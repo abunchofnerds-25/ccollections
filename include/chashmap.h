@@ -28,6 +28,15 @@ SOFTWARE.
 #include <common.h>
 #include <string.h>
 
+/* Everything declared from here to the end of this header is part of the
+ * public ABI of libccollections and is exported from the shared library.
+ * The library itself is built with -fvisibility=hidden, so any function or
+ * object that is not covered by one of these blocks stays internal to the
+ * library, is absent from its dynamic symbol table, and cannot be
+ * interposed by, or collide with, a symbol of the same name in the
+ * application that links against it. */
+#pragma GCC visibility push(default)
+
 /**
  * @file chashmap.h
  * @brief Hash map (dictionary) with automatic resizing and dual implementation
@@ -70,7 +79,7 @@ SOFTWARE.
  */
 
 /** @brief Default initial bucket array size */
-#define DEFAULT_INITIAL_BUCKET_ARRAY_SIZE 16
+#define CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE 16
 
 /** @brief Opaque hash map structure */
 typedef struct chashmap chashmap;
@@ -284,7 +293,7 @@ ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size);
  * regardless of which backend the map uses, or (for a map using the
  * open-addressing backend specifically) val_pair->size does not exactly
  * match the byte size of the value type the map was created with
- * @return ccol_container_full if max_elem_count reached
+ * @return ccol_container_full if ccol_max_elem_count reached
  * @return ccol_not_enough_memory if allocation fails
  *
  * @note O(1) average complexity
@@ -587,8 +596,8 @@ static inline void ___chmap_destroy(chmap *chm) {
 /**
  * @brief Initialize a hash map with full customization
  *
- * Initializes a previously declared hash map with custom memory management
- * and custom hashing. Calls fatal_err() on failure. Key and value types are
+ * Initializes a previously declared hash map with custom memory management and
+ * custom hashing. Calls ccol_fatal_err() on failure. Key and value types are
  * automatically detected from the type variables created by chmap_declare.
  *
  * @param hm_name Hash map variable to initialize (must be declared)
@@ -596,31 +605,31 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @param custom_hashing_proc Custom hash function
  *
  * @note Terminates program on failure
- * @note Uses DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16)
+ * @note Uses CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16)
  * @note Automatically detects key and value types to select implementation
  *
  * @see chmap_declare
  * @see chmap_construct_full
  */
-#define chmap_init_full(hm_name, mmgmt_procs, custom_hashing_proc) \
-  do {                                                             \
-    char *err = NULL;                                              \
-    hm_name = chmap_create_full(                                   \
-        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                         \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var),   \
-        determine_ccol_data_type(*hm_name##__ccol_val_type_var),   \
-        (mmgmt_procs), (custom_hashing_proc), &err);               \
-    if (!hm_name) {                                                \
-      fatal_err("Failed to create hash map '%s': %s", #hm_name,    \
-                err ? err : "unknown error");                      \
-    }                                                              \
+#define chmap_init_full(hm_name, mmgmt_procs, custom_hashing_proc)    \
+  do {                                                                \
+    char *err = NULL;                                                 \
+    hm_name = chmap_create_full(                                      \
+        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                       \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var), \
+        (mmgmt_procs), (custom_hashing_proc), &err);                  \
+    if (!hm_name) {                                                   \
+      ccol_fatal_err("Failed to create hash map '%s': %s", #hm_name,  \
+                     err ? err : "unknown error");                    \
+    }                                                                 \
   } while (0)
 
 /**
  * @brief Declare and initialize a hash map with full customization
  *
  * Combines declaration and initialization with custom memory management
- * and custom hashing. Calls fatal_err() on failure. Key and value types
+ * and custom hashing. Calls ccol_fatal_err() on failure. Key and value types
  * are specified explicitly and determine the implementation strategy.
  *
  * @param hm_name Hash map variable name
@@ -630,7 +639,7 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @param custom_hashing_proc Custom hash function
  *
  * @note Terminates program on failure
- * @note Uses DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16)
+ * @note Uses CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16)
  * @note Implementation automatically selected based on key_t and val_t
  *
  * @see chmap_init_full
@@ -643,13 +652,13 @@ static inline void ___chmap_destroy(chmap *chm) {
   do {                                                                        \
     char *err = NULL;                                                         \
     hm_name = chmap_create_full(                                              \
-        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                    \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var),              \
-        determine_ccol_data_type(*hm_name##__ccol_val_type_var),              \
+        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                               \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var),         \
         (mmgmt_procs), (custom_hashing_proc), &err);                          \
     if (!hm_name) {                                                           \
-      fatal_err("Failed to create hash map '%s': %s", #hm_name,               \
-                err ? err : "unknown error");                                 \
+      ccol_fatal_err("Failed to create hash map '%s': %s", #hm_name,          \
+                     err ? err : "unknown error");                            \
     }                                                                         \
   } while (0)
 
@@ -661,13 +670,13 @@ static inline void ___chmap_destroy(chmap *chm) {
   do {                                                                        \
     char *err = NULL;                                                         \
     hm_name = chmap_create_full(                                              \
-        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                    \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var),              \
-        determine_ccol_data_type(*hm_name##__ccol_val_type_var),              \
+        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                               \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var),         \
         (mmgmt_procs), (custom_hashing_proc), &err);                          \
     if (!hm_name) {                                                           \
-      fatal_err("Failed to create hash map '%s': %s", #hm_name,               \
-                err ? err : "unknown error");                                 \
+      ccol_fatal_err("Failed to create hash map '%s': %s", #hm_name,          \
+                     err ? err : "unknown error");                            \
     }                                                                         \
   } while (0)
 
@@ -683,17 +692,17 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @note Uses default memory management and automatic hashing selection
  * @note Implementation automatically selected based on detected types
  */
-#define chmap_init(hm_name)                                             \
-  do {                                                                  \
-    char *err = NULL;                                                   \
-    hm_name = chmap_create(                                             \
-        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                              \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var),        \
-        determine_ccol_data_type(*hm_name##__ccol_val_type_var), &err); \
-    if (!hm_name) {                                                     \
-      fatal_err("Failed to create hash map '%s': %s", #hm_name,         \
-                err ? err : "unknown error");                           \
-    }                                                                   \
+#define chmap_init(hm_name)                                                  \
+  do {                                                                       \
+    char *err = NULL;                                                        \
+    hm_name = chmap_create(                                                  \
+        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                              \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),        \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var), &err); \
+    if (!hm_name) {                                                          \
+      ccol_fatal_err("Failed to create hash map '%s': %s", #hm_name,         \
+                     err ? err : "unknown error");                           \
+    }                                                                        \
   } while (0)
 
 /**
@@ -733,12 +742,12 @@ static inline void ___chmap_destroy(chmap *chm) {
   do {                                                                        \
     char *err = NULL;                                                         \
     hm_name = chmap_create(                                                   \
-        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                    \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var),              \
-        determine_ccol_data_type(*hm_name##__ccol_val_type_var), &err);       \
+        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                               \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var), &err);  \
     if (!hm_name) {                                                           \
-      fatal_err("Failed to create hash map '%s': %s", #hm_name,               \
-                err ? err : "unknown error");                                 \
+      ccol_fatal_err("Failed to create hash map '%s': %s", #hm_name,          \
+                     err ? err : "unknown error");                            \
     }                                                                         \
   } while (0)
 
@@ -749,12 +758,12 @@ static inline void ___chmap_destroy(chmap *chm) {
   do {                                                                        \
     char *err = NULL;                                                         \
     hm_name = chmap_create(                                                   \
-        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                    \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var),              \
-        determine_ccol_data_type(*hm_name##__ccol_val_type_var), &err);       \
+        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                               \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var), &err);  \
     if (!hm_name) {                                                           \
-      fatal_err("Failed to create hash map '%s': %s", #hm_name,               \
-                err ? err : "unknown error");                                 \
+      ccol_fatal_err("Failed to create hash map '%s': %s", #hm_name,          \
+                     err ? err : "unknown error");                            \
     }                                                                         \
   } while (0)
 
@@ -770,18 +779,18 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @note Terminates program on failure
  * @note Uses default hashing (automatic selection based on types)
  */
-#define chmap_init_mp(hm_name, mmgmt_procs)                      \
-  do {                                                           \
-    char *err = NULL;                                            \
-    hm_name = chmap_create_mp(                                   \
-        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                       \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var), \
-        determine_ccol_data_type(*hm_name##__ccol_val_type_var), \
-        (mmgmt_procs), &err);                                    \
-    if (!hm_name) {                                              \
-      fatal_err("Failed to create hash map '%s': %s", #hm_name,  \
-                err ? err : "unknown error");                    \
-    }                                                            \
+#define chmap_init_mp(hm_name, mmgmt_procs)                           \
+  do {                                                                \
+    char *err = NULL;                                                 \
+    hm_name = chmap_create_mp(                                        \
+        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                       \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var), \
+        (mmgmt_procs), &err);                                         \
+    if (!hm_name) {                                                   \
+      ccol_fatal_err("Failed to create hash map '%s': %s", #hm_name,  \
+                     err ? err : "unknown error");                    \
+    }                                                                 \
   } while (0)
 
 /**
@@ -803,13 +812,13 @@ static inline void ___chmap_destroy(chmap *chm) {
   do {                                                                        \
     char *err = NULL;                                                         \
     hm_name = chmap_create_mp(                                                \
-        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                    \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var),              \
-        determine_ccol_data_type(*hm_name##__ccol_val_type_var),              \
+        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                               \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var),         \
         (mmgmt_procs), &err);                                                 \
     if (!hm_name) {                                                           \
-      fatal_err("Failed to create hash map '%s': %s", #hm_name,               \
-                err ? err : "unknown error");                                 \
+      ccol_fatal_err("Failed to create hash map '%s': %s", #hm_name,          \
+                     err ? err : "unknown error");                            \
     }                                                                         \
   } while (0)
 
@@ -820,13 +829,13 @@ static inline void ___chmap_destroy(chmap *chm) {
   do {                                                                        \
     char *err = NULL;                                                         \
     hm_name = chmap_create_mp(                                                \
-        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                    \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var),              \
-        determine_ccol_data_type(*hm_name##__ccol_val_type_var),              \
+        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                               \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var),         \
         (mmgmt_procs), &err);                                                 \
     if (!hm_name) {                                                           \
-      fatal_err("Failed to create hash map '%s': %s", #hm_name,               \
-                err ? err : "unknown error");                                 \
+      ccol_fatal_err("Failed to create hash map '%s': %s", #hm_name,          \
+                     err ? err : "unknown error");                            \
     }                                                                         \
   } while (0)
 
@@ -841,18 +850,18 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @note Terminates program on failure
  * @note Uses default memory management
  */
-#define chmap_init_ch(hm_name, custom_hashing_proc)              \
-  do {                                                           \
-    char *err = NULL;                                            \
-    hm_name = chmap_create_ch(                                   \
-        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                       \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var), \
-        determine_ccol_data_type(*hm_name##__ccol_val_type_var), \
-        (custom_hashing_proc), &err);                            \
-    if (!hm_name) {                                              \
-      fatal_err("Failed to create hash map '%s': %s", #hm_name,  \
-                err ? err : "unknown error");                    \
-    }                                                            \
+#define chmap_init_ch(hm_name, custom_hashing_proc)                   \
+  do {                                                                \
+    char *err = NULL;                                                 \
+    hm_name = chmap_create_ch(                                        \
+        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                       \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var), \
+        (custom_hashing_proc), &err);                                 \
+    if (!hm_name) {                                                   \
+      ccol_fatal_err("Failed to create hash map '%s': %s", #hm_name,  \
+                     err ? err : "unknown error");                    \
+    }                                                                 \
   } while (0)
 
 /**
@@ -874,13 +883,13 @@ static inline void ___chmap_destroy(chmap *chm) {
   do {                                                                        \
     char *err = NULL;                                                         \
     hm_name = chmap_create_ch(                                                \
-        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                    \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var),              \
-        determine_ccol_data_type(*hm_name##__ccol_val_type_var),              \
+        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                               \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var),         \
         (custom_hashing_proc), &err);                                         \
     if (!hm_name) {                                                           \
-      fatal_err("Failed to create hash map '%s': %s", #hm_name,               \
-                err ? err : "unknown error");                                 \
+      ccol_fatal_err("Failed to create hash map '%s': %s", #hm_name,          \
+                     err ? err : "unknown error");                            \
     }                                                                         \
   } while (0)
 
@@ -891,13 +900,13 @@ static inline void ___chmap_destroy(chmap *chm) {
   do {                                                                        \
     char *err = NULL;                                                         \
     hm_name = chmap_create_ch(                                                \
-        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                    \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var),              \
-        determine_ccol_data_type(*hm_name##__ccol_val_type_var),              \
+        CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                               \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_val_type_var),         \
         (custom_hashing_proc), &err);                                         \
     if (!hm_name) {                                                           \
-      fatal_err("Failed to create hash map '%s': %s", #hm_name,               \
-                err ? err : "unknown error");                                 \
+      ccol_fatal_err("Failed to create hash map '%s': %s", #hm_name,          \
+                     err ? err : "unknown error");                            \
     }                                                                         \
   } while (0)
 
@@ -908,8 +917,14 @@ static inline void ___chmap_destroy(chmap *chm) {
 /**
  * @brief Insert a key-value pair (type-safe)
  *
- * Type-safe wrapper for chmap_insert_elem() that automatically handles
- * type conversion and cmap_pair creation. Calls fatal_err() on failure.
+ * Type-safe wrapper for chmap_insert_elem() that builds the cmap_pair for the
+ * key and the value from the expressions passed. Calls ccol_fatal_err() on
+ * failure.
+ *
+ * key and val must be of the map's declared key and value types. Both are
+ * stored as the raw bytes of the expression passed, sized with sizeof, rather
+ * than converted to the declared type the way a plain C assignment would
+ * convert them.
  *
  * @param hm_name Hash map to insert into
  * @param key Key to insert
@@ -939,8 +954,8 @@ static inline void ___chmap_destroy(chmap *chm) {
     ccol_retval_t r = chmap_insert_elem(hm_name, key_pair, val_pair); \
     if (r != ccol_success && r != ccol_key_already_present) {         \
       _ccol_dump_key_to_stderr(key_pair->ptr, key_pair->size);        \
-      fatal_err("chmap_insert('%s'): r: %d (%s)", #hm_name, r,        \
-                ccol_retval_to_str(r));                               \
+      ccol_fatal_err("chmap_insert('%s'): r: %d (%s)", #hm_name, r,   \
+                     ccol_retval_to_str(r));                          \
     }                                                                 \
   } while (0)
 
@@ -980,7 +995,7 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @brief Get value by key (type-safe, returns value)
  *
  * Type-safe wrapper for chmap_get_elem_ref() that returns the actual value.
- * Calls fatal_err() if key not found or size mismatch.
+ * Calls ccol_fatal_err() if key not found or size mismatch.
  *
  * @param hm_name Hash map to search
  * @param key Key to look up
@@ -988,7 +1003,8 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @return Value associated with key
  *
  * @note Terminates program if key not found
- * @note Terminates program if value size doesn't match type size
+ * @note Terminates program if the stored value's size does not match the size
+ * of the declared value type
  * @note Returns value, not pointer
  * @note For strings, returns the char* itself
  *
@@ -1011,13 +1027,13 @@ static inline void ___chmap_destroy(chmap *chm) {
     ccol_retval_t r = chmap_get_elem_ref(hm_name, key_pair, &val_pair);     \
     if (r != ccol_success) {                                                \
       _ccol_dump_key_to_stderr(key_pair->ptr, key_pair->size);              \
-      fatal_err("chmap_get('%s'): r: %d (%s)", #hm_name, r,                 \
-                ccol_retval_to_str(r));                                     \
+      ccol_fatal_err("chmap_get('%s'): r: %d (%s)", #hm_name, r,            \
+                     ccol_retval_to_str(r));                                \
     }                                                                       \
-    if (is_char_ptr(*hm_name##__ccol_val_type_var)) {                       \
+    if (ccol_is_char_ptr(*hm_name##__ccol_val_type_var)) {                  \
       val = (typeof(*hm_name##__ccol_val_type_var) *)&(val_pair->ptr);      \
     } else if (val_pair->size != sizeof(*val)) {                            \
-      fatal_err(                                                            \
+      ccol_fatal_err(                                                       \
           "chmap_get('%s'): value size mismatch - stored: %lu bytes, "      \
           "requested: %lu bytes; wrong type or missing chmap_redeclare()?", \
           #hm_name, (unsigned long)val_pair->size,                          \
@@ -1067,10 +1083,10 @@ static inline void ___chmap_destroy(chmap *chm) {
     _populate_cmap_pair(key_pair, (key));                                     \
     ccol_retval_t r = chmap_get_elem_ref(hm_name, key_pair, &val_pair);       \
     if (r == ccol_success) {                                                  \
-      if (is_char_ptr(*hm_name##__ccol_val_type_var)) {                       \
+      if (ccol_is_char_ptr(*hm_name##__ccol_val_type_var)) {                  \
         val = (typeof(*hm_name##__ccol_val_type_var) *)&(val_pair->ptr);      \
       } else if (val_pair->size != sizeof(*val)) {                            \
-        fatal_err(                                                            \
+        ccol_fatal_err(                                                       \
             "chmap_get_ptr('%s'): value size mismatch - stored: %lu bytes, "  \
             "requested: %lu bytes; wrong type or missing chmap_redeclare()?", \
             #hm_name, (unsigned long)val_pair->size,                          \
@@ -1081,3 +1097,5 @@ static inline void ___chmap_destroy(chmap *chm) {
     }                                                                         \
     val;                                                                      \
   })
+
+#pragma GCC visibility pop

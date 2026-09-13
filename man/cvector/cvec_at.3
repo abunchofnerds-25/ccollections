@@ -29,7 +29,7 @@ Returns element reference at index
 Returns reference, not pointer
 index is evaluated exactly once, so a side-effecting expression
 (e.g. cvec_at(v, i++)) is safe to pass
-Terminates the program via fatal_err() if index is out of bounds
+Terminates the program via ccol_fatal_err() if index is out of bounds
 Can be used on left side of assignment
 Use cvec_at_ptr for a non-terminating, NULL-on-out-of-bounds alternative
 .fi

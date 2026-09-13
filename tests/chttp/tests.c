@@ -11,7 +11,7 @@
 TAU_MAIN()
 
 /* ========================================================================== */
-/*                     BASE64 ENCODE; RFC 4648 TEST VECTORS                 */
+/*                     BASE64 ENCODE: RFC 4648 TEST VECTORS                  */
 /* ========================================================================== */
 
 TEST(base64_encode, rfc4648_vectors) {
@@ -60,14 +60,13 @@ TEST(base64_encode, null_data_with_nonzero_len_fails) {
 }
 
 TEST(base64_encode, length_large_enough_to_overflow_is_rejected) {
-  /* Regression test: enc_len = ((len+2)/3)*4 had no overflow check before
-   * allocating enc_len+1 bytes; a caller-supplied len large enough to wrap
-   * size_t would previously proceed with a tiny wrapped allocation and then
-   * write far past it. len is deliberately close to SIZE_MAX here, well
-   * past what this function could ever legitimately be asked to encode; a
-   * real (non-NULL, non-dereferenced) pointer is passed since a correctly
-   * fixed implementation must reject this before ever touching *data*, not
-   * merely before allocating. */
+  /* enc_len = ((len+2)/3)*4 must be overflow-checked before enc_len+1 bytes
+   * are allocated: without that check, a caller-supplied len large enough to
+   * wrap size_t proceeds with a tiny wrapped allocation and then writes far
+   * past it. len is deliberately close to SIZE_MAX here, well past what this
+   * function could ever legitimately be asked to encode; a real (non-NULL,
+   * non-dereferenced) pointer is passed because the rejection must happen
+   * before *data* is ever touched, not merely before allocating. */
   char dummy = 0;
   REQUIRE_EQ((void *)chttp_base64_encode(&dummy, SIZE_MAX - 1, NULL), NULL);
 }
@@ -89,7 +88,7 @@ TEST(base64_encode, embedded_nul_bytes_round_trip_via_out_len) {
 }
 
 /* ========================================================================== */
-/*                     BASE64 DECODE; RFC 4648 TEST VECTORS                 */
+/*                     BASE64 DECODE: RFC 4648 TEST VECTORS                  */
 /* ========================================================================== */
 
 TEST(base64_decode, rfc4648_vectors) {
@@ -164,7 +163,7 @@ TEST(base64_decode, out_len_is_optional) {
 }
 
 /* ========================================================================== */
-/*                     BASIC AUTH; RFC 7617                                 */
+/*                     BASIC AUTH: RFC 7617                                  */
 /* ========================================================================== */
 
 TEST(basic_auth, rfc7617_example) {
@@ -215,15 +214,14 @@ extern bool _chttp_basic_auth_overflow_guard_for_tests(ccol_memmgmt_procs_t *mp,
                                                        size_t fake_pass_len);
 
 TEST(basic_auth, length_sum_large_enough_to_overflow_is_rejected) {
-  /* Regression test: combined_len = user_len + 1 + pass_len had no overflow
-   * check before allocating combined_len+1 bytes; two independently
-   * caller-supplied lengths summing close to SIZE_MAX would previously
-   * proceed with a wrapped allocation and then write far past it. Both
-   * fake lengths are deliberately huge (not just one), matching
-   * base64_encode's own "length_large_enough_to_overflow_is_rejected"
-   * pattern; real (non-NULL, short) strings are passed since a correctly
-   * fixed implementation must reject this before ever calling snprintf,
-   * not merely before allocating. */
+  /* combined_len = user_len + 1 + pass_len must be overflow-checked before
+   * combined_len+1 bytes are allocated: without that check, two
+   * independently caller-supplied lengths summing close to SIZE_MAX proceed
+   * with a wrapped allocation and then write far past it. Both fake lengths
+   * are deliberately huge (not just one), matching base64_encode's own
+   * "length_large_enough_to_overflow_is_rejected" pattern; real (non-NULL,
+   * short) strings are passed because the rejection must happen before
+   * snprintf is ever called, not merely before allocating. */
   bool rejected = _chttp_basic_auth_overflow_guard_for_tests(
       NULL, "user", SIZE_MAX / 2, "pass", SIZE_MAX / 2);
   REQUIRE_TRUE(rejected);

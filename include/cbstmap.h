@@ -27,6 +27,15 @@ SOFTWARE.
 #include <citerators.h>
 #include <common.h>
 
+/* Everything declared from here to the end of this header is part of the
+ * public ABI of libccollections and is exported from the shared library.
+ * The library itself is built with -fvisibility=hidden, so any function or
+ * object that is not covered by one of these blocks stays internal to the
+ * library, is absent from its dynamic symbol table, and cannot be
+ * interposed by, or collide with, a symbol of the same name in the
+ * application that links against it. */
+#pragma GCC visibility push(default)
+
 /**
  * @file cbstmap.h
  * @brief Self-balancing binary search tree map (AVL tree) with sorted keys
@@ -215,8 +224,10 @@ ccol_retval_t cbmap_reset(cbmap cbm);
  * @return ccol_success on success
  * @return ccol_key_already_present if the key already existed (its value was
  * updated successfully; the key itself is left unchanged)
- * @return ccol_container_full if max_elem_count reached
+ * @return ccol_container_full if ccol_max_elem_count reached
  * @return ccol_not_enough_memory if allocation fails
+ * @return ccol_invalid_args if key_pair's size does not match a fixed-width
+ * key type's own size (see ccol_fixed_width_data_type_size)
  *
  * @note O(log n) average and worst case (due to balancing)
  * @note Key and value data are copied (not referenced)
@@ -246,7 +257,9 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
  * @param target_buf_size Size of target buffer
  *
  * @return ccol_success if key found and value copied
- * @return ccol_invalid_args if buffer size doesn't match value size
+ * @return ccol_invalid_args if buffer size doesn't match value size, or if
+ * key_pair's size does not match a fixed-width key type's own size (see
+ * ccol_fixed_width_data_type_size)
  * @return ccol_key_not_found if key does not exist
  *
  * @note O(log n) complexity (binary search)
@@ -271,6 +284,8 @@ ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
  *
  * @return ccol_success if key found
  * @return ccol_key_not_found if key does not exist
+ * @return ccol_invalid_args if key_pair's size does not match a fixed-width
+ * key type's own size (see ccol_fixed_width_data_type_size)
  *
  * @note O(log n) complexity (binary search)
  * @note Returned pointer is invalidated by insert/delete operations
@@ -300,6 +315,8 @@ ccol_retval_t cbmap_get_elem_ref(cbmap cbm, const cmap_pair *key_pair,
  *
  * @return ccol_success if key found and deleted
  * @return ccol_key_not_found if key does not exist
+ * @return ccol_invalid_args if key_pair's size does not match a fixed-width
+ * key type's own size (see ccol_fixed_width_data_type_size)
  *
  * @note O(log n) complexity (search + rebalancing)
  * @note Frees memory allocated for key and value
@@ -461,16 +478,16 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @see cbmap_declare
  * @see cbmap_construct
  */
-#define cbmap_init(hm_name)                                                  \
-  do {                                                                       \
-    char *err = NULL;                                                        \
-    hm_name = cbmap_create_full(                                             \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL, NULL, \
-        &err);                                                               \
-    if (!hm_name) {                                                          \
-      fatal_err("Failed to create BST map '%s': %s", #hm_name,               \
-                err ? err : "unknown error");                                \
-    }                                                                        \
+#define cbmap_init(hm_name)                                                 \
+  do {                                                                      \
+    char *err = NULL;                                                       \
+    hm_name = cbmap_create_full(                                            \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL, \
+        NULL, &err);                                                        \
+    if (!hm_name) {                                                         \
+      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,         \
+                     err ? err : "unknown error");                          \
+    }                                                                       \
   } while (0)
 
 /**
@@ -484,16 +501,16 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @note Terminates program on failure
  * @note Automatically detects the key type (signedness, float, string, struct)
  */
-#define cbmap_init_mp(hm_name, mmgmt_procs)                      \
-  do {                                                           \
-    char *err = NULL;                                            \
-    hm_name = cbmap_create_full(                                 \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var), \
-        (mmgmt_procs), NULL, &err);                              \
-    if (!hm_name) {                                              \
-      fatal_err("Failed to create BST map '%s': %s", #hm_name,   \
-                err ? err : "unknown error");                    \
-    }                                                            \
+#define cbmap_init_mp(hm_name, mmgmt_procs)                           \
+  do {                                                                \
+    char *err = NULL;                                                 \
+    hm_name = cbmap_create_full(                                      \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), \
+        (mmgmt_procs), NULL, &err);                                   \
+    if (!hm_name) {                                                   \
+      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,   \
+                     err ? err : "unknown error");                    \
+    }                                                                 \
   } while (0)
 
 /**
@@ -507,16 +524,16 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @note Terminates program on failure
  * @note Uses default memory management
  */
-#define cbmap_init_cc(hm_name, custom_comparison_proc)                 \
-  do {                                                                 \
-    char *err = NULL;                                                  \
-    hm_name = cbmap_create_full(                                       \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL, \
-        (custom_comparison_proc), &err);                               \
-    if (!hm_name) {                                                    \
-      fatal_err("Failed to create BST map '%s': %s", #hm_name,         \
-                err ? err : "unknown error");                          \
-    }                                                                  \
+#define cbmap_init_cc(hm_name, custom_comparison_proc)                      \
+  do {                                                                      \
+    char *err = NULL;                                                       \
+    hm_name = cbmap_create_full(                                            \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL, \
+        (custom_comparison_proc), &err);                                    \
+    if (!hm_name) {                                                         \
+      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,         \
+                     err ? err : "unknown error");                          \
+    }                                                                       \
   } while (0)
 
 /**
@@ -535,11 +552,11 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
   do {                                                                \
     char *err = NULL;                                                 \
     hm_name = cbmap_create_full(                                      \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var),      \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), \
         (mmgmt_procs), (custom_comparison_proc), &err);               \
     if (!hm_name) {                                                   \
-      fatal_err("Failed to create BST map '%s': %s", #hm_name,        \
-                err ? err : "unknown error");                         \
+      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,   \
+                     err ? err : "unknown error");                    \
     }                                                                 \
   } while (0)
 
@@ -577,11 +594,11 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
   do {                                                                        \
     char *err = NULL;                                                         \
     hm_name = cbmap_create_full(                                              \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL, NULL,  \
-        &err);                                                                \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,   \
+        NULL, &err);                                                          \
     if (!hm_name) {                                                           \
-      fatal_err("Failed to create BST map '%s': %s", #hm_name,                \
-                err ? err : "unknown error");                                 \
+      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,           \
+                     err ? err : "unknown error");                            \
     }                                                                         \
   } while (0)
 
@@ -592,11 +609,11 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
   do {                                                                        \
     char *err = NULL;                                                         \
     hm_name = cbmap_create_full(                                              \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL, NULL,  \
-        &err);                                                                \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,   \
+        NULL, &err);                                                          \
     if (!hm_name) {                                                           \
-      fatal_err("Failed to create BST map '%s': %s", #hm_name,                \
-                err ? err : "unknown error");                                 \
+      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,           \
+                     err ? err : "unknown error");                            \
     }                                                                         \
   } while (0)
 
@@ -619,11 +636,11 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
   do {                                                                        \
     char *err = NULL;                                                         \
     hm_name = cbmap_create_full(                                              \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var),              \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         (mmgmt_procs), NULL, &err);                                           \
     if (!hm_name) {                                                           \
-      fatal_err("Failed to create BST map '%s': %s", #hm_name,                \
-                err ? err : "unknown error");                                 \
+      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,           \
+                     err ? err : "unknown error");                            \
     }                                                                         \
   } while (0)
 
@@ -634,11 +651,11 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
   do {                                                                        \
     char *err = NULL;                                                         \
     hm_name = cbmap_create_full(                                              \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var),              \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         (mmgmt_procs), NULL, &err);                                           \
     if (!hm_name) {                                                           \
-      fatal_err("Failed to create BST map '%s': %s", #hm_name,                \
-                err ? err : "unknown error");                                 \
+      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,           \
+                     err ? err : "unknown error");                            \
     }                                                                         \
   } while (0)
 
@@ -661,11 +678,11 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
   do {                                                                        \
     char *err = NULL;                                                         \
     hm_name = cbmap_create_full(                                              \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,        \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,   \
         (custom_comparison_proc), &err);                                      \
     if (!hm_name) {                                                           \
-      fatal_err("Failed to create BST map '%s': %s", #hm_name,                \
-                err ? err : "unknown error");                                 \
+      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,           \
+                     err ? err : "unknown error");                            \
     }                                                                         \
   } while (0)
 
@@ -677,11 +694,11 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
   do {                                                                        \
     char *err = NULL;                                                         \
     hm_name = cbmap_create_full(                                              \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,        \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,   \
         (custom_comparison_proc), &err);                                      \
     if (!hm_name) {                                                           \
-      fatal_err("Failed to create BST map '%s': %s", #hm_name,                \
-                err ? err : "unknown error");                                 \
+      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,           \
+                     err ? err : "unknown error");                            \
     }                                                                         \
   } while (0)
 
@@ -707,11 +724,11 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
   do {                                                                        \
     char *err = NULL;                                                         \
     hm_name = cbmap_create_full(                                              \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var),              \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         (mmgmt_procs), (custom_comparison_proc), &err);                       \
     if (!hm_name) {                                                           \
-      fatal_err("Failed to create BST map '%s': %s", #hm_name,                \
-                err ? err : "unknown error");                                 \
+      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,           \
+                     err ? err : "unknown error");                            \
     }                                                                         \
   } while (0)
 
@@ -723,11 +740,11 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
   do {                                                                        \
     char *err = NULL;                                                         \
     hm_name = cbmap_create_full(                                              \
-        determine_ccol_data_type(*hm_name##__ccol_key_type_var),              \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
         (mmgmt_procs), (custom_comparison_proc), &err);                       \
     if (!hm_name) {                                                           \
-      fatal_err("Failed to create BST map '%s': %s", #hm_name,                \
-                err ? err : "unknown error");                                 \
+      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,           \
+                     err ? err : "unknown error");                            \
     }                                                                         \
   } while (0)
 
@@ -738,8 +755,14 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /**
  * @brief Insert a key-value pair (type-safe)
  *
- * Type-safe wrapper for cbmap_insert_elem() that automatically handles
- * type conversion and cmap_pair creation. Calls fatal_err() on failure.
+ * Type-safe wrapper for cbmap_insert_elem() that builds the cmap_pair for the
+ * key and the value from the expressions passed. Calls ccol_fatal_err() on
+ * failure.
+ *
+ * key and val must be of the map's declared key and value types. Both are
+ * stored as the raw bytes of the expression passed, sized with sizeof, rather
+ * than converted to the declared type the way a plain C assignment would
+ * convert them.
  *
  * @param hm_name BST map to insert into
  * @param key Key to insert
@@ -763,8 +786,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     ccol_retval_t r = cbmap_insert_elem(hm_name, key_pair, val_pair); \
     if (r != ccol_success && r != ccol_key_already_present) {         \
       _ccol_dump_key_to_stderr(key_pair->ptr, key_pair->size);        \
-      fatal_err("cbmap_insert('%s'): r: %d (%s)", #hm_name, r,        \
-                ccol_retval_to_str(r));                               \
+      ccol_fatal_err("cbmap_insert('%s'): r: %d (%s)", #hm_name, r,   \
+                     ccol_retval_to_str(r));                          \
     }                                                                 \
   } while (0)
 
@@ -797,7 +820,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @brief Get value by key (type-safe, returns value)
  *
  * Type-safe wrapper for cbmap_get_elem_ref() that returns the actual value.
- * Calls fatal_err() if key not found or size mismatch.
+ * Calls ccol_fatal_err() if key not found or size mismatch.
  *
  * @param hm_name BST map to search
  * @param key Key to look up
@@ -805,7 +828,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @return Value associated with key
  *
  * @note Terminates program if key not found
- * @note Terminates program if value size doesn't match type size
+ * @note Terminates program if the stored value's size does not match the size
+ * of the declared value type
  * @note Returns value, not pointer
  * @note For strings, returns the char* itself
  * @note O(log n) search time
@@ -822,13 +846,13 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     ccol_retval_t r = cbmap_get_elem_ref(hm_name, key_pair, &val_pair);     \
     if (r != ccol_success) {                                                \
       _ccol_dump_key_to_stderr(key_pair->ptr, key_pair->size);              \
-      fatal_err("cbmap_get('%s'): r: %d (%s)", #hm_name, r,                 \
-                ccol_retval_to_str(r));                                     \
+      ccol_fatal_err("cbmap_get('%s'): r: %d (%s)", #hm_name, r,            \
+                     ccol_retval_to_str(r));                                \
     }                                                                       \
-    if (is_char_ptr(*hm_name##__ccol_val_type_var)) {                       \
+    if (ccol_is_char_ptr(*hm_name##__ccol_val_type_var)) {                  \
       val = (typeof(*hm_name##__ccol_val_type_var) *)&(val_pair->ptr);      \
     } else if (val_pair->size != sizeof(*val)) {                            \
-      fatal_err(                                                            \
+      ccol_fatal_err(                                                       \
           "cbmap_get('%s'): value size mismatch - stored: %lu bytes, "      \
           "requested: %lu bytes; wrong type or missing cbmap_redeclare()?", \
           #hm_name, (unsigned long)val_pair->size,                          \
@@ -869,10 +893,10 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     _populate_cmap_pair(key_pair, (key));                                     \
     ccol_retval_t r = cbmap_get_elem_ref(hm_name, key_pair, &val_pair);       \
     if (r == ccol_success) {                                                  \
-      if (is_char_ptr(*hm_name##__ccol_val_type_var)) {                       \
+      if (ccol_is_char_ptr(*hm_name##__ccol_val_type_var)) {                  \
         val = (typeof(*hm_name##__ccol_val_type_var) *)&(val_pair->ptr);      \
       } else if (val_pair->size != sizeof(*val)) {                            \
-        fatal_err(                                                            \
+        ccol_fatal_err(                                                       \
             "cbmap_get_ptr('%s'): value size mismatch - stored: %lu bytes, "  \
             "requested: %lu bytes; wrong type or missing cbmap_redeclare()?", \
             #hm_name, (unsigned long)val_pair->size,                          \
@@ -883,3 +907,5 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     }                                                                         \
     val;                                                                      \
   })
+
+#pragma GCC visibility pop

@@ -1,0 +1,35 @@
+.TH ___CSTRING_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+___cstring_destroy \- RAII cleanup function for cstr
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+void ___cstring_destroy(cstr *sp);
+.fi
+.SH DESCRIPTION
+.nf
+Static inline function used as the cleanup callback registered by
+cstr_declare_scoped() and cstr_construct_scoped(). When the scoped
+variable leaves scope this function calls __cstring_destroy(*sp) and
+sets *sp to NULL.
+
+Not intended to be called directly; use cstr_declare_scoped() or
+cstr_construct_scoped() instead.
+.fi
+.SH PARAMETERS
+.nf
+sp   Pointer to the cstr variable to clean up
+.fi
+.SH NOTES
+.nf
+Does nothing if sp is NULL or *sp is already NULL
+Compatible with __attribute__((cleanup)) on GCC and Clang
+.fi
+.SH "SEE ALSO"
+.BR cstr_declare_scoped (3),
+.BR cstr_construct_scoped (3),
+.BR __cstring_destroy (3),
+.BR cstring_destroy (3)

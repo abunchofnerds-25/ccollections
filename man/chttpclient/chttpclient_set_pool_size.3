@@ -15,6 +15,12 @@ Sets the maximum number of concurrent in-flight requests.  Callers
 that call chttpclient_do when the limit is reached will block until
 one becomes free.
 
+This cap applies only to Tier 1 (chttpclient_do and
+chttpclient_do_streaming).  Tier 2 (chttpclient_do_async/_streaming)
+and Tier 3 (chttpclient_do_pooled/_streaming) are not subject to it:
+any number of those may be submitted concurrently, all handled by
+the shared async engine without blocking at submission time.
+
 Passing 0 selects the CPU count (the default).
 
 May be called before or after the client has issued any requests, and
@@ -35,5 +41,5 @@ ccol_invalid_args       cli is CHTTPCLI_INVALID, or a stale/
                         already-destroyed handle.
 .fi
 .SH "SEE ALSO"
-.BR create_chttpclient (3),
+.BR ccol_create_chttpclient (3),
 .BR chttpclient_do (3)

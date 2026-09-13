@@ -21,7 +21,7 @@ handshake failure, a listen-socket bind failure, and each idle-timeout
 sweep pass that closes one or more connections.  If no engine logger
 has been installed when the engine first starts, a fallback logger
 (fd 2, level CLOG_FATAL) is installed automatically, mirroring
-create_chttpsvr's own internal stderr/FATAL-only logger; since all
+ccol_create_chttpsvr's own internal stderr/FATAL-only logger; since all
 three diagnostic points above log below CLOG_FATAL, that fallback
 logger's min_level filters every one of them out, so it is silent in
 practice unless this function is used to install a more verbose one.
@@ -32,13 +32,13 @@ reactor's own diagnostics logger is scoped to the reactor's lifetime
 (see chttpsvr_engine_stop), so a full stop/restart cycle requires
 calling this again if engine-level logging is still wanted afterward.
 
-cl must not be NULL; the derived child logger is owned by the engine
-and must not be closed by the caller.
+cl must not be CLOG_INVALID; the derived child logger is owned by the
+engine and must not be closed by the caller.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success on success.
-ccol_invalid_args if cl is NULL.
+ccol_invalid_args if cl is CLOG_INVALID.
 ccol_not_enough_memory if the child logger cannot be allocated.
 .fi
 .SH "SEE ALSO"

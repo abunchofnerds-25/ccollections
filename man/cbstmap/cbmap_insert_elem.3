@@ -27,14 +27,17 @@ val_pair   Value to associate with key (copied into map)
 .nf
 ccol_success               - New key inserted successfully
 ccol_key_already_present   - Key already existed; value updated successfully
-ccol_container_full        - Map has reached max_elem_count
+ccol_container_full        - Map has reached ccol_max_elem_count
 ccol_not_enough_memory     - Memory allocation failed
+ccol_invalid_args          - key_pair's size does not match a fixed-width
+                             key type's own size (see cbmap_create_full(3))
 .fi
 .SH NOTES
 .nf
 O(log n) complexity
 Key and value data are copied into the map
 If key exists, old value is freed and replaced
+Asserts if cbm is NULL
 .fi
 .SH "SEE ALSO"
 .BR cbmap_insert (3),

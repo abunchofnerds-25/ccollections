@@ -135,8 +135,8 @@ static void _echo_param_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 }
 
 /* Writes ctx (a literal string owned by the caller) verbatim; used by the
-   per-router segment-decode cache regression tests below to tell which of
-   several routes sharing a common decoded prefix actually matched. */
+   per-router segment-decode cache tests below to tell which of several
+   routes sharing a common decoded prefix actually matched. */
 static void _cache_literal_handler(chttpsvr_req *req, chttpsvr_resp *resp,
                                    void *ctx) {
   (void)req;
@@ -144,9 +144,9 @@ static void _cache_literal_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 }
 
 /* Writes "<ctx>:<id param>"; used by the per-router segment-decode cache
-   regression tests below to prove a param captured at a position several
-   OTHER, non-matching candidate routes already tried (and failed on, at a
-   LATER segment) still reads back correctly for the route that actually
+   tests below to prove a param captured at a position several OTHER,
+   non-matching candidate routes already tried (and failed on, at a LATER
+   segment) still reads back correctly for the route that actually
    matches. */
 static void _cache_param_handler(chttpsvr_req *req, chttpsvr_resp *resp,
                                  void *ctx) {
@@ -560,7 +560,7 @@ static void _stream_body_after_read_handler(chttpsvr_req *req,
 }
 
 /* Streaming handler that calls chttpsvr_req_read with buflen == 0.
-   With the fix, this must return 0 (no-op), not -1 (error). */
+   A zero-length read must return 0 (no-op), not -1 (error). */
 static void _stream_zero_buflen_handler(chttpsvr_req *req, chttpsvr_resp *resp,
                                         void *ctx) {
   (void)ctx;
@@ -679,9 +679,9 @@ static void _forced_status_with_body_handler(chttpsvr_req *req,
 /* Sets an explicit, caller-supplied "Connection" response header (via the
    "x-force-connection" request header) that may have nothing to do with
    whatever this server's own framing logic actually decides afterward.
-   Used to verify that a handler can no longer make the wire Connection
-   header disagree with the server's real post-response keep-alive/close
-   behavior (see _send_response's own doc comment on this). */
+   Used to verify that a handler cannot make the wire Connection header
+   disagree with the server's real post-response keep-alive/close behavior
+   (see _send_response's own doc comment on this). */
 static void _explicit_connection_header_handler(chttpsvr_req *req,
                                                 chttpsvr_resp *resp,
                                                 void *ctx) {
@@ -692,14 +692,13 @@ static void _explicit_connection_header_handler(chttpsvr_req *req,
 }
 
 /* Sets enough response headers, each with a large value, that the combined
-   header block comfortably exceeds a few KiB. Regression test for a real bug
-   in _send_response: it used to assemble the header block into a fixed
-   4096-byte stack buffer with no fallback, so a response whose headers alone
-   crossed that size silently lost its ENTIRE response (not even a graceful
-   500; the connection was simply closed with zero bytes ever written, and
-   nothing logged). _send_response now assembles the header block into a
-   buffer that grows (heap-allocated, doubling) as needed, so this must
-   succeed with every header intact regardless of size. */
+   header block comfortably exceeds a few KiB. _send_response must assemble
+   the header block into a buffer that grows (heap-allocated, doubling) as
+   needed: with a fixed 4096-byte stack buffer and no fallback, the ENTIRE
+   response is silently lost once the headers alone cross that size, not
+   even a graceful 500, just a connection closed with zero bytes ever
+   written and nothing logged. This must succeed with every header intact
+   regardless of size. */
 static void _large_response_headers_handler(chttpsvr_req *req,
                                             chttpsvr_resp *resp, void *ctx) {
   (void)req;
@@ -864,10 +863,10 @@ static void _set_header_non_tchar_name_guards_handler(chttpsvr_req *req,
                                                       void *ctx) {
   (void)req;
   _Atomic int *results = (_Atomic int *)ctx;
-  /* A space inside the name: contains no CR/LF of its own, so the
-   * pre-existing CRLF-only check would have let this through, but it is
-   * not a genuine RFC 7230 tchar-only token; "X Foo: bar" as a name would
-   * put "X Foo:bar:baz\r\n" on the wire, not a real two-field split. */
+  /* A space inside the name: contains no CR/LF of its own, so a CRLF-only
+   * check lets it through, but it is not a genuine RFC 7230 tchar-only
+   * token; "X Foo: bar" as a name would put "X Foo:bar:baz\r\n" on the
+   * wire, not a real two-field split. */
   results[0] = (int)chttpsvr_resp_set_header(resp, "X Foo", "bar");
   /* A literal colon inside the name, for the same reason. */
   results[1] = (int)chttpsvr_resp_set_header(resp, "X:Foo", "bar");
@@ -1075,13 +1074,13 @@ static void _teardown(void) {
 
   /* Destroy each server: drains in-flight requests and releases this
    * server's single shared-engine reference. chttpserver's own shared
-   * event_loop reactor is stopped asynchronously (a joinable reaper thread,
-   * fully independent of chttpclient's own engine) rather than being joined
-   * inline by the last destroy, so chttpsvr_engine_wait() below is required
-   * to deterministically block until it has actually finished before this
-   * function (an atexit handler) returns; otherwise the engine-installed
-   * logger (g_test_logger, routed via chttpsvr_set_engine_logger in
-   * _setup) could still be in use by a reactor thread when this function
+   * ccol_event_loop reactor is stopped asynchronously (a joinable reaper
+   * thread, fully independent of chttpclient's own engine) rather than being
+   * joined inline by the last destroy, so chttpsvr_engine_wait() below is
+   * required to deterministically block until it has actually finished before
+   * this function (an atexit handler) returns; otherwise the engine-installed
+   * logger (g_test_logger, routed via chttpsvr_set_engine_logger in _setup)
+   * could still be in use by a reactor thread when this function
    * closes it just below. */
   if (g_bounded_srv) {
     __chttpsvr_destroy(g_bounded_srv);
@@ -1117,7 +1116,7 @@ __attribute__((constructor)) static void _setup(void) {
   }
 
   /* Create and configure the test server. */
-  g_srv = create_chttpsvr(g_test_logger, &err);
+  g_srv = ccol_create_chttpsvr(g_test_logger, &err);
   if (!g_srv) {
     fprintf(stderr, "FATAL: could not create chttpsvr: %s\n", err ? err : "?");
     exit(1);
@@ -1170,9 +1169,9 @@ __attribute__((constructor)) static void _setup(void) {
                             _read_on_buffered_handler, NULL);
 
   /* Multi-method routes: same path registered for both GET and POST to verify
-     that both are routable independently (was broken before the _find_route
-     fix; a POST would get 405 because the GET route matched the path first
-     and the search stopped there). */
+     that both are routable independently (_find_route must keep searching
+     past a path match whose method does not match; stopping at the first
+     path match gives a POST a 405 because the GET route matched first). */
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/dual", _hello_handler, NULL);
   chttpsvr_register_handler(g_srv, CHTTP_POST, "/dual", _echo_body_handler,
                             NULL);
@@ -1282,10 +1281,10 @@ __attribute__((constructor)) static void _setup(void) {
   }
   chttpsvr_router_on(api_v3, CHTTP_GET, "/ping", _hello_handler, NULL);
 
-  /* Routes for tests that previously registered routes mid-test.  Registering
-   * them here guarantees each route exists exactly once for the lifetime of the
-   * process and avoids cross-test contamination from duplicate registrations.
-   */
+  /* Routes for tests that would otherwise register routes mid-test.
+   * Registering them here guarantees each route exists exactly once for the
+   * lifetime of the process and avoids cross-test contamination from
+   * duplicate registrations. */
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/null-guard",
                             _null_guard_handler, g_null_guard_results);
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/resp-write-null-guard",
@@ -1386,7 +1385,7 @@ __attribute__((constructor)) static void _setup(void) {
 
   /* Second server instance (not started) for route-registration edge-case
    * tests and double-start rejection tests. */
-  g_srv2 = create_chttpsvr(g_test_logger, NULL);
+  g_srv2 = ccol_create_chttpsvr(g_test_logger, NULL);
 
   /* Route engine logger to g_test_logger before the first chttpsvr_start. */
   chttpsvr_set_engine_logger(g_test_logger);
@@ -1410,7 +1409,7 @@ __attribute__((constructor)) static void _setup(void) {
   /* Create and start the bounded server for the bounded_pool_full_returns_503
    * test.  1 worker thread + queue_capacity=1 so total capacity = 2 (1 active
    * + 1 queued).  A third concurrent request must receive 503. */
-  g_bounded_srv = create_chttpsvr(g_test_logger, NULL);
+  g_bounded_srv = ccol_create_chttpsvr(g_test_logger, NULL);
   if (!g_bounded_srv) {
     fprintf(stderr, "FATAL: could not create bounded chttpsvr\n");
     exit(1);
@@ -1441,7 +1440,7 @@ __attribute__((constructor)) static void _setup(void) {
 
   /* Create and start the small-max_body_size server for the
    * max_body_size/413 boundary tests (both buffered and streaming). */
-  g_small_body_srv = create_chttpsvr(g_test_logger, NULL);
+  g_small_body_srv = ccol_create_chttpsvr(g_test_logger, NULL);
   if (!g_small_body_srv) {
     fprintf(stderr, "FATAL: could not create small-body chttpsvr\n");
     exit(1);
@@ -1559,11 +1558,10 @@ TEST(chttpserver, path_param_plus_literal) {
   /* A '+' in a URL path segment must survive as a literal '+' in the captured
    * parameter value.  Path-segment encoding rules (RFC 3986) do not assign
    * special meaning to '+'; only application/x-www-form-urlencoded (query
-   * strings) maps '+' to space.  The previous implementation used
-   * http_decode_url_unsafe (query-string semantics) for segment matching and
-   * parameter capture, causing '+' to become ' ' and producing values
-   * inconsistent with chttpsvr_req_path.  After the fix both decode via
-   * http_decode_path_unsafe. */
+   * strings) maps '+' to space.  Segment matching and parameter capture
+   * therefore both decode via http_decode_path_unsafe, never
+   * http_decode_url_unsafe (query-string semantics), which turns '+' into
+   * ' ' and produces values inconsistent with chttpsvr_req_path. */
   chttpcli_response *resp = _get("/params/hello+world/foo");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -2102,9 +2100,9 @@ TEST(chttpserver, duplicate_param_name_in_pattern_rejected) {
 
 TEST(chttpserver, multi_method_get) {
   /* GET /dual must reach the GET handler even though POST /dual is also
-     registered.  Before the _find_route fix this would have worked only by
-     accident of registration order; now correctness is guaranteed regardless
-     of order. */
+     registered.  _find_route matches on path AND method together, so this
+     holds regardless of the order the two routes were registered in, not by
+     accident of it. */
   chttpcli_response *resp = _get("/dual");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -2115,9 +2113,10 @@ TEST(chttpserver, multi_method_get) {
 
 TEST(chttpserver, multi_method_post) {
   /* POST /dual must reach the POST handler even though GET /dual was
-     registered first.  Before the _find_route fix the GET route matched the
-     path, the method check failed, the search stopped, and 405 was returned
-     instead of dispatching to the POST handler. */
+     registered first.  If _find_route stopped at the first path match, the
+     GET route would match the path, the method check would fail, the search
+     would end there, and 405 would come back instead of the POST handler's
+     own response. */
   chttpcli_response *resp = _post("/dual", "dual-body", "text/plain");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -2139,9 +2138,9 @@ TEST(chttpserver, multi_method_unregistered_405) {
 
 TEST(chttpserver, double_slash_pattern_rejected) {
   /* A route pattern containing consecutive slashes (e.g. /foo//bar) must be
-     rejected at registration time with ccol_invalid_args.  Such patterns were
-     previously silently normalised to /foo/bar, which is unexpected and
-     error-prone.  Uses g_srv2 which is never started. */
+     rejected at registration time with ccol_invalid_args: silently
+     normalising such a pattern to /foo/bar is unexpected and error-prone.
+     Uses g_srv2 which is never started. */
   REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(g_srv2, CHTTP_GET, "/foo//bar",
                                                _hello_handler, NULL);
@@ -2204,13 +2203,14 @@ TEST(chttpserver, path_url_decoded) {
 TEST(chttpserver, percent_encoded_nul_in_literal_segment_is_route_mismatch) {
   /* A %00-encoded NUL byte inside a path segment must not let strcmp-based
    * literal segment matching silently treat "hello" + trailing garbage as
-   * an exact match for the registered literal segment "hello": /hello%00xyz
-   * must NOT match the literal route /hello.  Before this was fixed,
-   * _match_route_cached's own literal-segment comparison decoded
-   * "hello%00xyz" to "hello\0xyz" and compared it against "hello" via
-   * strcmp, which stops at the first NUL in either operand and reported a
-   * match; letting an attacker-chosen suffix hide behind a route match a
-   * caller reasonably expects to reflect the whole segment. */
+   * an exact match for the registered literal segment "hello":
+   * /hello%00xyz must NOT match the literal route /hello.  Without the
+   * embedded-NUL guard, _match_route_cached's own literal-segment
+   * comparison decodes "hello%00xyz" to "hello\0xyz" and compares it
+   * against "hello" via strcmp, which stops at the first NUL in either
+   * operand and reports a match, letting an attacker-chosen suffix hide
+   * behind a route match a caller reasonably expects to reflect the whole
+   * segment. */
   chttpcli_response *resp = _get("/hello%00xyz");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 404);
@@ -2218,7 +2218,7 @@ TEST(chttpserver, percent_encoded_nul_in_literal_segment_is_route_mismatch) {
 }
 
 TEST(chttpserver, percent_encoded_nul_in_param_segment_is_route_mismatch) {
-  /* Same class of bug, exercised through a {param} segment instead of a
+  /* Same class of hazard, exercised through a {param} segment instead of a
    * literal one: _seg_cache_get must treat a decoded embedded NUL as a
    * decode failure (the same bucket a malformed %XX escape already falls
    * into), not silently hand a truncated value to a would-be match. */
@@ -2229,11 +2229,11 @@ TEST(chttpserver, percent_encoded_nul_in_param_segment_is_route_mismatch) {
 }
 
 TEST(chttpserver, percent_encoded_nul_in_query_key_does_not_alias) {
-  /* Same class of bug in the query-string decoder: a key "q%00x" must not
-   * decode-then-strcmp its way into aliasing the unrelated key "q". Before
-   * the fix, _parse_qparams stored the fully-decoded "q\0x" and
-   * chttpsvr_req_query_one's strcmp(qp->keys[i], "q") stopped at the
-   * embedded NUL and reported a spurious match. */
+  /* Same class of hazard in the query-string decoder: a key "q%00x" must
+   * not decode-then-strcmp its way into aliasing the unrelated key "q".
+   * Without the guard, _parse_qparams stores the fully-decoded "q\0x" and
+   * chttpsvr_req_query_one's strcmp(qp->keys[i], "q") stops at the embedded
+   * NUL and reports a spurious match. */
   chttpcli_response *resp = _get("/query-one?q%00x=hello");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -2264,10 +2264,10 @@ TEST(chttpserver, multi_key_query_missing) {
   chttpclient_resp_free(resp);
 }
 
-/* Counting pass-through allocator so create_chttpsvr_mp can be exercised and
- * the test can prove the supplied procs (not the library default allocator)
- * actually handled every allocation/free, not just that create/destroy
- * happened to succeed. */
+/* Counting pass-through allocator so ccol_create_chttpsvr_mp can be exercised
+ * and the test can prove the supplied procs (not the library default allocator)
+ * actually handled every allocation/free, not just that create/destroy happened
+ * to succeed. */
 static size_t g_wrap_malloc_count;
 static size_t g_wrap_free_count;
 static size_t g_wrap_calloc_count;
@@ -2291,14 +2291,13 @@ static void *_wrap_realloc(void *p, size_t s) {
 }
 
 TEST(chttpserver, custom_allocator_lifecycle) {
-  /* create_chttpsvr_mp must succeed with a custom allocator, accept route
+  /* ccol_create_chttpsvr_mp must succeed with a custom allocator, accept route
      registrations, and release all memory through the same allocator on
-     destroy.  Previously bug #1 caused UB in the mutex_init failure path;
-     the happy-path test here exercises the same m_procs copying code.
-     Counting the wrapper calls (rather than using bare passthroughs) proves
-     create_chttpsvr_mp actually threaded the supplied procs through to every
-     allocation site instead of silently falling back to the library
-     default. */
+     destroy.  This happy path exercises the same m_procs copying code the
+     ccol_mutex_init failure path depends on.  Counting the wrapper calls
+     (rather than using bare passthroughs) proves ccol_create_chttpsvr_mp
+     actually threads the supplied procs through to every allocation site
+     instead of silently falling back to the library default. */
   g_wrap_malloc_count = 0;
   g_wrap_free_count = 0;
   g_wrap_calloc_count = 0;
@@ -2308,7 +2307,7 @@ TEST(chttpserver, custom_allocator_lifecycle) {
                              _wrap_realloc};
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr_mp(&mp, g_test_logger, &err);
+      ccol_create_chttpsvr_mp(&mp, g_test_logger, &err);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   REQUIRE_GT(g_wrap_malloc_count + g_wrap_calloc_count, (size_t)0);
   REQUIRE_EQ(g_wrap_free_count, (size_t)0);
@@ -2567,12 +2566,12 @@ static int _raw_request(const char *method, const char *path,
     return -1;
   }
   /* Bounds the read loop below in case a regression makes the server never
-     respond and never close (e.g. it tried to read a declared-but-never-sent
-     body before rejecting an unmatched route; exactly the class of bug
+     respond and never close (e.g. it reads a declared-but-never-sent body
+     before rejecting an unmatched route; exactly the class of bug
      unmatched_route_rejected_without_reading_body exists to catch): without
-     this, that read(2) call would block forever instead of this helper's
-     caller failing its own assertion cleanly. Every caller of this shared
-     helper benefits, not just the one that originally motivated it. */
+     this, that read(2) call blocks forever instead of this helper's caller
+     failing its own assertion cleanly. Every caller of this shared helper
+     benefits, not just the one whose failure mode is named here. */
   struct timeval rcvtimeo = {5, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
 
@@ -2852,7 +2851,7 @@ static size_t _drain_socket_until_eof(int fd, char *buf, size_t buf_sz) {
    Mirrors _raw_request's own identical SO_RCVTIMEO guard above; every
    caller of this shared helper (used at every one of this file's
    keep-alive/Unix-socket/max_connections/self-restart tests) benefits, not
-   just the one that originally motivated it. A no-op for a caller that
+   just the one whose failure mode is named above. A no-op for a caller that
    already set its own SO_RCVTIMEO on fd (setsockopt simply overwrites the
    same option with an identical value). */
 static int _read_one_http_response(int fd, char *buf, size_t buf_sz) {
@@ -2973,19 +2972,18 @@ TEST(chttpserver, req_body_via_api_on_streaming_route) {
 }
 
 TEST(chttpserver, req_body_via_api_after_req_read_on_streaming_route) {
-  /* A real, previously-unguarded gap: chttpsvr_req_body() had no
-     is_streaming check at all, so it always returned conn->body.buf/.len
-     verbatim; for a streaming route, conn->body is a live cursor
-     chttpsvr_req_read() drains, only lazily compacted back to empty on the
-     NEXT batch's arrival, not immediately once fully drained. The previous
-     test above only ever calls chttpsvr_req_body() BEFORE any
-     chttpsvr_req_read() call, so it passed for the coincidental reason that
-     conn->body just happens to still be all-zero at that point, not because
-     of any real streaming-route enforcement. This test calls
-     chttpsvr_req_read() first, so a regression that dropped the guard would
-     surface here as a non-NULL body/nonzero len (whatever chttpsvr_req_read
-     had already delivered, still sitting in the buffer) instead of the
-     documented NULL/0. */
+  /* The gap chttpsvr_req_body()'s own is_streaming check closes: without
+     it, the function returns conn->body.buf/.len verbatim, and for a
+     streaming route conn->body is a live cursor chttpsvr_req_read() drains,
+     only lazily compacted back to empty on the NEXT batch's arrival, not
+     immediately once fully drained. The test above only ever calls
+     chttpsvr_req_body() BEFORE any chttpsvr_req_read() call, so it passes
+     for the coincidental reason that conn->body just happens to still be
+     all-zero at that point, not because of any real streaming-route
+     enforcement. This test calls chttpsvr_req_read() first, so a regression
+     that dropped the guard surfaces here as a non-NULL body/nonzero len
+     (whatever chttpsvr_req_read has already delivered, still sitting in the
+     buffer) instead of the documented NULL/0. */
   const char *payload = "12345678-more-than-eight-bytes";
   chttpcli_response *resp =
       _post("/stream-body-after-read", payload, "text/plain");
@@ -3023,9 +3021,9 @@ TEST(chttpserver, streaming_repeated_header) {
 
 TEST(chttpserver, streaming_body_delivered_in_separate_batches) {
   /* A client that writes its body in several delayed chunks must cause the
-     streaming handler's chttpsvr_req_read() to observe more than one batch
-     ; proving the body is read live off the socket by the worker thread
-     as it arrives, not pre-buffered whole before the handler starts. */
+     streaming handler's chttpsvr_req_read() to observe more than one batch,
+     proving the body is read live off the socket by the worker thread as it
+     arrives, not pre-buffered whole before the handler starts. */
   char buf[4096] = {0};
   int status = _raw_request_drip_body(TEST_PORT, "POST", "/stream-batch-count",
                                       "aaaabbbbccccddddeeee", 4, 20000, buf,
@@ -3045,7 +3043,7 @@ TEST(chttpserver, streaming_body_delivered_in_separate_batches) {
 }
 
 TEST(chttpserver, unmatched_route_rejected_without_reading_body) {
-  /* Routing now happens at headers-complete time, before any body byte is
+  /* Routing happens at headers-complete time, before any body byte is
      read; an unmatched route must be rejected immediately even though
      the client claims (but never sends) a huge body. If the server tried
      to read the body before responding, this would hang instead of
@@ -3061,16 +3059,16 @@ TEST(chttpserver, unmatched_route_rejected_without_reading_body) {
      bump lands strictly after the response is already on the wire (see
      _wait_for_reject_pool_task_count's own comment). Waiting for it here
      stops that straggler increment from leaking into whichever test tau
-     runs next, which previously could observe one more than it expected
-     if this test returned before the async bump landed. */
+     runs next, which would otherwise observe one more than it expects if
+     this test returned before the async bump landed. */
   _wait_for_reject_pool_task_count(reject_count_before + 1);
 }
 
 TEST(chttpserver, unmatched_route_rejection_routed_through_reject_pool) {
-  /* Every rejection is now routed through reject_pool, not just the
-     pool-full 503 case (see bounded_pool_full_returns_503's own assertion
-     on that); so a slow-reading client being told about a bad route can
-     no longer stall the sole reactor thread either. A black-box client
+  /* Every rejection is routed through reject_pool, not just the pool-full
+     503 case (see bounded_pool_full_returns_503's own assertion on that),
+     so a slow-reading client being told about a bad route cannot stall the
+     sole reactor thread either. A black-box client
      cannot distinguish "answered via reject_pool" from "answered via the
      synchronous last-resort fallback" (both produce an identical 404 on the
      wire), so this checks the mechanism directly via
@@ -3086,24 +3084,23 @@ TEST(chttpserver, unmatched_route_rejection_routed_through_reject_pool) {
 }
 
 TEST(chttpserver, concurrent_route_rejections_do_not_starve_other_requests) {
-  /* Previously, every unmatched-route rejection (404/405/500) ran
-     synchronously on chttpserver's own sole reactor thread; a burst of many
-     such rejections could delay dispatch for every other, unrelated
-     connection queued behind them on that same thread; g_srv and
-     g_bounded_srv share one process-wide reactor, so this is not a
-     hypothetical concern. Now that every rejection is routed through
-     reject_pool (a small dedicated pool, sized from worker_thread_count; see
-     that pool's own comment in chttpserver.c), a burst of concurrent
-     rejections must not meaningfully delay an ordinary, unrelated request
-     served concurrently. A courtesy rejection response is
-     too small to reliably force the old code's actual blocking write to
-     manifest via socket-buffer starvation (unlike
+  /* An unmatched-route rejection (404/405/500) that ran synchronously on
+     chttpserver's own sole reactor thread would let a burst of many such
+     rejections delay dispatch for every other, unrelated connection queued
+     behind them on that same thread; g_srv and g_bounded_srv share one
+     process-wide reactor, so this is not a hypothetical concern. Every
+     rejection therefore goes through reject_pool (a small dedicated pool,
+     sized from worker_thread_count; see that pool's own comment in
+     chttpserver.c), and a burst of concurrent rejections must not
+     meaningfully delay an ordinary, unrelated request served concurrently.
+     A courtesy rejection response is too small to reliably force a blocking
+     write to manifest via socket-buffer starvation (unlike
      response_write_timeout_closes_slow_reader_connection's large body), so
      this cannot tightly prove non-blocking the way that test does; it is a
-     smoke/regression check against gross reactor-thread starvation, and it
-     exercises reject_pool's own multi-threaded submission/dispatch path
-     under real concurrency (unlike bounded_pool_full_returns_503's single
-     503, which never contends with anything else). */
+     smoke check against gross reactor-thread starvation, and it exercises
+     reject_pool's own multi-threaded submission/dispatch path under real
+     concurrency (unlike bounded_pool_full_returns_503's single 503, which
+     never contends with anything else). */
   /* Every intermediate outcome below is captured into a local instead of
    * asserted on immediately with REQUIRE_*, and every successfully-created
    * background thread is joined UNCONDITIONALLY before any REQUIRE_* runs:
@@ -3171,9 +3168,9 @@ TEST(chttpserver, pipelined_bytes_after_rejected_route_not_misparsed) {
 
   /* Both requests concatenated into one write() call so they are guaranteed
      to arrive together in the same read buffer server-side: the first hits
-     an unmatched route (rejected without ever diverting), the second hits
-     a matched one and would misparse as its "body" if the bug were still
-     present. */
+     an unmatched route (rejected without ever diverting), the second hits a
+     matched one and is exactly what a misparse would swallow as the first
+     request's "body". */
   const char *req =
       "GET /no-such-route-at-all HTTP/1.1\r\n"
       "Host: 127.0.0.1\r\n"
@@ -3199,9 +3196,9 @@ TEST(chttpserver, pipelined_bytes_after_rejected_route_not_misparsed) {
 
 TEST(chttpserver, keep_alive_across_two_requests_on_one_connection) {
   /* Two matched requests sent back to back on the same connection (no
-     Connection: close) must both succeed; verifies that pausing at
-     headers-complete time (instead of after the full body, as before)
-     does not break normal keep-alive/pipelining. */
+     Connection: close) must both succeed; pausing at headers-complete time
+     (rather than after the full body) must not break normal keep-alive/
+     pipelining. */
   struct sockaddr_in sa;
   memset(&sa, 0, sizeof(sa));
   sa.sin_family = AF_INET;
@@ -3227,21 +3224,21 @@ TEST(chttpserver, keep_alive_across_two_requests_on_one_connection) {
 }
 
 TEST(chttpserver, pipelined_bodyless_requests_both_answered) {
-  /* Regression test for a real bug: a bodyless request (GET, here) that
-     completes its own framing immediately after headers (no Content-Length,
-     no chunked Transfer-Encoding) never calls _drain_body's own
-     chttp1_stream_read loop at all, since chttp1_parser_message_complete()
-     is already true the instant the worker starts. Before this was fixed,
-     whatever chttp1_stream_prepare() was given as leftover (here: this
-     connection's ENTIRE second, pipelined request, already off the wire and
-     gone from the kernel's socket buffer for good) sat untouched in the
-     stream's own carry-over and was silently discarded the moment
-     chttp1_stream_release() ran, even though the connection was correctly
-     being kept alive; the second request's bytes vanished forever and the
-     client hung waiting for a response that would never come. Both requests
-     are concatenated into a single write() call so they are guaranteed to
-     land together in the reactor's own read buffer server-side, exactly
-     the shape that triggered the bug. */
+  /* A bodyless request (GET, here) that completes its own framing
+     immediately after headers (no Content-Length, no chunked
+     Transfer-Encoding) never calls _drain_body's own chttp1_stream_read
+     loop at all, since chttp1_parser_message_complete() is already true the
+     instant the worker starts. The leftover chttp1_stream_prepare() is
+     given (here: this connection's ENTIRE second, pipelined request,
+     already off the wire and gone from the kernel's socket buffer for good)
+     must therefore be reclaimed explicitly: left untouched in the stream's
+     own carry-over, it is discarded the moment chttp1_stream_release()
+     runs, even though the connection is correctly being kept alive, so the
+     second request's bytes vanish forever and the client hangs waiting for
+     a response that never comes. Both requests are concatenated into a
+     single write() call so they are guaranteed to land together in the
+     reactor's own read buffer server-side, exactly the shape that
+     exercises it. */
   struct sockaddr_in sa;
   memset(&sa, 0, sizeof(sa));
   sa.sin_family = AF_INET;
@@ -3281,17 +3278,17 @@ TEST(chttpserver, pipelined_bodyless_requests_both_answered) {
 }
 
 TEST(chttpserver, pipelined_bytes_after_buffered_body_request_not_lost) {
-  /* Same regression as pipelined_bodyless_requests_both_answered, but for
-     the OTHER half of the same underlying bug: a request that DOES have a
-     body (so _drain_body's own chttp1_stream_read/chttp1_parser_execute
-     loop genuinely runs) can still lose a pipelined next request if that
-     loop's own read happens to pull in bytes past this message's body
-     boundary; chttp1_parser_execute reports back exactly how many of the
-     bytes it was given were actually consumed (chttp1_parser_consumed()),
-     but the trailing remainder (here: the second request's own raw bytes,
-     swept up in the very same chttp1_stream_read call that returned the
-     first request's 5-byte body) was previously never captured anywhere and
-     vanished right along with the rest of that read buffer. */
+  /* Same contract as pipelined_bodyless_requests_both_answered, but for the
+     OTHER half of it: a request that DOES have a body (so _drain_body's own
+     chttp1_stream_read/chttp1_parser_execute loop genuinely runs) can still
+     lose a pipelined next request if that loop's own read happens to pull
+     in bytes past this message's body boundary; chttp1_parser_execute
+     reports back exactly how many of the bytes it was given were actually
+     consumed (chttp1_parser_consumed()), and the trailing remainder (here:
+     the second request's own raw bytes, swept up in the very same
+     chttp1_stream_read call that returned the first request's 5-byte body)
+     must be captured rather than discarded along with the rest of that read
+     buffer. */
   struct sockaddr_in sa;
   memset(&sa, 0, sizeof(sa));
   sa.sin_family = AF_INET;
@@ -3335,7 +3332,7 @@ TEST(chttpserver, pipelined_bytes_after_buffered_body_request_not_lost) {
 TEST(chttpserver, pipelined_bytes_after_streaming_body_request_not_lost) {
   /* Streaming-route counterpart: chttpsvr_req_read() drives the identical
      chttp1_stream_read/chttp1_parser_execute loop shape _drain_body uses
-     for a buffered route, so it needs (and, with this fix, has) the same
+     for a buffered route, so it needs (and has) the same
      push-back-then-reclaim treatment; without it, a pipelined next request
      riding in on the same read as a streamed body's own trailing bytes
      would be lost exactly the same way. */
@@ -3392,12 +3389,11 @@ TEST(chttpserver, five_pipelined_bodyless_requests_all_answered) {
      complete right there (as they do here), _conn_start_diverted runs a
      second time too, recursively, from inside _task_worker itself,
      re-submitting to the very same worker pool for a fourth request's
-     bytes, and so on. This is the one code path in the pipelining fix that
-     was never exercised by any two-requests-only test: it locks in that
-     an arbitrarily long chain of pipelined requests, all delivered in one
-     socket read, is fully answered with none dropped, corrupted, or
-     duplicated, regardless of how many times that recursive hand-off has
-     to happen. */
+     bytes, and so on. No two-requests-only test reaches that recursive
+     hand-off at all, which is what this test exists for: an arbitrarily
+     long chain of pipelined requests, all delivered in one socket read, is
+     fully answered with none dropped, corrupted, or duplicated, regardless
+     of how many times the hand-off has to happen. */
   struct sockaddr_in sa;
   memset(&sa, 0, sizeof(sa));
   sa.sin_family = AF_INET;
@@ -3454,8 +3450,8 @@ TEST(chttpserver, five_pipelined_bodyless_requests_all_answered) {
 }
 
 TEST(chttpserver, pipelined_malformed_request_after_worker_processed_request) {
-  /* Regression test for a real use-after-free in _task_worker's own
-     keep-alive tail: when a further pipelined request's bytes are fed into
+  /* Guards against a use-after-free in _task_worker's own keep-alive tail:
+     when a further pipelined request's bytes are fed into
      _conn_feed_bytes from a worker thread (rather than the reactor thread;
      see _conn_feed_bytes's own doc comment and this exact code path's
      comment in _task_worker), _conn_feed_bytes may fully resolve conn's
@@ -3465,9 +3461,9 @@ TEST(chttpserver, pipelined_malformed_request_after_worker_processed_request) {
      the negative Content-Length case in negative_content_length_rejected
      above) takes _conn_feed_bytes's synchronous, same-thread _conn_close
      branch, freeing conn deterministically before _conn_feed_bytes returns;
-     not merely racily, unlike the cross-thread-divert case. A prior
-     version of this code read conn->m_procs immediately afterward to free
-     a local scratch buffer, a guaranteed use-after-free on this exact path.
+     not merely racily, unlike the cross-thread-divert case. Reading
+     conn->m_procs immediately afterward (to free a local scratch buffer,
+     say) is therefore a guaranteed use-after-free on this exact path.
      Both requests are concatenated into one write() so the first (matched,
      kept-alive) request is diverted to a worker thread from the reactor's
      own initial read, and the second (malformed) request's bytes ride
@@ -3720,16 +3716,16 @@ TEST(chttpserver, client_disconnect_mid_body_does_not_hang_server) {
      exactly exhausted by that OTHER test's own two concurrent blocking
      requests, leaving no slack for this test's own follow-up request to
      race the server's own not-yet-complete abort-cleanup without an
-     occasional, spurious 503 (observed in practice under valgrind, where
-     genuine concurrency is heavily serialized and a worker's own wakeup can
-     be delayed well past the moment a queue-capacity check runs). A
+     occasional, spurious 503 (a real effect under valgrind, where genuine
+     concurrency is heavily serialized and a worker's own wakeup can be
+     delayed well past the moment a queue-capacity check runs). A
      generous queue_capacity here (this test's only two connections are ever
      going to use it) removes that capacity race entirely while keeping the
      one property that makes the test meaningful: with only one worker
      thread, the follow-up below can only succeed if that same worker
      recovered from the abrupt disconnect and returned to the pool. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t reg_rv = chttpsvr_register_streaming_handler(
       srv, CHTTP_POST, "/disconnect-mid-body", _stream_error_report_handler,
@@ -3798,17 +3794,16 @@ TEST(chttpserver, client_disconnect_mid_body_does_not_hang_server) {
 TEST(chttpserver, truncated_body_reports_ccol_http_transfer_aborted) {
   /* chttpsvr_req_stream_error() is documented to return
      ccol_http_transfer_aborted for "connection closed or malformed
-     framing" mid-body, but chttpsvr_req_read()'s truncated-body and
-     hard-I/O-error exit paths never actually recorded that on the
-     connection: every such case silently fell through to ccol_success,
-     telling a well-behaved streaming handler that a truncated upload was a
-     clean read. Confirmed via a standalone repro against the built library
-     before fixing: POST Content-Length: 100, send 20 bytes, half-close;
-     the handler observed chttpsvr_req_read() return -1 but
-     chttpsvr_req_stream_error() report ccol_success and the server replied
-     200 OK. Unlike client_disconnect_mid_body_does_not_hang_server above
-     (a full close, so there is no response left to read back), this half-
-     closes only the write side so the response can be inspected directly. */
+     framing" mid-body, so chttpsvr_req_read()'s truncated-body and
+     hard-I/O-error exit paths must record that on the connection: a silent
+     fall-through to ccol_success tells a well-behaved streaming handler
+     that a truncated upload was a clean read (POST Content-Length: 100,
+     send 20 bytes, half-close, and the handler sees chttpsvr_req_read()
+     return -1 while chttpsvr_req_stream_error() reports ccol_success and
+     the server replies 200 OK). Unlike
+     client_disconnect_mid_body_does_not_hang_server above (a full close, so
+     there is no response left to read back), this half-closes only the
+     write side so the response can be inspected directly. */
   char buf[4096] = {0};
   int rc = _raw_request_truncate_body_half_close(
       "/stream-error-report", "only-part-of-the-declared-body", 1000, buf,
@@ -3819,15 +3814,13 @@ TEST(chttpserver, truncated_body_reports_ccol_http_transfer_aborted) {
 }
 
 TEST(chttpserver, expect_100_continue_interim_response_sent_before_body) {
-  /* conn->expects_continue's interim "100 Continue" write moved from the
-     reactor thread (_conn_pump, right when headers finish) to the worker
-     thread (_task_worker, right before body draining begins) so a slow-
-     reading client can no longer stall the server's sole reactor thread
-     during this write; no test exercised the server's Expect: 100-continue
-     behavior at all before this change. This proves the move preserved the
-     actual wire behavior: the interim response still arrives before the
-     client sends its body, and the real final response still follows once
-     the body is sent. */
+  /* conn->expects_continue's interim "100 Continue" write happens on the
+     worker thread (_task_worker, right before body draining begins) rather
+     than the reactor thread (_conn_pump, right when headers finish), so a
+     slow-reading client cannot stall the server's sole reactor thread
+     during this write. This pins the actual wire behavior that placement
+     must preserve: the interim response arrives before the client sends its
+     body, and the real final response follows once the body is sent. */
   struct sockaddr_in sa;
   memset(&sa, 0, sizeof(sa));
   sa.sin_family = AF_INET;
@@ -3873,18 +3866,18 @@ TEST(chttpserver, expect_100_continue_interim_response_sent_before_body) {
   fd = -1;
 }
 
-/* Regression test: a streaming route's handler that decides to reject a
-   request without ever calling chttpsvr_req_read() must produce the real
-   final response directly, with NO "100 Continue" interim response ever
-   reaching the client first. Before the fix, _task_worker sent "100
-   Continue" unconditionally, before the handler ever ran, for both buffered
-   and streaming routes alike; silently telling the client to go ahead and
-   upload a body the server was never going to read, defeating the entire
-   point of Expect: 100-continue (RFC 7231 SS5.1.1: let the server answer
-   with a final status instead of "100 Continue" and skip the upload
-   entirely). Fixed by deferring the interim send for a streaming route to
-   chttpsvr_req_read() itself (see that function's own comment), so it fires
-   only if the handler actually asks to read. */
+/* A streaming route's handler that decides to reject a request without ever
+   calling chttpsvr_req_read() must produce the real final response
+   directly, with NO "100 Continue" interim response ever reaching the
+   client first. Sending "100 Continue" unconditionally from _task_worker,
+   before the handler ever runs, for buffered and streaming routes alike,
+   silently tells the client to go ahead and upload a body the server was
+   never going to read, defeating the entire point of Expect: 100-continue
+   (RFC 7231 SS5.1.1: let the server answer with a final status instead of
+   "100 Continue" and skip the upload entirely). Deferring the interim send
+   for a streaming route to chttpsvr_req_read() itself (see that function's
+   own comment) is what keeps it from firing unless the handler actually
+   asks to read. */
 TEST(
     chttpserver,
     expect_100_continue_not_sent_when_streaming_handler_rejects_without_reading) {
@@ -3927,14 +3920,14 @@ TEST(
   fd = -1;
 }
 
-/* Regression test: a request that carries "Expect: 100-continue" but has no
-   body at all (no Content-Length, no chunked Transfer-Encoding) must never
-   receive the interim "100 Continue" response, for a STREAMING route whose
-   handler does call chttpsvr_req_read(). Before the fix, the lazy send in
-   chttpsvr_req_read() fired unconditionally on its first call regardless of
-   whether chttp1_parser_message_complete() was already true (i.e.
-   regardless of whether there was ever a body to invite); telling the
-   client to go ahead and upload a body that was never coming. */
+/* A request that carries "Expect: 100-continue" but has no body at all (no
+   Content-Length, no chunked Transfer-Encoding) must never receive the
+   interim "100 Continue" response, for a STREAMING route whose handler does
+   call chttpsvr_req_read(). The lazy send in chttpsvr_req_read() must not
+   fire unconditionally on its first call, regardless of whether
+   chttp1_parser_message_complete() is already true (that is, regardless of
+   whether there was ever a body to invite); doing so tells the client to go
+   ahead and upload a body that was never coming. */
 TEST(chttpserver, expect_100_continue_not_sent_for_bodyless_streaming_request) {
   struct sockaddr_in sa;
   memset(&sa, 0, sizeof(sa));
@@ -3964,10 +3957,10 @@ TEST(chttpserver, expect_100_continue_not_sent_for_bodyless_streaming_request) {
   fd = -1;
 }
 
-/* Same regression, for a BUFFERED route: _task_worker's own eager interim
+/* Same contract, for a BUFFERED route: _task_worker's own eager interim
    send (fired before _drain_body, for routes registered with
-   chttpsvr_register_handler rather than the streaming variant) had the
-   identical unconditional-send bug. */
+   chttpsvr_register_handler rather than the streaming variant) must be
+   conditional in exactly the same way. */
 TEST(chttpserver, expect_100_continue_not_sent_for_bodyless_buffered_request) {
   struct sockaddr_in sa;
   memset(&sa, 0, sizeof(sa));
@@ -3995,20 +3988,19 @@ TEST(chttpserver, expect_100_continue_not_sent_for_bodyless_buffered_request) {
   fd = -1;
 }
 
-/* Regression test for a real bug in _write_interim_continue: a genuine short
-   write of the 25-byte "HTTP/1.1 100 Continue\r\n\r\n" interim line (a slow-
-   reading peer stalling the write partway through, exactly the scenario
-   max_response_write_duration_ms exists to defend against) left a truncated,
-   unparseable status line on the wire, and neither _task_worker (this
-   test's own buffered-route path) nor chttpsvr_req_read (the sibling
-   streaming-route test right below) ever checked for it: both proceeded to
-   run the handler and send a complete, valid final response immediately
-   after the truncated prefix, producing a byte stream like "HTTP/1.1 100
-   ConHTTP/1.1 200 OK\r\n..." no compliant HTTP/1.1 client could parse. Fixed
-   by having _write_interim_continue report whether it wrote the complete
-   line, and having both call sites treat a false return as fatal for this
-   connection: skip the real response send entirely and close instead of
-   layering more bytes on top of a possibly-corrupted stream.
+/* A genuine short write of the 25-byte "HTTP/1.1 100 Continue\r\n\r\n"
+   interim line (a slow-reading peer stalling the write partway through,
+   exactly the scenario max_response_write_duration_ms exists to defend
+   against) leaves a truncated, unparseable status line on the wire.
+   _write_interim_continue therefore reports whether it wrote the complete
+   line, and both call sites (_task_worker, this test's own buffered-route
+   path, and chttpsvr_req_read, the sibling streaming-route test right
+   below) treat a false return as fatal for this connection: skip the real
+   response send entirely and close, instead of layering more bytes on top
+   of a possibly-corrupted stream. Running the handler and sending a
+   complete, valid final response immediately after the truncated prefix
+   instead produces a byte stream like "HTTP/1.1 100 ConHTTP/1.1 200
+   OK\r\n..." that no compliant HTTP/1.1 client can parse.
 
    _chttpsvr_force_short_interim_write_for_tests() reproduces the short
    write deterministically (a real, partial write to the actual socket, not
@@ -4123,23 +4115,23 @@ TEST(chttpserver, interim_continue_short_write_streaming_route_forces_close) {
 
 TEST(chttpserver,
      max_response_write_duration_bounds_interim_continue_response) {
-  /* Regression test for a real gap: _write_interim_continue's own "100
-     Continue" interim write (RFC 7231 SS5.1.1, sent for an ordinary
-     "Expect: 100-continue" request, standard client behavior; e.g. curl's
-     own default for large uploads) used to thread through conn->write_
-     deadline via a bare _shrink_timeout_to_deadline call, unlike
-     _send_response's own rejection-response path, which was given an
-     unconditional _CHTTPSVR_INTERNAL_WRITE_MAX_TOTAL_MS ceiling in an
-     earlier fix specifically so a small, fixed-shape, internally-generated
-     write is never left fully unbounded when the operator leaves
-     max_response_write_duration_ms at its own default-disabled value of 0.
-     Left unfixed, a peer sending an ordinary Expect: 100-continue request
+  /* _write_interim_continue's own "100 Continue" interim write (RFC 7231
+     SS5.1.1, sent for an ordinary "Expect: 100-continue" request, standard
+     client behavior; e.g. curl's own default for large uploads) must NOT
+     thread through
+     conn->write_deadline via a bare _shrink_timeout_to_deadline call. It
+     needs the same unconditional _CHTTPSVR_INTERNAL_WRITE_MAX_TOTAL_MS
+     ceiling _send_response's own rejection-response path carries, so that a
+     small, fixed-shape, internally-generated write is never left fully
+     unbounded when the operator leaves max_response_write_duration_ms at
+     its own default-disabled value of 0. Without it, a peer sending an
+     ordinary Expect: 100-continue request
      and then trickling reads of the interim line could hold a worker-pool
      thread hostage indefinitely at this project's own shipped default
      configuration, exhausting the entire pool with only a handful of such
-     connections; the identical Slowloris-class denial-of-service the
-     rejection-response fix already closed for a different internally-
-     generated write. g_srv (used here directly) never configures
+     connections; the identical Slowloris-class denial-of-service the same
+     unconditional ceiling closes for the rejection response, another
+     internally-generated write. g_srv (used here directly) never configures
      max_response_write_duration_ms, so it stays at its real, shipped
      default of 0 for this test, proving the ceiling really is unconditional
      rather than merely mirroring whatever cap the test itself sets up. */
@@ -4156,7 +4148,7 @@ TEST(chttpserver,
   REQUIRE_TRUE(fd >= 0);
   REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
   /* Bounds the read below in case a regression makes the hook stop being
-     consulted at all for this path (the exact pre-fix behavior): without
+     consulted at all for this path: without
      this, the server just sends an ordinary "100 Continue" interim line and
      the read below would still return promptly with those bytes rather
      than hang; this timeout exists purely as defensive
@@ -4182,41 +4174,40 @@ TEST(chttpserver,
   char buf[64];
   ssize_t r = read(fd, buf, sizeof(buf));
 
-  /* A working fix means the interim-continue write loop's very first
-     write-deadline check (before any real write(2) call is ever attempted)
-     reports "already expired" via the forced hook, so the interim write
-     returns false having sent zero bytes; per _write_interim_continue's own
-     documented contract, any false return (not just a short one) makes the
-     caller skip the real response send and close the connection, so the
-     client observes EOF (read returns 0) with nothing at all received. A
-     regressed (pre-fix) build never consults the hook for this path at
-     all, so the server sends a complete, ordinary "100 Continue" line
-     instead; observed here as a positive byte count. */
+  /* The interim-continue write loop's very first write-deadline check
+     (before any real write(2) call is ever attempted) reports "already
+     expired" via the forced hook, so the interim write returns false having
+     sent zero bytes; per _write_interim_continue's own documented contract,
+     any false return (not just a short one) makes the caller skip the real
+     response send and close the connection, so the client observes EOF
+     (read returns 0) with nothing at all received. This test is
+     non-vacuous: a build that never consults the hook for this path sends a
+     complete, ordinary "100 Continue" line instead, observed here as a
+     positive byte count. */
   REQUIRE_EQ((int)r, 0);
 }
 
 TEST(chttpserver, stream_read_timeout_ms_zero_means_wait_indefinitely) {
   /* chttpsvr_config_t.stream_read_timeout_ms is documented "0 = wait
-     indefinitely", but every chttpserver.c call site that read it cast the
-     value straight through to chttp1_stream_read/_write's own int
-     timeout_ms parameter, which instead follows poll(2)'s convention
-     (negative = block forever, 0 = a single non-blocking attempt, no
-     translation of a configured "0 means forever" into "-1 means
-     forever"). A configured 0 therefore silently meant the opposite: give
-     up immediately, on every single call, without even trying. Confirmed
-     via a standalone repro against the built library before this was
-     fixed: a streaming handler's chttpsvr_req_read() returned -1 at
-     essentially t=0 regardless of how long the client actually took to
-     send the body, and even a completely bodyless GET never received a
-     response at all, since response_write_timeout_ms's own "0 = use
-     stream_read_timeout_ms's value" default silently inherited the same
-     broken 0 and every response write failed instantly too. This test
-     proves both are fixed: a client that delays sending its body well past
+     indefinitely", so every chttpserver.c call site must translate that
+     into chttp1_stream_read/_write's own int timeout_ms parameter, which
+     follows poll(2)'s convention instead (negative = block forever, 0 = a
+     single non-blocking attempt). Casting the value straight through skips
+     that translation, and a configured 0 then means the exact opposite:
+     give up immediately, on every single call, without even trying. The
+     visible symptoms are a streaming handler's
+     chttpsvr_req_read() returning -1 at essentially t=0 regardless of how
+     long the client actually takes to send the body, and even a completely
+     bodyless GET never receiving a response at all, since
+     response_write_timeout_ms's own "0 = use stream_read_timeout_ms's
+     value" default inherits the same 0 and every response write fails
+     instantly too. This test covers both: a client that delays sending its
+     body well past
      any accidental "instant" failure must still succeed once the bytes
      actually arrive, and the resulting response must actually be
      delivered. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv =
       chttpsvr_register_streaming_handler(srv, CHTTP_POST, "/zero-timeout-wait",
@@ -4407,7 +4398,7 @@ TEST(chttpserver, trailing_slash_not_matched) {
 }
 
 /* ========================================================================== */
-/*   ROUTE-MATCHING PER-ROUTER SEGMENT-DECODE CACHE REGRESSION TESTS          */
+/*   ROUTE-MATCHING PER-ROUTER SEGMENT-DECODE CACHE TESTS                     */
 /*                                                                            */
 /* chttpserver.c's route matcher percent-decodes each raw path segment at    */
 /* most once per router per request (via a small cache), shared by every     */
@@ -4509,7 +4500,7 @@ TEST(chttpserver, cache_malformed_segment_rejects_every_sharing_candidate) {
 }
 
 /* ========================================================================== */
-/*   SUB-ROUTER PREFIX-MATCHING SEGMENT-DECODE CACHE REGRESSION TESTS         */
+/*   SUB-ROUTER PREFIX-MATCHING SEGMENT-DECODE CACHE TESTS                    */
 /*                                                                            */
 /* _find_route also percent-decodes each raw request-path segment at most    */
 /* once per request, via a cache shared across every non-root sub-router's   */
@@ -4737,8 +4728,8 @@ TEST(chttpserver, query_one_null_key_returns_invalid_args) {
 
 TEST(chttpserver, req_read_zero_buflen_returns_zero) {
   /* chttpsvr_req_read(req, buf, 0) must return 0 (no-op), not -1 (error),
-   * on a streaming route.  Before the fix the buflen == 0 check was bundled
-   * with the hard-error guards and incorrectly returned -1. */
+   * on a streaming route.  Bundling the buflen == 0 check with the
+   * hard-error guards instead would incorrectly return -1. */
   chttpcli_response *resp = _get("/stream-zero-buflen");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -5115,7 +5106,7 @@ TEST(chttpserver, stop_null_is_noop) {
   chttpsvr_stop(CHTTPSVR_INVALID);
 }
 
-/* (The engine lifecycle is now managed implicitly: the engine starts on the
+/* (The engine lifecycle is managed implicitly: the engine starts on the
    first chttpsvr_start call and stops when the last server is destroyed.) */
 
 /* ========================================================================== */
@@ -5566,13 +5557,14 @@ TEST(chttpserver, serve_tls_zero_port_rejected_before_tls_init) {
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 }
 
-/* serve_tls_blocked_by_running_server: removed.  Multiple server instances
- * may now run concurrently, so starting a TLS server while g_srv is active
- * is permitted.  TLS integration requires valid certificate files; that
+/* There is deliberately no "starting a TLS server while another server is
+ * already running is blocked" test here: multiple server instances may run
+ * concurrently, so starting a TLS server while g_srv is active is
+ * permitted.  TLS integration requires valid certificate files; that
  * coverage lives in the dedicated tests_tls binary in this directory. */
 
-/* tls_context_cleaned_before_second_serve_attempt: this regression test
- * requires real TLS certificate files to exercise a genuine handshake, not
+/* tls_context_cleaned_before_second_serve_attempt: this test requires real
+ * TLS certificate files to exercise a genuine handshake, not
  * merely a certificate that fails to load (ctls_ctx_cert_add reports a
  * missing/invalid cert file via its own ccol_retval_t return; a load
  * failure alone doesn't reach the code path this test is meant to cover).
@@ -5637,10 +5629,10 @@ TEST(chttpserver, root_router_shadows_subrouter_at_same_path) {
 TEST(chttpserver, middleware_overflow_registration_rejected) {
   /* The middleware-chain cap (_CHTTPSVR_MAX_MW = 32) is enforced at
    * registration time: the first 32 calls to chttpsvr_router_use must return
-   * ccol_success; the 33rd must return ccol_not_permitted.  The silent-500
-   * behavior that was previously observable only at request-dispatch time is no
-   * longer reachable through the public API because registration is rejected
-   * before the overflow can occur. */
+   * ccol_success; the 33rd must return ccol_not_permitted.  Rejecting the
+   * registration itself keeps a single router from ever building up an
+   * overflowing chain, so the dispatch-time silent-500 path cannot be
+   * reached that way through the public API. */
   REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   chttpsvr_router *ov_r = chttpsvr_subrouter(g_srv2, "/overflow-mw-test");
   REQUIRE_TRUE(ov_r != NULL);
@@ -5708,23 +5700,21 @@ TEST(chttpserver, malformed_encoding_in_param_correct_method_returns_404) {
 
 TEST(chttpserver,
      malformed_encoding_in_param_wrong_method_returns_404_not_405) {
-  /* Regression test for a dry-run asymmetry bug in this module's route
-   * matching (predating the current _match_route_cached/_seg_cache_get
-   * design, which structurally cannot reintroduce it: every segment is
-   * decoded via _seg_cache_get unconditionally, regardless of whether the
-   * caller passed a non-NULL pv_out to actually capture the value, so a
-   * malformed encoding is rejected identically either way).
+  /* Dry-run matching (used when the route's registered method does not
+   * match the request method) and capture matching must validate
+   * percent-encoding consistently.  A dry run that accepted any non-empty
+   * token for a {param} segment without validating its percent-encoding
+   * would set method_mismatch_seen=true and answer a POST to the GET-only
+   * /api/v1/items/{id} with 405, while a GET to the same malformed URL
+   * correctly returned 404.
    *
-   * In the old implementation, dry-run mode (used when the route's
-   * registered method does not match the request method) accepted any
-   * non-empty token for {param} segments without validating
-   * percent-encoding.  A POST to the GET-only /api/v1/items/{id} with a
-   * malformed parameter value would set method_mismatch_seen=true and
-   * produce 405, while a GET to the same URL would correctly return 404
-   * (capture mode rejected bad encoding).
+   * The current _match_route_cached/_seg_cache_get design makes that
+   * asymmetry structurally impossible: every segment is decoded via
+   * _seg_cache_get unconditionally, regardless of whether the caller passed
+   * a non-NULL pv_out to actually capture the value, so a malformed
+   * encoding is rejected identically either way.
    *
-   * Both modes must validate encoding consistently: this request must
-   * return 404, not 405. */
+   * This request must therefore return 404, not 405. */
   REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
   char buf[2048] = {0};
   int status =
@@ -5741,11 +5731,10 @@ TEST(chttpserver, valid_percent_encoded_literal_segment_matches_route) {
    * must match.
    *
    * This exercises _match_route_cached's own literal-segment comparison.
-   * Before the NUL-termination fix, http_decode_path_unsafe wrote decoded
-   * bytes but did not place a '\0';
-   * the subsequent strcmp read past the valid content into uninitialised
-   * stack memory.  On stacks where that byte happened to be non-zero the
-   * route would fail to match and the server would return 404. */
+   * http_decode_path_unsafe must NUL-terminate what it writes: without that
+   * terminator the subsequent strcmp reads past the valid content into
+   * uninitialised stack memory, and on stacks where that byte is non-zero
+   * the route fails to match and the server returns 404. */
   REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
   char buf[4096] = {0};
   int status = _raw_request("GET", "/hel%6Co", NULL, buf, sizeof(buf));
@@ -5931,14 +5920,15 @@ TEST(chttpserver, unrecognized_method_rejected_with_501_not_dispatched) {
      seven concrete methods this server recognizes"), never a real incoming
      request's method; a syntactically valid but unrecognized method token
      (a WebDAV verb like PROPFIND, TRACE, CONNECT, a custom verb, ...) must
-     never reach a CHTTP_ANY handler at all. Regression test for a real bug:
-     _find_route's method_ok test (route->method == CHTTP_ANY) used to
-     short-circuit to true regardless of the actual method, so such a
-     request reached _any_method_handler anyway, which called
-     chttp_method_str(chttpsvr_req_method(req)) and got back "UNKNOWN" (the
+     never reach a CHTTP_ANY handler at all. _find_route's method_ok test
+     (route->method == CHTTP_ANY) must not short-circuit to true regardless
+     of the actual method. If it does, such
+     a request reaches _any_method_handler anyway, which calls
+     chttp_method_str(chttpsvr_req_method(req)) and gets back "UNKNOWN" (the
      switch's default case) instead of a real method name: a 200 response
-     silently misreporting the request. Now rejected up front, before path/
-     header parsing or route matching ever runs, as 501 (RFC 7231 SS6.6.2),
+     silently misreporting the request. It is instead rejected up front,
+     before path/header parsing or route matching ever runs, as 501 (RFC
+     7231 SS6.6.2),
      and the handler is never invoked at all (an empty body proves this:
      _any_method_handler always writes a non-empty method-name string). */
   char buf[2048] = {0};
@@ -6094,24 +6084,24 @@ TEST(chttpserver, streaming_max_body_size_exceeded_reported) {
   REQUIRE_TRUE(strstr(buf, "connection:close") != NULL);
 }
 
-/* Regression test for a real bug found via code review: max_body_size == 0
-   is documented (chttpserver.h's own field comment) as "unlimited", matching
-   the same convention max_connections/max_header_bytes already use in this
-   same config struct, but _on_headers_complete's Content-Length pre-check
-   and _on_body's cumulative check both used a bare `> limit` comparison,
-   silently treating limit == 0 as "cap at zero" instead: any request with a
-   body at all was rejected. A caller explicitly configuring "no limit" this
-   way (a realistic choice, by direct analogy with this struct's own sibling
-   fields) got a server that 413s every POST/PUT/PATCH with any body.
-   Exercises a body well beyond any historical default/small-test limit
-   (200000 bytes) on both a buffered and a streaming route to prove neither
-   enforcement path silently caps at zero. Uses its own dedicated server
+/* max_body_size == 0 is documented (chttpserver.h's own field comment) as
+   "unlimited", matching the same convention max_connections/max_header_bytes
+   already use in this same config struct, so _on_headers_complete's
+   Content-Length pre-check and _on_body's cumulative check must both treat
+   it as "no cap at all". A bare `> limit` comparison instead treats
+   limit == 0 as "cap at zero" and rejects any request carrying a body, so a
+   caller explicitly configuring "no limit" this way (a realistic choice, by
+   direct analogy with this struct's own sibling fields) gets a server that
+   413s every POST/PUT/PATCH with any body. Exercises a body well beyond any
+   ordinary default or small-test limit (200000 bytes) on both a buffered
+   and a streaming route to prove neither enforcement path silently caps at
+   zero. Uses its own dedicated server
    (rather than the shared g_small_body_srv fixture, whose max_body_size is
    fixed at SMALL_BODY_MAX) so this test's own max_body_size = 0 cannot be
    confused with or disturbed by that fixture's own boundary tests. */
 TEST(chttpserver, buffered_max_body_size_zero_means_unlimited) {
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_POST, "/unlimited-body-echo", _echo_body_handler, NULL);
@@ -6142,7 +6132,7 @@ TEST(chttpserver, buffered_max_body_size_zero_means_unlimited) {
 
 TEST(chttpserver, streaming_max_body_size_zero_means_unlimited) {
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_streaming_handler(
       srv, CHTTP_POST, "/unlimited-body-stream", _stream_error_report_handler,
@@ -6198,7 +6188,7 @@ TEST(chttpserver, malformed_chunked_encoding_forces_connection_close) {
       "garbage-chunk-data\r\n";
   REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
 
-  /* Bounds the read loop below in case the "must close afterward" fix
+  /* Bounds the read loop below in case the must-close-afterward behavior
      regresses: without this, a regression would hang this test (waiting for
      more bytes/EOF that never come) instead of failing its own assertion
      cleanly. */
@@ -6223,23 +6213,22 @@ TEST(chttpserver, oversized_chunk_size_hex_rejected_gracefully) {
   /* "8000000000000000" is a syntactically valid 16-hex-digit chunk-size
      token (~9.2 exabytes as a uint64_t; this parser's chunk-size decoder is
      pure unsigned arithmetic with proper overflow checks, so there is no
-     signed-negative-value class of bug here to protect against). Before
-     chttp1_parser_t gained max_chunk_size_override (wired from
-     chttpsvr_config_t.max_body_size in _conn_reset_for_request), a value
-     this large was simply accepted as the declared size of the current
-     chunk, and the connection then sat waiting for that many bytes of chunk
-     data that were never actually sent; resolved only once the server's
-     stream_read_timeout_ms (30s by default on g_srv) finally fired. That
-     made this exact test take ~30 real seconds to pass, for the wrong
-     reason: its assertions were loose enough (some non-"none" x-stream-err
-     value) to pass equally whether the server rejected the oversized chunk
-     promptly or silently timed out half a minute later.
-     This now verifies the real, fast-path property: the oversized chunk is
-     rejected as soon as its chunk-size line is parsed, before any of its
-     (nonexistent) data is ever waited for, reported as the same
-     ccol_msg_too_large a merely-oversized *cumulative* body already
-     produces (see streaming_max_body_size_exceeded_reported), and the
-     round trip completes in well under a second; not 30. */
+     signed-negative-value class of bug here to protect against).
+     chttp1_parser_t's own max_chunk_size_override (wired from
+     chttpsvr_config_t.max_body_size in _conn_reset_for_request) is what
+     makes a value this large a decode-time rejection rather than the
+     accepted declared size of the current chunk: accepted, the connection
+     sits waiting for that many bytes of chunk data that are never actually
+     sent, resolved only once the server's stream_read_timeout_ms (30s by
+     default on g_srv) finally fires, roughly 30 real seconds later. An
+     assertion on the error value alone (some non-"none" x-stream-err value)
+     passes equally either way, which is why the elapsed time is checked
+     too: the oversized chunk must be rejected as soon as its chunk-size
+     line is parsed, before any of its (nonexistent) data is ever waited
+     for, reported as the same ccol_msg_too_large a merely-oversized
+     *cumulative* body already produces (see
+     streaming_max_body_size_exceeded_reported), with the round trip
+     completing in well under a second, not 30. */
   struct timespec t0, t1;
   clock_gettime(CLOCK_MONOTONIC, &t0);
 
@@ -6262,9 +6251,9 @@ TEST(chttpserver, oversized_chunk_size_hex_rejected_gracefully) {
       "garbage-chunk-data\r\n";
   REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
 
-  /* Bounds the read loop below in case the fast-rejection fix regresses:
-     without this, a regression that goes back to waiting on
-     stream_read_timeout_ms would hang this test in read() itself rather
+  /* Bounds the read loop below in case fast rejection regresses: without
+     this, a regression that instead waits on stream_read_timeout_ms would
+     hang this test in read() itself rather
      than merely making the elapsed_s check below fail (that check can only
      ever run once the loop actually returns). */
   struct timeval rcvtimeo = {10, 0};
@@ -6288,7 +6277,7 @@ TEST(chttpserver, oversized_content_length_buffered_route_rejected_upfront) {
   /* Companion to the chunked case above, for plain Content-Length framing:
      a buffered route whose declared Content-Length already exceeds
      max_body_size must be rejected with 413 immediately at headers-complete
-     time (_on_headers_complete's new upfront check), before ever diverting
+     time (_on_headers_complete's own upfront check), before ever diverting
      to a worker thread or waiting for any body byte; not only once that
      many bytes have actually streamed in, which the peer here never sends
      at all. g_small_body_srv (TEST_PORT+3) has max_body_size == 64. */
@@ -6315,7 +6304,7 @@ TEST(chttpserver, oversized_content_length_buffered_route_rejected_upfront) {
       "\r\n";
   REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
 
-  /* Bounds the read loop below in case the upfront-rejection fix regresses:
+  /* Bounds the read loop below in case upfront rejection regresses:
      without this, a regression that instead waited for body bytes that
      never arrive would hang this test in read() itself rather than merely
      making the elapsed_s check below fail. */
@@ -6470,13 +6459,13 @@ TEST(chttpserver, streaming_route_trailer_visible_only_after_body_drained) {
 }
 
 TEST(chttpserver, negative_content_length_rejected) {
-  /* http1_atol honors a leading '-', so "Content-Length: -1" used to parse
-     successfully; http1_consume_body treats content_length <= 0 as "no
-     body, already complete" the instant headers finish, so any body bytes
-     the client actually sent would have been silently reparsed as the
-     start of the next pipelined request; a framing desync. This is
-     caught during header parsing itself (http1_consume_header_top), before
-     routing/diversion ever happens, so the fixed behavior is the parser's
+  /* http1_atol honors a leading '-', so "Content-Length: -1" parses
+     successfully unless it is rejected explicitly; http1_consume_body
+     treats content_length <= 0 as "no body, already complete" the instant
+     headers finish, so any body bytes the client actually sent are silently
+     reparsed as the start of the next pipelined request: a framing desync.
+     This is caught during header parsing itself (http1_consume_header_top),
+     before routing/diversion ever happens, so the behavior is the parser's
      ordinary malformed-input response: the connection is closed outright
      with no HTTP response at all, not a graceful error page (matching
      every other pre-routing parse error in this parser, e.g. a
@@ -6498,9 +6487,9 @@ TEST(chttpserver, negative_content_length_rejected) {
       "\r\n";
   REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
 
-  /* Bounds the read loop below in case the reject-and-close fix regresses:
-     without this, a regression that instead kept the connection open would
-     hang this test in read() rather than failing its assertion cleanly. */
+  /* Bounds the read loop below in case reject-and-close regresses: without
+     this, a regression that instead kept the connection open would hang
+     this test in read() rather than failing its assertion cleanly. */
   struct timeval rcvtimeo = {5, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
   char buf[512] = {0};
@@ -6517,15 +6506,15 @@ TEST(chttpserver, chunked_not_last_in_transfer_encoding_list_rejected) {
   /* RFC 7230 SS3.3.1 requires `chunked`, when present, to be the final
      transfer-coding. http1_consume_header_transfer_encoding's two fast
      paths handle "chunked" alone or "chunked" as the last item in the
-     list; previously, anything else (e.g. "chunked, gzip", chunked
-     appearing in the middle) fell through and was silently stored as an
-     ordinary opaque header with neither HTTP1_P_FLAG_CHUNKED nor a usable
-     Content-Length set, framing the body as an implicit zero-length
-     message instead of rejecting it, a request-smuggling-shaped front/back
-     disagreement with any upstream proxy that DOES honor `chunked`
-     appearing anywhere in the list. This is caught during header parsing,
-     before routing, so (like the negative Content-Length case) the fixed
-     behavior is an outright connection close with no HTTP response. */
+     list; anything else (e.g. "chunked, gzip", chunked appearing in the
+     middle) must be rejected outright. Letting it fall through to be stored
+     as an ordinary opaque header, with neither HTTP1_P_FLAG_CHUNKED nor a
+     usable Content-Length set, frames the body as an implicit zero-length
+     message: a request-smuggling-shaped front/back disagreement with any
+     upstream proxy that DOES honor `chunked` appearing anywhere in the
+     list. This is caught during header parsing, before routing, so (like
+     the negative Content-Length case) the behavior is an outright
+     connection close with no HTTP response. */
   struct sockaddr_in sa;
   memset(&sa, 0, sizeof(sa));
   sa.sin_family = AF_INET;
@@ -6543,9 +6532,9 @@ TEST(chttpserver, chunked_not_last_in_transfer_encoding_list_rejected) {
       "\r\n";
   REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
 
-  /* Bounds the read loop below in case the reject-and-close fix regresses:
-     without this, a regression that instead kept the connection open would
-     hang this test in read() rather than failing its assertion cleanly. */
+  /* Bounds the read loop below in case reject-and-close regresses: without
+     this, a regression that instead kept the connection open would hang
+     this test in read() rather than failing its assertion cleanly. */
   struct timeval rcvtimeo = {5, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
   char buf[512] = {0};
@@ -6622,8 +6611,8 @@ static void *_drip_body_bg_thread(void *arg) {
  * (destroy_while_worker_reading_slow_body_is_safe and
  * destroy_does_not_hang_when_worker_blocked_with_disabled_timeouts).
  *
- * A single, file-scope-global mutex/cv/done triple was used here originally
- * and found to be a real bug: both tests run back-to-back with nothing else
+ * A single, file-scope-global mutex/cv/done triple shared by both tests is
+ * unsafe here: both tests run back-to-back with nothing else
  * in between, and each test's own detach-rather-than-join-on-timeout path is
  * deliberate (see either test's own comment), so a detached thread from an
  * EARLIER test that is merely slow (not genuinely hung) rather than a
@@ -6662,7 +6651,7 @@ static void *_destroy_hang_thread_fn(void *arg) {
 }
 
 TEST(chttpserver, destroy_while_worker_reading_slow_body_is_safe) {
-  /* Regression/coverage test: __chttpsvr_destroy must not free any
+  /* __chttpsvr_destroy must not free any
    * server-owned state a ctpool worker could still be dereferencing (e.g.
    * srv->max_body_size, read via chttpsvr_req_read) while that worker is
    * still blocked reading a slow/dripped body on another connection.
@@ -6679,7 +6668,7 @@ TEST(chttpserver, destroy_while_worker_reading_slow_body_is_safe) {
    * thread: mirrors destroy_does_not_hang_when_worker_blocked_with_disabled_
    * timeouts's own established pattern below, so a regression in destroy's
    * own bounded-wait/forced-unblock machinery (see that test's own comment
-   * for the exact historical bug this guards against) fails this one test
+   * for exactly what that machinery guards against) fails this one test
    * cleanly instead of hanging the entire binary with no attributable
    * failure. ctx (which owns srv) is heap-allocated, not a stack local with
    * RAII, for the same reason that test's own comment gives: this function
@@ -6694,7 +6683,7 @@ TEST(chttpserver, destroy_while_worker_reading_slow_body_is_safe) {
   ctx->done = false;
   pthread_mutex_init(&ctx->mtx, NULL);
   pthread_cond_init(&ctx->cv, NULL);
-  ctx->srv = create_chttpsvr(g_test_logger, NULL);
+  ctx->srv = ccol_create_chttpsvr(g_test_logger, NULL);
   if (ctx->srv == CHTTPSVR_INVALID) {
     free(ctx);
     REQUIRE_TRUE(false);
@@ -6775,10 +6764,10 @@ TEST(chttpserver, destroy_while_worker_reading_slow_body_is_safe) {
   /* Generous relative to this test's own ~1s drip duration (20 bytes at
      50ms each) plus the production-sized 30s/5s bounded-wait defaults this
      test leaves untouched (unlike the disabled-timeouts test below, this
-     one never needed to shrink them, since stream_read_timeout_ms=2000 was
-     already enough to make destroy's own graceful wait succeed quickly in
-     practice); wide enough to still fail cleanly, rather than mask a real
-     hang, on a loaded CI machine. */
+     one does not shrink them: stream_read_timeout_ms=2000 is already enough
+     for destroy's own graceful wait to succeed quickly); wide enough to
+     still fail cleanly, rather than mask a real hang, on a loaded CI
+     machine. */
   struct timespec deadline;
   clock_gettime(CLOCK_REALTIME, &deadline);
   deadline.tv_sec += 40;
@@ -6876,27 +6865,28 @@ static void *_stall_forever_bg_thread(void *arg) {
   return NULL;
 }
 
-/* Regression test for a real gap: chttpsvr_config_t.stream_read_timeout_ms
-   and max_body_read_duration_ms both document "0 = wait indefinitely" as a
-   legitimate, supported configuration (e.g. for slow legitimate uploads);
-   but chttpsvr_destroy() (via _quiesce_server_once) unconditionally calls
+/* chttpsvr_config_t.stream_read_timeout_ms and max_body_read_duration_ms
+   both document "0 = wait indefinitely" as a legitimate, supported
+   configuration (e.g. for slow legitimate uploads), while
+   chttpsvr_destroy() (via _quiesce_server_once) unconditionally calls
    ctpool_shutdown_drain() on the worker pool shortly after its own,
-   carefully bounded (30s) wait for in-flight requests; and that function
+   carefully bounded (30s) wait for in-flight requests, and that function
    has no timeout of its own at all ("blocks until every queued and active
-   task has completed"). Before the fix, a single peer that stalled mid-body
-   under this configuration (sent a partial body, declared far more via
-   Content-Length, then never sent the rest and never closed) left a worker
-   thread permanently blocked inside chttp1_stream_read with nothing to ever
-   unblock it, so chttpsvr_destroy() would hang forever despite that
-   elaborate bounded wait. Fixed by forcibly shutdown(2)-ing any connection
-   still diverted to a worker thread once the bounded wait is exhausted; see
+   task has completed"). A single peer that stalls mid-body under this
+   configuration (sends a partial body, declares far more via
+   Content-Length, then never sends the rest and never closes) therefore
+   holds a worker thread permanently blocked inside chttp1_stream_read with
+   nothing to ever unblock it, and chttpsvr_destroy() would hang forever
+   despite that elaborate bounded wait. What prevents that is forcibly
+   shutdown(2)-ing any connection still diverted to a worker thread once the
+   bounded wait is exhausted; see
    _wait_in_flight_bounded/_force_unblock_diverted_connections in
    chttpserver.c. This test's real assertion is that chttpsvr_destroy()
    actually returns at all, checked via a bounded condition-variable wait
    (not a bare pthread_join) so a regression fails this one test cleanly
    instead of hanging the whole binary. Uses its own short-lived server (not
    the shared g_srv) with both timeouts disabled, exactly the documented
-   configuration this bug required. Uses the white-box
+   configuration this requires. Uses the white-box
    _chttpsvr_set_wait_in_flight_bounds_for_tests() hook to shrink
    _wait_in_flight_bounded's own graceful-wait/grace-period bounds from tens
    of real seconds down to a few hundred milliseconds, so this test
@@ -6920,10 +6910,10 @@ TEST(chttpserver,
      later test. Every early-exit path below explicitly destroys/frees this
      itself (rather than relying on REQUIRE_*'s early return plus scope-exit
      cleanup, which cannot run here) so a failure partway through this test
-     can never leak the shared engine's own reference to this server; see
-     this file's own history for the class of whole-binary hang that leaving
-     a leaked, still-engine-referencing server behind causes in _teardown's
-     own chttpsvr_engine_wait() call. ctx is its own, private synchronization
+     can never leak the shared engine's own reference to this server:
+     leaving a leaked, still-engine-referencing server behind hangs this
+     whole binary in _teardown's own chttpsvr_engine_wait() call. ctx is its
+     own, private synchronization
      state (see _destroy_hang_ctx_t's own comment for why this must not be
      shared with the sibling test above). */
   _destroy_hang_ctx_t *ctx = malloc(sizeof(*ctx));
@@ -6941,7 +6931,7 @@ TEST(chttpserver,
   ctx->done = false;
   pthread_mutex_init(&ctx->mtx, NULL);
   pthread_cond_init(&ctx->cv, NULL);
-  ctx->srv = create_chttpsvr(g_test_logger, NULL);
+  ctx->srv = ccol_create_chttpsvr(g_test_logger, NULL);
   if (ctx->srv == CHTTPSVR_INVALID) {
     free(ctx);
     _chttpsvr_set_wait_in_flight_bounds_for_tests(0, 0);
@@ -6981,7 +6971,7 @@ TEST(chttpserver,
   /* Poll for the background connection to actually be accepted, headers
      parsed, and diverted to a ctpool worker (in_flight_requests > 0, meaning
      it is now genuinely, permanently blocked inside chttp1_stream_read,
-     absent the fix) before destroying, rather than guessing a fixed sleep
+     absent this guard) before destroying, rather than guessing a fixed sleep
      duration: bounded to 5s, comfortably clear of the shrunk 300ms/2000ms
      wait-in-flight overrides above, so a slow CI/valgrind run cannot
      silently turn this into "destroy on an already-idle server" instead of
@@ -7097,28 +7087,28 @@ static void *_restart_race_pipeline_thread(void *arg) {
 }
 
 TEST(chttpserver, restart_races_live_keep_alive_connection_is_safe) {
-  /* Regression test for a srv->worker_pool data race: worker_pool used to be
-   * written (drained/destroyed/recreated) without srv->mutex in every
-   * chttpsvr_start restart/teardown path, while _conn_start_diverted read it
-   * under the lock - a genuine data race, and a real use-after-free risk if a
-   * leftover pool were destroyed while a still-open keep-alive connection's
-   * next pipelined request was concurrently reading/submitting to it:
+  /* srv->worker_pool must be written (drained/destroyed/recreated) under
+   * srv->mutex in every chttpsvr_start restart/teardown path, since
+   * _conn_start_diverted reads it under that lock. Writing it
+   * unsynchronized is a genuine data race, and a use-after-free risk if a
+   * leftover pool is destroyed while a still-open keep-alive connection's
+   * next pipelined request is concurrently reading/submitting to it:
    * chttpsvr_stop only closes the listener, already-accepted connections
    * keep running, and their _on_headers_complete does not check
    * srv->lifecycle, so _conn_start_diverted can fire at any point during a
-   * restart. Fixed by _wait_and_detach_pools, which waits for
+   * restart. What prevents it is _wait_and_detach_pools, which waits for
    * in_flight_requests to drain to zero before ever detaching/destroying a
    * pool, guaranteeing no _conn_start_diverted call can be mid-flight holding
    * a stale copy of the pointer being handed to ctpool_destroy.
    *
-   * Also covers a closely related, later-found data race on the same
-   * restart path: srv->max_header_bytes/max_body_size used to be plain
-   * (non-_Atomic) fields chttpsvr_start rewrote, unsynchronized, in the
-   * small gap after srv->worker_pool is published but before the listener is
-   * re-registered; a pre-existing keep-alive connection's worker thread
-   * could read either field (_conn_reset_for_request/_on_body) inside that
-   * same gap. Fixed by giving them the same _Atomic treatment as
-   * stream_read_timeout_ms/etc. on the same struct. This test varies both
+   * Also covers a closely related data race on the same restart path:
+   * srv->max_header_bytes/max_body_size must be _Atomic, like
+   * stream_read_timeout_ms and friends on the same struct. As plain fields
+   * they are rewritten by chttpsvr_start, unsynchronized, in the small gap
+   * after srv->worker_pool is published but before the listener is
+   * re-registered, and a pre-existing keep-alive connection's worker thread
+   * can read either one (_conn_reset_for_request/_on_body) inside that same
+   * gap. This test varies both
    * across every restart iteration specifically to exercise that path, even
    * though the window is narrow enough that it is not expected to reliably
    * trip a plain CI run (see the struct field's own comment for why); the
@@ -7127,7 +7117,7 @@ TEST(chttpserver, restart_races_live_keep_alive_connection_is_safe) {
    * aborting/crashing outright if either race were reintroduced.
    *
    * This test doesn't assert on a return value for most of its body, for the
-   * same reason: the bugs are data races / a UAF, not a wrong result. A
+   * same reason: the hazards are data races / a UAF, not a wrong result. A
    * background thread keeps one keep-alive connection continuously
    * pipelining requests
    * while the main thread restarts the server many times in a tight loop (a
@@ -7136,7 +7126,7 @@ TEST(chttpserver, restart_races_live_keep_alive_connection_is_safe) {
    * the listener's port). Uses its own short-lived server so it cannot
    * disturb the shared test fixture. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/restart-race",
                                                _hello_handler, NULL);
@@ -7218,7 +7208,7 @@ TEST(chttpserver, max_body_read_duration_exceeded_reports_ccol_timed_out) {
    * fail the client's own subsequent writes with EPIPE before it ever gets
    * to read the response). */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_streaming_handler(
       srv, CHTTP_POST, "/deadline-test", _stream_error_report_handler, NULL);
@@ -7296,7 +7286,7 @@ TEST(chttpserver, max_body_read_duration_default_disabled_allows_slow_drip) {
    * enough that the per-gap timeout doesn't fire either. Guards against the
    * deadline check misfiring when it's supposed to be a no-op. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv =
       chttpsvr_register_streaming_handler(srv, CHTTP_POST, "/deadline-disabled",
@@ -7331,13 +7321,13 @@ TEST(chttpserver, max_response_write_duration_exceeded_closes_connection) {
    * overall duration cap; the client sends its request and then genuinely
    * reads nothing at all (not even a slow trickle) for well longer than the
    * cap, so the kernel socket buffers fill and chttp1_stream_write blocks
-   * waiting for space that will never free up during that silence; an
-   * earlier draft of this test read the response back in a tight,
-   * unthrottled loop immediately after sending the request, which drained
-   * the socket fast enough that the write side never actually blocked at
-   * all, silently testing nothing; caught by the observed elapsed time
-   * being a few milliseconds, not the ~300ms a genuinely-firing deadline
-   * would produce.
+   * waiting for space that will never free up during that silence. The
+   * client's deliberate silence is load-bearing: reading the response back
+   * in a tight, unthrottled loop immediately after sending the request
+   * drains the socket fast enough that the write side never blocks at all,
+   * making this test pass while exercising nothing. The symptom of that
+   * mistake is an observed elapsed time of a few milliseconds rather than
+   * the ~300ms a genuinely-firing deadline produces.
    *
    * The assertion itself is a byte-count comparison, not a timing one:
    * timing how long the client's own read loop takes once it resumes
@@ -7345,12 +7335,12 @@ TEST(chttpserver, max_response_write_duration_exceeded_closes_connection) {
    * connection" from "the deadline never fired, but the now-unblocked
    * write finishes fast anyway once reading resumes" on a fast loopback
    * connection, where the remaining transfer completes quickly either way.
-   * Whether the FULL response ever arrives, however, cannot: a genuinely-
-   * firing deadline closes the connection mid-write during the silent
-   * window, so no read afterward can ever recover the untransmitted
+   * Whether the FULL response ever arrives does separate them: a
+   * genuinely-firing deadline closes the connection mid-write during the
+   * silent window, so no read afterward can ever recover the untransmitted
    * remainder, however long it is given to try. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/large-response", _large_response_handler, NULL);
@@ -7385,7 +7375,7 @@ TEST(chttpserver, max_response_write_duration_exceeded_closes_connection) {
   struct timespec nap = {0, 700000000L}; /* 700ms */
   nanosleep(&nap, NULL);
 
-  /* Bounds every read call below in case the fix regresses (the connection
+  /* Bounds every read call below in case this regresses (the connection
      would then still be open, and the previously-blocked write would only
      resume once we start draining, eventually delivering the full
      response): without this, a regression would hang this test instead of
@@ -7422,7 +7412,7 @@ TEST(chttpserver,
      Guards against the deadline check misfiring when it's supposed to be a
      no-op. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/large-response-slow-ok", _large_response_handler, NULL);
@@ -7502,7 +7492,7 @@ TEST(chttpserver, max_response_write_duration_bounds_rejection_response) {
       void);
 
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
 
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
@@ -7525,9 +7515,9 @@ TEST(chttpserver, max_response_write_duration_bounds_rejection_response) {
   REQUIRE_TRUE(fd >= 0);
   REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
-  /* Bounds the read below in case a regression makes the fix's own guarded
+  /* Bounds the read below in case a regression makes the guarded
      write-deadline check stop being consulted at all for this path (the
-     exact pre-fix behavior): without this, if the hook is silently never
+     exact regressed behavior): without this, if the hook is silently never
      consumed, the server just sends an ordinary, complete 404 response and
      the read below would still return promptly with that response's bytes
      rather than hang; this timeout exists purely as defensive
@@ -7552,15 +7542,14 @@ TEST(chttpserver, max_response_write_duration_bounds_rejection_response) {
 
   REQUIRE_EQ(wn, (ssize_t)strlen(req));
 
-  /* A working fix means the header-write loop's very first write-deadline
-     check (before any real write(2) call is ever attempted) reports
-     "already expired" via the forced hook, so _send_response returns false
-     having sent zero bytes; the connection is then closed immediately, so
-     the client observes EOF (read returns 0) with nothing at all received.
-     A regressed (pre-fix) build passes NULL for conn here, so the hook is
-     never even consulted (conn && ... short-circuits), and the server sends
-     a complete, ordinary 404 response instead: observed here as a
-     positive byte count. */
+  /* The header-write loop's very first write-deadline check (before any
+     real write(2) call is ever attempted) reports "already expired" via the
+     forced hook, so _send_response returns false having sent zero bytes;
+     the connection is then closed immediately, so the client observes EOF
+     (read returns 0) with nothing at all received. This test is
+     non-vacuous: a build that passes NULL for conn here never consults the
+     hook at all (conn && ... short-circuits) and sends a complete, ordinary
+     404 response instead, observed here as a positive byte count. */
   REQUIRE_EQ((int)r, 0);
 
   chttpsvr_destroy(srv);
@@ -7575,7 +7564,7 @@ TEST(chttpserver, create_with_null_logger_uses_internal_fatal_only_logger) {
    * (stderr, FATAL-only) instead of requiring a caller-supplied one. The
    * server must still be fully functional. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(CLOG_INVALID, NULL);
+      ccol_create_chttpsvr(CLOG_INVALID, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
 
   ccol_retval_t rv = chttpsvr_register_handler(
@@ -7610,7 +7599,7 @@ TEST(chttpserver, create_with_logger_derives_and_leaves_parent_open) {
   REQUIRE_TRUE(parent != CLOG_INVALID);
 
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(parent, NULL);
+      ccol_create_chttpsvr(parent, NULL);
   if (srv == CHTTPSVR_INVALID) {
     clog_close(parent);
     REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
@@ -7641,10 +7630,10 @@ TEST(chttpserver, create_with_logger_derives_and_leaves_parent_open) {
   /* parent must still be alive: write through it, and derive another
    * (unrelated) server from it, both of which would misbehave under
    * valgrind/ASan if the server had wrongly closed the caller's handle. */
-  log_info(parent, "parent logger still usable after server destroy");
+  ccol_log_info(parent, "parent logger still usable after server destroy");
 
   chttpsvr srv2 _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(parent, NULL);
+      ccol_create_chttpsvr(parent, NULL);
   REQUIRE_TRUE(srv2 != CHTTPSVR_INVALID);
   chttpsvr_destroy(srv2);
 
@@ -7652,7 +7641,7 @@ TEST(chttpserver, create_with_logger_derives_and_leaves_parent_open) {
 }
 
 /* ========================================================================== */
-/*                    UNIX DOMAIN SOCKET TESTS (Phase 1, new capability)      */
+/*                    UNIX DOMAIN SOCKET TESTS                                */
 /* ========================================================================== */
 
 TEST(chttpserver, unix_socket_listen_and_round_trip) {
@@ -7660,7 +7649,7 @@ TEST(chttpserver, unix_socket_listen_and_round_trip) {
      instead of a TCP listener, and a request over that socket must be
      routed and answered exactly like a TCP connection would be. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/unix-hello",
                                                _hello_handler, NULL);
@@ -7717,7 +7706,7 @@ TEST(chttpserver, unix_socket_stale_file_replaced_on_start) {
   close(stale_fd);
 
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/stale-hello",
                                                _hello_handler, NULL);
@@ -7755,7 +7744,7 @@ TEST(chttpserver, unix_socket_unwritable_path_start_fails) {
   /* A directory component that doesn't exist must fail chttpsvr_start
      gracefully (bind() fails) rather than crashing or silently succeeding. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "unix:///chttpsvr_test_nonexistent_dir_xyz/socket.sock";
@@ -7765,7 +7754,7 @@ TEST(chttpserver, unix_socket_unwritable_path_start_fails) {
 }
 
 /* ========================================================================== */
-/*                    MAX_CONNECTIONS TESTS (Phase 1, new knob)               */
+/*                    MAX_CONNECTIONS TESTS                                   */
 /* ========================================================================== */
 
 TEST(chttpserver, max_connections_enforced) {
@@ -7773,7 +7762,7 @@ TEST(chttpserver, max_connections_enforced) {
      pending in the kernel's listen backlog (never accept()'d, never
      served) until the first connection closes and frees the one slot. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/maxconn-hello",
                                                _hello_handler, NULL);
@@ -7844,17 +7833,17 @@ TEST(chttpserver, max_connections_at_capacity_does_not_busy_loop) {
      listen socket with a non-empty accept backlog as ready on every single
      epoll_wait call, so a listener that keeps returning without pausing
      would be re-dispatched continuously, pinning the reactor thread at
-     ~100% CPU for as long as the server stays at capacity (confirmed via a
-     standalone /proc/<pid>/stat CPU-tick measurement during development;
-     not itself asserted on here, since raw CPU-time measurement is
-     inherently noisy on a shared/loaded machine). This is caught instead by
+     ~100% CPU for as long as the server stays at capacity (directly
+     measurable as CPU ticks in /proc/<pid>/stat; not itself asserted on
+     here, since raw CPU-time measurement is inherently noisy on a
+     shared/loaded machine). This is caught instead by
      directly counting how many times the listener was actually dispatched
      during a held-at-capacity window, via a white-box counter: a correctly
      paused listener produces at most a small, fixed handful of dispatches
      (the one that decided to pause), while a busy-looping one produces many
      thousands within a fraction of a second. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/busyloop-hello", _hello_handler, NULL);
@@ -7966,19 +7955,18 @@ static void *_backoff_test_realloc(void *p, size_t s) { return realloc(p, s); }
 
 extern size_t _chttpsvr_listener_alloc_failure_pause_count_for_tests(void);
 
-/* Regression test for a real bug found via code review: after a successful
-   accept4(), _conn_create()/ctls_conn_create_server() failing (allocation
-   failure) used to loop straight back to accept4() again with zero backoff;
-   unlike accept4()'s own EMFILE/ENFILE/ENOBUFS/ENOMEM handling a few lines
-   up in the same loop, which already backed off specifically to avoid
-   busy-looping a persistent resource-exhaustion condition. Under a sustained
-   allocation-failure condition (a custom, bounded ccol_memmgmt_procs_t is
-   the realistic trigger) combined with connections continuing to arrive,
-   this spun the reactor thread with zero progress; the identical
-   unbounded-busy-loop-under-a-persistent-condition shape already fixed for
-   accept4() itself.
+/* After a successful accept4(), a _conn_create()/ctls_conn_create_server()
+   failure (allocation failure) must not loop straight back to accept4()
+   again with zero backoff. It needs the same backoff accept4()'s own
+   EMFILE/ENFILE/ENOBUFS/ENOMEM handling a few lines up in the same loop
+   already applies, for the same
+   reason: to avoid busy-looping a persistent resource-exhaustion condition.
+   Under a sustained allocation-failure condition (a custom, bounded
+   ccol_memmgmt_procs_t is the realistic trigger) combined with connections
+   continuing to arrive, no backoff spins the reactor thread with zero
+   progress.
 
-   The fix pauses srv's listener registration on the very first allocation
+   srv's listener registration is paused on the very first allocation
    failure (see _listener_pause_for_resource_pressure), rather than merely
    sleeping before retrying inline: sleeping still blocks the one process-
    wide shared reactor thread for that sleep's duration on every single
@@ -7989,10 +7977,10 @@ extern size_t _chttpsvr_listener_alloc_failure_pause_count_for_tests(void);
    pressure_cleared), within at most _CHTTPSVR_IDLE_SWEEP_INTERVAL_MS of the
    condition clearing.
 
-   Verifies both halves of that fix via deterministic state checks rather
-   than inferring them from network activity observed over some timing
-   window: the idle-timeout sweep thread's own real, ~1s timer runs
-   unsynchronized with this (or any) test's clock, and can legitimately
+   Verifies both halves via deterministic state checks rather than inferring
+   them from network activity observed over some timing window: the
+   idle-timeout sweep thread's own real, ~1s timer runs unsynchronized with
+   this (or any) test's clock, and can legitimately
    resume, and (with nothing queued behind fd_a to re-fail against) leave
    resumed, this exact listener at any point during the test, making a
    network-observed window an inherently flaky signal for "is it currently
@@ -8011,7 +7999,7 @@ TEST(chttpserver,
                              _backoff_test_calloc, _backoff_test_realloc};
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr_mp(&mp, g_test_logger, &err);
+      ccol_create_chttpsvr_mp(&mp, g_test_logger, &err);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/backoff-hello",
                                                _hello_handler, NULL);
@@ -8059,8 +8047,8 @@ TEST(chttpserver,
      to actually pause and increment the counter too. Poll for the counter
      bounded to 2s (comfortably past ordinary scheduling jitter, sharply
      below a hang) rather than reading it exactly once immediately after the
-     EOF read returns, which raced and failed intermittently under TSan's
-     own scheduling (the two threads run on genuinely different CPUs; EOF
+     EOF read returns, which races TSan's own scheduling and fails
+     intermittently (the two threads run on genuinely different CPUs; EOF
      delivery does not wait for the server thread to reach its next
      statement). */
   /* Poll the pause flag itself, directly and repeatedly, rather than
@@ -8068,16 +8056,16 @@ TEST(chttpserver,
      then doing one, one-shot flag read immediately after: the counter is
      incremented BEFORE _listener_pause_for_resource_pressure is even called
      (see _listener_log_and_pause_for_alloc_failure), and that call performs
-     real work of its own (a mutex lock/unlock plus a full event_loop_pause()
-     call, itself a real syscall, not merely a few uncontended instructions)
-     before the flag is actually stored. A single flag read timed off the
-     counter's own change can therefore land in that real, non-negligible gap
-     and observe `false` even though the pause is about to succeed a moment
-     later - confirmed by exactly this failure occurring in practice. Polling
-     the flag directly, bounded to 2s, has no such gap: once it reads true,
-     the pause has genuinely already taken effect, and since the counter
-     increment strictly precedes it in program order on the same thread, the
-     counter is guaranteed to already reflect the change too by that point.
+     real work of its own (a mutex lock/unlock plus a full
+     ccol_event_loop_pause() call, itself a real syscall, not merely a few
+     uncontended instructions) before the flag is actually stored. A single flag
+     read timed off the counter's own change can therefore land in that real,
+     non-negligible gap and observe `false` even though the pause is about to
+     succeed a moment later; a failure that does occur in practice. Polling the
+     flag directly, bounded to 2s, has no such gap: once it reads true, the
+     pause has genuinely already taken effect, and since the counter increment
+     strictly precedes it in program order on the same thread, the counter is
+     guaranteed to already reflect the change too by that point.
 
      One further, narrower residual race is worth naming explicitly: the
      real idle-timeout sweep thread runs continuously for this whole test
@@ -8088,13 +8076,13 @@ TEST(chttpserver,
      true and this loop's very first read, that read (and every subsequent
      one, since nothing else re-triggers the failure once fd_a alone has
      already been processed) would observe false for the entire 2s bound.
-     Unlike the gap this fix itself closes (a real syscall's worth of width,
-     confirmed to fail in practice), this window is bounded by this loop's
-     own per-iteration overhead against a fixed ~1000ms period, several
-     orders of magnitude narrower; stress-tested 30 consecutive runs under
-     valgrind and 25 under ThreadSanitizer with zero failures before accepting
-     it, matching this file's own tolerance for a comparably narrow, already-
-     documented timing window elsewhere (see start_racing_engine_stop_and_
+     Unlike the gap this polling loop closes (a real syscall's worth of
+     width, and one that does fail in practice), this window is bounded by
+     this loop's own per-iteration overhead against a fixed ~1000ms period,
+     several orders of magnitude narrower: 30 consecutive runs under
+     valgrind and 25 under ThreadSanitizer show zero failures, matching this
+     file's own tolerance for a comparably narrow, already-documented timing
+     window elsewhere (see start_racing_engine_stop_and_
      destroy_does_not_free_raw_too_early in tests_engine_stop.c). */
   bool paused_flag = false;
   {
@@ -8148,28 +8136,26 @@ TEST(chttpserver,
   REQUIRE_EQ(status_b, 200);
 }
 
-/* Regression test for a real test-coverage gap found via code review: the
-   accept loop pauses unconditionally for any accept4() errno that isn't
+/* The accept loop pauses unconditionally for any accept4() errno that isn't
    EWOULDBLOCK/EAGAIN/EINTR/one of _accept_errno_is_transient's own per-
    connection cases - not only the specific EMFILE/ENFILE/ENOBUFS/ENOMEM
    resource-exhaustion allow-list _accept_errno_is_resource_exhaustion names
    (see that helper's own comment and the one call site's own comment in
-   _listener_on_readable_impl). Before this test, nothing actually drove a
-   real accept4() failure with an UNCLASSIFIED errno (EBADF/EINVAL/ENOTSOCK/
+   _listener_on_readable_impl). This is the only test that drives a real
+   accept4() failure with an UNCLASSIFIED errno (EBADF/EINVAL/ENOTSOCK/
    EFAULT and similar) through the loop to confirm it still pauses rather
-   than busy-loops for one of those; reverting to the old allow-list-gated
-   design (pausing only for the four named resource-exhaustion errnos) would
-   have passed every other test in this file untouched.
+   than busy-loops for one of those, and it is non-vacuous: an allow-list-
+   gated design (pausing only for the four named resource-exhaustion errnos)
+   passes every other test in this file untouched and fails only this one.
 
-   Uses _chttpsvr_force_next_accept_errno_for_tests (a white-box hook added
-   specifically for this test, scoped to one specific server so this test's
-   own long-lived shared fixture server or any other concurrently active
-   server in this process can never steal the forced errno intended for
-   srv - an early, unscoped version of this hook hit exactly that race
-   intermittently under valgrind) to make the very next accept4() dispatch
-   for srv report EINVAL - deliberately NOT one of the four resource-
-   exhaustion errnos, so this specifically exercises the "unclassified"
-   branch the fix closes - without needing to actually corrupt a real fd or
+   Uses _chttpsvr_force_next_accept_errno_for_tests (a white-box hook scoped
+   to one specific server, so this file's own long-lived shared fixture
+   server or any other concurrently active server in this process can never
+   steal the forced errno intended for srv; an unscoped hook hits exactly
+   that race intermittently under valgrind) to make the very next accept4()
+   dispatch for srv report EINVAL - deliberately NOT one of the four
+   resource-exhaustion errnos, so this specifically exercises the
+   "unclassified" branch - without needing to actually corrupt a real fd or
    exhaust a real system resource, which would be environment-dependent and
    disproportionate for what is, underneath, a simple control-flow decision.
    Confirms the LISTENER's own reaction
@@ -8187,7 +8173,7 @@ TEST(chttpserver,
       chttpsvr h);
 
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/accept-errno-hello", _hello_handler, NULL);
@@ -8228,15 +8214,15 @@ TEST(chttpserver,
      gap between "connection closed" and "flag actually stored", giving the
      real idle-sweep timer's own independent ~1s schedule more room to fire
      and clear the flag again before this loop's very first iteration ever
-     observes it true (confirmed intermittently in practice this way; see
+     observes it true (an intermittent, real failure that way; see
      post_accept_alloc_failure_pauses_and_resumes_instead_of_busy_looping's
-     own analogous, narrower residual-race discussion - this ordering
-     mistake made that same class of race meaningfully wider here). Starting
-     the poll immediately closes that self-inflicted gap down to this loop's
-     own per-iteration overhead, matching that sibling test's own tight
-     margin; stress-tested 120 consecutive runs under valgrind and 40 under
-     ThreadSanitizer with zero failures after this reordering, versus
-     multiple failures within roughly 100 runs before it. */
+     own analogous, narrower residual-race discussion - that ordering makes
+     the same class of race meaningfully wider here). Starting the poll
+     immediately closes that self-inflicted gap down to this loop's own
+     per-iteration overhead, matching that sibling test's own tight margin:
+     120 consecutive runs under valgrind and 40 under ThreadSanitizer pass
+     with zero failures this way, versus multiple failures within roughly
+     100 runs when the poll starts only after the blocking read. */
   bool paused_flag = false;
   {
     struct timespec pause_deadline;
@@ -8296,12 +8282,12 @@ TEST(chttpserver,
 }
 
 /* ========================================================================== */
-/*                    MAX_HEADER_BYTES TESTS (Phase 1, new knob)              */
+/*                    MAX_HEADER_BYTES TESTS                                  */
 /* ========================================================================== */
 
 TEST(chttpserver, max_header_bytes_within_limit_succeeds) {
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/hdrcap-hello",
                                                _hello_handler, NULL);
@@ -8331,7 +8317,7 @@ TEST(chttpserver, max_header_bytes_exceeded_closes_connection) {
      matching every other pre-routing parse error in this parser (see
      negative_content_length_rejected above). */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/hdrcap-hello2",
                                                _hello_handler, NULL);
@@ -8363,9 +8349,9 @@ TEST(chttpserver, max_header_bytes_exceeded_closes_connection) {
   REQUIRE_TRUE(n > 0 && (size_t)n < sizeof(req));
   REQUIRE_EQ(write(fd, req, (size_t)n), (ssize_t)n);
 
-  /* Bounds the read loop below in case the reject-and-close fix regresses:
-     without this, a regression that instead kept the connection open would
-     hang this test in read() rather than failing its assertion cleanly. */
+  /* Bounds the read loop below in case reject-and-close regresses: without
+     this, a regression that instead kept the connection open would hang
+     this test in read() rather than failing its assertion cleanly. */
   struct timeval rcvtimeo = {5, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
   char buf[512] = {0};
@@ -8393,7 +8379,7 @@ TEST(chttpserver, max_header_bytes_exact_boundary) {
      buffered_max_body_size_at_limit_succeeds/_exceeded_rejected's own
      exact-boundary pattern for max_body_size. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/hdrcap-boundary", _hello_handler, NULL);
@@ -8485,7 +8471,7 @@ TEST(chttpserver, max_header_bytes_exact_boundary) {
 }
 
 /* ========================================================================== */
-/*                    RESPONSE_WRITE_TIMEOUT_MS TEST (Phase 1, new knob)      */
+/*                    RESPONSE_WRITE_TIMEOUT_MS TEST                          */
 /* ========================================================================== */
 
 static void _large_body_handler(chttpsvr_req *req, chttpsvr_resp *resp,
@@ -8503,7 +8489,7 @@ static void _large_body_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 
 TEST(chttpserver, response_write_timeout_closes_slow_reader_connection) {
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/big-body",
                                                _large_body_handler, NULL);
@@ -8538,7 +8524,7 @@ TEST(chttpserver, response_write_timeout_closes_slow_reader_connection) {
   struct timespec wait_past_timeout = {0, 600000000L}; /* 600ms > 200ms cfg */
   nanosleep(&wait_past_timeout, NULL);
 
-  /* Bounds every read call below in case the fix regresses (the connection
+  /* Bounds every read call below in case this regresses (the connection
      would then still be open, and this test would otherwise block in read()
      forever instead of failing its assertion cleanly): matches
      max_response_write_duration_exceeded_closes_connection's own identical
@@ -8556,7 +8542,7 @@ TEST(chttpserver, response_write_timeout_closes_slow_reader_connection) {
 }
 
 /* ========================================================================== */
-/*                    IDLE-TIMEOUT SWEEP TEST (Phase 1, new mechanism)        */
+/*                    IDLE-TIMEOUT SWEEP TEST                                 */
 /* ========================================================================== */
 
 TEST(chttpserver, idle_timeout_closes_unused_connection) {
@@ -8564,7 +8550,7 @@ TEST(chttpserver, idle_timeout_closes_unused_connection) {
      closed by the module-local idle-timeout sweep thread once
      idle_timeout_ms has elapsed, rather than being held open forever. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/idle-hello",
                                                _hello_handler, NULL);
@@ -8601,31 +8587,31 @@ TEST(chttpserver, idle_timeout_closes_unused_connection) {
   chttpsvr_destroy(srv);
 }
 
-/* Regression coverage for a real bug found via code review: the idle sweep
-   captures its own `now` snapshot once, before it ever takes idle_mutex or
-   examines any specific connection; a connection's last_activity is
-   refreshed by _idle_list_add from a DIFFERENT thread every time it lands
-   back in the idle list, including the ordinary case of finishing a
-   keep-alive request concurrently with a sweep tick. A connection that
-   gains fresh activity in the window between the sweep's own `now` snapshot
-   and the sweep actually reaching that connection therefore legitimately
-   has last_activity > now; the elapsed-time computation used to be plain
-   `long` arithmetic compared via `(unsigned long)elapsed_ms >= idle_ms`,
-   which silently wraps a small negative elapsed_ms to a huge unsigned
-   value (unconditionally >= idle_ms for any realistic timeout) spuriously
-   evicting a connection that had just become idle instead of correctly
-   recognizing it as having zero (or negative) elapsed idle time. Exercised
-   directly via the extracted pure decision function rather than by trying
-   to actually win a real scheduling race against a live sweep thread. */
+/* The idle sweep captures its own `now` snapshot once, before it ever takes
+   idle_mutex or examines any specific connection; a connection's
+   last_activity is refreshed by _idle_list_add from a DIFFERENT thread
+   every time it lands back in the idle list, including the ordinary case of
+   finishing a keep-alive request concurrently with a sweep tick. A
+   connection that gains fresh activity in the window between the sweep's
+   own `now` snapshot and the sweep actually reaching that connection
+   therefore legitimately has last_activity > now. The elapsed-time
+   computation must therefore not be plain `long` arithmetic compared via
+   `(unsigned long)elapsed_ms >= idle_ms`: that silently wraps a small
+   negative elapsed_ms to a huge unsigned value (unconditionally >= idle_ms
+   for any realistic timeout), spuriously evicting a connection that has
+   just become idle instead of recognizing it as having zero (or negative)
+   elapsed idle time. Exercised directly via the pure decision function
+   rather than by trying to actually win a real scheduling race against a
+   live sweep thread. */
 TEST(chttpserver, idle_sweep_negative_elapsed_never_flagged_as_timed_out) {
   extern bool _chttpsvr_conn_idle_timed_out_for_tests(
       struct timespec now, struct timespec last_activity, unsigned idle_ms);
 
-  /* The regression case itself: last_activity is "in the future" relative
+  /* The racing case itself: last_activity is "in the future" relative
      to the sweep's own now snapshot (last_activity gained fresh activity
      after now was captured but before this connection was examined). Must
      never be reported as timed out, regardless of how large idle_ms is (a
-     small idle_ms is exactly what the pre-fix unsigned wraparound made
+     small idle_ms is exactly what an unsigned wraparound would make
      unconditionally true). */
   struct timespec now = {.tv_sec = 1000, .tv_nsec = 0};
   struct timespec last_activity_future_by_1ms = {.tv_sec = 1000,
@@ -8702,7 +8688,7 @@ TEST(chttpserver, idle_timeout_ms_overflow_clamped_not_wrapped) {
    * compile error under -Werror=overflow on ILP32 regardless of what
    * runtime branch would have contained them. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
@@ -8715,7 +8701,7 @@ TEST(chttpserver, idle_timeout_ms_overflow_clamped_not_wrapped) {
   /* Same clamp exercised via the read_timeout_ms fallback path
      (idle_timeout_ms left at 0). */
   chttpsvr srv2 _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv2 != CHTTPSVR_INVALID);
   chttpsvr_config_t cfg2 = CHTTPSVR_CONFIG_DEFAULT;
   cfg2.host = "127.0.0.1";
@@ -8735,7 +8721,7 @@ TEST(chttpserver, idle_timeout_ms_overflow_clamped_not_wrapped) {
   /* An ordinary, small value must still pass through untouched, on every
    * platform regardless of the above. */
   chttpsvr srv3 _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv3 != CHTTPSVR_INVALID);
   chttpsvr_config_t cfg3 = CHTTPSVR_CONFIG_DEFAULT;
   cfg3.host = "127.0.0.1";
@@ -8756,7 +8742,7 @@ TEST(chttpserver, enable_keepalive_does_not_break_normal_requests) {
      unobservable from a client (e.g. max_header_bytes_within_limit_
      succeeds above, for the byte cap itself). */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/keepalive-opt-hello", _hello_handler, NULL);
@@ -8786,7 +8772,7 @@ TEST(chttpserver, enable_reuseport_allows_second_listener_on_same_port) {
      real, externally observable effect of the option, unlike
      enable_keepalive/ipv6_only above. */
   chttpsvr srv1 _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv1 != CHTTPSVR_INVALID);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
@@ -8795,7 +8781,7 @@ TEST(chttpserver, enable_reuseport_allows_second_listener_on_same_port) {
   REQUIRE_EQ((int)chttpsvr_start(srv1, &cfg), (int)ccol_success);
 
   chttpsvr srv2 _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv2 != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv2, CHTTP_GET, "/reuseport-hello", _hello_handler, NULL);
@@ -8816,16 +8802,15 @@ TEST(chttpserver, enable_reuseport_allows_second_listener_on_same_port) {
      the pool cannot distinguish them, so once one connection is
      established every subsequent chttp_get() call to this URL silently
      reuses it instead of asking the kernel to select a listener again.
-     Confirmed directly: instrumenting a copy of this test to log every
-     attempt's status code showed chttp_get()'s outcomes were never
-     independent trials at all, a short run of one repeated result
-     followed by an unbroken streak of the other for the rest of the loop
-     (the kept-alive connection), while forcing Connection: close on every
-     attempt produced genuinely interleaved 200/404 results matching a fair
-     coin. Retried 64 times (not 1) purely as insurance against ordinary
-     coin-flip variance now that each attempt is a real, independent trial;
-     with true independence this is already comfortably below a 1-in-10^18
-     chance of a false failure. */
+     Logging every attempt's status code shows this directly: with
+     chttp_get() the outcomes are not independent trials at all, but a short
+     run of one repeated result followed by an unbroken streak of the other
+     for the rest of the loop (the kept-alive connection), while forcing
+     Connection: close on every attempt produces genuinely interleaved
+     200/404 results matching a fair coin. Retried 64 times purely as
+     insurance against ordinary coin-flip variance; with each attempt a
+     real, independent trial, this is already comfortably below a
+     1-in-10^18 chance of a false failure. */
   char url[128];
   snprintf(url, sizeof(url), "http://127.0.0.1:%d/reuseport-hello",
            TEST_PORT + 15);
@@ -8852,7 +8837,7 @@ TEST(chttpserver, ipv6_only_listener_still_serves_ipv6_traffic) {
      rather than hard-fail if binding "::1" itself doesn't work at all,
      since that's an environment limitation unrelated to ipv6_only. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/v6only-hello",
                                                _hello_handler, NULL);
@@ -8908,7 +8893,7 @@ TEST(chttpserver, ipv6_only_blocks_ipv4_mapped_connections) {
      IPv6 wildcard must NOT also silently accept IPv4 traffic once the flag
      is set; this test targets that guarantee directly. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/v6only-blocks-v4", _hello_handler, NULL);
@@ -8978,18 +8963,17 @@ TEST(chttpserver, ipv6_only_blocks_ipv4_mapped_connections) {
 }
 
 /* ========================================================================== */
-/*         HEAD METHOD + CARRY-OVER ALLOCATION-FAILURE REGRESSION TESTS       */
+/*         HEAD METHOD + CARRY-OVER ALLOCATION-FAILURE TESTS                  */
 /* ========================================================================== */
 
 TEST(chttpserver, head_request_suppresses_response_body) {
   /* RFC 7231 SS4.3.2: a HEAD response reports the same header fields
      (Content-Length included) a GET would, but must never actually send the
-     message body. Regression test for a real bug: _send_response used to
-     write conn->resp.body to the wire unconditionally, regardless of
-     conn->method, so a HEAD request reaching a handler that writes a body
-     got that body streamed back anyway. */
+     message body. _send_response must not write conn->resp.body to the wire
+     unconditionally, regardless of conn->method; doing so streams a body
+     back for a HEAD request that reached a handler which writes one. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_ANY, "/head-body",
                                                _hello_handler, NULL);
@@ -9079,7 +9063,7 @@ TEST(chttpserver, head_request_on_rejected_route_still_has_no_body) {
      here) and no body bytes of any kind after the header block's
      terminating CRLF, not merely "some text containing 404". */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
 
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
@@ -9141,14 +9125,15 @@ static void *_fail_at_size_realloc(void *p, size_t s) {
 
 TEST(chttpserver,
      carry_over_alloc_failure_rejects_gracefully_instead_of_crashing) {
-  /* Regression test for a real bug in _conn_start_diverted: when a request's
-     headers and the start of its body arrive in the same read() (the
-     leftover/carry-over bytes past the header block), the function used to
-     set conn->_carry_over_len to the leftover length even if the matching
-     _mem_alloc for conn->_carry_over failed. The worker thread would then
-     call chttp1_stream_prepare with a NULL pointer and a nonzero length,
-     which unconditionally memcpy()s from that NULL pointer, crashing. This
-     drives that exact allocation to fail via a custom allocator and asserts
+  /* When a request's headers and the start of its body arrive in the same
+     read() (the leftover/carry-over bytes past the header block),
+     _conn_start_diverted must not set conn->_carry_over_len to the leftover
+     length if the matching _ccol_mem_alloc for conn->_carry_over failed.
+     The worker thread would
+     then call chttp1_stream_prepare with a NULL pointer and a nonzero
+     length, which unconditionally memcpy()s from that NULL pointer,
+     crashing. This test drives that exact allocation to fail via a custom
+     allocator and asserts
      the connection is instead rejected gracefully (500) with the server
      (and the rest of this test process) still alive and functional
      afterward. */
@@ -9158,7 +9143,7 @@ TEST(chttpserver,
                              _fail_at_size_calloc, _fail_at_size_realloc};
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr_mp(&mp, g_test_logger, &err);
+      ccol_create_chttpsvr_mp(&mp, g_test_logger, &err);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_POST, "/carry-oom",
                                                _echo_body_handler, NULL);
@@ -9231,7 +9216,7 @@ TEST(chttpserver,
      proving the earlier allocation failure was contained to that one
      request rather than corrupting shared state. */
   chttpsvr srv2 _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv2 != CHTTPSVR_INVALID);
   rv = chttpsvr_register_handler(srv2, CHTTP_GET, "/after-carry-oom",
                                  _hello_handler, NULL);
@@ -9259,15 +9244,15 @@ TEST(chttpserver,
   chttpsvr_destroy(srv2);
 }
 
-/* Regression test for a real bug found via code review: a genuine _on_body
-   allocation failure while growing a streaming route's own body-accumulation
-   buffer used to be reported to the handler as ccol_http_transfer_aborted
-   ("connection closed or malformed framing") via chttpsvr_req_stream_error(),
+/* A genuine _on_body allocation failure while growing a streaming route's
+   own body-accumulation buffer must NOT be reported to the handler as
+   ccol_http_transfer_aborted ("connection closed or
+   malformed framing") via chttpsvr_req_stream_error(). That is
    indistinguishable from an actual dropped connection or malformed chunk
-   framing, even though nothing was wrong with the peer or its framing at
-   all - a genuine server-side OOM was silently misclassified as a client-
-   caused transfer error. Fixed by giving this specific failure its own flag
-   (conn->body_alloc_failed) and its own, distinct chttpsvr_req_stream_error()
+   framing even though nothing is wrong with the peer or its framing at all,
+   misclassifying a server-side OOM as a client-caused transfer error. This
+   specific failure therefore has its own flag (conn->body_alloc_failed) and
+   its own, distinct chttpsvr_req_stream_error()
    outcome (ccol_not_enough_memory), so a handler that reacts differently to
    "the peer misbehaved" versus "the server is out of memory" (e.g. logging/
    alerting differently, or only retrying a downstream call for the former)
@@ -9285,7 +9270,7 @@ TEST(chttpserver,
                              _fail_at_size_calloc, _fail_at_size_realloc};
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr_mp(&mp, g_test_logger, &err);
+      ccol_create_chttpsvr_mp(&mp, g_test_logger, &err);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_streaming_handler(
       srv, CHTTP_POST, "/body-buf-oom", _stream_error_report_handler, NULL);
@@ -9343,15 +9328,16 @@ TEST(chttpserver,
   REQUIRE_TRUE(strstr(buf, "x-stream-err:ccol_not_enough_memory") != NULL);
 }
 
-/* Regression test for a real bug in _on_header: an allocation failure while
-   copying a header's name/value (before routing has even run) used to
-   return 1 (aborting the parse with CHTTP1_USER) without ever setting
-   conn->req_rejected/reject_status, so _conn_feed_bytes fell into its
-   "else" branch and silently closed the connection with zero response
-   bytes; unlike the identical OOM failure mode _on_headers_complete
-   already handles gracefully (a 500 via reject_pool) a few callbacks
-   later. Drives that exact allocation to fail via the same fail-at-size
-   custom allocator the carry-over OOM test above uses, and asserts a
+/* _on_header: an allocation failure while copying a header's name/value
+   (before routing has even run) must not return 1 (aborting the parse with
+   CHTTP1_USER) without also setting
+   conn->req_rejected/reject_status. Doing so drops _conn_feed_bytes into
+   its "else" branch, silently closing the connection with zero response
+   bytes, unlike the identical OOM failure mode _on_headers_complete
+   handles gracefully (a 500 via reject_pool) a few callbacks
+   later. This test drives that exact allocation to fail via the same
+   fail-at-size custom allocator the carry-over OOM test above uses, and
+   asserts a
    graceful 500 (not a bare closed connection) is delivered instead. */
 TEST(
     chttpserver,
@@ -9362,7 +9348,7 @@ TEST(
                              _fail_at_size_calloc, _fail_at_size_realloc};
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr_mp(&mp, g_test_logger, &err);
+      ccol_create_chttpsvr_mp(&mp, g_test_logger, &err);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/hdr-oom",
                                                _hello_handler, NULL);
@@ -9436,12 +9422,12 @@ TEST(
   chttpsvr_destroy(srv);
 }
 
-/* Regression test for the identical bug class as the one just above, this
-   time in _on_request_line: an allocation failure while copying the raw
-   (still percent-encoded) request path (which happens before any route
-   has been matched at all) used to abort the parse with CHTTP1_USER
-   without ever setting conn->req_rejected/reject_status, silently dropping
-   the connection instead of sending a graceful 500. */
+/* The identical contract as the test just above, this time in
+   _on_request_line: an allocation failure while copying the raw (still
+   percent-encoded) request path (which happens before any route has been
+   matched at all) must not abort the parse with CHTTP1_USER without also
+   setting conn->req_rejected/reject_status, which silently drops the
+   connection instead of sending a graceful 500. */
 TEST(
     chttpserver,
     on_request_line_path_alloc_failure_rejects_gracefully_instead_of_dropping_connection) {
@@ -9452,7 +9438,7 @@ TEST(
                              _fail_at_size_calloc, _fail_at_size_realloc};
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr_mp(&mp, g_test_logger, &err);
+      ccol_create_chttpsvr_mp(&mp, g_test_logger, &err);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/after-path-oom", _hello_handler, NULL);
@@ -9529,11 +9515,11 @@ TEST(
 /* chttpsvr_req_query_oom() is documented (chttpserver.h) as latching true
    once chttpsvr_req_query()'s own result-array allocation has failed under
    memory pressure, and staying true "for the lifetime of the request
-   regardless of subsequent query calls"; but no existing test ever
-   triggers a real OOM in that path and checks the flag; the only prior
-   test exercises just the trivial NULL-req guard. A regression that broke
-   the latch (never setting it, or resetting it on a later successful call)
-   would pass the whole suite undetected without this. */
+   regardless of subsequent query calls". This is the only test that
+   triggers a real OOM in that path and checks the flag (the other coverage
+   of it exercises just the trivial NULL-req guard), so without it a
+   regression that broke the latch (never setting it, or resetting it on a
+   later successful call) passes the whole suite undetected. */
 static _Atomic bool g_query_oom_flag_right_after_failure = false;
 static _Atomic bool g_query_oom_flag_after_later_success = false;
 static _Atomic size_t g_query_oom_failed_call_count = (size_t)-1;
@@ -9588,7 +9574,7 @@ TEST(chttpserver, req_query_oom_latches_true_across_later_successful_calls) {
                              _fail_at_size_calloc, _fail_at_size_realloc};
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr_mp(&mp, g_test_logger, &err);
+      ccol_create_chttpsvr_mp(&mp, g_test_logger, &err);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/query-oom",
                                                _query_oom_handler, NULL);
@@ -9652,10 +9638,10 @@ TEST(chttpserver, req_query_oom_latches_true_across_later_successful_calls) {
 }
 
 /* chttpsvr_req_query_one's own documented ccol_not_enough_memory return
-   (chttpserver.h) had no test at all: the pre-existing OOM coverage above
-   only ever exercises chttpsvr_req_query's/chttpsvr_req_query_oom's own
-   flag-based contract, never chttpsvr_req_query_one's direct return-value
-   contract, which is a structurally different code path (its own
+   (chttpserver.h) is covered only here: the OOM coverage above exercises
+   chttpsvr_req_query's/chttpsvr_req_query_oom's own flag-based contract,
+   never chttpsvr_req_query_one's direct return-value contract, which is a
+   structurally different code path (its own
    `if (!qp) return ccol_not_enough_memory; if (req->_qparams_parse_oom)
    return ccol_not_enough_memory;` checks, both ahead of any "was the key
    even found" logic) that a regression collapsing those two checks into
@@ -9680,11 +9666,11 @@ static void _query_one_oom_handler(chttpsvr_req *req, chttpsvr_resp *resp,
      allocation for this request's single, deliberately long query key. */
   g_fail_alloc_size = QUERY_ONE_OOM_KEY_LEN + 1;
   /* Poisoned with a non-NULL sentinel first, not left at NULL: a bare NULL
-     starting value could not distinguish "the OOM path actually resets
-     *val_out" from "it simply never touched an already-NULL local", the
-     exact gap a real bug once hid behind (see chttpsvr_req_query_one's own
-     header doc comment: every failure return, OOM included, must leave
-     *val_out reset to NULL). */
+     starting value cannot distinguish "the OOM path actually resets
+     *val_out" from "it simply never touched an already-NULL local", so a
+     regression that never touches it would read identically (see
+     chttpsvr_req_query_one's own header doc comment: every failure return,
+     OOM included, must leave *val_out reset to NULL). */
   const char *val = (const char *)0xdeadbeefUL;
   ccol_retval_t rv = chttpsvr_req_query_one(req, "irrelevant-key", &val);
   g_fail_alloc_size = 0;
@@ -9699,7 +9685,7 @@ TEST(chttpserver, req_query_one_reports_not_enough_memory_not_key_not_found) {
                              _fail_at_size_calloc, _fail_at_size_realloc};
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr_mp(&mp, g_test_logger, &err);
+      ccol_create_chttpsvr_mp(&mp, g_test_logger, &err);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/query-one-oom",
                                                _query_one_oom_handler, NULL);
@@ -9748,20 +9734,20 @@ TEST(chttpserver, req_query_one_reports_not_enough_memory_not_key_not_found) {
   chttpsvr_destroy(srv);
 }
 
-/* Regression test for a real bug in _task_worker: unlike the carry-over copy
-   above (which goes through this module's own custom-allocator convention
-   and is therefore rejected gracefully by _conn_start_diverted before ever
+/* Unlike the carry-over copy above (which goes through this module's own
+   custom-allocator convention and is therefore rejected gracefully by
+   _conn_start_diverted before ever
    diverting), _task_worker's OWN chttp1_stream_prepare()/_tls() call (a
    second, separate copy of the same carry-over bytes, made on the worker
    thread) goes through plain malloc() and has no custom-allocator hook to
    fail it from a test; _chttpsvr_force_stream_prepare_fail_for_tests()
-   deterministically exercises that same failure path instead. Before the
-   fix: every response path in _task_worker was gated on `prepared`, so on
-   this failure the connection was simply closed with zero response bytes
-   for a buffered route (the intended 500 was set but never sent), and for a
-   streaming route the handler still ran against a NULL req->stream, with
-   chttpsvr_req_stream_error() falsely reporting ccol_success instead of the
-   real failure. This drives that exact scenario against a streaming route
+   deterministically exercises that same failure path instead. Gating every
+   response path in _task_worker on `prepared` would close the connection
+   with zero response bytes for a buffered route (the intended 500 set but
+   never sent), and for a streaming route would run the handler against a
+   NULL req->stream, with chttpsvr_req_stream_error() falsely reporting
+   ccol_success instead of the real failure. This drives that exact scenario
+   against a streaming route
    and asserts the connection instead receives a graceful 500 with the
    handler never invoked at all (no x-stream-err header, which only the
    handler itself ever sets). */
@@ -9770,7 +9756,7 @@ TEST(chttpserver, stream_prepare_failure_in_worker_sends_500_not_bare_close) {
 
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, &err);
+      ccol_create_chttpsvr(g_test_logger, &err);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_streaming_handler(
       srv, CHTTP_POST, "/stream-prepare-oom", _stream_error_report_handler,
@@ -9836,7 +9822,7 @@ TEST(chttpserver, stream_prepare_failure_in_worker_sends_500_not_bare_close) {
 
   /* The server (and this process) must still be fully usable afterward. */
   chttpsvr srv2 _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, NULL);
+      ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv2 != CHTTPSVR_INVALID);
   rv = chttpsvr_register_handler(srv2, CHTTP_GET, "/after-stream-prepare-oom",
                                  _hello_handler, NULL);
@@ -9870,11 +9856,10 @@ TEST(chttpserver, stream_prepare_failure_in_worker_sends_500_not_bare_close) {
 /* ========================================================================== */
 
 TEST(chttpserver, response_204_never_sends_body_or_content_length) {
-  /* Regression test for a real gap left behind by the HEAD body-suppression
-     fix: _send_response only ever suppressed the body for suppress_body
-     (HEAD), even though a 204 can never carry one either, regardless of
-     method (RFC 9110 SS15.2.1). Before this fix, /status-with-body's own
-     36-byte body would have been streamed back verbatim on a plain GET
+  /* _send_response's body suppression must cover a 204 as well as HEAD: a
+     204 can never carry a body either, regardless of method (RFC 9110
+     SS15.2.1). Suppressing only for suppress_body (HEAD) streams
+     /status-with-body's own 36-byte body back verbatim on a plain GET
      whose handler happens to set 204 after writing it; any client that
      correctly treats 204 as bodyless (including this library's own
      chttpclient parser; see chttp1_parser.c's own CHTTP1_ST_HEADERS
@@ -9891,7 +9876,7 @@ TEST(chttpserver, response_204_never_sends_body_or_content_length) {
 }
 
 TEST(chttpserver, response_304_suppresses_body_but_may_report_content_length) {
-  /* Same body-suppression fix as response_204_never_sends_body_or_
+  /* Same body-suppression contract as response_204_never_sends_body_or_
      content_length, but for 304 (RFC 9110 SS15.4.5), which (unlike 1xx/204)
      is still permitted to report a Content-Length (mirroring HEAD's own
      treatment); this locks in that the auto-injected header is not also
@@ -9917,7 +9902,7 @@ TEST(chttpserver, response_1xx_never_sends_body_or_content_length) {
      _send_response's own suppression logic is keyed purely on the numeric
      status range, with no special-casing of "how did we get here"; this
      locks that in rather than leaving 1xx as an untested corner of the
-     same fix. */
+     same rule. */
   char buf[2048] = {0};
   int status = _raw_request("GET", "/status-with-body",
                             "x-force-status: 199\r\n", buf, sizeof(buf));
@@ -9927,14 +9912,14 @@ TEST(chttpserver, response_1xx_never_sends_body_or_content_length) {
 }
 
 TEST(chttpserver, large_response_headers_still_delivered_in_full) {
-  /* Regression test: _send_response used to assemble the response header
-     block into a fixed 4096-byte stack buffer with no fallback, so a
-     response whose headers alone crossed that size silently lost the
-     ENTIRE response; not a graceful 500, not a truncated write, just a
-     bare connection close with zero bytes ever written and nothing logged.
+  /* _send_response must not assemble the response header block into a fixed
+     4096-byte stack buffer with no fallback. A response whose headers alone
+     cross that size then silently loses the ENTIRE
+     response: not a graceful 500, not a truncated write, just a bare
+     connection close with zero bytes ever written and nothing logged.
      /large-response-headers sets 20 headers of ~300 bytes each (~6.2 KiB of
-     header block, well past the old fixed cap); every one of them, the
-     200 status, and the body must all still reach the client intact. */
+     header block, well past a 4096-byte cap); every one of them, the 200
+     status, and the body must all still reach the client intact. */
   char buf[8192] = {0};
   int status =
       _raw_request("GET", "/large-response-headers", NULL, buf, sizeof(buf));
@@ -9953,10 +9938,10 @@ TEST(chttpserver, large_response_headers_still_delivered_in_full) {
 
 TEST(chttpserver,
      explicit_connection_close_header_ignored_when_actually_kept_alive) {
-  /* Regression test: _send_response used to emit a handler-supplied
-     "Connection" response header verbatim, completely independent of the
-     keep_alive value _task_worker actually used afterward to decide whether
-     the connection stays open. A handler here explicitly sets "Connection:
+  /* _send_response must not emit a handler-supplied "Connection" response
+     header verbatim, independent of the keep_alive value _task_worker
+     actually uses afterward to decide whether the
+     connection stays open. A handler here explicitly sets "Connection:
      close" while nothing about this ordinary HTTP/1.1 request gives the
      server any real reason to close (fully parsed, no body_too_large, no
      abort); the real decision is therefore keep-alive, and the wire must say
@@ -9999,7 +9984,7 @@ TEST(chttpserver,
 
 TEST(chttpserver,
      explicit_connection_keepalive_header_ignored_when_actually_closing) {
-  /* The other direction of the same fix: a handler explicitly sets
+  /* The other direction of the same contract: a handler explicitly sets
      "Connection: keep-alive" on an HTTP/1.0 request that carries no
      "Connection: keep-alive" token of its own, so chttp1_should_keep_alive()
      correctly reports this connection is not eligible for reuse regardless
@@ -10048,10 +10033,10 @@ TEST(chttpserver,
  * resolved through a library-owned slot table before the underlying struct
  * chttpserver* is ever touched (see the "CHTTPSVR HANDLE SLOT TABLE"
  * section of src/chttpserver.c; the exact same mechanism chttpclient.c
- * already uses for its own chttpcli handle, ported over for the identical
- * reason: __chttpsvr_destroy used to have no protection at all against
- * being run twice on the same handle, sequentially or concurrently, a
- * genuine double-free). This section tests that redesign directly.
+ * already uses for its own chttpcli handle, for the identical reason:
+ * without it __chttpsvr_destroy has no protection at all against being run
+ * twice on the same handle, sequentially or concurrently, which is a
+ * genuine double-free). This section tests that design directly.
  */
 extern struct chttpserver *_chttpsvr_resolve_for_tests(chttpsvr h);
 extern size_t _chttpsvr_slot_table_capacity_for_tests(void);
@@ -10066,9 +10051,9 @@ static void _noop_middleware_for_lifecycle_tests(chttpsvr_req *req,
 /* A fully completed destroy, followed later by a second destroy call on an
  * independently-held copy of the same original handle value, must be a
  * fatal error. Run in a forked child (mirroring this codebase's own
- * fork-test precedent, e.g. tests/clogger/tests.c) since fatal_err aborts
+ * fork-test precedent, e.g. tests/clogger/tests.c) since ccol_fatal_err aborts
  * the whole process. Each server in this section is created with a NULL
- * logger (create_chttpsvr's own internal stderr/FATAL-only logger) rather
+ * logger (ccol_create_chttpsvr's own internal stderr/FATAL-only logger) rather
  * than g_test_logger, so these tests have no dependency on the shared,
  * process-wide test server/logger state _setup/_teardown manage. */
 TEST(chttpsvr_handle_lifecycle, sequential_double_destroy_is_fatal) {
@@ -10080,7 +10065,7 @@ TEST(chttpsvr_handle_lifecycle, sequential_double_destroy_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    chttpsvr srv = create_chttpsvr(CLOG_INVALID, NULL);
+    chttpsvr srv = ccol_create_chttpsvr(CLOG_INVALID, NULL);
     if (srv == CHTTPSVR_INVALID) _exit(2);
     chttpsvr stale = srv;  /* an independently-held copy of the handle value,
          distinct from the local the macro below NULLs out */
@@ -10088,7 +10073,7 @@ TEST(chttpsvr_handle_lifecycle, sequential_double_destroy_is_fatal) {
         CHTTPSVR_INVALID, but `stale` still holds the original value */
     __chttpsvr_destroy(stale); /* the actual misuse under test: a second,
         purely sequential destroy of a handle already fully torn down */
-    _exit(0); /* unreachable if fatal_err() aborted as expected */
+    _exit(0); /* unreachable if ccol_fatal_err() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -10116,8 +10101,8 @@ static void *concurrent_svr_destroy_thread(void *arg) {
 
 /* Two threads calling destroy on two independently-held copies of the SAME,
  * still-valid handle at (as close to) the same moment as possible must also
- * be fatal; regression coverage for the original bug this redesign
- * exists to fix (a genuine heap double-free). */
+ * be fatal; this is the heap double-free the generation-tagged slot table
+ * exists to turn into a detected, loud failure. */
 TEST(chttpsvr_handle_lifecycle, concurrent_double_destroy_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
@@ -10127,7 +10112,7 @@ TEST(chttpsvr_handle_lifecycle, concurrent_double_destroy_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    chttpsvr srv = create_chttpsvr(CLOG_INVALID, NULL);
+    chttpsvr srv = ccol_create_chttpsvr(CLOG_INVALID, NULL);
     if (srv == CHTTPSVR_INVALID) _exit(2);
     concurrent_svr_destroy_arg_t a1 = {.h = srv};
     concurrent_svr_destroy_arg_t a2 = {.h = srv};
@@ -10137,7 +10122,7 @@ TEST(chttpsvr_handle_lifecycle, concurrent_double_destroy_is_fatal) {
     pthread_join(t1, NULL);
     pthread_join(t2, NULL);
     _exit(0); /* unreachable: whichever of the two destroy calls loses the
-                  race must hit fatal_err() */
+                  race must hit ccol_fatal_err() */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -10170,17 +10155,16 @@ extern void _chttpsvr_mark_self_as_worker_for_tests(chttpsvr h);
  * chttpsvr_engine_stop() for the same server, deadlock permanently
  * instead). Driven directly via _chttpsvr_mark_self_as_worker_for_tests
  * rather than a real end-to-end request dispatched through a real worker
- * thread: doing this via fork() (needed either way, since fatal_err()
+ * thread: doing this via fork() (needed either way, since ccol_fatal_err()
  * aborts the whole process) plus a real chttpsvr_start() would require the
  * forked child's own shared reactor to actually service a new listener
  * registration, but fork(2) does not duplicate any thread other than the
  * caller, so a child forked from this suite (whose shared reactor is
  * already running real OS threads by this point, given the hundreds of
  * earlier tests that started servers) inherits a hollow, permanently
- * un-serviced reactor handle (confirmed directly: an earlier version of
- * this test that did call chttpsvr_start() post-fork hung forever instead
- * of aborting, with gdb showing every thread idle and the listener never
- * once dispatched). The white-box hook sidesteps that fork/reactor
+ * un-serviced reactor handle: calling chttpsvr_start() post-fork here hangs
+ * forever instead of aborting, with every thread idle and the listener
+ * never once dispatched. The white-box hook sidesteps that fork/reactor
  * interaction entirely while still exercising the exact same comparison
  * __chttpsvr_destroy itself performs. */
 TEST(chttpsvr_handle_lifecycle, destroy_from_within_own_handler_is_fatal) {
@@ -10192,11 +10176,11 @@ TEST(chttpsvr_handle_lifecycle, destroy_from_within_own_handler_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    chttpsvr srv = create_chttpsvr(CLOG_INVALID, NULL);
+    chttpsvr srv = ccol_create_chttpsvr(CLOG_INVALID, NULL);
     if (srv == CHTTPSVR_INVALID) _exit(2);
     _chttpsvr_mark_self_as_worker_for_tests(srv);
     __chttpsvr_destroy(srv); /* the actual misuse under test */
-    _exit(0); /* unreachable if fatal_err() aborted as expected */
+    _exit(0); /* unreachable if ccol_fatal_err() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -10237,11 +10221,11 @@ TEST(chttpsvr_handle_lifecycle, engine_wait_from_within_own_handler_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    chttpsvr srv = create_chttpsvr(CLOG_INVALID, NULL);
+    chttpsvr srv = ccol_create_chttpsvr(CLOG_INVALID, NULL);
     if (srv == CHTTPSVR_INVALID) _exit(2);
     _chttpsvr_mark_self_as_worker_for_tests(srv);
     chttpsvr_engine_wait(); /* the actual misuse under test */
-    _exit(0);               /* unreachable if fatal_err() aborted as expected */
+    _exit(0); /* unreachable if ccol_fatal_err() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -10310,7 +10294,8 @@ static void _destroy_self_restart_test_server_if_live(void) {
 TEST(chttpsvr_handle_lifecycle,
      restart_from_within_own_handler_returns_not_permitted) {
   atomic_store(&g_self_restart_result_for_lifecycle_test, -1);
-  g_self_restart_srv_for_lifecycle_test = create_chttpsvr(CLOG_INVALID, NULL);
+  g_self_restart_srv_for_lifecycle_test =
+      ccol_create_chttpsvr(CLOG_INVALID, NULL);
   REQUIRE_NE(g_self_restart_srv_for_lifecycle_test, CHTTPSVR_INVALID);
   ccol_retval_t reg_rv = chttpsvr_register_handler(
       g_self_restart_srv_for_lifecycle_test, CHTTP_GET, "/self-restart",
@@ -10435,9 +10420,9 @@ static void *use_setter_thread(void *arg) {
  * a concurrent destroy, repeated under stress, since a real regression here
  * (a resolve-then-use race, or a use-after-free in the unpin path itself;
  * see chttpclient.c's own _chttpcli_resolve_unpin comment for a real
- * example of the latter, found only by tracing a precise interleaving by
- * hand) would only be reachable in a handful-of-instructions-wide window
- * that will not reproduce reliably under a single unstressed run. A fresh
+ * example of the latter) would only be reachable in a
+ * handful-of-instructions-wide window that will not reproduce reliably
+ * under a single unstressed run. A fresh
  * server is used each iteration so every repetition gets its own
  * independent race rather than reusing one already-destroyed handle. */
 TEST(chttpsvr_handle_lifecycle, resolve_unpin_race_stress) {
@@ -10451,7 +10436,7 @@ TEST(chttpsvr_handle_lifecycle, resolve_unpin_race_stress) {
    * until every server has been destroyed) hang forever at process exit. */
   enum { ITERATIONS = 30 };
   for (int i = 0; i < ITERATIONS; i++) {
-    chttpsvr srv = create_chttpsvr(CLOG_INVALID, NULL);
+    chttpsvr srv = ccol_create_chttpsvr(CLOG_INVALID, NULL);
     if (srv == CHTTPSVR_INVALID) REQUIRE_NE(srv, CHTTPSVR_INVALID);
 
     use_setter_arg_t setter_arg = {.h = srv};
@@ -10490,20 +10475,20 @@ static void *router_use_setter_thread(void *arg) {
   /* Return value intentionally ignored: a legitimate race with a concurrent
    * destroy of the owning server can make this resolve fail
    * (ccol_invalid_args) instead of succeeding; both outcomes are correct.
-   * This is a regression test for a real bug: chttpsvr_router_on/_on_stream/
-   * _use used to dereference router->srv (and mutate router->routes/mw_head)
-   * directly, with no resolve/pin against the owning server's handle at all,
-   * unlike every other mutating entry point in this API; racing a
-   * concurrent chttpsvr_destroy() that frees both srv and every router (via
-   * _destroy_router) once it observes pending_resolve_count == 0, a count
-   * these three functions never used to contribute to. */
+   * chttpsvr_router_on/_on_stream/_use must not dereference router->srv (or
+   * mutate router->routes/mw_head) directly without a resolve/pin against
+   * the owning server's handle, as every
+   * other mutating entry point in this API does. Without that pin they race
+   * a concurrent chttpsvr_destroy() that frees both srv and every router
+   * (via _destroy_router) once it observes pending_resolve_count == 0, a
+   * count they would not contribute to. */
   chttpsvr_router_on(a->router, CHTTP_GET, "/race", _hello_handler, NULL);
   return NULL;
 }
 
 /* Sub-router analogue of resolve_unpin_race_stress above: races
  * chttpsvr_router_on (representative of chttpsvr_router_on/_on_stream/_use,
- * which all now resolve/pin the router's owning server the same way) against
+ * which all resolve/pin the router's owning server the same way) against
  * a concurrent chttpsvr_destroy() of that same server. Real verification for
  * this is `make memtest` (valgrind) / -fsanitize=thread, which would report a
  * genuine use-after-free if the resolve/pin protection regressed; this test's
@@ -10517,7 +10502,7 @@ TEST(chttpsvr_handle_lifecycle, router_resolve_unpin_race_stress) {
    * whole binary's own teardown at process exit. */
   enum { ITERATIONS = 30 };
   for (int i = 0; i < ITERATIONS; i++) {
-    chttpsvr srv = create_chttpsvr(CLOG_INVALID, NULL);
+    chttpsvr srv = ccol_create_chttpsvr(CLOG_INVALID, NULL);
     if (srv == CHTTPSVR_INVALID) REQUIRE_NE(srv, CHTTPSVR_INVALID);
     chttpsvr_router *router = chttpsvr_subrouter(srv, "/race-router");
     if (!router) {
@@ -10551,15 +10536,15 @@ TEST(chttpsvr_handle_lifecycle, router_resolve_unpin_race_stress) {
 
 /* This entire fork-safety regression group exercises chttpserver.c's own
  * pthread_atfork() protection, which is compiled out entirely when
- * FORK_SAFETY_REQUIRED is defined to 0 (see that macro's own doc comment in
- * common.h); without it, this test's own premise (verifying that
- * protection prevents a hang) no longer holds, and forking while the feeder
- * thread below is mid-critical-section becomes a genuine, if low-
- * probability, source of flakiness rather than a meaningful regression
- * check. Mirrors tests/cthreadpool's and tests/cthreadcomm's own identical
- * `#if FORK_SAFETY_REQUIRED` wrapping of their own analogous fork-safety
+ * CCOL_FORK_SAFETY_REQUIRED is defined to 0 (see that macro's own doc comment
+ * in common.h); without it, this test's own premise (verifying that protection
+ * prevents a hang) does not hold, and forking while the feeder thread below is
+ * mid-critical-section becomes a genuine, if low-probability, source of
+ * flakiness rather than a meaningful regression check. Mirrors
+ * tests/cthreadpool's and tests/cthreadcomm's own identical `#if
+ * CCOL_FORK_SAFETY_REQUIRED` wrapping of their own analogous fork-safety
  * test groups exactly. */
-#if FORK_SAFETY_REQUIRED
+#if CCOL_FORK_SAFETY_REQUIRED
 typedef struct {
   chttpsvr h;
   _Atomic int stop;
@@ -10570,14 +10555,13 @@ typedef struct {
  * shared with the fork trials below. sched_yield() after every call is
  * load-bearing, not a nicety, mirroring tests/cthreadpool's own identical
  * ctp_fork_feeder_thread: a bare `while (!stop) chttpsvr_use(...);` loop
- * (tried first) reproduces the exact same contention natively, but iterates
- * fast enough that valgrind's own single-instrumented-execution-engine
- * scheduling (no real multi-core parallelism under memcheck) turns the
- * unthrottled spin into an astronomically larger total instrumented
- * instruction count for the same wall-clock test duration; confirmed
- * directly: an earlier, unthrottled version of this exact test still had
- * not finished a single one of its 60 trials after ten minutes under
- * valgrind, despite passing natively in well under a second. Yielding after
+ * reproduces the exact same contention natively, but iterates fast enough
+ * that valgrind's own single-instrumented-execution-engine scheduling (no
+ * real multi-core parallelism under memcheck) turns the unthrottled spin
+ * into an astronomically larger total instrumented instruction count for
+ * the same wall-clock test duration: unthrottled, this test does not finish
+ * a single one of its 60 trials in ten minutes under valgrind, despite
+ * passing natively in well under a second. Yielding after
  * every call caps this thread's own achievable call rate to whatever the
  * scheduler's own time-slice granularity allows, keeping the race
  * reproducible without paying that multiplier. */
@@ -10590,7 +10574,7 @@ static void *fork_feeder_thread(void *arg) {
   return NULL;
 }
 
-/* Regression coverage for chttpserver.c's own pthread_atfork() protection:
+/* Covers chttpserver.c's own pthread_atfork() protection:
  * fork() duplicates only the calling thread, so any of this module's own
  * locks (chttpsvr_slot_table.mutex, srv_engine_bundler.mutex, servers_
  * bundler.mutex, chttpsvr_router_shell_registry.mutex, or any live server's
@@ -10616,31 +10600,31 @@ static void *fork_feeder_thread(void *arg) {
  * parent's own concurrent use of the identical handle, but must never
  * simply hang).
  *
- * A first draft of this test used a second background thread here too,
- * continuously creating and destroying throwaway servers with no throttling
- * at all (mirroring the ctpool sibling test's own churn thread, which is
- * confirmed cheap there). That draft still had not completed a single one
- * of its 60 trials after ten minutes under valgrind, despite passing
- * natively in well under a second; measured directly (not assumed) via a
- * standalone reproduction outside this suite, isolating each background
- * thread in turn: a yield-throttled chttpsvr_use feeder thread alone costs
- * ~0.03s per fork under valgrind, while the unthrottled create/destroy
- * churn thread alone did not complete even one fork within 60 seconds,
- * continuously consuming CPU (not blocked/deadlocked; genuinely still
- * making forward progress, just catastrophically slowly). Root cause:
- * create_chttpsvr_mp's own per-iteration cost (a full root router, several
- * mutexes/condvars, and a derived logger, itself registering into and
- * unregistering from clogger's own separate global slot table) is far
+ * The pre-fork burst below is synchronous and bounded rather than a second
+ * background thread continuously creating and destroying throwaway servers
+ * with no throttling at all (the shape the ctpool sibling test's own churn
+ * thread uses, where it is confirmed cheap). Unthrottled churn here does
+ * not complete a single one of its 60 trials in ten minutes under valgrind,
+ * despite passing natively in well under a second; measurable directly (not
+ * assumed) via a standalone reproduction outside this suite, isolating each
+ * background thread in turn: a yield-throttled chttpsvr_use feeder thread
+ * alone costs ~0.03s per fork under valgrind, while the unthrottled
+ * create/destroy churn thread alone does not complete even one fork within
+ * 60 seconds, continuously consuming CPU (not blocked/deadlocked; genuinely
+ * still making forward progress, just catastrophically slowly). The reason:
+ * ccol_create_chttpsvr_mp's own per-iteration cost (a full root router,
+ * several mutexes/condvars, and a derived logger, itself registering into
+ * and unregistering from clogger's own separate global slot table) is far
  * heavier than ctpool's own minimal pool creation, and valgrind's memcheck
  * gives threads no real multi-core parallelism at all (it time-slices every
  * thread through one single instrumented execution engine), so an
  * unthrottled loop of this much heavier work does not divide across cores
  * the way it would natively; it just hands valgrind an astronomically
  * larger total instrumented instruction count to simulate for the same
- * wall-clock test duration. Replaced with the synchronous, bounded
- * pre-fork burst below, whose own cost scales with TRIALS rather than with
- * how much of it a background thread manages to cram into an unbounded
- * wall-clock window. TRIALS is deliberately smaller than the ctpool sibling
+ * wall-clock test duration. The burst's own cost instead scales with
+ * TRIALS rather than with how much of it a background thread manages to
+ * cram into an unbounded wall-clock window. TRIALS is deliberately smaller
+ * than the ctpool sibling
  * test's own 60, since fork() itself already carries a large, roughly fixed
  * per-call cost under valgrind regardless of trial count; the routes_lock
  * TID-tracking hazard this test also covers (see _chttpsvr_atfork_release_
@@ -10657,7 +10641,7 @@ TEST(chttpsvr_handle_lifecycle, fork_does_not_inherit_a_locked_mutex) {
    * is set, so an early return here would leave it spinning forever, and
    * feeder_srv (still holding a live shared-engine reference) undestroyed
    * would hang this whole binary's own teardown at process exit. */
-  chttpsvr feeder_srv = create_chttpsvr(CLOG_INVALID, NULL);
+  chttpsvr feeder_srv = ccol_create_chttpsvr(CLOG_INVALID, NULL);
   if (feeder_srv == CHTTPSVR_INVALID) REQUIRE_NE(feeder_srv, CHTTPSVR_INVALID);
   fork_feeder_arg_t feeder = {.h = feeder_srv, .stop = 0};
   pthread_t feeder_tid;
@@ -10676,7 +10660,7 @@ TEST(chttpsvr_handle_lifecycle, fork_does_not_inherit_a_locked_mutex) {
   for (int i = 0; i < TRIALS && bad_fork_pid == 0 && bad_waitpid_pid == 0;
        i++) {
     for (int b = 0; b < BURST; b++) {
-      chttpsvr burst_srv = create_chttpsvr(CLOG_INVALID, NULL);
+      chttpsvr burst_srv = ccol_create_chttpsvr(CLOG_INVALID, NULL);
       if (burst_srv != CHTTPSVR_INVALID) chttpsvr_destroy(burst_srv);
     }
 
@@ -10730,22 +10714,22 @@ static void *_fork_stop_race_stop_thread(void *arg) {
   return NULL;
 }
 
-/* Regression coverage for _chttpsvr_atfork_release_impl's own unconditional
-   child-side reset of a server's lifecycle from CHTTPSVR_LC_STOPPING back to
+/* Covers _chttpsvr_atfork_release_impl's own unconditional child-side reset
+   of a server's lifecycle from CHTTPSVR_LC_STOPPING back to
    CHTTPSVR_LC_IDLE (see that function's own doc comment for the full
    account, including why an unconditional reset is safe here specifically,
    unlike quiesce_state above). fork() can land while a parent-side thread is
    genuinely mid-way through _chttpsvr_stop_internal's own real teardown work
    for some server (lifecycle already CHTTPSVR_LC_STOPPING), and that thread
-   is not duplicated into the child; without the fixup, chttpsvr_start()'s
+   is not duplicated into the child; without that reset, chttpsvr_start()'s
    own retry loop (a plain 1ms-sleep poll on this exact state, not a condvar
-   wait) spins forever for this handle in the
-   child. Reuses g_stop_race_hook (already exercised by tests_engine_stop.c's
-   own analogous, single-process scenario) to pause a real chttpsvr_stop()
-   call at exactly that point, in the parent, before forking. */
+   wait) spins forever for this handle in the child. Reuses g_stop_race_hook
+   (already exercised by tests_engine_stop.c's own analogous, single-process
+   scenario) to pause a real chttpsvr_stop() call at exactly that point, in
+   the parent, before forking. */
 TEST(chttpsvr_handle_lifecycle,
      fork_mid_stop_internal_does_not_hang_start_in_child) {
-  g_fork_stop_race_srv = create_chttpsvr(CLOG_INVALID, NULL);
+  g_fork_stop_race_srv = ccol_create_chttpsvr(CLOG_INVALID, NULL);
   REQUIRE_NE(g_fork_stop_race_srv, CHTTPSVR_INVALID);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
@@ -10767,8 +10751,8 @@ TEST(chttpsvr_handle_lifecycle,
 
   /* Deterministic: this returns only once stop_th's own _chttpsvr_stop_
      internal() call has already entered CHTTPSVR_LC_STOPPING and is now
-     paused right there, strictly before its own event_loop_remove()/close()
-     call for the listener. */
+     paused right there, strictly before its own
+     ccol_event_loop_remove()/close() call for the listener. */
   _chttpsvr_wait_stop_race_hook_entered_for_tests();
 
   pid_t pid = fork();
@@ -10794,7 +10778,7 @@ TEST(chttpsvr_handle_lifecycle,
        may or may not bind cleanly here (the OLD, now-orphaned listener fd
        from the vanished parent-side thread may still be open in this
        child; see this test's own doc comment above), which is an accepted,
-       already-documented, gracefully-handled outcome of this fix, not what
+       already-documented, gracefully-handled outcome of this, not what
        this test itself checks. The only thing under test is whether the
        call returns at all. */
     chttpsvr_start(g_fork_stop_race_srv, &restart_cfg);
@@ -10847,8 +10831,8 @@ static void *_fork_starting_race_start_thread(void *arg) {
   return NULL;
 }
 
-/* Regression coverage for _chttpsvr_atfork_release_impl's own unconditional
-   child-side reset of a server's lifecycle from CHTTPSVR_LC_STARTING back to
+/* Covers _chttpsvr_atfork_release_impl's own unconditional child-side reset
+   of a server's lifecycle from CHTTPSVR_LC_STARTING back to
    CHTTPSVR_LC_IDLE (see that function's own doc comment for the full
    account, including why an unconditional reset is safe here specifically,
    mirroring the CHTTPSVR_LC_STOPPING case right above). fork() can land
@@ -10856,7 +10840,7 @@ static void *_fork_starting_race_start_thread(void *arg) {
    own real work for some server (lifecycle already CHTTPSVR_LC_STARTING:
    worker/reject pools created, an engine reference confirmed, but strictly
    before the listener socket itself is ever created), and that thread is
-   not duplicated into the child. Without the fixup, this handle is left
+   not duplicated into the child. Without that reset, this handle is left
    permanently unusable in the child: chttpsvr_start()'s own retry loop
    treats CHTTPSVR_LC_STARTING exactly like a second, genuinely concurrent
    chttpsvr_start() call and refuses outright with ccol_not_permitted (no
@@ -10868,7 +10852,7 @@ static void *_fork_starting_race_start_thread(void *arg) {
    at exactly that point, in the parent, before forking. */
 TEST(chttpsvr_handle_lifecycle,
      fork_mid_start_internal_does_not_disable_start_in_child) {
-  g_fork_starting_race_srv = create_chttpsvr(CLOG_INVALID, NULL);
+  g_fork_starting_race_srv = ccol_create_chttpsvr(CLOG_INVALID, NULL);
   REQUIRE_NE(g_fork_starting_race_srv, CHTTPSVR_INVALID);
   g_fork_starting_race_start_rv = ccol_success;
 
@@ -10942,12 +10926,12 @@ TEST(chttpsvr_handle_lifecycle,
     chttpsvr_config_t restart_cfg = CHTTPSVR_CONFIG_DEFAULT;
     restart_cfg.host = "127.0.0.1";
     restart_cfg.port = TEST_PORT + 75;
-    /* The actual regression this test exists to catch: without the fix,
-       this call returns ccol_not_permitted (lifecycle still stuck at
-       CHTTPSVR_LC_STARTING from the vanished parent-side thread) instead of
-       genuinely being able to proceed. Whether it succeeds outright here is
-       not itself asserted on (only that it is not the one specific,
-       permanent failure mode this fix closes) since a fresh listener may
+    /* The property under test: without that reset, this call returns
+       ccol_not_permitted (lifecycle still stuck at CHTTPSVR_LC_STARTING
+       from the vanished parent-side thread) instead of genuinely being able
+       to proceed. Whether it succeeds outright here is not itself asserted
+       on (only that it is not the one specific, permanent failure mode that
+       reset prevents) since a fresh listener may
        still legitimately fail to bind for unrelated environmental reasons;
        see this test's own doc comment above. */
     ccol_retval_t child_rv =
@@ -10987,23 +10971,24 @@ TEST(chttpsvr_handle_lifecycle,
   REQUIRE_EQ(ok, 1);
   REQUIRE_TRUE(start_th_joined);
 }
-#endif /* FORK_SAFETY_REQUIRED */
+#endif /* CCOL_FORK_SAFETY_REQUIRED */
 
-/* Regression coverage for a real bug found via code review: _listener_on_
-   readable() receives srv as a bare void* event_loop callback arg, entirely
-   outside the ordinary chttpsvr-handle resolve/pin mechanism every other
-   entry point into this server goes through. event_loop_remove()'s own
+/* _listener_on_readable() receives srv as a bare void* ccol_event_loop
+   callback arg, entirely outside the ordinary chttpsvr-handle resolve/pin
+   mechanism every other entry point into this server goes through.
+   ccol_event_loop_remove()'s own
    documented "callers may free whatever the registration's own arg points
    to immediately after this call returns" promise does not cover a
-   callback already in progress at the moment of the call (event_loop never
-   waits on the registration's own dispatch_lock during removal); this made
-   chttpsvr_destroy() capable of freeing srv while a still-running listener
-   dispatch kept reading its fields, a window that used to be a handful of
-   instructions (real, but never reliably reproducible) until a needed fix
-   elsewhere (backing off instead of busy-looping after a persistent
-   post-accept allocation failure) widened it into one valgrind could catch
-   on demand. Reproduced deterministically here via a dedicated white-box
-   race hook rather than relying on winning that same real-timing race. */
+   callback already in progress at the moment of the call (ccol_event_loop never
+   waits on the registration's own dispatch_lock during removal), so
+   without a pin of its own chttpsvr_destroy() can free srv while a
+   still-running listener dispatch keeps reading its fields. The window is
+   normally a handful of
+   instructions, real but not reliably reproducible; it widens to one
+   valgrind can catch whenever a dispatch legitimately takes longer (the
+   backoff after a persistent post-accept allocation failure, for instance).
+   Reproduced deterministically here via a dedicated white-box race hook
+   rather than by trying to win that real-timing race. */
 extern void _chttpsvr_arm_listener_dispatch_race_hook_for_tests(void);
 extern void _chttpsvr_wait_listener_dispatch_race_hook_entered_for_tests(void);
 extern void _chttpsvr_release_listener_dispatch_race_hook_for_tests(void);
@@ -11032,7 +11017,7 @@ TEST(chttpsvr_handle_lifecycle,
      would hang chttpsvr_engine_wait() in this file's own _teardown() at
      process exit, converting a rare setup failure into a silent
      whole-binary hang instead of a clean, reported failure). */
-  chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
+  chttpsvr srv = ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_NE(srv, CHTTPSVR_INVALID);
 
   ccol_retval_t rv = chttpsvr_register_handler(
@@ -11071,12 +11056,12 @@ TEST(chttpsvr_handle_lifecycle,
   REQUIRE_TRUE(fd_a >= 0);
   int connect_rv = connect(fd_a, (struct sockaddr *)&sa, sizeof(sa));
   /* Checked, unlike a bare fire-and-forget call: _wait_..._entered_for_tests
-     just below blocks on an unbounded cond_var_wait (no deadline, by design
-     matched to this hook's every other caller, which all rely on a genuine
-     connect() having actually triggered a real dispatch). A failed connect()
-     here would mean the listener never dispatches at all, hanging this test
-     (and, since the hook would stay armed, every later test in this binary
-     that dispatches a listener) forever instead of failing cleanly. */
+     just below blocks on an unbounded ccol_cond_var_wait (no deadline, by
+     design matched to this hook's every other caller, which all rely on a
+     genuine connect() having actually triggered a real dispatch). A failed
+     connect() here would mean the listener never dispatches at all, hanging
+     this test (and, since the hook would stay armed, every later test in this
+     binary that dispatches a listener) forever instead of failing cleanly. */
   if (connect_rv != 0) {
     _chttpsvr_release_listener_dispatch_race_hook_for_tests();
     chttpsvr_destroy(srv);
@@ -11105,17 +11090,16 @@ TEST(chttpsvr_handle_lifecycle,
 
   bool still_blocked = false;
   if (destroy_th_created) {
-    /* Give chttpsvr_destroy() time to actually run and reach (and, with the
-       fix in place, block inside) its own listener_dispatch_pins wait;
-       matches this file's own established 150ms precedent for "let the
-       other side reach its own blocking point" synchronization elsewhere. */
+    /* Give chttpsvr_destroy() time to actually run and reach (and block
+       inside) its own listener_dispatch_pins wait; matches this file's own
+       established 150ms precedent for "let the other side reach its own
+       blocking point" synchronization elsewhere. */
     struct timespec settle = {0, 150000000L};
     nanosleep(&settle, NULL);
-    /* With the fix, __chttpsvr_destroy() must still be blocked here,
-       waiting for listener_dispatch_pins to reach 0; not returned
-       already, which (without the fix) would mean it already freed srv
-       while the listener dispatch was still paused holding a bare pointer
-       to it. */
+    /* __chttpsvr_destroy() must still be blocked here, waiting for
+       listener_dispatch_pins to reach 0; a destroy that has already
+       returned would mean srv was freed while the listener dispatch is
+       still paused holding a bare pointer to it. */
     still_blocked = !atomic_load(&destroy_returned);
   }
 
@@ -11142,18 +11126,18 @@ TEST(chttpsvr_handle_lifecycle,
 
 /* Legitimate slot reuse must never be confused with a stale handle to the
  * slot's previous occupant; exactly the scenario a naive address-keyed
- * "remember every destroyed pointer forever" design could not handle
- * safely, since glibc's tcache routinely (though not guaranteedly) reuses a
+ * "remember every destroyed pointer forever" design cannot handle safely,
+ * since glibc's tcache routinely (though not guaranteedly) reuses a
  * just-freed struct chttpserver's exact address for the very next one
  * allocated. */
 TEST(chttpsvr_handle_lifecycle,
      legitimate_slot_reuse_not_confused_with_stale_handle) {
-  chttpsvr a = create_chttpsvr(CLOG_INVALID, NULL);
+  chttpsvr a = ccol_create_chttpsvr(CLOG_INVALID, NULL);
   REQUIRE_NE(a, CHTTPSVR_INVALID);
   chttpsvr stale_a = a;
   chttpsvr_destroy(a);
 
-  chttpsvr b = create_chttpsvr(CLOG_INVALID, NULL);
+  chttpsvr b = ccol_create_chttpsvr(CLOG_INVALID, NULL);
   REQUIRE_NE(b, CHTTPSVR_INVALID);
 
   /* B's operations must succeed normally regardless of whether the
@@ -11178,13 +11162,13 @@ TEST(chttpsvr_handle_lifecycle,
 TEST(chttpsvr_handle_lifecycle, bounded_slot_reuse_under_churn) {
   enum { ITERATIONS = 100 };
 
-  chttpsvr s0 = create_chttpsvr(CLOG_INVALID, NULL);
+  chttpsvr s0 = ccol_create_chttpsvr(CLOG_INVALID, NULL);
   REQUIRE_NE(s0, CHTTPSVR_INVALID);
   chttpsvr_destroy(s0);
   size_t capacity_after_first = _chttpsvr_slot_table_capacity_for_tests();
 
   for (int i = 1; i < ITERATIONS; i++) {
-    chttpsvr srv = create_chttpsvr(CLOG_INVALID, NULL);
+    chttpsvr srv = ccol_create_chttpsvr(CLOG_INVALID, NULL);
     REQUIRE_NE(srv, CHTTPSVR_INVALID);
     chttpsvr_destroy(srv);
   }
@@ -11202,8 +11186,8 @@ extern size_t _chttpsvr_doubling_growth_cap_for_tests(size_t cap,
 
 TEST(doubling_growth_cap, first_growth_returns_initial) {
   /* cap == 0 (nothing allocated yet) must always return `initial` verbatim,
-   * regardless of elem_size, mirroring every caller's own "cap ? cap*2 : 8"
-   * shape before this helper existed. */
+   * regardless of elem_size, matching every caller's own "cap ? cap*2 : 8"
+   * shape. */
   REQUIRE_EQ(_chttpsvr_doubling_growth_cap_for_tests(0, sizeof(void *), 8),
              (size_t)8);
 }
@@ -11241,16 +11225,16 @@ TEST(doubling_growth_cap, byte_size_multiplication_overflow_rejected) {
 /* ========================================================================== */
 /*             ACCEPT()-FAILURE ERRNO CLASSIFICATION                          */
 /*                                                                            */
-/* _listener_on_readable's own accept4() error handling used to treat every  */
-/* unexpected failure identically: no log, an immediate return with no       */
-/* retry. For a *persistent* resource-exhaustion condition (EMFILE/ENFILE/   */
+/* _listener_on_readable's own accept4() error handling must not treat every */
+/* unexpected failure identically (no log, an immediate return with no       */
+/* retry). For a *persistent* resource-exhaustion condition (EMFILE/ENFILE/  */
 /* ENOBUFS/ENOMEM: the process or system genuinely out of file descriptors,  */
 /* a realistic state under sustained connection-flood load with a modest    */
 /* ulimit -n), the listen backlog stays non-empty (nothing was ever          */
 /* accepted), so the reactor's own level-triggered epoll immediately         */
 /* re-dispatches this same handler again; an unbounded, silent busy-loop     */
 /* burning 100% CPU with zero operator-visible diagnostics for as long as    */
-/* the condition persists. Fixed with two errno-classification helpers (a   */
+/* the condition persists. Handled by two errno-classification helpers (a    */
 /* brief backoff sleep plus a rate-limited log for the resource-exhaustion   */
 /* class; an immediate retry, not a fresh epoll round-trip, for a genuinely  */
 /* transient single-connection error like ECONNABORTED). Exercising the     */

@@ -12,7 +12,14 @@ ccol_retval_t cyaml_list_push(cyaml seq, cyaml child);
 .SH DESCRIPTION
 .nf
 Append child to the CYAML_LIST node seq.  Ownership of child
-transfers to seq; do not free the child afterwards.
+transfers unconditionally: on success seq owns it, and on any failure
+it is deep-freed by this function.  Do not free child afterwards
+regardless of the return value.
+
+child must not be seq itself, nor a node that already contains seq
+somewhere in its own subtree.  This is not checked; creating such a
+cycle makes a later cyaml_destroy(), cyaml_clone(), or
+cyaml_serialize() call on the tree undefined behaviour.
 .fi
 .SH PARAMETERS
 .nf
@@ -21,10 +28,10 @@ child  Node to append.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success, ccol_invalid_args (if seq is not a list),
-ccol_not_enough_memory, or ccol_container_full (the list has
-reached its maximum representable element count; not reachable
-in practice).
+ccol_success, ccol_invalid_args (if seq or child is NULL, or seq is
+not a list), ccol_not_enough_memory, or ccol_container_full (the
+list has reached its maximum representable element count; not
+reachable in practice).
 .fi
 .SH "SEE ALSO"
 .BR cyaml_list_get (3),

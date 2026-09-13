@@ -1,0 +1,37 @@
+.TH CCOL_EVENT_LOOP_DECLARE 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccol_event_loop_declare \- declare an uninitialised ccol_event_loop variable
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_event_loop_declare(name);
+.fi
+.SH DESCRIPTION
+.nf
+Expands to `ccol_event_loop name`.  The variable is left uninitialised and
+must be assigned via ccol_event_loop_construct() or a ccol_event_loop_create*()
+call before use.
+
+Provided for naming-convention symmetry with other c_collections
+modules (compare ctpool_declare()).
+.fi
+.SH PARAMETERS
+.nf
+name  Variable name to declare.
+.fi
+.SH EXAMPLES
+.nf
+ccol_event_loop_declare(loop);
+char *err = NULL;
+loop = ccol_event_loop_create(32, 1, 1, &err);
+if (!loop) { fprintf(stderr, "%s\en", err); exit(1); }
+/* ... register selectables ... */
+ccol_event_loop_destroy(loop);
+.fi
+.SH "SEE ALSO"
+.BR ccol_event_loop_declare_scoped (3),
+.BR ccol_event_loop_construct (3),
+.BR ccol_event_loop_create (3)

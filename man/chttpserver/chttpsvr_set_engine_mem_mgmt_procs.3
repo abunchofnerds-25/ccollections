@@ -11,7 +11,7 @@ ccol_retval_t chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
 .fi
 .SH DESCRIPTION
 .nf
-Redirects every allocation made by the shared event_loop reactor's own
+Redirects every allocation made by the shared ccol_event_loop reactor's own
 construction and connection-registration bookkeeping to the
 malloc/free/calloc/realloc supplied in mp, exactly like the memory
 management procs accepted by every other module in this library.
@@ -19,7 +19,7 @@ Passing NULL reverts to the default allocator.
 
 This is independent of the allocator each individual chttpsvr instance
 uses for its own connections/requests (configured via
-create_chttpsvr_mp, following the usual _mp convention); this function
+ccol_create_chttpsvr_mp, following the usual _mp convention); this function
 only affects the one shared reactor's own construction.
 
 This function may only be called before the first chttpsvr_start call

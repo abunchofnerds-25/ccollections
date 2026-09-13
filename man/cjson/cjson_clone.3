@@ -14,7 +14,7 @@ cjson cjson_clone(cjson node);
 Returns a fully independent copy of the subtree rooted at node.
 All strings are duplicated, all arrays and objects are recursively
 cloned.  The clone uses the same allocator as the source (taken from
-the root node's stored m_procs).
+the root node's stored allocator).
 
 A subtree nested more than 500 levels deep (arrays and/or objects, in
 any combination) is rejected rather than recursing further; a tree

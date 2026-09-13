@@ -55,6 +55,15 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 
+/* Everything declared from here to the end of this header is part of the
+ * public ABI of libccollections and is exported from the shared library.
+ * The library itself is built with -fvisibility=hidden, so any function or
+ * object that is not covered by one of these blocks stays internal to the
+ * library, is absent from its dynamic symbol table, and cannot be
+ * interposed by, or collide with, a symbol of the same name in the
+ * application that links against it. */
+#pragma GCC visibility push(default)
+
 /* ========================================================================== */
 /*                         FORK SAFETY OPT-OUT                                */
 /* ========================================================================== */
@@ -63,7 +72,7 @@ SOFTWARE.
  * @brief Compile-time switch controlling whether this library's own
  *        pthread_atfork()-based fork() safety machinery is compiled in.
  *
- * Several modules (cthreadpool, cthreadcomm's event_loop and queue types,
+ * Several modules (cthreadpool, cthreadcomm's ccol_event_loop and queue types,
  * clogger) register pthread_atfork() prepare/parent/child handlers so that a
  * fork() landing while some thread holds one of their internal locks does
  * not hand a permanently-locked mutex to the child (which has no thread left
@@ -79,7 +88,7 @@ SOFTWARE.
  * fork()+execve() or an equivalent posix_spawn()-style wrapper, so the child
  * never touches any handle from this library before its own process image is
  * replaced), gets no benefit from this protection and can define this to 0
- * (e.g. -DFORK_SAFETY_REQUIRED=0) to compile every one of these
+ * (e.g. -DCCOL_FORK_SAFETY_REQUIRED=0) to compile every one of these
  * registrations, their handler bodies, and the handle-level state that
  * exists solely to support them (e.g. a "this handle was inherited across a
  * fork()" flag) out of the library entirely, removing that per-fork() cost.
@@ -91,8 +100,8 @@ SOFTWARE.
  * Defined to 1 (fork-safety compiled in) unless a caller has already defined
  * it before this header is first included.
  */
-#ifndef FORK_SAFETY_REQUIRED
-#define FORK_SAFETY_REQUIRED 1
+#ifndef CCOL_FORK_SAFETY_REQUIRED
+#define CCOL_FORK_SAFETY_REQUIRED 1
 #endif
 
 /* ========================================================================== */
@@ -100,107 +109,108 @@ SOFTWARE.
 /* ========================================================================== */
 
 /** @brief Mutex type (wraps pthread_mutex_t) */
-#define mutex_t pthread_mutex_t
+#define ccol_mutex_t pthread_mutex_t
 
 /** @brief Destroy a mutex */
-#define mutex_destroy(m) pthread_mutex_destroy(&(m))
+#define ccol_mutex_destroy(m) pthread_mutex_destroy(&(m))
 
 /** @brief Initialize a mutex with default attributes */
-#define mutex_init(m) pthread_mutex_init(&(m), NULL)
+#define ccol_mutex_init(m) pthread_mutex_init(&(m), NULL)
 
 /** @brief Lock a mutex (blocking) */
-#define mutex_lock(m) pthread_mutex_lock(&(m))
+#define ccol_mutex_lock(m) pthread_mutex_lock(&(m))
 
 /** @brief Unlock a mutex */
-#define mutex_unlock(m) pthread_mutex_unlock(&(m))
+#define ccol_mutex_unlock(m) pthread_mutex_unlock(&(m))
 
 /** @brief Read-write lock type (wraps pthread_rwlock_t) */
-#define rw_lock_t pthread_rwlock_t
+#define ccol_rw_lock_t pthread_rwlock_t
 
 /** @brief Destroy a read-write lock */
-#define rw_lock_destroy(a) pthread_rwlock_destroy(&(a))
+#define ccol_rw_lock_destroy(a) pthread_rwlock_destroy(&(a))
 
 /** @brief Initialize a read-write lock with default attributes */
-#define rw_lock_init(a) pthread_rwlock_init(&(a), NULL)
+#define ccol_rw_lock_init(a) pthread_rwlock_init(&(a), NULL)
 
 /** @brief Acquire write lock (exclusive access) */
-#define rw_lock_wrlock(a) pthread_rwlock_wrlock(&(a))
+#define ccol_rw_lock_wrlock(a) pthread_rwlock_wrlock(&(a))
 
 /** @brief Acquire read lock (shared access) */
-#define rw_lock_rdlock(a) pthread_rwlock_rdlock(&(a))
+#define ccol_rw_lock_rdlock(a) pthread_rwlock_rdlock(&(a))
 
 /** @brief Release read-write lock */
-#define rw_lock_unlock(a) pthread_rwlock_unlock(&(a))
+#define ccol_rw_lock_unlock(a) pthread_rwlock_unlock(&(a))
 
 /** @brief Condition variable type (wraps pthread_cond_t) */
-#define cond_var_t pthread_cond_t
+#define ccol_cond_var_t pthread_cond_t
 
 /** @brief Condition variable attributes type (wraps pthread_cond_attr_t) */
-#define cond_var_attr_t pthread_condattr_t
+#define ccol_cond_var_attr_t pthread_condattr_t
 
 /** @brief Destroy condition variable attributes */
-#define cond_var_attr_destroy(ca) pthread_condattr_destroy(&(ca))
+#define ccol_cond_var_attr_destroy(ca) pthread_condattr_destroy(&(ca))
 
 /** @brief Initialize condition variable attributes */
-#define cond_var_attr_init(ca) pthread_condattr_init(&(ca))
+#define ccol_cond_var_attr_init(ca) pthread_condattr_init(&(ca))
 
 /** @brief Set the clock type of condition variable attributes */
-#define cond_var_attr_setclock(ca, clk) pthread_condattr_setclock(&(ca), clk)
+#define ccol_cond_var_attr_setclock(ca, clk) \
+  pthread_condattr_setclock(&(ca), clk)
 
 /** @brief Destroy a condition variable */
-#define cond_var_destroy(c) pthread_cond_destroy(&(c))
+#define ccol_cond_var_destroy(c) pthread_cond_destroy(&(c))
 
 /** @brief Initialize a condition variable with default attributes */
-#define cond_var_init(c) pthread_cond_init(&(c), NULL)
+#define ccol_cond_var_init(c) pthread_cond_init(&(c), NULL)
 
 /** @brief Initialize a condition variable with custom attributes */
-#define cond_var_init_ca(c, ca) pthread_cond_init(&(c), &(ca))
+#define ccol_cond_var_init_ca(c, ca) pthread_cond_init(&(c), &(ca))
 
 /** @brief Wait on condition variable (releases mutex while waiting) */
-#define cond_var_wait(c, m) pthread_cond_wait(&(c), &(m))
+#define ccol_cond_var_wait(c, m) pthread_cond_wait(&(c), &(m))
 
 /** @brief Timed wait on condition variable with absolute timeout */
-#define cond_var_timedwait(c, m, t) pthread_cond_timedwait(&(c), &(m), &(t))
+#define ccol_cond_var_timedwait(c, m, t) \
+  pthread_cond_timedwait(&(c), &(m), &(t))
 
 /** @brief Signal one waiting thread on condition variable */
-#define cond_var_signal(c) pthread_cond_signal(&(c))
+#define ccol_cond_var_signal(c) pthread_cond_signal(&(c))
 
 /** @brief Signal all waiting threads on condition variable */
-#define cond_var_broadcast(c) pthread_cond_broadcast(&(c))
+#define ccol_cond_var_broadcast(c) pthread_cond_broadcast(&(c))
 
 /**
  * @brief Unnamed, process-private semaphore type (wraps sem_t)
  *
  * The one synchronization primitive in this file POSIX guarantees is
- * async-signal-safe to operate on (specifically: semaphore_post() below,
- * via sem_post(3)). Every other primitive here (mutex_t, cond_var_t,
- * rw_lock_t, and thread_create()/call_once() themselves) is explicitly NOT
- * safe to call from within a signal handler: pthread_mutex_lock can
- * self-deadlock if the interrupted thread already holds the very mutex a
- * handler tries to (re)acquire, and pthread_create/pthread_once can
- * internally need malloc's own arena lock, which the interrupted thread
- * could likewise already hold for an unrelated reason. A module that needs
- * to expose a genuinely async-signal-safe entry point (e.g. "safe to call
- * from a SIGTERM handler") must not call mutex_lock/thread_create/call_once
- * from that entry point directly; instead, wake an already-running,
- * dedicated watcher thread via semaphore_post() and let that thread (an
- * ordinary, non-signal execution context) perform the actual work. See
- * chttpserver.c's engine-stop watcher for the reference implementation of
- * this pattern.
+ * async-signal-safe to operate on (specifically: ccol_semaphore_post() below,
+ * via sem_post(3)). Every other primitive here (ccol_mutex_t, ccol_cond_var_t,
+ * ccol_rw_lock_t, and ccol_thread_create()/ccol_call_once() themselves) is
+ * explicitly NOT safe to call from within a signal handler: pthread_mutex_lock
+ * can self-deadlock if the interrupted thread already holds the very mutex a
+ * handler tries to (re)acquire, and pthread_create/pthread_once can internally
+ * need malloc's own arena lock, which the interrupted thread could likewise
+ * already hold for an unrelated reason. A module that needs to expose a
+ * genuinely async-signal-safe entry point (e.g. "safe to call from a SIGTERM
+ * handler") must not call ccol_mutex_lock/ccol_thread_create/ccol_call_once
+ * from that entry point directly; instead, wake an already-running, dedicated
+ * watcher thread via ccol_semaphore_post() and let that thread (an ordinary,
+ * non-signal execution context) perform the actual work. See chttpserver.c's
+ * engine-stop watcher for the reference implementation of this pattern.
  */
-#define semaphore_t sem_t
+#define ccol_semaphore_t sem_t
 
 /** @brief Initialize an unnamed, process-private semaphore to an initial
  *  count of value. */
-#define semaphore_init(s, value) sem_init(&(s), 0, (value))
+#define ccol_semaphore_init(s, value) sem_init(&(s), 0, (value))
 
-/** @brief Destroy a semaphore initialized with semaphore_init(). */
-#define semaphore_destroy(s) sem_destroy(&(s))
+/** @brief Destroy a semaphore initialized with ccol_semaphore_init(). */
+#define ccol_semaphore_destroy(s) sem_destroy(&(s))
 
 /** @brief Block until the semaphore's count is > 0, then atomically
  *  decrement it. Not async-signal-safe (may block); call only from an
  *  ordinary thread, never from within a signal handler. */
-#define semaphore_wait(s) sem_wait(&(s))
+#define ccol_semaphore_wait(s) sem_wait(&(s))
 
 /**
  * @brief Increment the semaphore's count, waking one waiter if any.
@@ -208,33 +218,33 @@ SOFTWARE.
  * Async-signal-safe per POSIX (sem_post(3)): the one operation in this
  * file that is genuinely safe to call from within a signal handler.
  */
-#define semaphore_post(s) sem_post(&(s))
+#define ccol_semaphore_post(s) sem_post(&(s))
 
 /** @brief Thread ID type (wraps pthread_t) */
-#define thread_id_t pthread_t
+#define ccol_thread_id_t pthread_t
 
 /** @brief Get current thread ID */
-#define get_thread_id pthread_self
+#define ccol_get_thread_id pthread_self
 
 /**
  * @brief Create a thread running fn(arg), storing its handle in handle
  *
  * Every current call site passes default (NULL) attributes and ignores the
  * return value beyond a success/failure check, so this wrapper hides the
- * attributes argument, mirroring how mutex_init()/cond_var_init() already
- * hide their own NULL-attributes argument.
+ * attributes argument, mirroring how ccol_mutex_init()/ccol_cond_var_init()
+ * already hide their own NULL-attributes argument.
  */
-#define thread_create(handle, fn, arg) \
+#define ccol_thread_create(handle, fn, arg) \
   pthread_create(&(handle), NULL, (fn), (arg))
 
 /** @brief Block until the thread identified by handle has terminated */
-#define thread_join(handle) pthread_join((handle), NULL)
+#define ccol_thread_join(handle) pthread_join((handle), NULL)
 
 /** @brief One-time-initialization guard type (wraps pthread_once_t) */
-#define once_flag_t pthread_once_t
+#define ccol_once_flag_t pthread_once_t
 
 /**
- * @brief Static initializer for a once_flag_t (wraps PTHREAD_ONCE_INIT)
+ * @brief Static initializer for a ccol_once_flag_t (wraps PTHREAD_ONCE_INIT)
  *
  * Unlike mutex/cond/rwlock, a one-time-init flag is a trivial, universally
  * representable "not yet run" state, not a real synchronization object, so
@@ -242,29 +252,29 @@ SOFTWARE.
  * initializer; it is what makes lazily initializing everything else
  * possible without a chicken-and-egg problem.
  */
-#define ONCE_INIT PTHREAD_ONCE_INIT
+#define CCOL_ONCE_INIT PTHREAD_ONCE_INIT
 
 /** @brief Run fn exactly once across all callers racing the same flag */
-#define call_once(flag, fn) pthread_once(&(flag), (fn))
+#define ccol_call_once(flag, fn) pthread_once(&(flag), (fn))
 
 /** @brief Thread-local storage key type (wraps pthread_key_t) */
-#define thread_ls_key_t pthread_key_t
+#define ccol_thread_ls_key_t pthread_key_t
 
 /** @brief Create a thread-local storage key with an optional destructor */
-#define thread_ls_key_create(key, destructor) \
+#define ccol_thread_ls_key_create(key, destructor) \
   pthread_key_create(&(key), (destructor))
 
 /** @brief Delete a thread-local storage key */
-#define thread_ls_key_delete(key) pthread_key_delete((key))
+#define ccol_thread_ls_key_delete(key) pthread_key_delete((key))
 
 /** @brief Set the calling thread's value for a thread-local storage key */
-#define thread_ls_set(key, val) pthread_setspecific((key), (val))
+#define ccol_thread_ls_set(key, val) pthread_setspecific((key), (val))
 
 /** @brief Get the calling thread's value for a thread-local storage key */
-#define thread_ls_get(key) pthread_getspecific((key))
+#define ccol_thread_ls_get(key) pthread_getspecific((key))
 
 /** @brief Register prepare/parent/child handlers to run around fork(2) */
-#define at_fork(prepare, parent, child) \
+#define ccol_at_fork(prepare, parent, child) \
   pthread_atfork((prepare), (parent), (child))
 
 /**
@@ -273,7 +283,7 @@ SOFTWARE.
  * Non-portable (Apple/BSD only); used solely by clogger.c's platform
  * fallback branches for systems without a /proc-based thread name lookup.
  */
-#define get_thread_name_np(thread, buf, len) \
+#define ccol_get_thread_name_np(thread, buf, len) \
   pthread_getname_np((thread), (buf), (len))
 
 /**
@@ -282,7 +292,8 @@ SOFTWARE.
  * Non-portable (Apple-only); used solely by clogger.c's platform fallback
  * branch for systems without a syscall-based thread id lookup.
  */
-#define get_thread_id_np(thread, out_id) pthread_threadid_np((thread), (out_id))
+#define ccol_get_thread_id_np(thread, out_id) \
+  pthread_threadid_np((thread), (out_id))
 
 /**
  * @brief Assertion macro for collections library
@@ -362,11 +373,11 @@ SOFTWARE.
  * Example:
  * @code
  * if (!ptr) {
- *   fatal_err("allocation failed: size=%zu", requested_size);
+ *   ccol_fatal_err("allocation failed: size=%zu", requested_size);
  * }
  * @endcode
  */
-#define fatal_err(_err_fmt, ...)                                        \
+#define ccol_fatal_err(_err_fmt, ...)                                   \
   do {                                                                  \
     fprintf(stderr, "%s:%d: fatal: " _err_fmt "\n", __FILE__, __LINE__, \
             ##__VA_ARGS__);                                             \
@@ -382,7 +393,7 @@ SOFTWARE.
  * @param size Number of bytes to allocate
  * @return Pointer to allocated memory, or NULL on failure
  */
-#define mem_alloc(size) malloc((size))
+#define ccol_mem_alloc(size) malloc((size))
 
 /**
  * @brief Allocate and zero-initialize memory (default: calloc)
@@ -390,7 +401,7 @@ SOFTWARE.
  * @param elem_size Size of each element
  * @return Pointer to allocated memory, or NULL on failure
  */
-#define mem_calloc(elem_count, elem_size) calloc((elem_count), (elem_size))
+#define ccol_mem_calloc(elem_count, elem_size) calloc((elem_count), (elem_size))
 
 /**
  * @brief Reallocate memory (default: realloc)
@@ -398,13 +409,13 @@ SOFTWARE.
  * @param new_size New size in bytes
  * @return Pointer to reallocated memory, or NULL on failure
  */
-#define mem_realloc(ptr, new_size) realloc((ptr), (new_size))
+#define ccol_mem_realloc(ptr, new_size) realloc((ptr), (new_size))
 
 /**
  * @brief Free memory (default: free)
  * @param ptr Pointer to free
  */
-#define mem_free(ptr) free((ptr))
+#define ccol_mem_free(ptr) free((ptr))
 
 /**
  * @brief Allocate memory using custom or default allocator
@@ -412,8 +423,8 @@ SOFTWARE.
  * @param size Number of bytes to allocate
  * @return Pointer to allocated memory, or NULL on failure
  */
-#define _mem_alloc(m_procs, size) \
-  (m_procs) ? (m_procs)->malloc((size)) : mem_alloc((size))
+#define _ccol_mem_alloc(m_procs, size) \
+  (m_procs) ? (m_procs)->malloc((size)) : ccol_mem_alloc((size))
 
 /**
  * @brief Allocate zeroed memory using custom or default allocator
@@ -422,9 +433,9 @@ SOFTWARE.
  * @param e_size Size of each element
  * @return Pointer to allocated memory, or NULL on failure
  */
-#define _mem_calloc(m_procs, e_count, e_size)        \
+#define _ccol_mem_calloc(m_procs, e_count, e_size)   \
   (m_procs) ? (m_procs)->calloc((e_count), (e_size)) \
-            : mem_calloc((e_count), (e_size))
+            : ccol_mem_calloc((e_count), (e_size))
 
 /**
  * @brief Reallocate memory using custom or default allocator
@@ -433,17 +444,17 @@ SOFTWARE.
  * @param new_size New size in bytes
  * @return Pointer to reallocated memory, or NULL on failure
  */
-#define _mem_realloc(m_procs, ptr, new_size)        \
+#define _ccol_mem_realloc(m_procs, ptr, new_size)   \
   (m_procs) ? (m_procs)->realloc((ptr), (new_size)) \
-            : mem_realloc((ptr), (new_size))
+            : ccol_mem_realloc((ptr), (new_size))
 
 /**
  * @brief Free memory using custom or default allocator
  * @param m_procs Memory management procedures (or NULL for default)
  * @param ptr Pointer to free
  */
-#define _mem_free(m_procs, ptr) \
-  (m_procs) ? (m_procs)->free((ptr)) : mem_free((ptr))
+#define _ccol_mem_free(m_procs, ptr) \
+  (m_procs) ? (m_procs)->free((ptr)) : ccol_mem_free((ptr))
 
 /**
  * @brief The invalid size_t for size related operations
@@ -463,14 +474,15 @@ SOFTWARE.
  * integer power of two that can be contained by a size_t variable
  * is the half of the 2^(#arch_bits).
  */
-#define max_power_of_two_size_t ((size_t)1 << ((sizeof(size_t) * CHAR_BIT) - 1))
+#define ccol_max_power_of_two_size_t \
+  ((size_t)1 << ((sizeof(size_t) * CHAR_BIT) - 1))
 
 /**
  * @brief Maximum element count for collections
  *
  * It is the maximum power of 2 that can be stored by a size_t
  */
-#define max_elem_count max_power_of_two_size_t
+#define ccol_max_elem_count ccol_max_power_of_two_size_t
 
 /* ========================================================================== */
 /*                         RETURN VALUE CODES                                 */
@@ -490,10 +502,10 @@ typedef enum ccollections_retval_t {
    * (some check "== 0" directly rather than always spelling out
    * ccol_success), and an implicit-value list silently renumbers every
    * later entry (including ccol_success itself) the moment a new
-   * enumerator is inserted anywhere but the very end; exactly the
-   * regression that occurred here once, caught via a cbstmap test
-   * failure that had nothing to do with cbstmap at all. Pin every value
-   * explicitly so a future addition cannot reintroduce that class of bug. */
+   * enumerator is inserted anywhere but the very end. Such a renumbering is
+   * invisible at the point of the edit and surfaces far away from it, as an
+   * unrelated module's test failing on a retval it never touched. Pin every
+   * value explicitly so a future addition cannot cause that. */
   ccol_unexpected_failure = -18,          /**< Unexpected/unknown error */
   ccol_http_connection_failed = -17,      /**< TCP connection to the server
                                              could not be established */
@@ -525,7 +537,8 @@ typedef enum ccollections_retval_t {
   ccol_success = 0               /**< Operation succeeded */
 } ccol_retval_t;
 
-/** Returns a string literal for @p r, suitable for use in fatal_err() messages.
+/** Returns a string literal for @p r, suitable for use in ccol_fatal_err()
+ * messages.
  */
 static inline const char *ccol_retval_to_str(ccol_retval_t r) {
   switch (r) {
@@ -575,8 +588,8 @@ static inline const char *ccol_retval_to_str(ccol_retval_t r) {
 /**
  * Hex-dumps @p size bytes at @p data to stderr in xxd-like format (offset,
  * hex columns, printable-ASCII sidebar). Called automatically by cbmap/chmap
- * macros before a fatal_err() on a failed insert/lookup, so the offending key
- * is visible even when it is opaque binary data.
+ * macros before a ccol_fatal_err() on a failed insert/lookup, so the offending
+ * key is visible even when it is opaque binary data.
  */
 static inline void _ccol_dump_key_to_stderr(const void *data, size_t size) {
   const unsigned char *p = (const unsigned char *)data;
@@ -740,7 +753,7 @@ static inline void ccol_growbuf_append_cstr(ccol_growbuf_t *b, const char *s) {
  * Safe to call on an already-OOM buffer (b->buf may be NULL).
  */
 static inline void ccol_growbuf_destroy(ccol_growbuf_t *b) {
-  _mem_free(b->m_procs, b->buf);
+  _ccol_mem_free(b->m_procs, b->buf);
 }
 
 /* ========================================================================== */
@@ -894,8 +907,8 @@ typedef struct cmap_iterator {
         }                                                          \
         result = false;                                            \
       } else {                                                     \
-        mem_cpy((container)->m_procs, (mmgmt_procs),               \
-                sizeof(ccol_memmgmt_procs_t));                     \
+        ccol_mem_cpy((container)->m_procs, (mmgmt_procs),          \
+                     sizeof(ccol_memmgmt_procs_t));                \
       }                                                            \
     } else {                                                       \
       (container)->m_procs = NULL;                                 \
@@ -910,7 +923,7 @@ typedef struct cmap_iterator {
  * scoped_ptr macros themselves. Exists only so the cleanup callback can
  * recover, at scope-exit time, both which allocator freed the pointer and
  * the pointer's current value (which may have been reassigned after
- * declaration, e.g. via a later _mem_alloc call).
+ * declaration, e.g. via a later _ccol_mem_alloc call).
  */
 typedef struct ccol_scoped_ptr_ctx_t {
   void **ptr_addr;               /**< Address of the guarded pointer var */
@@ -923,7 +936,7 @@ typedef struct ccol_scoped_ptr_ctx_t {
  */
 static inline void _ccol_scoped_ptr_cleanup(ccol_scoped_ptr_ctx_t *ctx) {
   if (ctx->ptr_addr && *ctx->ptr_addr) {
-    _mem_free(ctx->m_procs, *ctx->ptr_addr);
+    _ccol_mem_free(ctx->m_procs, *ctx->ptr_addr);
     *ctx->ptr_addr = NULL;
   }
 }
@@ -932,9 +945,9 @@ static inline void _ccol_scoped_ptr_cleanup(ccol_scoped_ptr_ctx_t *ctx) {
  * @brief Declare a raw pointer that is freed automatically at scope exit
  *
  * Declares `type *name`, initialised to NULL. Assign to it normally (e.g.
- * via _mem_alloc(mmgmt_procs, size), or plain malloc() if mmgmt_procs is
+ * via _ccol_mem_alloc(mmgmt_procs, size), or plain malloc() if mmgmt_procs is
  * NULL); whichever value name holds when the enclosing scope ends is freed
- * with mmgmt_procs (or the default allocator, via mem_free(), if
+ * with mmgmt_procs (or the default allocator, via ccol_mem_free(), if
  * mmgmt_procs is NULL).
  *
  * @param name Name of the pointer variable to declare
@@ -959,7 +972,7 @@ static inline void _ccol_scoped_ptr_cleanup(ccol_scoped_ptr_ctx_t *ctx) {
  * @code
  * void process(ccol_memmgmt_procs_t *mp) {
  *   ccol_scoped_ptr_mp(buf, char, mp);
- *   buf = _mem_alloc(mp, 128);
+ *   buf = _ccol_mem_alloc(mp, 128);
  *   if (!buf) return;
  *   // buf is freed via mp on every return path below this point
  * }
@@ -996,7 +1009,7 @@ static inline void _ccol_scoped_ptr_cleanup(ccol_scoped_ptr_ctx_t *ctx) {
  * @code
  * char *build(ccol_memmgmt_procs_t *mp) {
  *   ccol_scoped_ptr_mp(buf, char, mp);
- *   buf = _mem_alloc(mp, 128);
+ *   buf = _ccol_mem_alloc(mp, 128);
  *   if (!buf) return NULL;
  *   // ... populate buf ...
  *   return ccol_scoped_ptr_release(buf); // caller now owns it
@@ -1028,7 +1041,7 @@ static inline void _ccol_scoped_ptr_cleanup(ccol_scoped_ptr_ctx_t *ctx) {
  * @note Supports: const variants of all above types
  */
 #if defined __clang__
-#define is_integral_type(x)                                                 \
+#define ccol_is_integral_type(x)                                            \
   ({                                                                        \
     _Pragma("GCC diagnostic push");                                         \
     _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\""); \
@@ -1066,7 +1079,7 @@ static inline void _ccol_scoped_ptr_cleanup(ccol_scoped_ptr_ctx_t *ctx) {
     result;                                                                 \
   })
 #else
-#define is_integral_type(x)           \
+#define ccol_is_integral_type(x)      \
   _Generic((x),                       \
       char: true,                     \
       signed char: true,              \
@@ -1108,10 +1121,10 @@ static inline void _ccol_scoped_ptr_cleanup(ccol_scoped_ptr_ctx_t *ctx) {
  * @param x Pointer to check
  * @return true if pointer to numeric type, false otherwise
  *
- * @note Supports pointers to all types checked by is_integral_type()
+ * @note Supports pointers to all types checked by ccol_is_integral_type()
  */
 #if defined __clang__
-#define is_integral_ptr(x)                                                  \
+#define ccol_is_integral_ptr(x)                                             \
   ({                                                                        \
     _Pragma("GCC diagnostic push");                                         \
     _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\""); \
@@ -1149,7 +1162,7 @@ static inline void _ccol_scoped_ptr_cleanup(ccol_scoped_ptr_ctx_t *ctx) {
     _Pragma("GCC diagnostic pop");                                          \
   })
 #else
-#define is_integral_ptr(x)              \
+#define ccol_is_integral_ptr(x)         \
   _Generic((x),                         \
       char *: true,                     \
       signed char *: true,              \
@@ -1222,10 +1235,10 @@ static inline void _ccol_scoped_ptr_cleanup(ccol_scoped_ptr_ctx_t *ctx) {
  *
  * @note Clang version suppresses unreachable code warnings
  * @note Treats unsigned char* as string type
- * @note Returns false for char arrays (use is_char_array() for those)
+ * @note Returns false for char arrays (use ccol_is_char_array() for those)
  */
 #if defined __clang__
-#define is_char_ptr(data)                                                   \
+#define ccol_is_char_ptr(data)                                              \
   ({                                                                        \
     _Pragma("GCC diagnostic push");                                         \
     _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\""); \
@@ -1252,17 +1265,17 @@ static inline void _ccol_scoped_ptr_cleanup(ccol_scoped_ptr_ctx_t *ctx) {
  * @note Uses nested _Generic to check if &data is char**
  * @note Useful for determining string storage semantics
  */
-#define is_char_array(data)                   \
-  (is_char_ptr((data)) && _Generic((&(data)), \
-       char **: false,                        \
-       const char **: false,                  \
-       signed char **: false,                 \
-       const signed char **: false,           \
-       unsigned char **: false,               \
-       const unsigned char **: false,         \
+#define ccol_is_char_array(data)                   \
+  (ccol_is_char_ptr((data)) && _Generic((&(data)), \
+       char **: false,                             \
+       const char **: false,                       \
+       signed char **: false,                      \
+       const signed char **: false,                \
+       unsigned char **: false,                    \
+       const unsigned char **: false,              \
        default: true))
 #else
-#define is_char_ptr(data)          \
+#define ccol_is_char_ptr(data)     \
   _Generic((data),                 \
       char *: true,                \
       const char *: true,          \
@@ -1272,26 +1285,25 @@ static inline void _ccol_scoped_ptr_cleanup(ccol_scoped_ptr_ctx_t *ctx) {
       const unsigned char *: true, \
       default: false)
 
-#define is_char_array(data)                   \
-  (is_char_ptr((data)) && _Generic((&(data)), \
-       char **: false,                        \
-       const char **: false,                  \
-       signed char **: false,                 \
-       const signed char **: false,           \
-       unsigned char **: false,               \
-       const unsigned char **: false,         \
+#define ccol_is_char_array(data)                   \
+  (ccol_is_char_ptr((data)) && _Generic((&(data)), \
+       char **: false,                             \
+       const char **: false,                       \
+       signed char **: false,                      \
+       const signed char **: false,                \
+       unsigned char **: false,                    \
+       const unsigned char **: false,              \
        default: true))
 #endif
 
 /* Every enumerator below is given an explicit value, deliberately, even
  * though C would auto-increment them the same way if left implicit: an
  * implicit-value list silently renumbers every later entry the moment a new
- * enumerator is inserted anywhere but the very end, exactly the class of bug
- * this project has already been bitten by once for ccol_retval_t (see that
- * enum's own doc comment in this file). ccol_signed_char was added after
- * every pre-existing value below had already shipped; appending it at the
- * end with the next free number keeps every pre-existing enumerator's value
- * unchanged. */
+ * enumerator is inserted anywhere but the very end, the same hazard
+ * ccol_retval_t guards against (see that enum's own doc comment in this
+ * file). A new enumerator must therefore be appended at the very end with
+ * the next free number, which is what keeps every existing enumerator's
+ * value unchanged. */
 typedef enum ccollections_data_type {
   ccol_char = 0,
   ccol_short = 1,
@@ -1317,6 +1329,63 @@ typedef enum ccollections_data_type {
                            cbstmap.c's compare_keys()). A `signed char *`
                            still resolves to ccol_string, unaffected. */
 } ccol_data_type;
+
+/**
+ * @brief Byte size of the C type a ccol_data_type names, or 0 when the type
+ * has no single fixed width
+ *
+ * Returns sizeof() of the C type the enumerator stands for, for every
+ * enumerator that names one specific C type. ccol_string, ccol_other_types
+ * and any unrecognized value return 0: a key or value of those types
+ * legitimately arrives at any size, so there is no one width to check a
+ * caller-supplied cmap_pair against.
+ *
+ * This is what the map modules use to validate a hand-built cmap_pair passed
+ * through their raw chmap_insert_elem()/cbmap_insert_elem()-style layer. A
+ * container that dispatches on its declared key type reads a fixed number of
+ * bytes out of the key it is handed, so a key_pair whose size disagrees with
+ * this value is rejected with ccol_invalid_args rather than being allowed to
+ * read past the caller's own buffer or to store a key that no correctly typed
+ * lookup could ever find again. A caller building a cmap_pair by hand can use
+ * this to size one correctly.
+ *
+ * @param type Data type enumerator to size
+ *
+ * @return sizeof() of the corresponding C type, or 0 if the type is not
+ * fixed-width
+ */
+static inline size_t ccol_fixed_width_data_type_size(ccol_data_type type) {
+  switch (type) {
+    case ccol_char:
+    case ccol_signed_char:
+    case ccol_unsigned_char:
+      return sizeof(char);
+    case ccol_short:
+    case ccol_unsigned_short:
+      return sizeof(short);
+    case ccol_int:
+    case ccol_unsigned_int:
+      return sizeof(int);
+    case ccol_long:
+    case ccol_unsigned_long:
+      return sizeof(long);
+    case ccol_long_long:
+    case ccol_unsigned_long_long:
+      return sizeof(long long);
+    case ccol_float:
+      return sizeof(float);
+    case ccol_double:
+      return sizeof(double);
+    case ccol_long_double:
+      return sizeof(long double);
+    case ccol_pointer:
+      return sizeof(uintptr_t);
+    case ccol_string:
+    case ccol_other_types:
+    default:
+      return 0;
+  }
+}
 
 #if defined __clang__
 #define _determine_non_special_data_type(var)                               \
@@ -1410,12 +1479,12 @@ typedef enum ccollections_data_type {
  * expression could plausibly collide with it, matching this header's own
  * ccol_scoped_ptr_release/__ccol_released_ptr precedent for the identical
  * reason. */
-#define determine_ccol_data_type(data)                                \
+#define ccol_determine_ccol_data_type(data)                           \
   ({                                                                  \
     ccol_data_type r = ccol_other_types;                              \
-    if (is_char_array((data))) {                                      \
+    if (ccol_is_char_array((data))) {                                 \
       r = ccol_string;                                                \
-    } else if (is_char_ptr((data))) {                                 \
+    } else if (ccol_is_char_ptr((data))) {                            \
       r = ccol_string;                                                \
     } else {                                                          \
       typeof(data) __ccol_dcdt_type_probe = {0};                      \
@@ -1462,10 +1531,10 @@ typedef enum ccollections_data_type {
  */
 #define _populate_cmap_pair(pair, data)                     \
   do {                                                      \
-    if (is_char_array((data))) {                            \
+    if (ccol_is_char_array((data))) {                       \
       (pair)->ptr = (char *)&(data);                        \
       (pair)->size = strlen((char *)(pair)->ptr) + 1;       \
-    } else if (is_char_ptr((data))) {                       \
+    } else if (ccol_is_char_ptr((data))) {                  \
       char *_ptr = (char *)&(data);                         \
       _Pragma("GCC diagnostic push");                       \
       _Pragma("GCC diagnostic ignored \"-Warray-bounds\""); \
@@ -1551,13 +1620,13 @@ typedef enum ccollections_data_type {
  *
  * Example:
  * @code
- * find_nearest_gte_power_of_two(5)   -> 8
- * find_nearest_gte_power_of_two(16)  -> 16
- * find_nearest_gte_power_of_two(100) -> 128
- * find_nearest_gte_power_of_two(UINT64_MAX) -> ccol_invalid_size
+ * ccol_find_nearest_gte_power_of_two(5)   -> 8
+ * ccol_find_nearest_gte_power_of_two(16)  -> 16
+ * ccol_find_nearest_gte_power_of_two(100) -> 128
+ * ccol_find_nearest_gte_power_of_two(UINT64_MAX) -> ccol_invalid_size
  * @endcode
  */
-size_t find_nearest_gte_power_of_two(size_t input);
+size_t ccol_find_nearest_gte_power_of_two(size_t input);
 
 /**
  * @brief Optimized memory copy for small and large buffers
@@ -1581,10 +1650,10 @@ size_t find_nearest_gte_power_of_two(size_t input);
  * @code
  * int src = 42;
  * int dst;
- * mem_cpy(&dst, &src, sizeof(int));  // Optimized for 4 bytes
+ * ccol_mem_cpy(&dst, &src, sizeof(int));  // Optimized for 4 bytes
  * @endcode
  */
-void mem_cpy(void *dst, const void *src, size_t n);
+void ccol_mem_cpy(void *dst, const void *src, size_t n);
 
 /**
  * @brief Optimized memory zeroing for small and large buffers
@@ -1603,10 +1672,10 @@ void mem_cpy(void *dst, const void *src, size_t n);
  * Example:
  * @code
  * int array[100];
- * mem_zero(array, sizeof(array));  // Zeros entire array
+ * ccol_mem_zero(array, sizeof(array));  // Zeros entire array
  * @endcode
  */
-void mem_zero(void *dst, size_t n);
+void ccol_mem_zero(void *dst, size_t n);
 
 /**
  * @brief A strdup variant that uses the custom memory management procs
@@ -1627,9 +1696,11 @@ void mem_zero(void *dst, size_t n);
 static inline __attribute__((always_inline)) char *ccol_strdup(
     ccol_memmgmt_procs_t *mp, const char *input) {
   size_t len = strlen(input) + 1;  // The '\0' at the end
-  char *result = (char *)_mem_alloc(mp, len * sizeof(char));
+  char *result = (char *)_ccol_mem_alloc(mp, len * sizeof(char));
   if (result) {
-    mem_cpy(result, input, len);
+    ccol_mem_cpy(result, input, len);
   }
   return result;
 }
+
+#pragma GCC visibility pop

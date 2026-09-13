@@ -25,8 +25,9 @@ pool   Thread pool handle (CTPOOL_INVALID or a stale/already-destroyed handle is
 .fi
 .SH NOTES
 .nf
-ctpool_submit and ctpool_submit_future return ccol_not_permitted after
-this call.
+Every submit function returns ccol_not_permitted after this call,
+except ctpool_submit_future, whose only failure indication is a NULL
+return.
 Any thread blocked in ctpool_submit on a full bounded queue is woken
 and will receive ccol_not_permitted.
 

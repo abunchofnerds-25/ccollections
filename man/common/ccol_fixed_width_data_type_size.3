@@ -1,0 +1,50 @@
+.TH CCOL_FIXED_WIDTH_DATA_TYPE_SIZE 3 "2026-09-13" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccol_fixed_width_data_type_size \- byte size of the C type a ccol_data_type names
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <common.h>
+
+size_t ccol_fixed_width_data_type_size(ccol_data_type type);
+.fi
+.SH DESCRIPTION
+.nf
+Returns sizeof() of the C type the enumerator stands for, for every
+ccol_data_type that names one specific C type. ccol_string,
+ccol_other_types, and any unrecognized value return 0: a key or value of
+those types legitimately arrives at any size, so there is no one width
+to report.
+
+This is the width a key_pair must carry for a fixed-width key type, and
+what every chmap/cbmap entry point taking one requires of it. Code
+building a cmap_pair by hand can call this to size one correctly.
+.fi
+.SH PARAMETERS
+.nf
+type   Data type enumerator to size
+.fi
+.SH RETURN VALUE
+.nf
+Returns sizeof() of the corresponding C type
+Returns 0 if the type has no fixed width (ccol_string, ccol_other_types,
+or any unrecognized value)
+.fi
+.SH NOTES
+.nf
+Defined as a static inline function in common.h; no library symbol is
+exported for it
+The returned width is this platform's own sizeof(), so it varies with
+the ABI for long, pointer, and long double
+.fi
+.SH EXAMPLES
+.nf
+size_t width = ccol_fixed_width_data_type_size(ccol_int);
+int key = 42;
+cmap_pair kp = { .ptr = &key, .size = width };
+.fi
+.SH "SEE ALSO"
+.BR cbmap_insert_elem (3),
+.BR cbmap_create_full (3),
+.BR chmap_insert_elem (3)

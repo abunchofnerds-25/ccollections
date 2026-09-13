@@ -14,11 +14,11 @@ void __chttpclient_destroy(chttpcli cli);
 cli is an opaque VALUE handle (a packed {slot index, generation}
 pair), resolved through a library-owned slot table before the
 underlying client object is ever touched. cli must be a currently
-live handle (one returned by create_chttpclient/_mp or
+live handle (one returned by ccol_create_chttpclient/_mp or
 chttp_default_client and not yet destroyed). CHTTPCLI_INVALID is a
 silent no-op. Any other value (a stale handle already destroyed by
 an earlier call or concurrently by another thread, a forged value,
-or garbage) is a FATAL ERROR: this function calls fatal_err()
+or garbage) is a FATAL ERROR: this function calls ccol_fatal_err()
 (abort()/SIGABRT) rather than risk a use-after-free or double-free.
 
 On a live handle, waits for all in-flight requests to complete

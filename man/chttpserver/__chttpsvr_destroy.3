@@ -11,12 +11,12 @@ void __chttpsvr_destroy(chttpsvr srv);
 .fi
 .SH DESCRIPTION
 .nf
-srv must be a currently-live handle (one returned by create_chttpsvr /
-create_chttpsvr_mp and not yet destroyed). A stale handle (one that
+srv must be a currently-live handle (one returned by ccol_create_chttpsvr /
+ccol_create_chttpsvr_mp and not yet destroyed). A stale handle (one that
 has already been destroyed, whether by an earlier, completed call to
 this same function, or concurrently, by another thread racing this
 one right now), a forged value, or garbage is a FATAL ERROR: this
-function calls fatal_err() (abort()/SIGABRT), rather than risking a
+function calls ccol_fatal_err() (abort()/SIGABRT), rather than risking a
 use-after-free or double-free, for both a purely sequential
 double-destroy and a temporally-overlapping concurrent one.
 CHTTPSVR_INVALID (0) is the one exception and remains a silent no-op,
@@ -67,7 +67,7 @@ process.
 
 Also calls clog_close on the server's own logger (the internal
 stderr/FATAL-only logger, or the logger derived from the cl passed to
-create_chttpsvr_mp / create_chttpsvr).  This never closes a
+ccol_create_chttpsvr_mp / ccol_create_chttpsvr).  This never closes a
 caller-supplied cl directly, since the server only ever stores a
 derived copy of it.
 
@@ -93,7 +93,7 @@ same handle): whichever of the two finishes tearing srv down first,
 the other waits for that teardown to fully complete before proceeding,
 rather than racing it.
 
-Does not set the caller's pointer to CHTTPSVR_INVALID; use the
+Does not set the caller's handle variable to CHTTPSVR_INVALID; use the
 chttpsvr_destroy macro for that.
 
 Safe to call with CHTTPSVR_INVALID (0).

@@ -134,7 +134,7 @@ cmap_iterator *cbmap_begin_iter(cbmap cbm, char **err) {
   }
 
   cbmap_cmap_iterator *real_iter =
-      _mem_alloc(cbm->m_procs, sizeof(cbmap_cmap_iterator));
+      _ccol_mem_alloc(cbm->m_procs, sizeof(cbmap_cmap_iterator));
   if (!real_iter) {
     if (err) {
       *err = CCOL_ERR_STR("Failed to create the iterator buffer");
@@ -169,7 +169,7 @@ static cmap_iterator *cbmap_iter_next(cmap_iterator *iter) {
 void __cbmap_iterator_destroy(cmap_iterator *iter) {
   if (iter) {
     cbmap_cmap_iterator *real_iter = cmapIter2CbmapIter(iter);
-    _mem_free(real_iter->parent_map->m_procs, real_iter);
+    _ccol_mem_free(real_iter->parent_map->m_procs, real_iter);
   }
 }
 
@@ -201,7 +201,7 @@ cbmap cbmap_create_full(ccol_data_type key_type,
     return NULL;
   }
 
-  cbmap cbm = _mem_alloc(mmgmt_procs, sizeof(cbinarymap));
+  cbmap cbm = _ccol_mem_alloc(mmgmt_procs, sizeof(cbinarymap));
   if (!cbm) {
     if (err) {
       *err = CCOL_ERR_STR("Failed to allocate cbinarymap area");
@@ -210,7 +210,7 @@ cbmap cbmap_create_full(ccol_data_type key_type,
   }
 
   if (!ccol_populate_mem_mgmt_procs(cbm, mmgmt_procs, err)) {
-    _mem_free(mmgmt_procs, cbm);
+    _ccol_mem_free(mmgmt_procs, cbm);
     return NULL;
   }
 
@@ -226,9 +226,9 @@ cbmap cbmap_create_full(ccol_data_type key_type,
  * touch left/right pointers; callers must have already unlinked the node. */
 static void destroy_bmap_node(cbmap cbm, bmap_node *node) {
   if (node) {
-    _mem_free(cbm->m_procs, node->key_pair.ptr);
-    _mem_free(cbm->m_procs, node->val_pair.ptr);
-    _mem_free(cbm->m_procs, node);
+    _ccol_mem_free(cbm->m_procs, node->key_pair.ptr);
+    _ccol_mem_free(cbm->m_procs, node->val_pair.ptr);
+    _ccol_mem_free(cbm->m_procs, node);
   }
 }
 
@@ -284,7 +284,7 @@ void __cbmap_destroy(cbmap cbm) {
       free_func(cbm->m_procs);
       free_func(cbm);
     } else {
-      mem_free(cbm);
+      ccol_mem_free(cbm);
     }
   }
 }
@@ -381,8 +381,8 @@ static inline int cmp_unsigned_small(void *ptr1, void *ptr2, size_t size) {
  * value, and equal only to another NaN, restores a real total order: NaN
  * keys sort together at the high end of the tree instead of each one
  * comparing "equal" to whatever node the search happens to visit first
- * (which, left unfixed, silently corrupted that unrelated node's value
- * instead of ever inserting the NaN key at all). isnan() is a type-generic
+ * (which silently corrupts that unrelated node's value instead of ever
+ * inserting the NaN key at all). isnan() is a type-generic
  * (C99 <math.h>) macro, so this one helper serves float/double/long double
  * without needing a per-type variant. */
 #define cmp_float_val(T, ptr1, ptr2)                           \
@@ -543,19 +543,20 @@ static inline int compare_keys(cbmap cbm, const cmap_pair *key_pair1,
  * zero-byte key/value as ccol_not_enough_memory under an allocator that
  * legitimately chooses NULL for a zero-size request. A zero-size pair is
  * instead stored as ptr == NULL, size == 0, which every reader in this file
- * (compare_keys' memcmp, mem_cpy, destroy_bmap_node's _mem_free) already
+ * (compare_keys' memcmp, ccol_mem_cpy, destroy_bmap_node's _ccol_mem_free)
+ * already
  * handles safely for a zero length. */
 static bmap_node *create_new_node(cbmap cbm, const cmap_pair *key_pair,
                                   const cmap_pair *val_pair) {
-  bmap_node *new_node = _mem_alloc(cbm->m_procs, sizeof(bmap_node));
+  bmap_node *new_node = _ccol_mem_alloc(cbm->m_procs, sizeof(bmap_node));
   if (!new_node) {
     return NULL;
   }
 
   if (key_pair->size > 0) {
-    new_node->key_pair.ptr = _mem_alloc(cbm->m_procs, key_pair->size);
+    new_node->key_pair.ptr = _ccol_mem_alloc(cbm->m_procs, key_pair->size);
     if (!new_node->key_pair.ptr) {
-      _mem_free(cbm->m_procs, new_node);
+      _ccol_mem_free(cbm->m_procs, new_node);
       return NULL;
     }
   } else {
@@ -563,19 +564,19 @@ static bmap_node *create_new_node(cbmap cbm, const cmap_pair *key_pair,
   }
 
   if (val_pair->size > 0) {
-    new_node->val_pair.ptr = _mem_alloc(cbm->m_procs, val_pair->size);
+    new_node->val_pair.ptr = _ccol_mem_alloc(cbm->m_procs, val_pair->size);
     if (!new_node->val_pair.ptr) {
-      _mem_free(cbm->m_procs, new_node->key_pair.ptr);
-      _mem_free(cbm->m_procs, new_node);
+      _ccol_mem_free(cbm->m_procs, new_node->key_pair.ptr);
+      _ccol_mem_free(cbm->m_procs, new_node);
       return NULL;
     }
   } else {
     new_node->val_pair.ptr = NULL;
   }
 
-  mem_cpy(new_node->key_pair.ptr, key_pair->ptr, key_pair->size);
+  ccol_mem_cpy(new_node->key_pair.ptr, key_pair->ptr, key_pair->size);
   new_node->key_pair.size = key_pair->size;
-  mem_cpy(new_node->val_pair.ptr, val_pair->ptr, val_pair->size);
+  ccol_mem_cpy(new_node->val_pair.ptr, val_pair->ptr, val_pair->size);
   new_node->val_pair.size = val_pair->size;
 
   new_node->left = NULL;
@@ -616,7 +617,7 @@ static void update_bmap_node_value(cbmap cbm, bmap_node *node,
                                    ccol_retval_t *result) {
   if (node->val_pair.size != val_pair->size) {
     if (val_pair->size == 0) {
-      _mem_free(cbm->m_procs, node->val_pair.ptr);
+      _ccol_mem_free(cbm->m_procs, node->val_pair.ptr);
       node->val_pair.ptr = NULL;
       node->val_pair.size = 0;
       *result = ccol_key_already_present;
@@ -627,7 +628,7 @@ static void update_bmap_node_value(cbmap cbm, bmap_node *node,
     // may itself be NULL here (the node's current value has size 0), which
     // is fine: realloc(NULL, n) is defined to behave like malloc(n).
     void *new_ptr =
-        _mem_realloc(cbm->m_procs, node->val_pair.ptr, val_pair->size);
+        _ccol_mem_realloc(cbm->m_procs, node->val_pair.ptr, val_pair->size);
     if (!new_ptr) {
       // reallocation attempt failed!
       return;
@@ -635,7 +636,7 @@ static void update_bmap_node_value(cbmap cbm, bmap_node *node,
     node->val_pair.ptr = new_ptr;
     node->val_pair.size = val_pair->size;
   }
-  mem_cpy(node->val_pair.ptr, val_pair->ptr, val_pair->size);
+  ccol_mem_cpy(node->val_pair.ptr, val_pair->ptr, val_pair->size);
   *result = ccol_key_already_present;
 }
 
@@ -826,6 +827,31 @@ static bmap_node *cbmap_detach_extreme_iter(bmap_node *root, bool max,
   return root;
 }
 
+/* A key of a fixed-width key type must arrive at exactly that type's own
+ * size, on every raw-layer entry point that takes a key_pair.
+ *
+ * compare_keys() orders two keys of differing sizes by their common prefix
+ * and then by size, which is what gives a variable-width key type
+ * (ccol_string, ccol_other_types) its total order. Letting that same rule
+ * apply to a fixed-width key type would silently turn a mistyped key (a long
+ * handed to an int-keyed map) into a genuinely distinct key that no
+ * correctly typed lookup can ever reach again, with nothing reported at any
+ * point. A custom_comparison_proc does not make the mismatch harmless
+ * either: it is handed two bare pointers and no sizes, so it can only read a
+ * width fixed by the declared key type, and a shorter key_pair makes it read
+ * past the caller's own buffer.
+ *
+ * ccol_fixed_width_data_type_size() reports 0 for a key type whose width is
+ * genuinely not fixed, which is what lets a string or struct key keep
+ * arriving at any size (including 0) exactly as before. chashmap enforces
+ * the identical rule through the same helper, so the two map modules agree
+ * on which key types it covers. */
+static inline bool key_size_matches_type_if_fixed_width(
+    cbmap cbm, const cmap_pair *key_pair) {
+  size_t fixed_width = ccol_fixed_width_data_type_size(cbm->key_type);
+  return fixed_width == 0 || key_pair->size == fixed_width;
+}
+
 /* Inserts or updates a key-value pair. Uses an explicit, fixed-size path
  * array (see CBMAP_MAX_TREE_HEIGHT) to record the ancestor chain so the tree
  * can be rebalanced bottom-up after insertion without recursion and without
@@ -837,9 +863,13 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
     ccol_assert(false);
   }
 
+  if (!key_size_matches_type_if_fixed_width(cbm, key_pair)) {
+    return ccol_invalid_args;
+  }
+
   // Handle empty tree case. elem_count is always 0 here (root is only ever
   // NULL when the map is empty), so no capacity check is needed: this is
-  // always a genuinely new element, and max_elem_count (a real, if
+  // always a genuinely new element, and ccol_max_elem_count (a real, if
   // astronomically large, cap) can never already be reached.
   if (!cbm->root) {
     cbm->root = create_new_node(cbm, key_pair, val_pair);
@@ -885,7 +915,7 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
   // is the correct point to enforce the capacity cap (checked only now,
   // after confirming the key doesn't already exist, so updating an existing
   // key's value at a full map still succeeds rather than being rejected).
-  if (cbm->elem_count == max_elem_count) {
+  if (cbm->elem_count == ccol_max_elem_count) {
     return ccol_container_full;
   }
 
@@ -925,6 +955,10 @@ ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
     ccol_assert(false);
   }
 
+  if (!key_size_matches_type_if_fixed_width(cbm, key_pair)) {
+    return ccol_invalid_args;
+  }
+
   bmap_node *tracker = cbm->root;
   while (tracker) {
     register int comparison = compare_keys(cbm, key_pair, &tracker->key_pair);
@@ -932,7 +966,7 @@ ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
       if (target_buf_size != tracker->val_pair.size) {
         return ccol_invalid_args;
       }
-      mem_cpy(target_buf, tracker->val_pair.ptr, target_buf_size);
+      ccol_mem_cpy(target_buf, tracker->val_pair.ptr, target_buf_size);
       return ccol_success;
     }
 
@@ -953,6 +987,10 @@ ccol_retval_t cbmap_get_elem_ref(cbmap cbm, const cmap_pair *key_pair,
                                  cmap_pair **val_pair) {
   if (!cbm) {
     ccol_assert(false);
+  }
+
+  if (!key_size_matches_type_if_fixed_width(cbm, key_pair)) {
+    return ccol_invalid_args;
   }
 
   bmap_node *tracker = cbm->root;
@@ -1022,6 +1060,10 @@ static bmap_node *perform_element_removal(cbmap cbm, bmap_node *parent) {
 ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair *key_pair) {
   if (!cbm) {
     ccol_assert(false);
+  }
+
+  if (!key_size_matches_type_if_fixed_width(cbm, key_pair)) {
+    return ccol_invalid_args;
   }
 
   if (!cbm->root) {

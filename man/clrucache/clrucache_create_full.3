@@ -31,7 +31,7 @@ family in application code.
 capacity     Maximum number of live entries before eviction occurs.
              Must be > 0.
 key_type     ccol_data_type of keys, as returned by
-             determine_ccol_data_type().
+             ccol_determine_ccol_data_type().
 val_type     ccol_data_type of values (used for type tracking only;
              the internal map always stores heap pointers).
 getter       Remote getter callback, or NULL. Called on cache miss to

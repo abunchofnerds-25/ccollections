@@ -12,7 +12,8 @@ ccol_retval_t chttpsvr_resp_write_str(chttpsvr_resp *resp,
 .fi
 .SH DESCRIPTION
 .nf
-Equivalent to chttpsvr_resp_write(resp, str, strlen(str)).
+Equivalent to chttpsvr_resp_write(resp, str, strlen(str)); a NULL resp
+or str returns ccol_invalid_args instead.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_resp_write (3),

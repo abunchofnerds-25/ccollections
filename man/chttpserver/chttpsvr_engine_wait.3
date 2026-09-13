@@ -33,7 +33,7 @@ release or chttpsvr_engine_stop() call was the one that triggered it.
 
 Calling this from within a request handler or middleware currently
 running on ANY chttpsvr instance's own worker pool is a FATAL error
-(fatal_err(), abort()/SIGABRT), reported immediately rather than
+(ccol_fatal_err(), abort()/SIGABRT), reported immediately rather than
 hanging: draining that server's worker pool can never complete while
 this exact in-flight request is itself blocked here waiting for the
 engine to finish exiting, deadlocking the entire shared engine's

@@ -21,10 +21,10 @@ Accepted C types for val and the resulting CYAML node type:
   float / double            -> CYAML_FLOAT (stored as double)
   char * / const char *     -> CYAML_STRING (heap copy made)
   string literal ("...")    -> CYAML_STRING
-  a bare NULL literal       -> CYAML_NULL
+  void * (NULL included)    -> CYAML_NULL
 
-Any other C type (long double, a struct, an enum, or any pointer
-type other than char * / const char *) is rejected: cyaml_set
+Any other C type (long double, a struct, or any pointer type
+other than char *, const char *, or void *) is rejected: cyaml_set
 returns ccol_invalid_args and the target leaf is left untouched
 (created leaves are not left behind as CYAML_NULL for an unsupported
 type; an existing leaf's value is not overwritten).
@@ -43,7 +43,7 @@ exists its type is replaced unconditionally: existing list or
 dictionary subtrees are deep-freed before the new value is written.
 
 Non-finite doubles (Inf, -Inf, NaN) are accepted and stored (unlike
-cyaml_set on a cjson DOM).  They serialize as .inf, -.inf, .nan.
+cjson_set, which rejects them).  They serialize as .inf, -.inf, .nan.
 
 Passing (bool)true / (bool)false is required to produce a CYAML_BOOL
 node; without the explicit cast, integer literal 1 or 0 produces a

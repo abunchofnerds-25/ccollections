@@ -153,16 +153,16 @@ TEST(construction, object_replace_frees_old) {
 
 /*
  * cjson_list_push()/cjson_dictionary_set() take unconditional ownership of
- * their child argument.  Before this guard, handing the same already-owned
+ * their child argument.  Without this guard, handing the same already-owned
  * node to a second container slot (including via cjson_get()/cjson_list_get()
  * /cjson_dictionary_get()'s borrowed references, or a bare self-reference)
- * gave that node two owners; each owner's own teardown independently
- * destroyed it, corrupting the heap; confirmed to corrupt the default
- * allocator's thread-local node-pool free-list into a self-referencing
- * cycle (hanging the pool's own process-exit drain) and to segfault directly
- * under a custom allocator.  These tests cover every reachable variant of
- * that hazard and confirm the tree is left completely valid, and the
- * offending call reports ccol_invalid_args, rather than corrupting anything.
+ * gives that node two owners; each owner's own teardown then destroys it
+ * independently, corrupting the heap: it turns the default allocator's
+ * thread-local node-pool free-list into a self-referencing cycle (hanging
+ * the pool's own process-exit drain), and segfaults outright under a custom
+ * allocator.  These tests cover every reachable variant of that hazard and
+ * confirm the tree is left completely valid, and the offending call reports
+ * ccol_invalid_args, rather than corrupting anything.
  */
 
 TEST(ownership, dictionary_set_key_to_its_own_current_value_is_noop) {
@@ -289,12 +289,12 @@ TEST(ownership, clone_produces_independently_pushable_node) {
 
 TEST(ownership, list_push_ancestor_into_own_descendant_rejected) {
   /* `root` is never itself attached to anything (it IS the root), so the
-   * pre-existing `attached` guard alone does not reject pushing it into
-   * `child`, one of its own already-attached descendants; doing so would
-   * create a graph cycle (root -> child -> root) that corrupts
-   * __cjson_destroy()'s own worklist-driven teardown into a double free.
-   * Directly reproduces the double-free confirmed via glibc's own
-   * "double free detected in tcache" abort before this check was added. */
+   * `attached` guard alone does not reject pushing it into `child`, one of
+   * its own already-attached descendants; doing so would create a graph
+   * cycle (root -> child -> root) that corrupts __cjson_destroy()'s own
+   * worklist-driven teardown into a double free. This test is non-vacuous:
+   * without the reachability check, glibc aborts the run outright with its
+   * own "double free detected in tcache" diagnostic. */
   cjson root = cjson_create_dictionary();
   cjson child = cjson_create_list();
   REQUIRE_EQ(cjson_dictionary_set(root, "self", child), ccol_success);
@@ -1759,18 +1759,16 @@ TEST(construction, object_set_null_key_frees_child) {
 }
 
 /*
- * Regression tests: an early ccol_invalid_args reject caused by an invalid
- * arr/obj/key must never destroy an already-attached child, even though a
- * freshly unattached child IS destroyed on that same path (see the
- * "_frees_child" tests above). Before this fix, cjson_list_push()'s and
- * cjson_dictionary_set()'s own arr/obj-validity checks ran, and destroyed
- * child, BEFORE the child->attached guard ever had a chance to run;
- * silently freeing memory a real owner elsewhere in the tree still held a
- * pointer to, corrupting that tree the moment it was next touched or
- * destroyed. Confirmed via a direct revert of the fix: each REQUIRE_EQ
- * below failed with a heap-use-after-free/corruption crash on the final
- * REQUIRE_STREQ/REQUIRE_EQ readback rather than merely returning the wrong
- * code.
+ * An early ccol_invalid_args reject caused by an invalid arr/obj/key must
+ * never destroy an already-attached child, even though a freshly unattached
+ * child IS destroyed on that same path (see the "_frees_child" tests
+ * above). cjson_list_push()'s and cjson_dictionary_set()'s own
+ * arr/obj-validity checks must therefore not destroy the child before the
+ * child->attached guard runs: doing so silently frees memory a real owner
+ * elsewhere in the tree still holds a pointer to, corrupting that tree the
+ * moment it is next touched or destroyed. These tests are non-vacuous: with
+ * the guard removed, the final REQUIRE_STREQ/REQUIRE_EQ readback crashes
+ * with a heap use-after-free rather than merely reporting the wrong code.
  */
 
 TEST(construction,
@@ -2234,7 +2232,7 @@ TEST(oom, unreported_allocation_failure_reports_out_of_memory_not_unknown) {
    * diagnostic via parse_err() before returning failure; the only way to
    * reach parse_common's own fallback with ctx.error still empty is an
    * allocation failure with nowhere of its own to report through; here,
-   * node_alloc()'s single _mem_calloc() call for the "null" literal's own
+   * node_alloc()'s single _ccol_mem_calloc() call for the "null" literal's own
    * node, the very first (and, for this input, only) allocation the parse
    * would otherwise make. A single-fault allocator is required rather than
    * the budget-style counting one above: failing every call from a budget
@@ -2947,12 +2945,12 @@ static char *build_nested_object(size_t n) {
 TEST(parse, deeply_nested_array_rejected_not_crashed) {
   /* A document with far more nesting than CJSON_MAX_PARSE_DEPTH must be
    * rejected promptly with a parse error, not crash the process via
-   * unbounded recursive-descent stack growth (confirmed, prior to this
-   * guard, to segfault well under this depth) and not hang. Asserts an
+   * unbounded recursive-descent stack growth (without the depth guard, a
+   * document this deep segfaults the parser) and not hang. Asserts an
    * explicit wall-clock bound, matching this codebase's own established
    * convention for DoS-guard regression tests (see cyaml's own
    * deeply_nested_explicit_keys_rejected_not_hung / cthreadcomm's
-   * event_loop DoS-guard tests). */
+   * ccol_event_loop DoS-guard tests). */
   char *json = build_nested_array(5000);
   clock_t t0 = clock();
   char *err = NULL;
@@ -3083,16 +3081,16 @@ TEST(destroy, deeply_nested_api_built_tree_destroyed_without_crashing) {
 
 TEST(ownership,
      list_push_into_unattached_container_stays_cheap_even_for_deep_child) {
-  /* Regression guard for the cycle-detection check added to
-   * cjson_list_push()/cjson_dictionary_set(): the search for a would-be
-   * cycle must not turn the ordinary "wrap an already-built subtree in a
-   * brand-new, still-unattached outer container" pattern into an O(n^2)
-   * cost; see node_reaches()'s own doc comment in cjson.c for why
-   * checking needle->attached first keeps this O(1) per call regardless of
-   * how large the already-built child is. build_nested_list_via_api()
-   * performs exactly this pattern once per level; without the
-   * short-circuit, n=20000 measured well over a second here, versus a few
-   * milliseconds with it. Asserts an explicit wall-clock bound, matching
+  /* Guards the cost of cjson_list_push()/cjson_dictionary_set()'s own
+   * cycle-detection check: the search for a would-be cycle must not turn
+   * the ordinary "wrap an already-built subtree in a brand-new,
+   * still-unattached outer container" pattern into an O(n^2) cost; see
+   * node_reaches()'s own doc comment in cjson.c for why checking
+   * needle->attached first keeps this O(1) per call regardless of how large
+   * the already-built child is. build_nested_list_via_api() performs
+   * exactly this pattern once per level; without the short-circuit, n=20000
+   * takes well over a second here, versus a few milliseconds with it.
+   * Asserts an explicit wall-clock bound, matching
    * this codebase's own established DoS-guard test convention (see
    * parse.deeply_nested_array_rejected_not_crashed above). */
   clock_t t0 = clock();
@@ -3269,9 +3267,10 @@ TEST(node_pool, fresh_thread_starts_with_an_empty_pool) {
   pthread_join(tid, NULL);
 
   REQUIRE_EQ(result.start_pool_size, (size_t)0);
-  /* 50 single alloc-then-free round trips starting from an empty pool grow
-   * it by exactly one node per round trip (each is a fresh calloc, since
-   * nothing was left to recycle from yet), well under the cap. */
+  /* Starting from an empty pool, holding all 50 nodes live at once and then
+   * freeing them grows the pool by exactly one node per node (each is a
+   * fresh calloc, since nothing is resident to recycle), well under the
+   * cap. */
   REQUIRE_EQ(result.end_pool_size, (size_t)50);
 }
 

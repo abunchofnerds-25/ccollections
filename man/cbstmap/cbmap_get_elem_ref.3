@@ -27,11 +27,14 @@ val_pair   Pointer to receive reference to value
 .nf
 ccol_success        - Key found, *val_pair points to value
 ccol_key_not_found  - Key does not exist in map
+ccol_invalid_args   - key_pair's size does not match a fixed-width key
+                      type's own size (see cbmap_create_full(3))
 .fi
 .SH NOTES
 .nf
 O(log n) complexity
 Returned reference is valid until next insert/delete operation
+Asserts if cbm is NULL
 .fi
 .SH "SEE ALSO"
 .BR cbmap_get (3),

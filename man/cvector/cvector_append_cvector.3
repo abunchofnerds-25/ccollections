@@ -22,6 +22,8 @@ v_from  Source vector
 .SH RETURN VALUE
 .nf
 Returns true on success
+Returns false if the combined element count would overflow or exceed
+ccol_max_elem_count
 Returns false if memory allocation fails
 .fi
 .SH NOTES

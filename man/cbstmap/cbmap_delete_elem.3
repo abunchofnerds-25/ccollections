@@ -24,10 +24,13 @@ key_pair   Key to remove
 .nf
 ccol_success        - Key removed successfully
 ccol_key_not_found  - Key does not exist in map
+ccol_invalid_args   - key_pair's size does not match a fixed-width key
+                      type's own size (see cbmap_create_full(3))
 .fi
 .SH NOTES
 .nf
 O(log n) complexity
+Asserts if cbm is NULL
 .fi
 .SH "SEE ALSO"
 .BR cbmap_remove (3),

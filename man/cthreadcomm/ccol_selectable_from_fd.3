@@ -1,0 +1,75 @@
+.TH CCOL_SELECTABLE_FROM_FD 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccol_selectable_from_fd \- build a ccol_selectable from a raw file descriptor
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_selectable_from_fd(fd, dir);
+.fi
+.SH DESCRIPTION
+.nf
+Constructs a ccol_selectable tagged-union value of type ccol_selectable_fd
+wrapping the given file descriptor with the specified I/O direction.
+
+  ccol_select_read; wake when the fd becomes readable (data available or
+                     EOF / error condition)
+  ccol_select_write; wake when the fd becomes writable (send buffer has room)
+
+Expands to a compound literal; it has no run-time overhead.
+
+ccol_select() never reads or writes the fd itself; it only reports
+readiness (see ccol_select()'s own documentation).  For a ccol_select_read
+win, the caller performs its own read(2)/recv(2) on fd afterward.  For a
+ccol_select_write win, the caller performs its own write(2)/send(2).
+Either call may find nothing/EWOULDBLOCK if a concurrent reader/writer won
+the race first (the same TOCTOU contract POSIX select(2) itself has).
+
+Mixing fd selectables with queue selectables in the same ccol_select() call
+is supported.  The implementation switches to an epoll(7)-based wait path
+when any fd selectable is present.  If only queue selectables are supplied
+the lighter condvar path is used instead.
+.fi
+.SH PARAMETERS
+.nf
+fd        An open file descriptor.  Must be >= 0.  Passing a negative value
+          produces a selectable that ccol_select() will reject with
+          ccol_invalid_args.
+dir       ccol_select_read or ccol_select_write.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_selectable value (not a pointer).
+.fi
+.SH EXAMPLES
+.nf
+int pfd[2];
+pipe(pfd);  /* pfd[0] read end, pfd[1] write end */
+int src = 42;
+write(pfd[1], &src, sizeof(src));
+
+/* Wake when the pipe read end has data OR q has a message: */
+size_t idx;
+ccol_retval_t r = ccol_select_va(&idx,
+    ccol_selectable_from_circq(q, ccol_select_read),
+    ccol_selectable_from_fd(pfd[0], ccol_select_read));
+if (r == ccol_success && idx == 1) {
+    /* fd is ready; read it ourselves */
+    int val;
+    read(pfd[0], &val, sizeof(val));
+}
+
+/* Watch a socket for writability: */
+r = ccol_select_va(&idx, ccol_selectable_from_fd(sock_fd, ccol_select_write));
+if (r == ccol_success) write(sock_fd, "hi", 2);
+.fi
+.SH "SEE ALSO"
+.BR ccol_select (3),
+.BR ccol_select_timed (3),
+.BR ccol_select_va (3),
+.BR ccol_select_timed_va (3),
+.BR ccol_selectable_from_circq (3),
+.BR ccol_selectable_from_dynq (3),
+.BR ccol_selectable_from_chan (3)

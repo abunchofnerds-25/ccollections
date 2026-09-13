@@ -72,6 +72,15 @@ SOFTWARE.
 #include <sys/types.h> /* off_t */
 #include <time.h>      /* time_t */
 
+/* Everything declared from here to the end of this header is part of the
+ * public ABI of libccollections and is exported from the shared library.
+ * The library itself is built with -fvisibility=hidden, so any function or
+ * object that is not covered by one of these blocks stays internal to the
+ * library, is absent from its dynamic symbol table, and cannot be
+ * interposed by, or collide with, a symbol of the same name in the
+ * application that links against it. */
+#pragma GCC visibility push(default)
+
 /* Remove any macro definition of clog from <complex.h> */
 #ifdef clog
 #undef clog
@@ -550,47 +559,48 @@ void _clog_write(clog logger, clog_level_t level, const char *file, int line,
 
 /** @defgroup log_macros Logging macros
  *
- * Each macro accepts a clog handle followed by a printf-style format string
- * and optional arguments.  The file name, line number, and function name are
- * captured automatically.  log_error and log_fatal also append a backtrace.
+ * Each macro accepts a clog handle followed by a printf-style format string and
+ * optional arguments. The file name, line number, and function name are
+ * captured automatically. ccol_log_error and ccol_log_fatal also append a
+ * backtrace.
  *
  * @{
  */
 
-#define log_trace(l, fmt, ...)                                           \
+#define ccol_log_trace(l, fmt, ...)                                      \
   _clog_write((l), CLOG_TRACE, __FILE__, __LINE__, __func__, false, fmt, \
               ##__VA_ARGS__)
 
-#define log_debug(l, fmt, ...)                                           \
+#define ccol_log_debug(l, fmt, ...)                                      \
   _clog_write((l), CLOG_DEBUG, __FILE__, __LINE__, __func__, false, fmt, \
               ##__VA_ARGS__)
 
-#define log_info(l, fmt, ...)                                           \
+#define ccol_log_info(l, fmt, ...)                                      \
   _clog_write((l), CLOG_INFO, __FILE__, __LINE__, __func__, false, fmt, \
               ##__VA_ARGS__)
 
-#define log_warn(l, fmt, ...)                                           \
+#define ccol_log_warn(l, fmt, ...)                                      \
   _clog_write((l), CLOG_WARN, __FILE__, __LINE__, __func__, false, fmt, \
               ##__VA_ARGS__)
 
 /** Logs at ERROR level and appends a backtrace. */
-#define log_error(l, fmt, ...)                                          \
+#define ccol_log_error(l, fmt, ...)                                     \
   _clog_write((l), CLOG_ERROR, __FILE__, __LINE__, __func__, true, fmt, \
               ##__VA_ARGS__)
 
 /** Logs at ALERT level and appends a backtrace. */
-#define log_alert(l, fmt, ...)                                          \
+#define ccol_log_alert(l, fmt, ...)                                     \
   _clog_write((l), CLOG_ALERT, __FILE__, __LINE__, __func__, true, fmt, \
               ##__VA_ARGS__)
 
 /**
  * Logs at FATAL level, appends a backtrace, then terminates the process by
  * calling exit(EXIT_FAILURE). This macro never returns to the caller.
- * Unlike all other log_* macros, log_fatal bypasses the logger's min_level
+ * Unlike all other log_* macros, ccol_log_fatal bypasses the logger's min_level
  * filter: the message is always written so the cause of termination is never
  * silently suppressed.
  */
-#define log_fatal(l, fmt, ...)                                          \
+#define ccol_log_fatal(l, fmt, ...)                                     \
   _clog_write((l), CLOG_FATAL, __FILE__, __LINE__, __func__, true, fmt, \
               ##__VA_ARGS__)
 
@@ -844,7 +854,7 @@ bool clog_test_gzip_compress_file(const char *src, const char *dst);
  *
  * clog_flush() (and _clog_write()'s own FATAL-path pre-flush step) build a
  * fresh, stack-local synchronization object per call and initialize it via
- * mutex_init(); with default/NULL attributes this has no real failure path
+ * ccol_mutex_init(); with default/NULL attributes this has no real failure path
  * that can be triggered portably from a test (unlike an ordinary heap
  * allocation, it does not go through any per-logger custom allocator), so
  * this hook lets a test exercise the corresponding "fail safely instead of
@@ -905,8 +915,8 @@ void clog_test_write_unrepresentable_record(clog logger, clog_format_t fmt,
  *        report a genuine allocation failure, for testing.
  *
  * clogger.c's internal buffer-append helpers only ever have a real failure
- * path to exercise when growth is actually needed; which this library's
- * own buffer-sizing constants make impossible to reach for a handful of
+ * path to exercise when growth is actually needed, which this library's own
+ * buffer-sizing constants make impossible to reach for a handful of
  * deliberately small, fixed-size records (e.g. the "backtrace unavailable"
  * marker _emit_backtrace_syslog_lines() builds for CLOG_FMT_SYSLOG). This
  * hook lets a test force that one append to fail regardless of whether
@@ -943,3 +953,5 @@ void clog_test_force_next_buf_ensure_failure(bool force);
 void clog_test_emit_backtrace_syslog_unavailable_marker(clog logger,
                                                         clog_level_t level);
 #endif
+
+#pragma GCC visibility pop

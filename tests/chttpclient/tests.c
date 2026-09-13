@@ -67,12 +67,12 @@ TAU_MAIN()
  * Tier 2/3's async engine additionally calls signal(SIGPIPE, SIG_IGN) in its
  * own lazy init; but that only runs once some test has actually triggered
  * the async engine, leaving every Tier-1-only test before that point
- * unprotected against this test binary's own mock-server writes. Confirmed
- * as the real cause of an intermittent whole-process death under valgrind
- * (never natively, since the race needs valgrind's slowdown to become
- * reachable at all): the child's wait status decoded to 128+13 (SIGPIPE),
- * with no core file (SIGPIPE's default disposition does not dump one),
- * ruling out an external kill. A single, unconditional, process-wide
+ * unprotected against this test binary's own mock-server writes. Without
+ * this, that race intermittently kills the whole test process under
+ * valgrind (never natively: the window is only wide enough to be reachable
+ * at all under valgrind's slowdown), showing up as a wait status decoding
+ * to 128+13 (SIGPIPE) with no core file, since SIGPIPE's default
+ * disposition does not dump one. A single, unconditional, process-wide
  * SIGPIPE-ignore installed before the mock server (or any test) ever runs
  * closes this regardless of test order or which tier a given test uses. */
 __attribute__((constructor)) static void _ignore_sigpipe_for_mock_server(void) {
@@ -160,9 +160,9 @@ static void register_conn_thread(pthread_t tid) {
 /*
  * Send a complete HTTP response. keep_alive controls whether "Connection:
  * close" is sent; when true, the response relies on HTTP/1.1's implicit
- * keep-alive default instead. All pre-existing routes pass false, preserving
- * their exact original behavior; only the new keep-alive-specific routes
- * (added for real connection-reuse test coverage) pass true.
+ * keep-alive default instead. Only the keep-alive-specific routes, which
+ * exist for real connection-reuse coverage, pass true; every other route
+ * passes false and therefore closes after a single response.
  */
 static void srv_respond(int fd, int status, const char *status_text,
                         const char *content_type, const char *extra_hdrs,
@@ -244,15 +244,13 @@ static void srv_parse_request_line(const char *buf, char *method, size_t mlen,
  * the same recv() calls as the headers). *hdr_len_out receives the header
  * block's length (through and including the terminating CRLFCRLF).
  *
- * Split out from what used to be a single-shot "read headers, then keep
- * reading until content-length bytes of body have arrived" function
- * (srv_read_request) specifically so srv_conn_thread can react to an
+ * Reading headers only, rather than headers plus the whole declared body
+ * in one shot, is what lets srv_conn_thread react to an
  * "Expect: 100-continue" request header (and decide the route) before
  * necessarily reading (or, for the reject route, ever reading) any body at
- * all; srv_conn_thread's own body-reading tail, used for every route that
- * isn't one of the two Expect: 100-continue-aware ones below, reproduces
- * srv_read_request's old content-length loop exactly, so no route's timing
- * or behavior changes.
+ * all. Every route that is not one of the Expect: 100-continue-aware ones
+ * below gets its body from srv_conn_thread's own content-length loop
+ * instead, run immediately after this call returns.
  */
 static ssize_t srv_read_headers(int fd, char *buf, size_t max,
                                 size_t *hdr_len_out) {
@@ -404,10 +402,10 @@ static bool srv_handle_expect_continue_with_hints_route(int conn_fd, char *buf,
  * going), simulating a spec-compliant-per-RFC-7231-SS5.1.1 (which only
  * SHOULDs closing here, never MUSTs it) but naive server implementation
  * that does not itself track "this connection still owes me a body before
- * it is truly back at a request boundary". Regression coverage for a bug
- * where the client pooled such a connection for reuse anyway, purely
- * because *keep_alive_out reflected only this response's own Connection
- * header rather than whether the declared request body was ever sent.
+ * it is truly back at a request boundary". Pins the contract that the
+ * client must NOT pool such a connection for reuse: *keep_alive_out has to
+ * account for whether the declared request body was ever sent, not merely
+ * reflect this response's own Connection header.
  */
 static bool srv_handle_expect_continue_reject_keepalive_route(int conn_fd) {
   const char *b = "expectation failed";
@@ -420,19 +418,18 @@ static bool srv_handle_expect_continue_reject_keepalive_route(int conn_fd) {
  * A sixth Expect: 100-continue-aware route, used only by
  * expect_continue.dead_connection_after_100_with_fake_leftover_final_not_retried_with_stale_state:
  * writes "100 Continue" immediately followed, in the SAME send() call (so it
- * lands in the same TCP segment/read on the client side), by what LOOKS like
- * a complete final response's header block plus a truncated body - then
- * closes without ever finishing that body or reading anything the client
- * sends. Simulates a fast/buggy server that raced ahead of its own "100
- * Continue" with response bytes it can't actually finish delivering.
- * Regression coverage for a bug where the leftover bytes past the "100
- * Continue" boundary were parsed into chttp_do_internal's pctx/body-buffer
- * as part of a doomed carry-in read, and then - because that carry-in parse
- * never set any_bytes_read_out - chttp_do_internal's reused-connection
- * retry-once safety net reissued the request on a fresh connection while
- * reusing that same, already-polluted pctx/body-buffer, silently mixing the
- * fake response's headers/body-prefix into the one actually delivered to
- * the caller.
+ * lands in the same TCP segment/read on the client side), by what LOOKS like a
+ * complete final response's header block plus a truncated body - then closes
+ * without ever finishing that body or reading anything the client sends.
+ * Simulates a fast/buggy server that raced ahead of its own "100 Continue" with
+ * response bytes it can't actually finish delivering. Pins two coupled
+ * contracts. The leftover bytes past the "100 Continue" boundary are parsed
+ * into chttp_do_internal's pctx/body-buffer as part of a doomed carry-in read,
+ * and that carry-in parse must set any_bytes_read_out; without that,
+ * chttp_do_internal's reused-connection retry-once safety net reissues the
+ * request on a fresh connection while reusing that same, already-polluted
+ * pctx/body-buffer, silently mixing the fake response's headers/body-prefix
+ * into the one actually delivered to the caller.
  */
 static bool srv_handle_expect_continue_fake_final_then_die_route(int conn_fd) {
   const char *wire =
@@ -462,11 +459,12 @@ static _Atomic int g_die_after_100_clean_body_recv_count = 0;
  * reads the full declared body, then closes the connection immediately with
  * NO further bytes at all - a clean, boundary-aligned EOF for the final
  * response, with nothing left over in the same read to trip the carry-in
- * path. Regression coverage for a bug where a clean EOF (n == 0, no
- * carry-in) left any_bytes_read_out false even though the body had already
- * been sent to a server that had just explicitly confirmed it was alive via
- * "100 Continue", letting chttp_do_internal's reused-connection retry-once
- * safety net silently resend the entire body to a second connection.
+ * path. Pins the contract that a clean EOF (n == 0, no carry-in) must
+ * still count as "the peer was alive here": the body has already been sent
+ * to a server that just explicitly confirmed it was alive via "100
+ * Continue", so leaving any_bytes_read_out false lets chttp_do_internal's
+ * reused-connection retry-once safety net silently resend the entire body
+ * to a second connection.
  */
 static bool srv_handle_expect_continue_die_after_100_clean_route(
     int conn_fd, char *buf, size_t max, size_t total, size_t hdr_len) {
@@ -552,10 +550,10 @@ static bool srv_handle_expect_continue_bundled_final_route(
  * confirmed "100 Continue" is itself a genuine, non-discarded message that
  * breaks the run) rather than one combined budget shared across both
  * phases; see chttp_async_ctx_t.interim_responses_seen's own field comment
- * for the real bug this guards (Tier 2/3 used to share a single counter
- * across both phases, giving a hop that discarded interim responses before
- * "100 Continue" strictly less than the documented 64-response budget left
- * over for its own final-response read).
+ * for the failure mode this guards against: sharing a single counter across
+ * both phases would leave a hop that discards interim responses before
+ * "100 Continue" with strictly less than the documented 64-response budget
+ * for its own final-response read.
  */
 static bool srv_handle_expect_continue_hints_both_sides_route(
     int conn_fd, char *buf, size_t max, size_t total, size_t hdr_len,
@@ -689,9 +687,9 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
      * distinctively-named body. /redirect's own always-empty intermediate
      * body means a streaming redirect test using it can't actually tell
      * "the intermediate hop's body was correctly discarded" apart from
-     * "there was never anything to leak in the first place"; a bug that
-     * fed the intermediate body straight to the caller's sink would be
-     * silently undetectable. This route exists to give such a test a real
+     * "there was never anything to leak in the first place", so feeding
+     * the intermediate body straight to the caller's sink would go
+     * silently undetected. This route exists to give such a test a real
      * intermediate body to prove was NOT captured. */
     char loc_hdr[128];
     snprintf(loc_hdr, sizeof(loc_hdr), "Location: http://127.0.0.1:%d/get\r\n",
@@ -731,11 +729,11 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
     /* A dedicated, much-slower sibling of /slow: async_deadline.
      * request_timeout_fires_against_slow_endpoint needs a comfortable
      * margin between its short request_timeout_ms and when a real response
-     * could possibly arrive, now that the deadline sweep genuinely ticks
-     * every CHTTP_DEADLINE_SWEEP_INTERVAL_MS (100ms) instead of effectively
-     * immediately; racing that same 100ms tick interval against /slow's own
-     * exactly-100ms sleep would make worst-case sweep-detection latency and
-     * the real response arrival too close to call reliably. */
+     * could possibly arrive: the deadline sweep ticks every
+     * CHTTP_DEADLINE_SWEEP_INTERVAL_MS (100ms), and racing that same 100ms
+     * tick interval against /slow's own exactly-100ms sleep would put
+     * worst-case sweep-detection latency and the real response arrival too
+     * close together to call reliably. */
     usleep(500000); /* 500 ms */
     const char *b = "{\"status\":\"ok\"}";
     srv_respond(conn_fd, 200, "OK", "application/json", NULL, b, strlen(b),
@@ -878,10 +876,10 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
      * CHTTP_MAX_INTERIM_RESPONSES enforces: N == 64 must succeed (the last
      * legal discard), N == 65 must fail with ccol_http_transfer_aborted (one
      * discard past the documented cap; see README.md/chttpclient_do.3's own
-     * "after 64 consecutive discarded interim responses" contract). Used to
-     * catch a real cross-tier off-by-one where Tier 2/3 used to accept and
-     * discard 65 interim responses before giving up, one more than Tier 1's
-     * 64, silently violating that documented contract. */
+     * "after 64 consecutive discarded interim responses" contract). Guards
+     * against a cross-tier off-by-one in which Tier 2/3 accepts and
+     * discards 65 interim responses before giving up, one more than Tier
+     * 1's 64, silently violating that documented contract. */
     int n = atoi(path + 19);
     const char *hints =
         "HTTP/1.1 103 Early Hints\r\nLink: </style.css>; rel=preload\r\n\r\n";
@@ -926,11 +924,11 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
      * can trust a peer to avoid) "Content-Length" declaring far more than
      * chttpclient_set_max_response_body_size's configured cap, even though
      * the REAL final response's own body is tiny and well within it.
-     * Regression coverage for a real bug: _on_headers_complete's up-front
-     * too-large check used to fire on ANY message's declared Content-Length,
-     * including a discarded 1xx one, failing the whole request with
-     * ccol_msg_too_large despite the actually-delivered response being well
-     * within the cap. */
+     * Regression coverage: _on_headers_complete's up-front too-large check
+     * must not fire on a discarded 1xx message's declared Content-Length.
+     * Applying it to ANY message's declared length fails the whole request
+     * with ccol_msg_too_large despite the actually-delivered response being
+     * well within the cap. */
     const char *hints =
         "HTTP/1.1 103 Early Hints\r\nContent-Length: 999999\r\n\r\n";
     send(conn_fd, hints, strlen(hints), 0);
@@ -944,10 +942,10 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
       strcmp(path, "/head-oversized-content-length") == 0) {
     /* A HEAD response whose Content-Length describes what a GET would have
      * returned (RFC 7231 SS4.3.2); no body bytes ever follow on the wire.
-     * Regression coverage for a real bug: _on_headers_complete's up-front
-     * too-large check did not exclude a HEAD response, so a large declared
-     * Content-Length here used to fail the whole request with
-     * ccol_msg_too_large even though no body is ever buffered for HEAD. */
+     * Regression coverage: _on_headers_complete's up-front too-large check
+     * must exclude a HEAD response. Without that exclusion a large declared
+     * Content-Length here fails the whole request with ccol_msg_too_large
+     * even though no body is ever buffered for HEAD. */
     char header[256];
     int hlen = snprintf(header, sizeof(header),
                         "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n"
@@ -961,12 +959,12 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
      * Length (RFC 7232 SS4.1 - a real, common pattern for a conditional GET
      * against a CDN/static-asset server); no body bytes ever follow on the
      * wire, per RFC 7230 SS3.3 (identical framing rule to 1xx/204).
-     * Regression coverage for a real bug: _on_headers_complete's up-front
-     * too-large check only excluded 1xx and HEAD, not 204/304, so a large
-     * declared Content-Length here used to fail the whole request with
-     * ccol_msg_too_large even though chttp1_parser itself already
-     * unconditionally forces no_body for a 304 regardless of any declared
-     * length. */
+     * Regression coverage: _on_headers_complete's up-front too-large check
+     * must exclude 204/304 as well as 1xx and HEAD. Excluding only the
+     * latter two fails the whole request with ccol_msg_too_large for a
+     * large declared Content-Length here, even though chttp1_parser itself
+     * already unconditionally forces no_body for a 304 regardless of any
+     * declared length. */
     char header[256];
     int hlen = snprintf(header, sizeof(header),
                         "HTTP/1.1 304 Not Modified\r\n"
@@ -1022,7 +1020,7 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
      * the drop, once it happens, stays dropped for the LATER 307 hop too,
      * rather than the 307 resurrecting the ORIGINAL request's body; see
      * chttp_async_chain_t.body_dropped's own comment in chttpclient.c for
-     * the bug this guards against on the Tier 2/3 side. */
+     * the defect this guards against on the Tier 2/3 side. */
     char loc_hdr[128];
     snprintf(loc_hdr, sizeof(loc_hdr),
              "Location: http://127.0.0.1:%d/redirect-307-to-echo\r\n",
@@ -1074,9 +1072,9 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
      * are); per RFC 3986 SS5.2.2, T = R unconditionally once R has ANY
      * scheme, so _resolve_redirect_url must return it verbatim rather than
      * merging it onto this hop's own origin as though it were a relative
-     * path. Regression test for a bug where "mailto:test@example.com"
-     * resolved to "http://<this origin>/mailto:test@example.com" instead of
-     * being recognised as absolute and rejected by the next hop's
+     * path. Without that, "mailto:test@example.com" resolves to
+     * "http://<this origin>/mailto:test@example.com" instead of being
+     * recognised as absolute and rejected by the next hop's
      * _parse_chttp_url as ccol_http_invalid_url. */
     srv_respond(conn_fd, 302, "Found", "text/plain",
                 "Location: mailto:test@example.com\r\n", NULL, 0, false);
@@ -1098,14 +1096,13 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
     /* Plain relative Location ("sibling", no leading "/" and no ".."/"."
      * segments): the simplest reference that still requires RFC 3986 SS5.3
      * merge (base path "/nested/dir/redirect-relative-plain" merges with
-     * "sibling" to "/nested/dir/sibling"). Regression coverage for the
-     * async engine's own chttp_async_ctx_t not tracking a per-hop
-     * path_and_query at all: _async_handle_redirect's hand-built
-     * chttp_url_t base always left path_and_query NULL, and any Location
-     * value reaching _merge_ref_path (i.e. anything that isn't an absolute
-     * URL, a "//host/..." protocol-relative reference, or an absolute-path
-     * "/..." reference), crashed the whole process via a NULL-pointer
-     * strchr() call. */
+     * "sibling" to "/nested/dir/sibling"). Pins the async engine's own
+     * per-hop path_and_query tracking: _async_handle_redirect's hand-built
+     * chttp_url_t base must carry a real path_and_query, because any
+     * Location value that reaches _merge_ref_path (anything that is not an
+     * absolute URL, a "//host/..." protocol-relative reference, or an
+     * absolute-path "/..." reference) crashes the whole process on a
+     * NULL-pointer strchr() call if it is left NULL. */
     srv_respond(conn_fd, 302, "Found", "text/plain", "Location: sibling\r\n",
                 NULL, 0, false);
     return true;
@@ -1120,13 +1117,13 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
   if (strcmp(path, "/redirect-abs-path-query-with-slashes") == 0) {
     /* Absolute-path Location whose QUERY string (not the path) contains
      * "/../"; RFC 3986 SS5.2.4 dot-segment removal must never touch query
-     * bytes. Regression test for a bug where _resolve_redirect_url's
-     * absolute-path branch fed the whole "path?query" string into
-     * remove_dot_segments, letting "/../" inside the query corrupt the
-     * resolved path (e.g. "/foo/bar?x=1/../2" resolved to "/foo/2" instead
-     * of leaving the query untouched). The client must preserve the query
-     * byte-for-byte, so the next hop's request line must land on the exact
-     * route below, not some dot-segment-mangled path. */
+     * bytes. _resolve_redirect_url's absolute-path branch must therefore
+     * split the query off before calling remove_dot_segments: feeding it
+     * the whole "path?query" string lets "/../" inside the query corrupt
+     * the resolved path (e.g. "/foo/bar?x=1/../2" resolves to "/foo/2"
+     * instead of leaving the query untouched). The client must preserve the
+     * query byte-for-byte, so the next hop's request line must land on the
+     * exact route below, not some dot-segment-mangled path. */
     srv_respond(conn_fd, 302, "Found", "text/plain",
                 "Location: /query-preserved-target?x=1/../2\r\n", NULL, 0,
                 false);
@@ -1193,13 +1190,13 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
      * across two data chunks plus the terminating zero-length chunk, no
      * "Connection: close" (chunked framing has its own explicit end
      * marker, so the connection remains keep-alive-eligible and reusable).
-     * Regression coverage for a real gap: nothing in this suite previously
-     * sent the client an actual chunked response at all (only chunked
-     * REQUEST bodies were exercised, and chttp1_parser's own chunked-
-     * decoding logic only in isolation via tests_parser.c), so the client-
-     * side wiring for multi-chunk reassembly, post-chunked-body keep-alive,
-     * and the reactive max_response_body_size check on a chunked body had
-     * no end-to-end coverage on either tier. */
+     * This is the only route that sends the client a genuine chunked
+     * RESPONSE, and so the only end-to-end coverage (on either tier) of the
+     * client-side wiring for multi-chunk reassembly, post-chunked-body
+     * keep-alive, and the reactive max_response_body_size check on a
+     * chunked body; chunked REQUEST bodies, and chttp1_parser's own
+     * chunked-decoding logic in isolation (tests_parser.c), are covered
+     * separately. */
     const char *raw =
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: text/plain\r\n"
@@ -1293,8 +1290,8 @@ static void *srv_conn_thread(void *arg) {
           conn_fd, buf, TEST_SERVER_BUF, (size_t)n, hdr_len, path);
     } else {
       /* Ordinary route: read the rest of the body (if any) per
-       * content-length, exactly reproducing the now-removed
-       * srv_read_request's own single-shot behavior. */
+       * content-length, so the route sees the complete request exactly as
+       * though headers and body had arrived in a single read. */
       size_t total = (size_t)n;
       char cl_str[32] = {0};
       long cl = 0;
@@ -1691,10 +1688,10 @@ TEST(request, set_header_overwrites) {
 }
 
 TEST(request, set_header_rejects_crlf_in_name) {
-  /* Regression test: chttp_request_set_header used to store name/value
-   * verbatim with no validation; _serialize_request then writes
+  /* Regression test: chttp_request_set_header must validate name/value
+   * rather than storing them verbatim. _serialize_request writes
    * "name: value\r\n" onto the wire with no escaping, so a name containing
-   * an embedded CR/LF could inject an arbitrary extra header line (or split
+   * an embedded CR/LF would inject an arbitrary extra header line (or split
    * the request into two) ahead of the real value. Must be rejected
    * outright, and must not corrupt the request's existing headers. */
   chttp_request_t *req =
@@ -1771,7 +1768,7 @@ TEST(request, set_header_rejects_transfer_encoding) {
   /* Regression test: chttpclient never transfer-codes a request body (a
    * body-carrying request is always sent whole, Content-Length-framed), so
    * a caller-set "Transfer-Encoding" header could never be honored;
-   * accepting it used to let _serialize_request's own Content-Length
+   * accepting it would let _serialize_request's own Content-Length
    * synthesis (gated only on "no explicit content-length header") pair it
    * with a Content-Length header over a body that was never actually
    * transfer-coded, an ambiguous framing. Must be rejected outright,
@@ -1795,13 +1792,13 @@ TEST(request, set_header_rejects_transfer_encoding) {
 }
 
 TEST(request, new_null_body_data_with_nonzero_len_fails) {
-  /* Regression test: chttp_request_new_mp used to silently treat a NULL
-   * body->data paired with a nonzero body->len as "no body" (the body-copy
-   * block only ran when body->data was non-NULL), unlike
-   * chttp_base64_encode_mp's identical NULL-data/nonzero-len combination,
-   * which is explicitly rejected. A caller with a real bug (a miscomputed
-   * length paired with a null buffer) deserves a diagnosable failure, not a
-   * request that silently goes out with no body at all. */
+  /* Regression test: chttp_request_new_mp must reject a NULL body->data
+   * paired with a nonzero body->len rather than silently treating it as "no
+   * body" (the body-copy block only runs when body->data is non-NULL),
+   * matching chttp_base64_encode_mp's identical NULL-data/nonzero-len
+   * combination, which is explicitly rejected. A caller with a real bug (a
+   * miscomputed length paired with a null buffer) deserves a diagnosable
+   * failure, not a request that silently goes out with no body at all. */
   chttp_request_body_t bad_body = {
       .data = NULL, .len = 5, .content_type = NULL};
   char *err = NULL;
@@ -1857,7 +1854,7 @@ TEST(request, free_null_safe) { chttp_request_free(NULL); }
 
 TEST(client_construction, create_and_destroy) {
   char *err = NULL;
-  chttpcli cli = create_chttpclient(&err);
+  chttpcli cli = ccol_create_chttpclient(&err);
   REQUIRE_NE(cli, CHTTPCLI_INVALID);
   chttpclient_destroy(cli);
   REQUIRE_EQ(cli, CHTTPCLI_INVALID);
@@ -1880,7 +1877,7 @@ TEST(client_construction, construct_scoped_macro) {
 TEST(client_construction, declare_and_init) {
   chttpcli_declare(cli);
   char *err = NULL;
-  cli = create_chttpclient(&err);
+  cli = ccol_create_chttpclient(&err);
   REQUIRE_NE(cli, CHTTPCLI_INVALID);
   chttpclient_destroy(cli);
 }
@@ -1909,8 +1906,8 @@ TEST(client_construction, half_configured_client_cert_pair_rejected) {
   /* Regression test: cert_path and key_path are a pair; _rebuild_tls_ctx_
    * locked's have_cert_pair check requires BOTH to be set before ever
    * attempting to load a client certificate, so providing exactly one of
-   * the two used to be silently treated as "no client certificate
-   * configured"; chttpclient_set_tls reported ccol_success, and every
+   * the two would otherwise be silently treated as "no client certificate
+   * configured": chttpclient_set_tls would report ccol_success, and every
    * subsequent "mTLS" request would silently connect without presenting a
    * client certificate at all, with no error surfaced anywhere. Must be
    * rejected outright instead, for both directions (cert without key, key
@@ -1927,8 +1924,8 @@ TEST(client_construction, half_configured_client_cert_pair_rejected) {
 
   /* A fully-specified pair (still nonexistent files; readability is
    * validated lazily) must still be accepted, confirming the rejection
-   * above is specific to exactly-one-of-the-pair, not an overly broad
-   * regression. */
+   * above is specific to exactly-one-of-the-pair rather than an overly
+   * broad rejection of any certificate configuration. */
   chttp_tls_config_t both = CHTTP_TLS_DEFAULT;
   both.cert_path = "/nonexistent/cert.pem";
   both.key_path = "/nonexistent/key.pem";
@@ -2154,9 +2151,9 @@ TEST(http, redirect_does_not_leak_intermediate_headers) {
   REQUIRE_EQ(resp->status_code, 200);
 
   /* The 301 response carries a Location header.  After the redirect the final
-   * response is a 200 from /get which has no Location header.  Before the fix
-   * the headers map was never reset between responses, so "location" would
-   * bleed through from the intermediate 301 into the final response. */
+   * response is a 200 from /get which has no Location header.  The headers
+   * map must be reset between responses, or "location" bleeds through from
+   * the intermediate 301 into the final response. */
   REQUIRE_EQ((void *)chttpclient_resp_header(resp, "location"), NULL);
 
   /* The final response must still expose its own headers. */
@@ -2166,18 +2163,18 @@ TEST(http, redirect_does_not_leak_intermediate_headers) {
 }
 
 TEST(http, redirect_with_empty_location_header_reported_cleanly) {
-  /* Regression test for a real double-free in chttp_do_internal: when a
+  /* Pins chttp_do_internal against a double free of cur_url: when a
    * redirect hop's Location header is present but empty,
    * _resolve_redirect_url returns NULL immediately (its very first check,
-   * "if (!location || !*location) return NULL;"), and the hop loop used to
-   * free cur_url once when starting the redirect handling, then free the
-   * SAME pointer (never reassigned, since resolution failed) a second time
-   * in the function's shared post-loop cleanup. Found by clang's static
-   * analyzer, not by any prior dynamic test (nothing previously sent a
-   * redirect with an empty Location). Remotely triggerable by any server
-   * this client talks to, not a theoretical OOM-only edge case. The
-   * correctness assertion below is secondary; the real verification is
-   * that this doesn't crash, in particular under valgrind. */
+   * "if (!location || !*location) return NULL;"). The hop loop must not
+   * free cur_url when starting the redirect handling and then free the SAME
+   * pointer (never reassigned, since resolution failed) a second time in
+   * the function's shared post-loop cleanup. This shape is remotely
+   * triggerable by any server this client talks to, not a theoretical
+   * OOM-only edge case, and it is invisible to any dynamic test that never
+   * sends a redirect with an empty Location. The correctness assertion
+   * below is secondary; the real verification is that this does not crash,
+   * in particular under valgrind. */
   char url[160];
   make_url(url, sizeof(url), "/redirect-empty-location");
 
@@ -2293,12 +2290,12 @@ TEST(http, streaming_through_redirect_delivers_final_body_not_intermediate) {
    * not_intermediate: chttpclient_do_streaming and chttpclient_do_async_
    * streaming share _on_headers_complete's sink-selection logic but have
    * entirely separate hop-loop plumbing (chttp_do_internal vs
-   * _async_submit_hop), and this exact combination (Tier 1 + streaming +
-   * redirect) previously had no coverage on either tier: every other
-   * chttpclient_do_streaming test in this file targets a non-redirecting
-   * route. /redirect-with-body's intermediate 301 carries a real,
-   * distinctive body specifically so a regression that fed it to the
-   * sink instead of routing it through _sink_discard would be caught. */
+   * _async_submit_hop), so this exact combination (Tier 1 + streaming +
+   * redirect) needs its own coverage: every other chttpclient_do_streaming
+   * test in this file targets a non-redirecting route.
+   * /redirect-with-body's intermediate 301 carries a real, distinctive body
+   * specifically so that feeding it to the sink instead of routing it
+   * through _sink_discard is caught here. */
   char url[160];
   make_url(url, sizeof(url), "/redirect-with-body");
 
@@ -2402,13 +2399,13 @@ static void *concurrent_req_thread(void *arg) {
 
 /*
  * probe_arg_t / probe_thread: used by the "not_permitted_when_destroying" test
- * to synchronise a caller that races __chttpclient_destroy.  ready=1 is set
+ * to synchronise a caller that races __chttpclient_destroy. ready=1 is set
  * immediately before chttpclient_do is called (not after entering it), so the
- * window between the signal and the actual call is minimal but non-zero.
- * After ready=1 the probe will either (a) block in _slot_acquire's
- * cond_var_wait/cond_var_timedwait because both pool slots are in-use and get
- * woken by the destroy broadcast, or (b) see destroying=true at the fast-path
- * guard if the destroy thread wins the race.  Both paths return
+ * window between the signal and the actual call is minimal but non-zero. After
+ * ready=1 the probe will either (a) block in _slot_acquire's
+ * ccol_cond_var_wait/ccol_cond_var_timedwait because both pool slots are in-use
+ * and get woken by the destroy broadcast, or (b) see destroying=true at the
+ * fast-path guard if the destroy thread wins the race. Both paths return
  * ccol_not_permitted, so the test is correct in either case.
  */
 typedef struct {
@@ -2732,10 +2729,9 @@ TEST(pool, idle_handles_freed_on_shrink) {
   /* Grow the pool so POOL_LARGE requests can be in flight concurrently, then
    * shrink it once they've all completed. The concurrency limiter
    * (_slot_acquire/_slot_release) is a plain counting semaphore over
-   * cli->in_flight_count/pool_cap with no per-slot object of its own to leak
-   * (unlike this file's now-removed libcurl-backed predecessor, which really
-   * did hold a per-slot CURL handle); this test's job is simply to confirm
-   * that shrinking the pool after a burst of concurrency doesn't corrupt its
+   * cli->in_flight_count/pool_cap, with no per-slot object of its own that
+   * a shrink could leak; this test's job is simply to confirm that
+   * shrinking the pool after a burst of concurrency does not corrupt that
    * bookkeeping or otherwise break subsequent requests. Valgrind still
    * verifies no leak. */
   enum { POOL_LARGE = 4, POOL_SMALL = 2 };
@@ -2788,12 +2784,10 @@ TEST(pool, shrink_while_in_flight_exiles_slots) {
    * while all of them are in-flight (so cli->in_flight_count temporarily
    * exceeds the new, smaller cli->pool_cap), then wait for completion.
    * _slot_acquire/_slot_release track occupancy purely via
-   * cli->in_flight_count/pool_cap, with no per-slot object of its own (unlike
-   * this file's now-removed libcurl-backed predecessor, which held a
-   * per-slot CURL handle that a shrink had to explicitly clean up); this
-   * test's job is to confirm the shrink doesn't corrupt that bookkeeping
-   * while requests are genuinely in flight against it. Valgrind verifies
-   * nothing is leaked. */
+   * cli->in_flight_count/pool_cap, with no per-slot object of its own for a
+   * shrink to have to clean up; this test's job is to confirm the shrink
+   * does not corrupt that bookkeeping while requests are genuinely in
+   * flight against it. Valgrind verifies nothing is leaked. */
   enum { POOL_LARGE = 4, POOL_SMALL = 2 };
   char url[128];
   make_url(url, sizeof(url), "/slow");
@@ -2960,7 +2954,7 @@ TEST(custom_allocator, allocations_go_through_custom_procs) {
   atomic_store(&g_free_count, 0);
 
   err = NULL;
-  chttpcli cli = create_chttpclient_mp(&mp, &err);
+  chttpcli cli = ccol_create_chttpclient_mp(&mp, &err);
   REQUIRE_NE(cli, CHTTPCLI_INVALID);
   chttpclient_destroy(cli);
 
@@ -2992,19 +2986,19 @@ static ccol_memmgmt_procs_t g_bodybuf_oom_mp = {.malloc = bodybuf_oom_malloc,
                                                 .realloc = bodybuf_oom_realloc};
 
 TEST(body_buffer_oom, realloc_failure_reports_not_enough_memory) {
-  /* Regression test: chttp_bodybuf_t.oom was set by _sink_buffered on a
-   * realloc failure but never actually read anywhere; _on_body treated the
-   * resulting short return identically to a caller-level streaming abort,
-   * so a buffered response body large enough to need growing the sink
-   * buffer used to report ccol_http_transfer_aborted ("the connection
-   * failed mid-transfer, or the server sent a malformed response") on
-   * local OOM, instead of the documented ccol_not_enough_memory; an
-   * important distinction, since a caller can reasonably retry a transfer
-   * error but not an OOM. /large's response body (8192 bytes) is larger
+  /* Regression test: chttp_bodybuf_t.oom, set by _sink_buffered on a
+   * realloc failure, must actually be read. If _on_body treats the
+   * resulting short return identically to a caller-level streaming abort, a
+   * buffered response body large enough to need growing the sink buffer
+   * reports ccol_http_transfer_aborted ("the connection failed
+   * mid-transfer, or the server sent a malformed response") on local OOM
+   * instead of the documented ccol_not_enough_memory; an important
+   * distinction, since a caller can reasonably retry a transfer error but
+   * not an OOM. /large's response body (8192 bytes) is larger
    * than the sink's initial 4096-byte capacity, forcing exactly the growth
    * call this allocator targets. */
   char *cerr = NULL;
-  chttpcli cli = create_chttpclient_mp(&g_bodybuf_oom_mp, &cerr);
+  chttpcli cli = ccol_create_chttpclient_mp(&g_bodybuf_oom_mp, &cerr);
   REQUIRE_NE(cli, CHTTPCLI_INVALID);
 
   char url[160];
@@ -3155,7 +3149,7 @@ TEST(http, patch_without_content_type_sends_none) {
 
 TEST(tls, set_tls_deep_copies_strings) {
   /* Verify that chttpclient_set_tls owns copies of the path strings.
-   * Valgrind (memtest) will flag use-after-free if the fix is absent. */
+   * Valgrind (memtest) will flag use-after-free if that anchoring is absent. */
   chttpcli_construct(cli);
 
   {
@@ -3194,16 +3188,15 @@ TEST(tls, set_tls_deep_copies_strings) {
 }
 
 TEST(tls, unreadable_cert_path_reports_cert_load_failed) {
-  /* Regression test: ccol_http_tls_cert_load_failed (the code
-   * _rebuild_tls_ctx_locked's deferred-failure design is supposed to
-   * surface once an HTTPS request actually needs a cert/key/CA path that
-   * turned out not to be readable) was, for a time, silently misreported
-   * as the generic ccol_http_tls_handshake_failed at every one of its three
-   * call sites, indistinguishable from a real post-handshake failure.
-   * That gap went unnoticed specifically because no test exercised this
-   * scenario at all. The failure is detected before any connection attempt
-   * (chttp_do_internal checks tls_ctx_usable right after URL parsing), so the
-   * target need not resolve or accept a real connection. */
+  /* ccol_http_tls_cert_load_failed is the code _rebuild_tls_ctx_locked's
+   * deferred-failure design surfaces once an HTTPS request actually needs a
+   * cert/key/CA path that turns out not to be readable. Every one of its
+   * three call sites must report it as such rather than collapsing it into
+   * the generic ccol_http_tls_handshake_failed, which is indistinguishable
+   * from a real post-handshake failure. The failure is detected before any
+   * connection attempt (chttp_do_internal checks tls_ctx_usable right after
+   * URL parsing), so the target need not resolve or accept a real
+   * connection. */
   chttpcli_construct(cli);
 
   chttp_tls_config_t tls = {
@@ -3230,7 +3223,7 @@ TEST(tls, unreadable_cert_path_reports_cert_load_failed) {
 }
 
 TEST(tls, unreadable_ca_bundle_path_reports_cert_load_failed) {
-  /* Same regression as above, via the ca_bundle_path branch of
+  /* Same contract as above, via the ca_bundle_path branch of
    * _rebuild_tls_ctx_locked instead of the cert/key pair branch. */
   chttpcli_construct(cli);
 
@@ -3318,25 +3311,27 @@ TEST(pool, set_pool_size_zero_after_initialization) {
 }
 
 TEST(pool, request_timeout_counts_time_spent_waiting_for_a_pool_slot) {
-  /* Regression test: chttpclient_set_request_timeout's documented contract
-   * is "the maximum time from when chttpclient_do is called...", which must
-   * hold even when the concurrency-limiter pool (chttpclient_set_pool_size)
-   * is fully saturated and this call has to block inside _slot_acquire
-   * waiting for a slot. Before the fix, chttp_do_internal only anchored the
-   * overall deadline AFTER _slot_acquire returned, so time spent blocked
-   * waiting for a slot was completely invisible to it: a caller stuck behind
-   * a saturated pool got a full, fresh request_timeout_ms budget starting
-   * only once a slot finally freed up, however long that took.
+  /* chttpclient_set_request_timeout's documented contract is "the maximum
+   * time from when chttpclient_do is called...", which must hold even when
+   * the concurrency-limiter pool (chttpclient_set_pool_size) is fully
+   * saturated and this call has to block inside _slot_acquire waiting for a
+   * slot. The overall deadline is therefore anchored BEFORE _slot_acquire:
+   * anchoring it only after _slot_acquire returns makes the time spent
+   * blocked waiting for a slot completely invisible to that budget, so a
+   * caller stuck behind a saturated pool gets a full, fresh
+   * request_timeout_ms starting only once a slot finally frees up, however
+   * long that takes.
    *
    * Uses a pool of size 1: one thread occupies the only slot with a request
    * against /slow (server-side sleeps 100ms); the main thread then calls
    * chttpclient_do against the fast /get route with a 20ms request timeout.
-   * With the bug, the second call blocks on the saturated pool for ~100ms,
-   * THEN is granted a fresh 20ms budget (comfortably enough for a loopback
-   * /get) and succeeds. Fixed, its 20ms deadline is already ticking while it
-   * waits for the slot, so it times out around the 20ms mark, long before
-   * the occupant's slot ever frees up; a deterministic success-vs-timeout
-   * signal, not a timing-sensitive one. */
+   * This test is non-vacuous: anchored after _slot_acquire, the second call
+   * blocks on the saturated pool for ~100ms, THEN is granted a fresh 20ms
+   * budget (comfortably enough for a loopback /get) and succeeds. Anchored
+   * at entry, its 20ms deadline is already ticking while it waits for the
+   * slot, so it times out around the 20ms mark, long before the occupant's
+   * slot ever frees up; a deterministic success-vs-timeout signal, not a
+   * timing-sensitive one. */
   char slow_url[128], get_url[128];
   make_url(slow_url, sizeof(slow_url), "/slow"); /* sleeps 100ms */
   make_url(get_url, sizeof(get_url), "/get");
@@ -3371,9 +3366,9 @@ TEST(pool, request_timeout_counts_time_spent_waiting_for_a_pool_slot) {
    * stack-local `occupant` after this function's own frame is gone - a
    * real stack-use-after-return, not just a lost test result. This
    * includes chttpclient_set_request_timeout and chttp_request_new
-   * themselves, not just chttpclient_do's own result: an earlier version
-   * of this test asserted on those two calls immediately, before the join,
-   * missing exactly this window. */
+   * themselves, not just chttpclient_do's own result: asserting on those
+   * two calls immediately, before the join, would leave exactly this window
+   * open. */
   ccol_retval_t set_timeout_rv = chttpclient_set_request_timeout(cli, 20);
 
   chttp_request_t *req = chttp_request_new(CHTTP_GET, get_url, NULL, NULL);
@@ -3399,17 +3394,17 @@ TEST(pool, request_timeout_counts_time_spent_waiting_for_a_pool_slot) {
   REQUIRE_NE((void *)req, NULL);
   REQUIRE_EQ(rv, ccol_timed_out);
   REQUIRE_EQ((void *)resp, NULL);
-  /* The return code alone isn't a sufficient regression signal: merely
-   * anchoring the deadline before _slot_acquire, without also making
-   * _slot_acquire itself deadline-aware, would still block this call for
-   * the occupant's full ~100ms (an unconditional cond_var_wait has no way to
-   * notice the already-computed deadline elapsed) and only discover the
-   * (by-then-expired) deadline once a later connect/read step checked it;
-   * still ending in ccol_timed_out, but only after blocking far longer than
-   * the configured 20ms, exactly the defect this test exists to catch. A
-   * generous upper bound (80ms) comfortably separates "returned promptly
-   * once its own 20ms elapsed" from "blocked for the occupant's ~100ms
-   * first". */
+  /* The return code alone is not a sufficient signal: anchoring the
+   * deadline before _slot_acquire without ALSO making _slot_acquire itself
+   * deadline-aware would still block this call for the occupant's full
+   * ~100ms (an unconditional ccol_cond_var_wait has no way to notice that
+   * the already-computed deadline has elapsed) and only discover the
+   * by-then-expired deadline once a later connect/read step checked it;
+   * that still ends in ccol_timed_out, but only after blocking far longer
+   * than the configured 20ms, which is exactly what this test exists to
+   * catch. A generous upper bound (80ms) comfortably separates "returned
+   * promptly once its own 20ms elapsed" from "blocked for the occupant's
+   * ~100ms first". */
   REQUIRE_LT(elapsed_ms, 80L);
 
   REQUIRE_EQ(occupant.result_rv, ccol_success);
@@ -3537,7 +3532,7 @@ TEST(http, run_query_invalid_args) {
 
 TEST(pool, do_returns_not_permitted_when_destroying) {
   /* Strategy: fill ALL pool slots with 100 ms in-flight requests so that a
-   * subsequent chttpclient_do MUST block in _slot_acquire's cond_var_wait.
+   * subsequent chttpclient_do MUST block in _slot_acquire's ccol_cond_var_wait.
    * Once both slots are confirmed in-flight we start a probe thread (which
    * blocks on the full pool) and only then start the destroy thread.  The
    * destroy sets destroying=true and broadcasts, waking the probe which sees
@@ -3598,12 +3593,12 @@ TEST(pool, do_returns_not_permitted_when_destroying) {
    * below runs: tau's REQUIRE_* macros return from this function
    * immediately on failure, and probe/slow_args/cli are all stack-local to
    * this function (destroy_tid was even handed &cli directly). Checking
-   * assertions interleaved with joins, as an earlier version of this test
-   * did, would leave a not-yet-joined thread still running and still
-   * writing into this function's own stack frame - including, for
-   * destroy_tid specifically, still calling chttpclient_destroy on a `cli`
-   * variable that no longer exists - the moment any earlier assertion
-   * failed. A real stack-use-after-return, not just a lost test result. */
+   * assertions interleaved with joins would leave a not-yet-joined thread
+   * still running, and still writing into this function's own stack frame
+   * (including, for destroy_tid specifically, still calling
+   * chttpclient_destroy on a `cli` variable that no longer exists), the
+   * moment any earlier assertion fails: a real stack-use-after-return, not
+   * just a lost test result. */
   pthread_join(probe_tid, NULL);
   for (int i = 0; i < 2; i++) pthread_join(slow_tids[i], NULL);
   pthread_join(destroy_tid, NULL);
@@ -3637,18 +3632,18 @@ TEST(error_codes, unsupported_scheme_returns_invalid_url) {
  * the test can only pass if the library actively resets *resp_out to NULL,
  * not merely leaves an already-NULL value alone (every other test in this
  * file starts resp at NULL, which would trivially "pass" the same assertion
- * even without the fix; see the regression these cover, below). */
+ * even without this guard; see the contract these pin, below). */
 #define SENTINEL_RESP ((chttpcli_response *)(uintptr_t)0xdeadbeefUL)
 
 TEST(error_codes, resp_out_actively_reset_to_null_chttpclient_do) {
-  /* Regression test: chttp_do_internal (the shared implementation behind
-   * chttpclient_do and every convenience wrapper) used to never write
-   * *resp_out on any failure path, leaving it at whatever value the
-   * caller's own local variable held before the call. Since
-   * chttpclient_resp_free() is documented as safe to call with NULL
-   * specifically to license an unconditional-free cleanup idiom, a caller
-   * who did not separately pre-null their own pointer would free/dereference
-   * garbage on any ordinary failure (host down, bad URL, timeout, ...). */
+  /* chttp_do_internal (the shared implementation behind chttpclient_do and
+   * every convenience wrapper) must write *resp_out on every failure path,
+   * not leave it at whatever value the caller's own local variable held
+   * before the call. chttpclient_resp_free() is documented as safe to call
+   * with NULL specifically to license an unconditional-free cleanup idiom,
+   * so a caller who does not separately pre-null their own pointer would
+   * free/dereference garbage on any ordinary failure (host down, bad URL,
+   * timeout, ...). */
   chttpcli_construct(cli);
   chttp_request_t *req = chttp_request_new(
       CHTTP_GET, "ccol-not-a-scheme://example.com/", NULL, NULL);
@@ -3664,9 +3659,9 @@ TEST(error_codes, resp_out_actively_reset_to_null_chttpclient_do) {
 }
 
 TEST(error_codes, resp_out_actively_reset_to_null_convenience_wrappers) {
-  /* Same regression, exercised through every convenience wrapper's OWN
-   * early-return path (before chttp_do_internal is ever reached), which
-   * used to have the identical gap independently. */
+  /* The same contract, exercised through every convenience wrapper's OWN
+   * early-return path (before chttp_do_internal is ever reached), where it
+   * has to hold independently. */
   chttpcli_response *resp;
 
   resp = SENTINEL_RESP;
@@ -3704,9 +3699,9 @@ TEST(error_codes, resp_out_actively_reset_to_null_convenience_wrappers) {
              ccol_http_invalid_url);
   REQUIRE_EQ((void *)resp, NULL);
 
-  /* NULL url specifically: also exercised, since the fix deliberately
-   * checks/nulls resp_out BEFORE the url check, not just before whatever
-   * happened to be the very first failure condition previously. */
+  /* NULL url specifically: the reset deliberately checks/nulls resp_out
+   * BEFORE the url check, so it must hold for this failure condition too,
+   * not only for the ones reached further in. */
   resp = SENTINEL_RESP;
   REQUIRE_EQ(chttp_get(NULL, &resp), ccol_invalid_args);
   REQUIRE_EQ((void *)resp, NULL);
@@ -3718,9 +3713,9 @@ TEST(error_codes, resp_out_actively_reset_to_null_convenience_wrappers) {
 }
 
 TEST(error_codes, resp_out_actively_reset_to_null_chttpclient_do_pooled) {
-  /* chttpclient_do_pooled already did this correctly before this session's
-   * other fixes; kept as an explicit regression guard against it
-   * regressing back to Tier 1's old behavior. */
+  /* Tier 3's chttpclient_do_pooled owes the caller the identical *resp_out
+   * reset contract as Tier 1; pinned explicitly here so the two tiers
+   * cannot drift apart. */
   chttpcli_construct(cli);
   chttp_request_t *req = chttp_request_new(
       CHTTP_GET, "ccol-not-a-scheme://example.com/", NULL, NULL);
@@ -3738,9 +3733,9 @@ TEST(error_codes, resp_out_actively_reset_to_null_chttpclient_do_pooled) {
 #undef SENTINEL_RESP
 
 TEST(error_codes, embedded_crlf_in_path_rejected_end_to_end) {
-  /* End-to-end regression test for the request-line-injection bug the
-   * url_parsing.path_with_embedded_crlf_is_invalid group already covers at
-   * the parser level: chttpclient_do (Tier 1) itself must refuse to send a
+  /* End-to-end coverage of the request-line-injection vector that the
+   * url_parsing.path_with_embedded_crlf_is_invalid group pins at the parser
+   * level: chttpclient_do (Tier 1) itself must refuse to send a
    * request whose URL smuggles a raw CR/LF byte through its path, rather
    * than serializing it verbatim onto the wire as an injected header line
    * or a second, smuggled request. No live connection should even be
@@ -3872,10 +3867,9 @@ TEST(max_response_body_size, chunked_body_rejected_reactively) {
    * up-front length to check), so, like the EOF-delimited case above, only
    * the reactive per-append check in _sink_buffered can catch it once the
    * cumulative body ("Hello, chunked world!", 21 bytes, assembled from two
-   * separate chunks) exceeds the configured cap. Regression coverage for a
-   * previously entirely untested combination: max_response_body_size's own
-   * doc comment documents it applies to every body-framing mode, but no
-   * test exercised it against a chunked body specifically. */
+   * separate chunks) exceeds the configured cap. max_response_body_size's
+   * own doc comment states that it applies to every body-framing mode; this
+   * is the case that pins it for a chunked body specifically. */
   chttpcli_construct(cli);
   REQUIRE_EQ(chttpclient_set_max_response_body_size(cli, 5), ccol_success);
 
@@ -3923,14 +3917,14 @@ TEST(max_response_body_size, redirect_hop_body_exempt_from_the_cap) {
 
 TEST(max_response_body_size,
      interim_1xx_oversized_content_length_exempt_from_the_cap) {
-  /* Regression test for a real bug: _on_headers_complete's up-front
-   * too-large check fired on ANY message's declared Content-Length,
-   * including a discarded 1xx interim response's own (RFC 7230
-   * SS3.3.2-violating) one, failing the WHOLE request with
-   * ccol_msg_too_large even though the real, delivered final response
-   * ("{\"status\":\"ok\"}", 16 bytes) is well within the cap configured
-   * below. /early-hints-oversized-content-length's own "103 Early Hints"
-   * declares "Content-Length: 999999". */
+  /* _on_headers_complete's up-front too-large check must not fire on a
+   * discarded 1xx interim response's own (RFC 7230 SS3.3.2-violating)
+   * declared Content-Length. Applying it to ANY message's declared length
+   * fails the WHOLE request with ccol_msg_too_large even though the real,
+   * delivered final response ("{\"status\":\"ok\"}", 16 bytes) is well
+   * within the cap configured below.
+   * /early-hints-oversized-content-length's own "103 Early Hints" declares
+   * "Content-Length: 999999". */
   chttpcli_construct(cli);
   REQUIRE_EQ(chttpclient_set_max_response_body_size(cli, 100), ccol_success);
 
@@ -3952,11 +3946,11 @@ TEST(max_response_body_size,
 }
 
 TEST(max_response_body_size, head_response_oversized_content_length_exempt) {
-  /* Regression test for a real bug: _on_headers_complete's up-front
-   * too-large check did not exclude a HEAD response, whose Content-Length
-   * describes what a GET would have returned (RFC 7231 SS4.3.2) but is
-   * never followed by any actual body bytes; /head-oversized-content-length
-   * declares "Content-Length: 999999" with no body on the wire at all. */
+  /* _on_headers_complete's up-front too-large check must exclude a HEAD
+   * response, whose Content-Length describes what a GET would have returned
+   * (RFC 7231 SS4.3.2) but is never followed by any actual body bytes;
+   * /head-oversized-content-length declares "Content-Length: 999999" with
+   * no body on the wire at all. */
   chttpcli_construct(cli);
   REQUIRE_EQ(chttpclient_set_max_response_body_size(cli, 100), ccol_success);
 
@@ -3978,13 +3972,13 @@ TEST(max_response_body_size, head_response_oversized_content_length_exempt) {
 }
 
 TEST(max_response_body_size, response_304_oversized_content_length_exempt) {
-  /* Regression test for a real bug: _on_headers_complete's up-front
-   * too-large check excluded 1xx and HEAD, but not 204/304, even though RFC
-   * 7230 SS3.3 treats all of these identically for body-framing purposes and
-   * chttp1_parser.c already unconditionally forces no_body for 204/304
-   * regardless of any declared Content-Length. A 304 commonly carries the
-   * original resource's own (potentially large) Content-Length per RFC 7232
-   * SS4.1 - a real, common pattern for a conditional GET against a CDN. */
+  /* _on_headers_complete's up-front too-large check must exclude 204/304
+   * just as it excludes 1xx and HEAD: RFC 7230 SS3.3 treats all of these
+   * identically for body-framing purposes, and chttp1_parser.c already
+   * unconditionally forces no_body for 204/304 regardless of any declared
+   * Content-Length. A 304 commonly carries the original resource's own
+   * (potentially large) Content-Length per RFC 7232 SS4.1, a real, common
+   * pattern for a conditional GET against a CDN. */
   chttpcli_construct(cli);
   REQUIRE_EQ(chttpclient_set_max_response_body_size(cli, 100), ccol_success);
 
@@ -4077,14 +4071,13 @@ TEST(max_response_body_size, streaming_path_is_unaffected_by_the_cap) {
 /* ========================================================================== */
 /*                     CHUNKED RESPONSE TESTS                                 */
 /*                                                                            */
-/* /chunked-body sends a genuine chunked-transfer-encoded response (two data */
-/* chunks plus the terminating zero-length chunk, no Content-Length). Real   */
-/* gap this group closes: chttp1_parser.c's own chunked-decoding logic had  */
-/* dedicated unit coverage (tests_parser.c), and chunked REQUEST bodies were */
-/* exercised end to end, but nothing previously sent chttpclient a genuine   */
-/* chunked RESPONSE, so the client-side wiring (multi-chunk reassembly       */
-/* through _chttp_read_message / the async on-readable loop, and post-       */
-/* chunked-body keep-alive) had no integration coverage on either tier.     */
+/* /chunked-body sends a genuine chunked-transfer-encoded response (two data  */
+/* chunks plus the terminating zero-length chunk, no Content-Length). This    */
+/* group is the only integration coverage, on either tier, of the client-side */
+/* wiring for a chunked RESPONSE: multi-chunk reassembly through              */
+/* _chttp_read_message / the async on-readable loop, plus post-chunked-body   */
+/* keep-alive. chttp1_parser.c's own chunked-decoding logic is covered as a   */
+/* unit separately (tests_parser.c), as are chunked REQUEST bodies.           */
 /* ========================================================================== */
 
 TEST(chunked_response, decoded_correctly) {
@@ -4108,10 +4101,10 @@ TEST(chunked_response, decoded_correctly) {
 TEST(chunked_response, connection_reused_after_chunked_body) {
   /* Chunked framing has its own explicit end marker (the zero-length final
    * chunk), so, exactly like a Content-Length-framed body, the connection
-   * remains keep-alive-eligible; a bug that left keep_alive miscomputed
-   * after a chunked body (or that failed to fully drain/resync past the
-   * terminating chunk) would show up here as a second, unnecessary accept
-   * instead of a reused connection. */
+   * remains keep-alive-eligible. A miscomputed keep_alive after a chunked
+   * body, or a failure to fully drain/resync past the terminating chunk,
+   * shows up here as a second, unnecessary accept instead of a reused
+   * connection. */
   char url[160];
   make_url(url, sizeof(url), "/chunked-body");
 
@@ -4140,8 +4133,8 @@ TEST(chunked_response, connection_reused_after_chunked_body) {
 /* ========================================================================== */
 /*                     KEEP-ALIVE / IDLE POOL TESTS                           */
 /*                                                                            */
-/* These exercise mechanics that did not exist under the old libcurl-backed  */
-/* implementation: the client's own hand-rolled connection reuse.           */
+/* These exercise the client's own hand-rolled connection reuse: the idle     */
+/* pool, its liveness probe, and per-origin keying.                           */
 /* ========================================================================== */
 
 TEST(keepalive, sequential_requests_reuse_connection) {
@@ -4229,7 +4222,7 @@ TEST(keepalive, concurrent_requests_exceeding_idle_cap_no_crash) {
    * dispatch_no_uaf's identical comment - guards against a stack-use-
    * after-return if pthread_create itself fails partway through this
    * loop, since threads[]/args[] are stack-local. Without this, a failed
-   * pthread_create left threads[i] uninitialized and the join loop below
+   * pthread_create leaves threads[i] uninitialized and the join loop below
    * would call pthread_join on a garbage pthread_t, which is undefined
    * behavior and can hang this whole test binary rather than fail cleanly. */
   int created = 0;
@@ -4270,13 +4263,13 @@ extern size_t _chttpclient_idle_pools_async_key_count_for_tests(
 extern void _chttpclient_set_max_idle_origins_for_tests(size_t n);
 
 TEST(max_idle_origins, tier1_distinct_origins_bounded_and_reclaimed) {
-  /* Regression test for two related fixes in _idle_pool_take/_idle_pool_
-   * offer:
+  /* Regression test for two related properties of _idle_pool_take/
+   * _idle_pool_offer:
    *
-   * (1) A per-origin idle-pool list, once popped down to empty, used to
-   *     leave its own (now-empty) chmap entry behind permanently rather
-   *     than being pruned - closed by making _idle_pool_take delete the
-   *     entry the moment a pop empties its list.
+   * (1) A per-origin idle-pool list, once popped down to empty, must not
+   *     leave its own (now-empty) chmap entry behind permanently:
+   *     _idle_pool_take deletes the entry the moment a pop empties its
+   *     list.
    *
    * (2) Pruning alone does not bound growth for an origin visited exactly
    *     once and never revisited (a crawler pattern): nothing ever pops
@@ -4350,17 +4343,17 @@ TEST(max_idle_origins, tier1_distinct_origins_bounded_and_reclaimed) {
   int accepts_after_unix = test_server_accept_count();
   REQUIRE_EQ(accepts_after_unix - accepts_before_unix, 2);
 
-  /* Reclamation, proving fix (1) directly (not just (2) above): pop IPv4's
-   * one pooled connection via an ordinary, successful reuse - popping the
-   * LAST entry in an origin's list prunes that origin's own map entry
+  /* Reclamation, proving property (1) directly (not just (2) above): pop
+   * IPv4's one pooled connection via an ordinary, successful reuse. Popping
+   * the LAST entry in an origin's list prunes that origin's own map entry
    * immediately, in the very same locked section as the pop, regardless of
    * whether the popped connection later turns out alive or dead. /get sends
    * a real "Connection: close" (unlike /keepalive), so the reused
-   * connection is torn down afterward rather than re-offered - IPv4's
-   * pruned entry is never recreated, making the prune permanently
-   * observable rather than immediately masked by a fresh offer. If pruning
-   * were broken, IPv4's now-empty entry would still be sitting in the map,
-   * and the key count below would read 2, not 1. */
+   * connection is torn down afterward rather than re-offered; IPv4's pruned
+   * entry is never recreated, making the prune permanently observable
+   * rather than immediately masked by a fresh offer. This check is
+   * non-vacuous: if pruning were broken, IPv4's now-empty entry would still
+   * be sitting in the map and the key count below would read 2, not 1. */
   char url4_close[160];
   make_url(url4_close, sizeof(url4_close), "/get");
   chttp_request_t *req4b = chttp_request_new(CHTTP_GET, url4_close, NULL, NULL);
@@ -4430,10 +4423,10 @@ TEST(url_parsing, trailing_garbage_after_valid_port_returns_invalid_url) {
   /* Regression test: the port-digit loop stops at the first non-digit
    * byte, whatever it is; without an explicit check that byte is one of
    * '\0'/'/'/'?'/'#' afterward, trailing garbage right after an otherwise
-   * syntactically valid port (here "abc" right after "80") used to fall
-   * through into the path/query computation as though "abc/get" were the
-   * request path, silently sending the request to a different target than
-   * the URL string names instead of being rejected outright. Distinct from
+   * syntactically valid port (here "abc" right after "80") falls through
+   * into the path/query computation as though "abc/get" were the request
+   * path, silently sending the request to a different target than the URL
+   * string names instead of being rejected outright. Distinct from
    * non_numeric_port_returns_invalid_url above, which covers no digits at
    * all ("abc" with no leading valid port digits). */
   chttpcli_response *resp = NULL;
@@ -4524,12 +4517,12 @@ TEST(url_parsing, ipv6_empty_brackets_is_invalid) {
 }
 
 TEST(url_parsing, host_with_embedded_crlf_is_invalid) {
-  /* Regression test: the host scan loop stops at ':'/'/'/'?'/'#' but not at
-   * a raw CR/LF byte, so a URL string with embedded control characters in
-   * the authority component (however the caller constructed it) would
-   * previously be carried verbatim into url->host and then into the
-   * synthesized "host: " header line, letting it inject extra header lines
-   * onto the wire. Must be rejected as an invalid URL instead. */
+  /* The host scan loop stops at ':'/'/'/'?'/'#' but not at a raw CR/LF
+   * byte, so without an explicit rejection a URL string with embedded
+   * control characters in the authority component (however the caller
+   * constructed it) is carried verbatim into url->host and then into the
+   * synthesized "host: " header line, injecting extra header lines onto the
+   * wire. Must be rejected as an invalid URL instead. */
   ccol_retval_t rv = _chttp_parse_url_for_tests(
       "http://evil.com\r\nx-injected:1/path", NULL, NULL, NULL, NULL, NULL,
       NULL, NULL, NULL, NULL);
@@ -4544,15 +4537,15 @@ TEST(url_parsing, ipv6_host_with_embedded_crlf_is_invalid) {
 }
 
 TEST(url_parsing, path_with_embedded_crlf_is_invalid) {
-  /* Regression test: unlike the host component (see the two tests above),
-   * path_and_query was constructed with no CR/LF validation at all, so a raw
-   * (non-percent-encoded) control byte embedded in a URL's path was carried
-   * verbatim into path_and_query and then into the request line's
-   * request-target by _serialize_request ("METHOD <path_and_query>
-   * HTTP/1.1\r\n"), letting a caller-constructed URL string terminate the
-   * request line early and inject an arbitrary extra header line, or a
-   * whole smuggled second request. Must be rejected as an invalid URL,
-   * exactly like the same bytes in the host component already are. */
+  /* path_and_query must be CR/LF-validated exactly like the host component
+   * (see the two tests above). Without that, a raw (non-percent-encoded)
+   * control byte embedded in a URL's path is carried verbatim into
+   * path_and_query and then into the request line's request-target by
+   * _serialize_request ("METHOD <path_and_query> HTTP/1.1\r\n"), letting a
+   * caller-constructed URL string terminate the request line early and
+   * inject an arbitrary extra header line, or a whole smuggled second
+   * request. Must be rejected as an invalid URL, exactly like the same
+   * bytes in the host component. */
   ccol_retval_t rv = _chttp_parse_url_for_tests(
       "http://example.com/a\r\nX-Injected: 1", NULL, NULL, NULL, NULL, NULL,
       NULL, NULL, NULL, NULL);
@@ -4682,9 +4675,9 @@ TEST(url_parsing, no_userinfo_means_no_auto_authorization) {
 }
 
 TEST(url_parsing, fragment_is_stripped_from_wire) {
-  /* If the fragment leaked into the request line (the pre-fix bug), the
-   * server would see path "/get#section" and fall through to its 404
-   * handler instead of matching "/get". */
+  /* This test is non-vacuous: if the fragment leaked into the request
+   * line, the server would see path "/get#section" and fall through to its
+   * 404 handler instead of matching "/get". */
   char base[128];
   make_url(base, sizeof(base), "/get");
   char url[160];
@@ -4728,15 +4721,15 @@ TEST(relative_redirects, rfc3986_5_4_reference_table) {
    * removal (RFC 3986 SS5.2.4) operates on the path component only, and a
    * query value must never be reinterpreted as path navigation, even when
    * it happens to contain slashes and dots that would otherwise look like
-   * dot segments (regression coverage for a bug where the absolute-path
-   * branch fed the whole "path?query" string into remove_dot_segments,
-   * corrupting both the path and the query whenever the query contained a
-   * "/../"-aligned sequence). Also covers the table's own "#s"/"g#s" cases:
+   * dot segments; feeding the whole "path?query" string into
+   * remove_dot_segments corrupts both the path and the query whenever the
+   * query contains a "/../"-aligned sequence, which these cases catch. Also
+   * covers the table's own "#s"/"g#s" cases:
    * a fragment is never part of what a redirect actually sends to the next
    * hop (RFC 3986 SS3.5; _parse_chttp_url discards one from any URL the
    * same way), so this function's own output never carries one through,
    * regardless of what RFC 3986 SS5.4's own worked example table shows for
-   * T.fragment. "g#/../h" is the actual regression case: a fragment
+   * T.fragment. "g#/../h" is the sharpest of those cases: a fragment
    * containing its own "/../" bytes must be discarded BEFORE dot-segment
    * removal runs, not after, or those bytes get walked as real path
    * navigation and silently resolve to the wrong target. Also covers the
@@ -4808,8 +4801,8 @@ TEST(relative_redirects,
    * both the RFC and a reference implementation (e.g. Python's
    * urllib.parse.urljoin('http://example.com/a/../b?x', '?y') ==
    * 'http://example.com/a/../b?y'). The sibling "#frag" (fragment-only)
-   * case already gets this right today and is included here as a same-base
-   * control to confirm the two stay consistent with each other. */
+   * case is included here as a same-base control, confirming the two stay
+   * consistent with each other. */
   static const struct {
     const char *location;
     const char *expected;
@@ -5083,8 +5076,8 @@ TEST(relative_redirects, live_multi_level_dot_segments) {
 TEST(relative_redirects, live_absolute_path_query_with_slashes_not_corrupted) {
   /* End-to-end regression test (not just at the _resolve_redirect_url unit
    * level): an absolute-path Location whose query string contains "/../"
-   * must be forwarded to the server byte-for-byte. Before the fix, the
-   * client would mangle the request target into a different path entirely
+   * must be forwarded to the server byte-for-byte. Otherwise the client
+   * mangles the request target into a different path entirely
    * (see /redirect-abs-path-query-with-slashes' own comment in the mock
    * server), which would 404 instead of hitting /query-preserved-target. */
   char url[160];
@@ -5222,11 +5215,11 @@ TEST(redirect_policy, post_307_preserves_method_and_body) {
   chttpclient_resp_free(resp);
 }
 
-/* Regression tests for a real bug: a caller-set Content-Length/Content-Type/
- * Expect header describing the ORIGINAL POST body used to survive, unedited,
- * onto a 301/302/303-downgraded, bodyless GET, since chttp_do_internal only
- * ever rewrote cur_method/cur_body on downgrade, never req->headers itself.
- * A stale Content-Length in particular could make a receiving server (this
+/* Regression tests: a caller-set Content-Length/Content-Type/Expect header
+ * describing the ORIGINAL POST body must not survive, unedited, onto a
+ * 301/302/303-downgraded, bodyless GET. Rewriting only cur_method/cur_body
+ * on downgrade, and never req->headers itself, leaves exactly that. A stale
+ * Content-Length in particular can make a receiving server (this
  * codebase's own chttpserver.c included) block reading a body that would
  * never arrive. /redirect-301-to-count-header downgrades to a GET against
  * /count-header, which reports how many times the header named by
@@ -5304,9 +5297,9 @@ TEST(redirect_policy, stale_expect_stripped_after_downgrade) {
  * 301 drops the POST body and downgrades to GET; hop 1's 307 must preserve
  * that already-downgraded, bodyless GET, not resurrect the original POST
  * body. See chttp_async_chain_t.body_dropped's own comment in
- * chttpclient.c for the Tier 2/3 bug this guards against (Tier 1 never had
- * this bug: chttp_do_internal's cur_body loop-local already persists the
- * drop across hops). */
+ * chttpclient.c for how Tier 2/3 carries that state across its own hop
+ * chain; on Tier 1 it follows structurally, since chttp_do_internal's
+ * cur_body is a loop-local that already persists the drop across hops. */
 TEST(redirect_policy, body_stays_dropped_across_a_later_preserving_hop) {
   char url[160];
   make_url(url, sizeof(url), "/redirect-301-then-307-to-echo");
@@ -5325,14 +5318,13 @@ TEST(redirect_policy, body_stays_dropped_across_a_later_preserving_hop) {
   chttpclient_resp_free(resp);
 }
 
-/* Companion regression tests for the other real bug found alongside the one
- * above: a caller-set (not URL-userinfo-derived) Authorization header used
- * to be forwarded unconditionally across a redirect, including to a
- * different origin, unlike the userinfo-derived case (see
- * credentials.cross_origin_redirect_drops_authorization), leaking whatever
- * credential it carried to the redirect target regardless of origin. Now
- * matches curl's own CVE-2018-1000007-hardened default: dropped, permanently,
- * the first time a hop's origin differs from the ORIGINAL request's. */
+/* A caller-set (not URL-userinfo-derived) Authorization header follows the
+ * same cross-origin rule as the userinfo-derived case (see
+ * credentials.cross_origin_redirect_drops_authorization), matching curl's
+ * own CVE-2018-1000007-hardened default: it is dropped, permanently, the
+ * first time a hop's origin differs from the ORIGINAL request's. Forwarding
+ * it unconditionally across a redirect instead leaks whatever credential it
+ * carries to the redirect target regardless of origin. */
 TEST(credentials, explicit_authorization_header_carried_same_origin_redirect) {
   char url[160];
   make_url(url, sizeof(url), "/redirect-to-echo-auth-same-origin");
@@ -5445,7 +5437,7 @@ TEST(custom_allocator, response_freed_before_client_with_custom_alloc) {
                              .calloc = tracked_calloc,
                              .realloc = tracked_realloc};
   char *err = NULL;
-  chttpcli cli = create_chttpclient_mp(&mp, &err);
+  chttpcli cli = ccol_create_chttpclient_mp(&mp, &err);
   REQUIRE_NE(cli, CHTTPCLI_INVALID);
 
   chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
@@ -5471,12 +5463,12 @@ TEST(custom_allocator, response_freed_before_client_with_custom_alloc) {
 /* ========================================================================== */
 
 TEST(http, run_query_borrowed_map_mixed_case_ct_no_duplication) {
-  /* Regression test for Bug 2: _serialize_request used to look up
-   * "content-type" via an exact-key chmap lookup, so a borrowed chmap with a
-   * key like "Content-Type" (mixed case) was not detected, and auto-injection
-   * from body.content_type added a second Content-Type header.
+  /* Regression test: _serialize_request must not look up "content-type"
+   * via an exact-key chmap lookup. A borrowed chmap with a key like
+   * "Content-Type" (mixed case) would go undetected, and auto-injection
+   * from body.content_type would add a second Content-Type header.
    *
-   * The fix uses a case-insensitive linear scan (_scan_header_presence) so
+   * A case-insensitive linear scan (_scan_header_presence) is used so
    * that the existing header is found regardless of the key's case. */
   char url[128];
   make_url(url, sizeof(url), "/count-content-type");
@@ -5554,19 +5546,20 @@ TEST(http, patch_borrowed_map_mixed_case_ct_no_duplication) {
 /* ========================================================================== */
 
 /*
- * Regression tests for the same bug class as the Content-Type tests above,
- * generalized to the other five headers _serialize_request auto-injects a
- * default for (Accept, User-Agent, Content-Length, Authorization, Expect):
- * chttp_request_get_header's exact-key lookup (against a lower-cased query
- * string) missed a borrowed chmap's naturally-cased key (e.g. "Accept"),
- * so the auto-injected default was added ON TOP OF the caller's own header
- * instead of being suppressed by it, producing two conflicting lines on the
- * wire. _map_has_content_type's case-insensitive scan was the fix for
- * Content-Type specifically; _scan_header_presence generalizes it to all
- * six checks in one pass. Each case below sets exactly one mixed-case
- * header via a borrowed map (chttp_run_query, never routed through
- * chttp_request_set_header's own lower-casing) and asserts /count-header
- * sees exactly one occurrence of that header line on the wire.
+ * The same contract as the Content-Type tests above, generalized to the
+ * other five headers _serialize_request auto-injects a default for (Accept,
+ * User-Agent, Content-Length, Authorization, Expect): presence detection
+ * must be case-insensitive. An exact-key lookup (against a lower-cased
+ * query string, as chttp_request_get_header does) misses a borrowed chmap's
+ * naturally-cased key (e.g. "Accept"), so the auto-injected default lands
+ * ON TOP OF the caller's own header instead of being suppressed by it,
+ * producing two conflicting lines on the wire. _map_has_content_type's
+ * case-insensitive scan covers Content-Type specifically;
+ * _scan_header_presence generalizes it to all six checks in one pass. Each
+ * case below sets exactly one mixed-case header via a borrowed map
+ * (chttp_run_query, never routed through chttp_request_set_header's own
+ * lower-casing) and asserts /count-header sees exactly one occurrence of
+ * that header line on the wire.
  */
 
 TEST(http, run_query_borrowed_map_mixed_case_accept_no_duplication) {
@@ -5632,9 +5625,9 @@ TEST(http, run_query_borrowed_map_mixed_case_content_length_no_duplication) {
 TEST(http, run_query_borrowed_map_mixed_case_authorization_no_duplication) {
   /* Only reachable when the URL ALSO carries userinfo credentials (only then
    * does auto_authorization exist for has_auth to suppress); a mixed-case
-   * "Authorization" with no userinfo in the URL was never at risk of
+   * "Authorization" with no userinfo in the URL is never at risk of
    * duplication (nothing else would ever emit an authorization line), so
-   * this case must use a userinfo URL to actually exercise the bug. */
+   * this case must use a userinfo URL to actually exercise the path. */
   char base[128];
   make_url(base, sizeof(base), "/count-header");
   char url[192];
@@ -5693,11 +5686,11 @@ TEST(http, run_query_borrowed_map_case_variant_duplicate_keys_deduplicated) {
    * exactly ONE mixed-case header and check it isn't duplicated by an
    * auto-injected default): a chmap is keyed by exact byte content, so a
    * borrowed map can hold "Host" and "host" as two literally different
-   * entries at once. Before _serialize_request's own case-insensitive
-   * dedup, BOTH reached the wire as separate header lines; two Host headers
-   * is a request RFC 7230 SS5.4 requires a server to reject outright ("more
-   * than one Host header field" is explicitly listed as a 400 condition),
-   * not merely a cosmetic duplicate. */
+   * entries at once. Without _serialize_request's own case-insensitive
+   * dedup, BOTH reach the wire as separate header lines; two Host headers
+   * make a request RFC 7230 SS5.4 requires a server to reject outright
+   * ("more than one Host header field" is explicitly listed as a 400
+   * condition), not merely a cosmetic duplicate. */
   char url[128];
   make_url(url, sizeof(url), "/count-header");
 
@@ -5788,7 +5781,7 @@ TEST(http, run_query_borrowed_map_transfer_encoding_rejected) {
    * before ever opening a connection, i.e. no wire traffic and no leaked
    * resp. Uses a body-carrying method (POST) specifically because that is
    * exactly the case where a silently-accepted Transfer-Encoding header
-   * would have collided with the auto-synthesized Content-Length header. */
+   * would collide with the auto-synthesized Content-Length header. */
   char url[128];
   make_url(url, sizeof(url), "/post");
 
@@ -5827,17 +5820,16 @@ TEST(http, post_body_content_type_crlf_rejected) {
 }
 
 TEST(request, set_header_mismatched_content_length_rejected) {
-  /* Regression test: _serialize_request suppressed its own Content-Length
-   * synthesis whenever ANY content-length header was present and then
-   * emitted the caller's value verbatim, with no cross-check against the
-   * body bytes actually appended a few lines later - a caller-set
-   * Content-Length that disagreed with the real body length produced a
-   * request whose declared framing desynced from what was actually sent,
-   * the exact "declared framing disagrees with the wire" hazard the
+  /* _serialize_request suppresses its own Content-Length synthesis
+   * whenever ANY content-length header is present, and then emits the
+   * caller's value verbatim, so it must cross-check that value against the
+   * body bytes it actually appends a few lines later. Without that check, a
+   * caller-set Content-Length disagreeing with the real body length
+   * produces a request whose declared framing desyncs from what is actually
+   * sent: the exact "declared framing disagrees with the wire" hazard the
    * Transfer-Encoding rejection (set_header_rejects_transfer_encoding,
-   * above) already guards against, just reachable through a mismatched
-   * length instead of a wrong transfer-coding. Must fail before ever
-   * opening a connection. */
+   * above) guards against, reached through a mismatched length instead of a
+   * wrong transfer-coding. Must fail before ever opening a connection. */
   char url[128];
   make_url(url, sizeof(url), "/post");
 
@@ -5857,14 +5849,14 @@ TEST(request, set_header_mismatched_content_length_rejected) {
 }
 
 TEST(request, set_header_content_length_leading_sign_rejected) {
-  /* Regression test: the mismatch check above validated the numeric VALUE
-   * of a caller-set Content-Length via strtoull, which (unlike this
-   * codebase's own request-parsing chttp1_parser.c, used by chttpserver.c)
-   * tolerates a leading '+'/'-' sign before the digits. A value like "+22"
-   * numerically equal to the real body length used to pass this check and
-   * be written verbatim onto the wire as "content-length: +22\r\n", a
-   * header this library's own server-side parser rejects outright as
-   * "Invalid Content-Length" despite the client having accepted it. */
+  /* The mismatch check above cannot rest on a caller-set Content-Length's
+   * numeric VALUE alone: strtoull (unlike this codebase's own
+   * request-parsing chttp1_parser.c, used by chttpserver.c) tolerates a
+   * leading '+'/'-' sign before the digits. A value like "+22" numerically
+   * equal to the real body length would otherwise pass that check and be
+   * written verbatim onto the wire as "content-length: +22\r\n", a header
+   * this library's own server-side parser rejects outright as "Invalid
+   * Content-Length" despite the client having accepted it. */
   char url[128];
   make_url(url, sizeof(url), "/post");
 
@@ -5888,11 +5880,12 @@ TEST(request, set_header_content_length_leading_sign_rejected) {
 }
 
 TEST(request, set_header_content_length_embedded_whitespace_rejected) {
-  /* Same class of gap as set_header_content_length_leading_sign_rejected
+  /* The same hazard as set_header_content_length_leading_sign_rejected
    * above, reached via a leading space instead of a sign: strtoull skips
    * leading whitespace before parsing digits, so " 22" (numerically equal
-   * to the real body length) used to pass the mismatch check and reach the
-   * wire as "content-length:  22\r\n" (two spaces after the colon). */
+   * to the real body length) would otherwise pass the mismatch check and
+   * reach the wire as "content-length:  22\r\n" (two spaces after the
+   * colon). */
   char url[128];
   make_url(url, sizeof(url), "/post");
 
@@ -5918,8 +5911,8 @@ TEST(request, set_header_content_length_embedded_whitespace_rejected) {
 TEST(request, set_header_content_length_leading_zeros_still_accepted) {
   /* A leading-zero-padded value (e.g. "00022") is a plain digit string
    * (chttp1_parser.c's own parse_uint64_decimal has no leading-zero
-   * restriction either), so it must still be accepted: the stricter
-   * digit-only validation added for the '+'/whitespace gap above must not
+   * restriction either), so it must still be accepted: the digit-only
+   * validation that closes the '+'/whitespace cases above must not
    * over-reject this legitimate, if unusual, form. */
   char url[128];
   make_url(url, sizeof(url), "/post");
@@ -5969,16 +5962,16 @@ TEST(http, run_query_borrowed_map_mismatched_content_length_rejected) {
 }
 
 TEST(http, set_header_host_reaches_the_wire) {
-  /* Regression test: the header-emission loop in _serialize_request used to
-   * unconditionally skip re-emitting any "host" entry from req->headers,
-   * assuming it had "already [been] emitted above"; but the synthesis
-   * block above only ever runs when no Host header is present. The result
-   * was that a caller-supplied Host header (via the fully-documented,
-   * always-lower-cased chttp_request_set_header path, not even a borrowed-
-   * map case-sensitivity issue) was silently dropped from the wire
-   * entirely: no synthesized line, and no user-supplied line either. This
-   * uses /echo-header-raw to check the ACTUAL value the server received,
-   * not just a count. */
+  /* The header-emission loop in _serialize_request must not
+   * unconditionally skip re-emitting a "host" entry from req->headers on
+   * the assumption that it was "already emitted above": the synthesis block
+   * there only ever runs when no Host header is present. Skipping
+   * unconditionally drops a caller-supplied Host header from the wire
+   * entirely (no synthesized line, and no user-supplied line either), even
+   * one set through the fully-documented, always-lower-cased
+   * chttp_request_set_header path, so this is not merely a borrowed-map
+   * case-sensitivity concern. Uses /echo-header-raw to check the ACTUAL
+   * value the server received, not just a count. */
   char url[128];
   make_url(url, sizeof(url), "/echo-header-raw");
 
@@ -6106,11 +6099,11 @@ TEST(http, delete_body_not_transmitted) {
 }
 
 TEST(http, delete_with_body_content_type_not_sent) {
-  /* Regression test: _serialize_request used to emit a "content-type:"
-   * header whenever req->body.content_type was set, regardless of whether
+  /* Regression test: _serialize_request must not emit a "content-type:"
+   * header whenever req->body.content_type is set, regardless of whether
    * the method actually carries a body onto the wire at all. For DELETE
    * (see delete_body_not_transmitted above: the body itself is never sent),
-   * that meant a request could reach the server advertising a content-type
+   * that would let a request reach the server advertising a content-type
    * for a body that was never transmitted, with no Content-Length either.
    * The content-type synthesis must be gated by the exact same
    * body_carrying_method check the body-append and Content-Length synthesis
@@ -6192,26 +6185,26 @@ TEST(expect_continue, server_rejects_without_100) {
 }
 
 TEST(expect_continue, direct_rejection_without_100_never_pools_connection) {
-  /* Regression test: a real bug in _chttp_send_and_read's "server answered
-   * directly" branch only forced *keep_alive_out false when trailing bytes
-   * happened to follow the response; otherwise it trusted
-   * chttp1_should_keep_alive()'s verdict from the response's own Connection
-   * header alone, even though the request's declared body was never sent
-   * on this connection. RFC 7231 SS5.1.1 only SHOULDs (not MUSTs) a server
-   * close the connection in this situation, so a connection could be
-   * pooled and later reused while the server was still, from its own
-   * perspective, mid-way through reading the rejected request - letting an
-   * unrelated later request's bytes on that reused connection be
-   * misattributed as a continuation of the first request's body.
+  /* _chttp_send_and_read's "server answered directly" branch must force
+   * *keep_alive_out false unconditionally, not only when trailing bytes
+   * happen to follow the response. Trusting chttp1_should_keep_alive()'s
+   * verdict from the response's own Connection header alone ignores the
+   * fact that the request's declared body was never sent on this
+   * connection, and RFC 7231 SS5.1.1 only SHOULDs (not MUSTs) a server
+   * close the connection in this situation; the connection is then pooled
+   * and later reused while the server is still, from its own perspective,
+   * mid-way through reading the rejected request, so an unrelated later
+   * request's bytes on that reused connection are misattributed as a
+   * continuation of the first request's body.
    *
    * /expect-continue-reject-keepalive answers 417 directly (no "100
    * Continue", body never read), exactly like /expect-continue-reject, but
    * deliberately leaves the connection open instead of closing it,
    * simulating exactly that kind of naive-but-technically-compliant
-   * server. Verified deterministically via the accept count: the buggy
-   * behavior reuses the connection (accept count only rises by 1 across
-   * both requests); the fix always opens a fresh connection for the second,
-   * unrelated request (accept count rises by 2). */
+   * server. The accept count is the deterministic signal: pooling the
+   * connection would make it rise by only 1 across both requests, while the
+   * required behavior always opens a fresh connection for the second,
+   * unrelated request (a rise of 2). */
   char url1[160], url2[160];
   make_url(url1, sizeof(url1), "/expect-continue-reject-keepalive");
   make_url(url2, sizeof(url2), "/keepalive");
@@ -6252,17 +6245,16 @@ TEST(expect_continue, direct_rejection_without_100_never_pools_connection) {
 TEST(
     expect_continue,
     dead_connection_after_100_with_fake_leftover_final_not_retried_with_stale_state) {
-  /* Regression test for a real bug in _chttp_read_message: *any_bytes_read_out
-   * was documented and implemented to exclude carry_in bytes (bytes already
-   * read off the wire in an earlier call and threaded forward), even though
-   * a non-empty carry_in is fed straight into the parser here and can invoke
-   * on_header/on_headers_complete/on_body against the caller's pctx/body
-   * sink exactly as a live read would. chttp_do_internal's reused-connection
-   * retry-once safety net keys off *any_bytes_read_out to decide whether
-   * nothing has been parsed yet; with the bug, a doomed carry-in parse could
-   * populate pctx/the body buffer with a stale response's headers and a body
-   * prefix, and the retry would then reissue the request on a fresh
-   * connection while reusing that SAME, already-polluted pctx/buffer -
+  /* _chttp_read_message's *any_bytes_read_out must NOT exclude carry_in
+   * bytes (bytes already read off the wire in an earlier call and threaded
+   * forward): a non-empty carry_in is fed straight into the parser here and
+   * can invoke on_header/on_headers_complete/on_body against the caller's
+   * pctx/body sink exactly as a live read would. chttp_do_internal's
+   * reused-connection retry-once safety net keys off *any_bytes_read_out to
+   * decide whether nothing has been parsed yet; unguarded, a doomed
+   * carry-in parse populates pctx/the body buffer with a stale response's
+   * headers and a body prefix, and the retry then reissues the request on a
+   * fresh connection while reusing that SAME, already-polluted pctx/buffer,
    * silently mixing the stale attempt's data into the response actually
    * delivered to the caller.
    *
@@ -6270,28 +6262,27 @@ TEST(
    * followed, in the same send() (same TCP segment), by what looks like a
    * complete final response header block (status 200, distinctive
    * "x-stale" header, declared Content-Length: 100) plus a body prefix
-   * under 100 bytes - then closes without ever completing that body. The
-   * fix must surface a hard failure (the doomed carry-in parse disqualifies
-   * the safe-retry path) rather than silently deliver a response built from
-   * a mix of the stale leftover and (if a retry were still attempted) a
-   * fresh connection's data.
+   * under 100 bytes, then closes without ever completing that body. The
+   * required outcome is a hard failure (the doomed carry-in parse
+   * disqualifies the safe-retry path) rather than a response silently built
+   * from a mix of the stale leftover and, if a retry were still attempted,
+   * a fresh connection's data.
    *
    * The reused-connection retry-once safety net (chttp_do_internal) only
    * ever triggers for a REUSED (pooled) connection, never a freshly opened
-   * one - so the request to /expect-continue-fake-final-then-die must
-   * itself be the SECOND request on this client, reusing a connection a
-   * prior successful /keepalive request already returned to the idle pool,
-   * or the retry path this test targets is never even reached. Both the
-   * fixed (no retry at all) and the buggy (retries once, onto a fresh
-   * connection that hits this same route and also dies, since the route's
-   * behavior is unconditional) code paths end up returning an error here,
-   * so the return code alone cannot distinguish them - the decisive signal
-   * is the accept count: the fix opens exactly ONE connection total (the
-   * first /keepalive request's; the second request's failed reuse attempt
-   * is never retried), while the bug opens a SECOND one for the doomed
-   * retry. Uses a dedicated client (not the process-wide default one) so
-   * no unrelated test's pooled connection to this origin can skew the
-   * count. */
+   * one, so the request to /expect-continue-fake-final-then-die must itself
+   * be the SECOND request on this client, reusing a connection a prior
+   * successful /keepalive request already returned to the idle pool, or the
+   * retry path this test targets is never even reached. Both outcomes (no
+   * retry at all, and a retry onto a fresh connection that hits this same
+   * route and also dies, since the route's behavior is unconditional) end
+   * in an error here, so the return code alone cannot distinguish them; the
+   * decisive signal is the accept count. The required behavior opens
+   * exactly ONE connection total (the first /keepalive request's; the
+   * second request's failed reuse attempt is never retried), while a
+   * spurious retry opens a SECOND. Uses a dedicated client (not the
+   * process-wide default one) so no unrelated test's pooled connection to
+   * this origin can skew the count. */
   char url1[160], url2[160];
   make_url(url1, sizeof(url1), "/keepalive");
   make_url(url2, sizeof(url2), "/expect-continue-fake-final-then-die");
@@ -6331,41 +6322,40 @@ TEST(
 }
 
 TEST(expect_continue, dead_connection_after_100_clean_eof_not_retried) {
-  /* Regression test for a real bug in _chttp_send_and_read: once an
-   * explicit "100 Continue" was received and the body sent, a clean,
-   * boundary-aligned EOF on the final response read (no leftover bytes at
-   * all, unlike dead_connection_after_100_with_fake_leftover_final_
-   * not_retried_with_stale_state above, which needs fake trailing bytes in
-   * the same read to trip the fix that test targets) left
-   * *any_bytes_read_out untouched at false. chttp_do_internal's
-   * reused-connection retry-once safety net then treated that exactly like
-   * "nothing was ever sent, safe to retry" and silently resent the WHOLE
-   * request, including the body, to a brand-new connection - even though
-   * the server had already explicitly confirmed (via "100 Continue") that
-   * it was alive and had accepted the body on the first connection moments
-   * earlier. For a non-idempotent request this means the server could
-   * process the body twice.
+  /* In _chttp_send_and_read, once an explicit "100 Continue" has been
+   * received and the body sent, a clean, boundary-aligned EOF on the final
+   * response read (no leftover bytes at all, unlike
+   * dead_connection_after_100_with_fake_leftover_final_not_retried_with_
+   * stale_state above, which needs fake trailing bytes in the same read to
+   * reach the behavior that test targets) must still set
+   * *any_bytes_read_out. Leaving it at false makes chttp_do_internal's
+   * reused-connection retry-once safety net treat the hop exactly like
+   * "nothing was ever sent, safe to retry" and silently resend the WHOLE
+   * request, including the body, to a brand-new connection, even though the
+   * server explicitly confirmed (via "100 Continue") that it was alive and
+   * had accepted the body on the first connection moments earlier. For a
+   * non-idempotent request that means the server processes the body twice.
    *
    * /expect-continue-die-after-100-clean sends "100 Continue" as its own,
    * separate send() call, reads the full declared body (incrementing
    * g_die_after_100_clean_body_recv_count once it has), then closes with NO
-   * further bytes at all - a clean EOF for the would-be final response,
-   * with nothing left over to trip the (already-fixed) carry-in path the
-   * sibling test above exercises.
+   * further bytes at all: a clean EOF for the would-be final response, with
+   * nothing left over to reach the carry-in path the sibling test above
+   * exercises.
    *
    * As with the sibling test, the request to this route must be the SECOND
    * request on this client (reusing a connection a prior successful
    * /keepalive request already returned to the idle pool), or the retry
-   * path being tested is never even reached. Both the fixed (no retry) and
-   * the buggy (retries once, onto a fresh connection that hits this same
-   * route and also dies, since the route's behavior is unconditional) code
-   * paths return an error here, so the return code alone cannot distinguish
-   * them - the decisive signals are the accept count (the fix opens exactly
-   * ONE connection total; the bug opens a SECOND one for the doomed retry)
-   * and the body-receive count (the fix delivers the body to the server
-   * exactly once; the bug delivers it twice). Uses a dedicated client (not
-   * the process-wide default one) so no unrelated test's pooled connection
-   * to this origin can skew either count. */
+   * path being tested is never even reached. Both outcomes (no retry, and a
+   * retry onto a fresh connection that hits this same route and also dies,
+   * since the route's behavior is unconditional) return an error here, so
+   * the return code alone cannot distinguish them. The decisive signals are
+   * the accept count (the required behavior opens exactly ONE connection
+   * total; a spurious retry opens a SECOND) and the body-receive count (the
+   * required behavior delivers the body to the server exactly once; a
+   * spurious retry delivers it twice). Uses a dedicated client (not the
+   * process-wide default one) so no unrelated test's pooled connection to
+   * this origin can skew either count. */
   char url1[160], url2[160];
   make_url(url1, sizeof(url1), "/keepalive");
   make_url(url2, sizeof(url2), "/expect-continue-die-after-100-clean");
@@ -6435,19 +6425,18 @@ TEST(expect_continue, wait_times_out_body_sent_anyway) {
 }
 
 TEST(expect_continue, explicit_expect_header_suppresses_the_wait) {
-  /* Regression test: chttpclient.h documents that expect_continue "has no
-   * effect if... the caller already set an explicit Expect header", and
-   * _serialize_request correctly suppresses EMITTING "expect: 100-continue"
-   * on the wire in that case; but chttp_do_internal's own
-   * use_100_continue computation didn't check for a caller-set Expect
-   * header at all, so the hop still routed through _chttp_send_and_read
-   * and stalled for the full CHTTP_100_CONTINUE_WAIT_MS (1000ms) waiting
-   * for an interim response that, by construction (no "expect:" line was
-   * ever sent), can never arrive. /post is an ordinary route with no
-   * Expect: 100-continue awareness; it just reads the body and responds
-   * immediately, so a correctly-behaving request completes almost
-   * instantly. Slow-if-broken (~1s): that's the whole point of the
-   * elapsed-time assertion below. */
+  /* chttpclient.h documents that expect_continue "has no effect if... the
+   * caller already set an explicit Expect header". _serialize_request
+   * suppresses EMITTING "expect: 100-continue" on the wire in that case,
+   * and chttp_do_internal's own use_100_continue computation must check for
+   * a caller-set Expect header as well; otherwise the hop still routes
+   * through _chttp_send_and_read and stalls for the full
+   * CHTTP_100_CONTINUE_WAIT_MS (1000ms) waiting for an interim response
+   * that, by construction (no "expect:" line was ever sent), can never
+   * arrive. /post is an ordinary route with no Expect: 100-continue
+   * awareness; it just reads the body and responds immediately, so a
+   * correctly-behaving request completes almost instantly. Slow-if-broken
+   * (~1s): that is the whole point of the elapsed-time assertion below. */
   char url[160];
   make_url(url, sizeof(url), "/post");
 
@@ -6480,13 +6469,13 @@ TEST(expect_continue, explicit_expect_header_suppresses_the_wait) {
 
 TEST(expect_continue,
      reused_connection_dies_after_partial_interim_line_retries) {
-  /* Regression test for a real bug in _chttp_send_and_read's timeout branch:
-   * *any_bytes_read_out could be left "true" by an abandoned interim-response
-   * read (a partial, never-completed "100 Continue" fragment) and that would
-   * leak into the SEPARATE, unrelated final-response read that follows a
-   * timeout, incorrectly suppressing chttp_do_internal's reused-connection
-   * retry-once safety net even though the final read itself never received a
-   * single byte of a real response.
+  /* In _chttp_send_and_read's timeout branch, *any_bytes_read_out must not
+   * carry over a "true" left by an abandoned interim-response read (a
+   * partial, never-completed "100 Continue" fragment). Letting it leak into
+   * the SEPARATE, unrelated final-response read that follows a timeout
+   * suppresses chttp_do_internal's reused-connection retry-once safety net
+   * even though the final read itself never received a single byte of a
+   * real response.
    *
    * /expect-continue-timeout-then-die writes an incomplete "100 Con..."
    * fragment (so any_bytes_read_out is set true inside the interim read),
@@ -6496,11 +6485,11 @@ TEST(expect_continue,
    * reused connection.
    *
    * The request as a whole still ends up failing here (the route behaves
-   * identically against the retry's fresh connection too), but the fix's own
-   * effect is directly observable via the server's accept count: with the
-   * fix, chttp_do_internal must open exactly one additional connection to
-   * attempt the safe retry; without it, the stuck any_bytes_read flag skips
-   * the retry entirely and no new connection is ever opened for this second
+   * identically against the retry's fresh connection too), but the guard's
+   * effect is directly observable via the server's accept count:
+   * chttp_do_internal must open exactly one additional connection to
+   * attempt the safe retry, whereas a stuck any_bytes_read flag skips the
+   * retry entirely and opens no new connection at all for this second
    * request. Slow (~1.3s): this is the whole point of the test. */
   char keepalive_url[160], timeout_url[160];
   make_url(keepalive_url, sizeof(keepalive_url), "/keepalive");
@@ -6581,8 +6570,8 @@ TEST(expect_continue,
    * within its own 64-response budget. Tier 1's _chttp_send_and_read hands
    * the continue-wait and the final-response read to two SEPARATE
    * _chttp_read_message_loop calls, each with its own independent discard
-   * counter, so this has always succeeded here; this test exists mainly to
-   * pin that behavior down directly and to give the async counterpart
+   * counter, so the per-phase budget follows structurally here; this test
+   * pins that down directly and gives the async counterpart
    * (async_expect_continue's own test of the same name) a known-good
    * reference to compare against. */
   char url[160];
@@ -6633,11 +6622,11 @@ TEST(expect_continue, ignored_for_bodyless_request) {
 TEST(early_hints, discarded_and_real_response_delivered) {
   /* /early-hints sends "103 Early Hints" (as a SEPARATE message) before the
    * real "200 OK" response, on an ordinary GET with no Expect: 100-continue
-   * involvement at all. Before the general-path fix (_chttp_read_message_
-   * loop, now used by _chttp_read_response_carry), the FIRST message read
-   * off the wire (the 103) was unconditionally treated as the final
-   * response: the caller would see status_code == 103 with an empty body,
-   * while the real "200 OK" sat unread on the wire. */
+   * involvement at all. The general response path
+   * (_chttp_read_message_loop, used by _chttp_read_response_carry) must
+   * discard the 103 and keep reading; treating the FIRST message off the
+   * wire as the final response instead hands the caller status_code == 103
+   * with an empty body while the real "200 OK" sits unread on the wire. */
   char url[160];
   make_url(url, sizeof(url), "/early-hints");
 
@@ -6680,17 +6669,16 @@ TEST(early_hints,
 }
 
 TEST(early_hints, connection_stays_reusable_after_discarding_interim_response) {
-  /* Regression test for the response-desync scenario the general-path fix
-   * closes: without it, the "103" message would be delivered as the (bogus)
-   * final response and the connection (believing itself idle and
-   * keep-alive-eligible) would be pooled with the real "200 OK" still
-   * sitting unread on the wire; the NEXT unrelated request reusing that
-   * connection would then read THAT leftover response instead of its own, a
-   * real cross-request response mix-up. Verified here by running two
-   * /early-hints requests back-to-back on the same client (so the second
-   * very likely reuses the first's pooled connection) and checking that the
-   * SECOND request also gets ITS OWN correct response, not anything left
-   * over from the first. */
+  /* Pins the connection against a response desync: if the "103" message
+   * were delivered as the (bogus) final response, the connection (believing
+   * itself idle and keep-alive-eligible) would be pooled with the real
+   * "200 OK" still sitting unread on the wire, and the NEXT unrelated
+   * request reusing that connection would read THAT leftover response
+   * instead of its own; a real cross-request response mix-up. Verified by
+   * running two /early-hints requests back-to-back on the same client (so
+   * the second very likely reuses the first's pooled connection) and
+   * checking that the SECOND request also gets ITS OWN correct response,
+   * not anything left over from the first. */
   char url[160];
   make_url(url, sizeof(url), "/early-hints");
 
@@ -6713,11 +6701,11 @@ TEST(early_hints, connection_stays_reusable_after_discarding_interim_response) {
 }
 
 TEST(early_hints, tier1_gives_up_after_too_many_interim_responses) {
-  /* Regression test: _chttp_read_message_loop's interim-1xx discard loop
-   * had no iteration cap at all; with this client's default request_
-   * timeout_ms == 0 (no timeout), a server that never stops sending
-   * interim responses (e.g. an endless stream of "103 Early Hints") could
-   * pin this call, and the concurrency-limiter slot it holds, forever.
+  /* _chttp_read_message_loop's interim-1xx discard loop needs an iteration
+   * cap: with this client's default request_timeout_ms == 0 (no timeout), a
+   * server that never stops sending interim responses (e.g. an endless
+   * stream of "103 Early Hints") would otherwise pin this call, and the
+   * concurrency-limiter slot it holds, forever.
    * /endless-early-hints sends 100, comfortably more than
    * CHTTP_MAX_INTERIM_RESPONSES (64), so a correctly-capped client gives up
    * with an error well before the server finishes (or would ever need to
@@ -6739,22 +6727,19 @@ TEST(early_hints, tier1_discards_exactly_64_before_giving_up) {
    * with a fixed 100-hint stream. 64 discarded interim responses followed by
    * a real answer must still succeed (the 64th is the last legal discard).
    *
-   * Regression test for a real bug: _chttp_read_message_loop's cap check
-   * used to run BEFORE attempting to read each message, gating every read
-   * attempt uniformly regardless of whether it would turn out to be interim
-   * or the final response; once 64 interim responses had been discarded, it
-   * refused to even attempt reading whatever came next, so a real, final
-   * response arriving as the very next (65th) message was wrongly rejected
-   * even though only 64 (not 65) interim responses actually needed
-   * discarding. That silently violated this exact documented "after 64
-   * consecutive discarded interim responses" contract by giving up one
-   * message early (64 discarded interim responses, by themselves, were
-   * already enough to trip it, rather than needing a 65th). Moving the cap
-   * check to run only after a message is classified as interim (so it gates
-   * continuing the discard loop, not the read of whatever message comes
-   * next) fixed it, and also brought Tier 1 in line with the async engine's
-   * own equivalent loop (_async_on_readable_impl), which had never gated
-   * the final response this way. */
+   * _chttp_read_message_loop's cap check must run AFTER a message has been
+   * read and classified, never before attempting each read. Gating every
+   * read attempt uniformly, regardless of whether the message turns out to
+   * be interim or final, means that once 64 interim responses have been
+   * discarded the loop refuses to even attempt reading whatever comes next,
+   * so a real, final response arriving as the very next (65th) message is
+   * rejected even though only 64 (not 65) interim responses actually needed
+   * discarding; that gives up one message early and violates the documented
+   * "after 64 consecutive discarded interim responses" contract. Running
+   * the cap check only after a message is classified as interim makes it
+   * gate continuation of the discard loop rather than the read of whatever
+   * comes next, matching the async engine's own equivalent loop
+   * (_async_on_readable_impl), which gates the same way. */
   char url64[160];
   make_url(url64, sizeof(url64), "/early-hints-count/64");
 
@@ -6765,9 +6750,9 @@ TEST(early_hints, tier1_discards_exactly_64_before_giving_up) {
   REQUIRE_EQ(resp64->status_code, 200);
   chttpclient_resp_free(resp64);
 
-  /* One more (65) must fail: this is the boundary the bug above lived at
+  /* One more (65) must fail: that is the far side of the same boundary
    * (see the async counterpart of this test, in the ASYNC ENGINE section
-   * below, for confirmation both tiers now agree exactly). */
+   * below, which pins both tiers to exactly the same cutoff). */
   char url65[160];
   make_url(url65, sizeof(url65), "/early-hints-count/65");
 
@@ -6783,7 +6768,7 @@ TEST(early_hints, tier1_discards_exactly_64_before_giving_up) {
 
 /*
  * White-box tests for chttpclient's lazy, ref-counted, process-wide async
- * engine (chttpclient.c's own static g_client_reactor, an event_loop
+ * engine (chttpclient.c's own static g_client_reactor, a ccol_event_loop
  * instance fully independent of chttpserver's own reactor; this module's own
  * DNS/connect pool + deadline sweep are layered on top of it, backing
  * chttpclient_do_async/pooled-sync). These helpers are compiled only under
@@ -6799,18 +6784,17 @@ extern bool _chttpclient_engine_running_for_tests(void);
 extern ccol_retval_t _chttpclient_engine_acquire_for_tests(void);
 extern void _chttpclient_engine_release_for_tests(void);
 extern size_t _chttp_async_chain_struct_size_for_tests(void);
-/* _client_engine_release() hands the actual teardown (event_loop_destroy of
- * g_client_reactor, stopping the deadline sweep, destroying the DNS pool)
+/* _client_engine_release() hands the actual teardown (ccol_event_loop_destroy
+ * of g_client_reactor, stopping the deadline sweep, destroying the DNS pool)
  * off to a detached reaper thread rather than blocking the caller; necessary
  * since release is routinely called from inside one of the engine's own
  * dispatch callbacks (see the several _client_engine_release call sites in
  * chttpclient.c), where blocking would be unsafe. That makes
  * g_client_reactor_refs reach zero immediately but the actual teardown
- * asynchronous; every test below that triggers a stop calls this afterward
- * so the engine is guaranteed fully quiescent before the test returns;
- * otherwise a reaper thread could still be running when the process exits,
- * racing process teardown (a crash caught by valgrind during development of
- * this suite). */
+ * asynchronous; every test below that triggers a stop calls this afterward so
+ * the engine is guaranteed fully quiescent before the test returns. Without
+ * that, a reaper thread can still be running when the process exits, racing
+ * process teardown; valgrind reports that race as a crash. */
 extern void _chttpclient_engine_wait_for_quiescence_for_tests(void);
 extern size_t _chttpclient_engine_num_reactor_threads_for_tests(void);
 /* Opaque forward declaration: struct chttpclient's real definition is
@@ -6865,7 +6849,7 @@ extern size_t _chttpcli_slot_table_capacity_for_tests(void);
  * treated as if it had failed (real OOM cannot reach this call site: see
  * async_idle_pool.offer_push_failure_no_double_free below for why). */
 extern void _chttpclient_force_offer_push_fail_once_for_tests(void);
-/* Forces _async_submit_hop's very next reused-connection event_loop_modify
+/* Forces _async_submit_hop's very next reused-connection ccol_event_loop_modify
  * call to be treated as if it had failed (real failure cannot reach this
  * call site under ordinary conditions: see
  * async_idle_pool.reactivate_failure_retries_without_uaf below for why). */
@@ -6985,8 +6969,9 @@ TEST(async_engine, num_reactor_threads_defaults_to_cpu_count) {
 }
 
 TEST(async_engine, num_reactor_threads_explicit_value_is_wired_in) {
-  /* A positive override must be the exact value event_loop_create_with_mprocs
-   * actually receives, not merely accepted and then silently ignored. */
+  /* A positive override must be the exact value
+   * ccol_event_loop_create_with_mprocs actually receives, not merely accepted
+   * and then silently ignored. */
   REQUIRE_EQ(chttpcli_set_engine_num_reactor_threads(3), ccol_success);
   REQUIRE_EQ(_chttpclient_engine_acquire_for_tests(), ccol_success);
   REQUIRE_EQ(_chttpclient_engine_num_reactor_threads_for_tests(), (size_t)3);
@@ -7015,7 +7000,7 @@ TEST(async_engine, num_reactor_threads_rejected_while_running) {
  * Functional tests for the Tier 2 async engine (chttpclient_do_async):
  * plain HTTP only (no TLS yet), no redirect-following, no idle-pool reuse;
  * every request opens and then closes a fresh connection. These exercise the
- * real, shared event_loop reactor end to end against the same mock test
+ * real, shared ccol_event_loop reactor end to end against the same mock test
  * server the synchronous (Tier 1) tests use.
  */
 
@@ -7052,14 +7037,13 @@ static void wait_for_async_engine_idle(void) {
  * wakes up via ctpool_future_get()/chttpclient_async_result_get() and reads
  * the ref count immediately (or after a fixed sleep) can observe a
  * momentarily-too-high count that has nothing to do with any real leak.
- * Any assertion comparing this count against an expected value right after a
- * future resolves must poll for it rather than reading it once or waiting a
- * fixed duration; three sites in this file used to do exactly that and were
- * intermittently, reproducibly observed to fail under valgrind's heavier
- * scheduling perturbation (never seen under plain execution), each failure
- * skipping that test's own trailing chttpclient_destroy/wait_for_async_
- * engine_idle cleanup (REQUIRE_EQ returns immediately on failure) and
- * genuinely leaking the client under test.
+ * Any assertion comparing this count against an expected value right after
+ * a future resolves must poll for it rather than reading it once or waiting
+ * a fixed duration. Reading it once fails intermittently under valgrind's
+ * heavier scheduling perturbation (and essentially never under plain
+ * execution), and each such failure skips that test's own trailing
+ * chttpclient_destroy/wait_for_async_engine_idle cleanup (REQUIRE_EQ
+ * returns immediately on failure), genuinely leaking the client under test.
  */
 static int poll_engine_ref_count(int expected) {
   int refs = -1;
@@ -7072,9 +7056,9 @@ static int poll_engine_ref_count(int expected) {
 }
 
 TEST(async_engine, destroy_waits_for_in_flight_async_request) {
-  /* Regression test: __chttpclient_destroy used to only wait for Tier 1's
-   * in_flight_count and Tier 2/3's idle-pooled connection count, never an
-   * ACTIVE (in-flight, not yet idle-pooled) Tier 2/3 request; so
+  /* Regression test: __chttpclient_destroy must wait for an ACTIVE
+   * (in-flight, not yet idle-pooled) Tier 2/3 request, not merely Tier 1's
+   * in_flight_count and Tier 2/3's idle-pooled connection count. Otherwise
    * `f = chttpclient_do_async(cli, req); chttpclient_destroy(cli);`, with
    * no wait on f in between, could free cli out from under a request still
    * connecting/writing/reading on a reactor thread, since chain->cli/
@@ -7103,8 +7087,8 @@ TEST(async_engine, destroy_waits_for_in_flight_async_request) {
   long elapsed_ms =
       (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
   /* Comfortably below /slow's 100ms sleep, so a destroy that returned
-   * near-instantly (the bug) fails this even accounting for scheduling
-   * jitter on a loaded CI machine. */
+   * near-instantly (one that did not wait) fails this even accounting for
+   * scheduling jitter on a loaded CI machine. */
   REQUIRE_GT(elapsed_ms, 50);
 
   /* Stronger than just "eventually gettable": by the time destroy returned,
@@ -7184,16 +7168,15 @@ TEST(async_step_a, eof_delimited_body_without_content_length) {
 }
 
 TEST(async_step_a, hard_read_error_during_eof_delimited_body_reports_error) {
-  /* Regression test for a real bug in _async_on_readable_impl: it used to
-   * treat ANY read failure other than EWOULDBLOCK/EAGAIN identically to a
-   * clean n == 0 EOF, so a genuine transport/TLS error (a TCP RST, a TLS
-   * fatal alert, ...) arriving mid-transfer on a connection using
-   * EOF-delimited body framing (no Content-Length, no chunked
-   * Transfer-Encoding; see eof-delimited-body-ok above) was fed straight
-   * into chttp1_parser_finish() and reported as a successful, complete
-   * response, silently mis-reporting a failed/truncated transfer as
-   * ccol_success. Tier 1 already distinguished these correctly (see
-   * _chttp_read_message); this exercises the same distinction on the async
+  /* _async_on_readable_impl must not treat a read failure other than
+   * EWOULDBLOCK/EAGAIN identically to a clean n == 0 EOF. Doing so feeds a
+   * genuine transport/TLS error (a TCP RST, a TLS fatal alert, ...)
+   * arriving mid-transfer on a connection using EOF-delimited body framing
+   * (no Content-Length, no chunked Transfer-Encoding; see
+   * eof-delimited-body-ok above) straight into chttp1_parser_finish(),
+   * reporting a failed/truncated transfer as a successful, complete
+   * response under ccol_success. Tier 1 draws this distinction in
+   * _chttp_read_message; this exercises the same distinction on the async
    * engine.
    *
    * Uses the /eof-delimited-body route unchanged: its own graceful close is
@@ -7457,9 +7440,10 @@ TEST(async_max_response_body_size,
      interim_1xx_oversized_content_length_exempt_from_the_cap) {
   /* Tier 2/3 counterpart of max_response_body_size.interim_1xx_oversized_
    * content_length_exempt_from_the_cap: both tiers share the same
-   * _on_headers_complete callback, so the same bug (a discarded 1xx
-   * interim response's own oversized declared Content-Length failing the
-   * whole request with ccol_msg_too_large) applied here identically. */
+   * _on_headers_complete callback, so the same failure mode (a discarded
+   * 1xx interim response's own oversized declared Content-Length failing
+   * the whole request with ccol_msg_too_large) would reach here
+   * identically. */
   chttpcli_construct(cli);
   REQUIRE_EQ(chttpclient_set_max_response_body_size(cli, 100), ccol_success);
 
@@ -7491,10 +7475,10 @@ TEST(async_max_response_body_size,
      head_response_oversized_content_length_exempt) {
   /* Tier 2/3 counterpart of max_response_body_size.head_response_oversized_
    * content_length_exempt: both tiers share the same _on_headers_complete
-   * callback, so the same bug (a HEAD response's Content-Length, which
-   * describes what a GET would have returned per RFC 7231 SS4.3.2 but is
-   * never followed by any body bytes, failing the whole request with
-   * ccol_msg_too_large) applied here identically. */
+   * callback, so the same failure mode (a HEAD response's Content-Length,
+   * which describes what a GET would have returned per RFC 7231 SS4.3.2 but
+   * is never followed by any body bytes, failing the whole request with
+   * ccol_msg_too_large) would reach here identically. */
   chttpcli_construct(cli);
   REQUIRE_EQ(chttpclient_set_max_response_body_size(cli, 100), ccol_success);
 
@@ -7625,14 +7609,14 @@ TEST(async_step_a, connection_refused_reports_error) {
 }
 
 TEST(async_step_a, https_connection_refused_reports_error) {
-  /* HTTPS requests are now actually attempted (a future is returned, not
+  /* An https:// request is genuinely attempted (a future is returned, not
    * NULL); this exercises the is_https flag flowing correctly through ctx
    * creation into the connect stage. Nothing listens on this port, so the
    * failure surfaces before any TLS handshake is even attempted, keeping
-   * this test fast; a full end-to-end successful-handshake test lives in
-   * the dedicated tests/chttpclient_tls suite (mirroring how
-   * tests/chttpserver_tls is kept isolated for its own real cert/handshake
-   * needs; see that suite's own top-of-file comment). */
+   * this test fast. Full end-to-end successful-handshake coverage lives in
+   * tests/chttpserver/tests_tls.c, which generates a real throwaway
+   * cert/key pair and drives an actual HTTPS request through chttpclient;
+   * see that suite's own top-of-file comment. */
   chttpcli_construct(cli);
   chttp_request_t *req =
       chttp_request_new(CHTTP_GET, "https://127.0.0.1:1/", NULL, NULL);
@@ -7660,11 +7644,10 @@ TEST(async_step_a, https_handshake_fails_against_plain_http_server) {
    * handshake-failure path, without needing a live TLS-capable fixture.
    * Slow (~5s): the mock server's srv_read_headers has a fixed 5-second
    * SO_RCVTIMEO and a raw TLS ClientHello never contains the "\r\n\r\n" it's
-   * waiting for, so the server sits silent until its own timeout closes the
-   * connection;
-   * there is no per-request timeout enforcement in the async engine yet
-   * (see the "reactor-owned timer/cancellation" roadmap item) to cut this
-   * shorter client-side. */
+   * waiting for, so the server sits silent until its own timeout closes
+   * the connection. This client configures no request timeout (the default
+   * is none, see chttpclient_set_request_timeout), so nothing cuts the wait
+   * short from the client side. */
   chttpcli_construct(cli);
   char url[160];
   make_url(url, sizeof(url), "/get");
@@ -7767,11 +7750,11 @@ TEST(async_step_a, concurrent_requests_all_succeed) {
 TEST(async_early_hints, discarded_and_real_response_delivered) {
   /* Async-tier counterpart of early_hints.discarded_and_real_response_
    * delivered: /early-hints sends "103 Early Hints" (as a SEPARATE message)
-   * before the real "200 OK" response. Before the fix,
-   * _async_on_readable_impl treated the FIRST message it parsed off the
-   * wire (the 103) as the final response unconditionally: the future would
-   * be fulfilled with status_code == 103 and an empty body, while the real
-   * "200 OK" sat unread on the wire. */
+   * before the real "200 OK" response. _async_on_readable_impl must not
+   * treat the FIRST message it parses off the wire (the 103) as the final
+   * response unconditionally, or the future is fulfilled with status_code
+   * == 103 and an empty body while the real "200 OK" sits unread on the
+   * wire. */
   chttpcli_construct(cli);
   char url[160];
   make_url(url, sizeof(url), "/early-hints");
@@ -7854,7 +7837,7 @@ TEST(async_early_hints,
 TEST(async_early_hints,
      connection_stays_reusable_after_discarding_interim_response) {
   /* Async-tier counterpart of early_hints.connection_stays_reusable_after_
-   * discarding_interim_response: without the fix, the connection would be
+   * discarding_interim_response: without this, the connection would be
    * (incorrectly) offered to the Tier 2 idle pool believing itself done,
    * with the real response still unread on the wire, corrupting whichever
    * later request reuses it. Two sequential /early-hints requests on the
@@ -8078,7 +8061,7 @@ TEST(async_expect_continue, dead_connection_after_100_clean_eof_not_retried) {
 
 TEST(async_expect_continue, wait_times_out_body_sent_anyway) {
   /* /post has no Expect: 100-continue awareness at all; exercises the
-   * deadline sweep's own continue_deadline branch (event_loop_modify to
+   * deadline sweep's own continue_deadline branch (ccol_event_loop_modify to
    * write direction, dispatching to _async_on_writable_impl's own
    * CHTTP_ASYNC_AWAITING_CONTINUE branch) rather than a genuine "100
    * Continue" ever being seen. Slow (~1s): this is the whole point. */
@@ -8145,12 +8128,12 @@ TEST(async_expect_continue, explicit_expect_header_suppresses_the_wait) {
    * sibling test's own comment): the async engine's own extra thread hops
    * (submitter -> DNS/connect pool -> reactor -> dispatch worker) each pay
    * their own share of per-instruction instrumentation overhead under
-   * valgrind, which can push this well past 500ms (838-887ms observed);
-   * and, under sustained system load from other concurrently-running test
-   * suites (e.g. a full root `make memtest` sweep), even past the 1500ms
-   * this bound was previously widened to once already; widened again to
-   * 3000ms for the same reason, still nowhere near the real ~1000ms
-   * CHTTP_100_CONTINUE_WAIT_MS this assertion exists to rule out. */
+   * valgrind, which can push this well past 500ms (838-887ms observed),
+   * and sustained system load from other concurrently-running test suites
+   * (e.g. a full root `make memtest` sweep) pushes it further still. The
+   * 3000ms bound accommodates both while still being an explicit ceiling on
+   * a path that must never sit out a real ~1000ms
+   * CHTTP_100_CONTINUE_WAIT_MS wait. */
   REQUIRE_LT(elapsed_ms, 3000L);
 
   chttpclient_resp_free(raw->resp);
@@ -8196,26 +8179,27 @@ TEST(async_expect_continue, early_hints_before_100_continue_still_waits) {
 
 TEST(async_expect_continue,
      hints_both_sides_of_100_continue_each_phase_gets_its_own_cap) {
-  /* Async counterpart of expect_continue's own test of the same name: a
-   * real, previously-reproducible bug, not just a defensive regression.
-   * chttp_async_ctx_t.interim_responses_seen used to be a single counter
+  /* Async counterpart of expect_continue's own test of the same name, and a
+   * genuinely reachable failure rather than a defensive check.
+   * chttp_async_ctx_t.interim_responses_seen must NOT be a single counter
    * shared across both _async_awaiting_continue_on_data's own interim-
    * discard loop (while waiting for "100 Continue") and _async_process_
    * reading_data's identical-looking one (while reading the final
-   * response), never reset at the point a genuine "100 Continue" (or the
-   * continue-wait timing out) hands off between the two; so a hop that
-   * discarded 40 interim responses before "100 Continue" had only 24 (not
-   * a fresh 64) left over for its own final-response read, silently
-   * violating the documented "64 CONSECUTIVE discarded interim responses"
-   * cap (a confirmed "100 Continue" is itself a non-discarded message that
-   * breaks the run) and failing THIS exact scenario with
-   * ccol_http_transfer_aborted well before the real, distinct 65-in-a-row
-   * cap (see async_early_hints.discards_exactly_64_before_giving_up)
-   * should ever apply. Confirmed to fail (raw->rv != ccol_success) against
-   * a scratch copy of the code with both of ctx->interim_responses_seen's
-   * new reset points (in _async_awaiting_continue_on_data's confirmed-100
-   * branch and _async_on_writable_impl's continue-timeout branch) removed,
-   * before the fix was reapplied. */
+   * response) without being reset where a genuine "100 Continue" (or the
+   * continue-wait timing out) hands off between the two. Sharing one
+   * unreset counter leaves a hop that discarded 40 interim responses before
+   * "100 Continue" with only 24, rather than a fresh 64, for its own
+   * final-response read; that silently violates the documented "64
+   * CONSECUTIVE discarded interim responses" cap (a confirmed "100
+   * Continue" is itself a non-discarded message that breaks the run) and
+   * fails THIS exact scenario with ccol_http_transfer_aborted well before
+   * the real, distinct 65-in-a-row cap (see
+   * async_early_hints.discards_exactly_64_before_giving_up) should ever
+   * apply. This test is non-vacuous: removing either of
+   * ctx->interim_responses_seen's two reset points (in
+   * _async_awaiting_continue_on_data's confirmed-100 branch and
+   * _async_on_writable_impl's continue-timeout branch) makes it fail with
+   * raw->rv != ccol_success. */
   chttpcli_construct(cli);
   char url[160];
   make_url(url, sizeof(url), "/expect-continue-hints-both-sides/40/40");
@@ -8316,12 +8300,12 @@ TEST(async_expect_continue, bodyless_request_not_affected) {
    * sibling test's own comment): the async engine's own extra thread hops
    * (submitter -> DNS/connect pool -> reactor -> dispatch worker) each pay
    * their own share of per-instruction instrumentation overhead under
-   * valgrind, which can push this well past 500ms (838-887ms observed);
-   * and, under sustained system load from other concurrently-running test
-   * suites (e.g. a full root `make memtest` sweep), even past the 1500ms
-   * this bound was previously widened to once already; widened again to
-   * 3000ms for the same reason, still nowhere near the real ~1000ms
-   * CHTTP_100_CONTINUE_WAIT_MS this assertion exists to rule out. */
+   * valgrind, which can push this well past 500ms (838-887ms observed),
+   * and sustained system load from other concurrently-running test suites
+   * (e.g. a full root `make memtest` sweep) pushes it further still. The
+   * 3000ms bound accommodates both while still being an explicit ceiling on
+   * a path that must never sit out a real ~1000ms
+   * CHTTP_100_CONTINUE_WAIT_MS wait. */
   REQUIRE_LT(elapsed_ms, 3000L);
 
   chttpclient_resp_free(raw->resp);
@@ -8439,8 +8423,9 @@ TEST(async_redirects, post_307_preserves_method_and_body) {
 }
 
 /* Tier 2/3 counterparts of redirect_policy.stale_*_stripped_after_downgrade
- * above: _async_submit_hop re-sends chain->req_headers completely unchanged
- * on every hop, the same bug in a different tier. */
+ * above: _async_submit_hop must strip the same stale headers whenever a hop
+ * downgrades, since its own default is to re-send chain->req_headers
+ * completely unchanged on every hop. */
 TEST(async_redirects, stale_content_length_stripped_after_downgrade) {
   chttpcli_construct(cli);
   char url[160];
@@ -8542,11 +8527,11 @@ TEST(async_redirects, stale_expect_stripped_after_downgrade) {
 
 /* Tier 2/3 counterpart of redirect_policy.body_stays_dropped_across_a_later_
  * preserving_hop above: chain->body_dropped, mutated in
- * _async_handle_redirect. Regression test for a real bug where a 307/308 hop
- * following an earlier non-preserving downgrade re-read chain->body_data/
- * body_len/body_content_type (the chain's ORIGINAL, hop-0 values) instead of
- * respecting the drop an earlier hop on the same chain had already made;
- * see chttp_async_chain_t.body_dropped's own comment in chttpclient.c. */
+ * _async_handle_redirect. A 307/308 hop following an earlier non-preserving
+ * downgrade must not re-read chain->body_data/body_len/body_content_type
+ * (the chain's ORIGINAL, hop-0 values) instead of respecting the drop an
+ * earlier hop on the same chain already made; see
+ * chttp_async_chain_t.body_dropped's own comment in chttpclient.c. */
 TEST(async_redirects, body_stays_dropped_across_a_later_preserving_hop) {
   chttpcli_construct(cli);
   char url[160];
@@ -8670,17 +8655,16 @@ TEST(async_redirects, relative_location_resolved_against_current_host) {
 }
 
 TEST(async_redirects, plain_relative_location_merged_against_current_path) {
-  /* Regression test for a real crash: chttp_async_ctx_t used to have no
-   * field at all tracking the current hop's path_and_query, so
-   * _async_handle_redirect's own hand-built chttp_url_t base always left
-   * that field NULL. A Location header reaching _resolve_redirect_url's
-   * merge branch (anything that is not a full URL, a "//host/..."
-   * protocol-relative reference, or an absolute-path "/..." reference;
-   * i.e. a genuinely relative reference like "sibling" below) then crashed
-   * the whole process via a NULL-pointer strchr() call inside
-   * _merge_ref_path. /redirect-relative (used by the sibling test above)
-   * cannot catch this: "Location: /get" is an absolute-path reference and
-   * never reaches the merge branch at all. */
+  /* chttp_async_ctx_t must carry a field tracking the current hop's
+   * path_and_query, so that _async_handle_redirect's own hand-built
+   * chttp_url_t base never leaves it NULL. With it NULL, a Location header
+   * reaching _resolve_redirect_url's merge branch (anything that is not a
+   * full URL, a "//host/..." protocol-relative reference, or an
+   * absolute-path "/..." reference; i.e. a genuinely relative reference
+   * like "sibling" below) crashes the whole process via a NULL-pointer
+   * strchr() call inside _merge_ref_path. /redirect-relative (used by the
+   * sibling test above) cannot catch this: "Location: /get" is an
+   * absolute-path reference and never reaches the merge branch at all. */
   chttpcli_construct(cli);
   char url[160];
   make_url(url, sizeof(url), "/nested/dir/redirect-relative-plain");
@@ -8708,16 +8692,16 @@ TEST(async_redirects, plain_relative_location_merged_against_current_path) {
 }
 
 TEST(async_redirects, relative_location_resolved_against_ipv6_host) {
-  /* Regression test for a second bug in the same hand-built chttp_url_t
-   * base: chttp_async_ctx_t also had no field tracking whether its host was
-   * an IPv6 literal, so base.is_ipv6 always defaulted to false regardless of
-   * the real connection. _resolve_redirect_url unconditionally re-brackets
-   * the host via base->is_ipv6 (used by both the absolute-path and
-   * relative-path branches), so following ANY redirect (even the
-   * absolute-path "/get" this reuses from /redirect-relative) on an
-   * IPv6-literal connection produced a malformed, unbracketed
-   * "http://::1:<port>/get" redirect target that failed to re-parse on the
-   * next hop with ccol_http_invalid_url instead of succeeding. */
+  /* A second field the same hand-built chttp_url_t base depends on:
+   * chttp_async_ctx_t must also track whether its host is an IPv6 literal,
+   * so base.is_ipv6 reflects the real connection rather than defaulting to
+   * false. _resolve_redirect_url re-brackets the host via base->is_ipv6
+   * (used by both the absolute-path and relative-path branches), so with
+   * that flag wrong, following ANY redirect (even the absolute-path "/get"
+   * this reuses from /redirect-relative) on an IPv6-literal connection
+   * produces a malformed, unbracketed "http://::1:<port>/get" redirect
+   * target that fails to re-parse on the next hop with
+   * ccol_http_invalid_url instead of succeeding. */
   if (get_test_port6() == 0) {
     fprintf(stderr,
             "[SKIP] relative_location_resolved_against_ipv6_host: no IPv6 "
@@ -8937,14 +8921,12 @@ TEST(async_early_hints, discards_exactly_64_before_giving_up) {
    * already does that with a fixed 100-hint stream).
    *
    * _async_on_readable_impl's own interim-discard cap
-   * (ctx->interim_responses_seen) was already correct on its own terms: it
-   * only ever gates continuing to discard another interim response, never
-   * the read of the final (non-1xx) response, so 64 discarded interim
-   * responses followed by a real answer has always succeeded here. Tier 1's
-   * sibling loop (_chttp_read_message_loop) did not originally agree (see
-   * that test's own comment for the real bug this was); this test exists
-   * mainly to confirm both tiers agree exactly on the boundary now that
-   * Tier 1 has been fixed to match this tier's already-correct behavior. */
+   * (ctx->interim_responses_seen) only ever gates continuing to discard
+   * another interim response, never the read of the final (non-1xx) one, so
+   * 64 discarded interim responses followed by a real answer succeed here.
+   * Tier 1's sibling loop (_chttp_read_message_loop) gates the same way (see
+   * that test's own comment for what that ordering buys); this test pins
+   * both tiers to exactly the same boundary. */
   char url64[160];
   make_url(url64, sizeof(url64), "/early-hints-count/64");
 
@@ -9058,12 +9040,12 @@ TEST(async_idle_pool, dead_connection_detected_and_retried) {
 }
 
 TEST(async_idle_pool, stale_connection_eviction_releases_engine_reference) {
-  /* Regression test: _async_idle_pool_take's staleness-eviction branch (a
-   * pooled connection popped and found older than CHTTP_IDLE_MAX_AGE_MS)
-   * used to tear the connection down without releasing the separate engine
-   * reference _async_idle_pool_offer had acquired for it while it sat in the
-   * pool, permanently leaking one engine reference per aged-out connection.
-   * Forces that branch deterministically via
+  /* _async_idle_pool_take's staleness-eviction branch (a pooled connection
+   * popped and found older than CHTTP_IDLE_MAX_AGE_MS) must release the
+   * separate engine reference _async_idle_pool_offer acquired for that
+   * connection while it sat in the pool; otherwise every aged-out
+   * connection permanently leaks one engine reference. Forces that branch
+   * deterministically via
    * _chttpclient_force_async_idle_stale_for_tests instead of waiting out the
    * real 60 second window, then checks the engine's own ref count directly
    * rather than relying on any externally observable symptom of the leak
@@ -9075,13 +9057,12 @@ TEST(async_idle_pool, stale_connection_eviction_releases_engine_reference) {
    * shutdown(fd, SHUT_RDWR)s it, forcing a genuine EPOLLIN/EPOLLERR
    * dispatch that reaps it for real (including releasing this engine
    * reference) from dispatch context, asynchronously with respect to this
-   * thread; see _async_idle_pool_take's own doc comment. So, unlike the
-   * synchronous eviction the very first version of this test was written
-   * against, the ref-count drop below is not guaranteed to have already
-   * happened by the time the second request's future resolves; this must
-   * be a bounded poll (mirroring wait_for_async_engine_idle's own idiom),
-   * not an immediate assertion, or it would intermittently fail purely on
-   * timing, not on any real leak. */
+   * thread; see _async_idle_pool_take's own doc comment. The ref-count drop
+   * below is therefore not guaranteed to have already happened by the time
+   * the second request's future resolves, so it must be a bounded poll
+   * (mirroring wait_for_async_engine_idle's own idiom) rather than an
+   * immediate assertion, which would fail intermittently purely on timing
+   * and not on any real leak. */
   char url[160];
   make_url(url, sizeof(url), "/keepalive");
 
@@ -9119,9 +9100,9 @@ TEST(async_idle_pool, stale_connection_eviction_releases_engine_reference) {
    * engine reference once the reactor reaps it via the shutdown()-induced
    * dispatch; only the freshly-opened, now-repooled connection from this
    * second request should still be holding one, i.e. the count must settle
-   * back down to 1, not stay at 2. Before the original fix, the evicted
-   * connection's reference leaked permanently and this never dropped below
-   * 2 no matter how long it polled. */
+   * back down to 1, not stay at 2. This check is non-vacuous: if the
+   * evicted connection's reference leaked, the count never drops below 2 no
+   * matter how long it is polled. */
   REQUIRE_EQ(poll_engine_ref_count(1), 1);
 
   chttpclient_destroy(cli); /* drains the one still-pooled connection */
@@ -9160,71 +9141,62 @@ static void *stale_race_thread(void *arg) {
 }
 
 TEST(async_idle_pool, concurrent_stale_eviction_races_dispatch_no_uaf) {
-  /* Regression/stress test for a real use-after-free originally found via
-   * code review, not a failing test: an earlier design had
-   * _async_idle_pool_take's staleness-eviction branch call _async_ctx_free
-   * directly, from an ordinary application thread, on a ctx whose
-   * event_loop registration was still fully live; an idle-pooled
-   * connection stays fully attached to the reactor for as long as it sits
-   * in the pool, so a reactor dispatch thread could legitimately be
-   * mid-callback for that exact ctx (having already read
-   * ctx->hop_completed as false) at the same moment the evicting thread
-   * freed it, touching ctx->idle_lock/fd/tls after they were gone.
+  /* Stress coverage for a use-after-free no ordinary test surfaces:
+   * calling _async_ctx_free directly, from an ordinary application thread,
+   * on a ctx whose ccol_event_loop registration is still fully live. An
+   * idle-pooled connection stays fully attached to the reactor for as long
+   * as it sits in the pool, so a reactor dispatch thread can legitimately
+   * be mid-callback for that exact ctx (having already read
+   * ctx->hop_completed as false) at the same moment an evicting thread
+   * frees it, touching ctx->idle_lock/fd/tls after they are gone.
    *
-   * A first fix attempt added a per-ctx atomic pin (ctx->refs, pinned by
-   * every dispatch callback via _async_ctx_pin) that meaningfully NARROWED
-   * this: it closed the easily-reproduced case where a dispatch read
-   * ctx->refs==0 and would otherwise "resurrect" an object mid-destruction,
-   * but did NOT fully close the race: a thread already past
-   * event_loop's own reg->removed liveness check (i.e. a legitimate,
-   * in-progress dispatch invocation) could still be preempted by the OS
-   * for an unbounded duration before it ever touched ctx->refs at all, and
-   * _async_ctx_destroy_now could run to completion (including the final
-   * free of ctx's memory) entirely within that window on another thread;
-   * at which point even the pin's own first atomic_load was itself a
-   * genuine use-after-free, independent of ctx->refs' value. Both the
-   * original bug and this remaining gap in the first fix attempt were
-   * reproduced directly with AddressSanitizer against this exact test
-   * (not merely theorised), the original bug needing only 1-in-3 to
-   * 1-in-12 runs of this test's stress loop to trigger even under heavy
-   * load.
+   * A per-ctx atomic pin (ctx->refs, pinned by every dispatch callback via
+   * _async_ctx_pin) only NARROWS this rather than closing it. It does close
+   * the easily-reproduced case where a dispatch reads ctx->refs == 0 and
+   * would otherwise "resurrect" an object mid-destruction, but a thread
+   * already past ccol_event_loop's own reg->removed liveness check (that
+   * is, a legitimate, in-progress dispatch invocation) can still be
+   * preempted by the OS for an unbounded duration before it ever touches
+   * ctx->refs at all, and _async_ctx_destroy_now can run to completion
+   * (including the final free of ctx's memory) entirely within that window
+   * on another thread; at which point even the pin's own first atomic_load
+   * is itself a use-after-free, independent of ctx->refs' value.
+   * AddressSanitizer reports both shapes against this exact test; the
+   * unpinned one triggers in roughly 1 out of every 3 to 12 runs of this
+   * stress loop, even under heavy load.
    *
-   * The race is now closed by construction rather than narrowed: no
-   * application thread ever calls the real, destructive teardown
-   * (_async_ctx_teardown/_async_ctx_free) on a ctx that is still
-   * registered with the reactor. _async_idle_pool_take's staleness scan no
-   * longer tears a stale candidate down at all; it leaves it exactly
-   * where it is and merely shutdown()s its fd, forcing a genuine
-   * EPOLLIN/EPOLLERR dispatch that reaps it for real, entirely from
-   * dispatch context (see that function's own doc comment). Since
-   * dispatch callbacks for a single registration are already inherently
-   * serialised against each other by event_loop's own entry->dispatch_lock
-   * and entry->refcount-gated "one job in flight per entry" invariant
-   * (cthreadcomm.c), and no application thread is in the direct-free
-   * business anymore, there is no other thread left to race a dispatch
-   * callback's own touch of ctx. See pending_app_teardown's own field
-   * comment (chttpclient.c) for the complete design and its two
-   * application-thread call sites (neither of which is
-   * _async_idle_pool_take's staleness path anymore).
+   * The race is closed by construction rather than narrowed: no application
+   * thread ever calls the real, destructive teardown
+   * (_async_ctx_teardown/_async_ctx_free) on a ctx that is still registered
+   * with the reactor. _async_idle_pool_take's staleness scan does not tear
+   * a stale candidate down at all; it leaves it exactly where it is and
+   * merely shutdown()s its fd, forcing a genuine EPOLLIN/EPOLLERR dispatch
+   * that reaps it for real, entirely from dispatch context (see that
+   * function's own doc comment). Dispatch callbacks for a single
+   * registration are inherently serialised against each other by
+   * ccol_event_loop's own entry->dispatch_lock and entry->refcount-gated
+   * "one job in flight per entry" invariant (cthreadcomm.c), and no
+   * application thread is in the direct-free business, so no other thread
+   * is left to race a dispatch callback's own touch of ctx. See
+   * pending_app_teardown's own field comment (chttpclient.c) for the
+   * complete design and its two application-thread call sites, neither of
+   * which is _async_idle_pool_take's staleness path.
    *
    * The exact interleaving this test drives cannot be reproduced
-   * deterministically from a black-box test (the pre-existing
-   * stale_connection_eviction_releases_engine_reference test above forces
-   * staleness but has zero concurrent dispatch activity in flight, which
-   * is exactly why the original gap went uncaught in the first place).
-   * This test instead stress-tests the scenario: several threads sharing
-   * one client repeatedly pool a connection to a route the server closes
-   * immediately after responding to (guaranteeing a real, independent
-   * on_readable/EOF dispatch is in flight for the connection just
-   * pooled), forcing staleness and issuing a fresh request to the same
-   * origin right after every response. A clean plain run, and a clean
-   * valgrind/ASan/ThreadSanitizer pass across many repeated runs, are both
-   * now expected reliably, not merely "the stronger, still not fully
-   * conclusive, signal" the original gap-era version of this comment
-   * described; not any single assertion inside the loop (every request
-   * must still succeed regardless, so that much is checked too). Keep
-   * this test (and this comment) as permanent regression coverage: it is
-   * the only thing exercising this interleaving at all. */
+   * deterministically from a black-box test:
+   * stale_connection_eviction_releases_engine_reference above forces
+   * staleness but has zero concurrent dispatch activity in flight, so it
+   * cannot reach this interleaving at all. This test stress-tests the
+   * scenario instead: several threads sharing one client repeatedly pool a
+   * connection to a route the server closes immediately after responding to
+   * (guaranteeing a real, independent on_readable/EOF dispatch is in flight
+   * for the connection just pooled), forcing staleness and issuing a fresh
+   * request to the same origin right after every response. The signal is a
+   * clean plain run plus a clean valgrind/ASan/ThreadSanitizer pass across
+   * many repeated runs, not any single assertion inside the loop (every
+   * request must still succeed regardless, so that much is checked too).
+   * Keep this test, and this comment: it is the only thing exercising this
+   * interleaving at all. */
   char url[160];
   make_url(url, sizeof(url), "/keepalive-then-close");
 
@@ -9238,10 +9210,10 @@ TEST(async_idle_pool, concurrent_stale_eviction_races_dispatch_no_uaf) {
    * possible under real thread/resource exhaustion), an immediate
    * REQUIRE_EQ would return from this function while the earlier,
    * already-created threads are still running against these stack-local
-   * args[]/tids[] arrays - the same stack-use-after-return class already
-   * fixed elsewhere for the join-vs-assert ordering, just triggered by
-   * creation failing instead. created tracks exactly how many threads
-   * exist to join. */
+   * args[]/tids[] arrays: the same stack-use-after-return class the
+   * join-before-assert ordering elsewhere in this file guards against, just
+   * reached by creation failing instead. created tracks exactly how many
+   * threads exist to join. */
   int created = 0;
   int create_rv = 0;
   for (int i = 0; i < NUM_THREADS; i++) {
@@ -9315,12 +9287,12 @@ static ccol_memmgmt_procs_t g_size_fail_mp = {.malloc = size_fail_malloc,
                                               .realloc = size_fail_realloc};
 
 TEST(async_idle_pool, reused_hop_setup_failure_releases_engine_reference) {
-  /* Regression test for a leak in _async_submit_hop_fail's reused branch: a
+  /* In _async_submit_hop_fail's reused branch, a
    * headers-map/serialisation/origin_key allocation failure occurring AFTER
-   * a pooled connection has already been popped from the idle pool used to
-   * leak the separate engine reference _async_idle_pool_offer had acquired
-   * for that pooled connection while it sat there (same root cause and fix
-   * as async_idle_pool.stale_connection_eviction_releases_engine_reference
+   * a pooled connection has already been popped from the idle pool must not
+   * leak the separate engine reference _async_idle_pool_offer acquired for
+   * that pooled connection while it sat there (the same ownership rule as
+   * async_idle_pool.stale_connection_eviction_releases_engine_reference
    * above; that test covers the staleness-eviction exit from the idle pool,
    * this one covers the reused-hop-setup-failure exit).
    *
@@ -9333,13 +9305,13 @@ TEST(async_idle_pool, reused_hop_setup_failure_releases_engine_reference) {
    * occurred after the pool had already been popped, or the request simply
    * succeeded and repooled a connection that was later reused away), the
    * engine's ref count must be zero too, matching live pool membership
-   * exactly. Before the fix, a failure landing after the pop left the pool
-   * empty while still holding 1 leaked reference. */
+   * exactly. A failure landing after the pop must not leave the pool empty
+   * while still holding 1 leaked reference. */
   char url[160];
   make_url(url, sizeof(url), "/keepalive");
 
   char *cerr = NULL;
-  chttpcli cli = create_chttpclient_mp(&g_hop_fail_mp, &cerr);
+  chttpcli cli = ccol_create_chttpclient_mp(&g_hop_fail_mp, &cerr);
   REQUIRE_NE(cli, CHTTPCLI_INVALID);
 
   enum { SWEEP_UPPER = 40 };
@@ -9405,32 +9377,32 @@ TEST(async_idle_pool, reused_hop_setup_failure_releases_engine_reference) {
 
 TEST(async_idle_pool,
      chain_creation_oom_reports_not_enough_memory_not_generic) {
-  /* Regression test: an allocation failure inside _async_chain_create used
-   * to be reported by fulfilling the future with a bare NULL data pointer
-   * (ctpool_future_fulfill(future, NULL)) rather than a real
-   * chttpcli_async_result_t, so chttpclient_async_result_get(f) returned
-   * NULL exactly as it documents for a CANCELLED future - collapsing a
-   * genuine, common allocation failure into the same signal a cancellation
-   * produces, and losing the specific ccol_not_enough_memory code entirely.
-   * Tier 3 (chttpclient_do_pooled) compounded this: it maps ANY NULL result
-   * from chttpclient_async_result_get to the generic ccol_unexpected_
-   * failure, so this same allocation failure surfaced there as a code with
-   * no diagnostic value at all.
+  /* An allocation failure inside _async_chain_create must be reported by
+   * fulfilling the future with a real chttpcli_async_result_t carrying
+   * ccol_not_enough_memory, never with a bare NULL data pointer
+   * (ctpool_future_fulfill(future, NULL)). A NULL there makes
+   * chttpclient_async_result_get(f) return NULL, exactly as it documents
+   * for a CANCELLED future, collapsing a genuine, common allocation failure
+   * into the same signal a cancellation produces and losing the specific
+   * code entirely. Tier 3 (chttpclient_do_pooled) compounds that: it maps
+   * ANY NULL result from chttpclient_async_result_get to the generic
+   * ccol_unexpected_failure, so the same allocation failure would surface
+   * there as a code with no diagnostic value at all.
    *
-   * Targets the fix precisely using g_size_fail_mp: failing only the one
-   * calloc call whose byte size matches the internal chain struct exactly
-   * (via _chttp_async_chain_struct_size_for_tests, since chttp_async_
-   * chain_t itself is not a public type) guarantees this hits _async_
-   * chain_create's own calloc specifically - not any of the several
+   * Targets the behaviour precisely using g_size_fail_mp: failing only the
+   * one calloc call whose byte size matches the internal chain struct
+   * exactly (via _chttp_async_chain_struct_size_for_tests, since
+   * chttp_async_chain_t itself is not a public type) guarantees this hits
+   * _async_chain_create's own calloc specifically, not any of the several
    * differently-sized string allocations that run before it (URL parsing,
-   * initial_origin_key) - regardless of how many of those precede it or
-   * ever change in number. An earlier version of this test used
-   * g_hop_fail_mp's call-index counting instead; that version passed even
-   * with the fix fully reverted, because indices past the intended target
-   * could land on a LATER, already-correct ccol_not_enough_memory report
-   * elsewhere in _async_submit_hop, satisfying the assertion without ever
-   * exercising this fix at all - caught only by deliberately reverting the
-   * fix and re-running the test, which is why this version exists instead. */
+   * initial_origin_key), regardless of how many of those precede it or ever
+   * change in number. Counting call indices via g_hop_fail_mp instead makes
+   * the test vacuous: such a version passes even with the guard fully
+   * removed, because indices past the intended target can land on a LATER,
+   * already-correct ccol_not_enough_memory report elsewhere in
+   * _async_submit_hop, satisfying the assertion without exercising this
+   * behaviour at all. Only removing the guard and re-running distinguishes
+   * the two, which is why the size-targeted version is used here. */
   char url[160];
   make_url(url, sizeof(url), "/get");
 
@@ -9439,7 +9411,7 @@ TEST(async_idle_pool,
   /* Tier 2. */
   {
     char *cerr = NULL;
-    chttpcli cli = create_chttpclient_mp(&g_size_fail_mp, &cerr);
+    chttpcli cli = ccol_create_chttpclient_mp(&g_size_fail_mp, &cerr);
     REQUIRE_NE(cli, CHTTPCLI_INVALID);
     g_size_fail_target_size = chain_size;
 
@@ -9460,12 +9432,12 @@ TEST(async_idle_pool,
     wait_for_async_engine_idle();
   }
 
-  /* Tier 3: the identical fault must now surface the same specific code
-   * through chttpclient_do_pooled too, not the generic ccol_unexpected_
-   * failure it used to collapse to. */
+  /* Tier 3: the identical fault must surface the same specific code
+   * through chttpclient_do_pooled too, not collapse to the generic
+   * ccol_unexpected_failure. */
   {
     char *cerr = NULL;
-    chttpcli cli = create_chttpclient_mp(&g_size_fail_mp, &cerr);
+    chttpcli cli = ccol_create_chttpclient_mp(&g_size_fail_mp, &cerr);
     REQUIRE_NE(cli, CHTTPCLI_INVALID);
     g_size_fail_target_size = chain_size;
 
@@ -9484,22 +9456,21 @@ TEST(async_idle_pool,
 }
 
 TEST(client_construction, tier1_hop_allocation_failure_sweep_no_leak) {
-  /* Regression test for a leak in Tier 1's own chttp_do_internal: the
-   * !pctx.headers branch (chmap_create_full failing for the per-hop
-   * response header map) broke out of the hop loop via _conn_teardown +
-   * _url_free without ever freeing `wire`, the request already serialised
-   * by _serialize_request earlier in the same hop, including the entire
-   * request body for a POST/PUT/PATCH. Every other break/return path in
-   * the loop past that point frees it; this one didn't. Unlike Tier 2/3
-   * (which already had reused_hop_setup_failure_releases_engine_reference's
-   * own g_hop_fail_mp sweep above), Tier 1 had no equivalent OOM-injection
-   * coverage at all, which is why this was never caught. This sweep can't
-   * assert on the leak directly (this codebase has no allocation tracker
-   * exposed to tests beyond the counting mp itself, which only counts
-   * calls, not outstanding bytes); it exists so `make memtest` (valgrind)
-   * actually exercises every allocation-failure branch in one plain,
-   * synchronous chttp_do_internal hop and would catch the leak that
-   * prompted this fix. */
+  /* Tier 1's own chttp_do_internal must free `wire` (the request already
+   * serialised by _serialize_request earlier in the same hop, including the
+   * entire request body for a POST/PUT/PATCH) on EVERY exit from the hop
+   * loop, the !pctx.headers branch included; that branch (chmap_create_full
+   * failing for the per-hop response header map) breaks out via
+   * _conn_teardown + _url_free, where it is easy to miss even though every
+   * other break/return path past that point frees it. This is Tier 1's
+   * OOM-injection counterpart to
+   * reused_hop_setup_failure_releases_engine_reference's own g_hop_fail_mp
+   * sweep above. The sweep cannot assert on a leak directly (this codebase
+   * has no allocation tracker exposed to tests beyond the counting mp
+   * itself, which only counts calls, not outstanding bytes); it exists so
+   * `make memtest` (valgrind) actually exercises every allocation-failure
+   * branch in one plain, synchronous chttp_do_internal hop, which is what
+   * catches such a leak. */
   char url[160];
   make_url(url, sizeof(url), "/post");
 
@@ -9509,7 +9480,7 @@ TEST(client_construction, tier1_hop_allocation_failure_sweep_no_leak) {
   enum { SWEEP_UPPER = 60 };
   for (int idx = -1; idx < SWEEP_UPPER; idx++) {
     char *cerr = NULL;
-    chttpcli cli = create_chttpclient_mp(&g_hop_fail_mp, &cerr);
+    chttpcli cli = ccol_create_chttpclient_mp(&g_hop_fail_mp, &cerr);
     REQUIRE_NE(cli, CHTTPCLI_INVALID);
 
     char *rerr = NULL;
@@ -9592,11 +9563,12 @@ TEST(async_idle_pool, offer_push_failure_no_double_free) {
   /* Regression test for a double-free in _async_idle_pool_offer's OOM
    * branch: when cvector_push_back fails (after capacity was already
    * confirmed available via has_room), the function tears ctx down itself
-   * (_async_chain_release + _async_ctx_free + _client_engine_release) but
-   * used to still return false; whose documented contract means "ctx left
-   * completely untouched, caller falls back to a normal teardown". The
-   * caller (_async_finish_connection) then called _async_ctx_finish() on
-   * the very same, already-freed ctx a second time: a genuine double-free.
+   * (_async_chain_release + _async_ctx_free + _client_engine_release), so it
+   * must not return false, whose documented contract means "ctx left
+   * completely untouched, caller falls back to a normal teardown".
+   * Returning false makes the caller (_async_finish_connection) call
+   * _async_ctx_finish() on that very same, already-freed ctx a second time:
+   * a genuine double free.
    *
    * cvector_push_back can never actually fail at this call site under real
    * allocator pressure (CHTTP_MAX_IDLE_PER_ORIGIN equals cvector's own
@@ -9643,32 +9615,33 @@ TEST(async_idle_pool, offer_push_failure_no_double_free) {
 }
 
 TEST(async_idle_pool, reactivate_failure_retries_without_uaf) {
-  /* Regression test for a use-after-free in _async_submit_hop's
-   * reused-connection path: when event_loop_modify() fails to re-activate a
-   * popped idle connection's registration for write interest, the code used
-   * to call _async_ctx_teardown(ctx) directly on the calling (non-reactor)
-   * application thread while ctx was still fully registered with the shared
-   * reactor; the identical UAF class
+  /* In _async_submit_hop's reused-connection path, when
+   * ccol_event_loop_modify() fails to re-activate a popped idle
+   * connection's registration for write interest, the code must not call
+   * _async_ctx_teardown(ctx) directly on the calling (non-reactor)
+   * application thread while ctx is still fully registered with the shared
+   * reactor. That is the identical use-after-free class
    * async_idle_pool.concurrent_stale_eviction_races_dispatch_no_uaf above
-   * covers for the staleness-eviction path, just for this exit instead. It
-   * also used to leak the separate engine reference _async_idle_pool_offer
-   * had acquired for this ctx while it sat in the idle pool, the same leak
-   * class async_idle_pool.reused_hop_setup_failure_releases_engine_reference
+   * covers for the staleness-eviction path, just at this exit instead. This
+   * path must also release the separate engine reference
+   * _async_idle_pool_offer acquired for this ctx while it sat in the idle
+   * pool, the same leak class
+   * async_idle_pool.reused_hop_setup_failure_releases_engine_reference
    * covers for a setup failure occurring slightly earlier in the same
    * function.
    *
-   * Naturally forcing event_loop_modify to fail here is effectively
+   * Naturally forcing ccol_event_loop_modify to fail here is effectively
    * impossible: an idle-pooled connection is always read-only registered
-   * (so the write slot it needs is never occupied), and event_loop_modify
+   * (so the write slot it needs is never occupied), and ccol_event_loop_modify
    * performs no allocation of its own for allocator-failure injection to
    * target. _chttpclient_force_reactivate_fail_once_for_tests exists
-   * specifically to make this branch deterministically reachable; a
-   * regression is caught by valgrind/ASan (see `make memtest`), not by any
-   * assertion below, but this also checks the two externally observable
-   * consequences the fix addresses: the retried request must still succeed
-   * end-to-end (via a brand-new connection), and the abandoned connection's
-   * own dispatch-triggered reap must eventually release its engine
-   * reference rather than leaking it. */
+   * specifically to make this branch deterministically reachable. A
+   * violation of the first rule is caught by valgrind/ASan (see `make
+   * memtest`), not by any assertion below, but this test also checks the
+   * two externally observable consequences: the retried request must still
+   * succeed end-to-end (via a brand-new connection), and the abandoned
+   * connection's own dispatch-triggered reap must eventually release its
+   * engine reference rather than leaking it. */
   char url[160];
   make_url(url, sizeof(url), "/keepalive");
 
@@ -9689,7 +9662,7 @@ TEST(async_idle_pool, reactivate_failure_retries_without_uaf) {
 
   _chttpclient_force_reactivate_fail_once_for_tests();
 
-  /* Pops the pooled connection, hits the forced event_loop_modify failure,
+  /* Pops the pooled connection, hits the forced ccol_event_loop_modify failure,
    * retries against a brand-new connection, and must still succeed. */
   ctpool_future *f2 = async_get(cli, url);
   REQUIRE_NE((void *)f2, NULL);
@@ -9722,8 +9695,8 @@ TEST(async_idle_pool, reactivate_failure_retries_without_uaf) {
 TEST(max_idle_origins, tier2_distinct_origins_bounded_and_reclaimed) {
   /* Async (Tier 2/3) counterpart of max_idle_origins.tier1_distinct_
    * origins_bounded_and_reclaimed; see that test's own comment for the
-   * full rationale (the same two fixes, in _async_idle_pool_take/_async_
-   * idle_pool_offer this time). Uses chttpclient_do_async + async_get
+   * full rationale (the same two properties, in _async_idle_pool_take/
+   * _async_idle_pool_offer this time). Uses chttpclient_do_async + async_get
    * instead of the blocking chttpclient_do, otherwise identical in
    * structure and mechanism (an ordinary reuse pop of an origin's last
    * pooled ctx prunes its own map entry in the same locked section as the
@@ -9878,13 +9851,13 @@ TEST(async_deadline, connect_timeout_fires_against_unroutable_address) {
    * deadline is expected to trip here; but some sandboxed/virtualized
    * network environments respond to it with an immediate rejection
    * (ENETUNREACH or similar) instead of the packet silently vanishing.
-   * Confirmed to happen intermittently in this exact CI/sandbox: a raw
-   * `bash -c 'exec 3<>/dev/tcp/192.0.2.1/9'` connect attempt, entirely
-   * outside this library, sometimes hangs for the full probe duration and
-   * sometimes fails immediately with "Network is unreachable"; i.e. this
-   * is the underlying network's own inconsistent behavior toward that
-   * address, not something chttpclient's connect-timeout logic controls or
-   * should be expected to paper over. An immediate connection failure
+   * This is reproducible outside the library entirely: a raw
+   * `bash -c 'exec 3<>/dev/tcp/192.0.2.1/9'` connect attempt in this same
+   * CI/sandbox sometimes hangs for the full probe duration and sometimes
+   * fails immediately with "Network is unreachable". That is the
+   * underlying network's own inconsistent behavior toward that address,
+   * not something chttpclient's connect-timeout logic controls or should
+   * be expected to paper over. An immediate connection failure
    * still proves the connect attempt did not silently succeed, so
    * ccol_http_connection_failed and ccol_http_transfer_aborted (a fio_socket
    * failure surfacing through the async engine) are accepted alongside the
@@ -9998,17 +9971,16 @@ static void tls_black_hole_srv_stop(tls_black_hole_srv_t *s) {
 
 TEST(async_deadline,
      tls_handshake_stuck_peer_reports_timed_out_not_handshake_failed) {
-  /* Regression test for a real bug: the deadline sweep's own
-   * shutdown(fd, SHUT_RDWR) against a connection stuck in
-   * CHTTP_ASYNC_TLS_HANDSHAKING was always misreported as
+  /* The deadline sweep's own shutdown(fd, SHUT_RDWR) against a connection
+   * stuck in CHTTP_ASYNC_TLS_HANDSHAKING must surface as ccol_timed_out,
+   * which chttpclient.h documents for exactly this
+   * connect_timeout_ms-expired scenario, rather than as
    * ccol_http_tls_handshake_failed/ccol_http_tls_cert_verification_failed
    * (whichever of _async_tls_advance's CTLS_HANDSHAKE_ERROR branch or
-   * _async_on_error_impl's TLS_HANDSHAKING branch happened to dispatch),
-   * even though chttpclient.h documents ccol_timed_out for exactly this
-   * connect_timeout_ms-expired scenario. Unlike
-   * connect_timeout_fires_against_unroutable_address above (which depends
-   * on the surrounding network's own inconsistent behavior toward an
-   * unroutable address and has to accept three different outcomes as a
+   * _async_on_error_impl's TLS_HANDSHAKING branch happens to dispatch).
+   * Unlike connect_timeout_fires_against_unroutable_address above (which
+   * depends on the surrounding network's own inconsistent behavior toward
+   * an unroutable address and has to accept three different outcomes as a
    * result), a peer that completes the TCP handshake but never sends a
    * single TLS byte deterministically stalls in TLS_HANDSHAKING until the
    * deadline sweep itself intervenes, so this test can assert the exact,
@@ -10154,13 +10126,13 @@ TEST(async_streaming, null_write_fn_returns_null) {
 
 TEST(async_streaming, redirect_final_body_delivered_not_intermediate) {
   /* Uses /redirect-with-body specifically because /redirect's own
-   * intermediate 301 body is always empty: a regression that fed the
-   * intermediate hop's body straight to the caller's sink instead of
-   * routing it through _sink_discard would be silently undetectable
-   * against an intermediate body that has nothing in it to leak in the
-   * first place. REQUIRE_STREQ against the exact expected final body (not
-   * merely REQUIRE_GT(sink.len, 0)) is what actually proves the
-   * intermediate body's own distinctive text never reached the sink. */
+   * intermediate 301 body is always empty: feeding the intermediate hop's
+   * body straight to the caller's sink instead of routing it through
+   * _sink_discard would be silently undetectable against an intermediate
+   * body that has nothing in it to leak in the first place. REQUIRE_STREQ
+   * against the exact expected final body (not merely
+   * REQUIRE_GT(sink.len, 0)) is what actually proves the intermediate
+   * body's own distinctive text never reached the sink. */
   char url[160];
   make_url(url, sizeof(url), "/redirect-with-body");
 
@@ -10671,8 +10643,8 @@ TEST(url_parsing, http_unix_scheme_path_with_embedded_crlf_is_invalid) {
  * chttpcli is a generation-tagged {slot index, generation} value handle
  * resolved through a library-owned slot table before the underlying struct
  * chttpclient* is ever touched (see the "CHTTPCLI HANDLE SLOT TABLE" section
- * of src/chttpclient.c). This section tests that redesign directly: both
- * concurrent and sequential double-destroy must be a fatal_err (abort(),
+ * of src/chttpclient.c). This section tests that design directly: both
+ * concurrent and sequential double-destroy must be a ccol_fatal_err (abort(),
  * SIGABRT), never a use-after-free/double-free; a resolved-but-not-yet-
  * tier-pinned handle must not be freed out from under its caller by a
  * racing destroy; and legitimate slot reuse must never be confused with a
@@ -10680,15 +10652,15 @@ TEST(url_parsing, http_unix_scheme_path_with_embedded_crlf_is_invalid) {
  */
 
 /* Runs chttpclient_destroy(h) on a detached background thread and polls for
- * completion rather than calling it directly from the test thread: a real
- * regression in this redesign's pin/unpin discipline (a resolve left
- * permanently pinned on some exit path) makes __chttpclient_destroy block
- * forever in its own cond_var_wait, and calling it directly here would hang
- * this entire test binary rather than failing one test cleanly. Returns
- * true if destroy completed within the bound, false otherwise (a real,
- * detected hang). On the false path, the heap-allocated watchdog arg is
- * deliberately never freed (the background thread may still touch it
- * arbitrarily far in the future); a small, deliberate leak confined
+ * completion rather than calling it directly from the test thread: a regression
+ * in the pin/unpin discipline (a resolve left permanently pinned on some exit
+ * path) makes __chttpclient_destroy block forever in its own
+ * ccol_cond_var_wait, and calling it directly here would hang this entire test
+ * binary rather than failing one test cleanly. Returns true if destroy
+ * completed within the bound, false otherwise (a real, detected hang). On the
+ * false path, the heap-allocated watchdog arg is deliberately never freed (the
+ * background thread may still touch it arbitrarily far in the future); a small,
+ * deliberate leak confined
  * entirely to the artificial-regression path. */
 typedef struct {
   chttpcli h;
@@ -10727,11 +10699,11 @@ static bool destroy_completes_promptly(chttpcli h) {
 
 /* A fully completed destroy, followed later by a second destroy call on an
  * independently-held copy of the same original handle value, must be a
- * fatal error; the entire point of this redesign over the earlier,
- * rejected claim-registry alternative, which could only catch a temporally
+ * fatal error; this is exactly what the generation-tagged slot table buys
+ * over a claim-registry alternative, which could only catch a temporally
  * overlapping (concurrent) double-destroy, not a purely sequential one like
  * this. Run in a forked child (mirroring tests/clogger/tests.c's own
- * fork-test precedent for process-terminating misuse) since fatal_err
+ * fork-test precedent for process-terminating misuse) since ccol_fatal_err
  * aborts the whole process. */
 TEST(chttpcli_handle_lifecycle, sequential_double_destroy_is_fatal) {
   pid_t pid = fork();
@@ -10742,7 +10714,7 @@ TEST(chttpcli_handle_lifecycle, sequential_double_destroy_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    chttpcli cli = create_chttpclient(NULL);
+    chttpcli cli = ccol_create_chttpclient(NULL);
     if (cli == CHTTPCLI_INVALID) _exit(2);
     chttpcli stale = cli;     /* an independently-held copy of the handle value,
             distinct from the local the macro below NULLs out; exactly what a
@@ -10752,7 +10724,7 @@ TEST(chttpcli_handle_lifecycle, sequential_double_destroy_is_fatal) {
         CHTTPCLI_INVALID, but `stale` still holds the original value */
     __chttpclient_destroy(stale); /* the actual misuse under test: a second,
         purely sequential destroy of a handle already fully torn down */
-    _exit(0); /* unreachable if fatal_err() aborted as expected */
+    _exit(0); /* unreachable if ccol_fatal_err() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -10773,9 +10745,8 @@ static void *concurrent_destroy_thread(void *arg) {
 
 /* Two threads calling destroy on two independently-held copies of the SAME,
  * still-valid handle at (as close to) the same moment as possible must also
- * be fatal; regression coverage for the originally-reported bug (a
- * genuine heap double-free, confirmed under valgrind, that motivated this
- * entire redesign). */
+ * be fatal. Without the slot table's generation check, this is a genuine
+ * heap double free, which valgrind reports as such. */
 TEST(chttpcli_handle_lifecycle, concurrent_double_destroy_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
@@ -10785,7 +10756,7 @@ TEST(chttpcli_handle_lifecycle, concurrent_double_destroy_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    chttpcli cli = create_chttpclient(NULL);
+    chttpcli cli = ccol_create_chttpclient(NULL);
     if (cli == CHTTPCLI_INVALID) _exit(2);
     concurrent_destroy_arg_t a1 = {.h = cli};
     concurrent_destroy_arg_t a2 = {.h = cli};
@@ -10809,7 +10780,7 @@ TEST(chttpcli_handle_lifecycle, concurrent_double_destroy_is_fatal) {
     pthread_join(t1, NULL);
     pthread_join(t2, NULL);
     _exit(0); /* unreachable: whichever of the two destroy calls loses the
-                  race must hit fatal_err() */
+                  race must hit ccol_fatal_err() */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -10818,14 +10789,14 @@ TEST(chttpcli_handle_lifecycle, concurrent_double_destroy_is_fatal) {
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-/* The resolve-then-use race fix actually works: races a slow, blocking
- * chttpclient_do call (which keeps a struct chttpclient* resolved and
- * pinned via pending_resolve_count/in_flight_count for the whole request)
- * against a concurrent chttpclient_destroy on the same handle. destroy must
- * block until the in-flight call completes, and the in-flight call itself
- * must complete successfully rather than touch freed memory. This is the
- * test that would have caught the gap found during this design's own first
- * review round, had the naive resolve step shipped. */
+/* Races a slow, blocking chttpclient_do call (which keeps a struct
+ * chttpclient* resolved and pinned via
+ * pending_resolve_count/in_flight_count for the whole request) against a
+ * concurrent chttpclient_destroy on the same handle. destroy must block
+ * until the in-flight call completes, and the in-flight call itself must
+ * complete successfully rather than touch freed memory. A resolve step that
+ * merely validates the handle and returns the pointer, without pinning it,
+ * fails exactly here. */
 TEST(chttpcli_handle_lifecycle, resolve_then_use_race_destroy_waits) {
   char slow_url[128];
   make_url(slow_url, sizeof(slow_url), "/slow");
@@ -10886,10 +10857,10 @@ static void *pool_size_setter_thread(void *arg) {
  * redundant with it: that test's slow/blocking call guarantees
  * in_flight_count > 0 for the whole race window, so destroy's combined wait
  * predicate is always true on its first check there; structurally unable
- * to exercise the specific "predicate already false, cond_var_wait never
- * entered at all" path a later review round found was a real heap
- * use-after-free in an earlier draft of _chttpcli_resolve_unpin (see that
- * function's own comment in src/chttpclient.c for the full account). This
+ * to exercise the specific "predicate already false, ccol_cond_var_wait
+ * never entered at all" path, which is a genuine heap use-after-free hazard
+ * in _chttpcli_resolve_unpin (see that function's own comment in
+ * src/chttpclient.c for the full account). This
  * test needs the opposite shape: a fast, non-blocking entry point
  * (chttpclient_set_pool_size: resolve, pin, a short critical section,
  * unpin, return; no blocking I/O at all) raced against a concurrent
@@ -10901,7 +10872,7 @@ static void *pool_size_setter_thread(void *arg) {
 TEST(chttpcli_handle_lifecycle, resolve_unpin_race_stress) {
   enum { ITERATIONS = 25 };
   for (int i = 0; i < ITERATIONS; i++) {
-    chttpcli cli = create_chttpclient(NULL);
+    chttpcli cli = ccol_create_chttpclient(NULL);
     REQUIRE_NE(cli, CHTTPCLI_INVALID);
 
     pool_size_setter_arg_t setter_arg = {.h = cli};
@@ -10929,19 +10900,18 @@ TEST(chttpcli_handle_lifecycle, resolve_unpin_race_stress) {
 }
 
 /* Legitimate slot reuse must never be confused with a stale handle to the
- * slot's previous occupant; exactly the scenario the earlier, rejected
- * "remember every destroyed address forever" design could not handle
- * safely, since glibc's tcache routinely (though not guaranteedly) reuses a
+ * slot's previous occupant. Address identity alone cannot distinguish the
+ * two: glibc's tcache routinely (though not guaranteedly) reuses a
  * just-freed struct chttpclient's exact address for the very next one
- * allocated. */
+ * allocated, which is what the generation counter exists to disambiguate. */
 TEST(chttpcli_handle_lifecycle,
      legitimate_slot_reuse_not_confused_with_stale_handle) {
-  chttpcli a = create_chttpclient(NULL);
+  chttpcli a = ccol_create_chttpclient(NULL);
   REQUIRE_NE(a, CHTTPCLI_INVALID);
   chttpcli stale_a = a;
   chttpclient_destroy(a);
 
-  chttpcli b = create_chttpclient(NULL);
+  chttpcli b = ccol_create_chttpclient(NULL);
   REQUIRE_NE(b, CHTTPCLI_INVALID);
 
   /* B's operations must succeed normally regardless of whether the
@@ -10966,13 +10936,13 @@ TEST(chttpcli_handle_lifecycle,
 TEST(chttpcli_handle_lifecycle, bounded_slot_reuse_under_churn) {
   enum { ITERATIONS = 25 };
 
-  chttpcli cli0 = create_chttpclient(NULL);
+  chttpcli cli0 = ccol_create_chttpclient(NULL);
   REQUIRE_NE(cli0, CHTTPCLI_INVALID);
   chttpclient_destroy(cli0);
   size_t capacity_after_first = _chttpcli_slot_table_capacity_for_tests();
 
   for (int i = 1; i < ITERATIONS; i++) {
-    chttpcli cli = create_chttpclient(NULL);
+    chttpcli cli = ccol_create_chttpclient(NULL);
     REQUIRE_NE(cli, CHTTPCLI_INVALID);
     chttpclient_destroy(cli);
   }
@@ -10981,20 +10951,19 @@ TEST(chttpcli_handle_lifecycle, bounded_slot_reuse_under_churn) {
 }
 
 /* Every chttpclient_set_tls exit path must release its pin, not just the
- * one an earlier draft of this design's generic "resolve+pin, do the body,
- * unpin" template happened to cover; this function actually has four
- * distinct exit points (the !tls branch, the normal success path, and the
- * oom: label reached by goto from three different strdup failure checks;
- * the third and fourth are the same physical return statement). A missed
- * unpin on any one of them is silent: pending_resolve_count never returns
- * to zero for that client, so a later chttpclient_destroy call against it
- * hangs forever rather than crashing; exactly what
- * destroy_completes_promptly is built to detect without hanging this whole
- * test binary if the regression is present. */
+ * one a generic "resolve+pin, do the body, unpin" template would cover:
+ * this function has four distinct exit points (the !tls branch, the normal
+ * success path, and the oom: label reached by goto from three different
+ * strdup failure checks; the third and fourth are the same physical return
+ * statement). A missed unpin on any one of them is silent:
+ * pending_resolve_count never returns to zero for that client, so a later
+ * chttpclient_destroy call against it hangs forever rather than crashing.
+ * destroy_completes_promptly is what detects that without hanging this
+ * whole test binary. */
 TEST(tls, set_tls_all_exit_paths_release_pin) {
   /* Exit 1 of 4: the !tls branch (restore defaults). */
   {
-    chttpcli cli = create_chttpclient(NULL);
+    chttpcli cli = ccol_create_chttpclient(NULL);
     REQUIRE_NE(cli, CHTTPCLI_INVALID);
     REQUIRE_EQ(chttpclient_set_tls(cli, NULL), ccol_success);
     REQUIRE_TRUE(destroy_completes_promptly(cli));
@@ -11002,7 +10971,7 @@ TEST(tls, set_tls_all_exit_paths_release_pin) {
 
   /* Exit 2 of 4: the normal success path (a real, non-empty config). */
   {
-    chttpcli cli = create_chttpclient(NULL);
+    chttpcli cli = ccol_create_chttpclient(NULL);
     REQUIRE_NE(cli, CHTTPCLI_INVALID);
     chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
     tls.ca_bundle_path = "/nonexistent/ca-bundle.pem"; /* never actually read
@@ -11016,7 +10985,7 @@ TEST(tls, set_tls_all_exit_paths_release_pin) {
    * (cert_path). */
   {
     char *cerr = NULL;
-    chttpcli cli = create_chttpclient_mp(&g_hop_fail_mp, &cerr);
+    chttpcli cli = ccol_create_chttpclient_mp(&g_hop_fail_mp, &cerr);
     REQUIRE_NE(cli, CHTTPCLI_INVALID);
     atomic_store(&g_hop_fail_call_index, 0);
     g_hop_fail_at_call = 0;
@@ -11053,8 +11022,8 @@ TEST(tls, set_tls_all_exit_paths_release_pin) {
 static SSL_CTX *g_tls_ssl_ctx = NULL;
 /* atomic_int, not plain int: _stop_tls_server's teardown write races
  * _tls_accept_loop's own accept() read of this same field on the way out,
- * exactly the same benign-but-TSan-flagged shape already fixed for this
- * file's own g_srv.server_fd (see that field's own comment). */
+ * exactly the same benign-but-TSan-flagged shape g_srv.server_fd handles
+ * for this file's plain-HTTP mock server (see that field's own comment). */
 static atomic_int g_tls_srv_fd = -1;
 static int g_tls_srv_port = 0;
 static pthread_t g_tls_accept_tid;
@@ -11097,9 +11066,10 @@ static void register_tls_conn_thread(pthread_t tid) {
 }
 
 /* Generates a throwaway self-signed cert/key pair into a fresh mkdtemp()
- * directory via the openssl CLI (same approach as tests/chttpserver_tls).
- * Returns 0 on success, -1 on any failure; callers must treat -1 as "TLS
- * integration could not be verified in this environment" rather than crash. */
+ * directory via the openssl CLI, the same approach
+ * tests/chttpserver/tests_tls.c uses. Returns 0 on success, -1 on any
+ * failure; callers must treat -1 as "TLS integration could not be verified
+ * in this environment" rather than crash. */
 static int _openssl_selfsigned(const char *key_path, const char *cert_path,
                                const char *cn, const char *san) {
   char cmd[1024];

@@ -103,7 +103,7 @@ bool chttp1_is_tchar(unsigned char c) {
 /* Whether a byte is disallowed inside a header VALUE under this parser's
  * only (strict) mode: any control character other than HTAB, including a
  * bare CR or NUL that survived line-splitting as ordinary content (see
- * _accumulate_line's own comment for why those are not rejected there). */
+ * accumulate_line's own comment for why those are not rejected there). */
 static bool is_invalid_value_byte(unsigned char c) {
   return (c < 0x20 && c != '\t') || c == 0x7f;
 }
@@ -188,7 +188,7 @@ typedef enum {
  * specially rejected here; it simply becomes ordinary line content, which
  * is then caught by the caller's own control-character validation of that
  * content (is_invalid_value_byte, or the reason-phrase scan in
- * _parse_status_line) rather than duplicating that check at this layer.
+ * parse_status_line) rather than duplicating that check at this layer.
  */
 static line_result_t accumulate_line(chttp1_parser_t *parser, const char **pp,
                                      const char *end) {
@@ -239,8 +239,8 @@ typedef enum { PH_OK, PH_ERROR, PH_USER } ph_result_t;
  * The reason phrase, and the single space before it, are BOTH optional:
  * RFC 7230's ABNF technically requires a trailing SP even for an empty
  * reason phrase, but real servers routinely omit it entirely (e.g.
- * "HTTP/1.1 304\r\n"); rejecting that would be a real-world compatibility
- * regression versus the parser this replaces.
+ * "HTTP/1.1 304\r\n"); rejecting it outright would break interoperability
+ * with those servers.
  */
 static bool parse_status_line(chttp1_parser_t *parser) {
   const char *s = parser->line_buf;
@@ -412,9 +412,9 @@ static bool value_ends_with_chunked(const char *v, size_t len) {
 
 /* RFC 7230 SS3.3.1: "chunked" MUST be the final transfer-coding in a
  * Transfer-Encoding list. This only matters for REQUESTS (a response's
- * framing that ignores this rule is this parser's own, pre-existing,
- * documented scope reduction; see value_ends_with_chunked's own doc
- * comment; chttpclient.c only ever parses responses, so this check is
+ * framing that ignores this rule is this parser's own documented scope
+ * reduction; see value_ends_with_chunked's own doc comment;
+ * chttpclient.c only ever parses responses, so this check is
  * gated to CHTTP1_PARSE_REQUEST call sites only). Returns true iff
  * "chunked" (case-insensitive) appears as some comma-separated token that
  * is NOT the last one; the request-smuggling-shaped case a front/back
@@ -469,10 +469,10 @@ static void parse_connection_tokens(chttp1_parser_t *parser, const char *v,
  * checks: duplicate Content-Length, Content-Length+chunked conflict,
  * Content-Length decimal overflow), updates framing flags for the three
  * header names this parser cares about, and invokes settings->on_header.
- * Shared verbatim between CHTTP1_ST_HEADERS and CHTTP1_ST_BODY_CHUNK_TRAILERS
- *; there is no regular-vs-trailer distinction at this layer, matching
- * chttpclient.c's own existing behaviour of inserting both into the same
- * headers map.
+ * Shared verbatim between CHTTP1_ST_HEADERS and
+ * CHTTP1_ST_BODY_CHUNK_TRAILERS; there is no regular-vs-trailer
+ * distinction at this layer, matching chttpclient.c's own behaviour of
+ * inserting both into the same headers map.
  */
 /* Shared by process_header_line and the CHTTP1_ST_FIRST_LINE case below, so
  * the request/status line's own contribution to total_header_bytes is
@@ -547,14 +547,13 @@ static ph_result_t process_header_line(chttp1_parser_t *parser) {
      * a valid, if unusual, way of saying the merged list is
      * "gzip, chunked"). F_CHUNKED therefore reflects only whether the
      * MOST RECENTLY processed Transfer-Encoding line ends in "chunked",
-     * re-derived from scratch on every line rather than only ever set
-     * (never cleared) as an earlier version of this code did; a
-     * chunked-final claim from an earlier line must NOT survive a later
-     * line that changes the picture (see the two regression tests this
-     * fix added: chunked-then-identity now correctly rejected,
-     * gzip-then-chunked now correctly still accepted). Whether the FINAL
-     * merged list actually ends in "chunked" can only be known once every
-     * Transfer-Encoding line has been seen, i.e. at headers-complete time
+     * re-derived from scratch on every line rather than only ever set and
+     * never cleared: a chunked-final claim from an earlier line must NOT
+     * survive a later line that changes the picture, which is what makes
+     * chunked-then-identity a rejection and gzip-then-chunked an
+     * acceptance. Whether the FINAL merged list actually ends in "chunked"
+     * can only be known once every Transfer-Encoding line has been seen,
+     * i.e. at headers-complete time
      * (see the CHTTP1_ST_HEADERS blank-line branch below), not per line
      * here. */
     parser->flags |= F_TRANSFER_ENCODING;
@@ -795,7 +794,7 @@ chttp1_errno_t chttp1_parser_execute(chttp1_parser_t *parser, const char *data,
              * restarting to keep parsing a second message on the same
              * parser instance for an interim 1xx response. chttpclient.c's
              * Tier 1 (chttp_do_internal, via chttp_request_t.expect_continue)
-             * does now send "Expect: 100-continue" and does drive a second
+             * does send "Expect: 100-continue" and does drive a second
              * message on the same connection after a "100 Continue" interim
              * response; but it does so with a FRESH chttp1_parser_t
              * instance for that second message (see chttpclient.c's
@@ -813,17 +812,17 @@ chttp1_errno_t chttp1_parser_execute(chttp1_parser_t *parser, const char *data,
               !(parser->flags & F_CHUNKED)) {
             /* RFC 7230 SS3.3.3: for a REQUEST specifically (never a
              * response; see value_ends_with_chunked's own doc comment for
-             * that side's separate, pre-existing, documented scope
-             * reduction), a Transfer-Encoding whose final coding is not
-             * "chunked" leaves the message length genuinely indeterminate;
-             * a request has no EOF-delimited body-framing mode to fall
-             * back to the way a response does (see the request/response
-             * asymmetry documented where CHTTP1_ST_BODY_EOF is entered
-             * below), so silently falling through to the "no framing
-             * headers means no body" branch just below (the pre-existing
-             * behavior here) let a front-end that disagrees about framing
-             * desync from this parser: a conforming origin server MUST
-             * reject such a request outright instead. Checked here, once
+             * that side's separate, documented scope reduction), a
+             * Transfer-Encoding whose final coding is not "chunked" leaves
+             * the message length genuinely indeterminate; a request has no
+             * EOF-delimited body-framing mode to fall back to the way a
+             * response does (see the request/response asymmetry documented
+             * where CHTTP1_ST_BODY_EOF is entered below), so silently
+             * falling through to the "no framing headers means no body"
+             * branch just below would let a front-end that disagrees about
+             * framing desync from this parser: a conforming origin server
+             * MUST reject such a request outright instead. Checked here,
+             * once
              * every Transfer-Encoding line has actually been seen (see
              * process_header_line's own comment for why this can't be
              * decided any earlier), not per individual header line. */
@@ -1050,15 +1049,15 @@ bool chttp1_parser_message_complete(const chttp1_parser_t *parser) {
 
 bool chttp1_should_keep_alive(const chttp1_parser_t *parser) {
   /* "HTTP/1.1 or later" is major > 1, or major == 1 with minor >= 1; NOT
-   * "both major and minor are nonzero". The latter (this function's
-   * previous condition) misclassifies any version whose minor happens to be
-   * 0 while major is already >= 2 (e.g. a literal "HTTP/2.0" status line,
-   * which this parser's grammar accepts, per parse_status_line's own doc
-   * comment: "not hard-coded to 1.x... since chttp1_should_keep_alive
-   * already needs to compare arbitrary major/minor values correctly
-   * regardless") as HTTP/1.0-or-earlier, wrongly requiring an explicit
-   * Connection: keep-alive token that a real server of that vintage would
-   * never send, and silently disabling connection reuse against it. */
+   * "both major and minor are nonzero". The latter test misclassifies any
+   * version whose minor happens to be 0 while major is already >= 2 (e.g.
+   * a literal "HTTP/2.0" status line, which this parser's grammar accepts,
+   * per parse_status_line's own doc comment: "not hard-coded to 1.x...
+   * since chttp1_should_keep_alive already needs to compare arbitrary
+   * major/minor values correctly regardless") as HTTP/1.0-or-earlier,
+   * wrongly requiring an explicit Connection: keep-alive token that a real
+   * server of that vintage would never send, and silently disabling
+   * connection reuse against it. */
   bool is_1_1_or_later = parser->http_major > 1 ||
                          (parser->http_major == 1 && parser->http_minor >= 1);
   if (is_1_1_or_later) {
@@ -1229,29 +1228,27 @@ ssize_t chttp1_stream_read(chttp1_stream_t *stream, char *buf, size_t buflen,
    * smaller buflen than the underlying TLS record actually contained, such
    * as during header parsing before this connection was ever handed off to
    * a worker), fully independent of whether the raw fd itself currently has
-   * anything left to read from the kernel. Polling the raw fd first (the
-   * previous shape, still used below for the plaintext case) made those
-   * already-decrypted bytes invisible to poll(2), stalling for the full
-   * timeout_ms budget despite data being immediately available; this also
-   * happens to be what makes timeout_ms == 0 actually mean "return
-   * immediately if fd is not already readable right now" (its own
+   * anything left to read from the kernel. Polling the raw fd first would
+   * make those already-decrypted bytes invisible to poll(2), stalling for
+   * the full timeout_ms budget despite data being immediately available.
+   * Attempting first is also what makes timeout_ms == 0 actually mean
+   * "return immediately if fd is not already readable right now" (its own
    * documented contract) for a TLS stream, rather than "never even attempt
-   * a read", since the very first attempt now always happens before the
+   * a read", since the very first attempt always happens before the
    * deadline (already expired for timeout_ms == 0) is ever checked.
    *
-   * This is NOT extended to the plaintext branch below: a plaintext
-   * stream's fd is not guaranteed to be non-blocking (chttp1_stream_prepare,
-   * unlike _prepare_tls, has no such requirement documented anywhere, and
-   * this module's own test suite relies on it working correctly against a
-   * genuine blocking socketpair, gated entirely by poll(2); attempting a
-   * raw read(2) before ever confirming readiness reintroduces exactly the
-   * hang this design avoids: a blocking fd with nothing available blocks
-   * inside read(2) itself, silently ignoring timeout_ms altogether, a real,
-   * reproducible hang caught by this file's own stream.
-   * read_timeout_when_nothing_available test). A raw fd's own readiness,
-   * unlike a TLS stream's, has no equivalent internal-buffering concern for
-   * poll(2) to be blind to in the first place, so poll-first remains both
-   * correct and necessary here. */
+   * The plaintext branch below deliberately keeps the opposite order
+   * (poll first, then read). A plaintext stream's fd is not guaranteed to
+   * be non-blocking: chttp1_stream_prepare, unlike _prepare_tls, documents
+   * no such requirement, and this module's own test suite exercises it
+   * against a genuine blocking socketpair, gated entirely by poll(2).
+   * Attempting a raw read(2) there before confirming readiness would hang
+   * inside read(2) itself whenever nothing is available, silently ignoring
+   * timeout_ms altogether; this file's own
+   * stream.read_timeout_when_nothing_available test is non-vacuous against
+   * exactly that. A raw fd's own readiness, unlike a TLS stream's, has no
+   * equivalent internal-buffering concern for poll(2) to be blind to in
+   * the first place, so poll-first is both correct and necessary here. */
   if (stream->tls) {
     for (;;) {
       ssize_t got = ctls_conn_read((ctls_conn_t *)stream->tls, buf, buflen);
@@ -1294,14 +1291,14 @@ ssize_t chttp1_stream_read(chttp1_stream_t *stream, char *buf, size_t buflen,
    * reproduce timeout_ms itself minus a handful of nanoseconds of pure call
    * overhead (harmless), but for timeout_ms == 0 specifically, ANY nonzero
    * elapsed time already exceeds a zero-length budget, so that recomputed
-   * value is unconditionally <= 0. That made this function report "already
-   * timed out" without ever calling poll(2) or attempting read(2) at all,
-   * even when the fd was already readable right now: a real violation of
-   * this function's own documented timeout_ms == 0 contract ("return
-   * immediately if fd is not already readable right now"), not merely a
-   * missed optimisation. Passing timeout_ms straight through fixes this
-   * (poll(2)'s own timeout_ms == 0 convention is exactly "one immediate,
-   * non-blocking check") while behaving identically to before for every
+   * value is unconditionally <= 0. That would make this function report
+   * "already timed out" without ever calling poll(2) or attempting read(2)
+   * at all, even when the fd is already readable right now: a real
+   * violation of this function's own documented timeout_ms == 0 contract
+   * ("return immediately if fd is not already readable right now"), not
+   * merely a missed optimisation. Passing timeout_ms straight through
+   * avoids this (poll(2)'s own timeout_ms == 0 convention is exactly "one
+   * immediate, non-blocking check") and behaves identically for every
    * timeout_ms > 0 or negative ("block forever") value. */
   if (!wait_for_ready(stream, POLLIN, timeout_ms)) return -1;
 
@@ -1331,7 +1328,7 @@ ssize_t chttp1_stream_write(chttp1_stream_t *stream, const char *buf,
    * nanoseconds of pure call overhead since that computation as having
    * already exhausted a zero-length budget, reporting a timeout without
    * ever calling poll(2) or attempting the write below, even when the fd
-   * was already writable right now; a real violation of this function's own
+   * is already writable right now; a real violation of this function's own
    * documented timeout_ms == 0 contract ("return immediately if fd is not
    * already writable right now"), not merely a missed optimisation. From
    * the SECOND iteration onward, a real wait_for_ready() call (and possibly

@@ -46,9 +46,9 @@ TAU_MAIN()
 extern SSL *_ctls_conn_ssl_for_tests(ctls_conn_t *conn);
 
 /* White-box accessor from chashmap.c (RUNNING_UNIT_TESTS only); see its own
-   doc comment there for the finding (a "possibly lost" chashmap iterator
-   under a heavily-loaded `make memtest` run) this permanent guard exists to
-   catch, should it ever genuinely recur. */
+   doc comment there for the leak shape this permanent guard exists to catch:
+   a "possibly lost" chashmap iterator under a heavily-loaded `make memtest`
+   run. */
 extern long chashmap_iter_outstanding_count_for_tests(void);
 
 /* Checked at true process exit (the exact moment valgrind's own leak check
@@ -75,11 +75,11 @@ static void __attribute__((destructor)) _check_chmap_iter_balance_at_exit(
 /* file-loading path, distinct from its own self-signed-generation path)     */
 /* are produced once at startup via the openssl CLI, mirroring the same      */
 /* approach already established in tests/chttpclient/tests_tls.c and         */
-/* tests/chttpserver/tests_tls.c. Unlike those suites, ctls never aborts the */
-/* process on a bad/missing cert (a confirmed design decision; see          */
-/* ctls.h's own doc comments), so there is no need to isolate this into a    */
-/* separate binary purely for process-abort safety; a missing openssl CLI   */
-/* here simply fails the affected tests' setup with a clear message.        */
+/* tests/chttpserver/tests_tls.c. Unlike those suites, ctls never aborts the  */
+/* process on a bad/missing cert (a deliberate design choice; see ctls.h's    */
+/* own doc comments), so there is no need to isolate this into a separate     */
+/* binary purely for process-abort safety; a missing openssl CLI here simply  */
+/* fails the affected tests' setup with a clear message.                      */
 /* ========================================================================== */
 
 static char g_cert_dir[256];
@@ -315,9 +315,8 @@ TEST(ctls_ctx, trust_system_no_crash) {
   ctls_ctx_t *ctx = ctls_ctx_new(NULL);
   /* This CI/dev environment's own system CA store is expected to be present
    * and loadable; a platform with none configured would legitimately see
-   * ccol_http_tls_cert_load_failed here instead, which is exactly the
-   * real, previously-silently-discarded failure this return value now
-   * surfaces. */
+   * ccol_http_tls_cert_load_failed here instead, which is exactly the real
+   * failure this return value surfaces rather than discarding silently. */
   REQUIRE_EQ(ctls_ctx_trust_system(ctx), ccol_success);
   ctls_ctx_release(ctx);
 }
@@ -970,20 +969,19 @@ TEST(ctls_conn, udata_roundtrip) {
 }
 
 /* ========================================================================== */
-/* Regression coverage for three real bugs found via an independent deep-scan */
-/* code review, none previously caught: (1) a use-after-free in */
-/* _ctls_servername_cb, which used to look up the matching named cert's own */
-/* SSL_CTX* under tls->lock but call SSL_set_SSL_CTX() on it AFTER releasing */
-/* the lock, racing a concurrent ctls_ctx_cert_add() rotating (and freeing) */
-/* that exact SSL_CTX; (2) an entirely unlocked data race in */
-/* _ctls_alpn_select_cb (server-mode ALPN selection), which read */
-/* tls->alpn[]/tls->alpn_count with no locking at all, unlike its own */
-/* client-mode sibling _ctls_record_client_alpn, which already locked */
-/* correctly; and (3) a missing NULL check on the self-signed-certificate */
-/* subject-name allocation in ctls_ctx_cert_add, which could reach */
-/* _ctls_create_self_signed(NULL) -> strlen(NULL) under sustained memory */
-/* pressure instead of the documented, graceful ccol_not_enough_memory every */
-/* other allocation failure in that same function already reports.            */
+/* Coverage for three hazards that no ordinary test surfaces: (1) a           */
+/* use-after-free in _ctls_servername_cb, were it to look up the matching     */
+/* named cert's own SSL_CTX* under tls->lock but call SSL_set_SSL_CTX() on it */
+/* AFTER releasing the lock, racing a concurrent ctls_ctx_cert_add() rotating */
+/* (and freeing) that exact SSL_CTX; (2) an unlocked data race in             */
+/* _ctls_alpn_select_cb (server-mode ALPN selection), were it to read         */
+/* tls->alpn[]/tls->alpn_count without holding tls->lock the way its          */
+/* client-mode sibling _ctls_record_client_alpn does; and (3) a               */
+/* self-signed-certificate subject-name allocation in ctls_ctx_cert_add whose */
+/* NULL result, left unchecked, reaches _ctls_create_self_signed(NULL) ->     */
+/* strlen(NULL) under sustained memory pressure instead of the documented,    */
+/* graceful ccol_not_enough_memory every other allocation failure in that     */
+/* same function already reports.                                             */
 /* ========================================================================== */
 
 /* (3): self-signed named-cert subject-name OOM must not crash */
@@ -1004,12 +1002,12 @@ static void *_fail_nth_realloc(void *p, size_t sz) { return realloc(p, sz); }
 TEST(ctls_ctx, cert_add_self_signed_name_alloc_failure_reports_oom_not_crash) {
   /* ctls_ctx_cert_add's own call sequence for a NAMED, self-signed
      certificate with no password: lower_name = _ctls_strdup_lower(...) is
-     the first malloc, nc = _mem_calloc(...) is a calloc (not counted
+     the first malloc, nc = _ccol_mem_calloc(...) is a calloc (not counted
      here), and nc->self_signed_name = _ctls_strdup(...) is the second
-     malloc; exactly the one this test targets. Confirmed to crash
-     (strlen(NULL) inside _ctls_create_self_signed, reached via
-     _ctls_ctx_rebuild_locked) against a scratch build with the NULL check
-     this test guards removed, before the fix was reapplied. */
+     malloc; exactly the one this test targets. This test is non-vacuous:
+     removing the NULL check it guards makes it crash with strlen(NULL)
+     inside _ctls_create_self_signed, reached via
+     _ctls_ctx_rebuild_locked. */
   ccol_memmgmt_procs_t mp = {_fail_nth_malloc, _fail_nth_free, _fail_nth_calloc,
                              _fail_nth_realloc};
   ctls_ctx_t *ctx = ctls_ctx_new_mp(&mp, NULL);
@@ -1044,24 +1042,22 @@ static void *_sni_race_rotate_thread(void *arg) {
        _ctls_servername_cb call (on the handshake thread below) must never
        observe happening to the SSL_CTX* it already looked up. */
     ctls_ctx_cert_add(g_sni_race_ctx, "race.test", NULL, NULL, NULL, NULL);
-    /* A real wall-clock throttle, not sched_yield(): with 22 real cores
-       available, an unthrottled rotate thread runs on its own dedicated
-       core with nothing else contending for it, so sched_yield() there is a
-       near no-op (it only cedes the CPU to another runnable thread on the
-       SAME core) and does nothing to slow this thread's own iteration rate
+    /* A real wall-clock throttle, not sched_yield(): on a machine with cores
+       to spare, an unthrottled rotate thread runs on its own dedicated core
+       with nothing else contending for it, so sched_yield() there is a near
+       no-op (it only cedes the CPU to another runnable thread on the SAME
+       core) and does nothing to slow this thread's own iteration rate
        relative to the main thread's, which is on a different core entirely.
-       The rotate thread re-acquires ctx->lock so much faster than the main
-       thread's own handshake-driving calls that the lock is, in practice,
-       essentially always held (or immediately re-stolen the instant it's
-       released) by the time the main thread ever tries for it; a genuine
-       lock-starvation livelock (300 handshakes never completing within
-       several real minutes, not a deadlock but not survivable as a test
-       either), found empirically before this throttle was added: first a
-       180s run, then a bare sched_yield()-throttled 120s run, both never
-       got past the very first iteration of this test. usleep(1000) caps
-       the rotate thread at roughly 1000 iterations/sec, comfortably enough
-       to keep racing the main thread's own lock acquisitions while leaving
-       it genuine, reliable wall-clock room to win its share of them. */
+       Unthrottled, the rotate thread re-acquires ctx->lock so much faster
+       than the main thread's own handshake-driving calls that the lock is,
+       in practice, essentially always held (or immediately re-stolen the
+       instant it's released) by the time the main thread ever tries for it;
+       the result is a genuine lock-starvation livelock, with the 80
+       handshakes below never completing within several real minutes (not a
+       deadlock, but not survivable as a test either). usleep(1000) caps the
+       rotate thread at roughly 1000 iterations/sec, comfortably enough to
+       keep racing the main thread's own lock acquisitions while leaving it
+       genuine, reliable wall-clock room to win its share of them. */
     usleep(1000);
   }
   return NULL;
@@ -1082,9 +1078,9 @@ TEST(ctls_sni, cert_add_race_during_live_handshake_does_not_crash) {
 
   /* A bounded number of real, full handshakes, each against a fresh
      connection pair, racing the rotation thread's own continuous churn the
-     whole time. The real assertion is that this survives at all (under a
-     plain run this proves nothing new; under ASan/valgrind/TSan, a
-     use-after-free here reliably aborts or reports before the fix). */
+     whole time. The real assertion is that this survives at all: a plain
+     run proves little, but under ASan/valgrind/TSan a use-after-free here
+     reliably aborts or is reported. */
   for (int i = 0; i < 80; i++) {
     int fds[2];
     _make_nonblocking_pair(fds);
@@ -1116,7 +1112,7 @@ TEST(ctls_sni, cert_add_race_during_live_handshake_does_not_crash) {
 }
 
 /* (2): server-mode ALPN-select-callback race, plus the connection-owned
- *      alpn_selected_name copy fix (both directions) */
+ *      alpn_selected_name copy (both directions) */
 
 static _Atomic bool g_alpn_race_stop = false;
 static ctls_ctx_t *g_alpn_race_server_ctx = NULL;

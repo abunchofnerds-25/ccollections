@@ -33,8 +33,8 @@ pointer across a chttpsvr_stop/chttpsvr_start restart, and a
 registration call racing a concurrent chttpsvr_destroy of srv simply
 returns ccol_invalid_args rather than touching freed memory.
 
-This function is thread-safe and may be called before or after
-chttpsvr_start is running.
+This function is thread-safe and may be called before or after the
+server is started.
 .fi
 .SH NOTES
 .nf

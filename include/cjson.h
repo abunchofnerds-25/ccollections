@@ -26,6 +26,15 @@ SOFTWARE.
 
 #include <common.h>
 
+/* Everything declared from here to the end of this header is part of the
+ * public ABI of libccollections and is exported from the shared library.
+ * The library itself is built with -fvisibility=hidden, so any function or
+ * object that is not covered by one of these blocks stays internal to the
+ * library, is absent from its dynamic symbol table, and cannot be
+ * interposed by, or collide with, a symbol of the same name in the
+ * application that links against it. */
+#pragma GCC visibility push(default)
+
 /**
  * @file cjson.h
  * @brief Generic JSON parser, serializer, and mutable in-memory DOM.
@@ -96,9 +105,9 @@ SOFTWARE.
 /**
  * @brief JSON value kind tag.
  *
- * Replaces the general-purpose ccol_data_type with a JSON-specific set that
- * covers all seven JSON value kinds, including the composite types (list,
- * dictionary) that ccol_data_type lacks, plus null and boolean.
+ * Used in place of the general-purpose ccol_data_type: this set covers all
+ * seven JSON value kinds, including the composite types (list, dictionary)
+ * that ccol_data_type lacks, plus null and boolean.
  */
 typedef enum cjson_node_type {
   CJSON_NULL = 0,   /**< JSON null literal                           */
@@ -343,37 +352,37 @@ static inline const char *cjson_type_str(cjson node) {
 
 /**
  * @brief Return the boolean value.
- * Calls fatal_err() if the node's type is not CJSON_BOOL.
+ * Calls ccol_fatal_err() if the node's type is not CJSON_BOOL.
  */
 bool cjson_bool_val(cjson node);
 
 /**
  * @brief Return the integer value.
- * Calls fatal_err() if the node's type is not CJSON_INTEGER.
+ * Calls ccol_fatal_err() if the node's type is not CJSON_INTEGER.
  */
 long long cjson_int_val(cjson node);
 
 /**
  * @brief Return the floating-point value.
- * Calls fatal_err() if the node's type is not CJSON_FLOAT.
+ * Calls ccol_fatal_err() if the node's type is not CJSON_FLOAT.
  */
 double cjson_double_val(cjson node);
 
 /**
  * @brief Return the string value (owned by the node; do not free).
- * Calls fatal_err() if the node's type is not CJSON_STRING.
+ * Calls ccol_fatal_err() if the node's type is not CJSON_STRING.
  */
 const char *cjson_str_val(cjson node);
 
 /**
  * @brief Return the element count of an list node.
- * Calls fatal_err() if the node's type is not CJSON_LIST.
+ * Calls ccol_fatal_err() if the node's type is not CJSON_LIST.
  */
 size_t cjson_list_len(cjson node);
 
 /**
  * @brief Return the key count of an dictionary node.
- * Calls fatal_err() if the node's type is not CJSON_DICTIONARY.
+ * Calls ccol_fatal_err() if the node's type is not CJSON_DICTIONARY.
  */
 size_t cjson_dictionary_size(cjson node);
 
@@ -805,12 +814,13 @@ ccol_retval_t _cjson_set_typed(cjson root, const char *path,
  * cjson_set(doc, "users.#0.tag",    "champion");
  * @endcode
  */
-#define cjson_set(root, path, val)                                           \
-  ({                                                                         \
-    typeof(val) _cjson_sv = (val);                                           \
-    _cjson_set_typed((root), (path), _cjson_type_of(_cjson_sv),              \
-                     (void *)&_cjson_sv, sizeof(_cjson_sv),                  \
-                     _cjson_is_signed(_cjson_sv), is_char_array(_cjson_sv)); \
+#define cjson_set(root, path, val)                              \
+  ({                                                            \
+    typeof(val) _cjson_sv = (val);                              \
+    _cjson_set_typed((root), (path), _cjson_type_of(_cjson_sv), \
+                     (void *)&_cjson_sv, sizeof(_cjson_sv),     \
+                     _cjson_is_signed(_cjson_sv),               \
+                     ccol_is_char_array(_cjson_sv));            \
   })
 
 /**
@@ -832,3 +842,5 @@ ccol_retval_t _cjson_set_typed(cjson root, const char *path,
  * @endcode
  */
 #define cjson_delete(root, path) _cjson_delete((root), (path))
+
+#pragma GCC visibility pop

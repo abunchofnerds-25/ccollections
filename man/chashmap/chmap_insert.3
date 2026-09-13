@@ -11,10 +11,16 @@ chmap_insert(hm_name, key, val);
 .fi
 .SH DESCRIPTION
 .nf
-Type-safe wrapper for chmap_insert_elem() that automatically handles
-type conversion and cmap_pair creation. If the key already exists the
-value is updated silently. Calls fatal_err() only on a true failure
-(i.e. ccol_not_enough_memory or ccol_container_full).
+Type-safe wrapper for chmap_insert_elem() that builds the cmap_pair for
+the key and the value from the expressions passed. If the key already
+exists the value is updated silently. Calls ccol_fatal_err() only on a
+true failure (ccol_not_enough_memory, ccol_container_full, or
+ccol_invalid_args).
+
+key and val must be of the map's declared key and value types. Both are
+stored as the raw bytes of the expression passed, sized with sizeof,
+rather than converted to the declared type the way a plain C assignment
+would convert them.
 .fi
 .SH PARAMETERS
 .nf
@@ -37,8 +43,9 @@ collapses into a single key (see chmap_construct(3))
 .SH EXAMPLES
 .nf
 chmap_construct(map, int, char*);
-chmap_insert(map, 42, "hello");
-chmap_insert(map, 100, "world");
+int first = 42, second = 100;
+chmap_insert(map, first, "hello");
+chmap_insert(map, second, "world");
 .fi
 .SH "SEE ALSO"
 .BR chmap_insert_elem (3),

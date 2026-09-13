@@ -1497,15 +1497,15 @@ TEST(cstrings, many_appends_correctness) {
 }
 
 // ========================================================================
-// SELF-ALIAS TESTS (use-after-realloc and overlapping-copy bug coverage)
+// SELF-ALIAS TESTS (use-after-realloc and overlapping-copy hazards)
 // Strings of length >= 9 ensure the doubled length exceeds the 16-byte
-// minimum capacity, triggering a realloc so the alias bugs are exercised.
+// minimum capacity, triggering a realloc so those hazards are exercised.
 // ========================================================================
 
 TEST(cstrings, append_self_alias_triggers_realloc) {
   // "123456789" len=9; append self -> "123456789123456789" len=18
-  // 18+1 > 16 so cstring_grow_to must realloc; the old str pointer would
-  // be dangling without the alias fix.
+  // 18+1 > 16 so cstring_grow_to must realloc; str must be re-derived
+  // against the new buffer afterward, or it dangles.
   cstr_construct(s, "123456789");
   REQUIRE_EQ(cstring_get_capacity(s), (size_t)CSTRING_MIN_CAPACITY);
   ccol_retval_t rv = cstring_append(s, cstring_c_str(s));
@@ -1602,7 +1602,8 @@ TEST(cstrings, insert_alias_after_pos_no_realloc) {
 TEST(cstrings, insert_alias_overlapping_dst_gt_src) {
   // "abcde", insert s->data+1 ("bcde") at pos 3.
   // alias_off=1 <= pos=3, str_len=4: after memmove the copy source overlaps
-  // destination with dst > src; previously a forward memcpy would corrupt.
+  // destination with dst > src, so a forward memcpy corrupts the result and
+  // an overlap-safe memmove is required.
   // Expected: "abc" + "bcde" + "de" = "abcbcdede"
   cstr_construct(s, "abcde");
   ccol_retval_t rv = cstring_insert(s, 3, cstring_c_str(s) + 1);
@@ -1630,8 +1631,8 @@ TEST(cstrings, insert_self_alias_at_nonzero_pos_no_realloc) {
 // string aliased); every other nonzero-alias-offset test stays within the
 // current capacity, so grow_to() never actually reallocates. This test
 // combines both: a nonzero alias offset AND an actual buffer relocation,
-// which is exactly the scenario the "re-derive str after grow_to() may have
-// moved the buffer" fix exists for.
+// which is exactly the scenario re-deriving str after grow_to() may have
+// moved the buffer exists for.
 TEST(cstrings, prepend_alias_offset_nonzero_triggers_realloc) {
   // 20-char base -> init_cap = next_pow2(21) = 32. Prepending its own
   // offset-5 suffix (15 chars) grows the string to 35 bytes, forcing an
@@ -1875,14 +1876,15 @@ TEST(cstrings, substring_macro) {
 // MACRO HYGIENE REGRESSION (cstr_insert's internal retval local)
 // ========================================================================
 
-// cstr_insert used to declare its internal retval as plain '_r'; a caller
-// whose own pos argument was literally named '_r' would silently bind to
+// cstr_insert must not declare its internal retval as plain '_r'; a caller
+// whose own pos argument is literally named '_r' would silently bind to
 // that not-yet-initialized local instead (C's declarator-scope rule) rather
-// than the caller's real value, since ccol_retval_t implicitly converts to
-// size_t with no diagnostic guaranteed. Confirmed to actually reproduce
-// (wrong insertion position, or a spurious ccol_invalid_args depending on
-// what garbage the uninitialized enum held) against the pre-fix macro before
-// being fixed by renaming the internal local to __cstr_insert_r.
+// than to the caller's real value, since ccol_retval_t implicitly converts
+// to size_t with no diagnostic guaranteed. This test is non-vacuous:
+// renaming the internal local from __cstr_insert_r back to plain '_r' makes
+// it fail, either with a wrong insertion position or with a spurious
+// ccol_invalid_args, depending on what garbage the uninitialized enum
+// holds.
 TEST(cstrings, insert_macro_pos_argument_named__r_is_not_shadowed) {
   cstr_construct(s, "hello");
   size_t _r = 2;
@@ -1896,14 +1898,13 @@ TEST(cstrings, insert_macro_pos_argument_named__r_is_not_shadowed) {
 //
 // Every query/modification/search/substring function in this module is
 // documented to assert (abort via ccol_assert) when handed a NULL cstr.
-// None of these paths were previously exercised by this suite. Each one is
-// run in its own forked child (mirroring the fork+SIGABRT pattern used
-// throughout this codebase, e.g. tests/cvector's
+// Each one is run in its own forked child (mirroring the fork+SIGABRT
+// pattern used throughout this codebase, e.g. tests/cvector's
 // type_safe_at_out_of_bounds_is_fatal) so the process-aborting assert
 // doesn't take down the whole test binary, and the parent confirms the
 // child actually died via SIGABRT rather than merely exiting or crashing
-// some other way (e.g. a plain NULL-deref SIGSEGV, which is exactly the
-// failure mode cstring_get_mprocs had before it gained its own NULL guard).
+// some other way; a plain NULL-deref SIGSEGV is exactly what a missing NULL
+// guard produces instead.
 // ========================================================================
 
 /* Returns false (leaving *out_status untouched) if fork() or waitpid()
@@ -1973,9 +1974,9 @@ DEFINE_NULL_ARG_FATAL_TEST(null_substring_is_fatal,
 DEFINE_NULL_ARG_FATAL_TEST(null_copy_is_fatal, (void)cstring_copy(NULL, NULL))
 DEFINE_NULL_ARG_FATAL_TEST(null_split_is_fatal,
                            (void)cstring_split(NULL, ",", NULL))
-// cstring_get_mprocs previously had no NULL guard at all and would segfault
-// (WIFSIGNALED + SIGSEGV) rather than assert (WIFSIGNALED + SIGABRT); this
-// pins the fixed, now-consistent-with-the-rest-of-the-module behavior.
+// cstring_get_mprocs needs a NULL guard of its own: without one it
+// segfaults (WIFSIGNALED + SIGSEGV) instead of asserting (WIFSIGNALED +
+// SIGABRT), inconsistently with the rest of this module.
 DEFINE_NULL_ARG_FATAL_TEST(null_get_mprocs_is_fatal,
                            (void)cstring_get_mprocs(NULL))
 
@@ -1988,13 +1989,13 @@ DEFINE_NULL_ARG_FATAL_TEST(null_get_mprocs_is_fatal,
 // to the real free() unconditionally (never budget-tracked), so whatever DID
 // succeed is still released correctly by every cleanup path under test.
 //
-// Calibrated against the real, built library (not guessed) via a standalone
-// counting harness: cstring_create_full() always costs exactly 3 calls
-// (1 calloc for the container + 1 malloc for the copied mprocs + 1 malloc
-// for the data buffer, in that order) for any initial content that fits
-// within the minimum 16-byte capacity; a grow_to() that actually reallocates
-// costs exactly 1 further realloc call; cvector_create_full(sizeof(cstr))
-// (used internally by cstring_split) costs the identical 3 calls.
+// The budgets below are exact allocation counts, not estimates:
+// cstring_create_full() always costs exactly 3 calls (1 calloc for the
+// container + 1 malloc for the copied mprocs + 1 malloc for the data
+// buffer, in that order) for any initial content that fits within the
+// minimum 16-byte capacity; a grow_to() that actually reallocates costs
+// exactly 1 further realloc call; cvector_create_full(sizeof(cstr)) (used
+// internally by cstring_split) costs the identical 3 calls.
 // ========================================================================
 
 static int g_cstr_oom_budget = 0;
@@ -2238,8 +2239,8 @@ TEST(cstrings, split_oom_mid_loop_token_creation_fails) {
   // Budget covers the vector (3 calls) and the first token "a" (3 calls);
   // the second token "b"'s own container calloc (the 7th call) must fail.
   // Must return NULL with the first token already destroyed by
-  // destroy_cstr_vector(), not leaked (verified separately under
-  // `make memtest`).
+  // destroy_cstr_vector(), not leaked; `make memtest` is what catches a
+  // regression there.
   g_cstr_oom_budget = 6;
   char *split_err = NULL;
   cvec parts = cstring_split(s, ",", &split_err);

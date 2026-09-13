@@ -117,8 +117,11 @@ of those forms.
 A raw, unescaped C0 control byte (0x00-0x1F other than tab) or DEL
 (0x7F) is a parse error wherever it appears literally in scalar
 content, in every scalar style; a double-quoted scalar's own escape
-sequences (e.g. "\ex01", "\ex7f", "\e0") remain the only way to embed
-one of these bytes in a string value.
+sequences (e.g. "\ex01", "\ex7f") remain the only way to embed a
+non-null one of these bytes in a string value.  An escape that decodes
+to the null byte itself ("\e0", "\ex00", "\eu0000", "\eU00000000") is
+rejected instead: a node's scalar value is a plain null-terminated C
+string, so an embedded null byte can never be represented.
 
 Input is otherwise treated as an opaque byte string: no byte is
 checked for well-formed UTF-8, so a byte sequence that is not valid

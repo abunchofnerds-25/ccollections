@@ -11,8 +11,8 @@ ctpool_construct(name, num_threads, queue_capacity);
 .fi
 .SH DESCRIPTION
 .nf
-Declares a ctpool variable named name, calls create_cthread_pool() to
-initialise it, and calls fatal_err() if creation fails.
+Declares a ctpool variable named name, calls ccol_create_cthread_pool() to
+initialise it, and calls ccol_fatal_err() if creation fails.
 
 queue_capacity controls the queue mode:
   0 or ccol_invalid_size  ->  unbounded queue (submit never blocks on
@@ -30,7 +30,7 @@ queue_capacity  Maximum pending tasks (0 or ccol_invalid_size for
 .fi
 .SH NOTES
 .nf
-Calls fatal_err() on failure; use create_cthread_pool() directly when
+Calls ccol_fatal_err() on failure; use ccol_create_cthread_pool() directly when
 graceful error handling is required.
 .fi
 .SH EXAMPLES
@@ -50,7 +50,7 @@ ctpool_destroy(pool2);
 .SH "SEE ALSO"
 .BR ctpool_construct_scoped (3),
 .BR ctpool_declare (3),
-.BR create_cthread_pool (3),
+.BR ccol_create_cthread_pool (3),
 .BR ctpool_submit (3),
 .BR ctpool_shutdown_drain (3),
 .BR ctpool_destroy (3)

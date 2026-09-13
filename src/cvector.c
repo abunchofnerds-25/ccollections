@@ -56,7 +56,7 @@ struct cvector {
 void __cvector_destroy(cvec v) {
   if (v) {
     if (v->data_ptr) {
-      _mem_free(v->m_procs, v->data_ptr);
+      _ccol_mem_free(v->m_procs, v->data_ptr);
     }
 
     if (v->m_procs) {
@@ -64,7 +64,7 @@ void __cvector_destroy(cvec v) {
       free_func(v->m_procs);
       free_func(v);
     } else {
-      mem_free(v);
+      ccol_mem_free(v);
     }
   }
 }
@@ -115,7 +115,7 @@ cvec cvector_create_full(size_t elem_size, ccol_memmgmt_procs_t *mmgt_procs,
   }
 
   cvec v;
-  v = _mem_calloc(mmgt_procs, 1, sizeof(cvector));
+  v = _ccol_mem_calloc(mmgt_procs, 1, sizeof(cvector));
   if (!v) {
     if (err) {
       *err = CCOL_ERR_STR("failed to allocate vector container");
@@ -124,11 +124,11 @@ cvec cvector_create_full(size_t elem_size, ccol_memmgmt_procs_t *mmgt_procs,
   }
 
   if (!ccol_populate_mem_mgmt_procs(v, mmgt_procs, err)) {
-    _mem_free(mmgt_procs, v);
+    _ccol_mem_free(mmgt_procs, v);
     return NULL;
   }
 
-  v->data_ptr = _mem_alloc(mmgt_procs, minimum_capacity * elem_size);
+  v->data_ptr = _ccol_mem_alloc(mmgt_procs, minimum_capacity * elem_size);
   if (!v->data_ptr) {
     __cvector_destroy(v);
     if (err) {
@@ -159,20 +159,20 @@ ccol_memmgmt_procs_t *cvector_get_mprocs(cvec v) {
 }
 
 /* Doubles the backing buffer capacity. Returns ccol_container_full when the
- * architectural growth ceiling (max_elem_count, or the largest byte size this
- * elem_size can address) has already been reached (a structural limit, not
+ * architectural growth ceiling (ccol_max_elem_count, or the largest byte size
+ * this elem_size can address) has already been reached (a structural limit, not
  * a transient allocation failure) and ccol_not_enough_memory only when the
  * realloc itself fails. Callers must not conflate the two: see
  * cvector_push_back, the one caller of this function, which surfaces this
- * distinction to its own caller instead of reporting ccol_not_enough_memory
- * for both. On reallocation failure the original pointer is restored so the
+ * distinction to its own caller instead of reporting ccol_not_enough_memory for
+ * both. On reallocation failure the original pointer is restored so the
  * vector remains usable. */
 static ccol_retval_t scale_the_cvector_size_up(cvec v) {
   if (!v) {
     ccol_assert(false);
   }
 
-  if (v->capacity > (max_elem_count / scaling_factor)) {
+  if (v->capacity > (ccol_max_elem_count / scaling_factor)) {
     return ccol_container_full;  // Would overflow elem_count
   }
 
@@ -183,7 +183,7 @@ static ccol_retval_t scale_the_cvector_size_up(cvec v) {
 
   void *orig = v->data_ptr;
   v->data_ptr =
-      _mem_realloc(v->m_procs, v->data_ptr, new_capacity * v->elem_size);
+      _ccol_mem_realloc(v->m_procs, v->data_ptr, new_capacity * v->elem_size);
   if (!v->data_ptr) {
     v->data_ptr = orig;
     return ccol_not_enough_memory;
@@ -206,8 +206,8 @@ static void scale_the_cvector_size_down(cvec v) {
   }
 
   void *orig = v->data_ptr;
-  v->data_ptr = _mem_realloc(v->m_procs, v->data_ptr,
-                             (v->capacity / scaling_factor) * v->elem_size);
+  v->data_ptr = _ccol_mem_realloc(
+      v->m_procs, v->data_ptr, (v->capacity / scaling_factor) * v->elem_size);
   if (!v->data_ptr) {
     v->data_ptr = orig;
     return;
@@ -239,15 +239,15 @@ ccol_retval_t cvector_push_back(cvec v, const void *new_elem) {
     return ccol_invalid_args;
   }
 
-  if (v->elem_count == max_elem_count) {
+  if (v->elem_count == ccol_max_elem_count) {
     return ccol_container_full;
   }
 
   ccol_retval_t result = ccol_success;
 
   if (v->elem_count < v->capacity) {
-    mem_cpy((void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
-            new_elem, v->elem_size);
+    ccol_mem_cpy((void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
+                 new_elem, v->elem_size);
     ++v->elem_count;
   } else {
     const char *buf_start = (const char *)v->data_ptr;
@@ -265,8 +265,8 @@ ccol_retval_t cvector_push_back(cvec v, const void *new_elem) {
         // buffer.
         new_elem = (const char *)v->data_ptr + new_elem_offset;
       }
-      mem_cpy((void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
-              new_elem, v->elem_size);
+      ccol_mem_cpy((void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
+                   new_elem, v->elem_size);
       ++v->elem_count;
     } else {
       result = grow_result;
@@ -295,9 +295,9 @@ ccol_retval_t cvector_pop_back(cvec v, void *target_elem) {
     result = ccol_success;
     --v->elem_count;
 
-    mem_cpy(target_elem,
-            (void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
-            v->elem_size);
+    ccol_mem_cpy(target_elem,
+                 (void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
+                 v->elem_size);
 
     if (v->elem_count < (v->capacity / shrink_threshold_divisor)) {
       scale_the_cvector_size_down(v);
@@ -318,12 +318,12 @@ bool cvector_reserve(cvec v, size_t new_capacity_count) {
   }
 
   size_t refined_new_capacity_count =
-      find_nearest_gte_power_of_two(new_capacity_count);
+      ccol_find_nearest_gte_power_of_two(new_capacity_count);
   if (refined_new_capacity_count < minimum_capacity) {
     refined_new_capacity_count = minimum_capacity;
   }
 
-  if (refined_new_capacity_count > max_elem_count) {
+  if (refined_new_capacity_count > ccol_max_elem_count) {
     // That's too much, reject it.
     return false;
   }
@@ -339,8 +339,8 @@ bool cvector_reserve(cvec v, size_t new_capacity_count) {
 
   // We need to extend our capacity
   void *orig = v->data_ptr;
-  v->data_ptr = _mem_realloc(v->m_procs, v->data_ptr,
-                             refined_new_capacity_count * v->elem_size);
+  v->data_ptr = _ccol_mem_realloc(v->m_procs, v->data_ptr,
+                                  refined_new_capacity_count * v->elem_size);
   if (!v->data_ptr) {
     // Reallocation attempt failed, restore the original pointer
     v->data_ptr = orig;
@@ -355,22 +355,22 @@ bool cvector_reserve(cvec v, size_t new_capacity_count) {
 /* Copies n bytes from src into the vector's tail slot (v->data_ptr +
  * v->elem_count * v->elem_size; v->elem_count itself is not touched here).
  * arr_ptr is permitted to alias anywhere inside v's own backing buffer,
- * including into reserved-but-not-yet-live capacity past v->elem_count; if
- * the caller-supplied elem_count is large enough, the source range can
- * overlap the destination range. mem_cpy is not overlap-safe (it degrades to
- * a plain, non-overlap-safe memcpy for n > 32 bytes, and even its <=32-byte
+ * including into reserved-but-not-yet-live capacity past v->elem_count; if the
+ * caller-supplied elem_count is large enough, the source range can overlap the
+ * destination range. ccol_mem_cpy is not overlap-safe (it degrades to a plain,
+ * non-overlap-safe memcpy for n > 32 bytes, and even its <=32-byte
  * packed-struct-assignment fast path has no overlap guarantee), so an
  * overlap-safe memmove is used whenever the two ranges actually overlap;
- * mem_cpy's faster path is kept for the overwhelmingly common non-aliasing
+ * ccol_mem_cpy's faster path is kept for the overwhelmingly common non-aliasing
  * case. */
 #ifdef RUNNING_UNIT_TESTS
 /* Counts how many cvector_copy_into_tail calls actually took the
  * overlap-safe memmove branch, so a white-box test can assert the branch
  * was genuinely exercised rather than relying on the copy engine's observed
  * output alone; a real (and non-portable) memcpy implementation may
- * happen not to visibly corrupt a given overlapping range even without the
- * fix, so "the data came out right" is not on its own proof the safe path
- * was taken. Not part of the public API. */
+ * happen not to visibly corrupt a given overlapping range even when the
+ * overlap-safe branch is skipped, so "the data came out right" is not on
+ * its own proof the safe path was taken. Not part of the public API. */
 size_t cvector_overlap_copy_count_for_tests = 0;
 #endif
 
@@ -384,13 +384,13 @@ static void cvector_copy_into_tail(cvec v, const void *src, size_t n) {
 #endif
     memmove(dst, src, n);
   } else {
-    mem_cpy(dst, src, n);
+    ccol_mem_cpy(dst, src, n);
   }
 }
 
 /* Bulk-appends elem_count elements from arr_ptr to the vector, reserving
  * additional capacity when needed. The total element count overflow check
- * catches both a size_t wrap-around and exceeding max_elem_count.
+ * catches both a size_t wrap-around and exceeding ccol_max_elem_count.
  *
  * arr_ptr is permitted to alias into v's own backing buffer (e.g. a pointer
  * obtained from cvector_data_ptr(v) or cvector_at(v, i)). If
@@ -415,8 +415,9 @@ bool cvector_append_array(cvec v, void *arr_ptr, size_t elem_count) {
   }
 
   size_t new_elem_count = v->elem_count + elem_count;
-  if (new_elem_count < v->elem_count || new_elem_count > max_elem_count) {
-    // Either new_elem_count wrapped or it's greater than the max_elem_count
+  if (new_elem_count < v->elem_count || new_elem_count > ccol_max_elem_count) {
+    // Either new_elem_count wrapped or it's greater than the
+    // ccol_max_elem_count
     return false;
   }
 
@@ -470,10 +471,10 @@ bool cvector_append_cvector(cvec v_to, cvec v_from) {
     /* Mirrors cvector_append_array's own overflow check: without it, a
      * size_t wrap-around here would let this addition understate the real
      * required capacity. Unreachable in practice (elem_count would already
-     * have to sit at max_elem_count, an astronomically large vector), but
+     * have to sit at ccol_max_elem_count, an astronomically large vector), but
      * cvector_append_array's own downstream check must not be the only
      * thing standing between this call and an incorrect reserve. */
-    if (new_count < v_to->elem_count || new_count > max_elem_count) {
+    if (new_count < v_to->elem_count || new_count > ccol_max_elem_count) {
       return false;
     }
     if (!cvector_reserve(v_to, new_count)) {
@@ -531,8 +532,8 @@ void cvector_reset(cvec v) {
 
   if (v->capacity != minimum_capacity) {
     void *orig = v->data_ptr;
-    v->data_ptr =
-        _mem_realloc(v->m_procs, v->data_ptr, minimum_capacity * v->elem_size);
+    v->data_ptr = _ccol_mem_realloc(v->m_procs, v->data_ptr,
+                                    minimum_capacity * v->elem_size);
     if (!v->data_ptr) {
       // Capacity should remain unchanged if reallocation fails.
       v->data_ptr = orig;
@@ -581,7 +582,7 @@ typedef struct {
 
 static void cvec_iter_impl_free(cmap_iterator *it) {
   cvec_iter_impl_t *impl = (cvec_iter_impl_t *)it;
-  _mem_free(impl->vec->m_procs, impl);
+  _ccol_mem_free(impl->vec->m_procs, impl);
 }
 
 static cmap_iterator *cvec_cmap_iter_next(cmap_iterator *it) {
@@ -610,7 +611,8 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err) {
   if (v->elem_count == 0) {
     return NULL;
   }
-  cvec_iter_impl_t *impl = _mem_calloc(v->m_procs, 1, sizeof(cvec_iter_impl_t));
+  cvec_iter_impl_t *impl =
+      _ccol_mem_calloc(v->m_procs, 1, sizeof(cvec_iter_impl_t));
   if (!impl) {
     if (err) {
       *err = CCOL_ERR_STR("Failed to allocate iterator");

@@ -16,7 +16,7 @@ node using each node's stored allocator, then sets node to NULL.
 
 List children, dictionary values, and string copies are all freed
 recursively.  Double-freeing a destroyed handle is safe because the
-macro nulls the variable first.
+macro nulls the variable once the subtree has been freed.
 
 To destroy a tree without nulling the pointer, call __cyaml_destroy()
 directly.

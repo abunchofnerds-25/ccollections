@@ -40,25 +40,22 @@ SOFTWARE.
  * or any other public header. src/chttpclient.c and src/chttpserver.c are
  * the only files meant to #include this header.
  *
- * This parser started as a purpose-built *response*-only parser covering
- * exactly the subset chttpclient.c needs. Request-mode parsing
+ * Both grammars share one parser. Response-mode parsing covers exactly the
+ * subset chttpclient.c needs; request-mode parsing
  * (chttp1_parser_init_request(), settings->on_request_line,
  * CHTTP1_HEADERS_DIVERT_BODY/CHTTP1_HEADERS_ONLY, and the RFC 7230 SS3.3
- * request-specific body-framing rule) was added later, once chttpserver.c
- * needed its own parser, sharing the header/chunked/trailer/size-cap core
- * between both modes rather than duplicating it, exactly as
- * chttp1_parser_t's own internal state machine already made possible (every
- * state after the first line was already common to both grammars).
+ * request-specific body-framing rule) covers what chttpserver.c needs. The
+ * header/chunked/trailer/size-cap core is shared between both modes rather
+ * than duplicated, which chttp1_parser_t's own internal state machine makes
+ * natural: every state after the first line is common to both grammars.
  *
- * Also added in that same increment: chttp1_stream_t and its
- * prepare/read/write/last_error/release functions, a small, separate,
- * reactor-agnostic worker-pull I/O helper (real read(2)/write(2)/poll(2)
- * syscalls) for reading/writing raw bytes off a file descriptor from a
- * worker thread; see its own section below. Unlike chttp1_parser_t itself,
- * this is a genuine, if small, expansion of this module's dependencies
- * beyond the C standard library (poll(2) plus raw socket read/write); the
- * parser proper remains pure computation with zero I/O and zero
- * allocation, exactly as before.
+ * chttp1_stream_t and its prepare/read/write/last_error/release functions
+ * are a small, separate, reactor-agnostic worker-pull I/O helper (real
+ * read(2)/write(2)/poll(2) syscalls) for reading/writing raw bytes off a
+ * file descriptor from a worker thread; see its own section below. Unlike
+ * chttp1_parser_t itself, that helper depends on more than the C standard
+ * library (poll(2) plus raw socket read/write); the parser proper is pure
+ * computation with zero I/O and zero allocation.
  *
  * ### Design: a plain, self-contained value type, no heap allocation
  *
@@ -70,24 +67,24 @@ SOFTWARE.
  * accumulation buffer used for the status line, header lines, and
  * chunk-size lines is a FIXED-size array (CHTTP1_MAX_LINE_LEN, defined
  * below) embedded directly in the struct, not a growable/realloc'd
- * buffer; this is also what enforces the new header-size cap described
- * below (a line that hasn't terminated by the time the fixed buffer fills
- * up is rejected as "line too long"). Body/chunk-data bytes are never
+ * buffer; this is also what enforces the header-size cap described below
+ * (a line that hasn't terminated by the time the fixed buffer fills up is
+ * rejected as "line too long"). Body/chunk-data bytes are never
  * copied into this buffer at all; they are passed straight from the
- * caller's own read buffer to on_body, zero-copy, exactly like today.
+ * caller's own read buffer to on_body, zero-copy.
  *
  * ### Header size protections
  *
- * Nothing previously enforced any limit on a single header line's length,
- * the number of headers, or their total size; a slow-drip
- * malicious or misbehaving server could force unbounded client memory
- * growth via one endless header line. This parser enforces three fixed
- * limits (CHTTP1_MAX_LINE_LEN, defined below; CHTTP1_MAX_HEADER_COUNT and
- * CHTTP1_MAX_TOTAL_HEADER_BYTES, both private to chttp1_parser.c since they
- * don't affect this struct's layout) that, combined, bound this. Trailer
- * headers (after a chunked body's terminating 0-length chunk) count against
- * the exact same header-count/total-bytes budget as regular headers;
- * there is no separate trailer allowance to bypass the cap through.
+ * Without a limit on a single header line's length, on the number of
+ * headers, and on their total size, a slow-drip malicious or misbehaving
+ * peer could force unbounded memory growth via one endless header line.
+ * This parser enforces three fixed limits (CHTTP1_MAX_LINE_LEN, defined
+ * below, plus CHTTP1_MAX_HEADER_COUNT and CHTTP1_MAX_TOTAL_HEADER_BYTES,
+ * both private to chttp1_parser.c since they don't affect this struct's
+ * layout) that, combined, bound this. Trailer headers (after a chunked
+ * body's terminating 0-length chunk) count against the exact same
+ * header-count/total-bytes budget as regular headers; there is no separate
+ * trailer allowance to bypass the cap through.
  *
  * ### Thread safety
  *
@@ -171,11 +168,11 @@ typedef enum {
  * @brief settings->on_headers_complete return-value constants.
  *
  * CHTTP1_HEADERS_HAS_BODY and CHTTP1_HEADERS_NO_BODY apply in both parsing
- * modes, exactly as before (this parser used to document these as bare 0/1
- * without names; existing response-mode callers returning literal 0/1
- * continue to work unchanged). CHTTP1_HEADERS_DIVERT_BODY is new and valid
- * ONLY in request mode (see chttp1_settings_t.on_headers_complete's own doc
- * comment for its full contract); returning it in response mode is treated
+ * modes. Their values are 0 and 1 respectively, so a callback returning a
+ * bare literal 0/1 behaves identically to one returning the named constant.
+ * CHTTP1_HEADERS_DIVERT_BODY is valid ONLY in request mode (see
+ * chttp1_settings_t.on_headers_complete's own doc comment for its full
+ * contract); returning it in response mode is treated
  * as an invalid hint (CHTTP1_USER), since chttpclient.c has no worker-thread
  * diversion concept to hand off to.
  */
@@ -207,7 +204,7 @@ typedef enum {
 } chttp1__state_t;
 
 /* A three-way finish-state split (clean boundary / EOF-delimited
- * completion / truncated mid-message), which is what makes
+ * completion / truncated mid-message) is what makes
  * chttp1_parser_finish() correct without the call site needing to know
  * which body-framing mode was in effect. */
 typedef enum {
@@ -231,9 +228,9 @@ typedef enum {
  * 8192 matches the read-buffer size chttpclient.c already hard-codes at
  * both of its socket-read call sites.
  *
- * The other two new limits (max header count, max cumulative header bytes)
- * do not affect this struct's layout; they are plain running counts
- * compared against constants private to chttp1_parser.c.
+ * The other two limits (max header count, max cumulative header bytes) do
+ * not affect this struct's layout; they are plain running counts compared
+ * against constants private to chttp1_parser.c.
  */
 #define CHTTP1_MAX_LINE_LEN 8192
 
@@ -323,8 +320,8 @@ typedef struct {
    * meaningful to divert: a request with neither Content-Length nor chunked
    * Transfer-Encoding has no body at all regardless of this return value
    * (see CHTTP1_HEADERS_ONLY's own doc comment), and a request with an
-   * explicit "Content-Length: 0" completes immediately for the same reason
-   *; there is no point pausing to divert an empty body to a worker
+   * explicit "Content-Length: 0" completes immediately for the same
+   * reason; there is no point pausing to divert an empty body to a worker
    * thread. A chunked body, even one whose very first chunk turns out to
    * be the empty terminating chunk, is always genuinely diverted, since
    * that can only be discovered by reading the first chunk-size line,
@@ -346,11 +343,11 @@ typedef struct {
   /**
    * Fired exactly once, when the message (headers + whatever body framing
    * applies) is fully parsed. This parser already knows independently that
-   * it has just reached a message boundary; it drives its own explicit
-   * state machine rather
-   * than relying on a callback's return value to learn that; so this
-   * follows the same plain convention as the other three callbacks: return
-   * 0 on success, or nonzero to abort with CHTTP1_USER. chttp1_parser_execute
+   * it has just reached a message boundary (it drives its own explicit
+   * state machine rather than relying on a callback's return value to
+   * learn that), so this follows the same plain convention as the other
+   * three callbacks: return 0 on success, or nonzero to abort with
+   * CHTTP1_USER. chttp1_parser_execute
    * and chttp1_parser_finish report the pause itself via their own
    * CHTTP1_PAUSED return value regardless of what this callback returns
    * (beyond that zero/nonzero distinction).
@@ -411,25 +408,25 @@ struct chttp1_parser {
    * 0 (the default after chttp1_parser_init()/chttp1_parser_init_request())
    * means "use the built-in default"; set either field to a positive value,
    * any time before feeding the first byte, to override it for this parser
-   * instance. Added for chttpserver's own configurable
+   * instance. This exists for chttpserver's own configurable
    * chttpsvr_config_t.max_header_bytes; chttpclient has no equivalent
-   * public knob and simply never sets these, getting the original built-in
-   * caps unchanged. */
+   * public knob and simply never sets these, so it gets the built-in caps.
+   */
   size_t max_header_count_override;
   size_t max_total_header_bytes_override;
 
   /** Optional per-parser cap on a single chunk's declared size (chunked
    * Transfer-Encoding bodies only; has no effect on Content-Length-framed
    * bodies). 0 (the default) means no cap: a chunk-size line is accepted
-   * for any value that fits in uint64_t, exactly as before this field
-   * existed. A nonzero value rejects a chunk-size line whose decoded value
+   * for any value that fits in uint64_t. A nonzero value rejects a
+   * chunk-size line whose decoded value
    * exceeds it as soon as that line is parsed, with CHTTP1_ERROR (see
    * chttp1_chunk_size_limit_exceeded()), before ever waiting for a single
-   * byte of that chunk's data. Added for chttpserver's own max_body_size:
-   * without this, a peer could declare one absurdly large chunk (any value
-   * up to UINT64_MAX is a syntactically valid chunk-size token) and then
-   * simply never send it, tying up a worker thread until a read timeout
-   * fired, since max_body_size itself is only checked against bytes
+   * byte of that chunk's data. This exists for chttpserver's own
+   * max_body_size: without it, a peer can declare one absurdly large chunk
+   * (any value up to UINT64_MAX is a syntactically valid chunk-size token)
+   * and then simply never send it, tying up a worker thread until a read
+   * timeout fires, since max_body_size itself is only checked against bytes
    * actually received (see chttp1_declared_content_length's own comment for
    * the analogous Content-Length-framed gap this parallels). chttpclient.c
    * has no equivalent public knob and simply never sets this field. */
@@ -475,8 +472,8 @@ bool chttp1_is_tchar(unsigned char c);
 void chttp1_settings_init(chttp1_settings_t *settings);
 
 /**
- * @brief Initialise parser for a new response message. Void and infallible
- *       ; there is no allocation to fail.
+ * @brief Initialise parser for a new response message. Void and
+ *        infallible; there is no allocation to fail.
  *
  * settings must outlive parser.
  *
@@ -494,8 +491,8 @@ void chttp1_parser_init(chttp1_parser_t *parser,
  *        CHTTP1_PARSE_REQUEST). Void and infallible, same contract as
  *        chttp1_parser_init() otherwise.
  *
- * Added for the server side: parses "method SP request-target SP
- * HTTP-version CRLF" instead of a status line, fires settings->
+ * Parses "method SP request-target SP HTTP-version CRLF" instead of a
+ * status line, fires settings->
  * on_request_line once before any header, applies RFC 7230 SS3.3's request-
  * specific body-framing rule (neither Content-Length nor chunked means no
  * body at all, never the response-only EOF-delimited framing mode), and
@@ -530,8 +527,8 @@ void chttp1_parser_init_request(chttp1_parser_t *parser,
  *    request mode, chttpserver.c DOES treat them as real, meaningful
  *    pipelined-request bytes rather than discarding them (see
  *    chttp1_stream_push_back_leftover(), which exists specifically to
- *    thread them into the next request's own parse); this contract
- *    predates that request-mode use and is scoped to response mode only.
+ *    thread them into the next request's own parse); this contract is
+ *    scoped to response mode only.
  *
  * 3. CHTTP1_HEADERS_ONLY (request mode only) is NOT covered by contract #2
  *    above: it is not a terminal outcome, and feeding more bytes afterward
@@ -597,13 +594,13 @@ size_t chttp1_parser_consumed(const chttp1_parser_t *parser);
  *        (the state chttp1_parser_execute()/chttp1_parser_finish() leave it
  *        in after returning CHTTP1_PAUSED).
  *
- * A thin, stable accessor over parser->state, added so callers driving a
- * request across a CHTTP1_HEADERS_ONLY divert (see that code's own doc
- * comment); resuming chttp1_parser_execute() from a different thread,
- * potentially several calls later; have a documented way to ask "is this
- * request now fully parsed" without reaching into parser->state directly
- * (chttp1__state_t's own values are not part of this module's documented
- * contract and may change).
+ * A thin, stable accessor over parser->state, so that a caller driving a
+ * request across a CHTTP1_HEADERS_ONLY divert (resuming
+ * chttp1_parser_execute() from a different thread, potentially several
+ * calls later) has a documented way to ask "is this request now fully
+ * parsed" without reaching into parser->state directly (chttp1__state_t's
+ * own values are not part of this module's documented contract and may
+ * change).
  */
 bool chttp1_parser_message_complete(const chttp1_parser_t *parser);
 
@@ -645,10 +642,9 @@ bool chttp1_should_keep_alive(const chttp1_parser_t *parser);
  * (correctly handling a "100 Continue" interim response arriving before the
  * real final response on the same connection, rather than treating it as an
  * ordinary complete (no-body) message the way any other 1xx status is
- * treated today) is deliberately deferred: it has no real caller to
- * exercise it until chttpclient.c itself gains Expect: 100-continue
- * request-sending support, which is a separate, later increment, not this
- * one.
+ * treated) is deliberately not provided: nothing would exercise it unless
+ * chttpclient.c itself gained Expect: 100-continue request-sending
+ * support.
  */
 bool chttp1_expects_continue(const chttp1_parser_t *parser);
 
@@ -660,8 +656,9 @@ bool chttp1_expects_continue(const chttp1_parser_t *parser);
  * exclusive with chunked framing by construction: this parser rejects a
  * message declaring both Content-Length and chunked Transfer-Encoding
  * before headers can ever complete (RFC 7230 SS3.3.3), so this and chunked
- * framing can never both be true for the same message. Added so a caller
- * can inspect the declared body size (see chttp1_declared_content_length())
+ * framing can never both be true for the same message. This exists so a
+ * caller can inspect the declared body size (see
+ * chttp1_declared_content_length())
  * before deciding whether to divert the request to a worker thread at all,
  * without reaching into parser->flags directly (private to
  * chttp1_parser.c).
@@ -680,10 +677,10 @@ bool chttp1_has_content_length(const chttp1_parser_t *parser);
  * different meaning, not the original declared total. Returns 0 for a NULL
  * parser.
  *
- * Added specifically so a caller (chttpserver.c) can reject a request whose
- * declared Content-Length already exceeds its own configured body-size
- * limit immediately at headers-complete time, rather than only reactively,
- * byte by byte, as the body is actually read (see
+ * This exists specifically so a caller (chttpserver.c) can reject a
+ * request whose declared Content-Length already exceeds its own configured
+ * body-size limit immediately at headers-complete time, rather than only
+ * reactively, byte by byte, as the body is actually read (see
  * chttp1_settings_t.on_body's own doc comment): without this, a peer that
  * declares an oversized Content-Length and then simply never sends the
  * body ties up a reader until a read timeout fires, since nothing ever
@@ -699,8 +696,9 @@ uint64_t chttp1_declared_content_length(const chttp1_parser_t *parser);
  * Meaningful only immediately after chttp1_parser_execute() (or
  * chttp1_parser_finish()) returns CHTTP1_ERROR; false in every other case,
  * including every other rejection reason CHTTP1_ERROR also covers (a
- * malformed chunk-size token, a too-long line, ...). Added so a caller that
- * sets max_chunk_size_override can distinguish "this specific chunk
+ * malformed chunk-size token, a too-long line, ...). This exists so a
+ * caller that sets max_chunk_size_override can distinguish "this specific
+ * chunk
  * declared more than the configured limit" from every other parse failure,
  * e.g. to map it to the same "body too large" outcome (413/
  * ccol_msg_too_large in chttpserver.c's case) a max_body_size violation
@@ -720,11 +718,11 @@ bool chttp1_chunk_size_limit_exceeded(const chttp1_parser_t *parser);
  *
  * Used internally by chttpserver.c's own worker-driven body ingestion,
  * operating on a raw file descriptor with no dependency on any
- * reactor/event_loop at all; unlike chttp1_parser_t itself, chttp1_stream_t
- * is NOT zero-allocation (it may heap-allocate a copy of the carry-over
- * bytes passed to
- * chttp1_stream_prepare()), since its lifecycle (one instance per diverted
- * request, not embedded pervasively) does not need that same constraint.
+ * reactor/ccol_event_loop at all; unlike chttp1_parser_t itself,
+ * chttp1_stream_t is NOT zero-allocation (it may heap-allocate a copy of
+ * the carry-over bytes passed to chttp1_stream_prepare()), since its
+ * lifecycle (one instance per diverted request, not embedded pervasively)
+ * does not need that same constraint.
  *
  * Typical use: a reactor thread parses headers via chttp1_parser_execute()
  * until it returns CHTTP1_HEADERS_ONLY, hands the fd off to a worker thread
@@ -802,8 +800,8 @@ bool chttp1_stream_prepare(chttp1_stream_t *stream, int fd,
  * ctls_conn_read() during its own header-parsing loop, not raw wire bytes),
  * except chttp1_stream_read()/_write() subsequently call
  * ctls_conn_read()/_write() on tls_conn instead of raw read(2)/write(2) on
- * fd. fd is still needed and still used, purely for poll(2) readiness waits
- *; ctls_conn_t is deliberately reactor-agnostic and has no polling
+ * fd. fd is still needed and still used, purely for poll(2) readiness
+ * waits; ctls_conn_t is deliberately reactor-agnostic and has no polling
  * primitive of its own.
  *
  * @param tls_conn  The ctls_conn_t (from ctls.h) driving this connection's
@@ -924,18 +922,17 @@ bool chttp1_stream_push_back_leftover(chttp1_stream_t *stream, const char *buf,
  *
  * Intended to be called exactly once, by whichever caller drove this
  * stream's ingestion, right before chttp1_stream_release(); that function
- * would otherwise silently free any such bytes with no way to get them
- * back. This closes a real, previously-undetected bug in an earlier
- * version of chttpserver.c: a pipelined next request's bytes, already
- * permanently gone from the kernel's own socket receive buffer, would
- * vanish the instant the current request's ingestion finished, hanging the
- * client waiting for a response that would never come. After this call,
- * stream's own carry-over is empty, exactly as if chttp1_stream_prepare()
- * had been given none at all.
+ * otherwise silently frees any such bytes with no way to get them back.
+ * Skipping this call loses a pipelined next request: its bytes are already
+ * permanently gone from the kernel's own socket receive buffer, so they
+ * vanish the instant the current request's ingestion finishes, leaving the
+ * client waiting for a response that never comes. After this call, stream's
+ * own carry-over is empty, exactly as if chttp1_stream_prepare() had been
+ * given none at all.
  *
  * @param len_out  Set to the number of bytes returned (0 if the return
  *                 value is NULL).
- * @return A heap-allocated (plain malloc(), not this codebase's _mem_alloc
+ * @return A heap-allocated (plain malloc(), not this codebase's _ccol_mem_alloc
  *         convention; matching chttp1_stream_t's own carry-over
  *         allocation) buffer the caller must free() (even when *len_out
  *         would be 0, freeing a NULL pointer is always safe); NULL if there
@@ -948,8 +945,8 @@ char *chttp1_stream_take_leftover(chttp1_stream_t *stream, size_t *len_out);
 
 /**
  * @brief Releases stream's own resources (its carry-over buffer, if any).
- *        Does NOT close fd; ownership of the file descriptor itself was
- *        never transferred to this struct by chttp1_stream_prepare().
+ *        Does NOT close fd; chttp1_stream_prepare() never transfers
+ *        ownership of the file descriptor itself to this struct.
  *
  * Must be called exactly once, after ingestion is fully done (EOF, error,
  * or the handler simply stopped reading/writing early). Safe to call on a

@@ -13,7 +13,7 @@ cstr_init_mp(s, initial, mprocs);
 .nf
 Calls cstring_create_full() to initialise the already-declared cstr variable
 s with the given initial content and memory management procedures. Calls
-fatal_err() if creation fails.
+ccol_fatal_err() if creation fails.
 .fi
 .SH PARAMETERS
 .nf
@@ -23,7 +23,7 @@ mprocs   Custom memory management procedures (ccol_memmgmt_procs_t *)
 .fi
 .SH NOTES
 .nf
-Calls fatal_err() on allocation failure
+Calls ccol_fatal_err() on allocation failure
 .fi
 .SH "SEE ALSO"
 .BR cstr_init (3),

@@ -2,11 +2,11 @@ CC = gcc
 INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
 SRC_FILE_PREFIX = clrucache
-# cthreadpool.c is a transitive dependency of cthreadcomm.c: event_loop's
+# cthreadpool.c is a transitive dependency of cthreadcomm.c: ccol_event_loop's
 # dispatch_pool (num_reactor_threads > 1) is a ctpool. cvector.c is needed
-# for two reasons now: cthreadcomm.c links it (event_loop's own
+# for two reasons: cthreadcomm.c links it (ccol_event_loop's own
 # generation-tagged handle slot table) and clrucache.c needs it directly
-# for its own, separate slot table (clru_cache's identical redesign).
+# for its own, separate slot table of the same shape.
 SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/chashmap.c \
             ../../src/cthreadcomm.c ../../src/cthreadpool.c \
             ../../src/cvector.c ../../src/common.c
@@ -31,10 +31,10 @@ memtest: build
 
 # --ignore-errors negative: gcov's own coverage counters are plain (non-atomic)
 # increments, which can race under concurrently-executed instrumented code and
-# has been observed producing a spurious negative hit count (reproduced on
-# more than one module, including a glibc header, not this library's own
-# logic); see tests/chttpclient/Makefile's identical flag for the full
-# rationale and reproduction notes.
+# produce a spurious negative hit count. This affects more than one module,
+# including inside a glibc header, and is a limitation of gcov's own
+# instrumentation rather than a defect in this library's logic; see
+# tests/chttpclient/Makefile's identical flag for the full rationale.
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
@@ -42,7 +42,7 @@ generate_coverage_report:
 	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file $(SRC_FILE_PREFIX).c.info && \
 	genhtml --ignore-errors inconsistent -s $(SRC_FILE_PREFIX).c.info --output-directory coverage && \
-	rm -rf *.gcno *.gcda *.gcov *.c.info
+	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info
 
 all: build test memtest generate_coverage_report
 

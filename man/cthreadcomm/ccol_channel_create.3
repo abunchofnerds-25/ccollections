@@ -1,0 +1,56 @@
+.TH CCOL_CHANNEL_CREATE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccol_channel_create \- create a bidirectional communication ccol_channel
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_channel_create(max_size, err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a bidirectional ccol_channel with two internal circular queues for
+communication between an owner thread and worker threads. Both directions
+share the same capacity. Uses standard malloc/free for memory management.
+
+This is a convenience macro for ccol_channel_create_with_mprocs() with NULL
+memory management procedures.
+.fi
+.SH PARAMETERS
+.nf
+max_size   Maximum number of messages each direction can hold; each
+           direction is backed by its own circular queue, so the same
+           SIZE_MAX / sizeof(c_message_t) bound documented for
+           ccol_circular_queue_create(3) applies here
+err_str    Optional error string pointer
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to newly created ccol_channel on success
+Returns NULL on failure
+.fi
+.SH NOTES
+.nf
+All operations are thread-safe
+Channel must be destroyed with ccol_channel_destroy() when done
+Direction is automatically selected based on calling thread ID
+The owner thread (the one that called ccol_channel_create()) must remain
+alive for as long as the ccol_channel is in use: routing compares the
+calling thread's ID against the ID captured at creation time, and the
+OS may reuse that ID for an unrelated, later thread once the original
+owner exits, which would then be silently misrouted as the owner too
+The supported way to combine fork(2) with a ccol_channel is to fork(2)
+before creating it, or create it and fork(2) immediately followed by
+exec(3); continuing to run without an intervening exec(3) while a
+ccol_channel created before the fork is still live is not a supported
+pattern. As a defense-in-depth measure on top of that, a lock held by
+some other thread at the instant of the fork is never inherited by
+the child already locked, and neither underlying queue owns a thread
+of its own, so a ccol_channel inherited that way happens to remain fully
+usable regardless.
+.fi
+.SH "SEE ALSO"
+.BR ccol_channel_create_with_mprocs (3),
+.BR ccol_channel_destroy (3)

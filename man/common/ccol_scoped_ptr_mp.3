@@ -13,9 +13,9 @@ ccol_scoped_ptr_mp(name, type, mmgmt_procs);
 .nf
 Declares "type *name", initialised to NULL, and registers automatic
 cleanup via __attribute__((cleanup(...))). Assign to name normally (e.g.
-via _mem_alloc(mmgmt_procs, size)); whichever value it holds when the
+via _ccol_mem_alloc(mmgmt_procs, size)); whichever value it holds when the
 enclosing scope ends is freed via mmgmt_procs->free (or the default
-allocator, via mem_free(), if mmgmt_procs is NULL).
+allocator, via ccol_mem_free(), if mmgmt_procs is NULL).
 
 This is the custom-allocator counterpart to ccol_scoped_ptr(); see that
 page for the default-allocator form and for the caveats shared by both
@@ -40,7 +40,7 @@ the point of declaration, which is the common case.
 Passing the address of a local variable directly as mmgmt_procs (e.g.
 &some_local_procs) can trip -Waddress ("the address of X will always
 evaluate as true") under this library's own -Werror build flags, since
-_mem_alloc/_mem_free's internal NULL check becomes provably always-true
+_ccol_mem_alloc/_ccol_mem_free's internal NULL check becomes provably always-true
 at that call site. Store the address in a ccol_memmgmt_procs_t * variable
 first and pass that instead.
 
@@ -60,7 +60,7 @@ library.
 .nf
 void process(ccol_memmgmt_procs_t *mp) {
   ccol_scoped_ptr_mp(buf, char, mp);
-  buf = _mem_alloc(mp, 128);
+  buf = _ccol_mem_alloc(mp, 128);
   if (!buf) return;
 
   /* buf is used here */

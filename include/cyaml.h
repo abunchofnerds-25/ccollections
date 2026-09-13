@@ -26,6 +26,15 @@ SOFTWARE.
 
 #include <common.h>
 
+/* Everything declared from here to the end of this header is part of the
+ * public ABI of libccollections and is exported from the shared library.
+ * The library itself is built with -fvisibility=hidden, so any function or
+ * object that is not covered by one of these blocks stays internal to the
+ * library, is absent from its dynamic symbol table, and cannot be
+ * interposed by, or collide with, a symbol of the same name in the
+ * application that links against it. */
+#pragma GCC visibility push(default)
+
 /**
  * @file cyaml.h
  * @brief YAML 1.2 parser, serializer, and mutable in-memory DOM.
@@ -231,9 +240,9 @@ SOFTWARE.
  * - Integer range: CYAML_INTEGER is a signed 64-bit long long.  An
  *   implicit decimal, hex, or octal integer literal whose value does not
  *   fit gracefully falls back the same way a too-wide decimal literal
- *   always has: to CYAML_FLOAT when the text also parses as one, or
- *   otherwise to a plain CYAML_STRING; it is never silently reinterpreted
- *   as a wrapped-around or wrong-signed CYAML_INTEGER.
+ *   does: to CYAML_FLOAT when the text also parses as one, or otherwise
+ *   to a plain CYAML_STRING; it is never silently reinterpreted as a
+ *   wrapped-around or wrong-signed CYAML_INTEGER.
  *
  * ### Custom memory management
  *
@@ -615,37 +624,37 @@ ccol_retval_t cyaml_node_set_tag(cyaml node, const char *tag);
 
 /**
  * @brief Return the boolean value.
- * Calls fatal_err() if the node's type is not CYAML_BOOL.
+ * Calls ccol_fatal_err() if the node's type is not CYAML_BOOL.
  */
 bool cyaml_bool_val(cyaml node);
 
 /**
  * @brief Return the integer value.
- * Calls fatal_err() if the node's type is not CYAML_INTEGER.
+ * Calls ccol_fatal_err() if the node's type is not CYAML_INTEGER.
  */
 long long cyaml_int_val(cyaml node);
 
 /**
  * @brief Return the floating-point value.
- * Calls fatal_err() if the node's type is not CYAML_FLOAT.
+ * Calls ccol_fatal_err() if the node's type is not CYAML_FLOAT.
  */
 double cyaml_double_val(cyaml node);
 
 /**
  * @brief Return the string value (owned by the node; do not free).
- * Calls fatal_err() if the node's type is not CYAML_STRING.
+ * Calls ccol_fatal_err() if the node's type is not CYAML_STRING.
  */
 const char *cyaml_str_val(cyaml node);
 
 /**
  * @brief Return the element count of a list node.
- * Calls fatal_err() if the node's type is not CYAML_LIST.
+ * Calls ccol_fatal_err() if the node's type is not CYAML_LIST.
  */
 size_t cyaml_list_len(cyaml node);
 
 /**
  * @brief Return the key count of a dictionary node.
- * Calls fatal_err() if the node's type is not CYAML_DICTIONARY.
+ * Calls ccol_fatal_err() if the node's type is not CYAML_DICTIONARY.
  */
 size_t cyaml_dictionary_size(cyaml node);
 
@@ -1074,12 +1083,13 @@ ccol_retval_t _cyaml_set_typed(cyaml root, const char *path,
  * cyaml_set(doc, "server.tls",  (bool)true);
  * @endcode
  */
-#define cyaml_set(root, path, val)                                           \
-  ({                                                                         \
-    typeof(val) _cyaml_sv = (val);                                           \
-    _cyaml_set_typed((root), (path), _cyaml_type_of(_cyaml_sv),              \
-                     (void *)&_cyaml_sv, sizeof(_cyaml_sv),                  \
-                     _cyaml_is_signed(_cyaml_sv), is_char_array(_cyaml_sv)); \
+#define cyaml_set(root, path, val)                              \
+  ({                                                            \
+    typeof(val) _cyaml_sv = (val);                              \
+    _cyaml_set_typed((root), (path), _cyaml_type_of(_cyaml_sv), \
+                     (void *)&_cyaml_sv, sizeof(_cyaml_sv),     \
+                     _cyaml_is_signed(_cyaml_sv),               \
+                     ccol_is_char_array(_cyaml_sv));            \
   })
 
 /**
@@ -1101,3 +1111,5 @@ ccol_retval_t _cyaml_set_typed(cyaml root, const char *path,
  * @endcode
  */
 #define cyaml_delete(root, path) _cyaml_delete((root), (path))
+
+#pragma GCC visibility pop

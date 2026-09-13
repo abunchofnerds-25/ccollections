@@ -12,8 +12,9 @@ cvec_construct(vec_name, type);
 .SH DESCRIPTION
 .nf
 Type-safe macro for creating a vector. Automatically determines element
-size from the type and creates type marker variables for compile-time
-type checking in other macros.
+size from the type and creates a type marker variable that lets the
+other type-dispatching macros know the declared element type at each
+call site.
 .fi
 .SH PARAMETERS
 .nf
@@ -23,7 +24,8 @@ type      Element type (e.g., int, double, struct foo)
 .SH NOTES
 .nf
 Terminates program on allocation failure
-Creates hidden type marker variable for type safety
+Creates a hidden type marker variable that the other type-dispatching
+macros read; cvec_redeclare(3) recreates it in another scope
 Equivalent to cvector_create(sizeof(type), &err) with error handling
 .fi
 .SH EXAMPLES

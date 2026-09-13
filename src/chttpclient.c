@@ -101,7 +101,7 @@ static size_t _effective_max_idle_origins(void) {
  * indefinitely against the default request_timeout_ms == 0 (no timeout)
  * configuration; every other unbounded-repetition vector in this file
  * (redirects, chttp1_parser's own header count/byte budgets) is already
- * capped, and this loop was the one exception. */
+ * capped; this cap does the same for this loop. */
 #define CHTTP_MAX_INTERIM_RESPONSES 64
 
 /* ========================================================================== */
@@ -206,7 +206,7 @@ typedef struct {
  * chttpclient* is ever touched. This is what lets __chttpclient_destroy
  * detect BOTH a concurrent double-destroy (racing another destroy on the
  * same still-live handle) AND a sequential one (a stale handle, from an
- * earlier, already-completed destroy) as a fatal_err rather than a
+ * earlier, already-completed destroy) as a ccol_fatal_err rather than a
  * use-after-free/double-free: a slot is marked not-in-use the instant it is
  * released, and its generation is bumped on every reuse, so a stale handle
  * can never alias a later, unrelated client occupying the same slot index.
@@ -217,12 +217,10 @@ typedef struct {
  * _do_async, _do_pooled, ...); _chttpcli_handle_slot_acquire/
  * __chttpclient_destroy (the only mutators) each run once per client's
  * entire lifetime, not once per request. Mirrors cthreadcomm.c's/
- * cthreadpool.c's own identical slot-table rwlock conversions. Unlike
- * those two, this table has no pthread_atfork() protection of its own at
- * all (chttpclient.c registers none), so this conversion carries none of
- * their own TID-tracked-write-lock reinit-in-child subtlety: there being
- * nothing to preserve doesn't change what fork() safety this table already
- * did or didn't have. */
+ * cthreadpool.c's own identical slot-table rwlocks. Unlike those two, this
+ * table has no pthread_atfork() protection of its own at all
+ * (chttpclient.c registers none), so none of their own
+ * TID-tracked-write-lock reinit-in-child machinery applies here. */
 typedef struct {
   struct chttpclient *ptr; /* NULL when slot is free */
   uint32_t generation;     /* minted fresh on every acquire; monotonic per
@@ -232,27 +230,27 @@ typedef struct {
 } chttpcli_slot_t;
 
 static struct {
-  rw_lock_t rwlock;
-  once_flag_t once;
+  ccol_rw_lock_t rwlock;
+  ccol_once_flag_t once;
   cvec slots;        /* cvec of chttpcli_slot_t; grows via push_back only,
                          indices permanent once allocated */
   cvec free_indices; /* cvec of uint32_t; LIFO free list, O(1) reuse */
 } chttpcli_slot_table = {0};
 
 static void _chttpcli_slot_table_init_globals(void) {
-  if (rw_lock_init(chttpcli_slot_table.rwlock) != 0)
-    fatal_err("chttpcli slot table: failed to initialize rwlock");
+  if (ccol_rw_lock_init(chttpcli_slot_table.rwlock) != 0)
+    ccol_fatal_err("chttpcli slot table: failed to initialize rwlock");
   chttpcli_slot_table.slots = cvector_create(sizeof(chttpcli_slot_t), NULL);
   if (!chttpcli_slot_table.slots)
-    fatal_err("chttpcli slot table: failed to allocate slots vector");
+    ccol_fatal_err("chttpcli slot table: failed to allocate slots vector");
   chttpcli_slot_table.free_indices = cvector_create(sizeof(uint32_t), NULL);
   if (!chttpcli_slot_table.free_indices)
-    fatal_err("chttpcli slot table: failed to allocate free-index vector");
+    ccol_fatal_err("chttpcli slot table: failed to allocate free-index vector");
 }
 
 struct chttpclient {
-  mutex_t lock;
-  cond_var_t available;
+  ccol_mutex_t lock;
+  ccol_cond_var_t available;
 
   /* Pinned by _chttpcli_resolve (lock-free atomic increment) for as long as
    * some caller holds a just-resolved struct chttpclient* it hasn't yet
@@ -290,7 +288,7 @@ struct chttpclient {
    * under them. */
   chmap idle_pools_async;
   size_t idle_total_count_async;
-  cond_var_t idle_async_drained;
+  ccol_cond_var_t idle_async_drained;
 
   /* Tracks active (not-yet-idle-pooled) Tier 2/3 async chains created for
    * THIS client: incremented once per chain in _async_chain_create,
@@ -300,7 +298,7 @@ struct chttpclient {
    * idle_total_count_async (idle-pooled connections are the OPPOSITE of
    * in-flight). Guarded by a DEDICATED leaf lock/condvar, deliberately
    * never cli->lock/available: _async_chain_release (the only place this is
-   * decremented) runs as often from inside an event_loop dispatch callback,
+   * decremented) runs as often from inside a ccol_event_loop dispatch callback,
    * already holding that registration's own dispatch_lock, as it does from
    * a safe synchronous context; reusing cli->lock here would introduce a
    * brand new dispatch_lock -> cli->lock ordering this module has otherwise
@@ -311,8 +309,8 @@ struct chttpclient {
    * an active hop's lifecycle (cli->lock, cli->idle_pools_async,
    * cli->m_procs), well after chttpclient_do_async/_streaming has already
    * returned to the caller. */
-  mutex_t async_count_lock;
-  cond_var_t async_count_drained;
+  ccol_mutex_t async_count_lock;
+  ccol_cond_var_t async_count_drained;
   size_t async_in_flight_count;
 
   long connect_timeout_ms;
@@ -346,11 +344,11 @@ struct chttpclient {
  * tier-specific protection (in_flight_count / async_in_flight_count) has
  * taken over, or immediately if the call is short and non-blocking. */
 static struct chttpclient *_chttpcli_resolve(chttpcli h) {
-  call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
+  ccol_call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
   if (h == 0) return NULL;
   uint32_t idx = (uint32_t)(h >> 32);
   uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
-  rw_lock_rdlock(chttpcli_slot_table.rwlock);
+  ccol_rw_lock_rdlock(chttpcli_slot_table.rwlock);
   struct chttpclient *raw = NULL;
   if (idx < cvector_elem_count(chttpcli_slot_table.slots)) {
     chttpcli_slot_t *slot =
@@ -367,27 +365,27 @@ static struct chttpclient *_chttpcli_resolve(chttpcli h) {
    * also requires chttpcli_slot_table.rwlock's write side, which cannot
    * run concurrently with this read side regardless. */
   if (raw) atomic_fetch_add(&raw->pending_resolve_count, 1);
-  rw_lock_unlock(chttpcli_slot_table.rwlock);
+  ccol_rw_lock_unlock(chttpcli_slot_table.rwlock);
   return raw;
 }
 
 static void _chttpcli_resolve_unpin(struct chttpclient *raw) {
   /* The decrement itself MUST happen under raw->lock, not as a bare atomic
-   * op outside it: a bare-atomic decrement could bring pending_resolve_
-   * count to 0 before this function acquires raw->lock, letting a
-   * concurrent __chttpclient_destroy acquire raw->lock first, see BOTH
-   * pending_resolve_count == 0 and in_flight_count == 0 true on its very
-   * first check (never entering cond_var_wait at all), and proceed straight
-   * through teardown (including mutex_destroy(raw->lock) and freeing raw)
-   * before this function ever calls mutex_lock(raw->lock), which would
-   * then be a use-after-free. The standard condition-variable pattern
-   * requires the signaling side to modify the predicate AND broadcast under
-   * the SAME lock the waiter uses for its own predicate-check-and-sleep;
-   * moving only the decrement outside the lock does not satisfy that. */
-  mutex_lock(raw->lock);
+   * op outside it: a bare-atomic decrement could bring pending_resolve_ count
+   * to 0 before this function acquires raw->lock, letting a concurrent
+   * __chttpclient_destroy acquire raw->lock first, see BOTH
+   * pending_resolve_count == 0 and in_flight_count == 0 true on its very first
+   * check (never entering ccol_cond_var_wait at all), and proceed straight
+   * through teardown (including ccol_mutex_destroy(raw->lock) and freeing raw)
+   * before this function ever calls ccol_mutex_lock(raw->lock), which would
+   * then be a use-after-free. The standard condition-variable pattern requires
+   * the signaling side to modify the predicate AND broadcast under the SAME
+   * lock the waiter uses for its own predicate-check-and-sleep; moving only the
+   * decrement outside the lock does not satisfy that. */
+  ccol_mutex_lock(raw->lock);
   atomic_fetch_sub(&raw->pending_resolve_count, 1);
-  cond_var_broadcast(raw->available); /* wake a destroy waiting on this */
-  mutex_unlock(raw->lock);
+  ccol_cond_var_broadcast(raw->available); /* wake a destroy waiting on this */
+  ccol_mutex_unlock(raw->lock);
   /* Note the asymmetry with _chttpcli_resolve's own increment, which
    * correctly remains a bare atomic op with no raw->lock acquisition at
    * all: the increment side can never cause a lost wakeup (it only ever
@@ -397,15 +395,15 @@ static void _chttpcli_resolve_unpin(struct chttpclient *raw) {
    * chttpcli_slot_table.rwlock, so this raw->lock acquisition is never
    * nested inside the slot table's global lock; an entirely ordinary
    * per-object lock use, identical in shape to every other
-   * mutex_lock(cli->lock) call already in this file. */
+   * ccol_mutex_lock(cli->lock) call already in this file. */
 }
 
 /* Allocates a fresh slot (or reuses a freed one) for cli and returns the
- * resulting handle, or 0 on OOM. Called once, from create_chttpclient_mp,
+ * resulting handle, or 0 on OOM. Called once, from ccol_create_chttpclient_mp,
  * after the object is otherwise fully constructed. */
 static chttpcli _chttpcli_handle_slot_acquire(struct chttpclient *cli) {
-  call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
-  rw_lock_wrlock(chttpcli_slot_table.rwlock);
+  ccol_call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
+  ccol_rw_lock_wrlock(chttpcli_slot_table.rwlock);
   uint32_t idx;
   chttpcli_slot_t *slot;
   if (cvector_elem_count(chttpcli_slot_table.free_indices) > 0) {
@@ -414,7 +412,7 @@ static chttpcli _chttpcli_handle_slot_acquire(struct chttpclient *cli) {
   } else {
     chttpcli_slot_t fresh = {0};
     if (cvector_push_back(chttpcli_slot_table.slots, &fresh) != ccol_success) {
-      rw_lock_unlock(chttpcli_slot_table.rwlock);
+      ccol_rw_lock_unlock(chttpcli_slot_table.rwlock);
       return 0; /* ordinary, non-fatal OOM */
     }
     idx = (uint32_t)cvector_elem_count(chttpcli_slot_table.slots) - 1;
@@ -422,14 +420,14 @@ static chttpcli _chttpcli_handle_slot_acquire(struct chttpclient *cli) {
   }
   slot->generation++;
   if (slot->generation == 0)
-    slot->generation++; /* skip the one value that
-would collide with CHTTPCLI_INVALID after ~2^32 reuses of this exact
-slot index; see this function's own history in the design plan for
-why this is closed outright rather than left as residual risk */
+    slot->generation++; /* skip the one value that would collide with
+                         * CHTTPCLI_INVALID after ~2^32 reuses of this exact
+                         * slot index; closed outright rather than left as a
+                         * residual risk */
   slot->ptr = cli;
   slot->in_use = true;
   chttpcli h = ((chttpcli)idx << 32) | (chttpcli)slot->generation;
-  rw_lock_unlock(chttpcli_slot_table.rwlock);
+  ccol_rw_lock_unlock(chttpcli_slot_table.rwlock);
   return h;
 }
 
@@ -441,12 +439,12 @@ why this is closed outright rather than left as residual risk */
  * compare-and-swap if the handle it's given happens to be this singleton
  * (see __chttpclient_destroy's own comment on this); chttp_default_client
  * reads it with a plain atomic_load, matching this file's existing
- * _Atomic(event_reg) precedent rather than adding a new lock for a single
+ * _Atomic(ccol_event_reg) precedent rather than adding a new lock for a single
  * value. once never resets: this module never re-initialises the default
  * client, deliberately (see chttp_default_client's own doc comment). */
 static struct {
   _Atomic(chttpcli) client;
-  once_flag_t once;
+  ccol_once_flag_t once;
 } default_client_bundler = {0};
 
 /* ========================================================================== */
@@ -455,11 +453,11 @@ static struct {
 
 static void _url_free(ccol_memmgmt_procs_t *mp, chttp_url_t *u) {
   if (!u) return;
-  _mem_free(mp, u->unix_socket_path);
-  _mem_free(mp, u->host);
-  _mem_free(mp, u->path_and_query);
-  _mem_free(mp, u->origin_key);
-  _mem_free(mp, u->userinfo_authorization);
+  _ccol_mem_free(mp, u->unix_socket_path);
+  _ccol_mem_free(mp, u->host);
+  _ccol_mem_free(mp, u->path_and_query);
+  _ccol_mem_free(mp, u->origin_key);
+  _ccol_mem_free(mp, u->userinfo_authorization);
   memset(u, 0, sizeof(*u));
 }
 
@@ -491,7 +489,7 @@ static char *_percent_encode_unix_path_len(ccol_memmgmt_procs_t *mp,
    * project treats a reducible/unguarded overflow in a size computation as
    * a real bug regardless of how large an input is needed to trigger it. */
   if (len > (SIZE_MAX - 1) / 3) return NULL;
-  char *out = (char *)_mem_alloc(mp, len * 3 + 1);
+  char *out = (char *)_ccol_mem_alloc(mp, len * 3 + 1);
   if (!out) return NULL;
   size_t w = 0;
   for (size_t i = 0; i < len; i++) {
@@ -544,7 +542,7 @@ bool _chttp_percent_encode_unix_path_overflow_guard_for_tests(
     ccol_memmgmt_procs_t *mp, const char *path, size_t fake_len) {
   char *r = _percent_encode_unix_path_len(mp, path, fake_len);
   bool rejected = (r == NULL);
-  _mem_free(mp, r);
+  _ccol_mem_free(mp, r);
   return rejected;
 }
 #endif /* RUNNING_UNIT_TESTS */
@@ -558,7 +556,7 @@ bool _chttp_percent_encode_unix_path_overflow_guard_for_tests(
 static ccol_retval_t _percent_decode_component(ccol_memmgmt_procs_t *mp,
                                                const char *start, size_t len,
                                                char **out) {
-  char *buf = (char *)_mem_alloc(mp, len + 1);
+  char *buf = (char *)_ccol_mem_alloc(mp, len + 1);
   if (!buf) return ccol_not_enough_memory;
   size_t w = 0;
   for (size_t i = 0; i < len; i++) {
@@ -566,13 +564,13 @@ static ccol_retval_t _percent_decode_component(ccol_memmgmt_procs_t *mp,
     if (c == '%') {
       if (i + 2 >= len || !isxdigit((unsigned char)start[i + 1]) ||
           !isxdigit((unsigned char)start[i + 2])) {
-        _mem_free(mp, buf);
+        _ccol_mem_free(mp, buf);
         return ccol_http_invalid_url;
       }
       char hex[3] = {start[i + 1], start[i + 2], '\0'};
       int v = (int)strtol(hex, NULL, 16);
       if (v == 0) {
-        _mem_free(mp, buf);
+        _ccol_mem_free(mp, buf);
         return ccol_http_invalid_url;
       }
       buf[w++] = (char)v;
@@ -610,7 +608,7 @@ static ccol_retval_t _parse_chttp_unix_url(ccol_memmgmt_procs_t *mp,
   ccol_retval_t drv = _percent_decode_component(mp, p, enc_len, &unix_path);
   if (drv != ccol_success) return drv;
   if (unix_path[0] == '\0') {
-    _mem_free(mp, unix_path);
+    _ccol_mem_free(mp, unix_path);
     return ccol_http_invalid_url;
   }
 
@@ -626,23 +624,23 @@ static ccol_retval_t _parse_chttp_unix_url(ccol_memmgmt_procs_t *mp,
    * caller-constructed "http+unix://" URL string inject extra header lines
    * or a smuggled second request. */
   if (memchr(pq, '\r', pq_len) || memchr(pq, '\n', pq_len)) {
-    _mem_free(mp, unix_path);
+    _ccol_mem_free(mp, unix_path);
     return ccol_http_invalid_url;
   }
 
   char *path_and_query;
   if (pq_len > 0 && pq[0] == '/') {
-    path_and_query = (char *)_mem_alloc(mp, pq_len + 1);
+    path_and_query = (char *)_ccol_mem_alloc(mp, pq_len + 1);
     if (!path_and_query) {
-      _mem_free(mp, unix_path);
+      _ccol_mem_free(mp, unix_path);
       return ccol_not_enough_memory;
     }
     memcpy(path_and_query, pq, pq_len);
     path_and_query[pq_len] = '\0';
   } else {
-    path_and_query = (char *)_mem_alloc(mp, pq_len + 2);
+    path_and_query = (char *)_ccol_mem_alloc(mp, pq_len + 2);
     if (!path_and_query) {
-      _mem_free(mp, unix_path);
+      _ccol_mem_free(mp, unix_path);
       return ccol_not_enough_memory;
     }
     path_and_query[0] = '/';
@@ -652,14 +650,14 @@ static ccol_retval_t _parse_chttp_unix_url(ccol_memmgmt_procs_t *mp,
 
   int needed = snprintf(NULL, 0, "unix://%s", unix_path);
   if (needed < 0) {
-    _mem_free(mp, unix_path);
-    _mem_free(mp, path_and_query);
+    _ccol_mem_free(mp, unix_path);
+    _ccol_mem_free(mp, path_and_query);
     return ccol_unexpected_failure;
   }
-  char *origin_key = (char *)_mem_alloc(mp, (size_t)needed + 1);
+  char *origin_key = (char *)_ccol_mem_alloc(mp, (size_t)needed + 1);
   if (!origin_key) {
-    _mem_free(mp, unix_path);
-    _mem_free(mp, path_and_query);
+    _ccol_mem_free(mp, unix_path);
+    _ccol_mem_free(mp, path_and_query);
     return ccol_not_enough_memory;
   }
   snprintf(origin_key, (size_t)needed + 1, "unix://%s", unix_path);
@@ -695,7 +693,7 @@ static char *_format_bracketed_host(ccol_memmgmt_procs_t *mp, const char *host,
    * would wrap the allocation size, under-allocate `out`, and the memcpy
    * below would write past its end. */
   if (hlen > SIZE_MAX - 3) return NULL;
-  char *out = (char *)_mem_alloc(mp, hlen + 3);
+  char *out = (char *)_ccol_mem_alloc(mp, hlen + 3);
   if (!out) return NULL;
   out[0] = '[';
   memcpy(out + 1, host, hlen);
@@ -711,9 +709,8 @@ static char *_format_bracketed_host(ccol_memmgmt_procs_t *mp, const char *host,
  * Authorization value, a plain reg-name/IPv4 host or a bracketed IPv6
  * literal ("[::1]"), an optional ":port", and a path/query with any
  * trailing "#fragment" discarded; fragments are never sent to a server
- * (RFC 3986 SS3.5), so silently forwarding one in the request line (the
- * previous behavior) was a real correctness bug, not a documented scope
- * choice.
+ * (RFC 3986 SS3.5), so forwarding one in the request line would be a real
+ * correctness bug, not a documented scope choice.
  *
  * Not attempted: userinfo/hostname are not validated beyond basic syntax;
  * an implausible bracketed literal or reg-name is simply handed to
@@ -783,14 +780,14 @@ static ccol_retval_t _parse_chttp_url(ccol_memmgmt_procs_t *mp, const char *url,
     if (drv == ccol_success)
       drv = _percent_decode_component(mp, pass_start, pass_len, &pass_dec);
     if (drv != ccol_success) {
-      _mem_free(mp, user_dec);
-      _mem_free(mp, pass_dec);
+      _ccol_mem_free(mp, user_dec);
+      _ccol_mem_free(mp, pass_dec);
       return drv;
     }
 
     userinfo_authorization = chttp_basic_auth_mp(mp, user_dec, pass_dec);
-    _mem_free(mp, user_dec);
-    _mem_free(mp, pass_dec);
+    _ccol_mem_free(mp, user_dec);
+    _ccol_mem_free(mp, pass_dec);
     if (!userinfo_authorization) return ccol_not_enough_memory;
 
     host_scan_start = last_at + 1;
@@ -803,13 +800,13 @@ static ccol_retval_t _parse_chttp_url(ccol_memmgmt_procs_t *mp, const char *url,
     const char *close = host_scan_start + 1;
     while (*close && *close != ']') close++;
     if (*close != ']') {
-      _mem_free(mp, userinfo_authorization);
+      _ccol_mem_free(mp, userinfo_authorization);
       return ccol_http_invalid_url;
     }
     char after = close[1];
     if (after != '\0' && after != ':' && after != '/' && after != '?' &&
         after != '#') {
-      _mem_free(mp, userinfo_authorization);
+      _ccol_mem_free(mp, userinfo_authorization);
       return ccol_http_invalid_url;
     }
     host_start = host_scan_start + 1;
@@ -822,7 +819,7 @@ static ccol_retval_t _parse_chttp_url(ccol_memmgmt_procs_t *mp, const char *url,
   }
   size_t host_len = (size_t)(q - host_start);
   if (host_len == 0) {
-    _mem_free(mp, userinfo_authorization);
+    _ccol_mem_free(mp, userinfo_authorization);
     return ccol_http_invalid_url;
   }
   /* Unlike ':'/'/'/'?'/'#' above, a raw CR or LF byte does not terminate the
@@ -836,7 +833,7 @@ static ccol_retval_t _parse_chttp_url(ccol_memmgmt_procs_t *mp, const char *url,
    * own check exists for, reached through the URL instead of a header). */
   if (memchr(host_start, '\r', host_len) ||
       memchr(host_start, '\n', host_len)) {
-    _mem_free(mp, userinfo_authorization);
+    _ccol_mem_free(mp, userinfo_authorization);
     return ccol_http_invalid_url;
   }
   if (is_ipv6) q++; /* skip past ']' */
@@ -849,14 +846,14 @@ static ccol_retval_t _parse_chttp_url(ccol_memmgmt_procs_t *mp, const char *url,
     while (*q && isdigit((unsigned char)*q)) {
       pv = pv * 10 + (unsigned long)(*q - '0');
       if (pv > 65535) {
-        _mem_free(mp, userinfo_authorization);
+        _ccol_mem_free(mp, userinfo_authorization);
         return ccol_http_invalid_url;
       }
       q++;
       pd++;
     }
     if (pd == 0 || pv == 0) {
-      _mem_free(mp, userinfo_authorization);
+      _ccol_mem_free(mp, userinfo_authorization);
       return ccol_http_invalid_url;
     }
     /* The digit loop above stops at the first non-digit byte, whatever it
@@ -866,7 +863,7 @@ static ccol_retval_t _parse_chttp_url(ccol_memmgmt_procs_t *mp, const char *url,
      * path, sending the request to a different target than the URL string
      * names instead of being rejected. */
     if (*q != '\0' && *q != '/' && *q != '?' && *q != '#') {
-      _mem_free(mp, userinfo_authorization);
+      _ccol_mem_free(mp, userinfo_authorization);
       return ccol_http_invalid_url;
     }
     port = (uint16_t)pv;
@@ -891,13 +888,13 @@ static ccol_retval_t _parse_chttp_url(ccol_memmgmt_procs_t *mp, const char *url,
    * request, exactly the class of bug the host check above already guards
    * against. */
   if (memchr(pq, '\r', pq_len) || memchr(pq, '\n', pq_len)) {
-    _mem_free(mp, userinfo_authorization);
+    _ccol_mem_free(mp, userinfo_authorization);
     return ccol_http_invalid_url;
   }
 
-  char *host = (char *)_mem_alloc(mp, host_len + 1);
+  char *host = (char *)_ccol_mem_alloc(mp, host_len + 1);
   if (!host) {
-    _mem_free(mp, userinfo_authorization);
+    _ccol_mem_free(mp, userinfo_authorization);
     return ccol_not_enough_memory;
   }
   memcpy(host, host_start, host_len);
@@ -905,10 +902,10 @@ static ccol_retval_t _parse_chttp_url(ccol_memmgmt_procs_t *mp, const char *url,
 
   char *path_and_query;
   if (pq_len > 0 && pq[0] == '/') {
-    path_and_query = (char *)_mem_alloc(mp, pq_len + 1);
+    path_and_query = (char *)_ccol_mem_alloc(mp, pq_len + 1);
     if (!path_and_query) {
-      _mem_free(mp, host);
-      _mem_free(mp, userinfo_authorization);
+      _ccol_mem_free(mp, host);
+      _ccol_mem_free(mp, userinfo_authorization);
       return ccol_not_enough_memory;
     }
     memcpy(path_and_query, pq, pq_len);
@@ -916,10 +913,10 @@ static ccol_retval_t _parse_chttp_url(ccol_memmgmt_procs_t *mp, const char *url,
   } else {
     /* pq is empty, or starts with '?' (query with no path component);
      * synthesise a leading '/'. */
-    path_and_query = (char *)_mem_alloc(mp, pq_len + 2);
+    path_and_query = (char *)_ccol_mem_alloc(mp, pq_len + 2);
     if (!path_and_query) {
-      _mem_free(mp, host);
-      _mem_free(mp, userinfo_authorization);
+      _ccol_mem_free(mp, host);
+      _ccol_mem_free(mp, userinfo_authorization);
       return ccol_not_enough_memory;
     }
     path_and_query[0] = '/';
@@ -929,32 +926,32 @@ static ccol_retval_t _parse_chttp_url(ccol_memmgmt_procs_t *mp, const char *url,
 
   char *bracketed_host = _format_bracketed_host(mp, host, is_ipv6);
   if (!bracketed_host) {
-    _mem_free(mp, host);
-    _mem_free(mp, path_and_query);
-    _mem_free(mp, userinfo_authorization);
+    _ccol_mem_free(mp, host);
+    _ccol_mem_free(mp, path_and_query);
+    _ccol_mem_free(mp, userinfo_authorization);
     return ccol_not_enough_memory;
   }
 
   int needed = snprintf(NULL, 0, "%s://%s:%u", https ? "https" : "http",
                         bracketed_host, (unsigned)port);
   if (needed < 0) {
-    _mem_free(mp, host);
-    _mem_free(mp, path_and_query);
-    _mem_free(mp, bracketed_host);
-    _mem_free(mp, userinfo_authorization);
+    _ccol_mem_free(mp, host);
+    _ccol_mem_free(mp, path_and_query);
+    _ccol_mem_free(mp, bracketed_host);
+    _ccol_mem_free(mp, userinfo_authorization);
     return ccol_unexpected_failure;
   }
-  char *origin_key = (char *)_mem_alloc(mp, (size_t)needed + 1);
+  char *origin_key = (char *)_ccol_mem_alloc(mp, (size_t)needed + 1);
   if (!origin_key) {
-    _mem_free(mp, host);
-    _mem_free(mp, path_and_query);
-    _mem_free(mp, bracketed_host);
-    _mem_free(mp, userinfo_authorization);
+    _ccol_mem_free(mp, host);
+    _ccol_mem_free(mp, path_and_query);
+    _ccol_mem_free(mp, bracketed_host);
+    _ccol_mem_free(mp, userinfo_authorization);
     return ccol_not_enough_memory;
   }
   snprintf(origin_key, (size_t)needed + 1, "%s://%s:%u",
            https ? "https" : "http", bracketed_host, (unsigned)port);
-  _mem_free(mp, bracketed_host);
+  _ccol_mem_free(mp, bracketed_host);
 
   out->is_https = https;
   out->is_ipv6 = is_ipv6;
@@ -972,12 +969,12 @@ static ccol_retval_t _parse_chttp_url(ccol_memmgmt_procs_t *mp, const char *url,
  * "?query" before/after calling this. */
 static char *_remove_dot_segments(ccol_memmgmt_procs_t *mp, const char *path) {
   size_t len = strlen(path);
-  char *in = (char *)_mem_alloc(mp, len + 1);
+  char *in = (char *)_ccol_mem_alloc(mp, len + 1);
   if (!in) return NULL;
   memcpy(in, path, len + 1);
-  char *out = (char *)_mem_alloc(mp, len + 1);
+  char *out = (char *)_ccol_mem_alloc(mp, len + 1);
   if (!out) {
-    _mem_free(mp, in);
+    _ccol_mem_free(mp, in);
     return NULL;
   }
   size_t out_len = 0;
@@ -1011,7 +1008,7 @@ static char *_remove_dot_segments(ccol_memmgmt_procs_t *mp, const char *path) {
     }
   }
   out[out_len] = '\0';
-  _mem_free(mp, in);
+  _ccol_mem_free(mp, in);
   return out;
 }
 
@@ -1047,7 +1044,7 @@ static char *_merge_ref_path(ccol_memmgmt_procs_t *mp,
   if (ref_path_len > SIZE_MAX - dir_len ||
       dir_len + ref_path_len > SIZE_MAX - 1)
     return NULL;
-  char *out = (char *)_mem_alloc(mp, dir_len + ref_path_len + 1);
+  char *out = (char *)_ccol_mem_alloc(mp, dir_len + ref_path_len + 1);
   if (!out) return NULL;
   memcpy(out, base_path_and_query, dir_len);
   memcpy(out + dir_len, ref_path, ref_path_len);
@@ -1075,7 +1072,7 @@ bool _chttp_merge_ref_path_overflow_guard_for_tests(
   char *r =
       _merge_ref_path(mp, base_path_and_query, ref_path, fake_ref_path_len);
   bool rejected = (r == NULL);
-  _mem_free(mp, r);
+  _ccol_mem_free(mp, r);
   return rejected;
 }
 #endif /* RUNNING_UNIT_TESTS */
@@ -1097,7 +1094,7 @@ static char *_concat_len(ccol_memmgmt_procs_t *mp, const char *a, size_t a_len,
    * unchecked, it would let this allocation under-size `out` and then the
    * memcpy calls below write past its end. */
   if (b_len > SIZE_MAX - a_len || a_len + b_len > SIZE_MAX - 1) return NULL;
-  char *out = (char *)_mem_alloc(mp, a_len + b_len + 1);
+  char *out = (char *)_ccol_mem_alloc(mp, a_len + b_len + 1);
   if (!out) return NULL;
   memcpy(out, a, a_len);
   memcpy(out + a_len, b, b_len);
@@ -1123,7 +1120,7 @@ bool _chttp_concat_len_overflow_guard_for_tests(ccol_memmgmt_procs_t *mp,
                                                 size_t fake_b_len) {
   char *r = _concat_len(mp, a, fake_a_len, b, fake_b_len);
   bool rejected = (r == NULL);
-  _mem_free(mp, r);
+  _ccol_mem_free(mp, r);
   return rejected;
 }
 #endif /* RUNNING_UNIT_TESTS */
@@ -1189,10 +1186,10 @@ static char *_resolve_redirect_url(ccol_memmgmt_procs_t *mp,
    * the relative-reference handling below, which would otherwise merge the
    * whole "scheme:opaque" string onto the CURRENT origin's path as though it
    * were a same-origin relative path (e.g. "g:h" against
-   * "http://a/b/c/d;p?q" silently became "http://a/b/c/g:h" instead of being
-   * recognised as the absolute reference "g:h" it actually is). Returned
-   * verbatim, exactly like the three recognised-scheme prefixes just above;
-   * see this function's own doc comment for why the next hop's
+   * "http://a/b/c/d;p?q" would silently resolve to "http://a/b/c/g:h"
+   * instead of being recognised as the absolute reference "g:h" it is).
+   * Returned verbatim, exactly like the three recognised-scheme prefixes
+   * just above; see this function's own doc comment for why the next hop's
    * _parse_chttp_url is what actually rejects it. */
   if (_location_has_scheme(location)) return ccol_strdup(mp, location);
 
@@ -1208,7 +1205,7 @@ static char *_resolve_redirect_url(ccol_memmgmt_procs_t *mp,
      * the fully absolute-URL case above isn't either. */
     int needed = snprintf(NULL, 0, "%s:%s", scheme, location);
     if (needed < 0) return NULL;
-    char *out = (char *)_mem_alloc(mp, (size_t)needed + 1);
+    char *out = (char *)_ccol_mem_alloc(mp, (size_t)needed + 1);
     if (!out) return NULL;
     snprintf(out, (size_t)needed + 1, "%s:%s", scheme, location);
     return out;
@@ -1230,7 +1227,7 @@ static char *_resolve_redirect_url(ccol_memmgmt_procs_t *mp,
    * first raw '#' unconditionally starts the fragment. */
   const char *frag = strchr(location, '#');
   size_t loc_len_nf = frag ? (size_t)(frag - location) : strlen(location);
-  char *location_nf = (char *)_mem_alloc(mp, loc_len_nf + 1);
+  char *location_nf = (char *)_ccol_mem_alloc(mp, loc_len_nf + 1);
   if (!location_nf) return NULL;
   memcpy(location_nf, location, loc_len_nf);
   location_nf[loc_len_nf] = '\0';
@@ -1244,7 +1241,7 @@ static char *_resolve_redirect_url(ccol_memmgmt_procs_t *mp,
                         ? _percent_encode_unix_path(mp, base->unix_socket_path)
                         : _format_bracketed_host(mp, base->host, base->is_ipv6);
   if (!authority) {
-    _mem_free(mp, location_nf);
+    _ccol_mem_free(mp, location_nf);
     return NULL;
   }
 
@@ -1264,7 +1261,7 @@ static char *_resolve_redirect_url(ccol_memmgmt_procs_t *mp,
      * to take the base's place). Base is already fully resolved/
      * normalised, so no merge or dot-segment removal is needed here at
      * all. */
-    _mem_free(mp, location_nf);
+    _ccol_mem_free(mp, location_nf);
     const char *out_scheme0 = base->is_unix ? "http+unix" : scheme;
     int needed0;
     if (base->is_unix || default_port) {
@@ -1275,12 +1272,12 @@ static char *_resolve_redirect_url(ccol_memmgmt_procs_t *mp,
                          (unsigned)base->port, base->path_and_query);
     }
     if (needed0 < 0) {
-      _mem_free(mp, authority);
+      _ccol_mem_free(mp, authority);
       return NULL;
     }
-    char *out0 = (char *)_mem_alloc(mp, (size_t)needed0 + 1);
+    char *out0 = (char *)_ccol_mem_alloc(mp, (size_t)needed0 + 1);
     if (!out0) {
-      _mem_free(mp, authority);
+      _ccol_mem_free(mp, authority);
       return NULL;
     }
     if (base->is_unix || default_port) {
@@ -1290,7 +1287,7 @@ static char *_resolve_redirect_url(ccol_memmgmt_procs_t *mp,
       snprintf(out0, (size_t)needed0 + 1, "%s://%s:%u%s", out_scheme0,
                authority, (unsigned)base->port, base->path_and_query);
     }
-    _mem_free(mp, authority);
+    _ccol_mem_free(mp, authority);
     return out0;
   }
 
@@ -1310,12 +1307,12 @@ static char *_resolve_redirect_url(ccol_memmgmt_procs_t *mp,
   if (location[0] == '/') {
     /* Absolute-path reference: T.path = remove_dot_segments(R.path)
      * directly, no merge against the base path needed. */
-    char *path_only = (char *)_mem_alloc(mp, ref_path_len + 1);
+    char *path_only = (char *)_ccol_mem_alloc(mp, ref_path_len + 1);
     if (path_only) {
       memcpy(path_only, location, ref_path_len);
       path_only[ref_path_len] = '\0';
       new_path = _remove_dot_segments(mp, path_only);
-      _mem_free(mp, path_only);
+      _ccol_mem_free(mp, path_only);
     }
   } else if (ref_path_len == 0) {
     /* RFC 3986 SS5.3: R.path == "" (a query-only reference, e.g. "?y") means
@@ -1325,43 +1322,43 @@ static char *_resolve_redirect_url(ccol_memmgmt_procs_t *mp,
      * (see _parse_chttp_url), so re-deriving a "cleaned" form of it at this
      * one specific reference shape would silently redirect to a different
      * path than the one the original request actually used, with no server
-     * instruction to change it (a real, previously-untested divergence from
-     * both the RFC and a reference implementation, e.g. Python's
-     * urllib.parse.urljoin: both leave a dotted base path like "/a/../b"
-     * untouched for a query-only reference, matching the fragment-only
-     * branch above, which already gets this right for the identical
-     * reason). _merge_ref_path's own ref_path_len==0 handling already
-     * produces exactly this verbatim copy (dir_len == the whole base path,
-     * nothing appended); the bug was applying _remove_dot_segments to that
-     * result afterward, in the branch below, which is why this needs to be
-     * its own branch rather than merely skipping that one call inline. */
+     * instruction to change it, diverging from both the RFC and reference
+     * implementations such as Python's urllib.parse.urljoin: both leave a
+     * dotted base path like "/a/../b" untouched for a query-only reference,
+     * matching the fragment-only branch above, which gets this right for
+     * the identical reason. _merge_ref_path's own ref_path_len==0 handling
+     * already produces exactly this verbatim copy (dir_len == the whole
+     * base path, nothing appended); it is the _remove_dot_segments call the
+     * branch below applies afterward that would re-normalise that copy,
+     * which is why this needs to be its own branch rather than merely
+     * skipping that one call inline. */
     new_path = _merge_ref_path(mp, base->path_and_query, location, 0);
   } else {
     char *merged =
         _merge_ref_path(mp, base->path_and_query, location, ref_path_len);
     if (merged) {
       new_path = _remove_dot_segments(mp, merged);
-      _mem_free(mp, merged);
+      _ccol_mem_free(mp, merged);
     }
   }
   if (new_path && ref_query) {
     /* _concat_len's own overflow guard (see its doc comment) is what makes
      * this safe against path_len + query_len wrapping SIZE_MAX; treated as
-     * an ordinary allocation failure here (the existing !with_query
-     * branch), exactly like the real OOM case just below it. */
+     * an ordinary allocation failure here (the !with_query branch),
+     * exactly like the real OOM case just below it. */
     char *with_query = _concat_len(mp, new_path, strlen(new_path), ref_query,
                                    strlen(ref_query));
     if (!with_query) {
-      _mem_free(mp, new_path);
+      _ccol_mem_free(mp, new_path);
       new_path = NULL;
     } else {
-      _mem_free(mp, new_path);
+      _ccol_mem_free(mp, new_path);
       new_path = with_query;
     }
   }
   if (!new_path) {
-    _mem_free(mp, authority);
-    _mem_free(mp, location_nf);
+    _ccol_mem_free(mp, authority);
+    _ccol_mem_free(mp, location_nf);
     return NULL;
   }
 
@@ -1376,16 +1373,16 @@ static char *_resolve_redirect_url(ccol_memmgmt_procs_t *mp,
                       (unsigned)base->port, new_path);
   }
   if (needed < 0) {
-    _mem_free(mp, authority);
-    _mem_free(mp, new_path);
-    _mem_free(mp, location_nf);
+    _ccol_mem_free(mp, authority);
+    _ccol_mem_free(mp, new_path);
+    _ccol_mem_free(mp, location_nf);
     return NULL;
   }
-  char *out = (char *)_mem_alloc(mp, (size_t)needed + 1);
+  char *out = (char *)_ccol_mem_alloc(mp, (size_t)needed + 1);
   if (!out) {
-    _mem_free(mp, authority);
-    _mem_free(mp, new_path);
-    _mem_free(mp, location_nf);
+    _ccol_mem_free(mp, authority);
+    _ccol_mem_free(mp, new_path);
+    _ccol_mem_free(mp, location_nf);
     return NULL;
   }
   if (base->is_unix || default_port) {
@@ -1395,16 +1392,16 @@ static char *_resolve_redirect_url(ccol_memmgmt_procs_t *mp,
     snprintf(out, (size_t)needed + 1, "%s://%s:%u%s", out_scheme, authority,
              (unsigned)base->port, new_path);
   }
-  _mem_free(mp, authority);
-  _mem_free(mp, new_path);
-  _mem_free(mp, location_nf);
+  _ccol_mem_free(mp, authority);
+  _ccol_mem_free(mp, new_path);
+  _ccol_mem_free(mp, location_nf);
   return out;
 }
 
 /* White-box test helpers exposing _parse_chttp_url/_resolve_redirect_url;
  * chttp_url_t is a file-local type, so these flatten the result into out
  * params/a plain string. NULL mp means every result is plain-malloc'd (see
- * _mem_alloc); test code frees them with plain free(). Not part of the
+ * _ccol_mem_alloc); test code frees them with plain free(). Not part of the
  * public API; gated so these symbols do not leak into a production build
  * of libccollections.so, matching every other white-box helper in this
  * file. */
@@ -1425,23 +1422,23 @@ ccol_retval_t _chttp_parse_url_for_tests(
   if (unix_socket_path_out)
     *unix_socket_path_out = parsed.unix_socket_path;
   else
-    _mem_free(mp, parsed.unix_socket_path);
+    _ccol_mem_free(mp, parsed.unix_socket_path);
   if (host_out)
     *host_out = parsed.host;
   else
-    _mem_free(mp, parsed.host);
+    _ccol_mem_free(mp, parsed.host);
   if (path_and_query_out)
     *path_and_query_out = parsed.path_and_query;
   else
-    _mem_free(mp, parsed.path_and_query);
+    _ccol_mem_free(mp, parsed.path_and_query);
   if (origin_key_out)
     *origin_key_out = parsed.origin_key;
   else
-    _mem_free(mp, parsed.origin_key);
+    _ccol_mem_free(mp, parsed.origin_key);
   if (userinfo_authorization_out)
     *userinfo_authorization_out = parsed.userinfo_authorization;
   else
-    _mem_free(mp, parsed.userinfo_authorization);
+    _ccol_mem_free(mp, parsed.userinfo_authorization);
   return ccol_success;
 }
 
@@ -1471,13 +1468,14 @@ chttp_request_t *chttp_request_new_mp(chttp_method_t method, const char *url,
   }
   /* A NULL body->data paired with a nonzero body->len is an inconsistent
    * body descriptor (nothing to actually copy body->len bytes from); the
-   * body-copy block below only runs when body->data is non-NULL, so this
-   * combination used to be silently treated as "no body" instead of being
-   * reported to the caller, unlike chttp_base64_encode_mp's identical
-   * NULL-data/nonzero-len combination, which is explicitly rejected. A
-   * caller with a real bug (a miscomputed length paired with a null
-   * buffer) deserves a diagnosable ccol_invalid_args, not a request that
-   * silently goes out with no body at all. */
+   * body-copy block below only runs when body->data is non-NULL, so
+   * without this check the combination would be silently treated as "no
+   * body" instead of being reported to the caller, unlike
+   * chttp_base64_encode_mp's identical NULL-data/nonzero-len combination,
+   * which is explicitly rejected. A caller with a real bug (a miscomputed
+   * length paired with a null buffer) deserves a diagnosable
+   * ccol_invalid_args, not a request that silently goes out with no body at
+   * all. */
   if (body && !body->data && body->len > 0) {
     if (err_str)
       *err_str = CCOL_ERR_STR("body->data must not be NULL when body->len > 0");
@@ -1492,11 +1490,11 @@ chttp_request_t *chttp_request_new_mp(chttp_method_t method, const char *url,
       if (err_str) *err_str = CCOL_ERR_STR("failed to allocate mprocs");
       return NULL;
     }
-    mem_cpy(mp, mprocs, sizeof(ccol_memmgmt_procs_t));
+    ccol_mem_cpy(mp, mprocs, sizeof(ccol_memmgmt_procs_t));
   }
 
   chttp_request_t *req =
-      (chttp_request_t *)_mem_alloc(mp, sizeof(chttp_request_t));
+      (chttp_request_t *)_ccol_mem_alloc(mp, sizeof(chttp_request_t));
   if (!req) {
     if (err_str) *err_str = CCOL_ERR_STR("failed to allocate request");
     if (mp) mp->free(mp);
@@ -1509,17 +1507,17 @@ chttp_request_t *chttp_request_new_mp(chttp_method_t method, const char *url,
   req->url = ccol_strdup(mp, url);
   if (!req->url) {
     if (err_str) *err_str = CCOL_ERR_STR("failed to copy url");
-    _mem_free(mp, req);
+    _ccol_mem_free(mp, req);
     if (mp) mp->free(mp);
     return NULL;
   }
 
   if (body && body->data && body->len > 0) {
-    void *body_copy = _mem_alloc(mp, body->len);
+    void *body_copy = _ccol_mem_alloc(mp, body->len);
     if (!body_copy) {
       if (err_str) *err_str = CCOL_ERR_STR("failed to copy body");
-      _mem_free(mp, req->url);
-      _mem_free(mp, req);
+      _ccol_mem_free(mp, req->url);
+      _ccol_mem_free(mp, req);
       if (mp) mp->free(mp);
       return NULL;
     }
@@ -1534,14 +1532,14 @@ chttp_request_t *chttp_request_new_mp(chttp_method_t method, const char *url,
    * legitimate request shape, and _serialize_request's Content-Type
    * auto-injection is documented to honor req->body.content_type regardless
    * of body length. Nesting this copy inside the body->len > 0 branch above
-   * used to silently discard content_type for exactly that shape. */
+   * would silently discard content_type for exactly that shape. */
   if (body && body->content_type) {
     req->body.content_type = ccol_strdup(mp, body->content_type);
     if (!req->body.content_type) {
       if (err_str) *err_str = CCOL_ERR_STR("failed to copy content_type");
-      _mem_free(mp, (void *)req->body.data);
-      _mem_free(mp, req->url);
-      _mem_free(mp, req);
+      _ccol_mem_free(mp, (void *)req->body.data);
+      _ccol_mem_free(mp, req->url);
+      _ccol_mem_free(mp, req);
       if (mp) mp->free(mp);
       return NULL;
     }
@@ -1594,14 +1592,15 @@ ccol_retval_t chttp_request_set_header(chttp_request_t *req, const char *name,
 
   if (!req->headers) {
     char *err = NULL;
-    chmap hm = chmap_create_full(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, ccol_string,
-                                 ccol_string, req->_m_procs, NULL, &err);
+    chmap hm =
+        chmap_create_full(CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, ccol_string,
+                          ccol_string, req->_m_procs, NULL, &err);
     if (!hm) return ccol_not_enough_memory;
     req->headers = hm;
   }
 
   size_t nlen = strlen(name);
-  char *lower = (char *)_mem_alloc(req->_m_procs, nlen + 1);
+  char *lower = (char *)_ccol_mem_alloc(req->_m_procs, nlen + 1);
   if (!lower) return ccol_not_enough_memory;
   for (size_t i = 0; i <= nlen; i++)
     lower[i] = (char)tolower((unsigned char)name[i]);
@@ -1610,7 +1609,7 @@ ccol_retval_t chttp_request_set_header(chttp_request_t *req, const char *name,
   cmap_pair vp = {.ptr = (void *)value, .size = strlen(value) + 1};
 
   ccol_retval_t rv = chmap_insert_elem((chmap)req->headers, &kp, &vp);
-  _mem_free(req->_m_procs, lower);
+  _ccol_mem_free(req->_m_procs, lower);
   if (rv == ccol_key_already_present) rv = ccol_success;
   return rv;
 }
@@ -1620,7 +1619,7 @@ const char *chttp_request_get_header(const chttp_request_t *req,
   if (!req || !name || !req->headers) return NULL;
 
   size_t nlen = strlen(name);
-  char *lower = (char *)_mem_alloc(req->_m_procs, nlen + 1);
+  char *lower = (char *)_ccol_mem_alloc(req->_m_procs, nlen + 1);
   if (!lower) return NULL;
   for (size_t i = 0; i <= nlen; i++)
     lower[i] = (char)tolower((unsigned char)name[i]);
@@ -1628,7 +1627,7 @@ const char *chttp_request_get_header(const chttp_request_t *req,
   cmap_pair kp = {.ptr = lower, .size = nlen + 1};
   cmap_pair *vp = NULL;
   ccol_retval_t rv = chmap_get_elem_ref((chmap)req->headers, &kp, &vp);
-  _mem_free(req->_m_procs, lower);
+  _ccol_mem_free(req->_m_procs, lower);
 
   if (rv != ccol_success || !vp) return NULL;
   return (const char *)vp->ptr;
@@ -1637,11 +1636,11 @@ const char *chttp_request_get_header(const chttp_request_t *req,
 void chttp_request_free(chttp_request_t *req) {
   if (!req) return;
   ccol_memmgmt_procs_t *mp = req->_m_procs;
-  _mem_free(mp, req->url);
-  _mem_free(mp, (void *)req->body.data);
-  _mem_free(mp, (void *)req->body.content_type);
+  _ccol_mem_free(mp, req->url);
+  _ccol_mem_free(mp, (void *)req->body.data);
+  _ccol_mem_free(mp, (void *)req->body.content_type);
   if (req->headers) __chmap_destroy((chmap)req->headers);
-  _mem_free(mp, req);
+  _ccol_mem_free(mp, req);
   if (mp) mp->free(mp);
 }
 
@@ -1707,22 +1706,22 @@ static chttp_deadline_t _deadline_earlier(chttp_deadline_t a,
 /* Initialises *cv against CLOCK_MONOTONIC, matching every deadline this file
  * computes via _deadline_make/clock_gettime(CLOCK_MONOTONIC, ...); falls back
  * to the platform default clock if condattr support is unavailable. Without
- * this, a cond_var_timedwait call against a timespec produced by
+ * this, a ccol_cond_var_timedwait call against a timespec produced by
  * _deadline_make would be comparing a monotonic-clock-based value against a
  * condvar internally using the wall clock (CLOCK_REALTIME by default),
  * making the wait either return ETIMEDOUT immediately or never honour the
- * deadline at all; see client_deadline_bundle's own identical fix
- * (_client_deadline_init_globals) for the first place this exact mistake was
- * caught in this codebase. */
-static int _cond_var_init_monotonic(cond_var_t *cv) {
-  cond_var_attr_t cv_attr;
-  if (cond_var_attr_init(cv_attr) == 0) {
-    cond_var_attr_setclock(cv_attr, CLOCK_MONOTONIC);
-    int rv = cond_var_init_ca(*cv, cv_attr);
-    cond_var_attr_destroy(cv_attr);
+ * deadline at all; client_deadline_bundle's own
+ * _client_deadline_init_globals initialises its condition variable the same
+ * way, for the same reason. */
+static int _ccol_cond_var_init_monotonic(ccol_cond_var_t *cv) {
+  ccol_cond_var_attr_t cv_attr;
+  if (ccol_cond_var_attr_init(cv_attr) == 0) {
+    ccol_cond_var_attr_setclock(cv_attr, CLOCK_MONOTONIC);
+    int rv = ccol_cond_var_init_ca(*cv, cv_attr);
+    ccol_cond_var_attr_destroy(cv_attr);
     return rv;
   }
-  return cond_var_init(*cv);
+  return ccol_cond_var_init(*cv);
 }
 
 /* ========================================================================== */
@@ -1813,12 +1812,11 @@ static ccol_retval_t _chttp_send_all(chttp_conn_t *conn, const char *data,
 }
 
 /* Applies TCP_NODELAY to fd, best-effort (a failure here is never fatal to
- * the connection itself, just a missed latency optimisation). Closes a
- * pre-existing asymmetry: this Tier 1 connect path used to set no socket
- * options at all, while Tier 2's connect path already got TCP_NODELAY
- * internally; both tiers now apply it consistently via this one shared
- * helper. Meaningless for a unix domain socket (no TCP layer), so callers
- * only invoke this for an AF_INET/AF_INET6 connection. */
+ * the connection itself, just a missed latency optimisation). Shared by the
+ * Tier 1 and Tier 2 connect paths so both apply it identically, rather than
+ * each setting its own socket options. Meaningless for a unix domain socket
+ * (no TCP layer), so callers only invoke this for an AF_INET/AF_INET6
+ * connection. */
 static void _apply_tcp_nodelay(int fd) {
   int one = 1;
   (void)setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
@@ -2037,7 +2035,7 @@ static void _conn_teardown(ccol_memmgmt_procs_t *mp, chttp_conn_t *c) {
   if (!c) return;
   if (c->tls) ctls_conn_destroy(c->tls);
   if (c->fd >= 0) close(c->fd);
-  _mem_free(mp, c->origin_key);
+  _ccol_mem_free(mp, c->origin_key);
   memset(c, 0, sizeof(*c));
   c->fd = -1;
 }
@@ -2062,17 +2060,17 @@ static size_t _resolve_pool_cap(size_t configured) {
  * even when the pool (chttpclient_set_pool_size) is saturated: the caller
  * (chttp_do_internal) computes the overall deadline BEFORE calling this,
  * specifically so time spent waiting here counts against it, rather than
- * being invisible to it the way an unconditional cond_var_wait would leave
+ * being invisible to it the way an unconditional ccol_cond_var_wait would leave
  * it. cli->available is initialised against CLOCK_MONOTONIC (see
- * _cond_var_init_monotonic) specifically so deadline->deadline, itself a
+ * _ccol_cond_var_init_monotonic) specifically so deadline->deadline, itself a
  * CLOCK_MONOTONIC timespec from _deadline_make, can be handed to
- * cond_var_timedwait directly.
+ * ccol_cond_var_timedwait directly.
  */
 static ccol_retval_t _slot_acquire(struct chttpclient *cli,
                                    const chttp_deadline_t *deadline) {
-  mutex_lock(cli->lock);
+  ccol_mutex_lock(cli->lock);
   if (cli->destroying) {
-    mutex_unlock(cli->lock);
+    ccol_mutex_unlock(cli->lock);
     return ccol_not_permitted;
   }
   if (!cli->pool_initialized) {
@@ -2081,33 +2079,33 @@ static ccol_retval_t _slot_acquire(struct chttpclient *cli,
   }
   while (cli->in_flight_count >= cli->pool_cap && !cli->destroying) {
     if (deadline && deadline->active) {
-      int wrc =
-          cond_var_timedwait(cli->available, cli->lock, deadline->deadline);
+      int wrc = ccol_cond_var_timedwait(cli->available, cli->lock,
+                                        deadline->deadline);
       if (wrc == ETIMEDOUT) {
-        mutex_unlock(cli->lock);
+        ccol_mutex_unlock(cli->lock);
         return ccol_timed_out;
       }
       /* Any other outcome (a genuine wake, or a spurious one) just falls
        * through to re-checking the loop predicate above, exactly like
-       * cond_var_wait's own spurious-wakeup handling already does. */
+       * ccol_cond_var_wait's own spurious-wakeup handling already does. */
     } else {
-      cond_var_wait(cli->available, cli->lock);
+      ccol_cond_var_wait(cli->available, cli->lock);
     }
   }
   if (cli->destroying) {
-    mutex_unlock(cli->lock);
+    ccol_mutex_unlock(cli->lock);
     return ccol_not_permitted;
   }
   cli->in_flight_count++;
-  mutex_unlock(cli->lock);
+  ccol_mutex_unlock(cli->lock);
   return ccol_success;
 }
 
 static void _slot_release(struct chttpclient *cli) {
-  mutex_lock(cli->lock);
+  ccol_mutex_lock(cli->lock);
   cli->in_flight_count--;
-  cond_var_broadcast(cli->available);
-  mutex_unlock(cli->lock);
+  ccol_cond_var_broadcast(cli->available);
+  ccol_mutex_unlock(cli->lock);
 }
 
 /* ========================================================================== */
@@ -2135,7 +2133,7 @@ static bool _idle_pool_take(struct chttpclient *cli, const char *origin_key,
                             chttp_conn_t *out) {
   for (;;) {
     bool got = false;
-    mutex_lock(cli->lock);
+    ccol_mutex_lock(cli->lock);
     if (cli->idle_pools) {
       cmap_pair kp = {.ptr = (void *)origin_key,
                       .size = strlen(origin_key) + 1};
@@ -2165,7 +2163,7 @@ static bool _idle_pool_take(struct chttpclient *cli, const char *origin_key,
         }
       }
     }
-    mutex_unlock(cli->lock);
+    ccol_mutex_unlock(cli->lock);
     if (!got) return false;
 
     struct timespec now;
@@ -2225,7 +2223,7 @@ static bool _idle_pool_take(struct chttpclient *cli, const char *origin_key,
  */
 static void _idle_pool_offer(struct chttpclient *cli, chttp_conn_t *c) {
   bool pooled = false;
-  mutex_lock(cli->lock);
+  ccol_mutex_lock(cli->lock);
   if (!cli->destroying && cli->idle_pools &&
       cli->idle_total_count < CHTTP_MAX_IDLE_TOTAL) {
     cmap_pair kp = {.ptr = c->origin_key, .size = strlen(c->origin_key) + 1};
@@ -2258,7 +2256,7 @@ static void _idle_pool_offer(struct chttpclient *cli, chttp_conn_t *c) {
       }
     }
   }
-  mutex_unlock(cli->lock);
+  ccol_mutex_unlock(cli->lock);
   if (!pooled) _conn_teardown(cli->m_procs, c);
 }
 
@@ -2274,13 +2272,13 @@ static void _idle_pool_offer(struct chttpclient *cli, chttp_conn_t *c) {
  * would miss a borrowed map (e.g. one built directly by a caller and handed
  * to chttp_run_query, never routed through chttp_request_set_header's own
  * lower-casing) whose keys use natural casing like "Content-Type" or
- * "Authorization"; a mismatch there previously meant chttp_run_query calls
- * could hand back a wire request carrying both the caller's own header and
- * an auto-injected duplicate (or, for Host specifically, silently drop the
- * caller's own value, since the header-emission loop below always skips
- * any case-insensitive "host" match unconditionally). This was only ever
- * fixed for Content-Type (the case-insensitive scan this struct/function
- * generalizes); every other field below needs the identical treatment.
+ * "Authorization". A mismatch there makes chttp_run_query hand back a wire
+ * request carrying both the caller's own header and an auto-injected
+ * duplicate (or, for Host specifically, silently drop the caller's own
+ * value, since the header-emission loop below always skips any
+ * case-insensitive "host" match unconditionally). Every field below is
+ * resolved through this one case-insensitive scan so that no field can
+ * regain that asymmetry.
  */
 typedef struct {
   bool has_host;
@@ -2328,7 +2326,7 @@ static chttp_header_presence_t _scan_header_presence(chmap headers) {
  * own lower-casing prevents this for the documented header-setting API, but a
  * borrowed map built directly (chttp_run_query's headers parameter, or a
  * caller that pokes chttp_request_t.headers itself) has no such guarantee.
- * Left undeduplicated, both entries reached the wire as two separate header
+ * Left undeduplicated, both entries reach the wire as two separate header
  * lines; for an arbitrary custom header that is merely unusual (RFC 7230
  * SS3.2.2 permits combining repeated fields with the same name), but for
  * "Host" specifically it produces a request RFC 7230 SS5.4 requires a server
@@ -2382,8 +2380,8 @@ static bool _seen_names_add(ccol_memmgmt_procs_t *mp, chttp_seen_names_t *seen,
     if (seen->cap > SIZE_MAX / 2) return false;
     size_t nc = seen->cap ? seen->cap * 2 : 8;
     if (nc > SIZE_MAX / sizeof(*seen->names)) return false;
-    const char **nn =
-        (const char **)_mem_realloc(mp, (void *)seen->names, nc * sizeof(*nn));
+    const char **nn = (const char **)_ccol_mem_realloc(mp, (void *)seen->names,
+                                                       nc * sizeof(*nn));
     if (!nn) return false;
     seen->names = nn;
     seen->cap = nc;
@@ -2418,7 +2416,7 @@ bool _chttp_seen_names_add_overflow_guard_for_tests(ccol_memmgmt_procs_t *mp,
    * real _seen_names_add (which always frees seen.names itself, in
    * _serialize_request's own header-emission loop) would ever be
    * responsible for cleaning up. */
-  _mem_free(mp, (void *)seen.names);
+  _ccol_mem_free(mp, (void *)seen.names);
   return !added;
 }
 #endif /* RUNNING_UNIT_TESTS */
@@ -2460,7 +2458,7 @@ static void _ob_append(chttp_outbuf_t *b, const char *data, size_t n) {
       }
       nc *= 2;
     }
-    char *nb = (char *)_mem_realloc(b->mp, b->buf, nc);
+    char *nb = (char *)_ccol_mem_realloc(b->mp, b->buf, nc);
     if (!nb) {
       b->oom = true;
       return;
@@ -2501,7 +2499,7 @@ bool _chttp_ob_append_overflow_guard_for_tests(ccol_memmgmt_procs_t *mp,
   if (n > sizeof(probe)) n = sizeof(probe);
   _ob_append(&ob, probe, n);
   bool oom = ob.oom;
-  _mem_free(mp, ob.buf);
+  _ccol_mem_free(mp, ob.buf);
   return oom;
 }
 #endif /* RUNNING_UNIT_TESTS */
@@ -2518,9 +2516,8 @@ bool _chttp_ob_append_overflow_guard_for_tests(ccol_memmgmt_procs_t *mp,
  * Exists purely so a caller that also needs one of these flags (Tier 1's
  * hop loop needs has_expect, to decide whether this hop should route through
  * the Expect: 100-continue wait) doesn't have to pay for a second full
- * O(header count) scan via its own separate _scan_header_presence call;
- * chttp_do_internal used to do exactly that, once here and once again right
- * after this call returned, over the identical header map.
+ * O(header count) scan via its own separate _scan_header_presence call over
+ * the identical header map.
  */
 static ccol_retval_t _serialize_request(ccol_memmgmt_procs_t *mp,
                                         const chttp_request_t *req,
@@ -2547,7 +2544,7 @@ static ccol_retval_t _serialize_request(ccol_memmgmt_procs_t *mp,
      * synthesis further down would otherwise pair it with a conflicting
      * Content-Length header over a body that was never actually
      * chunk-encoded. */
-    _mem_free(mp, ob.buf);
+    _ccol_mem_free(mp, ob.buf);
     return ccol_invalid_args;
   }
   bool has_host = hp.has_host;
@@ -2605,18 +2602,18 @@ static ccol_retval_t _serialize_request(ccol_memmgmt_procs_t *mp,
        req->method == CHTTP_PATCH);
 
   if (req->headers) {
-    /* No "host" special-case here (unlike an earlier version of this loop):
-     * the synthesis block above only ever runs when !has_host, so a "host"
-     * entry only ever reaches this loop when the caller supplied one
-     * explicitly (has_host true, synthesis skipped); skipping it
-     * unconditionally here, on top of that, meant a caller-supplied Host
-     * header (via chttp_request_set_header, or a borrowed map) was silently
-     * dropped from the wire entirely: no synthesized line (correctly
-     * suppressed) and no user-supplied line either (incorrectly
-     * suppressed), violating RFC 7230 SS5.4's "every HTTP/1.1 request MUST
-     * carry a Host header" requirement this same file's own unix-socket
-     * comment already cites elsewhere. Letting it fall through here like any
-     * other header is what actually honors has_host's own gating intent. */
+    /* Deliberately no "host" special-case in this loop: the synthesis block
+     * above only ever runs when !has_host, so a "host" entry only ever
+     * reaches this loop when the caller supplied one explicitly (has_host
+     * true, synthesis skipped). Skipping it unconditionally here, on top of
+     * that, would drop a caller-supplied Host header (via
+     * chttp_request_set_header, or a borrowed map) from the wire entirely:
+     * no synthesized line (correctly suppressed) and no user-supplied line
+     * either (incorrectly suppressed), violating RFC 7230 SS5.4's "every
+     * HTTP/1.1 request MUST carry a Host header" requirement this same
+     * file's own unix-socket comment already cites elsewhere. Letting it
+     * fall through here like any other header is what actually honors
+     * has_host's own gating intent. */
     chttp_seen_names_t seen = {0};
     cmap_iterator *it = chashmap_begin_iter((chmap)req->headers, NULL);
     for (; it; it = it->_next_fn(it)) {
@@ -2631,15 +2628,15 @@ static ccol_retval_t _serialize_request(ccol_memmgmt_procs_t *mp,
        * from either path, is actually written onto the wire. */
       if (strpbrk(name, "\r\n") || strpbrk(val, "\r\n") || !*name) {
         ccol_iter_destroy(it);
-        _mem_free(mp, (void *)seen.names);
-        _mem_free(mp, ob.buf);
+        _ccol_mem_free(mp, (void *)seen.names);
+        _ccol_mem_free(mp, ob.buf);
         return ccol_invalid_args;
       }
       for (const char *p = name; *p; p++) {
         if (!chttp1_is_tchar((unsigned char)*p)) {
           ccol_iter_destroy(it);
-          _mem_free(mp, (void *)seen.names);
-          _mem_free(mp, ob.buf);
+          _ccol_mem_free(mp, (void *)seen.names);
+          _ccol_mem_free(mp, ob.buf);
           return ccol_invalid_args;
         }
       }
@@ -2684,9 +2681,8 @@ static ccol_retval_t _serialize_request(ccol_memmgmt_procs_t *mp,
        * prevent (see chttp_request_set_header's own doc comment), just via
        * a wrong length instead of a wrong transfer-coding. Only checked for
        * a body_carrying_method: for any other method this exact header is
-       * already dropped from the wire entirely a few lines above (line
-       * ~2088), so there is no framing for a mismatched value to desync
-       * from. */
+       * already dropped from the wire entirely a few lines above, so there
+       * is no framing for a mismatched value to desync from. */
       if (body_carrying_method && strcasecmp(name, "content-length") == 0) {
         size_t expected = req->body.data ? req->body.len : (size_t)0;
         /* val is written to the wire byte-for-byte if accepted, so its
@@ -2697,7 +2693,7 @@ static ccol_retval_t _serialize_request(ccol_memmgmt_procs_t *mp,
          * is not sufficient here, since (unlike parse_uint64_decimal) it
          * tolerates a leading '+'/'-' and leading whitespace before the
          * digits; a value like "+42" or " 42" numerically equal to the real
-         * body length used to pass this check (strtoull("+42", &endp, 10)
+         * body length would otherwise pass (strtoull("+42", &endp, 10)
          * returns 42 with *endp == '\0') and be written verbatim onto the
          * wire, producing a request this library's own chttpserver rejects
          * outright as "Invalid Content-Length" despite chttp_request_
@@ -2716,15 +2712,15 @@ static ccol_retval_t _serialize_request(ccol_memmgmt_procs_t *mp,
         if (!all_digits || *endp != '\0' || errno == ERANGE ||
             (unsigned long long)expected != declared) {
           ccol_iter_destroy(it);
-          _mem_free(mp, (void *)seen.names);
-          _mem_free(mp, ob.buf);
+          _ccol_mem_free(mp, (void *)seen.names);
+          _ccol_mem_free(mp, ob.buf);
           return ccol_invalid_args;
         }
       }
       if (!_seen_names_add(mp, &seen, name)) {
         ccol_iter_destroy(it);
-        _mem_free(mp, (void *)seen.names);
-        _mem_free(mp, ob.buf);
+        _ccol_mem_free(mp, (void *)seen.names);
+        _ccol_mem_free(mp, ob.buf);
         return ccol_not_enough_memory;
       }
       _ob_append_cstr(&ob, name);
@@ -2732,7 +2728,7 @@ static ccol_retval_t _serialize_request(ccol_memmgmt_procs_t *mp,
       _ob_append_cstr(&ob, val);
       _ob_append(&ob, "\r\n", 2);
     }
-    _mem_free(mp, (void *)seen.names);
+    _ccol_mem_free(mp, (void *)seen.names);
   }
 
   if (!has_ct && body_carrying_method && req->body.content_type) {
@@ -2742,11 +2738,11 @@ static ccol_retval_t _serialize_request(ccol_memmgmt_procs_t *mp,
      * of whether body.data is set. A non-body-carrying method (GET, DELETE,
      * HEAD, OPTIONS) never puts req->body on the wire at all (see the
      * body-append check further down), so advertising a content-type for
-     * one of those was a real, previously-untested inconsistency; a caller
-     * attaching a body to e.g. a DELETE request (as this file's own
-     * delete_body_not_transmitted test does) got a spurious
-     * "content-type: ..." header with no body bytes and no Content-Length
-     * to match it - body_carrying_method alone is what rules that out.
+     * one of those is an inconsistency: a caller attaching a body to e.g. a
+     * DELETE request (as this file's own delete_body_not_transmitted test
+     * does) would get a spurious "content-type: ..." header with no body
+     * bytes and no Content-Length to match it. body_carrying_method alone
+     * is what rules that out.
      * A genuinely empty body on a body-carrying method (body.data == NULL
      * because body.len == 0, e.g. CHTTP_JSON_BODY("", 0)) is a different,
      * legitimate case: it still emits "content-length: 0" below, so a
@@ -2759,7 +2755,7 @@ static ccol_retval_t _serialize_request(ccol_memmgmt_procs_t *mp,
      * chttp_request_body_t, copied verbatim by chttp_request_new_mp), so
      * this is its only checkpoint before reaching the wire. */
     if (strpbrk(req->body.content_type, "\r\n")) {
-      _mem_free(mp, ob.buf);
+      _ccol_mem_free(mp, ob.buf);
       return ccol_invalid_args;
     }
     _ob_append_cstr(&ob, "content-type: ");
@@ -2786,7 +2782,7 @@ static ccol_retval_t _serialize_request(ccol_memmgmt_procs_t *mp,
     _ob_append(&ob, (const char *)req->body.data, req->body.len);
 
   if (ob.oom) {
-    _mem_free(mp, ob.buf);
+    _ccol_mem_free(mp, ob.buf);
     return ccol_not_enough_memory;
   }
   *out_buf = ob.buf;
@@ -2816,7 +2812,7 @@ static size_t _sink_buffered(const void *data, size_t len, void *ctx) {
    * supplied value needs to be implausibly large on its own for bb->len +
    * len to approach SIZE_MAX; only the CUMULATIVE total across many calls
    * does. Practically unreachable regardless (the real allocator behind
-   * _mem_realloc below would already fail well before bb->buf could ever
+   * _ccol_mem_realloc below would already fail well before bb->buf could ever
    * grow anywhere near that size, and that failure is already handled by
    * the existing `if (!nb)` check further down), but this project treats a
    * reducible/unguarded overflow in a size computation as a real bug
@@ -2851,7 +2847,7 @@ static size_t _sink_buffered(const void *data, size_t len, void *ctx) {
       }
       nc *= 2;
     }
-    char *nb = (char *)_mem_realloc(bb->mp, bb->buf, nc);
+    char *nb = (char *)_ccol_mem_realloc(bb->mp, bb->buf, nc);
     if (!nb) {
       bb->oom = true;
       return 0;
@@ -2886,7 +2882,7 @@ bool _chttp_sink_buffered_overflow_guard_for_tests(ccol_memmgmt_procs_t *mp,
   char probe[8] = {0};
   size_t n = _sink_buffered(probe, sizeof(probe), &bb);
   bool rejected = (n != sizeof(probe)) && bb.oom && !bb.too_large;
-  _mem_free(mp, bb.buf);
+  _ccol_mem_free(mp, bb.buf);
   return rejected;
 }
 #endif /* RUNNING_UNIT_TESTS */
@@ -2975,15 +2971,15 @@ static int _on_headers_complete(chttp1_parser_t *p) {
    * and a HEAD response (whose Content-Length describes what a GET would have
    * returned, per RFC 7231 SS4.3.2, but is never followed by actual body
    * bytes; see this function's own is_head_request check at the very end).
-   * Applying this cap to any of these wrongly failed the WHOLE request with
-   * ccol_msg_too_large even when the real, eventually-delivered response
-   * (always zero bytes for 1xx/204/304, unconditionally) was well within the
-   * configured limit: a 103 Early Hints interim response (or any other 1xx)
-   * carrying an oversized declared length ahead of a small, well-within-cap
-   * final response, a plain HEAD request against a large resource, or an
-   * ordinary conditional GET receiving 304 Not Modified with the original
-   * resource's oversized Content-Length, all used to fail this way before
-   * this check excluded them. A chunked or EOF-delimited body (no
+   * Applying this cap to any of these would wrongly fail the WHOLE request
+   * with ccol_msg_too_large even when the real, eventually-delivered
+   * response (always zero bytes for 1xx/204/304, unconditionally) is well
+   * within the configured limit: a 103 Early Hints interim response (or any
+   * other 1xx) carrying an oversized declared length ahead of a small,
+   * well-within-cap final response, a plain HEAD request against a large
+   * resource, or an ordinary conditional GET receiving 304 Not Modified with
+   * the original resource's oversized Content-Length would all be rejected
+   * without this check excluding them. A chunked or EOF-delimited body (no
    * Content-Length declared) has no up-front signal to check here regardless;
    * it is still bounded by the reactive per-append check in _sink_buffered
    * below. */
@@ -3045,7 +3041,7 @@ static int _on_message_complete(chttp1_parser_t *p) {
 
 static struct {
   chttp1_settings_t settings;
-  once_flag_t once;
+  ccol_once_flag_t once;
 } client_http1_settings_bundler = {0};
 
 static void _init_chttp1_settings(void) {
@@ -3059,7 +3055,7 @@ static void _init_chttp1_settings(void) {
 }
 
 static void _parse_ctx_free_fields(chttp_parse_ctx_t *ctx) {
-  _mem_free(ctx->mp, ctx->location);
+  _ccol_mem_free(ctx->mp, ctx->location);
   if (ctx->headers) __chmap_destroy(ctx->headers);
   ctx->location = NULL;
   ctx->headers = NULL;
@@ -3078,12 +3074,12 @@ static void _parse_ctx_free_fields(chttp_parse_ctx_t *ctx) {
  * caller's real sink config); sink_fn/sink_ctx are cleared since
  * _on_headers_complete resolves them fresh for the message it's parsing. */
 static ccol_retval_t _parse_ctx_reset_for_continue(chttp_parse_ctx_t *ctx) {
-  _mem_free(ctx->mp, ctx->location);
+  _ccol_mem_free(ctx->mp, ctx->location);
   ctx->location = NULL;
   if (ctx->headers) __chmap_destroy(ctx->headers);
   char *herr = NULL;
   ctx->headers =
-      chmap_create_full(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, ccol_string,
+      chmap_create_full(CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, ccol_string,
                         ccol_string, ctx->mp, NULL, &herr);
   ctx->will_redirect = false;
   ctx->message_complete = false;
@@ -3138,18 +3134,19 @@ static ccol_retval_t _parse_ctx_reset_for_continue(chttp_parse_ctx_t *ctx) {
  * whether a failure is safe to silently retry against a fresh connection
  * (nothing has been parsed or handed to the caller yet) versus one that
  * must be surfaced (partial response already in flight, possibly already
- * streamed out to a user callback); treating carry_in as exempt used to let
- * chttp_do_internal's reused-connection retry-once safety net reissue a
- * request onto a fresh connection while reusing a chttp_parse_ctx_t/body
- * buffer that a dead carry_in parse had already partially populated,
- * silently mixing a discarded response's headers/body-prefix into the one
- * actually delivered to the caller.
+ * streamed out to a user callback). carry_in is deliberately NOT exempt
+ * from that accounting: treating it as exempt would let chttp_do_internal's
+ * reused-connection retry-once safety net reissue a request onto a fresh
+ * connection while reusing a chttp_parse_ctx_t/body buffer that a dead
+ * carry_in parse had already partially populated, silently mixing a
+ * discarded response's headers/body-prefix into the one actually delivered
+ * to the caller.
  */
 static ccol_retval_t _chttp_read_message(
     chttp_conn_t *conn, chttp_parse_ctx_t *pctx, chttp_deadline_t *overall,
     const char *carry_in, size_t carry_in_len, bool *keep_alive_out,
     bool *any_bytes_read_out, char **leftover_out, size_t *leftover_len_out) {
-  call_once(client_http1_settings_bundler.once, _init_chttp1_settings);
+  ccol_call_once(client_http1_settings_bundler.once, _init_chttp1_settings);
 
   chttp1_parser_t parser;
   chttp1_parser_init(&parser, &client_http1_settings_bundler.settings);
@@ -3166,7 +3163,7 @@ static ccol_retval_t _chttp_read_message(
       *keep_alive_out = chttp1_should_keep_alive(&parser);
       if (consumed < carry_in_len) {
         size_t rem = carry_in_len - consumed;
-        char *lb = (char *)_mem_alloc(pctx->mp, rem);
+        char *lb = (char *)_ccol_mem_alloc(pctx->mp, rem);
         if (!lb) return ccol_not_enough_memory;
         memcpy(lb, carry_in + consumed, rem);
         *leftover_out = lb;
@@ -3214,7 +3211,7 @@ static ccol_retval_t _chttp_read_message(
       *keep_alive_out = chttp1_should_keep_alive(&parser);
       if (consumed < (size_t)n) {
         size_t rem = (size_t)n - consumed;
-        char *lb = (char *)_mem_alloc(pctx->mp, rem);
+        char *lb = (char *)_ccol_mem_alloc(pctx->mp, rem);
         if (!lb) return ccol_not_enough_memory;
         memcpy(lb, buf + consumed, rem);
         *leftover_out = lb;
@@ -3239,15 +3236,16 @@ static ccol_retval_t _chttp_read_message(
  * either stop_at_status itself, any final (>=200) response, or a hard
  * failure/timeout.
  *
- * This closes a real correctness gap: every caller used to read exactly one
- * message and unconditionally treat it as final, so a server that
- * proactively sends an interim 1xx status other than the one being watched
- * for (most notably "103 Early Hints", RFC 8297, which servers may send
- * ahead of an ORDINARY response, not just ahead of "100 Continue") would be
- * misread as though it WERE the final response: an empty, wrong-status
- * result delivered to the caller while the server's real response sits
- * unread on the wire; corrupting whatever unrelated later request
- * happens to reuse this same connection from the keep-alive pool.
+ * Skipping interim responses here, rather than having each caller read
+ * exactly one message and treat it as final, is what makes a proactively
+ * sent 1xx safe. A server may send an interim status other than the one
+ * being watched for (most notably "103 Early Hints", RFC 8297, which
+ * servers may send ahead of an ORDINARY response, not just ahead of "100
+ * Continue"); read as though it WERE the final response, it yields an
+ * empty, wrong-status result delivered to the caller while the server's
+ * real response sits unread on the wire, corrupting whatever unrelated
+ * later request happens to reuse this same connection from the keep-alive
+ * pool.
  *
  * Every discarded interim message's own pctx state (headers, Location,
  * etc.) is cleared via _parse_ctx_reset_for_continue before the next read,
@@ -3282,7 +3280,7 @@ static ccol_retval_t _chttp_read_message_loop(
   char *cur_carry = NULL;
   size_t cur_carry_len = 0;
   if (carry_in_len > 0) {
-    cur_carry = (char *)_mem_alloc(pctx->mp, carry_in_len);
+    cur_carry = (char *)_ccol_mem_alloc(pctx->mp, carry_in_len);
     if (!cur_carry) return ccol_not_enough_memory;
     memcpy(cur_carry, carry_in, carry_in_len);
     cur_carry_len = carry_in_len;
@@ -3292,32 +3290,31 @@ static ccol_retval_t _chttp_read_message_loop(
    * found to be an interim (skippable) one, never before attempting a read;
    * see CHTTP_MAX_INTERIM_RESPONSES's own comment ("how many...it will
    * discard before giving up") for why this ordering, not the reverse, is
-   * the documented contract. An earlier version of this loop checked the
-   * cap up front, gating every read attempt (interim or not) uniformly:
-   * once 64 interim responses had been discarded, that version refused to
-   * even attempt reading whatever message came next, so a real, final
-   * response arriving as the very next (65th) message was wrongly rejected
-   * even though only 64 (not 65) interim responses had actually needed
-   * discarding. That silently violated this function's own documented
-   * "after 64 consecutive discarded interim responses" contract (also
-   * published in README.md and chttpclient_do.3) by giving up one message
-   * early, and disagreed with the async engine's own equivalent loop
-   * (_async_on_readable_impl), which has never gated the final response
-   * this way, only the interim ones. Checking the cap here, after
-   * classifying the message, makes both tiers agree exactly: a final
-   * response is always deliverable no matter its position, and only the
-   * interim-discard count itself is bounded. */
+   * the documented contract. Checking the cap up front instead, gating
+   * every read attempt (interim or not) uniformly, would refuse to even
+   * attempt reading whatever message came next once 64 interim responses
+   * had been discarded, so a real, final response arriving as the very next
+   * (65th) message would be rejected even though only 64 (not 65) interim
+   * responses had actually needed discarding. That gives up one message
+   * early, violating this function's own documented "after 64 consecutive
+   * discarded interim responses" contract (also published in README.md and
+   * chttpclient_do.3), and disagrees with the async engine's own equivalent
+   * loop (_async_on_readable_impl), which gates only the interim messages,
+   * never the final response. Checking the cap here, after classifying the
+   * message, is what makes both tiers agree exactly: a final response is
+   * always deliverable no matter its position, and only the interim-discard
+   * count itself is bounded. */
   for (size_t n_discarded = 0;;) {
     char *leftover = NULL;
     size_t leftover_len = 0;
     ccol_retval_t rv = _chttp_read_message(
         conn, pctx, overall, cur_carry, cur_carry_len, keep_alive_out,
         any_bytes_read_out, &leftover, &leftover_len);
-    _mem_free(pctx->mp, cur_carry);
+    _ccol_mem_free(pctx->mp, cur_carry);
     cur_carry = NULL;
     cur_carry_len = 0;
     if (rv != ccol_success) {
-      _mem_free(pctx->mp, leftover);
+      _ccol_mem_free(pctx->mp, leftover);
       return rv;
     }
 
@@ -3331,14 +3328,14 @@ static ccol_retval_t _chttp_read_message_loop(
     }
 
     if (n_discarded >= CHTTP_MAX_INTERIM_RESPONSES) {
-      _mem_free(pctx->mp, leftover);
+      _ccol_mem_free(pctx->mp, leftover);
       return ccol_http_transfer_aborted;
     }
     n_discarded++;
 
     ccol_retval_t rrv = _parse_ctx_reset_for_continue(pctx);
     if (rrv != ccol_success) {
-      _mem_free(pctx->mp, leftover);
+      _ccol_mem_free(pctx->mp, leftover);
       return rrv;
     }
     cur_carry = leftover;
@@ -3350,9 +3347,9 @@ static ccol_retval_t _chttp_read_message_loop(
  * with any leftover bytes past the returned message's own boundary
  * collapsed into the ordinary trailing-garbage handling every caller except
  * chttp_do_internal's Expect: 100-continue path actually wants (downgrades
- * keep_alive_out to false, exactly matching this function's previous,
- * inlined behavior before _chttp_read_message was split out). carry_in/
- * carry_in_len are forwarded unchanged. */
+ * keep_alive_out to false, since bytes past a response's own boundary make
+ * the connection unsafe to reuse). carry_in/carry_in_len are forwarded
+ * unchanged. */
 static ccol_retval_t _chttp_read_response_carry(
     chttp_conn_t *conn, chttp_parse_ctx_t *pctx, chttp_deadline_t *overall,
     const char *carry_in, size_t carry_in_len, bool *keep_alive_out,
@@ -3366,7 +3363,7 @@ static ccol_retval_t _chttp_read_response_carry(
     pctx->trailing_garbage = true;
     *keep_alive_out = false;
   }
-  _mem_free(pctx->mp, leftover);
+  _ccol_mem_free(pctx->mp, leftover);
   return rv;
 }
 
@@ -3399,16 +3396,15 @@ static bool _file_readable(const char *path) {
  * ctls_ctx_cert_add/_trust report failure via an ordinary ccol_retval_t and
  * never touch the process's own lifetime (a missing/unreadable file is
  * always a recoverable error here, never a process abort). chttpclient_set_tls
- * must still be able to accept a syntactically valid but currently-nonexistent
- * path without crashing (callers may configure TLS well before ever making an
- * HTTPS request, or never make one at all); so the configured paths are
- * still validated with access() BEFORE ever calling into ctls. If they don't
- * check out, no context is built here and the failure is deferred to actual
- * connection time (see chttp_do_internal), where it surfaces as a normal
- * ccol_retval_t exactly as before. This pre-check is kept (rather than
- * relying solely on ctls_ctx_cert_add's own graceful failure) to preserve
- * this function's existing "always returns ccol_success, failure is always
- * deferred" contract unchanged.
+ * must accept a syntactically valid but currently-nonexistent path without
+ * crashing (callers may configure TLS well before ever making an HTTPS
+ * request, or never make one at all), so the configured paths are validated
+ * with access() BEFORE ever calling into ctls. If they don't check out, no
+ * context is built here and the failure is deferred to actual connection
+ * time (see chttp_do_internal), where it surfaces as a normal
+ * ccol_retval_t. This pre-check (rather than relying solely on
+ * ctls_ctx_cert_add's own graceful failure) is what gives this function its
+ * "always returns ccol_success, failure is always deferred" contract.
  */
 static ccol_retval_t _rebuild_tls_ctx_locked(struct chttpclient *cli) {
   if (cli->tls_ctx) {
@@ -3449,9 +3445,9 @@ static ccol_retval_t _rebuild_tls_ctx_locked(struct chttpclient *cli) {
      * certificate itself could be entirely attacker-forged. Without this,
      * a caller setting verify_peer=false, verify_host=true (plausible if
      * the two are read as independent toggles, which chttp_tls_config_t's
-     * field comments now warn against) got a false sense of security: the
-     * hostname check would run and "pass" against literally any
-     * self-signed certificate for that hostname. */
+     * field comments warn against) gets a false sense of security: the
+     * hostname check runs and "passes" against literally any self-signed
+     * certificate for that hostname. */
     if (ctls_ctx_trust_system(ctx) != ccol_success) {
       /* Unlike a plain missing/unreadable CA-bundle file (checked with
        * access() before ctls is ever touched, above), this failure is not
@@ -3480,9 +3476,9 @@ static ccol_retval_t _rebuild_tls_ctx_locked(struct chttpclient *cli) {
 /* ========================================================================== */
 
 /*
- * One static, process-wide event_loop reactor shared by every chttpcli
+ * One static, process-wide ccol_event_loop reactor shared by every chttpcli
  * instance in the process (including the lazily-created default client);
- * One of two separate, independent reactors (the other belongs to chttpserver;
+ * one of two separate, independent reactors (the other belongs to chttpserver;
  * see chttpserver.c's own identical lifecycle wrapper). chttpclient does not
  * share a process-wide singleton with chttpserver, so this lifecycle wrapper
  * needs no cross-module ordering at all, only ref-counting across Tier 2/3
@@ -3492,28 +3488,28 @@ static ccol_retval_t _rebuild_tls_ctx_locked(struct chttpclient *cli) {
  * layered on top and torn down in lockstep with it.
  */
 static struct {
-  event_loop reactor;
+  ccol_event_loop reactor;
   size_t reactor_refs;
-  mutex_t mutex;
-  cond_var_t stopped_cv;
-  once_flag_t once;
+  ccol_mutex_t mutex;
+  ccol_cond_var_t stopped_cv;
+  ccol_once_flag_t once;
   bool stopping;
-  thread_id_t reaper_thread;
+  ccol_thread_id_t reaper_thread;
   bool reaper_joinable;
   ccol_memmgmt_procs_t mprocs_storage;
   ccol_memmgmt_procs_t *mprocs;
 
   /* 0 = auto-detect via sysconf(_SC_NPROCESSORS_ONLN), this module's
-   * original, still-default behavior. A positive value pins the reactor to
+   * default behavior. A positive value pins the reactor to
    * exactly that many OS threads instead; see
    * chttpcli_set_engine_num_reactor_threads's own doc comment. Baked into
    * the reactor at construction time, same "before first start, or after a
    * full stop" restriction as mprocs above. */
   size_t num_reactor_threads;
-  /* The value actually passed to event_loop_create_with_mprocs the last time
-   * the reactor was created (auto-detected or explicit); for test
-   * instrumentation only, see
-   * _chttpclient_engine_num_reactor_threads_for_tests below. */
+  /* The value actually passed to ccol_event_loop_create_with_mprocs the last
+   * time the reactor was created (auto-detected or explicit); for test
+   * instrumentation only, see _chttpclient_engine_num_reactor_threads_for_tests
+   * below. */
   size_t last_resolved_num_reactor_threads;
 
   /* Diagnostics logger for chttpclient's own reactor-thread events (TLS
@@ -3523,7 +3519,7 @@ static struct {
    * fallback logger (fd 2) the first time the engine starts, so this field
    * is never actually NULL for the engine's whole running lifetime; not
    * merely an internal detail: _client_engine_reaper_fn's own teardown
-   * log_info call, and the deadline sweep's, both rely on having SOME
+   * ccol_log_info call, and the deadline sweep's, both rely on having SOME
    * live logger to call through (chttp1_parser has no equivalent of its
    * own; _clog_write itself has no NULL-handle guard, so calling through a
    * genuinely NULL logger would crash, not silently skip). Only the rare
@@ -3547,10 +3543,11 @@ static ccol_retval_t _client_deadline_sweep_start(void);
 static void _client_deadline_sweep_stop_and_join(void);
 
 static void _client_engine_globals_init(void) {
-  if (mutex_init(cli_engine_bundler.mutex) != 0)
-    fatal_err("chttpclient engine: failed to initialize mutex");
-  if (cond_var_init(cli_engine_bundler.stopped_cv) != 0)
-    fatal_err("chttpclient engine: failed to initialize condition variable");
+  if (ccol_mutex_init(cli_engine_bundler.mutex) != 0)
+    ccol_fatal_err("chttpclient engine: failed to initialize mutex");
+  if (ccol_cond_var_init(cli_engine_bundler.stopped_cv) != 0)
+    ccol_fatal_err(
+        "chttpclient engine: failed to initialize condition variable");
   /* Belt-and-suspenders: Tier 1 already passes MSG_NOSIGNAL to every send(),
    * and Tier 2/3's own raw writes do the same (see _async_on_writable), so
    * this is not load-bearing the way chttpserver.c's identical call is for
@@ -3562,31 +3559,30 @@ static void _client_engine_globals_init(void) {
 
 /*
  * Logs through cli_engine_bundler.logger with the read of that pointer and
- * the actual log_info call combined into ONE critical section, rather than
- * copying the pointer out under the lock and using it afterward with no
- * lock held at all (the shape this replaced). That earlier shape was a
- * real use-after-free: chttpcli_set_engine_logger() swaps in a new logger
- * under cli_engine_bundler.mutex but calls clog_close() on the OLD one only
- * after releasing it (clog_close() unconditionally frees the handle itself,
- * regardless of the shared backing store's own separate refcount; see
- * clogger.c), so a caller that had already copied the old pointer out
- * before the swap, and only used it afterward, could call log_info() on
- * memory that had just been freed out from under it. Kept as a macro
- * (rather than a wrapping function) specifically so log_info's own
+ * the actual ccol_log_info call combined into ONE critical section. Copying
+ * the pointer out under the lock and using it afterward with no lock held
+ * at all is a use-after-free: chttpcli_set_engine_logger() swaps in a new
+ * logger under cli_engine_bundler.mutex but calls clog_close() on the OLD
+ * one only after releasing it (clog_close() unconditionally frees the
+ * handle itself, regardless of the shared backing store's own separate
+ * refcount; see clogger.c), so a caller holding a copy of the old pointer
+ * taken before the swap could call ccol_log_info() on memory freed out from
+ * under it. Kept as a macro
+ * (rather than a wrapping function) specifically so ccol_log_info's own
  * __FILE__/__LINE__/__func__ capture still reflects the real call site, not
  * this helper's. */
-#define _CLIENT_ENGINE_LOG_INFO(fmt, ...)                            \
-  do {                                                               \
-    call_once(cli_engine_bundler.once, _client_engine_globals_init); \
-    mutex_lock(cli_engine_bundler.mutex);                            \
-    if (cli_engine_bundler.logger)                                   \
-      log_info(cli_engine_bundler.logger, fmt, ##__VA_ARGS__);       \
-    mutex_unlock(cli_engine_bundler.mutex);                          \
+#define _CLIENT_ENGINE_LOG_INFO(fmt, ...)                                 \
+  do {                                                                    \
+    ccol_call_once(cli_engine_bundler.once, _client_engine_globals_init); \
+    ccol_mutex_lock(cli_engine_bundler.mutex);                            \
+    if (cli_engine_bundler.logger)                                        \
+      ccol_log_info(cli_engine_bundler.logger, fmt, ##__VA_ARGS__);       \
+    ccol_mutex_unlock(cli_engine_bundler.mutex);                          \
   } while (0)
 
 static void _client_engine_join_reaper_if_needed_locked(void) {
   if (cli_engine_bundler.reaper_joinable) {
-    thread_join(cli_engine_bundler.reaper_thread);
+    ccol_thread_join(cli_engine_bundler.reaper_thread);
     cli_engine_bundler.reaper_joinable = false;
   }
 }
@@ -3602,35 +3598,34 @@ static void _client_engine_join_reaper_if_needed_locked(void) {
  */
 static void *_client_engine_reaper_fn(void *arg) {
   (void)arg;
-  event_loop loop_to_destroy;
+  ccol_event_loop loop_to_destroy;
   ctpool dns_pool_to_destroy;
-  mutex_lock(cli_engine_bundler.mutex);
+  ccol_mutex_lock(cli_engine_bundler.mutex);
   loop_to_destroy = cli_engine_bundler.reactor;
   dns_pool_to_destroy = cli_engine_bundler.dns_pool;
-  mutex_unlock(cli_engine_bundler.mutex);
+  ccol_mutex_unlock(cli_engine_bundler.mutex);
 
   /* Stop the deadline sweep before tearing down the reactor and DNS pool it
    * may still be referencing (a sweep tick closes a fd/removes a
    * registration directly; see _client_deadline_sweep_once). */
   _client_deadline_sweep_stop_and_join();
-  if (loop_to_destroy) event_loop_destroy(loop_to_destroy);
+  if (loop_to_destroy) ccol_event_loop_destroy(loop_to_destroy);
   /* ctpool_destroy (an implicit drain shutdown, joining every dns_pool
    * worker thread - potentially slow if one is mid-getaddrinfo()/connect())
-   * is called here, outside the lock, mirroring event_loop_destroy just
-   * above it rather than being held under cli_engine_bundler.mutex the way
-   * an earlier version of this function did. That earlier version let any
-   * concurrent, otherwise-cheap call to chttpcli_set_engine_logger/_set_
+   * is called here, outside the lock, mirroring ccol_event_loop_destroy just
+   * above it. Holding cli_engine_bundler.mutex across it instead would let
+   * any concurrent, otherwise-cheap call to chttpcli_set_engine_logger/_set_
    * engine_mem_mgmt_procs/_set_engine_num_reactor_threads (all of which
    * take this same mutex unconditionally, with no cond-var wait to yield
-   * it) block for the full duration of the drain, with no real ordering
-   * requirement forcing that - reactor/dns_pool are only ever cleared
+   * it) block for the full duration of the drain, and no ordering
+   * requirement asks for that: reactor/dns_pool are only ever cleared
    * together, under the single critical section below, regardless of
    * where the actual destroy call happens relative to it. */
   if (dns_pool_to_destroy) ctpool_destroy(dns_pool_to_destroy);
 
-  mutex_lock(cli_engine_bundler.mutex);
+  ccol_mutex_lock(cli_engine_bundler.mutex);
   cli_engine_bundler.dns_pool = CTPOOL_INVALID;
-  cli_engine_bundler.reactor = EVENT_LOOP_INVALID;
+  cli_engine_bundler.reactor = CCOL_EVENT_LOOP_INVALID;
   cli_engine_bundler.stopping = false;
   /* logger can legitimately still be NULL here: _client_engine_acquire's own
    * fallback-logger allocation can itself fail, in which case it reaps the
@@ -3638,31 +3633,31 @@ static void *_client_engine_reaper_fn(void *arg) {
    * comment) with no logger ever having been installed; _clog_write has no
    * NULL-handle guard of its own, so logging unconditionally here would
    * crash instead of simply skipping diagnostics, exactly like every other
-   * log_info call site in this file already does via its own `if (el)`/
+   * ccol_log_info call site in this file already does via its own `if (el)`/
    * `if (logger)` guard. */
   if (cli_engine_bundler.logger)
-    log_info(cli_engine_bundler.logger,
-             "The http client reactor engine has been destroyed");
+    ccol_log_info(cli_engine_bundler.logger,
+                  "The http client reactor engine has been destroyed");
   clog old_logger = cli_engine_bundler.logger;
   cli_engine_bundler.logger = CLOG_INVALID;
-  cond_var_broadcast(cli_engine_bundler.stopped_cv);
-  mutex_unlock(cli_engine_bundler.mutex);
+  ccol_cond_var_broadcast(cli_engine_bundler.stopped_cv);
+  ccol_mutex_unlock(cli_engine_bundler.mutex);
   if (old_logger) clog_close(old_logger);
   return NULL;
 }
 
 static void _client_engine_spawn_reaper(void) {
-  thread_id_t reaper;
-  if (thread_create(reaper, _client_engine_reaper_fn, NULL) != 0) {
+  ccol_thread_id_t reaper;
+  if (ccol_thread_create(reaper, _client_engine_reaper_fn, NULL) != 0) {
     /* No safer fallback than running it inline (OOM-class failure); nothing
      * to join afterward since it already ran to completion synchronously. */
     _client_engine_reaper_fn(NULL);
     return;
   }
-  mutex_lock(cli_engine_bundler.mutex);
+  ccol_mutex_lock(cli_engine_bundler.mutex);
   cli_engine_bundler.reaper_thread = reaper;
   cli_engine_bundler.reaper_joinable = true;
-  mutex_unlock(cli_engine_bundler.mutex);
+  ccol_mutex_unlock(cli_engine_bundler.mutex);
 }
 
 /*
@@ -3672,10 +3667,10 @@ static void _client_engine_spawn_reaper(void) {
  * paired with exactly one _client_engine_release() call.
  */
 static ccol_retval_t _client_engine_acquire(void) {
-  call_once(cli_engine_bundler.once, _client_engine_globals_init);
-  mutex_lock(cli_engine_bundler.mutex);
+  ccol_call_once(cli_engine_bundler.once, _client_engine_globals_init);
+  ccol_mutex_lock(cli_engine_bundler.mutex);
   while (cli_engine_bundler.stopping)
-    cond_var_wait(cli_engine_bundler.stopped_cv, cli_engine_bundler.mutex);
+    ccol_cond_var_wait(cli_engine_bundler.stopped_cv, cli_engine_bundler.mutex);
   _client_engine_join_reaper_if_needed_locked();
 
   if (!cli_engine_bundler.reactor) {
@@ -3686,15 +3681,16 @@ static ccol_retval_t _client_engine_acquire(void) {
     }
     cli_engine_bundler.last_resolved_num_reactor_threads = nthreads;
     char *err = NULL;
-    cli_engine_bundler.reactor = event_loop_create_with_mprocs(
+    cli_engine_bundler.reactor = ccol_event_loop_create_with_mprocs(
         256, 4, nthreads, cli_engine_bundler.mprocs, &err);
     if (!cli_engine_bundler.reactor) {
-      mutex_unlock(cli_engine_bundler.mutex);
+      ccol_mutex_unlock(cli_engine_bundler.mutex);
       return ccol_not_enough_memory;
     }
 
     char *dns_err = NULL;
-    cli_engine_bundler.dns_pool = create_cthread_pool(nthreads, 0, &dns_err);
+    cli_engine_bundler.dns_pool =
+        ccol_create_cthread_pool(nthreads, 0, &dns_err);
     if (!cli_engine_bundler.dns_pool) {
       /* Capture the reactor handle and clear the struct field BEFORE
        * releasing the mutex, so a concurrent _client_engine_acquire sees a
@@ -3708,10 +3704,10 @@ static ccol_retval_t _client_engine_acquire(void) {
        * mutex across it serves no correctness purpose, only needlessly
        * blocks any other thread trying to acquire/release/reconfigure the
        * engine for the duration of the join. */
-      event_loop stale_reactor = cli_engine_bundler.reactor;
-      cli_engine_bundler.reactor = EVENT_LOOP_INVALID;
-      mutex_unlock(cli_engine_bundler.mutex);
-      __event_loop_destroy(stale_reactor);
+      ccol_event_loop stale_reactor = cli_engine_bundler.reactor;
+      cli_engine_bundler.reactor = CCOL_EVENT_LOOP_INVALID;
+      ccol_mutex_unlock(cli_engine_bundler.mutex);
+      __ccol_event_loop_destroy(stale_reactor);
       return ccol_not_enough_memory;
     }
 
@@ -3724,12 +3720,12 @@ static ccol_retval_t _client_engine_acquire(void) {
        * nothing else that could be depending on either handle at this
        * point. */
       ctpool stale_dns_pool = cli_engine_bundler.dns_pool;
-      event_loop stale_reactor = cli_engine_bundler.reactor;
+      ccol_event_loop stale_reactor = cli_engine_bundler.reactor;
       cli_engine_bundler.dns_pool = CTPOOL_INVALID;
-      cli_engine_bundler.reactor = EVENT_LOOP_INVALID;
-      mutex_unlock(cli_engine_bundler.mutex);
+      cli_engine_bundler.reactor = CCOL_EVENT_LOOP_INVALID;
+      ccol_mutex_unlock(cli_engine_bundler.mutex);
       __ctpool_destroy(stale_dns_pool);
-      __event_loop_destroy(stale_reactor);
+      __ccol_event_loop_destroy(stale_reactor);
       return ccol_unexpected_failure;
     }
 
@@ -3744,25 +3740,25 @@ static ccol_retval_t _client_engine_acquire(void) {
          * takes cli_engine_bundler.mutex, so synchronously joining it while
          * still holding that same mutex here would deadlock (the sweep
          * thread's own in-flight tick could be blocked waiting for exactly
-         * this lock). Unlocking first and joining afterward isn't
-         * safe either: a concurrent _client_engine_acquire call could see
+         * this lock). Unlocking first and joining afterward isn't safe
+         * either: a concurrent _client_engine_acquire call could see
          * cli_engine_bundler.reactor already non-NULL in that window, skip
          * this whole "create everything" branch entirely, and hand out a
          * live reference to a reactor this thread is about to destroy out
-         * from under it. The correct fix is the same one
-         * _client_engine_release() already uses for "last reference just
-         * dropped, tear down without blocking the calling thread": mark
+         * from under it. What this branch does instead is exactly what
+         * _client_engine_release() does for "last reference just dropped,
+         * tear down without blocking the calling thread": mark
          * the bundle stopping (so any concurrent acquirer's own top-of-
          * function wait loop blocks instead of proceeding) and hand the
          * actual teardown off to a freshly spawned reaper thread, exactly
          * as if this acquire's not-yet-granted reference had been acquired
          * and immediately released. Without this, a logger allocation
-         * failure here permanently leaked the reactor, dns_pool, and
+         * failure here permanently leaks the reactor, dns_pool, and
          * (already-running) sweep thread for the remaining life of the
-         * process, since reactor_refs never left 0 and nothing would ever
-         * call _client_engine_release() to reap them. */
+         * process, since reactor_refs never leaves 0 and nothing ever calls
+         * _client_engine_release() to reap them. */
         cli_engine_bundler.stopping = true;
-        mutex_unlock(cli_engine_bundler.mutex);
+        ccol_mutex_unlock(cli_engine_bundler.mutex);
         _client_engine_spawn_reaper();
         return ccol_not_enough_memory;
       }
@@ -3770,11 +3766,11 @@ static ccol_retval_t _client_engine_acquire(void) {
                      "http-client-engine");
     }
 
-    log_info(cli_engine_bundler.logger,
-             "New http client reactor engine has been created");
+    ccol_log_info(cli_engine_bundler.logger,
+                  "New http client reactor engine has been created");
   }
   cli_engine_bundler.reactor_refs++;
-  mutex_unlock(cli_engine_bundler.mutex);
+  ccol_mutex_unlock(cli_engine_bundler.mutex);
   return ccol_success;
 }
 
@@ -3785,18 +3781,18 @@ static ccol_retval_t _client_engine_acquire(void) {
  * this is essential, not just a style choice, since this is routinely called
  * from inside a reactor callback thread itself (_async_on_error tearing down
  * the last live ctx), which must never block joining the deadline sweep or
- * draining cli_engine_bundler.dns_pool (a real hang, caught in testing, in the
- * single-owner predecessor of this exact design).
+ * draining cli_engine_bundler.dns_pool; tearing either down inline from a
+ * reactor callback thread is a real hang, not a theoretical one.
  */
 static void _client_engine_release(void) {
   bool should_reap = false;
-  mutex_lock(cli_engine_bundler.mutex);
+  ccol_mutex_lock(cli_engine_bundler.mutex);
   if (cli_engine_bundler.reactor_refs > 0) cli_engine_bundler.reactor_refs--;
   if (cli_engine_bundler.reactor_refs == 0 && cli_engine_bundler.reactor) {
     cli_engine_bundler.stopping = true;
     should_reap = true;
   }
-  mutex_unlock(cli_engine_bundler.mutex);
+  ccol_mutex_unlock(cli_engine_bundler.mutex);
   if (should_reap) _client_engine_spawn_reaper();
 }
 
@@ -3820,12 +3816,12 @@ static void _client_engine_release(void) {
  */
 #ifdef RUNNING_UNIT_TESTS
 static void _client_engine_wait_for_quiescence(void) {
-  call_once(cli_engine_bundler.once, _client_engine_globals_init);
-  mutex_lock(cli_engine_bundler.mutex);
+  ccol_call_once(cli_engine_bundler.once, _client_engine_globals_init);
+  ccol_mutex_lock(cli_engine_bundler.mutex);
   while (cli_engine_bundler.stopping)
-    cond_var_wait(cli_engine_bundler.stopped_cv, cli_engine_bundler.mutex);
+    ccol_cond_var_wait(cli_engine_bundler.stopped_cv, cli_engine_bundler.mutex);
   _client_engine_join_reaper_if_needed_locked();
-  mutex_unlock(cli_engine_bundler.mutex);
+  ccol_mutex_unlock(cli_engine_bundler.mutex);
 }
 #endif /* RUNNING_UNIT_TESTS */
 
@@ -3834,11 +3830,11 @@ ccol_retval_t chttpcli_set_engine_logger(clog cl) {
   clog derived = clog_derive(cl);
   if (!derived) return ccol_not_enough_memory;
   clog_set_field(derived, "component", "http-client-engine");
-  call_once(cli_engine_bundler.once, _client_engine_globals_init);
-  mutex_lock(cli_engine_bundler.mutex);
+  ccol_call_once(cli_engine_bundler.once, _client_engine_globals_init);
+  ccol_mutex_lock(cli_engine_bundler.mutex);
   clog old = cli_engine_bundler.logger;
   cli_engine_bundler.logger = derived;
-  mutex_unlock(cli_engine_bundler.mutex);
+  ccol_mutex_unlock(cli_engine_bundler.mutex);
   if (old) clog_close(old);
   return ccol_success;
 }
@@ -3846,10 +3842,10 @@ ccol_retval_t chttpcli_set_engine_logger(clog cl) {
 ccol_retval_t chttpcli_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp) {
   if (mp && (!mp->malloc || !mp->free || !mp->calloc || !mp->realloc))
     return ccol_invalid_args;
-  call_once(cli_engine_bundler.once, _client_engine_globals_init);
-  mutex_lock(cli_engine_bundler.mutex);
+  ccol_call_once(cli_engine_bundler.once, _client_engine_globals_init);
+  ccol_mutex_lock(cli_engine_bundler.mutex);
   if (cli_engine_bundler.reactor) {
-    mutex_unlock(cli_engine_bundler.mutex);
+    ccol_mutex_unlock(cli_engine_bundler.mutex);
     return ccol_not_permitted;
   }
   if (mp) {
@@ -3858,19 +3854,19 @@ ccol_retval_t chttpcli_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp) {
   } else {
     cli_engine_bundler.mprocs = NULL;
   }
-  mutex_unlock(cli_engine_bundler.mutex);
+  ccol_mutex_unlock(cli_engine_bundler.mutex);
   return ccol_success;
 }
 
 ccol_retval_t chttpcli_set_engine_num_reactor_threads(size_t num_threads) {
-  call_once(cli_engine_bundler.once, _client_engine_globals_init);
-  mutex_lock(cli_engine_bundler.mutex);
+  ccol_call_once(cli_engine_bundler.once, _client_engine_globals_init);
+  ccol_mutex_lock(cli_engine_bundler.mutex);
   if (cli_engine_bundler.reactor) {
-    mutex_unlock(cli_engine_bundler.mutex);
+    ccol_mutex_unlock(cli_engine_bundler.mutex);
     return ccol_not_permitted;
   }
   cli_engine_bundler.num_reactor_threads = num_threads;
-  mutex_unlock(cli_engine_bundler.mutex);
+  ccol_mutex_unlock(cli_engine_bundler.mutex);
   return ccol_success;
 }
 
@@ -3880,48 +3876,48 @@ ccol_retval_t chttpcli_set_engine_num_reactor_threads(size_t num_threads) {
 
 /*
  * Tier 2/3 engine: a non-blocking HTTP or HTTPS request/response cycle per
- * connection, with redirect-following layered on top of a single-hop
- * pipeline, driven by chttpclient's own event_loop reactor (see the "SHARED
- * STATIC REACTOR" section above).
+ * connection, with redirect-following layered on top of a single-hop pipeline,
+ * driven by chttpclient's own ccol_event_loop reactor (see the "SHARED STATIC
+ * REACTOR" section above).
  *
  * TLS: uses the same reactor-agnostic, client-mode ctls API Tier 1 uses
  * (ctls_conn_create_client / ctls_conn_handshake_step / ctls_conn_read /
  * ctls_conn_write), driven from on_readable/on_writable instead of a
  * blocking poll() loop.
  *
- * No tls_lock is needed here: event_loop's own per-event_entry dispatch_lock
- * (see cthreadcomm's own documentation) guarantees that a registration's
- * callback is never invoked concurrently with itself, and, more strongly,
- * that both directions of one fd (on_readable/on_writable) are never
+ * No tls_lock is needed here: ccol_event_loop's own per-event_entry
+ * dispatch_lock (see cthreadcomm's own documentation) guarantees that a
+ * registration's callback is never invoked concurrently with itself, and, more
+ * strongly, that both directions of one fd (on_readable/on_writable) are never
  * dispatched concurrently with each other either. That guarantee is exactly
  * what lets this module drive OpenSSL on one shared connection from either
  * callback with no additional locking of its own.
  *
- * Write-readiness re-arming needs no special-casing: event_loop is
+ * Write-readiness re-arming needs no special-casing: ccol_event_loop is
  * level-triggered and keeps a registration live until explicitly removed
- * (event_loop_modify is used instead, purely to flip which direction(s) are
- * of interest), so there is no "forgot to re-arm a one-shot write interest"
+ * (ccol_event_loop_modify is used instead, purely to flip which direction(s)
+ * are of interest), so there is no "forgot to re-arm a one-shot write interest"
  * window to guard against for raw (queue-bypassing) TLS writes.
  *
- * Connection identity is its raw fd plus the event_reg handle returned by
- * event_loop_add for its current registration (EVENT_REG_INVALID while none
- * is active, e.g. mid-connect via the DNS/connect pool, or while idle-pooled).
- * event_loop's own generation counter (event_loop_reg_generation) is
- * available for defensive bookkeeping but is not needed for correctness
- * here: event_loop's dispatch path already re-validates a registration's
- * liveness under its own lock at dispatch time, so a stale, already-fetched
- * epoll_wait batch entry for a since-removed registration is always a safe
- * no-op regardless.
+ * Connection identity is its raw fd plus the ccol_event_reg handle returned by
+ * ccol_event_loop_add for its current registration (CCOL_EVENT_REG_INVALID
+ * while none is active, e.g. mid-connect via the DNS/connect pool, or while
+ * idle-pooled). ccol_event_loop's own generation counter
+ * (ccol_event_loop_reg_generation) is available for defensive bookkeeping but
+ * is not needed for correctness here: ccol_event_loop's dispatch path already
+ * re-validates a registration's liveness under its own lock at dispatch time,
+ * so a stale, already-fetched epoll_wait batch entry for a since-removed
+ * registration is always a safe no-op regardless.
  *
- * event_loop_remove only protects event_loop's OWN internal structures via
- * deferred/epoch-based freeing; it does NOT protect this module's OWN ctx
- * payload from a dispatch that was already in flight when the removal
- * happened. Every place that ends a connection therefore goes through one
- * of two small, explicit teardown helpers (_async_ctx_finish/
+ * ccol_event_loop_remove only protects ccol_event_loop's OWN internal
+ * structures via deferred/epoch-based freeing; it does NOT protect this
+ * module's OWN ctx payload from a dispatch that was already in flight when the
+ * removal happened. Every place that ends a connection therefore goes through
+ * one of two small, explicit teardown helpers (_async_ctx_finish/
  * _async_idle_ctx_finish, defined after the idle pool section below) rather
- * than relying on any implicit "on_close eventually runs" guarantee: there
- * is no unconditional terminal callback under event_loop, so this module
- * must be explicit about ending a connection instead.
+ * than relying on any implicit "on_close eventually runs" guarantee: there is
+ * no unconditional terminal callback under ccol_event_loop, so this module must
+ * be explicit about ending a connection instead.
  *
  * Redirect-chain lifetime: a redirect chain spans multiple connections (one
  * chttp_async_ctx_t per hop, exactly mirroring Tier 1's "a fresh
@@ -4004,29 +4000,31 @@ typedef struct {
   size_t body_len;
   char *body_content_type; /* owned copy; NULL if none */
   bool body_dropped;       /* Latches true, permanently, the first time a
-                            * non-preserving redirect drops the body; mirrors Tier
-                            * 1's chttp_do_internal, which persists this by
+                            * non-preserving redirect drops the body; mirrors
+                            * Tier 1's chttp_do_internal, which persists this by
                             * overwriting its cur_body loop-local with an empty
                             * body once dropped, so a LATER 307/308 on the same
                             * chain preserves "whatever the current, possibly
                             * already-dropped, body is", not the original one.
-                            * _async_handle_redirect has no per-ctx equivalent of
-                            * Tier 1's cur_body (a fresh chttp_async_ctx_t exists
-                            * only for the hop that is currently in flight), so
-                            * this chain-level flag is what makes that same
-                            * "once dropped, stays dropped" persistence hold
-                            * across hops here too; without it, a 307/308 hop
-                            * following an earlier non-preserving downgrade would
-                            * resurrect body_data/body_len/body_content_type from
-                            * this struct's own ORIGINAL, hop-0 values instead of
-                            * the empty body the chain had already moved to.
-                            * Mutated only from _async_handle_redirect, which
-                            * always runs synchronously on whichever thread just
+                            * _async_handle_redirect has no per-ctx equivalent
+                            * of Tier 1's cur_body (a fresh chttp_async_ctx_t
+                            * exists only for the hop that is currently in
+                            * flight), so this chain-level flag is what makes
+                            * that same "once dropped, stays dropped"
+                            * persistence hold across hops here too; without it,
+                            * a 307/308 hop following an earlier non-preserving
+                            * downgrade would resurrect
+                            * body_data/body_len/body_content_type from this
+                            * struct's own ORIGINAL, hop-0 values instead of the
+                            * empty body the chain had already moved to. Mutated
+                            * only from _async_handle_redirect, which always
+                            * runs synchronously on whichever thread just
                             * finished parsing a hop's response and calls
                             * _async_submit_hop for the next hop from the same
-                            * call stack; safe without additional locking for the
-                            * same reason carried_auth/explicit_auth_suppressed
-                            * above already are (see this struct's own comments on
+                            * call stack; safe without additional locking for
+                            * the same reason
+                            * carried_auth/explicit_auth_suppressed above
+                            * already are (see this struct's own comments on
                             * those fields). */
 
   char *carried_auth;        /* auto-injected-from-userinfo Authorization
@@ -4116,11 +4114,11 @@ typedef struct {
                          * wait moot for a later hop even though this flag
                          * itself never changes for the chain's lifetime. */
 
-  mutex_t lock; /* guards fulfilled and refcount, both mutated from
-                 * potentially concurrent hops' reactor callbacks (see the
-                 * file-level comment: an old hop's on_close can fire
-                 * concurrently with a new hop's on_data/on_ready once the
-                 * redirect handoff has queued the next connection) */
+  ccol_mutex_t lock; /* guards fulfilled and refcount, both mutated from
+                      * potentially concurrent hops' reactor callbacks (see the
+                      * file-level comment: an old hop's on_close can fire
+                      * concurrently with a new hop's on_data/on_ready once the
+                      * redirect handoff has queued the next connection) */
   bool fulfilled;
   int refcount; /* number of currently-live per-hop ctx referencing this
                  * chain; reaches zero exactly once, when the last hop's
@@ -4158,29 +4156,27 @@ typedef struct chttp_async_ctx_s {
                               * loop variable */
   _Atomic chttp_async_state_t state;
   _Atomic int fd; /* -1 until the connect task obtains a real fd */
-  _Atomic(event_reg)
-      reg; /* current event_loop registration, or EVENT_REG_INVALID
+  _Atomic(ccol_event_reg)
+      reg; /* current ccol_event_loop registration, or CCOL_EVENT_REG_INVALID
             * while none is active (mid-connect via the DNS/connect
             * pool, or while idle-pooled with no direction of
             * interest yet needed). Set exactly once, by
-            * _async_connect_task, right after event_loop_add
+            * _async_connect_task, right after ccol_event_loop_add
             * returns; and _Atomic specifically because that
             * assignment is NOT safe to treat as "invisible until a
-            * dispatch could care": event_loop_add's own internal
+            * dispatch could care": ccol_event_loop_add's own internal
             * registration goes live (dispatchable by another
             * reactor thread) as part of the call itself, which can
             * complete and hand a callback to a DIFFERENT thread
-            * before this thread's own `ctx->reg = event_loop_add(
+            * before this thread's own `ctx->reg = ccol_event_loop_add(
             * ...)` assignment has finished executing; especially
             * likely for a loopback connect, which is often already
             * writable the instant it's registered. A plain
-            * (non-atomic) pointer here was a real, TSan-caught data
-            * race (an earlier version of this comment's own claim
-            * that this field is "never read lock-free" was simply
-            * wrong, found only by running ThreadSanitizer against a
-            * suite that kept intermittently failing
-            * async_idle_pool.dead_connection_detected_and_retried,
-            * not by re-reading this code and noticing it). Every
+            * (non-atomic) pointer here is a real data race, not a
+            * theoretical one: this field IS read lock-free, by
+            * every dispatch callback, so it must be accessed
+            * atomically. ThreadSanitizer catches the non-atomic
+            * form; ordinary code reading does not. Every
             * dispatch callback (_async_on_writable/_on_readable/
             * _on_error) treats a NULL read here as "registration
             * not yet published" and returns immediately without
@@ -4196,12 +4192,12 @@ typedef struct chttp_async_ctx_s {
                            * separately */
   uint16_t port;
   bool is_ipv6;         /* host is a raw (unbracketed) IPv6 literal; mirrors
-                         * chttp_url_t.is_ipv6. Needed by _async_handle_redirect to
-                         * correctly re-bracket the host when reconstructing a
-                         * redirect target; omitting this (an earlier version of this
-                         * struct had no such field at all) silently produced a
-                         * malformed "scheme://<unbracketed-ipv6>:port/path" redirect
-                         * target that failed to re-parse on the next hop. */
+                         * chttp_url_t.is_ipv6. Needed by _async_handle_redirect
+                         * to correctly re-bracket the host when reconstructing
+                         * a redirect target. Without it, the reconstruction
+                         * silently produces a malformed
+                         * "scheme://<unbracketed-ipv6>:port/path"
+                         * target that fails to re-parse on the next hop. */
   char *path_and_query; /* owned copy of THIS HOP's request path+query, e.g.
                          * "/a/b?x=1"; mirrors chttp_url_t.path_and_query.
                          * Captured fresh in _async_submit_hop on EVERY hop,
@@ -4213,13 +4209,12 @@ typedef struct chttp_async_ctx_s {
                          * _async_handle_redirect to resolve a relative-path
                          * Location header against this hop's own URL, the
                          * same way Tier 1's per-hop chttp_url_t url local
-                         * already does; without it (an earlier version of
-                         * this struct had no such field), _async_handle_
-                         * redirect's own hand-built chttp_url_t base always
-                         * left this NULL, and any genuinely relative (not
-                         * absolute-path, not a full URL, not protocol-
-                         * relative) Location header crashed the process via
-                         * a NULL-pointer strchr() inside _merge_ref_path. */
+                         * already does. Without it, _async_handle_redirect's
+                         * own hand-built chttp_url_t base would leave this
+                         * NULL, and any genuinely relative (not absolute-
+                         * path, not a full URL, not protocol-relative)
+                         * Location header would crash the process via a
+                         * NULL-pointer strchr() inside _merge_ref_path. */
   char *origin_key;     /* owned copy, "scheme://host:port" or "unix://<path>";
                          * matches Tier 1's chttp_conn_t.origin_key; used to
                          * place/remove this ctx in cli->idle_pools_async */
@@ -4311,23 +4306,24 @@ typedef struct chttp_async_ctx_s {
                       * whether that ending must still fulfil the chain's
                       * future, retry, or neither (already handled by
                       * whichever code path called _async_ctx_finish in
-                      * the first place). _Atomic (unlike a first version
-                      * of this field, which assumed event_loop's own
-                      * dispatch_lock was sufficient protection) because
-                      * it is also written directly by _async_submit_hop's
-                      * reused-connection path (ordinary application
-                      * code running on whatever thread called
-                      * chttpclient_do_async, not a dispatch callback, and
-                      * therefore NOT covered by event_loop's dispatch_lock
-                      * at all) while a concurrent dispatch for this
-                      * same, already-registered ctx can legitimately be
-                      * in flight at the same time. A real, TSan-caught
-                      * data race, found chasing down an intermittent
+                      * the first place). _Atomic, because
+                      * ccol_event_loop's own dispatch_lock does not cover
+                      * this field on its own: it is also written directly
+                      * by _async_submit_hop's reused-connection path
+                      * (ordinary application code running on whatever
+                      * thread called chttpclient_do_async, not a dispatch
+                      * callback, and therefore NOT covered by
+                      * ccol_event_loop's dispatch_lock at all) while a
+                      * concurrent dispatch for this same,
+                      * already-registered ctx can legitimately be in
+                      * flight at the same time. A plain bool here is a
+                      * real data race, one ThreadSanitizer reports; the
                       * async_idle_pool.dead_connection_detected_and_
-                      * retried failure. See pending_app_teardown's own
-                      * field comment for why setting this field is never,
-                      * by itself, allowed to be paired with an application
-                      * thread also calling _async_ctx_teardown directly. */
+                      * retried scenario reaches it. See
+                      * pending_app_teardown's own field comment for why
+                      * setting this field is never, by itself, allowed to
+                      * be paired with an application thread also calling
+                      * _async_ctx_teardown directly. */
   _Atomic bool
       pending_app_teardown; /* Set (always together with hop_completed,
                              * and always before shutdown(ctx->fd, ...) is
@@ -4336,7 +4332,7 @@ typedef struct chttp_async_ctx_s {
                              * (re)activated" failure paths in
                              * _async_submit_hop/_async_submit_hop_fail,
                              * which must NEVER call _async_ctx_teardown
-                             * themselves: ctx's event_loop registration is
+                             * themselves: ctx's ccol_event_loop registration is
                              * still fully live at that point (it was just
                              * popped from the idle pool for reuse), so a
                              * reactor dispatch callback can legitimately
@@ -4344,17 +4340,16 @@ typedef struct chttp_async_ctx_s {
                              * different thread at the same moment; and
                              * that thread can be preempted by the OS for
                              * an unbounded duration between passing
-                             * event_loop's own liveness check and ever
+                             * ccol_event_loop's own liveness check and ever
                              * touching ctx. An application thread
                              * physically freeing ctx while that could
-                             * still happen is a real, ASan-reproduced
-                             * use-after-free; a per-ctx atomic refcount
-                             * pinned by every dispatch callback (an
-                             * earlier version of this fix) does not
+                             * still happen is a real use-after-free, one
+                             * ASan reports. A per-ctx atomic refcount
+                             * pinned by every dispatch callback does not
                              * close it either, since the pin's own very
                              * first read of the refcount can itself race
                              * a concurrent free the same way. The only
-                             * fix that actually closes this by
+                             * approach that closes this by
                              * construction: no application thread ever
                              * calls the real, destructive teardown for a
                              * registered ctx at all. Instead, these two
@@ -4376,7 +4371,7 @@ typedef struct chttp_async_ctx_s {
                              * _async_ctx_teardown for real, now safely
                              * from dispatch context, which is inherently
                              * serialised against every other dispatch for
-                             * this exact registration by event_loop's own
+                             * this exact registration by ccol_event_loop's own
                              * entry->dispatch_lock and
                              * entry->refcount-gated "one job in flight
                              * per entry" invariant). Write-once per ctx,
@@ -4389,43 +4384,45 @@ typedef struct chttp_async_ctx_s {
                              * hop_completed is reset in
                              * _async_idle_pool_offer. */
   ctls_conn_t *tls;         /* NULL until the connect succeeds and the handshake
-                             * begins; NULL for plain HTTP. No separate lock guards
-                             * this: see the file-level comment on why event_loop's
-                             * own per-registration dispatch_lock already makes one
+                             * begins; NULL for plain HTTP. No separate lock
+                             * guards this: see the file-level comment on why
+                             * ccol_event_loop's own per-registration
+                             * dispatch_lock already makes one
                              * unnecessary. */
 
-  mutex_t idle_lock; /* Guards the state/chain pair specifically across the
-                      * idle<->active transition. A connection popped out of
-                      * cli->idle_pools_async by _async_idle_pool_take stays
-                      * fully attached to the reactor the whole time (there
-                      * is no way to "pause" polling for a single fd);
-                      * removing it from the POOL's bookkeeping does nothing
-                      * to stop the reactor from independently dispatching
-                      * on_readable/on_writable/on_error for it on another
-                      * thread the moment the peer sends something (or the
-                      * connection dies) while _async_submit_hop is still in
-                      * the middle of reconfiguring ctx->state away from
-                      * CHTTP_ASYNC_IDLE and ctx->chain away from NULL for
-                      * its new owner. Without this lock, a dispatch's
-                      * IDLE-state guard could read a stale (already-popped
-                      * but not-yet-reconfigured) ctx->state, fall through
-                      * past the guard, and dereference ctx->chain while it
-                      * is still NULL. Only ever held very briefly, around
-                      * the handful of statements that flip state+chain in
-                      * either direction, never across I/O. Deliberately NOT
-                      * used by the deadline sweep (see the "ASYNC DEADLINE
-                      * SWEEP" section for the lock-ordering hazard this
-                      * would otherwise create, and the shutdown(fd)-based
-                      * design that avoids it entirely): state/chain/fd/
-                      * timed_out are instead _Atomic specifically so the
-                      * sweep can read them lock-free; see those fields' own
-                      * comments for why individual atomic reads (rather
-                      * than this lock's stronger compound guarantee) are
-                      * sufficient for the sweep's specific use, even though
-                      * every OTHER consumer of state/chain (the dispatch
-                      * callbacks, via _async_dispatch_kind) still needs (and
-                      * keeps getting) the full compound protection this
-                      * lock alone provides. */
+  ccol_mutex_t
+      idle_lock; /* Guards the state/chain pair specifically across the
+                  * idle<->active transition. A connection popped out of
+                  * cli->idle_pools_async by _async_idle_pool_take stays
+                  * fully attached to the reactor the whole time (there
+                  * is no way to "pause" polling for a single fd);
+                  * removing it from the POOL's bookkeeping does nothing
+                  * to stop the reactor from independently dispatching
+                  * on_readable/on_writable/on_error for it on another
+                  * thread the moment the peer sends something (or the
+                  * connection dies) while _async_submit_hop is still in
+                  * the middle of reconfiguring ctx->state away from
+                  * CHTTP_ASYNC_IDLE and ctx->chain away from NULL for
+                  * its new owner. Without this lock, a dispatch's
+                  * IDLE-state guard could read a stale (already-popped
+                  * but not-yet-reconfigured) ctx->state, fall through
+                  * past the guard, and dereference ctx->chain while it
+                  * is still NULL. Only ever held very briefly, around
+                  * the handful of statements that flip state+chain in
+                  * either direction, never across I/O. Deliberately NOT
+                  * used by the deadline sweep (see the "ASYNC DEADLINE
+                  * SWEEP" section for the lock-ordering hazard this
+                  * would otherwise create, and the shutdown(fd)-based
+                  * design that avoids it entirely): state/chain/fd/
+                  * timed_out are instead _Atomic specifically so the
+                  * sweep can read them lock-free; see those fields' own
+                  * comments for why individual atomic reads (rather
+                  * than this lock's stronger compound guarantee) are
+                  * sufficient for the sweep's specific use, even though
+                  * every OTHER consumer of state/chain (the dispatch
+                  * callbacks, via _async_dispatch_kind) still needs (and
+                  * keeps getting) the full compound protection this
+                  * lock alone provides. */
 
   chttp_deadline_t connect_deadline; /* Only meaningful while state is
                                       * CHTTP_ASYNC_CONNECTING or
@@ -4447,30 +4444,27 @@ typedef struct chttp_async_ctx_s {
                                       * fully-initialised value with no
                                       * separate synchronisation needed. See
                                       * the "ASYNC DEADLINE SWEEP" section. */
-  mutex_t deadline_lock; /* Guards overall_deadline below ONLY; a small,
-                          * dedicated leaf lock, never held while trying to
-                          * acquire idle_lock or a deadline stripe's mutex
-                          * (so it introduces no new lock-ordering cycle with
-                          * either), taken briefly by both the writer
-                          * (_async_idle_pool_take/_async_submit_hop/
-                          * _async_retry_hop, all of which may already be
-                          * holding idle_lock at the point they need to
-                          * write overall_deadline) and the reader (the
-                          * deadline sweep, which already holds this ctx's
-                          * own stripe's mutex for that stripe's walk). A
-                          * first version of overall_deadline
-                          * relied on ctx->chain's own _Atomic-ness as a
-                          * publication barrier (matching connect_deadline's
-                          * established pattern below) instead of a real
-                          * lock; that reasoning turned out to be
-                          * insufficient in practice for THIS field
-                          * specifically (unlike connect_deadline, which is
-                          * published exactly once via _client_deadline_
-                          * register's own mutex, overall_deadline can be
-                          * REWRITTEN on every idle-pool reuse cycle without
-                          * a fresh _client_deadline_register call at all),
-                          * caught as a real, reproducible TSan data race
-                          * even after the ordering fix. */
+  ccol_mutex_t deadline_lock; /* Guards overall_deadline below ONLY; a small,
+                               * dedicated leaf lock, never held while trying to
+                               * acquire idle_lock or a deadline stripe's mutex
+                               * (so it introduces no new lock-ordering cycle
+                               * with either), taken briefly by both the writer
+                               * (_async_idle_pool_take/_async_submit_hop/
+                               * _async_retry_hop, all of which may already be
+                               * holding idle_lock at the point they need to
+                               * write overall_deadline) and the reader (the
+                               * deadline sweep, which already holds this ctx's
+                               * own stripe's mutex for that stripe's walk).
+                               * Relying on ctx->chain's own _Atomic-ness as a
+                               * publication barrier (connect_deadline's own
+                               * pattern below) instead of a real lock is not
+                               * sufficient for THIS field:
+                               * unlike connect_deadline, which is published
+                               * exactly once via _client_deadline_register's
+                               * own mutex, overall_deadline can be REWRITTEN on
+                               * every idle-pool reuse cycle without a fresh
+                               * _client_deadline_register call at all, which is
+                               * a genuine data race ThreadSanitizer reports. */
   chttp_deadline_t overall_deadline; /* A ctx-local COPY of chain->
                                       * overall_deadline (immutable for the
                                       * chain's whole lifetime, computed once
@@ -4481,17 +4475,16 @@ typedef struct chttp_async_ctx_s {
                                       * reused paths, _async_idle_pool_take,
                                       * _async_retry_hop). This copy exists
                                       * so the deadline sweep never needs to
-                                      * dereference ctx->chain at all: an
-                                      * earlier version read chain->
-                                      * overall_deadline directly through
-                                      * node->chain, a genuine TSan-caught
-                                      * use-after-free, since nothing
-                                      * prevented the chain's last reference
-                                      * from being released (and the chain
-                                      * freed) between the sweep's atomic
-                                      * read of the pointer and its
-                                      * subsequent dereference of it. The
-                                      * sweep now only ever compares
+                                      * dereference ctx->chain at all.
+                                      * Reading chain->overall_deadline
+                                      * directly through node->chain would be
+                                      * a use-after-free: nothing prevents
+                                      * the chain's last reference from being
+                                      * released (and the chain freed)
+                                      * between the sweep's atomic read of
+                                      * the pointer and any subsequent
+                                      * dereference of it. The sweep
+                                      * therefore only ever compares
                                       * node->chain against NULL directly
                                       * (a safe, non-dereferencing pointer
                                       * read, needing no lock) to decide
@@ -4561,7 +4554,7 @@ typedef struct chttp_async_ctx_s {
                          * seen" branch and _async_on_writable_impl's
                          * "continue_deadline expired" branch may actually
                          * decide to resume writing the body; whichever
-                         * dispatch's callback runs first (event_loop's own
+                         * dispatch's callback runs first (ccol_event_loop's own
                          * per-entry dispatch_lock guarantees the two can
                          * never run concurrently with each other, since
                          * both directions of one fd share one entry) sets
@@ -4631,7 +4624,7 @@ typedef struct chttp_async_ctx_s {
  * _deadline_remaining_ms semantics exactly; including catching a
  * connection that never goes fully idle (e.g. a slow trickle of bytes just
  * before an activity-reset timeout would fire) but has still blown its
- * deadline. event_loop has no built-in timer/deadline mechanism at all, so
+ * deadline. ccol_event_loop has no built-in timer/deadline mechanism at all, so
  * this is a small periodic-sweep thread, entirely separate from the
  * reactor's own threads and the DNS/connect ctpool; started/stopped
  * alongside them (see _client_deadline_sweep_start/_stop_and_join, called
@@ -4643,24 +4636,24 @@ typedef struct chttp_async_ctx_s {
  * list head, rather than one global mutex guarding one global list. A
  * registration/unregistration only ever needs to lock the one stripe its
  * ctx hashes into (_deadline_stripe_index_for_ctx), so concurrent
- * registrations for different ctx nodes across many in-flight requests no
- * longer serialise against each other, and the sweep's own per-stripe walk
+ * registrations for different ctx nodes across many in-flight requests do
+ * not serialise against each other, and the sweep's own per-stripe walk
  * (below) only ever blocks a registration/unregistration landing in that
  * one stripe, not every registration/unregistration in the process. A
  * single request's own register/unregister pair is still, by construction,
  * always on the very same stripe (the hash is a pure, stateless function
  * of the ctx pointer, recomputed identically on both calls, so no extra
  * per-ctx bookkeeping field is needed to remember which stripe a given ctx
- * landed in). Mirrors event_loop's own lock-striped fd registry in
+ * landed in). Mirrors ccol_event_loop's own lock-striped fd registry in
  * cthreadcomm.c (_stripe_index_for_fd) for exactly the same reason: a real
- * ctx-hash key needs the same stripe on every lookup, unlike event_loop's
+ * ctx-hash key needs the same stripe on every lookup, unlike ccol_event_loop's
  * queue-selectable stripe assignment (round-robin), which is safe only
  * because a queue selectable is never looked up a second time.
  *
  * client_deadline_bundle.mutex/cond_var, separately, guard only the sweep
  * thread's own start/stop/sleep-wake lifecycle (client_deadline_bundle.
- * stop/thread); they play no part in registry mutual exclusion at all any
- * more. Each stripe's own mutex now serialises, for that one stripe: (1)
+ * stop/thread); they play no part in registry mutual exclusion at all.
+ * Each stripe's own mutex serialises, for that one stripe: (1)
  * its intrusive doubly-linked list itself (ctx->deadline_prev/
  * deadline_next, for every ctx hashing into it), and (2) the reason a ctx
  * is never explicitly unregistered except from within _async_ctx_free, the
@@ -4682,7 +4675,7 @@ typedef struct chttp_async_ctx_s {
  *
  * Lock ordering: _client_deadline_register CAN legitimately be called while
  * some ctx's idle_lock is held (e.g. _async_submit_hop's reused-connection
- * event_loop_modify-failure branch holds the abandoned ctx's own idle_lock
+ * ccol_event_loop_modify-failure branch holds the abandoned ctx's own idle_lock
  * across its call to _async_retry_hop, which registers the brand-new retry
  * ctx before releasing it), so a stripe's mutex is NOT always taken outside
  * of every ctx->idle_lock. This is still deadlock-free only because the
@@ -4724,34 +4717,33 @@ typedef struct chttp_async_ctx_s {
  * calling it here. shutdown() neuters both directions of the connection
  * (readable-with-error and writable-with-error on the next epoll_wait)
  * without this sweep ever touching ctx's own memory, idle_lock, or its
- * event_loop registration; the normal dispatch path
+ * ccol_event_loop registration; the normal dispatch path
  * (_async_on_readable/_on_writable/_on_error) takes it from there once the
  * reactor observes it, exactly like any other organic connection failure.
  */
 #define CHTTP_DEADLINE_SWEEP_STRIPES 16
 
 typedef struct {
-  mutex_t mutex;
+  ccol_mutex_t mutex;
   chttp_async_ctx_t *head;
 } chttp_deadline_stripe_t;
 
 struct {
-  mutex_t mutex;
-  cond_var_t cond_var;
+  ccol_mutex_t mutex;
+  ccol_cond_var_t cond_var;
   /* client_deadline_bundle.mutex/_cv guard only the sweep thread's own
    * start/stop/sleep-wake lifecycle (stop, thread), never the ctx registry
    * itself; the registry's own locking is entirely per-stripe (see
-   * stripes[] below). client_deadline_bundle.mutex/_cv used to carry static
-   * PTHREAD_MUTEX_INITIALIZER/PTHREAD_COND_INITIALIZER initializers; converted
-   * to lazy, call_once-guarded runtime init (see
-   * _client_deadline_init_globals), independent of the async engine pair's own
-   * once-guard above, for the same reason: a non-pthread backend's equivalent
-   * primitive may need real setup work a compile-time constant can't provide.
+   * stripes[] below). They are lazily initialised at runtime under a
+   * ccol_call_once guard (see _client_deadline_init_globals), independent of
+   * the async engine pair's own once-guard above, rather than via a static
+   * constant initializer: a non-pthread backend's equivalent primitive may
+   * need real setup work a compile-time constant cannot provide.
    * Every function below that touches any of these globals calls
-   * call_once(client_deadline_bundle.once, ...) as its first statement. */
-  once_flag_t once;
+   * ccol_call_once(client_deadline_bundle.once, ...) as its first statement. */
+  ccol_once_flag_t once;
   chttp_deadline_stripe_t stripes[CHTTP_DEADLINE_SWEEP_STRIPES];
-  thread_id_t thread;
+  ccol_thread_id_t thread;
   bool stop;
 } client_deadline_bundle = {0};
 
@@ -4785,27 +4777,27 @@ static size_t _deadline_stripe_index_for_ctx(const chttp_async_ctx_t *ctx) {
 }
 
 static void _client_deadline_init_globals(void) {
-  if (mutex_init(client_deadline_bundle.mutex) != 0)
-    fatal_err("chttpclient deadline sweep: failed to initialize mutex");
+  if (ccol_mutex_init(client_deadline_bundle.mutex) != 0)
+    ccol_fatal_err("chttpclient deadline sweep: failed to initialize mutex");
   for (size_t i = 0; i < CHTTP_DEADLINE_SWEEP_STRIPES; i++) {
-    if (mutex_init(client_deadline_bundle.stripes[i].mutex) != 0)
-      fatal_err(
+    if (ccol_mutex_init(client_deadline_bundle.stripes[i].mutex) != 0)
+      ccol_fatal_err(
           "chttpclient deadline sweep: failed to initialize stripe mutex");
   }
   /* CLOCK_MONOTONIC to match _client_deadline_sweep_fn's own
    * clock_gettime(CLOCK_MONOTONIC, ...)-based wake deadline;
-   * cond_var_init's default clock (CLOCK_REALTIME) would make that
+   * ccol_cond_var_init's default clock (CLOCK_REALTIME) would make that
    * deadline comparison meaningless (a monotonic-clock timespec, always a
    * small value relative to boot time, compared against a condvar
-   * internally using the wall clock), so cond_var_timedwait would report
+   * internally using the wall clock), so ccol_cond_var_timedwait would report
    * ETIMEDOUT immediately on every call instead of actually sleeping ~100ms
    * between sweeps, busy-spinning the sweep thread at 100% CPU for the
-   * entire life of the engine. See chttpserver.c's srv->requests_done_cv
-   * for the exact same fix, applied there first; see _cond_var_init_monotonic
-   * (this file's shared helper for this exact pattern) for the full
-   * rationale. */
-  if (_cond_var_init_monotonic(&client_deadline_bundle.cond_var) != 0)
-    fatal_err(
+   * entire life of the engine. chttpserver.c's srv->requests_done_cv is
+   * initialised the same way, for the same reason; see
+   * _ccol_cond_var_init_monotonic (this file's shared helper for this exact
+   * pattern) for the full rationale. */
+  if (_ccol_cond_var_init_monotonic(&client_deadline_bundle.cond_var) != 0)
+    ccol_fatal_err(
         "chttpclient deadline sweep: failed to initialize condition "
         "variable");
 }
@@ -4828,10 +4820,10 @@ static void _client_deadline_init_globals(void) {
  * thread's own lifecycle only, not the registry).
  */
 static void _client_deadline_register(chttp_async_ctx_t *ctx) {
-  call_once(client_deadline_bundle.once, _client_deadline_init_globals);
+  ccol_call_once(client_deadline_bundle.once, _client_deadline_init_globals);
   chttp_deadline_stripe_t *stripe =
       &client_deadline_bundle.stripes[_deadline_stripe_index_for_ctx(ctx)];
-  mutex_lock(stripe->mutex);
+  ccol_mutex_lock(stripe->mutex);
   if (!ctx->deadline_registered) {
     ctx->deadline_prev = NULL;
     ctx->deadline_next = stripe->head;
@@ -4839,7 +4831,7 @@ static void _client_deadline_register(chttp_async_ctx_t *ctx) {
     stripe->head = ctx;
     ctx->deadline_registered = true;
   }
-  mutex_unlock(stripe->mutex);
+  ccol_mutex_unlock(stripe->mutex);
 }
 
 /* Removes ctx from the deadline registry if present. Called exactly once,
@@ -4850,10 +4842,10 @@ static void _client_deadline_register(chttp_async_ctx_t *ctx) {
  * _client_deadline_register used for this same ctx - no separate
  * "which stripe was this in" bookkeeping is needed. */
 static void _client_deadline_unregister(chttp_async_ctx_t *ctx) {
-  call_once(client_deadline_bundle.once, _client_deadline_init_globals);
+  ccol_call_once(client_deadline_bundle.once, _client_deadline_init_globals);
   chttp_deadline_stripe_t *stripe =
       &client_deadline_bundle.stripes[_deadline_stripe_index_for_ctx(ctx)];
-  mutex_lock(stripe->mutex);
+  ccol_mutex_lock(stripe->mutex);
   if (ctx->deadline_registered) {
     if (ctx->deadline_prev) {
       ctx->deadline_prev->deadline_next = ctx->deadline_next;
@@ -4865,7 +4857,7 @@ static void _client_deadline_unregister(chttp_async_ctx_t *ctx) {
     ctx->deadline_prev = ctx->deadline_next = NULL;
     ctx->deadline_registered = false;
   }
-  mutex_unlock(stripe->mutex);
+  ccol_mutex_unlock(stripe->mutex);
 }
 
 /*
@@ -4879,8 +4871,8 @@ static void _client_deadline_unregister(chttp_async_ctx_t *ctx) {
  * directly, inline, still holding that stripe's lock (see the section's own
  * file-level comment for why this is safe: no reentrancy risk, and no
  * fd-reuse race). n_shutdown accumulates across the whole tick (every
- * stripe), so CHTTP_DEADLINE_SWEEP_BATCH still bounds one sweep tick's total
- * work the same way it did under the single-list design, not per-stripe.
+ * stripe), so CHTTP_DEADLINE_SWEEP_BATCH bounds one sweep tick's total work
+ * across every stripe, not per-stripe.
  *
  * state/chain/fd/timed_out are read as plain (but _Atomic-qualified, so
  * individually race-free) loads here; deliberately NOT under the ctx's own
@@ -4889,8 +4881,7 @@ static void _client_deadline_unregister(chttp_async_ctx_t *ctx) {
  * stripe, e.g. _async_submit_hop's reused-connection-write-failure branch
  * calling _async_retry_hop -> _client_deadline_register; this sweep must
  * never acquire idle_lock itself while holding a stripe's mutex, or that
- * becomes a classic AB-BA lock-order inversion, for that stripe exactly as
- * it would have for the single global mutex before sharding).
+ * becomes a classic AB-BA lock-order inversion for that stripe).
  *
  * This is safe without idle_lock's stronger *compound* (state-and-chain-
  * together) consistency guarantee specifically because of what this
@@ -4907,7 +4898,7 @@ static void _client_deadline_unregister(chttp_async_ctx_t *ctx) {
  * optimisation opportunity, never an incorrect abort of a still-in-flight,
  * unrelated request. Every OTHER consumer of state/chain (the dispatch
  * callbacks, via _async_dispatch_kind) has a stronger need for idle_lock's
- * full guarantee and keeps using it entirely unchanged.
+ * full guarantee and takes it.
  *
  * A ctx is marked ctx->timed_out before its fd is shut down, both to tell
  * the normal teardown path "this is a timeout, not an ordinary connection
@@ -4917,14 +4908,14 @@ static void _client_deadline_unregister(chttp_async_ctx_t *ctx) {
  * teardown from an earlier tick's shutdown() call.
  */
 static void _client_deadline_sweep_once(void) {
-  call_once(client_deadline_bundle.once, _client_deadline_init_globals);
+  ccol_call_once(client_deadline_bundle.once, _client_deadline_init_globals);
   size_t n_shutdown = 0;
 
   for (size_t s = 0; s < CHTTP_DEADLINE_SWEEP_STRIPES &&
                      n_shutdown < CHTTP_DEADLINE_SWEEP_BATCH;
        s++) {
     chttp_deadline_stripe_t *stripe = &client_deadline_bundle.stripes[s];
-    mutex_lock(stripe->mutex);
+    ccol_mutex_lock(stripe->mutex);
     chttp_async_ctx_t *node = stripe->head;
     while (node && n_shutdown < CHTTP_DEADLINE_SWEEP_BATCH) {
       chttp_async_ctx_t *next = node->deadline_next;
@@ -4932,8 +4923,8 @@ static void _client_deadline_sweep_once(void) {
       chttp_async_state_t state = node->state;
       /* Only ever compared against NULL (never dereferenced): see
        * node->overall_deadline's own field comment for why dereferencing a
-       * bare chain pointer read here was a real, TSan-caught
-       * use-after-free. */
+       * bare chain pointer read here is a use-after-free ThreadSanitizer
+       * reports. */
       bool has_chain = (node->chain != NULL);
       int fd = node->fd;
       bool expired = false;
@@ -4949,9 +4940,9 @@ static void _client_deadline_sweep_once(void) {
            * leaf lock is what makes reading overall_deadline here safe,
            * since it can be rewritten (not just published once) on every
            * idle-pool reuse cycle, unlike connect_deadline. */
-          mutex_lock(node->deadline_lock);
+          ccol_mutex_lock(node->deadline_lock);
           bool still_ok = _deadline_remaining_ms(&node->overall_deadline, &ms);
-          mutex_unlock(node->deadline_lock);
+          ccol_mutex_unlock(node->deadline_lock);
           if (!still_ok) expired = true;
         }
         if (expired) node->timed_out = true;
@@ -4987,7 +4978,7 @@ static void _client_deadline_sweep_once(void) {
          * call below could still race a same-instant on_readable claim;
          * the worst outcome is a transiently wrong epoll direction for
          * this one connection, which self-heals via the very next
-         * event_loop_modify call for the same registration (always
+         * ccol_event_loop_modify call for the same registration (always
          * recomputed from live state, never a stale snapshot) or, at
          * worst, via overall_deadline's own unconditional backstop above -
          * never a permanent hang, a crash, or any effect on any OTHER
@@ -4995,16 +4986,16 @@ static void _client_deadline_sweep_once(void) {
         int cms;
         if (!_deadline_remaining_ms(&node->continue_deadline, &cms) &&
             !atomic_load(&node->continue_decided)) {
-          event_reg reg = atomic_load(&node->reg);
+          ccol_event_reg reg = atomic_load(&node->reg);
           if (reg) {
-            event_loop_modify(cli_engine_bundler.reactor, reg,
-                              ccol_select_write);
+            ccol_event_loop_modify(cli_engine_bundler.reactor, reg,
+                                   ccol_select_write);
           }
         }
       }
       node = next;
     }
-    mutex_unlock(stripe->mutex);
+    ccol_mutex_unlock(stripe->mutex);
   }
 
   if (n_shutdown > 0) {
@@ -5015,8 +5006,8 @@ static void _client_deadline_sweep_once(void) {
 
 static void *_client_deadline_sweep_fn(void *arg) {
   (void)arg;
-  call_once(client_deadline_bundle.once, _client_deadline_init_globals);
-  mutex_lock(client_deadline_bundle.mutex);
+  ccol_call_once(client_deadline_bundle.once, _client_deadline_init_globals);
+  ccol_mutex_lock(client_deadline_bundle.mutex);
   while (!client_deadline_bundle.stop) {
     struct timespec wake;
     clock_gettime(CLOCK_MONOTONIC, &wake);
@@ -5025,14 +5016,14 @@ static void *_client_deadline_sweep_fn(void *arg) {
       wake.tv_nsec -= 1000000000L;
       wake.tv_sec += 1;
     }
-    cond_var_timedwait(client_deadline_bundle.cond_var,
-                       client_deadline_bundle.mutex, wake);
+    ccol_cond_var_timedwait(client_deadline_bundle.cond_var,
+                            client_deadline_bundle.mutex, wake);
     if (client_deadline_bundle.stop) break;
-    mutex_unlock(client_deadline_bundle.mutex);
+    ccol_mutex_unlock(client_deadline_bundle.mutex);
     _client_deadline_sweep_once();
-    mutex_lock(client_deadline_bundle.mutex);
+    ccol_mutex_lock(client_deadline_bundle.mutex);
   }
-  mutex_unlock(client_deadline_bundle.mutex);
+  ccol_mutex_unlock(client_deadline_bundle.mutex);
   return NULL;
 }
 
@@ -5041,8 +5032,8 @@ static void *_client_deadline_sweep_fn(void *arg) {
  * rollback-on-failure handling. */
 static ccol_retval_t _client_deadline_sweep_start(void) {
   client_deadline_bundle.stop = false;
-  int rc = thread_create(client_deadline_bundle.thread,
-                         _client_deadline_sweep_fn, NULL);
+  int rc = ccol_thread_create(client_deadline_bundle.thread,
+                              _client_deadline_sweep_fn, NULL);
   return (rc == 0) ? ccol_success : ccol_unexpected_failure;
 }
 
@@ -5051,12 +5042,12 @@ static ccol_retval_t _client_deadline_sweep_start(void) {
  * own comment for why teardown always happens on a dedicated reaper thread,
  * never inline from a reactor callback. */
 static void _client_deadline_sweep_stop_and_join(void) {
-  call_once(client_deadline_bundle.once, _client_deadline_init_globals);
-  mutex_lock(client_deadline_bundle.mutex);
+  ccol_call_once(client_deadline_bundle.once, _client_deadline_init_globals);
+  ccol_mutex_lock(client_deadline_bundle.mutex);
   client_deadline_bundle.stop = true;
-  cond_var_broadcast(client_deadline_bundle.cond_var);
-  mutex_unlock(client_deadline_bundle.mutex);
-  thread_join(client_deadline_bundle.thread);
+  ccol_cond_var_broadcast(client_deadline_bundle.cond_var);
+  ccol_mutex_unlock(client_deadline_bundle.mutex);
+  ccol_thread_join(client_deadline_bundle.thread);
 }
 
 /* Deep-copies a chmap(char* -> char*) header map; used to give a redirect
@@ -5069,8 +5060,8 @@ static void _client_deadline_sweep_stop_and_join(void) {
  * other call site in this file that treats "no headers" as normal). */
 static chmap _clone_headers_map(ccol_memmgmt_procs_t *mp, chmap src) {
   char *err = NULL;
-  chmap dst = chmap_create_full(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, ccol_string,
-                                ccol_string, mp, NULL, &err);
+  chmap dst = chmap_create_full(CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,
+                                ccol_string, ccol_string, mp, NULL, &err);
   if (!dst) return NULL;
   cmap_iterator *it = chashmap_begin_iter(src, NULL);
   for (; it; it = it->_next_fn(it)) {
@@ -5100,10 +5091,10 @@ static chttp_async_chain_t *_async_chain_create(
     size_t max_response_body_size, chttpcli_write_fn write_fn, void *write_ctx,
     bool expect_continue) {
   chttp_async_chain_t *chain =
-      (chttp_async_chain_t *)_mem_calloc(mp, 1, sizeof(*chain));
+      (chttp_async_chain_t *)_ccol_mem_calloc(mp, 1, sizeof(*chain));
   if (!chain) return NULL;
-  if (mutex_init(chain->lock) != 0) {
-    _mem_free(mp, chain);
+  if (ccol_mutex_init(chain->lock) != 0) {
+    _ccol_mem_free(mp, chain);
     return NULL;
   }
   chain->mp = mp;
@@ -5124,7 +5115,7 @@ static chttp_async_chain_t *_async_chain_create(
     if (!chain->req_headers) goto fail;
   }
   if (body_data && body_len > 0) {
-    chain->body_data = _mem_alloc(mp, body_len);
+    chain->body_data = _ccol_mem_alloc(mp, body_len);
     if (!chain->body_data) goto fail;
     memcpy(chain->body_data, body_data, body_len);
     chain->body_len = body_len;
@@ -5143,19 +5134,19 @@ static chttp_async_chain_t *_async_chain_create(
    * comment on struct chttpclient) so __chttpclient_destroy can wait for it.
    * Matched by exactly one decrement in _async_chain_release, once this
    * chain's refcount reaches zero. */
-  mutex_lock(cli->async_count_lock);
+  ccol_mutex_lock(cli->async_count_lock);
   cli->async_in_flight_count++;
-  mutex_unlock(cli->async_count_lock);
+  ccol_mutex_unlock(cli->async_count_lock);
 
   return chain;
 
 fail:
   if (chain->req_headers) __chmap_destroy(chain->req_headers);
-  _mem_free(mp, chain->body_data);
-  _mem_free(mp, chain->body_content_type);
-  _mem_free(mp, chain->initial_origin_key);
-  mutex_destroy(chain->lock);
-  _mem_free(mp, chain);
+  _ccol_mem_free(mp, chain->body_data);
+  _ccol_mem_free(mp, chain->body_content_type);
+  _ccol_mem_free(mp, chain->initial_origin_key);
+  ccol_mutex_destroy(chain->lock);
+  _ccol_mem_free(mp, chain);
   return NULL;
 }
 
@@ -5169,9 +5160,9 @@ static void _async_fulfill_chain(chttp_async_chain_t *chain, ccol_retval_t rv,
  * live (either freshly created with refcount 0 -> 1, or retained again by a
  * redirect handoff while the old hop's ctx is still alive). */
 static void _async_chain_retain(chttp_async_chain_t *chain) {
-  mutex_lock(chain->lock);
+  ccol_mutex_lock(chain->lock);
   chain->refcount++;
-  mutex_unlock(chain->lock);
+  ccol_mutex_unlock(chain->lock);
 }
 
 /*
@@ -5184,9 +5175,9 @@ static void _async_chain_retain(chttp_async_chain_t *chain) {
  */
 static void _async_chain_release(chttp_async_chain_t *chain) {
   if (!chain) return;
-  mutex_lock(chain->lock);
+  ccol_mutex_lock(chain->lock);
   int remaining = --chain->refcount;
-  mutex_unlock(chain->lock);
+  ccol_mutex_unlock(chain->lock);
   if (remaining > 0) return;
 
   struct chttpclient *cli = chain->cli;
@@ -5194,42 +5185,41 @@ static void _async_chain_release(chttp_async_chain_t *chain) {
   _async_fulfill_chain(chain, ccol_http_transfer_aborted, NULL);
   if (chain->tls_ctx) ctls_ctx_release(chain->tls_ctx);
   if (chain->req_headers) __chmap_destroy(chain->req_headers);
-  _mem_free(chain->mp, chain->body_data);
-  _mem_free(chain->mp, chain->body_content_type);
-  _mem_free(chain->mp, chain->carried_auth);
-  _mem_free(chain->mp, chain->carried_auth_origin);
-  _mem_free(chain->mp, chain->initial_origin_key);
-  mutex_destroy(chain->lock);
-  _mem_free(chain->mp, chain);
+  _ccol_mem_free(chain->mp, chain->body_data);
+  _ccol_mem_free(chain->mp, chain->body_content_type);
+  _ccol_mem_free(chain->mp, chain->carried_auth);
+  _ccol_mem_free(chain->mp, chain->carried_auth_origin);
+  _ccol_mem_free(chain->mp, chain->initial_origin_key);
+  ccol_mutex_destroy(chain->lock);
+  _ccol_mem_free(chain->mp, chain);
   _client_engine_release();
 
   /* Matches the increment in _async_chain_create; see cli's own
    * async_in_flight_count field comment for why this uses a dedicated leaf
-   * lock rather than cli->lock (this function runs from inside event_loop
+   * lock rather than cli->lock (this function runs from inside ccol_event_loop
    * dispatch callbacks as often as from a safe synchronous context). */
-  mutex_lock(cli->async_count_lock);
+  ccol_mutex_lock(cli->async_count_lock);
   if (cli->async_in_flight_count > 0) cli->async_in_flight_count--;
   if (cli->async_in_flight_count == 0)
-    cond_var_broadcast(cli->async_count_drained);
-  mutex_unlock(cli->async_count_lock);
+    ccol_cond_var_broadcast(cli->async_count_drained);
+  ccol_mutex_unlock(cli->async_count_lock);
 }
 
 static chttp_async_ctx_t *_async_ctx_create(ccol_memmgmt_procs_t *mp) {
   chttp_async_ctx_t *ctx =
-      (chttp_async_ctx_t *)_mem_calloc(mp, 1, sizeof(*ctx));
+      (chttp_async_ctx_t *)_ccol_mem_calloc(mp, 1, sizeof(*ctx));
   if (!ctx) return NULL;
   ctx->mp = mp;
   ctx->fd = -1;
   /* pending_app_teardown/hop_completed both correctly default to false via
-   * _mem_calloc above; no explicit init needed (unlike the old ctx->refs
-   * field this replaced, whose correct default was 1, not calloc's 0). */
-  if (mutex_init(ctx->idle_lock) != 0) {
-    _mem_free(mp, ctx);
+   * _ccol_mem_calloc above; no explicit init needed. */
+  if (ccol_mutex_init(ctx->idle_lock) != 0) {
+    _ccol_mem_free(mp, ctx);
     return NULL;
   }
-  if (mutex_init(ctx->deadline_lock) != 0) {
-    mutex_destroy(ctx->idle_lock);
-    _mem_free(mp, ctx);
+  if (ccol_mutex_init(ctx->deadline_lock) != 0) {
+    ccol_mutex_destroy(ctx->idle_lock);
+    _ccol_mem_free(mp, ctx);
     return NULL;
   }
   return ctx;
@@ -5241,17 +5231,17 @@ static chttp_async_ctx_t *_async_ctx_create(ccol_memmgmt_procs_t *mp) {
  * _async_idle_ctx_finish, the two explicit terminal-teardown helpers below
  * that give this module its own guaranteed-exactly-once teardown point; see
  * the "ASYNC CONNECTION STATE MACHINE" section's file-level comment for why
- * event_loop needs this to be explicit rather than implicit) or, for
+ * ccol_event_loop needs this to be explicit rather than implicit) or, for
  * failures that occur before a connection is ever registered with the
  * reactor, directly by the failing code path. Every field is safe to
  * free/destroy unconditionally: fields whose ownership was transferred
  * elsewhere (headers/bb.buf -> a successfully built response) are set
- * NULL/cleared at the transfer site, and _mem_free/_parse_ctx_free_fields/a
- * NULL tls/reg/fd are all no-ops. Does NOT touch ctx->chain; that is
- * shared, whole-chain state; see _async_ctx_teardown, which pairs this with
- * the matching chain release.
+ * NULL/cleared at the transfer site, and
+ * _ccol_mem_free/_parse_ctx_free_fields/a NULL tls/reg/fd are all no-ops. Does
+ * NOT touch ctx->chain; that is shared, whole-chain state; see
+ * _async_ctx_teardown, which pairs this with the matching chain release.
  *
- * event_loop_remove and close() are both called here, unconditionally and
+ * ccol_event_loop_remove and close() are both called here, unconditionally and
  * idempotently safe, rather than requiring every caller to have already
  * done so: this mirrors ctx->tls/ctx->wire's own "always safe to free here
  * regardless of what the caller already did" treatment. _client_deadline_
@@ -5264,46 +5254,46 @@ static chttp_async_ctx_t *_async_ctx_create(ccol_memmgmt_procs_t *mp) {
  */
 static void _async_ctx_destroy_now(chttp_async_ctx_t *ctx) {
   /* Brief acquire/release, not held across anything below: guarantees
-   * _async_connect_task's own post-event_loop_add window (see its own
+   * _async_connect_task's own post-ccol_event_loop_add window (see its own
    * comment, right after this same idle_lock is taken there) has fully
    * completed before this function proceeds to free ctx out from under it.
    * Every other _async_ctx_free/_async_ctx_teardown call site already
    * releases idle_lock (if it was even held) before calling in here (see
    * the call-site audit in this function's own doc comment above), so this
    * cannot self-deadlock against any existing caller. */
-  mutex_lock(ctx->idle_lock);
-  mutex_unlock(ctx->idle_lock);
+  ccol_mutex_lock(ctx->idle_lock);
+  ccol_mutex_unlock(ctx->idle_lock);
   _client_deadline_unregister(ctx); /* no-op if never registered; MUST run
                                      * before the close() below */
-  if (ctx->reg) event_loop_remove(cli_engine_bundler.reactor, ctx->reg);
+  if (ctx->reg) ccol_event_loop_remove(cli_engine_bundler.reactor, ctx->reg);
   if (ctx->tls) ctls_conn_destroy(ctx->tls);
   if (ctx->fd >= 0) close(ctx->fd);
-  mutex_destroy(ctx->idle_lock);
-  mutex_destroy(ctx->deadline_lock);
-  _mem_free(ctx->mp, ctx->wire);
-  _mem_free(ctx->mp, ctx->continue_carry);
-  _mem_free(ctx->mp, ctx->unix_socket_path);
-  _mem_free(ctx->mp, ctx->host);
-  _mem_free(ctx->mp, ctx->path_and_query);
-  _mem_free(ctx->mp, ctx->origin_key);
+  ccol_mutex_destroy(ctx->idle_lock);
+  ccol_mutex_destroy(ctx->deadline_lock);
+  _ccol_mem_free(ctx->mp, ctx->wire);
+  _ccol_mem_free(ctx->mp, ctx->continue_carry);
+  _ccol_mem_free(ctx->mp, ctx->unix_socket_path);
+  _ccol_mem_free(ctx->mp, ctx->host);
+  _ccol_mem_free(ctx->mp, ctx->path_and_query);
+  _ccol_mem_free(ctx->mp, ctx->origin_key);
   _parse_ctx_free_fields(&ctx->pctx);
-  _mem_free(ctx->mp, ctx->bb.buf);
-  _mem_free(ctx->mp, ctx);
+  _ccol_mem_free(ctx->mp, ctx->bb.buf);
+  _ccol_mem_free(ctx->mp, ctx);
 }
 
 /*
  * The single reliable place ctx is actually, physically freed. Safe to call
  * unconditionally because this module's own invariant (see
  * pending_app_teardown's field comment, and the "no application thread ever
- * frees a registered ctx" rule it exists to uphold) guarantees this function
- * is only ever reached in one of two situations: (1) ctx was never
- * registered with the reactor at all (a pre-connect failure; nothing else
- * could possibly reference it), or (2) this call is running from within a
- * reactor dispatch callback, which event_loop's own entry->dispatch_lock and
- * entry->refcount-gated "at most one job in flight per entry" invariant
- * already guarantee cannot be running concurrently with any other dispatch
- * for this exact registration. Neither case needs, or has, any reference
- * count of its own on ctx.
+ * frees a registered ctx" rule it exists to uphold) guarantees this function is
+ * only ever reached in one of two situations: (1) ctx was never registered with
+ * the reactor at all (a pre-connect failure; nothing else could possibly
+ * reference it), or (2) this call is running from within a reactor dispatch
+ * callback, which ccol_event_loop's own entry->dispatch_lock and
+ * entry->refcount-gated "at most one job in flight per entry" invariant already
+ * guarantee cannot be running concurrently with any other dispatch for this
+ * exact registration. Neither case needs, or has, any reference count of its
+ * own on ctx.
  */
 static void _async_ctx_free(chttp_async_ctx_t *ctx) {
   if (!ctx) return;
@@ -5311,9 +5301,10 @@ static void _async_ctx_free(chttp_async_ctx_t *ctx) {
 }
 
 /* Frees a single hop's per-connection state and releases its chain
- * reference; the standard way every terminal code path for a ctx (on_close,
- * or an early failure before fio_attach ever ran) ends. Captures chain into
- * a local first since _async_ctx_free frees ctx itself. */
+ * reference; the standard way every terminal code path for a ctx (a
+ * dispatch-driven teardown, or an early failure before the ctx was ever
+ * registered with the reactor) ends. Captures chain into a local first
+ * since _async_ctx_free frees ctx itself. */
 static void _async_ctx_teardown(chttp_async_ctx_t *ctx) {
   chttp_async_chain_t *chain = ctx->chain;
   _async_ctx_free(ctx);
@@ -5323,7 +5314,7 @@ static void _async_ctx_teardown(chttp_async_ctx_t *ctx) {
 /*
  * Delivers a terminal result to the caller's future exactly once (guarded by
  * chain->fulfilled, under chain->lock; see that field's comment for why
- * this must be lock-protected rather than a plain bool now that a redirect
+ * this must be lock-protected rather than a plain bool, since a redirect
  * chain can have two hops' callbacks running concurrently); safe to call
  * from multiple exit paths (e.g. an error path followed by
  * _async_chain_release's backstop call) since only the first call has any
@@ -5333,26 +5324,26 @@ static void _async_ctx_teardown(chttp_async_ctx_t *ctx) {
  */
 static void _async_fulfill_chain(chttp_async_chain_t *chain, ccol_retval_t rv,
                                  chttpcli_response *resp) {
-  mutex_lock(chain->lock);
+  ccol_mutex_lock(chain->lock);
   bool already = chain->fulfilled;
   chain->fulfilled = true;
-  mutex_unlock(chain->lock);
+  ccol_mutex_unlock(chain->lock);
   if (already) {
     if (resp) {
       if (resp->headers) __chmap_destroy(resp->headers);
-      _mem_free(chain->mp, resp->body);
-      _mem_free(chain->mp, resp);
+      _ccol_mem_free(chain->mp, resp->body);
+      _ccol_mem_free(chain->mp, resp);
     }
     return;
   }
-  chttpcli_async_result_t *result =
-      (chttpcli_async_result_t *)_mem_calloc(chain->mp, 1, sizeof(*result));
+  chttpcli_async_result_t *result = (chttpcli_async_result_t *)_ccol_mem_calloc(
+      chain->mp, 1, sizeof(*result));
   if (!result) {
     ctpool_future_fulfill(chain->future, NULL);
     if (resp) {
       if (resp->headers) __chmap_destroy(resp->headers);
-      _mem_free(chain->mp, resp->body);
-      _mem_free(chain->mp, resp);
+      _ccol_mem_free(chain->mp, resp->body);
+      _ccol_mem_free(chain->mp, resp);
     }
     return;
   }
@@ -5376,12 +5367,12 @@ static void _async_fulfill(chttp_async_ctx_t *ctx, ccol_retval_t rv,
 
 /* Builds the chttpcli_response from the completed parse (mirrors Tier 1's
  * own response-building code at the tail of chttp_do_internal). Transfers
- * ownership of ctx->pctx.headers/ctx->bb.buf out of ctx (nulling them there)
- *; called BEFORE _async_finish_connection's idle-pool-offer path, which
- * would otherwise free those exact same fields while resetting ctx for its
- * idle life; see _async_on_data's CHTTP1_PAUSED handling for why the ordering
- * (build response, then finish the connection, then actually fulfil) matters
- * on its own terms too.
+ * ownership of ctx->pctx.headers/ctx->bb.buf out of ctx (nulling them
+ * there); called BEFORE _async_finish_connection's idle-pool-offer path,
+ * which would otherwise free those exact same fields while resetting ctx
+ * for its idle life; see _async_on_data's CHTTP1_PAUSED handling for why
+ * the ordering (build response, then finish the connection, then actually
+ * fulfil) matters on its own terms too.
  *
  * For a streaming request (ctx->chain->write_fn set), body bytes were
  * already delivered to the caller's callback as they arrived off the wire
@@ -5394,7 +5385,7 @@ static void _async_fulfill(chttp_async_ctx_t *ctx, ccol_retval_t rv,
  * documented "response headers are not accessible via this path". */
 static chttpcli_response *_async_build_response(chttp_async_ctx_t *ctx) {
   chttpcli_response *resp =
-      (chttpcli_response *)_mem_calloc(ctx->mp, 1, sizeof(*resp));
+      (chttpcli_response *)_ccol_mem_calloc(ctx->mp, 1, sizeof(*resp));
   if (!resp) return NULL;
   resp->_m_procs = ctx->mp;
   resp->status_code = ctx->pctx.status_code;
@@ -5470,16 +5461,16 @@ static void _async_fulfill_success(chttp_async_ctx_t *ctx) {
  * every element _idle_pool_offer's own has_room check will ever let through,
  * so this push_back never needs to grow (realloc) the array, and cannot fail
  * via allocator OOM. Similarly, _async_submit_hop's reused-connection
- * event_loop_modify call performs no allocation of its own, and every one of
- * its other failure conditions (bad args, a non-fd selectable, an
+ * ccol_event_loop_modify call performs no allocation of its own, and every one
+ * of its other failure conditions (bad args, a non-fd selectable, an
  * already-removed registration, the target direction already occupied) is
  * structurally unreachable for a connection that was just popped from the
  * idle pool, where it was always read-only registered. Both branches are
  * still real, reachable code (a future refactor could raise
- * CHTTP_MAX_IDLE_PER_ORIGIN past 4, or a future event_loop change could add a
- * new failure mode) and were the site of a real, ASan-found use-after-free
- * each; these hooks exist purely to keep that fixed behavior under permanent
- * regression coverage.
+ * CHTTP_MAX_IDLE_PER_ORIGIN past 4, or a future ccol_event_loop change could
+ * add a new failure mode), and each is a use-after-free hazard if it mishandles
+ * ctx ownership. These hooks exist purely to keep both branches under
+ * permanent, deterministic test coverage.
  *
  * The third flag exists for the identical reason, applied to
  * _async_on_readable_impl's hard-transport-error-vs-real-EOF distinction
@@ -5507,7 +5498,7 @@ static _Atomic bool g_force_async_hard_read_error_for_tests = false;
 static void _async_idle_count_dec_locked(struct chttpclient *cli) {
   if (cli->idle_total_count_async > 0) cli->idle_total_count_async--;
   if (cli->idle_total_count_async == 0)
-    cond_var_broadcast(cli->idle_async_drained);
+    ccol_cond_var_broadcast(cli->idle_async_drained);
 }
 
 /* Removes `target` from its origin's idle list if it's still there (swap-
@@ -5520,16 +5511,15 @@ static void _async_idle_count_dec_locked(struct chttpclient *cli) {
 /* Deliberately does NOT call _async_idle_count_dec_locked: that decrement
  * (and the idle_async_drained broadcast it may trigger once the count
  * reaches zero) is the caller's own responsibility, deferred until the ctx
- * has ACTUALLY been freed. An earlier version of this function decremented
- * right here, at removal time; which let __chttpclient_destroy observe
- * the count reach zero and proceed to free cli (and cli->m_procs) while
- * _async_idle_ctx_finish, the only caller of this function, was still
- * mid-teardown on a reactor worker thread, reading that same freed
- * cli->m_procs through ctx->mp inside its own _async_ctx_free call: a real
- * use-after-free, caught by ThreadSanitizer (not valgrind) via a stress
- * test that cycles many connections through real, server-initiated death
- * fast enough to make the window land. See _async_idle_ctx_finish's own
- * comment for the corrected ordering. */
+ * has ACTUALLY been freed. Decrementing here instead, at removal time,
+ * would let __chttpclient_destroy observe the count reach zero and proceed
+ * to free cli (and cli->m_procs) while _async_idle_ctx_finish, the only
+ * caller of this function, is still mid-teardown on a reactor worker
+ * thread, reading that same freed cli->m_procs through ctx->mp inside its
+ * own _async_ctx_free call: a use-after-free that ThreadSanitizer reports
+ * but valgrind does not, and that only lands under a workload cycling many
+ * connections through real, server-initiated death. See
+ * _async_idle_ctx_finish's own comment for the ordering this requires. */
 static bool _async_idle_remove_locked(struct chttpclient *cli,
                                       chttp_async_ctx_t *target) {
   if (!cli->idle_pools_async || !target->origin_key) return false;
@@ -5584,14 +5574,14 @@ static bool _async_idle_remove_locked(struct chttpclient *cli,
  * another thread at any moment; the connection stays fully attached to the
  * reactor for as long as it sat in the pool, exactly like every other race
  * described in this section.
- * Without holding idle_lock across the WHOLE reconfiguration (not just the
- * state/chain pair, as an earlier version of this function attempted), a
- * concurrent on_close could see ctx in a half-reconfigured state; state
- * already flipped off CHTTP_ASYNC_IDLE, but hop/pctx/wire/etc. still being
- * written by this thread; and tear ctx down (freeing it, destroying
- * idle_lock itself) while this function's caller is still using it: a real,
- * caught-in-development use-after-free, distinct from (and deeper than) the
- * earlier state/chain torn-write bug. _async_dispatch_kind (used by
+ * idle_lock is held across the WHOLE reconfiguration, not merely the
+ * state/chain pair. Narrowing it to that pair would let a concurrent
+ * on_close see ctx in a half-reconfigured state (state already flipped off
+ * CHTTP_ASYNC_IDLE, but hop/pctx/wire/etc. still being written by this
+ * thread) and tear ctx down, freeing it and destroying idle_lock itself,
+ * while this function's caller is still using it: a use-after-free deeper
+ * than the torn write of the state/chain pair alone.
+ * _async_dispatch_kind (used by
  * on_readable/on_writable/on_error) takes the same lock, so any of them
  * racing this function simply blocks until the caller releases it, by which
  * point ctx is fully self-consistent one way or the other.
@@ -5599,11 +5589,10 @@ static bool _async_idle_remove_locked(struct chttpclient *cli,
  * The ENTIRE classify-and-pop decision for one origin runs inside a single
  * `cli->lock` critical section, scanning the per-origin cvec back-to-front
  * (from the most-recently-offered/"warmest" candidate at the highest index
- * toward the oldest at index 0; deliberately preserving the exact LIFO
- * preference the previous cvector_pop_back-based design had; scanning
- * front-to-back instead would silently start preferring the OLDEST fresh
- * candidate, a real behavioural regression, since older idle connections
- * are statistically more likely to have already been closed by the peer).
+ * toward the oldest at index 0, which is a deliberate LIFO preference:
+ * scanning front-to-back instead would prefer the OLDEST fresh candidate,
+ * and older idle connections are statistically more likely to have already
+ * been closed by the peer).
  * A candidate older than CHTTP_IDLE_MAX_AGE_MS is shut down right here
  * (reading its fd is safe: this whole walk holds cli->lock, and removal
  * from this vector, the only thing that could invalidate a candidate,
@@ -5611,32 +5600,32 @@ static bool _async_idle_remove_locked(struct chttpclient *cli,
  * exactly where it is in the vector, untouched otherwise (no write to
  * state/chain/hop_completed, no removal): this function does NOT tear a
  * stale candidate down itself. shutdown() forces a genuine EPOLLIN/EOF on
- * its still-read-registered fd, and the existing, entirely unmodified
- * _async_on_readable_impl idle-branch -> _async_idle_ctx_finish path (which
+ * its still-read-registered fd, and the _async_on_readable_impl
+ * idle-branch -> _async_idle_ctx_finish path (which
  * already does its own exclusive claim via _async_idle_remove_locked, and
  * already releases the pooled engine reference) reaps it for real, from
  * dispatch context. The first genuinely fresh candidate found is popped
  * (swap-with-last, mirroring _async_idle_remove_locked's own removal
  * pattern) and returned.
  *
- * This replaces an earlier design where a stale candidate was popped and
- * torn down (_async_ctx_finish) directly, from this application thread;
- * a real, ASan-reproduced use-after-free: a reactor dispatch callback for
- * that exact, still-registered ctx can legitimately be in flight (or about
+ * Popping a stale candidate and tearing it down (_async_ctx_finish)
+ * directly from this application thread would instead be a use-after-free,
+ * one ASan reports: a reactor dispatch callback for that exact,
+ * still-registered ctx can legitimately be in flight (or about
  * to be invoked) on a different thread at the same moment, and the OS can
  * preempt that thread for an unbounded duration between passing
- * event_loop's own liveness check and ever touching ctx; during which
+ * ccol_event_loop's own liveness check and ever touching ctx; during which
  * this application thread could free it out from under that callback. A
- * per-ctx atomic refcount pinned by every dispatch callback (an earlier
- * fix attempt) did not close this either: the pin's own very first read of
- * the refcount can itself race a concurrent free the same way. The only
- * fix that closes this by construction is the one implemented here: no
+ * per-ctx atomic refcount pinned by every dispatch callback does not close
+ * this either: the pin's own very first read of the refcount can itself
+ * race a concurrent free the same way. The only approach that closes it by
+ * construction is the one implemented here: no
  * application thread ever tears a registered ctx down at all; a stale
  * candidate is merely marked (via shutdown(), not via any ctx field) for
  * the SAME dispatch-context reaping path an organically-dead idle
  * connection already goes through today, which is inherently safe since it
  * is inherently serialised against every other dispatch for that exact
- * registration (event_loop's own entry->dispatch_lock and entry->refcount-
+ * registration (ccol_event_loop's own entry->dispatch_lock and entry->refcount-
  * gated "one job in flight per entry" invariant).
  *
  * Accepted tradeoff: a shutdown-but-not-yet-reaped stale candidate still
@@ -5652,7 +5641,7 @@ static bool _async_idle_pool_take(struct chttpclient *cli,
                                   chttp_async_chain_t *chain,
                                   chttp_async_ctx_t **out) {
   chttp_async_ctx_t *ctx = NULL;
-  mutex_lock(cli->lock);
+  ccol_mutex_lock(cli->lock);
   if (cli->idle_pools_async) {
     cmap_pair kp = {.ptr = (void *)origin_key, .size = strlen(origin_key) + 1};
     cmap_pair *vp = NULL;
@@ -5702,16 +5691,16 @@ static bool _async_idle_pool_take(struct chttpclient *cli,
       }
     }
   }
-  mutex_unlock(cli->lock);
+  ccol_mutex_unlock(cli->lock);
   if (!ctx) return false;
 
-  mutex_lock(ctx->idle_lock); /* left locked; see contract above */
+  ccol_mutex_lock(ctx->idle_lock); /* left locked; see contract above */
   /* See ctx->deadline_lock's own field comment for why this dedicated leaf
    * lock (not idle_lock, which the deadline sweep deliberately never
    * takes) is what makes this safe for the sweep to read concurrently. */
-  mutex_lock(ctx->deadline_lock);
+  ccol_mutex_lock(ctx->deadline_lock);
   ctx->overall_deadline = chain->overall_deadline;
-  mutex_unlock(ctx->deadline_lock);
+  ccol_mutex_unlock(ctx->deadline_lock);
   ctx->chain = chain;
   ctx->state = CHTTP_ASYNC_WRITING;
   *out = ctx;
@@ -5730,22 +5719,19 @@ static bool _async_idle_pool_take(struct chttpclient *cli,
  * different outcomes: (1) the ordinary success case, where ctx genuinely
  * joins the idle pool, and (2) the "vanishingly rare" cvector_push_back OOM
  * case below, where ctx has already been torn down by this function
- * itself. Returning `false` for case (2) (an earlier version of this
- * function did exactly that) is a real double-free: the caller's own
- * fallback path for `false` calls _async_ctx_finish, which would then tear
- * down a ctx this function had already released its reference to. Found
- * via the same reference-timeline tracing that, in an earlier version of
- * this file's design, also found a per-ctx atomic refcount's own
- * resurrection race (see pending_app_teardown's field comment for how that
- * whole class of problem was ultimately closed, by construction, instead).
+ * itself. Returning `false` for case (2) would be a double-free: the
+ * caller's own fallback path for `false` calls _async_ctx_finish, which
+ * would then tear down a ctx this function had already released its
+ * reference to. This is the same class of reference-lifetime hazard
+ * pending_app_teardown's own field comment describes, and it is closed the
+ * same way: by construction, not by refcounting.
  *
  * On success, detaches ctx from its original chain, releasing the one chain
  * reference this hop was holding for it (the hop is over; the chain no
- * longer owns this connection, the idle pool does); forgetting this
- * release was a real, valgrind-caught reference leak during this feature's
- * own development, since a pooled connection never goes through the normal
- * _async_ctx_teardown path (which is the only OTHER place that releases a
- * ctx's chain reference) until it is later reused or evicted.
+ * longer owns this connection, the idle pool does). Omitting that release
+ * leaks the reference outright, since a pooled connection never goes
+ * through the normal _async_ctx_teardown path (the only OTHER place that
+ * releases a ctx's chain reference) until it is later reused or evicted.
  *
  * The capacity check (is there room in the pool for this origin, creating
  * the per-origin list on demand if needed) happens FIRST, entirely under
@@ -5761,8 +5747,8 @@ static bool _async_idle_pool_take(struct chttpclient *cli,
  * starting to reconfigure ctx for a brand new hop while this function was
  * still freeing/resetting those exact same fields for the OLD hop would be
  * a genuine concurrent-access data race on the fields themselves, not just
- * a logical inconsistency; caught during this feature's own development;
- * (2) the caller's "ctx untouched on failure" contract above would
+ * a logical inconsistency; (2) the caller's "ctx untouched on failure"
+ * contract above would
  * otherwise be violated by a version of this function that resets ctx
  * speculatively before knowing whether the pool has room.
  */
@@ -5777,7 +5763,7 @@ static bool _async_idle_pool_offer(chttp_async_ctx_t *ctx) {
 
   cvec list = NULL;
   bool has_room = false;
-  mutex_lock(cli->lock);
+  ccol_mutex_lock(cli->lock);
   if (!cli->destroying && cli->idle_pools_async &&
       cli->idle_total_count_async < CHTTP_MAX_IDLE_TOTAL) {
     cmap_pair kp = {.ptr = ctx->origin_key,
@@ -5809,7 +5795,7 @@ static bool _async_idle_pool_offer(chttp_async_ctx_t *ctx) {
     has_room = (list && cvector_elem_count(list) < CHTTP_MAX_IDLE_PER_ORIGIN);
   }
   if (!has_room) {
-    mutex_unlock(cli->lock);
+    ccol_mutex_unlock(cli->lock);
     _client_engine_release();
     return false; /* ctx untouched; caller falls back to a normal close */
   }
@@ -5819,40 +5805,39 @@ static bool _async_idle_pool_offer(chttp_async_ctx_t *ctx) {
    * holding cli->lock (see the file-level comment above for why). */
   chttp_async_chain_t *old_chain = ctx->chain;
 
-  /* _parse_ctx_free_fields only frees+nulls cur_field/cur_value/location/
-   * headers; every other field (cur_field_cap/cur_value_cap in
-   * particular) is left stale. That has always been safe at its other call
-   * sites (_async_ctx_free, right before the whole ctx is freed; and Tier
-   * 1's per-hop chttp_parse_ctx_t, a fresh stack struct every hop) because
-   * the struct itself is discarded immediately after. Here it is NOT
-   * discarded (ctx is about to be reused for a future hop) so a stale,
-   * non-zero cur_field_cap paired with a freshly-NULLed cur_field would
-   * make _accum_append's very next call skip its realloc (capacity already
-   * "big enough") and memcpy into a NULL buffer. The explicit memset below
-   * (after _parse_ctx_free_fields has freed everything that needs freeing)
-   * restores the same all-zero state a freshly _mem_calloc'd ctx already
+  /* _parse_ctx_free_fields only frees+nulls location/headers; every other
+   * field (the status code, the sink wiring, and the per-message flags a
+   * finished hop leaves behind) is left stale. That is safe at its other
+   * call sites (_async_ctx_free, right before the whole ctx is freed; and
+   * Tier 1's per-hop chttp_parse_ctx_t, a fresh stack struct every hop)
+   * because the struct itself is discarded immediately after. Here it is
+   * NOT discarded (ctx is about to be reused for a future hop), so a stale
+   * flag or status code left behind by the finished hop would be read as
+   * though it described the next one. The explicit memset below (after
+   * _parse_ctx_free_fields has freed everything that needs freeing)
+   * restores the same all-zero state a freshly _ccol_mem_calloc'd ctx already
    * has, which every other user of chttp_parse_ctx_t implicitly relies on. */
   _parse_ctx_free_fields(&ctx->pctx);
   memset(&ctx->pctx, 0, sizeof(ctx->pctx));
-  _mem_free(ctx->mp, ctx->bb.buf);
+  _ccol_mem_free(ctx->mp, ctx->bb.buf);
   ctx->bb.buf = NULL;
   ctx->bb.len = ctx->bb.cap = 0;
   ctx->bb.oom = false;
   ctx->bb.too_large = false;
-  _mem_free(ctx->mp, ctx->wire);
+  _ccol_mem_free(ctx->mp, ctx->wire);
   ctx->wire = NULL;
   ctx->wire_len = ctx->wire_sent = 0;
   /* Expect: 100-continue state, stale the moment this hop is done; every
    * fresh hop attempt recomputes want_100_continue/header_len from scratch
    * in _async_submit_hop/_async_retry_hop and re-arms continue_decided to
    * false there too, but resetting here as well matches this function's
-   * own "restore the same all-zero state a freshly _mem_calloc'd ctx
+   * own "restore the same all-zero state a freshly _ccol_mem_calloc'd ctx
    * already has" discipline documented above. continue_carry should always
    * already be NULL by the time a hop reaches here (consumed the moment
    * the body write it was waiting on finished; see that field's own
    * comment), but freed defensively regardless, the same as wire/bb just
    * above. */
-  _mem_free(ctx->mp, ctx->continue_carry);
+  _ccol_mem_free(ctx->mp, ctx->continue_carry);
   ctx->continue_carry = NULL;
   ctx->continue_carry_len = 0;
   ctx->want_100_continue = false;
@@ -5863,7 +5848,7 @@ static bool _async_idle_pool_offer(chttp_async_ctx_t *ctx) {
    * hop's request path, not anything meaningful while pooled); freed here
    * rather than left dangling until the next _async_submit_hop call
    * overwrites it, matching wire/bb's identical treatment just above. */
-  _mem_free(ctx->mp, ctx->path_and_query);
+  _ccol_mem_free(ctx->mp, ctx->path_and_query);
   ctx->path_and_query = NULL;
   ctx->hop_completed = false;
   ctx->reused = false;
@@ -5886,11 +5871,11 @@ static bool _async_idle_pool_offer(chttp_async_ctx_t *ctx) {
    * `reused && !any_bytes_read` branch) is starved by a stale ctx->timed_out
    * left over from a hop that already succeeded, reporting ccol_timed_out
    * to a caller whose own deadline was never in danger. */
-  mutex_lock(ctx->idle_lock);
+  ccol_mutex_lock(ctx->idle_lock);
   ctx->chain = NULL;
   ctx->state = CHTTP_ASYNC_IDLE;
   ctx->timed_out = false;
-  mutex_unlock(ctx->idle_lock);
+  ccol_mutex_unlock(ctx->idle_lock);
 
   clock_gettime(CLOCK_MONOTONIC, &ctx->last_used);
   bool pushed;
@@ -5907,15 +5892,15 @@ static bool _async_idle_pool_offer(chttp_async_ctx_t *ctx) {
     pushed = (cvector_push_back(list, &ctx) == ccol_success);
   }
   if (pushed) cli->idle_total_count_async++;
-  mutex_unlock(cli->lock);
+  ccol_mutex_unlock(cli->lock);
 
   if (!pushed) {
     /* Vanishingly rare (OOM inside cvector_push_back itself, despite room
      * being confirmed available above); ctx has already been fully
      * detached from old_chain and reset to an idle shape, so it can no
-     * longer be handed back to the caller as "just fio_close it as a
-     * normal active ctx" the way the has_room==false path above can. Tear
-     * it down directly instead. */
+     * longer be handed back to the caller as a normal active ctx to close
+     * the way the has_room==false path above can. Tear it down directly
+     * instead. */
     _async_chain_release(old_chain);
     _async_ctx_free(ctx);
     _client_engine_release();
@@ -5923,18 +5908,15 @@ static bool _async_idle_pool_offer(chttp_async_ctx_t *ctx) {
                   * function itself (unlike the has_room==false path above,
                   * which returns false with ctx completely untouched); the
                   * caller (_async_finish_connection) must not ALSO call
-                  * _async_ctx_finish on it. Returning false here was a
-                  * second real bug found via the same reference-timeline
-                  * tracing that, in an earlier version of this file's
-                  * design, also found a per-ctx atomic refcount's own
-                  * resurrection race (see pending_app_teardown's field
-                  * comment): _async_finish_connection's contract is "false
-                  * means fall back to tearing ctx down normally", which is
-                  * exactly wrong for this specific failure; it would
-                  * call _async_ctx_finish a second time on a ctx this
-                  * function had already released its reference to, a
-                  * genuine double-free (independent of, and in addition
-                  * to, that other bug). */
+                  * _async_ctx_finish on it. Returning false here would be
+                  * wrong for exactly that reason (the same class of
+                  * reference-lifetime hazard pending_app_teardown's own
+                  * field comment describes): _async_finish_connection's
+                  * contract is "false means fall back to tearing ctx down
+                  * normally", which is exactly wrong for this specific
+                  * failure; it would call _async_ctx_finish a second time
+                  * on a ctx this function has already released its
+                  * reference to, a genuine double-free. */
   }
 
   _async_chain_release(old_chain);
@@ -5955,7 +5937,7 @@ static bool _async_idle_pool_offer(chttp_async_ctx_t *ctx) {
  * This module's own guaranteed-exactly-once teardown point for an ACTIVE
  * (non-idle-pooled) ctx: every place that ends such a connection (a hard
  * error, a timeout, an explicit close after a successful/redirect
- * completion that wasn't pooled) calls this exactly once, since event_loop
+ * completion that wasn't pooled) calls this exactly once, since ccol_event_loop
  * has no unconditional terminal callback of its own to rely on instead
  * (see the "ASYNC CONNECTION STATE MACHINE" section's file-level comment).
  *
@@ -5966,7 +5948,7 @@ static bool _async_idle_pool_offer(chttp_async_ctx_t *ctx) {
  * nothing itself; _async_ctx_teardown's chain release below carries its own
  * backstop (guarded by chain->fulfilled) that fulfils with the generic
  * ccol_http_transfer_aborted exactly once, the same value every caller of
- * this function that doesn't need a more specific code already relied on.
+ * this function that doesn't need a more specific code relies on.
  */
 /* Forward declaration: this function's own body calls _async_retry_hop,
  * defined much further below (after the "ASYNC IDLE POOL" section,
@@ -6003,16 +5985,12 @@ static void _async_ctx_finish(chttp_async_ctx_t *ctx) {
  * fd keeps reporting EOF, not EWOULDBLOCK), so two sequential stale
  * dispatches for the same idle ctx can both legitimately observe real EOF
  * via the peek in _async_on_readable's idle branch and both decide to
- * evict it. An earlier version of this function unconditionally called
- * _async_ctx_free/_client_engine_release regardless of whether the removal
- * above actually found anything (the old comment even said "a no-op if
- * some other path already removed it" while the code below it was NOT,
- * in fact, a no-op); a real double-free, caught via valgrind and a
- * flaky-test repro loop against async_idle_pool.dead_connection_detected_
- * and_retried specifically because that test's second request is exactly
- * what makes the first request's pooled connection genuinely, persistently
- * dead (the server closes its end), rather than merely racing a stale-but-
- * harmless spurious dispatch.
+ * evict it. _async_ctx_free/_client_engine_release are therefore called
+ * ONLY when the removal above actually found something. Calling them
+ * unconditionally would be a double-free in exactly that two-dispatch case,
+ * and it is not one ordinary testing surfaces: it needs a pooled connection
+ * the server has genuinely, persistently closed, rather than merely racing
+ * a stale-but-harmless spurious dispatch.
  *
  * idle_total_count_async is decremented (and idle_async_drained possibly
  * broadcast) only in a THIRD, separate locked section, after both
@@ -6021,22 +5999,22 @@ static void _async_ctx_finish(chttp_async_ctx_t *ctx) {
  * count reaching zero as its signal that every pooled connection has
  * genuinely finished tearing down before it proceeds to free cli (and
  * cli->m_procs, which ctx->mp still points at); decrementing at removal
- * time let that signal fire while this function's own _async_ctx_free call
- * was still using cli->m_procs on this thread, a real use-after-free
- * ThreadSanitizer caught that valgrind alone had not (see
+ * time instead would let that signal fire while this function's own
+ * _async_ctx_free call is still using cli->m_procs on this thread, a
+ * use-after-free ThreadSanitizer reports and valgrind alone does not (see
  * _async_idle_remove_locked's own comment for the full account).
  */
 static void _async_idle_ctx_finish(chttp_async_ctx_t *ctx) {
   struct chttpclient *cli = ctx->cli;
-  mutex_lock(cli->lock);
+  ccol_mutex_lock(cli->lock);
   bool removed = _async_idle_remove_locked(cli, ctx);
-  mutex_unlock(cli->lock);
+  ccol_mutex_unlock(cli->lock);
   if (!removed) return;
   _async_ctx_free(ctx);
   _client_engine_release();
-  mutex_lock(cli->lock);
+  ccol_mutex_lock(cli->lock);
   _async_idle_count_dec_locked(cli);
-  mutex_unlock(cli->lock);
+  ccol_mutex_unlock(cli->lock);
 }
 
 static void _async_finish_connection(chttp_async_ctx_t *ctx, bool reusable) {
@@ -6067,18 +6045,18 @@ static void _async_process_reading_data(chttp_async_ctx_t *ctx,
  * Drives the client TLS handshake one step at a time from either
  * _async_on_readable or _async_on_writable, whichever fires next (this
  * ctx's single registration is flipped between read/write direction via
- * event_loop_modify as the handshake's own WANT_READ/WANT_WRITE demands).
- * No locking needed around ctx->tls: event_loop's own per-registration
+ * ccol_event_loop_modify as the handshake's own WANT_READ/WANT_WRITE demands).
+ * No locking needed around ctx->tls: ccol_event_loop's own per-registration
  * dispatch_lock already guarantees this ctx's read and write direction are
  * never dispatched concurrently with each other (see the file-level comment
- * above for why this replaces the old tls_lock entirely).
+ * above for why that removes any need for a tls_lock of this module's own).
  */
 static void _async_tls_advance(chttp_async_ctx_t *ctx) {
   ctls_handshake_result_t r = ctls_conn_handshake_step(ctx->tls);
   if (r == CTLS_HANDSHAKE_DONE) {
     ctx->state = CHTTP_ASYNC_WRITING;
-    if (event_loop_modify(cli_engine_bundler.reactor, ctx->reg,
-                          ccol_select_write) != ccol_success) {
+    if (ccol_event_loop_modify(cli_engine_bundler.reactor, ctx->reg,
+                               ccol_select_write) != ccol_success) {
       _async_ctx_finish(ctx);
       return;
     }
@@ -6097,7 +6075,7 @@ static void _async_tls_advance(chttp_async_ctx_t *ctx) {
      * _async_ctx_finish's own read of the same field) is checked FIRST: the
      * deadline sweep's shutdown(fd, SHUT_RDWR) against a stuck handshake is
      * exactly what surfaces here as CTLS_HANDSHAKE_ERROR, and without this
-     * check a connect_timeout_ms/request_timeout_ms expiry was always
+     * check a connect_timeout_ms/request_timeout_ms expiry would be
      * misreported as a TLS handshake/certificate failure instead of
      * ccol_timed_out, contradicting chttpclient.h's documented contract. */
     long vr = ctls_conn_verify_result(ctx->tls);
@@ -6112,7 +6090,7 @@ static void _async_tls_advance(chttp_async_ctx_t *ctx) {
   }
   ccol_select_dir want =
       (r == CTLS_HANDSHAKE_WANT_WRITE) ? ccol_select_write : ccol_select_read;
-  if (event_loop_modify(cli_engine_bundler.reactor, ctx->reg, want) !=
+  if (ccol_event_loop_modify(cli_engine_bundler.reactor, ctx->reg, want) !=
       ccol_success) {
     _async_ctx_finish(ctx);
   }
@@ -6169,14 +6147,14 @@ static void _async_tls_try_write(chttp_async_ctx_t *ctx) {
      * calloc, or a prior hop on a reused ctx), reading it as "already
      * expired" and firing the wait-timeout path immediately instead of
      * genuinely waiting up to CHTTP_100_CONTINUE_WAIT_MS. */
-    mutex_lock(ctx->deadline_lock);
+    ccol_mutex_lock(ctx->deadline_lock);
     chttp_deadline_t overall = ctx->overall_deadline;
-    mutex_unlock(ctx->deadline_lock);
+    ccol_mutex_unlock(ctx->deadline_lock);
     ctx->continue_deadline =
         _deadline_earlier(_deadline_make(CHTTP_100_CONTINUE_WAIT_MS), overall);
     ctx->state = CHTTP_ASYNC_AWAITING_CONTINUE;
-    if (event_loop_modify(cli_engine_bundler.reactor, ctx->reg,
-                          ccol_select_read) != ccol_success) {
+    if (ccol_event_loop_modify(cli_engine_bundler.reactor, ctx->reg,
+                               ccol_select_read) != ccol_success) {
       _async_ctx_finish(ctx);
     }
     return;
@@ -6186,35 +6164,31 @@ static void _async_tls_try_write(chttp_async_ctx_t *ctx) {
    * actually still alive to respond); see _async_retry_hop, which can run
    * against THIS ctx later if the subsequent read side discovers the
    * connection was already dead, and needs the ORIGINAL request bytes to
-   * resend on a fresh connection. Freeing wire here unconditionally was a
-   * real, reproducible bug (not just the earlier NULL/stale-wire_len crash
-   * this comment used to describe): once that crash was fixed by also
-   * zeroing wire_len/wire_sent alongside wire, _async_retry_hop's transfer
-   * of a NULL wire + wire_len==0 into the retry ctx silently made the retry
-   * send ZERO bytes (its own write loop's `wire_sent < wire_len` check is
-   * immediately false), so the retry's connection sat open while the real
-   * server-side mock waited out its own 5-second read timeout before
-   * closing it; caught via async_idle_pool.dead_connection_detected_and_
-   * retried failing intermittently under full-suite load (never in
-   * isolation, since it needs enough concurrent connections for a write to
-   * a reused-but-already-peer-closed socket to actually succeed locally
-   * before the read side notices), root-caused with targeted stderr tracing
-   * on both the client and the test mock server after ThreadSanitizer
-   * confirmed no data race was involved. A fresh (non-reused) ctx is never
-   * retried (see _async_ctx_finish's own reused-only check), so its wire is
-   * still freed eagerly here, exactly as before; only the reused case needs
+   * resend on a fresh connection. Freeing wire here unconditionally breaks
+   * that retry in two separate ways. Freeing it while leaving wire_len set
+   * crashes on the stale pointer; zeroing wire_len/wire_sent alongside it
+   * instead makes _async_retry_hop transfer a NULL wire + wire_len==0 into
+   * the retry ctx, so the retry silently sends ZERO bytes (its own write
+   * loop's `wire_sent < wire_len` check is immediately false) and its
+   * connection sits open until the peer times the read out and closes it.
+   * The second form is the harder one to notice: it needs enough concurrent
+   * connections for a write to a reused-but-already-peer-closed socket to
+   * succeed locally before the read side notices, and no data race is
+   * involved, so ThreadSanitizer does not flag it. A fresh (non-reused) ctx
+   * is never retried (see _async_ctx_finish's own reused-only check), so
+   * its wire is freed eagerly here; only the reused case needs
    * to keep it alive, until either _async_retry_hop's own transfer, a
    * successful _async_idle_pool_offer (which resets wire unconditionally
    * for the next hop), or _async_ctx_free's own unconditional free at
    * teardown claims it. */
   if (!ctx->reused) {
-    _mem_free(ctx->mp, ctx->wire);
+    _ccol_mem_free(ctx->mp, ctx->wire);
     ctx->wire = NULL;
     ctx->wire_len = ctx->wire_sent = 0;
   }
   ctx->state = CHTTP_ASYNC_READING;
-  if (event_loop_modify(cli_engine_bundler.reactor, ctx->reg,
-                        ccol_select_read) != ccol_success) {
+  if (ccol_event_loop_modify(cli_engine_bundler.reactor, ctx->reg,
+                             ccol_select_read) != ccol_success) {
     _async_ctx_finish(ctx);
     return;
   }
@@ -6239,7 +6213,7 @@ static void _async_tls_try_write(chttp_async_ctx_t *ctx) {
     ctx->continue_carry = NULL;
     ctx->continue_carry_len = 0;
     _async_process_reading_data(ctx, carry, carry_len);
-    _mem_free(mp, carry);
+    _ccol_mem_free(mp, carry);
   }
 }
 
@@ -6276,31 +6250,31 @@ static void _async_plain_try_write(chttp_async_ctx_t *ctx) {
      * (both the wire-buffer-lifetime note and, importantly, why
      * continue_deadline must be computed and stored BEFORE ctx->state is
      * published as CHTTP_ASYNC_AWAITING_CONTINUE, not after). */
-    mutex_lock(ctx->deadline_lock);
+    ccol_mutex_lock(ctx->deadline_lock);
     chttp_deadline_t overall = ctx->overall_deadline;
-    mutex_unlock(ctx->deadline_lock);
+    ccol_mutex_unlock(ctx->deadline_lock);
     ctx->continue_deadline =
         _deadline_earlier(_deadline_make(CHTTP_100_CONTINUE_WAIT_MS), overall);
     ctx->state = CHTTP_ASYNC_AWAITING_CONTINUE;
-    if (event_loop_modify(cli_engine_bundler.reactor, ctx->reg,
-                          ccol_select_read) != ccol_success) {
+    if (ccol_event_loop_modify(cli_engine_bundler.reactor, ctx->reg,
+                               ccol_select_read) != ccol_success) {
       _async_ctx_finish(ctx);
     }
     return;
   }
-  /* See _async_tls_try_write's identical comment for the full history: a
+  /* See _async_tls_try_write's identical comment for the full rationale: a
    * REUSED ctx must keep its wire buffer alive past a "successful" write,
    * since _async_retry_hop needs the original request bytes to resend if
    * the read side then discovers the peer was already dead; only a fresh
    * (never-retried) ctx frees it here eagerly. */
   if (!ctx->reused) {
-    _mem_free(ctx->mp, ctx->wire);
+    _ccol_mem_free(ctx->mp, ctx->wire);
     ctx->wire = NULL;
     ctx->wire_len = ctx->wire_sent = 0;
   }
   ctx->state = CHTTP_ASYNC_READING;
-  if (event_loop_modify(cli_engine_bundler.reactor, ctx->reg,
-                        ccol_select_read) != ccol_success) {
+  if (ccol_event_loop_modify(cli_engine_bundler.reactor, ctx->reg,
+                             ccol_select_read) != ccol_success) {
     _async_ctx_finish(ctx);
     return;
   }
@@ -6325,7 +6299,7 @@ static void _async_plain_try_write(chttp_async_ctx_t *ctx) {
     ctx->continue_carry = NULL;
     ctx->continue_carry_len = 0;
     _async_process_reading_data(ctx, carry, carry_len);
-    _mem_free(mp, carry);
+    _ccol_mem_free(mp, carry);
   }
 }
 
@@ -6349,8 +6323,8 @@ static void _async_handle_redirect(chttp_async_ctx_t *ctx, bool reusable);
  * itself): falling through to "active hop" processing would misinterpret
  * an already-abandoned ctx's stale state/chain/pctx as a live hop,
  * potentially misdelivering data to the wrong chain. Note that mechanism 1
- * (_async_idle_pool_take's staleness eviction) never reaches here at all
- * any more: it does not touch state/hop_completed for a stale candidate,
+ * (_async_idle_pool_take's staleness eviction) never reaches here at all:
+ * it does not touch state/hop_completed for a stale candidate,
  * only shutdown()s its fd, so a stale candidate is always still
  * legitimately IDLE from this function's point of view; its real teardown
  * happens via the separate _async_idle_ctx_finish path below, not via this
@@ -6363,10 +6337,10 @@ typedef enum {
 
 static chttp_async_dispatch_kind_t _async_dispatch_kind(
     chttp_async_ctx_t *ctx) {
-  mutex_lock(ctx->idle_lock);
+  ccol_mutex_lock(ctx->idle_lock);
   bool completed = ctx->hop_completed;
   bool idle = (ctx->state == CHTTP_ASYNC_IDLE);
-  mutex_unlock(ctx->idle_lock);
+  ccol_mutex_unlock(ctx->idle_lock);
   if (completed) return CHTTP_ASYNC_DISPATCH_ABANDONED;
   return idle ? CHTTP_ASYNC_DISPATCH_IDLE : CHTTP_ASYNC_DISPATCH_ACTIVE;
 }
@@ -6406,23 +6380,22 @@ static chttp_async_dispatch_kind_t _async_dispatch_kind(
  * holds) would leak permanently, and chttpclient_destroy would hang
  * forever waiting for async_in_flight_count to reach zero.
  * _async_on_writable_impl's own top-of-function check is not reachable for
- * case (2) today (event_loop_modify never mutates a registration's
+ * case (2) today (ccol_event_loop_modify never mutates a registration's
  * direction on any failure path it can return through, so a reused ctx
  * whose reactivation failed stays read-registered, never write-registered)
  * but is given the identical treatment anyway, purely so correctness does
  * not depend on that staying true forever, mirroring this same function's
- * own pre-existing hop_completed check (which the file already documents
- * as "structurally cannot fire" for the read-only-registered case, kept
- * anyway).
+ * own hop_completed check (which the file documents as "structurally cannot
+ * fire" for the read-only-registered case, kept anyway).
  *
  * Can never double-fire, within one dispatch invocation or across separate
  * ones. Within one invocation: whichever of the two checks in a given
  * function sees hop_completed true first calls this and returns
  * immediately, so the second check in that same function is structurally
  * unreachable once the first has fired. Across separate invocations:
- * _event_loop_poller_collect (cthreadcomm.c) refuses to submit a second
+ * _ccol_event_loop_poller_collect (cthreadcomm.c) refuses to submit a second
  * job for an entry while entry->refcount > 0; _async_ctx_teardown ->
- * _async_ctx_destroy_now calls event_loop_remove (setting reg->removed =
+ * _async_ctx_destroy_now calls ccol_event_loop_remove (setting reg->removed =
  * true) before returning, after which no future poller pass ever builds
  * another job item referencing this reg. Combined with
  * entry->dispatch_lock serialising same-entry callbacks, _async_ctx_
@@ -6432,7 +6405,7 @@ static void _async_ctx_handle_if_abandoned(chttp_async_ctx_t *ctx) {
   if (ctx->pending_app_teardown) _async_ctx_teardown(ctx);
 }
 
-static void _async_on_writable_impl(event_loop loop, ccol_selectable *sel,
+static void _async_on_writable_impl(ccol_event_loop loop, ccol_selectable *sel,
                                     chttp_async_ctx_t *ctx) {
   (void)loop;
   (void)sel;
@@ -6450,7 +6423,7 @@ static void _async_on_writable_impl(event_loop loop, ccol_selectable *sel,
   }
   /* See ctx->reg's own field comment: a dispatch for this ctx's very first
    * (write-direction) registration can legitimately arrive before
-   * _async_connect_task's own `ctx->reg = event_loop_add(...)` assignment
+   * _async_connect_task's own `ctx->reg = ccol_event_loop_add(...)` assignment
    * has finished, especially for a loopback connect that's often already
    * writable the instant it's registered. Nothing else has happened yet in
    * that window (no read, no write), so simply returning is always safe;
@@ -6467,7 +6440,7 @@ static void _async_on_writable_impl(event_loop loop, ccol_selectable *sel,
        * checked first: the deadline sweep's shutdown(fd, SHUT_RDWR) against
        * a stuck connect is exactly what surfaces here as a getsockopt/
        * SO_ERROR failure, and without this check a connect_timeout_ms
-       * expiry was always misreported as ccol_http_connection_failed
+       * expiry would be misreported as ccol_http_connection_failed
        * instead of the ccol_timed_out chttpclient.h documents. */
       _async_fulfill(
           ctx, ctx->timed_out ? ccol_timed_out : ccol_http_connection_failed,
@@ -6524,7 +6497,7 @@ static void _async_on_writable_impl(event_loop loop, ccol_selectable *sel,
      * above. Claim the decision first, exactly like every exit from
      * _async_awaiting_continue_on_data; a genuine "100 Continue" that
      * arrived and was already claimed by a racing on_readable dispatch
-     * just before this one runs (event_loop's own per-entry dispatch_lock
+     * just before this one runs (ccol_event_loop's own per-entry dispatch_lock
      * orders the two, but does not decide which one wins) means that
      * dispatch has already taken over sending the body, and this one has
      * nothing left to do. */
@@ -6558,26 +6531,26 @@ static void _async_on_writable_impl(event_loop loop, ccol_selectable *sel,
 }
 
 /*
- * event_loop's own public callback shape (event_writable_fn/
- * event_readable_fn/event_error_fn all take `void *arg`, the value handed
- * to event_loop_add); these thin wrappers exist purely to cast `arg` back
- * to chttp_async_ctx_t* before handing off to the real logic in
+ * ccol_event_loop's own public callback shape (ccol_event_writable_fn/
+ * ccol_event_readable_fn/ccol_event_error_fn all take `void *arg`, the value
+ * handed to ccol_event_loop_add); these thin wrappers exist purely to cast
+ * `arg` back to chttp_async_ctx_t* before handing off to the real logic in
  * _async_on_writable_impl/_on_readable_impl/_on_error_impl below.
  *
- * No pinning/refcounting of any kind happens here (an earlier version of
- * this design had a per-ctx atomic refcount, pinned here via
- * _async_ctx_pin; both were removed once the underlying use-after-free was
- * closed by construction instead; see pending_app_teardown's own field
- * comment for the full rationale). Safety now rests entirely on "no
+ * No pinning/refcounting of any kind happens here, deliberately: a per-ctx
+ * atomic refcount pinned at this point cannot close the underlying
+ * use-after-free, because the pin's own first read of the refcount races a
+ * concurrent free the same way (see pending_app_teardown's own field
+ * comment for the full rationale). Safety rests entirely on "no
  * application thread ever frees a registered ctx"; the only thing that can
  * ever call the real, destructive teardown for a ctx these wrappers are
- * dispatched for is a dispatch callback itself, and event_loop's own
+ * dispatched for is a dispatch callback itself, and ccol_event_loop's own
  * entry->dispatch_lock plus entry->refcount-gated "one job in flight per
  * entry" invariant (cthreadcomm.c) together guarantee that happens at most
  * once per ctx, with no other thread able to be touching ctx at the same
  * time.
  */
-static void _async_on_writable(event_loop loop, ccol_selectable *sel,
+static void _async_on_writable(ccol_event_loop loop, ccol_selectable *sel,
                                void *arg) {
   _async_on_writable_impl(loop, sel, (chttp_async_ctx_t *)arg);
 }
@@ -6647,7 +6620,8 @@ static void _async_process_reading_data(chttp_async_ctx_t *ctx,
           _async_ctx_finish(ctx);
           return;
         }
-        call_once(client_http1_settings_bundler.once, _init_chttp1_settings);
+        ccol_call_once(client_http1_settings_bundler.once,
+                       _init_chttp1_settings);
         chttp1_parser_init(&ctx->parser,
                            &client_http1_settings_bundler.settings);
         ctx->parser.data = &ctx->pctx;
@@ -6761,7 +6735,8 @@ static void _async_awaiting_continue_on_data(chttp_async_ctx_t *ctx,
           _async_ctx_finish(ctx);
           return;
         }
-        call_once(client_http1_settings_bundler.once, _init_chttp1_settings);
+        ccol_call_once(client_http1_settings_bundler.once,
+                       _init_chttp1_settings);
         chttp1_parser_init(&ctx->parser,
                            &client_http1_settings_bundler.settings);
         ctx->parser.data = &ctx->pctx;
@@ -6790,7 +6765,7 @@ static void _async_awaiting_continue_on_data(chttp_async_ctx_t *ctx,
            * below may not complete synchronously) and must be stashed
            * instead. */
           ctx->continue_carry =
-              (char *)_mem_alloc(ctx->mp, data_len - consumed);
+              (char *)_ccol_mem_alloc(ctx->mp, data_len - consumed);
           if (!ctx->continue_carry) {
             ctx->hop_completed = true;
             _async_fulfill(ctx, ccol_not_enough_memory, NULL);
@@ -6831,7 +6806,8 @@ static void _async_awaiting_continue_on_data(chttp_async_ctx_t *ctx,
           _async_ctx_finish(ctx);
           return;
         }
-        call_once(client_http1_settings_bundler.once, _init_chttp1_settings);
+        ccol_call_once(client_http1_settings_bundler.once,
+                       _init_chttp1_settings);
         chttp1_parser_init(&ctx->parser,
                            &client_http1_settings_bundler.settings);
         ctx->parser.data = &ctx->pctx;
@@ -6892,7 +6868,7 @@ static void _async_awaiting_continue_on_data(chttp_async_ctx_t *ctx,
   }
 }
 
-static void _async_on_readable_impl(event_loop loop, ccol_selectable *sel,
+static void _async_on_readable_impl(ccol_event_loop loop, ccol_selectable *sel,
                                     chttp_async_ctx_t *ctx) {
   (void)loop;
   (void)sel;
@@ -6913,7 +6889,7 @@ static void _async_on_readable_impl(event_loop loop, ccol_selectable *sel,
    * redirect chains sharing the same chain state, corrupting its refcount
    * bookkeeping. Checked before the TLS_HANDSHAKING branch too, since a
    * handshake failure detected by one dispatch must stop a second, racing
-   * dispatch from re-entering _async_tls_advance. event_loop's own
+   * dispatch from re-entering _async_tls_advance. ccol_event_loop's own
    * per-registration dispatch_lock already serialises every dispatch for
    * this ctx's single registration against itself, so a plain bool is
    * sufficient here; no additional locking needed. */
@@ -6958,10 +6934,9 @@ static void _async_on_readable_impl(event_loop loop, ccol_selectable *sel,
      * sufficient evidence that the connection is actually dead or has
      * genuinely unexpected data; an actual non-blocking read is required
      * to tell a stale, already-handled readiness apart from real activity.
-     * Found via targeted stderr tracing after a real, reproducible failure
-     * in async_idle_pool.sequential_requests_reuse_connection (pooled
-     * connections were being spuriously evicted moments after being
-     * offered), not assumed from code inspection alone. */
+     * Without this read, a pooled connection is spuriously evicted moments
+     * after being offered; async_idle_pool.sequential_requests_reuse_
+     * connection is non-vacuous here and fails without it. */
     char peek_buf[1];
     ssize_t pn;
     if (ctx->tls) {
@@ -7050,9 +7025,9 @@ static void _async_on_readable_impl(event_loop loop, ccol_selectable *sel,
      * peer finishing normally. Mirrors Tier 1's own _chttp_read_message
      * (returns ccol_http_transfer_aborted immediately for any read error
      * other than EWOULDBLOCK, never calling chttp1_parser_finish) and this
-     * same function's _async_on_error_impl sibling, which already gets a
-     * genuine EPOLLERR dispatch right; only this function's own read-result
-     * classification had collapsed the eof-vs-error distinction into one.
+     * same function's _async_on_error_impl sibling, which treats a genuine
+     * EPOLLERR dispatch the same way; this function's own read-result
+     * classification must keep the eof-vs-error distinction just as sharp.
      * _async_ctx_finish itself checks reused/any_bytes_read and retries if
      * eligible; no pre-emptive fulfil here (see its own comment). */
     _async_ctx_finish(ctx);
@@ -7114,13 +7089,13 @@ static void _async_on_readable_impl(event_loop loop, ccol_selectable *sel,
   _async_process_reading_data(ctx, buf, (size_t)n);
 }
 
-static void _async_on_readable(event_loop loop, ccol_selectable *sel,
+static void _async_on_readable(ccol_event_loop loop, ccol_selectable *sel,
                                void *arg) {
   /* See _async_on_writable's identical comment above. */
   _async_on_readable_impl(loop, sel, (chttp_async_ctx_t *)arg);
 }
 
-static void _async_on_error_impl(event_loop loop, ccol_selectable *sel,
+static void _async_on_error_impl(ccol_event_loop loop, ccol_selectable *sel,
                                  chttp_async_ctx_t *ctx) {
   (void)loop;
   (void)sel;
@@ -7162,7 +7137,7 @@ static void _async_on_error_impl(event_loop loop, ccol_selectable *sel,
    * TLS handshake killed by an RST mid-handshake, which never reaches
    * _async_tls_advance's CTLS_HANDSHAKE_ERROR branch (ctls_conn_
    * verify_result-based diagnosis) either. Without the two checks below,
-   * both cases fell through to the generic backstop
+   * both cases would fall through to the generic backstop
    * ccol_http_transfer_aborted instead of the specific, documented
    * ccol_http_connection_failed/ccol_http_tls_handshake_failed/
    * ccol_http_tls_cert_verification_failed chttpclient.h promises "once the
@@ -7175,7 +7150,7 @@ static void _async_on_error_impl(event_loop loop, ccol_selectable *sel,
    * first in both branches below: the deadline sweep's shutdown(fd,
    * SHUT_RDWR) against a stuck connect/handshake dispatches here exactly
    * like a genuine peer-side failure would, and without this check a
-   * connect_timeout_ms/request_timeout_ms expiry was always misreported as
+   * connect_timeout_ms/request_timeout_ms expiry would be misreported as
    * ccol_http_connection_failed/ccol_http_tls_handshake_failed/
    * ccol_http_tls_cert_verification_failed instead of the ccol_timed_out
    * chttpclient.h documents. */
@@ -7204,7 +7179,8 @@ static void _async_on_error_impl(event_loop loop, ccol_selectable *sel,
   _async_ctx_finish(ctx);
 }
 
-static void _async_on_error(event_loop loop, ccol_selectable *sel, void *arg) {
+static void _async_on_error(ccol_event_loop loop, ccol_selectable *sel,
+                            void *arg) {
   /* See _async_on_writable's identical comment above. */
   _async_on_error_impl(loop, sel, (chttp_async_ctx_t *)arg);
 }
@@ -7301,46 +7277,45 @@ static void _async_connect_task(void *arg) {
     /* Never registered with the reactor, so nothing else could act on this
      * fd yet; report the timeout ourselves and let _async_ctx_teardown (via
      * _async_ctx_destroy_now) close fd for us. Closing it manually here,
-     * before _client_deadline_unregister has run, was a real violation of
-     * this module's own "unregister before close" invariant (see
+     * before _client_deadline_unregister has run, would violate this
+     * module's own "unregister before close" invariant (see
      * _async_ctx_destroy_now's own doc comment: this ctx is already linked
      * into the deadline registry by this point, registered before this
-     * task was ever submitted). _async_ctx_destroy_now already closes
-     * ctx->fd itself, unconditionally, AFTER unregistering - closing it a
-     * second time here would only have been safe because it was set to -1
-     * immediately after, making the later close a no-op; removing the
-     * manual close entirely is both simpler and correct. */
+     * task was ever submitted). _async_ctx_destroy_now closes ctx->fd
+     * itself, unconditionally, AFTER unregistering, which is the only
+     * ordering that keeps that invariant intact. */
     _async_fulfill(ctx, ccol_timed_out, NULL);
     _async_ctx_teardown(ctx);
     return;
   }
 
   char *err = NULL;
-  event_handlers_t handlers = {
+  ccol_event_handlers_t handlers = {
       .on_readable = _async_on_readable,
       .on_writable = _async_on_writable,
       .on_error = _async_on_error,
   };
-  /* idle_lock, held across both the event_loop_add call and this thread's
-   * own read-back of ctx->reg right after: the moment event_loop_add makes
+  /* idle_lock, held across both the ccol_event_loop_add call and this thread's
+   * own read-back of ctx->reg right after: the moment ccol_event_loop_add makes
    * this registration live, a reactor thread is free to dispatch it (a
    * loopback connect is very often already writable immediately), drive the
    * whole hop to completion, and reach _async_ctx_free; racing this
    * thread's own still-in-flight "ctx->reg = ..." write and the "if
    * (!ctx->reg)" read right after it, a genuine write/read race on ctx->reg
-   * itself (caught by ThreadSanitizer, not by inspection). _async_ctx_free
-   * takes the same lock, briefly, as its very first action, which is enough
-   * to guarantee this window has fully completed (ctx->reg published, and
-   * this function has stopped touching ctx) before free() can proceed; no
-   * dispatch path needs idle_lock to observe ctx->reg itself (see its own
-   * field comment: a NULL read there is already handled as a harmless,
-   * self-healing no-op), so this adds no new contention on that side. */
-  mutex_lock(ctx->idle_lock);
-  ctx->reg = event_loop_add(cli_engine_bundler.reactor,
-                            selectable_from_fd(fd, ccol_select_write), handlers,
-                            ctx, &err);
+   * itself (one ThreadSanitizer reports, and code reading does not).
+   * _async_ctx_free takes the same lock, briefly, as its very first action,
+   * which is enough to guarantee this window has fully completed (ctx->reg
+   * published, and this function has stopped touching ctx) before free()
+   * can proceed; no dispatch path needs idle_lock to observe ctx->reg
+   * itself (see its own field comment: a NULL read there is already handled
+   * as a harmless, self-healing no-op), so this adds no new contention on
+   * that side. */
+  ccol_mutex_lock(ctx->idle_lock);
+  ctx->reg = ccol_event_loop_add(cli_engine_bundler.reactor,
+                                 ccol_selectable_from_fd(fd, ccol_select_write),
+                                 handlers, ctx, &err);
   bool reg_failed = !ctx->reg;
-  mutex_unlock(ctx->idle_lock);
+  ccol_mutex_unlock(ctx->idle_lock);
   if (reg_failed) {
     _async_fulfill(ctx, ccol_not_enough_memory, NULL);
     _async_ctx_teardown(ctx);
@@ -7391,12 +7366,12 @@ static void _async_retry_hop(chttp_async_ctx_t *old_ctx) {
   }
 
   /* ctx is a brand-new, still-private object here (not yet registered with
-   * the deadline registry or event_loop), so no concurrent reader could
+   * the deadline registry or ccol_event_loop), so no concurrent reader could
    * possibly race this write regardless; deadline_lock is still used, for
    * uniformity with every other write site (see its own field comment). */
-  mutex_lock(ctx->deadline_lock);
+  ccol_mutex_lock(ctx->deadline_lock);
   ctx->overall_deadline = chain->overall_deadline;
-  mutex_unlock(ctx->deadline_lock);
+  ccol_mutex_unlock(ctx->deadline_lock);
   ctx->chain = chain;
   ctx->cli = old_ctx->cli;
   ctx->hop = old_ctx->hop;
@@ -7456,7 +7431,7 @@ static void _async_retry_hop(chttp_async_ctx_t *old_ctx) {
    * continues to apply unchanged across the retry. */
   ctx->connect_deadline = _deadline_make(chain->connect_timeout_ms);
 
-  call_once(client_http1_settings_bundler.once, _init_chttp1_settings);
+  ccol_call_once(client_http1_settings_bundler.once, _init_chttp1_settings);
   chttp1_parser_init(&ctx->parser, &client_http1_settings_bundler.settings);
   ctx->parser.data = &ctx->pctx;
 
@@ -7508,11 +7483,10 @@ static void _async_retry_hop(chttp_async_ctx_t *old_ctx) {
  *
  * Crucially, this function runs on an ordinary application thread (whatever
  * thread called chttpclient_do_async, or a redirect-driven caller), and
- * ctx's event_loop registration is still fully live at this point; a
+ * ctx's ccol_event_loop registration is still fully live at this point; a
  * reactor dispatch callback for it can legitimately be in flight, or about
  * to be invoked, on a different thread at this exact moment. Directly
- * calling _async_ctx_teardown here (an earlier version of this function did
- * exactly that) is therefore a real use-after-free: see
+ * calling _async_ctx_teardown here would therefore be a use-after-free: see
  * pending_app_teardown's own field comment for the full rationale, which
  * this function is one of the two sites that comment describes. Instead:
  * mark pending_app_teardown (together with hop_completed, in that order;
@@ -7536,7 +7510,7 @@ static void _async_submit_hop_fail(chttp_async_ctx_t *ctx, ccol_retval_t rv) {
     ctx->pending_app_teardown = true;
     ctx->hop_completed = true;
     int fd = ctx->fd;
-    mutex_unlock(ctx->idle_lock);
+    ccol_mutex_unlock(ctx->idle_lock);
     /* _client_engine_release() below releases the SEPARATE engine
      * reference _async_idle_pool_offer acquired for this ctx while it sat
      * in the idle pool; _async_ctx_teardown (once the deferred dispatch
@@ -7545,7 +7519,7 @@ static void _async_submit_hop_fail(chttp_async_ctx_t *ctx, ccol_retval_t rv) {
      * this reference must be released on, alongside a successful reuse
      * (below in _async_submit_hop), organic idle-connection death
      * (_async_idle_ctx_finish), and staleness eviction
-     * (_async_idle_pool_take); missing it here leaked one engine reference
+     * (_async_idle_pool_take); missing it here leaks one engine reference
      * per reused-connection setup failure (an allocation or serialisation
      * failure occurring after a pooled connection was already popped).
      * Safe to call from this thread directly: it only ever touches a
@@ -7617,21 +7591,21 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
     char *na = ccol_strdup(chain->mp, url.userinfo_authorization);
     char *no = ccol_strdup(chain->mp, url.origin_key);
     if (!na || !no) {
-      _mem_free(chain->mp, na);
-      _mem_free(chain->mp, no);
+      _ccol_mem_free(chain->mp, na);
+      _ccol_mem_free(chain->mp, no);
       _url_free(chain->mp, &url);
       _async_fulfill_chain(chain, ccol_not_enough_memory, NULL);
       _async_chain_release(chain);
       return false;
     }
-    _mem_free(chain->mp, chain->carried_auth);
-    _mem_free(chain->mp, chain->carried_auth_origin);
+    _ccol_mem_free(chain->mp, chain->carried_auth);
+    _ccol_mem_free(chain->mp, chain->carried_auth_origin);
     chain->carried_auth = na;
     chain->carried_auth_origin = no;
   } else if (chain->carried_auth &&
              strcmp(chain->carried_auth_origin, url.origin_key) != 0) {
-    _mem_free(chain->mp, chain->carried_auth);
-    _mem_free(chain->mp, chain->carried_auth_origin);
+    _ccol_mem_free(chain->mp, chain->carried_auth);
+    _ccol_mem_free(chain->mp, chain->carried_auth_origin);
     chain->carried_auth = NULL;
     chain->carried_auth_origin = NULL;
   }
@@ -7665,9 +7639,9 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
    * through deadline_lock regardless (see its own field comment), since
    * for the reused case this ctx may already be registered with the
    * deadline sweep from an earlier fresh connect. */
-  mutex_lock(ctx->deadline_lock);
+  ccol_mutex_lock(ctx->deadline_lock);
   ctx->overall_deadline = chain->overall_deadline;
-  mutex_unlock(ctx->deadline_lock);
+  ccol_mutex_unlock(ctx->deadline_lock);
   ctx->chain = chain;
   ctx->hop = hop;
   ctx->cur_method = method;
@@ -7685,10 +7659,10 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
    * pooled connection. Needed by _async_handle_redirect to resolve a
    * relative-path Location header against THIS hop's own URL, mirroring
    * Tier 1's per-hop chttp_url_t url local; see this field's own struct
-   * comment for the crash this fixes. Freed first since a reused ctx may
+   * comment for the crash it prevents. Freed first since a reused ctx may
    * still be carrying the previous owner's copy (idle-pool offer only clears
    * it opportunistically, not as a correctness requirement). */
-  _mem_free(chain->mp, ctx->path_and_query);
+  _ccol_mem_free(chain->mp, ctx->path_and_query);
   ctx->path_and_query = ccol_strdup(chain->mp, url.path_and_query);
   if (!ctx->path_and_query) {
     _url_free(chain->mp, &url);
@@ -7709,7 +7683,7 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
 
   char *herr = NULL;
   ctx->pctx.headers =
-      chmap_create_full(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, ccol_string,
+      chmap_create_full(CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, ccol_string,
                         ccol_string, chain->mp, NULL, &herr);
   if (!ctx->pctx.headers) {
     _url_free(chain->mp, &url);
@@ -7728,10 +7702,11 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
    * 100-continue" on the wire (it reads req->expect_continue, not anything
    * chain-level), even though ctx->want_100_continue below is computed
    * independently from chain->expect_continue and correctly engages the
-   * write-splitting/wait machinery regardless - a real bug caught by
-   * async_step_a.expect_continue_field_reaches_the_wire, which found the
-   * header count on the wire coming back 0 despite the wait/timeout timing
-   * proving the wait itself was genuinely happening. */
+   * write-splitting/wait machinery regardless: the wait genuinely happens
+   * while the header never reaches the peer.
+   * async_step_a.expect_continue_field_reaches_the_wire is non-vacuous
+   * here; without this line it fails, counting zero such headers on the
+   * wire. */
   hop_req.expect_continue = chain->expect_continue;
 
   chttp_header_presence_t hop_hp;
@@ -7792,7 +7767,7 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
   }
   _url_free(chain->mp, &url);
 
-  call_once(client_http1_settings_bundler.once, _init_chttp1_settings);
+  ccol_call_once(client_http1_settings_bundler.once, _init_chttp1_settings);
   chttp1_parser_init(&ctx->parser, &client_http1_settings_bundler.settings);
   ctx->parser.data = &ctx->pctx;
 
@@ -7806,26 +7781,23 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
      * NOT made here, on this (non-reactor) calling thread; it is left
      * entirely to _async_on_writable's own dispatch, exactly like a fresh
      * connection's first write already works. This is not just simpler; it
-     * is required for correctness: the moment event_loop_modify flips this
+     * is required for correctness: the moment ccol_event_loop_modify flips this
      * registration to write interest, an already-running reactor thread is
      * free to dispatch _async_on_writable for it concurrently with this
-     * calling thread (event_loop's own guarantee only prevents two
+     * calling thread (ccol_event_loop's own guarantee only prevents two
      * dispatches of the same registration from running concurrently with
      * EACH OTHER; it says nothing about a non-callback caller like this
-     * function racing a dispatch it just made possible). An earlier version
-     * of this function attempted the write here directly, which both raced
-     * that concurrent dispatch and separately failed to transition
-     * ctx->state/direction to READING on a fully-completed write; a real,
-     * reproducible hang in async_idle_pool.sequential_requests_reuse_
-     * connection, found via gdb thread backtraces on the hung process
-     * rather than assumed from code inspection alone. */
+     * function racing a dispatch it just made possible). Attempting the
+     * write here directly would both race that concurrent dispatch and fail
+     * to transition ctx->state/direction to READING on a fully-completed
+     * write, hanging a sequential reuse of the same pooled connection. */
     ccol_retval_t reactivate_rv;
 #ifdef RUNNING_UNIT_TESTS
     if (atomic_exchange(&g_force_reactivate_fail_for_tests, false)) {
-      /* Simulated event_loop_modify failure: the real call is deliberately
+      /* Simulated ccol_event_loop_modify failure: the real call is deliberately
        * NOT made, so ctx->reg is left exactly as a genuine failure would
        * leave it (still read-registered; see this branch's own comment
-       * below on why event_loop_modify never mutates direction on any
+       * below on why ccol_event_loop_modify never mutates direction on any
        * failure path it can return through). See
        * g_force_reactivate_fail_for_tests's own comment for why the real
        * call can never actually fail here. */
@@ -7833,18 +7805,17 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
     } else
 #endif
     {
-      reactivate_rv = event_loop_modify(cli_engine_bundler.reactor, ctx->reg,
-                                        ccol_select_write);
+      reactivate_rv = ccol_event_loop_modify(cli_engine_bundler.reactor,
+                                             ctx->reg, ccol_select_write);
     }
     if (reactivate_rv != ccol_success) {
-      /* See pending_app_teardown's own field comment: ctx's event_loop
+      /* See pending_app_teardown's own field comment: ctx's ccol_event_loop
        * registration is still fully live here (it was just popped from
        * the idle pool for reuse), so a reactor dispatch callback can
        * legitimately be in flight, or about to be invoked, on a
        * different thread at this exact moment. Calling
        * _async_ctx_teardown directly from this (non-dispatch) thread
-       * would be a real use-after-free (an earlier version of this
-       * function did exactly that, found via ASan); instead, mark ctx
+       * would be a use-after-free; instead, mark ctx
        * terminal (BEFORE calling _async_retry_hop, which itself sets
        * ctx->hop_completed = true as its own very first statement; the
        * write order between the two flags does not matter for
@@ -7864,14 +7835,14 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
                               * one whose reactivation just failed) is
                               * abandoned from here on. */
       int fd = ctx->fd;
-      mutex_unlock(ctx->idle_lock);
+      ccol_mutex_unlock(ctx->idle_lock);
       /* Releases the SEPARATE engine reference _async_idle_pool_offer
        * acquired for this ctx while it sat in the idle pool;
        * _async_ctx_teardown (once the deferred dispatch finally runs it)
        * only ever releases ctx's chain reference and knows nothing about
        * this one. This is the same leak class _async_submit_hop_fail's
-       * reused branch was fixed for (see its own comment); this
-       * event_loop_modify-failure exit was missed at the time. Safe to
+       * reused branch guards against (see its own comment), reached through
+       * this ccol_event_loop_modify-failure exit instead. Safe to
        * call from this thread directly: it only ever touches a global
        * counter, never ctx. */
       _client_engine_release();
@@ -7884,7 +7855,7 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
      * blocked waiting for it now proceeds against a coherent ctx, and (since
      * the fd is almost certainly already writable, being freshly reused) may
      * do so essentially immediately. */
-    mutex_unlock(ctx->idle_lock);
+    ccol_mutex_unlock(ctx->idle_lock);
     /* This ctx's connection now belongs to the chain, not the idle pool;
      * release the engine reference it was holding while pooled (the
      * chain's own single reference, held for its whole lifetime, covers it
@@ -7898,8 +7869,8 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
 
   /* Registered BEFORE submitting, not after: once ctpool_submit hands ctx to
    * a worker, that worker can connect, run the whole hop to completion, and
-   * free ctx before this thread would otherwise get a chance to register it
-   *; registering first guarantees ctx is already safely in the registry
+   * free ctx before this thread would otherwise get a chance to register
+   * it; registering first guarantees ctx is already safely in the registry
    * for the entire time any other thread can possibly touch it. */
   _client_deadline_register(ctx);
 
@@ -7932,7 +7903,7 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
  * kernel just freed; but only once that worker thread actually gets to
  * run, which cannot happen until ctpool_submit for the next hop is called.
  * Finishing the connection unconditionally FIRST (so the old fd is fully
- * closed, and its event_loop registration fully removed, before
+ * closed, and its ccol_event_loop registration fully removed, before
  * _async_submit_hop ever calls ctpool_submit for the next hop) guarantees
  * there is no window where the new hop's socket() could receive the old
  * fd's number while it might still be registered with the reactor; when the
@@ -7956,7 +7927,7 @@ static void _async_handle_redirect(chttp_async_ctx_t *ctx, bool reusable) {
    * a DIFFERENT, concurrently-running reactor thread; if that happened to
    * be the last live reference, chain would be freed while this function
    * is still using its local `chain` pointer below (in _async_submit_hop's
-   * argument and _mem_free(chain->mp, ...)). This is the same class of "a
+   * argument and _ccol_mem_free(chain->mp, ...)). This is the same class of "a
    * concurrent teardown can free something a synchronous caller still
    * needs" race documented throughout this section, just one level higher
    * than the ctx-local ones. Retaining here first, and releasing only once
@@ -7969,11 +7940,10 @@ static void _async_handle_redirect(chttp_async_ctx_t *ctx, bool reusable) {
     /* This response is itself the 51st request in the chain and is ALSO a
      * redirect; following it would exceed the 50-redirect budget. Report it
      * as an error instead of silently delivering it, mirroring Tier 1's
-     * identical cap check in chttp_do_internal (the deliberate design this
-     * codebase shipped with previously, reversed per an explicit request: a
-     * caller relying on ccol_http_too_many_redirects to detect a redirect
-     * loop needs an actual error here, not a stale 3xx response it has to
-     * notice and interpret itself). No URL resolution or next-hop work is
+     * identical cap check in chttp_do_internal: a caller relying on
+     * ccol_http_too_many_redirects to detect a redirect loop needs an actual
+     * error here, not a stale 3xx response it has to notice and interpret
+     * itself. No URL resolution or next-hop work is
      * attempted at all. */
     _async_finish_connection(ctx, reusable);
     _async_fulfill_chain(chain, ccol_http_too_many_redirects, NULL);
@@ -7989,15 +7959,15 @@ static void _async_handle_redirect(chttp_async_ctx_t *ctx, bool reusable) {
   base.unix_socket_path = ctx->unix_socket_path;
   base.host = ctx->host;
   base.port = ctx->port;
-  /* Both fields above (is_ipv6, path_and_query below) used to be left at
-   * their memset-zero default here, since chttp_async_ctx_t had no fields to
-   * source them from: is_ipv6 always false silently produced an unbracketed
-   * "scheme://<ipv6-literal>:port/path" redirect target that failed to
-   * re-parse on the next hop, and a NULL path_and_query crashed the process
-   * (a NULL-pointer strchr() inside _merge_ref_path) the moment a server
-   * sent a genuinely relative (not absolute-path, not a full URL, not
-   * protocol-relative) Location header. Both ctx fields are now captured
-   * fresh on every hop in _async_submit_hop; see their own struct comments. */
+  /* Both fields above (is_ipv6, path_and_query below) must be sourced from
+   * ctx rather than left at their memset-zero default: a false is_ipv6
+   * silently produces an unbracketed "scheme://<ipv6-literal>:port/path"
+   * redirect target that fails to re-parse on the next hop, and a NULL
+   * path_and_query crashes the process (a NULL-pointer strchr() inside
+   * _merge_ref_path) the moment a server sends a genuinely relative (not
+   * absolute-path, not a full URL, not protocol-relative) Location header.
+   * Both ctx fields are captured fresh on every hop in _async_submit_hop;
+   * see their own struct comments. */
   base.path_and_query = ctx->path_and_query;
 
   char *next_url = _resolve_redirect_url(chain->mp, &base, ctx->pctx.location);
@@ -8036,7 +8006,7 @@ static void _async_handle_redirect(chttp_async_ctx_t *ctx, bool reusable) {
   if (next_url) {
     _async_submit_hop(chain, next_url, next_method, next_body_data,
                       next_body_len, next_body_ct, next_hop);
-    _mem_free(chain->mp, next_url);
+    _ccol_mem_free(chain->mp, next_url);
   }
   _async_chain_release(chain); /* release the temporary ref taken above */
 }
@@ -8053,10 +8023,9 @@ static void _async_handle_redirect(chttp_async_ctx_t *ctx, bool reusable) {
  * into the per-hop loop of chttp_do_internal, re-run fresh on every hop
  * (a redirect can change URL/scheme hop to hop, so there's no single
  * upfront check to extract there the way Tier 2/3 have; they only ever
- * need this once, before a chain/future exists at all). Tier 1 already
- * returns fully specific ccol_retval_t codes natively, so extracting its
- * inline logic would touch already-hardened, already-shipped code for no
- * functional benefit.
+ * need this once, before a chain/future exists at all). Tier 1 returns
+ * fully specific ccol_retval_t codes natively, so extracting its inline
+ * logic would buy no functional benefit.
  *
  * This exists specifically so Tier 3 does not have to accept
  * chttpclient_do_async/_streaming's collapsed "NULL for any pre-queue
@@ -8073,9 +8042,9 @@ static ccol_retval_t _chttp_async_preflight_check(struct chttpclient *cli,
   ccol_retval_t prv = _parse_chttp_url(cli->m_procs, req->url, url_out);
   if (prv != ccol_success) return prv;
 
-  mutex_lock(cli->lock);
+  ccol_mutex_lock(cli->lock);
   bool tls_ctx_usable = cli->tls_ctx_usable;
-  mutex_unlock(cli->lock);
+  ccol_mutex_unlock(cli->lock);
 
   if (url_out->is_https && !tls_ctx_usable) {
     /* Configured cert/key/ca path(s) were not readable (or ctls itself
@@ -8136,7 +8105,7 @@ static ctpool_future *_chttp_do_async_internal(struct chttpclient *cli,
   long connect_timeout_ms;
   long request_timeout_ms;
   size_t max_response_body_size;
-  mutex_lock(cli->lock);
+  ccol_mutex_lock(cli->lock);
   tls_ctx = cli->tls_ctx;
   tls_ctx_usable = cli->tls_ctx_usable;
   verify_host = cli->tls.verify_host;
@@ -8144,11 +8113,11 @@ static ctpool_future *_chttp_do_async_internal(struct chttpclient *cli,
   request_timeout_ms = cli->request_timeout_ms;
   max_response_body_size = cli->max_response_body_size;
   if (tls_ctx) ctls_ctx_retain(tls_ctx);
-  mutex_unlock(cli->lock);
+  ccol_mutex_unlock(cli->lock);
 
   if (_client_engine_acquire() != ccol_success) {
     if (tls_ctx) ctls_ctx_release(tls_ctx);
-    _mem_free(mp, initial_origin_key);
+    _ccol_mem_free(mp, initial_origin_key);
     return NULL;
   }
 
@@ -8157,14 +8126,13 @@ static ctpool_future *_chttp_do_async_internal(struct chttpclient *cli,
   if (!future) {
     if (tls_ctx) ctls_ctx_release(tls_ctx);
     _client_engine_release();
-    _mem_free(mp, initial_origin_key);
+    _ccol_mem_free(mp, initial_origin_key);
     return NULL;
   }
   /* From here on a future exists and is always returned to the caller (who
    * owns pairing it with exactly one ctpool_future_free); any subsequent
-   * failure fulfils it with a specific error instead of returning NULL,
-   * exactly mirroring this function's previous, single-hop behaviour on a
-   * ctpool_submit failure. Captured into a local now: once hop 0 is queued
+   * failure fulfils it with a specific error instead of returning NULL.
+   * Captured into a local now: once hop 0 is queued
    * below, a worker may run the request to completion and free the chain
    * via _async_chain_release before this function's own thread runs another
    * instruction; reading chain->future afterward would be a
@@ -8180,11 +8148,11 @@ static ctpool_future *_chttp_do_async_internal(struct chttpclient *cli,
    * how it already handles req_headers/body_data/body_content_type); this
    * function's own local copy is never retained beyond this call, whether
    * or not chain creation succeeded. */
-  _mem_free(mp, initial_origin_key);
+  _ccol_mem_free(mp, initial_origin_key);
   if (!chain) {
     if (tls_ctx) ctls_ctx_release(tls_ctx);
     /* _async_chain_create fails only on an allocation failure (calloc,
-     * mutex_init, or one of the deep-copy allocations it performs), so
+     * ccol_mutex_init, or one of the deep-copy allocations it performs), so
      * ccol_not_enough_memory is always the accurate cause here. Reported
      * via a real chttpcli_async_result_t (mirroring exactly what
      * _async_fulfill_chain builds on its own success path) rather than
@@ -8199,7 +8167,7 @@ static ctpool_future *_chttp_do_async_internal(struct chttpclient *cli,
      * uses when it can't even allocate ITS result struct) if this smaller
      * allocation also fails. */
     chttpcli_async_result_t *result =
-        (chttpcli_async_result_t *)_mem_calloc(mp, 1, sizeof(*result));
+        (chttpcli_async_result_t *)_ccol_mem_calloc(mp, 1, sizeof(*result));
     if (result) {
       result->rv = ccol_not_enough_memory;
       result->resp = NULL;
@@ -8221,9 +8189,9 @@ static ctpool_future *_chttp_do_async_internal(struct chttpclient *cli,
 
 /* White-box test helpers exposing internal engine state. Not part of the
  * public API; gated so these symbols do not leak into a production build
- * of libccollections.so (the surrounding engine code itself is no longer
- * gated now that chttpclient_do_async/_streaming are real public callers,
- * but these five functions exist purely for test instrumentation). */
+ * of libccollections.so (the surrounding engine code itself is not gated,
+ * since chttpclient_do_async/_streaming are real public callers; these
+ * functions exist purely for test instrumentation). */
 #ifdef RUNNING_UNIT_TESTS
 /* Exposes sizeof(chttp_async_chain_t) (an internal, non-public type) so a
  * test can build a size-targeted fault-injecting allocator that fails
@@ -8237,18 +8205,18 @@ size_t _chttp_async_chain_struct_size_for_tests(void) {
 }
 
 int _chttpclient_engine_ref_count_for_tests(void) {
-  call_once(cli_engine_bundler.once, _client_engine_globals_init);
-  mutex_lock(cli_engine_bundler.mutex);
+  ccol_call_once(cli_engine_bundler.once, _client_engine_globals_init);
+  ccol_mutex_lock(cli_engine_bundler.mutex);
   int n = (int)cli_engine_bundler.reactor_refs;
-  mutex_unlock(cli_engine_bundler.mutex);
+  ccol_mutex_unlock(cli_engine_bundler.mutex);
   return n;
 }
 
 bool _chttpclient_engine_running_for_tests(void) {
-  call_once(cli_engine_bundler.once, _client_engine_globals_init);
-  mutex_lock(cli_engine_bundler.mutex);
-  bool running = (cli_engine_bundler.reactor != EVENT_LOOP_INVALID);
-  mutex_unlock(cli_engine_bundler.mutex);
+  ccol_call_once(cli_engine_bundler.once, _client_engine_globals_init);
+  ccol_mutex_lock(cli_engine_bundler.mutex);
+  bool running = (cli_engine_bundler.reactor != CCOL_EVENT_LOOP_INVALID);
+  ccol_mutex_unlock(cli_engine_bundler.mutex);
   return running;
 }
 
@@ -8263,10 +8231,10 @@ void _chttpclient_engine_wait_for_quiescence_for_tests(void) {
 }
 
 size_t _chttpclient_engine_num_reactor_threads_for_tests(void) {
-  call_once(cli_engine_bundler.once, _client_engine_globals_init);
-  mutex_lock(cli_engine_bundler.mutex);
+  ccol_call_once(cli_engine_bundler.once, _client_engine_globals_init);
+  ccol_mutex_lock(cli_engine_bundler.mutex);
   size_t n = cli_engine_bundler.last_resolved_num_reactor_threads;
-  mutex_unlock(cli_engine_bundler.mutex);
+  ccol_mutex_unlock(cli_engine_bundler.mutex);
   return n;
 }
 
@@ -8277,7 +8245,7 @@ size_t _chttpclient_engine_num_reactor_threads_for_tests(void) {
  * Test-only: exists purely to make the staleness-eviction path in
  * _async_idle_pool_take deterministically reachable. */
 void _chttpclient_force_async_idle_stale_for_tests(struct chttpclient *cli) {
-  mutex_lock(cli->lock);
+  ccol_mutex_lock(cli->lock);
   if (cli->idle_pools_async) {
     cmap_iterator *it = chashmap_begin_iter(cli->idle_pools_async, NULL);
     for (; it; it = it->_next_fn(it)) {
@@ -8290,7 +8258,7 @@ void _chttpclient_force_async_idle_stale_for_tests(struct chttpclient *cli) {
       }
     }
   }
-  mutex_unlock(cli->lock);
+  ccol_mutex_unlock(cli->lock);
 }
 
 /* Reads cli->idle_total_count_async: how many connections are currently
@@ -8301,9 +8269,9 @@ void _chttpclient_force_async_idle_stale_for_tests(struct chttpclient *cli) {
  * zero too") that holds regardless of exactly which internal allocation an
  * injected OOM failure happens to land on. */
 size_t _chttpclient_async_idle_total_count_for_tests(struct chttpclient *cli) {
-  mutex_lock(cli->lock);
+  ccol_mutex_lock(cli->lock);
   size_t n = cli->idle_total_count_async;
-  mutex_unlock(cli->lock);
+  ccol_mutex_unlock(cli->lock);
   return n;
 }
 
@@ -8313,9 +8281,9 @@ size_t _chttpclient_async_idle_total_count_for_tests(struct chttpclient *cli) {
  * chmap entry, rather than merely leaving an empty per-origin cvec behind
  * forever (see _idle_pool_take's own pruning comment). */
 size_t _chttpclient_idle_pools_key_count_for_tests(struct chttpclient *cli) {
-  mutex_lock(cli->lock);
+  ccol_mutex_lock(cli->lock);
   size_t n = cli->idle_pools ? chmap_elem_count(cli->idle_pools) : 0;
-  mutex_unlock(cli->lock);
+  ccol_mutex_unlock(cli->lock);
   return n;
 }
 
@@ -8323,10 +8291,10 @@ size_t _chttpclient_idle_pools_key_count_for_tests(struct chttpclient *cli) {
  * tests above, for cli->idle_pools_async. */
 size_t _chttpclient_idle_pools_async_key_count_for_tests(
     struct chttpclient *cli) {
-  mutex_lock(cli->lock);
+  ccol_mutex_lock(cli->lock);
   size_t n =
       cli->idle_pools_async ? chmap_elem_count(cli->idle_pools_async) : 0;
-  mutex_unlock(cli->lock);
+  ccol_mutex_unlock(cli->lock);
   return n;
 }
 
@@ -8349,18 +8317,18 @@ void _chttpclient_set_max_idle_origins_for_tests(size_t n) {
  * client, silently hanging every future chttpclient_destroy call against
  * it). Returns NULL under the exact same conditions _chttpcli_resolve does. */
 struct chttpclient *_chttpcli_resolve_for_tests(chttpcli h) {
-  call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
+  ccol_call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
   if (h == 0) return NULL;
   uint32_t idx = (uint32_t)(h >> 32);
   uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
-  rw_lock_rdlock(chttpcli_slot_table.rwlock);
+  ccol_rw_lock_rdlock(chttpcli_slot_table.rwlock);
   struct chttpclient *raw = NULL;
   if (idx < cvector_elem_count(chttpcli_slot_table.slots)) {
     chttpcli_slot_t *slot =
         (chttpcli_slot_t *)cvector_at(chttpcli_slot_table.slots, idx);
     if (slot->in_use && slot->generation == gen) raw = slot->ptr;
   }
-  rw_lock_unlock(chttpcli_slot_table.rwlock);
+  ccol_rw_lock_unlock(chttpcli_slot_table.rwlock);
   return raw;
 }
 
@@ -8369,10 +8337,10 @@ struct chttpclient *_chttpcli_resolve_for_tests(chttpcli h) {
  * create/destroy churn loop reuses freed slots rather than growing the
  * table without bound. */
 size_t _chttpcli_slot_table_capacity_for_tests(void) {
-  call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
-  rw_lock_rdlock(chttpcli_slot_table.rwlock);
+  ccol_call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
+  ccol_rw_lock_rdlock(chttpcli_slot_table.rwlock);
   size_t n = cvector_elem_count(chttpcli_slot_table.slots);
-  rw_lock_unlock(chttpcli_slot_table.rwlock);
+  ccol_rw_lock_unlock(chttpcli_slot_table.rwlock);
   return n;
 }
 
@@ -8388,7 +8356,7 @@ void _chttpclient_force_offer_push_fail_once_for_tests(void) {
   atomic_store(&g_force_offer_push_fail_for_tests, true);
 }
 
-/* Forces _async_submit_hop's very next reused-connection event_loop_modify
+/* Forces _async_submit_hop's very next reused-connection ccol_event_loop_modify
  * call (for any client) to be treated as if it had failed, without actually
  * touching the real registration at all. Consumed automatically the first
  * time that call site is reached afterward. See
@@ -8438,7 +8406,7 @@ chttpcli_async_result_t *chttpclient_async_result_get(ctpool_future *f) {
 
 void chttpclient_async_result_free(chttpcli_async_result_t *result) {
   if (!result) return;
-  _mem_free(result->_m_procs, result);
+  _ccol_mem_free(result->_m_procs, result);
 }
 
 /* ========================================================================== */
@@ -8534,7 +8502,7 @@ ccol_retval_t chttpclient_do_pooled_streaming(chttpcli h,
     /* Streaming's chttpcli_response always exists internally (its body/
      * headers just stay NULL; see _async_build_response) purely so
      * status_code has somewhere to travel through the single
-     * chttpcli_async_result_t.resp channel; this function's own public
+     * chttpcli_async_result_t.resp field; this function's own public
      * contract has no resp_out at all (mirrors chttpclient_do_streaming
      * exactly), so it is unwrapped and freed here, never exposed. */
     if (rv == ccol_success && status_code_out) {
@@ -8551,7 +8519,8 @@ ccol_retval_t chttpclient_do_pooled_streaming(chttpcli h,
 /*                         CLIENT CONSTRUCTORS                                */
 /* ========================================================================== */
 
-chttpcli create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
+chttpcli ccol_create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs,
+                                    char **err_str) {
   if (mprocs && !ccol_verify_memmgmt_procs(mprocs, err_str))
     return CHTTPCLI_INVALID;
 
@@ -8562,11 +8531,11 @@ chttpcli create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
       if (err_str) *err_str = CCOL_ERR_STR("failed to allocate mprocs");
       return CHTTPCLI_INVALID;
     }
-    mem_cpy(mp, mprocs, sizeof(ccol_memmgmt_procs_t));
+    ccol_mem_cpy(mp, mprocs, sizeof(ccol_memmgmt_procs_t));
   }
 
   struct chttpclient *cli =
-      (struct chttpclient *)_mem_calloc(mp, 1, sizeof(struct chttpclient));
+      (struct chttpclient *)_ccol_mem_calloc(mp, 1, sizeof(struct chttpclient));
   if (!cli) {
     if (err_str) *err_str = CCOL_ERR_STR("failed to allocate client");
     if (mp) mp->free(mp);
@@ -8575,82 +8544,83 @@ chttpcli create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
 
   cli->m_procs = mp;
   cli->tls = CHTTP_TLS_DEFAULT;
-  if (mutex_init(cli->lock) != 0) {
+  if (ccol_mutex_init(cli->lock) != 0) {
     if (err_str) *err_str = CCOL_ERR_STR("failed to initialize mutex");
-    _mem_free(mp, cli);
+    _ccol_mem_free(mp, cli);
     if (mp) mp->free(mp);
     return CHTTPCLI_INVALID;
   }
   /* CLOCK_MONOTONIC: _slot_acquire hands this condvar a CLOCK_MONOTONIC
-   * timespec (from _deadline_make) via cond_var_timedwait; see
-   * _cond_var_init_monotonic's own comment for why the clock must match. */
-  if (_cond_var_init_monotonic(&cli->available) != 0) {
+   * timespec (from _deadline_make) via ccol_cond_var_timedwait; see
+   * _ccol_cond_var_init_monotonic's own comment for why the clock must match.
+   */
+  if (_ccol_cond_var_init_monotonic(&cli->available) != 0) {
     if (err_str)
       *err_str = CCOL_ERR_STR("failed to initialize condition variable");
-    mutex_destroy(cli->lock);
-    _mem_free(mp, cli);
+    ccol_mutex_destroy(cli->lock);
+    _ccol_mem_free(mp, cli);
     if (mp) mp->free(mp);
     return CHTTPCLI_INVALID;
   }
-  if (cond_var_init(cli->idle_async_drained) != 0) {
+  if (ccol_cond_var_init(cli->idle_async_drained) != 0) {
     if (err_str)
       *err_str = CCOL_ERR_STR("failed to initialize condition variable");
-    mutex_destroy(cli->lock);
-    cond_var_destroy(cli->available);
-    _mem_free(mp, cli);
+    ccol_mutex_destroy(cli->lock);
+    ccol_cond_var_destroy(cli->available);
+    _ccol_mem_free(mp, cli);
     if (mp) mp->free(mp);
     return CHTTPCLI_INVALID;
   }
-  if (mutex_init(cli->async_count_lock) != 0) {
+  if (ccol_mutex_init(cli->async_count_lock) != 0) {
     if (err_str) *err_str = CCOL_ERR_STR("failed to initialize mutex");
-    mutex_destroy(cli->lock);
-    cond_var_destroy(cli->available);
-    cond_var_destroy(cli->idle_async_drained);
-    _mem_free(mp, cli);
+    ccol_mutex_destroy(cli->lock);
+    ccol_cond_var_destroy(cli->available);
+    ccol_cond_var_destroy(cli->idle_async_drained);
+    _ccol_mem_free(mp, cli);
     if (mp) mp->free(mp);
     return CHTTPCLI_INVALID;
   }
-  if (cond_var_init(cli->async_count_drained) != 0) {
+  if (ccol_cond_var_init(cli->async_count_drained) != 0) {
     if (err_str)
       *err_str = CCOL_ERR_STR("failed to initialize condition variable");
-    mutex_destroy(cli->lock);
-    cond_var_destroy(cli->available);
-    cond_var_destroy(cli->idle_async_drained);
-    mutex_destroy(cli->async_count_lock);
-    _mem_free(mp, cli);
+    ccol_mutex_destroy(cli->lock);
+    ccol_cond_var_destroy(cli->available);
+    ccol_cond_var_destroy(cli->idle_async_drained);
+    ccol_mutex_destroy(cli->async_count_lock);
+    _ccol_mem_free(mp, cli);
     if (mp) mp->free(mp);
     return CHTTPCLI_INVALID;
   }
 
   char *herr = NULL;
   cli->idle_pools =
-      chmap_create_full(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, ccol_string,
+      chmap_create_full(CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, ccol_string,
                         ccol_pointer, mp, NULL, &herr);
   if (!cli->idle_pools) {
     if (err_str) *err_str = CCOL_ERR_STR("failed to allocate idle pool map");
-    mutex_destroy(cli->lock);
-    cond_var_destroy(cli->available);
-    cond_var_destroy(cli->idle_async_drained);
-    mutex_destroy(cli->async_count_lock);
-    cond_var_destroy(cli->async_count_drained);
-    _mem_free(mp, cli);
+    ccol_mutex_destroy(cli->lock);
+    ccol_cond_var_destroy(cli->available);
+    ccol_cond_var_destroy(cli->idle_async_drained);
+    ccol_mutex_destroy(cli->async_count_lock);
+    ccol_cond_var_destroy(cli->async_count_drained);
+    _ccol_mem_free(mp, cli);
     if (mp) mp->free(mp);
     return CHTTPCLI_INVALID;
   }
 
   cli->idle_pools_async =
-      chmap_create_full(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, ccol_string,
+      chmap_create_full(CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, ccol_string,
                         ccol_pointer, mp, NULL, &herr);
   if (!cli->idle_pools_async) {
     if (err_str)
       *err_str = CCOL_ERR_STR("failed to allocate async idle pool map");
     __chmap_destroy(cli->idle_pools);
-    mutex_destroy(cli->lock);
-    cond_var_destroy(cli->available);
-    cond_var_destroy(cli->idle_async_drained);
-    mutex_destroy(cli->async_count_lock);
-    cond_var_destroy(cli->async_count_drained);
-    _mem_free(mp, cli);
+    ccol_mutex_destroy(cli->lock);
+    ccol_cond_var_destroy(cli->available);
+    ccol_cond_var_destroy(cli->idle_async_drained);
+    ccol_mutex_destroy(cli->async_count_lock);
+    ccol_cond_var_destroy(cli->async_count_drained);
+    _ccol_mem_free(mp, cli);
     if (mp) mp->free(mp);
     return CHTTPCLI_INVALID;
   }
@@ -8659,12 +8629,12 @@ chttpcli create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
     if (err_str) *err_str = CCOL_ERR_STR("failed to build default TLS context");
     __chmap_destroy(cli->idle_pools);
     __chmap_destroy(cli->idle_pools_async);
-    mutex_destroy(cli->lock);
-    cond_var_destroy(cli->available);
-    cond_var_destroy(cli->idle_async_drained);
-    mutex_destroy(cli->async_count_lock);
-    cond_var_destroy(cli->async_count_drained);
-    _mem_free(mp, cli);
+    ccol_mutex_destroy(cli->lock);
+    ccol_cond_var_destroy(cli->available);
+    ccol_cond_var_destroy(cli->idle_async_drained);
+    ccol_mutex_destroy(cli->async_count_lock);
+    ccol_cond_var_destroy(cli->async_count_drained);
+    _ccol_mem_free(mp, cli);
     if (mp) mp->free(mp);
     return CHTTPCLI_INVALID;
   }
@@ -8675,12 +8645,12 @@ chttpcli create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
     if (cli->tls_ctx) ctls_ctx_release(cli->tls_ctx);
     __chmap_destroy(cli->idle_pools);
     __chmap_destroy(cli->idle_pools_async);
-    mutex_destroy(cli->lock);
-    cond_var_destroy(cli->available);
-    cond_var_destroy(cli->idle_async_drained);
-    mutex_destroy(cli->async_count_lock);
-    cond_var_destroy(cli->async_count_drained);
-    _mem_free(mp, cli);
+    ccol_mutex_destroy(cli->lock);
+    ccol_cond_var_destroy(cli->available);
+    ccol_cond_var_destroy(cli->idle_async_drained);
+    ccol_mutex_destroy(cli->async_count_lock);
+    ccol_cond_var_destroy(cli->async_count_drained);
+    _ccol_mem_free(mp, cli);
     if (mp) mp->free(mp);
     return CHTTPCLI_INVALID;
   }
@@ -8694,12 +8664,12 @@ chttpcli create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
 ccol_retval_t chttpclient_set_pool_size(chttpcli h, size_t n) {
   struct chttpclient *cli = _chttpcli_resolve(h);
   if (!cli) return ccol_invalid_args;
-  mutex_lock(cli->lock);
+  ccol_mutex_lock(cli->lock);
   cli->configured_pool_size = n;
   cli->pool_cap = _resolve_pool_cap(n);
   cli->pool_initialized = true;
-  cond_var_broadcast(cli->available);
-  mutex_unlock(cli->lock);
+  ccol_cond_var_broadcast(cli->available);
+  ccol_mutex_unlock(cli->lock);
   _chttpcli_resolve_unpin(cli);
   return ccol_success;
 }
@@ -8707,9 +8677,9 @@ ccol_retval_t chttpclient_set_pool_size(chttpcli h, size_t n) {
 ccol_retval_t chttpclient_set_connect_timeout(chttpcli h, long ms) {
   struct chttpclient *cli = _chttpcli_resolve(h);
   if (!cli) return ccol_invalid_args;
-  mutex_lock(cli->lock);
+  ccol_mutex_lock(cli->lock);
   cli->connect_timeout_ms = ms;
-  mutex_unlock(cli->lock);
+  ccol_mutex_unlock(cli->lock);
   _chttpcli_resolve_unpin(cli);
   return ccol_success;
 }
@@ -8717,9 +8687,9 @@ ccol_retval_t chttpclient_set_connect_timeout(chttpcli h, long ms) {
 ccol_retval_t chttpclient_set_request_timeout(chttpcli h, long ms) {
   struct chttpclient *cli = _chttpcli_resolve(h);
   if (!cli) return ccol_invalid_args;
-  mutex_lock(cli->lock);
+  ccol_mutex_lock(cli->lock);
   cli->request_timeout_ms = ms;
-  mutex_unlock(cli->lock);
+  ccol_mutex_unlock(cli->lock);
   _chttpcli_resolve_unpin(cli);
   return ccol_success;
 }
@@ -8728,9 +8698,9 @@ ccol_retval_t chttpclient_set_max_response_body_size(chttpcli h,
                                                      size_t max_bytes) {
   struct chttpclient *cli = _chttpcli_resolve(h);
   if (!cli) return ccol_invalid_args;
-  mutex_lock(cli->lock);
+  ccol_mutex_lock(cli->lock);
   cli->max_response_body_size = max_bytes;
-  mutex_unlock(cli->lock);
+  ccol_mutex_unlock(cli->lock);
   _chttpcli_resolve_unpin(cli);
   return ccol_success;
 }
@@ -8753,17 +8723,17 @@ ccol_retval_t chttpclient_set_tls(chttpcli h, const chttp_tls_config_t *tls) {
   struct chttpclient *cli = _chttpcli_resolve(h);
   if (!cli) return ccol_invalid_args;
 
-  mutex_lock(cli->lock);
+  ccol_mutex_lock(cli->lock);
 
-  _mem_free(cli->m_procs, cli->owned_cert_path);
-  _mem_free(cli->m_procs, cli->owned_key_path);
-  _mem_free(cli->m_procs, cli->owned_ca_bundle_path);
+  _ccol_mem_free(cli->m_procs, cli->owned_cert_path);
+  _ccol_mem_free(cli->m_procs, cli->owned_key_path);
+  _ccol_mem_free(cli->m_procs, cli->owned_ca_bundle_path);
   cli->owned_cert_path = cli->owned_key_path = cli->owned_ca_bundle_path = NULL;
 
   if (!tls) {
     cli->tls = CHTTP_TLS_DEFAULT;
     ccol_retval_t rv = _rebuild_tls_ctx_locked(cli);
-    mutex_unlock(cli->lock);
+    ccol_mutex_unlock(cli->lock);
     _chttpcli_resolve_unpin(cli); /* exit 1 of 4 */
     return rv;
   }
@@ -8788,15 +8758,15 @@ ccol_retval_t chttpclient_set_tls(chttpcli h, const chttp_tls_config_t *tls) {
 
   {
     ccol_retval_t rv = _rebuild_tls_ctx_locked(cli);
-    mutex_unlock(cli->lock);
+    ccol_mutex_unlock(cli->lock);
     _chttpcli_resolve_unpin(cli); /* exit 2 of 4 */
     return rv;
   }
 
 oom:
-  _mem_free(cli->m_procs, cli->owned_cert_path);
-  _mem_free(cli->m_procs, cli->owned_key_path);
-  _mem_free(cli->m_procs, cli->owned_ca_bundle_path);
+  _ccol_mem_free(cli->m_procs, cli->owned_cert_path);
+  _ccol_mem_free(cli->m_procs, cli->owned_key_path);
+  _ccol_mem_free(cli->m_procs, cli->owned_ca_bundle_path);
   cli->owned_cert_path = cli->owned_key_path = cli->owned_ca_bundle_path = NULL;
   cli->tls = CHTTP_TLS_DEFAULT;
   /* cli->tls_ctx/tls_ctx_usable still describe whatever configuration was
@@ -8812,7 +8782,7 @@ oom:
    * whatever rebuilding a plain default config does or doesn't need to
    * allocate. */
   _rebuild_tls_ctx_locked(cli);
-  mutex_unlock(cli->lock);
+  ccol_mutex_unlock(cli->lock);
   _chttpcli_resolve_unpin(cli); /* exit 3 of 4 (reachable from all three
                                     strdup failure checks above) */
   return ccol_not_enough_memory;
@@ -8826,18 +8796,19 @@ void __chttpclient_destroy(chttpcli cli) {
   if (!cli) return;
 
   /* Defensive: if the caller passed the handle chttp_default_client()
-   * returns (its own doc comment invites passing it to chttpclient_set_*,
-   * and nothing stops a caller from also passing it here), clear the
-   * singleton's own copy of this handle first. Without this,
-   * default_client_bundler.client would keep holding a handle this call is
-   * about to invalidate; both handed straight back out by any later
+   * returns (its own doc comment invites passing it to chttpclient_set_*, and
+   * nothing stops a caller from also passing it here), clear the singleton's
+   * own copy of this handle first. Without this, default_client_bundler.client
+   * would keep holding a handle this call is about to invalidate; both handed
+   * straight back out by any later
    * chttp_default_client()/chttp_do()/chttp_get() call in this process (a
    * use-after-destroy, since default_client_bundler.once never re-fires to
-   * rebuild it), and destroyed a second time by this file's own
-   * process-exit destructor, which is now exactly the fatal double-destroy
-   * this redesign exists to catch rather than a silent double-free. A no-op
-   * (compare-and-swap fails harmlessly) for any client actually created via
-   * create_chttpclient/_mp, which can never equal this singleton's handle. */
+   * rebuild it), and destroyed a second time by this file's own process-exit
+   * destructor, which the generation-checked handle design reports as a fatal
+   * double-destroy rather than a silent double-free. A no-op (compare-and-swap
+   * fails harmlessly) for any client actually created via
+   * ccol_create_chttpclient/_mp, which can never equal this singleton's handle.
+   */
   chttpcli expected = cli;
   atomic_compare_exchange_strong(&default_client_bundler.client, &expected, 0);
 
@@ -8847,12 +8818,13 @@ void __chttpclient_destroy(chttpcli cli) {
    * see a resolve failure rather than racing this call's own teardown; see
    * the slot table's own file-level comment and _chttpcli_resolve's
    * comment for the full design. A stale or already-destroyed handle
-   * reaching here is exactly the misuse this redesign exists to catch: it
-   * is fatal, not a silent use-after-free/double-free. */
-  call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
+   * reaching here is exactly the misuse the generation-checked handle
+   * design exists to catch: it is fatal, not a silent
+   * use-after-free/double-free. */
+  ccol_call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
   uint32_t idx = (uint32_t)(cli >> 32);
   uint32_t gen = (uint32_t)(cli & 0xFFFFFFFFu);
-  rw_lock_wrlock(chttpcli_slot_table.rwlock);
+  ccol_rw_lock_wrlock(chttpcli_slot_table.rwlock);
   chttpcli_slot_t *slot = NULL;
   struct chttpclient *raw = NULL;
   if (idx < cvector_elem_count(chttpcli_slot_table.slots)) {
@@ -8864,26 +8836,26 @@ void __chttpclient_destroy(chttpcli cli) {
     }
   }
   if (!raw) {
-    rw_lock_unlock(chttpcli_slot_table.rwlock);
-    fatal_err(
+    ccol_rw_lock_unlock(chttpcli_slot_table.rwlock);
+    ccol_fatal_err(
         "chttpclient_destroy: handle is stale or already destroyed "
         "(double-destroy / use-after-destroy of a chttpcli handle)");
   }
   slot->in_use = false; /* blocks ALL future resolves for this handle from
                             this instant, including a second concurrent
                             destroy attempt */
-  rw_lock_unlock(chttpcli_slot_table.rwlock);
+  ccol_rw_lock_unlock(chttpcli_slot_table.rwlock);
 
-  mutex_lock(raw->lock);
+  ccol_mutex_lock(raw->lock);
   raw->destroying = true;
-  cond_var_broadcast(raw->available);
+  ccol_cond_var_broadcast(raw->available);
   /* Combined predicate, not two sequential loops: pending_resolve_count
    * (see that field's own comment on struct chttpclient) and in_flight_count
    * both independently gate "is anyone still touching this object". */
   while (atomic_load(&raw->pending_resolve_count) > 0 ||
          raw->in_flight_count > 0)
-    cond_var_wait(raw->available, raw->lock);
-  mutex_unlock(raw->lock);
+    ccol_cond_var_wait(raw->available, raw->lock);
+  ccol_mutex_unlock(raw->lock);
 
   /* Wait for every ACTIVE (not yet idle-pooled) Tier 2/3 async chain
    * created for this client to finish before touching anything else below:
@@ -8899,10 +8871,10 @@ void __chttpclient_destroy(chttpcli cli) {
    * draining below: an active chain completing while this wait is still in
    * progress is exactly what is expected to feed fresh entries into that
    * pool, which the idle-pool draining logic then cleans up. */
-  mutex_lock(raw->async_count_lock);
+  ccol_mutex_lock(raw->async_count_lock);
   while (raw->async_in_flight_count > 0)
-    cond_var_wait(raw->async_count_drained, raw->async_count_lock);
-  mutex_unlock(raw->async_count_lock);
+    ccol_cond_var_wait(raw->async_count_drained, raw->async_count_lock);
+  ccol_mutex_unlock(raw->async_count_lock);
 
   if (raw->idle_pools) {
     cmap_iterator *it = chashmap_begin_iter(raw->idle_pools, NULL);
@@ -8931,7 +8903,7 @@ void __chttpclient_destroy(chttpcli cli) {
    * like the deadline sweep's identical use of it: it has no synchronous
    * application-level callback of its own, so there is no
    * reentrancy/lock-order hazard in calling it from inside this loop. */
-  mutex_lock(raw->lock);
+  ccol_mutex_lock(raw->lock);
   if (raw->idle_pools_async) {
     cmap_iterator *ait = chashmap_begin_iter(raw->idle_pools_async, NULL);
     for (; ait; ait = ait->_next_fn(ait)) {
@@ -8960,8 +8932,8 @@ void __chttpclient_destroy(chttpcli cli) {
    * _async_ctx_teardown actually runs, so that earlier wait cannot have
    * returned while one is still pending either. */
   while (raw->idle_total_count_async > 0)
-    cond_var_wait(raw->idle_async_drained, raw->lock);
-  mutex_unlock(raw->lock);
+    ccol_cond_var_wait(raw->idle_async_drained, raw->lock);
+  ccol_mutex_unlock(raw->lock);
 
   if (raw->idle_pools_async) {
     cmap_iterator *it = chashmap_begin_iter(raw->idle_pools_async, NULL);
@@ -8974,28 +8946,28 @@ void __chttpclient_destroy(chttpcli cli) {
 
   if (raw->tls_ctx) ctls_ctx_release(raw->tls_ctx);
 
-  mutex_destroy(raw->lock);
-  cond_var_destroy(raw->available);
-  cond_var_destroy(raw->idle_async_drained);
-  mutex_destroy(raw->async_count_lock);
-  cond_var_destroy(raw->async_count_drained);
+  ccol_mutex_destroy(raw->lock);
+  ccol_cond_var_destroy(raw->available);
+  ccol_cond_var_destroy(raw->idle_async_drained);
+  ccol_mutex_destroy(raw->async_count_lock);
+  ccol_cond_var_destroy(raw->async_count_drained);
 
   ccol_memmgmt_procs_t *mp = raw->m_procs;
-  _mem_free(mp, raw->owned_cert_path);
-  _mem_free(mp, raw->owned_key_path);
-  _mem_free(mp, raw->owned_ca_bundle_path);
-  _mem_free(mp, raw);
+  _ccol_mem_free(mp, raw->owned_cert_path);
+  _ccol_mem_free(mp, raw->owned_key_path);
+  _ccol_mem_free(mp, raw->owned_ca_bundle_path);
+  _ccol_mem_free(mp, raw);
   if (mp) mp->free(mp);
 
   /* Release the slot last, only after raw is fully torn down and freed:
    * this is what makes the slot's generation bump (and the free-index
-   * push-back) mark the handle as reusable, not any earlier step. Re-fetch
-   * by idx rather than reusing `slot`: a concurrent create_chttpclient_mp's
+   * push-back) mark the handle as reusable, not any earlier step. Re-fetch by
+   * idx rather than reusing `slot`: a concurrent ccol_create_chttpclient_mp's
    * own _chttpcli_handle_slot_acquire call in between may have reallocated
-   * slots' backing array via cvector_push_back, invalidating any pointer
-   * into it taken before this second lock acquisition; idx itself is
+   * slots' backing array via cvector_push_back, invalidating any pointer into
+   * it taken before this second lock acquisition; idx itself is
    * stable. */
-  rw_lock_wrlock(chttpcli_slot_table.rwlock);
+  ccol_rw_lock_wrlock(chttpcli_slot_table.rwlock);
   chttpcli_slot_t *slot2 =
       (chttpcli_slot_t *)cvector_at(chttpcli_slot_table.slots, idx);
   slot2->ptr = NULL;
@@ -9003,7 +8975,7 @@ void __chttpclient_destroy(chttpcli cli) {
       the just-freed cli's handle carried, so that stale handle can never
       again match a FUTURE acquire's generation for this same index */
   cvector_push_back(chttpcli_slot_table.free_indices, &idx);
-  rw_lock_unlock(chttpcli_slot_table.rwlock);
+  ccol_rw_lock_unlock(chttpcli_slot_table.rwlock);
 }
 
 /* ========================================================================== */
@@ -9019,8 +8991,7 @@ void __chttpclient_destroy(chttpcli cli) {
  * body.len > 0, matching _serialize_request's own condition for having
  * emitted the "expect: 100-continue" header in the first place).
  *
- * Non-100-continue case: unchanged single-shot send-then-read, exactly what
- * this logic looked like before this function existed.
+ * Non-100-continue case: a single-shot send, then read.
  *
  * 100-continue case: sends only the header portion first, then waits up to
  * CHTTP_100_CONTINUE_WAIT_MS (bounded by whatever is left of `overall`) for
@@ -9111,7 +9082,7 @@ static ccol_retval_t _chttp_send_and_read(
                                 any_bytes_read_out);
   }
   if (prv != ccol_success) {
-    _mem_free(pctx->mp, leftover);
+    _ccol_mem_free(pctx->mp, leftover);
     return prv;
   }
 
@@ -9132,19 +9103,19 @@ static ccol_retval_t _chttp_send_and_read(
      * whose body was never sent), tracked here purely for diagnostics. */
     *keep_alive_out = false;
     if (leftover_len > 0) pctx->trailing_garbage = true;
-    _mem_free(pctx->mp, leftover);
+    _ccol_mem_free(pctx->mp, leftover);
     return ccol_success;
   }
 
   prv = _parse_ctx_reset_for_continue(pctx);
   if (prv != ccol_success) {
-    _mem_free(pctx->mp, leftover);
+    _ccol_mem_free(pctx->mp, leftover);
     return prv;
   }
 
   prv = _chttp_send_all(conn, wire + header_len, body_len, overall);
   if (prv != ccol_success) {
-    _mem_free(pctx->mp, leftover);
+    _ccol_mem_free(pctx->mp, leftover);
     return prv;
   }
   /* The body has now been handed to a connection the server itself just
@@ -9157,7 +9128,7 @@ static ccol_retval_t _chttp_send_and_read(
   *any_bytes_read_out = false;
   prv = _chttp_read_response_carry(conn, pctx, overall, leftover, leftover_len,
                                    keep_alive_out, any_bytes_read_out);
-  _mem_free(pctx->mp, leftover);
+  _ccol_mem_free(pctx->mp, leftover);
   return prv;
 }
 
@@ -9175,8 +9146,7 @@ static ccol_retval_t chttp_do_internal(
    * call with NULL specifically to license an unconditional-free cleanup
    * idiom (`resp = NULL; rv = chttpclient_do(...); ...;
    * chttpclient_resp_free(resp);`), and chttpclient_do_pooled/_streaming
-   * (Tier 3) already do exactly this; Tier 1 not doing the same was a real
-   * gap, not a documented contract. */
+   * (Tier 3) rely on exactly this; Tier 1 must behave identically. */
   if (!streaming) {
     if (!resp_out) return ccol_invalid_args;
     *resp_out = NULL;
@@ -9192,9 +9162,9 @@ static ccol_retval_t chttp_do_internal(
    * (chttpclient_set_pool_size) must count against it too. _slot_acquire is
    * itself deadline-aware for exactly this reason; see its own comment. */
   long request_timeout_ms;
-  mutex_lock(cli->lock);
+  ccol_mutex_lock(cli->lock);
   request_timeout_ms = cli->request_timeout_ms;
-  mutex_unlock(cli->lock);
+  ccol_mutex_unlock(cli->lock);
   chttp_deadline_t overall_dl = _deadline_make(request_timeout_ms);
 
   ccol_retval_t rv = _slot_acquire(cli, &overall_dl);
@@ -9207,7 +9177,7 @@ static ccol_retval_t chttp_do_internal(
   ctls_ctx_t *tls_ctx;
   bool tls_ctx_usable;
   size_t max_response_body_size;
-  mutex_lock(cli->lock);
+  ccol_mutex_lock(cli->lock);
   connect_timeout_ms = cli->connect_timeout_ms;
   tls_cfg = cli->tls;
   tls_ctx = cli->tls_ctx;
@@ -9216,7 +9186,7 @@ static ccol_retval_t chttp_do_internal(
   if (tls_ctx)
     ctls_ctx_retain(
         tls_ctx); /* pin: a concurrent set_tls must not free this under us */
-  mutex_unlock(cli->lock);
+  ccol_mutex_unlock(cli->lock);
 
   char *cur_url = ccol_strdup(mp, req->url);
   if (!cur_url) {
@@ -9300,20 +9270,20 @@ static ccol_retval_t chttp_do_internal(
       char *na = ccol_strdup(mp, url.userinfo_authorization);
       char *no = ccol_strdup(mp, url.origin_key);
       if (!na || !no) {
-        _mem_free(mp, na);
-        _mem_free(mp, no);
+        _ccol_mem_free(mp, na);
+        _ccol_mem_free(mp, no);
         _url_free(mp, &url);
         result = ccol_not_enough_memory;
         break;
       }
-      _mem_free(mp, carried_auth);
-      _mem_free(mp, carried_auth_origin);
+      _ccol_mem_free(mp, carried_auth);
+      _ccol_mem_free(mp, carried_auth_origin);
       carried_auth = na;
       carried_auth_origin = no;
     } else if (carried_auth &&
                strcmp(carried_auth_origin, url.origin_key) != 0) {
-      _mem_free(mp, carried_auth);
-      _mem_free(mp, carried_auth_origin);
+      _ccol_mem_free(mp, carried_auth);
+      _ccol_mem_free(mp, carried_auth_origin);
       carried_auth = NULL;
       carried_auth_origin = NULL;
     }
@@ -9342,7 +9312,7 @@ static ccol_retval_t chttp_do_internal(
       prv = _conn_open(mp, &url, url.is_https, tls_ctx, tls_cfg.verify_host,
                        &connect_dl, &overall_dl, &conn);
       if (prv != ccol_success) {
-        _mem_free(mp, wire);
+        _ccol_mem_free(mp, wire);
         _url_free(mp, &url);
         result = prv;
         break;
@@ -9362,10 +9332,10 @@ static ccol_retval_t chttp_do_internal(
     pctx.requested_sink_ctx = streaming ? user_write_ctx : &bb;
 
     char *herr = NULL;
-    pctx.headers = chmap_create_full(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,
+    pctx.headers = chmap_create_full(CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,
                                      ccol_string, ccol_string, mp, NULL, &herr);
     if (!pctx.headers) {
-      _mem_free(mp, wire);
+      _ccol_mem_free(mp, wire);
       _conn_teardown(mp, &conn);
       _url_free(mp, &url);
       result = ccol_not_enough_memory;
@@ -9422,9 +9392,9 @@ static ccol_retval_t chttp_do_internal(
        * connection's own configured connect_timeout_ms budget, causing this
        * retry's connect attempt to time out (or get much less than
        * connect_timeout_ms) even though a full, fresh budget was
-       * configured. Mirrors _async_retry_hop's identical fix for the exact
-       * same Tier 2/3 scenario (see that function's own connect_deadline
-       * field comment). */
+       * configured. Mirrors _async_retry_hop's identical fresh connect
+       * deadline for the exact same Tier 2/3 scenario (see that function's
+       * own connect_deadline field comment). */
       chttp_deadline_t retry_connect_dl = _deadline_make(connect_timeout_ms);
       prv = _conn_open(mp, &url, url.is_https, tls_ctx, tls_cfg.verify_host,
                        &retry_connect_dl, &overall_dl, &conn);
@@ -9435,11 +9405,11 @@ static ccol_retval_t chttp_do_internal(
                                    &keep_alive, &any_bytes_read, &retry_unsafe);
       }
     }
-    _mem_free(mp, wire);
+    _ccol_mem_free(mp, wire);
     if (prv != ccol_success) {
       _conn_teardown(mp, &conn);
       _parse_ctx_free_fields(&pctx);
-      _mem_free(mp, bb.buf);
+      _ccol_mem_free(mp, bb.buf);
       _url_free(mp, &url);
       result = prv;
       break;
@@ -9456,14 +9426,12 @@ static ccol_retval_t chttp_do_internal(
       if (hop >= CHTTP_MAX_REDIRECTS) {
         /* This response is itself the 51st request in the chain and is
          * ALSO a redirect; following it would exceed the 50-redirect
-         * budget. Report it as an error instead of silently delivering it
-         * (the deliberate design this codebase shipped with previously,
-         * reversed per an explicit request: a caller relying on
-         * ccol_http_too_many_redirects to detect a redirect loop needs an
-         * actual error here, not a stale 3xx response it has to notice and
-         * interpret itself). */
+         * budget. Report it as an error instead of silently delivering it:
+         * a caller relying on ccol_http_too_many_redirects to detect a
+         * redirect loop needs an actual error here, not a stale 3xx
+         * response it has to notice and interpret itself. */
         _parse_ctx_free_fields(&pctx);
-        _mem_free(mp, bb.buf);
+        _ccol_mem_free(mp, bb.buf);
         _url_free(mp, &url);
         result = ccol_http_too_many_redirects;
         break;
@@ -9471,9 +9439,9 @@ static ccol_retval_t chttp_do_internal(
       char *next_url = _resolve_redirect_url(mp, &url, pctx.location);
       bool preserve = (pctx.status_code == 307 || pctx.status_code == 308);
       _parse_ctx_free_fields(&pctx);
-      _mem_free(mp, bb.buf);
+      _ccol_mem_free(mp, bb.buf);
       _url_free(mp, &url);
-      _mem_free(mp, cur_url);
+      _ccol_mem_free(mp, cur_url);
       /* NULLed immediately after freeing (not just reassigned on the
        * success path below): a redirect status with an empty or otherwise
        * unresolvable Location header (RFC 3986 SS5.2/5.3 resolution
@@ -9481,10 +9449,10 @@ static ccol_retval_t chttp_do_internal(
        * is `if (!location || !*location) return NULL;`, trivially
        * reachable via a plain server response, no malformed input needed)
        * makes next_url NULL and falls through to the post-loop cleanup's
-       * own _mem_free(mp, cur_url) below with this pointer still holding
-       * the just-freed value; a real, remotely-triggerable double-free
-       * caught by clang's static analyzer, not by any dynamic test (no
-       * existing mock route sends a redirect with an empty Location). */
+       * own _ccol_mem_free(mp, cur_url) below with this pointer still holding
+       * the just-freed value; a real, remotely-triggerable double-free,
+       * one clang's static analyzer reports and no dynamic test covers (no
+       * mock route sends a redirect with an empty Location). */
       cur_url = NULL;
 
       if (!next_url) {
@@ -9509,10 +9477,10 @@ static ccol_retval_t chttp_do_internal(
     }
 
     chttpcli_response *resp =
-        (chttpcli_response *)_mem_calloc(mp, 1, sizeof(chttpcli_response));
+        (chttpcli_response *)_ccol_mem_calloc(mp, 1, sizeof(chttpcli_response));
     if (!resp) {
       _parse_ctx_free_fields(&pctx);
-      _mem_free(mp, bb.buf);
+      _ccol_mem_free(mp, bb.buf);
       _url_free(mp, &url);
       result = ccol_not_enough_memory;
       break;
@@ -9530,10 +9498,10 @@ static ccol_retval_t chttp_do_internal(
     break;
   }
 
-  _mem_free(mp, cur_url);
-  _mem_free(mp, carried_auth);
-  _mem_free(mp, carried_auth_origin);
-  _mem_free(mp, initial_origin_key);
+  _ccol_mem_free(mp, cur_url);
+  _ccol_mem_free(mp, carried_auth);
+  _ccol_mem_free(mp, carried_auth_origin);
+  _ccol_mem_free(mp, initial_origin_key);
   if (tls_ctx) ctls_ctx_release(tls_ctx);
   _slot_release(cli);
   return result;
@@ -9545,10 +9513,9 @@ ccol_retval_t chttpclient_do(chttpcli h, const chttp_request_t *req,
   if (!raw) return ccol_invalid_args;
   ccol_retval_t rv =
       chttp_do_internal(raw, req, false, NULL, NULL, resp_out, NULL);
-  /* chttp_do_internal, above, is called completely unmodified: it still
-   * runs its own existing _slot_acquire/_slot_release pair internally,
-   * bracketing the whole request including the actual blocking network
-   * I/O, exactly as today. */
+  /* chttp_do_internal, above, runs its own _slot_acquire/_slot_release
+   * pair internally, bracketing the whole request including the actual
+   * blocking network I/O. */
   _chttpcli_resolve_unpin(raw);
   return rv;
 }
@@ -9569,11 +9536,11 @@ ccol_retval_t chttpclient_do_streaming(chttpcli h, const chttp_request_t *req,
 /* ========================================================================== */
 
 static void _init_default_client(void) {
-  atomic_store(&default_client_bundler.client, create_chttpclient(NULL));
+  atomic_store(&default_client_bundler.client, ccol_create_chttpclient(NULL));
 }
 
 chttpcli chttp_default_client(void) {
-  call_once(default_client_bundler.once, _init_default_client);
+  ccol_call_once(default_client_bundler.once, _init_default_client);
   return atomic_load(&default_client_bundler.client);
 }
 
@@ -9585,7 +9552,7 @@ __attribute__((destructor)) static void _cleanup_default_client(void) {
    * exit; clearing here first makes that CAS in __chttpclient_destroy a
    * guaranteed no-op instead of a second racing writer. */
   chttpcli cli = atomic_exchange(&default_client_bundler.client, 0);
-  if (cli) __chttpclient_destroy(cli); /* unchanged */
+  if (cli) __chttpclient_destroy(cli);
 
   /* The one client this library itself might still own has just been
    * destroyed and its slot released. Free the slot table's own bookkeeping
@@ -9597,26 +9564,26 @@ __attribute__((destructor)) static void _cleanup_default_client(void) {
    * to reclaim a client it created directly (rather than calling
    * chttpclient_destroy itself) may still have a live handle touched by a
    * destructor/atexit handler that happens to run after this one
-   * (chttpclient_destroy/_do/_set_*, or even create_chttpclient again).
+   * (chttpclient_destroy/_do/_set_*, or even ccol_create_chttpclient again).
    * Freeing the shared slot table out from under a still-live handle would
    * turn that into a use-after-free; skipping the free instead leaves
    * exactly the same already-accepted "caller never destroyed their client"
    * leak this comment already documents for the struct itself, just now
    * covering the slot table's bookkeeping arrays too.
    *
-   * MUST call_once here too, even though the line above already might have:
-   * if cli was 0 (the default client was never created in this process at
+   * MUST ccol_call_once here too, even though the line above already might
+   * have: if cli was 0 (the default client was never created in this process at
    * all; e.g. an application that links this library only for
-   * cvector/chashmap/chttpserver and never touches chttpclient), the
-   * `if (cli) __chttpclient_destroy(cli);` line is skipped entirely, meaning
-   * call_once was never invoked anywhere in this process, and the block
+   * cvector/chashmap/chttpserver and never touches chttpclient), the `if (cli)
+   * __chttpclient_destroy(cli);` line is skipped entirely, meaning
+   * ccol_call_once was never invoked anywhere in this process, and the block
    * below would lock a never-pthread_mutex_init'd mutex. This is a
    * deterministic trigger, not a rare race: it fires on 100% of runs of any
    * process that links this .so without ever creating a chttpcli handle;
    * __attribute__((destructor)) functions run unconditionally for the whole
    * shared object regardless of which parts of it were actually used. */
-  call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
-  rw_lock_wrlock(chttpcli_slot_table.rwlock);
+  ccol_call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
+  ccol_rw_lock_wrlock(chttpcli_slot_table.rwlock);
   bool any_slot_in_use = false;
   size_t slot_count = cvector_elem_count(chttpcli_slot_table.slots);
   for (size_t i = 0; i < slot_count; i++) {
@@ -9631,7 +9598,7 @@ __attribute__((destructor)) static void _cleanup_default_client(void) {
     __cvector_destroy(chttpcli_slot_table.slots);
     __cvector_destroy(chttpcli_slot_table.free_indices);
   }
-  rw_lock_unlock(chttpcli_slot_table.rwlock);
+  ccol_rw_lock_unlock(chttpcli_slot_table.rwlock);
 }
 
 /* ========================================================================== */
@@ -9643,8 +9610,8 @@ ccol_retval_t chttp_do(const chttp_request_t *req,
   /* Checked and NULLed here, before chttp_default_client() rather than
    * deferred to chttpclient_do's own identical check: the !cli early return
    * just below would otherwise leave *resp_out untouched on that path, the
-   * same class of gap chttp_do_internal itself was fixed for (see its own
-   * comment). */
+   * same class of gap chttp_do_internal's own identical ordering closes
+   * (see its own comment). */
   if (!resp_out) return ccol_invalid_args;
   *resp_out = NULL;
   chttpcli cli = chttp_default_client();
@@ -9739,17 +9706,17 @@ const char *chttpclient_resp_header(const chttpcli_response *resp,
                                     const char *name) {
   if (!resp || !name || !resp->headers) return NULL;
 
-  /* A caller doing several known-name header lookups per response (a
-   * realistic, likely hot pattern) previously paid one heap _mem_alloc/
-   * _mem_free pair per lookup just to hold the lower-cased copy of `name`.
-   * Every real HTTP header name (RFC 7230 SS3.2's "token" grammar; every
+  /* A caller doing several known-name header lookups per response is a
+   * realistic, likely hot pattern, and each lookup needs a lower-cased copy
+   * of `name`. Taking that copy on the stack avoids one heap
+   * _ccol_mem_alloc/_ccol_mem_free pair per lookup. Every real HTTP header
+   * name (RFC 7230 SS3.2's "token" grammar; every
    * registered name in the IANA registry, and any realistic custom one) is
    * far shorter than this stack buffer, so the allocation is skipped
    * entirely in the overwhelmingly common case; only a pathologically long
    * name (longer than this buffer could ever legitimately be, since actual
    * response headers of that length would themselves be rejected/unusual
-   * long before reaching this call) falls back to the heap, exactly as
-   * before. */
+   * long before reaching this call) falls back to the heap. */
   enum { STACK_NAME_BUF = 128 };
   char stack_lower[STACK_NAME_BUF];
   size_t nlen = strlen(name);
@@ -9758,7 +9725,7 @@ const char *chttpclient_resp_header(const chttpcli_response *resp,
   if (nlen < STACK_NAME_BUF) {
     lower = stack_lower;
   } else {
-    heap_lower = (char *)_mem_alloc(resp->_m_procs, nlen + 1);
+    heap_lower = (char *)_ccol_mem_alloc(resp->_m_procs, nlen + 1);
     if (!heap_lower) return NULL;
     lower = heap_lower;
   }
@@ -9768,7 +9735,7 @@ const char *chttpclient_resp_header(const chttpcli_response *resp,
   cmap_pair kp = {.ptr = lower, .size = nlen + 1};
   cmap_pair *vp = NULL;
   ccol_retval_t rv = chmap_get_elem_ref((chmap)resp->headers, &kp, &vp);
-  if (heap_lower) _mem_free(resp->_m_procs, heap_lower);
+  if (heap_lower) _ccol_mem_free(resp->_m_procs, heap_lower);
 
   if (rv != ccol_success || !vp) return NULL;
   return (const char *)vp->ptr;
@@ -9777,8 +9744,8 @@ const char *chttpclient_resp_header(const chttpcli_response *resp,
 void chttpclient_resp_free(chttpcli_response *resp) {
   if (!resp) return;
   ccol_memmgmt_procs_t *mp = resp->_m_procs;
-  _mem_free(mp, resp->body);
+  _ccol_mem_free(mp, resp->body);
   if (resp->headers) __chmap_destroy((chmap)resp->headers);
-  _mem_free(mp, resp);
+  _ccol_mem_free(mp, resp);
   /* mp is NOT freed: it is owned by the client, not the response. */
 }

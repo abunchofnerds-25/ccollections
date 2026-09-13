@@ -42,8 +42,9 @@ equality contract (value-based, unlike every other key type)
 .SH EXAMPLES
 .nf
 chmap_construct(map, int, int);
-chmap_insert(map, 42, 100);
-int* ptr = chmap_get_ptr(map, 42);
+int key = 42, val = 100;
+chmap_insert(map, key, val);
+int* ptr = chmap_get_ptr(map, key);
 if (ptr) {
   *ptr = 200; // Modify in-place
 }

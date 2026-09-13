@@ -11,7 +11,7 @@ double cyaml_double_val(cyaml node);
 .fi
 .SH DESCRIPTION
 .nf
-Return the double stored in node.  Calls fatal_err() if node is NULL or
+Return the double stored in node.  Calls ccol_fatal_err() if node is NULL or
 if its type is not CYAML_FLOAT.  The returned value may be infinite or
 NaN (see cyaml_create_double_mp).
 .fi

@@ -12,7 +12,7 @@ value = chmap_get(hm_name, key);
 .SH DESCRIPTION
 .nf
 Type-safe wrapper for chmap_get_elem_ref() that returns the actual value.
-Calls fatal_err() if key not found or size mismatch.
+Calls ccol_fatal_err() if key not found or size mismatch.
 .fi
 .SH PARAMETERS
 .nf
@@ -26,7 +26,8 @@ Returns value associated with key
 .SH NOTES
 .nf
 Terminates program if key not found
-Terminates program if value size doesn't match type size
+Terminates program if the stored value's size does not match the
+size of the declared value type
 Returns value, not pointer
 For strings, returns the char* itself
 For a float or double key, see chmap_construct(3) for the map's
@@ -37,8 +38,9 @@ equality contract (value-based, unlike every other key type)
 .SH EXAMPLES
 .nf
 chmap_construct(map, int, char*);
-chmap_insert(map, 42, "hello");
-char* val = chmap_get(map, 42); // val == "hello"
+int key = 42;
+chmap_insert(map, key, "hello");
+char* val = chmap_get(map, key); // val is "hello"
 .fi
 .SH "SEE ALSO"
 .BR chmap_get_ptr (3),

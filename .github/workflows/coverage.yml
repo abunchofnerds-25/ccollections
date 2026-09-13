@@ -1,0 +1,73 @@
+name: Coverage
+
+# Runs on every push to main, which is what a merged pull request produces,
+# and publishes the merged coverage report to GitHub Pages. Branch pushes and
+# pull requests deliberately do not trigger it: a full run rebuilds and
+# re-executes every module suite under gcov instrumentation, and only the
+# state of main is worth publishing.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# The Pages deployment needs to mint an OIDC token (id-token) and write the
+# Pages artifact; nothing here needs write access to the repository contents.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deployments race for the single Pages environment. Unlike the
+# CI workflow, an in-flight run is allowed to finish: cancelling a half-done
+# deployment can leave the published site inconsistent.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  coverage:
+    name: Merged coverage report
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y lcov libssl-dev zlib1g-dev
+
+      - name: Build the merged coverage report
+        run: make coverage_site
+
+      - name: Publish the summary to the job page
+        run: |
+          {
+            echo "## Coverage (library sources only)"
+            echo
+            echo '```'
+            cat coverage_site/summary.txt
+            echo '```'
+            echo
+            echo "Merged from every module suite under \`tests/\`, narrowed to \`src/\` and \`include/\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the report as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: coverage_site/html
+          retention-days: 30
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: coverage_site/html
+
+      - name: Deploy to Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

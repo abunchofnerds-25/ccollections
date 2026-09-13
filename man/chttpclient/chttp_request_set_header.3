@@ -28,7 +28,7 @@ a CRLF-injection vector but still produces a structurally malformed
 wire line a strict downstream server/proxy could misread.
 
 value must not contain an embedded CR or LF byte.  The serializer writes
-"name: value\r\n" onto the wire with no escaping, so an unvalidated
+"name: value\er\en" onto the wire with no escaping, so an unvalidated
 CR/LF in value would let a caller that reflects untrusted data (a
 forwarded token, a proxied header) into a header inject arbitrary extra
 header lines, or split the request into two (HTTP request splitting).

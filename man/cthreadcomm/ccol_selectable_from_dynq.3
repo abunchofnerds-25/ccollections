@@ -1,0 +1,54 @@
+.TH CCOL_SELECTABLE_FROM_DYNQ 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccol_selectable_from_dynq \- build a ccol_selectable from a ccol_dynamic_queue
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_selectable_from_dynq(q, dir);
+.fi
+.SH DESCRIPTION
+.nf
+Constructs a ccol_selectable tagged-union value of type ccol_selectable_dynq
+wrapping the given ccol_dynamic_queue pointer with the specified direction.
+
+  ccol_select_read; wait for at least one message to arrive (read-wait)
+  ccol_select_write; wait until sending is enabled and the queue holds
+                     fewer than ccol_max_elem_count messages, the same
+                     ceiling ccol_dynmq_send_zc() itself enforces
+
+Because a ccol_dynamic_queue is unbounded in practice, it is always considered
+writable as long as writing is not disabled.  ccol_select_write on a
+ccol_dynamic_queue is only necessary when ccol_dynmq_disable_sending() has been
+called and the caller needs to know when the queue becomes writable again.
+.fi
+.SH PARAMETERS
+.nf
+q    ccol_dynamic_queue pointer to wrap.  Passing NULL produces a selectable
+     that ccol_select() will reject with ccol_invalid_args.
+dir  ccol_select_read or ccol_select_write.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_selectable value (not a pointer).
+.fi
+.SH EXAMPLES
+.nf
+ccol_dynamic_queue *dq = ccol_dynamic_queue_create(NULL);
+ccol_circular_queue *q0 = ccol_circular_queue_create(8, NULL);
+
+size_t idx;
+ccol_select_va(&idx,
+    ccol_selectable_from_circq(q0, ccol_select_read),
+    ccol_selectable_from_dynq(dq, ccol_select_read));
+/* on ccol_success, claim the message via ccol_dynmq_try_recv_zc(dq, ...) or
+   ccol_circq_try_recv_zc(q0, ...), whichever selectable idx points at */
+.fi
+.SH "SEE ALSO"
+.BR ccol_select (3),
+.BR ccol_select_va (3),
+.BR ccol_selectable_from_circq (3),
+.BR ccol_selectable_from_chan (3),
+.BR ccol_selectable_from_fd (3)

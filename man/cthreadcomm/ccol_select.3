@@ -21,8 +21,8 @@ ready, then writes its 0-based index into *ready_index and returns.
 ccol_select() never performs the receive or send itself, for any
 selectable type: it only reports readiness.  The caller must, immediately
 afterward, perform its own explicit non-blocking receive or send on the
-winning selectable: circq_try_recv_zc()/dynmq_try_recv_zc() or
-circq_try_send_zc()/dynmq_try_send_zc() for a queue selectable,
+winning selectable: ccol_circq_try_recv_zc()/ccol_dynmq_try_recv_zc() or
+ccol_circq_try_send_zc()/ccol_dynmq_send_zc() for a queue selectable,
 read(2)/recv(2) or write(2)/send(2) on selectables[*ready_index].fd for an
 fd selectable.  A concurrent consumer or producer may win the race between
 ccol_select() returning and that explicit call (the same TOCTOU contract
@@ -39,9 +39,9 @@ adjustments cannot extend the timeout.
 ccol_select() is equivalent to ccol_select_timed(ready_index, n,
 selectables, -1).
 
-A ccol_selectable wraps a circular_queue, a dynamic_queue, or a raw file
-descriptor.  Build one with selectable_from_circq(), selectable_from_dynq(),
-selectable_from_chan(), or selectable_from_fd().  Channels are pre-resolved
+A ccol_selectable wraps a ccol_circular_queue, a ccol_dynamic_queue, or a raw file
+descriptor.  Build one with ccol_selectable_from_circq(), ccol_selectable_from_dynq(),
+ccol_selectable_from_chan(), or ccol_selectable_from_fd().  Channels are pre-resolved
 to their underlying circular queue before being passed here; ccol_select()
 treats them identically to plain circular queues.
 
@@ -175,8 +175,8 @@ eventually gets a chance to observe the same readiness (cascading wake).
 This prevents both thundering herd and liveness gaps when multiple
 messages arrive, or multiple slots free up, in quick succession.
 
-When writing is disabled on a queue (via circq_disable_sending() or
-dynmq_disable_sending()), read-direction waiters on that queue remain
+When writing is disabled on a queue (via ccol_circq_disable_sending() or
+ccol_dynmq_disable_sending()), read-direction waiters on that queue remain
 registered and continue waiting.  ccol_select() will unblock once sending
 is re-enabled and a message arrives.  Write-direction waiters are woken
 immediately so they can observe the new state.
@@ -185,12 +185,12 @@ File descriptors must be kept open for the entire duration of the
 ccol_select() call.  Closing an fd that ccol_select() is currently
 watching produces undefined behaviour.
 
-Likewise, a queue or channel passed to selectable_from_circq()/
-selectable_from_dynq()/selectable_from_chan() must not be destroyed
+Likewise, a queue or ccol_channel passed to ccol_selectable_from_circq()/
+ccol_selectable_from_dynq()/ccol_selectable_from_chan() must not be destroyed
 while a ccol_select()/ccol_select_timed() call is still watching it:
-circular_queue_destroy()/dynamic_queue_destroy()/channel_destroy() assert
+ccol_circular_queue_destroy()/ccol_dynamic_queue_destroy()/ccol_channel_destroy() assert
 if the queue still has a linked waiter (from either an in-progress
-ccol_select()/ccol_select_timed() call or a live event_loop
+ccol_select()/ccol_select_timed() call or a live ccol_event_loop
 registration), since the still-linked waiter node would otherwise
 reference the queue's own, about-to-be-freed mutex.
 
@@ -208,13 +208,13 @@ eventfd(2) when fd selectables are present (Linux only).
 .fi
 .SH EXAMPLES
 .nf
-/* Fan-in from two circular queues and a channel: */
+/* Fan-in from two circular queues and a ccol_channel: */
 size_t idx;
 ccol_retval_t r = ccol_select(&idx, 3,
     (ccol_selectable[]){
-        selectable_from_circq(q0, ccol_select_read),
-        selectable_from_circq(q1, ccol_select_read),
-        selectable_from_chan(ch, ccol_select_read),
+        ccol_selectable_from_circq(q0, ccol_select_read),
+        ccol_selectable_from_circq(q1, ccol_select_read),
+        ccol_selectable_from_chan(ch, ccol_select_read),
     });
 if (r == ccol_success) {
     printf("selectable %zu is ready\en", idx);
@@ -222,26 +222,26 @@ if (r == ccol_success) {
 
 /* Equivalent using the convenience macro: */
 r = ccol_select_va(&idx,
-        selectable_from_circq(q0, ccol_select_read),
-        selectable_from_dynq(dq, ccol_select_read),
-        selectable_from_chan(ch, ccol_select_read));
+        ccol_selectable_from_circq(q0, ccol_select_read),
+        ccol_selectable_from_dynq(dq, ccol_select_read),
+        ccol_selectable_from_chan(ch, ccol_select_read));
 
 /* Mixed read+write: wake when q0 has room OR dq has a message: */
 r = ccol_select_va(&idx,
-        selectable_from_circq(q0, ccol_select_write),
-        selectable_from_dynq(dq,  ccol_select_read));
+        ccol_selectable_from_circq(q0, ccol_select_write),
+        ccol_selectable_from_dynq(dq,  ccol_select_read));
 
 /* Fan-in from a queue and a pipe read end: */
 int pfd[2];
 pipe(pfd);
 r = ccol_select_va(&idx,
-        selectable_from_circq(q0, ccol_select_read),
-        selectable_from_fd(pfd[0], ccol_select_read));
+        ccol_selectable_from_circq(q0, ccol_select_read),
+        ccol_selectable_from_fd(pfd[0], ccol_select_read));
 if (r == ccol_success) {
     c_message_t msg;
     if (idx == 0) {
         /* queue is ready; claim it ourselves (zero-copy) */
-        if (circq_try_recv_zc(q0, &msg) == ccol_success) {
+        if (ccol_circq_try_recv_zc(q0, &msg) == ccol_success) {
             printf("queue message size: %zu\en", msg.size);
             free(msg.data);
         }
@@ -255,15 +255,15 @@ if (r == ccol_success) {
 
 /* Timed wait with 500 ms deadline: */
 r = ccol_select_timed_va(&idx, 500,
-        selectable_from_circq(q0, ccol_select_read));
+        ccol_selectable_from_circq(q0, ccol_select_read));
 if (r == ccol_timed_out) {
     printf("no source ready within 500 ms\en");
 }
 
 /* Watch one connected socket for either direction, whichever comes first: */
 r = ccol_select_va(&idx,
-        selectable_from_fd(sock_fd, ccol_select_read),
-        selectable_from_fd(sock_fd, ccol_select_write));
+        ccol_selectable_from_fd(sock_fd, ccol_select_read),
+        ccol_selectable_from_fd(sock_fd, ccol_select_write));
 if (r == ccol_success) {
     if (idx == 0) {
         char buf[512];
@@ -279,13 +279,12 @@ if (r == ccol_success) {
 .BR ccol_select_va (3),
 .BR ccol_select_timed_va (3),
 .BR ccol_selectable_from_chan (3),
-.BR selectable_from_circq (3),
-.BR selectable_from_dynq (3),
-.BR selectable_from_chan (3),
-.BR selectable_from_fd (3),
-.BR circq_try_recv_zc (3),
-.BR dynmq_try_recv_zc (3),
-.BR chan_try_recv_zc (3),
-.BR circular_queue_destroy (3),
-.BR dynamic_queue_destroy (3),
-.BR channel_destroy (3)
+.BR ccol_selectable_from_circq (3),
+.BR ccol_selectable_from_dynq (3),
+.BR ccol_selectable_from_fd (3),
+.BR ccol_circq_try_recv_zc (3),
+.BR ccol_dynmq_try_recv_zc (3),
+.BR ccol_chan_try_recv_zc (3),
+.BR ccol_circular_queue_destroy (3),
+.BR ccol_dynamic_queue_destroy (3),
+.BR ccol_channel_destroy (3)

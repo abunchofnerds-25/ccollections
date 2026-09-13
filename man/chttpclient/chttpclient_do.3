@@ -202,7 +202,8 @@ ccol_http_tls_cert_load_failed
 ccol_http_transfer_aborted
        The connection failed mid-transfer, the server sent a
        malformed HTTP/1.1 response, or a streaming chttpcli_write_fn
-       returned fewer bytes than it was given.
+       returned anything other than the number of bytes it was
+       given.
 
 ccol_msg_too_large
        The response body exceeded

@@ -97,13 +97,13 @@ static void _teardown(void) {
     g_srv = CHTTPSVR_INVALID;
   }
   /* __chttpsvr_destroy releases this server's shared-engine reference but
-   * hands teardown of the shared event_loop reactor off to a joinable
+   * hands teardown of the shared ccol_event_loop reactor off to a joinable
    * reaper thread rather than joining it inline; chttpsvr_engine_wait()
    * blocks until that reaper thread has actually joined, which is required
    * here so no reactor thread is still running when this atexit handler
    * returns (otherwise valgrind's leak check can race process exit against
-   * the reactor's own teardown). See tests/chttpserver_tls/tests.c for the
-   * same reasoning. */
+   * the reactor's own teardown). tests_tls.c in this same directory relies
+   * on the same reasoning. */
   chttpsvr_engine_wait();
   if (g_test_logger) {
     clog_close(g_test_logger);
@@ -134,7 +134,7 @@ __attribute__((constructor)) static void _setup(void) {
     exit(1);
   }
 
-  g_srv = create_chttpsvr(g_test_logger, &err);
+  g_srv = ccol_create_chttpsvr(g_test_logger, &err);
   if (!g_srv) {
     fprintf(stderr, "FATAL: could not create chttpsvr: %s\n",
             err ? err : "(unknown)");
@@ -153,9 +153,10 @@ __attribute__((constructor)) static void _setup(void) {
   }
 
   /* Drive one real request through the engine so its internal allocations
-   * (the event_loop registration table, per-connection dispatch state, ...)
-   * actually happen before any TEST() body inspects the counters. */
-  chttpcli cli = create_chttpclient(NULL);
+   * (the ccol_event_loop registration table, per-connection dispatch state,
+   * and so on) actually happen before any TEST() body inspects the
+   * counters. */
+  chttpcli cli = ccol_create_chttpclient(NULL);
   if (cli) {
     chttp_request_t *req =
         chttp_request_new(CHTTP_GET, BASE_URL "/hello", NULL, NULL);
@@ -180,25 +181,25 @@ __attribute__((constructor)) static void _setup(void) {
 /* ========================================================================== */
 
 TEST(chttpserver_mem_mgmt, procs_wired_into_engine_allocations) {
-  /* _setup() installed counting procs before the first chttpsvr_start() and
-   * then drove a real request through the running engine. If the shared
-   * event_loop reactor's own internal allocations (the registry chmaps, the
-   * per-connection dispatch state, and so on) were actually redirected to
-   * the configured procs, malloc/calloc/free must all be nonzero by now.
+  /* _setup() installs counting procs before the first chttpsvr_start() and
+   * then drives a real request through the running engine. The shared
+   * ccol_event_loop reactor's own internal allocations (the registry chmaps,
+   * the per-connection dispatch state, and so on) are routed through the
+   * configured procs, so malloc/calloc/free must all be nonzero by the time
+   * this test body runs.
    *
-   * realloc is deliberately not asserted on here: traced through
-   * cthreadcomm.c directly, event_loop has no _mem_realloc call site at
-   * all. Its own fd registry chooses open addressing (both key and value
-   * types are integral; see chashmap.c's should_use_open_addressing),
-   * and open addressing's own growth path (oa_rehash) allocates a fresh,
-   * larger slot array via calloc and frees the old one, rather than
-   * reallocating in place. mp->realloc is still a hard requirement (see
-   * null_function_pointer_rejected below) for interface completeness and
-   * in case a future change introduces a genuine realloc call site, but
-   * there is currently no way to *exercise* it through this engine's own
-   * allocations, so a dedicated procs_wired_into_engine_reallocations test
-   * (which used to exist here, targeting FIOBJ hash growth specifically)
-   * was removed rather than built around an artificial trigger. */
+   * realloc is deliberately not asserted on here: ccol_event_loop has no
+   * _ccol_mem_realloc call site at all. Its own fd registry chooses open
+   * addressing (both key and value types are integral; see chashmap.c's
+   * should_use_open_addressing), and open addressing's own growth path
+   * (oa_rehash) allocates a fresh, larger slot array via calloc and frees
+   * the old one, rather than reallocating in place. mp->realloc is still a
+   * hard requirement (see null_function_pointer_rejected below) for
+   * interface completeness and in case a future change introduces a genuine
+   * realloc call site, but there is no way to *exercise* it through this
+   * engine's own allocations, so there is deliberately no dedicated
+   * procs_wired_into_engine_reallocations test: one could only be built
+   * around an artificial trigger. */
   REQUIRE_GT(__atomic_load_n(&g_mm_malloc_count, __ATOMIC_RELAXED) +
                  __atomic_load_n(&g_mm_calloc_count, __ATOMIC_RELAXED),
              (size_t)0);
@@ -208,16 +209,13 @@ TEST(chttpserver_mem_mgmt, procs_wired_into_engine_allocations) {
    * own chttpsvr_conn_t in response; an event the server's reactor must
    * still observe and dispatch asynchronously, not something guaranteed to
    * have already happened the instant _setup()'s constructor returns.
-   * Bounded retry rather than an immediate single check: this dispatch now
-   * goes through the poller-to-ctpool-worker handoff described in
-   * cthreadcomm's own history (a real, if small and bounded, added latency
-   * versus the single-thread design's near-synchronous inline dispatch),
-   * which made a bare immediate assertion here measurably flaky where it
-   * previously was not. 150 x 20ms = 3s total, matching this codebase's own
-   * established precedent (e.g. chttpclient's async_expect_continue bounds,
-   * widened from 500ms to 1500ms to 3000ms for the identical reason) for
-   * how much headroom a dispatch-latency-sensitive wait needs to stay
-   * reliable under make memtest/a loaded CI runner, not just a native run. */
+   * Bounded retry rather than an immediate single check: the dispatch goes
+   * through cthreadcomm's poller-to-ctpool-worker handoff, whose small but
+   * real latency makes a bare immediate assertion here measurably flaky.
+   * 150 x 20ms = 3s total, matching the headroom this codebase's other
+   * dispatch-latency-sensitive waits use (e.g. chttpclient's
+   * async_expect_continue bounds) to stay reliable under make memtest or a
+   * loaded CI runner, not just a native run. */
   for (int attempt = 0;
        __atomic_load_n(&g_mm_free_count, __ATOMIC_RELAXED) == 0 &&
        attempt < 150;
@@ -282,12 +280,12 @@ TEST(chttpserver_mem_mgmt, num_reactor_threads_rejected_while_running) {
 TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
   /* chttpsvr_set_engine_mem_mgmt_procs's own doc comment states it "may be
    * called again after the engine has fully stopped (chttpsvr_engine_wait()
-   * has returned), before the next chttpsvr_start()" - but no test anywhere
-   * in this suite exercised that path; the other three tests above only
-   * cover install-before-start (implicitly, via _setup()) and
-   * reject-while-running. A regression that made the "engine already
-   * running" check sticky (e.g. a latch never cleared on stop) would pass
-   * every other test in this file untouched.
+   * has returned), before the next chttpsvr_start()", and this is the only
+   * test in the file covering that path; every other one covers just
+   * install-before-start (implicitly, via _setup()) and reject-while-running.
+   * This test is non-vacuous: making the "engine already running" check
+   * sticky (e.g. a latch never cleared on stop) fails here and nowhere else
+   * in this file.
    *
    * This must be the last test in the file: it fully tears down g_srv (the
    * only thing keeping the shared engine's refcount above zero in this
@@ -328,15 +326,15 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
 
   char *err = NULL;
   /* _ccol_destructor: a safety net for a REQUIRE_* failure between here and
-     the ownership transfer to g_srv below (Tau's REQUIRE_* returns from this
-     function immediately on failure, which would otherwise leak this
-     server's own shared-engine reference and hang chttpsvr_engine_wait() in
-     this file's own _teardown() at process exit; see this suite's own
-     history for that exact class of bug). Neutralized (set to
-     CHTTPSVR_INVALID) immediately after ownership is actually handed to
-     g_srv, so it never double-destroys the handle g_srv now owns. */
+     the ownership transfer to g_srv below. Tau's REQUIRE_* returns from this
+     function immediately on failure, which without this destructor leaks
+     this server's own shared-engine reference and hangs
+     chttpsvr_engine_wait() in this file's own _teardown() at process exit.
+     Neutralized (set to CHTTPSVR_INVALID) immediately after ownership is
+     actually handed to g_srv, so it never double-destroys the handle g_srv
+     then owns. */
   chttpsvr new_srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, &err);
+      ccol_create_chttpsvr(g_test_logger, &err);
   REQUIRE_TRUE(new_srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(new_srv, CHTTP_GET, "/hello",
                                                _hello_handler, NULL);
@@ -349,10 +347,11 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
   g_srv = new_srv;
   new_srv = CHTTPSVR_INVALID; /* ownership transferred to g_srv; see above */
 
-  /* The shared event_loop reactor is a plain static variable, fully
-   * destroyed (event_loop_destroy) when the last reference is released above
-   * and fully reconstructed from scratch (event_loop_create_with_mprocs) by
-   * chttpsvr_start below; there is no pool to recycle allocations from
+  /* The shared ccol_event_loop reactor is a plain static variable, fully
+   * destroyed (ccol_event_loop_destroy) when the last reference is released
+   * above and fully reconstructed from scratch
+   * (ccol_event_loop_create_with_mprocs) by chttpsvr_start below; there is
+   * no pool to recycle allocations from
    * across a restart, so a fresh malloc/calloc call through the
    * just-reinstalled procs is guaranteed, not merely likely. */
   REQUIRE_GT(__atomic_load_n(&g_mm_malloc_count, __ATOMIC_RELAXED) +
@@ -361,7 +360,7 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
   REQUIRE_EQ(_chttpsvr_engine_num_reactor_threads_for_tests(), (size_t)3);
 
   chttpcli cli _ccol_destructor(___chttpclient_destroy) =
-      create_chttpclient(NULL);
+      ccol_create_chttpclient(NULL);
   REQUIRE_TRUE(cli != CHTTPCLI_INVALID);
   chttp_request_t *req =
       chttp_request_new(CHTTP_GET, BASE_URL "/hello", NULL, NULL);

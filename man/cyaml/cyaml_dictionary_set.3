@@ -13,10 +13,17 @@ ccol_retval_t cyaml_dictionary_set(cyaml map, const char *key,
 .SH DESCRIPTION
 .nf
 Store child under key in the CYAML_DICTIONARY node map.  An internal copy
-of key is made.  Ownership of child transfers to map.  If the key
-already exists, the new child is stored first and the previous child is
-deep-freed afterward, so both may be resident in memory at the same
-instant during the replacement.
+of key is made.  Ownership of child transfers unconditionally: on
+success map owns it, and on any failure it is deep-freed by this
+function, so it must never be freed by the caller regardless of the
+return value.  If the key already exists, the new child is stored
+first and the previous child is deep-freed afterward, so both may be
+resident in memory at the same instant during the replacement.
+
+child must not be map itself, nor a node that already contains map
+somewhere in its own subtree.  This is not checked; creating such a
+cycle makes a later cyaml_destroy(), cyaml_clone(), or
+cyaml_serialize() call on the tree undefined behaviour.
 .fi
 .SH PARAMETERS
 .nf

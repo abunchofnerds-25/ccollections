@@ -12,8 +12,8 @@ ccol_iter_destroy(it);
 .SH DESCRIPTION
 .nf
 Destroys the iterator by calling its own _free_fn callback and sets it
-to NULL.  Must be called when breaking out of a manual for loop before
-the iterator reaches NULL naturally.
+to NULL.  Use it to release the iterator at the point where a manual
+for loop breaks out, rather than leaving it alive until scope exit.
 
 When using ccol_iter_declare(), RAII cleanup handles destruction
 automatically on scope exit; ccol_iter_destroy() is only necessary

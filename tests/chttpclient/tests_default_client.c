@@ -35,31 +35,31 @@ TAU_MAIN()
 /* ========================================================================== */
 /*   DESTROYING chttp_default_client()'S HANDLE (dedicated binary)            */
 /*                                                                            */
-/* Regression test for a real bug: chttp_default_client() lazily creates a   */
-/* process-wide singleton via call_once and hands its raw handle out; its    */
-/* own doc comment invites passing that handle to chttpclient_set_*, and     */
-/* nothing stops a caller from also passing it to chttpclient_destroy. Doing */
-/* so used to leave the static default_client_bundler.client pointer         */
-/* dangling (only the caller's own local variable was NULLed by the destroy  */
-/* macro): every later chttp_default_client()/chttp_do()/chttp_get() call in */
-/* the process would then use-after-free that pointer directly (call_once   */
-/* never re-fires, so nothing rebuilds it), and this file's own              */
-/* __attribute__((destructor)) cleanup would double-destroy it a second time */
-/* at process exit regardless of whether anything used it in between.       */
-/*                                                                           */
-/* Fixed with a defensive compare-and-swap in __chttpclient_destroy: it now  */
-/* clears default_client_bundler.client if the handle passed to it happens  */
-/* to be the singleton, and the header now documents that a destroyed       */
-/* default client is never rebuilt (every convenience function fails        */
-/* cleanly afterward instead of crashing).                                  */
-/*                                                                           */
-/* This is exactly the kind of one-shot, process-global, unrecoverable       */
-/* action (destroying default_client_bundler.client is permanent for the    */
-/* life of the process) that this project's own established convention      */
-/* isolates into its own binary within the same test directory, mirroring   */
-/* tests_tls.c/tests_mem_mgmt.c's precedent, rather than running inside     */
-/* tests.c where it would permanently break every other test's use of       */
-/* chttp_do/chttp_get for the rest of that process.                        */
+/* chttp_default_client() lazily creates a process-wide singleton via         */
+/* ccol_call_once and hands its raw handle out; its own doc comment invites   */
+/* passing that handle to chttpclient_set_*, and nothing stops a caller       */
+/* from also passing it to chttpclient_destroy. Doing so must not leave the   */
+/* static default_client_bundler.client pointer dangling (the destroy macro   */
+/* NULLs only the caller's own local variable). A dangling singleton          */
+/* pointer makes every later chttp_default_client()/chttp_do()/chttp_get()    */
+/* call in the process use-after-free that pointer directly (ccol_call_once   */
+/* never re-fires, so nothing rebuilds it), and makes this file's own         */
+/* __attribute__((destructor)) cleanup double-destroy it at process exit      */
+/* regardless of whether anything used it in between.                         */
+/*                                                                            */
+/* __chttpclient_destroy therefore clears default_client_bundler.client via   */
+/* a defensive compare-and-swap whenever the handle handed to it is the       */
+/* singleton, and the header documents that a destroyed default client is     */
+/* never rebuilt (every convenience function fails cleanly afterward          */
+/* instead of crashing).                                                      */
+/*                                                                            */
+/* Destroying default_client_bundler.client is a one-shot, process-global,    */
+/* unrecoverable action (it is permanent for the life of the process), so     */
+/* this project's own established convention isolates it into its own         */
+/* binary within the same test directory, mirroring tests_tls.c and           */
+/* tests_mem_mgmt.c, rather than running it inside tests.c where it would     */
+/* permanently break every other test's use of chttp_do/chttp_get for the     */
+/* rest of that process.                                                      */
 /* ========================================================================== */
 
 TEST(default_client, destroying_it_directly_does_not_crash_or_double_free) {
@@ -72,9 +72,9 @@ TEST(default_client, destroying_it_directly_does_not_crash_or_double_free) {
   chttpclient_destroy(cli);
   REQUIRE_EQ(cli, CHTTPCLI_INVALID); /* the macro NULLs the local as usual */
 
-  /* Before the fix: this would return the same, now-stale handle
-   * (call_once never re-fires), and any use of it below would be a real
-   * use-after-destroy. After the fix: the singleton was cleared, so this
+  /* Without the singleton being cleared on destroy, this would return the
+   * same, now-stale handle (ccol_call_once never re-fires), and any use of
+   * it below would be a use-after-destroy. With it cleared, this
    * consistently and permanently returns CHTTPCLI_INVALID instead; there
    * is no way to rebuild the default client once it has been destroyed
    * this way (see chttp_default_client's own doc comment). */
@@ -82,9 +82,9 @@ TEST(default_client, destroying_it_directly_does_not_crash_or_double_free) {
   REQUIRE_EQ(cli2, CHTTPCLI_INVALID);
 
   /* Every convenience function built on the default client must fail
-   * cleanly (no crash) rather than dereference the dangling pointer the
-   * bug used to leave behind. No real request is ever attempted: chttp_do
-   * short-circuits on a NULL default client before any network I/O. */
+   * cleanly (no crash) rather than dereference a dangling pointer. No real
+   * request is ever attempted: chttp_do short-circuits on a NULL default
+   * client before any network I/O. */
   chttp_request_t *req =
       chttp_request_new(CHTTP_GET, "http://127.0.0.1:1/x", NULL, NULL);
   REQUIRE_NE((void *)req, NULL);

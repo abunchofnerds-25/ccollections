@@ -30,10 +30,19 @@ SOFTWARE.
 #include <stdint.h>
 #include <sys/types.h>
 
+/* Everything declared from here to the end of this header is part of the
+ * public ABI of libccollections and is exported from the shared library.
+ * The library itself is built with -fvisibility=hidden, so any function or
+ * object that is not covered by one of these blocks stays internal to the
+ * library, is absent from its dynamic symbol table, and cannot be
+ * interposed by, or collide with, a symbol of the same name in the
+ * application that links against it. */
+#pragma GCC visibility push(default)
+
 /**
  * @file chttpserver.h
- * @brief HTTP/1.1 server backed by event_loop (a persistent, multi-threaded
- *        epoll reactor) with routing, middleware, sub-routers, TLS, and
+ * @brief HTTP/1.1 server backed by ccol_event_loop (a persistent,
+ * multi-threaded epoll reactor) with routing, middleware, sub-routers, TLS, and
  *        optional streaming-body dispatch.
  *
  * ### Quick start
@@ -83,7 +92,7 @@ SOFTWARE.
  *
  * ### Engine lifecycle (implicit)
  *
- * The shared event_loop reactor (the "engine") is started automatically on
+ * The shared ccol_event_loop reactor (the "engine") is started automatically on
  * the first chttpsvr_start() call and stopped automatically when the last
  * running server is destroyed.  There is no need to call engine lifecycle
  * functions manually.
@@ -148,9 +157,8 @@ SOFTWARE.
  * normally.  (This mirrors how two same-router routes registered for the
  * same path under different methods already behave; see README.md's routing
  * section for the 405-vs-404 mechanism this shares.)  To avoid unintentional
- * shadowing, do not register
- * root-level routes whose paths overlap with a sub-router's prefix +
- * pattern combination for the same method.
+ * shadowing, do not register root-level routes whose paths overlap with a
+ * sub-router's prefix + pattern combination for the same method.
  *
  * ### Route patterns
  *
@@ -179,12 +187,11 @@ typedef struct chttpserver chttpserver;
  * a pointer cast, or otherwise treated as an address. Compare it directly
  * against CHTTPSVR_INVALID (or use it in a truthiness check; CHTTPSVR_INVALID
  * is 0, so `if (!srv)` works too). Internally, every use of a chttpsvr is
- * resolved through a
- * library-owned slot table before the underlying server object is touched:
- * a handle whose slot has since been freed (or reused for an unrelated,
- * later server) is always detected, rather than silently dereferencing
- * freed or wrong-object memory. See chttpsvr_destroy's own doc comment for
- * what happens when a stale handle reaches it specifically.
+ * resolved through a library-owned slot table before the underlying server
+ * object is touched: a handle whose slot has since been freed (or reused
+ * for an unrelated, later server) is always detected, rather than silently
+ * dereferencing freed or wrong-object memory. See chttpsvr_destroy's own
+ * doc comment for what happens when a stale handle reaches it specifically.
  */
 typedef uint64_t chttpsvr;
 
@@ -332,8 +339,8 @@ typedef struct chttpsvr_config {
    *  worker pool indefinitely. On expiry, chttpsvr_req_read() returns -1 and
    *  chttpsvr_req_stream_error() reports ccol_timed_out (the same outcome as
    *  a stream_read_timeout_ms expiry); buffered routes respond 408
-   *  automatically. Default 0 (disabled) so existing deployments are
-   *  unaffected until this is explicitly opted into. */
+   *  automatically. Default 0 (disabled): the total-duration cap applies
+   *  only when it is explicitly opted into. */
   unsigned max_body_read_duration_ms;
   /** Bounds how long a worker thread will wait, per write(2)-equivalent
    *  call, while sending one response to a slow-reading client, in ms; 0 =
@@ -356,9 +363,8 @@ typedef struct chttpsvr_config {
    *  indefinitely by trickling reads of an otherwise large response. On
    *  expiry the response send fails and the connection is closed (the
    *  client sees a truncated response or a reset, having already received
-   *  as much as it read before the deadline). Default 0 (disabled) so
-   *  existing deployments are unaffected until this is explicitly opted
-   *  into.
+   *  as much as it read before the deadline). Default 0 (disabled): the
+   *  total-duration cap applies only when it is explicitly opted into.
    *
    *  A courtesy rejection response (404/405/413/500/501/503, generated
    *  internally rather than by a handler) and the "Expect: 100-continue"
@@ -400,21 +406,20 @@ typedef struct chttpsvr_config {
    *  Any other value         = exact bounded capacity; 503 is returned when
    *                            the queue is full. */
   size_t worker_queue_capacity;
-  /** Enable SO_KEEPALIVE on every accepted TCP connection (default: off,
-   *  matching this library's historical behavior). Lets the OS detect and
-   *  close a connection whose peer has gone silently unreachable (e.g. a
-   *  pulled network cable) using the kernel's own keepalive probe interval,
-   *  independent of and in addition to idle_timeout_ms (which only measures
-   *  local inactivity, not peer reachability). No effect on a Unix domain
-   *  socket listener. */
+  /** Enable SO_KEEPALIVE on every accepted TCP connection (default: off).
+   *  Lets the OS detect and close a connection whose peer has gone
+   *  silently unreachable (e.g. a pulled network cable) using the kernel's
+   *  own keepalive probe interval, independent of and in addition to
+   *  idle_timeout_ms (which only measures local inactivity, not peer
+   *  reachability). No effect on a Unix domain socket listener. */
   bool enable_keepalive;
   /** Set SO_REUSEPORT on the listening socket (default: off). Lets more
    *  than one process (or, within one process, more than one chttpsvr
    *  instance) bind the same host:port simultaneously, with the kernel
    *  load-balancing accepted connections across them. This library does
    *  not itself coordinate multiple processes; this knob only controls
-   *  whether the OS-level prerequisite for an application to do so
-   * itself is set. No effect on a Unix domain socket listener. */
+   *  whether the OS-level prerequisite for an application to do so itself
+   *  is set. No effect on a Unix domain socket listener. */
   bool enable_reuseport;
   /** Set IPV6_V6ONLY on the listening socket when it ends up binding an
    *  IPv6 address (default: off, i.e. leave the OS default, which on Linux
@@ -458,17 +463,17 @@ typedef struct chttpsvr_config {
 /* ========================================================================== */
 
 /**
- * @brief Install a custom logger for the shared event_loop engine's own
+ * @brief Install a custom logger for the shared ccol_event_loop engine's own
  *        diagnostics.
  *
  * The engine logger captures the reactor's own diagnostics: TLS handshake
  * failures, listen-socket bind failures, and idle-timeout sweep closures.
- * It is separate from the per-server logger passed to create_chttpsvr().
+ * It is separate from the per-server logger passed to ccol_create_chttpsvr().
  *
  * Call this before the first chttpsvr_start() if you want a custom engine
  * logger. If no logger has been installed when the engine first starts, a
  * fallback logger (fd 2, level CLOG_FATAL) is installed automatically,
- * mirroring create_chttpsvr's own internal stderr/FATAL-only logger; since
+ * mirroring ccol_create_chttpsvr's own internal stderr/FATAL-only logger; since
  * this engine's own diagnostics (idle-timeout closures, TLS handshake
  * failures, listen-socket setup failures) are all logged below
  * CLOG_FATAL, that fallback logger's min_level filters every one of them
@@ -490,10 +495,10 @@ ccol_retval_t chttpsvr_set_engine_logger(clog cl);
 /* ========================================================================== */
 
 /**
- * @brief Install custom memory management procs for the shared event_loop
+ * @brief Install custom memory management procs for the shared ccol_event_loop
  *        engine's own internal allocations.
  *
- * By default, the event_loop reactor shared by every chttpsvr instance in
+ * By default, the ccol_event_loop reactor shared by every chttpsvr instance in
  * this process (see the module notes on the shared engine) allocates its
  * own memory (the registration table, per-connection dispatch state, and
  * so on) using the default allocator. Calling this function with a
@@ -501,8 +506,8 @@ ccol_retval_t chttpsvr_set_engine_logger(clog cl);
  * exactly like the memory management procs accepted by every other module
  * in this library. Passing NULL reverts to the default behavior.
  *
- * This is independent of the allocator each individual chttpsvr instance
- * uses for its own connections/requests (configured via create_chttpsvr_mp,
+ * This is independent of the allocator each individual chttpsvr instance uses
+ * for its own connections/requests (configured via ccol_create_chttpsvr_mp,
  * following the usual _mp convention); this function only affects the one
  * shared reactor's own construction.
  *
@@ -526,8 +531,8 @@ ccol_retval_t chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
 /* ========================================================================== */
 
 /**
- * @brief Configure how many OS threads the shared event_loop engine devotes
- *        to its own polling and dispatch.
+ * @brief Configure how many OS threads the shared ccol_event_loop engine
+ * devotes to its own polling and dispatch.
  *
  * By default (never having called this function, or having called it with
  * num_threads == 0), the shared reactor uses exactly 1 thread: a single
@@ -535,7 +540,7 @@ ccol_retval_t chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
  * callback (header parsing, TLS handshake stepping) inline, with no
  * separate dispatch worker pool at all. Calling this function with a
  * num_threads > 1 spins up that many OS threads instead, following
- * event_loop_create_with_mprocs's own num_reactor_threads semantics
+ * ccol_event_loop_create_with_mprocs's own num_reactor_threads semantics
  * (cthreadcomm.h): one dedicated polling thread plus (num_threads - 1)
  * separate dispatch worker threads that actually run callbacks.
  *
@@ -597,7 +602,7 @@ ccol_retval_t chttpsvr_set_engine_num_reactor_threads(size_t num_threads);
 /* ========================================================================== */
 
 /**
- * @brief Block until the shared event_loop engine's reactor threads exit.
+ * @brief Block until the shared ccol_event_loop engine's reactor threads exit.
  *
  * Returns immediately if the engine was never started or has already stopped.
  *
@@ -626,7 +631,7 @@ ccol_retval_t chttpsvr_set_engine_num_reactor_threads(size_t num_threads);
 void chttpsvr_engine_wait(void);
 
 /**
- * @brief Signal the shared event_loop engine to stop.
+ * @brief Signal the shared ccol_event_loop engine to stop.
  *
  * Non-blocking and async-signal-safe: safe to call from a signal handler.
  * The engine drains in-flight requests and exits; chttpsvr_engine_wait() can
@@ -672,8 +677,8 @@ void chttpsvr_engine_stop(void);
  * @param err_str  Optional: receives a static error string on failure.
  * @return New server handle, or CHTTPSVR_INVALID on failure.
  */
-chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
-                            char **err_str);
+chttpsvr ccol_create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
+                                 char **err_str);
 
 /**
  * @brief Create an HTTP server with the default allocator.
@@ -681,8 +686,8 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
  * @return New server handle, or CHTTPSVR_INVALID on failure.
  */
 static inline __attribute__((always_inline)) chttpsvr
-create_chttpsvr(clog cl, char **err_str) {
-  return create_chttpsvr_mp(NULL, cl, err_str);
+ccol_create_chttpsvr(clog cl, char **err_str) {
+  return ccol_create_chttpsvr_mp(NULL, cl, err_str);
 }
 
 /* ========================================================================== */
@@ -692,16 +697,16 @@ create_chttpsvr(clog cl, char **err_str) {
 /**
  * @brief Internal destroy; use chttpsvr_destroy macro instead.
  *
- * Stops the server if it is running, drains the server's worker pool, and
- * if this is the last running server, stops the shared event_loop engine and
- * waits for it to exit.  Frees all owned resources including sub-routers,
+ * Stops the server if it is running, drains the server's worker pool, and if
+ * this is the last running server, stops the shared ccol_event_loop engine and
+ * waits for it to exit. Frees all owned resources including sub-routers,
  * routes, and the server-owned ctpool.
  *
- * srv must be a currently-live handle (one returned by create_chttpsvr/_mp
+ * srv must be a currently-live handle (one returned by ccol_create_chttpsvr/_mp
  * and not yet destroyed). A stale handle (one that has already been
  * destroyed, whether by an earlier, completed call to this same function,
  * or concurrently, by another thread racing this one right now), a forged
- * value, or garbage is a fatal error: this function calls fatal_err()
+ * value, or garbage is a fatal error: this function calls ccol_fatal_err()
  * (abort()/SIGABRT), rather than risking a use-after-free or double-free,
  * for both a purely sequential double-destroy and a temporally-overlapping
  * concurrent one. CHTTPSVR_INVALID (0) is the one exception and remains a
@@ -775,12 +780,12 @@ static inline __attribute__((always_inline)) void ___chttpsvr_destroy(
   chttpsvr name _ccol_destructor(___chttpsvr_destroy) = CHTTPSVR_INVALID
 
 /**
- * @brief Declare and initialise a server; fatal_err on failure.
+ * @brief Declare and initialise a server; ccol_fatal_err on failure.
  *
  * @param name  Variable name for the server handle.
  * @param cl    Parent logger to derive this server's logger from, or NULL to
  *              use an internal stderr/FATAL-only logger.  See
- *              create_chttpsvr_mp() for details.
+ *              ccol_create_chttpsvr_mp() for details.
  *
  * Example:
  * @code
@@ -793,34 +798,34 @@ static inline __attribute__((always_inline)) void ___chttpsvr_destroy(
  * chttpsvr_destroy(srv);
  * @endcode
  */
-#define chttpsvr_construct(name, cl)                    \
-  chttpsvr name = CHTTPSVR_INVALID;                     \
-  do {                                                  \
-    char *_chs_err = NULL;                              \
-    (name) = create_chttpsvr((cl), &_chs_err);          \
-    if (!(name)) {                                      \
-      fatal_err("chttpsvr_construct('%s'): %s", #name,  \
-                _chs_err ? _chs_err : "unknown error"); \
-    }                                                   \
+#define chttpsvr_construct(name, cl)                         \
+  chttpsvr name = CHTTPSVR_INVALID;                          \
+  do {                                                       \
+    char *_chs_err = NULL;                                   \
+    (name) = ccol_create_chttpsvr((cl), &_chs_err);          \
+    if (!(name)) {                                           \
+      ccol_fatal_err("chttpsvr_construct('%s'): %s", #name,  \
+                     _chs_err ? _chs_err : "unknown error"); \
+    }                                                        \
   } while (0)
 
 /**
- * @brief Declare, initialise, and auto-destroy on scope exit; fatal_err on
+ * @brief Declare, initialise, and auto-destroy on scope exit; ccol_fatal_err on
  *        failure.
  *
  * @param name  Variable name for the server handle.
  * @param cl    Parent logger to derive this server's logger from, or NULL to
  *              use an internal stderr/FATAL-only logger.  See
- *              create_chttpsvr_mp() for details.
+ *              ccol_create_chttpsvr_mp() for details.
  */
 #define chttpsvr_construct_scoped(name, cl)                               \
   chttpsvr name _ccol_destructor(___chttpsvr_destroy) = CHTTPSVR_INVALID; \
   do {                                                                    \
     char *_chs_err = NULL;                                                \
-    (name) = create_chttpsvr((cl), &_chs_err);                            \
+    (name) = ccol_create_chttpsvr((cl), &_chs_err);                       \
     if (!(name)) {                                                        \
-      fatal_err("chttpsvr_construct_scoped('%s'): %s", #name,             \
-                _chs_err ? _chs_err : "unknown error");                   \
+      ccol_fatal_err("chttpsvr_construct_scoped('%s'): %s", #name,        \
+                     _chs_err ? _chs_err : "unknown error");              \
     }                                                                     \
   } while (0)
 
@@ -832,7 +837,7 @@ static inline __attribute__((always_inline)) void ___chttpsvr_destroy(
  * @brief Register this server's listener on the shared engine.
  *
  * Binds the listening socket and begins accepting connections.  If this is
- * the first chttpsvr_start() call in the process, the shared event_loop
+ * the first chttpsvr_start() call in the process, the shared ccol_event_loop
  * reactor is started automatically in background threads.  Subsequent calls
  * for additional servers reuse the already-running engine.
  *
@@ -1517,3 +1522,5 @@ ccol_retval_t chttpsvr_resp_printf(chttpsvr_resp *resp, const char *fmt, ...)
  */
 ccol_retval_t chttpsvr_resp_write_json(chttpsvr_resp *resp, const char *json,
                                        size_t len);
+
+#pragma GCC visibility pop

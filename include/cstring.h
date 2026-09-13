@@ -26,6 +26,15 @@ SOFTWARE.
 
 #include <cvector.h>
 
+/* Everything declared from here to the end of this header is part of the
+ * public ABI of libccollections and is exported from the shared library.
+ * The library itself is built with -fvisibility=hidden, so any function or
+ * object that is not covered by one of these blocks stays internal to the
+ * library, is absent from its dynamic symbol table, and cannot be
+ * interposed by, or collide with, a symbol of the same name in the
+ * application that links against it. */
+#pragma GCC visibility push(default)
+
 /**
  * @file cstring.h
  * @brief Dynamic string container with a rich set of string operations
@@ -510,38 +519,38 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
 /**
  * @brief Initialise a declared cstr using default allocators
  *
- * Calls fatal_err() if creation fails.
+ * Calls ccol_fatal_err() if creation fails.
  *
  * @param s        cstr variable to initialise (must have been declared)
  * @param initial  Initial content (C string or NULL for empty)
  */
-#define cstr_init(s, initial)                             \
-  do {                                                    \
-    char *_cstr_err = NULL;                               \
-    s = cstring_create((initial), &_cstr_err);            \
-    if (!s) {                                             \
-      fatal_err("cstr_init('%s'): %s", #s,                \
-                _cstr_err ? _cstr_err : "unknown error"); \
-    }                                                     \
+#define cstr_init(s, initial)                                  \
+  do {                                                         \
+    char *_cstr_err = NULL;                                    \
+    s = cstring_create((initial), &_cstr_err);                 \
+    if (!s) {                                                  \
+      ccol_fatal_err("cstr_init('%s'): %s", #s,                \
+                     _cstr_err ? _cstr_err : "unknown error"); \
+    }                                                          \
   } while (0)
 
 /**
  * @brief Initialise a declared cstr using custom memory management
  *
- * Calls fatal_err() if creation fails.
+ * Calls ccol_fatal_err() if creation fails.
  *
  * @param s        cstr variable to initialise (must have been declared)
  * @param initial  Initial content (C string or NULL for empty)
  * @param mprocs   Custom memory management procedures
  */
-#define cstr_init_mp(s, initial, mprocs)                      \
-  do {                                                        \
-    char *_cstr_err = NULL;                                   \
-    s = cstring_create_full((initial), (mprocs), &_cstr_err); \
-    if (!s) {                                                 \
-      fatal_err("cstr_init_mp('%s'): %s", #s,                 \
-                _cstr_err ? _cstr_err : "unknown error");     \
-    }                                                         \
+#define cstr_init_mp(s, initial, mprocs)                       \
+  do {                                                         \
+    char *_cstr_err = NULL;                                    \
+    s = cstring_create_full((initial), (mprocs), &_cstr_err);  \
+    if (!s) {                                                  \
+      ccol_fatal_err("cstr_init_mp('%s'): %s", #s,             \
+                     _cstr_err ? _cstr_err : "unknown error"); \
+    }                                                          \
   } while (0)
 
 /**
@@ -622,80 +631,82 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
  * specific to its own one macro is the only practical fix available to a
  * non-hygienic C macro. */
 
-/** @brief Append @p str; calls fatal_err() on failure */
-#define cstr_append(s, str)                                        \
-  do {                                                              \
-    ccol_retval_t __cstr_append_r = cstring_append((s), (str));     \
-    if (__cstr_append_r != ccol_success) {                          \
-      fatal_err("cstr_append('%s'): r: %d (%s)", #s, __cstr_append_r, \
-                ccol_retval_to_str(__cstr_append_r));                \
+/** @brief Append @p str; calls ccol_fatal_err() on failure */
+#define cstr_append(s, str)                                                \
+  do {                                                                     \
+    ccol_retval_t __cstr_append_r = cstring_append((s), (str));            \
+    if (__cstr_append_r != ccol_success) {                                 \
+      ccol_fatal_err("cstr_append('%s'): r: %d (%s)", #s, __cstr_append_r, \
+                     ccol_retval_to_str(__cstr_append_r));                 \
+    }                                                                      \
+  } while (0)
+
+/** @brief Prepend @p str; calls ccol_fatal_err() on failure */
+#define cstr_prepend(s, str)                                                 \
+  do {                                                                       \
+    ccol_retval_t __cstr_prepend_r = cstring_prepend((s), (str));            \
+    if (__cstr_prepend_r != ccol_success) {                                  \
+      ccol_fatal_err("cstr_prepend('%s'): r: %d (%s)", #s, __cstr_prepend_r, \
+                     ccol_retval_to_str(__cstr_prepend_r));                  \
+    }                                                                        \
+  } while (0)
+
+/** @brief Insert @p str at @p pos; calls ccol_fatal_err() on failure */
+#define cstr_insert(s, pos, str)                                           \
+  do {                                                                     \
+    ccol_retval_t __cstr_insert_r = cstring_insert((s), (pos), (str));     \
+    if (__cstr_insert_r != ccol_success) {                                 \
+      ccol_fatal_err("cstr_insert('%s'): r: %d (%s)", #s, __cstr_insert_r, \
+                     ccol_retval_to_str(__cstr_insert_r));                 \
+    }                                                                      \
+  } while (0)
+
+/** @brief Replace entire content with @p str; calls ccol_fatal_err() on failure
+ */
+#define cstr_set(s, str)                                             \
+  do {                                                               \
+    ccol_retval_t __cstr_set_r = cstring_set((s), (str));            \
+    if (__cstr_set_r != ccol_success) {                              \
+      ccol_fatal_err("cstr_set('%s'): r: %d (%s)", #s, __cstr_set_r, \
+                     ccol_retval_to_str(__cstr_set_r));              \
     }                                                                \
   } while (0)
 
-/** @brief Prepend @p str; calls fatal_err() on failure */
-#define cstr_prepend(s, str)                                          \
-  do {                                                                \
-    ccol_retval_t __cstr_prepend_r = cstring_prepend((s), (str));     \
-    if (__cstr_prepend_r != ccol_success) {                           \
-      fatal_err("cstr_prepend('%s'): r: %d (%s)", #s, __cstr_prepend_r, \
-                ccol_retval_to_str(__cstr_prepend_r));                 \
-    }                                                                  \
+/** @brief Replace all occurrences of @p needle; calls ccol_fatal_err() on
+ * failure */
+#define cstr_replace(s, needle, replacement)                                 \
+  do {                                                                       \
+    ccol_retval_t __cstr_replace_r =                                         \
+        cstring_replace((s), (needle), (replacement));                       \
+    if (__cstr_replace_r != ccol_success) {                                  \
+      ccol_fatal_err("cstr_replace('%s'): r: %d (%s)", #s, __cstr_replace_r, \
+                     ccol_retval_to_str(__cstr_replace_r));                  \
+    }                                                                        \
   } while (0)
 
-/** @brief Insert @p str at @p pos; calls fatal_err() on failure */
-#define cstr_insert(s, pos, str)                                        \
-  do {                                                                  \
-    ccol_retval_t __cstr_insert_r = cstring_insert((s), (pos), (str));  \
-    if (__cstr_insert_r != ccol_success) {                              \
-      fatal_err("cstr_insert('%s'): r: %d (%s)", #s, __cstr_insert_r,   \
-                ccol_retval_to_str(__cstr_insert_r));                   \
-    }                                                                   \
-  } while (0)
-
-/** @brief Replace entire content with @p str; calls fatal_err() on failure */
-#define cstr_set(s, str)                                             \
-  do {                                                                \
-    ccol_retval_t __cstr_set_r = cstring_set((s), (str));             \
-    if (__cstr_set_r != ccol_success) {                               \
-      fatal_err("cstr_set('%s'): r: %d (%s)", #s, __cstr_set_r,       \
-                ccol_retval_to_str(__cstr_set_r));                    \
-    }                                                                 \
-  } while (0)
-
-/** @brief Replace all occurrences of @p needle; calls fatal_err() on failure */
-#define cstr_replace(s, needle, replacement)                              \
-  do {                                                                    \
-    ccol_retval_t __cstr_replace_r =                                      \
-        cstring_replace((s), (needle), (replacement));                   \
-    if (__cstr_replace_r != ccol_success) {                               \
-      fatal_err("cstr_replace('%s'): r: %d (%s)", #s, __cstr_replace_r,   \
-                ccol_retval_to_str(__cstr_replace_r));                    \
-    }                                                                     \
-  } while (0)
-
-/** @brief Reserve at least @p cap bytes; calls fatal_err() on failure */
-#define cstr_reserve(s, cap)                                                \
-  do {                                                                      \
-    if (!cstring_reserve((s), (cap))) {                                     \
-      fatal_err(                                                            \
+/** @brief Reserve at least @p cap bytes; calls ccol_fatal_err() on failure */
+#define cstr_reserve(s, cap)                                                  \
+  do {                                                                        \
+    if (!cstring_reserve((s), (cap))) {                                       \
+      ccol_fatal_err(                                                         \
           "cstr_reserve('%s'): failed to reserve %zu bytes (out of memory?)", \
-          #s, (size_t)(cap));                                               \
-    }                                                                       \
+          #s, (size_t)(cap));                                                 \
+    }                                                                         \
   } while (0)
 
 /** @brief Create a new cstring that contains the content of [start,start+len)
- * of the cstring s; calls fatal_err() on failure */
-#define cstr_substring(s, start, len)                               \
-  ({                                                                \
-    char *_cstr_sub_err = NULL;                                     \
-    cstr _cstr_sub_result =                                         \
-        cstring_substring((s), (start), (len), &_cstr_sub_err);     \
-    if (!_cstr_sub_result) {                                        \
-      fatal_err("cstr_substring('%s', start=%zu, len=%zu): %s", #s, \
-                (size_t)(start), (size_t)(len),                     \
-                _cstr_sub_err ? _cstr_sub_err : "unknown error");   \
-    }                                                               \
-    _cstr_sub_result;                                               \
+ * of the cstring s; calls ccol_fatal_err() on failure */
+#define cstr_substring(s, start, len)                                    \
+  ({                                                                     \
+    char *_cstr_sub_err = NULL;                                          \
+    cstr _cstr_sub_result =                                              \
+        cstring_substring((s), (start), (len), &_cstr_sub_err);          \
+    if (!_cstr_sub_result) {                                             \
+      ccol_fatal_err("cstr_substring('%s', start=%zu, len=%zu): %s", #s, \
+                     (size_t)(start), (size_t)(len),                     \
+                     _cstr_sub_err ? _cstr_sub_err : "unknown error");   \
+    }                                                                    \
+    _cstr_sub_result;                                                    \
   })
 
 /* Simple pass-through wrappers */
@@ -761,7 +772,11 @@ bool cstring_length_fits_with_terminator_for_tests(size_t length);
  * @return ccol_success on success
  * @return ccol_container_full if the computation would overflow size_t
  */
-ccol_retval_t cstring_replace_compute_new_length_for_tests(
-    size_t orig_length, size_t nlen, size_t rlen, size_t count,
-    size_t *new_len_out);
+ccol_retval_t cstring_replace_compute_new_length_for_tests(size_t orig_length,
+                                                           size_t nlen,
+                                                           size_t rlen,
+                                                           size_t count,
+                                                           size_t *new_len_out);
 #endif
+
+#pragma GCC visibility pop

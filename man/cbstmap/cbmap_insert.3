@@ -11,11 +11,16 @@ cbmap_insert(hm_name, key, val);
 .fi
 .SH DESCRIPTION
 .nf
-Type-safe wrapper for cbmap_insert_elem() that automatically handles
-type conversion and cmap_pair creation. If the key already exists the
-value is updated silently. Calls fatal_err() only on a true failure
-(i.e. ccol_not_enough_memory or ccol_container_full).
+Type-safe wrapper for cbmap_insert_elem() that builds the cmap_pair for
+the key and the value from the expressions passed. If the key already
+exists the value is updated silently. Calls ccol_fatal_err() only on a
+true failure (i.e. ccol_not_enough_memory or ccol_container_full).
 Tree is automatically rebalanced after insertion.
+
+key and val must be of the map's declared key and value types. Both are
+stored as the raw bytes of the expression passed, sized with sizeof,
+rather than converted to the declared type the way a plain C assignment
+would convert them.
 .fi
 .SH PARAMETERS
 .nf
@@ -30,5 +35,6 @@ Handles both value types and string types correctly
 .fi
 .SH "SEE ALSO"
 .BR cbmap_insert_elem (3),
+.BR cbmap_create_full (3),
 .BR cbmap_get (3),
 .BR cbmap_remove (3)

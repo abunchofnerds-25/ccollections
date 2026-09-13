@@ -15,8 +15,8 @@ Declares a chttpcli variable named name with automatic destruction via
 GCC cleanup attribute.  ___chttpclient_destroy is called when name goes
 out of scope regardless of how the scope is exited.
 
-The variable is initialised to NULL.  Assigning NULL before scope exit
-suppresses the cleanup call.
+The variable is initialised to CHTTPCLI_INVALID.  Assigning
+CHTTPCLI_INVALID before scope exit suppresses the cleanup call.
 .fi
 .SH "SEE ALSO"
 .BR chttpcli_construct_scoped (3),

@@ -5,8 +5,8 @@ SRC_FILE_PREFIX = clogger
 # cvector.c is needed for clog's own generation-tagged handle slot table (a
 # cvec of slots plus a cvec free-index stack, plus the live-shareds and
 # atfork scratch cvectors; see "Fork safety" in src/clogger.c). cthreadcomm.c
-# is needed for async logging's writer-thread queue (circular_queue /
-# dynamic_queue); cthreadpool.c is cthreadcomm.c's own transitive dependency.
+# is needed for async logging's writer-thread queue (ccol_circular_queue /
+# ccol_dynamic_queue); cthreadpool.c is cthreadcomm.c's own transitive dependency.
 SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c \
             ../../src/chashmap.c ../../src/cvector.c \
             ../../src/cthreadcomm.c ../../src/cthreadpool.c \
@@ -39,7 +39,7 @@ test: build
 # die_after_fork=0: this suite's own forked-child fatal/null-handle tests
 # (and the fork_safety.* group) fork and, in some cases, create new pthreads
 # in the child; TSan's default die_after_fork=1 can otherwise make such a
-# child exit normally instead of reaching its expected fatal_err()/SIGABRT
+# child exit normally instead of reaching its expected ccol_fatal_err()/SIGABRT
 # or exercising the forked thread at all, specifically when the parent is
 # multi-threaded at fork() time (see tests/chttpclient/Makefile's fuller
 # comment on its own test_tsan target for the exact mechanism).
@@ -56,10 +56,10 @@ memtest: build
 
 # --ignore-errors negative: gcov's own coverage counters are plain (non-atomic)
 # increments, which can race under concurrently-executed instrumented code and
-# has been observed producing a spurious negative hit count (reproduced on
-# more than one module, including a glibc header, not this library's own
-# logic); see tests/chttpclient/Makefile's identical flag for the full
-# rationale and reproduction notes.
+# produce a spurious negative hit count. This affects more than one module,
+# including inside a glibc header, and is a limitation of gcov's own
+# instrumentation rather than a defect in this library's logic; see
+# tests/chttpclient/Makefile's identical flag for the full rationale.
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
@@ -67,7 +67,7 @@ generate_coverage_report:
 	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file $(SRC_FILE_PREFIX).c.info && \
 	genhtml --ignore-errors inconsistent -s $(SRC_FILE_PREFIX).c.info --output-directory coverage && \
-	rm -rf *.gcno *.gcda *.gcov *.c.info
+	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info
 
 all: build build_tsan test test_tsan memtest generate_coverage_report
 

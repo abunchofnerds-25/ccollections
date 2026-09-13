@@ -28,6 +28,15 @@ SOFTWARE.
 #include <stdbool.h>
 #include <stddef.h>
 
+/* Everything declared from here to the end of this header is part of the
+ * public ABI of libccollections and is exported from the shared library.
+ * The library itself is built with -fvisibility=hidden, so any function or
+ * object that is not covered by one of these blocks stays internal to the
+ * library, is absent from its dynamic symbol table, and cannot be
+ * interposed by, or collide with, a symbol of the same name in the
+ * application that links against it. */
+#pragma GCC visibility push(default)
+
 /**
  * @file chttp.h
  * @brief Common types shared between chttpclient and chttpserver.
@@ -295,3 +304,5 @@ static inline __attribute__((always_inline)) char *chttp_basic_auth(
     const char *username, const char *password) {
   return chttp_basic_auth_mp(NULL, username, password);
 }
+
+#pragma GCC visibility pop

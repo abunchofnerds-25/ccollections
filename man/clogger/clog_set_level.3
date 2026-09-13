@@ -20,10 +20,12 @@ sharing the logger.
 .nf
 logger  Logger handle.
 level   New minimum level (CLOG_TRACE through CLOG_OFF).
-        Use CLOG_OFF to suppress all output.
+        Use CLOG_OFF to suppress all output except CLOG_FATAL.
 .fi
 .SH NOTES
 .nf
+CLOG_FATAL bypasses this filter entirely and is always written,
+whatever the current minimum level is.
 Thread-safe: the minimum level is a per-logger, atomically updated
 value, independent of the lock that serialises writes/rotation for
 the shared output target, so changing one logger's level never

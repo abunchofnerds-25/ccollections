@@ -1,0 +1,49 @@
+.TH CHMAP_GET_ELEM_COPY 3 "2026-09-13" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chmap_get_elem_copy \- copy the value associated with a key out of a hash map
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chashmap.h>
+
+ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair *key_pair,
+                                  void *target_buf, size_t target_buf_size);
+.fi
+.SH DESCRIPTION
+.nf
+Searches the map for key_pair and copies the associated value into
+target_buf, copying min(value_size, target_buf_size) bytes so an
+undersized buffer receives a partial copy rather than an error. When
+target_buf_size exceeds the stored value's size, the remaining bytes of
+target_buf are zeroed rather than left untouched. cbmap_get_elem_copy(3)
+takes the stricter approach of requiring an exact size match.
+.fi
+.SH PARAMETERS
+.nf
+chm              Hash map to search
+key_pair         Key to look up
+target_buf       Buffer to receive the value copy
+target_buf_size  Size of target_buf
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        - Key found, value copied into target_buf
+ccol_key_not_found  - Key does not exist in map
+ccol_invalid_args   - Any pointer is NULL, a size is 0, or key_pair's
+                      size does not match a fixed-width key type's own
+                      size (see chmap_create_full(3))
+.fi
+.SH NOTES
+.nf
+O(1) average complexity
+Open-addressing: O(n) worst case for linear probing
+Separate chaining: O(n) worst case per bucket, where n is chain length
+Copies min(actual_value_size, target_buf_size) bytes
+Safe to use with an undersized buffer, which receives a partial copy
+Bytes of target_buf beyond the copied value are zeroed
+.fi
+.SH "SEE ALSO"
+.BR chmap_get_elem_ref (3),
+.BR chmap_insert_elem (3),
+.BR cbmap_get_elem_copy (3)

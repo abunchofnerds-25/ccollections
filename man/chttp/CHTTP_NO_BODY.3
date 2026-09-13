@@ -16,7 +16,7 @@ Use for GET, HEAD, DELETE, and other methods that carry no body.
 .fi
 .SH EXAMPLES
 .nf
-chttp_request_t *req = chttp_request_new(CHTTP_GET, url, CHTTP_NO_BODY, NULL);
+chttp_request_t *req = chttp_request_new(CHTTP_GET, url, &CHTTP_NO_BODY, NULL);
 .fi
 .SH "SEE ALSO"
 .BR CHTTP_BODY (3),

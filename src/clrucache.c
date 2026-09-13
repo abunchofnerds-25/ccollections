@@ -73,7 +73,7 @@ typedef struct clru_entry {
   void *value; /* NULL while fetch/set is in progress */
   size_t value_size;
 
-  cond_var_t cond; /* shared with cache->mutex */
+  ccol_cond_var_t cond; /* shared with cache->mutex */
 
   bool fetch_in_progress; /* a remote getter is running for this key */
   bool set_in_progress;   /* a remote/async setter is running for this key */
@@ -86,10 +86,10 @@ typedef struct clru_entry {
    * find entry->value still NULL consults this to report the same
    * ccol_unexpected_failure the fetching thread itself received, instead
    * of the generic ccol_key_not_found every other fetch-failure reason
-   * produces; without it, only the one thread that happened to actually
-   * run the remote getter learned that the real problem was a mis-sized
-   * value, contradicting this module's own "all others ... receive the
-   * same result" coalescing contract (see clrucache.h's file-level doc
+   * produces; without it, only the one thread that actually runs the
+   * remote getter learns that the real problem is a mis-sized value,
+   * contradicting this module's own "all others ... receive the same
+   * result" coalescing contract (see clrucache.h's file-level doc
    * comment). */
   bool fetch_size_mismatch;
 
@@ -107,11 +107,11 @@ typedef struct clru_entry {
  * clrucache* is ever touched. This is what lets __clrucache_destroy detect
  * BOTH a concurrent double-destroy (racing another destroy on the same
  * still-live handle) AND a sequential one (a stale handle, from an earlier,
- * already-completed destroy) as a fatal_err rather than a use-after-free/
+ * already-completed destroy) as a ccol_fatal_err rather than a use-after-free/
  * double-free: a slot is marked not-in-use the instant it is released, and
  * its generation is bumped on every reuse, so a stale handle can never
  * alias a later, unrelated cache occupying the same slot index. Mirrors
- * chttpcli_slot_table/chttpsvr_slot_table/event_loop_slot_table exactly;
+ * chttpcli_slot_table/chttpsvr_slot_table/ccol_event_loop_slot_table exactly;
  * see src/chttpclient.c's own copy of this comment for the full design
  * rationale.
  *
@@ -120,13 +120,12 @@ typedef struct clru_entry {
  * runs on every single clru_cache get/set/delete call; _clrucache_handle_
  * slot_acquire/__clrucache_destroy (the only mutators) each run once per
  * cache's entire lifetime, not once per operation. Mirrors cthreadcomm.c's/
- * cthreadpool.c's/chttpclient.c's own identical slot-table rwlock
- * conversions. Like chttpclient.c's chttpcli_slot_table, this table has no
- * pthread_atfork() protection of its own at all (clrucache.c registers
- * none), so this conversion carries none of cthreadcomm.c's/cthreadpool.c's
- * own TID-tracked-write-lock reinit-in-child subtlety: there being nothing
- * to preserve doesn't change what fork() safety this table already did or
- * didn't have. */
+ * cthreadpool.c's/chttpclient.c's own identical slot-table rwlocks. Like
+ * chttpclient.c's chttpcli_slot_table, this table has no pthread_atfork()
+ * protection of its own at all (clrucache.c registers none), so none of
+ * cthreadcomm.c's/cthreadpool.c's own TID-tracked-write-lock
+ * reinit-in-child subtlety applies here: there is no fork()-time lock state
+ * for this table to preserve in the first place. */
 typedef struct {
   struct clrucache *ptr; /* NULL when slot is free */
   uint32_t generation;   /* minted fresh on every acquire; monotonic per
@@ -136,22 +135,23 @@ typedef struct {
 } clrucache_slot_t;
 
 static struct {
-  rw_lock_t rwlock;
-  once_flag_t once;
+  ccol_rw_lock_t rwlock;
+  ccol_once_flag_t once;
   cvec slots;        /* cvec of clrucache_slot_t; grows via push_back only,
                          indices permanent once allocated */
   cvec free_indices; /* cvec of uint32_t; LIFO free list, O(1) reuse */
 } clrucache_slot_table = {0};
 
 static void _clrucache_slot_table_init_globals(void) {
-  if (rw_lock_init(clrucache_slot_table.rwlock) != 0)
-    fatal_err("clru_cache slot table: failed to initialize rwlock");
+  if (ccol_rw_lock_init(clrucache_slot_table.rwlock) != 0)
+    ccol_fatal_err("clru_cache slot table: failed to initialize rwlock");
   clrucache_slot_table.slots = cvector_create(sizeof(clrucache_slot_t), NULL);
   if (!clrucache_slot_table.slots)
-    fatal_err("clru_cache slot table: failed to allocate slots vector");
+    ccol_fatal_err("clru_cache slot table: failed to allocate slots vector");
   clrucache_slot_table.free_indices = cvector_create(sizeof(uint32_t), NULL);
   if (!clrucache_slot_table.free_indices)
-    fatal_err("clru_cache slot table: failed to allocate free-index vector");
+    ccol_fatal_err(
+        "clru_cache slot table: failed to allocate free-index vector");
 }
 
 struct clrucache {
@@ -167,7 +167,7 @@ struct clrucache {
   size_t capacity;
   size_t size; /* number of LIVE entries */
 
-  mutex_t mutex; /* protects everything */
+  ccol_mutex_t mutex; /* protects everything */
 
   clru_remote_getter_t remote_getter;
   clru_remote_setter_t remote_setter;
@@ -182,11 +182,11 @@ struct clrucache {
    * object, closing a real resolve-then-use race a naive "look up, unlock,
    * return the pointer" resolve step would otherwise leave open. Reuses
    * this cache's own single mutex for the unpin side's decrement+broadcast
-   * (unlike event_loop's fully lock-free pin, this module is already a
+   * (unlike ccol_event_loop's fully lock-free pin, this module is already a
    * single-global-mutex design, so this introduces no new contention
-   * beyond what every entry point already pays today). */
+   * beyond what every entry point already pays). */
   _Atomic size_t pending_resolve_count;
-  cond_var_t pin_cv; /* wakes __clrucache_destroy's wait; shares mutex */
+  ccol_cond_var_t pin_cv; /* wakes __clrucache_destroy's wait; shares mutex */
 };
 
 /* ========================================================================== */
@@ -199,11 +199,11 @@ struct clrucache {
  * _clrucache_resolve_unpin(result) exactly once, as soon as it is done
  * touching the resolved struct clrucache*. */
 static struct clrucache *_clrucache_resolve(clru_cache h) {
-  call_once(clrucache_slot_table.once, _clrucache_slot_table_init_globals);
+  ccol_call_once(clrucache_slot_table.once, _clrucache_slot_table_init_globals);
   if (h == 0) return NULL;
   uint32_t idx = (uint32_t)(h >> 32);
   uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
-  rw_lock_rdlock(clrucache_slot_table.rwlock);
+  ccol_rw_lock_rdlock(clrucache_slot_table.rwlock);
   struct clrucache *raw = NULL;
   if (idx < cvector_elem_count(clrucache_slot_table.slots)) {
     clrucache_slot_t *slot =
@@ -218,28 +218,28 @@ static struct clrucache *_clrucache_resolve(clru_cache h) {
    * requires clrucache_slot_table.rwlock's write side, which cannot run
    * concurrently with this read side regardless. */
   if (raw) atomic_fetch_add(&raw->pending_resolve_count, 1);
-  rw_lock_unlock(clrucache_slot_table.rwlock);
+  ccol_rw_lock_unlock(clrucache_slot_table.rwlock);
   return raw;
 }
 
 static void _clrucache_resolve_unpin(struct clrucache *raw) {
   /* The decrement itself MUST happen under raw->mutex, not as a bare atomic
    * op outside it: see _chttpcli_resolve_unpin's own comment in
-   * src/chttpclient.c for the full account of the lost-wakeup use-after-free
-   * an earlier draft of that exact function had, which this mirrors
-   * exactly. */
-  mutex_lock(raw->mutex);
+   * src/chttpclient.c for the full account of the lost-wakeup
+   * use-after-free a bare atomic decrement causes here; this mirrors that
+   * function exactly. */
+  ccol_mutex_lock(raw->mutex);
   atomic_fetch_sub(&raw->pending_resolve_count, 1);
-  cond_var_broadcast(raw->pin_cv); /* wake a destroy waiting on this */
-  mutex_unlock(raw->mutex);
+  ccol_cond_var_broadcast(raw->pin_cv); /* wake a destroy waiting on this */
+  ccol_mutex_unlock(raw->mutex);
 }
 
 /* Allocates a fresh slot (or reuses a freed one) for cache and returns the
  * resulting handle, or 0 on OOM. Called once, from clrucache_create_full,
  * after the object is otherwise fully constructed. */
 static clru_cache _clrucache_handle_slot_acquire(struct clrucache *cache) {
-  call_once(clrucache_slot_table.once, _clrucache_slot_table_init_globals);
-  rw_lock_wrlock(clrucache_slot_table.rwlock);
+  ccol_call_once(clrucache_slot_table.once, _clrucache_slot_table_init_globals);
+  ccol_rw_lock_wrlock(clrucache_slot_table.rwlock);
   uint32_t idx;
   clrucache_slot_t *slot;
   if (cvector_elem_count(clrucache_slot_table.free_indices) > 0) {
@@ -248,7 +248,7 @@ static clru_cache _clrucache_handle_slot_acquire(struct clrucache *cache) {
   } else {
     clrucache_slot_t fresh = {0};
     if (cvector_push_back(clrucache_slot_table.slots, &fresh) != ccol_success) {
-      rw_lock_unlock(clrucache_slot_table.rwlock);
+      ccol_rw_lock_unlock(clrucache_slot_table.rwlock);
       return 0; /* ordinary, non-fatal OOM */
     }
     idx = (uint32_t)cvector_elem_count(clrucache_slot_table.slots) - 1;
@@ -263,7 +263,7 @@ static clru_cache _clrucache_handle_slot_acquire(struct clrucache *cache) {
   slot->ptr = cache;
   slot->in_use = true;
   clru_cache h = ((clru_cache)idx << 32) | (clru_cache)slot->generation;
-  rw_lock_unlock(clrucache_slot_table.rwlock);
+  ccol_rw_lock_unlock(clrucache_slot_table.rwlock);
   return h;
 }
 
@@ -319,14 +319,14 @@ static void cache_free_self(clrucache *cache) {
 
 static clru_entry *entry_alloc(clrucache *cache) {
   clru_entry *e =
-      (clru_entry *)_mem_calloc(cache->m_procs, 1, sizeof(clru_entry));
+      (clru_entry *)_ccol_mem_calloc(cache->m_procs, 1, sizeof(clru_entry));
   if (!e) return NULL;
-  if (cond_var_init(e->cond) != 0) {
+  if (ccol_cond_var_init(e->cond) != 0) {
     /* Do NOT route this through entry_free(): that would call
-     * cond_var_destroy() on a condvar that was never successfully
+     * ccol_cond_var_destroy() on a condvar that was never successfully
      * initialized, which is undefined behavior. e->key/e->value are still
      * NULL (fresh calloc), so a plain free is all that is needed. */
-    _mem_free(cache->m_procs, e);
+    _ccol_mem_free(cache->m_procs, e);
     return NULL;
   }
   return e;
@@ -344,10 +344,10 @@ static clru_entry *entry_alloc(clrucache *cache) {
  * the caller; correctness depends solely on one of the two situations
  * above, not on the mutex itself. */
 static void entry_free(clrucache *cache, clru_entry *e) {
-  _mem_free(cache->m_procs, e->key);
-  _mem_free(cache->m_procs, e->value);
-  cond_var_destroy(e->cond);
-  _mem_free(cache->m_procs, e);
+  _ccol_mem_free(cache->m_procs, e->key);
+  _ccol_mem_free(cache->m_procs, e->value);
+  ccol_cond_var_destroy(e->cond);
+  _ccol_mem_free(cache->m_procs, e);
 }
 
 /* ========================================================================== */
@@ -372,7 +372,7 @@ static void evict_lru(clrucache *cache) {
   chmap_delete_elem(cache->map, &kp);
 
   victim->evicted = true;
-  cond_var_broadcast(victim->cond);
+  ccol_cond_var_broadcast(victim->cond);
   cache->size--;
 
   if (victim->waiters == 0) {
@@ -448,13 +448,14 @@ clru_cache clrucache_create_full(size_t capacity, ccol_data_type key_type,
       if (err) *err = CCOL_ERR_STR("failed to allocate m_procs copy");
       return CLRU_CACHE_INVALID;
     }
-    mem_cpy(cache->m_procs, mprocs, sizeof(*mprocs));
+    ccol_mem_cpy(cache->m_procs, mprocs, sizeof(*mprocs));
   }
 
   /* Internal map: key type as supplied; value type is always ccol_pointer */
   char *map_err = NULL;
-  cache->map = chmap_create_full(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, key_type,
-                                 ccol_pointer, cache->m_procs, NULL, &map_err);
+  cache->map =
+      chmap_create_full(CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, key_type,
+                        ccol_pointer, cache->m_procs, NULL, &map_err);
   if (!cache->map) {
     if (err)
       *err = map_err ? map_err : CCOL_ERR_STR("failed to create internal map");
@@ -474,18 +475,18 @@ clru_cache clrucache_create_full(size_t capacity, ccol_data_type key_type,
    * per POSIX, and returning a handle backed by a not-fully-initialized
    * mutex/condvar would make every later lock/wait/broadcast on it (in
    * particular _clrucache_resolve_unpin and __clrucache_destroy) undefined
-   * behavior; mirrors entry_alloc's own cond_var_init check a few dozen
+   * behavior; mirrors entry_alloc's own ccol_cond_var_init check a few dozen
    * lines above in this same file. */
-  if (mutex_init(cache->mutex) != 0) {
+  if (ccol_mutex_init(cache->mutex) != 0) {
     if (err) *err = CCOL_ERR_STR("failed to initialize cache mutex");
     __chmap_destroy(cache->map);
     cache_free_self(cache);
     return CLRU_CACHE_INVALID;
   }
-  if (cond_var_init(cache->pin_cv) != 0) {
+  if (ccol_cond_var_init(cache->pin_cv) != 0) {
     if (err)
       *err = CCOL_ERR_STR("failed to initialize cache pin condition variable");
-    mutex_destroy(cache->mutex);
+    ccol_mutex_destroy(cache->mutex);
     __chmap_destroy(cache->map);
     cache_free_self(cache);
     return CLRU_CACHE_INVALID;
@@ -498,18 +499,18 @@ clru_cache clrucache_create_full(size_t capacity, ccol_data_type key_type,
   cache->eviction_cb = eviction_cb;
 
   /* Slot acquisition is the LITERAL LAST step, after the cache is otherwise
-   * fully constructed: mirroring chttpcli/chttpsvr/event_loop's own
+   * fully constructed: mirroring chttpcli/chttpsvr/ccol_event_loop's own
    * constructors exactly, so that no handle is ever exposed to any caller
    * until this function is already about to return success. Unlike
-   * event_loop/ctpool, this module spawns no threads of its own, so a
+   * ccol_event_loop/ctpool, this module spawns no threads of its own, so a
    * failure here needs no thread-stopping, just releasing what was already
    * successfully constructed. */
   clru_cache h = _clrucache_handle_slot_acquire(cache);
   if (h == 0) {
     if (err) *err = CCOL_ERR_STR("failed to allocate clru_cache handle slot");
     __chmap_destroy(cache->map);
-    mutex_destroy(cache->mutex);
-    cond_var_destroy(cache->pin_cv);
+    ccol_mutex_destroy(cache->mutex);
+    ccol_cond_var_destroy(cache->pin_cv);
     cache_free_self(cache);
     return CLRU_CACHE_INVALID;
   }
@@ -531,12 +532,12 @@ void __clrucache_destroy(clru_cache cache) {
    * teardown; see the slot table's own file-level comment and
    * _clrucache_resolve's comment for the full design. A stale or
    * already-destroyed handle reaching here is exactly the misuse this
-   * redesign exists to catch: it is fatal, not a silent use-after-free/
-   * double-free. */
-  call_once(clrucache_slot_table.once, _clrucache_slot_table_init_globals);
+   * generation-tagged handle design exists to catch: it is fatal, not a
+   * silent use-after-free/double-free. */
+  ccol_call_once(clrucache_slot_table.once, _clrucache_slot_table_init_globals);
   uint32_t idx = (uint32_t)(cache >> 32);
   uint32_t gen = (uint32_t)(cache & 0xFFFFFFFFu);
-  rw_lock_wrlock(clrucache_slot_table.rwlock);
+  ccol_rw_lock_wrlock(clrucache_slot_table.rwlock);
   clrucache_slot_t *slot = NULL;
   struct clrucache *raw = NULL;
   if (idx < cvector_elem_count(clrucache_slot_table.slots)) {
@@ -548,40 +549,40 @@ void __clrucache_destroy(clru_cache cache) {
     }
   }
   if (!raw) {
-    rw_lock_unlock(clrucache_slot_table.rwlock);
-    fatal_err(
+    ccol_rw_lock_unlock(clrucache_slot_table.rwlock);
+    ccol_fatal_err(
         "clrucache_destroy: handle is stale or already destroyed "
         "(double-destroy / use-after-destroy of a clru_cache handle)");
   }
   slot->in_use = false; /* blocks ALL future resolves for this handle from
                             this instant, including a second concurrent
                             destroy attempt */
-  rw_lock_unlock(clrucache_slot_table.rwlock);
+  ccol_rw_lock_unlock(clrucache_slot_table.rwlock);
 
   /* Wait for pending_resolve_count to reach 0 BEFORE running any teardown
    * logic at all (not just before freeing memory); mirrors chttpcli's own
    * ordering exactly. Safe waiting first (unlike ctpool): the module's own
-   * blocking waits (the coalescing-getter/setter cond_var_wait loops) are
+   * blocking waits (the coalescing-getter/setter ccol_cond_var_wait loops) are
    * released by whichever other application thread's remote_getter/
    * remote_setter call completes for that key, a mechanism entirely
    * independent of anything destroy does, so no pinned/blocked caller here
    * ever depends on destroy-side logic to release its own pin. */
-  mutex_lock(raw->mutex);
+  ccol_mutex_lock(raw->mutex);
   while (atomic_load(&raw->pending_resolve_count) > 0) {
-    cond_var_wait(raw->pin_cv, raw->mutex);
+    ccol_cond_var_wait(raw->pin_cv, raw->mutex);
   }
-  mutex_unlock(raw->mutex);
+  ccol_mutex_unlock(raw->mutex);
 
   /* Evict all remaining live entries (calls eviction callback for each) */
-  mutex_lock(raw->mutex);
+  ccol_mutex_lock(raw->mutex);
   while (raw->lru_tail.prev != &raw->lru_head) {
     evict_lru(raw);
   }
-  mutex_unlock(raw->mutex);
+  ccol_mutex_unlock(raw->mutex);
 
   __chmap_destroy(raw->map);
-  mutex_destroy(raw->mutex);
-  cond_var_destroy(raw->pin_cv);
+  ccol_mutex_destroy(raw->mutex);
+  ccol_cond_var_destroy(raw->pin_cv);
 
   cache_free_self(raw);
 
@@ -593,7 +594,7 @@ void __clrucache_destroy(clru_cache cache) {
    * between may have reallocated slots' backing array via
    * cvector_push_back, invalidating any pointer into it taken before this
    * second lock acquisition; idx itself is stable. */
-  rw_lock_wrlock(clrucache_slot_table.rwlock);
+  ccol_rw_lock_wrlock(clrucache_slot_table.rwlock);
   clrucache_slot_t *slot2 =
       (clrucache_slot_t *)cvector_at(clrucache_slot_table.slots, idx);
   slot2->ptr = NULL;
@@ -601,7 +602,7 @@ void __clrucache_destroy(clru_cache cache) {
       the just-freed cache's handle carried, so that stale handle can never
       again match a FUTURE acquire's generation for this same index */
   cvector_push_back(clrucache_slot_table.free_indices, &idx);
-  rw_lock_unlock(clrucache_slot_table.rwlock);
+  ccol_rw_lock_unlock(clrucache_slot_table.rwlock);
 }
 
 #ifdef RUNNING_UNIT_TESTS
@@ -615,18 +616,18 @@ void __clrucache_destroy(clru_cache cache) {
  * cache, silently hanging every future clru_destroy call against it).
  * Returns NULL under the exact same conditions _clrucache_resolve does. */
 struct clrucache *_clrucache_resolve_for_tests(clru_cache h) {
-  call_once(clrucache_slot_table.once, _clrucache_slot_table_init_globals);
+  ccol_call_once(clrucache_slot_table.once, _clrucache_slot_table_init_globals);
   if (h == 0) return NULL;
   uint32_t idx = (uint32_t)(h >> 32);
   uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
-  rw_lock_rdlock(clrucache_slot_table.rwlock);
+  ccol_rw_lock_rdlock(clrucache_slot_table.rwlock);
   struct clrucache *raw = NULL;
   if (idx < cvector_elem_count(clrucache_slot_table.slots)) {
     clrucache_slot_t *slot =
         (clrucache_slot_t *)cvector_at(clrucache_slot_table.slots, idx);
     if (slot->in_use && slot->generation == gen) raw = slot->ptr;
   }
-  rw_lock_unlock(clrucache_slot_table.rwlock);
+  ccol_rw_lock_unlock(clrucache_slot_table.rwlock);
   return raw;
 }
 
@@ -635,10 +636,10 @@ struct clrucache *_clrucache_resolve_for_tests(clru_cache h) {
  * create/destroy churn loop reuses freed slots rather than growing the
  * table without bound. */
 size_t _clrucache_slot_table_capacity_for_tests(void) {
-  call_once(clrucache_slot_table.once, _clrucache_slot_table_init_globals);
-  rw_lock_rdlock(clrucache_slot_table.rwlock);
+  ccol_call_once(clrucache_slot_table.once, _clrucache_slot_table_init_globals);
+  ccol_rw_lock_rdlock(clrucache_slot_table.rwlock);
   size_t n = cvector_elem_count(clrucache_slot_table.slots);
-  rw_lock_unlock(clrucache_slot_table.rwlock);
+  ccol_rw_lock_unlock(clrucache_slot_table.rwlock);
   return n;
 }
 
@@ -646,9 +647,9 @@ size_t _clrucache_slot_table_capacity_for_tests(void) {
  * Lets a test bias, without guaranteeing outright, which of two threads
  * wins the race for raw->mutex once a successful fetch/set finishes
  * publishing an entry: called while the publishing thread STILL HOLDS
- * raw->mutex, immediately before it calls cond_var_broadcast() (which is
+ * raw->mutex, immediately before it calls ccol_cond_var_broadcast() (which is
  * what first makes a coalesced waiter blocked on that same entry start
- * contending for the mutex) and mutex_unlock(). Holding the mutex for
+ * contending for the mutex) and ccol_mutex_unlock(). Holding the mutex for
  * longer here gives a concurrent, unrelated thread trying to lock the same
  * mutex (e.g. to run an eviction that will remove the entry just
  * published) more time to already be queued up waiting for it BEFORE the
@@ -692,22 +693,22 @@ static void _clru_test_maybe_delay_post_publish(void) {
 
 /* Frees the slot table's own bookkeeping arrays at process exit, so
  * make memtest's leak-kind reporting does not flag them as still-
- * reachable; mirrors event_loop's own _cleanup_event_loop_slot_table
+ * reachable; mirrors ccol_event_loop's own _cleanup_event_loop_slot_table
  * exactly (see that function's own comment for the full rationale,
  * including why this is sound only given every clru_cache the
  * application created was itself destroyed before process exit; the
  * same precondition this test suite already satisfies for a clean
- * make memtest). MUST call_once here: __attribute__((destructor))
+ * make memtest). MUST ccol_call_once here: __attribute__((destructor))
  * functions run unconditionally for the whole shared object regardless
  * of which parts of it were actually used, so a process that links this
  * library but never creates a single clru_cache would otherwise lock a
  * never-pthread_mutex_init'd mutex here. */
 __attribute__((destructor)) static void _cleanup_clrucache_slot_table(void) {
-  call_once(clrucache_slot_table.once, _clrucache_slot_table_init_globals);
-  rw_lock_wrlock(clrucache_slot_table.rwlock);
+  ccol_call_once(clrucache_slot_table.once, _clrucache_slot_table_init_globals);
+  ccol_rw_lock_wrlock(clrucache_slot_table.rwlock);
   __cvector_destroy(clrucache_slot_table.slots);
   __cvector_destroy(clrucache_slot_table.free_indices);
-  rw_lock_unlock(clrucache_slot_table.rwlock);
+  ccol_rw_lock_unlock(clrucache_slot_table.rwlock);
 }
 
 /* ========================================================================== */
@@ -723,14 +724,14 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
     return ccol_invalid_args;
   }
 
-  mutex_lock(raw->mutex);
+  ccol_mutex_lock(raw->mutex);
 
   clru_entry *entry = map_lookup(raw, key_pair);
 
   if (!entry) {
     /* Cache miss */
     if (!raw->remote_getter) {
-      mutex_unlock(raw->mutex);
+      ccol_mutex_unlock(raw->mutex);
       _clrucache_resolve_unpin(raw);
       return ccol_key_not_found;
     }
@@ -739,25 +740,26 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
      * find it and coalesce onto the single remote fetch we're about to do. */
     entry = entry_alloc(raw);
     if (!entry) {
-      mutex_unlock(raw->mutex);
+      ccol_mutex_unlock(raw->mutex);
       _clrucache_resolve_unpin(raw);
       return ccol_not_enough_memory;
     }
 
-    entry->key = _mem_alloc(raw->m_procs, key_pair->size);
+    entry->key = _ccol_mem_alloc(raw->m_procs, key_pair->size);
     if (!entry->key) {
       /* Release the mutex before freeing, matching every other entry_free
        * call site in this file that frees an entry never published into
-       * cache->map: the single global cache mutex must not be held across
-       * the freed entry's own _mem_free/cond_var_destroy calls, which would
-       * otherwise needlessly block every other concurrent getter/setter on
+       * cache->map: the single global cache mutex must not be held across the
+       * freed entry's own _ccol_mem_free/ccol_cond_var_destroy calls, which
+       * would otherwise needlessly block every other concurrent getter/setter
+       * on
        * this cache for their duration. */
-      mutex_unlock(raw->mutex);
+      ccol_mutex_unlock(raw->mutex);
       entry_free(raw, entry);
       _clrucache_resolve_unpin(raw);
       return ccol_not_enough_memory;
     }
-    mem_cpy(entry->key, key_pair->ptr, key_pair->size);
+    ccol_mem_cpy(entry->key, key_pair->ptr, key_pair->size);
     entry->key_size = key_pair->size;
     entry->fetch_in_progress = true;
 
@@ -774,19 +776,19 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
      * a dangling pointer behind for the very next lookup of this key. */
     ccol_retval_t ins = map_upsert(raw, key_pair, entry);
     if (ins != ccol_success && ins != ccol_key_already_present) {
-      mutex_unlock(raw->mutex);
+      ccol_mutex_unlock(raw->mutex);
       entry_free(raw, entry);
       _clrucache_resolve_unpin(raw);
       return ins;
     }
 
     /* We are the fetcher: release mutex, call remote getter */
-    mutex_unlock(raw->mutex);
+    ccol_mutex_unlock(raw->mutex);
 
     cmap_pair fetched = {};
     bool fetch_ok = raw->remote_getter(key_pair, &fetched);
 
-    mutex_lock(raw->mutex);
+    ccol_mutex_lock(raw->mutex);
     entry->fetch_in_progress = false;
 
     if (fetch_ok && fetched.ptr && fetched.size > 0) {
@@ -796,15 +798,15 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
       lru_add_to_front(raw, entry);
       raw->size++;
 
-      void *copy = _mem_alloc(raw->m_procs, fetched.size);
+      void *copy = _ccol_mem_alloc(raw->m_procs, fetched.size);
       if (!copy) {
         /* Entry is cached; caller just can't get a copy this time. */
-        cond_var_broadcast(entry->cond);
-        mutex_unlock(raw->mutex);
+        ccol_cond_var_broadcast(entry->cond);
+        ccol_mutex_unlock(raw->mutex);
         _clrucache_resolve_unpin(raw);
         return ccol_not_enough_memory;
       }
-      mem_cpy(copy, fetched.ptr, fetched.size);
+      ccol_mem_cpy(copy, fetched.ptr, fetched.size);
       val_out->ptr = copy;
       val_out->size = fetched.size;
 
@@ -814,20 +816,20 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
        * coalesced waiter; see the hook's own doc comment. */
       _clru_test_maybe_delay_post_publish();
 #endif
-      cond_var_broadcast(entry->cond);
-      mutex_unlock(raw->mutex);
+      ccol_cond_var_broadcast(entry->cond);
+      ccol_mutex_unlock(raw->mutex);
       _clrucache_resolve_unpin(raw);
       return ccol_success;
     } else {
       /* Remote getter failed: remove placeholder, notify waiters */
       if (fetched.ptr)
-        _mem_free(raw->m_procs, fetched.ptr); /* size==0 edge case */
+        _ccol_mem_free(raw->m_procs, fetched.ptr); /* size==0 edge case */
       cmap_pair kp = {.ptr = entry->key, .size = entry->key_size};
       chmap_delete_elem(raw->map, &kp);
       entry->evicted = true;
-      cond_var_broadcast(entry->cond);
+      ccol_cond_var_broadcast(entry->cond);
       bool should_free = (entry->waiters == 0);
-      mutex_unlock(raw->mutex);
+      ccol_mutex_unlock(raw->mutex);
       if (should_free) entry_free(raw, entry);
       _clrucache_resolve_unpin(raw);
       return ccol_key_not_found;
@@ -838,7 +840,7 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
   if (entry->fetch_in_progress || entry->set_in_progress) {
     entry->waiters++;
     while (entry->fetch_in_progress || entry->set_in_progress) {
-      cond_var_wait(entry->cond, raw->mutex);
+      ccol_cond_var_wait(entry->cond, raw->mutex);
     }
     entry->waiters--;
 
@@ -853,7 +855,7 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
                                  ? ccol_unexpected_failure
                                  : ccol_key_not_found;
       bool should_free = (entry->evicted && entry->waiters == 0);
-      mutex_unlock(raw->mutex);
+      ccol_mutex_unlock(raw->mutex);
       if (should_free) entry_free(raw, entry);
       _clrucache_resolve_unpin(raw);
       return fail_r;
@@ -885,21 +887,21 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
   /* Allocate the caller's copy BEFORE promoting the entry's LRU position:
    * a call that ends up failing (OOM here) must not still have the side
    * effect of moving the entry to the front of the eviction order. */
-  void *copy = _mem_alloc(raw->m_procs, entry->value_size);
+  void *copy = _ccol_mem_alloc(raw->m_procs, entry->value_size);
   if (!copy) {
     bool should_free = (entry->evicted && entry->waiters == 0);
-    mutex_unlock(raw->mutex);
+    ccol_mutex_unlock(raw->mutex);
     if (should_free) entry_free(raw, entry);
     _clrucache_resolve_unpin(raw);
     return ccol_not_enough_memory;
   }
   if (!entry->evicted) lru_move_to_front(raw, entry);
-  mem_cpy(copy, entry->value, entry->value_size);
+  ccol_mem_cpy(copy, entry->value, entry->value_size);
   val_out->ptr = copy;
   val_out->size = entry->value_size;
 
   bool should_free = (entry->evicted && entry->waiters == 0);
-  mutex_unlock(raw->mutex);
+  ccol_mutex_unlock(raw->mutex);
   if (should_free) entry_free(raw, entry);
   _clrucache_resolve_unpin(raw);
   return ccol_success;
@@ -929,21 +931,21 @@ static clru_entry *create_and_insert_placeholder(clrucache *cache,
     return NULL;
   }
 
-  e->key = _mem_alloc(cache->m_procs, key_pair->size);
+  e->key = _ccol_mem_alloc(cache->m_procs, key_pair->size);
   if (!e->key) {
     /* Release the mutex before freeing, then re-acquire it before
      * returning, so this helper's own "returns with cache->mutex held"
      * contract holds regardless of outcome: the single global cache mutex
-     * must not be held across the freed entry's own _mem_free/
-     * cond_var_destroy calls, which would otherwise needlessly block every
+     * must not be held across the freed entry's own _ccol_mem_free/
+     * ccol_cond_var_destroy calls, which would otherwise needlessly block every
      * other concurrent getter/setter on this cache for their duration. */
-    mutex_unlock(cache->mutex);
+    ccol_mutex_unlock(cache->mutex);
     entry_free(cache, e);
-    mutex_lock(cache->mutex);
+    ccol_mutex_lock(cache->mutex);
     *err_out = ccol_not_enough_memory;
     return NULL;
   }
-  mem_cpy(e->key, key_pair->ptr, key_pair->size);
+  ccol_mem_cpy(e->key, key_pair->ptr, key_pair->size);
   e->key_size = key_pair->size;
 
   /* ccol_key_already_present is a documented success outcome of
@@ -951,9 +953,9 @@ static clru_entry *create_and_insert_placeholder(clrucache *cache,
    * in clrucache_get_full's own miss path for the full reasoning. */
   ccol_retval_t ins = map_upsert(cache, key_pair, e);
   if (ins != ccol_success && ins != ccol_key_already_present) {
-    mutex_unlock(cache->mutex);
+    ccol_mutex_unlock(cache->mutex);
     entry_free(cache, e);
-    mutex_lock(cache->mutex);
+    ccol_mutex_lock(cache->mutex);
     *err_out = ins;
     return NULL;
   }
@@ -966,11 +968,11 @@ static clru_entry *create_and_insert_placeholder(clrucache *cache,
  */
 static ccol_retval_t entry_store_value(clrucache *cache, clru_entry *entry,
                                        const cmap_pair *val_pair) {
-  void *new_val = _mem_alloc(cache->m_procs, val_pair->size);
+  void *new_val = _ccol_mem_alloc(cache->m_procs, val_pair->size);
   if (!new_val) return ccol_not_enough_memory;
-  mem_cpy(new_val, val_pair->ptr, val_pair->size);
+  ccol_mem_cpy(new_val, val_pair->ptr, val_pair->size);
 
-  _mem_free(cache->m_procs, entry->value);
+  _ccol_mem_free(cache->m_procs, entry->value);
   entry->value = new_val;
   entry->value_size = val_pair->size;
 
@@ -994,7 +996,7 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
     return ccol_invalid_args;
   }
 
-  mutex_lock(raw->mutex);
+  ccol_mutex_lock(raw->mutex);
 
   bool created_new = false;
   clru_entry *entry;
@@ -1016,7 +1018,7 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
       ccol_retval_t create_err = ccol_not_enough_memory;
       entry = create_and_insert_placeholder(raw, key_pair, &create_err);
       if (!entry) {
-        mutex_unlock(raw->mutex);
+        ccol_mutex_unlock(raw->mutex);
         _clrucache_resolve_unpin(raw);
         return create_err;
       }
@@ -1029,7 +1031,7 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
     /* A concurrent fetch or set is in progress: wait for it to complete */
     entry->waiters++;
     while (entry->fetch_in_progress || entry->set_in_progress) {
-      cond_var_wait(entry->cond, raw->mutex);
+      ccol_cond_var_wait(entry->cond, raw->mutex);
     }
     entry->waiters--;
     if (!entry->evicted) {
@@ -1041,17 +1043,17 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
     bool should_free = (entry->waiters == 0);
     if (should_free) {
       /* Release the mutex before freeing, matching every other entry_free
-       * call site in this file: the single global cache mutex must not be
-       * held across the freed entry's own _mem_free/cond_var_destroy calls,
-       * which would otherwise needlessly block every other concurrent
+       * call site in this file: the single global cache mutex must not be held
+       * across the freed entry's own _ccol_mem_free/ccol_cond_var_destroy
+       * calls, which would otherwise needlessly block every other concurrent
        * getter/setter on this cache for their duration. Safe to re-lock and
        * continue the loop afterward: `entry` is not touched again except by
-       * being reassigned from the next map_lookup() call, and this
-       * function's own pin (acquired at entry via _clrucache_resolve) keeps
+       * being reassigned from the next map_lookup() call, and this function's
+       * own pin (acquired at entry via _clrucache_resolve) keeps
        * `raw` itself alive regardless of whether the mutex is held. */
-      mutex_unlock(raw->mutex);
+      ccol_mutex_unlock(raw->mutex);
       entry_free(raw, entry);
-      mutex_lock(raw->mutex);
+      ccol_mutex_lock(raw->mutex);
     }
   }
 
@@ -1088,11 +1090,11 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
     /* Hold a waiter reference so the entry is not freed if evicted while we
      * are blocked in the remote call. */
     entry->waiters++;
-    mutex_unlock(raw->mutex);
+    ccol_mutex_unlock(raw->mutex);
 
     remote_ok = raw->remote_setter(key_pair, val_pair);
 
-    mutex_lock(raw->mutex);
+    ccol_mutex_lock(raw->mutex);
     entry->waiters--;
   }
 
@@ -1120,9 +1122,9 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
         raw->size++;
       }
       entry->set_in_progress = false;
-      cond_var_broadcast(entry->cond);
+      ccol_cond_var_broadcast(entry->cond);
       bool should_free = (entry->evicted && entry->waiters == 0);
-      mutex_unlock(raw->mutex);
+      ccol_mutex_unlock(raw->mutex);
       if (should_free) entry_free(raw, entry);
       _clrucache_resolve_unpin(raw);
       return store_r;
@@ -1164,10 +1166,10 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
 #ifdef RUNNING_UNIT_TESTS
   _clru_test_maybe_delay_post_publish();
 #endif
-  cond_var_broadcast(entry->cond);
+  ccol_cond_var_broadcast(entry->cond);
 
   bool should_free = (entry->evicted && entry->waiters == 0);
-  mutex_unlock(raw->mutex);
+  ccol_mutex_unlock(raw->mutex);
   if (should_free) entry_free(raw, entry);
 
   _clrucache_resolve_unpin(raw);
@@ -1187,34 +1189,34 @@ ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
     return ccol_invalid_args;
   }
 
-  mutex_lock(raw->mutex);
+  ccol_mutex_lock(raw->mutex);
 
   clru_entry *entry = map_lookup(raw, key_pair);
 
   if (!entry) {
     if (!raw->remote_getter) {
-      mutex_unlock(raw->mutex);
+      ccol_mutex_unlock(raw->mutex);
       _clrucache_resolve_unpin(raw);
       return ccol_key_not_found;
     }
 
     entry = entry_alloc(raw);
     if (!entry) {
-      mutex_unlock(raw->mutex);
+      ccol_mutex_unlock(raw->mutex);
       _clrucache_resolve_unpin(raw);
       return ccol_not_enough_memory;
     }
 
-    entry->key = _mem_alloc(raw->m_procs, key_pair->size);
+    entry->key = _ccol_mem_alloc(raw->m_procs, key_pair->size);
     if (!entry->key) {
       /* Release the mutex before freeing; see the identical comment in
        * clrucache_get_full's own miss path for the full reasoning. */
-      mutex_unlock(raw->mutex);
+      ccol_mutex_unlock(raw->mutex);
       entry_free(raw, entry);
       _clrucache_resolve_unpin(raw);
       return ccol_not_enough_memory;
     }
-    mem_cpy(entry->key, key_pair->ptr, key_pair->size);
+    ccol_mem_cpy(entry->key, key_pair->ptr, key_pair->size);
     entry->key_size = key_pair->size;
     entry->fetch_in_progress = true;
 
@@ -1223,18 +1225,18 @@ ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
      * in clrucache_get_full's own miss path for the full reasoning. */
     ccol_retval_t ins = map_upsert(raw, key_pair, entry);
     if (ins != ccol_success && ins != ccol_key_already_present) {
-      mutex_unlock(raw->mutex);
+      ccol_mutex_unlock(raw->mutex);
       entry_free(raw, entry);
       _clrucache_resolve_unpin(raw);
       return ins;
     }
 
-    mutex_unlock(raw->mutex);
+    ccol_mutex_unlock(raw->mutex);
 
     cmap_pair fetched = {};
     bool fetch_ok = raw->remote_getter(key_pair, &fetched);
 
-    mutex_lock(raw->mutex);
+    ccol_mutex_lock(raw->mutex);
     entry->fetch_in_progress = false;
 
     if (fetch_ok && fetched.ptr && fetched.size > 0) {
@@ -1248,14 +1250,14 @@ ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
        * treat any size mismatch as a fetch failure entirely rather than
        * caching it. */
       if (fetched.size != buf_size) {
-        _mem_free(raw->m_procs, fetched.ptr);
+        _ccol_mem_free(raw->m_procs, fetched.ptr);
         cmap_pair kp = {.ptr = entry->key, .size = entry->key_size};
         chmap_delete_elem(raw->map, &kp);
         entry->evicted = true;
         entry->fetch_size_mismatch = true;
-        cond_var_broadcast(entry->cond);
+        ccol_cond_var_broadcast(entry->cond);
         bool should_free = (entry->waiters == 0);
-        mutex_unlock(raw->mutex);
+        ccol_mutex_unlock(raw->mutex);
         if (should_free) entry_free(raw, entry);
         _clrucache_resolve_unpin(raw);
         return ccol_unexpected_failure;
@@ -1267,23 +1269,23 @@ ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
       lru_add_to_front(raw, entry);
       raw->size++;
 
-      mem_cpy(buf, fetched.ptr, fetched.size);
+      ccol_mem_cpy(buf, fetched.ptr, fetched.size);
 
 #ifdef RUNNING_UNIT_TESTS
       _clru_test_maybe_delay_post_publish();
 #endif
-      cond_var_broadcast(entry->cond);
-      mutex_unlock(raw->mutex);
+      ccol_cond_var_broadcast(entry->cond);
+      ccol_mutex_unlock(raw->mutex);
       _clrucache_resolve_unpin(raw);
       return ccol_success;
     } else {
-      if (fetched.ptr) _mem_free(raw->m_procs, fetched.ptr);
+      if (fetched.ptr) _ccol_mem_free(raw->m_procs, fetched.ptr);
       cmap_pair kp = {.ptr = entry->key, .size = entry->key_size};
       chmap_delete_elem(raw->map, &kp);
       entry->evicted = true;
-      cond_var_broadcast(entry->cond);
+      ccol_cond_var_broadcast(entry->cond);
       bool should_free = (entry->waiters == 0);
-      mutex_unlock(raw->mutex);
+      ccol_mutex_unlock(raw->mutex);
       if (should_free) entry_free(raw, entry);
       _clrucache_resolve_unpin(raw);
       return ccol_key_not_found;
@@ -1293,7 +1295,7 @@ ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
   if (entry->fetch_in_progress || entry->set_in_progress) {
     entry->waiters++;
     while (entry->fetch_in_progress || entry->set_in_progress) {
-      cond_var_wait(entry->cond, raw->mutex);
+      ccol_cond_var_wait(entry->cond, raw->mutex);
     }
     entry->waiters--;
 
@@ -1308,7 +1310,7 @@ ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
                                  ? ccol_unexpected_failure
                                  : ccol_key_not_found;
       bool should_free = (entry->evicted && entry->waiters == 0);
-      mutex_unlock(raw->mutex);
+      ccol_mutex_unlock(raw->mutex);
       if (should_free) entry_free(raw, entry);
       _clrucache_resolve_unpin(raw);
       return fail_r;
@@ -1334,16 +1336,16 @@ ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
    * the front of the eviction order. */
   if (entry->value_size != buf_size) {
     bool should_free = (entry->evicted && entry->waiters == 0);
-    mutex_unlock(raw->mutex);
+    ccol_mutex_unlock(raw->mutex);
     if (should_free) entry_free(raw, entry);
     _clrucache_resolve_unpin(raw);
     return ccol_unexpected_failure;
   }
   if (!entry->evicted) lru_move_to_front(raw, entry);
-  mem_cpy(buf, entry->value, entry->value_size);
+  ccol_mem_cpy(buf, entry->value, entry->value_size);
 
   bool should_free = (entry->evicted && entry->waiters == 0);
-  mutex_unlock(raw->mutex);
+  ccol_mutex_unlock(raw->mutex);
   if (should_free) entry_free(raw, entry);
   _clrucache_resolve_unpin(raw);
   return ccol_success;
@@ -1356,9 +1358,9 @@ ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
 size_t clrucache_size(clru_cache cache) {
   struct clrucache *raw = _clrucache_resolve(cache);
   if (!raw) return 0;
-  mutex_lock(raw->mutex);
+  ccol_mutex_lock(raw->mutex);
   size_t s = raw->size;
-  mutex_unlock(raw->mutex);
+  ccol_mutex_unlock(raw->mutex);
   _clrucache_resolve_unpin(raw);
   return s;
 }
@@ -1366,9 +1368,9 @@ size_t clrucache_size(clru_cache cache) {
 size_t clrucache_capacity(clru_cache cache) {
   struct clrucache *raw = _clrucache_resolve(cache);
   if (!raw) return 0;
-  mutex_lock(raw->mutex);
+  ccol_mutex_lock(raw->mutex);
   size_t c = raw->capacity;
-  mutex_unlock(raw->mutex);
+  ccol_mutex_unlock(raw->mutex);
   _clrucache_resolve_unpin(raw);
   return c;
 }

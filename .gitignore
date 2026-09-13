@@ -2,11 +2,18 @@
 .project
 obj/
 libccollections.so
+# versioned shared objects: libccollections.so.<ABI> and .<VERSION>
+libccollections.so.*
 libccollections.a
+# generated from ccollections.pc.in at build time (prefix/version are
+# substituted in), so only the .in template is tracked
+ccollections.pc
 tests/*/tests
 tests/*/tests_*
 !tests/*/tests_*.*
 tests/*/coverage/
+# merged, browsable coverage report produced by `make coverage_site`
+coverage_site/
 tests/*/fuzz_*
 tests/*/crash-*
 tests/*/oom-*

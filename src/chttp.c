@@ -43,7 +43,7 @@ static const char g_chttp_base64_alphabet[] =
  * a literal would need every one of the 61 non-specified alphabet slots to
  * default to something other than 0, since 0 already means 'A'. */
 static signed char g_chttp_base64_decode_table[256];
-static once_flag_t g_chttp_base64_decode_table_once = ONCE_INIT;
+static ccol_once_flag_t g_chttp_base64_decode_table_once = CCOL_ONCE_INIT;
 
 static void _chttp_base64_decode_table_init(void) {
   memset(g_chttp_base64_decode_table, -1, sizeof(g_chttp_base64_decode_table));
@@ -66,16 +66,16 @@ char *chttp_base64_encode_mp(ccol_memmgmt_procs_t *mp, const void *data,
                              size_t len, size_t *out_len) {
   if (!data && len > 0) return NULL;
   /* enc_len below is ((len+2)/3)*4; len is a caller-supplied length with no
-   * upper bound of its own, and neither "len+2" nor the final "*4" was
-   * previously checked for overflow. Practically unreachable (it would take
-   * a multi-exabyte input to actually wrap size_t), but an unchecked size
-   * computation feeding an allocation is worth rejecting outright rather
-   * than trusting the input never gets that large. */
+   * upper bound of its own, so both "len+2" and the final "*4" need an
+   * overflow check. Practically unreachable (it would take a multi-exabyte
+   * input to actually wrap size_t), but an unchecked size computation
+   * feeding an allocation is worth rejecting outright rather than trusting
+   * the input never gets that large. */
   if (len > (SIZE_MAX / 4) * 3 - 4) return NULL;
 
   const unsigned char *p = (const unsigned char *)data;
   size_t enc_len = ((len + 2) / 3) * 4;
-  char *out = (char *)_mem_alloc(mp, enc_len + 1);
+  char *out = (char *)_ccol_mem_alloc(mp, enc_len + 1);
   if (!out) return NULL;
 
   size_t oi = 0, i = 0;
@@ -116,7 +116,7 @@ void *chttp_base64_decode_mp(ccol_memmgmt_procs_t *mp, const char *b64_input,
 
   size_t in_len = strlen(b64_input);
   if (in_len == 0) {
-    char *out = (char *)_mem_alloc(mp, 1);
+    char *out = (char *)_ccol_mem_alloc(mp, 1);
     if (!out) return NULL;
     out[0] = '\0';
     if (out_len) *out_len = 0;
@@ -124,7 +124,8 @@ void *chttp_base64_decode_mp(ccol_memmgmt_procs_t *mp, const char *b64_input,
   }
   if (in_len % 4 != 0) return NULL;
 
-  call_once(g_chttp_base64_decode_table_once, _chttp_base64_decode_table_init);
+  ccol_call_once(g_chttp_base64_decode_table_once,
+                 _chttp_base64_decode_table_init);
 
   /* '=' padding may only appear as the final one or two bytes of the whole
    * string; this pre-scan bounds the output allocation exactly, and the
@@ -139,7 +140,7 @@ void *chttp_base64_decode_mp(ccol_memmgmt_procs_t *mp, const char *b64_input,
 
   size_t groups = in_len / 4;
   size_t dec_len = groups * 3 - pad;
-  unsigned char *out = (unsigned char *)_mem_alloc(mp, dec_len + 1);
+  unsigned char *out = (unsigned char *)_ccol_mem_alloc(mp, dec_len + 1);
   if (!out) return NULL;
 
   size_t oi = 0;
@@ -152,19 +153,19 @@ void *chttp_base64_decode_mp(ccol_memmgmt_procs_t *mp, const char *b64_input,
       char c = chunk[k];
       if (c == '=') {
         if (!last_group || k < 2) {
-          _mem_free(mp, out);
+          _ccol_mem_free(mp, out);
           return NULL;
         }
         seen_pad = true;
         vals[k] = -1;
       } else {
         if (seen_pad) {
-          _mem_free(mp, out);
+          _ccol_mem_free(mp, out);
           return NULL;
         }
         int v = g_chttp_base64_decode_table[(unsigned char)c];
         if (v < 0) {
-          _mem_free(mp, out);
+          _ccol_mem_free(mp, out);
           return NULL;
         }
         vals[k] = v;
@@ -213,23 +214,23 @@ static char *_chttp_basic_auth_len(ccol_memmgmt_procs_t *mp,
   if (pass_len > SIZE_MAX - user_len || user_len + pass_len > SIZE_MAX - 2)
     return NULL;
   size_t combined_len = user_len + 1 + pass_len;
-  char *combined = (char *)_mem_alloc(mp, combined_len + 1);
+  char *combined = (char *)_ccol_mem_alloc(mp, combined_len + 1);
   if (!combined) return NULL;
   snprintf(combined, combined_len + 1, "%s:%s", username, password);
 
   size_t b64_len = 0;
   char *b64 = chttp_base64_encode_mp(mp, combined, combined_len, &b64_len);
-  _mem_free(mp, combined);
+  _ccol_mem_free(mp, combined);
   if (!b64) return NULL;
 
   size_t auth_len = 6 + b64_len; /* strlen("Basic ") == 6 */
-  char *out = (char *)_mem_alloc(mp, auth_len + 1);
+  char *out = (char *)_ccol_mem_alloc(mp, auth_len + 1);
   if (!out) {
-    _mem_free(mp, b64);
+    _ccol_mem_free(mp, b64);
     return NULL;
   }
   snprintf(out, auth_len + 1, "Basic %s", b64);
-  _mem_free(mp, b64);
+  _ccol_mem_free(mp, b64);
   return out;
 }
 
@@ -259,7 +260,7 @@ bool _chttp_basic_auth_overflow_guard_for_tests(ccol_memmgmt_procs_t *mp,
   char *r = _chttp_basic_auth_len(mp, username, fake_user_len, password,
                                   fake_pass_len);
   bool rejected = (r == NULL);
-  _mem_free(mp, r);
+  _ccol_mem_free(mp, r);
   return rejected;
 }
 #endif /* RUNNING_UNIT_TESTS */

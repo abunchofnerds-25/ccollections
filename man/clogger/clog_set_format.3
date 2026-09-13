@@ -22,7 +22,7 @@ Three formats are available:
     Default.  Every record is emitted as a single logfmt line:
       ts=<ISO-8601-UTC> level=<L> proc=<name>(<pid>):<tname>(<tid>)
       src=<file>:<line> func=<fn> [fields] msg=<text>
-    log_error, log_alert, and log_fatal append tab-indented backtrace
+    ccol_log_error, ccol_log_alert, and ccol_log_fatal append tab-indented backtrace
     continuation lines after the main record.
 
   CLOG_FMT_JSON (1)
@@ -30,8 +30,8 @@ Three formats are available:
     newline:
       {"ts":"...","level":"...","proc":"name(pid):tname(tid)",
        "src":"file:N","func":"...", [fields,] "msg":"..."}
-    Structured fields become top-level JSON keys.  For log_error,
-    log_alert, and log_fatal the backtrace is embedded as a "bt"
+    Structured fields become top-level JSON keys.  For ccol_log_error,
+    ccol_log_alert, and ccol_log_fatal the backtrace is embedded as a "bt"
     string array inside the same JSON object.  Every string value
     (the message and every field key/value) is validated as UTF-8
     before being embedded; a byte or byte sequence that is not
@@ -59,13 +59,13 @@ Three formats are available:
                    rather than truncating the value at that point; "-"
                    if this yields no bytes at all (including
                    gethostname(2) itself failing)
-      APP-NAME   = process name from /proc/self/comm or argv[0],
+      APP-NAME   = executable name (the basename of argv[0]),
                    filtered to PRINTUSASCII the same way; "-" if this
                    yields no bytes at all
       PID        = getpid(2)
       MSGID      = level string ("INFO", "ERROR", etc.)
       [ccol ...]  = RFC 5424 SD-ELEMENT with SD-ID "ccol" carrying
-                   proc="[<name>(<pid>):<tname>(<tid>)\e]",
+                   proc="<name>(<pid>):<tname>(<tid>)",
                    src="<file>:<line>", func="<fn>", and any fields
                    attached via clog_set_field()
       MSG        = the formatted message text
@@ -80,7 +80,7 @@ Three formats are available:
     multiple lines by its own content.
 
     The facility is controlled by clog_set_facility() and defaults to
-    CLOG_SYSLOG_USER.  Backtraces (log_error, log_alert, log_fatal) are
+    CLOG_SYSLOG_USER.  Backtraces (ccol_log_error, ccol_log_alert, ccol_log_fatal) are
     emitted as separate syslog messages, one per frame, using the same
     PRI, TIMESTAMP, and MSGID as the original record; the frame text
     itself is backslash-escaped the same way MSG is.  Sharing the

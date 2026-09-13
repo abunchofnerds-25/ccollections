@@ -27,6 +27,15 @@ SOFTWARE.
 #include <common.h>
 #include <stdbool.h>
 
+/* Everything declared from here to the end of this header is part of the
+ * public ABI of libccollections and is exported from the shared library.
+ * The library itself is built with -fvisibility=hidden, so any function or
+ * object that is not covered by one of these blocks stays internal to the
+ * library, is absent from its dynamic symbol table, and cannot be
+ * interposed by, or collide with, a symbol of the same name in the
+ * application that links against it. */
+#pragma GCC visibility push(default)
+
 /**
  * @file clrucache.h
  * @brief Thread-safe generic LRU cache with optional remote source integration
@@ -114,14 +123,13 @@ typedef struct clrucache clrucache;
  * pair), not a pointer; it must never be cast to/from void*, compared via
  * a pointer cast, or otherwise treated as an address. Compare it directly
  * against CLRU_CACHE_INVALID (or use it in a truthiness check;
- * CLRU_CACHE_INVALID is 0, so `if (!cache)` still works exactly as it did
- * when this was a raw pointer). Internally, every use of a clru_cache is
- * resolved through a library-owned slot table before the underlying cache
- * object is touched: a handle whose slot has since been freed (or reused
- * for an unrelated, later cache) is always detected, rather than silently
- * dereferencing freed or wrong-object memory. See
- * __clrucache_destroy's own doc comment for what happens when a stale
- * handle reaches it specifically.
+ * CLRU_CACHE_INVALID is 0, so `if (!cache)` is a valid test for an invalid
+ * handle). Internally, every use of a clru_cache is resolved through a
+ * library-owned slot table before the underlying cache object is touched:
+ * a handle whose slot has since been freed (or reused for an unrelated,
+ * later cache) is always detected, rather than silently dereferencing
+ * freed or wrong-object memory. See __clrucache_destroy's own doc comment
+ * for what happens when a stale handle reaches it specifically.
  */
 typedef uint64_t clru_cache;
 
@@ -136,8 +144,8 @@ typedef uint64_t clru_cache;
  * @brief Create an LRU cache
  *
  * @param capacity     Maximum number of live entries before eviction occurs
- * @param key_type     ccol_data_type of keys (from determine_ccol_data_type)
- * @param val_type     ccol_data_type of values (from determine_ccol_data_type)
+ * @param key_type ccol_data_type of keys (from ccol_determine_ccol_data_type)
+ * @param val_type ccol_data_type of values (from ccol_determine_ccol_data_type)
  * @param getter       Remote getter (may be NULL)
  * @param setter       Remote setter (may be NULL). If non-NULL, it is called
  *                     synchronously before each cache update.
@@ -161,7 +169,7 @@ clru_cache clrucache_create_full(size_t capacity, ccol_data_type key_type,
  * A stale handle (one that has already been destroyed, whether by an
  * earlier, completed call to this same function, or concurrently, by
  * another thread racing this one right now), a forged value, or garbage
- * is a fatal error: this function calls fatal_err() (abort()/SIGABRT),
+ * is a fatal error: this function calls ccol_fatal_err() (abort()/SIGABRT),
  * rather than risking a use-after-free or double-free, for both a purely
  * sequential double-destroy and a temporally-overlapping concurrent one.
  * CLRU_CACHE_INVALID (0) is the one exception and remains a silent
@@ -318,17 +326,17 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
  * @param setter     Remote setter (may be NULL)
  * @param evict_cb   Eviction callback (may be NULL)
  */
-#define clru_init(name, capacity, getter, setter, evict_cb)               \
-  do {                                                                    \
-    char *_clru_err = NULL;                                               \
-    (name) = clrucache_create_full(                                       \
-        (capacity), determine_ccol_data_type(*name##__clru_key_type_var), \
-        determine_ccol_data_type(*name##__clru_val_type_var), (getter),   \
-        (setter), (evict_cb), NULL, &_clru_err);                          \
-    if (!(name)) {                                                        \
-      fatal_err("clru_init('%s'): %s", #name,                             \
-                _clru_err ? _clru_err : "unknown error");                 \
-    }                                                                     \
+#define clru_init(name, capacity, getter, setter, evict_cb)                    \
+  do {                                                                         \
+    char *_clru_err = NULL;                                                    \
+    (name) = clrucache_create_full(                                            \
+        (capacity), ccol_determine_ccol_data_type(*name##__clru_key_type_var), \
+        ccol_determine_ccol_data_type(*name##__clru_val_type_var), (getter),   \
+        (setter), (evict_cb), NULL, &_clru_err);                               \
+    if (!(name)) {                                                             \
+      ccol_fatal_err("clru_init('%s'): %s", #name,                             \
+                     _clru_err ? _clru_err : "unknown error");                 \
+    }                                                                          \
   } while (0)
 
 /**
@@ -344,20 +352,20 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
  * clru_destroy(my_cache);
  * @endcode
  */
-#define clru_construct(name, KeyT, ValT, capacity, getter, setter, evict_cb) \
-  typeof(KeyT) *name##__clru_key_type_var __attribute__((unused)) = NULL;    \
-  typeof(ValT) *name##__clru_val_type_var __attribute__((unused)) = NULL;    \
-  clru_cache name = CLRU_CACHE_INVALID;                                      \
-  do {                                                                       \
-    char *_clru_err = NULL;                                                  \
-    (name) = clrucache_create_full(                                          \
-        (capacity), determine_ccol_data_type(*name##__clru_key_type_var),    \
-        determine_ccol_data_type(*name##__clru_val_type_var), (getter),      \
-        (setter), (evict_cb), NULL, &_clru_err);                             \
-    if (!(name)) {                                                           \
-      fatal_err("clru_construct('%s'): %s", #name,                           \
-                _clru_err ? _clru_err : "unknown error");                    \
-    }                                                                        \
+#define clru_construct(name, KeyT, ValT, capacity, getter, setter, evict_cb)   \
+  typeof(KeyT) *name##__clru_key_type_var __attribute__((unused)) = NULL;      \
+  typeof(ValT) *name##__clru_val_type_var __attribute__((unused)) = NULL;      \
+  clru_cache name = CLRU_CACHE_INVALID;                                        \
+  do {                                                                         \
+    char *_clru_err = NULL;                                                    \
+    (name) = clrucache_create_full(                                            \
+        (capacity), ccol_determine_ccol_data_type(*name##__clru_key_type_var), \
+        ccol_determine_ccol_data_type(*name##__clru_val_type_var), (getter),   \
+        (setter), (evict_cb), NULL, &_clru_err);                               \
+    if (!(name)) {                                                             \
+      ccol_fatal_err("clru_construct('%s'): %s", #name,                        \
+                     _clru_err ? _clru_err : "unknown error");                 \
+    }                                                                          \
   } while (0)
 
 /**
@@ -371,12 +379,12 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
   do {                                                                         \
     char *_clru_err = NULL;                                                    \
     (name) = clrucache_create_full(                                            \
-        (capacity), determine_ccol_data_type(*name##__clru_key_type_var),      \
-        determine_ccol_data_type(*name##__clru_val_type_var), (getter),        \
+        (capacity), ccol_determine_ccol_data_type(*name##__clru_key_type_var), \
+        ccol_determine_ccol_data_type(*name##__clru_val_type_var), (getter),   \
         (setter), (evict_cb), NULL, &_clru_err);                               \
     if (!(name)) {                                                             \
-      fatal_err("clru_construct_scoped('%s'): %s", #name,                      \
-                _clru_err ? _clru_err : "unknown error");                      \
+      ccol_fatal_err("clru_construct_scoped('%s'): %s", #name,                 \
+                     _clru_err ? _clru_err : "unknown error");                 \
     }                                                                          \
   } while (0)
 
@@ -450,7 +458,7 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
     cmap_pair _clru_kp = {};                                                  \
     _populate_cmap_pair(&_clru_kp, _clru_k);                                  \
     ccol_retval_t _clru_r;                                                    \
-    if (is_char_ptr(*(name##__clru_val_type_var))) {                          \
+    if (ccol_is_char_ptr(*(name##__clru_val_type_var))) {                     \
       /* char* path: heap-allocate a copy and transfer ownership to caller */ \
       cmap_pair _clru_vout = {};                                              \
       _clru_r = clrucache_get_full((name), &_clru_kp, &_clru_vout);           \
@@ -458,7 +466,7 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
         /* Write the heap pointer via memcpy to avoid strict-aliasing         \
          * violations when val_ptr is not char**. */                          \
         void *_clru_str_out = _clru_vout.ptr;                                 \
-        mem_cpy((val_ptr), &_clru_str_out, sizeof(void *));                   \
+        ccol_mem_cpy((val_ptr), &_clru_str_out, sizeof(void *));              \
       }                                                                       \
     } else {                                                                  \
       /* Non-char* path: read into a temporary typed as the cache's own       \
@@ -529,3 +537,5 @@ size_t clrucache_size(clru_cache cache);
  * @brief Return the capacity of the cache
  */
 size_t clrucache_capacity(clru_cache cache);
+
+#pragma GCC visibility pop

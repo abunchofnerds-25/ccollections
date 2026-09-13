@@ -46,11 +46,11 @@ SOFTWARE.
  * - Every function reports failure via a return value (NULL, or a
  *   ccol_retval_t); nothing in this module ever calls exit()/abort() on a
  *   caller-supplied bad configuration (e.g. an unreadable cert file). This
- *   was a deliberate, confirmed design choice: a misconfigured TLS setup is
- *   the caller's own input error to detect and act on (log, refuse to
- *   start, retry with a different path, ...), not a reason for this
- *   library to kill the whole process out from under an application that
- *   may have other unrelated work in flight.
+ *   is deliberate: a misconfigured TLS setup is the caller's own input
+ *   error to detect and act on (log, refuse to start, retry with a
+ *   different path, ...), not a reason for this library to kill the whole
+ *   process out from under an application that may have other unrelated
+ *   work in flight.
  *
  * - ctls_ctx_t is a ref-counted, mutable, mutex-protected TLS configuration
  *   object shared by many ctls_conn_t connections. Every mutator
@@ -72,7 +72,7 @@ SOFTWARE.
  *   own fully-built SSL_CTX, and an SSL_CTX_set_tlsext_servername_callback
  *   installed once on the context's default SSL_CTX swaps the live SSL
  *   object onto the matching named SSL_CTX via SSL_set_SSL_CTX() the moment
- *   a ClientHello's SNI extension names it. This is deliberate, confirmed
+ *   a ClientHello's SNI extension names it. This is a deliberate
  *   capability, not an incidental side effect of the certificate-storage
  *   design.
  *
@@ -82,7 +82,7 @@ SOFTWARE.
  *   deferring it onto a reactor task queue: this reactor-agnostic module
  *   has no such queue and no need for one, since ctls_conn_handshake_step
  *   is already a synchronous call from the caller's own perspective,
- *   whether invoked from a blocking loop or from an event_loop
+ *   whether invoked from a blocking loop or from a ccol_event_loop
  *   on_readable/on_writable callback. This is a deliberate simplification,
  *   not a functionality cut: the caller learns the selected protocol at the
  *   same logical point either way, and no application code in this
@@ -228,10 +228,9 @@ ccol_retval_t ctls_ctx_cert_add(ctls_ctx_t *ctx, const char *server_name,
  * nothing to fail verification on); a client that DOES present one must
  * have it verify successfully against ctx's trust store, or the handshake
  * fails. In other words, this is already a request-but-don't-strictly-
- * require mode by construction, not (as an earlier draft of this comment
- * claimed) an unconditional requirement; a caller wanting to reject
- * anonymous (no-certificate) clients outright needs a stricter mode this
- * module does not currently provide.
+ * require mode by construction, not an unconditional requirement; a caller
+ * wanting to reject anonymous (no-certificate) clients outright needs a
+ * stricter mode this module does not provide.
  *
  * May be called more than once; each call adds to the trust store rather
  * than replacing it.
@@ -374,8 +373,8 @@ ctls_conn_t *ctls_conn_create_server(ctls_ctx_t *ctx, int fd, void *udata,
  * @note Known third-party limitation, not a bug in this module: running
  *       many concurrent client handshakes that share one ctls_ctx_t's trust
  *       store (e.g. chttpclient's Tier 2/3 async engine firing several
- *       requests to certificate-verifying HTTPS origins at once) has been
- *       observed, under ThreadSanitizer, to race inside OpenSSL's own
+ *       requests to certificate-verifying HTTPS origins at once) makes
+ *       ThreadSanitizer report a race inside OpenSSL's own
  *       X509_NAME_cmp/X509_cmp machinery (an ASN1_STRING read racing a
  *       concurrent write during certificate verification's canonical-
  *       encoding lazy-cache population). Every per-connection object this
@@ -394,13 +393,11 @@ ctls_conn_t *ctls_conn_create_server(ctls_ctx_t *ctx, int fd, void *udata,
  *       whole point of this engine multiplexing several of them at once,
  *       to paper over what is very likely someone else's bug. Every
  *       concurrent-HTTPS handshake in tests/chttpclient/tests.c's own
- *       sync_tls/async_tls test groups (that file's own former separate
- *       tests_tls.c binary, merged in 2026-08-16) has always completed
- *       successfully in practice, under both plain and -fsanitize=thread
- *       builds, including every run that also triggered this exact race;
- *       revisit if it is ever seen to actually corrupt a handshake's
- *       outcome rather than just being flagged by the race detector, not
- *       merely because the race itself is detected.
+ *       sync_tls/async_tls test groups completes successfully in practice,
+ *       under both plain and -fsanitize=thread builds, including runs that
+ *       also flag this exact race; revisit only if the race is ever seen to
+ *       actually corrupt a handshake's outcome, not merely because the race
+ *       detector reports it.
  */
 ctls_handshake_result_t ctls_conn_handshake_step(ctls_conn_t *conn);
 

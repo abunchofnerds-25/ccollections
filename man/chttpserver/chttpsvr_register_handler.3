@@ -75,14 +75,13 @@ If the same method and pattern combination is registered more than once,
 each call succeeds (returns ccol_success) but only the FIRST registered
 handler is ever invoked (first-wins policy).
 
-Trailing slashes are NOT treated as equivalent: a request for
-/users/42/ does not match the pattern /users/{id}.  Register a
-separate pattern if the trailing-slash form must be accepted.
-
 Patterns with consecutive slashes (e.g. /foo//bar) or a trailing slash
-(e.g. /foo/) are rejected at registration time.  A trailing slash in an
-incoming request path does NOT match a registered pattern that lacks one;
-register a separate pattern if the trailing-slash form must be accepted.
+(e.g. /foo/) are rejected at registration time.  Trailing slashes in an
+incoming request path are not treated as equivalent either: a request
+for /users/42/ does not match the pattern /users/{id}, and because a
+pattern may not itself end in '/', the trailing-slash form cannot be
+registered as a route of its own; normalise such paths before they
+reach the server if they must be accepted.
 
 This function is thread-safe and may be called at any time, including
 concurrently with chttpsvr_destroy of the same server from another

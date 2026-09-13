@@ -1,6 +1,6 @@
 .TH CSTR_SUBSTRING 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cstr_substring \- create a new string from a sub-range; calls fatal_err() on failure
+cstr_substring \- create a new string from a sub-range; calls ccol_fatal_err() on failure
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -12,7 +12,7 @@ cstr result = cstr_substring(s, start, len);
 .SH DESCRIPTION
 .nf
 GNU C statement expression that calls cstring_substring() and calls
-fatal_err() if the result is NULL (allocation failure). Returns the new
+ccol_fatal_err() if the result is NULL (allocation failure). Returns the new
 cstring as a value so it can be used directly in expressions.
 .fi
 .SH PARAMETERS

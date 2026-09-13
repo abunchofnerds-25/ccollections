@@ -1602,8 +1602,8 @@ TEST(concurrency, concurrent_getters_different_keys) {
 }
 
 /* ========================================================================== */
-/*           IN-PROGRESS SETTER NOT EVICTABLE (regression for the bug        */
-/*           where a live entry with set_in_progress could be evicted)        */
+/*     IN-PROGRESS SETTER NOT EVICTABLE (a live entry whose remote setter     */
+/*     is still running must never be chosen as an eviction victim)           */
 /* ========================================================================== */
 
 /*
@@ -1631,7 +1631,7 @@ static bool value_gating_setter(const cmap_pair *key, const cmap_pair *val) {
  * becomes live.  When the setter for key 1 completes, entry_store_value evicts
  * key 2 to make room and key 1 becomes live with value 999.  The getter that
  * was blocked on the setter must see ccol_success with value 999, not
- * ccol_key_not_found (which was the pre-fix behaviour).
+ * ccol_key_not_found.
  */
 TEST(concurrency, getter_sees_new_value_after_set_with_concurrent_insertion) {
   atomic_store(&val_gate_started, false);
@@ -1657,10 +1657,10 @@ TEST(concurrency, getter_sees_new_value_after_set_with_concurrent_insertion) {
   REQUIRE_EQ((int)atomic_load(&warg.done), 0);
 
   /* Main thread acts as Thread C: insert key 2 while Thread A is gated.
-   * Before the fix: key 1 was still in LRU (size=1 >= capacity=1) so this
-   * evicted key 1, causing Thread B to see ccol_key_not_found.
-   * After the fix: key 1 was removed from LRU (size=0 < capacity=1) so
-   * key 2 is inserted without triggering eviction. */
+   * If key 1 were still in LRU (size=1 >= capacity=1), this would evict it
+   * and Thread B would see ccol_key_not_found. Key 1 is removed from LRU
+   * (size=0 < capacity=1), so key 2 is inserted without triggering
+   * eviction. */
   clru_set(cache, 2, 200);
 
   /* Release Thread A */
@@ -1680,13 +1680,12 @@ TEST(concurrency, getter_sees_new_value_after_set_with_concurrent_insertion) {
 /* ========================================================================== */
 
 /*
- * Regression tests for a real bug: a getter coalesced onto an in-flight
- * fetch or set for the same key used to receive ccol_key_not_found if the
- * just-published entry was evicted by an unrelated, concurrent cache
- * operation before the waiter woke up and observed the result; even
- * though the fetch/set it coalesced onto had genuinely succeeded and the
- * entry's value was still sitting right there, kept alive by the waiter's
- * own reference. clru_test_set_post_publish_delay_us() widens the window
+ * A getter coalesced onto an in-flight fetch or set for the same key must
+ * not receive ccol_key_not_found when the just-published entry is evicted
+ * by an unrelated, concurrent cache operation before the waiter wakes up
+ * and observes the result: the fetch/set it coalesced onto succeeded, and
+ * the entry's value is still reachable, kept alive by the waiter's own
+ * reference. clru_test_set_post_publish_delay_us() widens the window
  * between an entry being published and the publishing thread
  * broadcasting/unlocking, so a concurrent evictor reliably queues up on
  * the mutex ahead of the woken waiter instead of depending on rare
@@ -2092,17 +2091,16 @@ TEST(concurrency, multiple_getters_coalesce_on_failed_fetch) {
 }
 
 /*
- * Regression test for a real bug: __clrucache_get_into() (the non-char*
- * clru_get() path) rejects a remote getter's fetched value when its size
- * does not match the caller's own fixed-size buffer, reporting
- * ccol_unexpected_failure; but only to the thread that actually ran the
- * getter. A concurrent caller coalesced onto that same in-flight fetch
- * (here, via clrucache_get_full()'s raw API, which has no fixed-size
- * destination of its own) used to see only ccol_key_not_found instead,
- * violating this module's own documented "all others ... receive the same
- * result" coalescing contract (clrucache.h's file-level doc comment) for
- * this one specific failure reason. Every coalesced caller must now learn
- * the fetch failed for the same reason the fetching thread did.
+ * __clrucache_get_into() (the non-char* clru_get() path) rejects a remote
+ * getter's fetched value when its size does not match the caller's own
+ * fixed-size buffer, reporting ccol_unexpected_failure. That specific
+ * diagnostic must reach every caller coalesced onto the same in-flight
+ * fetch (here, one arriving via clrucache_get_full()'s raw API, which has
+ * no fixed-size destination of its own), not only the thread that actually
+ * ran the getter: handing the coalesced callers the generic
+ * ccol_key_not_found instead violates this module's own documented "all
+ * others ... receive the same result" coalescing contract (clrucache.h's
+ * file-level doc comment) for this one specific failure reason.
  */
 static _Atomic bool mismatch_gate_started = false;
 static _Atomic bool mismatch_gate_open = false;
@@ -2390,7 +2388,7 @@ TEST(concurrency, multiple_char_ptr_getters_coalesce_on_failed_fetch) {
  * The 30 ms sleep in call 0 gives threads 2 and 3 time to enter the
  * set_in_progress wait loop before the first call completes.
  * The 30 ms sleep in call 1 gives thread 3 time to re-check the map (with
- * the fix) or race to create a duplicate placeholder (without the fix) while
+ * the guard) or race to create a duplicate placeholder (unguarded) while
  * thread 2's remote call is still in progress.
  */
 static volatile int phased_set_count = 0;
@@ -2417,15 +2415,16 @@ static bool phased_setter_fn(const cmap_pair *key, const cmap_pair *val) {
  * 30 ms and then FAILS.  Threads 2 and 3 block on set_in_progress during
  * that window.
  *
- * Without the fix: after Thread 1 fails, Threads 2 and 3 both wake up.
- * Thread 2 creates a new placeholder and releases the mutex for its 30 ms
- * remote call.  Thread 3 then calls create_and_insert_placeholder for the
- * same key, which hits chmap_insert_elem with an already-existing key and
- * gets ccol_key_already_present; so the function returns NULL and Thread 3
- * incorrectly returns ccol_not_enough_memory, silently dropping the set.
+ * Without the coalescing guard: after Thread 1 fails, Threads 2 and 3 both
+ * wake up.  Thread 2 creates a new placeholder and releases the mutex for
+ * its 30 ms remote call.  Thread 3 then calls create_and_insert_placeholder
+ * for the same key, which hits chmap_insert_elem with an already-existing
+ * key and gets ccol_key_already_present; so the function returns NULL and
+ * Thread 3 incorrectly returns ccol_not_enough_memory, silently dropping
+ * the set.
  * Result: only 2 remote setter calls are made instead of 3.
  *
- * With the fix: Thread 3 loops back to map_lookup, finds Thread 2's
+ * With it: Thread 3 loops back to map_lookup, finds Thread 2's
  * placeholder (set_in_progress = true), and waits for it.  After Thread 2
  * succeeds, Thread 3 takes over the same entry and runs the remote setter
  * itself.  Result: all 3 remote setter calls are made, size == 1.
@@ -2455,9 +2454,9 @@ TEST(concurrency, multiple_setters_race_after_failed_new_key_set) {
     pthread_join(stids[i], NULL);
   }
 
-  /* All 3 remote setter calls must have been made.  Without the fix,
-   * thread 3 short-circuits with ccol_not_enough_memory and only 2 calls
-   * are observed. */
+  /* All 3 remote setter calls must have been made.  Without the coalescing
+   * guard, thread 3 short-circuits with ccol_not_enough_memory and only 2
+   * calls are observed. */
   REQUIRE_EQ(phased_set_count, N_RACING_SETTERS);
 
   /* Exactly one live entry must exist; no orphaned entries. */
@@ -2889,13 +2888,12 @@ TEST(get_val_types, get_into_rejects_live_value_too_small_for_buffer) {
 }
 
 /*
- * Regression test: a failed __clrucache_get_into call (rejected because the
- * caller's buffer size does not match the cached value's size) must not
- * still promote the entry to the front of the LRU order. Before the fix,
- * lru_move_to_front() ran unconditionally before the size check, so an
- * entry that was never successfully read could outlive a genuinely
- * more-recently-set entry purely because someone had queried it with the
- * wrong buffer size.
+ * A failed __clrucache_get_into call (rejected because the caller's buffer
+ * size does not match the cached value's size) must not still promote the
+ * entry to the front of the LRU order. If lru_move_to_front() ran
+ * unconditionally, before the size check, an entry that was never
+ * successfully read would outlive a genuinely more-recently-set entry
+ * purely because someone queried it with the wrong buffer size.
  */
 TEST(get_val_types, get_into_size_mismatch_failure_does_not_promote_lru) {
   clru_cache cache = clrucache_create_full(2, ccol_int, ccol_int, NULL, NULL,
@@ -2952,13 +2950,13 @@ TEST(get_val_types, get_into_size_mismatch_failure_does_not_promote_lru) {
  * the cache's own declared ValT/KeyT the same way a plain C assignment
  * would, not merely capture val's/key's own natural expression type and
  * store its raw bytes. A same-size-but-differently-typed val (e.g. a float
- * stored into an int-valued cache) previously had its raw bit pattern
- * copied verbatim; __clrucache_get_into's size check cannot catch this,
+ * stored into an int-valued cache) would otherwise have its raw bit pattern
+ * copied verbatim. __clrucache_get_into's size check cannot catch that,
  * since the stored size and the requested buffer size coincidentally match
  * even though the underlying types differ, so the wrong (reinterpreted)
- * value was silently returned as a "success". This mirrors the cvec_push /
- * cvec_push_rvalue bug this codebase has already found and fixed for
- * cvector's own type-safe push macros.
+ * value is silently returned as a "success". The same hazard drives
+ * cvec_push / cvec_push_rvalue's own typed-temporary treatment in
+ * cvector's type-safe push macros.
  */
 TEST(type_conversion, set_float_into_int_cache_converts_not_reinterprets) {
   clru_construct(cache, int, int, 8, NULL, NULL, NULL);
@@ -3174,13 +3172,12 @@ TEST(custom_alloc, invalid_mprocs_returns_null) {
 }
 
 /*
- * Regression test: a clrucache_get_full() call on an already-cached LIVE
- * entry that fails only because the caller's own copy allocation hits OOM
- * must not still promote that entry to the front of the LRU order. Before
- * the fix, lru_move_to_front() ran unconditionally before the copy
- * allocation was attempted, so a hit that failed purely due to transient
- * memory pressure could keep an entry alive at the expense of a genuinely
- * more-recently-set one.
+ * A clrucache_get_full() call on an already-cached LIVE entry that fails
+ * only because the caller's own copy allocation hits OOM must not still
+ * promote that entry to the front of the LRU order. If lru_move_to_front()
+ * ran unconditionally, before the copy allocation is attempted, a hit that
+ * failed purely due to transient memory pressure would keep an entry alive
+ * at the expense of a genuinely more-recently-set one.
  */
 TEST(custom_alloc, get_full_copy_oom_failure_does_not_promote_lru) {
   _lru_fault_alloc_budget = -1; /* unlimited while seeding the cache */
@@ -3240,19 +3237,19 @@ TEST(custom_alloc, get_full_copy_oom_failure_does_not_promote_lru) {
 /*        CLRU_CACHE HANDLE LIFECYCLE (GENERATION-TAGGED SLOT TABLE)          */
 /* ========================================================================== */
 
-/* Mirrors the already-implemented, already-verified chttpcli_handle_lifecycle
- * / event_loop_handle_lifecycle test groups, adapted for clru_cache's own
- * lock-protected pin mechanism (see src/clrucache.c's own struct clrucache.
- * pending_resolve_count / pin_cv field comments: unlike event_loop's fully
- * lock-free pin, clru_cache reuses the chttpcli/chttpsvr-style
- * lock-protected decrement+broadcast, since this module is already a
- * single-global-mutex design with no new-contention concern from adding one
- * more brief mutex-protected step). */
+/* Mirrors the chttpcli_handle_lifecycle / ccol_event_loop_handle_lifecycle
+ * test groups, adapted for clru_cache's own lock-protected pin mechanism
+ * (see src/clrucache.c's own struct clrucache.pending_resolve_count /
+ * pin_cv field comments: unlike ccol_event_loop's fully lock-free pin,
+ * clru_cache reuses the chttpcli/chttpsvr-style lock-protected
+ * decrement+broadcast, since this module is already a single-global-mutex
+ * design with no new-contention concern from adding one more brief
+ * mutex-protected step). */
 
 /* A fully completed destroy, followed later by a second destroy call on an
  * independently-held copy of the same original handle value, must be a
  * fatal error. Run in a forked child (mirroring tests/clogger/tests.c's own
- * fork-test precedent for process-terminating misuse) since fatal_err
+ * fork-test precedent for process-terminating misuse) since ccol_fatal_err
  * aborts the whole process. */
 TEST(clrucache_handle_lifecycle, sequential_double_destroy_is_fatal) {
   pid_t pid = fork();
@@ -3272,7 +3269,7 @@ TEST(clrucache_handle_lifecycle, sequential_double_destroy_is_fatal) {
                CLRU_CACHE_INVALID, but `stale` still holds the original value */
     __clrucache_destroy(stale); /* the actual misuse under test: a second,
         purely sequential destroy of a handle already fully torn down */
-    _exit(0); /* unreachable if fatal_err() aborted as expected */
+    _exit(0); /* unreachable if ccol_fatal_err() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -3293,8 +3290,8 @@ static void *clru_concurrent_destroy_thread(void *arg) {
 
 /* Two threads calling destroy on two independently-held copies of the SAME,
  * still-valid handle at (as close to) the same moment as possible must also
- * be fatal; regression coverage for the same class of concurrent double-free
- * this whole redesign exists to close for chttpcli/chttpsvr/event_loop. */
+ * be fatal: the same class of concurrent double-free the generation-tagged
+ * slot table exists to close for chttpcli/chttpsvr/ccol_event_loop. */
 TEST(clrucache_handle_lifecycle, concurrent_double_destroy_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
@@ -3323,7 +3320,7 @@ TEST(clrucache_handle_lifecycle, concurrent_double_destroy_is_fatal) {
     pthread_join(t1, NULL);
     pthread_join(t2, NULL);
     _exit(0); /* unreachable: whichever of the two destroy calls loses the
-                  race must hit fatal_err() */
+                  race must hit ccol_fatal_err() */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -3332,12 +3329,12 @@ TEST(clrucache_handle_lifecycle, concurrent_double_destroy_is_fatal) {
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-/* Reuses the pre-existing slow_remote_getter (defined above, in the
- * COALESCING GETTERS section: sleeps 100ms before returning) to hold a
- * clrucache_get_full call's pin open for a long, directly-controlled
- * duration; unlike event_loop (which has no naturally-occurring slow public
- * entry point and needed a dedicated resolve_pin_and_sleep_for_tests test
- * hook), clru_cache's own remote-getter mechanism already gives every
+/* Reuses slow_remote_getter (defined above, in the COALESCING GETTERS
+ * section: sleeps 100ms before returning) to hold a clrucache_get_full
+ * call's pin open for a long, directly-controlled duration; unlike
+ * ccol_event_loop (which has no naturally-occurring slow public entry
+ * point and therefore carries a dedicated resolve_pin_and_sleep_for_tests
+ * test hook), clru_cache's own remote-getter mechanism already gives every
  * caller a way to block for an arbitrary, application-controlled duration
  * while still holding a resolve's pin, so no new test-only accessor is
  * needed for this test specifically. */
@@ -3356,11 +3353,11 @@ static void *clru_slow_get_thread(void *arg) {
   return NULL;
 }
 
-/* The resolve-then-use race fix actually works: races a thread blocked
- * inside clrucache_get_full's remote-getter call (still holding its pin)
- * against a concurrent clru_destroy on the same handle. destroy must block
- * until the pin is released, not race ahead and free the cache out from
- * under the still-resolved pointer. */
+/* A destroy must respect an in-flight pin: races a thread blocked inside
+ * clrucache_get_full's remote-getter call (still holding its pin) against
+ * a concurrent clru_destroy on the same handle. destroy must block until
+ * the pin is released, not race ahead and free the cache out from under
+ * the still-resolved pointer. */
 TEST(clrucache_handle_lifecycle, resolve_then_use_race_destroy_waits) {
   clru_construct(cache, int, int, 8, slow_remote_getter, NULL, NULL);
 

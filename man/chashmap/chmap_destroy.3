@@ -22,8 +22,7 @@ hm   Hash map to destroy (will be set to NULL after destruction)
 .nf
 Safe to call with NULL pointer
 Frees all keys and values
-For maps created from preallocated buffers, only the map structure is
-freed (user must manage buffer lifetime)
+Frees every bucket collision chain and the bucket/slot array itself
 .fi
 .SH "SEE ALSO"
 .BR chmap_create (3),

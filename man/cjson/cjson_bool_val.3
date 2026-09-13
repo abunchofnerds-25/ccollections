@@ -14,7 +14,7 @@ const char *cjson_str_val(cjson node);
 .fi
 .SH DESCRIPTION
 .nf
-Each function returns the value stored in node, asserting via fatal_err()
+Each function returns the value stored in node, asserting via ccol_fatal_err()
 if the node's type does not match.
 
 cjson_str_val() returns a pointer to the node's own internal copy of

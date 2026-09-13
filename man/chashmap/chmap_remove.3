@@ -31,7 +31,8 @@ Frees memory for key and value
 .fi
 .SH EXAMPLES
 .nf
-ccol_retval_t r = chmap_remove(map, 42);
+int key = 42;
+ccol_retval_t r = chmap_remove(map, key);
 if (r == ccol_key_not_found) {
   printf("Key not found\en");
 }

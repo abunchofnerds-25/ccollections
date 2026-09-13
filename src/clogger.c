@@ -206,7 +206,7 @@ typedef struct clog_shared {
    * delete a file another rotation has not finished reading yet. */
   clog_pending_compress_t *pending_compress;
 
-  mutex_t mutex;
+  ccol_mutex_t mutex;
   int ref_count;
   clog_format_t format;
   clog_syslog_facility_t syslog_facility; /* PRI facility for CLOG_FMT_SYSLOG */
@@ -217,8 +217,8 @@ typedef struct clog_shared {
 
   /* Async logging (see "ASYNC LOGGING" below); every field in this block is
    * zeroed/unused for a synchronous logger (async_enabled == false), so a
-   * synchronous logger's behavior is byte-for-byte unchanged from before
-   * async logging existed. async_enabled itself is written exactly once, by
+   * synchronous logger pays nothing at all for async support being
+   * available. async_enabled itself is written exactly once, by
    * the constructing thread before this shared object is ever published to
    * any other thread (or, in a forked child, by _clog_atfork_child's own
    * downgrade; see that function's own comment), so every other reader
@@ -227,11 +227,11 @@ typedef struct clog_shared {
   bool async_enabled;
   bool is_bounded_queue; /* meaningful only if async_enabled */
   union {
-    circular_queue *circq;
-    dynamic_queue *dynmq;
+    ccol_circular_queue *circq;
+    ccol_dynamic_queue *dynmq;
   } q;
   clog_async_cfg_t async_cfg; /* resolved copy, defaults already applied */
-  thread_id_t writer_thread;
+  ccol_thread_id_t writer_thread;
   clog_buf_t async_buf; /* writer-thread-owned aggregation buffer; distinct
       from any individual handle's own lg->buf, since jobs from every handle
       sharing this shared target land in ONE buffer */
@@ -269,7 +269,7 @@ struct clogger {
    * already holds shared->mutex for the whole call), shared->mutex is always
    * acquired first, never the reverse, so no lock-ordering cycle is
    * possible anywhere in this file. */
-  mutex_t fields_mutex;
+  ccol_mutex_t fields_mutex;
   chmap fields;   /* chmap(char* -> char*); per-logger fields */
   clog_buf_t buf; /* per-logger reusable write buffer          */
   /* Pinned by _clog_resolve() (lock-free atomic increment) for as long as a
@@ -310,8 +310,8 @@ typedef struct {
 } clog_slot_t;
 
 static struct {
-  rw_lock_t rwlock;
-  once_flag_t once;
+  ccol_rw_lock_t rwlock;
+  ccol_once_flag_t once;
   cvec slots;        /* cvector of clog_slot_t */
   cvec free_indices; /* cvector of uint32_t; LIFO */
   cvec live_shareds; /* cvector of clog_shared_t*; a clog_shared_t's whole
@@ -321,7 +321,7 @@ static struct {
       deriving the set of live clog_shared_t objects from the handle table */
 } clog_slot_table = {0};
 
-#if FORK_SAFETY_REQUIRED
+#if CCOL_FORK_SAFETY_REQUIRED
 /*
  * One slot caught mid-clog_close() (in_use == false, freed == false) at
  * fork() time; see _clog_atfork_prepare()'s own recording of these and
@@ -331,10 +331,11 @@ static struct {
  *
  * This type, _clog_atfork_state below, and every function/registration site
  * that touches either of them are compiled out entirely when
- * FORK_SAFETY_REQUIRED is 0 (see that macro's own doc comment in common.h);
- * clog_slot_table.slots/free_indices/live_shareds and clog_slot_t.freed
- * themselves stay unconditionally compiled, since they also serve this
- * module's ordinary (non-fork) handle lifecycle, not fork-safety alone.
+ * CCOL_FORK_SAFETY_REQUIRED is 0 (see that macro's own doc comment in
+ * common.h); clog_slot_table.slots/free_indices/live_shareds and
+ * clog_slot_t.freed themselves stay unconditionally compiled, since they also
+ * serve this module's ordinary (non-fork) handle lifecycle, not fork-safety
+ * alone.
  */
 typedef struct {
   uint32_t idx;
@@ -358,7 +359,7 @@ static struct {
 static void _clog_atfork_prepare(void);
 static void _clog_atfork_parent(void);
 static void _clog_atfork_child(void);
-#endif /* FORK_SAFETY_REQUIRED */
+#endif /* CCOL_FORK_SAFETY_REQUIRED */
 static void _clog_slot_table_init_globals(void);
 
 /* Forward-declared: defined much further down (in the "CONSTRUCTOR HELPERS"
@@ -380,7 +381,7 @@ static void _shared_free_partial(clog_shared_t *sh);
  * clog_slot_table.slots/free_indices/live_shareds ever use, regardless of
  * any per-logger custom mprocs; see _clog_slot_table_init_globals()) ever
  * actually failing for real. Both effects are needed together to reach the
- * one rollback path that used to leave a slot behind with freed == false and
+ * one rollback path that can leave a slot behind with freed == false and
  * ptr == NULL simultaneously (see _clog_handle_acquire()'s own comment on
  * that rollback): a reused slot popped off free_indices is already
  * freed == true from its previous occupant's own clog_close(), so only a
@@ -415,10 +416,10 @@ bool clog_test_close_finalize_delay_entered(void) {
 }
 
 size_t clog_test_live_shareds_count(void) {
-  call_once(clog_slot_table.once, _clog_slot_table_init_globals);
-  rw_lock_rdlock(clog_slot_table.rwlock);
+  ccol_call_once(clog_slot_table.once, _clog_slot_table_init_globals);
+  ccol_rw_lock_rdlock(clog_slot_table.rwlock);
   size_t n = cvector_elem_count(clog_slot_table.live_shareds);
-  rw_lock_unlock(clog_slot_table.rwlock);
+  ccol_rw_lock_unlock(clog_slot_table.rwlock);
   return n;
 }
 #else
@@ -428,28 +429,28 @@ static inline bool _clog_test_consume_forced_fresh_slot_reg_failure(void) {
 #endif
 
 static void _clog_slot_table_init_globals(void) {
-  if (rw_lock_init(clog_slot_table.rwlock) != 0)
-    fatal_err("clog slot table: failed to initialize rwlock");
+  if (ccol_rw_lock_init(clog_slot_table.rwlock) != 0)
+    ccol_fatal_err("clog slot table: failed to initialize rwlock");
   clog_slot_table.slots = cvector_create(sizeof(clog_slot_t), NULL);
   if (!clog_slot_table.slots)
-    fatal_err("clog slot table: failed to allocate slots vector");
+    ccol_fatal_err("clog slot table: failed to allocate slots vector");
   clog_slot_table.free_indices = cvector_create(sizeof(uint32_t), NULL);
   if (!clog_slot_table.free_indices)
-    fatal_err("clog slot table: failed to allocate free-index vector");
+    ccol_fatal_err("clog slot table: failed to allocate free-index vector");
   clog_slot_table.live_shareds = cvector_create(sizeof(clog_shared_t *), NULL);
   if (!clog_slot_table.live_shareds)
-    fatal_err("clog slot table: failed to allocate live-shareds vector");
-#if FORK_SAFETY_REQUIRED
+    ccol_fatal_err("clog slot table: failed to allocate live-shareds vector");
+#if CCOL_FORK_SAFETY_REQUIRED
   _clog_atfork_state.locked_fields =
       cvector_create(sizeof(struct clogger *), NULL);
   if (!_clog_atfork_state.locked_fields)
-    fatal_err("clog slot table: failed to allocate atfork scratch vector");
+    ccol_fatal_err("clog slot table: failed to allocate atfork scratch vector");
   _clog_atfork_state.closing_slots =
       cvector_create(sizeof(clog_atfork_closing_t), NULL);
   if (!_clog_atfork_state.closing_slots)
-    fatal_err(
+    ccol_fatal_err(
         "clog slot table: failed to allocate atfork closing-slots vector");
-  at_fork(_clog_atfork_prepare, _clog_atfork_parent, _clog_atfork_child);
+  ccol_at_fork(_clog_atfork_prepare, _clog_atfork_parent, _clog_atfork_child);
 #endif
 }
 
@@ -457,34 +458,34 @@ static void _clog_slot_table_init_globals(void) {
  * deliberate escape hatch, mirroring cthreadcomm.c's own _cthreadcomm_
  * ensure_atfork_registered_before_caller() and cthreadpool.c's own
  * _ctpool_ensure_atfork_registered_before_caller() exactly, for a dependent
- * module (chttpserver.c) that must guarantee this module's own at_fork()
+ * module (chttpserver.c) that must guarantee this module's own ccol_at_fork()
  * triple is registered BEFORE its own, so that pthread_atfork's LIFO
  * prepare-handler ordering makes the CALLER's own prepare handler run FIRST
  * at every future fork() (i.e. before this module's own prepare handler,
  * _clog_atfork_prepare, ever gets a chance to lock clog_slot_table.rwlock or
  * any live clog_shared_t's own mutex/fields_mutex).
  *
- * chttpserver.c holds its own srv_engine_bundler.mutex across a call into
- * this module twice (_SRV_ENGINE_LOG's own log_info/log_warn/... call, and
- * _engine_acquire's own direct clog_open_fd_mp call for the engine's
- * fallback logger), so without this, whichever of the two modules happens to
- * be used FIRST by the embedding application determines the real fork()-time
- * lock order purely by accident: a caller that resolves a chttpsvr handle
- * (even an invalid one, which every handle-resolving public chttpsvr_*
- * function tolerates and reports as a plain error rather than requiring the
- * caller to guarantee validity first) before this process has ever used clog
- * for anything else registers chttpserver's own at_fork() triple with no
- * forced clogger registration first; a later, independent first use of clog
- * then registers this module's own at_fork() AFTER chttpserver's, inverting
- * the required order and reopening the identical AB-BA fork()-deadlock shape
- * already found and fixed once for chttpserver/cthreadcomm/cthreadpool (see
- * _chttpsvr_slot_table_init_globals's own doc comment in chttpserver.c for
- * that account). A caller that never uses this function is entirely
- * unaffected: this module's own lazy, call_once-guarded registration happens
- * exactly as it always has, whenever a clog handle is first created on its
+ * chttpserver.c holds its own srv_engine_bundler.mutex across a call into this
+ * module twice (_SRV_ENGINE_LOG's own ccol_log_info/ccol_log_warn/... call, and
+ * _engine_acquire's own direct clog_open_fd_mp call for the engine's fallback
+ * logger), so without this, whichever of the two modules happens to be used
+ * FIRST by the embedding application determines the real fork()-time lock order
+ * purely by accident: a caller that resolves a chttpsvr handle (even an invalid
+ * one, which every handle-resolving public chttpsvr_* function tolerates and
+ * reports as a plain error rather than requiring the caller to guarantee
+ * validity first) before this process has ever used clog for anything else
+ * registers chttpserver's own ccol_at_fork() triple with no forced clogger
+ * registration first; a later, independent first use of clog then registers
+ * this module's own ccol_at_fork() AFTER chttpserver's, inverting the required
+ * order and producing the identical AB-BA fork()-deadlock shape the same
+ * forced-registration helpers in chttpserver/cthreadcomm/cthreadpool exist to
+ * keep closed (see _chttpsvr_slot_table_init_globals's own doc comment in
+ * chttpserver.c). A caller that never uses this function is entirely
+ * unaffected: this module's own lazy, ccol_call_once-guarded registration still
+ * happens whenever a clog handle is first created on its
  * own. */
 void _clog_ensure_atfork_registered_before_caller(void) {
-  call_once(clog_slot_table.once, _clog_slot_table_init_globals);
+  ccol_call_once(clog_slot_table.once, _clog_slot_table_init_globals);
 }
 
 /*
@@ -496,29 +497,30 @@ void _clog_ensure_atfork_registered_before_caller(void) {
  * _clog_handle_acquire/clog_close (both take the WRITE lock).
  */
 static struct clogger *_clog_resolve(clog h) {
-  call_once(clog_slot_table.once, _clog_slot_table_init_globals);
+  ccol_call_once(clog_slot_table.once, _clog_slot_table_init_globals);
   if (h == 0) return NULL;
   uint32_t idx = (uint32_t)(h >> 32);
   uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
-  rw_lock_rdlock(clog_slot_table.rwlock);
+  ccol_rw_lock_rdlock(clog_slot_table.rwlock);
   struct clogger *raw = NULL;
   if (idx < cvector_elem_count(clog_slot_table.slots)) {
     clog_slot_t *slot = (clog_slot_t *)cvector_at(clog_slot_table.slots, idx);
     if (slot->in_use && slot->generation == gen) raw = slot->ptr;
   }
   if (raw) atomic_fetch_add(&raw->pending_resolve_count, 1);
-  rw_lock_unlock(clog_slot_table.rwlock);
+  ccol_rw_lock_unlock(clog_slot_table.rwlock);
   return raw;
 }
 
 /*
- * Lock-free, deliberately, and safely; NOT the same bare-atomic-decrement
- * design _chttpsvr_resolve_unpin/_chttpcli_resolve_unpin explicitly document
- * as having caused a real use-after-free when they themselves once tried
- * it: an earlier lock-free version of THEIR decrement could bring their own
- * pending_resolve_count to 0 before their own function acquired their own
- * lock to broadcast a condvar-waiting destroyer, letting that destroyer
- * free the object before the delayed lock/broadcast call ever ran.
+ * Lock-free, deliberately, and safely. A bare atomic decrement is only safe
+ * in an unpin that has nothing left to do afterward, which is exactly what
+ * separates this one from the analogous unpins in chttpserver.c and
+ * chttpclient.c: those two must still acquire their own lock and broadcast
+ * to a condvar-waiting destroyer, so decrementing their own
+ * pending_resolve_count to 0 outside that lock lets the destroyer free the
+ * object before the delayed lock/broadcast call ever runs; a use-after-free
+ * their own doc comments spell out.
  *
  * This function's body is, and must remain, exactly the one
  * atomic_fetch_sub statement below, with no lock acquisition and no
@@ -527,8 +529,8 @@ static struct clogger *_clog_resolve(clog h) {
  * clog_close()'s own step 3), so there is no wakeup left to deliver and
  * therefore nothing left for this function to do once the decrement
  * completes. Do NOT add a lock/broadcast/any other touch of raw to this
- * function later "to be safe"; doing so would reintroduce the exact
- * touch-after-decrement window the cited historical bug came from.
+ * function later "to be safe"; that opens exactly the touch-after-decrement
+ * window described above.
  */
 static void _clog_resolve_unpin(struct clogger *raw) {
   atomic_fetch_sub(&raw->pending_resolve_count, 1);
@@ -556,8 +558,8 @@ static void _clog_resolve_unpin(struct clogger *raw) {
  * never protect it at all).
  */
 static clog _clog_handle_acquire(struct clogger *lg) {
-  call_once(clog_slot_table.once, _clog_slot_table_init_globals);
-  rw_lock_wrlock(clog_slot_table.rwlock);
+  ccol_call_once(clog_slot_table.once, _clog_slot_table_init_globals);
+  ccol_rw_lock_wrlock(clog_slot_table.rwlock);
 
   /* Compiles away entirely (the non-test build's own helper is a bare
    * `return false;`) outside RUNNING_UNIT_TESTS, so this costs nothing on
@@ -574,7 +576,7 @@ static clog _clog_handle_acquire(struct clogger *lg) {
   } else {
     clog_slot_t fresh = {0};
     if (cvector_push_back(clog_slot_table.slots, &fresh) != ccol_success) {
-      rw_lock_unlock(clog_slot_table.rwlock);
+      ccol_rw_lock_unlock(clog_slot_table.rwlock);
       return CLOG_INVALID;
     }
     idx = (uint32_t)cvector_elem_count(clog_slot_table.slots) - 1;
@@ -631,14 +633,14 @@ static clog _clog_handle_acquire(struct clogger *lg) {
      * skips a slot via `if (slot->freed) continue;`), so leaving it behind
      * uncorrected here would make a fork() landing while this now-"free"
      * index sits unused in free_indices dereference a NULL ptr via
-     * mutex_lock(slot->ptr->fields_mutex) and crash. Explicitly restoring
+     * ccol_mutex_lock(slot->ptr->fields_mutex) and crash. Explicitly restoring
      * both fields to the same "freed" shape a slot retired by clog_close()
      * itself always ends up in makes this rollback safe, regardless of
      * which of the two branches above produced `slot`. */
     slot->freed = true;
     slot->ptr = NULL;
     cvector_push_back(clog_slot_table.free_indices, &idx);
-    rw_lock_unlock(clog_slot_table.rwlock);
+    ccol_rw_lock_unlock(clog_slot_table.rwlock);
     return CLOG_INVALID;
   }
 
@@ -650,7 +652,7 @@ static clog _clog_handle_acquire(struct clogger *lg) {
 
   clog h = ((clog)idx << 32) | (clog)slot->generation;
 
-  rw_lock_unlock(clog_slot_table.rwlock);
+  ccol_rw_lock_unlock(clog_slot_table.rwlock);
   return h;
 }
 
@@ -658,7 +660,7 @@ static clog _clog_handle_acquire(struct clogger *lg) {
 /*                         FORK SAFETY                                       */
 /* ========================================================================== */
 
-#if FORK_SAFETY_REQUIRED
+#if CCOL_FORK_SAFETY_REQUIRED
 /*
  * fork() duplicates only the calling thread. Any lock some OTHER thread
  * happened to be holding at that exact instant (clog_slot_table.rwlock,
@@ -686,27 +688,27 @@ static clog _clog_handle_acquire(struct clogger *lg) {
 static void _clog_atfork_prepare(void) {
   /* Per this file's own standing pthread-wrapper rule: every function that
    * directly touches clog_slot_table.rwlock must guard it with this same
-   * call_once, even though pthread_atfork() can only ever invoke this
+   * ccol_call_once, even though pthread_atfork() can only ever invoke this
    * function after _clog_slot_table_init_globals() has already registered
    * it (and therefore already run); relying on that call-graph reasoning
-   * instead of guarding here unconditionally is exactly the class of gap
-   * that has silently broken other modules in this codebase before, the
-   * moment some future change adds a new, unanticipated call path. */
-  call_once(clog_slot_table.once, _clog_slot_table_init_globals);
-  rw_lock_wrlock(clog_slot_table.rwlock);
+   * instead of guarding here unconditionally breaks silently the moment a
+   * future change adds a new, unanticipated call path, so the guard stays
+   * unconditional. */
+  ccol_call_once(clog_slot_table.once, _clog_slot_table_init_globals);
+  ccol_rw_lock_wrlock(clog_slot_table.rwlock);
 
   size_t ns = cvector_elem_count(clog_slot_table.live_shareds);
   for (size_t i = 0; i < ns; i++) {
     clog_shared_t *sh =
         *(clog_shared_t **)cvector_at(clog_slot_table.live_shareds, i);
-    mutex_lock(sh->mutex);
+    ccol_mutex_lock(sh->mutex);
   }
 
   size_t n = cvector_elem_count(clog_slot_table.slots);
   for (size_t i = 0; i < n; i++) {
     clog_slot_t *slot = (clog_slot_t *)cvector_at(clog_slot_table.slots, i);
     if (slot->freed) continue;
-    mutex_lock(slot->ptr->fields_mutex);
+    ccol_mutex_lock(slot->ptr->fields_mutex);
     if (cvector_push_back(_clog_atfork_state.locked_fields, &slot->ptr) !=
         ccol_success) {
       /* Recording this lock failed (OOM); release it right back immediately
@@ -719,7 +721,7 @@ static void _clog_atfork_prepare(void) {
        * leaves open is the same kind of narrow, OOM-only race already
        * accepted for a `freed` slot (skipped above) or a shared object that
        * never made it into live_shareds at all. */
-      mutex_unlock(slot->ptr->fields_mutex);
+      ccol_mutex_unlock(slot->ptr->fields_mutex);
     }
 
     if (!slot->in_use) {
@@ -745,34 +747,32 @@ static void _clog_atfork_prepare(void) {
 }
 
 /*
- * A real, empirically-confirmed correction to this module's own original
- * design reasoning: a plain pthread_rwlock_unlock() on the write lock,
- * called from the child's own sole thread, was assumed to be a valid
- * release of a lock that thread's own forking continuation had acquired in
- * the parent. Verified directly (gdb on a hung child process, stuck in
- * rw_lock_rdlock on this exact rwlock) that glibc's rwlock write-lock
+ * In the child, the slot table's rwlock is re-initialized rather than
+ * unlocked. A plain pthread_rwlock_unlock() on the write lock, called from
+ * the child's own sole thread, does NOT release a lock that thread's own
+ * forking continuation acquired in the parent: glibc's rwlock write-lock
  * tracks ownership by TID internally, and the child's post-fork thread has
- * a different TID than the parent's forking thread did; so the unlock
- * silently fails to release it, permanently hanging every subsequent
- * resolve in the child. Plain (default-type) mutexes do not exhibit this
- * (no TID tracking for the fast/normal mutex type this codebase uses
- * throughout, per common.h's own mutex_init()), so only the rwlock needs
- * the fix below, not sh->mutex/fields_mutex.
+ * a different TID than the parent's forking thread did, so the unlock
+ * silently fails and every subsequent resolve in the child hangs forever in
+ * ccol_rw_lock_rdlock on this exact rwlock. Plain (default-type) mutexes do
+ * not exhibit this (no TID tracking for the fast/normal mutex type this
+ * codebase uses throughout, per common.h's own ccol_mutex_init()), so only
+ * the rwlock needs this treatment, not sh->mutex/fields_mutex.
  *
- * The standard, well-established fix (used by e.g. glibc's own malloc
- * arena locks for this exact scenario) is to re-initialize the lock in the
- * child instead of unlocking it; safe specifically because the child has
+ * Re-initializing the lock in the child instead of unlocking it is the
+ * standard, well-established handling for exactly this scenario (glibc's own
+ * malloc arena locks do the same); safe specifically because the child has
  * exactly one thread and no one else can possibly be waiting on it, so
  * there is no other party for a fresh init to race.
  */
 static void _clog_atfork_release(bool in_child) {
   /* See the identical guard (and its own doc comment) at the top of
-   * _clog_atfork_prepare(): this function touches clog_slot_table.rwlock
-   * too (further down, and unconditionally for every caller), and must
-   * carry the same call_once guard for the same reason, rather than relying
-   * on _clog_atfork_prepare() having already run it moments earlier for
+   * _clog_atfork_prepare(): this function touches clog_slot_table.rwlock too
+   * (further down, and unconditionally for every caller), and must carry the
+   * same ccol_call_once guard for the same reason, rather than relying on
+   * _clog_atfork_prepare() having already run it moments earlier for
    * this exact fork(). */
-  call_once(clog_slot_table.once, _clog_slot_table_init_globals);
+  ccol_call_once(clog_slot_table.once, _clog_slot_table_init_globals);
   size_t nf = cvector_elem_count(_clog_atfork_state.locked_fields);
   for (size_t i = nf; i-- > 0;) {
     struct clogger *lg =
@@ -804,7 +804,7 @@ static void _clog_atfork_release(bool in_child) {
        * the shared target). */
       atomic_store(&lg->pending_resolve_count, 0);
     }
-    mutex_unlock(lg->fields_mutex);
+    ccol_mutex_unlock(lg->fields_mutex);
   }
 
   size_t ns = cvector_elem_count(clog_slot_table.live_shareds);
@@ -831,28 +831,27 @@ static void _clog_atfork_release(bool in_child) {
     }
     if (in_child && sh->async_enabled) {
       /* The writer thread this shared target relied on does not exist in
-       * the child at all (fork() duplicates only the calling thread), and
-       * there is no safe way to reach into circular_queue/dynamic_queue's
-       * own opaque internals to reset whatever lock state they were
-       * inherited in. Rather than attempting that, every code path in this
-       * file already gates ALL access to sh->q/sh->writer_thread/
-       * sh->async_buf behind this one flag; flipping it here means
-       * nothing in the child ever touches that (possibly lock-inconsistent)
-       * queue/buffer/thread state again, for the rest of this process's
-       * lifetime. clog_close() on this handle in the child correctly takes
-       * the plain synchronous teardown path as a direct consequence (its
-       * own "if (sh->async_enabled) _shared_async_teardown(sh);" check is
-       * now false), never attempting to join a thread that was never
-       * duplicated into this process or send a sentinel into a queue with
-       * no reader. The queue/buffer's own backing memory is never freed in
-       * the child (there is no thread left to hand that job to); an
-       * accepted, inherent leak for the remaining lifetime of the child
-       * process specifically, no different in kind from any other
+       * the child at all (fork() duplicates only the calling thread), and there
+       * is no safe way to reach into ccol_circular_queue/ccol_dynamic_queue's
+       * own opaque internals to reset whatever lock state they were inherited
+       * in. Rather than attempting that, every code path in this file already
+       * gates ALL access to sh->q/sh->writer_thread/ sh->async_buf behind this
+       * one flag; flipping it here means nothing in the child ever touches that
+       * (possibly lock-inconsistent) queue/buffer/thread state again, for the
+       * rest of this process's lifetime. clog_close() on this handle in the
+       * child correctly takes the plain synchronous teardown path as a direct
+       * consequence (its own "if (sh->async_enabled)
+       * _shared_async_teardown(sh);" check is now false), never attempting to
+       * join a thread that was never duplicated into this process or send a
+       * sentinel into a queue with no reader. The queue/buffer's own backing
+       * memory is never freed in the child (there is no thread left to hand
+       * that job to); an accepted, inherent leak for the remaining lifetime of
+       * the child process specifically, no different in kind from any other
        * kernel-level resource a forked child similarly abandons rather
        * than reclaims. */
       sh->async_enabled = false;
     }
-    mutex_unlock(sh->mutex);
+    ccol_mutex_unlock(sh->mutex);
   }
 
   if (in_child) {
@@ -928,17 +927,17 @@ static void _clog_atfork_release(bool in_child) {
           }
         }
         _shared_close_owned_fd(sh);
-        mutex_destroy(sh->mutex);
+        ccol_mutex_destroy(sh->mutex);
         _shared_free_partial(sh);
       }
     }
   }
 
   if (in_child) {
-    if (rw_lock_init(clog_slot_table.rwlock) != 0)
-      fatal_err("clog atfork release: failed to reinit slot table rwlock");
+    if (ccol_rw_lock_init(clog_slot_table.rwlock) != 0)
+      ccol_fatal_err("clog atfork release: failed to reinit slot table rwlock");
   } else {
-    rw_lock_unlock(clog_slot_table.rwlock);
+    ccol_rw_lock_unlock(clog_slot_table.rwlock);
   }
   cvector_reset(_clog_atfork_state.locked_fields);
   /* Unconditionally, not just in_child: the parent branch never processes
@@ -954,7 +953,7 @@ static void _clog_atfork_release(bool in_child) {
 
 static void _clog_atfork_parent(void) { _clog_atfork_release(false); }
 static void _clog_atfork_child(void) { _clog_atfork_release(true); }
-#endif /* FORK_SAFETY_REQUIRED */
+#endif /* CCOL_FORK_SAFETY_REQUIRED */
 
 /*
  * Defensive process-exit cleanup, mirroring chttpclient.c's own
@@ -977,11 +976,11 @@ __attribute__((destructor)) static void _cleanup_clog_slot_table(void) {
   cvector_destroy(clog_slot_table.slots);
   cvector_destroy(clog_slot_table.free_indices);
   cvector_destroy(clog_slot_table.live_shareds);
-#if FORK_SAFETY_REQUIRED
+#if CCOL_FORK_SAFETY_REQUIRED
   cvector_destroy(_clog_atfork_state.locked_fields);
   cvector_destroy(_clog_atfork_state.closing_slots);
 #endif
-  rw_lock_destroy(clog_slot_table.rwlock);
+  ccol_rw_lock_destroy(clog_slot_table.rwlock);
 }
 
 /* ========================================================================== */
@@ -990,7 +989,7 @@ __attribute__((destructor)) static void _cleanup_clog_slot_table(void) {
 
 static int _buf_init(clog_buf_t *b, const ccol_memmgmt_procs_t *m_procs) {
   b->m_procs = m_procs;
-  b->data = _mem_alloc(m_procs, CLOG_BUF_INITIAL);
+  b->data = _ccol_mem_alloc(m_procs, CLOG_BUF_INITIAL);
   if (!b->data) return -1;
   b->data[0] = '\0';
   b->len = 0;
@@ -1013,7 +1012,7 @@ static void _buf_raise_cap_limit(clog_buf_t *b, size_t new_limit) {
 static void _buf_reset(clog_buf_t *b) { b->len = 0; }
 
 static void _buf_free(clog_buf_t *b) {
-  _mem_free(b->m_procs, b->data);
+  _ccol_mem_free(b->m_procs, b->data);
   b->data = NULL;
   b->len = b->cap = 0;
 }
@@ -1060,9 +1059,9 @@ static int _buf_ensure(clog_buf_t *b, size_t need) {
   while (new_cap - b->len < need) {
     if (new_cap >= b->cap_limit) return -1;
     /* b->cap_limit may be a large, caller-configured value (see
-     * _buf_raise_cap_limit()), unlike the fixed compile-time constant this
-     * loop used to double against exclusively; guard the doubling itself
-     * against size_t overflow rather than assuming new_cap*2 always fits.
+     * _buf_raise_cap_limit()) rather than a fixed compile-time constant, so
+     * the doubling itself must be guarded against size_t overflow rather
+     * than assuming new_cap*2 always fits.
      * Clamping straight to cap_limit here must NOT bypass the loop's own
      * sufficiency check the way an unconditional `break` would: cap_limit
      * being reachable at all does not guarantee it is actually >= what
@@ -1079,7 +1078,7 @@ static int _buf_ensure(clog_buf_t *b, size_t need) {
       if (new_cap > b->cap_limit) new_cap = b->cap_limit;
     }
   }
-  char *p = _mem_realloc(b->m_procs, b->data, new_cap);
+  char *p = _ccol_mem_realloc(b->m_procs, b->data, new_cap);
   if (!p) {
     b->oom = true;
     return -1;
@@ -1523,7 +1522,7 @@ static pid_t _get_tid(void) {
   return (pid_t)syscall(SYS_gettid);
 #elif defined(__APPLE__)
   uint64_t tid64 = 0;
-  get_thread_id_np(NULL, &tid64);
+  ccol_get_thread_id_np(NULL, &tid64);
   return (pid_t)tid64;
 #elif defined(__FreeBSD__)
   return (pid_t)pthread_getthreadid_np();
@@ -1533,7 +1532,7 @@ static pid_t _get_tid(void) {
    * (so e.g. distinguishing log lines from different threads still works),
    * but unlike the branches above it is not comparable against OS-level
    * tools (ps -eLf, /proc/<pid>/task, top -H, ...). */
-  return (pid_t)(uintptr_t)get_thread_id();
+  return (pid_t)(uintptr_t)ccol_get_thread_id();
 #endif
 }
 
@@ -1546,7 +1545,8 @@ static void _get_thread_name(char *buf, size_t bufsz) {
     return;
   }
 #elif defined(__APPLE__) || defined(__FreeBSD__)
-  if (get_thread_name_np(get_thread_id(), buf, bufsz) == 0 && buf[0]) return;
+  if (ccol_get_thread_name_np(ccol_get_thread_id(), buf, bufsz) == 0 && buf[0])
+    return;
 #endif
   snprintf(buf, bufsz, "unknown");
 }
@@ -1930,7 +1930,7 @@ static void _prune_rotated(const char *file_path, int max_keep,
      */
     const char *suffix = n + base_len; /* starts with '.' */
     size_t suffix_len = strlen(suffix);
-    char *full = _mem_alloc(m_procs, file_path_len + suffix_len + 1);
+    char *full = _ccol_mem_alloc(m_procs, file_path_len + suffix_len + 1);
     if (!full) continue;
     memcpy(full, file_path, file_path_len);
     memcpy(full + file_path_len, suffix, suffix_len + 1); /* + NUL */
@@ -1943,15 +1943,16 @@ static void _prune_rotated(const char *file_path, int max_keep,
       }
     }
     if (is_pending) {
-      _mem_free(m_procs, full);
+      _ccol_mem_free(m_procs, full);
       continue;
     }
 
     if (mc >= cap) {
       int nc = cap ? cap * 2 : 16;
-      char **nm = _mem_realloc(m_procs, matches, (size_t)nc * sizeof *matches);
+      char **nm =
+          _ccol_mem_realloc(m_procs, matches, (size_t)nc * sizeof *matches);
       if (!nm) {
-        _mem_free(m_procs, full);
+        _ccol_mem_free(m_procs, full);
         break;
       }
       matches = nm;
@@ -1969,8 +1970,8 @@ static void _prune_rotated(const char *file_path, int max_keep,
     unlink(matches[i]);
   }
 
-  for (int i = 0; i < mc; i++) _mem_free(m_procs, matches[i]);
-  _mem_free(m_procs, matches);
+  for (int i = 0; i < mc; i++) _ccol_mem_free(m_procs, matches[i]);
+  _ccol_mem_free(m_procs, matches);
 }
 
 /*
@@ -2140,9 +2141,9 @@ static int _rotate(clog_shared_t *sh) {
           .path = rotated, .gz_path = gz_path, .next = sh->pending_compress};
       sh->pending_compress = &node;
 
-      mutex_unlock(sh->mutex);
+      ccol_mutex_unlock(sh->mutex);
       _gzip_compress_file(rotated, gz_path);
-      mutex_lock(sh->mutex);
+      ccol_mutex_lock(sh->mutex);
 
       /* Unlink `node` from the list. A concurrent rotation may have pushed
        * further nodes onto the head while we were unlocked, so `node` is not
@@ -2243,11 +2244,11 @@ static bool __attribute__((noinline)) _capture_backtrace(char ***out_syms,
 /*
  * Fixed marker appended in place of the usual "\t#N ..." continuation lines
  * whenever the real backtrace could not be captured at all (unsupported
- * platform, or backtrace_symbols() itself failing to allocate). Without
- * this, a NULL syms was a silent no-op here, so a reader of a logfmt record
- * with with_backtrace requested had no way to tell "the backtrace was
- * omitted" apart from "no backtrace was ever requested"; unlike JSON,
- * which already carries this same distinction via _BT_JSON_ERROR_MARKER.
+ * platform, or backtrace_symbols() itself failing to allocate). Without it,
+ * a NULL syms is a silent no-op here, leaving a reader of a logfmt record
+ * that requested a backtrace no way to tell "the backtrace was omitted"
+ * apart from "no backtrace was ever requested"; JSON carries that same
+ * distinction via _BT_JSON_ERROR_MARKER.
  */
 static const char _BT_LINE_ERROR_MARKER[] = "\t#error backtrace unavailable\n";
 
@@ -2262,8 +2263,8 @@ static const char _BT_LINE_ERROR_MARKER[] = "\t#error backtrace unavailable\n";
  * appended (a longer symbol name that didn't fit is silently skipped in
  * favour of a later, shorter one that does, rather than giving up on the
  * whole backtrace the moment the first frame doesn't fit; a frame skipped
- * this way carries no marker of its own, matching this function's
- * long-standing per-frame-best-effort contract), because depth <=
+ * this way carries no marker of its own, matching this function's own
+ * per-frame-best-effort contract), because depth <=
  * CLOG_BT_INITIAL_FRAME means capture genuinely succeeded but found no frame
  * beyond the initial bookkeeping two (nothing to append, and nothing to
  * report missing; mirroring _emit_backtrace_json()'s identical
@@ -2426,7 +2427,7 @@ static bool _emit_backtrace_json(clog_buf_t *b, char *const *syms, int depth) {
  * sh->mutex held. A NULL syms (backtrace unavailable, or _capture_backtrace()
  * itself failed) emits a single fixed marker record instead of nothing, for
  * the same reason _emit_backtrace_lines() does for logfmt: without it, a
- * reader had no way to tell "the backtrace was omitted" apart from "no
+ * reader has no way to tell "the backtrace was omitted" apart from "no
  * backtrace was ever requested". A non-NULL syms with depth <=
  * CLOG_BT_INITIAL_FRAME (capture genuinely succeeded but found no frame
  * beyond the initial bookkeeping two) emits nothing at all, the same
@@ -2599,10 +2600,10 @@ void clog_test_emit_backtrace_syslog_unavailable_marker(clog logger,
   if (!lg) return;
   struct timeval ts;
   gettimeofday(&ts, NULL);
-  mutex_lock(lg->shared->mutex);
+  ccol_mutex_lock(lg->shared->mutex);
   if (lg->shared->fd >= 0)
     _emit_backtrace_syslog_lines(&lg->buf, lg->shared, level, &ts, NULL, 0);
-  mutex_unlock(lg->shared->mutex);
+  ccol_mutex_unlock(lg->shared->mutex);
   _clog_resolve_unpin(lg);
 }
 #endif
@@ -2643,8 +2644,8 @@ typedef struct clog_async_job {
       thread identity must be captured here, not by the writer thread */
 
   char msg_inline[256]; /* stack-buffer-then-heap-spill, relocated into the
-      job; smaller than the sync path's 1024-byte stack buffer since this is
-      now a heap cost paid per queued message, not a thread-stack cost */
+      job; smaller than the sync path's 1024-byte stack buffer because this
+      is a heap cost paid per queued message, not a thread-stack cost */
   char *msg_heap;       /* NULL unless the message spilled past msg_inline */
   const char *msg;      /* == msg_inline or msg_heap; never NULL */
 
@@ -2670,8 +2671,8 @@ typedef struct clog_async_job {
  * queued ahead of this request. Always stack-allocated on the requester's
  * own frame (see _clog_flush_pinned()), never freed by the writer thread. */
 typedef struct {
-  mutex_t mutex;
-  cond_var_t cv;
+  ccol_mutex_t mutex;
+  ccol_cond_var_t cv;
   bool done;
 } clog_async_ctrl_t;
 
@@ -2715,7 +2716,7 @@ typedef struct {
   union {
     struct {
       chmap fields;
-      mutex_t *mutex;
+      ccol_mutex_t *mutex;
     } live;
     struct {
       const clog_field_view_t *views;
@@ -2774,9 +2775,9 @@ static bool _clog_emit_fields(clog_buf_t *out, clog_format_t fmt,
      * otherwise it races a concurrent clog_set_field()/_remove_field()/
      * _clear_fields() call on the same handle from another thread, which is
      * exactly the kind of access this lock exists to serialize against. */
-    mutex_lock(*src->u.live.mutex);
+    ccol_mutex_lock(*src->u.live.mutex);
     if (chmap_elem_count(fields) == 0) {
-      mutex_unlock(*src->u.live.mutex);
+      ccol_mutex_unlock(*src->u.live.mutex);
       return true;
     }
     cmap_iterator *it = chashmap_begin_iter(fields, NULL);
@@ -2801,7 +2802,7 @@ static bool _clog_emit_fields(clog_buf_t *out, clog_format_t fmt,
         it = it->_next_fn(it);
       }
     }
-    mutex_unlock(*src->u.live.mutex);
+    ccol_mutex_unlock(*src->u.live.mutex);
     return ok;
   }
 
@@ -2874,9 +2875,10 @@ static bool _clog_build_header(clog_buf_t *out, clog_shared_t *sh,
     ok = ok && _buf_append_lv(out, proc_val) == 0;
     ok = ok && _buf_append(out, " src=", 5) == 0;
     {
-      /* See the identical block this was extracted from for why a long
-       * __FILE__ path spills to a heap buffer rather than being appended
-       * raw and unescaped. */
+      /* A long __FILE__ path can make "%s:%d" outgrow this stack buffer;
+       * spill it to a heap buffer rather than appending it raw and
+       * unescaped, so the value still goes through _buf_append_lv()'s own
+       * logfmt quoting/escaping like every other dynamic field here. */
       char src_stack[512];
       char *src_val = src_stack;
       char *src_heap = NULL;
@@ -2884,7 +2886,7 @@ static bool _clog_build_header(clog_buf_t *out, clog_shared_t *sh,
       if (slen < 0) {
         ok = false;
       } else if ((size_t)slen >= sizeof src_stack) {
-        src_heap = _mem_alloc(sh->m_procs, (size_t)slen + 1);
+        src_heap = _ccol_mem_alloc(sh->m_procs, (size_t)slen + 1);
         if (!src_heap) {
           /* A genuine allocator failure, not a CLOG_BUF_MAX-style size
            * rejection; flag it the same way _buf_ensure() flags one, so
@@ -2900,7 +2902,7 @@ static bool _clog_build_header(clog_buf_t *out, clog_shared_t *sh,
         }
       }
       ok = ok && _buf_append_lv(out, src_val) == 0;
-      _mem_free(sh->m_procs, src_heap);
+      _ccol_mem_free(sh->m_procs, src_heap);
     }
     ok = ok && _buf_append(out, " func=", 6) == 0;
     ok = ok && _buf_append_lv(out, func) == 0;
@@ -2946,12 +2948,11 @@ static bool _clog_build_msg_and_close(clog_buf_t *out, clog_format_t fmt,
 /*
  * Called when the ordinary record-building sequence failed. This has two
  * distinct causes: the record's own content genuinely exceeded the target
- * buffer's own cap_limit (an oversized message, or a very large accumulation
- * of field values), or
- * a transient, size-unrelated allocation failure prevented the record from
- * being safely completed regardless of its actual size. `alloc_failure`
- * distinguishes the two so the note below reports the real cause rather
- * than always blaming size.
+ * buffer's own cap_limit (an oversized message, or a very large
+ * accumulation of field values), or a transient, size-unrelated allocation
+ * failure prevented the record from being safely completed regardless of
+ * its actual size. `alloc_failure` distinguishes the two so the note below
+ * reports the real cause rather than always blaming size.
  *
  * Builds starting from whatever out->len already is (the caller has already
  * rolled it back to where this record started) rather than resetting out to
@@ -2962,8 +2963,7 @@ static bool _clog_build_msg_and_close(clog_buf_t *out, clog_format_t fmt,
  * single-record callers (the synchronous/FATAL write path, and the async
  * enqueue-failure fallback) each reset their own buffer to empty exactly
  * once, before building their one record, so this ends up being that
- * buffer's only content for them, matching this function's original,
- * pre-batching behavior exactly.
+ * buffer's only content for them.
  *
  * `with_backtrace` matters only for JSON: logfmt and syslog emit backtrace
  * frames independently of whether the primary record itself fell back to
@@ -2976,11 +2976,11 @@ static bool _clog_build_msg_and_close(clog_buf_t *out, clog_format_t fmt,
  * Returns true if this fixed-size placeholder was appended to `out` in full;
  * false if even IT could not fit in whatever room `out` had left (only
  * reachable when `out` is the async writer thread's shared aggregation
- * buffer and it is already sitting right up against its own cap_limit),
- * in which case `out` is left completely untouched
- * (rolled back to its own length on entry) so the caller can flush what is
- * already safely in `out` and retry against a freshly emptied buffer,
- * rather than ever writing a truncated or malformed record.
+ * buffer and it is already sitting right up against its own cap_limit), in
+ * which case `out` is left completely untouched (rolled back to its own
+ * length on entry) so the caller can flush what is already safely in `out`
+ * and retry against a freshly emptied buffer, rather than ever writing a
+ * truncated or malformed record.
  */
 static bool _clog_build_fallback_record(clog_buf_t *out, clog_shared_t *sh,
                                         clog_format_t fmt, clog_level_t level,
@@ -2991,7 +2991,7 @@ static bool _clog_build_fallback_record(clog_buf_t *out, clog_shared_t *sh,
   size_t fallback_start = out->len;
   char note[160];
   if (alloc_failure) {
-    /* Deliberately generic: alloc_failure is now raised by any genuine
+    /* Deliberately generic: alloc_failure is raised by any genuine
      * allocator failure encountered while building this record (the header,
      * a field's value, the message, or the field snapshot/iterator itself),
      * not only a failure to enumerate fields; see _clog_build_record()'s
@@ -3142,15 +3142,15 @@ static bool _clog_build_record(clog_buf_t *out, clog_shared_t *sh,
      * marker (see _emit_backtrace_lines()'s own doc comment), fit in
      * whatever room was left after the primary record; reachable only when
      * `out` is sitting within a few dozen bytes of its own cap_limit. The
-     * primary record was otherwise perfectly fine, but a record
-     * that explicitly requested a backtrace must never silently end up
-     * missing it with zero trace anywhere (the exact, previously-real bug
-     * this function's own callers no longer reproduce for every OTHER
-     * failure mode). Force the same fallback-record recovery every other
-     * build failure already gets: `out->oom` reflects whether this specific
-     * failure was itself a genuine allocator failure or merely hit the
-     * capacity cap, exactly as it already does for every other build step
-     * above, so the resulting placeholder's own diagnostic stays accurate. */
+     * primary record is otherwise perfectly fine, but a record that
+     * explicitly requested a backtrace must never silently end up missing
+     * it with zero trace anywhere; the same guarantee this function already
+     * upholds for every OTHER failure mode. Force the same fallback-record
+     * recovery every other build failure already gets: `out->oom` reflects
+     * whether this specific failure was itself a genuine allocator failure
+     * or merely hit the capacity cap, exactly as it already does for every
+     * other build step above, so the resulting placeholder's own diagnostic
+     * stays accurate. */
     ok = false;
     if (!alloc_failure) alloc_failure = out->oom;
   }
@@ -3269,10 +3269,10 @@ void clog_test_write_unrepresentable_record(clog logger, clog_format_t fmt,
                                             bool with_backtrace) {
   struct clogger *lg = _clog_resolve(logger);
   if (!lg) return;
-  mutex_lock(lg->shared->mutex);
+  ccol_mutex_lock(lg->shared->mutex);
   if (lg->shared->fd >= 0)
     _clog_write_unrepresentable_record(lg->shared, fmt, level, with_backtrace);
-  mutex_unlock(lg->shared->mutex);
+  ccol_mutex_unlock(lg->shared->mutex);
   _clog_resolve_unpin(lg);
 }
 #endif
@@ -3293,12 +3293,12 @@ void clog_test_write_unrepresentable_record(clog logger, clog_format_t fmt,
  * (folded into its generic "unrecoverable write error" path) then takes
  * over gracefully instead.
  */
-static once_flag_t _clog_sigpipe_once = ONCE_INIT;
+static ccol_once_flag_t _clog_sigpipe_once = CCOL_ONCE_INIT;
 static void _clog_ignore_sigpipe(void) { signal(SIGPIPE, SIG_IGN); }
 
 static chmap _fields_create(ccol_memmgmt_procs_t *m_procs) {
   char *err = NULL;
-  chmap m = chmap_create_mp(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, ccol_string,
+  chmap m = chmap_create_mp(CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, ccol_string,
                             ccol_string, m_procs, &err);
   return m; /* NULL on failure */
 }
@@ -3316,7 +3316,7 @@ static chmap _fields_create(ccol_memmgmt_procs_t *m_procs) {
  * first, via _shared_close_owned_fd() below.
  */
 static void _shared_free_partial(clog_shared_t *sh) {
-  _mem_free(sh->m_procs, sh->file_path);
+  _ccol_mem_free(sh->m_procs, sh->file_path);
   ccol_memmgmt_procs_t *mp = sh->m_procs;
   if (mp) {
     ccol_free_t free_fn = mp->free;
@@ -3347,9 +3347,9 @@ static void _shared_close_owned_fd(clog_shared_t *sh) {
 
 static clog_shared_t *_shared_alloc(int fd, bool owns_fd, const char *file_path,
                                     ccol_memmgmt_procs_t *m_procs) {
-  call_once(_clog_sigpipe_once, _clog_ignore_sigpipe);
+  ccol_call_once(_clog_sigpipe_once, _clog_ignore_sigpipe);
 
-  clog_shared_t *sh = _mem_calloc(m_procs, 1, sizeof *sh);
+  clog_shared_t *sh = _ccol_mem_calloc(m_procs, 1, sizeof *sh);
   if (!sh) return NULL;
 
   sh->fd = fd;
@@ -3367,7 +3367,7 @@ static clog_shared_t *_shared_alloc(int fd, bool owns_fd, const char *file_path,
 
   if (file_path) {
     size_t len = strlen(file_path) + 1;
-    sh->file_path = _mem_alloc(sh->m_procs, len);
+    sh->file_path = _ccol_mem_alloc(sh->m_procs, len);
     if (!sh->file_path) {
       _shared_free_partial(sh);
       return NULL;
@@ -3375,7 +3375,7 @@ static clog_shared_t *_shared_alloc(int fd, bool owns_fd, const char *file_path,
     memcpy(sh->file_path, file_path, len);
   }
 
-  if (mutex_init(sh->mutex) != 0) {
+  if (ccol_mutex_init(sh->mutex) != 0) {
     _shared_free_partial(sh);
     return NULL;
   }
@@ -3409,25 +3409,25 @@ static clog_shared_t *_shared_alloc(int fd, bool owns_fd, const char *file_path,
 
 static struct clogger *_logger_alloc(clog_shared_t *shared,
                                      clog_level_t min_level) {
-  struct clogger *lg = _mem_calloc(shared->m_procs, 1, sizeof *lg);
+  struct clogger *lg = _ccol_mem_calloc(shared->m_procs, 1, sizeof *lg);
   if (!lg) return NULL;
 
   if (_buf_init(&lg->buf, shared->m_procs) != 0) {
-    _mem_free(shared->m_procs, lg);
+    _ccol_mem_free(shared->m_procs, lg);
     return NULL;
   }
 
   lg->fields = _fields_create(shared->m_procs);
   if (!lg->fields) {
     _buf_free(&lg->buf);
-    _mem_free(shared->m_procs, lg);
+    _ccol_mem_free(shared->m_procs, lg);
     return NULL;
   }
 
-  if (mutex_init(lg->fields_mutex) != 0) {
+  if (ccol_mutex_init(lg->fields_mutex) != 0) {
     __chmap_destroy(lg->fields);
     _buf_free(&lg->buf);
-    _mem_free(shared->m_procs, lg);
+    _ccol_mem_free(shared->m_procs, lg);
     return NULL;
   }
 
@@ -3438,11 +3438,11 @@ static struct clogger *_logger_alloc(clog_shared_t *shared,
 
 /* Free a fully-initialised logger without touching the shared backing store. */
 static void _logger_free(struct clogger *lg) {
-  mutex_destroy(lg->fields_mutex);
+  ccol_mutex_destroy(lg->fields_mutex);
   __chmap_destroy(lg->fields);
   lg->fields = NULL;
   _buf_free(&lg->buf);
-  _mem_free(lg->shared->m_procs, lg);
+  _ccol_mem_free(lg->shared->m_procs, lg);
 }
 
 static struct clogger *_alloc(int fd, bool owns_fd, const char *file_path,
@@ -3453,7 +3453,7 @@ static struct clogger *_alloc(int fd, bool owns_fd, const char *file_path,
 
   struct clogger *lg = _logger_alloc(sh, min_level);
   if (!lg) {
-    mutex_destroy(sh->mutex);
+    ccol_mutex_destroy(sh->mutex);
     _shared_free_partial(sh);
     return NULL;
   }
@@ -3480,10 +3480,10 @@ static void _snapshot_fields(struct clogger *lg, clog_field_view_t **out_fields,
   *out_count = 0;
   *out_failed = false;
 
-  mutex_lock(lg->fields_mutex);
+  ccol_mutex_lock(lg->fields_mutex);
   size_t n = chmap_elem_count(lg->fields);
   if (n == 0) {
-    mutex_unlock(lg->fields_mutex);
+    ccol_mutex_unlock(lg->fields_mutex);
     /* Skip ccol_growbuf_init()'s own unconditional 256-byte backing-store
      * allocation entirely for the common case of a logger with no
      * persistent fields at all (paid on every single async log call
@@ -3492,11 +3492,11 @@ static void _snapshot_fields(struct clogger *lg, clog_field_view_t **out_fields,
      * ccol_growbuf_destroy() (always called later by
      * _clog_async_job_release(), unconditionally) is documented safe on
      * exactly this shape (b->buf may be NULL), so this is not merely an
-     * optimization of the success path; it also closes the gap the
-     * previous unconditional call had: ccol_growbuf_init() failing here
-     * under real memory pressure (leaving out_pool->oom set) had no way to
-     * surface as *out_failed, since this n == 0 branch returned before ever
-     * checking it. */
+     * optimization of the success path: calling ccol_growbuf_init() here
+     * could fail under real memory pressure (leaving out_pool->oom set)
+     * with no way to surface as *out_failed, since this n == 0 branch
+     * returns before ever checking it. Building the empty shape directly
+     * has no such failure mode at all. */
     out_pool->buf = NULL;
     out_pool->len = 0;
     out_pool->cap = 0;
@@ -3506,17 +3506,18 @@ static void _snapshot_fields(struct clogger *lg, clog_field_view_t **out_fields,
   }
   ccol_growbuf_init(out_pool, lg->shared->m_procs);
 
-  clog_field_view_t *views = _mem_calloc(lg->shared->m_procs, n, sizeof *views);
+  clog_field_view_t *views =
+      _ccol_mem_calloc(lg->shared->m_procs, n, sizeof *views);
   if (!views) {
-    mutex_unlock(lg->fields_mutex);
+    ccol_mutex_unlock(lg->fields_mutex);
     *out_failed = true;
     return;
   }
 
   cmap_iterator *it = chashmap_begin_iter(lg->fields, NULL);
   if (!it) {
-    mutex_unlock(lg->fields_mutex);
-    _mem_free(lg->shared->m_procs, views);
+    ccol_mutex_unlock(lg->fields_mutex);
+    _ccol_mem_free(lg->shared->m_procs, views);
     *out_failed = true;
     return;
   }
@@ -3544,21 +3545,20 @@ static void _snapshot_fields(struct clogger *lg, clog_field_view_t **out_fields,
    * field-carrying async submission; this function runs on clogger's own
    * hot path. */
   if (it) ccol_iter_destroy(it);
-  mutex_unlock(lg->fields_mutex);
+  ccol_mutex_unlock(lg->fields_mutex);
 
   if (out_pool->oom) {
     /* out_pool (job->field_pool) is deliberately left alone here, not
      * destroyed: this function's sole caller (_clog_write_async) always
      * routes the job (on every success and failure path alike) through
      * _clog_async_job_release(), which unconditionally destroys
-     * job->field_pool exactly once. Destroying it here too was a real
+     * job->field_pool exactly once. Destroying it here too would be a
      * double-free: ccol_growbuf_destroy() frees out_pool->buf without ever
      * nulling the pointer afterward, so _clog_async_job_release()'s later,
      * unconditional destroy would free the same already-freed block again.
      * The other two early-return failure paths above (views/iterator
-     * allocation failure) already get this right by never touching out_pool
-     * at all; this path now matches them. */
-    _mem_free(lg->shared->m_procs, views);
+     * allocation failure) leave out_pool alone for the identical reason. */
+    _ccol_mem_free(lg->shared->m_procs, views);
     *out_failed = true;
     return;
   }
@@ -3616,13 +3616,14 @@ static void _clog_async_job_release(clog_shared_t *sh,
   clog_async_job_t *job = &envelope->u.job;
   if (job->bt_syms)
     free(job->bt_syms); /* backtrace_symbols()'s own malloc'd
-block; never routed through _mem_free/a custom allocator, mirroring
+block; never routed through _ccol_mem_free/a custom allocator, mirroring
 every other backtrace-symbol free in this file */
   ccol_growbuf_destroy(&job->field_pool);
-  _mem_free(sh->m_procs, job->fields);
-  _mem_free(sh->m_procs, job->msg_heap);
-  _mem_free(sh->m_procs, envelope); /* reclaims job's own storage too, since
-      job is embedded by value inside envelope, never separately allocated */
+  _ccol_mem_free(sh->m_procs, job->fields);
+  _ccol_mem_free(sh->m_procs, job->msg_heap);
+  _ccol_mem_free(sh->m_procs,
+                 envelope); /* reclaims job's own storage too, since
+job is embedded by value inside envelope, never separately allocated */
 }
 
 static void *_clog_writer_thread_main(void *arg) {
@@ -3647,30 +3648,31 @@ static void *_clog_writer_thread_main(void *arg) {
     timeout.tv_nsec = (remaining_ms % 1000) * 1000000L;
 
     c_message_t m = {0};
-    ccol_retval_t rv = sh->is_bounded_queue
-                           ? circq_timed_recv_zc(sh->q.circq, &m, &timeout)
-                           : dynmq_timed_recv_zc(sh->q.dynmq, &m, &timeout);
+    ccol_retval_t rv =
+        sh->is_bounded_queue
+            ? ccol_circq_timed_recv_zc(sh->q.circq, &m, &timeout)
+            : ccol_dynmq_timed_recv_zc(sh->q.dynmq, &m, &timeout);
 
     if (rv == ccol_timed_out) {
-      mutex_lock(sh->mutex);
+      ccol_mutex_lock(sh->mutex);
       _writer_flush_now(sh);
-      mutex_unlock(sh->mutex);
+      ccol_mutex_unlock(sh->mutex);
       continue;
     }
     if (rv != ccol_success) {
-      /* A genuine, documented return value (circq_timed_recv_zc()/
-       * dynmq_timed_recv_zc()'s own header doc: "ccol_unexpected_failure on
-       * system error (check errno)"), not merely a theoretical one; and
+      /* A genuine, documented return value (ccol_circq_timed_recv_zc()/
+       * ccol_dynmq_timed_recv_zc()'s own header doc: "ccol_unexpected_failure
+       * on system error (check errno)"), not merely a theoretical one; and
        * merely looping back to the timed receive does NOT by itself avoid a
        * tight spin loop, since nothing on this path touches
        * sh->last_flush_monotonic: once flush_interval_ms has already elapsed
        * since the last real flush (an entirely ordinary steady state for an
-       * otherwise-idle logger), `remaining_ms` above clamps to 0 and stays 0
-       * on every subsequent iteration, so a persistent system error would
+       * otherwise-idle logger), `remaining_ms` above clamps to 0 and stays 0 on
+       * every subsequent iteration, so a persistent system error would
        * otherwise busy-spin this thread at 100% CPU on one core indefinitely,
        * with no backoff. usleep() is not a pthread/sem primitive, so it needs
-       * no common.h wrapper (matching this file's other direct usleep()
-       * calls); a short, fixed sleep bounds the retry rate regardless of how
+       * no common.h wrapper (matching this file's other direct usleep() calls);
+       * a short, fixed sleep bounds the retry rate regardless of how
        * long the underlying condition persists. */
       usleep(1000);
       continue;
@@ -3681,9 +3683,9 @@ static void *_clog_writer_thread_main(void *arg) {
        * already built, then exit. Sent only after every prior job/flush
        * request has already been enqueued, and FIFO order guarantees this
        * is processed only once everything ahead of it has been. */
-      mutex_lock(sh->mutex);
+      ccol_mutex_lock(sh->mutex);
       _writer_flush_now(sh);
-      mutex_unlock(sh->mutex);
+      ccol_mutex_unlock(sh->mutex);
       return NULL;
     }
 
@@ -3691,13 +3693,13 @@ static void *_clog_writer_thread_main(void *arg) {
 
     if (envelope->kind == CLOG_ASYNC_MSG_FLUSH) {
       clog_async_ctrl_t *ctrl = envelope->u.ctrl;
-      mutex_lock(sh->mutex);
+      ccol_mutex_lock(sh->mutex);
       _writer_flush_now(sh);
-      mutex_unlock(sh->mutex);
-      mutex_lock(ctrl->mutex);
+      ccol_mutex_unlock(sh->mutex);
+      ccol_mutex_lock(ctrl->mutex);
       ctrl->done = true;
-      cond_var_broadcast(ctrl->cv);
-      mutex_unlock(ctrl->mutex);
+      ccol_cond_var_broadcast(ctrl->cv);
+      ccol_mutex_unlock(ctrl->mutex);
       /* A FLUSH envelope is always stack-allocated on the requester's own
        * frame (see _clog_flush_pinned()); never free it. */
       continue;
@@ -3705,7 +3707,7 @@ static void *_clog_writer_thread_main(void *arg) {
 
     /* CLOG_ASYNC_MSG_JOB */
     clog_async_job_t *job = &envelope->u.job;
-    mutex_lock(sh->mutex);
+    ccol_mutex_lock(sh->mutex);
     if (sh->fd >= 0) {
       clog_format_t fmt = sh->format;
       clog_field_source_t fsrc;
@@ -3808,17 +3810,16 @@ static void *_clog_writer_thread_main(void *arg) {
            * single-record buffer that is always reset to empty beforehand
            * and whose capacity can never shrink below CLOG_BUF_INITIAL never
            * actually needs to grow just to fit that placeholder, so this
-           * call cannot itself fail today. This return value used to be
-           * discarded outright regardless, which would have silently
-           * dropped the record (and its backtrace, if any) with zero trace
-           * the moment a future change (a smaller CLOG_BUF_INITIAL, or a
-           * differently-sized/pre-shrunk buffer reused for this purpose)
-           * ever made that "cannot fail" guarantee stop holding; the exact
-           * class of regression _clog_write_unrepresentable_record() exists
-           * to guard against on its OTHER two call sites. Checking it here
-           * too, and falling back to that same allocation-free, cannot-
-           * itself-fail last resort, closes the one call site in this file
-           * that was missing this guard. */
+           * call cannot itself fail today. The return value is checked
+           * anyway: discarding it would silently drop the record (and its
+           * backtrace, if any) with zero trace the moment a future change
+           * (a smaller CLOG_BUF_INITIAL, or a differently-sized/pre-shrunk
+           * buffer reused for this purpose) made that "cannot fail"
+           * guarantee stop holding; the exact class of failure
+           * _clog_write_unrepresentable_record() exists to guard against on
+           * its OTHER two call sites. Checking it here too, and falling back
+           * to that same allocation-free, cannot-itself-fail last resort,
+           * gives this call site the identical guarantee. */
           if (!_clog_build_record(
                   &sh->async_buf, sh, fmt, job->level, &job->ts, job->proc_val,
                   job->file, job->line, job->func, job->msg, &fsrc,
@@ -3843,7 +3844,7 @@ static void *_clog_writer_thread_main(void *arg) {
           _writer_flush_now(sh);
       }
     }
-    mutex_unlock(sh->mutex);
+    ccol_mutex_unlock(sh->mutex);
 
     _clog_async_job_release(sh, envelope);
   }
@@ -3877,19 +3878,19 @@ static bool _shared_async_init(clog_shared_t *sh,
   char *err = NULL; /* discarded; clog_open_*_mp surfaces no error string
       on any failure today, matching existing convention */
   if (sh->is_bounded_queue) {
-    sh->q.circq = circular_queue_create_with_mprocs(async_cfg->queue_size,
-                                                    sh->m_procs, &err);
+    sh->q.circq = ccol_circular_queue_create_with_mprocs(async_cfg->queue_size,
+                                                         sh->m_procs, &err);
     if (!sh->q.circq) return false;
   } else {
-    sh->q.dynmq = dynamic_queue_create_with_mprocs(sh->m_procs, &err);
+    sh->q.dynmq = ccol_dynamic_queue_create_with_mprocs(sh->m_procs, &err);
     if (!sh->q.dynmq) return false;
   }
 
   if (_buf_init(&sh->async_buf, sh->m_procs) != 0) {
     if (sh->is_bounded_queue)
-      circular_queue_destroy(sh->q.circq);
+      ccol_circular_queue_destroy(sh->q.circq);
     else
-      dynamic_queue_destroy(sh->q.dynmq);
+      ccol_dynamic_queue_destroy(sh->q.dynmq);
     return false;
   }
   /* A caller-configured flush_buffer_size larger than CLOG_BUF_MAX must
@@ -3900,12 +3901,13 @@ static bool _shared_async_init(clog_shared_t *sh,
 
   clock_gettime(CLOCK_MONOTONIC, &sh->last_flush_monotonic);
 
-  if (thread_create(sh->writer_thread, _clog_writer_thread_main, sh) != 0) {
+  if (ccol_thread_create(sh->writer_thread, _clog_writer_thread_main, sh) !=
+      0) {
     _buf_free(&sh->async_buf);
     if (sh->is_bounded_queue)
-      circular_queue_destroy(sh->q.circq);
+      ccol_circular_queue_destroy(sh->q.circq);
     else
-      dynamic_queue_destroy(sh->q.dynmq);
+      ccol_dynamic_queue_destroy(sh->q.dynmq);
     return false;
   }
 
@@ -3917,17 +3919,16 @@ static bool _shared_async_init(clog_shared_t *sh,
  * Sends the shutdown sentinel, retrying with a bounded backoff until it is
  * genuinely accepted by the queue rather than giving up after one attempt.
  *
- * A single unchecked attempt used to be enough in practice for a BOUNDED
- * queue (circq_send_zc() blocks until space frees, and the writer thread is
+ * A single unchecked attempt is enough in practice for a BOUNDED queue
+ * (ccol_circq_send_zc() blocks until space frees, and the writer thread is
  * always still draining at this point, so space always eventually appears)
- * but not for the UNBOUNDED queue: dynmq_send_zc() never blocks, and can
+ * but not for the UNBOUNDED queue: ccol_dynmq_send_zc() never blocks, and can
  * genuinely fail with ccol_not_enough_memory if its own internal node
  * allocation fails under memory pressure; exactly the condition a caller
  * may be closing loggers in response to. Silently ignoring that failure and
- * proceeding straight to thread_join() (the original, buggy shape of this
- * function) hangs forever: the writer thread never receives the sentinel it
- * is blocked waiting for, and nothing else will ever send one on this
- * function's behalf.
+ * proceeding straight to ccol_thread_join() hangs forever: the writer thread
+ * never receives the sentinel it is blocked waiting for, and nothing else
+ * will ever send one on this function's behalf.
  *
  * Retrying instead of giving up is deliberate, not merely convenient:
  * giving up here has no safe fallback. The writer thread cannot be abandoned
@@ -3945,8 +3946,8 @@ static void _clog_send_shutdown_sentinel_blocking(clog_shared_t *sh) {
   for (;;) {
     c_message_t sentinel = {.data = NULL, .size = 0};
     ccol_retval_t rv = sh->is_bounded_queue
-                           ? circq_send_zc(sh->q.circq, &sentinel)
-                           : dynmq_send_zc(sh->q.dynmq, &sentinel);
+                           ? ccol_circq_send_zc(sh->q.circq, &sentinel)
+                           : ccol_dynmq_send_zc(sh->q.dynmq, &sentinel);
     if (rv == ccol_success) return;
     /* A transient allocation failure (the unbounded queue's own node
      * allocation), or the vanishingly unlikely ccol_not_permitted case (this
@@ -3970,11 +3971,11 @@ static void _clog_send_shutdown_sentinel_blocking(clog_shared_t *sh) {
  */
 static void _shared_async_teardown(clog_shared_t *sh) {
   _clog_send_shutdown_sentinel_blocking(sh);
-  thread_join(sh->writer_thread);
+  ccol_thread_join(sh->writer_thread);
   if (sh->is_bounded_queue)
-    circular_queue_destroy(sh->q.circq);
+    ccol_circular_queue_destroy(sh->q.circq);
   else
-    dynamic_queue_destroy(sh->q.dynmq);
+    ccol_dynamic_queue_destroy(sh->q.dynmq);
   _buf_free(&sh->async_buf);
 }
 
@@ -3999,7 +4000,7 @@ clog clog_open_fd_mp(int fd, clog_level_t min_level,
      * reading lg->shared afterward would be a use-after-free. */
     clog_shared_t *sh = lg->shared;
     _shared_close_owned_fd(sh);
-    mutex_destroy(sh->mutex);
+    ccol_mutex_destroy(sh->mutex);
     _logger_free(lg);
     _shared_free_partial(sh);
     return CLOG_INVALID;
@@ -4010,7 +4011,7 @@ clog clog_open_fd_mp(int fd, clog_level_t min_level,
     clog_shared_t *sh = lg->shared; /* see the identical note above */
     if (sh->async_enabled) _shared_async_teardown(sh);
     _shared_close_owned_fd(sh);
-    mutex_destroy(sh->mutex);
+    ccol_mutex_destroy(sh->mutex);
     _logger_free(lg);
     _shared_free_partial(sh);
     return CLOG_INVALID;
@@ -4085,7 +4086,7 @@ clog clog_open_file_mp(const char *path, clog_level_t min_level,
     if (!have_size && cfg->size_rotation_enabled) {
       clog_shared_t *sh = lg->shared; /* see the identical note below */
       _shared_close_owned_fd(sh);
-      mutex_destroy(sh->mutex);
+      ccol_mutex_destroy(sh->mutex);
       _logger_free(lg);
       _shared_free_partial(sh);
       return CLOG_INVALID;
@@ -4100,7 +4101,7 @@ clog clog_open_file_mp(const char *path, clog_level_t min_level,
      * reading lg->shared afterward would be a use-after-free. */
     clog_shared_t *sh = lg->shared;
     _shared_close_owned_fd(sh);
-    mutex_destroy(sh->mutex);
+    ccol_mutex_destroy(sh->mutex);
     _logger_free(lg);
     _shared_free_partial(sh);
     return CLOG_INVALID;
@@ -4111,7 +4112,7 @@ clog clog_open_file_mp(const char *path, clog_level_t min_level,
     clog_shared_t *sh = lg->shared; /* see the identical note above */
     if (sh->async_enabled) _shared_async_teardown(sh);
     _shared_close_owned_fd(sh);
-    mutex_destroy(sh->mutex);
+    ccol_mutex_destroy(sh->mutex);
     _logger_free(lg);
     _shared_free_partial(sh);
     return CLOG_INVALID;
@@ -4128,23 +4129,25 @@ void clog_close(clog h) {
    * once the close begins). Double-close is a fatal programming error,
    * matching chttpsvr's own explicit design. */
   {
-    call_once(clog_slot_table.once, _clog_slot_table_init_globals);
+    ccol_call_once(clog_slot_table.once, _clog_slot_table_init_globals);
     if (h == 0)
-      fatal_err("clog_close: clog handle is invalid, stale, or already closed");
+      ccol_fatal_err(
+          "clog_close: clog handle is invalid, stale, or already closed");
     uint32_t idx = (uint32_t)(h >> 32);
     uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
-    rw_lock_wrlock(clog_slot_table.rwlock);
+    ccol_rw_lock_wrlock(clog_slot_table.rwlock);
     clog_slot_t *slot = NULL;
     if (idx < cvector_elem_count(clog_slot_table.slots))
       slot = (clog_slot_t *)cvector_at(clog_slot_table.slots, idx);
     if (!slot || !slot->in_use || slot->generation != gen) {
-      rw_lock_unlock(clog_slot_table.rwlock);
-      fatal_err("clog_close: clog handle is invalid, stale, or already closed");
+      ccol_rw_lock_unlock(clog_slot_table.rwlock);
+      ccol_fatal_err(
+          "clog_close: clog handle is invalid, stale, or already closed");
     }
     raw = slot->ptr;
     sh = raw->shared;
     slot->in_use = false;
-    rw_lock_unlock(clog_slot_table.rwlock);
+    ccol_rw_lock_unlock(clog_slot_table.rwlock);
   }
 
   /* Step 3: poll-wait for any in-flight, pin-holding operation on this exact
@@ -4184,7 +4187,7 @@ void clog_close(clog h) {
    * the index onto the free list) since there is no reason to defer it
    * until after the (possibly slow) shared-object teardown below. */
   {
-    rw_lock_wrlock(clog_slot_table.rwlock);
+    ccol_rw_lock_wrlock(clog_slot_table.rwlock);
     uint32_t idx = (uint32_t)(h >> 32);
     clog_slot_t *slot = (clog_slot_t *)cvector_at(clog_slot_table.slots, idx);
     _logger_free(raw);
@@ -4193,22 +4196,22 @@ void clog_close(clog h) {
     slot->generation++;
     if (slot->generation == 0) slot->generation++; /* skip the sentinel */
     cvector_push_back(clog_slot_table.free_indices, &idx);
-    rw_lock_unlock(clog_slot_table.rwlock);
+    ccol_rw_lock_unlock(clog_slot_table.rwlock);
   }
 
   /* Step 5: decrement the shared ref count. Never overlaps holding both the
    * slot table's write lock and shared->mutex at once (step 4 has already
    * released the write lock before this step ever acquires shared->mutex). */
-  mutex_lock(sh->mutex);
+  ccol_mutex_lock(sh->mutex);
   int remaining = --sh->ref_count;
-  mutex_unlock(sh->mutex);
+  ccol_mutex_unlock(sh->mutex);
 
   /* Step 6: only the last handle sharing sh actually frees it. */
   if (remaining == 0) {
     /* Remove sh from live_shareds under a fresh acquisition of the write
      * lock, strictly BEFORE anything else here touches sh->mutex again;
      * see "Fork safety" for why this ordering matters. */
-    rw_lock_wrlock(clog_slot_table.rwlock);
+    ccol_rw_lock_wrlock(clog_slot_table.rwlock);
     size_t n = cvector_elem_count(clog_slot_table.live_shareds);
     for (size_t i = 0; i < n; i++) {
       clog_shared_t *seen =
@@ -4222,12 +4225,12 @@ void clog_close(clog h) {
         break;
       }
     }
-    rw_lock_unlock(clog_slot_table.rwlock);
+    ccol_rw_lock_unlock(clog_slot_table.rwlock);
 
     /* Runs with sh->mutex NOT held: the writer thread's own loop acquires
      * that same mutex internally to process everything ahead of the
      * shutdown sentinel (including the sentinel's own final flush);
-     * holding it here across thread_join() (inside
+     * holding it here across ccol_thread_join() (inside
      * _shared_async_teardown()) would be a genuine self-deadlock, since the
      * writer thread could never acquire it to reach the sentinel at all.
      * Must run BEFORE the fd is closed below: jobs already queued by other,
@@ -4236,7 +4239,7 @@ void clog_close(clog h) {
     if (sh->async_enabled) _shared_async_teardown(sh);
 
     _shared_close_owned_fd(sh);
-    mutex_destroy(sh->mutex);
+    ccol_mutex_destroy(sh->mutex);
     _shared_free_partial(sh);
   }
 }
@@ -4244,7 +4247,8 @@ void clog_close(clog h) {
 clog clog_derive(clog parent_h) {
   struct clogger *parent = _clog_resolve(parent_h);
   if (!parent)
-    fatal_err("clog_derive: clog handle is invalid, stale, or already closed");
+    ccol_fatal_err(
+        "clog_derive: clog handle is invalid, stale, or already closed");
 
   /* min_level is _Atomic; reading it directly here (as _clog_write()'s own
    * fast path already does) needs no lock of its own. */
@@ -4256,15 +4260,15 @@ clog clog_derive(clog parent_h) {
 
   /* Copy parent's fields into the child's independent field map. Guarded by
    * parent->fields_mutex alone (not shared->mutex), the same lock
-   * clog_set_field()/_remove_field()/_clear_fields() now use, so this
+   * clog_set_field()/_remove_field()/_clear_fields() use, so this
    * genuinely synchronises against a concurrent mutation of parent's own
    * field map without contending with an unrelated write in progress on a
    * sibling logger sharing the same shared->mutex. */
-  mutex_lock(parent->fields_mutex);
+  ccol_mutex_lock(parent->fields_mutex);
   if (chmap_elem_count(parent->fields) > 0) {
     cmap_iterator *it = chashmap_begin_iter(parent->fields, NULL);
     if (!it) {
-      mutex_unlock(parent->fields_mutex);
+      ccol_mutex_unlock(parent->fields_mutex);
       _logger_free(child);
       _clog_resolve_unpin(parent);
       return CLOG_INVALID;
@@ -4281,7 +4285,7 @@ clog clog_derive(clog parent_h) {
       ccol_retval_t rv = chmap_insert_elem(child->fields, &kp, &vp);
       if (rv != ccol_success && rv != ccol_key_already_present) {
         ccol_iter_destroy(it);
-        mutex_unlock(parent->fields_mutex);
+        ccol_mutex_unlock(parent->fields_mutex);
         _logger_free(child);
         _clog_resolve_unpin(parent);
         return CLOG_INVALID;
@@ -4289,7 +4293,7 @@ clog clog_derive(clog parent_h) {
       it = it->_next_fn(it);
     }
   }
-  mutex_unlock(parent->fields_mutex);
+  ccol_mutex_unlock(parent->fields_mutex);
 
   /* ref_count is genuinely shared across the whole derive tree; still needs
    * shared->mutex, held only for this brief increment. parent is guaranteed
@@ -4297,9 +4301,9 @@ clog clog_derive(clog parent_h) {
    * the entire duration of this call (its own pin is held throughout), so it
    * is safe to acquire this lock without having held it continuously since
    * the top of the function. */
-  mutex_lock(parent->shared->mutex);
+  ccol_mutex_lock(parent->shared->mutex);
   parent->shared->ref_count++;
-  mutex_unlock(parent->shared->mutex);
+  ccol_mutex_unlock(parent->shared->mutex);
 
   clog h = _clog_handle_acquire(child);
   if (h == CLOG_INVALID) {
@@ -4307,9 +4311,9 @@ clog clog_derive(clog parent_h) {
      * still fully alive here (parent's own pin is still held throughout
      * this whole function); so reading child->shared->m_procs inside
      * _logger_free(child) below is always safe. */
-    mutex_lock(parent->shared->mutex);
+    ccol_mutex_lock(parent->shared->mutex);
     parent->shared->ref_count--;
-    mutex_unlock(parent->shared->mutex);
+    ccol_mutex_unlock(parent->shared->mutex);
     _logger_free(child);
     _clog_resolve_unpin(parent);
     return CLOG_INVALID;
@@ -4342,7 +4346,7 @@ clog clog_derive(clog parent_h) {
 void clog_set_level(clog h, clog_level_t level) {
   struct clogger *lg = _clog_resolve(h);
   if (!lg)
-    fatal_err(
+    ccol_fatal_err(
         "clog_set_level: clog handle is invalid, stale, or already closed");
 
   lg->min_level = level;
@@ -4352,7 +4356,7 @@ void clog_set_level(clog h, clog_level_t level) {
 clog_level_t clog_get_level(clog h) {
   struct clogger *lg = _clog_resolve(h);
   if (!lg)
-    fatal_err(
+    ccol_fatal_err(
         "clog_get_level: clog handle is invalid, stale, or already closed");
 
   clog_level_t l = lg->min_level;
@@ -4367,30 +4371,30 @@ clog_level_t clog_get_level(clog h) {
 void clog_set_format(clog h, clog_format_t fmt) {
   struct clogger *lg = _clog_resolve(h);
   if (!lg)
-    fatal_err(
+    ccol_fatal_err(
         "clog_set_format: clog handle is invalid, stale, or already closed");
 
-  mutex_lock(lg->shared->mutex);
+  ccol_mutex_lock(lg->shared->mutex);
   /* CLOG_FMT_SYSLOG requires a caller-supplied fd (owns_fd == false). */
   if (fmt == CLOG_FMT_SYSLOG && lg->shared->owns_fd) {
-    mutex_unlock(lg->shared->mutex);
+    ccol_mutex_unlock(lg->shared->mutex);
     _clog_resolve_unpin(lg);
     return;
   }
   lg->shared->format = fmt;
-  mutex_unlock(lg->shared->mutex);
+  ccol_mutex_unlock(lg->shared->mutex);
   _clog_resolve_unpin(lg);
 }
 
 clog_format_t clog_get_format(clog h) {
   struct clogger *lg = _clog_resolve(h);
   if (!lg)
-    fatal_err(
+    ccol_fatal_err(
         "clog_get_format: clog handle is invalid, stale, or already closed");
 
-  mutex_lock(lg->shared->mutex);
+  ccol_mutex_lock(lg->shared->mutex);
   clog_format_t f = lg->shared->format;
-  mutex_unlock(lg->shared->mutex);
+  ccol_mutex_unlock(lg->shared->mutex);
   _clog_resolve_unpin(lg);
   return f;
 }
@@ -4398,24 +4402,24 @@ clog_format_t clog_get_format(clog h) {
 void clog_set_facility(clog h, clog_syslog_facility_t facility) {
   struct clogger *lg = _clog_resolve(h);
   if (!lg)
-    fatal_err(
+    ccol_fatal_err(
         "clog_set_facility: clog handle is invalid, stale, or already closed");
 
-  mutex_lock(lg->shared->mutex);
+  ccol_mutex_lock(lg->shared->mutex);
   lg->shared->syslog_facility = facility;
-  mutex_unlock(lg->shared->mutex);
+  ccol_mutex_unlock(lg->shared->mutex);
   _clog_resolve_unpin(lg);
 }
 
 clog_syslog_facility_t clog_get_facility(clog h) {
   struct clogger *lg = _clog_resolve(h);
   if (!lg)
-    fatal_err(
+    ccol_fatal_err(
         "clog_get_facility: clog handle is invalid, stale, or already closed");
 
-  mutex_lock(lg->shared->mutex);
+  ccol_mutex_lock(lg->shared->mutex);
   clog_syslog_facility_t f = lg->shared->syslog_facility;
-  mutex_unlock(lg->shared->mutex);
+  ccol_mutex_unlock(lg->shared->mutex);
   _clog_resolve_unpin(lg);
   return f;
 }
@@ -4427,7 +4431,7 @@ clog_syslog_facility_t clog_get_facility(clog h) {
 void clog_set_field(clog h, const char *key, const char *value) {
   struct clogger *lg = _clog_resolve(h);
   if (!lg)
-    fatal_err(
+    ccol_fatal_err(
         "clog_set_field: clog handle is invalid, stale, or already closed");
 
   if (!key || !value) {
@@ -4458,20 +4462,20 @@ void clog_set_field(clog h, const char *key, const char *value) {
    * the same shared backing store, so a field mutation here must not
    * contend with an unrelated write in progress on a sibling (see
    * fields_mutex's own doc comment on struct clogger). */
-  mutex_lock(lg->fields_mutex);
+  ccol_mutex_lock(lg->fields_mutex);
 
   cmap_pair kp = {.ptr = (void *)key, .size = strlen(key) + 1};
   cmap_pair vp = {.ptr = (void *)value, .size = strlen(value) + 1};
   chmap_insert_elem(lg->fields, &kp, &vp);
 
-  mutex_unlock(lg->fields_mutex);
+  ccol_mutex_unlock(lg->fields_mutex);
   _clog_resolve_unpin(lg);
 }
 
 void clog_remove_field(clog h, const char *key) {
   struct clogger *lg = _clog_resolve(h);
   if (!lg)
-    fatal_err(
+    ccol_fatal_err(
         "clog_remove_field: clog handle is invalid, stale, or already closed");
 
   if (!key) {
@@ -4479,24 +4483,24 @@ void clog_remove_field(clog h, const char *key) {
     return;
   }
 
-  mutex_lock(lg->fields_mutex);
+  ccol_mutex_lock(lg->fields_mutex);
 
   cmap_pair kp = {.ptr = (void *)key, .size = strlen(key) + 1};
   chmap_delete_elem(lg->fields, &kp);
 
-  mutex_unlock(lg->fields_mutex);
+  ccol_mutex_unlock(lg->fields_mutex);
   _clog_resolve_unpin(lg);
 }
 
 void clog_clear_fields(clog h) {
   struct clogger *lg = _clog_resolve(h);
   if (!lg)
-    fatal_err(
+    ccol_fatal_err(
         "clog_clear_fields: clog handle is invalid, stale, or already closed");
 
-  mutex_lock(lg->fields_mutex);
+  ccol_mutex_lock(lg->fields_mutex);
   chmap_reset(lg->fields, 0);
-  mutex_unlock(lg->fields_mutex);
+  ccol_mutex_unlock(lg->fields_mutex);
   _clog_resolve_unpin(lg);
 }
 
@@ -4538,7 +4542,7 @@ static void __attribute__((format(printf, 9, 0))) _clog_write_sync(
     struct clogger *lg, clog_level_t level, const char *file, int line,
     const char *func, bool with_backtrace, char *const *bt_syms, int bt_depth,
     const char *fmt, va_list ap) {
-  mutex_lock(lg->shared->mutex);
+  ccol_mutex_lock(lg->shared->mutex);
 
   /* CLOG_FATAL bypasses the level filter: the cause of termination must
    * always be recorded, regardless of min_level. This re-check is redundant
@@ -4549,12 +4553,12 @@ static void __attribute__((format(printf, 9, 0))) _clog_write_sync(
    * still honored for this one call, the same rare, intentionally-accepted
    * boundary-line race already documented for the fast path itself. */
   if (level < lg->min_level && level != CLOG_FATAL) {
-    mutex_unlock(lg->shared->mutex);
+    ccol_mutex_unlock(lg->shared->mutex);
     return;
   }
 
   if (lg->shared->fd < 0) {
-    mutex_unlock(lg->shared->mutex);
+    ccol_mutex_unlock(lg->shared->mutex);
     return;
   }
 
@@ -4576,7 +4580,7 @@ static void __attribute__((format(printf, 9, 0))) _clog_write_sync(
     static const char fmt_err_msg[] = "<log message formatting failed>";
     memcpy(msg_stack, fmt_err_msg, sizeof fmt_err_msg);
   } else if ((size_t)mlen >= sizeof msg_stack) {
-    msg_heap = _mem_alloc(lg->shared->m_procs, (size_t)mlen + 1);
+    msg_heap = _ccol_mem_alloc(lg->shared->m_procs, (size_t)mlen + 1);
     if (msg_heap) {
       int mlen2 = vsnprintf(msg_heap, (size_t)mlen + 1, fmt, ap2);
       if (mlen2 >= 0) msg = msg_heap;
@@ -4619,7 +4623,7 @@ static void __attribute__((format(printf, 9, 0))) _clog_write_sync(
                                   proc_val, file, line, func, msg, &fsrc,
                                   with_backtrace, bt_syms, bt_depth, NULL);
 
-  _mem_free(lg->shared->m_procs, msg_heap);
+  _ccol_mem_free(lg->shared->m_procs, msg_heap);
 
   /* ----------------------------------------------------------------------- */
   /* Emit.                                                                    */
@@ -4652,7 +4656,7 @@ static void __attribute__((format(printf, 9, 0))) _clog_write_sync(
   /* ----------------------------------------------------------------------- */
   _clog_size_rotate_if_due(lg->shared);
 
-  mutex_unlock(lg->shared->mutex);
+  ccol_mutex_unlock(lg->shared->mutex);
 }
 
 /* Forward-declared: defined further down (needs clog_async_ctrl_t/
@@ -4699,7 +4703,7 @@ static void __attribute__((format(printf, 9, 0))) _clog_write_async(
     const char *func, bool with_backtrace, char **bt_syms, int bt_depth,
     const char *fmt, va_list ap) {
   clog_async_msg_t *envelope =
-      _mem_calloc(lg->shared->m_procs, 1, sizeof *envelope);
+      _ccol_mem_calloc(lg->shared->m_procs, 1, sizeof *envelope);
   if (!envelope) {
     _clog_write_sync(lg, level, file, line, func, with_backtrace, bt_syms,
                      bt_depth, fmt, ap);
@@ -4736,11 +4740,11 @@ static void __attribute__((format(printf, 9, 0))) _clog_write_async(
     static const char fmt_err_msg[] = "<log message formatting failed>";
     memcpy(job->msg_inline, fmt_err_msg, sizeof fmt_err_msg);
   } else if ((size_t)mlen >= sizeof job->msg_inline) {
-    job->msg_heap = _mem_alloc(lg->shared->m_procs, (size_t)mlen + 1);
+    job->msg_heap = _ccol_mem_alloc(lg->shared->m_procs, (size_t)mlen + 1);
     if (job->msg_heap) {
       int mlen2 = vsnprintf(job->msg_heap, (size_t)mlen + 1, fmt, ap2);
       if (mlen2 < 0) {
-        _mem_free(lg->shared->m_procs, job->msg_heap);
+        _ccol_mem_free(lg->shared->m_procs, job->msg_heap);
         job->msg_heap = NULL;
       }
     }
@@ -4760,8 +4764,8 @@ static void __attribute__((format(printf, 9, 0))) _clog_write_async(
 
   c_message_t m = {.data = envelope, .size = sizeof *envelope};
   ccol_retval_t rv = lg->shared->is_bounded_queue
-                         ? circq_send_zc(lg->shared->q.circq, &m)
-                         : dynmq_send_zc(lg->shared->q.dynmq, &m);
+                         ? ccol_circq_send_zc(lg->shared->q.circq, &m)
+                         : ccol_dynmq_send_zc(lg->shared->q.dynmq, &m);
   if (rv != ccol_success) {
     /* Drain anything already queued (from this handle or any sibling
      * sharing lg->shared) before this job's own direct write below, so that
@@ -4773,7 +4777,7 @@ static void __attribute__((format(printf, 9, 0))) _clog_write_async(
      * flush. */
     _clog_flush_pinned(lg);
 
-    mutex_lock(lg->shared->mutex);
+    ccol_mutex_lock(lg->shared->mutex);
     if (lg->shared->fd >= 0) {
       clog_format_t fmt2 = lg->shared->format;
       clog_field_source_t fsrc;
@@ -4815,7 +4819,7 @@ static void __attribute__((format(printf, 9, 0))) _clog_write_async(
 
       _clog_size_rotate_if_due(lg->shared);
     }
-    mutex_unlock(lg->shared->mutex);
+    ccol_mutex_unlock(lg->shared->mutex);
 
     _clog_async_job_release(lg->shared, envelope);
   }
@@ -4823,9 +4827,9 @@ static void __attribute__((format(printf, 9, 0))) _clog_write_async(
 
 #ifdef RUNNING_UNIT_TESTS
 /*
- * Lets a test deterministically force the NEXT _clog_flush_pinned() call's
- * own mutex_init()/cond_var_init() on its stack-local clog_async_ctrl_t to
- * fail, without depending on pthread_mutex_init()/pthread_cond_init() ever
+ * Lets a test deterministically force the NEXT _clog_flush_pinned() call's own
+ * ccol_mutex_init()/ccol_cond_var_init() on its stack-local clog_async_ctrl_t
+ * to fail, without depending on pthread_mutex_init()/pthread_cond_init() ever
  * actually failing for real (with default/NULL attributes, glibc's own
  * implementation has no real failure path to trigger portably from a test).
  * Each hook auto-disarms itself the moment it fires, so only the one call a
@@ -4859,36 +4863,38 @@ static inline bool _clog_test_consume_forced_flush_condvar_init_failure(void) {
 /*
  * Core of clog_flush(), factored out so it can also be called from
  * _clog_write()'s own FATAL path against an lg the caller has ALREADY
- * resolved/pinned; this function does no resolve/unpin of its own, and
- * assumes lg->shared->async_enabled is already known true by the caller.
- * The pin is held for this entire call, including the blocking wait below,
- * mirroring how _clog_write()/_clog_write_async() already hold their own
- * pin across their own blocking circq_send_zc/dynmq_send_zc call; this is
- * what lets clog_close()'s poll-wait naturally serialize against an
- * in-flight flush the same way it already does for an in-flight write.
+ * resolved/pinned; this function does no resolve/unpin of its own, and assumes
+ * lg->shared->async_enabled is already known true by the caller. The pin is
+ * held for this entire call, including the blocking wait below, mirroring how
+ * _clog_write()/_clog_write_async() already hold their own pin across their own
+ * blocking ccol_circq_send_zc/ccol_dynmq_send_zc call; this is what lets
+ * clog_close()'s poll-wait naturally serialize against an in-flight flush the
+ * same way it already does for an in-flight write.
  */
 static void _clog_flush_pinned(struct clogger *lg) {
-  clog_async_ctrl_t ctrl; /* stack-scoped, per-call; mutex_init/cond_var_init
-      on a fresh instance each time, never a static/constant initializer,
-      per this file's own standing pthread-wrapper rule */
+  clog_async_ctrl_t
+      ctrl; /* stack-scoped, per-call; ccol_mutex_init/ccol_cond_var_init
+on a fresh instance each time, never a static/constant initializer,
+per this file's own standing pthread-wrapper rule */
   /* Both checked, unlike an ordinary "this basically never fails" pthread
-   * init elsewhere in this file: proceeding to mutex_lock()/cond_var_wait()
-   * on a NOT-fully-initialized mutex/condvar on the strength of "it almost
-   * certainly succeeded" would be undefined behavior, not a graceful
-   * degradation, and this function's own envelope must never be handed to
-   * the writer thread in that case; there would be no correctly-initialized
-   * ctrl.mutex/ctrl.cv left for it to safely lock/broadcast on the other end.
-   * Failing this open (treat it as nothing having been enqueued, exactly the
-   * existing "vanishingly unlikely enqueue failure" branch below already
-   * does) is also what keeps this function's other caller, _clog_write()'s
-   * own FATAL path, from ever hanging indefinitely on a call meant to
+   * init elsewhere in this file: proceeding to
+   * ccol_mutex_lock()/ccol_cond_var_wait() on a NOT-fully-initialized
+   * mutex/condvar on the strength of "it almost certainly succeeded" would be
+   * undefined behavior, not a graceful degradation, and this function's own
+   * envelope must never be handed to the writer thread in that case; there
+   * would be no correctly-initialized ctrl.mutex/ctrl.cv left for it to safely
+   * lock/broadcast on the other end. Failing this open (treat it as nothing
+   * having been enqueued, exactly the existing "vanishingly unlikely enqueue
+   * failure" branch below already does) is also what keeps this function's
+   * other caller, _clog_write()'s own FATAL path, from ever hanging
+   * indefinitely on a call meant to
    * terminate the process. */
   if (_clog_test_consume_forced_flush_mutex_init_failure() ||
-      mutex_init(ctrl.mutex) != 0)
+      ccol_mutex_init(ctrl.mutex) != 0)
     return;
   if (_clog_test_consume_forced_flush_condvar_init_failure() ||
-      cond_var_init(ctrl.cv) != 0) {
-    mutex_destroy(ctrl.mutex);
+      ccol_cond_var_init(ctrl.cv) != 0) {
+    ccol_mutex_destroy(ctrl.mutex);
     return;
   }
   ctrl.done = false;
@@ -4898,13 +4904,13 @@ static void _clog_flush_pinned(struct clogger *lg) {
   envelope.u.ctrl = &ctrl;
   c_message_t m = {.data = &envelope, .size = sizeof envelope};
   ccol_retval_t rv = lg->shared->is_bounded_queue
-                         ? circq_send_zc(lg->shared->q.circq, &m)
-                         : dynmq_send_zc(lg->shared->q.dynmq, &m);
+                         ? ccol_circq_send_zc(lg->shared->q.circq, &m)
+                         : ccol_dynmq_send_zc(lg->shared->q.dynmq, &m);
 
   if (rv == ccol_success) {
-    mutex_lock(ctrl.mutex);
-    while (!ctrl.done) cond_var_wait(ctrl.cv, ctrl.mutex);
-    mutex_unlock(ctrl.mutex);
+    ccol_mutex_lock(ctrl.mutex);
+    while (!ctrl.done) ccol_cond_var_wait(ctrl.cv, ctrl.mutex);
+    ccol_mutex_unlock(ctrl.mutex);
   }
   /* else: the vanishingly unlikely ccol_not_permitted/ccol_not_enough_memory
    * failure path (sending already disabled, or the unbounded queue's own
@@ -4915,14 +4921,15 @@ static void _clog_flush_pinned(struct clogger *lg) {
    * FATAL-path pre-flush step, and an unconditional wait here could hang a
    * process indefinitely instead of terminating after a fatal error. */
 
-  mutex_destroy(ctrl.mutex);
-  cond_var_destroy(ctrl.cv);
+  ccol_mutex_destroy(ctrl.mutex);
+  ccol_cond_var_destroy(ctrl.cv);
 }
 
 void clog_flush(clog h) {
   struct clogger *lg = _clog_resolve(h);
   if (!lg)
-    fatal_err("clog_flush: clog handle is invalid, stale, or already closed");
+    ccol_fatal_err(
+        "clog_flush: clog handle is invalid, stale, or already closed");
   if (lg->shared->async_enabled) _clog_flush_pinned(lg);
   _clog_resolve_unpin(lg);
 }
@@ -4931,21 +4938,22 @@ void _clog_write(clog h, clog_level_t level, const char *file, int line,
                  const char *func, bool with_backtrace, const char *fmt, ...) {
   struct clogger *lg = _clog_resolve(h);
   if (!lg)
-    fatal_err("_clog_write: clog handle is invalid, stale, or already closed");
+    ccol_fatal_err(
+        "_clog_write: clog handle is invalid, stale, or already closed");
 
   /* Fast path: most log_* call sites at a filtered-out level (e.g.
-   * log_trace/log_debug once a logger is running at CLOG_INFO or above) hit
-   * this on every call. Checking min_level here, before doing anything
-   * else, lets a disabled call return without ever contending for
-   * shared->mutex (sync path) or paying the cost of formatting/snapshotting
-   * a message no one will ever see (async path). A relaxed load is enough:
-   * this is purely an optimization to skip the work for the common case,
-   * not the authoritative decision for the synchronous path (see
-   * _clog_write_sync()'s own locked re-check); the async path has no
-   * second, more authoritative check of its own, so a message it has
-   * already queued by the time a concurrent clog_set_level() takes effect
-   * is delivered anyway, the same kind of rare boundary-line race this
-   * file's own README already documents as intentional for the synchronous
+   * ccol_log_trace/ccol_log_debug once a logger is running at CLOG_INFO or
+   * above) hit this on every call. Checking min_level here, before doing
+   * anything else, lets a disabled call return without ever contending for
+   * shared->mutex (sync path) or paying the cost of formatting/snapshotting a
+   * message no one will ever see (async path). A relaxed load is enough: this
+   * is purely an optimization to skip the work for the common case, not the
+   * authoritative decision for the synchronous path (see _clog_write_sync()'s
+   * own locked re-check); the async path has no second, more authoritative
+   * check of its own, so a message it has already queued by the time a
+   * concurrent clog_set_level() takes effect is delivered anyway, the same kind
+   * of rare boundary-line race this file's own README already documents as
+   * intentional for the synchronous
    * path's unlocked fast check. CLOG_FATAL always bypasses the filter. */
   if (level < atomic_load_explicit(&lg->min_level, memory_order_relaxed) &&
       level != CLOG_FATAL) {

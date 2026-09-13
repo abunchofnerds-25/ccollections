@@ -58,7 +58,7 @@ static void reset_counters(void) {
 
 /* A single shared instance, returned by pointer from a function (rather
  * than callers taking the address of a local/global directly), so that
- * passing it to _mem_alloc/_mem_free/ccol_scoped_ptr_mp doesn't trip
+ * passing it to _ccol_mem_alloc/_ccol_mem_free/ccol_scoped_ptr_mp doesn't trip
  * -Waddress ("the address of X will always evaluate as true") the way a
  * literal &some_local_var would at the macro call site. */
 static ccol_memmgmt_procs_t g_counting_procs_storage = {
@@ -91,7 +91,7 @@ TEST(scoped_ptr, custom_allocator_frees_via_provided_procs) {
   ccol_memmgmt_procs_t *mp = counting_procs();
   {
     ccol_scoped_ptr_mp(buf, int, mp);
-    buf = _mem_alloc(mp, sizeof(int) * 4);
+    buf = _ccol_mem_alloc(mp, sizeof(int) * 4);
     REQUIRE_NE((void *)buf, NULL);
     REQUIRE_EQ(g_malloc_count, (size_t)1);
     REQUIRE_EQ(g_free_count, (size_t)0);
@@ -115,12 +115,12 @@ TEST(scoped_ptr, only_final_value_is_freed_on_reassignment) {
   ccol_memmgmt_procs_t *mp = counting_procs();
   {
     ccol_scoped_ptr_mp(buf, int, mp);
-    buf = _mem_alloc(mp, sizeof(int));
+    buf = _ccol_mem_alloc(mp, sizeof(int));
     REQUIRE_NE((void *)buf, NULL);
     /* Reassigning without freeing the earlier value first is the macro's
      * documented caveat, not something it tries to solve on its own. */
-    _mem_free(mp, buf);
-    buf = _mem_alloc(mp, sizeof(int) * 2);
+    _ccol_mem_free(mp, buf);
+    buf = _ccol_mem_alloc(mp, sizeof(int) * 2);
     REQUIRE_NE((void *)buf, NULL);
   }
   REQUIRE_EQ(g_malloc_count, (size_t)2);
@@ -133,7 +133,7 @@ TEST(scoped_ptr, release_prevents_auto_free_and_transfers_ownership) {
   int *released = NULL;
   {
     ccol_scoped_ptr_mp(buf, int, mp);
-    buf = _mem_alloc(mp, sizeof(int));
+    buf = _ccol_mem_alloc(mp, sizeof(int));
     REQUIRE_NE((void *)buf, NULL);
     *buf = 7;
     released = ccol_scoped_ptr_release(buf);
@@ -142,7 +142,7 @@ TEST(scoped_ptr, release_prevents_auto_free_and_transfers_ownership) {
   REQUIRE_EQ(g_free_count, (size_t)0);
   REQUIRE_NE((void *)released, NULL);
   REQUIRE_EQ(*released, 7);
-  _mem_free(mp, released);
+  _ccol_mem_free(mp, released);
   REQUIRE_EQ(g_free_count, (size_t)1);
 }
 
@@ -159,8 +159,8 @@ TEST(scoped_ptr, multiple_independent_pointers_in_same_scope) {
   {
     ccol_scoped_ptr_mp(a, int, mp);
     ccol_scoped_ptr_mp(b, char, mp);
-    a = _mem_alloc(mp, sizeof(int));
-    b = _mem_alloc(mp, 32);
+    a = _ccol_mem_alloc(mp, sizeof(int));
+    b = _ccol_mem_alloc(mp, 32);
     REQUIRE_NE((void *)a, NULL);
     REQUIRE_NE((void *)b, NULL);
   }
@@ -173,10 +173,10 @@ TEST(scoped_ptr, nested_scope_frees_at_inner_block_exit) {
   ccol_memmgmt_procs_t *mp = counting_procs();
   {
     ccol_scoped_ptr_mp(outer, int, mp);
-    outer = _mem_alloc(mp, sizeof(int));
+    outer = _ccol_mem_alloc(mp, sizeof(int));
     {
       ccol_scoped_ptr_mp(inner, int, mp);
-      inner = _mem_alloc(mp, sizeof(int));
+      inner = _ccol_mem_alloc(mp, sizeof(int));
       REQUIRE_EQ(g_free_count, (size_t)0);
     }
     REQUIRE_EQ(g_free_count, (size_t)1);
@@ -188,7 +188,7 @@ TEST(scoped_ptr, nested_scope_frees_at_inner_block_exit) {
 static bool process_may_fail(bool should_fail) {
   ccol_memmgmt_procs_t *mp = counting_procs();
   ccol_scoped_ptr_mp(buf, int, mp);
-  buf = _mem_alloc(mp, sizeof(int) * 8);
+  buf = _ccol_mem_alloc(mp, sizeof(int) * 8);
   if (!buf) return false;
   if (should_fail) return false; /* early return, buf still freed */
   buf[0] = 1;

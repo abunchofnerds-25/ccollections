@@ -47,6 +47,14 @@ For ccol_other_types (e.g. a struct key type), the default falls back to a
 raw memcmp of the representation, comparing indeterminate padding bytes and
 any pointer members by address rather than by pointee; pass
 custom_comparison_proc for a struct key
+Every default comparison above applies to two keys of the same stored
+size. Keys of differing sizes, which only a variable-width key type
+(ccol_string, ccol_other_types) has, are ordered by their common prefix
+first and, if that is equal, by size, shorter key first. Every key of a
+fixed-width key type is exactly ccol_fixed_width_data_type_size(3) bytes
+wide, which every entry point taking a key_pair requires, including when
+a custom_comparison_proc is installed: that function is handed two bare
+key pointers and no sizes, and so reads a width fixed by the key type.
 Custom comparison receives void* pointers to key data
 .fi
 .SH "SEE ALSO"

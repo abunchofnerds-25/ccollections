@@ -14,7 +14,7 @@ ccol_scoped_ptr(name, type);
 Declares "type *name", initialised to NULL, and registers automatic
 cleanup via __attribute__((cleanup(...))). Assign to name normally (e.g.
 via a plain malloc()); whichever value it holds when the enclosing scope
-ends is freed with the default allocator (mem_free(), i.e. plain free()).
+ends is freed with the default allocator (ccol_mem_free(), i.e. plain free()).
 
 Equivalent to ccol_scoped_ptr_mp(name, type, NULL). Use
 ccol_scoped_ptr_mp() instead when the pointer must be freed with a

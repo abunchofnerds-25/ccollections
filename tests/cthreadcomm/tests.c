@@ -1,9 +1,7 @@
 #include <assert.h>
-#include <cdebuglog.h>
 #include <cthreadcomm.h>
 #include <dirent.h>
 #include <errno.h>
-#include <execinfo.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
@@ -16,7 +14,6 @@
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
-#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <tau/tau.h>
 #include <time.h>
@@ -118,138 +115,6 @@ static void _ccl_skip_tests_affected_by_known_qemu_fd_trans_lock_bug(void) {
 int main(const int argc, const char *const *const argv) {
   _ccl_skip_tests_affected_by_known_qemu_fd_trans_lock_bug();
   return tau_main(argc, argv);
-}
-
-/* Every [DEBUG_TEST] print in this file goes through cdebuglog_write()
- * (src/cdebuglog.c, an opt-in RUNNING_UNIT_TESTS-only module explicitly
- * added to this suite's own Makefile) rather than fprintf(stderr, ...)
- * directly: stderr is unbuffered by default, so each call would otherwise
- * cost a real write(2) syscall on the spot, and under qemu-user emulation
- * (this instrumentation exists specifically to chase CI-only, qemu-only
- * timing/hang mysteries) every syscall pays real, measurable translation
- * overhead that risks perturbing the exact timing being observed. See
- * cdebuglog.h for the full rationale.
- *
- * cdebuglog_flush() is called explicitly by _test_flush_and_exit() below, at
- * every _exit() call site in the hang-prone tests that log through this
- * buffer (since _exit() bypasses cdebuglog's own atexit-registered flush),
- * and as the first action of _sigalrm_backtrace_handler() below, for correct
- * chronological ordering relative to that handler's own raw-write() backtrace
- * output. */
-
-/* Flushes the shared cdebuglog buffer before calling _exit(): a forked
- * child in this file that calls plain _exit() bypasses cdebuglog's own
- * atexit-registered flush, silently losing whatever it had accumulated
- * since its last automatic flush point (see cdebuglog.h). Every _exit()
- * call site in a test that logs through cdebuglog_write() must go through
- * this instead of a bare _exit(). */
-static void _test_flush_and_exit(int code) {
-  cdebuglog_flush();
-  _exit(code);
-}
-
-/* Set by a hang-prone test right after creating its own background waiter
- * thread, so _sigalrm_backtrace_handler() below can additionally ask THAT
- * thread for its own backtrace (via SIGUSR1) rather than only ever seeing
- * whichever thread SIGALRM itself happened to be delivered to (POSIX leaves
- * that choice unspecified for a process-directed signal). 0 means "no
- * secondary thread registered for this test." */
-static _Atomic uintptr_t g_hang_watch_waiter_thread = 0;
-
-/* Diagnostic-only SIGUSR1 handler: dumps the current thread's own call stack
- * and returns (does NOT terminate), so a thread targeted by
- * pthread_kill(..., SIGUSR1) from _sigalrm_backtrace_handler below can be
- * inspected without disturbing whatever it was doing. */
-static void _sigusr1_backtrace_handler(int signo) {
-  (void)signo;
-  char hdr[160];
-  int hlen = snprintf(hdr, sizeof hdr,
-                      "[DEBUG_TEST] SIGUSR1 (on-demand dump) pid=%d tid=%ld; "
-                      "dumping backtrace of the signal-receiving thread:\n",
-                      (int)getpid(), (long)syscall(SYS_gettid));
-  if (hlen > 0) {
-    ssize_t _wn = write(STDERR_FILENO, hdr, (size_t)hlen);
-    (void)_wn; /* best-effort diagnostic write; nothing to do on failure */
-  }
-  void *frames[64];
-  int depth = backtrace(frames, 64);
-  backtrace_symbols_fd(frames, depth, STDERR_FILENO);
-}
-
-/* Diagnostic-only SIGALRM handler for the fork()+destroy() hang scenarios
- * below: the default SIGALRM disposition (a bare alarm() with no handler)
- * terminates the process with no indication of where it was stuck, leaving
- * a CI hang with nothing more to go on than "it took until the alarm fired."
- * This prints the signal-receiving thread's tid and its own call stack (via
- * backtrace()/backtrace_symbols_fd(), the standard, widely-used approach for
- * this exact diagnostic purpose despite backtrace() not being on the strict
- * POSIX async-signal-safe list), additionally asks the test's registered
- * background waiter thread (if any) for its own backtrace via SIGUSR1, then
- * restores the default disposition and re-raises, so the process still
- * terminates via a real SIGALRM exactly as it did before (preserving every
- * existing WIFSIGNALED/WTERMSIG(SIGALRM) check downstream), just with both
- * threads' backtraces now printed first. Only useful against a genuine
- * in-process deadlock; it cannot fire at all against the already-documented
- * qemu-user translation-lock hang, since that failure mode wedges signal
- * delivery itself, not merely the thread the signal targets. */
-static void _sigalrm_backtrace_handler(int signo) {
-  (void)signo;
-  /* Flush whatever [DEBUG_TEST] content is still buffered before printing
-   * anything else, so it appears in correct chronological order ahead of
-   * this handler's own raw-write() backtrace output rather than being lost
-   * entirely once the process terminates via the re-raise below. */
-  cdebuglog_flush();
-  char hdr[160];
-  int hlen = snprintf(hdr, sizeof hdr,
-                      "[DEBUG_TEST] SIGALRM fired, pid=%d tid=%ld; dumping "
-                      "backtrace of the signal-receiving thread:\n",
-                      (int)getpid(), (long)syscall(SYS_gettid));
-  if (hlen > 0) {
-    ssize_t _wn = write(STDERR_FILENO, hdr, (size_t)hlen);
-    (void)_wn; /* best-effort diagnostic write; nothing to do on failure */
-  }
-  void *frames[64];
-  int depth = backtrace(frames, 64);
-  backtrace_symbols_fd(frames, depth, STDERR_FILENO);
-
-  uintptr_t waiter = atomic_load(&g_hang_watch_waiter_thread);
-  if (waiter != 0) {
-    const char *msg =
-        "[DEBUG_TEST] requesting registered waiter thread's own backtrace "
-        "via SIGUSR1:\n";
-    ssize_t _wn = write(STDERR_FILENO, msg, strlen(msg));
-    (void)_wn; /* best-effort diagnostic write; nothing to do on failure */
-    pthread_kill((pthread_t)waiter, SIGUSR1);
-    /* Give the signal a brief, bounded window to actually be delivered and
-     * printed before this handler goes on to terminate the process below;
-     * best-effort only, never itself a source of an unbounded wait. */
-    struct timespec wait_ts = {0, 200000000}; /* 200ms */
-    nanosleep(&wait_ts, NULL);
-  }
-
-  signal(SIGALRM, SIG_DFL);
-  raise(SIGALRM);
-}
-
-/* Installs both handlers above and forces backtrace()'s own lazy one-time
- * setup (unwind-table/dl_iterate_phdr caching) to happen now, in a normal
- * calling context, rather than risking that lazy init's own internal
- * allocations happening for the first time from inside a signal handler
- * later. Call this once, before alarm(), in every hang-prone forked-child
- * test that wants an actual backtrace instead of a silent SIGALRM
- * termination. A test whose background waiter thread does not exist yet at
- * this point registers it afterward via _register_hang_watch_waiter()
- * below, once pthread_create() actually returns it. */
-static void _arm_sigalrm_backtrace_handler(void) {
-  void *warm[4];
-  backtrace(warm, 4);
-  signal(SIGUSR1, _sigusr1_backtrace_handler);
-  signal(SIGALRM, _sigalrm_backtrace_handler);
-}
-
-/* See _arm_sigalrm_backtrace_handler()'s own doc comment. */
-static void _register_hang_watch_waiter(pthread_t t) {
-  atomic_store(&g_hang_watch_waiter_thread, (uintptr_t)t);
 }
 
 extern struct event_loop_s *_event_loop_resolve_for_tests(event_loop h);
@@ -1049,14 +914,12 @@ static bool _read_proc_file(pid_t pid, const char *name, char *buf,
 
 /* Diagnostic-only: dumps whatever the host kernel's /proc still says about
  * pid (and each of its own threads, if any) after a bounded wait for it has
- * already timed out -- see _wait_for_forked_child_bounded's own doc comment
+ * already timed out; see _wait_for_forked_child_bounded's own doc comment
  * for why an unbounded parent-side waitpid() is no longer trusted here.
  * Deliberately reads real files via plain, buffered stdio/read() calls
- * rather than anything signal-handler-safe or cdebuglog-buffered: unlike
- * the now-removed child-side SIGALRM instrumentation this mirrors in spirit
- * (see this suite's own git history), this only ever runs on the already-
- * failing path, well after the timing window that mattered has closed, so
- * perturbing it further costs nothing.
+ * rather than anything signal-handler-safe: this only ever runs on the
+ * already-failing path, well after the timing window that mattered has
+ * closed, so perturbing it further costs nothing.
  *
  * /proc/<pid>/status's own State: line is the single most useful field
  * here: Z (zombie) would mean the child has genuinely already exited and
@@ -1114,7 +977,7 @@ static void _dump_stuck_child_diagnostics(pid_t pid) {
  * first. A genuinely reproduced qemu-user hang can leave a forked child's
  * own alarm()-bounded lifetime irrelevant: the child completes and even
  * visibly aborts (SIGABRT, a core dump), yet the parent's own waitpid()
- * still never returns -- see this suite's own git history for the
+ * still never returns; see this suite's own git history for the
  * SIGALRM-in-the-child instrumentation that was built to chase this and
  * removed once it looked resolved, and this function's own sibling
  * (_dump_stuck_child_diagnostics) for why that removed tooling was aimed
@@ -1271,10 +1134,7 @@ static void *cq_select_waiter_thread(void *arg) {
 }
 
 TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
-  cdebuglog_write("[DEBUG_TEST] pid=%d about to fork()\n", (int)getpid());
   pid_t pid = fork();
-  cdebuglog_write("[DEBUG_TEST] pid=%d fork() returned %d\n", (int)getpid(),
-                  (int)pid);
   if (pid == 0) {
     /* Bounds this child's own lifetime so an unexpected hang here fails
      * this one test loudly and fast instead of hanging the entire test
@@ -1282,15 +1142,9 @@ TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
      * alarm's identical use in the sibling test above for the full
      * rationale, and _wait_for_forked_child_bounded's own doc comment for
      * why the parent below has its own, independent bound too. */
-    _arm_sigalrm_backtrace_handler();
     alarm(10);
-    cdebuglog_write("[DEBUG_TEST] child pid=%d alarm set, creating queue\n",
-                    (int)getpid());
     circular_queue *cq = circular_queue_create(4, NULL);
-    if (!cq) _test_flush_and_exit(2);
-    cdebuglog_write(
-        "[DEBUG_TEST] child pid=%d queue created, spawning waiter\n",
-        (int)getpid());
+    if (!cq) _exit(2);
 
     cq_select_waiter_args wargs = {.cq = cq};
     pthread_t waiter;
@@ -1309,10 +1163,7 @@ TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
      * rather than surfacing 2 seconds later as an indistinguishable
      * REQUIRE_TRUE(linked) failure. */
     if (pthread_create(&waiter, NULL, cq_select_waiter_thread, &wargs) != 0)
-      _test_flush_and_exit(4);
-    _register_hang_watch_waiter(waiter);
-    cdebuglog_write("[DEBUG_TEST] child pid=%d waiter thread created\n",
-                    (int)getpid());
+      _exit(4);
 
     /* Poll for the waiter thread to have ACTUALLY linked itself into cq's
      * own read-waiter list (real synchronization on the condition this test
@@ -1340,27 +1191,12 @@ TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
       }
     }
     /* unreachable in practice; see REQUIRE_TRUE below */
-    if (!linked) _test_flush_and_exit(3);
-    cdebuglog_write(
-        "[DEBUG_TEST] child pid=%d confirmed linked, calling destroy\n",
-        (int)getpid());
-    /* Flush now, immediately before the one call in this test that is
-     * EXPECTED to terminate the process via ccol_assert()/abort() (not a
-     * controlled _exit() this file can wrap): abort() bypasses atexit()
-     * exactly like _exit() does, so without this explicit flush here, every
-     * [DEBUG_TEST] checkpoint logged since the last flush point would
-     * silently vanish on every ordinary, PASSING run of this test, leaving
-     * only the SIGALRM-handler path (the abnormal, hanging case) able to
-     * ever see this test's own diagnostic trail. */
-    cdebuglog_flush();
+    if (!linked) _exit(3);
 
     /* The actual misuse under test: the waiter thread above is confirmed
      * still linked into cq's own waiter list when this destroys cq. */
     circular_queue_destroy(cq);
-    cdebuglog_write(
-        "[DEBUG_TEST] child pid=%d destroy returned (should be unreachable!)\n",
-        (int)getpid());
-    _test_flush_and_exit(0); /* unreachable if the assert fired as expected */
+    _exit(0); /* unreachable if the assert fired as expected */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -7800,27 +7636,8 @@ typedef struct {
  * this test's own repeated fork() calls. */
 static void *fork_safety_churn_thread(void *arg) {
   fork_safety_churn_arg_t *a = (fork_safety_churn_arg_t *)arg;
-  cdebuglog_write("[DEBUG_TEST] pid=%d churn thread ENTER\n", (int)getpid());
-  unsigned long churn_iters = 0;
   while (!atomic_load(&a->stop)) {
     char *err = NULL;
-    /* Only every 200th iteration is logged, both before AND after: this
-     * thread spins as fast as it can for the whole test, and logging every
-     * single iteration would burn through the shared buffer's own
-     * auto-flush threshold purely on churn-thread noise, crowding out the
-     * far rarer, far more diagnostic [DEBUG_ATFORK]/[DEBUG_TEST] fork()
-     * checkpoints from the main test thread. A before/after pair around a
-     * skipped create+destroy cycle still bounds "was the churn thread
-     * inside event_loop_create/_destroy (and therefore inside
-     * event_loop_slot_table's own mutex) at the moment things stopped
-     * progressing" to within 200 iterations either way. */
-    bool log_this_iter = (churn_iters % 200) == 0;
-    if (log_this_iter) {
-      cdebuglog_write(
-          "[DEBUG_TEST] pid=%d churn thread iter=%lu about to "
-          "event_loop_create\n",
-          (int)getpid(), churn_iters);
-    }
     event_loop l = event_loop_create_with_mprocs(4, 1, 1, NULL, &err);
     if (l != EVENT_LOOP_INVALID) {
       int pfd[2];
@@ -7832,22 +7649,9 @@ static void *fork_safety_churn_thread(void *arg) {
         close(pfd[0]);
         close(pfd[1]);
       }
-      if (log_this_iter) {
-        cdebuglog_write(
-            "[DEBUG_TEST] pid=%d churn thread iter=%lu about to "
-            "event_loop_destroy\n",
-            (int)getpid(), churn_iters);
-      }
       event_loop_destroy(l);
     }
-    if (log_this_iter) {
-      cdebuglog_write("[DEBUG_TEST] pid=%d churn thread iter=%lu cycle done\n",
-                      (int)getpid(), churn_iters);
-    }
-    churn_iters++;
   }
-  cdebuglog_write("[DEBUG_TEST] pid=%d churn thread EXIT after %lu iters\n",
-                  (int)getpid(), churn_iters);
   return NULL;
 }
 
@@ -7882,22 +7686,11 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_event_loop_mutex) {
    * whole test body and disarmed just before normal completion, is what
    * catches that specific case: 30 trials * 10s worst-case reap bound each,
    * comfortably under this. */
-  _arm_sigalrm_backtrace_handler();
   alarm(360);
-  cdebuglog_write("[DEBUG_TEST] pid=%d fork_does_not_inherit... ENTER\n",
-                  (int)getpid());
   fork_safety_churn_arg_t churn = {.stop = 0};
   pthread_t churn_tid;
   REQUIRE_EQ(pthread_create(&churn_tid, NULL, fork_safety_churn_thread, &churn),
              0);
-  /* Registered as the SIGALRM handler's secondary backtrace target: if the
-   * main thread's own fork() call wedges inside _cthreadcomm_atfork_prepare
-   * waiting for a lock, the churn thread (the only other actor touching
-   * event_loop_slot_table's own mutex/stripe locks in this process) is the
-   * single most likely thread to be found holding it. */
-  _register_hang_watch_waiter(churn_tid);
-  cdebuglog_write("[DEBUG_TEST] pid=%d churn thread created tid=%lu\n",
-                  (int)getpid(), (unsigned long)churn_tid);
 
   char *err = NULL;
   event_loop loop = event_loop_create_with_mprocs(16, 1, 3, NULL, &err);
@@ -7919,21 +7712,9 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_event_loop_mutex) {
     char byte = 'x';
     REQUIRE_EQ(write(hotfd[1], &byte, 1), 1);
 
-    cdebuglog_write("[DEBUG_TEST] pid=%d trial=%d about to fork()\n",
-                    (int)getpid(), i);
     pid_t pid = fork();
-    cdebuglog_write("[DEBUG_TEST] pid=%d trial=%d fork() returned %d\n",
-                    (int)getpid(), i, (int)pid);
     REQUIRE_NE(pid, -1);
     if (pid == 0) {
-      /* Deliberately does NOT redirect STDOUT_FILENO/STDERR_FILENO to
-       * /dev/null: cdebuglog_flush() and this handler's own backtrace dump
-       * both write to STDERR_FILENO, and silencing it here would defeat the
-       * entire purpose of chasing a hang with this instrumentation
-       * active. */
-      _arm_sigalrm_backtrace_handler();
-      cdebuglog_write("[DEBUG_TEST] child pid=%d trial=%d alarm set\n",
-                      (int)getpid(), i);
       /* Bounds this child's own lifetime in case the hazard this test
        * guards against somehow still fires, rather than hanging the whole
        * suite; the parent below distinguishes this from a clean exit via
@@ -7948,11 +7729,7 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_event_loop_mutex) {
           loop, selectable_from_fd(fd2[0], ccol_select_read), h2, NULL, NULL);
       int rc = r2 ? 0 : 1;
       if (r2 != EVENT_REG_INVALID) event_loop_remove(loop, r2);
-      cdebuglog_write(
-          "[DEBUG_TEST] child pid=%d trial=%d event_loop_add rc=%d, "
-          "exiting\n",
-          (int)getpid(), i, rc);
-      _test_flush_and_exit(rc);
+      _exit(rc);
     }
 
     int status = 0;
@@ -7963,18 +7740,12 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_event_loop_mutex) {
     REQUIRE_TRUE(reaped);
     if (!reaped) return;
     if (!WIFEXITED(status)) hangs++;
-    cdebuglog_write(
-        "[DEBUG_TEST] pid=%d trial=%d reaped=%d WIFEXITED=%d hangs=%d\n",
-        (int)getpid(), i, (int)reaped, WIFEXITED(status), hangs);
   }
 
   REQUIRE_EQ(hangs, 0);
 
   atomic_store(&churn.stop, 1);
-  cdebuglog_write("[DEBUG_TEST] pid=%d about to join churn thread\n",
-                  (int)getpid());
   pthread_join(churn_tid, NULL);
-  cdebuglog_write("[DEBUG_TEST] pid=%d churn thread joined\n", (int)getpid());
 
   event_loop_remove(loop, reg);
   event_loop_destroy(loop);
@@ -7982,8 +7753,6 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_event_loop_mutex) {
   close(hotfd[1]);
 
   alarm(0);
-  cdebuglog_write("[DEBUG_TEST] pid=%d fork_does_not_inherit... EXIT\n",
-                  (int)getpid());
 }
 
 typedef struct {
@@ -8352,10 +8121,10 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_event_loop_slot_table) {
    * An earlier version of this test asserted on pipe(), fork(), and the
    * elapsed_ms check directly, each capable of leaking holder un-joined on
    * its own failure path (missed in an earlier pass that only fixed the
-   * LATER assertions, below the read/reap steps -- caught on review, not
+   * LATER assertions, below the read/reap steps; caught on review, not
    * by inspection). Every outcome is therefore captured into a local
    * below, unconditionally, and the corresponding REQUIRE_* only runs
-   * after pthread_join(holder, NULL) -- and, when a child was actually
+   * after pthread_join(holder, NULL); and, when a child was actually
    * forked, after _wait_for_forked_child_bounded too, for the identical
    * reason (see that call's own comment: this is the one test in this
    * file where skipping _dump_stuck_child_diagnostics on a genuine hang
@@ -8389,58 +8158,14 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_event_loop_slot_table) {
        * resolve inside event_loop_create below until alarm(3) kills this
        * child. */
       close(result_pipe[0]);
-      /* Deliberately does NOT redirect STDOUT_FILENO/STDERR_FILENO to
-       * /dev/null: cdebuglog_flush() writes to STDERR_FILENO, and
-       * silencing it here would defeat the entire purpose of the
-       * checkpoints below -- this is precisely the test whose child went
-       * silent on a real CI run (a qemu-arm and an aarch64-clang job both
-       * failed here) with no checkpoint of any kind to show how far it
-       * got, unlike every sibling fork_safety test in this file. */
-      cdebuglog_write(
-          "[DEBUG_TEST] child pid=%d about to arm sigalrm "
-          "backtrace handler\n",
-          (int)getpid());
-      /* Flushed explicitly, immediately, unlike this file's other
-       * checkpoints: the very first CI recurrence of this test's own hang
-       * (before this checkpoint existed at all) went completely silent
-       * between the atfork release completing and event_loop_create ever
-       * being reached, /proc showing the child genuinely blocked in a real
-       * futex_do_wait, not a busy spin or stuck-in-emulator-translation
-       * pattern -- pointing at _arm_sigalrm_backtrace_handler's own
-       * backtrace() call specifically, whose lazy first-use unwind-info
-       * init walks loaded shared libraries via dl_iterate_phdr, taking
-       * glibc's own internal dynamic-linker lock, a lock this project owns
-       * no atfork handler for and cannot protect the way it protects its
-       * own locks. If THAT is where this hangs, alarm(3) below is never
-       * even reached, so nothing downstream would ever get a chance to
-       * flush this on its own; an unflushed, buffered checkpoint sitting
-       * unseen forever would be exactly as uninformative as having none at
-       * all. */
-      cdebuglog_flush();
-      _arm_sigalrm_backtrace_handler();
-      cdebuglog_write(
-          "[DEBUG_TEST] child pid=%d sigalrm backtrace handler "
-          "armed, about to alarm(3)\n",
-          (int)getpid());
-      cdebuglog_flush();
       alarm(3);
-      cdebuglog_write(
-          "[DEBUG_TEST] child pid=%d alarm set, about to "
-          "event_loop_create\n",
-          (int)getpid());
-      cdebuglog_flush();
       char *err = NULL;
       event_loop l = event_loop_create(4, 1, 1, &err);
-      cdebuglog_write(
-          "[DEBUG_TEST] child pid=%d event_loop_create returned %s\n",
-          (int)getpid(), (l != EVENT_LOOP_INVALID) ? "valid" : "invalid");
       char b = (l != EVENT_LOOP_INVALID) ? 1 : 0;
       if (l != EVENT_LOOP_INVALID) event_loop_destroy(l);
-      cdebuglog_write("[DEBUG_TEST] child pid=%d writing result, exiting\n",
-                      (int)getpid());
       test_write_retry_eintr(result_pipe[1], &b, 1);
       close(result_pipe[1]);
-      _test_flush_and_exit(0);
+      _exit(0);
     }
 
     if (pid > 0) {
@@ -8629,7 +8354,7 @@ TEST(fork_safety,
        * be reported via REQUIRE_EQ the way every sibling fork_safety test's
        * own identical spin-wait setup does (their own pthread_create is
        * called by the PARENT, before ever forking, so REQUIRE_EQ's failure
-       * path -- an early `return` out of this Tau test function -- lands
+       * path (an early `return` out of this Tau test function) lands
        * safely back in the harness that called it; here, that same early
        * `return` would instead return out of THIS test function while
        * still running as the forked child, skipping the _exit(0) below and

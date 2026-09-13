@@ -1,6 +1,9 @@
+#include <cdebuglog.h>
 #include <common.h>
 #include <common_invariants.h>
 #include <cthreadpool.h>
+#include <dirent.h>
+#include <errno.h>
 #include <execinfo.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -1903,6 +1906,116 @@ static void *ctp_blocked_submit_thread(void *arg) {
   return NULL;
 }
 
+/* Diagnostic aid for resolve_then_use_race_destroy_waits below: a real CI
+ * hang was seen there (linux-arm32-clang, under real qemu-user 8.2.2), where
+ * ctpool_destroy never returned; this test has no forked child to point
+ * /proc at (unlike the fork-related hangs elsewhere in this codebase), since
+ * the whole race lives between threads of this same process, so instead of
+ * dumping one pid's /proc/<pid> files, this dumps status/wchan/syscall/stat
+ * for every thread of THIS process (/proc/self/task/<tid> entries) if
+ * ctpool_destroy has not returned within a generous, fixed bound.
+ * Deliberately does NOT try to cancel or otherwise recover the stuck call:
+ * pthread_cancel landing mid-mutex-hold could leave that lock permanently
+ * held for the rest of this process's life, corrupting every later use
+ * rather than reporting a clean failure. Terminates the whole process
+ * outright (after flushing the dump) instead, via a distinct exit code so
+ * it reads as an intentional diagnostic exit rather than an ordinary crash,
+ * converting what would otherwise be an uninformative 45-minute job-level
+ * timeout into a fast, informative one.
+ *
+ * The dump itself is written via plain, buffered fprintf(stderr, ...), not
+ * cdebuglog_write(): this only ever runs once the bounded window has
+ * already elapsed, well after the timing that mattered has closed, so
+ * paying real write(2) syscalls here costs nothing (mirroring tests/
+ * cthreadcomm/tests.c's own _dump_stuck_child_diagnostics, which reasons
+ * identically). cdebuglog_flush() is still called first, so every
+ * [DEBUG_TEST] checkpoint already buffered appears in correct chronological
+ * order ahead of this dump's own raw output rather than staying buffered
+ * until process exit (which _exit() below would bypass entirely, losing it
+ * for good). */
+static bool _ctp_test_read_proc_task_file(pid_t tid, const char *name,
+                                          char *buf, size_t buf_cap) {
+  char path[64];
+  snprintf(path, sizeof path, "/proc/self/task/%d/%s", (int)tid, name);
+  int fd = open(path, O_RDONLY);
+  if (fd < 0) return false;
+  ssize_t n = read(fd, buf, buf_cap - 1);
+  close(fd);
+  if (n < 0) return false;
+  buf[n] = '\0';
+  return true;
+}
+
+static void _ctp_test_dump_all_threads_and_die(void) {
+  char buf[4096];
+  /* Flush whatever [DEBUG_TEST] content is still buffered before printing
+   * anything else, so it appears in correct chronological order ahead of
+   * this function's own raw fprintf() output rather than being lost
+   * entirely once _exit() below bypasses cdebuglog's own atexit-registered
+   * flush. */
+  cdebuglog_flush();
+  fprintf(stderr,
+          "[WATCHDOG_DIAG] pid=%d: ctpool_destroy did not return within the "
+          "bounded window; dumping every thread of this process\n",
+          (int)getpid());
+  DIR *td = opendir("/proc/self/task");
+  if (!td) {
+    fprintf(stderr, "[WATCHDOG_DIAG] /proc/self/task: unreadable\n");
+  } else {
+    struct dirent *ent;
+    static const char *const files[] = {"status", "wchan", "syscall", "stat"};
+    while ((ent = readdir(td)) != NULL) {
+      if (ent->d_name[0] == '.') continue;
+      pid_t tid = (pid_t)atoi(ent->d_name);
+      for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
+        if (_ctp_test_read_proc_task_file(tid, files[i], buf, sizeof buf)) {
+          fprintf(stderr, "[WATCHDOG_DIAG] /proc/self/task/%d/%s:\n%s\n",
+                  (int)tid, files[i], buf);
+        } else {
+          fprintf(stderr,
+                  "[WATCHDOG_DIAG] /proc/self/task/%d/%s: unreadable "
+                  "(errno=%d %s)\n",
+                  (int)tid, files[i], errno, strerror(errno));
+        }
+      }
+    }
+    closedir(td);
+  }
+  fflush(stderr);
+  _exit(97); /* distinct sentinel: "watchdog detected a stuck ctpool_destroy",
+                not an ordinary crash, so it is easy to tell apart in a CI
+                log or exit-code check */
+}
+
+typedef struct {
+  pthread_mutex_t mu;
+  pthread_cond_t cv;
+  bool done;
+} ctp_destroy_watchdog_ctx_t;
+
+/* Bounded condvar wait, not a blind poll (see this codebase's own test-
+ * hygiene lessons on preferring a real timed wait over a fixed-interval
+ * poll): wakes immediately once the main thread signals done, or after the
+ * fixed bound elapses, whichever comes first. 20 real seconds is enormously
+ * generous for a call this test expects to take ~20-30ms even under a slow,
+ * emulated CI runner; only a genuine hang, not ordinary scheduling
+ * variance, should ever reach the timeout branch. */
+static void *ctp_destroy_watchdog_fn(void *arg) {
+  ctp_destroy_watchdog_ctx_t *w = (ctp_destroy_watchdog_ctx_t *)arg;
+  struct timespec deadline;
+  clock_gettime(CLOCK_REALTIME, &deadline);
+  deadline.tv_sec += 20;
+  pthread_mutex_lock(&w->mu);
+  while (!w->done) {
+    int rc = pthread_cond_timedwait(&w->cv, &w->mu, &deadline);
+    if (rc == ETIMEDOUT) break;
+  }
+  bool timed_out = !w->done;
+  pthread_mutex_unlock(&w->mu);
+  if (timed_out) _ctp_test_dump_all_threads_and_die();
+  return NULL;
+}
+
 /* The resolve-then-use race fix actually works, exercising the specific
  * reversed wait-ordering __ctpool_teardown_raw uses (shutdown-drain BEFORE
  * waiting on pending_resolve_count; see that function's own comment in
@@ -1920,7 +2033,28 @@ static void *ctp_blocked_submit_thread(void *arg) {
  * ccol_not_permitted once shutdown starts, and (3) still actually block
  * until the worker thread has been joined (a real wait, not an instant
  * return); proven by racing it against a release_gate_fn thread with a
- * known, fixed 20ms delay. */
+ * known, fixed 20ms delay.
+ *
+ * A real CI hang was seen here once (linux-arm32-clang, under real qemu-user
+ * 8.2.2): ctpool_destroy below never returned within this job's own 45-
+ * minute timeout. This test never calls fork(), so the confirmed, external,
+ * already-filed qemu-user fd_trans_lock bug (linux-user's own internal
+ * fd_trans_lock, a process-wide pthread mutex left permanently locked in a
+ * forked child if another thread in the parent was holding it at the
+ * instant of fork(); gitlab.com/qemu-project/qemu/-/issues/2846) cannot be
+ * the cause; that bug has no way to trigger without a fork() call, and this
+ * test's race is entirely between ordinary threads of one process. The
+ * actual cause is still open. The [DEBUG_TEST] checkpoints below (logged via
+ * cdebuglog_write(), not a direct fprintf(stderr, ...): see cdebuglog.h for
+ * why buffering these checkpoints, rather than paying a real write(2)
+ * syscall per checkpoint, matters for a timing-sensitive mystery like this
+ * one) plus the watchdog thread bracketing the ctpool_destroy call (see
+ * that section's own comment above) exist so that if this recurs, there is
+ * enough information to actually diagnose it: which checkpoint was last
+ * printed narrows down how far the main thread got, and the watchdog's own
+ * per-thread /proc dump shows every thread's real kernel-level wait state
+ * (wchan/syscall) at the moment of the hang, rather than only a bare
+ * timeout with no information. */
 TEST(ctpool_handle_lifecycle, resolve_then_use_race_destroy_waits) {
   atomic_int gate = 0;
   atomic_int started = 0;
@@ -1928,37 +2062,90 @@ TEST(ctpool_handle_lifecycle, resolve_then_use_race_destroy_waits) {
   gate_ctx_t gctx = {.gate = &gate, .started = &started};
 
   ctpool_construct(pool, 1, 1);
+  cdebuglog_write("[DEBUG_TEST] pid=%d about to submit blocker_fn\n",
+                  (int)getpid());
   ctpool_submit(pool, blocker_fn, &gctx, NULL);
   while (!atomic_load(&started)) sleep_ms(1);
+  cdebuglog_write(
+      "[DEBUG_TEST] pid=%d blocker_fn started, about to fill queue\n",
+      (int)getpid());
+
+  /* Every fallible step from here on runs with the pool's own worker
+   * already alive and spinning inside blocker_fn, so none of them may be
+   * asserted on directly: ctpool_construct (unlike ctpool_construct_scoped)
+   * does not auto-destroy pool on scope exit, so a REQUIRE_* failure's
+   * early return here would leak that still-running worker, and any
+   * thread already created below, for the remaining life of this test
+   * binary. Every outcome is therefore captured into a local,
+   * unconditionally, and every REQUIRE_* only runs after every thread
+   * created below has already been joined and pool has already been
+   * destroyed (see this codebase's own test-hygiene lesson on this exact
+   * class of gap). */
 
   /* Fill the bounded queue (cap 1) so the next submit genuinely blocks. */
-  REQUIRE_EQ(ctpool_submit(pool, inc_counter, &counter, NULL), ccol_success);
+  ccol_retval_t fill_rv = ctpool_submit(pool, inc_counter, &counter, NULL);
 
   ctp_blocked_submit_arg_t blocked_arg = {
       .h = pool, .counter = &counter, .rv = ccol_success};
   pthread_t blocked_thread;
-  REQUIRE_EQ(pthread_create(&blocked_thread, NULL, ctp_blocked_submit_thread,
-                            &blocked_arg),
-             0);
+  cdebuglog_write(
+      "[DEBUG_TEST] pid=%d queue filled, about to create blocked_thread\n",
+      (int)getpid());
+  int blocked_rc = pthread_create(&blocked_thread, NULL,
+                                  ctp_blocked_submit_thread, &blocked_arg);
+  bool blocked_created = (blocked_rc == 0);
   /* Give the blocked-submit thread a head start so its resolve (and
    * therefore its pin) has definitely already happened before destroy
-   * fires. */
+   * fires; harmless when blocked_created is false, since there is then
+   * nothing for the head start to matter to. */
   sleep_ms(10);
 
   pthread_t gate_thread;
-  REQUIRE_EQ(pthread_create(&gate_thread, NULL, release_gate_fn, &gate), 0);
+  cdebuglog_write("[DEBUG_TEST] pid=%d about to create gate_thread\n",
+                  (int)getpid());
+  int gate_rc = pthread_create(&gate_thread, NULL, release_gate_fn, &gate);
+  bool gate_created = (gate_rc == 0);
+  /* No gate_thread exists to ever release the pool's own worker from its
+   * blocker_fn spin in this case: release it directly instead of leaving
+   * ctpool_destroy below to block forever on a wakeup that would now never
+   * come. */
+  if (!gate_created) atomic_store(&gate, 1);
+
+  ctp_destroy_watchdog_ctx_t watchdog = {.mu = PTHREAD_MUTEX_INITIALIZER,
+                                         .cv = PTHREAD_COND_INITIALIZER,
+                                         .done = false};
+  pthread_t watchdog_thread;
+  int watchdog_rc = pthread_create(&watchdog_thread, NULL,
+                                   ctp_destroy_watchdog_fn, &watchdog);
+  bool watchdog_created = (watchdog_rc == 0);
 
   struct timespec t0, t1;
   clock_gettime(CLOCK_MONOTONIC, &t0);
+  cdebuglog_write("[DEBUG_TEST] pid=%d about to call ctpool_destroy\n",
+                  (int)getpid());
   ctpool_destroy(pool); /* must block until the worker (stuck until the gate
                             thread's ~20ms release) has actually exited */
+  cdebuglog_write("[DEBUG_TEST] pid=%d ctpool_destroy returned\n",
+                  (int)getpid());
   clock_gettime(CLOCK_MONOTONIC, &t1);
   long elapsed_ms =
       (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
 
-  pthread_join(blocked_thread, NULL);
-  pthread_join(gate_thread, NULL);
+  if (watchdog_created) {
+    pthread_mutex_lock(&watchdog.mu);
+    watchdog.done = true;
+    pthread_cond_signal(&watchdog.cv);
+    pthread_mutex_unlock(&watchdog.mu);
+    pthread_join(watchdog_thread, NULL);
+  }
 
+  if (blocked_created) pthread_join(blocked_thread, NULL);
+  if (gate_created) pthread_join(gate_thread, NULL);
+
+  REQUIRE_EQ(fill_rv, ccol_success);
+  REQUIRE_EQ(blocked_rc, 0);
+  REQUIRE_EQ(gate_rc, 0);
+  REQUIRE_EQ(watchdog_rc, 0);
   REQUIRE_EQ(blocked_arg.rv, ccol_not_permitted);
   /* The worker was stuck for ~20ms (the gate thread's own fixed delay);
    * destroy returning in well under that would mean it did NOT actually

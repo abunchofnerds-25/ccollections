@@ -1,12 +1,19 @@
 CC = gcc
 INCLUDES = -I.. -I../../include
-DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
+# CDEBUGLOG_ENABLED opts this suite into src/cdebuglog.c's own diagnostic
+# log buffer (see its doc comment in include/cdebuglog.h for why
+# RUNNING_UNIT_TESTS alone is not enough to activate it); used by
+# resolve_then_use_race_destroy_waits's own [DEBUG_TEST] checkpoints while
+# chasing a CI-only, qemu-only hang.
+DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64 -DCDEBUGLOG_ENABLED
 SRC_FILE_PREFIX = cthreadpool
 # cvector.c is needed for ctpool's own generation-tagged handle slot table
 # (the same redesign already applied to chttpcli/chttpsvr/event_loop/
-# clru_cache).
-SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/cvector.c \
-            ../../src/common.c
+# clru_cache). cdebuglog.c is an opt-in, RUNNING_UNIT_TESTS-only diagnostic
+# log buffer (not part of the root Makefile's default library build; see
+# its own doc comment in include/cdebuglog.h).
+SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/cdebuglog.c \
+            ../../src/cvector.c ../../src/common.c
 ALL_SRC_FILES = tests.c $(SRC_FILES)
 EXTRA_CFLAGS ?=
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-strong -Wstrict-overflow \

@@ -52,7 +52,8 @@ static struct {
 } ctls_root_key_bundle = {0};
 
 static void _ctls_root_key_globals_init(void) {
-  mutex_init(ctls_root_key_bundle.mutex);
+  if (mutex_init(ctls_root_key_bundle.mutex) != 0)
+    fatal_err("ctls root key: failed to initialize mutex");
 }
 
 static EVP_PKEY *_ctls_get_root_key(void) {
@@ -83,7 +84,8 @@ static struct {
 } ctls_conn_ex_idx_bundle = {0};
 
 static void _ctls_ex_idx_globals_init(void) {
-  mutex_init(ctls_conn_ex_idx_bundle.mutex);
+  if (mutex_init(ctls_conn_ex_idx_bundle.mutex) != 0)
+    fatal_err("ctls conn ex_data index: failed to initialize mutex");
 }
 
 static int _ctls_conn_ex_idx(void) {
@@ -308,19 +310,34 @@ static X509 *_ctls_create_self_signed(const char *server_name) {
   if (!cert) return NULL;
   static _Atomic uint32_t counter = 0;
   uint32_t serial = ++counter;
-  ASN1_INTEGER_set(X509_get_serialNumber(cert), (long)serial);
-  X509_gmtime_adj(X509_get_notBefore(cert), 0);
-  X509_gmtime_adj(X509_get_notAfter(cert), 15552000L); /* 180 days */
-  X509_set_pubkey(cert, root_key);
+  if (!ASN1_INTEGER_set(X509_get_serialNumber(cert), (long)serial)) {
+    X509_free(cert);
+    return NULL;
+  }
+  if (!X509_gmtime_adj(X509_get_notBefore(cert), 0) ||
+      !X509_gmtime_adj(X509_get_notAfter(cert), 15552000L) /* 180 days */) {
+    X509_free(cert);
+    return NULL;
+  }
+  if (!X509_set_pubkey(cert, root_key)) {
+    X509_free(cert);
+    return NULL;
+  }
   X509_NAME *s = X509_get_subject_name(cert);
   size_t name_len = strlen(server_name);
-  X509_NAME_add_entry_by_txt(s, "O", MBSTRING_ASC,
-                             (const unsigned char *)server_name, (int)name_len,
-                             -1, 0);
-  X509_NAME_add_entry_by_txt(s, "CN", MBSTRING_ASC,
-                             (const unsigned char *)server_name, (int)name_len,
-                             -1, 0);
-  X509_set_issuer_name(cert, s);
+  if (!X509_NAME_add_entry_by_txt(s, "O", MBSTRING_ASC,
+                                  (const unsigned char *)server_name,
+                                  (int)name_len, -1, 0) ||
+      !X509_NAME_add_entry_by_txt(s, "CN", MBSTRING_ASC,
+                                  (const unsigned char *)server_name,
+                                  (int)name_len, -1, 0)) {
+    X509_free(cert);
+    return NULL;
+  }
+  if (!X509_set_issuer_name(cert, s)) {
+    X509_free(cert);
+    return NULL;
+  }
   if (!X509_sign(cert, root_key, EVP_sha512())) {
     X509_free(cert);
     return NULL;
@@ -383,8 +400,14 @@ static bool _ctls_apply_cert(SSL_CTX *ctx, const char *cert_pem,
         if (tmp->x509) {
           if (i == 0) {
             cert_ok = SSL_CTX_use_certificate(ctx, tmp->x509) == 1;
-          } else {
-            SSL_CTX_add1_chain_cert(ctx, tmp->x509);
+          } else if (SSL_CTX_add1_chain_cert(ctx, tmp->x509) != 1) {
+            /* An intermediate cert failing to attach would silently hand
+             * every client an incomplete chain; unlike the trust-bundle
+             * loop below (many independent trust anchors, where losing one
+             * is a tolerable degradation), this server's own chain is a
+             * single, load-bearing sequence, so any failure here fails the
+             * whole cert application. */
+            cert_ok = false;
           }
         }
       }
@@ -401,7 +424,8 @@ static bool _ctls_apply_trust(SSL_CTX *ctx, ctls_ctx_t *tls) {
   if (!store) return false;
   SSL_CTX_set_cert_store(ctx, store);
   SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
-  if (tls->verify_default_store) SSL_CTX_set_default_verify_paths(ctx);
+  if (tls->verify_default_store && SSL_CTX_set_default_verify_paths(ctx) != 1)
+    return false;
   for (size_t i = 0; i < tls->trust_count; ++i) {
     BIO *bio = BIO_new_mem_buf(tls->trust_pems[i], (int)tls->trust_lens[i]);
     if (!bio) continue;
@@ -732,7 +756,12 @@ ctls_ctx_t *ctls_ctx_new_mp(ccol_memmgmt_procs_t *mp, char **err_str) {
     *tls->m_procs = *mp;
   }
   tls->ref = 1;
-  mutex_init(tls->lock);
+  if (mutex_init(tls->lock) != 0) {
+    _mem_free(mp, tls->m_procs);
+    _mem_free(mp, tls);
+    if (err_str) *err_str = "ctls_ctx_new: failed to initialize mutex";
+    return NULL;
+  }
   char *err = NULL;
   tls->named_certs =
       chmap_create_mp(16, ccol_string, ccol_pointer, tls->m_procs, &err);
@@ -962,13 +991,14 @@ ccol_retval_t ctls_ctx_trust(ctls_ctx_t *ctx, const char *ca_bundle_path,
   return ccol_success;
 }
 
-void ctls_ctx_trust_system(ctls_ctx_t *ctx) {
-  if (!ctx) return;
+ccol_retval_t ctls_ctx_trust_system(ctls_ctx_t *ctx) {
+  if (!ctx) return ccol_invalid_args;
   mutex_lock(ctx->lock);
   ctx->verify_default_store = true;
   ctx->verify_peer = true;
-  _ctls_ctx_rebuild_locked(ctx);
+  bool built = _ctls_ctx_rebuild_locked(ctx);
   mutex_unlock(ctx->lock);
+  return built ? ccol_success : ccol_http_tls_cert_load_failed;
 }
 
 ccol_retval_t ctls_ctx_alpn_add(ctls_ctx_t *ctx, const char *protocol_name,
@@ -1135,7 +1165,15 @@ ctls_conn_t *ctls_conn_create_client(ctls_ctx_t *ctx, int fd,
     if (err_str) *err_str = "ctls_conn_create_client: SSL_new failure";
     return NULL;
   }
-  SSL_set_ex_data(ssl, _ctls_conn_ex_idx(), conn);
+  if (!SSL_set_ex_data(ssl, _ctls_conn_ex_idx(), conn)) {
+    SSL_free(ssl);
+    SSL_CTX_free(conn->pinned_ctx_default);
+    ccol_memmgmt_procs_t *mp = ctx->m_procs;
+    ctls_ctx_release(ctx);
+    _mem_free(mp, conn);
+    if (err_str) *err_str = "ctls_conn_create_client: SSL_set_ex_data failure";
+    return NULL;
+  }
 
   BIO *bio = BIO_new_socket(fd, 0);
   if (!bio) {
@@ -1217,7 +1255,15 @@ ctls_conn_t *ctls_conn_create_server(ctls_ctx_t *ctx, int fd, void *udata,
     if (err_str) *err_str = "ctls_conn_create_server: SSL_new failure";
     return NULL;
   }
-  SSL_set_ex_data(ssl, _ctls_conn_ex_idx(), conn);
+  if (!SSL_set_ex_data(ssl, _ctls_conn_ex_idx(), conn)) {
+    SSL_free(ssl);
+    SSL_CTX_free(conn->pinned_ctx_default);
+    ccol_memmgmt_procs_t *mp = ctx->m_procs;
+    ctls_ctx_release(ctx);
+    _mem_free(mp, conn);
+    if (err_str) *err_str = "ctls_conn_create_server: SSL_set_ex_data failure";
+    return NULL;
+  }
 
   BIO *bio = BIO_new_socket(fd, 0);
   if (!bio) {

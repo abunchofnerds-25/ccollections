@@ -1199,7 +1199,7 @@ TEST(csort, csort_sort_null_getter_proc_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -1222,7 +1222,7 @@ TEST(csort, csort_sort_null_comparison_proc_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -1258,7 +1258,7 @@ TEST(
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }

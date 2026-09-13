@@ -1,12 +1,19 @@
 CC = gcc
 INCLUDES = -I.. -I../../include
-DEFINITIONS = -DRUNNING_UNIT_TESTS
+# CDEBUGLOG_ENABLED opts this suite into src/cdebuglog.c's own diagnostic
+# log buffer (see its doc comment in include/cdebuglog.h for why
+# RUNNING_UNIT_TESTS alone is not enough to activate it); used by
+# resolve_then_use_race_destroy_waits's own [DEBUG_TEST] checkpoints while
+# chasing a CI-only, qemu-only hang.
+DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64 -DCDEBUGLOG_ENABLED
 SRC_FILE_PREFIX = cthreadpool
 # cvector.c is needed for ctpool's own generation-tagged handle slot table
 # (the same redesign already applied to chttpcli/chttpsvr/event_loop/
-# clru_cache).
-SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/cvector.c \
-            ../../src/common.c
+# clru_cache). cdebuglog.c is an opt-in, RUNNING_UNIT_TESTS-only diagnostic
+# log buffer (not part of the root Makefile's default library build; see
+# its own doc comment in include/cdebuglog.h).
+SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/cdebuglog.c \
+            ../../src/cvector.c ../../src/common.c
 ALL_SRC_FILES = tests.c $(SRC_FILES)
 EXTRA_CFLAGS ?=
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-strong -Wstrict-overflow \
@@ -49,11 +56,17 @@ test_tsan: build_tsan
 memtest: build
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 --child-silent-after-fork=yes ./tests
 
+# --ignore-errors negative: gcov's own coverage counters are plain (non-atomic)
+# increments, which can race under concurrently-executed instrumented code and
+# has been observed producing a spurious negative hit count (reproduced on
+# more than one module, including a glibc header, not this library's own
+# logic); see tests/chttpclient/Makefile's identical flag for the full
+# rationale and reproduction notes.
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
 	gcov -d -w tests-$(SRC_FILE_PREFIX) && \
-	lcov --ignore-errors mismatch --ignore-errors inconsistent --capture --directory . \
+	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file $(SRC_FILE_PREFIX).c.info && \
 	genhtml --ignore-errors inconsistent -s $(SRC_FILE_PREFIX).c.info --output-directory coverage && \
 	rm -rf *.gcno *.gcda *.gcov *.c.info

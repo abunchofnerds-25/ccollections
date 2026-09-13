@@ -1,14 +1,15 @@
 CC = gcc
 INCLUDES = -I.. -I../../include
-DEFINITIONS = -DRUNNING_UNIT_TESTS
+DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
 SRC_FILE_PREFIX = cthreadcomm
 # chashmap.c is a transitive dependency: event_loop's internal fd registry
 # (int fd -> event_entry*) is backed by chmap. cthreadpool.c is a transitive
 # dependency too: event_loop's dispatch_pool (num_reactor_threads > 1) is a
 # ctpool. cvector.c is needed for event_loop's own generation-tagged handle
 # slot table (a cvec of slots plus a cvec free-index stack).
-SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/chashmap.c \
-            ../../src/cthreadpool.c ../../src/cvector.c ../../src/common.c
+SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c \
+            ../../src/chashmap.c ../../src/cthreadpool.c \
+            ../../src/cvector.c ../../src/common.c
 ALL_SRC_FILES = tests.c $(SRC_FILES)
 EXTRA_CFLAGS ?=
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-strong -Wstrict-overflow \
@@ -38,20 +39,31 @@ test: build
 # This module's event_loop instances are torn down between tests, keeping
 # the parent single-threaded at fork() time in practice, so this has not
 # been observed to matter here the way it does for chttpclient/chttpserver's
-# own persistent, process-wide reactors -- set for consistency across all
+# own persistent, process-wide reactors; set for consistency across all
 # three fork-and-spawn-new-threads suites, and as a safeguard against a
 # future test addition making this parent multi-threaded at fork time too.
+# suppressions=tsan_rwlock_reinit.supp: a known, confirmed-non-bug
+# ThreadSanitizer limitation around this module's own fork()-safety rwlock
+# reinit; see that file's own comment for the independent, cthreadcomm.c-free
+# reproduction proving it, mirroring tests/clogger/Makefile's identical
+# "known non-bug, suppress with a documented reason" precedent.
 test_tsan: build_tsan
-	TSAN_OPTIONS="die_after_fork=0" ./tests_tsan
+	TSAN_OPTIONS="die_after_fork=0 suppressions=tsan_rwlock_reinit.supp" ./tests_tsan
 
 memtest: build
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 --child-silent-after-fork=yes ./tests
 
+# --ignore-errors negative: gcov's own coverage counters are plain (non-atomic)
+# increments, which can race under concurrently-executed instrumented code and
+# has been observed producing a spurious negative hit count (reproduced on
+# more than one module, including a glibc header, not this library's own
+# logic); see tests/chttpclient/Makefile's identical flag for the full
+# rationale and reproduction notes.
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
 	gcov tests-$(SRC_FILE_PREFIX) && \
-	lcov --ignore-errors mismatch --ignore-errors inconsistent --capture --directory . \
+	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file $(SRC_FILE_PREFIX).c.info && \
 	genhtml --ignore-errors inconsistent $(SRC_FILE_PREFIX).c.info --output-directory coverage && \
 	rm -rf *.gcno *.gcda *.gcov *.c.info

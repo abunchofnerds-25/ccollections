@@ -1,7 +1,7 @@
 CC = gcc
 
 INCLUDES = -I.. -I../../include
-DEFINITIONS = -DRUNNING_UNIT_TESTS
+DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
 
 # Our source files (compiled with strict flags + -Werror). chttpclient.c owns
 # its own static event_loop reactor (cthreadcomm.c) and uses ctls.c for TLS.
@@ -50,7 +50,7 @@ build_tsan:
 # forks, then creates two NEW pthreads in the child to race a double-destroy.
 # chttpclient's async engine keeps a persistent, process-wide multi-threaded
 # event_loop reactor alive for the whole suite, so by the time this test
-# runs, the parent is multi-threaded at fork() time -- exactly the condition
+# runs, the parent is multi-threaded at fork() time; exactly the condition
 # TSan's own default die_after_fork=1 treats as unsafe for a child that then
 # creates further threads, silently making the child exit normally instead
 # of reaching this test's own expected fatal_err()/SIGABRT (verified: the
@@ -87,7 +87,7 @@ build_default_client:
 # fully independent of any real network traffic. chttp1_parser.c links
 # ctls.c (+ its own chashmap.c/common.c dependencies) now that
 # chttp1_stream_t optionally drives a TLS connection via ctls_conn_read/
-# _write -- see chttp1_parser.h's own module doc comment. Kept as its own
+# _write; see chttp1_parser.h's own module doc comment. Kept as its own
 # binary in this same directory rather than a new top-level tests/
 # directory.
 build_parser:
@@ -118,12 +118,26 @@ fuzz_response:
 	$(FUZZ_CC) $(FUZZ_CFLAGS) fuzz/fuzz_chttp1_response.c $(FUZZ_PARSER_SRC_FILES) \
 		-o fuzz_chttp1_response $(LFLAGS)
 
-test: build build_parser build_default_client
+# tests_differential cross-checks chttp1_parser.c against picohttpparser
+# (vendored under picohttpparser/, an independent, production-deployed
+# HTTP/1.x parser used by the h2o web server) on the same raw byte sequences,
+# to catch a framing/extraction bug neither parser's own self-consistent test
+# suite alone would surface. Kept as its own binary in this same directory
+# rather than a new top-level tests/ directory, matching the tests_parser/
+# tests_default_client precedent above; picohttpparser.c is only needed by
+# this one binary, so it is not added to COMMON_SRC_FILES.
+build_differential:
+	$(CC) $(CFLAGS) tests_differential.c ../../src/chttp1_parser.c \
+		../../src/ctls.c ../../src/chashmap.c ../../src/common.c \
+		picohttpparser/picohttpparser.c -o tests_differential $(LFLAGS)
+
+test: build build_parser build_default_client build_differential
 	./tests
 	./tests_parser
 	./tests_default_client
+	./tests_differential
 
-memtest: build build_parser build_default_client
+memtest: build build_parser build_default_client build_differential
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
 		--error-exitcode=1 --child-silent-after-fork=yes --suppressions=ld_so_dlopen.supp \
 		--suppressions=openssl_internal.supp ./tests
@@ -131,13 +145,25 @@ memtest: build build_parser build_default_client
 		--error-exitcode=1 --suppressions=openssl_internal.supp ./tests_parser
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
 		--error-exitcode=1 --suppressions=ld_so_dlopen.supp ./tests_default_client
+	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
+		--error-exitcode=1 ./tests_differential
 
+# --ignore-errors negative: gcov's own coverage counters are plain
+# (non-atomic) increments, so this suite's own heavily multi-threaded async
+# engine can race two threads incrementing the same counter concurrently,
+# occasionally producing an apparently negative delta when gcov reconciles
+# counts; reproduced directly (not merely reasoned about) as a NON-
+# deterministic failure landing on a different file/line/value on repeated
+# runs (once on chttpclient.c, once on cthreadcomm.c). This is gcov's own
+# instrumentation limitation for concurrent code, not a defect in this
+# library's logic, matching the same tolerate-a-known-tool-quirk rationale
+# already applied here to mismatch/inconsistent.
 generate_coverage_report:
 	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests.c \
 		$(COMMON_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
 	gcov -d -w tests-chttpclient && \
-	lcov --ignore-errors mismatch --ignore-errors inconsistent --capture --directory . \
+	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file chttpclient.c.info && \
 	genhtml --ignore-errors inconsistent -s chttpclient.c.info --output-directory coverage/tests && \
 	rm -rf *.gcno *.gcda *.gcov *.c.info tests
@@ -145,15 +171,25 @@ generate_coverage_report:
 		../../src/ctls.c ../../src/chashmap.c ../../src/common.c -o tests_parser $(LFLAGS) && \
 	./tests_parser && \
 	gcov -d -w tests_parser-chttp1_parser && \
-	lcov --ignore-errors mismatch --ignore-errors inconsistent --capture --directory . \
+	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file chttp1_parser.c.info && \
 	genhtml --ignore-errors inconsistent -s chttp1_parser.c.info --output-directory coverage/tests_parser && \
 	rm -rf *.gcno *.gcda *.gcov *.c.info tests_parser
+	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests_differential.c \
+		../../src/chttp1_parser.c ../../src/ctls.c ../../src/chashmap.c \
+		../../src/common.c picohttpparser/picohttpparser.c \
+		-o tests_differential $(LFLAGS) && \
+	./tests_differential && \
+	gcov -d -w tests_differential-chttp1_parser && \
+	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
+	--output-file chttp1_parser_differential.c.info && \
+	genhtml --ignore-errors inconsistent -s chttp1_parser_differential.c.info --output-directory coverage/tests_differential && \
+	rm -rf *.gcno *.gcda *.gcov *.c.info tests_differential
 
-all: build build_parser build_default_client build_tsan test test_tsan memtest generate_coverage_report
+all: build build_parser build_default_client build_differential build_tsan test test_tsan memtest generate_coverage_report
 
 clean:
-	rm -rf tests tests_tls tests_parser tests_default_client tests_tsan third_party_obj coverage *.gcno *.gcda *.gcov *.c.info \
+	rm -rf tests tests_tls tests_parser tests_default_client tests_differential tests_tsan third_party_obj coverage *.gcno *.gcda *.gcov *.c.info \
 		fuzz_chttp1_request fuzz_chttp1_response
 
-default: build build_parser build_default_client
+default: build build_parser build_default_client build_differential

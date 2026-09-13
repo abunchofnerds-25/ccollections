@@ -41,12 +41,15 @@ alive for as long as the channel is in use: routing compares the
 calling thread's ID against the ID captured at creation time, and the
 OS may reuse that ID for an unrelated, later thread once the original
 owner exits, which would then be silently misrouted as the owner too
-fork(2) is safe with respect to each underlying circular queue's own
-internal locking: a lock held by some other thread at the instant of
-the fork is never inherited by the child already locked. Neither
-queue owns a thread of its own, so a channel already live and in
-active use across the fork remains fully usable on both sides
-afterward.
+The supported way to combine fork(2) with a channel is to fork(2)
+before creating it, or create it and fork(2) immediately followed by
+exec(3); continuing to run without an intervening exec(3) while a
+channel created before the fork is still live is not a supported
+pattern. As a defense-in-depth measure on top of that, a lock held by
+some other thread at the instant of the fork is never inherited by
+the child already locked, and neither underlying queue owns a thread
+of its own, so a channel inherited that way happens to remain fully
+usable regardless.
 .fi
 .SH "SEE ALSO"
 .BR channel_create_with_mprocs (3),

@@ -35,11 +35,14 @@ Returns NULL on failure
 .nf
 All operations on this queue are thread-safe
 Queue must be destroyed with circular_queue_destroy() when done
-fork(2) is safe with respect to this queue's own internal locking: a
-lock held by some other thread at the instant of the fork is never
-inherited by the child already locked. The queue owns no thread of
-its own, so one already live and in active use across the fork
-remains fully usable on both sides afterward.
+The supported way to combine fork(2) with this queue is to fork(2)
+before creating it, or create it and fork(2) immediately followed by
+exec(3); continuing to run without an intervening exec(3) while a
+queue created before the fork is still live is not a supported
+pattern. As a defense-in-depth measure on top of that, a lock held by
+some other thread at the instant of the fork is never inherited by
+the child already locked, and the queue owns no thread of its own, so
+one inherited that way happens to remain fully usable regardless.
 .fi
 .SH "SEE ALSO"
 .BR circular_queue_create_with_mprocs (3),

@@ -155,8 +155,14 @@ __attribute__((destructor)) static void _teardown(void) {
 static void _make_nonblocking_pair(int fds[2]) {
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
   for (int i = 0; i < 2; ++i) {
+    /* An unchecked failure here would leave fds[i] blocking, silently
+     * turning every subsequent ctls_conn_read/_write call in whichever test
+     * invoked this helper into a genuine, unbounded block instead of the
+     * expected EWOULDBLOCK; a full test-binary hang, not merely a missed
+     * check, since this helper backs essentially every test in this file. */
     int flags = fcntl(fds[i], F_GETFL, 0);
-    fcntl(fds[i], F_SETFL, flags | O_NONBLOCK);
+    REQUIRE_GE(flags, 0);
+    REQUIRE_EQ(fcntl(fds[i], F_SETFL, flags | O_NONBLOCK), 0);
   }
 }
 
@@ -301,9 +307,18 @@ TEST(ctls_ctx, trust_null_args_invalid) {
   ctls_ctx_release(ctx);
 }
 
+TEST(ctls_ctx, trust_system_null_ctx_invalid) {
+  REQUIRE_EQ(ctls_ctx_trust_system(NULL), ccol_invalid_args);
+}
+
 TEST(ctls_ctx, trust_system_no_crash) {
   ctls_ctx_t *ctx = ctls_ctx_new(NULL);
-  ctls_ctx_trust_system(ctx);
+  /* This CI/dev environment's own system CA store is expected to be present
+   * and loadable; a platform with none configured would legitimately see
+   * ccol_http_tls_cert_load_failed here instead, which is exactly the
+   * real, previously-silently-discarded failure this return value now
+   * surfaces. */
+  REQUIRE_EQ(ctls_ctx_trust_system(ctx), ccol_success);
   ctls_ctx_release(ctx);
 }
 
@@ -971,7 +986,7 @@ TEST(ctls_conn, udata_roundtrip) {
 /* other allocation failure in that same function already reports.            */
 /* ========================================================================== */
 
-/* --- (3): self-signed named-cert subject-name OOM must not crash --------- */
+/* (3): self-signed named-cert subject-name OOM must not crash */
 
 static _Atomic int g_fail_malloc_at_call = 0; /* 0 = never fail */
 static _Atomic int g_malloc_call_count = 0;
@@ -1015,7 +1030,7 @@ TEST(ctls_ctx, cert_add_self_signed_name_alloc_failure_reports_oom_not_crash) {
   ctls_ctx_release(ctx);
 }
 
-/* --- (1): SNI servername-callback UAF under concurrent cert rotation ----- */
+/* (1): SNI servername-callback UAF under concurrent cert rotation */
 
 static _Atomic bool g_sni_race_stop = false;
 static ctls_ctx_t *g_sni_race_ctx = NULL;
@@ -1100,8 +1115,8 @@ TEST(ctls_sni, cert_add_race_during_live_handshake_does_not_crash) {
   g_sni_race_ctx = NULL;
 }
 
-/* --- (2): server-mode ALPN-select-callback race, plus the connection-owned */
-/*          alpn_selected_name copy fix (both directions)                    */
+/* (2): server-mode ALPN-select-callback race, plus the connection-owned
+ *      alpn_selected_name copy fix (both directions) */
 
 static _Atomic bool g_alpn_race_stop = false;
 static ctls_ctx_t *g_alpn_race_server_ctx = NULL;

@@ -1268,7 +1268,8 @@ TEST(chash_maps, stress_scaling_ptrs) {
   chmap_destroy(chm);
 }
 
-unsigned long custom_int_key_hasher(const void *ptr) {
+unsigned long custom_int_key_hasher(const void *ptr, size_t size) {
+  (void)size;
   return *(const int *)ptr;
 }
 
@@ -2925,6 +2926,39 @@ TEST(chash_maps, oa_custom_hashing) {
   chmap_destroy(hm);
 }
 
+// FNV-1a over exactly ptr[0..size), the shape a hash function for a
+// genuinely variable-length binary key needs: it must be able to hash two
+// keys with a shared prefix but different lengths (e.g. "ab" and "abc") to
+// different values without relying on a NUL terminator or any other
+// external convention to find its own extent.
+static unsigned long fnv1a_key_hasher(const void *ptr, size_t size) {
+  const unsigned char *b = (const unsigned char *)ptr;
+  unsigned long h = 2166136261UL;
+  for (size_t i = 0; i < size; i++) h = (h ^ b[i]) * 16777619UL;
+  return h;
+}
+
+// Verify the custom hashing callback's size parameter is wired through
+// correctly for a separate-chaining map with a variable-length (string)
+// key: two keys sharing a prefix but differing in length must hash (and
+// therefore be stored/looked-up) independently.
+TEST(chash_maps, sc_custom_hashing_with_variable_length_key) {
+  ccol_hashing_proc_t ch = &fnv1a_key_hasher;
+  chmap_construct_ch(hm, char *, int, ch);
+
+  int v1 = 1, v2 = 2, v3 = 3;
+  chmap_insert(hm, "ab", v1);
+  chmap_insert(hm, "abc", v2);
+  chmap_insert(hm, "abcd", v3);
+
+  REQUIRE_EQ(chmap_elem_count(hm), 3);
+  REQUIRE_EQ(chmap_get(hm, "ab"), 1);
+  REQUIRE_EQ(chmap_get(hm, "abc"), 2);
+  REQUIRE_EQ(chmap_get(hm, "abcd"), 3);
+
+  chmap_destroy(hm);
+}
+
 // chmap_insert_elem, chmap_get_elem_ref, and chmap_delete_elem must return
 // ccol_invalid_args when passed NULL pointers or a zero-size key/value.
 TEST(chash_maps, insert_and_ref_invalid_args) {
@@ -3922,8 +3956,9 @@ TEST(chash_maps, chmap_as_a_struct_field_two_levels_access_via_ptr) {
 // so the sc_find_in_llist/sc_delete_from_llist hash_val pre-check can never
 // short-circuit: every lookup must fall through to the full memcmp on every
 // candidate in the chain to land on the right one.
-static unsigned long constant_struct_key_hasher(const void *ptr) {
+static unsigned long constant_struct_key_hasher(const void *ptr, size_t size) {
   (void)ptr;
+  (void)size;
   return 42;
 }
 

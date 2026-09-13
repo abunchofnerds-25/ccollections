@@ -4225,14 +4225,27 @@ TEST(keepalive, concurrent_requests_exceeding_idle_cap_no_crash) {
   const int n = 12;
   pthread_t threads[12];
   concurrent_req_arg_t args[12];
+  /* created/create_rv: see async_idle_pool.concurrent_stale_eviction_races_
+   * dispatch_no_uaf's identical comment - guards against a stack-use-
+   * after-return if pthread_create itself fails partway through this
+   * loop, since threads[]/args[] are stack-local. Without this, a failed
+   * pthread_create left threads[i] uninitialized and the join loop below
+   * would call pthread_join on a garbage pthread_t, which is undefined
+   * behavior and can hang this whole test binary rather than fail cleanly. */
+  int created = 0;
+  int create_rv = 0;
   for (int i = 0; i < n; i++) {
     args[i].cli = cli;
     snprintf(args[i].url, sizeof(args[i].url), "%s", url);
     args[i].result_status = 0;
     args[i].result_rv = ccol_unexpected_failure;
-    pthread_create(&threads[i], NULL, concurrent_req_thread, &args[i]);
+    create_rv =
+        pthread_create(&threads[i], NULL, concurrent_req_thread, &args[i]);
+    if (create_rv != 0) break;
+    created++;
   }
-  for (int i = 0; i < n; i++) pthread_join(threads[i], NULL);
+  for (int i = 0; i < created; i++) pthread_join(threads[i], NULL);
+  REQUIRE_EQ(create_rv, 0);
   for (int i = 0; i < n; i++) {
     REQUIRE_EQ(args[i].result_rv, ccol_success);
     REQUIRE_EQ(args[i].result_status, 200);
@@ -10692,6 +10705,7 @@ static void *destroy_watchdog_thread(void *arg) {
 static bool destroy_completes_promptly(chttpcli h) {
   destroy_watchdog_arg_t *warg =
       (destroy_watchdog_arg_t *)malloc(sizeof(*warg));
+  if (!warg) return false;
   warg->h = h;
   atomic_store(&warg->done, false);
   pthread_t tid;
@@ -10776,8 +10790,22 @@ TEST(chttpcli_handle_lifecycle, concurrent_double_destroy_is_fatal) {
     concurrent_destroy_arg_t a1 = {.h = cli};
     concurrent_destroy_arg_t a2 = {.h = cli};
     pthread_t t1, t2;
-    pthread_create(&t1, NULL, concurrent_destroy_thread, &a1);
-    pthread_create(&t2, NULL, concurrent_destroy_thread, &a2);
+    /* Checked explicitly, not via REQUIRE_*: this runs inside the forked
+     * child, where an early return would skip _exit() and fall back into
+     * the harness's own test-running loop a second time. On failure, an
+     * unjoined/unchecked pthread_create's garbage t1/t2 fed into
+     * pthread_join below would be undefined behavior and could hang this
+     * child (and, transitively, the parent's waitpid below) instead of
+     * failing cleanly; _exit(3) instead falls through to the same kind of
+     * distinguishable-from-SIGABRT exit code this child already uses for
+     * the cli == CHTTPCLI_INVALID precondition above, which the parent's
+     * WIFSIGNALED/WTERMSIG checks below already report as a clean test
+     * failure rather than a hang. */
+    int t1_rv = pthread_create(&t1, NULL, concurrent_destroy_thread, &a1);
+    int t2_rv = (t1_rv == 0)
+                    ? pthread_create(&t2, NULL, concurrent_destroy_thread, &a2)
+                    : -1;
+    if (t1_rv != 0 || t2_rv != 0) _exit(3);
     pthread_join(t1, NULL);
     pthread_join(t2, NULL);
     _exit(0); /* unreachable: whichever of the two destroy calls loses the

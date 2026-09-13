@@ -1,0 +1,75 @@
+# Suppresses a known ThreadSanitizer limitation around the standard, correct
+# fork()-safety idiom this module uses for its own process-wide
+# event_loop_slot_table.rwlock and each live loop's own reg_slot_rwlock (see
+# _cthreadcomm_atfork_release_impl's own doc comment in src/cthreadcomm.c): a
+# forked child's sole surviving thread re-initializes these rwlocks via
+# pthread_rwlock_init() instead of unlocking them, since glibc's rwlock
+# write-lock tracks ownership by TID and the child's post-fork thread has a
+# different TID than the parent's forking thread did (a plain unlock would
+# silently fail to release it). This is the same fix glibc's own malloc
+# arena locks use for the identical problem, and is safe: the child has
+# exactly one thread, so a fresh init can never race a second party.
+#
+# ThreadSanitizer does not clear its own internal "this rwlock is
+# write-locked" shadow state across fork() + pthread_rwlock_init(): confirmed
+# via an independent, cthreadcomm.c-free reproduction (two global locks, a
+# plain mutex A and a PTHREAD_RWLOCK_INITIALIZER-statically-initialized
+# rwlock B; mirroring _cthreadcomm_atfork_prepare's own nested A-then-B lock
+# order once, then write-locking B alone, fork()ing, reinitializing B in the
+# child instead of unlocking it, then locking A alone in the child on an
+# entirely unrelated, ordinary critical section; no c_collections code
+# involved at all) that reproduces the identical "lock-order-inversion
+# (potential deadlock)" report, attributing the cycle to the exact same
+# nested-lock call site the real report names. The underlying rwlock is
+# genuinely safe post-fork (POSIX explicitly permits this reinit idiom, and
+# there is no real concurrent deadlock: prepare()/release() run fully
+# serialized around each individual fork() call, on one thread at a time, and
+# the child has exactly one surviving thread); this is a detector limitation
+# around the reinit-in-child pattern colliding with an earlier, unrelated
+# nested-lock edge recorded before the fork, not a real race in this
+# module's own logic.
+#
+# Anchored on _cthreadcomm_atfork_prepare (this module's own nested-lock call
+# site, always symbol-resolved, and the exact function every real report so
+# far has named) rather than any pthread-internal frame name, mirroring
+# tests/clogger/tsan_rwlock_reinit.supp's own identical "anchor on our own
+# code" choice.
+deadlock:_cthreadcomm_atfork_prepare
+
+# Second symptom of the exact same root cause above, not a separate issue:
+# ThreadSanitizer's own "thread leak" check can misattribute a leak to a
+# thread that held event_loop_slot_table.rwlock pre-fork and was correctly,
+# unconditionally joined by the PARENT process afterward -- fork_safety.
+# fork_does_not_inherit_a_write_locked_event_loop_slot_table's own "holder"
+# thread genuinely is joined every time (verified by reading the test: the
+# join is unconditional, before every REQUIRE_* that could return early),
+# and TSan's own reported exit-status override on the CHILD process (whose
+# code path never joins holder at all -- fork() duplicates only the calling
+# thread, so holder never existed there to begin with) is the only place
+# the false "leak" is ever reported, never from the parent's own, correct
+# join.
+#
+# Confirmed via an independent repro that links this module's own real
+# src/cthreadcomm.c directly (no TAU, no test suite, so no accumulated
+# history-across-many-forks explanation is possible either): a thread that
+# takes event_loop_slot_table.rwlock via event_loop_test_wrlock_slot_table_
+# for_tests, held across a real fork() with real pthread_atfork() handlers
+# already registered (an ordinary event_loop_create/_destroy cycle run once
+# beforehand, matching what an earlier test in the real suite already did),
+# reproduces the identical "thread leak" report 5/5 runs, pointing at the
+# thread's own pthread_create call site, even though it is unconditionally
+# joined; removing only the rwlock-holding from that same repro (the thread
+# sleeps instead) drops the report to 0/5 runs with everything else
+# unchanged, isolating the rwlock's own reinit-in-child idiom as the actual
+# trigger, not the child's own behavior, not test-suite history, and not
+# any of this file's own diagnostic instrumentation (sigalrm handler,
+# cdebuglog checkpoints) added alongside this exact test.
+#
+# Anchored on the specific test function name (the only frame in the
+# "created by" stack that is ever symbol-resolved for this report; a bare
+# pthread_create call has no library-code frame of its own to anchor on
+# the way the deadlock suppression above does) rather than a broader
+# wildcard, deliberately: this is the one test in this file confirmed to
+# trigger this specific symptom, and a broader anchor risks silencing a
+# genuine future thread-leak elsewhere in this suite.
+thread:_TAU_TEST_FUNC_fork_safety_fork_does_not_inherit_a_write_locked_event_loop_slot_table

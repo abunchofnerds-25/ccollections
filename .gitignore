@@ -36,3 +36,5 @@ main
 /*.pdb
 .envrc
 massif.out.*
+
+# An unnecessary line for triggering a new CI run - 0

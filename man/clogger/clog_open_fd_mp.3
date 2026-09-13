@@ -82,11 +82,16 @@ allocation fails.
 The fd is not duplicated; the caller is responsible for keeping it
 open for the lifetime of the logger.
 All public functions are fully thread-safe via a per-logger mutex.
-A handle open at the time of fork() remains fully usable in the
-child: logging, deriving, and closing it all continue to work
-correctly on both sides of the fork. A logger's async writer thread
-does not exist in a forked child; an async-enabled handle inherited
-into a child transparently falls back to synchronous logging there.
+The supported way to combine fork(2) with clogger is to fork(2)
+before opening a logger, or open one and fork(2) immediately followed
+by exec(3); continuing to run without an intervening exec(3) while a
+handle opened before the fork is still live is not a supported
+pattern. As a defense-in-depth measure on top of that, a handle open
+at the time of such a fork remains technically usable in the child:
+logging, deriving, and closing it all continue to work correctly on
+both sides. A logger's async writer thread does not exist in a forked
+child; an async-enabled handle inherited into a child transparently
+falls back to synchronous logging there.
 
 When async_cfg is non-NULL, CLOG_FMT_SYSLOG output is exempt from
 batching regardless of queue_size/flush_buffer_size/flush_interval_ms:

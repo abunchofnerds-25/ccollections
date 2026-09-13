@@ -178,5 +178,17 @@ int main(void) {
   dump_node(root);
   putchar('\n');
   cyaml_destroy(root);
+
+  /* dump_node/putchar above write through buffered stdio (putchar/fputs/
+   * printf), none of whose individual return values this function checks;
+   * a single fflush()+ferror() check here catches any failure among all of
+   * them (a full disk when stdout is redirected to a file, most plausibly),
+   * matching this file's own documented "2 on a usage/environment error
+   * (out of memory, bad output)" exit code contract, which nothing else in
+   * this function currently implements. */
+  if (fflush(stdout) != 0 || ferror(stdout)) {
+    fprintf(stderr, "cyaml_to_json: error writing output\n");
+    return 2;
+  }
   return 0;
 }

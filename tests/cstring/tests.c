@@ -1906,8 +1906,14 @@ TEST(cstrings, insert_macro_pos_argument_named__r_is_not_shadowed) {
 // failure mode cstring_get_mprocs had before it gained its own NULL guard).
 // ========================================================================
 
-static int run_forked(void (*fn)(void)) {
+/* Returns false (leaving *out_status untouched) if fork() or waitpid()
+ * itself failed, so the caller can tell that apart from a genuine
+ * WIFSIGNALED-but-not-SIGABRT test failure; REQUIRE_* cannot be used
+ * directly in this function since its bare `return;` only fits a void
+ * TEST body, not this int-returning helper. */
+static bool run_forked(void (*fn)(void), int *out_status) {
   pid_t pid = fork();
+  if (pid < 0) return false;
   if (pid == 0) {
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
@@ -1919,16 +1925,18 @@ static int run_forked(void (*fn)(void)) {
     _exit(0); /* unreachable if the assert aborted as expected */
   }
   int status = 0;
-  waitpid(pid, &status, 0);
-  return status;
+  if (waitpid(pid, &status, 0) != pid) return false;
+  *out_status = status;
+  return true;
 }
 
-#define DEFINE_NULL_ARG_FATAL_TEST(test_name, callexpr)       \
-  static void _null_arg_thunk_##test_name(void) { callexpr; } \
-  TEST(cstrings, test_name) {                                 \
-    int status = run_forked(_null_arg_thunk_##test_name);     \
-    REQUIRE_TRUE(WIFSIGNALED(status));                        \
-    REQUIRE_EQ(WTERMSIG(status), SIGABRT);                    \
+#define DEFINE_NULL_ARG_FATAL_TEST(test_name, callexpr)             \
+  static void _null_arg_thunk_##test_name(void) { callexpr; }       \
+  TEST(cstrings, test_name) {                                       \
+    int status = 0;                                                 \
+    REQUIRE_TRUE(run_forked(_null_arg_thunk_##test_name, &status)); \
+    REQUIRE_TRUE(WIFSIGNALED(status));                              \
+    REQUIRE_EQ(WTERMSIG(status), SIGABRT);                          \
   }
 
 DEFINE_NULL_ARG_FATAL_TEST(null_length_is_fatal, (void)cstring_length(NULL))

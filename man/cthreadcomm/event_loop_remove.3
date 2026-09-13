@@ -14,13 +14,20 @@ ccol_retval_t event_loop_remove(event_loop loop, event_reg reg);
 Deregisters reg.  Safe to call from within a callback for the very
 registration being removed (self-removal on error is a common pattern),
 as well as from any other thread, including concurrently with an
-in-flight dispatch for the same registration; teardown is deferred until
-any in-progress callback returns.  No further callback for this
-registration is ever invoked after this call returns, even one already
-collected (e.g. sitting queued for a dispatch worker thread with
-num_reactor_threads > 1) but not yet actually started; callers may free
-whatever the registration's own arg points to immediately after this
-call returns without racing a stale callback invocation.
+in-flight dispatch for the same registration.  No further callback for
+this registration is ever invoked after this call returns, even one
+already collected (e.g. sitting queued for a dispatch worker thread with
+num_reactor_threads > 1) but not yet actually started; this call itself,
+however, does not wait for a dispatch that is already in flight at the
+moment of the call to finish.  A caller that must not free whatever arg
+points to while such a dispatch could still be running needs
+handlers.on_removed (see event_loop_add(3)): it fires exactly once,
+asynchronously, only once no dispatch of this registration and no other
+event_loop call resolving it can still be in progress.  A caller
+confident no dispatch can be in flight at the moment of removal (e.g.
+self-removal from within that exact registration's own callback, or a
+registration that was never dispatched to begin with) may still free arg
+immediately without needing on_removed.
 
 Does not close an fd or affect a queue's own lifetime; only the
 event_loop's registration bookkeeping is released, mirroring
@@ -86,4 +93,5 @@ void on_readable(event_loop loop, ccol_selectable *sel, void *arg) {
 .BR event_loop_add (3),
 .BR event_loop_modify (3),
 .BR event_loop_pause (3),
-.BR event_loop_resume (3)
+.BR event_loop_resume (3),
+.BR event_loop_destroy (3)

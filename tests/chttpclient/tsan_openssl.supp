@@ -9,8 +9,8 @@
 # via an independent, ctls.c-free reproduction (raw OpenSSL, no c_collections
 # code at all) to be entirely internal to libcrypto, with real precedent in
 # OpenSSL's own issue tracker across multiple versions. Every concurrent
-# handshake still completes correctly regardless -- this is a data race the
-# detector flags, not an actual verification/handshake failure -- confirmed
+# handshake still completes correctly regardless (this is a data race the
+# detector flags, not an actual verification/handshake failure), confirmed
 # by a clean `make memtest` (valgrind) pass on the exact same test.
 # Deliberately not "fixed" by locking around the verification or handshake
 # step instead of suppressing the report: the only locking scope found to
@@ -18,7 +18,7 @@
 # verification) requires holding a lock across real network I/O waits
 # between this module's own non-blocking handshake-step calls, which would
 # serialise concurrent connections' actual data transfer, not just a brief
-# CPU-bound moment -- a real throughput regression to paper over what is
+# CPU-bound moment; a real throughput regression to paper over what is
 # very likely someone else's bug, not a fix.
 #
 # Anchored on _async_tls_advance (this module's own handshake-stepping call

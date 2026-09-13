@@ -83,9 +83,10 @@ receive on_writable instead if the fd is also writable (EPOLLOUT and
 EPOLLERR/EPOLLHUP are not mutually exclusive either: a socket that has
 entered an error state is reported writable too, since write(2) on it
 returns immediately with an error rather than blocking).  Queue
-selectables never produce an error condition.  Any of the three
-callbacks may be NULL, in which case that class of event is silently
-dropped for this registration.  A read registration with on_readable
+selectables never produce an error condition.  Any of on_readable,
+on_writable, and on_error may be NULL, in which case that class of
+event is silently dropped for this registration.  A read registration
+with on_readable
 set to NULL (an "error only" reader, watching solely for the fd to
 die) must genuinely never receive ordinary data with no accompanying
 error: the fd remaining readable with real, undrained bytes and no
@@ -96,6 +97,13 @@ for it, a silent, unbounded dispatch spin.  The identical hazard
 applies to a write registration with on_writable set to NULL (an
 "error only" writer): it must genuinely never become writable with no
 accompanying error either.
+
+handlers.on_removed, unlike the other three, is not tied to a readiness
+event: it fires exactly once, asynchronously, once it is provably safe
+to release arg (see event_loop_remove(3)'s own NOTES for the precise
+guarantee and why event_loop_remove() itself cannot always provide it
+synchronously). May be left NULL for a registration whose arg needs no
+release notification.
 
 Callbacks run on one of loop's own background reactor threads, never on
 the calling thread.  A callback must not block.

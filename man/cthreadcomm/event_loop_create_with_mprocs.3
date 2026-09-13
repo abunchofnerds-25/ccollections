@@ -126,16 +126,21 @@ help here, since it governs the same fd registered across multiple
 SEPARATE epoll instances, not many threads sharing one), wasting
 dispatch latency on a single, otherwise-uncontended connection.
 
-A fresh event_loop_create_with_mprocs/_add/_remove/_modify/_pause/
-_resume/_destroy call, from any thread, in either the parent or a
-freshly forked child, never hangs on a lock some other (possibly
+The supported way to combine fork(2) with event_loop is to fork(2)
+before creating a loop, or create one and fork(2) immediately followed
+by exec(3); continuing to run without an intervening exec(3) while a
+loop created before the fork is still live is not a supported pattern.
+As a defense-in-depth measure on top of that, a fresh
+event_loop_create_with_mprocs/_add/_remove/_modify/_pause/_resume/
+_destroy call, from any thread, in either the parent or a freshly
+forked child, never hangs on a lock some other (possibly
 no-longer-existing, since fork(2) duplicates only the calling thread)
 thread happened to hold at the instant of the fork. A loop already
-live across the fork is a different matter: its polling and dispatch
-threads are not duplicated into the child, so an inherited loop can no
-longer dispatch anything there regardless of this guarantee; treat
-such a loop as inert in the child (safe to event_loop_destroy, not
-usable for further dispatch).
+live across the fork is a different matter regardless of that measure:
+its polling and dispatch threads are not duplicated into the child, so
+an inherited loop can no longer dispatch anything there; treat such a
+loop as inert in the child (safe to event_loop_destroy, not usable for
+further dispatch).
 .fi
 .SH THREAD SAFETY
 .nf

@@ -1132,16 +1132,23 @@ TEST(concurrency, multiple_getters_coalesce_to_single_remote_fetch) {
   REQUIRE_EQ(pthread_barrier_init(&barrier, NULL, N_THREADS), 0);
   getter_arg_t args[N_THREADS];
   pthread_t tids[N_THREADS];
+  int created = 0;
   for (int i = 0; i < N_THREADS; i++) {
     args[i].cache = cache;
     args[i].key = 42;
     args[i].result = 0;
     args[i].retval = ccol_unexpected_failure;
     args[i].start_barrier = &barrier;
-    pthread_create(&tids[i], NULL, getter_thread, &args[i]);
+    /* A partial failure here must not leave the join loop below joining an
+     * uninitialized tids[i] slot (undefined behavior, possibly hanging on
+     * garbage pthread_t data), so only the threads actually created are
+     * joined. */
+    if (pthread_create(&tids[i], NULL, getter_thread, &args[i]) != 0) break;
+    created++;
   }
+  REQUIRE_EQ(created, (int)N_THREADS);
 
-  for (int i = 0; i < N_THREADS; i++) {
+  for (int i = 0; i < created; i++) {
     pthread_join(tids[i], NULL);
   }
   pthread_barrier_destroy(&barrier);
@@ -1232,7 +1239,7 @@ TEST(concurrency, getters_wait_for_sync_setter) {
 
   sync_setter_arg_t sarg = {cache, 10, 99};
   pthread_t stid;
-  pthread_create(&stid, NULL, sync_setter_thread, &sarg);
+  REQUIRE_EQ(pthread_create(&stid, NULL, sync_setter_thread, &sarg), 0);
 
   /* Wait until setter has started the remote call */
   while (!atomic_load(&setter_started)) usleep(1000);
@@ -1240,7 +1247,7 @@ TEST(concurrency, getters_wait_for_sync_setter) {
   /* Start a getter that should block until setter finishes */
   waiter_arg_t warg = {cache, 10, 99, 0, ccol_unexpected_failure, false};
   pthread_t wtid;
-  pthread_create(&wtid, NULL, waiter_thread, &warg);
+  REQUIRE_EQ(pthread_create(&wtid, NULL, waiter_thread, &warg), 0);
 
   /* Give getter time to start waiting */
   usleep(50000);
@@ -1272,7 +1279,7 @@ TEST(concurrency, getter_blocked_by_setter_for_existing_key_succeeds) {
   /* Phase 1: seed key 55 = 550 using the gating setter (let it complete) */
   sync_setter_arg_t sarg1 = {cache, 55, 550};
   pthread_t stid1;
-  pthread_create(&stid1, NULL, sync_setter_thread, &sarg1);
+  REQUIRE_EQ(pthread_create(&stid1, NULL, sync_setter_thread, &sarg1), 0);
   while (!atomic_load(&setter_started)) usleep(1000);
   atomic_store(&setter_may_finish, true);
   pthread_join(stid1, NULL);
@@ -1284,13 +1291,13 @@ TEST(concurrency, getter_blocked_by_setter_for_existing_key_succeeds) {
 
   sync_setter_arg_t sarg2 = {cache, 55, 999};
   pthread_t stid2;
-  pthread_create(&stid2, NULL, sync_setter_thread, &sarg2);
+  REQUIRE_EQ(pthread_create(&stid2, NULL, sync_setter_thread, &sarg2), 0);
   while (!atomic_load(&setter_started)) usleep(1000);
 
   /* Getter arrives while the setter holds the set_in_progress flag */
   waiter_arg_t warg = {cache, 55, 0, 0, ccol_unexpected_failure, false};
   pthread_t wtid;
-  pthread_create(&wtid, NULL, waiter_thread, &warg);
+  REQUIRE_EQ(pthread_create(&wtid, NULL, waiter_thread, &warg), 0);
 
   /* Confirm the getter is blocked */
   usleep(50000);
@@ -1323,14 +1330,14 @@ TEST(concurrency, getter_sees_key_not_found_when_new_key_setter_fails) {
 
   sync_setter_arg_t sarg = {cache, 77, 777};
   pthread_t stid;
-  pthread_create(&stid, NULL, sync_setter_thread, &sarg);
+  REQUIRE_EQ(pthread_create(&stid, NULL, sync_setter_thread, &sarg), 0);
 
   while (!atomic_load(&setter_started)) usleep(1000);
 
   /* Getter arrives while the setter placeholder is live */
   waiter_arg_t warg = {cache, 77, 0, 0, ccol_unexpected_failure, false};
   pthread_t wtid;
-  pthread_create(&wtid, NULL, waiter_thread, &warg);
+  REQUIRE_EQ(pthread_create(&wtid, NULL, waiter_thread, &warg), 0);
 
   /* Give the getter time to enter the wait loop */
   usleep(50000);
@@ -1362,7 +1369,7 @@ TEST(concurrency, getter_gets_old_value_when_setter_fails_for_existing_key) {
 
   sync_setter_arg_t sarg1 = {cache, 33, 330};
   pthread_t stid1;
-  pthread_create(&stid1, NULL, sync_setter_thread, &sarg1);
+  REQUIRE_EQ(pthread_create(&stid1, NULL, sync_setter_thread, &sarg1), 0);
   while (!atomic_load(&setter_started)) usleep(1000);
   atomic_store(&setter_may_finish, true);
   pthread_join(stid1, NULL);
@@ -1375,13 +1382,13 @@ TEST(concurrency, getter_gets_old_value_when_setter_fails_for_existing_key) {
 
   sync_setter_arg_t sarg2 = {cache, 33, 999};
   pthread_t stid2;
-  pthread_create(&stid2, NULL, sync_setter_thread, &sarg2);
+  REQUIRE_EQ(pthread_create(&stid2, NULL, sync_setter_thread, &sarg2), 0);
   while (!atomic_load(&setter_started)) usleep(1000);
 
   /* Getter arrives while the failing setter is in progress */
   waiter_arg_t warg = {cache, 33, 330, 0, ccol_unexpected_failure, false};
   pthread_t wtid;
-  pthread_create(&wtid, NULL, waiter_thread, &warg);
+  REQUIRE_EQ(pthread_create(&wtid, NULL, waiter_thread, &warg), 0);
 
   usleep(50000);
   REQUIRE_EQ((int)atomic_load(&warg.done), 0);
@@ -1413,7 +1420,7 @@ TEST(concurrency, multiple_getters_see_old_value_when_setter_fails) {
 
   sync_setter_arg_t sarg1 = {cache, 42, 420};
   pthread_t stid1;
-  pthread_create(&stid1, NULL, sync_setter_thread, &sarg1);
+  REQUIRE_EQ(pthread_create(&stid1, NULL, sync_setter_thread, &sarg1), 0);
   while (!atomic_load(&setter_started)) usleep(1000);
   atomic_store(&setter_may_finish, true);
   pthread_join(stid1, NULL);
@@ -1426,16 +1433,21 @@ TEST(concurrency, multiple_getters_see_old_value_when_setter_fails) {
 
   sync_setter_arg_t sarg2 = {cache, 42, 999};
   pthread_t stid2;
-  pthread_create(&stid2, NULL, sync_setter_thread, &sarg2);
+  REQUIRE_EQ(pthread_create(&stid2, NULL, sync_setter_thread, &sarg2), 0);
   while (!atomic_load(&setter_started)) usleep(1000);
 
 #define N_OLD_VAL_WAITERS 4
   waiter_arg_t wargs[N_OLD_VAL_WAITERS];
   pthread_t wtids[N_OLD_VAL_WAITERS];
+  int wtids_created = 0;
   for (int i = 0; i < N_OLD_VAL_WAITERS; i++) {
     wargs[i] = (waiter_arg_t){cache, 42, 0, 0, ccol_unexpected_failure, false};
-    pthread_create(&wtids[i], NULL, waiter_thread, &wargs[i]);
+    /* A partial failure here must not leave the join loop below joining an
+     * uninitialized wtids[i] slot. */
+    if (pthread_create(&wtids[i], NULL, waiter_thread, &wargs[i]) != 0) break;
+    wtids_created++;
   }
+  REQUIRE_EQ(wtids_created, (int)N_OLD_VAL_WAITERS);
 
   usleep(50000); /* give all getters time to enter the wait loop */
   for (int i = 0; i < N_OLD_VAL_WAITERS; i++) {
@@ -1444,7 +1456,7 @@ TEST(concurrency, multiple_getters_see_old_value_when_setter_fails) {
 
   atomic_store(&setter_may_finish, true);
   pthread_join(stid2, NULL);
-  for (int i = 0; i < N_OLD_VAL_WAITERS; i++) {
+  for (int i = 0; i < wtids_created; i++) {
     pthread_join(wtids[i], NULL);
   }
 
@@ -1499,14 +1511,20 @@ TEST(concurrency, setters_for_same_key_are_serialized) {
   simple_setter_arg_t sargs[N_SETTERS];
   pthread_t stids[N_SETTERS];
 
+  int stids_created = 0;
   for (int i = 0; i < N_SETTERS; i++) {
     sargs[i].cache = cache;
     sargs[i].key = 7; /* same key for all */
     sargs[i].val = i + 1;
-    pthread_create(&stids[i], NULL, simple_setter_thread, &sargs[i]);
+    /* A partial failure here must not leave the join loop below joining an
+     * uninitialized stids[i] slot. */
+    if (pthread_create(&stids[i], NULL, simple_setter_thread, &sargs[i]) != 0)
+      break;
+    stids_created++;
     usleep(500); /* stagger slightly so order is deterministic */
   }
-  for (int i = 0; i < N_SETTERS; i++) {
+  REQUIRE_EQ(stids_created, (int)N_SETTERS);
+  for (int i = 0; i < stids_created; i++) {
     pthread_join(stids[i], NULL);
   }
 
@@ -1544,15 +1562,20 @@ TEST(concurrency, concurrent_getters_different_keys) {
 #define N_UNIQUE_KEYS 8
   getter_arg_t args[N_UNIQUE_KEYS];
   pthread_t tids[N_UNIQUE_KEYS];
+  int created = 0;
   for (int i = 0; i < N_UNIQUE_KEYS; i++) {
     args[i].cache = cache;
     args[i].key = 100 + i; /* distinct keys; no coalescing should happen */
     args[i].result = 0;
     args[i].retval = ccol_unexpected_failure;
     args[i].start_barrier = NULL; /* no shared-key race here to remove */
-    pthread_create(&tids[i], NULL, getter_thread, &args[i]);
+    /* A partial failure here must not leave the join loop below joining an
+     * uninitialized tids[i] slot. */
+    if (pthread_create(&tids[i], NULL, getter_thread, &args[i]) != 0) break;
+    created++;
   }
-  for (int i = 0; i < N_UNIQUE_KEYS; i++) {
+  REQUIRE_EQ(created, (int)N_UNIQUE_KEYS);
+  for (int i = 0; i < created; i++) {
     pthread_join(tids[i], NULL);
   }
 
@@ -1623,13 +1646,13 @@ TEST(concurrency, getter_sees_new_value_after_set_with_concurrent_insertion) {
   /* Thread A: slow setter for key 1 = 999 */
   sync_setter_arg_t sarg = {cache, 1, 999};
   pthread_t stid;
-  pthread_create(&stid, NULL, sync_setter_thread, &sarg);
+  REQUIRE_EQ(pthread_create(&stid, NULL, sync_setter_thread, &sarg), 0);
   while (!atomic_load(&val_gate_started)) usleep(1000);
 
   /* Thread B: getter for key 1 (must block until setter finishes) */
   waiter_arg_t warg = {cache, 1, 0, 0, ccol_unexpected_failure, false};
   pthread_t wtid;
-  pthread_create(&wtid, NULL, waiter_thread, &warg);
+  REQUIRE_EQ(pthread_create(&wtid, NULL, waiter_thread, &warg), 0);
   usleep(50000); /* give Thread B time to enter the wait loop */
   REQUIRE_EQ((int)atomic_load(&warg.done), 0);
 
@@ -1730,7 +1753,7 @@ TEST(concurrency,
      * gates inside the remote getter, well outside the cache mutex. */
     getter_arg_t farg = {cache, 1, 0, ccol_unexpected_failure, NULL};
     pthread_t ftid;
-    pthread_create(&ftid, NULL, getter_thread, &farg);
+    REQUIRE_EQ(pthread_create(&ftid, NULL, getter_thread, &farg), 0);
     while (!atomic_load(&fetch_gate_started)) usleep(1000);
 
     /* Thread B: a getter coalesced onto Thread A's in-flight fetch, this
@@ -1738,7 +1761,7 @@ TEST(concurrency,
      * block on Thread A's placeholder. */
     full_api_getter_arg_t warg = {cache, 1, 0, ccol_unexpected_failure};
     pthread_t wtid;
-    pthread_create(&wtid, NULL, full_api_getter_thread, &warg);
+    REQUIRE_EQ(pthread_create(&wtid, NULL, full_api_getter_thread, &warg), 0);
     usleep(50000); /* give Thread B time to enter the wait loop */
 
     /* Release Thread A: it re-locks the mutex, publishes key 1 as LIVE
@@ -1793,7 +1816,7 @@ TEST(concurrency, coalesced_set_waiter_receives_value_despite_racing_eviction) {
      * setter, well outside the cache mutex. */
     sync_setter_arg_t sarg = {cache, 1, 100};
     pthread_t stid;
-    pthread_create(&stid, NULL, sync_setter_thread, &sarg);
+    REQUIRE_EQ(pthread_create(&stid, NULL, sync_setter_thread, &sarg), 0);
     while (!atomic_load(&setter_started)) usleep(1000);
 
     /* Thread B: a getter coalesced onto Thread A's in-flight set (via
@@ -1801,7 +1824,7 @@ TEST(concurrency, coalesced_set_waiter_receives_value_despite_racing_eviction) {
      * placeholder. */
     waiter_arg_t warg = {cache, 1, 100, 0, ccol_unexpected_failure, false};
     pthread_t wtid;
-    pthread_create(&wtid, NULL, waiter_thread, &warg);
+    REQUIRE_EQ(pthread_create(&wtid, NULL, waiter_thread, &warg), 0);
     usleep(50000); /* give Thread B time to enter the wait loop */
 
     /* Release Thread A: it re-locks the mutex, stores key 1 as LIVE
@@ -1852,7 +1875,7 @@ TEST(concurrency, size_zero_while_set_in_progress_for_existing_key) {
 
   sync_setter_arg_t sarg = {cache, 1, 999};
   pthread_t stid;
-  pthread_create(&stid, NULL, sync_setter_thread, &sarg);
+  REQUIRE_EQ(pthread_create(&stid, NULL, sync_setter_thread, &sarg), 0);
   while (!atomic_load(&val_gate_started)) usleep(1000);
 
   /* Entry is removed from LRU while setter is in progress */
@@ -1889,7 +1912,7 @@ TEST(concurrency, failed_setter_restores_existing_entry_to_lru) {
   setter_should_fail = false;
   sync_setter_arg_t sarg1 = {cache, 5, 50};
   pthread_t stid1;
-  pthread_create(&stid1, NULL, sync_setter_thread, &sarg1);
+  REQUIRE_EQ(pthread_create(&stid1, NULL, sync_setter_thread, &sarg1), 0);
   while (!atomic_load(&setter_started)) usleep(1000);
   atomic_store(&setter_may_finish, true);
   pthread_join(stid1, NULL);
@@ -1901,7 +1924,7 @@ TEST(concurrency, failed_setter_restores_existing_entry_to_lru) {
   setter_should_fail = true;
   sync_setter_arg_t sarg2 = {cache, 5, 999};
   pthread_t stid2;
-  pthread_create(&stid2, NULL, sync_setter_thread, &sarg2);
+  REQUIRE_EQ(pthread_create(&stid2, NULL, sync_setter_thread, &sarg2), 0);
   while (!atomic_load(&setter_started)) usleep(1000);
 
   /* Entry is being set (removed from LRU); size is 0 during the call */
@@ -1952,7 +1975,7 @@ TEST(concurrency, failed_setter_restores_without_exceeding_capacity) {
   /* Thread A: attempt to overwrite key 1 = 999; setter gates then fails */
   sync_setter_arg_t sarg = {cache, 1, 999};
   pthread_t stid;
-  pthread_create(&stid, NULL, sync_setter_thread, &sarg);
+  REQUIRE_EQ(pthread_create(&stid, NULL, sync_setter_thread, &sarg), 0);
   while (!atomic_load(&cap_overflow_gate_started)) usleep(1000);
 
   /* Thread A removed key 1 from the LRU; size is now 0.
@@ -1988,7 +2011,7 @@ TEST(concurrency, size_zero_while_fetch_in_progress) {
 
   getter_arg_t arg = {cache, 55, 0, ccol_unexpected_failure, NULL};
   pthread_t tid;
-  pthread_create(&tid, NULL, getter_thread, &arg);
+  REQUIRE_EQ(pthread_create(&tid, NULL, getter_thread, &arg), 0);
 
   /* spin until the remote getter has been entered (placeholder in map) */
   while (atomic_load(&coalesce_getter_calls) == 0) usleep(1000);
@@ -2031,15 +2054,20 @@ TEST(concurrency, multiple_getters_coalesce_on_failed_fetch) {
   REQUIRE_EQ(pthread_barrier_init(&barrier, NULL, N_FAIL_THREADS), 0);
   getter_arg_t args[N_FAIL_THREADS];
   pthread_t tids[N_FAIL_THREADS];
+  int created = 0;
   for (int i = 0; i < N_FAIL_THREADS; i++) {
     args[i].cache = cache;
     args[i].key = 11;
     args[i].result = 0;
     args[i].retval = ccol_success; /* sentinel; must be overwritten */
     args[i].start_barrier = &barrier;
-    pthread_create(&tids[i], NULL, getter_thread, &args[i]);
+    /* A partial failure here must not leave the join loop below joining an
+     * uninitialized tids[i] slot. */
+    if (pthread_create(&tids[i], NULL, getter_thread, &args[i]) != 0) break;
+    created++;
   }
-  for (int i = 0; i < N_FAIL_THREADS; i++) {
+  REQUIRE_EQ(created, (int)N_FAIL_THREADS);
+  for (int i = 0; i < created; i++) {
     pthread_join(tids[i], NULL);
   }
   pthread_barrier_destroy(&barrier);
@@ -2102,7 +2130,7 @@ TEST(concurrency,
    * gates inside the remote getter, well outside the cache mutex. */
   getter_arg_t farg = {cache, 1, 0, ccol_success, NULL};
   pthread_t ftid;
-  pthread_create(&ftid, NULL, getter_thread, &farg);
+  REQUIRE_EQ(pthread_create(&ftid, NULL, getter_thread, &farg), 0);
   while (!atomic_load(&mismatch_gate_started)) usleep(1000);
 
   /* Thread B: coalesces onto Thread A's in-flight fetch via
@@ -2110,7 +2138,7 @@ TEST(concurrency,
    * compare against. */
   full_api_getter_arg_t warg = {cache, 1, 0, ccol_success};
   pthread_t wtid;
-  pthread_create(&wtid, NULL, full_api_getter_thread, &warg);
+  REQUIRE_EQ(pthread_create(&wtid, NULL, full_api_getter_thread, &warg), 0);
   usleep(50000); /* give Thread B time to enter the wait loop */
 
   atomic_store(&mismatch_gate_open, true);
@@ -2149,7 +2177,7 @@ TEST(concurrency, setter_waits_for_active_fetch_then_succeeds) {
   /* Thread A: get key=7; triggers a 100 ms remote fetch */
   getter_arg_t garg = {cache, 7, 0, ccol_unexpected_failure, NULL};
   pthread_t gtid;
-  pthread_create(&gtid, NULL, getter_thread, &garg);
+  REQUIRE_EQ(pthread_create(&gtid, NULL, getter_thread, &garg), 0);
 
   /* Wait until the fetch has actually started (placeholder created, mutex
    * released, slow getter running). */
@@ -2158,7 +2186,7 @@ TEST(concurrency, setter_waits_for_active_fetch_then_succeeds) {
   /* Thread B: set key=7; must find fetch_in_progress=true and block */
   sync_setter_arg_t sarg = {cache, 7, 999};
   pthread_t stid;
-  pthread_create(&stid, NULL, sync_setter_thread, &sarg);
+  REQUIRE_EQ(pthread_create(&stid, NULL, sync_setter_thread, &sarg), 0);
 
   pthread_join(gtid, NULL);
   pthread_join(stid, NULL);
@@ -2234,15 +2262,20 @@ TEST(concurrency, multiple_char_ptr_getters_coalesce) {
   REQUIRE_EQ(pthread_barrier_init(&barrier, NULL, N_STR_THREADS), 0);
   str_getter_arg_t args[N_STR_THREADS];
   pthread_t tids[N_STR_THREADS];
+  int created = 0;
   for (int i = 0; i < N_STR_THREADS; i++) {
     args[i].cache = cache;
     args[i].key = 77;
     args[i].result = NULL;
     args[i].retval = ccol_unexpected_failure;
     args[i].start_barrier = &barrier;
-    pthread_create(&tids[i], NULL, str_getter_thread, &args[i]);
+    /* A partial failure here must not leave the join loop below joining an
+     * uninitialized tids[i] slot. */
+    if (pthread_create(&tids[i], NULL, str_getter_thread, &args[i]) != 0) break;
+    created++;
   }
-  for (int i = 0; i < N_STR_THREADS; i++) {
+  REQUIRE_EQ(created, (int)N_STR_THREADS);
+  for (int i = 0; i < created; i++) {
     pthread_join(tids[i], NULL);
   }
   pthread_barrier_destroy(&barrier);
@@ -2302,15 +2335,20 @@ TEST(concurrency, multiple_char_ptr_getters_coalesce_on_failed_fetch) {
   REQUIRE_EQ(pthread_barrier_init(&barrier, NULL, N_FAIL_STR_THREADS), 0);
   str_getter_arg_t args[N_FAIL_STR_THREADS];
   pthread_t tids[N_FAIL_STR_THREADS];
+  int created = 0;
   for (int i = 0; i < N_FAIL_STR_THREADS; i++) {
     args[i].cache = cache;
     args[i].key = 22;
     args[i].result = NULL;
     args[i].retval = ccol_success; /* sentinel; must be overwritten */
     args[i].start_barrier = &barrier;
-    pthread_create(&tids[i], NULL, str_getter_thread, &args[i]);
+    /* A partial failure here must not leave the join loop below joining an
+     * uninitialized tids[i] slot. */
+    if (pthread_create(&tids[i], NULL, str_getter_thread, &args[i]) != 0) break;
+    created++;
   }
-  for (int i = 0; i < N_FAIL_STR_THREADS; i++) {
+  REQUIRE_EQ(created, (int)N_FAIL_STR_THREADS);
+  for (int i = 0; i < created; i++) {
     pthread_join(tids[i], NULL);
   }
   pthread_barrier_destroy(&barrier);
@@ -2400,14 +2438,20 @@ TEST(concurrency, multiple_setters_race_after_failed_new_key_set) {
 #define N_RACING_SETTERS 3
   simple_setter_arg_t sargs[N_RACING_SETTERS];
   pthread_t stids[N_RACING_SETTERS];
+  int created = 0;
   for (int i = 0; i < N_RACING_SETTERS; i++) {
     sargs[i].cache = cache;
     sargs[i].key = 55;
     sargs[i].val = i + 1;
-    pthread_create(&stids[i], NULL, simple_setter_thread, &sargs[i]);
+    /* A partial failure here must not leave the join loop below joining an
+     * uninitialized stids[i] slot. */
+    if (pthread_create(&stids[i], NULL, simple_setter_thread, &sargs[i]) != 0)
+      break;
+    created++;
     usleep(1000); /* stagger so thread 1 acquires the set slot first */
   }
-  for (int i = 0; i < N_RACING_SETTERS; i++) {
+  REQUIRE_EQ(created, (int)N_RACING_SETTERS);
+  for (int i = 0; i < created; i++) {
     pthread_join(stids[i], NULL);
   }
 
@@ -2527,8 +2571,7 @@ static bool str_val_remote_getter(const cmap_pair *key, cmap_pair *val) {
   return true;
 }
 
-/* --- non-char* get miss: output buffer must not be modified ----------------
- */
+/* non-char* get miss: output buffer must not be modified */
 
 /*
  * For non-char* value types clru_get routes through __clrucache_get_into,
@@ -2546,7 +2589,7 @@ TEST(get_val_types, non_char_ptr_get_miss_does_not_modify_buf) {
   clru_destroy(cache);
 }
 
-/* --- non-char* scalar: double --------------------------------------------- */
+/* non-char* scalar: double */
 
 TEST(get_val_types, double_value_via_macro) {
   clru_construct(cache, int, double, 8, NULL, NULL, NULL);
@@ -2560,7 +2603,7 @@ TEST(get_val_types, double_value_via_macro) {
   clru_destroy(cache);
 }
 
-/* --- non-char* struct value ----------------------------------------------- */
+/* non-char* struct value */
 
 TEST(get_val_types, struct_value_via_macro) {
   clru_construct(cache, int, point_t, 8, NULL, NULL, NULL);
@@ -2576,8 +2619,7 @@ TEST(get_val_types, struct_value_via_macro) {
   clru_destroy(cache);
 }
 
-/* --- clrucache_get_full: each call produces a fresh independent allocation -
- */
+/* clrucache_get_full: each call produces a fresh independent allocation */
 
 TEST(get_val_types, full_api_returns_independent_copies) {
   clru_construct(cache, int, int, 8, NULL, NULL, NULL);
@@ -2603,8 +2645,7 @@ TEST(get_val_types, full_api_returns_independent_copies) {
   clru_destroy(cache);
 }
 
-/* --- on a miss, val_out fields are not modified ----------------------------
- */
+/* on a miss, val_out fields are not modified */
 
 TEST(get_val_types, missing_key_val_out_untouched) {
   clru_construct(cache, int, int, 8, NULL, NULL, NULL);
@@ -2624,8 +2665,7 @@ TEST(get_val_types, missing_key_val_out_untouched) {
   clru_destroy(cache);
 }
 
-/* --- overwrite: subsequent get returns the new value -----------------------
- */
+/* overwrite: subsequent get returns the new value */
 
 TEST(get_val_types, overwrite_reflected_in_subsequent_get) {
   clru_construct(cache, int, double, 8, NULL, NULL, NULL);
@@ -2640,8 +2680,7 @@ TEST(get_val_types, overwrite_reflected_in_subsequent_get) {
   clru_destroy(cache);
 }
 
-/* --- char* value: macro transfers heap ownership to caller -----------------
- */
+/* char* value: macro transfers heap ownership to caller */
 
 TEST(get_val_types, char_ptr_value_macro_transfers_ownership) {
   clru_construct(cache, int, char *, 8, NULL, NULL, NULL);
@@ -2657,8 +2696,7 @@ TEST(get_val_types, char_ptr_value_macro_transfers_ownership) {
   clru_destroy(cache);
 }
 
-/* --- char* value: two consecutive gets return distinct heap pointers -------
- */
+/* char* value: two consecutive gets return distinct heap pointers */
 
 TEST(get_val_types, char_ptr_value_two_gets_are_independent_copies) {
   clru_construct(cache, int, char *, 8, NULL, NULL, NULL);
@@ -2680,8 +2718,7 @@ TEST(get_val_types, char_ptr_value_two_gets_are_independent_copies) {
   clru_destroy(cache);
 }
 
-/* --- char* value via clrucache_get_full: size == strlen + 1 ----------------
- */
+/* char* value via clrucache_get_full: size == strlen + 1 */
 
 TEST(get_val_types, char_ptr_value_full_api_size_includes_null_terminator) {
   clru_construct(cache, int, char *, 8, NULL, NULL, NULL);
@@ -2702,7 +2739,7 @@ TEST(get_val_types, char_ptr_value_full_api_size_includes_null_terminator) {
   clru_destroy(cache);
 }
 
-/* --- both key and value are char* ----------------------------------------- */
+/* both key and value are char* */
 
 TEST(get_val_types, char_ptr_key_and_char_ptr_value) {
   clru_construct(cache, char *, char *, 8, NULL, NULL, NULL);
@@ -2725,8 +2762,7 @@ TEST(get_val_types, char_ptr_key_and_char_ptr_value) {
   clru_destroy(cache);
 }
 
-/* --- char* value from remote getter: macro path delivers owned string ------
- */
+/* char* value from remote getter: macro path delivers owned string */
 
 TEST(get_val_types, char_ptr_value_from_remote_getter_macro) {
   clru_construct(cache, int, char *, 8, str_val_remote_getter, NULL, NULL);
@@ -2746,8 +2782,7 @@ TEST(get_val_types, char_ptr_value_from_remote_getter_macro) {
   clru_destroy(cache);
 }
 
-/* --- char* value from remote getter: clrucache_get_full direct path --------
- */
+/* char* value from remote getter: clrucache_get_full direct path */
 
 TEST(get_val_types, char_ptr_value_from_remote_getter_full_api) {
   clru_construct(cache, int, char *, 8, str_val_remote_getter, NULL, NULL);
@@ -2766,7 +2801,7 @@ TEST(get_val_types, char_ptr_value_from_remote_getter_full_api) {
   clru_destroy(cache);
 }
 
-/* --- __clrucache_get_into safety check: cached value size mismatching the
+/* __clrucache_get_into safety check: cached value size mismatching the
  *     caller's buffer, in either direction (LIVE entry path).
  *
  *     The size-mismatch-reject logic in __clrucache_get_into has two
@@ -2783,7 +2818,7 @@ TEST(get_val_types, char_ptr_value_from_remote_getter_full_api) {
  *     We reach the LIVE path by storing a value via clrucache_set_full
  *     directly (bypassing the type-safe macros, which always keep buf_size
  *     and the stored size in sync), then calling __clrucache_get_into with a
- *     differently-sized buffer. ------------------------------------------ */
+ *     differently-sized buffer. */
 
 TEST(get_val_types, get_into_rejects_live_value_too_large_for_buffer) {
   clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
@@ -3241,7 +3276,7 @@ TEST(clrucache_handle_lifecycle, sequential_double_destroy_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -3275,8 +3310,16 @@ TEST(clrucache_handle_lifecycle, concurrent_double_destroy_is_fatal) {
     clru_concurrent_destroy_arg_t a1 = {.h = cache};
     clru_concurrent_destroy_arg_t a2 = {.h = cache};
     pthread_t t1, t2;
-    pthread_create(&t1, NULL, clru_concurrent_destroy_thread, &a1);
-    pthread_create(&t2, NULL, clru_concurrent_destroy_thread, &a2);
+    /* Inside a forked child: REQUIRE_* would be unsafe here (its early
+     * return would skip this branch's own _exit() and fall back into the
+     * harness's test loop a second time), so a create failure instead
+     * falls through to a distinct, non-SIGABRT exit the parent's
+     * WIFSIGNALED/SIGABRT check below already turns into a clean test
+     * failure, rather than joining a garbage, never-created pthread_t. */
+    if (pthread_create(&t1, NULL, clru_concurrent_destroy_thread, &a1) != 0)
+      _exit(2);
+    if (pthread_create(&t2, NULL, clru_concurrent_destroy_thread, &a2) != 0)
+      _exit(2);
     pthread_join(t1, NULL);
     pthread_join(t2, NULL);
     _exit(0); /* unreachable: whichever of the two destroy calls loses the
@@ -3284,7 +3327,7 @@ TEST(clrucache_handle_lifecycle, concurrent_double_destroy_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }

@@ -547,7 +547,7 @@ static inline size_t hash_key_data(const void* key_ptr, size_t key_size,
                                    ccol_data_type key_type,
                                    ccol_hashing_proc_t custom_proc) {
   if (custom_proc) {
-    return custom_proc(key_ptr);
+    return custom_proc(key_ptr, key_size);
   }
 
   // Use fast Fibonacci hashing for all integral types. Every multi-byte

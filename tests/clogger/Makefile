@@ -1,15 +1,16 @@
 CC = gcc
 INCLUDES = -I.. -I../../include
-DEFINITIONS = -DRUNNING_UNIT_TESTS
+DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
 SRC_FILE_PREFIX = clogger
 # cvector.c is needed for clog's own generation-tagged handle slot table (a
 # cvec of slots plus a cvec free-index stack, plus the live-shareds and
-# atfork scratch cvectors -- see "Fork safety" in src/clogger.c). cthreadcomm.c
+# atfork scratch cvectors; see "Fork safety" in src/clogger.c). cthreadcomm.c
 # is needed for async logging's writer-thread queue (circular_queue /
 # dynamic_queue); cthreadpool.c is cthreadcomm.c's own transitive dependency.
-SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/chashmap.c \
-            ../../src/cvector.c ../../src/cthreadcomm.c \
-            ../../src/cthreadpool.c ../../src/common.c
+SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c \
+            ../../src/chashmap.c ../../src/cvector.c \
+            ../../src/cthreadcomm.c ../../src/cthreadpool.c \
+            ../../src/common.c
 ALL_SRC_FILES = tests.c $(SRC_FILES)
 EXTRA_CFLAGS ?=
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-strong -Wstrict-overflow \
@@ -44,7 +45,7 @@ test: build
 # comment on its own test_tsan target for the exact mechanism).
 # suppressions=tsan_rwlock_reinit.supp: a known, confirmed-non-bug
 # ThreadSanitizer limitation around this module's own fork()-safety rwlock
-# reinit -- see that file's own comment for the independent, clogger.c-free
+# reinit; see that file's own comment for the independent, clogger.c-free
 # reproduction proving it, mirroring tests/chttpclient/Makefile's identical
 # "known non-bug, suppress with a documented reason" precedent.
 test_tsan: build_tsan
@@ -53,11 +54,17 @@ test_tsan: build_tsan
 memtest: build
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --child-silent-after-fork=yes --error-exitcode=1 ./tests
 
+# --ignore-errors negative: gcov's own coverage counters are plain (non-atomic)
+# increments, which can race under concurrently-executed instrumented code and
+# has been observed producing a spurious negative hit count (reproduced on
+# more than one module, including a glibc header, not this library's own
+# logic); see tests/chttpclient/Makefile's identical flag for the full
+# rationale and reproduction notes.
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
 	gcov -d -w tests-$(SRC_FILE_PREFIX) && \
-	lcov --ignore-errors mismatch --ignore-errors inconsistent --capture --directory . \
+	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file $(SRC_FILE_PREFIX).c.info && \
 	genhtml --ignore-errors inconsistent -s $(SRC_FILE_PREFIX).c.info --output-directory coverage && \
 	rm -rf *.gcno *.gcda *.gcov *.c.info

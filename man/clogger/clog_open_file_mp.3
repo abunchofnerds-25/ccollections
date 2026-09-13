@@ -102,11 +102,16 @@ so no log lines are lost or interleaved across the rotation boundary.
 When compress_rotated is true, the gzip compression step runs after
 the new fd is already in use, outside the mutex, to avoid stalling
 concurrent log writers during the compression I/O.
-A handle open at the time of fork() remains fully usable in the
-child: logging, deriving, and closing it all continue to work
-correctly on both sides of the fork. A logger's async writer thread
-does not exist in a forked child; an async-enabled handle inherited
-into a child transparently falls back to synchronous logging there.
+The supported way to combine fork(2) with clogger is to fork(2)
+before opening a logger, or open one and fork(2) immediately followed
+by exec(3); continuing to run without an intervening exec(3) while a
+handle opened before the fork is still live is not a supported
+pattern. As a defense-in-depth measure on top of that, a handle open
+at the time of such a fork remains technically usable in the child:
+logging, deriving, and closing it all continue to work correctly on
+both sides. A logger's async writer thread does not exist in a forked
+child; an async-enabled handle inherited into a child transparently
+falls back to synchronous logging there.
 
 When async_cfg is non-NULL, a batch built by the writer thread can
 span several records logged moments apart; a batch that happens to

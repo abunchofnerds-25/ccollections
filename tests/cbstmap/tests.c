@@ -1,5 +1,6 @@
 #include <cbstmap.h>
 #include <common_invariants.h>
+#include <limits.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -716,7 +717,12 @@ TEST(cbst_maps, negative_keys) {
 TEST(cbst_maps, long_keys) {
   cbmap_construct(bm, long, long);
 
-  long keys[] = {1000000000L, 2000000000L, 3000000000L, 4000000000L};
+  // Derived from LONG_MAX rather than fixed 10-digit literals: `long` is
+  // only 4 bytes on an ILP32 target (i386, armhf), where a literal like
+  // 4000000000L overflows it. Capping the largest key at LONG_MAX / 2 also
+  // keeps this test's own `keys[i] * 2` below from overflowing, on any
+  // platform.
+  long keys[] = {LONG_MAX / 8, LONG_MAX / 6, LONG_MAX / 4, LONG_MAX / 2};
   int num_keys = sizeof(keys) / sizeof(keys[0]);
 
   for (int i = 0; i < num_keys; ++i) {

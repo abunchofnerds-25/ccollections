@@ -3265,7 +3265,7 @@ TEST(node_pool, fresh_thread_starts_with_an_empty_pool) {
    * memtest`: a broken drain would show up there as a 50-allocation leak. */
   pool_populate_result_t result = {(size_t)-1, (size_t)-1};
   pthread_t tid;
-  pthread_create(&tid, NULL, pool_populate_thread, &result);
+  REQUIRE_EQ(pthread_create(&tid, NULL, pool_populate_thread, &result), 0);
   pthread_join(tid, NULL);
 
   REQUIRE_EQ(result.start_pool_size, (size_t)0);
@@ -3309,7 +3309,7 @@ TEST(node_pool, node_freed_on_a_different_thread_joins_that_threads_own_pool) {
 
   cross_thread_free_arg_t arg = {nodes, count, (size_t)-1, (size_t)-1};
   pthread_t tid;
-  pthread_create(&tid, NULL, cross_thread_free_thread, &arg);
+  REQUIRE_EQ(pthread_create(&tid, NULL, cross_thread_free_thread, &arg), 0);
   pthread_join(tid, NULL);
   free(nodes);
 

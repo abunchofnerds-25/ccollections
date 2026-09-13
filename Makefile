@@ -27,8 +27,8 @@ EXTRA_CFLAGS ?=
 # at the actual link step that produces libccollections.so, not here in
 # COMMON_CFLAGS, which this Makefile only ever uses for the separate,
 # link-less `$(CC) -c ...` object-compile steps below. Putting it here meant
-# it was silently discarded before ever reaching a real link invocation --
-# providing no actual RELRO/BIND_NOW hardening at all -- and, under clang
+# it was silently discarded before ever reaching a real link invocation
+# (providing no actual RELRO/BIND_NOW hardening at all), and, under clang
 # specifically (whose driver treats an unused linker argument passed to a
 # compile-only invocation as an error under -Werror, unlike gcc's silent
 # tolerance of the same mistake), broke the build outright. See
@@ -37,10 +37,18 @@ EXTRA_CFLAGS ?=
 # all) has no equivalent: RELRO/BIND_NOW are properties of a real ELF
 # executable/shared object, and applying them is the responsibility of
 # whatever a caller of libccollections.a itself ultimately links into.
+# -D_FILE_OFFSET_BITS=64: on a 32-bit (ILP32) target, glibc's readdir() must
+# narrow the kernel's 64-bit d_ino into the caller's own ino_t; without this
+# flag that ino_t is only 32 bits wide, so readdir() fails with EOVERFLOW
+# the moment a directory contains an entry whose real inode number does not
+# fit (routine on a modern 64-bit-inode filesystem, not a corrupt or
+# adversarial input). This flag makes ino_t (and off_t, stat, etc.) 64 bits
+# wide on every target, a no-op on a 64-bit build where they already are.
 COMMON_CFLAGS = -I$(INCLUDE_DIR) \
 	-fstack-protector-strong \
 	-fstack-clash-protection \
 	-D_FORTIFY_SOURCE=3 \
+	-D_FILE_OFFSET_BITS=64 \
 	-Wstrict-overflow -Wformat=2 -Wformat-security -Wall -Wextra \
 	-g -O3 -Werror -fPIC $(EXTRA_CFLAGS)
 
@@ -52,7 +60,13 @@ STATIC_CFLAGS = $(COMMON_CFLAGS)
 SHARED_LDFLAGS = -Wl,-z,relro,-z,now -shared -lpthread -lz -lssl -lcrypto -lm
 STATIC_LDFLAGS =
 
-SOURCE_FILES = $(wildcard $(SOURCE_DIR)/*.c)
+# cdebuglog.c (an opt-in, RUNNING_UNIT_TESTS-only diagnostic log buffer for
+# chasing hard-to-reproduce CI timing/hang issues; see its own doc comment
+# in include/cdebuglog.h) is deliberately excluded here: it is not part of
+# the shipped library, even as the empty translation unit it would compile
+# to in a production (non-RUNNING_UNIT_TESTS) build. A test suite that wants
+# it adds src/cdebuglog.c to its own Makefile's SRC_FILES explicitly.
+SOURCE_FILES = $(filter-out $(SOURCE_DIR)/cdebuglog.c,$(wildcard $(SOURCE_DIR)/*.c))
 HEADER_FILES = $(wildcard $(INCLUDE_DIR)/*.h)
 OBJ_FILES_SHARED = $(SOURCE_FILES:$(SOURCE_DIR)/%.c=$(OBJECT_DIR)/%.o)
 OBJ_FILES_STATIC = $(SOURCE_FILES:$(SOURCE_DIR)/%.c=$(OBJECT_DIR)/%.static.o)
@@ -92,7 +106,10 @@ $(OBJECT_DIR)/%.static.o: $(SOURCE_DIR)/%.c $(HEADER_FILES)
 clean:
 	rm -rf $(SHARED_LIBRARY_NAME) $(STATIC_LIBRARY_NAME) $(OBJECT_DIR) \
 		tests/*/tests tests/*/tests_tls tests/*/tests_mem_mgmt \
-		tests/*/tests_parser tests/*/tests_starts_engine_first \
+		tests/*/tests_parser tests/*/tests_default_client \
+		tests/*/tests_engine_stop tests/*/tests_engine_stop_tsan \
+		tests/*/tests_spec_suite tests/*/tests_differential \
+		tests/*/tests_tsan tests/*/fuzz_* \
 		tests/*/coverage tests/*/third_party_obj \
 		tests/*/*.gcno tests/*/*.gcda tests/*/*.gcov tests/*/*.c.info
 

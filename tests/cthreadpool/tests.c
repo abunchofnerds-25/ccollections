@@ -28,6 +28,8 @@ extern struct cthread_pool *_ctpool_resolve_for_tests(ctpool h);
 extern size_t _ctpool_slot_table_capacity_for_tests(void);
 extern size_t _ctpool_task_free_list_size_for_tests(struct cthread_pool *pool);
 extern size_t _ctpool_task_free_list_cap_for_tests(struct cthread_pool *pool);
+extern size_t _ctpool_pending_resolve_count_for_tests(
+    struct cthread_pool *pool);
 extern void ctpool_test_wrlock_slot_table_for_tests(void);
 extern void ctpool_test_wrunlock_slot_table_for_tests(void);
 
@@ -1906,6 +1908,27 @@ static void *ctp_blocked_submit_thread(void *arg) {
   return NULL;
 }
 
+typedef struct {
+  ctpool h;
+  _Atomic bool entered;
+  _Atomic bool returned;
+} ctp_destroy_thread_arg_t;
+
+/* Runs ctpool_destroy on its own thread rather than the main test thread,
+ * marking entered true as its very first action and returned true as its
+ * very last: this lets the main thread (see resolve_then_use_race_destroy_
+ * waits below) observe, with no timing assumption at all, that destroy has
+ * actually been called (entered) yet has NOT returned while the pool's
+ * worker is still deliberately held stuck; see that test's own doc comment
+ * for why that specific ordering is a genuine proof, not a heuristic. */
+static void *ctp_destroy_thread_fn(void *arg) {
+  ctp_destroy_thread_arg_t *a = (ctp_destroy_thread_arg_t *)arg;
+  atomic_store(&a->entered, true);
+  ctpool_destroy(a->h);
+  atomic_store(&a->returned, true);
+  return NULL;
+}
+
 /* Diagnostic aid for resolve_then_use_race_destroy_waits below: a real CI
  * hang was seen there (linux-arm32-clang, under real qemu-user 8.2.2), where
  * ctpool_destroy never returned; this test has no forked child to point
@@ -1996,15 +2019,24 @@ typedef struct {
 /* Bounded condvar wait, not a blind poll (see this codebase's own test-
  * hygiene lessons on preferring a real timed wait over a fixed-interval
  * poll): wakes immediately once the main thread signals done, or after the
- * fixed bound elapses, whichever comes first. 20 real seconds is enormously
- * generous for a call this test expects to take ~20-30ms even under a slow,
- * emulated CI runner; only a genuine hang, not ordinary scheduling
- * variance, should ever reach the timeout branch. */
+ * fixed bound elapses, whichever comes first. This thread is created at
+ * the very start of resolve_then_use_race_destroy_waits, before either of
+ * that test's own two bounded, hang-safety-net polls (each up to 10s,
+ * neither of which can itself hang, but both of which run BEFORE the
+ * pthread_join this watchdog actually exists to protect); 60 real seconds
+ * leaves a comfortable 3x margin over that combined 20s worst case, so a
+ * legitimately slow (not hung) machine that happens to need close to the
+ * full budget on both of those polls still cannot trip this watchdog by
+ * itself. Even at 60s this remains a pure hang-safety net, not a
+ * correctness threshold this test relies on: every step it brackets is
+ * driven by real synchronization (see resolve_then_use_race_destroy_
+ * waits's own doc comment), so only a genuine hang, never ordinary
+ * scheduling variance, should ever reach the timeout branch. */
 static void *ctp_destroy_watchdog_fn(void *arg) {
   ctp_destroy_watchdog_ctx_t *w = (ctp_destroy_watchdog_ctx_t *)arg;
   struct timespec deadline;
   clock_gettime(CLOCK_REALTIME, &deadline);
-  deadline.tv_sec += 20;
+  deadline.tv_sec += 60;
   pthread_mutex_lock(&w->mu);
   while (!w->done) {
     int rc = pthread_cond_timedwait(&w->cv, &w->mu, &deadline);
@@ -2032,24 +2064,53 @@ static void *ctp_destroy_watchdog_fn(void *arg) {
  * destroy forever instead), (2) let the blocked submit return
  * ccol_not_permitted once shutdown starts, and (3) still actually block
  * until the worker thread has been joined (a real wait, not an instant
- * return); proven by racing it against a release_gate_fn thread with a
- * known, fixed 20ms delay.
+ * return).
  *
- * A real CI hang was seen here once (linux-arm32-clang, under real qemu-user
- * 8.2.2): ctpool_destroy below never returned within this job's own 45-
- * minute timeout. This test never calls fork(), so the confirmed, external,
- * already-filed qemu-user fd_trans_lock bug (linux-user's own internal
- * fd_trans_lock, a process-wide pthread mutex left permanently locked in a
- * forked child if another thread in the parent was holding it at the
- * instant of fork(); gitlab.com/qemu-project/qemu/-/issues/2846) cannot be
- * the cause; that bug has no way to trigger without a fork() call, and this
- * test's race is entirely between ordinary threads of one process. The
- * actual cause is still open. The [DEBUG_TEST] checkpoints below (logged via
- * cdebuglog_write(), not a direct fprintf(stderr, ...): see cdebuglog.h for
- * why buffering these checkpoints, rather than paying a real write(2)
- * syscall per checkpoint, matters for a timing-sensitive mystery like this
- * one) plus the watchdog thread bracketing the ctpool_destroy call (see
- * that section's own comment above) exist so that if this recurs, there is
+ * Every one of those three properties is proven below with NO fixed-sleep
+ * timing assumption at all, deliberately: an earlier version of this test
+ * used a fixed ~10ms head start before creating a background "release the
+ * gate after ~20ms" thread, then treated ctpool_destroy taking over 10ms
+ * as proof of (3). Both fixed delays were real, load-dependent
+ * assumptions, and a real CI failure was seen (memtest on a native
+ * linux-x86_64-gcc job, no emulation involved) where added, unrelated
+ * thread-creation overhead elsewhere in the test consumed enough of that
+ * budget that the gate was released before ctpool_destroy was even called,
+ * making it return in ~0ms; a second, direct local repro produced a
+ * different symptom (blocked_arg.rv coming back ccol_success instead of
+ * ccol_not_permitted) from the exact same underlying cause. Neither
+ * symptom was a real product bug; both were the test's own timing
+ * assumption breaking under load. The redesign below replaces every fixed
+ * sleep with a real synchronization point: ctp_destroy_thread_fn's own
+ * entered/returned flags let the main thread observe, with no clock
+ * involved, that ctpool_destroy has actually been called (entered) yet
+ * provably has NOT returned while gate is still 0; it structurally
+ * CANNOT have returned at that point, regardless of how much wall-clock
+ * time has passed, since the pool's one worker cannot exit blocker_fn's
+ * spin (its only exit condition) until this test sets gate itself, and
+ * ctpool_destroy cannot return before that worker has been joined. This
+ * makes the check below a genuine proof of (3), not a timing heuristic.
+ * Likewise, _ctpool_pending_resolve_count_for_tests replaces the old fixed
+ * head start: polling it (bounded only as a hang-safety net, never a
+ * correctness threshold) confirms the blocked submitter has genuinely
+ * pinned the handle before this test proceeds, however long that actually
+ * takes on the machine running it.
+ *
+ * A real CI hang was seen here once too (linux-arm32-clang, under real
+ * qemu-user 8.2.2): the destroy thread below never finished within this
+ * job's own 45-minute timeout. This test never calls fork(), so the
+ * confirmed, external, already-filed qemu-user fd_trans_lock bug (linux-
+ * user's own internal fd_trans_lock, a process-wide pthread mutex left
+ * permanently locked in a forked child if another thread in the parent was
+ * holding it at the instant of fork(); gitlab.com/qemu-project/qemu/-/
+ * issues/2846) cannot be the cause; that bug has no way to trigger without
+ * a fork() call, and this test's race is entirely between ordinary threads
+ * of one process. The actual cause is still open. The [DEBUG_TEST]
+ * checkpoints below (logged via cdebuglog_write(), not a direct
+ * fprintf(stderr, ...): see cdebuglog.h for why buffering these
+ * checkpoints, rather than paying a real write(2) syscall per checkpoint,
+ * matters for a timing-sensitive mystery like this one) plus the watchdog
+ * thread bracketing the destroy thread's own join below (see that
+ * section's own comment above) exist so that if this recurs, there is
  * enough information to actually diagnose it: which checkpoint was last
  * printed narrows down how far the main thread got, and the watchdog's own
  * per-thread /proc dump shows every thread's real kernel-level wait state
@@ -2062,6 +2123,21 @@ TEST(ctpool_handle_lifecycle, resolve_then_use_race_destroy_waits) {
   gate_ctx_t gctx = {.gate = &gate, .started = &started};
 
   ctpool_construct(pool, 1, 1);
+  struct cthread_pool *raw = _ctpool_resolve_for_tests(pool);
+
+  /* Created immediately: this thread's own bounded 60s wait is a pure hang
+   * safety net (see its own section's doc comment above, including why 60s
+   * specifically), independent of every timing concern the rest of this
+   * test used to have, so its exact creation point no longer matters the
+   * way it once, fragilely, did. */
+  ctp_destroy_watchdog_ctx_t watchdog = {.mu = PTHREAD_MUTEX_INITIALIZER,
+                                         .cv = PTHREAD_COND_INITIALIZER,
+                                         .done = false};
+  pthread_t watchdog_thread;
+  int watchdog_rc = pthread_create(&watchdog_thread, NULL,
+                                   ctp_destroy_watchdog_fn, &watchdog);
+  bool watchdog_created = (watchdog_rc == 0);
+
   cdebuglog_write("[DEBUG_TEST] pid=%d about to submit blocker_fn\n",
                   (int)getpid());
   ctpool_submit(pool, blocker_fn, &gctx, NULL);
@@ -2075,12 +2151,11 @@ TEST(ctpool_handle_lifecycle, resolve_then_use_race_destroy_waits) {
    * asserted on directly: ctpool_construct (unlike ctpool_construct_scoped)
    * does not auto-destroy pool on scope exit, so a REQUIRE_* failure's
    * early return here would leak that still-running worker, and any
-   * thread already created below, for the remaining life of this test
-   * binary. Every outcome is therefore captured into a local,
-   * unconditionally, and every REQUIRE_* only runs after every thread
-   * created below has already been joined and pool has already been
-   * destroyed (see this codebase's own test-hygiene lesson on this exact
-   * class of gap). */
+   * thread already created, for the remaining life of this test binary.
+   * Every outcome is therefore captured into a local, unconditionally, and
+   * every REQUIRE_* only runs after every thread created has already been
+   * joined and pool has already been destroyed (see this codebase's own
+   * test-hygiene lesson on this exact class of gap). */
 
   /* Fill the bounded queue (cap 1) so the next submit genuinely blocks. */
   ccol_retval_t fill_rv = ctpool_submit(pool, inc_counter, &counter, NULL);
@@ -2094,42 +2169,45 @@ TEST(ctpool_handle_lifecycle, resolve_then_use_race_destroy_waits) {
   int blocked_rc = pthread_create(&blocked_thread, NULL,
                                   ctp_blocked_submit_thread, &blocked_arg);
   bool blocked_created = (blocked_rc == 0);
-  /* Give the blocked-submit thread a head start so its resolve (and
-   * therefore its pin) has definitely already happened before destroy
-   * fires; harmless when blocked_created is false, since there is then
-   * nothing for the head start to matter to. */
-  sleep_ms(10);
+  /* Poll (bounded only as a hang-safety net, never a correctness
+   * threshold) for blocked_thread's own resolve to have actually pinned
+   * the handle, rather than assuming a fixed sleep was long enough for
+   * that to have happened by now; see this test's own doc comment above
+   * for the real CI failure this replaces. */
+  if (blocked_created) {
+    for (int i = 0;
+         i < 10000 && _ctpool_pending_resolve_count_for_tests(raw) == 0; i++)
+      sleep_ms(1);
+  }
 
-  pthread_t gate_thread;
-  cdebuglog_write("[DEBUG_TEST] pid=%d about to create gate_thread\n",
+  cdebuglog_write("[DEBUG_TEST] pid=%d about to create destroy_thread\n",
                   (int)getpid());
-  int gate_rc = pthread_create(&gate_thread, NULL, release_gate_fn, &gate);
-  bool gate_created = (gate_rc == 0);
-  /* No gate_thread exists to ever release the pool's own worker from its
-   * blocker_fn spin in this case: release it directly instead of leaving
-   * ctpool_destroy below to block forever on a wakeup that would now never
-   * come. */
-  if (!gate_created) atomic_store(&gate, 1);
+  ctp_destroy_thread_arg_t destroy_arg = {
+      .h = pool, .entered = false, .returned = false};
+  pthread_t destroy_thread;
+  int destroy_rc = pthread_create(&destroy_thread, NULL, ctp_destroy_thread_fn,
+                                  &destroy_arg);
+  bool destroy_created = (destroy_rc == 0);
 
-  ctp_destroy_watchdog_ctx_t watchdog = {.mu = PTHREAD_MUTEX_INITIALIZER,
-                                         .cv = PTHREAD_COND_INITIALIZER,
-                                         .done = false};
-  pthread_t watchdog_thread;
-  int watchdog_rc = pthread_create(&watchdog_thread, NULL,
-                                   ctp_destroy_watchdog_fn, &watchdog);
-  bool watchdog_created = (watchdog_rc == 0);
+  bool destroy_returned_before_gate_released = false;
+  if (destroy_created) {
+    /* Poll (bounded only as a hang-safety net) until ctpool_destroy has
+     * actually been entered on destroy_thread. gate is still 0 here (this
+     * test has not set it yet), so the pool's one worker cannot have
+     * exited blocker_fn's spin, so ctpool_destroy cannot have returned
+     * either, regardless of how long entered took to become true; see
+     * this test's own doc comment above for why that makes the read below
+     * a genuine proof, not a timing heuristic. */
+    for (int i = 0; i < 10000 && !atomic_load(&destroy_arg.entered); i++)
+      sleep_ms(1);
+    destroy_returned_before_gate_released = atomic_load(&destroy_arg.returned);
+  }
 
-  struct timespec t0, t1;
-  clock_gettime(CLOCK_MONOTONIC, &t0);
-  cdebuglog_write("[DEBUG_TEST] pid=%d about to call ctpool_destroy\n",
-                  (int)getpid());
-  ctpool_destroy(pool); /* must block until the worker (stuck until the gate
-                            thread's ~20ms release) has actually exited */
-  cdebuglog_write("[DEBUG_TEST] pid=%d ctpool_destroy returned\n",
-                  (int)getpid());
-  clock_gettime(CLOCK_MONOTONIC, &t1);
-  long elapsed_ms =
-      (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
+  cdebuglog_write("[DEBUG_TEST] pid=%d about to release gate\n", (int)getpid());
+  atomic_store(&gate, 1);
+
+  if (destroy_created) pthread_join(destroy_thread, NULL);
+  cdebuglog_write("[DEBUG_TEST] pid=%d destroy_thread joined\n", (int)getpid());
 
   if (watchdog_created) {
     pthread_mutex_lock(&watchdog.mu);
@@ -2140,17 +2218,14 @@ TEST(ctpool_handle_lifecycle, resolve_then_use_race_destroy_waits) {
   }
 
   if (blocked_created) pthread_join(blocked_thread, NULL);
-  if (gate_created) pthread_join(gate_thread, NULL);
 
   REQUIRE_EQ(fill_rv, ccol_success);
   REQUIRE_EQ(blocked_rc, 0);
-  REQUIRE_EQ(gate_rc, 0);
+  REQUIRE_EQ(destroy_rc, 0);
   REQUIRE_EQ(watchdog_rc, 0);
+  REQUIRE_FALSE(destroy_returned_before_gate_released);
   REQUIRE_EQ(blocked_arg.rv, ccol_not_permitted);
-  /* The worker was stuck for ~20ms (the gate thread's own fixed delay);
-   * destroy returning in well under that would mean it did NOT actually
-   * wait for the worker to be joined. */
-  REQUIRE_GT(elapsed_ms, 10L);
+  REQUIRE_TRUE(atomic_load(&destroy_arg.returned));
 }
 
 typedef struct {

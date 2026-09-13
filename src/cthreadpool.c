@@ -2051,6 +2051,18 @@ size_t _ctpool_task_free_list_cap_for_tests(cthread_pool *pool) {
   return n;
 }
 
+/* Reads pool's own current pending_resolve_count (already an _Atomic
+ * field; see _ctpool_resolve's own comment for why it needs no additional
+ * lock to read safely). Lets a test observe, with no timing assumption at
+ * all, that a concurrent resolve/pin has genuinely already happened,
+ * rather than assuming a fixed sleep was long enough for it to have
+ * happened by now: a genuinely slow/loaded machine could starve that
+ * thread past any fixed bound, silently reopening the exact resolve-then-
+ * use race a test like this exists to close. */
+size_t _ctpool_pending_resolve_count_for_tests(cthread_pool *pool) {
+  return atomic_load(&pool->pending_resolve_count);
+}
+
 /* Test-only: locks/unlocks ctpool_slot_table's own rwlock write side
  * directly, bypassing every public API function, mirroring event_loop's
  * identical event_loop_test_wrlock_reg_slot_for_tests/_wrunlock pair in

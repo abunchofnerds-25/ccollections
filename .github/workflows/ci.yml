@@ -103,9 +103,17 @@ jobs:
     name: Linux aarch64 (cross-compile + QEMU)
     runs-on: ubuntu-latest
     # qemu-user's own fork()-plus-multithreaded-guest handling has a known,
-    # timing-dependent deadlock class (its binary-translation lock can be
-    # held across a guest fork(), wedging the child's own itimer/signal
-    # delivery along with it); when it triggers, no in-process timeout
+    # timing-dependent deadlock class: at least one confirmed, external,
+    # already-filed cause is linux-user's own internal fd_trans_lock, a
+    # process-wide pthread mutex left permanently locked in a forked child
+    # if another thread in the parent was holding it at the instant of
+    # fork() (gitlab.com/qemu-project/qemu/-/issues/2846, confirmed there on
+    # exactly the qemu-user 8.2.2 this distribution installs; see
+    # tests/cthreadcomm/tests.c's own CCOL_QEMU_FD_TRANS_LOCK_BUG comment,
+    # which this job's own "Detect a known-affected qemu-user version" step
+    # feeds, for the one test suite known to hit it reliably enough to skip
+    # outright). When this class triggers on some OTHER test this project has
+    # not identified and skipped this same way, no in-process timeout
     # (including this suite's own `alarm(10)` safety nets around fork()-based
     # tests) can save the job, since the itimer that alarm() relies on is
     # itself stuck inside the same deadlock. A one-time occurrence ran for
@@ -134,6 +142,21 @@ jobs:
           EOF
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user libssl-dev:arm64 zlib1g-dev:arm64
+      - name: Detect a known-affected qemu-user version
+        # See tests/cthreadcomm/tests.c's own comment on
+        # CCOL_QEMU_FD_TRANS_LOCK_BUG for the full rationale: qemu-user's
+        # linux-user fd_trans_lock can be left permanently locked in a
+        # forked child (gitlab.com/qemu-project/qemu/-/issues/2846),
+        # confirmed there on exactly the qemu-user 8.2.2 this distribution
+        # installs. Detected here, not inside the test binary itself: a
+        # guest program running under qemu-user has no way to query the
+        # host's own qemu-user version from inside the emulated process.
+        run: |
+          QEMU_VER=$(qemu-aarch64 --version | head -1)
+          echo "Installed: $QEMU_VER"
+          if echo "$QEMU_VER" | grep -qE 'version 8\.2\.2([^0-9]|$)'; then
+            echo "CCOL_QEMU_FD_TRANS_LOCK_BUG=1" >> "$GITHUB_ENV"
+          fi
       - name: Cross-build and run each module's test suite under qemu-aarch64
         # The per-module test/memtest targets hardcode a bare `./tests`
         # invocation with no prefix-injection point, so an aarch64 binary
@@ -186,6 +209,15 @@ jobs:
           EOF
           sudo apt-get update
           sudo apt-get install -y clang gcc-aarch64-linux-gnu qemu-user libssl-dev:arm64 zlib1g-dev:arm64
+      - name: Detect a known-affected qemu-user version
+        # See linux-aarch64-gcc's own identical step above for the full
+        # rationale.
+        run: |
+          QEMU_VER=$(qemu-aarch64 --version | head -1)
+          echo "Installed: $QEMU_VER"
+          if echo "$QEMU_VER" | grep -qE 'version 8\.2\.2([^0-9]|$)'; then
+            echo "CCOL_QEMU_FD_TRANS_LOCK_BUG=1" >> "$GITHUB_ENV"
+          fi
       - name: Cross-build and run each module's test suite under qemu-aarch64
         # Same shape as the aarch64 GCC job above (bare ./tests invocation,
         # no memtest leg; see its own comment for the full rationale on
@@ -243,6 +275,21 @@ jobs:
           EOF
           sudo apt-get update
           sudo apt-get install -y gcc-arm-linux-gnueabihf qemu-user libssl-dev:armhf zlib1g-dev:armhf
+      - name: Detect a known-affected qemu-user version
+        # See tests/cthreadcomm/tests.c's own comment on
+        # CCOL_QEMU_FD_TRANS_LOCK_BUG for the full rationale: qemu-user's
+        # linux-user fd_trans_lock can be left permanently locked in a
+        # forked child (gitlab.com/qemu-project/qemu/-/issues/2846),
+        # confirmed there on exactly the qemu-user 8.2.2 this distribution
+        # installs. Detected here, not inside the test binary itself: a
+        # guest program running under qemu-user has no way to query the
+        # host's own qemu-user version from inside the emulated process.
+        run: |
+          QEMU_VER=$(qemu-arm --version | head -1)
+          echo "Installed: $QEMU_VER"
+          if echo "$QEMU_VER" | grep -qE 'version 8\.2\.2([^0-9]|$)'; then
+            echo "CCOL_QEMU_FD_TRANS_LOCK_BUG=1" >> "$GITHUB_ENV"
+          fi
       - name: Cross-build and run each module's test suite under qemu-arm
         # Same shape as the aarch64 job above: build each module via the
         # existing `build` target with CC=arm-linux-gnueabihf-gcc and run the
@@ -289,6 +336,15 @@ jobs:
           EOF
           sudo apt-get update
           sudo apt-get install -y clang gcc-arm-linux-gnueabihf qemu-user libssl-dev:armhf zlib1g-dev:armhf
+      - name: Detect a known-affected qemu-user version
+        # See linux-arm32-gcc's own identical step above for the full
+        # rationale.
+        run: |
+          QEMU_VER=$(qemu-arm --version | head -1)
+          echo "Installed: $QEMU_VER"
+          if echo "$QEMU_VER" | grep -qE 'version 8\.2\.2([^0-9]|$)'; then
+            echo "CCOL_QEMU_FD_TRANS_LOCK_BUG=1" >> "$GITHUB_ENV"
+          fi
       - name: Cross-build and run each module's test suite under qemu-arm
         # Same shape as the arm32 GCC job above (bare ./tests invocation, no
         # memtest leg; see its own comment for the full rationale on both),

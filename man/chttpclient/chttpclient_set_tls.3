@@ -22,9 +22,24 @@ be freed or reused immediately after this call returns.
 
 cert_path/key_path/ca_bundle_path are validated for readability
 lazily, at the time an HTTPS request actually needs them, rather than
-here; a path that does not currently exist is accepted here without
-error and only surfaces as ccol_http_tls_cert_load_failed from
+here; a path that is not a readable regular file, whether because it
+does not exist or because it names a directory or another non-file
+object, is accepted here without error and only surfaces as
+ccol_http_tls_cert_load_failed from
 chttpclient_do/chttpclient_do_streaming once a request needs it.
+
+Each of the three files is read whole, and any one of them larger than
+16 MB is rejected with ccol_http_tls_cert_load_failed rather than read
+into memory. A PEM artefact is far smaller than that (a certificate or
+key is a few kilobytes, a full system CA bundle a few hundred), so the
+limit is only reached by a path that points at something which is not
+a PEM file at all.
+
+ca_bundle_path must additionally contribute at least one certificate.
+A readable file that parses to none (an empty file, a key on its own,
+a file that is not PEM at all) is reported as
+ccol_http_tls_cert_load_failed rather than accepted as a trust store
+that trusts no issuer.
 
 cert_path and key_path are a pair: providing exactly one of the two
 (the other NULL) is rejected outright as ccol_invalid_args, rather

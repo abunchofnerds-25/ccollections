@@ -341,7 +341,7 @@ TEST(oom, basic_auth_fails_at_every_allocation_site) {
 }
 
 /* ========================================================================== */
-/*                         chttp_method_str                                    */
+/*                         chttp_method_str */
 /* ========================================================================== */
 
 /* Every method name the library puts on the wire or into a log line comes from
@@ -351,9 +351,8 @@ TEST(chttp_method_str, every_method_maps_to_its_own_spelling) {
     chttp_method_t m;
     const char *name;
   } cases[] = {
-      {CHTTP_GET, "GET"},         {CHTTP_POST, "POST"},
-      {CHTTP_PUT, "PUT"},         {CHTTP_DELETE, "DELETE"},
-      {CHTTP_PATCH, "PATCH"},     {CHTTP_HEAD, "HEAD"},
+      {CHTTP_GET, "GET"},         {CHTTP_POST, "POST"},   {CHTTP_PUT, "PUT"},
+      {CHTTP_DELETE, "DELETE"},   {CHTTP_PATCH, "PATCH"}, {CHTTP_HEAD, "HEAD"},
       {CHTTP_OPTIONS, "OPTIONS"}, {CHTTP_ANY, "ANY"},
   };
 

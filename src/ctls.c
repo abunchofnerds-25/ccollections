@@ -35,6 +35,7 @@ SOFTWARE.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 /* ========================================================================== */
 /*                       PROCESS-WIDE SELF-SIGNED ROOT KEY                    */
@@ -245,22 +246,53 @@ static char *_ctls_strdup_lower(ccol_memmgmt_procs_t *mp, const char *s) {
   return d;
 }
 
+/* Bounds what a caller-supplied path can make this function allocate. A PEM
+ * artefact is small: a certificate or a private key runs to a couple of
+ * kilobytes, and a full system CA bundle (the Mozilla set) is a few hundred
+ * kilobytes. 16 MB is far above any legitimate input while keeping a path that
+ * points at something else entirely (a log, a disk image, a core dump) a fast,
+ * clean error instead of a multi-gigabyte allocation. Typed long to match the
+ * reported size it is compared against, so the comparison carries no
+ * signedness conversion. */
+#define CTLS_MAX_PEM_FILE_SIZE ((long)16 * 1024 * 1024)
+
 /* Reads an entire file into a freshly allocated buffer. Returns false (no
  * partial allocation left behind) on any failure: missing file, read error,
  * or a zero-length file (never a meaningful cert/key/CA bundle). */
 static bool _ctls_read_file(ccol_memmgmt_procs_t *mp, const char *path,
-                            char **out_data, size_t *out_len) {
+                            char **out_data, size_t *out_len, char **why) {
   *out_data = NULL;
   *out_len = 0;
+  /* Every failure below leaves this in place unless it has something more
+   * specific to say, so a caller never reports a bare "unreadable" for a file
+   * it could read perfectly well. */
+  if (why) *why = "file is missing or unreadable";
   if (!path) return false;
   FILE *f = fopen(path, "rb");
   if (!f) return false;
+  /* Only a regular file has a meaningful size to read. Opening a directory
+   * succeeds on Linux, and seeking to its end can then report a length of
+   * LONG_MAX, which the allocation below would take at face value; pointing a
+   * certificate or CA-bundle option at a directory is an ordinary
+   * configuration slip (OpenSSL itself separates CAfile from CApath for this
+   * reason), so it is rejected here rather than turned into an absurd
+   * allocation request. */
+  struct stat st;
+  if (fstat(fileno(f), &st) != 0 || !S_ISREG(st.st_mode)) {
+    fclose(f);
+    return false;
+  }
   if (fseek(f, 0, SEEK_END) != 0) {
     fclose(f);
     return false;
   }
   long sz = ftell(f);
   if (sz <= 0) {
+    fclose(f);
+    return false;
+  }
+  if (sz > CTLS_MAX_PEM_FILE_SIZE) {
+    if (why) *why = "file is larger than the 16 MB limit for a PEM artefact";
     fclose(f);
     return false;
   }
@@ -809,11 +841,14 @@ ccol_retval_t ctls_ctx_cert_add(ctls_ctx_t *ctx, const char *server_name,
   char *cert_pem = NULL, *key_pem = NULL, *pw_copy = NULL;
   size_t cert_len = 0, key_len = 0;
   if (have_pair) {
-    if (!_ctls_read_file(ctx->m_procs, cert_path, &cert_pem, &cert_len) ||
-        !_ctls_read_file(ctx->m_procs, key_path, &key_pem, &key_len)) {
+    char *why = NULL;
+    if (!_ctls_read_file(ctx->m_procs, cert_path, &cert_pem, &cert_len, &why) ||
+        !_ctls_read_file(ctx->m_procs, key_path, &key_pem, &key_len, &why)) {
       _ccol_mem_free(ctx->m_procs, cert_pem);
       _ccol_mem_free(ctx->m_procs, key_pem);
-      if (err_str) *err_str = "ctls_ctx_cert_add: cert/key file unreadable";
+      if (err_str) {
+        *err_str = why ? why : "ctls_ctx_cert_add: cert/key file unreadable";
+      }
       return ccol_http_tls_cert_load_failed;
     }
     if (pk_password) {
@@ -939,13 +974,56 @@ ccol_retval_t ctls_ctx_cert_add(ctls_ctx_t *ctx, const char *server_name,
   return ccol_success;
 }
 
+/* Reports whether a PEM stream holds at least one certificate. OpenSSL parses
+ * a stream carrying none (an empty file, a private key on its own, a text file
+ * that is not PEM at all) into an empty set rather than an error, so a bundle
+ * an operator explicitly supplied has to be checked for content, not merely
+ * for parseability. A bundle contributing nothing still switches peer
+ * verification on and leaves a store that trusts no issuer: a client then
+ * rejects every peer it talks to, and a server, whose peer verification is
+ * request-but-don't-require, keeps accepting every client that presents no
+ * certificate at all, so the mutual-TLS enforcement the bundle was configured
+ * to provide is silently absent. Certificates alone count: a CRL carries no
+ * trust anchor, and this module never sets X509_V_FLAG_CRL_CHECK, so a stream
+ * of nothing but CRLs configures nothing at all. */
+static bool _ctls_pem_has_certificate(const char *pem, size_t len) {
+  BIO *bio = BIO_new_mem_buf(pem, (int)len);
+  if (!bio) return false;
+  STACK_OF(X509_INFO) *inf = PEM_X509_INFO_read_bio(bio, NULL, NULL, NULL);
+  bool found = false;
+  if (inf) {
+    for (int i = 0; i < sk_X509_INFO_num(inf) && !found; ++i) {
+      X509_INFO *entry = sk_X509_INFO_value(inf, i);
+      if (entry && entry->x509) found = true;
+    }
+    sk_X509_INFO_pop_free(inf, X509_INFO_free);
+  }
+  BIO_free(bio);
+  return found;
+}
+
 ccol_retval_t ctls_ctx_trust(ctls_ctx_t *ctx, const char *ca_bundle_path,
                              char **err_str) {
   if (!ctx || !ca_bundle_path) return ccol_invalid_args;
   char *pem = NULL;
   size_t len = 0;
-  if (!_ctls_read_file(ctx->m_procs, ca_bundle_path, &pem, &len)) {
-    if (err_str) *err_str = "ctls_ctx_trust: CA bundle file unreadable";
+  char *why = NULL;
+  if (!_ctls_read_file(ctx->m_procs, ca_bundle_path, &pem, &len, &why)) {
+    if (err_str) {
+      *err_str = why ? why : "ctls_ctx_trust: CA bundle file unreadable";
+    }
+    return ccol_http_tls_cert_load_failed;
+  }
+  /* Checked here, before the entry is committed below, rather than from the
+   * rebuild step: a bundle that reaches ctx->trust_pems and only then fails
+   * stays registered, and every later rebuild this context runs for an
+   * unrelated reason (another certificate, another ALPN protocol) fails on it
+   * again. */
+  if (!_ctls_pem_has_certificate(pem, len)) {
+    _ccol_mem_free(ctx->m_procs, pem);
+    if (err_str) {
+      *err_str = "ctls_ctx_trust: CA bundle contains no certificates";
+    }
     return ccol_http_tls_cert_load_failed;
   }
 

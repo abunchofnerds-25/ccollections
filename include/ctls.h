@@ -235,6 +235,12 @@ ccol_retval_t ctls_ctx_cert_add(ctls_ctx_t *ctx, const char *server_name,
  * May be called more than once; each call adds to the trust store rather
  * than replacing it.
  *
+ * The bundle must contribute at least one certificate. A readable file that
+ * parses to none (an empty file, a private key on its own, a file that is not
+ * PEM at all) is rejected with ccol_http_tls_cert_load_failed and leaves ctx
+ * exactly as it was, rather than registering a trust store that trusts no
+ * issuer while peer verification is switched on.
+ *
  * @param ctx            Context to modify.
  * @param ca_bundle_path PEM file containing one or more trusted certificates.
  * @param err_str        Optional: receives a static diagnostic string on

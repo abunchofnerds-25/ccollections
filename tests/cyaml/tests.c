@@ -11076,7 +11076,7 @@ TEST(node_pool, node_freed_on_a_different_thread_joins_that_threads_own_pool) {
 }
 
 /* ========================================================================== */
-/*                         cyaml_type_str                                      */
+/*                         cyaml_type_str */
 /* ========================================================================== */
 
 /* Same contract as cjson_type_str: the spelling reaches users through
@@ -11091,10 +11091,9 @@ TEST(cyaml_type_str, every_node_type_maps_to_its_own_spelling) {
   nodes[5] = cyaml_create_list();
   nodes[6] = cyaml_create_dictionary();
 
-  static const char *expected[7] = {"CYAML_NULL",   "CYAML_BOOL",
-                                    "CYAML_INTEGER", "CYAML_FLOAT",
-                                    "CYAML_STRING",  "CYAML_LIST",
-                                    "CYAML_DICTIONARY"};
+  static const char *expected[7] = {
+      "CYAML_NULL",   "CYAML_BOOL", "CYAML_INTEGER",   "CYAML_FLOAT",
+      "CYAML_STRING", "CYAML_LIST", "CYAML_DICTIONARY"};
 
   bool all_created = true, all_named = true;
   for (volatile size_t i = 0; i < 7; i++) {

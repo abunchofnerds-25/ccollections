@@ -4144,16 +4144,17 @@ TEST(r_mempools, concurrent_realloc_stress) {
 /* ========================================================================== */
 /* Allocation-failure sweep over pool construction                            */
 /*                                                                            */
-/* Both pool flavours build several objects before returning (the pool struct, */
-/* its backing buffer, the per-entry bookkeeping, and for a ranged pool one    */
-/* inner pool per size class), and each failure point has to unwind exactly    */
-/* what was built so far. Nothing else here executes those branches, so the    */
-/* documented "returns NULL with err set" contract and the freeing that goes   */
-/* with it are otherwise unverified.                                           */
+/* Both pool flavours build several objects before returning (the pool struct,
+ */
+/* its backing buffer, the per-entry bookkeeping, and for a ranged pool one */
+/* inner pool per size class), and each failure point has to unwind exactly */
+/* what was built so far. Nothing else here executes those branches, so the */
+/* documented "returns NULL with err set" contract and the freeing that goes */
+/* with it are otherwise unverified. */
 /*                                                                            */
-/* One counter across all four procs: the pool struct and several of the       */
-/* inner tables are calloc, so failing only malloc would leave their           */
-/* unwinding unreachable.                                                      */
+/* One counter across all four procs: the pool struct and several of the */
+/* inner tables are calloc, so failing only malloc would leave their */
+/* unwinding unreachable. */
 /* ========================================================================== */
 
 static _Atomic int g_mp_alloc_seen = 0;
@@ -4251,8 +4252,8 @@ TEST(cmempool_oom, ranged_pool_construction_unwinds_at_every_allocation) {
   for (int n = 1; n <= 40; n++) {
     _mp_arm(n);
     char *err = NULL;
-    ccol_r_mempool *rmp = ccol_r_mempool_create(
-        4, 8, 4, fallback_disabled, false, &g_mp_sweep_procs, &err);
+    ccol_r_mempool *rmp = ccol_r_mempool_create(4, 8, 4, fallback_disabled,
+                                                false, &g_mp_sweep_procs, &err);
     _mp_disarm();
     if (rmp)
       ccol_r_mempool_destroy(rmp);
@@ -4283,8 +4284,8 @@ TEST(cmempool_oom, a_pool_built_under_a_late_failure_still_serves_entries) {
   bool built = false, usable = false;
   for (int n = 20; n <= 80 && !built; n++) {
     _mp_arm(n);
-    ccol_r_mempool *rmp = ccol_r_mempool_create(
-        4, 8, 4, fallback_disabled, false, &g_mp_sweep_procs, NULL);
+    ccol_r_mempool *rmp = ccol_r_mempool_create(4, 8, 4, fallback_disabled,
+                                                false, &g_mp_sweep_procs, NULL);
     _mp_disarm();
     if (rmp) {
       built = true;

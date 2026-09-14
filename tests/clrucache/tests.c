@@ -3552,14 +3552,14 @@ TEST(clrucache_handle_lifecycle, bounded_slot_reuse_under_churn) {
 /* ========================================================================== */
 /* Allocation-failure sweep over cache construction                           */
 /*                                                                            */
-/* clrucache_create_full builds a slot entry, the backing map, the eviction    */
-/* list bookkeeping and the per-entry condition variables before it returns,   */
-/* and each failure point unwinds a different amount of that. Nothing else in  */
-/* this suite executes those branches, so the documented CLRU_CACHE_INVALID    */
-/* return and the freeing that goes with it are otherwise unverified.          */
+/* clrucache_create_full builds a slot entry, the backing map, the eviction */
+/* list bookkeeping and the per-entry condition variables before it returns, */
+/* and each failure point unwinds a different amount of that. Nothing else in */
+/* this suite executes those branches, so the documented CLRU_CACHE_INVALID */
+/* return and the freeing that goes with it are otherwise unverified. */
 /*                                                                            */
-/* One counter across all four procs: the cache struct and the map are         */
-/* calloc, so failing only malloc would leave their unwinding unreachable.     */
+/* One counter across all four procs: the cache struct and the map are */
+/* calloc, so failing only malloc would leave their unwinding unreachable. */
 /* ========================================================================== */
 
 static atomic_int g_lru_alloc_seen = 0;
@@ -3608,7 +3608,8 @@ TEST(clrucache_oom, integral_cache_construction_unwinds_at_every_allocation) {
   REQUIRE_TRUE(all_handled);
 }
 
-TEST(clrucache_oom, string_keyed_cache_construction_unwinds_at_every_allocation) {
+TEST(clrucache_oom,
+     string_keyed_cache_construction_unwinds_at_every_allocation) {
   /* A string key type selects the separate-chaining map rather than the
    * open-addressed one, which allocates a different shape. */
   bool all_handled = true;
@@ -3633,9 +3634,9 @@ TEST(clrucache_oom, a_large_capacity_cache_unwinds_at_every_allocation) {
   bool all_handled = true;
   for (int n = 1; n <= 40; n++) {
     _lru_arm(n);
-    clru_cache cache = clrucache_create_full(
-        256, ccol_long_long, ccol_string, NULL, NULL, NULL,
-        &g_lru_sweep_procs, NULL);
+    clru_cache cache =
+        clrucache_create_full(256, ccol_long_long, ccol_string, NULL, NULL,
+                              NULL, &g_lru_sweep_procs, NULL);
     _lru_disarm();
     if (cache != CLRU_CACHE_INVALID) __clrucache_destroy(cache);
   }

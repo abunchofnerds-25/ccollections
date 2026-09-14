@@ -28,7 +28,7 @@ TAU_MAIN()  // sets up Tau (+ main function)
       cvector_push_back(cvec, &(type){rand() % modulus_value}); \
     }                                                           \
                                                                 \
-    REQUIRE_EQ(cvector_elem_count(cvec), (size_t)num_sample);           \
+    REQUIRE_EQ(cvector_elem_count(cvec), (size_t)num_sample);   \
                                                                 \
     cvec_sort(cvec);                                            \
                                                                 \

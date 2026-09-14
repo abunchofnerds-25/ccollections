@@ -25,10 +25,10 @@ SOFTWARE.
 #include <common.h>
 #include <ctls.h>
 #include <fcntl.h>
-#include <signal.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -151,9 +151,9 @@ static int _generate_all_certs(void) {
   snprintf(g_enc_key, sizeof(g_enc_key), "%s/enc_key.pem", g_cert_dir);
   /* Tracked separately: an openssl build without the cipher this needs must
    * skip only the password tests, not every file-backed cert test. */
-  g_enc_cert_ready = (_openssl_selfsigned_encrypted(
-                          g_enc_key, g_enc_cert, "enc.test",
-                          CTLS_TEST_KEY_PASSWORD) == 0);
+  g_enc_cert_ready =
+      (_openssl_selfsigned_encrypted(g_enc_key, g_enc_cert, "enc.test",
+                                     CTLS_TEST_KEY_PASSWORD) == 0);
   return 0;
 }
 
@@ -1239,15 +1239,16 @@ TEST(ctls_alpn, alpn_add_race_during_live_handshake_does_not_crash) {
 /* ========================================================================== */
 /* Allocation-failure sweep                                                   */
 /*                                                                            */
-/* Every entry point below has cleanup branches that free a different subset   */
-/* of what the call had built by the time the allocation failed. Nothing else  */
-/* in this suite executes them, so the documented ccol_not_enough_memory       */
-/* return and the freeing that goes with it are unverified without this.       */
+/* Every entry point below has cleanup branches that free a different subset */
+/* of what the call had built by the time the allocation failed. Nothing else */
+/* in this suite executes them, so the documented ccol_not_enough_memory */
+/* return and the freeing that goes with it are unverified without this. */
 /*                                                                            */
-/* The counter is shared across all four procs on purpose. The context itself, */
-/* a named-certificate record and a connection are _ccol_mem_calloc, and the   */
-/* trust and ALPN arrays grow through _ccol_mem_realloc; a harness that only   */
-/* failed malloc would leave every one of those branches unreachable.          */
+/* The counter is shared across all four procs on purpose. The context itself,
+ */
+/* a named-certificate record and a connection are _ccol_mem_calloc, and the */
+/* trust and ALPN arrays grow through _ccol_mem_realloc; a harness that only */
+/* failed malloc would leave every one of those branches unreachable. */
 /* ========================================================================== */
 
 static _Atomic int g_alloc_seen = 0;
@@ -1306,8 +1307,8 @@ TEST(ctls_oom, named_self_signed_cert_add_never_crashes_or_half_configures) {
     if (!ctx) continue;
 
     _sweep_arm(n);
-    ccol_retval_t rv = ctls_ctx_cert_add(ctx, "sweep.test", NULL, NULL, NULL,
-                                         NULL);
+    ccol_retval_t rv =
+        ctls_ctx_cert_add(ctx, "sweep.test", NULL, NULL, NULL, NULL);
     _sweep_disarm();
 
     if (rv != ccol_success && rv != ccol_not_enough_memory &&
@@ -1471,9 +1472,8 @@ TEST(ctls_pem_password, a_wrong_password_reports_a_load_failure) {
   ctls_ctx_t *ctx = ctls_ctx_new(NULL);
   REQUIRE_NE((void *)ctx, (void *)NULL);
   char *err = NULL;
-  ccol_retval_t rv =
-      ctls_ctx_cert_add(ctx, NULL, g_enc_cert, g_enc_key, "not-the-password",
-                        &err);
+  ccol_retval_t rv = ctls_ctx_cert_add(ctx, NULL, g_enc_cert, g_enc_key,
+                                       "not-the-password", &err);
   ctls_ctx_release(ctx);
   REQUIRE_EQ((int)rv, (int)ccol_http_tls_cert_load_failed);
 }
@@ -1553,11 +1553,126 @@ TEST(ctls_file_input, a_file_that_reports_zero_length_reports_a_load_failure) {
 }
 
 TEST(ctls_file_input, a_directory_in_place_of_a_bundle_reports_a_load_failure) {
+  /* Pointing a bundle option at a directory is an ordinary configuration slip.
+   * Opening one succeeds on Linux, and whether the subsequent seek fails or
+   * reports a length of LONG_MAX varies by filesystem, so the rejection has to
+   * come from the file type rather than from its apparent size. This test is
+   * non-vacuous: without that check, the LONG_MAX case reaches the allocation
+   * and AddressSanitizer aborts the process with allocation-size-too-big.
+   * A directory created here rather than /tmp keeps the case independent of
+   * whichever filesystem the tests happen to run on. */
   ctls_ctx_t *ctx = ctls_ctx_new(NULL);
   REQUIRE_NE((void *)ctx, (void *)NULL);
-  ccol_retval_t rv = ctls_ctx_trust(ctx, "/tmp", NULL);
+
+  /* Created beside the test binary rather than under /tmp: whether seeking a
+   * directory succeeds is filesystem-dependent (it fails on tmpfs, which /tmp
+   * often is, and succeeds on ext4), and the build tree is the one location
+   * guaranteed to be the same filesystem the library is normally pointed at. */
+  char dir[] = "ctls_dir_XXXXXX";
+  bool made = (mkdtemp(dir) != NULL);
+  ccol_retval_t rv = ccol_unexpected_failure;
+  if (made) {
+    rv = ctls_ctx_trust(ctx, dir, NULL);
+    rmdir(dir);
+  }
   ctls_ctx_release(ctx);
+
+  REQUIRE_TRUE(made);
   REQUIRE_EQ((int)rv, (int)ccol_http_tls_cert_load_failed);
+}
+
+TEST(ctls_file_input, an_oversized_bundle_is_rejected_before_it_is_allocated) {
+  /* A PEM artefact is a couple of kilobytes; a full system CA bundle is a
+   * few hundred kilobytes. A path pointing at something else entirely (a log,
+   * an image, a core dump) must be turned away on its size rather than read
+   * into memory. The file is made sparse, so it costs no disk space and no
+   * time to create. */
+  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  REQUIRE_NE((void *)ctx, (void *)NULL);
+
+  char path[] = "ctls_big_XXXXXX";
+  int fd = mkstemp(path);
+  ccol_retval_t rv = ccol_unexpected_failure;
+  char *err = NULL;
+  bool sized = false;
+  if (fd >= 0) {
+    sized = (ftruncate(fd, (off_t)17 * 1024 * 1024) == 0);
+    close(fd);
+    if (sized) rv = ctls_ctx_trust(ctx, path, &err);
+    unlink(path);
+  }
+  ctls_ctx_release(ctx);
+
+  REQUIRE_TRUE(sized);
+  REQUIRE_EQ((int)rv, (int)ccol_http_tls_cert_load_failed);
+  /* The reported reason has to name the size, not claim the file could not be
+   * read: an operator told "unreadable" about a perfectly readable file goes
+   * looking for a permissions problem that does not exist. */
+  REQUIRE_NE((void *)err, (void *)NULL);
+  if (err) REQUIRE_NE((void *)strstr(err, "larger than"), (void *)NULL);
+}
+
+TEST(ctls_file_input, a_bundle_just_under_the_limit_is_still_read) {
+  /* The cap must reject only what is past it. A file below the limit is read
+   * normally, and fails later on its contents rather than on its size. */
+  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  REQUIRE_NE((void *)ctx, (void *)NULL);
+
+  char path[] = "ctls_ok_XXXXXX";
+  int fd = mkstemp(path);
+  ccol_retval_t rv = ccol_unexpected_failure;
+  char *err = NULL;
+  bool sized = false;
+  if (fd >= 0) {
+    sized = (ftruncate(fd, (off_t)15 * 1024 * 1024) == 0);
+    close(fd);
+    if (sized) rv = ctls_ctx_trust(ctx, path, &err);
+    unlink(path);
+  }
+  ctls_ctx_release(ctx);
+
+  REQUIRE_TRUE(sized);
+  /* Rejected on its contents (it carries no certificate), not on its size.
+   * That distinction is the whole point of this test: the two branches report
+   * different reasons, so the reason pins which one ran, and a file below the
+   * cap must reach the content check rather than be turned away for length. */
+  REQUIRE_EQ((int)rv, (int)ccol_http_tls_cert_load_failed);
+  REQUIRE_NE((void *)err, (void *)NULL);
+  if (err) {
+    REQUIRE_NE((void *)strstr(err, "no certificates"), (void *)NULL);
+    REQUIRE_EQ((void *)strstr(err, "larger than"), (void *)NULL);
+  }
+}
+
+TEST(ctls_file_input, a_bundle_holding_no_certificate_is_rejected) {
+  /* A readable file that parses to no certificate at all leaves a trust store
+   * with no issuer in it while peer verification is switched on. A client
+   * built from such a context rejects every peer, and a server, whose peer
+   * verification is request-but-don't-require, keeps accepting every client
+   * that presents no certificate: the mutual TLS the bundle was configured
+   * for is silently absent. Configuring it has to fail instead. */
+  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  REQUIRE_NE((void *)ctx, (void *)NULL);
+
+  char path[] = "ctls_nocert_XXXXXX";
+  int fd = mkstemp(path);
+  ccol_retval_t rv = ccol_success;
+  char *err = NULL;
+  bool written = false;
+  if (fd >= 0) {
+    static const char text[] = "this file is readable and holds no PEM block\n";
+    ssize_t n = write(fd, text, sizeof(text) - 1);
+    written = (n == (ssize_t)(sizeof(text) - 1));
+    close(fd);
+    if (written) rv = ctls_ctx_trust(ctx, path, &err);
+    unlink(path);
+  }
+  ctls_ctx_release(ctx);
+
+  REQUIRE_TRUE(written);
+  REQUIRE_EQ((int)rv, (int)ccol_http_tls_cert_load_failed);
+  REQUIRE_NE((void *)err, (void *)NULL);
+  if (err) REQUIRE_NE((void *)strstr(err, "no certificates"), (void *)NULL);
 }
 
 TEST(ctls_file_input, a_bundle_that_cannot_be_allocated_reports_oom) {
@@ -1581,9 +1696,9 @@ TEST(ctls_file_input, a_bundle_that_cannot_be_allocated_reports_oom) {
 /* ========================================================================== */
 /* Read and write result classification                                       */
 /*                                                                            */
-/* chttpclient and chttpserver branch on this return value and errno pair on   */
-/* every read and write they perform, so it is the interface between ctls and  */
-/* the two largest modules in the library.                                     */
+/* chttpclient and chttpserver branch on this return value and errno pair on */
+/* every read and write they perform, so it is the interface between ctls and */
+/* the two largest modules in the library. */
 /* ========================================================================== */
 
 /* Builds a completed TLS session over a socketpair. Returns false if the
@@ -1706,7 +1821,8 @@ TEST(ctls_io, a_protocol_violation_reads_as_a_reset_connection) {
   ssize_t n = -99;
   int err = 0;
   if (up) {
-    static const char garbage[] = "this is not a TLS record at all, not even close";
+    static const char garbage[] =
+        "this is not a TLS record at all, not even close";
     ssize_t pushed = write(fds[1], garbage, sizeof garbage);
     (void)pushed;
     errno = 0;

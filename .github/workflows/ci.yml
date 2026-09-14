@@ -41,21 +41,22 @@ jobs:
       - name: make memtest (valgrind)
         run: make CC=clang memtest
 
-  linux-x86_64-coverage-floors:
-    name: Coverage floors
+  linux-x86_64-coverage:
+    name: Coverage threshold
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libssl-dev zlib1g-dev lcov
-      # Catching a drop here rather than in coverage.yml is what makes the
-      # floors useful: coverage.yml only runs on a push to main, so on its own
-      # it reports a regression that has already landed. This job rebuilds
-      # every suite instrumented, which is the bulk of its cost, and is still
-      # well inside what the rest of this matrix already spends.
+      # Every file in src/ and include/ must reach the threshold that
+      # check_test_coverages.sh defines. Running that here rather than only in
+      # coverage.yml is what keeps it useful: coverage.yml runs on a push to
+      # main, so on its own it would only report a shortfall that has already
+      # landed. Rebuilding every suite instrumented is the bulk of this job's
+      # cost, and is still well inside what the rest of this matrix spends.
       - name: Build the merged coverage report
         run: make coverage_site
-      - name: Check every file against its recorded coverage floor
+      - name: Check every file against the coverage threshold
         run: make coverage_check
 
   linux-x86_64-sanitizers:

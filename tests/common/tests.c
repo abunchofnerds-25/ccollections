@@ -209,7 +209,7 @@ TEST(scoped_ptr, early_return_from_multiple_paths_still_frees) {
 }
 
 /* ========================================================================== */
-/*                  ccol_mem_zero / ccol_mem_cpy SIZE SWEEP                    */
+/*                  ccol_mem_zero / ccol_mem_cpy SIZE SWEEP */
 /* ========================================================================== */
 
 /* Both helpers dispatch on size: a buffer of SMALL_CHUNKS_SIZE (32) bytes or
@@ -365,7 +365,7 @@ TEST(mem_cpy, sizes_above_the_small_chunk_limit_use_memcpy) {
 }
 
 /* ========================================================================== */
-/*                  ccol_find_nearest_gte_power_of_two                         */
+/*                  ccol_find_nearest_gte_power_of_two */
 /* ========================================================================== */
 
 /* Declared in common.c rather than common.h; chashmap sizes every table it
@@ -406,7 +406,7 @@ TEST(power_of_two, above_the_representable_maximum_is_invalid) {
 }
 
 /* ========================================================================== */
-/*                         ccol_growbuf_t                                      */
+/*                         ccol_growbuf_t */
 /* ========================================================================== */
 
 /* A reallocator that refuses once armed, so the buffer's own out-of-memory
@@ -432,7 +432,8 @@ static ccol_memmgmt_procs_t *growbuf_procs(void) {
 TEST(growbuf, init_starts_empty_and_nul_terminated) {
   ccol_growbuf_t b;
   ccol_growbuf_init(&b, growbuf_procs());
-  bool ok = (b.len == 0) && (b.cap >= 256) && !b.oom && b.buf && b.buf[0] == '\0';
+  bool ok =
+      (b.len == 0) && (b.cap >= 256) && !b.oom && b.buf && b.buf[0] == '\0';
   ccol_growbuf_destroy(&b);
   REQUIRE_TRUE(ok);
 }
@@ -528,7 +529,7 @@ TEST(growbuf, destroy_on_an_oom_buffer_is_safe) {
 }
 
 /* ========================================================================== */
-/*                  ccol_retval_to_str / data type size / key dump             */
+/*                  ccol_retval_to_str / data type size / key dump */
 /* ========================================================================== */
 
 /* ccol_retval_t pins an explicit numeric value on every enumerator, and
@@ -559,8 +560,7 @@ static const struct {
     {ccol_http_tls_cert_verification_failed, -14,
      "ccol_http_tls_cert_verification_failed"},
     {ccol_http_tls_handshake_failed, -15, "ccol_http_tls_handshake_failed"},
-    {ccol_http_host_resolution_failed, -16,
-     "ccol_http_host_resolution_failed"},
+    {ccol_http_host_resolution_failed, -16, "ccol_http_host_resolution_failed"},
     {ccol_http_connection_failed, -17, "ccol_http_connection_failed"},
     {ccol_unexpected_failure, -18, "ccol_unexpected_failure"},
 };

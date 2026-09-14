@@ -572,6 +572,67 @@ TEST(chttpserver_tls, start_rejects_tls_config_with_no_cert_or_key) {
   chttpsvr_destroy(srv);
 }
 
+TEST(chttpserver_tls, start_rejects_a_ca_bundle_holding_no_certificate) {
+  /* A readable CA bundle that parses to no certificate at all must fail the
+     start, not configure an empty trust store. Peer verification here is
+     request-but-don't-require, so an empty store rejects a client that
+     presents a certificate while still accepting one that presents none:
+     the listener would come up serving TLS with the mutual-TLS enforcement
+     the caller asked for silently absent. Needs a real cert/key pair to get
+     past ctls_ctx_cert_add and reach the ca_bundle_path handling. */
+  if (!g_cert_ready) {
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this "
+            "environment\n");
+    return;
+  }
+
+  char bundle[] = "chttpsvr_nocert_bundle_XXXXXX";
+  int fd = mkstemp(bundle);
+  REQUIRE_GT(fd, -1);
+  static const char text[] = "readable, and not a PEM certificate\n";
+  ssize_t written = write(fd, text, sizeof(text) - 1);
+  close(fd);
+  if (written != (ssize_t)(sizeof(text) - 1)) {
+    unlink(bundle);
+    REQUIRE_EQ((long)written, (long)(sizeof(text) - 1));
+    return;
+  }
+
+  char *err = NULL;
+  chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
+      ccol_create_chttpsvr(g_test_logger, &err);
+  if (srv == CHTTPSVR_INVALID) {
+    unlink(bundle);
+    REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+    return;
+  }
+
+  chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
+  tls.cert_path = g_cert_path;
+  tls.key_path = g_key_path;
+  tls.ca_bundle_path = bundle;
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TLS_TEST_PORT + 6;
+  cfg.tls = &tls;
+
+  ccol_retval_t started = chttpsvr_start(srv, &cfg);
+
+  /* The failed start must not have left a live listener behind: a second,
+     plain HTTP start on the identical port must succeed cleanly. */
+  chttpsvr_config_t plain_cfg = CHTTPSVR_CONFIG_DEFAULT;
+  plain_cfg.host = "127.0.0.1";
+  plain_cfg.port = TLS_TEST_PORT + 6;
+  ccol_retval_t reused = chttpsvr_start(srv, &plain_cfg);
+
+  chttpsvr_destroy(srv);
+  unlink(bundle);
+
+  REQUIRE_EQ(started, ccol_unexpected_failure);
+  REQUIRE_EQ(reused, ccol_success);
+}
+
 TEST(chttpserver_tls, start_rejects_unloadable_ca_bundle_path) {
   /* A genuinely valid cert/key pair, but a ca_bundle_path that cannot be
      loaded: chttpsvr_start must fail rather than silently start the server

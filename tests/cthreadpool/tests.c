@@ -3214,15 +3214,15 @@ TEST(fork_safety, wait_on_foreign_pool_with_pending_work_does_not_hang) {
 /* ========================================================================== */
 /* Allocation-failure sweep over pool construction                            */
 /*                                                                            */
-/* ccol_create_cthread_pool_mp builds a slot entry, a queue, a free list and   */
-/* a worker array before it returns, and each failure point unwinds a          */
-/* different amount of that. The g_oom_enabled allocator above fails every     */
-/* allocation at once, which only ever reaches the first of those branches;    */
-/* failing the Nth allocation in turn is what walks the rest.                  */
+/* ccol_create_cthread_pool_mp builds a slot entry, a queue, a free list and */
+/* a worker array before it returns, and each failure point unwinds a */
+/* different amount of that. The g_oom_enabled allocator above fails every */
+/* allocation at once, which only ever reaches the first of those branches; */
+/* failing the Nth allocation in turn is what walks the rest. */
 /*                                                                            */
-/* The counter spans all four procs deliberately: the pool struct and the      */
-/* worker array are calloc, so a malloc-only injector would leave their        */
-/* unwinding unreachable.                                                      */
+/* The counter spans all four procs deliberately: the pool struct and the */
+/* worker array are calloc, so a malloc-only injector would leave their */
+/* unwinding unreachable. */
 /* ========================================================================== */
 
 static atomic_int g_ctp_alloc_seen = 0;

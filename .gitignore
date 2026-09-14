@@ -44,4 +44,7 @@ main
 .envrc
 massif.out.*
 
+# Per-suite build-identity stamps (compiler + flags the objects were built with)
+tests/*/.build-flags
+
 # An unnecessary line for triggering a new CI run - 0

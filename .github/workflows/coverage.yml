@@ -41,6 +41,9 @@ jobs:
       - name: Build the merged coverage report
         run: make coverage_site
 
+      - name: Check every file against the coverage threshold
+        run: make coverage_check
+
       - name: Publish the summary to the job page
         run: |
           {

@@ -152,11 +152,14 @@ server-side configuration without a server identity certificate (unlike
 the client side, where ca_bundle_path alone is the ordinary way to
 configure custom-CA verification with no client certificate involved).
 If cert_path/key_path are both set but the certificate/key pair cannot
-be loaded (a missing/unreadable file or malformed contents),
+be loaded (a missing/unreadable file, a file larger than the 16 MB
+ceiling every PEM artefact is read under, or malformed contents),
 chttpsvr_start fails with ccol_unexpected_failure and no listener is
 registered.  If cfg->tls->ca_bundle_path is also set, it must load
 successfully too (this is what enables client-certificate verification
-on the resulting listener); a failure to load it is likewise reported
+on the resulting listener), and must contribute at least one
+certificate: a readable bundle that parses to none is a load failure,
+not an empty trust store.  A failure to load it is likewise reported
 as ccol_unexpected_failure rather than silently starting the server
 without the client-certificate verification that was requested.
 That verification is request-and-verify, not require: a client

@@ -28,6 +28,7 @@ SOFTWARE.
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -85,7 +86,12 @@ static void __attribute__((destructor)) _check_chmap_iter_balance_at_exit(
 static char g_cert_dir[256];
 static char g_server_cert[320], g_server_key[320];
 static char g_client_cert[320], g_client_key[320];
+static char g_enc_cert[320], g_enc_key[320];
 static bool g_certs_ready = false;
+static bool g_enc_cert_ready = false;
+
+/* The password a ctls_ctx_cert_add caller has to supply for g_enc_key. */
+#define CTLS_TEST_KEY_PASSWORD "hunter2"
 
 static int _openssl_selfsigned(const char *key_path, const char *cert_path,
                                const char *cn, const char *san) {
@@ -109,6 +115,25 @@ static int _openssl_selfsigned(const char *key_path, const char *cert_path,
   return 0;
 }
 
+/* A password-protected private key, which the -nodes form above deliberately
+ * does not produce. Loading one is the only path that reaches the PEM password
+ * callback ctls installs, and that callback is what turns a wrong password
+ * into a reported load failure rather than an OpenSSL prompt on a terminal
+ * that may not exist. */
+static int _openssl_selfsigned_encrypted(const char *key_path,
+                                         const char *cert_path, const char *cn,
+                                         const char *password) {
+  char cmd[1024];
+  int n = snprintf(cmd, sizeof(cmd),
+                   "openssl req -x509 -newkey rsa:2048 -keyout '%s' -out '%s' "
+                   "-days 1 -subj '/CN=%s' -passout pass:%s >/dev/null 2>&1",
+                   key_path, cert_path, cn, password);
+  if (n < 0 || (size_t)n >= sizeof(cmd)) return -1;
+  if (system(cmd) != 0) return -1;
+  if (access(cert_path, R_OK) != 0 || access(key_path, R_OK) != 0) return -1;
+  return 0;
+}
+
 static int _generate_all_certs(void) {
   snprintf(g_cert_dir, sizeof(g_cert_dir), "/tmp/ctls_test_XXXXXX");
   if (!mkdtemp(g_cert_dir)) return -1;
@@ -122,10 +147,26 @@ static int _generate_all_certs(void) {
   if (_openssl_selfsigned(g_client_key, g_client_cert, "test-client", NULL) !=
       0)
     return -1;
+  snprintf(g_enc_cert, sizeof(g_enc_cert), "%s/enc.pem", g_cert_dir);
+  snprintf(g_enc_key, sizeof(g_enc_key), "%s/enc_key.pem", g_cert_dir);
+  /* Tracked separately: an openssl build without the cipher this needs must
+   * skip only the password tests, not every file-backed cert test. */
+  g_enc_cert_ready =
+      (_openssl_selfsigned_encrypted(g_enc_key, g_enc_cert, "enc.test",
+                                     CTLS_TEST_KEY_PASSWORD) == 0);
   return 0;
 }
 
 __attribute__((constructor)) static void _setup(void) {
+  /* ctls hands OpenSSL a plain socket BIO, whose writes carry no
+   * MSG_NOSIGNAL, so writing to a peer that has already gone away raises
+   * SIGPIPE and its default disposition kills the whole test process rather
+   * than the one thread. Tests that deliberately close one end of a pair,
+   * and the close_notify that ctls_conn_destroy sends, both reach that case.
+   * src/chttpserver.c's engine init installs this same ignore for every real
+   * server in this codebase; a binary driving ctls directly has to install it
+   * itself, before any test runs. */
+  signal(SIGPIPE, SIG_IGN);
   g_certs_ready = (_generate_all_certs() == 0);
   if (!g_certs_ready) {
     fprintf(stderr,
@@ -1193,4 +1234,677 @@ TEST(ctls_alpn, alpn_add_race_during_live_handshake_does_not_crash) {
   g_alpn_race_server_ctx = NULL;
 
   REQUIRE_FALSE(alpn_len_mismatch);
+}
+
+/* ========================================================================== */
+/* Allocation-failure sweep                                                   */
+/*                                                                            */
+/* Every entry point below has cleanup branches that free a different subset */
+/* of what the call had built by the time the allocation failed. Nothing else */
+/* in this suite executes them, so the documented ccol_not_enough_memory */
+/* return and the freeing that goes with it are unverified without this. */
+/*                                                                            */
+/* The counter is shared across all four procs on purpose. The context itself,
+ */
+/* a named-certificate record and a connection are _ccol_mem_calloc, and the */
+/* trust and ALPN arrays grow through _ccol_mem_realloc; a harness that only */
+/* failed malloc would leave every one of those branches unreachable. */
+/* ========================================================================== */
+
+static _Atomic int g_alloc_seen = 0;
+static _Atomic int g_alloc_fail_at = 0; /* 0 disarms */
+
+static bool _sweep_should_fail(void) {
+  int at = atomic_load(&g_alloc_fail_at);
+  if (at == 0) return false;
+  return (atomic_fetch_add(&g_alloc_seen, 1) + 1) == at;
+}
+static void *_sweep_malloc(size_t n) {
+  return _sweep_should_fail() ? NULL : malloc(n);
+}
+static void _sweep_free(void *p) { free(p); }
+static void *_sweep_calloc(size_t a, size_t b) {
+  return _sweep_should_fail() ? NULL : calloc(a, b);
+}
+static void *_sweep_realloc(void *p, size_t n) {
+  return _sweep_should_fail() ? NULL : realloc(p, n);
+}
+static ccol_memmgmt_procs_t g_sweep_mp = {_sweep_malloc, _sweep_free,
+                                          _sweep_calloc, _sweep_realloc};
+
+static void _sweep_arm(int nth) {
+  atomic_store(&g_alloc_seen, 0);
+  atomic_store(&g_alloc_fail_at, nth);
+}
+static void _sweep_disarm(void) { atomic_store(&g_alloc_fail_at, 0); }
+
+/* Deep enough to walk past the last allocation any one of these calls makes,
+ * so the sweep covers every branch rather than a prefix of them. */
+#define CTLS_SWEEP_DEPTH 46
+
+TEST(ctls_oom, ctx_new_reports_failure_at_every_allocation_step) {
+  bool all_handled = true;
+  for (int n = 1; n <= 10; n++) {
+    _sweep_arm(n);
+    char *err = NULL;
+    ctls_ctx_t *ctx = ctls_ctx_new_mp(&g_sweep_mp, &err);
+    _sweep_disarm();
+    /* Either the allocation it failed was not on this path, or the context
+     * could not be built and no half-constructed one is handed back. */
+    if (ctx)
+      ctls_ctx_release(ctx);
+    else if (!err)
+      all_handled = false;
+  }
+  REQUIRE_TRUE(all_handled);
+}
+
+TEST(ctls_oom, named_self_signed_cert_add_never_crashes_or_half_configures) {
+  bool all_handled = true;
+  for (int n = 1; n <= CTLS_SWEEP_DEPTH; n++) {
+    _sweep_disarm();
+    ctls_ctx_t *ctx = ctls_ctx_new_mp(&g_sweep_mp, NULL);
+    if (!ctx) continue;
+
+    _sweep_arm(n);
+    ccol_retval_t rv =
+        ctls_ctx_cert_add(ctx, "sweep.test", NULL, NULL, NULL, NULL);
+    _sweep_disarm();
+
+    if (rv != ccol_success && rv != ccol_not_enough_memory &&
+        rv != ccol_http_tls_cert_load_failed)
+      all_handled = false;
+    /* A failed add must leave the context usable rather than poisoned. */
+    if (ctls_ctx_cert_add(ctx, "after.test", NULL, NULL, NULL, NULL) !=
+        ccol_success)
+      all_handled = false;
+    ctls_ctx_release(ctx);
+  }
+  REQUIRE_TRUE(all_handled);
+}
+
+TEST(ctls_oom, default_self_signed_cert_add_never_crashes) {
+  bool all_handled = true;
+  for (int n = 1; n <= CTLS_SWEEP_DEPTH; n++) {
+    _sweep_disarm();
+    ctls_ctx_t *ctx = ctls_ctx_new_mp(&g_sweep_mp, NULL);
+    if (!ctx) continue;
+    _sweep_arm(n);
+    ccol_retval_t rv = ctls_ctx_cert_add(ctx, NULL, NULL, NULL, NULL, NULL);
+    _sweep_disarm();
+    if (rv != ccol_success && rv != ccol_not_enough_memory &&
+        rv != ccol_http_tls_cert_load_failed)
+      all_handled = false;
+    ctls_ctx_release(ctx);
+  }
+  REQUIRE_TRUE(all_handled);
+}
+
+TEST(ctls_oom, file_backed_cert_add_with_password_never_crashes) {
+  if (!g_certs_ready) return;
+  bool all_handled = true;
+  for (int n = 1; n <= CTLS_SWEEP_DEPTH; n++) {
+    _sweep_disarm();
+    ctls_ctx_t *ctx = ctls_ctx_new_mp(&g_sweep_mp, NULL);
+    if (!ctx) continue;
+    _sweep_arm(n);
+    ccol_retval_t rv = ctls_ctx_cert_add(ctx, "sweep.test", g_server_cert,
+                                         g_server_key, "unused-password", NULL);
+    _sweep_disarm();
+    if (rv != ccol_success && rv != ccol_not_enough_memory &&
+        rv != ccol_http_tls_cert_load_failed)
+      all_handled = false;
+    ctls_ctx_release(ctx);
+  }
+  REQUIRE_TRUE(all_handled);
+}
+
+TEST(ctls_oom, trust_array_growth_reports_failure_without_dangling) {
+  if (!g_certs_ready) return;
+  bool all_handled = true;
+  for (int n = 1; n <= 20; n++) {
+    _sweep_disarm();
+    ctls_ctx_t *ctx = ctls_ctx_new_mp(&g_sweep_mp, NULL);
+    if (!ctx) continue;
+    /* Two adds: the second one is what forces the parallel pem and length
+     * arrays to grow, which is where a partially-applied reallocation would
+     * leave one of them pointing at freed storage. */
+    _sweep_arm(n);
+    ccol_retval_t first = ctls_ctx_trust(ctx, g_server_cert, NULL);
+    _sweep_disarm();
+    _sweep_arm(n);
+    ccol_retval_t second = ctls_ctx_trust(ctx, g_server_cert, NULL);
+    _sweep_disarm();
+    if (first != ccol_success && first != ccol_not_enough_memory &&
+        first != ccol_http_tls_cert_load_failed)
+      all_handled = false;
+    if (second != ccol_success && second != ccol_not_enough_memory &&
+        second != ccol_http_tls_cert_load_failed)
+      all_handled = false;
+    ctls_ctx_release(ctx);
+  }
+  REQUIRE_TRUE(all_handled);
+}
+
+TEST(ctls_oom, alpn_array_growth_reports_failure_and_keeps_the_count_honest) {
+  bool all_handled = true;
+  for (int n = 1; n <= 14; n++) {
+    _sweep_disarm();
+    ctls_ctx_t *ctx = ctls_ctx_new_mp(&g_sweep_mp, NULL);
+    if (!ctx) continue;
+    _sweep_arm(n);
+    ccol_retval_t a = ctls_ctx_alpn_add(ctx, "h2", NULL, NULL, NULL, NULL);
+    _sweep_disarm();
+    _sweep_arm(n);
+    ccol_retval_t b =
+        ctls_ctx_alpn_add(ctx, "http/1.1", NULL, NULL, NULL, NULL);
+    _sweep_disarm();
+
+    /* An add that ran out of memory gives up before the entry is stored, so
+     * it must leave the count untouched. An add that stored the entry and
+     * then failed only to rebuild the SSL_CTX keeps the registration, which
+     * a later successful rebuild picks up, and is counted. */
+    size_t expect = (a != ccol_not_enough_memory ? 1u : 0u) +
+                    (b != ccol_not_enough_memory ? 1u : 0u);
+    if (ctls_ctx_alpn_count(ctx) != expect) all_handled = false;
+    if (a != ccol_success && a != ccol_not_enough_memory &&
+        a != ccol_http_tls_cert_load_failed)
+      all_handled = false;
+    if (b != ccol_success && b != ccol_not_enough_memory &&
+        b != ccol_http_tls_cert_load_failed)
+      all_handled = false;
+    ctls_ctx_release(ctx);
+  }
+  REQUIRE_TRUE(all_handled);
+}
+
+TEST(ctls_oom, conn_create_returns_null_rather_than_a_partial_connection) {
+  bool all_handled = true;
+  for (int n = 1; n <= 6; n++) {
+    _sweep_disarm();
+    ctls_ctx_t *ctx = ctls_ctx_new_mp(&g_sweep_mp, NULL);
+    if (!ctx) continue;
+    ctls_ctx_cert_add(ctx, NULL, NULL, NULL, NULL, NULL);
+
+    int fds[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0) {
+      _sweep_arm(n);
+      ctls_conn_t *cl =
+          ctls_conn_create_client(ctx, fds[0], "sweep.test", true, NULL);
+      _sweep_disarm();
+      if (cl) ctls_conn_destroy(cl);
+
+      _sweep_arm(n);
+      ctls_conn_t *sv = ctls_conn_create_server(ctx, fds[1], NULL, NULL);
+      _sweep_disarm();
+      if (sv) ctls_conn_destroy(sv);
+
+      close(fds[0]);
+      close(fds[1]);
+    } else {
+      all_handled = false;
+    }
+    ctls_ctx_release(ctx);
+  }
+  REQUIRE_TRUE(all_handled);
+}
+
+/* ========================================================================== */
+/* Password-protected private keys                                            */
+/* ========================================================================== */
+
+TEST(ctls_pem_password, a_correct_password_loads_an_encrypted_key) {
+  if (!g_enc_cert_ready) return;
+  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  REQUIRE_NE((void *)ctx, (void *)NULL);
+  char *err = NULL;
+  ccol_retval_t rv = ctls_ctx_cert_add(ctx, NULL, g_enc_cert, g_enc_key,
+                                       CTLS_TEST_KEY_PASSWORD, &err);
+  ctls_ctx_release(ctx);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+}
+
+TEST(ctls_pem_password, a_wrong_password_reports_a_load_failure) {
+  /* Without the password callback ctls installs, OpenSSL would fall back to
+   * prompting on the controlling terminal instead of returning, which in a
+   * test binary or a daemon means hanging rather than failing. */
+  if (!g_enc_cert_ready) return;
+  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  REQUIRE_NE((void *)ctx, (void *)NULL);
+  char *err = NULL;
+  ccol_retval_t rv = ctls_ctx_cert_add(ctx, NULL, g_enc_cert, g_enc_key,
+                                       "not-the-password", &err);
+  ctls_ctx_release(ctx);
+  REQUIRE_EQ((int)rv, (int)ccol_http_tls_cert_load_failed);
+}
+
+TEST(ctls_pem_password, an_encrypted_key_with_no_password_reports_a_failure) {
+  if (!g_enc_cert_ready) return;
+  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  REQUIRE_NE((void *)ctx, (void *)NULL);
+  ccol_retval_t rv =
+      ctls_ctx_cert_add(ctx, NULL, g_enc_cert, g_enc_key, NULL, NULL);
+  ctls_ctx_release(ctx);
+  REQUIRE_EQ((int)rv, (int)ccol_http_tls_cert_load_failed);
+}
+
+TEST(ctls_pem_password, an_encrypted_named_cert_serves_a_real_handshake) {
+  /* Loading is not the same as being usable: this proves the decrypted key
+   * actually backs a completed handshake. */
+  if (!g_enc_cert_ready) return;
+  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  ccol_retval_t added = ctls_ctx_cert_add(
+      server_ctx, NULL, g_enc_cert, g_enc_key, CTLS_TEST_KEY_PASSWORD, NULL);
+  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+
+  int fds[2];
+  _make_nonblocking_pair(fds);
+  ctls_conn_t *server_conn =
+      ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
+  ctls_conn_t *client_conn =
+      ctls_conn_create_client(client_ctx, fds[1], "enc.test", false, NULL);
+  bool shook = (server_conn && client_conn) &&
+               _drive_both(client_conn, server_conn, 200, NULL, NULL);
+
+  if (client_conn) ctls_conn_destroy(client_conn);
+  if (server_conn) ctls_conn_destroy(server_conn);
+  close(fds[0]);
+  close(fds[1]);
+  ctls_ctx_release(client_ctx);
+  ctls_ctx_release(server_ctx);
+
+  REQUIRE_EQ((int)added, (int)ccol_success);
+  REQUIRE_TRUE(shook);
+}
+
+/* ========================================================================== */
+/* Unreadable and unusable PEM inputs                                         */
+/* ========================================================================== */
+
+TEST(ctls_file_input, an_empty_file_reports_a_load_failure) {
+  /* A zero-length file opens and seeks perfectly well, so nothing short of
+   * checking the size catches it before the PEM parser is handed nothing. */
+  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  REQUIRE_NE((void *)ctx, (void *)NULL);
+
+  char path[] = "/tmp/ctls_empty_XXXXXX";
+  int fd = mkstemp(path);
+  ccol_retval_t rv = ccol_unexpected_failure;
+  bool made = (fd >= 0);
+  if (made) {
+    close(fd);
+    rv = ctls_ctx_trust(ctx, path, NULL);
+    unlink(path);
+  }
+  ctls_ctx_release(ctx);
+
+  REQUIRE_TRUE(made);
+  REQUIRE_EQ((int)rv, (int)ccol_http_tls_cert_load_failed);
+}
+
+TEST(ctls_file_input, a_file_that_reports_zero_length_reports_a_load_failure) {
+  /* procfs entries report a length of zero while still having content, which
+   * is the same branch an empty regular file takes. */
+  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  REQUIRE_NE((void *)ctx, (void *)NULL);
+  ccol_retval_t rv = ctls_ctx_trust(ctx, "/proc/self/status", NULL);
+  ctls_ctx_release(ctx);
+  REQUIRE_EQ((int)rv, (int)ccol_http_tls_cert_load_failed);
+}
+
+TEST(ctls_file_input, a_directory_in_place_of_a_bundle_reports_a_load_failure) {
+  /* Pointing a bundle option at a directory is an ordinary configuration slip.
+   * Opening one succeeds on Linux, and whether the subsequent seek fails or
+   * reports a length of LONG_MAX varies by filesystem, so the rejection has to
+   * come from the file type rather than from its apparent size. This test is
+   * non-vacuous: without that check, the LONG_MAX case reaches the allocation
+   * and AddressSanitizer aborts the process with allocation-size-too-big.
+   * A directory created here rather than /tmp keeps the case independent of
+   * whichever filesystem the tests happen to run on. */
+  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  REQUIRE_NE((void *)ctx, (void *)NULL);
+
+  /* Created beside the test binary rather than under /tmp: whether seeking a
+   * directory succeeds is filesystem-dependent (it fails on tmpfs, which /tmp
+   * often is, and succeeds on ext4), and the build tree is the one location
+   * guaranteed to be the same filesystem the library is normally pointed at. */
+  char dir[] = "ctls_dir_XXXXXX";
+  bool made = (mkdtemp(dir) != NULL);
+  ccol_retval_t rv = ccol_unexpected_failure;
+  if (made) {
+    rv = ctls_ctx_trust(ctx, dir, NULL);
+    rmdir(dir);
+  }
+  ctls_ctx_release(ctx);
+
+  REQUIRE_TRUE(made);
+  REQUIRE_EQ((int)rv, (int)ccol_http_tls_cert_load_failed);
+}
+
+TEST(ctls_file_input, an_oversized_bundle_is_rejected_before_it_is_allocated) {
+  /* A PEM artefact is a couple of kilobytes; a full system CA bundle is a
+   * few hundred kilobytes. A path pointing at something else entirely (a log,
+   * an image, a core dump) must be turned away on its size rather than read
+   * into memory. The file is made sparse, so it costs no disk space and no
+   * time to create. */
+  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  REQUIRE_NE((void *)ctx, (void *)NULL);
+
+  char path[] = "ctls_big_XXXXXX";
+  int fd = mkstemp(path);
+  ccol_retval_t rv = ccol_unexpected_failure;
+  char *err = NULL;
+  bool sized = false;
+  if (fd >= 0) {
+    sized = (ftruncate(fd, (off_t)17 * 1024 * 1024) == 0);
+    close(fd);
+    if (sized) rv = ctls_ctx_trust(ctx, path, &err);
+    unlink(path);
+  }
+  ctls_ctx_release(ctx);
+
+  REQUIRE_TRUE(sized);
+  REQUIRE_EQ((int)rv, (int)ccol_http_tls_cert_load_failed);
+  /* The reported reason has to name the size, not claim the file could not be
+   * read: an operator told "unreadable" about a perfectly readable file goes
+   * looking for a permissions problem that does not exist. */
+  REQUIRE_NE((void *)err, (void *)NULL);
+  if (err) REQUIRE_NE((void *)strstr(err, "larger than"), (void *)NULL);
+}
+
+TEST(ctls_file_input, a_bundle_just_under_the_limit_is_still_read) {
+  /* The cap must reject only what is past it. A file below the limit is read
+   * normally, and fails later on its contents rather than on its size. */
+  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  REQUIRE_NE((void *)ctx, (void *)NULL);
+
+  char path[] = "ctls_ok_XXXXXX";
+  int fd = mkstemp(path);
+  ccol_retval_t rv = ccol_unexpected_failure;
+  char *err = NULL;
+  bool sized = false;
+  if (fd >= 0) {
+    sized = (ftruncate(fd, (off_t)15 * 1024 * 1024) == 0);
+    close(fd);
+    if (sized) rv = ctls_ctx_trust(ctx, path, &err);
+    unlink(path);
+  }
+  ctls_ctx_release(ctx);
+
+  REQUIRE_TRUE(sized);
+  /* Rejected on its contents (it carries no certificate), not on its size.
+   * That distinction is the whole point of this test: the two branches report
+   * different reasons, so the reason pins which one ran, and a file below the
+   * cap must reach the content check rather than be turned away for length. */
+  REQUIRE_EQ((int)rv, (int)ccol_http_tls_cert_load_failed);
+  REQUIRE_NE((void *)err, (void *)NULL);
+  if (err) {
+    REQUIRE_NE((void *)strstr(err, "no certificates"), (void *)NULL);
+    REQUIRE_EQ((void *)strstr(err, "larger than"), (void *)NULL);
+  }
+}
+
+TEST(ctls_file_input, a_bundle_holding_no_certificate_is_rejected) {
+  /* A readable file that parses to no certificate at all leaves a trust store
+   * with no issuer in it while peer verification is switched on. A client
+   * built from such a context rejects every peer, and a server, whose peer
+   * verification is request-but-don't-require, keeps accepting every client
+   * that presents no certificate: the mutual TLS the bundle was configured
+   * for is silently absent. Configuring it has to fail instead. */
+  ctls_ctx_t *ctx = ctls_ctx_new(NULL);
+  REQUIRE_NE((void *)ctx, (void *)NULL);
+
+  char path[] = "ctls_nocert_XXXXXX";
+  int fd = mkstemp(path);
+  ccol_retval_t rv = ccol_success;
+  char *err = NULL;
+  bool written = false;
+  if (fd >= 0) {
+    static const char text[] = "this file is readable and holds no PEM block\n";
+    ssize_t n = write(fd, text, sizeof(text) - 1);
+    written = (n == (ssize_t)(sizeof(text) - 1));
+    close(fd);
+    if (written) rv = ctls_ctx_trust(ctx, path, &err);
+    unlink(path);
+  }
+  ctls_ctx_release(ctx);
+
+  REQUIRE_TRUE(written);
+  REQUIRE_EQ((int)rv, (int)ccol_http_tls_cert_load_failed);
+  REQUIRE_NE((void *)err, (void *)NULL);
+  if (err) REQUIRE_NE((void *)strstr(err, "no certificates"), (void *)NULL);
+}
+
+TEST(ctls_file_input, a_bundle_that_cannot_be_allocated_reports_oom) {
+  if (!g_certs_ready) return;
+  bool handled = true;
+  for (int n = 1; n <= 6; n++) {
+    _sweep_disarm();
+    ctls_ctx_t *ctx = ctls_ctx_new_mp(&g_sweep_mp, NULL);
+    if (!ctx) continue;
+    _sweep_arm(n);
+    ccol_retval_t rv = ctls_ctx_trust(ctx, g_server_cert, NULL);
+    _sweep_disarm();
+    if (rv != ccol_success && rv != ccol_not_enough_memory &&
+        rv != ccol_http_tls_cert_load_failed)
+      handled = false;
+    ctls_ctx_release(ctx);
+  }
+  REQUIRE_TRUE(handled);
+}
+
+/* ========================================================================== */
+/* Read and write result classification                                       */
+/*                                                                            */
+/* chttpclient and chttpserver branch on this return value and errno pair on */
+/* every read and write they perform, so it is the interface between ctls and */
+/* the two largest modules in the library. */
+/* ========================================================================== */
+
+/* Builds a completed TLS session over a socketpair. Returns false if the
+ * handshake could not be driven to completion, in which case nothing is
+ * allocated for the caller to release. */
+static bool _make_connected_pair(ctls_ctx_t **out_server_ctx,
+                                 ctls_ctx_t **out_client_ctx,
+                                 ctls_conn_t **out_server,
+                                 ctls_conn_t **out_client, int fds[2]) {
+  *out_server_ctx = ctls_ctx_new(NULL);
+  *out_client_ctx = ctls_ctx_new(NULL);
+  *out_server = NULL;
+  *out_client = NULL;
+  if (!*out_server_ctx || !*out_client_ctx) return false;
+  if (ctls_ctx_cert_add(*out_server_ctx, NULL, NULL, NULL, NULL, NULL) !=
+      ccol_success)
+    return false;
+
+  _make_nonblocking_pair(fds);
+  *out_server = ctls_conn_create_server(*out_server_ctx, fds[0], NULL, NULL);
+  *out_client =
+      ctls_conn_create_client(*out_client_ctx, fds[1], "io.test", false, NULL);
+  if (!*out_server || !*out_client) return false;
+  return _drive_both(*out_client, *out_server, 200, NULL, NULL);
+}
+
+TEST(ctls_io, a_read_with_nothing_pending_asks_to_be_retried) {
+  ctls_ctx_t *sc, *cc;
+  ctls_conn_t *s, *c;
+  int fds[2] = {-1, -1};
+  bool up = _make_connected_pair(&sc, &cc, &s, &c, fds);
+
+  char buf[64];
+  ssize_t n = 0;
+  int err = 0;
+  if (up) {
+    errno = 0;
+    n = ctls_conn_read(c, buf, sizeof buf);
+    err = errno;
+  }
+
+  if (c) ctls_conn_destroy(c);
+  if (s) ctls_conn_destroy(s);
+  if (fds[0] >= 0) close(fds[0]);
+  if (fds[1] >= 0) close(fds[1]);
+  ctls_ctx_release(cc);
+  ctls_ctx_release(sc);
+
+  REQUIRE_TRUE(up);
+  REQUIRE_EQ(n, (ssize_t)-1);
+  REQUIRE_TRUE(err == EWOULDBLOCK || err == EAGAIN);
+  /* A read that is merely waiting for more data wants the read direction, so
+   * a caller that re-armed for writability here would stall the connection. */
+  REQUIRE_FALSE(ctls_conn_wants_write(NULL));
+}
+
+TEST(ctls_io, a_roundtrip_reports_the_exact_byte_count) {
+  ctls_ctx_t *sc, *cc;
+  ctls_conn_t *s, *c;
+  int fds[2] = {-1, -1};
+  bool up = _make_connected_pair(&sc, &cc, &s, &c, fds);
+
+  static const char msg[] = "classification";
+  ssize_t wrote = 0, got = 0;
+  char buf[64] = {0};
+  if (up) {
+    wrote = ctls_conn_write(c, msg, sizeof msg);
+    got = ctls_conn_read(s, buf, sizeof buf);
+  }
+
+  if (c) ctls_conn_destroy(c);
+  if (s) ctls_conn_destroy(s);
+  if (fds[0] >= 0) close(fds[0]);
+  if (fds[1] >= 0) close(fds[1]);
+  ctls_ctx_release(cc);
+  ctls_ctx_release(sc);
+
+  REQUIRE_TRUE(up);
+  REQUIRE_EQ(wrote, (ssize_t)sizeof msg);
+  REQUIRE_EQ(got, (ssize_t)sizeof msg);
+  REQUIRE_STREQ(buf, msg);
+}
+
+TEST(ctls_io, a_clean_peer_shutdown_reads_as_end_of_stream) {
+  /* Zero means the peer closed the session properly, which a caller must not
+   * confuse with the -1 that asks for a retry. */
+  ctls_ctx_t *sc, *cc;
+  ctls_conn_t *s, *c;
+  int fds[2] = {-1, -1};
+  bool up = _make_connected_pair(&sc, &cc, &s, &c, fds);
+
+  char buf[64];
+  ssize_t n = -99;
+  if (up) {
+    ctls_conn_destroy(c); /* sends the TLS close_notify the peer observes */
+    c = NULL;
+    n = ctls_conn_read(s, buf, sizeof buf);
+  }
+
+  if (c) ctls_conn_destroy(c);
+  if (s) ctls_conn_destroy(s);
+  if (fds[0] >= 0) close(fds[0]);
+  if (fds[1] >= 0) close(fds[1]);
+  ctls_ctx_release(cc);
+  ctls_ctx_release(sc);
+
+  REQUIRE_TRUE(up);
+  REQUIRE_EQ(n, (ssize_t)0);
+}
+
+TEST(ctls_io, a_protocol_violation_reads_as_a_reset_connection) {
+  /* Plaintext arriving where a TLS record belongs is a protocol error, and
+   * the caller is told the connection is unusable rather than retryable. */
+  ctls_ctx_t *sc, *cc;
+  ctls_conn_t *s, *c;
+  int fds[2] = {-1, -1};
+  bool up = _make_connected_pair(&sc, &cc, &s, &c, fds);
+
+  char buf[64];
+  ssize_t n = -99;
+  int err = 0;
+  if (up) {
+    static const char garbage[] =
+        "this is not a TLS record at all, not even close";
+    ssize_t pushed = write(fds[1], garbage, sizeof garbage);
+    (void)pushed;
+    errno = 0;
+    n = ctls_conn_read(s, buf, sizeof buf);
+    err = errno;
+  }
+
+  if (c) ctls_conn_destroy(c);
+  if (s) ctls_conn_destroy(s);
+  if (fds[0] >= 0) close(fds[0]);
+  if (fds[1] >= 0) close(fds[1]);
+  ctls_ctx_release(cc);
+  ctls_ctx_release(sc);
+
+  REQUIRE_TRUE(up);
+  REQUIRE_EQ(n, (ssize_t)-1);
+  REQUIRE_EQ(err, ECONNRESET);
+}
+
+TEST(ctls_io, an_abruptly_closed_peer_reads_as_a_failure_not_a_retry) {
+  ctls_ctx_t *sc, *cc;
+  ctls_conn_t *s, *c;
+  int fds[2] = {-1, -1};
+  bool up = _make_connected_pair(&sc, &cc, &s, &c, fds);
+
+  char buf[64];
+  ssize_t n = -99;
+  int err = 0;
+  if (up) {
+    /* Closing the descriptor under the peer skips close_notify entirely, so
+     * this is the truncation case rather than the clean shutdown above. */
+    close(fds[1]);
+    fds[1] = -1;
+    errno = 0;
+    n = ctls_conn_read(s, buf, sizeof buf);
+    err = errno;
+  }
+
+  if (c) ctls_conn_destroy(c);
+  if (s) ctls_conn_destroy(s);
+  if (fds[0] >= 0) close(fds[0]);
+  if (fds[1] >= 0) close(fds[1]);
+  ctls_ctx_release(cc);
+  ctls_ctx_release(sc);
+
+  REQUIRE_TRUE(up);
+  REQUIRE_TRUE(n <= 0);
+  if (n < 0) REQUIRE_TRUE(err != 0);
+}
+
+TEST(ctls_io, a_write_that_fills_the_socket_asks_for_the_write_direction) {
+  /* The one case where a caller must re-arm for writability after a read-side
+   * API call: ctls_conn_wants_write is how that is discovered. */
+  ctls_ctx_t *sc, *cc;
+  ctls_conn_t *s, *c;
+  int fds[2] = {-1, -1};
+  bool up = _make_connected_pair(&sc, &cc, &s, &c, fds);
+
+  bool saw_would_block = false, wants_write = false;
+  if (up) {
+    static char chunk[16384];
+    memset(chunk, 'x', sizeof chunk);
+    for (int i = 0; i < 512 && !saw_would_block; i++) {
+      errno = 0;
+      ssize_t w = ctls_conn_write(c, chunk, sizeof chunk);
+      if (w < 0 && (errno == EWOULDBLOCK || errno == EAGAIN)) {
+        saw_would_block = true;
+        wants_write = ctls_conn_wants_write(c);
+      } else if (w < 0) {
+        break;
+      }
+    }
+  }
+
+  if (c) ctls_conn_destroy(c);
+  if (s) ctls_conn_destroy(s);
+  if (fds[0] >= 0) close(fds[0]);
+  if (fds[1] >= 0) close(fds[1]);
+  ctls_ctx_release(cc);
+  ctls_ctx_release(sc);
+
+  REQUIRE_TRUE(up);
+  REQUIRE_TRUE(saw_would_block);
+  REQUIRE_TRUE(wants_write);
 }

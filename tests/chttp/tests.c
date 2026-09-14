@@ -339,3 +339,34 @@ TEST(oom, basic_auth_fails_at_every_allocation_site) {
   }
   g_fail_at_call = -1;
 }
+
+/* ========================================================================== */
+/*                         chttp_method_str */
+/* ========================================================================== */
+
+/* Every method name the library puts on the wire or into a log line comes from
+ * here. Driven from a runtime index so the switch is genuinely executed. */
+TEST(chttp_method_str, every_method_maps_to_its_own_spelling) {
+  static const struct {
+    chttp_method_t m;
+    const char *name;
+  } cases[] = {
+      {CHTTP_GET, "GET"},         {CHTTP_POST, "POST"},   {CHTTP_PUT, "PUT"},
+      {CHTTP_DELETE, "DELETE"},   {CHTTP_PATCH, "PATCH"}, {CHTTP_HEAD, "HEAD"},
+      {CHTTP_OPTIONS, "OPTIONS"}, {CHTTP_ANY, "ANY"},
+  };
+
+  bool all_named = true;
+  for (volatile size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+    if (strcmp(chttp_method_str(cases[i].m), cases[i].name) != 0)
+      all_named = false;
+
+  REQUIRE_TRUE(all_named);
+}
+
+TEST(chttp_method_str, an_out_of_range_method_reports_unknown) {
+  /* chttp_method_t is a plain enum, so a caller can hand it any integer and
+   * the fallback has to hold. */
+  volatile chttp_method_t bogus = (chttp_method_t)9999;
+  REQUIRE_STREQ(chttp_method_str(bogus), "UNKNOWN");
+}

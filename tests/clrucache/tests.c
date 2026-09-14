@@ -3548,3 +3548,128 @@ TEST(clrucache_handle_lifecycle, bounded_slot_reuse_under_churn) {
 
   REQUIRE_EQ(_clrucache_slot_table_capacity_for_tests(), capacity_after_first);
 }
+
+/* ========================================================================== */
+/* Allocation-failure sweep over cache construction                           */
+/*                                                                            */
+/* clrucache_create_full builds a slot entry, the backing map, the eviction */
+/* list bookkeeping and the per-entry condition variables before it returns, */
+/* and each failure point unwinds a different amount of that. Nothing else in */
+/* this suite executes those branches, so the documented CLRU_CACHE_INVALID */
+/* return and the freeing that goes with it are otherwise unverified. */
+/*                                                                            */
+/* One counter across all four procs: the cache struct and the map are */
+/* calloc, so failing only malloc would leave their unwinding unreachable. */
+/* ========================================================================== */
+
+static atomic_int g_lru_alloc_seen = 0;
+static atomic_int g_lru_fail_at = 0; /* 0 disarms */
+
+static bool _lru_should_fail(void) {
+  int at = atomic_load(&g_lru_fail_at);
+  if (at == 0) return false;
+  return (atomic_fetch_add(&g_lru_alloc_seen, 1) + 1) == at;
+}
+static void *_lru_sweep_malloc(size_t n) {
+  return _lru_should_fail() ? NULL : malloc(n);
+}
+static void _lru_sweep_free(void *p) { free(p); }
+static void *_lru_sweep_calloc(size_t a, size_t b) {
+  return _lru_should_fail() ? NULL : calloc(a, b);
+}
+static void *_lru_sweep_realloc(void *p, size_t n) {
+  return _lru_should_fail() ? NULL : realloc(p, n);
+}
+static ccol_memmgmt_procs_t g_lru_sweep_procs = {
+    _lru_sweep_malloc, _lru_sweep_free, _lru_sweep_calloc, _lru_sweep_realloc};
+
+static void _lru_arm(int nth) {
+  atomic_store(&g_lru_alloc_seen, 0);
+  atomic_store(&g_lru_fail_at, nth);
+}
+static void _lru_disarm(void) { atomic_store(&g_lru_fail_at, 0); }
+
+#define LRU_SWEEP_DEPTH 24
+
+TEST(clrucache_oom, integral_cache_construction_unwinds_at_every_allocation) {
+  bool all_handled = true;
+  for (int n = 1; n <= LRU_SWEEP_DEPTH; n++) {
+    _lru_arm(n);
+    char *err = NULL;
+    clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
+                                             NULL, &g_lru_sweep_procs, &err);
+    _lru_disarm();
+    if (cache != CLRU_CACHE_INVALID) {
+      __clrucache_destroy(cache);
+    } else if (!err) {
+      all_handled = false;
+    }
+  }
+  REQUIRE_TRUE(all_handled);
+}
+
+TEST(clrucache_oom,
+     string_keyed_cache_construction_unwinds_at_every_allocation) {
+  /* A string key type selects the separate-chaining map rather than the
+   * open-addressed one, which allocates a different shape. */
+  bool all_handled = true;
+  for (int n = 1; n <= LRU_SWEEP_DEPTH; n++) {
+    _lru_arm(n);
+    char *err = NULL;
+    clru_cache cache =
+        clrucache_create_full(8, ccol_string, ccol_string, NULL, NULL, NULL,
+                              &g_lru_sweep_procs, &err);
+    _lru_disarm();
+    if (cache != CLRU_CACHE_INVALID)
+      __clrucache_destroy(cache);
+    else if (!err)
+      all_handled = false;
+  }
+  REQUIRE_TRUE(all_handled);
+}
+
+TEST(clrucache_oom, a_large_capacity_cache_unwinds_at_every_allocation) {
+  /* A bigger capacity pushes construction further before it can fail, so the
+   * later failure points become reachable at all. */
+  bool all_handled = true;
+  for (int n = 1; n <= 40; n++) {
+    _lru_arm(n);
+    clru_cache cache =
+        clrucache_create_full(256, ccol_long_long, ccol_string, NULL, NULL,
+                              NULL, &g_lru_sweep_procs, NULL);
+    _lru_disarm();
+    if (cache != CLRU_CACHE_INVALID) __clrucache_destroy(cache);
+  }
+  REQUIRE_TRUE(all_handled);
+}
+
+TEST(clrucache_oom, a_cache_built_under_a_late_failure_still_stores_and_reads) {
+  /* Separates "unwound correctly" from "returned a corpse": whatever survives
+   * has to behave like a fully built cache. */
+  bool built = false, works = false;
+  for (int n = 12; n <= 60 && !built; n++) {
+    _lru_arm(n);
+    clru_cache cache = clrucache_create_full(4, ccol_int, ccol_int, NULL, NULL,
+                                             NULL, &g_lru_sweep_procs, NULL);
+    _lru_disarm();
+    if (cache != CLRU_CACHE_INVALID) {
+      built = true;
+      int key = 7, val = 42;
+      cmap_pair kp = {}, vp = {};
+      _populate_cmap_pair(&kp, key);
+      _populate_cmap_pair(&vp, val);
+      if (clrucache_set_full(cache, &kp, &vp) == ccol_success) {
+        /* get_full hands back storage it allocated; the caller owns it. */
+        cmap_pair val_out = {};
+        if (clrucache_get_full(cache, &kp, &val_out) == ccol_success &&
+            val_out.ptr && val_out.size == sizeof(int)) {
+          works = (*(int *)val_out.ptr == 42);
+        }
+        free(val_out.ptr);
+      }
+      __clrucache_destroy(cache);
+    }
+  }
+  REQUIRE_TRUE(built);
+  REQUIRE_TRUE(works);
+}

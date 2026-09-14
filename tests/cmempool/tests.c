@@ -1,6 +1,7 @@
 #include <cmempool.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -4138,4 +4139,162 @@ TEST(r_mempools, concurrent_realloc_stress) {
 
   ccol_r_mempool_destroy(rmp);
   REQUIRE_EQ((void *)rmp, NULL);
+}
+
+/* ========================================================================== */
+/* Allocation-failure sweep over pool construction                            */
+/*                                                                            */
+/* Both pool flavours build several objects before returning (the pool struct,
+ */
+/* its backing buffer, the per-entry bookkeeping, and for a ranged pool one */
+/* inner pool per size class), and each failure point has to unwind exactly */
+/* what was built so far. Nothing else here executes those branches, so the */
+/* documented "returns NULL with err set" contract and the freeing that goes */
+/* with it are otherwise unverified. */
+/*                                                                            */
+/* One counter across all four procs: the pool struct and several of the */
+/* inner tables are calloc, so failing only malloc would leave their */
+/* unwinding unreachable. */
+/* ========================================================================== */
+
+static _Atomic int g_mp_alloc_seen = 0;
+static _Atomic int g_mp_fail_at = 0; /* 0 disarms */
+
+static bool _mp_should_fail(void) {
+  int at = atomic_load(&g_mp_fail_at);
+  if (at == 0) return false;
+  return (atomic_fetch_add(&g_mp_alloc_seen, 1) + 1) == at;
+}
+static void *_mp_sweep_malloc(size_t n) {
+  return _mp_should_fail() ? NULL : malloc(n);
+}
+static void _mp_sweep_free(void *p) { free(p); }
+static void *_mp_sweep_calloc(size_t a, size_t b) {
+  return _mp_should_fail() ? NULL : calloc(a, b);
+}
+static void *_mp_sweep_realloc(void *p, size_t n) {
+  return _mp_should_fail() ? NULL : realloc(p, n);
+}
+static ccol_memmgmt_procs_t g_mp_sweep_procs = {
+    _mp_sweep_malloc, _mp_sweep_free, _mp_sweep_calloc, _mp_sweep_realloc};
+
+static void _mp_arm(int nth) {
+  atomic_store(&g_mp_alloc_seen, 0);
+  atomic_store(&g_mp_fail_at, nth);
+}
+static void _mp_disarm(void) { atomic_store(&g_mp_fail_at, 0); }
+
+#define MP_SWEEP_DEPTH 12
+
+TEST(cmempool_oom, fixed_pool_construction_unwinds_at_every_allocation) {
+  bool all_handled = true;
+  for (int n = 1; n <= MP_SWEEP_DEPTH; n++) {
+    _mp_arm(n);
+    char *err = NULL;
+    ccol_mempool *mp = ccol_mempool_create(32, sizeof(int), false, false,
+                                           &g_mp_sweep_procs, &err);
+    _mp_disarm();
+    if (mp) {
+      /* Past the failed allocation, so it has to be a genuinely usable pool. */
+      void *e = ccol_mempool_alloc_entry(mp);
+      if (!e) all_handled = false;
+      if (e) ccol_mempool_free_entry(e);
+      ccol_mempool_destroy(mp);
+    } else if (!err) {
+      all_handled = false;
+    }
+  }
+  REQUIRE_TRUE(all_handled);
+}
+
+TEST(cmempool_oom, fixed_pool_with_fallback_unwinds_at_every_allocation) {
+  /* The dynamic-fallback flag adds its own bookkeeping to construction. */
+  bool all_handled = true;
+  for (int n = 1; n <= MP_SWEEP_DEPTH; n++) {
+    _mp_arm(n);
+    char *err = NULL;
+    ccol_mempool *mp = ccol_mempool_create(16, sizeof(long long), true, true,
+                                           &g_mp_sweep_procs, &err);
+    _mp_disarm();
+    if (mp)
+      ccol_mempool_destroy(mp);
+    else if (!err)
+      all_handled = false;
+  }
+  REQUIRE_TRUE(all_handled);
+}
+
+TEST(cmempool_oom, preallocated_buffer_pool_unwinds_at_every_allocation) {
+  /* The caller owns the buffer here, so an unwind must free the pool's own
+   * bookkeeping without touching the caller's storage. */
+  bool all_handled = true;
+  for (int n = 1; n <= MP_SWEEP_DEPTH; n++) {
+    static unsigned char buf[4096];
+    memset(buf, 0xA5, sizeof buf);
+    _mp_arm(n);
+    char *err = NULL;
+    ccol_mempool *mp = ccol_mempool_create_from_preallocated_buffer(
+        buf, sizeof buf, 32, false, false, &g_mp_sweep_procs, &err);
+    _mp_disarm();
+    if (mp)
+      ccol_mempool_destroy(mp);
+    else if (!err)
+      all_handled = false;
+  }
+  REQUIRE_TRUE(all_handled);
+}
+
+TEST(cmempool_oom, ranged_pool_construction_unwinds_at_every_allocation) {
+  /* A ranged pool builds one inner pool per size class, so the interesting
+   * failures are the ones that land partway through that loop and have to
+   * tear down the inner pools already built. */
+  bool all_handled = true;
+  for (int n = 1; n <= 40; n++) {
+    _mp_arm(n);
+    char *err = NULL;
+    ccol_r_mempool *rmp = ccol_r_mempool_create(4, 8, 4, fallback_disabled,
+                                                false, &g_mp_sweep_procs, &err);
+    _mp_disarm();
+    if (rmp)
+      ccol_r_mempool_destroy(rmp);
+    else if (!err)
+      all_handled = false;
+  }
+  REQUIRE_TRUE(all_handled);
+}
+
+TEST(cmempool_oom, ranged_pool_with_fallback_unwinds_at_every_allocation) {
+  bool all_handled = true;
+  for (int n = 1; n <= 40; n++) {
+    _mp_arm(n);
+    char *err = NULL;
+    ccol_r_mempool *rmp = ccol_r_mempool_create(
+        4, 7, 3, fallback_at_last_exhaustion, true, &g_mp_sweep_procs, &err);
+    _mp_disarm();
+    if (rmp)
+      ccol_r_mempool_destroy(rmp);
+    else if (!err)
+      all_handled = false;
+  }
+  REQUIRE_TRUE(all_handled);
+}
+
+TEST(cmempool_oom, a_pool_built_under_a_late_failure_still_serves_entries) {
+  /* Separates "unwound correctly" from "returned a corpse". */
+  bool built = false, usable = false;
+  for (int n = 20; n <= 80 && !built; n++) {
+    _mp_arm(n);
+    ccol_r_mempool *rmp = ccol_r_mempool_create(4, 8, 4, fallback_disabled,
+                                                false, &g_mp_sweep_procs, NULL);
+    _mp_disarm();
+    if (rmp) {
+      built = true;
+      void *e = ccol_r_mempool_alloc_entry(rmp, 16);
+      usable = (e != NULL);
+      if (e) ccol_r_mempool_free_entry(e);
+      ccol_r_mempool_destroy(rmp);
+    }
+  }
+  REQUIRE_TRUE(built);
+  REQUIRE_TRUE(usable);
 }

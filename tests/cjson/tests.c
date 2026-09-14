@@ -3318,3 +3318,49 @@ TEST(node_pool, node_freed_on_a_different_thread_joins_that_threads_own_pool) {
   REQUIRE_EQ(arg.end_pool_size, count);
   REQUIRE_EQ(main_pool_after, main_pool_before);
 }
+
+/* ========================================================================== */
+/*                         cjson_type_str */
+/* ========================================================================== */
+
+/* The node type is part of every diagnostic a caller prints, so a copy-paste
+ * slip that maps one type onto another type's spelling is invisible to every
+ * other test in this suite while corrupting every message a user reads. The
+ * table drives the switch from a runtime index, which is also what keeps the
+ * individual arms executing rather than folded away at -O3. */
+TEST(cjson_type_str, every_node_type_maps_to_its_own_spelling) {
+  cjson nodes[7];
+  nodes[0] = cjson_create_null();
+  nodes[1] = cjson_create_bool(true);
+  nodes[2] = cjson_create_int(42);
+  nodes[3] = cjson_create_double(1.5);
+  nodes[4] = cjson_create_string("s");
+  nodes[5] = cjson_create_list();
+  nodes[6] = cjson_create_dictionary();
+
+  static const char *expected[7] = {
+      "CJSON_NULL",   "CJSON_BOOL", "CJSON_INTEGER",   "CJSON_FLOAT",
+      "CJSON_STRING", "CJSON_LIST", "CJSON_DICTIONARY"};
+
+  bool all_created = true, all_named = true;
+  for (volatile size_t i = 0; i < 7; i++) {
+    if (!nodes[i]) {
+      all_created = false;
+      continue;
+    }
+    if (strcmp(cjson_type_str(nodes[i]), expected[i]) != 0) all_named = false;
+  }
+
+  for (size_t i = 0; i < 7; i++)
+    if (nodes[i]) __cjson_destroy(nodes[i]);
+
+  REQUIRE_TRUE(all_created);
+  REQUIRE_TRUE(all_named);
+}
+
+TEST(cjson_type_str, a_null_handle_reports_the_null_type) {
+  /* cjson_type() answers CJSON_NULL for a NULL handle rather than an
+   * out-of-range value, so this is the documented type name and not the
+   * unknown fallback. */
+  REQUIRE_STREQ(cjson_type_str(NULL), "CJSON_NULL");
+}

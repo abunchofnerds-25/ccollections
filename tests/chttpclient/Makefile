@@ -26,17 +26,61 @@ COMMON_SRC_FILES = ../../src/chttpclient.c \
 	../../src/common.c
 
 EXTRA_CFLAGS ?=
-CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-strong -Wstrict-overflow \
-	-Wl,-z,relro,-z,now \
+# The library's own sources are compiled at the optimization level the shipped
+# library uses, so what these tests exercise is the code that ships rather than
+# a debug build nobody installs. Only this directory's own test files are built
+# at -O0, where the extra debuggability is worth having and the object code is
+# not part of the product. Loosen SRC_OPT temporarily when a failure needs to
+# be stepped through.
+SRC_OPT = -O3
+TEST_OPT = -O0
+# -Wl,-z,relro,-z,now is a linker flag and is kept out of CFLAGS_COMMON on
+# purpose: SRC_CFLAGS drives compile-only invocations, and clang's driver
+# treats an unused linker argument there as an error under -Werror, where gcc
+# merely discards it. It belongs on CFLAGS, which is what performs the real
+# link, and is applied there instead.
+LD_HARDENING = -Wl,-z,relro,-z,now
+CFLAGS_COMMON = $(INCLUDES) $(DEFINITIONS) -fstack-protector-strong \
+	-Wstrict-overflow \
 	-fstack-clash-protection \
 	-D_FORTIFY_SOURCE=3 \
-	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O0 -Werror $(EXTRA_CFLAGS)
+	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -Werror
+CFLAGS = $(CFLAGS_COMMON) $(LD_HARDENING) $(TEST_OPT) $(EXTRA_CFLAGS)
+SRC_CFLAGS = $(CFLAGS_COMMON) $(SRC_OPT) $(EXTRA_CFLAGS)
+# The library objects are built once for this directory and linked into every
+# binary it produces, rather than recompiled once per binary. PARSER_OBJS is
+# the subset the two parser-only binaries need.
+SRC_OBJS = $(notdir $(COMMON_SRC_FILES:.c=.o))
+PARSER_OBJS = chttp1_parser.o ctls.o chashmap.o common.o
 TSAN_CFLAGS = $(INCLUDES) $(DEFINITIONS) -fsanitize=thread -Wall -Wextra -g -O1
 
 LFLAGS = -lpthread -lssl -lcrypto -lz -lm
 
-build:
-	$(CC) $(CFLAGS) tests.c $(COMMON_SRC_FILES) -o tests $(LFLAGS)
+# Empty for an ordinary build; generate_coverage_report passes COVERAGE_ON in
+# so the same pattern rule instruments the library objects.
+COVERAGE_FLAGS =
+COVERAGE_ON = -fprofile-arcs -ftest-coverage
+
+# An object file carries no record of how it was built, so switching compiler
+# or flags (a native build followed by `make CC="gcc -m32" test`, or by a
+# coverage run) would otherwise relink stale objects of the wrong architecture
+# or without instrumentation. This stamp holds the current compiler and flags
+# and is rewritten only when they actually change, so the objects rebuild when
+# they must and stay cached when they need not.
+.PHONY: FORCE
+FORCE:
+
+.build-flags: FORCE
+	@printf '%s\n' '$(CC) $(SRC_CFLAGS) $(COVERAGE_FLAGS)' | cmp -s - $@ || \
+		printf '%s\n' '$(CC) $(SRC_CFLAGS) $(COVERAGE_FLAGS)' > $@
+
+# Pattern rule for the library objects. $(COVERAGE_FLAGS) is empty for an
+# ordinary build and set by generate_coverage_report, so one rule serves both.
+%.o: ../../src/%.c .build-flags
+	$(CC) $(COVERAGE_FLAGS) $(SRC_CFLAGS) -c $< -o $@
+
+build: $(SRC_OBJS)
+	$(CC) $(CFLAGS) tests.c $(SRC_OBJS) -o tests $(LFLAGS)
 
 # Separate ThreadSanitizer build of the main suite only (the multi-threaded
 # async engine is what this is meant to catch races in), kept out of the
@@ -72,8 +116,8 @@ test_tsan: build_tsan
 # other test's use of chttp_do/chttp_get for the rest of that process.
 # Mirrors the tests_parser precedent of an additional binary within this
 # same directory rather than a new top-level tests/ directory.
-build_default_client:
-	$(CC) $(CFLAGS) tests_default_client.c $(COMMON_SRC_FILES) \
+build_default_client: $(SRC_OBJS)
+	$(CC) $(CFLAGS) tests_default_client.c $(SRC_OBJS) \
 		-o tests_default_client $(LFLAGS)
 
 # tests_parser exercises chttp1_parser.c directly (no chttpclient.c at all)
@@ -87,9 +131,8 @@ build_default_client:
 # _write; see chttp1_parser.h's own module doc comment. Kept as its own
 # binary in this same directory rather than a new top-level tests/
 # directory.
-build_parser:
-	$(CC) $(CFLAGS) tests_parser.c ../../src/chttp1_parser.c ../../src/ctls.c \
-		../../src/chashmap.c ../../src/common.c -o tests_parser $(LFLAGS)
+build_parser: $(PARSER_OBJS)
+	$(CC) $(CFLAGS) tests_parser.c $(PARSER_OBJS) -o tests_parser $(LFLAGS)
 
 # libFuzzer targets for chttp1_parser.c, request and response mode
 # separately (see fuzz/fuzz_common.h for why: request-line and status-line
@@ -123,9 +166,10 @@ fuzz_response:
 # rather than a new top-level tests/ directory, matching the tests_parser/
 # tests_default_client precedent above; picohttpparser.c is only needed by
 # this one binary, so it is not added to COMMON_SRC_FILES.
-build_differential:
-	$(CC) $(CFLAGS) tests_differential.c ../../src/chttp1_parser.c \
-		../../src/ctls.c ../../src/chashmap.c ../../src/common.c \
+# picohttpparser is a vendored comparison implementation, not library source,
+# so it stays with the test-side flags rather than the shipped ones.
+build_differential: $(PARSER_OBJS)
+	$(CC) $(CFLAGS) tests_differential.c $(PARSER_OBJS) \
 		picohttpparser/picohttpparser.c -o tests_differential $(LFLAGS)
 
 test: build build_parser build_default_client build_differential
@@ -155,37 +199,44 @@ memtest: build build_parser build_default_client build_differential
 # library's logic, matching the same tolerate-a-known-tool-quirk rationale
 # already applied here to mismatch/inconsistent.
 generate_coverage_report:
-	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests.c \
-		$(COMMON_SRC_FILES) -o tests $(LFLAGS) && \
+	$(MAKE) clean_objs
+	$(MAKE) COVERAGE_FLAGS="$(COVERAGE_ON)" $(SRC_OBJS)
+	$(CC) $(COVERAGE_ON) $(CFLAGS) tests.c $(SRC_OBJS) -o tests $(LFLAGS) && \
 	./tests && \
-	gcov -d -w tests-chttpclient && \
+	gcov -d -w chttpclient && \
 	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file chttpclient.c.info && \
 	genhtml --ignore-errors inconsistent -s chttpclient.c.info --output-directory coverage/tests && \
-	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info tests
-	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests_parser.c ../../src/chttp1_parser.c \
-		../../src/ctls.c ../../src/chashmap.c ../../src/common.c -o tests_parser $(LFLAGS) && \
+	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info *.o tests
+	$(MAKE) clean_objs
+	$(MAKE) COVERAGE_FLAGS="$(COVERAGE_ON)" $(PARSER_OBJS)
+	$(CC) $(COVERAGE_ON) $(CFLAGS) tests_parser.c $(PARSER_OBJS) \
+		-o tests_parser $(LFLAGS) && \
 	./tests_parser && \
-	gcov -d -w tests_parser-chttp1_parser && \
+	gcov -d -w chttp1_parser && \
 	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file chttp1_parser.c.info && \
 	genhtml --ignore-errors inconsistent -s chttp1_parser.c.info --output-directory coverage/tests_parser && \
-	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info tests_parser
-	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests_differential.c \
-		../../src/chttp1_parser.c ../../src/ctls.c ../../src/chashmap.c \
-		../../src/common.c picohttpparser/picohttpparser.c \
-		-o tests_differential $(LFLAGS) && \
+	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info *.o tests_parser
+	$(MAKE) clean_objs
+	$(MAKE) COVERAGE_FLAGS="$(COVERAGE_ON)" $(PARSER_OBJS)
+	$(CC) $(COVERAGE_ON) $(CFLAGS) tests_differential.c $(PARSER_OBJS) \
+		picohttpparser/picohttpparser.c -o tests_differential $(LFLAGS) && \
 	./tests_differential && \
-	gcov -d -w tests_differential-chttp1_parser && \
+	gcov -d -w chttp1_parser && \
 	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file chttp1_parser_differential.c.info && \
 	genhtml --ignore-errors inconsistent -s chttp1_parser_differential.c.info --output-directory coverage/tests_differential && \
-	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info tests_differential
+	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info *.o tests_differential
 
 all: build build_parser build_default_client build_differential build_tsan test test_tsan memtest generate_coverage_report
 
+.PHONY: clean_objs
+clean_objs:
+	rm -f *.o *.gcno *.gcda .build-flags
+
 clean:
-	rm -rf tests tests_tls tests_parser tests_default_client tests_differential tests_tsan third_party_obj coverage *.gcno *.gcda *.gcov *.c.info \
+	rm -rf .build-flags *.o tests tests_tls tests_parser tests_default_client tests_differential tests_tsan third_party_obj coverage *.gcno *.gcda *.gcov *.c.info \
 		fuzz_chttp1_request fuzz_chttp1_response
 
 default: build build_parser build_default_client build_differential

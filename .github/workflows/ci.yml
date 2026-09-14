@@ -133,23 +133,17 @@ jobs:
   linux-aarch64-gcc:
     name: Linux aarch64 (cross-compile + QEMU)
     runs-on: ubuntu-latest
-    # qemu-user's own fork()-plus-multithreaded-guest handling has a known,
-    # timing-dependent deadlock class: at least one confirmed, external,
-    # already-filed cause is linux-user's own internal fd_trans_lock, a
-    # process-wide pthread mutex left permanently locked in a forked child
-    # if another thread in the parent was holding it at the instant of
-    # fork() (gitlab.com/qemu-project/qemu/-/issues/2846, confirmed there on
-    # exactly the qemu-user 8.2.2 this distribution installs; see
-    # tests/cthreadcomm/tests.c's own CCOL_QEMU_FD_TRANS_LOCK_BUG comment,
-    # which this job's own "Detect a known-affected qemu-user version" step
-    # feeds, for the two test suites known to hit it reliably enough to skip
-    # outright). When this class triggers on some OTHER test this project has
-    # not identified and skipped this same way, no in-process timeout
-    # (including this suite's own `alarm(10)` safety nets around fork()-based
-    # tests) can save the job, since the itimer that alarm() relies on is
-    # itself stuck inside the same deadlock. A one-time occurrence ran for
-    # over 3 hours with zero output before being cancelled; this bound keeps
-    # a recurrence cheap instead of silently burning runner time.
+    # qemu-user has a timing-dependent deadlock class around a guest fork():
+    # a lock held inside the emulator at that instant is inherited locked by
+    # the child, whose threads then sleep on a futex with nothing able to
+    # release them. The one identified instance of it, linux-user's own
+    # fd_trans_lock (gitlab.com/qemu-project/qemu/-/issues/2846), is fixed in
+    # the qemu-user this job installs below. This bound covers whatever else
+    # in that class remains: no in-process timeout can recover from it,
+    # because the itimer this suite's own alarm() safety nets rely on is
+    # stuck inside the same deadlock, and an occurrence ran for over 3 hours
+    # with zero output before being cancelled. The bound keeps a recurrence
+    # cheap instead of silently burning runner time.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -172,22 +166,37 @@ jobs:
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
           EOF
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user libssl-dev:arm64 zlib1g-dev:arm64
-      - name: Detect a known-affected qemu-user version
-        # See tests/cthreadcomm/tests.c's own comment on
-        # CCOL_QEMU_FD_TRANS_LOCK_BUG for the full rationale: qemu-user's
-        # linux-user fd_trans_lock can be left permanently locked in a
-        # forked child (gitlab.com/qemu-project/qemu/-/issues/2846),
-        # confirmed there on exactly the qemu-user 8.2.2 this distribution
-        # installs. Detected here, not inside the test binary itself: a
-        # guest program running under qemu-user has no way to query the
-        # host's own qemu-user version from inside the emulated process.
+          sudo apt-get install -y gcc-aarch64-linux-gnu libssl-dev:arm64 zlib1g-dev:arm64
+      - name: Install a qemu-user build without the fd_trans_lock fork bug
+        # Ubuntu 24.04 ships qemu-user 8.2.2, which carries a linux-user bug
+        # that can leave its internal, process-wide fd_trans_lock permanently
+        # locked in a forked child (gitlab.com/qemu-project/qemu/-/issues/2846).
+        # Every thread of that child then sleeps on a futex forever, which
+        # surfaces here as an unrelated-looking test hanging until its own
+        # bounded wait gives up. The trigger is not something a guest program
+        # can avoid by forking carefully: qemu-user runs more than one host
+        # thread even while the emulated program is single-threaded, so any
+        # guest fork() is exposed. Measured against this repository's own
+        # cthreadcomm suite, 8.2.2 fails roughly one full-suite run in ten,
+        # landing on a different fork() test each time, while 10.x passes.
+        #
+        # The static qemu-user binary is copied out of an official Debian
+        # trixie image rather than installed from apt, because no Ubuntu 24.04
+        # archive carries a fixed build. Nothing else about these jobs changes:
+        # the binary is static-pie with no libc dependency, so it runs directly
+        # on the runner, and the cross toolchain, sysroot and build flags stay
+        # exactly as they were.
         run: |
-          QEMU_VER=$(qemu-aarch64 --version | head -1)
-          echo "Installed: $QEMU_VER"
-          if echo "$QEMU_VER" | grep -qE 'version 8\.2\.2([^0-9]|$)'; then
-            echo "CCOL_QEMU_FD_TRANS_LOCK_BUG=1" >> "$GITHUB_ENV"
-          fi
+          set -e
+          STAGE=$(mktemp -d)
+          docker run --rm -v "$STAGE:/out" debian:trixie bash -c '
+            apt-get update -qq
+            apt-get install -y -qq qemu-user-static
+            cp /usr/bin/qemu-aarch64-static /out/qemu-aarch64-static
+          '
+          sudo install -m 0755 "$STAGE/qemu-aarch64-static" /usr/local/bin/qemu-aarch64-static
+          sudo rm -rf "$STAGE"
+          qemu-aarch64-static --version | head -1
       - name: Cross-build and run each module's test suite under qemu-aarch64
         # The per-module test/memtest targets hardcode a bare `./tests`
         # invocation with no prefix-injection point, so an aarch64 binary
@@ -201,12 +210,36 @@ jobs:
         # reliably supported combination.
         run: |
           set -e
+          # Several suites fork a child that deliberately abort()s to prove a
+          # misuse is fatal. qemu-user writes a guest core dump per abort into
+          # the working directory, which these deliberate aborts give no reason
+          # to keep and which runs to gigabytes across a full sweep, so the
+          # limit is zeroed rather than left to whatever the runner defaults to.
+          ulimit -c 0
           for dir in tests/*/; do
             mod=$(basename "$dir")
             [ "$mod" = "tau" ] && continue
             echo "::group::$mod"
-            (cd "$dir" && make CC=aarch64-linux-gnu-gcc build)
-            qemu-aarch64 -L /usr/aarch64-linux-gnu "$dir/tests"
+            # Build exactly what this module's own `test` target builds, and
+            # run exactly the binaries its recipe runs, so this job covers the
+            # same set as the native jobs. Most modules have one binary, but
+            # chttpclient, chttpserver and cyaml each have several, and a
+            # module that gains another later is picked up here with no edit
+            # to this workflow. Deriving both lists from the Makefile keeps
+            # that in step automatically; cyaml's build_differential is
+            # correctly left out, since it is deliberately not a `test`
+            # prerequisite.
+            targets=$(sed -n 's/^test:[[:space:]]*//p' "$dir/Makefile" | head -1)
+            bins=$(awk '/^test:/{f=1;next} f&&/^\t\.\//{sub(/^\t\.\//,"");print $1;next} f&&/^[^\t]/{exit}' "$dir/Makefile")
+            (cd "$dir" && make CC=aarch64-linux-gnu-gcc $targets)
+            # Run from inside the module directory, exactly as its own
+            # `test` target does: at least one binary (cyaml's
+            # tests_spec_suite) resolves its vendored data files relative
+            # to its own directory and fails outright from anywhere else.
+            for bin in $bins; do
+              echo "--- $bin ---"
+              (cd "$dir" && qemu-aarch64-static -L /usr/aarch64-linux-gnu "./$bin")
+            done
             echo "::endgroup::"
           done
 
@@ -214,11 +247,8 @@ jobs:
     name: Linux aarch64 (Clang cross-compile + QEMU)
     runs-on: ubuntu-latest
     # See linux-aarch64-gcc's own comment above for the full rationale: this
-    # job runs the identical qemu-aarch64-based fork() test under the same
-    # emulator, so it carries the identical deadlock risk (confirmed directly
-    # on this job: a run hung for over 3 hours at
-    # circular_queues.destroy_while_ccol_select_is_watching_is_fatal with zero
-    # output before being cancelled).
+    # job runs the identical fork() tests under the same emulator, so it
+    # carries the identical residual deadlock risk.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -239,16 +269,21 @@ jobs:
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
           EOF
           sudo apt-get update
-          sudo apt-get install -y clang gcc-aarch64-linux-gnu qemu-user libssl-dev:arm64 zlib1g-dev:arm64
-      - name: Detect a known-affected qemu-user version
+          sudo apt-get install -y clang gcc-aarch64-linux-gnu libssl-dev:arm64 zlib1g-dev:arm64
+      - name: Install a qemu-user build without the fd_trans_lock fork bug
         # See linux-aarch64-gcc's own identical step above for the full
         # rationale.
         run: |
-          QEMU_VER=$(qemu-aarch64 --version | head -1)
-          echo "Installed: $QEMU_VER"
-          if echo "$QEMU_VER" | grep -qE 'version 8\.2\.2([^0-9]|$)'; then
-            echo "CCOL_QEMU_FD_TRANS_LOCK_BUG=1" >> "$GITHUB_ENV"
-          fi
+          set -e
+          STAGE=$(mktemp -d)
+          docker run --rm -v "$STAGE:/out" debian:trixie bash -c '
+            apt-get update -qq
+            apt-get install -y -qq qemu-user-static
+            cp /usr/bin/qemu-aarch64-static /out/qemu-aarch64-static
+          '
+          sudo install -m 0755 "$STAGE/qemu-aarch64-static" /usr/local/bin/qemu-aarch64-static
+          sudo rm -rf "$STAGE"
+          qemu-aarch64-static --version | head -1
       - name: Cross-build and run each module's test suite under qemu-aarch64
         # Same shape as the aarch64 GCC job above (bare ./tests invocation,
         # no memtest leg; see its own comment for the full rationale on
@@ -269,12 +304,32 @@ jobs:
         run: |
           set -e
           AARCH64_GCC_CROSS_DIR=$(find /usr/lib/gcc-cross/aarch64-linux-gnu -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
+          # See linux-aarch64-gcc's own identical line above for why.
+          ulimit -c 0
           for dir in tests/*/; do
             mod=$(basename "$dir")
             [ "$mod" = "tau" ] && continue
             echo "::group::$mod"
-            (cd "$dir" && make CC="clang --target=aarch64-linux-gnu -B$AARCH64_GCC_CROSS_DIR" build)
-            qemu-aarch64 -L /usr/aarch64-linux-gnu "$dir/tests"
+            # Build exactly what this module's own `test` target builds, and
+            # run exactly the binaries its recipe runs, so this job covers the
+            # same set as the native jobs. Most modules have one binary, but
+            # chttpclient, chttpserver and cyaml each have several, and a
+            # module that gains another later is picked up here with no edit
+            # to this workflow. Deriving both lists from the Makefile keeps
+            # that in step automatically; cyaml's build_differential is
+            # correctly left out, since it is deliberately not a `test`
+            # prerequisite.
+            targets=$(sed -n 's/^test:[[:space:]]*//p' "$dir/Makefile" | head -1)
+            bins=$(awk '/^test:/{f=1;next} f&&/^\t\.\//{sub(/^\t\.\//,"");print $1;next} f&&/^[^\t]/{exit}' "$dir/Makefile")
+            (cd "$dir" && make CC="clang --target=aarch64-linux-gnu -B$AARCH64_GCC_CROSS_DIR" $targets)
+            # Run from inside the module directory, exactly as its own
+            # `test` target does: at least one binary (cyaml's
+            # tests_spec_suite) resolves its vendored data files relative
+            # to its own directory and fails outright from anywhere else.
+            for bin in $bins; do
+              echo "--- $bin ---"
+              (cd "$dir" && qemu-aarch64-static -L /usr/aarch64-linux-gnu "./$bin")
+            done
             echo "::endgroup::"
           done
 
@@ -282,8 +337,8 @@ jobs:
     name: Linux arm32 (cross-compile + QEMU)
     runs-on: ubuntu-latest
     # See linux-aarch64-gcc's own comment above for the full rationale: this
-    # job runs the identical fork() test under qemu-arm, so it carries the
-    # identical qemu-user fork()-plus-multithreaded-guest deadlock risk.
+    # job runs the identical fork() tests under qemu-arm, so it carries the
+    # identical residual deadlock risk.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -305,22 +360,21 @@ jobs:
           deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
           EOF
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf qemu-user libssl-dev:armhf zlib1g-dev:armhf
-      - name: Detect a known-affected qemu-user version
-        # See tests/cthreadcomm/tests.c's own comment on
-        # CCOL_QEMU_FD_TRANS_LOCK_BUG for the full rationale: qemu-user's
-        # linux-user fd_trans_lock can be left permanently locked in a
-        # forked child (gitlab.com/qemu-project/qemu/-/issues/2846),
-        # confirmed there on exactly the qemu-user 8.2.2 this distribution
-        # installs. Detected here, not inside the test binary itself: a
-        # guest program running under qemu-user has no way to query the
-        # host's own qemu-user version from inside the emulated process.
+          sudo apt-get install -y gcc-arm-linux-gnueabihf libssl-dev:armhf zlib1g-dev:armhf
+      - name: Install a qemu-user build without the fd_trans_lock fork bug
+        # See linux-aarch64-gcc's own identical step above for the full
+        # rationale.
         run: |
-          QEMU_VER=$(qemu-arm --version | head -1)
-          echo "Installed: $QEMU_VER"
-          if echo "$QEMU_VER" | grep -qE 'version 8\.2\.2([^0-9]|$)'; then
-            echo "CCOL_QEMU_FD_TRANS_LOCK_BUG=1" >> "$GITHUB_ENV"
-          fi
+          set -e
+          STAGE=$(mktemp -d)
+          docker run --rm -v "$STAGE:/out" debian:trixie bash -c '
+            apt-get update -qq
+            apt-get install -y -qq qemu-user-static
+            cp /usr/bin/qemu-arm-static /out/qemu-arm-static
+          '
+          sudo install -m 0755 "$STAGE/qemu-arm-static" /usr/local/bin/qemu-arm-static
+          sudo rm -rf "$STAGE"
+          qemu-arm-static --version | head -1
       - name: Cross-build and run each module's test suite under qemu-arm
         # Same shape as the aarch64 job above: build each module via the
         # existing `build` target with CC=arm-linux-gnueabihf-gcc and run the
@@ -331,12 +385,32 @@ jobs:
         # reliably supported combination.
         run: |
           set -e
+          # See linux-aarch64-gcc's own identical line above for why.
+          ulimit -c 0
           for dir in tests/*/; do
             mod=$(basename "$dir")
             [ "$mod" = "tau" ] && continue
             echo "::group::$mod"
-            (cd "$dir" && make CC=arm-linux-gnueabihf-gcc build)
-            qemu-arm -L /usr/arm-linux-gnueabihf "$dir/tests"
+            # Build exactly what this module's own `test` target builds, and
+            # run exactly the binaries its recipe runs, so this job covers the
+            # same set as the native jobs. Most modules have one binary, but
+            # chttpclient, chttpserver and cyaml each have several, and a
+            # module that gains another later is picked up here with no edit
+            # to this workflow. Deriving both lists from the Makefile keeps
+            # that in step automatically; cyaml's build_differential is
+            # correctly left out, since it is deliberately not a `test`
+            # prerequisite.
+            targets=$(sed -n 's/^test:[[:space:]]*//p' "$dir/Makefile" | head -1)
+            bins=$(awk '/^test:/{f=1;next} f&&/^\t\.\//{sub(/^\t\.\//,"");print $1;next} f&&/^[^\t]/{exit}' "$dir/Makefile")
+            (cd "$dir" && make CC=arm-linux-gnueabihf-gcc $targets)
+            # Run from inside the module directory, exactly as its own
+            # `test` target does: at least one binary (cyaml's
+            # tests_spec_suite) resolves its vendored data files relative
+            # to its own directory and fails outright from anywhere else.
+            for bin in $bins; do
+              echo "--- $bin ---"
+              (cd "$dir" && qemu-arm-static -L /usr/arm-linux-gnueabihf "./$bin")
+            done
             echo "::endgroup::"
           done
 
@@ -344,8 +418,8 @@ jobs:
     name: Linux arm32 (Clang cross-compile + QEMU)
     runs-on: ubuntu-latest
     # See linux-aarch64-gcc's own comment above for the full rationale: this
-    # job runs the identical fork() test under qemu-arm, so it carries the
-    # identical qemu-user fork()-plus-multithreaded-guest deadlock risk.
+    # job runs the identical fork() tests under qemu-arm, so it carries the
+    # identical residual deadlock risk.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -366,16 +440,21 @@ jobs:
           deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
           EOF
           sudo apt-get update
-          sudo apt-get install -y clang gcc-arm-linux-gnueabihf qemu-user libssl-dev:armhf zlib1g-dev:armhf
-      - name: Detect a known-affected qemu-user version
-        # See linux-arm32-gcc's own identical step above for the full
+          sudo apt-get install -y clang gcc-arm-linux-gnueabihf libssl-dev:armhf zlib1g-dev:armhf
+      - name: Install a qemu-user build without the fd_trans_lock fork bug
+        # See linux-aarch64-gcc's own identical step above for the full
         # rationale.
         run: |
-          QEMU_VER=$(qemu-arm --version | head -1)
-          echo "Installed: $QEMU_VER"
-          if echo "$QEMU_VER" | grep -qE 'version 8\.2\.2([^0-9]|$)'; then
-            echo "CCOL_QEMU_FD_TRANS_LOCK_BUG=1" >> "$GITHUB_ENV"
-          fi
+          set -e
+          STAGE=$(mktemp -d)
+          docker run --rm -v "$STAGE:/out" debian:trixie bash -c '
+            apt-get update -qq
+            apt-get install -y -qq qemu-user-static
+            cp /usr/bin/qemu-arm-static /out/qemu-arm-static
+          '
+          sudo install -m 0755 "$STAGE/qemu-arm-static" /usr/local/bin/qemu-arm-static
+          sudo rm -rf "$STAGE"
+          qemu-arm-static --version | head -1
       - name: Cross-build and run each module's test suite under qemu-arm
         # Same shape as the arm32 GCC job above (bare ./tests invocation, no
         # memtest leg; see its own comment for the full rationale on both),
@@ -405,11 +484,31 @@ jobs:
         run: |
           set -e
           ARM_GCC_CROSS_DIR=$(find /usr/lib/gcc-cross/arm-linux-gnueabihf -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
+          # See linux-aarch64-gcc's own identical line above for why.
+          ulimit -c 0
           for dir in tests/*/; do
             mod=$(basename "$dir")
             [ "$mod" = "tau" ] && continue
             echo "::group::$mod"
-            (cd "$dir" && make CC="clang --target=arm-linux-gnueabihf -B$ARM_GCC_CROSS_DIR" EXTRA_CFLAGS="-Wno-error=unused-command-line-argument" build)
-            qemu-arm -L /usr/arm-linux-gnueabihf "$dir/tests"
+            # Build exactly what this module's own `test` target builds, and
+            # run exactly the binaries its recipe runs, so this job covers the
+            # same set as the native jobs. Most modules have one binary, but
+            # chttpclient, chttpserver and cyaml each have several, and a
+            # module that gains another later is picked up here with no edit
+            # to this workflow. Deriving both lists from the Makefile keeps
+            # that in step automatically; cyaml's build_differential is
+            # correctly left out, since it is deliberately not a `test`
+            # prerequisite.
+            targets=$(sed -n 's/^test:[[:space:]]*//p' "$dir/Makefile" | head -1)
+            bins=$(awk '/^test:/{f=1;next} f&&/^\t\.\//{sub(/^\t\.\//,"");print $1;next} f&&/^[^\t]/{exit}' "$dir/Makefile")
+            (cd "$dir" && make CC="clang --target=arm-linux-gnueabihf -B$ARM_GCC_CROSS_DIR" EXTRA_CFLAGS="-Wno-error=unused-command-line-argument" $targets)
+            # Run from inside the module directory, exactly as its own
+            # `test` target does: at least one binary (cyaml's
+            # tests_spec_suite) resolves its vendored data files relative
+            # to its own directory and fails outright from anywhere else.
+            for bin in $bins; do
+              echo "--- $bin ---"
+              (cd "$dir" && qemu-arm-static -L /usr/arm-linux-gnueabihf "./$bin")
+            done
             echo "::endgroup::"
           done

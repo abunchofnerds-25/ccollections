@@ -217,21 +217,22 @@ static bool _clog_test_read_proc_file(pid_t pid, const char *name, char *buf,
  * pid (and each of its own threads, if any) after a bounded wait for it has
  * already timed out. Exists for async.fatal_drains_queue_before_writing_
  * and_terminating (see that test's own comment), whose occasional CI-only
- * hang has no confirmed cause: unlike two confirmed-affected cthreadcomm
- * fork_safety tests, it does not reproduce in 15 direct attempts against
- * the exact same qemu-user version. If it recurs, THIS dump is what
- * answers it: a State: S with a real /proc/<pid>/syscall entry (a genuine
- * futex/nanosleep/whatever wait, not a placeholder) and a broad SigBlk mask
+ * hang has no confirmed cause: unlike the cthreadcomm fork() tests that do
+ * carry the qemu-user fd_trans_lock signature, it does not reproduce in 15
+ * direct attempts against the same qemu-user version. If it recurs, THIS
+ * dump is what answers it: a State: S with a real /proc/<pid>/syscall
+ * entry (a genuine futex/nanosleep/whatever wait, not a placeholder) and a
+ * broad SigBlk mask
  * blocking nearly every signal would match the confirmed qemu-user
  * fd_trans_lock signature after all (qemu-user's own linux-user
  * fd_trans_lock, a process-wide pthread mutex left permanently locked in a
  * forked child if another thread in the parent was holding it at the instant
- * of fork(); gitlab.com/qemu-project/qemu/-/issues/2846, confirmed there on
- * exactly the qemu-user 8.2.2 this distribution's CI jobs install); that
- * broad SigBlk mask is qemu-user's own baseline thread-management behavior,
- * present regardless of whether this specific test's own child ever calls
- * alarm() itself (it does not), so do not expect a specific pending signal
- * in ShdPnd the way the two confirmed cthreadcomm cases show; the mask
+ * of fork(); gitlab.com/qemu-project/qemu/-/issues/2846, present in
+ * qemu-user 8.2.2 and fixed in 10.x, which is what the CI jobs install);
+ * that broad SigBlk mask is qemu-user's own baseline thread-management
+ * behavior, present regardless of whether this specific test's own child
+ * ever calls alarm() itself (it does not), so do not expect a specific
+ * pending signal in ShdPnd the way the cthreadcomm cases show; the mask
  * itself, not a particular pending bit, is the signal to look for here.
  * State: R with high CPU and an empty wchan would instead point at a genuine
  * spin; a State: Z (zombie) would point at a waitpid()-observation bug under
@@ -5886,9 +5887,9 @@ TEST(async, format_switch_to_syslog_does_not_drop_buffered_batch) {
  * moments before a crash, still sitting unflushed, would be silently lost.
  *
  * This test has one open, CI-only failure mode (seen on linux-aarch64-gcc,
- * under real qemu-user 8.2.2): the child is not reaped within the 30s bound
+ * under qemu-user 8.2.2): the child is not reaped within the 30s bound
  * below. It does NOT match the confirmed, external, already-filed qemu-user
- * fd_trans_lock bug that two cthreadcomm fork_safety tests are known to hit
+ * fd_trans_lock bug that several cthreadcomm fork() tests do carry
  * (linux-user's own internal fd_trans_lock, a process-wide pthread mutex
  * left permanently locked in a forked child if another thread in the parent
  * was holding it at the instant of fork(); gitlab.com/qemu-project/qemu/-/
@@ -5904,8 +5905,8 @@ TEST(async, format_switch_to_syslog_does_not_drop_buffered_batch) {
  * "REQUIRE_TRUE(false), reason unknown": a State: S child with a real
  * /proc/<pid>/syscall entry and a broad SigBlk mask blocking nearly every
  * signal would match the confirmed fd_trans_lock signature after all (this
- * child never calls alarm() itself, so, unlike the two confirmed cthreadcomm
- * cases, do not expect any particular pending signal in ShdPnd; the mask
+ * child never calls alarm() itself, so, unlike the cthreadcomm cases, do
+ * not expect any particular pending signal in ShdPnd; the mask
  * itself is qemu-user's own baseline thread-management behavior and is what
  * to look for here); a State: R child spinning at high CPU with an empty
  * wchan would instead point at a genuine busy loop; and which [DEBUG_TEST]

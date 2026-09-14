@@ -11074,3 +11074,44 @@ TEST(node_pool, node_freed_on_a_different_thread_joins_that_threads_own_pool) {
   REQUIRE_EQ(arg.end_pool_size, count);
   REQUIRE_EQ(main_pool_after, main_pool_before);
 }
+
+/* ========================================================================== */
+/*                         cyaml_type_str                                      */
+/* ========================================================================== */
+
+/* Same contract as cjson_type_str: the spelling reaches users through
+ * diagnostics, and a mismapped arm is invisible to every other test here. */
+TEST(cyaml_type_str, every_node_type_maps_to_its_own_spelling) {
+  cyaml nodes[7];
+  nodes[0] = cyaml_create_null();
+  nodes[1] = cyaml_create_bool(true);
+  nodes[2] = cyaml_create_int(42);
+  nodes[3] = cyaml_create_double(1.5);
+  nodes[4] = cyaml_create_string("s");
+  nodes[5] = cyaml_create_list();
+  nodes[6] = cyaml_create_dictionary();
+
+  static const char *expected[7] = {"CYAML_NULL",   "CYAML_BOOL",
+                                    "CYAML_INTEGER", "CYAML_FLOAT",
+                                    "CYAML_STRING",  "CYAML_LIST",
+                                    "CYAML_DICTIONARY"};
+
+  bool all_created = true, all_named = true;
+  for (volatile size_t i = 0; i < 7; i++) {
+    if (!nodes[i]) {
+      all_created = false;
+      continue;
+    }
+    if (strcmp(cyaml_type_str(nodes[i]), expected[i]) != 0) all_named = false;
+  }
+
+  for (size_t i = 0; i < 7; i++)
+    if (nodes[i]) __cyaml_destroy(nodes[i]);
+
+  REQUIRE_TRUE(all_created);
+  REQUIRE_TRUE(all_named);
+}
+
+TEST(cyaml_type_str, a_null_handle_reports_the_null_type) {
+  REQUIRE_STREQ(cyaml_type_str(NULL), "CYAML_NULL");
+}

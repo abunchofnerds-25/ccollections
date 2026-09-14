@@ -35,7 +35,6 @@ memtest: build
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
-	gcov tests-mixed && \
 	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file mixed.c.info && \
 	genhtml --ignore-errors inconsistent mixed.c.info --output-directory coverage && \

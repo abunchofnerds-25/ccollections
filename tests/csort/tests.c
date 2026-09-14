@@ -28,7 +28,7 @@ TAU_MAIN()  // sets up Tau (+ main function)
       cvector_push_back(cvec, &(type){rand() % modulus_value}); \
     }                                                           \
                                                                 \
-    REQUIRE_EQ(cvector_elem_count(cvec), num_sample);           \
+    REQUIRE_EQ(cvector_elem_count(cvec), (size_t)num_sample);           \
                                                                 \
     cvec_sort(cvec);                                            \
                                                                 \
@@ -60,7 +60,7 @@ TEST(csort, cvector_integer_sort) {
     cvector_push_back(cvec, &(int){rand()});
   }
 
-  REQUIRE_EQ(cvector_elem_count(cvec), num_sample);
+  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)num_sample);
 
   cvec_sort(cvec);
 
@@ -105,7 +105,7 @@ define_integer_type_test(char, char, 100)
     cvector_push_back(cvec, &(double){((double)rand() / RAND_MAX * 10)});
   }
 
-  REQUIRE_EQ(cvector_elem_count(cvec), num_sample);
+  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)num_sample);
 
   cvec_sort(cvec);
 
@@ -134,7 +134,7 @@ TEST(csort, cvector_float_sort) {
     cvector_push_back(cvec, &(float){((float)rand() / (float)RAND_MAX * 10)});
   }
 
-  REQUIRE_EQ(cvector_elem_count(cvec), num_sample);
+  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)num_sample);
 
   cvec_sort(cvec);
 
@@ -164,7 +164,7 @@ TEST(csort, cvector_long_double_sort) {
                       &(long double){((long double)rand() / RAND_MAX * 10)});
   }
 
-  REQUIRE_EQ(cvector_elem_count(cvec), num_sample);
+  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)num_sample);
 
   cvec_sort(cvec);
 
@@ -212,7 +212,7 @@ TEST(csort, cvector_string_sort_with_known_values) {
   for (i = 0; i < num_sample; i++) {
     cvector_push_back(cvec, &(char *){test_strings[i]});
   }
-  REQUIRE_EQ(cvector_elem_count(cvec), num_sample);
+  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)num_sample);
 
   cvec_sort(cvec);
 
@@ -267,7 +267,7 @@ TEST(csort, cvector_string_sort_with_random_values) {
     cvector_push_back(cvec, &(char *){rand_strings[i]});
   }
 
-  REQUIRE_EQ(cvector_elem_count(cvec), num_sample);
+  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)num_sample);
 
   cvec_sort(cvec);
 
@@ -312,7 +312,7 @@ TEST(csort, cvector_custom_test_struct_sort) {
     cvector_push_back(cvec, &(custom_test_struct){.data = rand()});
   }
 
-  REQUIRE_EQ(cvector_elem_count(cvec), num_sample);
+  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)num_sample);
 
   cvector_sort_with_comparison_proc(cvec, custom_test_struct_comparison_proc);
 

@@ -805,7 +805,7 @@ TEST(cbst_maps, stress_test_many_insertions) {
     cbmap_insert(bm, i, val);
   }
 
-  REQUIRE_EQ(cbmap_elem_count(bm), size);
+  REQUIRE_EQ(cbmap_elem_count(bm), (size_t)size);
 
   // Verify all elements
   for (int i = 0; i < size; ++i) {
@@ -837,7 +837,7 @@ TEST(cbst_maps, stress_test_many_deletions) {
     cbmap_insert(bm, i, val);
   }
 
-  REQUIRE_EQ(cbmap_elem_count(bm), size);
+  REQUIRE_EQ(cbmap_elem_count(bm), (size_t)size);
 
   // Delete all elements
   for (int i = 0; i < size; ++i) {

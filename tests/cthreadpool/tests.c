@@ -3210,3 +3210,117 @@ TEST(fork_safety, wait_on_foreign_pool_with_pending_work_does_not_hang) {
 }
 
 #endif /* CCOL_FORK_SAFETY_REQUIRED */
+
+/* ========================================================================== */
+/* Allocation-failure sweep over pool construction                            */
+/*                                                                            */
+/* ccol_create_cthread_pool_mp builds a slot entry, a queue, a free list and   */
+/* a worker array before it returns, and each failure point unwinds a          */
+/* different amount of that. The g_oom_enabled allocator above fails every     */
+/* allocation at once, which only ever reaches the first of those branches;    */
+/* failing the Nth allocation in turn is what walks the rest.                  */
+/*                                                                            */
+/* The counter spans all four procs deliberately: the pool struct and the      */
+/* worker array are calloc, so a malloc-only injector would leave their        */
+/* unwinding unreachable.                                                      */
+/* ========================================================================== */
+
+static atomic_int g_ctp_alloc_seen = 0;
+static atomic_int g_ctp_fail_at = 0; /* 0 disarms */
+
+static bool _ctp_should_fail(void) {
+  int at = atomic_load(&g_ctp_fail_at);
+  if (at == 0) return false;
+  return (atomic_fetch_add(&g_ctp_alloc_seen, 1) + 1) == at;
+}
+static void *_ctp_sweep_malloc(size_t n) {
+  return _ctp_should_fail() ? NULL : malloc(n);
+}
+static void _ctp_sweep_free(void *p) { free(p); }
+static void *_ctp_sweep_calloc(size_t a, size_t b) {
+  return _ctp_should_fail() ? NULL : calloc(a, b);
+}
+static void *_ctp_sweep_realloc(void *p, size_t n) {
+  return _ctp_should_fail() ? NULL : realloc(p, n);
+}
+static ccol_memmgmt_procs_t g_ctp_sweep_mp = {
+    _ctp_sweep_malloc, _ctp_sweep_free, _ctp_sweep_calloc, _ctp_sweep_realloc};
+
+static void _ctp_arm(int nth) {
+  atomic_store(&g_ctp_alloc_seen, 0);
+  atomic_store(&g_ctp_fail_at, nth);
+}
+static void _ctp_disarm(void) { atomic_store(&g_ctp_fail_at, 0); }
+
+/* Deep enough to walk past the last allocation construction makes. */
+#define CTP_SWEEP_DEPTH 24
+
+TEST(ctpool_oom, bounded_pool_construction_unwinds_at_every_allocation) {
+  bool all_handled = true;
+  for (int n = 1; n <= CTP_SWEEP_DEPTH; n++) {
+    _ctp_arm(n);
+    char *err = NULL;
+    ctpool pool = ccol_create_cthread_pool_mp(2, 8, &g_ctp_sweep_mp, &err);
+    _ctp_disarm();
+    if (pool != CTPOOL_INVALID) {
+      /* Construction got past the failed allocation, so the pool has to be a
+       * genuinely working one rather than a half-built handle. */
+      if (ctpool_submit(pool, NULL, NULL, NULL) == ccol_success)
+        all_handled = false;
+      ctpool_destroy(pool);
+    } else if (!err) {
+      all_handled = false;
+    }
+  }
+  REQUIRE_TRUE(all_handled);
+}
+
+TEST(ctpool_oom, unbounded_pool_construction_unwinds_at_every_allocation) {
+  /* A zero capacity takes the unbounded-queue branch, which allocates a
+   * different shape from the bounded one above. */
+  bool all_handled = true;
+  for (int n = 1; n <= CTP_SWEEP_DEPTH; n++) {
+    _ctp_arm(n);
+    char *err = NULL;
+    ctpool pool = ccol_create_cthread_pool_mp(1, 0, &g_ctp_sweep_mp, &err);
+    _ctp_disarm();
+    if (pool != CTPOOL_INVALID)
+      ctpool_destroy(pool);
+    else if (!err)
+      all_handled = false;
+  }
+  REQUIRE_TRUE(all_handled);
+}
+
+TEST(ctpool_oom, many_worker_pool_construction_unwinds_at_every_allocation) {
+  /* More workers means more per-thread allocation, reaching failure points
+   * the two-thread sweeps above stop short of. */
+  bool all_handled = true;
+  for (int n = 1; n <= 40; n++) {
+    _ctp_arm(n);
+    ctpool pool = ccol_create_cthread_pool_mp(8, 16, &g_ctp_sweep_mp, NULL);
+    _ctp_disarm();
+    if (pool != CTPOOL_INVALID) ctpool_destroy(pool);
+  }
+  REQUIRE_TRUE(all_handled);
+}
+
+TEST(ctpool_oom, a_pool_built_under_a_late_failure_still_runs_work) {
+  /* Whatever survives the sweep must be a usable pool, not merely a non-NULL
+   * handle: this is what separates "unwound correctly" from "returned a
+   * corpse". */
+  bool built = false, ran = false;
+  for (int n = 30; n <= 60 && !built; n++) {
+    _ctp_arm(n);
+    ctpool pool = ccol_create_cthread_pool_mp(2, 4, &g_ctp_sweep_mp, NULL);
+    _ctp_disarm();
+    if (pool != CTPOOL_INVALID) {
+      built = true;
+      ctpool_wait(pool); /* returns cleanly on a genuinely working pool */
+      ran = true;
+      ctpool_destroy(pool);
+    }
+  }
+  REQUIRE_TRUE(built);
+  REQUIRE_TRUE(ran);
+}

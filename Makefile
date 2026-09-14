@@ -120,8 +120,13 @@ test:
 memtest:
 	$(foreach folder,$(TEST_FOLDERS),(cd $(folder) && make memtest) &&) true
 
+# Each module runs in its own subshell, and the list is chained with && so the
+# first failure stops the sweep and propagates. A `cd $(folder) && ... && cd -`
+# chain joined by `;` instead would leave the shell parked in the failing
+# module's directory, so every following module's own relative cd fails too and
+# sixteen misleading "can't cd" lines bury the one real error.
 generate_coverage_report:
-	$(foreach folder,$(COVERAGE_TEST_FOLDERS),cd $(folder) && make generate_coverage_report && cd -;)
+	$(foreach folder,$(COVERAGE_TEST_FOLDERS),(cd $(folder) && make generate_coverage_report) &&) true
 
 # ---------------------------------------------------------------------------
 # Aggregate coverage site
@@ -133,10 +138,16 @@ generate_coverage_report:
 # test binaries, and only the union of their runs describes how much of it the
 # suite actually reaches.
 #
+# A module may leave more than one tracefile behind, and every one of them is
+# picked up: a suite that builds several binaries from one directory emits one
+# per binary.
+#
 # The merged data is then narrowed to src/ and include/ alone. Coverage of the
 # test code itself, of the vendored test framework, and of system headers says
 # nothing about how well the library is tested, and leaving it in inflates
-# every headline number.
+# every headline number. The extract patterns are anchored to $(CURDIR) rather
+# than written as '*/include/*', which also matches /usr/include/... and pulls
+# six glibc and OpenSSL headers into the report, one of them at 0.0 percent.
 # Fails the build if anything in the public interface loses its namespace
 # prefix. This cannot be checked by the test suites: they compile the .c files
 # straight into their own binaries, where an unprefixed or unexported symbol
@@ -146,6 +157,14 @@ check_namespace: $(SHARED_LIBRARY_NAME)
 	@./check_public_namespace.sh $(SHARED_LIBRARY_REAL)
 
 COVERAGE_SITE_DIR = coverage_site
+
+# Fails if any file in src/ or include/ is covered by less than 80 percent of
+# its instrumented lines. Separate from coverage_site so that the report can be
+# regenerated and inspected without the check, and so the check can be re-run
+# against an existing report without paying for the instrumented rebuild.
+.PHONY: coverage_check
+coverage_check:
+	@./check_test_coverages.sh $(COVERAGE_SITE_DIR)/library.info
 LCOV_QUIRK_FLAGS = --ignore-errors inconsistent --ignore-errors empty \
                    --ignore-errors unused --ignore-errors corrupt
 
@@ -165,7 +184,8 @@ coverage_site: generate_coverage_report
 	lcov $$tracefiles $(LCOV_QUIRK_FLAGS) \
 		--output-file $(COVERAGE_SITE_DIR)/merged.info; \
 	lcov --extract $(COVERAGE_SITE_DIR)/merged.info \
-		'*/$(SOURCE_DIR)/*' '*/$(INCLUDE_DIR)/*' $(LCOV_QUIRK_FLAGS) \
+		'$(CURDIR)/$(SOURCE_DIR)/*' '$(CURDIR)/$(INCLUDE_DIR)/*' \
+		$(LCOV_QUIRK_FLAGS) \
 		--output-file $(COVERAGE_SITE_DIR)/library.info; \
 	genhtml $(COVERAGE_SITE_DIR)/library.info $(LCOV_QUIRK_FLAGS) \
 		--legend --show-details --title "c_collections $(VERSION)" \
@@ -237,6 +257,7 @@ clean:
 		tests/*/tests_parser tests/*/tests_default_client \
 		tests/*/tests_engine_stop tests/*/tests_engine_stop_tsan \
 		tests/*/tests_spec_suite tests/*/tests_differential \
+		tests/*/*.o tests/*/.build-flags \
 		tests/*/tests_tsan tests/*/fuzz_* \
 		tests/*/coverage tests/*/third_party_obj \
 		tests/*/*.gcno tests/*/*.gcda tests/*/*.gcov tests/*/*.c.info

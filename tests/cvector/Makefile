@@ -40,6 +40,6 @@ generate_coverage_report:
 all: build test memtest generate_coverage_report
 
 clean:
-	rm -rf tests coverage *.gcda *.gcdo *.gcno *.gcov
+	rm -rf tests coverage *.gcno *.gcda *.gcov *.c.info
 
 default: build

@@ -220,6 +220,20 @@ make memtest      # Run all tests under Valgrind with full leak checking
 make clean        # Remove all build artefacts
 ```
 
+Two further targets cover the test suites themselves:
+
+```bash
+make coverage_site   # Rebuild every suite instrumented and merge one HTML report
+make coverage_check  # Fail if any file dropped below its recorded coverage floor
+```
+
+`coverage_site` writes a browsable report to `coverage_site/html` and a summary
+to `coverage_site/summary.txt`. `coverage_check` reads the merged data that run
+produces and fails if any file in `src/` or `include/` is covered by less than
+80 percent of its instrumented lines, so run `make coverage_site` first. The
+threshold and the short list of modules that have no unit tests of their own
+live in `check_test_coverages.sh`.
+
 Individual module test suites can be run in isolation:
 
 ```bash

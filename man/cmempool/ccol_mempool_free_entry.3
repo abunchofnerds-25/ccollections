@@ -7,24 +7,49 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <cmempool.h>
 
-ccol_mempool_free_entry(entry);
+ccol_mempool_free_entry(mp, entry);
 .fi
 .SH DESCRIPTION
 .nf
 Returns an allocated entry to the pool's free list. Macro wrapper around
 _ccol_mempool_free_entry() that sets pointer to NULL.
+
+The pool is named by the caller rather than derived from the entry. Free
+an entry to the pool it was allocated from; passing a different pool is a
+caller error and is fatal.
 .fi
 .SH PARAMETERS
 .nf
+mp     Pool the entry was allocated from
 entry  Entry to free (will be set to NULL after freeing)
 .fi
 .SH NOTES
 .nf
 O(1) complexity
-Safe to call with NULL
-Thread-safe if pool created with single_threaded=false
+Safe to call with a NULL entry; a NULL pool is a caller error and fatal
 Performs corruption detection via assertions
+
+On a thread-safe pool the entry is parked in a small per-thread cache,
+and the shared free list is reached only when that cache is full. A pool
+too small to maintain one, meaning fewer than 8 elements, takes the
+pool's lock on every call instead. See
+ccol_mempool_create(3) for how to size a pool.
+
+Corruption and double-free detection are unaffected by caching. An entry
+sitting in a cache is still marked free, so freeing it a second time is
+detected exactly as it would be otherwise. Two threads freeing the same
+entry at the same instant are the exception: the check that catches it
+runs outside the lock, so one of the two can miss the other's mark. That
+is a data race in the calling program either way, and it is the same
+limit a thread-caching general purpose allocator has.
+.fi
+.SH "THREAD SAFETY"
+.nf
+Thread-safe if the pool was created with single_threaded = false.
+Concurrent callers do not contend on the common path. An entry freed by
+one thread may be handed out to another.
 .fi
 .SH "SEE ALSO"
 .BR ccol_mempool_alloc_entry (3),
-.BR _ccol_mempool_free_entry (3)
+.BR ccol_mempool_create (3),
+.BR ccol_r_mempool_free_entry (3)

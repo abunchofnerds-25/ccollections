@@ -12,8 +12,8 @@ ccol_retval_t ccol_chan_recv_zc(ccol_channel *ch, c_message_t *target_buf);
 .SH DESCRIPTION
 .nf
 Automatically selects the appropriate queue based on calling thread:
-- Owner thread receives from workers_to_owner queue
-- Worker threads receive from owner_to_workers queue
+- Owner thread receives from ccol_workers_to_owner queue
+- Worker threads receive from ccol_owner_to_workers queue
 
 Blocks until a message arrives and transfers ownership.
 .fi

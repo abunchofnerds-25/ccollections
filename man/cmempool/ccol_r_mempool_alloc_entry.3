@@ -29,6 +29,9 @@ Returns NULL on failure
 .nf
 O(1) in common case, O(number_of_pools) worst case
 Returned memory is uninitialized (use ccol_r_mempool_calloc_entry() for zeroed)
+The returned pointer is aligned for any object type, the same guarantee
+malloc() makes, so any object that can be stored in heap memory can be
+stored in a pool entry
 Size is rounded up to next power-of-2 pool size
 Tries progressively larger pools if optimal pool is exhausted
 Thread-safe if pool created with single_threaded=false

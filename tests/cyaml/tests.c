@@ -56,6 +56,28 @@ static ccol_memmgmt_procs_t g_counting_mp = {.malloc = counting_malloc,
                                              .realloc = counting_realloc,
                                              .free = free};
 
+/* A plain tally, distinct from g_counting_mp above: that one exists to REFUSE
+   an allocation once its budget runs out, where this one never refuses and
+   only records how many were made. A test that wants to pin how much work a
+   parse does needs the count, and cannot get it from a budget. */
+static long g_tally = 0;
+static void *tally_malloc(size_t sz) {
+  g_tally++;
+  return malloc(sz);
+}
+static void *tally_calloc(size_t n, size_t sz) {
+  g_tally++;
+  return calloc(n, sz);
+}
+static void *tally_realloc(void *p, size_t sz) {
+  g_tally++;
+  return realloc(p, sz);
+}
+static ccol_memmgmt_procs_t g_tally_mp = {.malloc = tally_malloc,
+                                          .calloc = tally_calloc,
+                                          .realloc = tally_realloc,
+                                          .free = free};
+
 /* Single-fault-injection allocator: unlike g_counting_mp above (which fails
  * every call once its budget hits zero, so a message allocated AFTER the
  * failure that triggered the whole parse to fail can itself never succeed),
@@ -92,6 +114,173 @@ static ccol_memmgmt_procs_t g_single_fault_mp = {
 /* ========================================================================== */
 /*                         CONSTRUCTION                                       */
 /* ========================================================================== */
+
+/* A string key is handed to the dictionary by moving the scalar node's own
+   buffer, not by duplicating it, so a parse makes one allocation per entry
+   fewer than it would by copying. The bound is a count rather than a time, so
+   it is exact and repeats; measured on this document, moving makes 457
+   allocations and copying makes 521, which is precisely one more per entry.
+   This test is non-vacuous: duplicating the key instead takes it past 8 per
+   entry and it fails. */
+TEST(cyaml_key_storage, a_string_key_is_moved_into_the_dictionary_not_copied) {
+  enum { N = 64 };
+  char doc[8192];
+  size_t off = 0;
+  for (int i = 0; i < N; i++)
+    off +=
+        (size_t)snprintf(doc + off, sizeof(doc) - off, "key_%03d: %d\n", i, i);
+
+  char *err = NULL;
+  g_tally = 0;
+  cyaml parsed = cyaml_parse_mp(doc, &err, &g_tally_mp);
+  long allocations = g_tally;
+  bool parsed_ok = (parsed != NULL && err == NULL);
+  size_t entries = parsed ? cyaml_dictionary_size(parsed) : 0;
+  /* Destroyed before any assertion, so a failure here leaks nothing. err is
+     non-NULL only on a parse failure, which is itself one of the things
+     asserted below. */
+  if (parsed) cyaml_destroy(parsed);
+  free(err);
+
+  REQUIRE_TRUE(parsed_ok);
+  REQUIRE_EQ(entries, (size_t)N);
+  /* Measured: 457 with the move, 521 without, identically on gcc and clang at
+     every optimization level and at both widths. The bound sits between them
+     rather than just under the higher one, so neither a change that adds a few
+     allocations nor one that removes a few silently flips this test's verdict.
+   */
+  REQUIRE_LT(allocations, (long)(8 * N - N / 2));
+}
+
+/* A byte-order mark shifts every offset in the document by three without
+   shifting any column, so the line starts the parser works from are rewritten
+   for it. Columns are what decide block nesting, so a document that keeps its
+   structure with a BOM and loses it without one (or the reverse) is the
+   symptom. The two documents below are byte-identical apart from the BOM, and
+   the parse has to agree on every column of both.
+
+   This test does NOT pin the memo's own start-of-life sentinel: the BOM branch
+   moves the parse position past the mark before any parsing function runs, so
+   nothing ever asks about offset zero on a BOM document and a memo that
+   answered there would not be consulted. The sentinel is defensive. */
+static cyaml _cyaml_dict_child(cyaml parent, const char *key) {
+  if (!parent || cyaml_type(parent) != CYAML_DICTIONARY) return NULL;
+  return cyaml_dictionary_get(parent, key);
+}
+
+static void _cyaml_probe(cyaml doc, size_t *root_size, long long *leaf,
+                         long long *deep) {
+  if (!doc || cyaml_type(doc) != CYAML_DICTIONARY) return;
+  cyaml r = cyaml_dictionary_get(doc, "root");
+  if (!r || cyaml_type(r) != CYAML_DICTIONARY) return;
+  *root_size = cyaml_dictionary_size(r);
+
+  cyaml leaf_node = _cyaml_dict_child(_cyaml_dict_child(r, "inner"), "leaf");
+  if (leaf_node && cyaml_type(leaf_node) == CYAML_INTEGER)
+    *leaf = cyaml_int_val(leaf_node);
+
+  cyaml sib = cyaml_dictionary_get(r, "sibling");
+  cyaml third =
+      (sib && cyaml_type(sib) == CYAML_LIST && cyaml_list_len(sib) > 2)
+          ? cyaml_list_get(sib, 2)
+          : NULL;
+  cyaml deep_node = _cyaml_dict_child(third, "deep");
+  if (deep_node && cyaml_type(deep_node) == CYAML_INTEGER)
+    *deep = cyaml_int_val(deep_node);
+}
+
+/* The convention this suite uses for reaching a RUNNING_UNIT_TESTS-only
+   accessor in the module under test. */
+extern bool cyaml_test_force_line_cache_disabled;
+
+/* The same BOM document parsed with the line cache disabled, which is the
+ * fallback a growth failure of line_starts latches. That path computes a line
+ * start by scanning backwards, and a scan that walks past the byte-order mark
+ * reports the first line as starting three bytes early; every column on it is
+ * then three too large, which is enough to break the block structure the
+ * columns decide rather than merely to misreport a position.
+ *
+ * The test above cannot reach this: it exercises the cached path, where the
+ * mark is accounted for by seeding the cache. Reaching the fallback for real
+ * needs an allocation failure after 64 line boundaries, by which point no
+ * query lands on the first line at all, so the hook is what makes the class
+ * testable.
+ *
+ * This test is non-vacuous: with the scan's floor removed, the BOM document
+ * fails to parse with "trailing content". */
+TEST(cyaml_line_cache, a_bom_is_honoured_when_the_line_cache_is_disabled) {
+  static const char body[] =
+      "root:\n"
+      "  inner:\n"
+      "    leaf: 7\n";
+  char with_bom[sizeof(body) + 3];
+  memcpy(with_bom, "\xEF\xBB\xBF", 3);
+  memcpy(with_bom + 3, body, sizeof(body));
+
+  cyaml_test_force_line_cache_disabled = true;
+  char *err_a = NULL, *err_b = NULL;
+  cyaml plain = cyaml_parse(body, &err_a);
+  cyaml bom = cyaml_parse(with_bom, &err_b);
+  /* Disarmed before any assertion, so an early return cannot leave every later
+     test in this binary running on the degraded path. */
+  cyaml_test_force_line_cache_disabled = false;
+
+  size_t plain_root = 0, bom_root = 0;
+  long long plain_leaf = -1, bom_leaf = -1, ignored = -1;
+  _cyaml_probe(plain, &plain_root, &plain_leaf, &ignored);
+  _cyaml_probe(bom, &bom_root, &bom_leaf, &ignored);
+  bool both_parsed =
+      (plain != NULL && bom != NULL && err_a == NULL && err_b == NULL);
+  if (plain) cyaml_destroy(plain);
+  if (bom) cyaml_destroy(bom);
+  free(err_a);
+  free(err_b);
+
+  REQUIRE_TRUE(both_parsed);
+  REQUIRE_EQ(plain_root, (size_t)1);
+  REQUIRE_EQ(bom_root, (size_t)1);
+  REQUIRE_EQ(plain_leaf, 7LL);
+  REQUIRE_EQ(bom_leaf, 7LL);
+}
+
+TEST(cyaml_line_cache, a_bom_does_not_shift_the_columns_the_memo_reports) {
+  static const char body[] =
+      "root:\n"
+      "  inner:\n"
+      "    leaf: 7\n"
+      "  sibling: [1, 2, {deep: 9}]\n";
+  char with_bom[sizeof(body) + 3];
+  memcpy(with_bom, "\xEF\xBB\xBF", 3);
+  memcpy(with_bom + 3, body, sizeof(body));
+
+  char *err_a = NULL, *err_b = NULL;
+  cyaml plain = cyaml_parse(body, &err_a);
+  cyaml bom = cyaml_parse(with_bom, &err_b);
+
+  long long plain_leaf = -1, bom_leaf = -1, plain_deep = -1, bom_deep = -1;
+  size_t plain_root = 0, bom_root = 0;
+  /* Every accessor below is gated on the node's own type, not merely on its
+     being non-NULL. A nesting regression is precisely what turns one of these
+     into a scalar, and cyaml_dictionary_size/cyaml_int_val call ccol_fatal_err
+     on a node of the wrong type, which would abort the whole binary and destroy
+     every other test's result rather than failing this one. */
+  _cyaml_probe(plain, &plain_root, &plain_leaf, &plain_deep);
+  _cyaml_probe(bom, &bom_root, &bom_leaf, &bom_deep);
+  bool both_parsed =
+      (plain != NULL && bom != NULL && err_a == NULL && err_b == NULL);
+  if (plain) cyaml_destroy(plain);
+  if (bom) cyaml_destroy(bom);
+  free(err_a);
+  free(err_b);
+
+  REQUIRE_TRUE(both_parsed);
+  REQUIRE_EQ(plain_root, (size_t)2);
+  REQUIRE_EQ(bom_root, (size_t)2);
+  REQUIRE_EQ(plain_leaf, 7LL);
+  REQUIRE_EQ(bom_leaf, 7LL);
+  REQUIRE_EQ(plain_deep, 9LL);
+  REQUIRE_EQ(bom_deep, 9LL);
+}
 
 TEST(construction, null) {
   cyaml n = cyaml_create_null();

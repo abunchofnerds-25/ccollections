@@ -12,8 +12,8 @@ ccol_retval_t ccol_chan_send_zc(ccol_channel *ch, c_message_t *msg);
 .SH DESCRIPTION
 .nf
 Automatically selects the appropriate queue based on calling thread:
-- Owner thread sends to owner_to_workers queue
-- Worker threads send to workers_to_owner queue
+- Owner thread sends to ccol_owner_to_workers queue
+- Worker threads send to ccol_workers_to_owner queue
 
 Blocks until space is available and transfers ownership.
 .fi

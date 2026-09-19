@@ -4938,6 +4938,154 @@ static void _fork_safety_rollback_race_child(const char *marker_path) {
   _exit(0);
 }
 
+/* The second rollback in _clog_handle_acquire, and the one
+ * handle_acquire_rollback_leaves_slot_fork_safe below does not reach.
+ * Publishing the handle into the pin index is the last step of an acquisition,
+ * after live_shareds registration has already succeeded, so its failure has
+ * that registration to undo as well as the slot. The caller, handed
+ * CLOG_INVALID, goes on to free the shared object; an entry left behind in
+ * live_shareds means the next fork() locks a mutex inside that freed memory.
+ *
+ * Isolated in its own child for the same reason as
+ * handle_acquire_rollback_leaves_slot_fork_safe below: the failure it stages
+ * leaves a freed shared object behind if the rollback is wrong, and a later
+ * fork in the same process would then lock a mutex inside it. What this one
+ * proves is that the fork survives. The rollback itself is pinned by
+ * handle_publish_rollback_leaves_no_registered_shared below, which runs in this
+ * process and fails without any instrumentation. */
+extern void _ccol_pintable_force_next_publish_failure_for_tests(void);
+
+static void _fork_safety_publish_rollback_child(const char *marker_path) {
+  char dir[256];
+  if (make_tmpdir(dir, sizeof dir) != 0) _exit(0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  _ccol_pintable_force_next_publish_failure_for_tests();
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  if (lg != CLOG_INVALID) {
+    clog_close(lg);
+    cleanup_dir(dir, "app.log");
+    _exit(0); /* the forced failure did not apply; nothing more to check */
+  }
+  _fork_safety_marker_append(marker_path, "acquire_failed_as_expected\n");
+
+  /* Proves the arming above is what made that open fail, rather than a
+   * mkdtemp, an open(2) or an allocation failing ahead of the publish and
+   * leaving the one-shot flag still armed. The flag is consumed by the next
+   * publish whether or not that publish then succeeds, so a second open must
+   * succeed here; without this check the whole child reads as a pass for a
+   * failure that never reached the rollback under test. */
+  clog probe = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  if (probe != CLOG_INVALID) {
+    _fork_safety_marker_append(marker_path, "forced_failure_was_consumed\n");
+    clog_close(probe);
+  }
+
+  /* The shared object this acquisition registered has been freed by the
+   * caller's own error path. If the rollback left it in live_shareds,
+   * _clog_atfork_prepare's walk locks sh->mutex inside freed memory here,
+   * synchronously, before fork() returns anywhere. */
+  pid_t pid = fork();
+  _fork_safety_marker_append(marker_path, "survived_fork_call\n");
+
+  if (pid == 0) _exit(0);
+  if (pid > 0) waitpid(pid, NULL, 0);
+  cleanup_dir(dir, "app.log");
+  _exit(0);
+}
+
+/* The rollback's whole job is to undo the live_shareds registration the
+ * acquisition made before publishing, so the count of registered shared objects
+ * coming back to what it was is the property. Checked here, in this process,
+ * rather than inside the forked child above: a count read takes the table's
+ * read lock, and a child that inherited the fork handler's write lock and then
+ * re-initialised it reads as still write-locked to ThreadSanitizer, which has
+ * no way to model that re-initialisation as a release.
+ *
+ * This test is non-vacuous: removing the live_shareds rollback leaves the count
+ * one higher. Relying on a sanitizer or a leak checker to notice the stale
+ * entry instead does not work, because the access it enables happens in a
+ * forked child whose exit status the fork test discards. */
+TEST(fork_safety, handle_publish_rollback_leaves_no_registered_shared) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  size_t before = clog_test_live_shareds_count();
+
+  _ccol_pintable_force_next_publish_failure_for_tests();
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  bool refused = (lg == CLOG_INVALID);
+  if (!refused) clog_close(lg);
+  size_t after = clog_test_live_shareds_count();
+
+  /* Proves the arming above is what refused that open, rather than something
+     failing ahead of the publish and leaving the one-shot flag still armed. */
+  clog probe = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  bool probe_opened = (probe != CLOG_INVALID);
+  if (probe_opened) clog_close(probe);
+
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(refused);
+  REQUIRE_TRUE(probe_opened);
+  REQUIRE_EQ(after, before);
+}
+
+TEST(fork_safety, handle_publish_rollback_unregisters_the_shared_object) {
+  char marker_dir[256];
+  REQUIRE_EQ(make_tmpdir(marker_dir, sizeof marker_dir), 0);
+  char marker_path[512];
+  snprintf(marker_path, sizeof marker_path, "%s/marker", marker_dir);
+
+  pid_t pid = fork();
+  if (pid == 0) {
+    _fork_safety_publish_rollback_child(marker_path);
+    _exit(127); /* unreachable */
+  }
+  REQUIRE_NE(pid, -1);
+
+  int status;
+  bool reaped = false;
+  /* Same 30s bound, and for the same reason, as the test above. */
+  for (int waited_ms = 0; waited_ms < 30000; waited_ms += 20) {
+    pid_t r = waitpid(pid, &status, WNOHANG);
+    if (r == pid) {
+      reaped = true;
+      break;
+    }
+    usleep(20000);
+  }
+  if (!reaped) {
+    kill(pid, SIGKILL);
+    waitpid(pid, &status, 0);
+    REQUIRE_TRUE(false); /* child never completed within the bound */
+  }
+  /* Everything the markers have to say is read out and the directory removed
+     before any of it is asserted: a failing REQUIRE_ returns from the test on
+     the spot and would leave the mkdtemp directory behind. The strstr calls are
+     guarded on a non-empty read, since buf is only written when there was
+     something to read. */
+  bool exited = WIFEXITED(status);
+  char buf[256];
+  size_t len = read_file(marker_path, buf, sizeof buf);
+  bool saw_acquire_failed =
+      len > 0 && strstr(buf, "acquire_failed_as_expected") != NULL;
+  bool saw_failure_consumed =
+      len > 0 && strstr(buf, "forced_failure_was_consumed") != NULL;
+  bool saw_survived_fork = len > 0 && strstr(buf, "survived_fork_call") != NULL;
+
+  cleanup_dir(marker_dir, "marker");
+
+  REQUIRE_TRUE(exited);
+  REQUIRE_GT(len, (size_t)0);
+  REQUIRE_TRUE(saw_acquire_failed);
+  REQUIRE_TRUE(saw_failure_consumed);
+  REQUIRE_TRUE(saw_survived_fork);
+}
+
 /* _clog_handle_acquire()'s rollback for a failed live_shareds registration
  * must restore BOTH slot->freed and slot->ptr to the same shape a slot
  * retired by clog_close() itself always ends up in, regardless of which of
@@ -4995,11 +5143,17 @@ TEST(fork_safety, handle_acquire_rollback_leaves_slot_fork_safe) {
    * SOME exit happened. */
   char buf[256];
   size_t len = read_file(marker_path, buf, sizeof buf);
-  REQUIRE_GT(len, (size_t)0);
-  REQUIRE_NE(strstr(buf, "acquire_failed_as_expected"), NULL);
-  REQUIRE_NE(strstr(buf, "survived_fork_call"), NULL);
+  bool saw_acquire_failed =
+      len > 0 && strstr(buf, "acquire_failed_as_expected") != NULL;
+  bool saw_survived_fork = len > 0 && strstr(buf, "survived_fork_call") != NULL;
 
+  /* Removed before the assertions, so a failing one does not leave the
+     mkdtemp directory behind. */
   cleanup_dir(marker_dir, "marker");
+
+  REQUIRE_GT(len, (size_t)0);
+  REQUIRE_TRUE(saw_acquire_failed);
+  REQUIRE_TRUE(saw_survived_fork);
 }
 
 /* clog_test_force_next_fresh_slot_registration_failure() forces
@@ -8149,4 +8303,119 @@ TEST(json, fatal_has_inline_bt_array) {
   REQUIRE_EQ(*(nl - 1), '}');
 
   cleanup_dir(dir, "app.log");
+}
+
+/* ------------------------------------------------------------------------ */
+/* Deferred slot-table release                                               */
+/* ------------------------------------------------------------------------ */
+
+/* One fixture, deliberately, covering both halves of the deferred release.
+ *
+ * Only ONE set of loggers in this binary can exercise the release at all: the
+ * release fires when the last live slot goes away, so whichever fixture is torn
+ * down last is the only one that reaches it, and any other fixture's close
+ * simply finds a live sibling and returns. Two separate fixtures therefore
+ * cannot both be non-vacuous here however they are ordered, which is why the
+ * single-threaded and concurrent cases are driven from the same pair of
+ * loggers rather than from one each.
+ *
+ * Each logger has a derived handle closed during the test, so that two handles
+ * shared one clog_shared_t and each close is the one that drops the last
+ * reference to its own shared object and walks live_shareds. That walk is the
+ * step the release must not have run ahead of.
+ *
+ * Both are then closed concurrently, with one held inside the window in which
+ * it has already cleared its slot but still has to read the table. The other
+ * close finds no live slot and, judging from that alone, would release the
+ * table underneath the first one.
+ *
+ * This test is non-vacuous: with an in-flight close uncounted, it dies with
+ * "ccol_assert failed" out of cvector_elem_count as the held close walks a
+ * vector the other close has destroyed. The abort lands after the harness has
+ * printed its summary, so the signal is the binary's exit status, which is what
+ * `make test` checks.
+ *
+ * The mechanism for reaching the release at all is link order, so do not "tidy"
+ * either half of this away: this file is linked ahead of src/clogger.c and
+ * destructors run in reverse link order, so the destructor below runs AFTER
+ * clogger's own and therefore closes into a table whose release is already
+ * pending. Opening the loggers from an ordinary test is what leaves them open
+ * at exit; the suite's other checks on the shared count all compare deltas
+ * around their own work, so two extra long-lived loggers do not disturb them.
+ *
+ * Adding another destructor-held logger to this file would silently make this
+ * test check nothing, for the reason given at the top. */
+static clog g_deferred_release_a = CLOG_INVALID;
+static clog g_deferred_release_b = CLOG_INVALID;
+
+TEST(clogger_deferred_release, a_racing_pair_left_open_defers_then_releases) {
+  int fd = open("/dev/null", O_WRONLY);
+  REQUIRE_NE(fd, -1);
+  clog a = clog_open_fd(fd, CLOG_INFO, NULL);
+  clog b = clog_open_fd(fd, CLOG_INFO, NULL);
+  clog da = (a != CLOG_INVALID) ? clog_derive(a) : CLOG_INVALID;
+  clog db = (b != CLOG_INVALID) ? clog_derive(b) : CLOG_INVALID;
+  if (da != CLOG_INVALID) clog_close(da);
+  if (db != CLOG_INVALID) clog_close(db);
+
+  /* Published only once both are fully set up, so a partial open cannot leave
+     the destructor below holding one logger it will then decline to close. */
+  bool opened = (a != CLOG_INVALID && b != CLOG_INVALID && da != CLOG_INVALID &&
+                 db != CLOG_INVALID);
+  if (opened) {
+    g_deferred_release_a = a;
+    g_deferred_release_b = b;
+  } else {
+    if (a != CLOG_INVALID) clog_close(a);
+    if (b != CLOG_INVALID) clog_close(b);
+  }
+  REQUIRE_TRUE(opened);
+}
+
+static void *_close_b_in_the_window(void *unused) {
+  (void)unused;
+  clog_close(g_deferred_release_b);
+  g_deferred_release_b = CLOG_INVALID;
+  return NULL;
+}
+
+__attribute__((destructor)) static void _close_the_deferred_release_pair(void) {
+  if (g_deferred_release_a == CLOG_INVALID ||
+      g_deferred_release_b == CLOG_INVALID) {
+    if (g_deferred_release_a != CLOG_INVALID) clog_close(g_deferred_release_a);
+    if (g_deferred_release_b != CLOG_INVALID) clog_close(g_deferred_release_b);
+    g_deferred_release_a = CLOG_INVALID;
+    g_deferred_release_b = CLOG_INVALID;
+    return;
+  }
+
+  clog_test_set_close_release_window_us(200000);
+  pthread_t t;
+  if (pthread_create(&t, NULL, _close_b_in_the_window, NULL) != 0) {
+    /* Nothing to race with; close both so the fixture is not left open. */
+    clog_test_set_close_release_window_us(0);
+    clog_close(g_deferred_release_a);
+    clog_close(g_deferred_release_b);
+    g_deferred_release_a = CLOG_INVALID;
+    g_deferred_release_b = CLOG_INVALID;
+    return;
+  }
+
+  /* Wait for the window to be genuinely occupied rather than sleeping for a
+     guessed interval: a thread slow to start would otherwise read an already
+     disarmed hook, the two closes would serialise, and this would pass having
+     exercised nothing. Bounded only as a hang-safety net.
+
+     B holds the window for 200ms once it is in, against the close it is
+     racing, which takes about one microsecond natively and about a fifth of a
+     millisecond under valgrind. That is a margin of roughly three orders of
+     magnitude in the slower of the two environments this suite runs in. */
+  for (int i = 0; i < 20000 && !clog_test_close_release_window_entered(); i++) {
+    struct timespec ts = {0, 100L * 1000L};
+    nanosleep(&ts, NULL);
+  }
+  clog_test_set_close_release_window_us(0);
+  clog_close(g_deferred_release_a);
+  g_deferred_release_a = CLOG_INVALID;
+  pthread_join(t, NULL);
 }

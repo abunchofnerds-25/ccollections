@@ -35,6 +35,13 @@ Returns pointer to newly created hash map on success
 Returns NULL on failure
 .fi
 .SH NOTES
+.PP
+A custom hash does not have to spread its own entropy. The map derives a bucket
+or slot index from the high bits of a hash, which suits the hashes it computes
+itself, so a value arriving through ccol_hashing_proc_t is passed through an
+avalanche step first. A hash that is an identity, a counter, or something
+already reduced modulo a small number therefore still distributes, at the cost
+of a few operations per call that the built-in hashes do not pay.
 .nf
 Implementation selection:
   - Open-addressing: Both key and value are integral types <=8 bytes

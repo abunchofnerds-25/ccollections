@@ -41,8 +41,18 @@ SOFTWARE.
  * @brief Thread-safe generic LRU cache with optional remote source integration
  *
  * An LRU cache backed by a hash map (O(1) lookup) and a doubly-linked list
- * (O(1) eviction). All operations are fully thread-safe via a single global
- * mutex and per-entry condition variables.
+ * (O(1) eviction). All operations are fully thread-safe.
+ *
+ * A cache large enough to be worth it is divided into several independently
+ * locked segments, and a key belongs to exactly one of them, chosen from a
+ * hash of the key. Threads working on keys in different segments do
+ * not wait for one another. Operations on the same key still serialise, which
+ * is what the guarantees below rest on. Dividing begins at 128 entries, which
+ * is the first capacity that gives two segments 64 entries each; below that a
+ * cache is a single segment and keeps one exact, global least-recently-used
+ * order. Above it, capacity is divided across the segments and each evicts
+ * its own least recently used entry. See clrucache_create_full() for the full
+ * account.
  *
  * Key concurrency guarantees:
  * - Multiple getters for the same uncached key coalesce: only one remote fetch
@@ -56,8 +66,10 @@ SOFTWARE.
  * clrucache_set_full() returns ccol_unexpected_failure.
  *
  * Limitations / caller responsibilities:
- * - The eviction callback is invoked while holding the cache mutex and MUST
- *   NOT call back into the cache (deadlock).
+ * - The eviction callback is invoked while holding the owning segment's lock
+ *   and MUST NOT call back into the cache (deadlock). It is NOT serialised
+ *   against itself: two segments can evict at the same time on two threads, so
+ *   a callback that touches state of its own must guard it.
  * - clrucache_destroy() should only be called once all other threads have
  *   stopped using the cache.
  */
@@ -101,8 +113,13 @@ typedef bool (*clru_remote_setter_t)(const cmap_pair *key,
 /**
  * @brief Eviction callback
  *
- * Invoked synchronously (while the cache mutex is held) when an entry is
- * evicted to make room for a new one. Must not call back into the cache.
+ * Invoked synchronously (while the owning segment's lock is held) when an
+ * entry is evicted to make room for a new one. Must not call back into the
+ * cache.
+ *
+ * Only that one segment's lock is held, so two evictions in different segments
+ * can run this callback concurrently on two threads. Any state the callback
+ * keeps of its own needs its own protection.
  *
  * @param key  Evicted key pair (ptr + size)
  * @param val  Evicted value pair (ptr + size)
@@ -186,7 +203,8 @@ void __clrucache_destroy(clru_cache cache);
  *        use clru_get() macro instead)
  *
  * Unlike clrucache_get_full(), this function performs no heap allocation: it
- * copies the stored value into buf while holding the cache mutex and returns.
+ * copies the stored value into buf while holding the owning segment's lock and
+ * returns.
  * buf_size must exactly equal the stored value's size; the clru_get() macro
  * satisfies this by passing sizeof(ValT) (via a ValT-typed temporary it reads
  * into and then assigns, converted, into *val_ptr), not sizeof(*val_ptr);
@@ -223,7 +241,9 @@ ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
  * consistent state.
  *
  * @param cache     Cache handle
- * @param key_pair  Key to look up
+ * @param key_pair  Key to look up. For a fixed-width key type its size must
+ *                  equal that type's own width, or the call reports
+ *                  ccol_invalid_args without reading the key
  * @param val_out   On success: val_out->ptr is a heap-allocated copy of the
  *                  value (caller must free it with the cache's allocator);
  *                  val_out->size is the stored value size

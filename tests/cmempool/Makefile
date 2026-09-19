@@ -11,13 +11,27 @@ CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-strong -Wstrict-overflow \
 	-D_FORTIFY_SOURCE=3 \
 	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O3 -Werror $(EXTRA_CFLAGS)
 COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage 
+# -O1 rather than the -O3 the ordinary build uses: ThreadSanitizer's own
+# instrumentation is what is being exercised here, and the higher level buys
+# nothing while making a report harder to read back to source.
+TSAN_CFLAGS = $(INCLUDES) $(DEFINITIONS) -fsanitize=thread -Wall -Wextra -g -O1
 LFLAGS = -lpthread
 
 build:
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)
 
+build_tsan:
+	$(CC) $(TSAN_CFLAGS) $(ALL_SRC_FILES) -o tests_tsan $(LFLAGS) -fsanitize=thread
+
 test: build
 	./tests
+
+# die_after_fork=0: several tests here fork and the child then runs to an
+# expected ccol_assert() abort. TSan's default would exit such a child silently
+# instead, turning a test that verifies a fatal path into one that verifies
+# nothing.
+test_tsan: build_tsan
+	TSAN_OPTIONS="die_after_fork=0" ./tests_tsan
 
 memtest: build
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 --child-silent-after-fork=yes ./tests
@@ -37,9 +51,9 @@ generate_coverage_report:
 	genhtml $(SRC_FILE_PREFIX).c.info --output-directory coverage && \
 	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info
 
-all: build test memtest generate_coverage_report
+all: build test test_tsan memtest generate_coverage_report
 
 clean:
-	rm -rf tests coverage *.gcno *.gcda *.gcov *.c.info
+	rm -rf tests tests_tsan coverage *.gcno *.gcda *.gcov *.c.info
 
 default: build

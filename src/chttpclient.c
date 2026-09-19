@@ -25,6 +25,7 @@ SOFTWARE.
 #include <chashmap.h>
 #include <chttp1_parser.h>
 #include <chttpclient.h>
+#include <cpintable.h>
 #include <cthreadcomm.h>
 #include <cthreadpool.h>
 #include <ctls.h>
@@ -235,7 +236,26 @@ static struct {
   cvec slots;        /* cvec of chttpcli_slot_t; grows via push_back only,
                          indices permanent once allocated */
   cvec free_indices; /* cvec of uint32_t; LIFO free list, O(1) reuse */
+  /* Set when the process-exit destructor found a client still live and left
+     this table alone, so that whichever destroy releases the last slot
+     afterwards performs the release the destructor could not. Read and written
+     only under the write lock. */
+  bool release_deferred;
 } chttpcli_slot_table = {0};
+
+/* Defined with the process-exit teardown below; declared here because
+   __chttpclient_destroy's own final locked section performs the release the
+   destructor deferred. */
+static bool _chttpcli_any_slot_live_locked(void);
+static void _chttpcli_release_slot_table_locked(void);
+static void _chttpcli_release_slot_table_if_deferred_locked(void);
+
+/* The hot half of the table above: handle to pointer, plus the pin that holds
+ * a client alive for the duration of a call. Kept separate because a resolve
+ * runs on every request and must not write anything another thread reads,
+ * while everything else this table does (slot recycling, the exit-time sweep)
+ * is cold and stays under the rwlock. */
+static ccol_pintable chttpcli_pintable;
 
 static void _chttpcli_slot_table_init_globals(void) {
   if (ccol_rw_lock_init(chttpcli_slot_table.rwlock) != 0)
@@ -251,18 +271,6 @@ static void _chttpcli_slot_table_init_globals(void) {
 struct chttpclient {
   ccol_mutex_t lock;
   ccol_cond_var_t available;
-
-  /* Pinned by _chttpcli_resolve (lock-free atomic increment) for as long as
-   * some caller holds a just-resolved struct chttpclient* it hasn't yet
-   * handed off to its own tier-specific protection (in_flight_count /
-   * async_in_flight_count); released by _chttpcli_resolve_unpin (under
-   * `lock`, together with the broadcast that wakes a waiting destroy; see
-   * that function's own comment for why the decrement itself, not just the
-   * broadcast, must happen under the lock). __chttpclient_destroy blocks
-   * until this reaches 0 before freeing the object, closing a real
-   * resolve-then-use race a naive "look up, unlock, return the pointer"
-   * resolve step would otherwise leave open. */
-  _Atomic size_t pending_resolve_count;
 
   /* Concurrency limiter: bounds simultaneous in-flight requests. */
   size_t pool_cap;
@@ -331,6 +339,12 @@ struct chttpclient {
                           readable; see _rebuild_tls_ctx_locked */
 
   ccol_memmgmt_procs_t *m_procs;
+
+  /* This client's own handle, so an unpin can find the slot holding its pin
+   * without the caller having to carry one. Written once, before the handle is
+   * published, and never again. Appended here rather than placed among the
+   * fields above so no field a request path already reads moves. */
+  chttpcli self_handle;
 };
 
 /* ========================================================================== */
@@ -344,58 +358,32 @@ struct chttpclient {
  * tier-specific protection (in_flight_count / async_in_flight_count) has
  * taken over, or immediately if the call is short and non-blocking. */
 static struct chttpclient *_chttpcli_resolve(chttpcli h) {
-  ccol_call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
-  if (h == 0) return NULL;
-  uint32_t idx = (uint32_t)(h >> 32);
-  uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
-  ccol_rw_lock_rdlock(chttpcli_slot_table.rwlock);
-  struct chttpclient *raw = NULL;
-  if (idx < cvector_elem_count(chttpcli_slot_table.slots)) {
-    chttpcli_slot_t *slot =
-        (chttpcli_slot_t *)cvector_at(chttpcli_slot_table.slots, idx);
-    if (slot->in_use && slot->generation == gen) raw = slot->ptr;
-  }
-  /* No raw->lock acquisition here at all, so nothing can ever block while
-   * chttpcli_slot_table.rwlock is held; a nested-lock version would let a
-   * slow, per-client operation holding raw->lock (e.g. chttpclient_set_
-   * tls's blocking disk I/O in _rebuild_tls_ctx_locked) transiently stall
-   * every other client's resolve calls process-wide. Safe because raw is
-   * guaranteed still-allocated here regardless: the only thing that could
-   * make it unsafe to touch, __chttpclient_destroy's slot-release step,
-   * also requires chttpcli_slot_table.rwlock's write side, which cannot
-   * run concurrently with this read side regardless. */
-  if (raw) atomic_fetch_add(&raw->pending_resolve_count, 1);
-  ccol_rw_lock_unlock(chttpcli_slot_table.rwlock);
-  return raw;
+  /* No lock and no shared write. Every public entry point of this module runs
+   * this, so anything here that wrote memory another thread reads would be
+   * paid on every single request. The pin index is a zeroed static, so a
+   * handle presented before any client has ever been created finds no chunk
+   * and resolves to NULL, which is the same answer it gives for any handle it
+   * does not recognise. */
+  return (struct chttpclient *)ccol_pintable_pin(&chttpcli_pintable, h);
 }
 
 static void _chttpcli_resolve_unpin(struct chttpclient *raw) {
-  /* The decrement itself MUST happen under raw->lock, not as a bare atomic
-   * op outside it: a bare-atomic decrement could bring pending_resolve_ count
-   * to 0 before this function acquires raw->lock, letting a concurrent
-   * __chttpclient_destroy acquire raw->lock first, see BOTH
-   * pending_resolve_count == 0 and in_flight_count == 0 true on its very first
-   * check (never entering ccol_cond_var_wait at all), and proceed straight
-   * through teardown (including ccol_mutex_destroy(raw->lock) and freeing raw)
-   * before this function ever calls ccol_mutex_lock(raw->lock), which would
-   * then be a use-after-free. The standard condition-variable pattern requires
-   * the signaling side to modify the predicate AND broadcast under the SAME
-   * lock the waiter uses for its own predicate-check-and-sleep; moving only the
-   * decrement outside the lock does not satisfy that. */
-  ccol_mutex_lock(raw->lock);
-  atomic_fetch_sub(&raw->pending_resolve_count, 1);
-  ccol_cond_var_broadcast(raw->available); /* wake a destroy waiting on this */
-  ccol_mutex_unlock(raw->lock);
-  /* Note the asymmetry with _chttpcli_resolve's own increment, which
-   * correctly remains a bare atomic op with no raw->lock acquisition at
-   * all: the increment side can never cause a lost wakeup (it only ever
-   * makes the wait predicate MORE true, never flips it from true to false),
-   * so it has no need to synchronize with a sleeper. This function is
-   * always called standalone, after _chttpcli_resolve has already released
-   * chttpcli_slot_table.rwlock, so this raw->lock acquisition is never
-   * nested inside the slot table's global lock; an entirely ordinary
-   * per-object lock use, identical in shape to every other
-   * ccol_mutex_lock(cli->lock) call already in this file. */
+  /* Releases the pin and touches nothing else. Taking this client's own lock
+   * here would mean every request acquired it twice, the second time
+   * immediately after releasing it, which is how a convoy sustains itself
+   * under concurrent callers. There is no wakeup to deliver either:
+   * __chttpclient_destroy polls the pin count rather than sleeping on a
+   * condition variable waiting for this function.
+   *
+   * The pin lives in the slot rather than in raw, which is what makes a
+   * lock-free release safe: this call dereferences no part of the object, so
+   * a destroy that observes the count reach zero may free raw immediately
+   * without racing anything here.
+   *
+   * Reading raw->self_handle before releasing is safe precisely because the
+   * pin is still held at that point; after the release the client may be
+   * freed at any instant, so nothing may touch raw past this call. */
+  ccol_pintable_unpin(&chttpcli_pintable, raw->self_handle);
 }
 
 /* Allocates a fresh slot (or reuses a freed one) for cli and returns the
@@ -410,6 +398,15 @@ static chttpcli _chttpcli_handle_slot_acquire(struct chttpclient *cli) {
     cvector_pop_back(chttpcli_slot_table.free_indices, &idx);
     slot = (chttpcli_slot_t *)cvector_at(chttpcli_slot_table.slots, idx);
   } else {
+    /* A slot whose index is beyond what the pin table can hold could never be
+     * published, so it is refused here rather than claimed and rolled back:
+     * rolling one back would put an index no later publish can use onto the
+     * free list every acquire pops from. Reported as an ordinary failure,
+     * which is how a caller already has to treat a table that cannot grow. */
+    if (cvector_elem_count(chttpcli_slot_table.slots) >= CCOL_PIN_MAX_SLOTS) {
+      ccol_rw_lock_unlock(chttpcli_slot_table.rwlock);
+      return 0;
+    }
     chttpcli_slot_t fresh = {0};
     if (cvector_push_back(chttpcli_slot_table.slots, &fresh) != ccol_success) {
       ccol_rw_lock_unlock(chttpcli_slot_table.rwlock);
@@ -424,9 +421,26 @@ static chttpcli _chttpcli_handle_slot_acquire(struct chttpclient *cli) {
                          * CHTTPCLI_INVALID after ~2^32 reuses of this exact
                          * slot index; closed outright rather than left as a
                          * residual risk */
+  chttpcli h = ((chttpcli)idx << 32) | (chttpcli)slot->generation;
+
+  /* Written before the handle is published, so a resolver that finds this
+   * client also finds the handle its own unpin needs. */
+  cli->self_handle = h;
+
+  /* Publishing can allocate (a first-use chunk or stripe block), and a failure
+   * would leave a handle that no call could resolve, so the slot goes back on
+   * the free list instead. slot->ptr and slot->in_use are deliberately not
+   * written until after this succeeds, which leaves this path nothing to undo
+   * beyond the index. */
+  if (!ccol_pintable_publish(&chttpcli_pintable, idx, slot->generation, cli)) {
+    cli->self_handle = 0;
+    cvector_push_back(chttpcli_slot_table.free_indices, &idx);
+    ccol_rw_lock_unlock(chttpcli_slot_table.rwlock);
+    return 0;
+  }
+
   slot->ptr = cli;
   slot->in_use = true;
-  chttpcli h = ((chttpcli)idx << 32) | (chttpcli)slot->generation;
   ccol_rw_lock_unlock(chttpcli_slot_table.rwlock);
   return h;
 }
@@ -4728,7 +4742,7 @@ typedef struct {
   chttp_async_ctx_t *head;
 } chttp_deadline_stripe_t;
 
-struct {
+static struct {
   ccol_mutex_t mutex;
   ccol_cond_var_t cond_var;
   /* client_deadline_bundle.mutex/_cv guard only the sweep thread's own
@@ -8308,14 +8322,16 @@ void _chttpclient_set_max_idle_origins_for_tests(size_t n) {
 }
 
 /* Resolves h to its underlying struct chttpclient* WITHOUT pinning it (does
- * not touch pending_resolve_count at all): a bare slot-table lookup, safe
+ * not touch the pin index at all): a bare slot-table lookup, safe
  * for tests specifically because test code calling this runs synchronously,
  * single-threaded, with no concurrent destroy to race in the first place;
  * unlike _chttpcli_resolve, there is no matching _unpin call a test needs to
  * remember, which would otherwise be an easy gap to leave (a forgotten
- * unpin would leave pending_resolve_count permanently nonzero on that
- * client, silently hanging every future chttpclient_destroy call against
- * it). Returns NULL under the exact same conditions _chttpcli_resolve does. */
+ * unpin would leave a pin outstanding on that client, silently hanging every
+ * future chttpclient_destroy call against it). Returns NULL under the exact
+ * same conditions _chttpcli_resolve does: the slot table record read here and
+ * the pin index record read there are flipped under the same lock, so the two
+ * can never disagree. */
 struct chttpclient *_chttpcli_resolve_for_tests(chttpcli h) {
   ccol_call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
   if (h == 0) return NULL;
@@ -8336,12 +8352,34 @@ struct chttpclient *_chttpcli_resolve_for_tests(chttpcli h) {
  * ones plus freed-but-not-yet-reused ones): lets a test assert that a
  * create/destroy churn loop reuses freed slots rather than growing the
  * table without bound. */
+/* Indices currently sitting on the free list. Read alongside the capacity
+ * above: a rollback that loses a slot shows up as a table that grew, but only
+ * while the free list was empty, so a test that measures growth alone passes
+ * or fails according to how many handles earlier tests happened to hold at
+ * once. Consumed together, the two describe the table independently of that. */
+size_t _chttpcli_free_index_count_for_tests(void) {
+  ccol_call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
+  ccol_rw_lock_rdlock(chttpcli_slot_table.rwlock);
+  size_t n = cvector_elem_count(chttpcli_slot_table.free_indices);
+  ccol_rw_lock_unlock(chttpcli_slot_table.rwlock);
+  return n;
+}
+
 size_t _chttpcli_slot_table_capacity_for_tests(void) {
   ccol_call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
   ccol_rw_lock_rdlock(chttpcli_slot_table.rwlock);
   size_t n = cvector_elem_count(chttpcli_slot_table.slots);
   ccol_rw_lock_unlock(chttpcli_slot_table.rwlock);
   return n;
+}
+
+/* Reads how many pins are currently outstanding against h's slot. Lets a test
+ * assert directly that resolve and unpin stay balanced, rather than inferring
+ * it from a destroy that would simply never return if they were not. Takes the
+ * handle rather than a resolved pointer, so a caller needs no pin of its own to
+ * ask. */
+size_t _chttpcli_pin_count_for_tests(chttpcli h) {
+  return ccol_pintable_pins_for(&chttpcli_pintable, h);
 }
 
 /* Forces _async_idle_pool_offer's very next cvector_push_back call (for any
@@ -8844,16 +8882,47 @@ void __chttpclient_destroy(chttpcli cli) {
   slot->in_use = false; /* blocks ALL future resolves for this handle from
                             this instant, including a second concurrent
                             destroy attempt */
+  /* Same step, same lock: from here no new pin can be granted, which is what
+   * lets the count below reach zero and stay there. The two records of "is
+   * this handle resolvable" are flipped together so they can never
+   * disagree. */
+  ccol_pintable_retire(&chttpcli_pintable, idx);
   ccol_rw_lock_unlock(chttpcli_slot_table.rwlock);
 
+  /* Marking and waking come BEFORE the pin drain, not after. A caller parked
+   * waiting for pool capacity holds a resolve pin while it sleeps, so draining
+   * first makes this wait out that caller's entire remaining request instead
+   * of waking it and having it return ccol_not_permitted straight away. The
+   * occupant releasing its pool slot would free that caller eventually either
+   * way, so this ordering bounds how long destroy takes rather than closing a
+   * deadlock; cthreadpool's equivalent ordering does close a genuine one,
+   * because its workers block on the pool's own queue with nothing but its
+   * shutdown to release them. */
   ccol_mutex_lock(raw->lock);
   raw->destroying = true;
   ccol_cond_var_broadcast(raw->available);
-  /* Combined predicate, not two sequential loops: pending_resolve_count
-   * (see that field's own comment on struct chttpclient) and in_flight_count
-   * both independently gate "is anyone still touching this object". */
-  while (atomic_load(&raw->pending_resolve_count) > 0 ||
-         raw->in_flight_count > 0)
+  ccol_mutex_unlock(raw->lock);
+
+  /* Then wait out every in-flight caller that resolved before the retire
+   * above. Polled rather than slept on, because the unpin side deliberately
+   * performs no wakeup: the whole point of it is to touch nothing but the
+   * pin. Deliberately holds no lock: a pinned caller commonly needs raw->lock
+   * to finish its own call and release its pin, so waiting here with that lock
+   * held would deadlock against exactly the callers being waited for. */
+  {
+    long delay_ns = 1000;
+    while (ccol_pintable_pins(&chttpcli_pintable, idx) > 0) {
+      struct timespec ts = {.tv_sec = 0, .tv_nsec = delay_ns};
+      nanosleep(&ts, NULL);
+      if (delay_ns < 1000000L) delay_ns *= 2;
+    }
+  }
+
+  /* in_flight_count is a separate gate and keeps its condition variable: a
+   * caller increments it while still holding its pin and releases the pin only
+   * once it has, so the drain above cannot have missed one. */
+  ccol_mutex_lock(raw->lock);
+  while (raw->in_flight_count > 0)
     ccol_cond_var_wait(raw->available, raw->lock);
   ccol_mutex_unlock(raw->lock);
 
@@ -8975,6 +9044,10 @@ void __chttpclient_destroy(chttpcli cli) {
       the just-freed cli's handle carried, so that stale handle can never
       again match a FUTURE acquire's generation for this same index */
   cvector_push_back(chttpcli_slot_table.free_indices, &idx);
+  /* The process-exit destructor has already run and found this client live, so
+     the release it could not perform belongs to whoever frees the last slot,
+     which may be this call. */
+  _chttpcli_release_slot_table_if_deferred_locked();
   ccol_rw_lock_unlock(chttpcli_slot_table.rwlock);
 }
 
@@ -9584,21 +9657,78 @@ __attribute__((destructor)) static void _cleanup_default_client(void) {
    * shared object regardless of which parts of it were actually used. */
   ccol_call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
   ccol_rw_lock_wrlock(chttpcli_slot_table.rwlock);
-  bool any_slot_in_use = false;
+  if (_chttpcli_any_slot_live_locked()) {
+    /* Handed to whichever destroy frees the last slot rather than skipped, so
+       an application that does destroy its clients leaves nothing behind
+       whatever order the destructors ran in. */
+    chttpcli_slot_table.release_deferred = true;
+  } else {
+    _chttpcli_release_slot_table_locked();
+    /* The pin index's own slot storage is deliberately never released while
+     * the process runs, because a resolve indexes it with no lock held; left
+     * alone it would be reported by a leak checker configured to treat
+     * still-reachable memory as an error. Released here rather than from a
+     * destructor of its own so it inherits the same "no handle is still live"
+     * guard as the two vectors above, and so its ordering against them is
+     * fixed rather than left to whatever order destructors happen to run in.
+     *
+     * Note what that guard does and does not buy. It establishes that no
+     * handle remains resolvable, which is the condition that matters: every
+     * resolve still possible at this point is of a handle this table would
+     * reject anyway. It does NOT exclude a concurrent resolver, since a
+     * resolve takes no lock at all and the write lock held here orders this
+     * against slot-table mutation only. Unpublishing each chunk before freeing
+     * it narrows that to a resolver which has not yet loaded the chunk
+     * pointer; it does not close it, so a thread still calling into this
+     * module while the process tears itself down remains the caller's own
+     * contract to avoid, exactly as it is for the two vectors above. */
+  }
+  ccol_rw_lock_unlock(chttpcli_slot_table.rwlock);
+}
+
+/* Whether any slot still names a client. Caller holds the write lock.
+ *
+ * slot->ptr, not slot->in_use: in_use is cleared as the first step of a
+ * destroy, so that a second destroy or a new resolve is rejected as early as
+ * possible, and the rest of the teardown (quiescing the engine, draining pins,
+ * the final locked release of the index) runs after it. A scan that trusted
+ * in_use alone would free this table out from under a destroy still in that
+ * window, which the last step of it then indexes. ptr is written only once a
+ * slot is fully acquired and cleared only in that final locked step, so it is
+ * true for exactly as long as the table must not be released. */
+static bool _chttpcli_any_slot_live_locked(void) {
   size_t slot_count = cvector_elem_count(chttpcli_slot_table.slots);
   for (size_t i = 0; i < slot_count; i++) {
     chttpcli_slot_t *slot =
         (chttpcli_slot_t *)cvector_at(chttpcli_slot_table.slots, i);
-    if (slot->in_use) {
-      any_slot_in_use = true;
-      break;
-    }
+    if (slot->ptr != NULL) return true;
   }
-  if (!any_slot_in_use) {
-    __cvector_destroy(chttpcli_slot_table.slots);
-    __cvector_destroy(chttpcli_slot_table.free_indices);
+  return false;
+}
+
+/* Releases the table's own bookkeeping and the pin index. Caller holds the
+ * write lock and has established that no slot is live. The vectors are NULLed
+ * as they go, which is what makes a later call answer "already released"
+ * rather than index a freed one. */
+/* The check and the release both live behind one out-of-line call, so the
+ * destroy path that has to make it keeps the code shape it would have without
+ * any of this. Cold code in a hot object file is not free: inlined here, the
+ * same handful of instructions measurably slows an unrelated container's push
+ * path by shifting what the linker laid out around it, with the instruction
+ * count unchanged. */
+static __attribute__((noinline)) void
+_chttpcli_release_slot_table_if_deferred_locked(void) {
+  if (chttpcli_slot_table.release_deferred &&
+      !_chttpcli_any_slot_live_locked()) {
+    _chttpcli_release_slot_table_locked();
   }
-  ccol_rw_lock_unlock(chttpcli_slot_table.rwlock);
+}
+
+static void _chttpcli_release_slot_table_locked(void) {
+  cvector_destroy(chttpcli_slot_table.slots);
+  cvector_destroy(chttpcli_slot_table.free_indices);
+  ccol_pintable_dispose(&chttpcli_pintable);
+  chttpcli_slot_table.release_deferred = false;
 }
 
 /* ========================================================================== */

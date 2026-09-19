@@ -465,6 +465,17 @@ inline __attribute__((always_inline)) void ccol_mem_cpy_small(void *dst,
  * struct-assignment fast path is taken; otherwise the C library memcpy handles
  * the misaligned case. Larger buffers always delegate to memcpy. */
 void ccol_mem_cpy(void *dst, const void *src, size_t n) {
+  /* Copying nothing is a no-op, and returning here is what makes it one
+     safely. The containers represent an empty key or value as a NULL pointer
+     with size 0, and memcpy declares both of its pointer parameters as never
+     null even for a zero length, so reaching it with that representation is
+     undefined behavior in its own right and UndefinedBehaviorSanitizer reports
+     it, whether or not a byte would ever have been read or written. This is the
+     same hazard the map modules already guard at their own memcmp call sites
+     for zero-length keys. */
+  if (n == 0) {
+    return;
+  }
   if (n <= SMALL_CHUNKS_SIZE) {
     // Check if pointers are suitably aligned for fast path
     // Use pointer alignment check, since uint64_t is the largest direct access
@@ -623,6 +634,12 @@ inline __attribute__((always_inline)) void ccol_mem_zero_small(void *dst,
  * else falls
  * through to memset. */
 void ccol_mem_zero(void *dst, size_t n) {
+  /* Zeroing nothing is a no-op; see ccol_mem_cpy's own guard for why reaching
+     memset with a NULL destination and a zero length is undefined even though
+     no byte would be written. */
+  if (n == 0) {
+    return;
+  }
   if (n <= SMALL_CHUNKS_SIZE) {
     // Check alignment for fast path
     if ((uintptr_t)dst & ALIGNMENT_MASK) {  // Not well aligned
@@ -691,3 +708,53 @@ void ccol_growbuf_append(ccol_growbuf_t *b, const char *data, size_t n) {
   b->len += n;
   b->buf[b->len] = '\0';
 }
+
+#ifdef RUNNING_UNIT_TESTS
+/* See ccol_atfork_module_t in common.h for what this exists to catch. */
+static const char *const _ccol_atfork_module_names[ccol_atfork_module_count] = {
+    "clogger", "cthreadcomm", "cthreadpool", "chttpserver"};
+
+/* The handlers that have already run in the fork currently being prepared, in
+   the order they ran. */
+static unsigned char _ccol_atfork_seq[ccol_atfork_module_count];
+static unsigned _ccol_atfork_seq_len;
+
+/* _ccol_atfork_ran_before[a][b] records that a's handler ran before b's in some
+   earlier fork. */
+static bool _ccol_atfork_ran_before[ccol_atfork_module_count]
+                                   [ccol_atfork_module_count];
+
+void _ccol_atfork_order_record(ccol_atfork_module_t ccol_module) {
+  if ((unsigned)ccol_module >= (unsigned)ccol_atfork_module_count) return;
+
+  /* No lock, deliberately. This runs only from inside a fork-prepare handler,
+     and those run one sequence at a time under the C library's own atfork lock,
+     so there is no concurrent caller to exclude. Taking a lock here would nest
+     one more lock inside the very handlers whose nesting this exists to police,
+     which is the thing least worth adding to them. */
+  for (unsigned i = 0; i < _ccol_atfork_seq_len; i++) {
+    if (_ccol_atfork_seq[i] == (unsigned char)ccol_module) {
+      /* This handler is running a second time, so a new fork has begun and the
+         recorded sequence belongs to the previous one. */
+      _ccol_atfork_seq_len = 0;
+      break;
+    }
+  }
+
+  for (unsigned i = 0; i < _ccol_atfork_seq_len; i++) {
+    ccol_atfork_module_t earlier = (ccol_atfork_module_t)_ccol_atfork_seq[i];
+    if (_ccol_atfork_ran_before[ccol_module][earlier]) {
+      ccol_fatal_err(
+          "fork-prepare handler order inverted: %s ran before %s in an earlier "
+          "fork and after it in this one, so the locks the two handlers hold "
+          "nest in opposite orders between two forks",
+          _ccol_atfork_module_names[ccol_module],
+          _ccol_atfork_module_names[earlier]);
+    }
+    _ccol_atfork_ran_before[earlier][ccol_module] = true;
+  }
+
+  if (_ccol_atfork_seq_len < (unsigned)ccol_atfork_module_count)
+    _ccol_atfork_seq[_ccol_atfork_seq_len++] = (unsigned char)ccol_module;
+}
+#endif /* RUNNING_UNIT_TESTS */

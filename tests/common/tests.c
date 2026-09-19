@@ -25,7 +25,9 @@ SOFTWARE.
 #include <common.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <tau/tau.h>
+#include <unistd.h>
 TAU_MAIN()  // sets up Tau (+ main function)
 
 /* Counting allocator */
@@ -709,4 +711,67 @@ TEST(dump_key, unprintable_bytes_render_as_dots) {
   char buf[512];
   REQUIRE_TRUE(dump_key_capture(key, sizeof key, buf, sizeof buf));
   REQUIRE_NE((void *)strstr(buf, "|.A..|"), (void *)NULL);
+}
+
+/* The fork-prepare handler ordering check (see ccol_atfork_module_t). Every
+ * module that registers a prepare handler holds its own locks from that handler
+ * until after the fork, so the handlers' locks nest in whatever order the
+ * handlers run in. A consistent order across forks is what keeps that nesting
+ * acyclic, and it is a property of registration order rather than of anything
+ * local to a handler, so it is worth checking rather than asserting in a
+ * comment.
+ *
+ * Runs in a forked child because a violation is deliberately fatal: the whole
+ * point is that a build which inverts the order stops rather than continuing
+ * into a nesting no reader has reasoned about.
+ *
+ * This test is non-vacuous: recording the same pair in one order and then in
+ * the other is what makes the child abort, and a build whose recorder accepted
+ * both would exit 0 here instead. */
+TEST(atfork_order, an_inverted_prepare_handler_order_is_fatal) {
+  pid_t pid = fork();
+  if (pid == 0) {
+    _ccol_atfork_order_record(ccol_atfork_module_clogger);
+    _ccol_atfork_order_record(ccol_atfork_module_cthreadcomm);
+    /* The opposite order, as a second fork would produce it. */
+    _ccol_atfork_order_record(ccol_atfork_module_cthreadcomm);
+    _ccol_atfork_order_record(ccol_atfork_module_clogger);
+    _exit(0); /* reached only if the recorder accepted the inversion */
+  }
+  REQUIRE_NE(pid, -1);
+
+  int status = 0;
+  pid_t reaped = waitpid(pid, &status, 0);
+
+  REQUIRE_EQ(reaped, pid);
+  REQUIRE_TRUE(WIFSIGNALED(status));
+  REQUIRE_EQ(WTERMSIG(status), SIGABRT);
+}
+
+/* The same pair recorded in the same order across two forks is the ordinary
+ * case and must be accepted, so the check above cannot pass merely by refusing
+ * everything. */
+TEST(atfork_order, a_repeated_consistent_order_is_accepted) {
+  pid_t pid = fork();
+  if (pid == 0) {
+    for (int fork_round = 0; fork_round < 3; fork_round++) {
+      _ccol_atfork_order_record(ccol_atfork_module_clogger);
+      _ccol_atfork_order_record(ccol_atfork_module_cthreadcomm);
+      _ccol_atfork_order_record(ccol_atfork_module_cthreadpool);
+    }
+    _exit(0);
+  }
+  REQUIRE_NE(pid, -1);
+
+  int status = 0;
+  pid_t reaped = waitpid(pid, &status, 0);
+
+  REQUIRE_EQ(reaped, pid);
+  /* WIFEXITED only, deliberately not WEXITSTATUS(status) == 0 as well. Under
+     valgrind, --errors-for-leak-kinds=all reports the inherited process image
+     of any forked child as still reachable and --error-exitcode then replaces
+     the child's own status, so the exit code says nothing about what the child
+     did. WIFEXITED is the part that carries the meaning here: a recorder that
+     rejected this consistent order would abort, which makes WIFEXITED false. */
+  REQUIRE_TRUE(WIFEXITED(status));
 }

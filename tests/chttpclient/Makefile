@@ -23,7 +23,7 @@ COMMON_SRC_FILES = ../../src/chttpclient.c \
 	../../src/cthreadpool.c \
 	../../src/cvector.c \
 	../../src/ctls.c \
-	../../src/common.c
+	../../src/common.c ../../src/cpintable.c
 
 EXTRA_CFLAGS ?=
 # The library's own sources are compiled at the optimization level the shipped
@@ -76,7 +76,9 @@ FORCE:
 
 # Pattern rule for the library objects. $(COVERAGE_FLAGS) is empty for an
 # ordinary build and set by generate_coverage_report, so one rule serves both.
-%.o: ../../src/%.c .build-flags
+LIB_HEADERS = $(wildcard ../../include/*.h)
+
+%.o: ../../src/%.c $(LIB_HEADERS) .build-flags
 	$(CC) $(COVERAGE_FLAGS) $(SRC_CFLAGS) -c $< -o $@
 
 build: $(SRC_OBJS)

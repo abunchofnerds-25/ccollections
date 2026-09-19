@@ -11,8 +11,8 @@
 TAU_MAIN()  // sets up Tau (+ main function)
 
 extern size_t cvector_get_capacity(cvector *v);
-extern const size_t minimum_capacity;
-extern const size_t scaling_factor;
+extern const size_t _ccol_cvector_minimum_capacity;
+extern const size_t _ccol_cvector_scaling_factor;
 extern size_t cvector_overlap_copy_count_for_tests;
 
 // C_VECTOR TESTS
@@ -57,8 +57,8 @@ TEST(cvectors, create_fails) {
 }
 
 // An elem_size large enough that the initial 4-element backing buffer
-// allocation (minimum_capacity * elem_size) would overflow size_t must be
-// rejected upfront, rather than silently wrapping to an undersized
+// allocation (_ccol_cvector_minimum_capacity * elem_size) would overflow size_t
+// must be rejected upfront, rather than silently wrapping to an undersized
 // allocation while v->elem_size still records the real, huge value.
 TEST(cvectors, create_fails_on_elem_size_overflow) {
   char *err_str = NULL;
@@ -257,12 +257,13 @@ TEST(cvectors, push_back_self_alias_no_realloc) {
   cvector_push_back(cvec, &(int){20});
   cvector_push_back(cvec, &(int){30});
 
-  REQUIRE_EQ(cvector_get_capacity(cvec), minimum_capacity);
+  REQUIRE_EQ(cvector_get_capacity(cvec), _ccol_cvector_minimum_capacity);
   int *elem_ptr = cvector_at(cvec, 1);  // points at element {20}
   ccol_retval_t result = cvector_push_back(cvec, elem_ptr);
   REQUIRE_EQ(result, ccol_success);
   REQUIRE_EQ(cvector_elem_count(cvec), 4);
-  REQUIRE_EQ(cvector_get_capacity(cvec), minimum_capacity);  // no realloc
+  REQUIRE_EQ(cvector_get_capacity(cvec),
+             _ccol_cvector_minimum_capacity);  // no realloc
 
   REQUIRE_EQ(*(int *)cvector_at(cvec, 0), 10);
   REQUIRE_EQ(*(int *)cvector_at(cvec, 1), 20);
@@ -283,12 +284,13 @@ TEST(cvectors, push_back_self_alias_triggers_expansion) {
     cvector_push_back(cvec, &(int){(i + 1) * 10});
   }
 
-  REQUIRE_EQ(cvector_get_capacity(cvec), minimum_capacity);
+  REQUIRE_EQ(cvector_get_capacity(cvec), _ccol_cvector_minimum_capacity);
   int *elem_ptr = cvector_at(cvec, 3);  // points at element {40}
   ccol_retval_t result = cvector_push_back(cvec, elem_ptr);
   REQUIRE_EQ(result, ccol_success);
   REQUIRE_EQ(cvector_elem_count(cvec), 5);
-  REQUIRE_NE(cvector_get_capacity(cvec), minimum_capacity);  // grew
+  REQUIRE_NE(cvector_get_capacity(cvec),
+             _ccol_cvector_minimum_capacity);  // grew
 
   REQUIRE_EQ(*(int *)cvector_at(cvec, 0), 10);
   REQUIRE_EQ(*(int *)cvector_at(cvec, 1), 20);
@@ -306,11 +308,12 @@ TEST(cvectors, push_back_self_alias_via_type_safe_macro) {
   for (int i = 0; i < 4; ++i) {
     cvec_push_rvalue(vec, (i + 1) * 100);
   }
-  REQUIRE_EQ(cvector_get_capacity(vec), minimum_capacity);
+  REQUIRE_EQ(cvector_get_capacity(vec), _ccol_cvector_minimum_capacity);
 
   cvec_push(vec, cvec_at(vec, 0));  // aliases the vector's own storage
   REQUIRE_EQ(cvec_size(vec), (size_t)5);
-  REQUIRE_NE(cvector_get_capacity(vec), minimum_capacity);  // grew
+  REQUIRE_NE(cvector_get_capacity(vec),
+             _ccol_cvector_minimum_capacity);  // grew
   REQUIRE_EQ(cvec_at(vec, 4), 100);
 
   cvec_destroy(vec);
@@ -467,25 +470,26 @@ TEST(cvectors, scaling) {
   cvector *cvec = cvector_create(sizeof(int), NULL);
 
   REQUIRE_EQ(cvector_elem_count(cvec), 0);
-  REQUIRE_EQ(cvector_get_capacity(cvec), minimum_capacity);
+  REQUIRE_EQ(cvector_get_capacity(cvec), _ccol_cvector_minimum_capacity);
 
-  for (size_t i = 0; i < minimum_capacity; ++i) {
+  for (size_t i = 0; i < _ccol_cvector_minimum_capacity; ++i) {
     cvector_push_back(cvec, &i);
   }
 
-  REQUIRE_EQ(cvector_elem_count(cvec), minimum_capacity);
-  REQUIRE_EQ(cvector_get_capacity(cvec), minimum_capacity);
+  REQUIRE_EQ(cvector_elem_count(cvec), _ccol_cvector_minimum_capacity);
+  REQUIRE_EQ(cvector_get_capacity(cvec), _ccol_cvector_minimum_capacity);
 
-  cvector_push_back(cvec, &(int){minimum_capacity});
-  REQUIRE_EQ(cvector_elem_count(cvec), minimum_capacity + 1);
-  REQUIRE_EQ(cvector_get_capacity(cvec), minimum_capacity * scaling_factor);
+  cvector_push_back(cvec, &(int){_ccol_cvector_minimum_capacity});
+  REQUIRE_EQ(cvector_elem_count(cvec), _ccol_cvector_minimum_capacity + 1);
+  REQUIRE_EQ(cvector_get_capacity(cvec),
+             _ccol_cvector_minimum_capacity * _ccol_cvector_scaling_factor);
 
   int tmp;
-  for (size_t i = 0; i <= minimum_capacity; ++i) {
+  for (size_t i = 0; i <= _ccol_cvector_minimum_capacity; ++i) {
     cvector_pop_back(cvec, &tmp);
   }
   REQUIRE_EQ(cvector_elem_count(cvec), 0);
-  REQUIRE_EQ(cvector_get_capacity(cvec), minimum_capacity);
+  REQUIRE_EQ(cvector_get_capacity(cvec), _ccol_cvector_minimum_capacity);
 
   cvector_destroy(cvec);
 }
@@ -578,7 +582,7 @@ TEST(cvectors, data_ptr_access) {
 TEST(cvectors, reserve_basic) {
   cvector *cvec = cvector_create(sizeof(int), NULL);
 
-  REQUIRE_EQ(cvector_get_capacity(cvec), minimum_capacity);
+  REQUIRE_EQ(cvector_get_capacity(cvec), _ccol_cvector_minimum_capacity);
 
   int result = (int)cvector_reserve(cvec, 100);
   REQUIRE_EQ(result, 1);
@@ -610,10 +614,10 @@ TEST(cvectors, reserve_below_minimum) {
   cvector *cvec = cvector_create(sizeof(int), NULL);
 
   cvector_reserve(cvec, 1);
-  REQUIRE_EQ(cvector_get_capacity(cvec), minimum_capacity);
+  REQUIRE_EQ(cvector_get_capacity(cvec), _ccol_cvector_minimum_capacity);
 
   cvector_reserve(cvec, 2);
-  REQUIRE_EQ(cvector_get_capacity(cvec), minimum_capacity);
+  REQUIRE_EQ(cvector_get_capacity(cvec), _ccol_cvector_minimum_capacity);
 
   cvector_destroy(cvec);
 }
@@ -813,13 +817,14 @@ TEST(cvectors, append_array_self_alias_no_realloc) {
   cvector_push_back(cvec, &(int){1});
   cvector_push_back(cvec, &(int){2});
 
-  REQUIRE_EQ(cvector_get_capacity(cvec), minimum_capacity);
+  REQUIRE_EQ(cvector_get_capacity(cvec), _ccol_cvector_minimum_capacity);
   void *arr_ptr = cvector_data_ptr(cvec);
   size_t overlap_count_before = cvector_overlap_copy_count_for_tests;
   int result = (int)cvector_append_array(cvec, arr_ptr, 2);
   REQUIRE_EQ(result, true);
   REQUIRE_EQ(cvector_elem_count(cvec), 4);
-  REQUIRE_EQ(cvector_get_capacity(cvec), minimum_capacity);  // no realloc
+  REQUIRE_EQ(cvector_get_capacity(cvec),
+             _ccol_cvector_minimum_capacity);  // no realloc
   // Source range ends exactly where the destination begins (touching, not
   // overlapping): the cheaper ccol_mem_cpy path must still be used, not
   // memmove.
@@ -843,12 +848,13 @@ TEST(cvectors, append_array_self_alias_triggers_expansion) {
   cvector_push_back(cvec, &(int){20});
   cvector_push_back(cvec, &(int){30});
 
-  REQUIRE_EQ(cvector_get_capacity(cvec), minimum_capacity);
+  REQUIRE_EQ(cvector_get_capacity(cvec), _ccol_cvector_minimum_capacity);
   void *arr_ptr = cvector_data_ptr(cvec);
   int result = (int)cvector_append_array(cvec, arr_ptr, 3);
   REQUIRE_EQ(result, true);
   REQUIRE_EQ(cvector_elem_count(cvec), 6);
-  REQUIRE_NE(cvector_get_capacity(cvec), minimum_capacity);  // grew
+  REQUIRE_NE(cvector_get_capacity(cvec),
+             _ccol_cvector_minimum_capacity);  // grew
 
   REQUIRE_EQ(*(int *)cvector_at(cvec, 0), 10);
   REQUIRE_EQ(*(int *)cvector_at(cvec, 1), 20);
@@ -869,13 +875,14 @@ TEST(cvectors, append_array_partial_self_alias_triggers_expansion) {
     cvector_push_back(cvec, &i);
   }
 
-  REQUIRE_EQ(cvector_get_capacity(cvec), minimum_capacity);
+  REQUIRE_EQ(cvector_get_capacity(cvec), _ccol_cvector_minimum_capacity);
   int *arr_ptr =
       (int *)cvector_data_ptr(cvec) + 2;  // points at elements {2, 3}
   int result = (int)cvector_append_array(cvec, arr_ptr, 2);
   REQUIRE_EQ(result, true);
   REQUIRE_EQ(cvector_elem_count(cvec), 6);
-  REQUIRE_NE(cvector_get_capacity(cvec), minimum_capacity);  // grew
+  REQUIRE_NE(cvector_get_capacity(cvec),
+             _ccol_cvector_minimum_capacity);  // grew
 
   REQUIRE_EQ(*(int *)cvector_at(cvec, 0), 0);
   REQUIRE_EQ(*(int *)cvector_at(cvec, 1), 1);
@@ -1086,10 +1093,11 @@ TEST(cvectors, append_cvector_self_append) {
     cvector_push_back(v, &(int){1});
     cvector_push_back(v, &(int){2});
 
-    REQUIRE_EQ(cvector_get_capacity(v), minimum_capacity);
+    REQUIRE_EQ(cvector_get_capacity(v), _ccol_cvector_minimum_capacity);
     REQUIRE_EQ((int)cvector_append_cvector(v, v), true);
     REQUIRE_EQ(cvector_elem_count(v), 4);
-    REQUIRE_EQ(cvector_get_capacity(v), minimum_capacity);  // no realloc
+    REQUIRE_EQ(cvector_get_capacity(v),
+               _ccol_cvector_minimum_capacity);  // no realloc
 
     REQUIRE_EQ(*(int *)cvector_at(v, 0), 1);
     REQUIRE_EQ(*(int *)cvector_at(v, 1), 2);
@@ -1106,10 +1114,11 @@ TEST(cvectors, append_cvector_self_append) {
     cvector_push_back(v, &(int){20});
     cvector_push_back(v, &(int){30});
 
-    REQUIRE_EQ(cvector_get_capacity(v), minimum_capacity);
+    REQUIRE_EQ(cvector_get_capacity(v), _ccol_cvector_minimum_capacity);
     REQUIRE_EQ((int)cvector_append_cvector(v, v), true);
     REQUIRE_EQ(cvector_elem_count(v), 6);
-    REQUIRE_NE(cvector_get_capacity(v), minimum_capacity);  // grew
+    REQUIRE_NE(cvector_get_capacity(v),
+               _ccol_cvector_minimum_capacity);  // grew
 
     REQUIRE_EQ(*(int *)cvector_at(v, 0), 10);
     REQUIRE_EQ(*(int *)cvector_at(v, 1), 20);
@@ -1228,12 +1237,12 @@ TEST(cvectors, reset_after_growth) {
   }
 
   size_t large_capacity = cvector_get_capacity(cvec);
-  REQUIRE_NE(large_capacity, minimum_capacity);
+  REQUIRE_NE(large_capacity, _ccol_cvector_minimum_capacity);
 
   cvector_reset(cvec);
 
   REQUIRE_EQ(cvector_elem_count(cvec), 0);
-  REQUIRE_EQ(cvector_get_capacity(cvec), minimum_capacity);
+  REQUIRE_EQ(cvector_get_capacity(cvec), _ccol_cvector_minimum_capacity);
 
   // Verify vector still works
   cvector_push_back(cvec, &(int){999});
@@ -1255,7 +1264,7 @@ static void *_reset_test_realloc(void *ptr, size_t size) {
 static void _reset_test_free(void *ptr) { free(ptr); }
 
 // cvector_reset must not touch the allocator at all when the vector is
-// already at minimum_capacity (a true no-op shrink), mirroring
+// already at _ccol_cvector_minimum_capacity (a true no-op shrink), mirroring
 // scale_the_cvector_size_down's own early-return guard for the identical
 // case; it must still shrink (and therefore realloc) when genuinely needed.
 TEST(cvectors, reset_skips_realloc_when_already_at_minimum_capacity) {
@@ -1267,23 +1276,23 @@ TEST(cvectors, reset_skips_realloc_when_already_at_minimum_capacity) {
 
   cvector *cvec = cvector_create_full(sizeof(int), &procs, NULL);
   REQUIRE_NE((void *)cvec, NULL);
-  REQUIRE_EQ(cvector_get_capacity(cvec), minimum_capacity);
+  REQUIRE_EQ(cvector_get_capacity(cvec), _ccol_cvector_minimum_capacity);
 
   cvector_reset(cvec);
   REQUIRE_EQ(cvector_elem_count(cvec), 0);
-  REQUIRE_EQ(cvector_get_capacity(cvec), minimum_capacity);
+  REQUIRE_EQ(cvector_get_capacity(cvec), _ccol_cvector_minimum_capacity);
   REQUIRE_EQ(g_reset_test_realloc_count, (size_t)0);
 
   // Grow past minimum, then reset: this time a shrinking realloc is expected.
   for (int i = 0; i < 20; ++i) {
     cvector_push_back(cvec, &i);
   }
-  REQUIRE_NE(cvector_get_capacity(cvec), minimum_capacity);
+  REQUIRE_NE(cvector_get_capacity(cvec), _ccol_cvector_minimum_capacity);
 
   size_t realloc_count_before_shrink = g_reset_test_realloc_count;
   cvector_reset(cvec);
   REQUIRE_EQ(cvector_elem_count(cvec), 0);
-  REQUIRE_EQ(cvector_get_capacity(cvec), minimum_capacity);
+  REQUIRE_EQ(cvector_get_capacity(cvec), _ccol_cvector_minimum_capacity);
   REQUIRE_GT(g_reset_test_realloc_count, realloc_count_before_shrink);
 
   cvector_destroy(cvec);
@@ -1293,12 +1302,12 @@ TEST(cvectors, boundary_fill_to_capacity) {
   cvector *cvec = cvector_create(sizeof(int), NULL);
 
   // Fill to exact minimum capacity
-  for (int i = 0; i < (int)minimum_capacity; ++i) {
+  for (int i = 0; i < (int)_ccol_cvector_minimum_capacity; ++i) {
     cvector_push_back(cvec, &i);
   }
 
-  REQUIRE_EQ(cvector_elem_count(cvec), minimum_capacity);
-  REQUIRE_EQ(cvector_get_capacity(cvec), minimum_capacity);
+  REQUIRE_EQ(cvector_elem_count(cvec), _ccol_cvector_minimum_capacity);
+  REQUIRE_EQ(cvector_get_capacity(cvec), _ccol_cvector_minimum_capacity);
 
   cvector_destroy(cvec);
 }
@@ -1971,11 +1980,12 @@ TEST(cvectors, push_self_alias_still_safe_after_conversion_fix) {
   for (int i = 0; i < 4; ++i) {
     cvec_push_rvalue(vec, (i + 1) * 100);
   }
-  REQUIRE_EQ(cvector_get_capacity(vec), minimum_capacity);
+  REQUIRE_EQ(cvector_get_capacity(vec), _ccol_cvector_minimum_capacity);
 
   cvec_push(vec, cvec_at(vec, 0));  // aliases the vector's own storage
   REQUIRE_EQ(cvec_size(vec), (size_t)5);
-  REQUIRE_NE(cvector_get_capacity(vec), minimum_capacity);  // grew
+  REQUIRE_NE(cvector_get_capacity(vec),
+             _ccol_cvector_minimum_capacity);  // grew
   REQUIRE_EQ(cvec_at(vec, 4), 100);
 
   cvec_destroy(vec);
@@ -2598,8 +2608,8 @@ static bool cvector_is_power_of_two(size_t x) {
 
 // Runs a random sequence of push_back/pop_back/reserve/reset operations and
 // checks structural invariants after every single one: elem_count never
-// exceeds capacity, capacity never drops below minimum_capacity and is
-// always a power of two, and data_ptr is never NULL while capacity > 0.
+// exceeds capacity, capacity never drops below _ccol_cvector_minimum_capacity
+// and is always a power of two, and data_ptr is never NULL while capacity > 0.
 // A fixed seed is used (see common_invariants.h) so a failure is always
 // reproducible from the printed seed alone.
 TEST(cvectors, invariants_random_ops) {
@@ -2642,7 +2652,7 @@ TEST(cvectors, invariants_random_ops) {
     size_t elem_count = cvector_elem_count(vec);
     size_t capacity = cvector_get_capacity(vec);
     REQUIRE_TRUE(elem_count <= capacity);
-    REQUIRE_TRUE(capacity >= minimum_capacity);
+    REQUIRE_TRUE(capacity >= _ccol_cvector_minimum_capacity);
     REQUIRE_TRUE(cvector_is_power_of_two(capacity));
     if (capacity > 0) {
       REQUIRE_NE(cvector_data_ptr(vec), NULL);

@@ -1,0 +1,48 @@
+.TH CCOL_R_MEMPOOL_ALLOCATED_BYTES 3 "2026-09-16" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccol_r_mempool_allocated_bytes \- report the memory a ranged pool holds for its entries
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cmempool.h>
+
+size_t ccol_r_mempool_allocated_bytes(ccol_r_mempool *rmp);
+.fi
+.SH DESCRIPTION
+.nf
+Returns every tier's entry block added together, in bytes, which is what
+a ranged pool costs.
+
+Each tier is a pool in its own right with its own element size and
+element count, and each one large enough to keep per-thread caches holds
+a reserve of its own, so this exceeds the sum of the tier capacities.
+It is the figure to use when sizing a ranged pool against a memory
+budget, where working it out by hand is least practical.
+.fi
+.SH PARAMETERS
+.nf
+rmp                       Ranged memory pool to query (must not be NULL)
+.fi
+.SH RETURN VALUE
+.nf
+Returns the size in bytes of every tier's entry block, summed
+.fi
+.SH NOTES
+.nf
+The tiers' entry blocks are counted and nothing else, on the same terms
+as ccol_mempool_allocated_bytes(3): handles, per-thread caches and
+entries served by a fallback policy are all outside this figure.
+
+The value does not change over the pool's lifetime.
+.fi
+.SH "THREAD SAFETY"
+.nf
+Thread-safe when the pool was created with single_threaded = false.
+Acquires each tier's lock in turn, so it is a cold-path call and not
+intended for use inside a hot loop.
+.fi
+.SH "SEE ALSO"
+.BR ccol_mempool_allocated_bytes (3),
+.BR ccol_r_mempool_total_capacity (3),
+.BR ccol_r_mempool_create (3)

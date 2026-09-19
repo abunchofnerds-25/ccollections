@@ -10,7 +10,7 @@ SRC_FILE_PREFIX = clogger
 SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c \
             ../../src/chashmap.c ../../src/cvector.c \
             ../../src/cthreadcomm.c ../../src/cthreadpool.c \
-            ../../src/common.c
+            ../../src/common.c ../../src/cpintable.c
 ALL_SRC_FILES = tests.c $(SRC_FILES)
 EXTRA_CFLAGS ?=
 # The library's own sources are compiled at the optimization level the shipped
@@ -59,7 +59,9 @@ FORCE:
 
 # Pattern rule for the library objects. $(COVERAGE_FLAGS) is empty for an
 # ordinary build and set by generate_coverage_report, so one rule serves both.
-%.o: ../../src/%.c .build-flags
+LIB_HEADERS = $(wildcard ../../include/*.h)
+
+%.o: ../../src/%.c $(LIB_HEADERS) .build-flags
 	$(CC) $(COVERAGE_FLAGS) $(SRC_CFLAGS) -c $< -o $@
 
 build: $(SRC_OBJS)
@@ -81,13 +83,15 @@ test: build
 # or exercising the forked thread at all, specifically when the parent is
 # multi-threaded at fork() time (see tests/chttpclient/Makefile's fuller
 # comment on its own test_tsan target for the exact mechanism).
-# suppressions=tsan_rwlock_reinit.supp: a known, confirmed-non-bug
-# ThreadSanitizer limitation around this module's own fork()-safety rwlock
-# reinit; see that file's own comment for the independent, clogger.c-free
-# reproduction proving it, mirroring tests/chttpclient/Makefile's identical
-# "known non-bug, suppress with a documented reason" precedent.
+# suppressions=tsan_atfork_lock_order.supp: a lock-order-inversion the
+# detector raises between this module's fork-prepare handler and
+# cthreadcomm's, which the C library's own serialization of prepare handlers
+# makes undeadlockable; see that file's own comment for the full argument and
+# for the always-on check that catches the case where it would NOT be, and
+# tests/chttpclient/Makefile for the same "suppress with a documented reason"
+# precedent.
 test_tsan: build_tsan
-	TSAN_OPTIONS="die_after_fork=0 suppressions=tsan_rwlock_reinit.supp" ./tests_tsan
+	TSAN_OPTIONS="die_after_fork=0 suppressions=tsan_atfork_lock_order.supp" ./tests_tsan
 
 memtest: build
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --child-silent-after-fork=yes --error-exitcode=1 ./tests

@@ -1703,4 +1703,33 @@ static inline __attribute__((always_inline)) char *ccol_strdup(
   return result;
 }
 
+#ifdef RUNNING_UNIT_TESTS
+/*
+ * Fork-prepare handler ordering, checked rather than assumed.
+ *
+ * Every module here that registers a pthread_atfork() prepare handler takes its
+ * own locks in that handler and keeps them until after the fork, so the
+ * handlers' locks nest in whatever order the handlers happen to run in. That
+ * order is reverse registration order, and registration order is decided by
+ * whichever module the embedding program uses first, which is why the modules
+ * force their dependencies to register ahead of them. If two handlers ever ran
+ * in opposite relative orders in two different forks, their locks would nest
+ * both ways and the cycle would be real rather than a detector artifact.
+ *
+ * Each handler reports itself here on entry. Recording the pairwise order and
+ * refusing a later contradiction turns that property into something the test
+ * suites check on every fork they perform, instead of a claim a comment makes.
+ * Compiled only into the test builds; the shipped library contains none of it.
+ */
+typedef enum {
+  ccol_atfork_module_clogger = 0,
+  ccol_atfork_module_cthreadcomm,
+  ccol_atfork_module_cthreadpool,
+  ccol_atfork_module_chttpserver,
+  ccol_atfork_module_count
+} ccol_atfork_module_t;
+
+void _ccol_atfork_order_record(ccol_atfork_module_t ccol_module);
+#endif /* RUNNING_UNIT_TESTS */
+
 #pragma GCC visibility pop

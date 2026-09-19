@@ -50,11 +50,11 @@ Buffer size must exactly match CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE
 Buffer is not freed by ccol_r_mempool_destroy() (user manages buffer lifetime)
 Pool structs are still allocated via mmgmt_procs
 Buffer contains all sub-pools in adjacent segments
-Returns NULL with error if buffer is not sufficiently aligned for the
-  pool's internal per-element header (a size_t plus a pointer); a
-  buffer declared via CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER is always
-  properly aligned, a hand-rolled buffer must be aligned to at least
-  _Alignof(max_align_t)
+Returns NULL with error if the buffer is not aligned to at least
+  16 bytes, which is what every entry the pool hands out is
+  aligned to and therefore what entry 0, sitting at the buffer's own
+  address, has to satisfy; a buffer declared via
+  CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER already meets this
 Same power-of-two size/count constraints as ccol_r_mempool_create() apply
 .fi
 .SH "SEE ALSO"

@@ -30,6 +30,27 @@ destroying the pool.
 Safe to call with NULL pointer
 For preallocated pools, user must manage buffer lifetime
 .fi
+.PP
+A custom allocator's free function can still be called after this returns, and
+after main() returns. A pool shared between threads keeps a small per-thread
+cache of entries; destroying the pool marks those caches dead but does not free
+them, because a cache belongs to the thread holding it and another thread must
+not free it underneath that thread. Each is released later: when its owning
+thread next has to acquire a cache for a pool it does not already hold one
+for, when that thread exits, or, if that thread is the one that runs the
+library's process-exit handler, at process exit. Each release calls the free
+function the pool was created with. None of those is guaranteed to happen: a
+thread that keeps using the same few pools answers every request from the
+caches it already holds and never acquires another, so it can hold a dead one
+indefinitely. A program that needs its allocator to see every free should join
+such threads.
+.PP
+An allocator that is itself torn down at a known point therefore has to outlive
+that: one drawing from an arena released at the end of main(), or from storage
+freed by the application's own exit handler, can be called after it is gone.
+Allocators built on malloc/free, or on storage that lives for the process, are
+unaffected. A pool created with single_threaded set keeps no such cache and has
+no such tail.
 .SH "SEE ALSO"
 .BR ccol_mempool_create (3),
-.BR _ccol_mempool_destroy (3)
+.BR ccol_r_mempool_destroy (3)

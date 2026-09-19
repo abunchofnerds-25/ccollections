@@ -26,9 +26,9 @@ Returns 0 on error or if disabled
 .fi
 .SH NOTES
 .nf
-Returns 0 if fallback_disabled
-With fallback_at_first_exhaustion, tracks per-pool dynamic allocations
-With fallback_at_last_exhaustion, tracks all dynamic allocations
+Returns 0 if ccol_fallback_disabled
+With ccol_fallback_at_first_exhaustion, tracks per-pool dynamic allocations
+With ccol_fallback_at_last_exhaustion, tracks all dynamic allocations
 Returns 0 if size is invalid
 Thread-safe if pool created with single_threaded=false
 .fi

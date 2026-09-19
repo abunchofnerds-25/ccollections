@@ -1,0 +1,66 @@
+.TH CCOL_MEMPOOL_TOTAL_CAPACITY 3 "2026-09-17" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccol_mempool_total_capacity \- report the number of elements a pool holds
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cmempool.h>
+
+size_t ccol_mempool_total_capacity(ccol_mempool *mp);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the total number of pool-owned elements mp holds, whether
+currently in use or free. Dynamic fallback allocations are not counted;
+see ccol_mempool_dynamic_allocs_count(3) for those.
+.fi
+.SH PARAMETERS
+.nf
+mp                        Memory pool to query (must not be NULL)
+.fi
+.SH RETURN VALUE
+.nf
+Returns the number of elements the pool holds
+.fi
+.SH NOTES
+.nf
+This is the elem_count passed to ccol_mempool_create(), or the element
+count derived from the buffer passed to
+ccol_mempool_create_from_preallocated_buffer(). It does not change over
+the pool's lifetime.
+
+A thread-safe pool large enough to maintain per-thread caches allocates
+additional elements beyond this count, as a reserve that keeps the
+advertised count obtainable by any thread regardless of how many entries
+other threads are holding in their caches. That reserve is not reported
+here, and it does not change the pool's memory footprint at run time:
+ccol_mempool_allocated_bytes(3) reports the whole block, reserve
+included, and it is allocated once when the pool is created.
+
+The two ends of the count are not equally exact for such a pool. A thread
+takes an entry from its own cache with no lock held and therefore with no
+count to consult, so entries have to be committed to a cache before it is
+known whether they will be needed. That decision favours the guarantee
+above: a caller is never refused while another thread's cache holds
+entries it was entitled to. In exchange, concurrent callers can briefly
+hold a few entries more than this count at once, never more than the
+physical slot count. A pool with no cache, which includes every pool
+created with single_threaded = true and every pool built by
+ccol_mempool_create_from_preallocated_buffer(3), is exact in both
+directions: allocation past this count fails, or falls back to the system
+allocator.
+
+See ccol_mempool_create(3) for how pool size affects performance.
+.fi
+.SH "THREAD SAFETY"
+.nf
+Thread-safe when the pool was created with single_threaded = false.
+Acquires the pool's lock, so it is a cold-path call and not intended for
+use inside a hot loop.
+.fi
+.SH "SEE ALSO"
+.BR ccol_mempool_used_count (3),
+.BR ccol_mempool_dynamic_allocs_count (3),
+.BR ccol_mempool_allocated_bytes (3),
+.BR ccol_mempool_create (3)

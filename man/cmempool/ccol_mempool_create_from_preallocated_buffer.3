@@ -29,7 +29,7 @@ buf_size                   Size of buffer in bytes
 elem_size                  Size of each element in bytes (must be > 0;
                           if smaller than sizeof(uintptr_t) it is rounded
                           up, mirroring ccol_mempool_create(); maximum
-                          SIZE_MAX minus the internal header overhead)
+                          SIZE_MAX minus the stride rounding)
 fallback_to_dynamic_memory If true, allocate from heap when pool exhausted
 single_threaded           If true, omit locking
 mmgmt_procs               Custom memory management, or NULL
@@ -42,22 +42,27 @@ Returns NULL on failure
 .fi
 .SH NOTES
 .nf
-Element count is calculated as buf_size / stride, where stride is
-  elem_size + header_overhead further rounded up so every element in the
-  pool is correctly aligned, not just the first (the same stride
-  CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER sizes its own buffer with)
+Element count is calculated as buf_size / (stride + 1). An entry carries
+  no header; stride is elem_size rounded up to 16 bytes and then, unless
+  the library was built with -DCCOL_MEMPOOL_COMPACT_LAYOUT=1, on up to a
+  power of two, so every element in the pool is aligned for any object
+  type and not just the first. The one extra byte per element is that
+  element's own status byte, which lives in the same buffer after the
+  entries. CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER sizes its own buffer
+  with the same arithmetic and is the way to get it right without
+  restating it
 Buffer is not freed by ccol_mempool_destroy() (user manages buffer lifetime)
 Pool struct itself is still allocated via mmgmt_procs
 Returns NULL with error if elem_size is zero
 If elem_size is nonzero but < sizeof(uintptr_t), it is rounded up
   (same as ccol_mempool_create())
 Returns NULL with error if elem_size would overflow size_t once the
-header overhead and alignment rounding are added
-Returns NULL with error if buffer is not sufficiently aligned for the
-  pool's internal per-element header (a size_t plus a pointer); a buffer
-  declared via CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER is always properly
-  aligned, a hand-rolled buffer must be aligned to at least
-  _Alignof(max_align_t)
+stride rounding is applied
+Returns NULL with error if the buffer is not aligned to at least
+  16 bytes, which is what every entry the pool hands out is
+  aligned to and therefore what entry 0, sitting at the buffer's own
+  address, has to satisfy; a buffer declared via
+  CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER already meets this
 .fi
 .SH "SEE ALSO"
 .BR CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER (3),

@@ -117,7 +117,7 @@ converted into *val_ptr; the caller must NOT call free() on it.
 .nf
 Uses a GNU C statement expression ({...}); requires GCC or Clang.
 The cache never exposes a pointer into its internal storage; the value
-is always copied out before the mutex is released.
+is always copied out before the segment's lock is released.
 .fi
 .SH "SEE ALSO"
 .BR clru_set (3),

@@ -10,9 +10,17 @@
 #
 # Run from the repository root, after `make coverage_site`. Used by
 # `make coverage_check` and by CI.
+#
+# CCOL_DISABLED_SOURCES may carry a space-separated list of source paths that
+# this build deliberately left out (see the WITH_* switches in the root
+# Makefile). Those files are still present on disk, so without being told about
+# them the directory scan below would report each one as compiled by no suite,
+# which is exactly the failure it exists to raise for a file that fell out by
+# accident. Being explicit keeps that check meaningful for everything else.
 set -eu
 
 MIN_COVERAGE=80
+CCOL_DISABLED_SOURCES="${CCOL_DISABLED_SOURCES:-}"
 
 # Modules with no unit tests of their own. Whatever coverage they show comes
 # incidentally from another module's suite, so holding them to the threshold
@@ -39,7 +47,12 @@ INFO="${1:-coverage_site/library.info}"
 	exit 2
 }
 
-awk -v info="$INFO" -v minimum="$MIN_COVERAGE" -v excluded="$NOT_UNIT_TESTED" '
+# Files this build left out join the never-unit-tested list: both mean "present
+# on disk, legitimately absent from the report".
+EXCLUDED="$NOT_UNIT_TESTED
+$(printf '%s\n' $CCOL_DISABLED_SOURCES)"
+
+awk -v info="$INFO" -v minimum="$MIN_COVERAGE" -v excluded="$EXCLUDED" '
 	function basename(p,   n, a) { n = split(p, a, "/"); return a[n - 1] "/" a[n] }
 
 	BEGIN {
@@ -75,7 +88,9 @@ awk -v info="$INFO" -v minimum="$MIN_COVERAGE" -v excluded="$NOT_UNIT_TESTED" '
 			if (seen[k] > 0) hit[p[1]]++
 		}
 		status = 0
+		nfiles = 0
 		while (("ls src/*.c include/*.h 2>/dev/null" | getline f) > 0) {
+			nfiles++
 			if (f in skip) { nskipped++; continue }
 			if (!(f in total)) {
 				# A header made only of macros and declarations legitimately
@@ -100,6 +115,14 @@ awk -v info="$INFO" -v minimum="$MIN_COVERAGE" -v excluded="$NOT_UNIT_TESTED" '
 			} else {
 				npassed++
 			}
+		}
+		# An empty listing is the one result that has to be refused rather
+		# than reported: it is what a wrong working directory produces, and
+		# every check below it then passes by examining nothing at all.
+		if (nfiles == 0) {
+			printf "check_test_coverages: found no src/*.c or include/*.h to check;\n"
+			printf "                      run this from the repository root.\n"
+			exit 2
 		}
 		printf "check_test_coverages: %d file(s) at or above %d%%, %d with no instrumented lines, %d not unit tested\n", npassed, minimum, nolines, nskipped
 		if (status != 0)

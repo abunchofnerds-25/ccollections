@@ -1,0 +1,51 @@
+.TH CCOL_MEMPOOL_DYNAMIC_ALLOCS_COUNT 3 "2026-09-15" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccol_mempool_dynamic_allocs_count \- report outstanding fallback allocations
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cmempool.h>
+
+size_t ccol_mempool_dynamic_allocs_count(ccol_mempool *mp);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the number of allocations currently outstanding that came from
+the system allocator rather than from the pool's own storage. These occur
+only in a pool created with fallback_to_dynamic_memory = true, and only
+once the pool's own elements are exhausted.
+.fi
+.SH PARAMETERS
+.nf
+mp                        Memory pool to query (must not be NULL)
+.fi
+.SH RETURN VALUE
+.nf
+Returns the number of outstanding fallback allocations, or 0 for a pool
+created without fallback
+.fi
+.SH NOTES
+.nf
+A non-zero result means the pool was too small for its workload at some
+point. It is the signal to raise elem_count: every fallback allocation is
+a system allocator round trip, which is the cost the pool exists to
+avoid.
+
+Entries held in a per-thread cache are pool-owned and are never counted
+here.
+
+ccol_mempool_destroy() treats outstanding fallback allocations as a leak
+and terminates the process, so a pool with fallback enabled must have
+every fallback entry freed before it is destroyed.
+.fi
+.SH "THREAD SAFETY"
+.nf
+Thread-safe when the pool was created with single_threaded = false.
+Acquires the pool's lock, so it is a cold-path call and not intended for
+use inside a hot loop.
+.fi
+.SH "SEE ALSO"
+.BR ccol_mempool_total_capacity (3),
+.BR ccol_mempool_used_count (3),
+.BR ccol_mempool_create (3)

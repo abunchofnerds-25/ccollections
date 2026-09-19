@@ -1,4 +1,4 @@
-.TH CCOL_R_MEMPOOL_TOTAL_CAPACITY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CCOL_R_MEMPOOL_TOTAL_CAPACITY 3 "2026-09-17" "c_collections" "C Collections Library - Functions"
 .SH NAME
 ccol_r_mempool_total_capacity \- get total capacity for a size
 .SH LIBRARY
@@ -29,6 +29,12 @@ Returns 0 on error
 Returns 0 if size is invalid (0 or > largest_size)
 Size is rounded up to next power-of-2 pool
 Thread-safe if pool created with single_threaded=false
+
+The count this reports for a size is the count that tier was built for,
+and that many entries of that size are always obtainable. A tier large
+enough to maintain per-thread caches allocates a reserve beyond it, so
+concurrent callers can briefly hold a few more than this at once; see
+ccol_mempool_total_capacity(3) for the full account.
 .fi
 .SH "SEE ALSO"
 .BR ccol_r_mempool_used_count (3),

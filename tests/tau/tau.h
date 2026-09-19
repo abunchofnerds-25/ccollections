@@ -269,15 +269,23 @@ static inline double tauClock() {
 
 #elif defined(__linux)
   struct timespec ts = {0, 0};
-#if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
-  timespec_get(&ts, TIME_UTC);
-#else
-  const clockid_t cid = CLOCK_REALTIME;
-#if defined(TAU_USE_CLOCKGETTIME)
+  /* CLOCK_MONOTONIC, not the wall clock. Two reasons, both of which reach the
+     durations this reports. It cannot step, where the wall clock can be moved
+     by the administrator or slewed by NTP in the middle of a test. And it
+     counts from boot rather than from the epoch, which keeps the value inside
+     the range a double represents exactly: an epoch reading is around 1.8e18
+     nanoseconds, where the gap between representable doubles is 256, so
+     adjacent readings collapse onto one value and every duration is quantized
+     to that step. A reading counted from boot is around 3e14, whose gap is a
+     sixteenth of a nanosecond.
+
+     C11's timespec_get offers no monotonic clock, so this takes the POSIX call
+     on both paths rather than preferring it. */
+  const clockid_t cid = CLOCK_MONOTONIC;
+#if defined(TAU_USE_CLOCKGETTIME) || !defined(SYS_clock_gettime)
   clock_gettime(cid, &ts);
 #else
   syscall(SYS_clock_gettime, cid, &ts);
-#endif
 #endif
   return TAU_CAST(double, ts.tv_sec) * 1000 * 1000 * 1000 +
          TAU_CAST(double, ts.tv_nsec);  // in nanoseconds
@@ -290,7 +298,19 @@ static inline double tauClock() {
 static void tauClockPrintDuration(const double nanoseconds_duration) {
   tau_u64 n;
   int num_digits = 0;
-  n = TAU_CAST(tau_u64, nanoseconds_duration);
+  /* A duration is the difference of two clock readings and is not guaranteed
+     to be positive. On a target that evaluates intermediate floating-point
+     results in a wider format than double (x87 on i386, where this is
+     reproducible), the two readings need not round consistently, so a very
+     short interval can come out a few nanoseconds below zero; a clock that
+     steps backwards has the same effect. Converting a negative double to an
+     unsigned integer type is undefined behaviour, which a sanitizer reports
+     and -fno-sanitize-recover turns into a failed run, so the value is
+     floored here. Zero is the truthful floor for an interval too short to
+     measure. */
+  const double duration =
+      nanoseconds_duration > 0.0 ? nanoseconds_duration : 0.0;
+  n = TAU_CAST(tau_u64, duration);
   while (n != 0) {
     n /= 10;
     ++num_digits;
@@ -298,22 +318,23 @@ static void tauClockPrintDuration(const double nanoseconds_duration) {
 
   // Stick with nanoseconds (no need for decimal points here)
   switch (num_digits) {
+    case 0:
     case 1:
     case 2:
-      printf("%.0lfns", nanoseconds_duration);
+      printf("%.0lfns", duration);
       break;
     case 3:
     case 4:
     case 5:
-      printf("%.2lfus", nanoseconds_duration / 1000);
+      printf("%.2lfus", duration / 1000);
       break;
     case 6:
     case 7:
     case 8:
-      printf("%.2lfms", nanoseconds_duration / 1000000);
+      printf("%.2lfms", duration / 1000000);
       break;
     default:
-      printf("%.2lfs", nanoseconds_duration / 1000000000);
+      printf("%.2lfs", duration / 1000000000);
       break;
   }
 }

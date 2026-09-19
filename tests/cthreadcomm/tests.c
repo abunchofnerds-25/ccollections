@@ -26,8 +26,8 @@ extern size_t _ccol_event_loop_slot_table_capacity_for_tests(void);
 extern bool _ccol_event_loop_resolve_pin_and_sleep_for_tests(ccol_event_loop h,
                                                              int ms);
 
-extern void add_duration_to_timespec(struct timespec *target,
-                                     struct timespec *duration);
+extern void _ccol_add_duration_to_timespec(struct timespec *target,
+                                           struct timespec *duration);
 
 /* Every write(2) call in this file is a small (a handful of bytes), single
  * fixed-size best-effort signal into a pipe this same test already owns
@@ -44,7 +44,7 @@ static void test_write_retry_eintr(int fd, const void *buf, size_t n) {
   } while (rv < 0 && errno == EINTR);
 }
 
-TEST(add_duration_to_timespec, edge_cases) {
+TEST(_ccol_add_duration_to_timespec, edge_cases) {
   {
     struct timespec t;
     struct timespec duration;
@@ -55,7 +55,7 @@ TEST(add_duration_to_timespec, edge_cases) {
     duration.tv_sec = 2;
     duration.tv_nsec = 400000000;
 
-    add_duration_to_timespec(&t, &duration);
+    _ccol_add_duration_to_timespec(&t, &duration);
 
     REQUIRE_EQ(t.tv_sec, 4);
     REQUIRE_EQ(t.tv_nsec, 0);
@@ -71,7 +71,7 @@ TEST(add_duration_to_timespec, edge_cases) {
     duration.tv_sec = 2;
     duration.tv_nsec = 400000000;
 
-    add_duration_to_timespec(&t, &duration);
+    _ccol_add_duration_to_timespec(&t, &duration);
 
     REQUIRE_EQ(t.tv_sec, 3);
     REQUIRE_EQ(t.tv_nsec, 999999999);
@@ -87,7 +87,7 @@ TEST(add_duration_to_timespec, edge_cases) {
     duration.tv_sec = 2;
     duration.tv_nsec = 1400000000;
 
-    add_duration_to_timespec(&t, &duration);
+    _ccol_add_duration_to_timespec(&t, &duration);
 
     REQUIRE_EQ(t.tv_sec, 4);
     REQUIRE_EQ(t.tv_nsec, 999999999);
@@ -103,7 +103,7 @@ TEST(add_duration_to_timespec, edge_cases) {
     duration.tv_sec = 2;
     duration.tv_nsec = 1400000000;
 
-    add_duration_to_timespec(&t, &duration);
+    _ccol_add_duration_to_timespec(&t, &duration);
 
     REQUIRE_EQ(t.tv_sec, 5);
     REQUIRE_EQ(t.tv_nsec, 0);
@@ -119,7 +119,7 @@ TEST(add_duration_to_timespec, edge_cases) {
     duration.tv_sec = 2;
     duration.tv_nsec = 400000000;
 
-    add_duration_to_timespec(&t, &duration);
+    _ccol_add_duration_to_timespec(&t, &duration);
 
     REQUIRE_EQ(t.tv_sec, 4);
     REQUIRE_EQ(t.tv_nsec, 999999999);
@@ -135,19 +135,19 @@ TEST(add_duration_to_timespec, edge_cases) {
     duration.tv_sec = 2;
     duration.tv_nsec = 400000000;
 
-    add_duration_to_timespec(&t, &duration);
+    _ccol_add_duration_to_timespec(&t, &duration);
 
     REQUIRE_EQ(t.tv_sec, 5);
     REQUIRE_EQ(t.tv_nsec, 0);
   }
 }
 
-TEST(add_duration_to_timespec, duration_not_mutated) {
+TEST(_ccol_add_duration_to_timespec, duration_not_mutated) {
   // The function must not modify the caller's duration struct even when
   // duration->tv_nsec is overflowed and would normally be normalised.
   struct timespec t = {.tv_sec = 1, .tv_nsec = 600000000};
   struct timespec d = {.tv_sec = 2, .tv_nsec = 1500000000};
-  add_duration_to_timespec(&t, &d);
+  _ccol_add_duration_to_timespec(&t, &d);
   // Verify the result is correct (function was actually called).
   REQUIRE_EQ(t.tv_sec, 5);
   REQUIRE_EQ(t.tv_nsec, 100000000);
@@ -168,25 +168,25 @@ TEST(add_duration_to_timespec, duration_not_mutated) {
  * behaviour per POSIX for a struct timespec outside [0, 999999999]. The
  * normalisation borrows whole seconds until tv_nsec is non-negative, the
  * mirror image of the >= max_nsecs normalisation. */
-TEST(add_duration_to_timespec, negative_tv_nsec_in_duration_normalised) {
+TEST(_ccol_add_duration_to_timespec, negative_tv_nsec_in_duration_normalised) {
   struct timespec t = {.tv_sec = 5, .tv_nsec = 0};
   struct timespec d = {.tv_sec = 2, .tv_nsec = -1};
-  add_duration_to_timespec(&t, &d);
+  _ccol_add_duration_to_timespec(&t, &d);
   REQUIRE_EQ(t.tv_sec, 6);
   REQUIRE_EQ(t.tv_nsec, 999999999);
   REQUIRE_GE(t.tv_nsec, 0L);
 }
 
-TEST(add_duration_to_timespec, negative_tv_nsec_in_target_normalised) {
+TEST(_ccol_add_duration_to_timespec, negative_tv_nsec_in_target_normalised) {
   struct timespec t = {.tv_sec = 5, .tv_nsec = -500000000};
   struct timespec d = {.tv_sec = 0, .tv_nsec = 0};
-  add_duration_to_timespec(&t, &d);
+  _ccol_add_duration_to_timespec(&t, &d);
   REQUIRE_EQ(t.tv_sec, 4);
   REQUIRE_EQ(t.tv_nsec, 500000000);
   REQUIRE_GE(t.tv_nsec, 0L);
 }
 
-TEST(add_duration_to_timespec,
+TEST(_ccol_add_duration_to_timespec,
      negative_tv_nsec_spanning_multiple_seconds_normalised) {
   /* -1500000000ns == -2s + 500000000ns: exercises the general borrow-count
    * computation (more than a single second's worth of borrowing), not just
@@ -195,7 +195,7 @@ TEST(add_duration_to_timespec,
    * discipline, mirroring duration_not_mutated above. */
   struct timespec t = {.tv_sec = 10, .tv_nsec = 0};
   struct timespec d = {.tv_sec = 0, .tv_nsec = -1500000000};
-  add_duration_to_timespec(&t, &d);
+  _ccol_add_duration_to_timespec(&t, &d);
   REQUIRE_EQ(t.tv_sec, 8);
   REQUIRE_EQ(t.tv_nsec, 500000000);
   REQUIRE_EQ(d.tv_sec, 0);
@@ -678,6 +678,276 @@ TEST(circular_queues, timed_recv_condvar_error_racing_message_still_receives) {
   REQUIRE_EQ(ccol_circq_msg_count(cq), (size_t)0);
 
   ccol_circular_queue_destroy(cq);
+}
+
+/* ------------------------------------------------------------------ */
+/* A blocked waiter must be released by the operation that makes progress
+ * possible, not by its own timeout.
+ *
+ * Both queues signal a condition variable only when the matching waiter count
+ * says somebody is parked in it, so a wait site that fails to register itself
+ * leaves a real waiter invisible and the signal is skipped. The symptom is not
+ * a wrong answer but a delay: the waiter sleeps to its own timeout, re-checks,
+ * and returns the message that was already there. These tests separate the two
+ * by giving the wait a timeout several times longer than the bound they then
+ * allow the wake to land in, and by polling the waiter count so the
+ * wake-up operation is only performed once the waiter has genuinely parked.
+ * A missing registration therefore fails the poll, not just the timing bound.
+ *
+ * This is non-vacuous: dropping either the increment or the decrement around
+ * any of the three timed wait sites makes the matching test fail.
+ */
+
+#define CCOL_WAKE_WAIT_TIMEOUT_SEC 10    /* the blocked call's own timeout */
+#define CCOL_WAKE_PARK_BOUND_US 5000000L /* to observe the waiter parked */
+#define CCOL_WAKE_WAKE_BOUND_US 3000000L /* to observe it released again */
+
+typedef struct {
+  ccol_circular_queue *cq;
+  ccol_dynamic_queue *dq;
+  c_message_t msg;
+  ccol_retval_t retval;
+  atomic_bool finished;
+} ccol_wake_args;
+
+static void *_wake_circq_timed_recv(void *arg) {
+  ccol_wake_args *a = (ccol_wake_args *)arg;
+  struct timespec t = {.tv_sec = CCOL_WAKE_WAIT_TIMEOUT_SEC, .tv_nsec = 0};
+  a->retval = ccol_circq_timed_recv_zc(a->cq, &a->msg, &t);
+  atomic_store(&a->finished, true);
+  return NULL;
+}
+
+static void *_wake_circq_timed_send(void *arg) {
+  ccol_wake_args *a = (ccol_wake_args *)arg;
+  struct timespec t = {.tv_sec = CCOL_WAKE_WAIT_TIMEOUT_SEC, .tv_nsec = 0};
+  a->retval = ccol_circq_timed_send_zc(a->cq, &a->msg, &t);
+  atomic_store(&a->finished, true);
+  return NULL;
+}
+
+static void *_wake_dynmq_timed_recv(void *arg) {
+  ccol_wake_args *a = (ccol_wake_args *)arg;
+  struct timespec t = {.tv_sec = CCOL_WAKE_WAIT_TIMEOUT_SEC, .tv_nsec = 0};
+  a->retval = ccol_dynmq_timed_recv_zc(a->dq, &a->msg, &t);
+  atomic_store(&a->finished, true);
+  return NULL;
+}
+
+/* Bounded poll helpers. Every wait here carries a deadline, so a regression
+ * fails the run instead of hanging it. */
+static void _wake_poll_pause(void) {
+  struct timespec s = {.tv_sec = 0, .tv_nsec = 200000}; /* 0.2 ms */
+  nanosleep(&s, NULL);
+}
+
+static bool _wake_await_circq_readers(ccol_circular_queue *cq) {
+  struct timespec start, now;
+  getWallTime(start);
+  for (;;) {
+    if (ccol_circq_waiting_readers_for_tests(cq) >= 1) return true;
+    getWallTime(now);
+    if (diffTimeUSec(start, now) > CCOL_WAKE_PARK_BOUND_US) return false;
+    _wake_poll_pause();
+  }
+}
+
+static bool _wake_await_circq_writers(ccol_circular_queue *cq) {
+  struct timespec start, now;
+  getWallTime(start);
+  for (;;) {
+    if (ccol_circq_waiting_writers_for_tests(cq) >= 1) return true;
+    getWallTime(now);
+    if (diffTimeUSec(start, now) > CCOL_WAKE_PARK_BOUND_US) return false;
+    _wake_poll_pause();
+  }
+}
+
+static bool _wake_await_dynmq_readers(ccol_dynamic_queue *dq) {
+  struct timespec start, now;
+  getWallTime(start);
+  for (;;) {
+    if (ccol_dynmq_waiting_readers_for_tests(dq) >= 1) return true;
+    getWallTime(now);
+    if (diffTimeUSec(start, now) > CCOL_WAKE_PARK_BOUND_US) return false;
+    _wake_poll_pause();
+  }
+}
+
+static bool _wake_await_finished(ccol_wake_args *a) {
+  struct timespec start, now;
+  getWallTime(start);
+  for (;;) {
+    if (atomic_load(&a->finished)) return true;
+    getWallTime(now);
+    if (diffTimeUSec(start, now) > CCOL_WAKE_WAKE_BOUND_US) return false;
+    _wake_poll_pause();
+  }
+}
+
+TEST(circular_queues, blocked_timed_recv_is_released_by_a_send) {
+  ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
+  REQUIRE_NE((void *)cq, NULL);
+
+  void *payload = malloc(4);
+  ccol_wake_args a = {.cq = cq,
+                      .dq = NULL,
+                      .msg = {.data = NULL, .size = 0},
+                      .retval = ccol_unexpected_failure};
+  atomic_init(&a.finished, false);
+
+  pthread_t tid;
+  bool started = (pthread_create(&tid, NULL, _wake_circq_timed_recv, &a) == 0);
+  bool parked = false, released = false, matched = false;
+  ccol_retval_t sent = ccol_unexpected_failure;
+
+  if (started) {
+    parked = _wake_await_circq_readers(cq);
+    c_message_t m = {.data = payload, .size = 4};
+    sent = ccol_circq_send_zc(cq, &m);
+    if (sent != ccol_success) free(payload);
+    released = _wake_await_finished(&a);
+    pthread_join(tid, NULL);
+    matched = (a.msg.data == payload);
+    free(a.msg.data);
+  } else {
+    free(payload);
+  }
+
+  /* Drained before the destroy below. A receiver that came back empty (the
+     regression this test hunts) leaves the message queued, and destroying a
+     queue with messages still in it is a caller error the library aborts on,
+     which would take the whole binary down instead of failing the assertions
+     that follow. */
+  c_message_t leftover = {.data = NULL, .size = 0};
+  while (ccol_circq_try_recv_zc(cq, &leftover) == ccol_success) {
+    free(leftover.data);
+  }
+
+  /* Every waiter has returned, so the counter must have been given back. */
+  size_t residual = ccol_circq_waiting_readers_for_tests(cq);
+  ccol_retval_t got = a.retval;
+  ccol_circular_queue_destroy(cq);
+
+  REQUIRE_TRUE(started);
+  REQUIRE_TRUE(parked);
+  REQUIRE_EQ(sent, ccol_success);
+  REQUIRE_TRUE(released);
+  REQUIRE_EQ(got, ccol_success);
+  REQUIRE_TRUE(matched);
+  REQUIRE_EQ(residual, (size_t)0);
+}
+
+TEST(circular_queues, blocked_timed_send_is_released_by_a_receive) {
+  ccol_circular_queue *cq = ccol_circular_queue_create(1, NULL);
+  REQUIRE_NE((void *)cq, NULL);
+
+  void *first = malloc(4);
+  c_message_t filler = {.data = first, .size = 4};
+  ccol_retval_t filled = ccol_circq_send_zc(cq, &filler);
+  if (filled != ccol_success) free(first);
+
+  void *payload = malloc(4);
+  ccol_wake_args a = {.cq = cq,
+                      .dq = NULL,
+                      .msg = {.data = payload, .size = 4},
+                      .retval = ccol_unexpected_failure};
+  atomic_init(&a.finished, false);
+
+  pthread_t tid;
+  bool started = (pthread_create(&tid, NULL, _wake_circq_timed_send, &a) == 0);
+  bool parked = false, released = false, drained = false, matched = false;
+  c_message_t out = {.data = NULL, .size = 0};
+  ccol_retval_t recvd = ccol_unexpected_failure;
+
+  if (started) {
+    parked = _wake_await_circq_writers(cq);
+    recvd = ccol_circq_recv_zc(cq, &out);
+    if (recvd == ccol_success) free(out.data);
+    released = _wake_await_finished(&a);
+    pthread_join(tid, NULL);
+    /* The queued message is the one the unblocked sender handed over. */
+    c_message_t tail = {.data = NULL, .size = 0};
+    drained = (ccol_circq_try_recv_zc(cq, &tail) == ccol_success);
+    matched = (tail.data == payload);
+    free(tail.data);
+  } else {
+    free(payload);
+  }
+
+  /* Drained before the destroy below, for the same reason
+     blocked_timed_recv_is_released_by_a_send drains: the filler is still in the
+     queue on the path where no thread started, and a sender that timed out
+     leaves its own message behind on the path this test hunts. Destroying a
+     queue with messages still in it is a caller error the library aborts on,
+     which would take the whole binary down instead of failing the assertions
+     that follow. */
+  c_message_t leftover = {.data = NULL, .size = 0};
+  while (ccol_circq_try_recv_zc(cq, &leftover) == ccol_success) {
+    free(leftover.data);
+  }
+
+  size_t residual = ccol_circq_waiting_writers_for_tests(cq);
+  ccol_retval_t got = a.retval;
+  ccol_circular_queue_destroy(cq);
+
+  REQUIRE_EQ(filled, ccol_success);
+  REQUIRE_TRUE(started);
+  REQUIRE_TRUE(parked);
+  REQUIRE_EQ(recvd, ccol_success);
+  REQUIRE_TRUE(released);
+  REQUIRE_EQ(got, ccol_success);
+  REQUIRE_TRUE(drained);
+  REQUIRE_TRUE(matched);
+  REQUIRE_EQ(residual, (size_t)0);
+}
+
+TEST(dynamic_queues, blocked_timed_recv_is_released_by_a_send) {
+  ccol_dynamic_queue *dq = ccol_dynamic_queue_create(NULL);
+  REQUIRE_NE((void *)dq, NULL);
+
+  void *payload = malloc(4);
+  ccol_wake_args a = {.cq = NULL,
+                      .dq = dq,
+                      .msg = {.data = NULL, .size = 0},
+                      .retval = ccol_unexpected_failure};
+  atomic_init(&a.finished, false);
+
+  pthread_t tid;
+  bool started = (pthread_create(&tid, NULL, _wake_dynmq_timed_recv, &a) == 0);
+  bool parked = false, released = false, matched = false;
+  ccol_retval_t sent = ccol_unexpected_failure;
+
+  if (started) {
+    parked = _wake_await_dynmq_readers(dq);
+    c_message_t m = {.data = payload, .size = 4};
+    sent = ccol_dynmq_send_zc(dq, &m);
+    if (sent != ccol_success) free(payload);
+    released = _wake_await_finished(&a);
+    pthread_join(tid, NULL);
+    matched = (a.msg.data == payload);
+    free(a.msg.data);
+  } else {
+    free(payload);
+  }
+
+  /* See blocked_timed_recv_is_released_by_a_send for why this drains first. */
+  c_message_t leftover = {.data = NULL, .size = 0};
+  while (ccol_dynmq_try_recv_zc(dq, &leftover) == ccol_success) {
+    free(leftover.data);
+  }
+
+  size_t residual = ccol_dynmq_waiting_readers_for_tests(dq);
+  ccol_retval_t got = a.retval;
+  ccol_dynamic_queue_destroy(dq);
+
+  REQUIRE_TRUE(started);
+  REQUIRE_TRUE(parked);
+  REQUIRE_EQ(sent, ccol_success);
+  REQUIRE_TRUE(released);
+  REQUIRE_EQ(got, ccol_success);
+  REQUIRE_TRUE(matched);
+  REQUIRE_EQ(residual, (size_t)0);
 }
 
 TEST(circular_queues, recv_drains_successfully_after_disable) {
@@ -1704,15 +1974,15 @@ void *thr_for_channels_msg_count(void *args) {
   c_message_t msg = {.data = NULL, .size = 0};
 
   for (size_t i = 3; i > 0; --i) {
-    assert(ccol_chan_msg_count(ch, owner_to_workers) == i);
+    assert(ccol_chan_msg_count(ch, ccol_owner_to_workers) == i);
     ccol_chan_recv_zc(ch, &msg);
-    assert(ccol_chan_msg_count(ch, owner_to_workers) == i - 1);
+    assert(ccol_chan_msg_count(ch, ccol_owner_to_workers) == i - 1);
   }
 
   for (size_t i = 0; i < 3; ++i) {
-    assert(ccol_chan_msg_count(ch, workers_to_owner) == i);
+    assert(ccol_chan_msg_count(ch, ccol_workers_to_owner) == i);
     ccol_chan_send_zc(ch, &msg);
-    assert(ccol_chan_msg_count(ch, workers_to_owner) == i + 1);
+    assert(ccol_chan_msg_count(ch, ccol_workers_to_owner) == i + 1);
   }
 
   return NULL;
@@ -1724,9 +1994,9 @@ TEST(channels, msg_count) {
   c_message_t m1 = {.data = NULL, .size = 0};
 
   for (size_t i = 0; i < 3; ++i) {
-    REQUIRE_EQ(ccol_chan_msg_count(ch, owner_to_workers), i);
+    REQUIRE_EQ(ccol_chan_msg_count(ch, ccol_owner_to_workers), i);
     ccol_chan_send_zc(ch, &m1);
-    REQUIRE_EQ(ccol_chan_msg_count(ch, owner_to_workers), i + 1);
+    REQUIRE_EQ(ccol_chan_msg_count(ch, ccol_owner_to_workers), i + 1);
   }
 
   pthread_t tid;
@@ -1735,9 +2005,9 @@ TEST(channels, msg_count) {
   usleep(100000);
 
   for (size_t i = 3; i > 0; --i) {
-    REQUIRE_EQ(ccol_chan_msg_count(ch, workers_to_owner), i);
+    REQUIRE_EQ(ccol_chan_msg_count(ch, ccol_workers_to_owner), i);
     ccol_chan_recv_zc(ch, &m1);
-    REQUIRE_EQ(ccol_chan_msg_count(ch, workers_to_owner), i - 1);
+    REQUIRE_EQ(ccol_chan_msg_count(ch, ccol_workers_to_owner), i - 1);
   }
 
   pthread_join(tid, NULL);
@@ -1916,11 +2186,11 @@ void *thr_for_enable_disable_sending(void *args) {
   assert(*((char *)msg.data) == 'A');
   *((char *)msg.data) = 'B';
 
-  ccol_chan_disable_sending(ch, workers_to_owner);
+  ccol_chan_disable_sending(ch, ccol_workers_to_owner);
   assert(ccol_chan_send_zc(ch, &msg) == ccol_not_permitted);
   assert(msg.data != NULL);
 
-  ccol_chan_enable_sending(ch, workers_to_owner);
+  ccol_chan_enable_sending(ch, ccol_workers_to_owner);
   assert(ccol_chan_send_zc(ch, &msg) == ccol_success);
   assert(msg.data == NULL);
 
@@ -1937,12 +2207,12 @@ TEST(channels, enable_disable_sending) {
   m1.size = 1;
   ((char *)(m1.data))[0] = 'A';
 
-  ccol_chan_disable_sending(ch, owner_to_workers);
+  ccol_chan_disable_sending(ch, ccol_owner_to_workers);
 
   REQUIRE_EQ(ccol_chan_send_zc(ch, &m1), ccol_not_permitted);
   REQUIRE_NE(m1.data, NULL);
 
-  ccol_chan_enable_sending(ch, owner_to_workers);
+  ccol_chan_enable_sending(ch, ccol_owner_to_workers);
 
   REQUIRE_EQ(ccol_chan_send_zc(ch, &m1), ccol_success);
   REQUIRE_EQ(m1.data, NULL);
@@ -2940,8 +3210,8 @@ TEST(ccol_select, write_circq_two_concurrent_waiters_both_wake_on_slot_free) {
   sel_write_wait_result a1 = {.cq = cq, .result = ccol_unexpected_failure};
   sel_write_wait_result a2 = {.cq = cq, .result = ccol_unexpected_failure};
   pthread_t t1, t2;
-  REQUIRE_EQ(pthread_create(&t1, NULL, thr_circq_write_wait, &a1), 0);
-  REQUIRE_EQ(pthread_create(&t2, NULL, thr_circq_write_wait, &a2), 0);
+  bool started_t1 = (pthread_create(&t1, NULL, thr_circq_write_wait, &a1) == 0);
+  bool started_t2 = (pthread_create(&t2, NULL, thr_circq_write_wait, &a2) == 0);
 
   usleep(30000); /* let both threads register as write-waiters */
 
@@ -2949,8 +3219,10 @@ TEST(ccol_select, write_circq_two_concurrent_waiters_both_wake_on_slot_free) {
   REQUIRE_EQ(ccol_circq_recv_zc(cq, &drain), ccol_success);
   free(drain.data);
 
-  pthread_join(t1, NULL);
-  pthread_join(t2, NULL);
+  if (started_t1) pthread_join(t1, NULL);
+  if (started_t2) pthread_join(t2, NULL);
+  REQUIRE_TRUE(started_t1);
+  REQUIRE_TRUE(started_t2);
 
   REQUIRE_EQ(a1.result, ccol_success);
   REQUIRE_EQ(a2.result, ccol_success);
@@ -2991,8 +3263,8 @@ TEST(ccol_select,
   sel_read_wait_result a1 = {.cq = cq, .result = ccol_unexpected_failure};
   sel_read_wait_result a2 = {.cq = cq, .result = ccol_unexpected_failure};
   pthread_t t1, t2;
-  REQUIRE_EQ(pthread_create(&t1, NULL, thr_circq_read_wait, &a1), 0);
-  REQUIRE_EQ(pthread_create(&t2, NULL, thr_circq_read_wait, &a2), 0);
+  bool started_t1 = (pthread_create(&t1, NULL, thr_circq_read_wait, &a1) == 0);
+  bool started_t2 = (pthread_create(&t2, NULL, thr_circq_read_wait, &a2) == 0);
 
   usleep(30000); /* let both threads register as read waiters */
 
@@ -3007,8 +3279,10 @@ TEST(ccol_select,
   REQUIRE_EQ(ccol_circq_send_zc(cq, &m0), ccol_success);
   REQUIRE_EQ(ccol_circq_send_zc(cq, &m1), ccol_success);
 
-  pthread_join(t1, NULL);
-  pthread_join(t2, NULL);
+  if (started_t1) pthread_join(t1, NULL);
+  if (started_t2) pthread_join(t2, NULL);
+  REQUIRE_TRUE(started_t1);
+  REQUIRE_TRUE(started_t2);
 
   REQUIRE_EQ(a1.result, ccol_success);
   REQUIRE_EQ(a2.result, ccol_success);
@@ -3991,9 +4265,9 @@ TEST(ccol_event_loop, queue_channel_selectable) {
   ccol_event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  /* This thread is the ccol_channel's owner; owner reads from workers_to_owner,
-   * so a worker (a separate thread) must send for the owner-side read
-   * registration to fire. */
+  /* This thread is the ccol_channel's owner; owner reads from
+   * ccol_workers_to_owner, so a worker (a separate thread) must send for the
+   * owner-side read registration to fire. */
   ccol_event_reg reg =
       ccol_event_loop_add(loop, ccol_selectable_from_chan(ch, ccol_select_read),
                           handlers, &ctx, &err);
@@ -5971,23 +6245,38 @@ TEST(ccol_event_loop, multi_threaded_multi_fd_stress_with_stripes) {
     args[i].ctx_log_count = 0;
   }
 
+  bool all_started = false;
+  size_t residual_regs = 0;
   {
     /* Nested block: see the other multi-thread tests' identical pattern;
      * this loop's destructor joins every reactor thread at this block's
      * closing brace, which is what makes freeing every logged ctx
      * afterward, below, actually safe. */
     ccol_event_loop_construct_scoped(loop, 32, 16, 1);
+    int started = 0;
     for (int i = 0; i < n_threads; i++) {
       args[i].loop = loop;
-      REQUIRE_EQ(pthread_create(&threads[i], NULL, evl_stripe_stress_fd_worker,
-                                &args[i]),
-                 0);
+      /* Counted, not asserted inside this loop: a REQUIRE_* here returns from
+       * the test while the threads earlier iterations already created keep
+       * running against args[] and against `loop`, whose scoped destructor
+       * runs on that very return. Only the threads that actually started are
+       * joined, and the count is checked once every one of them is back. */
+      if (pthread_create(&threads[i], NULL, evl_stripe_stress_fd_worker,
+                         &args[i]) != 0)
+        break;
+      started++;
     }
-    for (int i = 0; i < n_threads; i++) {
+    for (int i = 0; i < started; i++) {
       pthread_join(threads[i], NULL);
     }
 
-    REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)0);
+    /* Captured rather than asserted here: an assertion that fires returns from
+       the test immediately, and everything below this block still has pipes to
+       close and per-thread logs to free. The registration count has to be read
+       while the loop is still alive, which is what keeps it inside the
+       block. */
+    all_started = (started == n_threads);
+    residual_regs = ccol_event_loop_reg_count(loop);
   }
 
   for (int i = 0; i < n_threads; i++) {
@@ -5999,6 +6288,9 @@ TEST(ccol_event_loop, multi_threaded_multi_fd_stress_with_stripes) {
     }
     free(args[i].ctx_log);
   }
+
+  REQUIRE_TRUE(all_started);
+  REQUIRE_EQ(residual_regs, (size_t)0);
 }
 
 static void *evl_stripe_stress_queue_worker(void *arg) {
@@ -6058,23 +6350,38 @@ TEST(ccol_event_loop, multi_threaded_multi_queue_stress_with_stripes) {
     args[i].ctx_log_count = 0;
   }
 
+  bool all_started = false;
+  size_t residual_regs = 0;
   {
     /* Nested block: see the other multi-thread tests' identical pattern;
      * this loop's destructor joins every reactor thread at this block's
      * closing brace, which is what makes freeing every logged ctx/cq
      * afterward, below, actually safe. */
     ccol_event_loop_construct_scoped(loop, 32, 16, 1);
+    int started = 0;
     for (int i = 0; i < n_threads; i++) {
       args[i].loop = loop;
-      REQUIRE_EQ(pthread_create(&threads[i], NULL,
-                                evl_stripe_stress_queue_worker, &args[i]),
-                 0);
+      /* Counted, not asserted inside this loop: a REQUIRE_* here returns from
+       * the test while the threads earlier iterations already created keep
+       * running against args[] and against `loop`, whose scoped destructor
+       * runs on that very return. Only the threads that actually started are
+       * joined, and the count is checked once every one of them is back. */
+      if (pthread_create(&threads[i], NULL, evl_stripe_stress_queue_worker,
+                         &args[i]) != 0)
+        break;
+      started++;
     }
-    for (int i = 0; i < n_threads; i++) {
+    for (int i = 0; i < started; i++) {
       pthread_join(threads[i], NULL);
     }
 
-    REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)0);
+    /* Captured rather than asserted here: an assertion that fires returns from
+       the test immediately, and everything below this block still has pipes to
+       close and per-thread logs to free. The registration count has to be read
+       while the loop is still alive, which is what keeps it inside the
+       block. */
+    all_started = (started == n_threads);
+    residual_regs = ccol_event_loop_reg_count(loop);
   }
 
   for (int i = 0; i < n_threads; i++) {
@@ -6086,6 +6393,9 @@ TEST(ccol_event_loop, multi_threaded_multi_queue_stress_with_stripes) {
     free(args[i].ctx_log);
     free(args[i].cq_log);
   }
+
+  REQUIRE_TRUE(all_started);
+  REQUIRE_EQ(residual_regs, (size_t)0);
 }
 
 TEST(ccol_event_loop, destroy_frees_registrations_across_multiple_stripes) {
@@ -6555,6 +6865,7 @@ TEST(ccol_event_loop, multi_thread_fd_reuse_generation_stays_consistent) {
     args[i].ctx_log_count = 0;
   }
 
+  bool all_started = false;
   {
     /* Nested block: see multi_thread_cross_direction_serialization's
      * identical pattern and comment; this loop's destructor shuts down
@@ -6562,15 +6873,26 @@ TEST(ccol_event_loop, multi_thread_fd_reuse_generation_stays_consistent) {
      * is what makes freeing every logged ctx afterward, below, actually
      * safe rather than a timing guess. */
     ccol_event_loop_construct_scoped(loop, 8, 4, 8);
+    int started = 0;
     for (int i = 0; i < n_drivers; i++) {
       args[i].loop = loop;
-      REQUIRE_EQ(
-          pthread_create(&drivers[i], NULL, evl_reuse_driver_thread, &args[i]),
-          0);
+      /* Counted, not asserted inside this loop: a REQUIRE_* here returns from
+       * the test while the threads earlier iterations already created keep
+       * running against args[] and against `loop`, whose scoped destructor
+       * runs on that very return. Only the threads that actually started are
+       * joined, and the count is checked once every one of them is back. */
+      if (pthread_create(&drivers[i], NULL, evl_reuse_driver_thread,
+                         &args[i]) != 0)
+        break;
+      started++;
     }
-    for (int i = 0; i < n_drivers; i++) {
+    for (int i = 0; i < started; i++) {
       pthread_join(drivers[i], NULL);
     }
+
+    /* See the fd-stress test above for why this is captured rather than
+       asserted here. */
+    all_started = (started == n_drivers);
   }
 
   int total_mismatches = 0;
@@ -6584,6 +6906,7 @@ TEST(ccol_event_loop, multi_thread_fd_reuse_generation_stays_consistent) {
     total_mismatches += atomic_load(&args[i].mismatch_total);
   }
 
+  REQUIRE_TRUE(all_started);
   REQUIRE_EQ(total_mismatches, 0);
 }
 
@@ -7553,14 +7876,16 @@ TEST(ccol_event_loop_handle_lifecycle, resolve_unpin_race_stress) {
     evl_reg_count_arg_t reg_count_arg = {.h = loop};
     evl_concurrent_destroy_arg_t destroy_arg = {.h = loop};
     pthread_t reg_count_tid, destroy_tid;
-    REQUIRE_EQ(pthread_create(&reg_count_tid, NULL, evl_reg_count_thread,
-                              &reg_count_arg),
-               0);
-    REQUIRE_EQ(pthread_create(&destroy_tid, NULL, evl_concurrent_destroy_thread,
-                              &destroy_arg),
-               0);
-    pthread_join(reg_count_tid, NULL);
-    pthread_join(destroy_tid, NULL);
+    bool started_reg_count_tid =
+        (pthread_create(&reg_count_tid, NULL, evl_reg_count_thread,
+                        &reg_count_arg) == 0);
+    bool started_destroy_tid =
+        (pthread_create(&destroy_tid, NULL, evl_concurrent_destroy_thread,
+                        &destroy_arg) == 0);
+    if (started_reg_count_tid) pthread_join(reg_count_tid, NULL);
+    if (started_destroy_tid) pthread_join(destroy_tid, NULL);
+    REQUIRE_TRUE(started_reg_count_tid);
+    REQUIRE_TRUE(started_destroy_tid);
   }
 }
 

@@ -16,8 +16,8 @@ ccol_retval_t clrucache_set_full(clru_cache cache,
 Associates key_pair with val_pair in the cache.
 
 If a remote setter was provided at construction it is called
-synchronously outside the mutex before the cache is updated. On
-setter failure the function returns ccol_unexpected_failure and the
+synchronously outside the segment's lock before the cache is updated.
+On setter failure the function returns ccol_unexpected_failure and the
 cache is left unchanged for that key (an existing value is preserved).
 
 Multiple setters for the same key are serialised. Concurrent getters
@@ -40,7 +40,9 @@ ccol_success             Value stored (and remote setter succeeded if
 ccol_unexpected_failure  Remote setter returned false; cache unchanged.
 ccol_invalid_args        cache is CLRU_CACHE_INVALID or a stale
                          (already-destroyed) handle; or key_pair or
-                         val_pair is NULL; or val_pair->size is 0.
+                         val_pair is NULL; or val_pair->size is 0; or
+                         key_pair->size disagrees with the width of the
+                         key type the cache was created for.
 ccol_not_enough_memory   Memory allocation for the new value failed.
 ccol_container_full      When storing a brand-new key, the cache's own
                          internal bookkeeping has reached its maximum

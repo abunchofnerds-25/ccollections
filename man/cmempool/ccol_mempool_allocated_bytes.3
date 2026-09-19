@@ -1,0 +1,60 @@
+.TH CCOL_MEMPOOL_ALLOCATED_BYTES 3 "2026-09-16" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccol_mempool_allocated_bytes \- report the memory a pool holds for its entries
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cmempool.h>
+
+size_t ccol_mempool_allocated_bytes(ccol_mempool *mp);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the size in bytes of the single block mp holds for its entries
+and their per-entry state.
+
+This is what the pool costs, which ccol_mempool_total_capacity(3)
+deliberately does not report. A thread-safe pool large enough to keep
+per-thread caches holds a reserve beyond the count it was created with,
+so its memory exceeds what its usable capacity accounts for. Use this
+call to size a pool against a memory budget rather than reproducing the
+reserve arithmetic.
+.fi
+.SH PARAMETERS
+.nf
+mp                        Memory pool to query (must not be NULL)
+.fi
+.SH RETURN VALUE
+.nf
+Returns the size in bytes of the pool's entry block
+.fi
+.SH NOTES
+.nf
+The entry block is counted and nothing else. The handle itself is a
+small fixed allocation; per-thread caches are separate allocations made
+lazily as threads first use the pool, bounded by the same reserve; and
+entries served by the dynamic fallback are not part of this block at all,
+so ccol_mempool_dynamic_allocs_count(3) is what accounts for those.
+
+For a pool built by
+ccol_mempool_create_from_preallocated_buffer(3) this reports the part of
+the caller's own buffer that was divided into entries. Such a pool never
+receives a cache and carries no reserve, so the figure is exactly the
+element count times the stride, plus one status byte per element. The
+pool allocated none of it.
+
+The value does not change over the pool's lifetime.
+.fi
+.SH "THREAD SAFETY"
+.nf
+Thread-safe when the pool was created with single_threaded = false.
+Acquires the pool's lock, so it is a cold-path call and not intended for
+use inside a hot loop.
+.fi
+.SH "SEE ALSO"
+.BR ccol_mempool_total_capacity (3),
+.BR ccol_mempool_used_count (3),
+.BR ccol_mempool_dynamic_allocs_count (3),
+.BR ccol_r_mempool_allocated_bytes (3),
+.BR ccol_mempool_create (3)

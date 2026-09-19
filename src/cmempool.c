@@ -1505,7 +1505,7 @@ void *ccol_mempool_calloc_entry(ccol_mempool *mp) {
   void *result = ccol_mempool_alloc_entry(mp);
 
   if (result) {
-    ccol_mem_zero(result, mp->extended_elem_size);
+    memset(result, 0, mp->extended_elem_size);
   }
 
   return result;
@@ -1882,7 +1882,7 @@ static bool assess_r_mempool_create_inputs(
  * active_dynamic_memory_buffer_count tracks all dynamic entries across all
  * sub-pools. */
 static bool init_r_mempool_pseudo_pool(ccol_r_mempool *rmp) {
-  ccol_mem_zero(&rmp->pseudo_pool, sizeof(ccol_mempool));
+  memset(&rmp->pseudo_pool, 0, sizeof(ccol_mempool));
   rmp->pseudo_pool.m_procs = rmp->m_procs;
   rmp->pseudo_pool.owner_rmp = rmp;
   if (rmp->fb_policy == ccol_fallback_at_last_exhaustion) {
@@ -1920,8 +1920,7 @@ static bool init_r_mempool_internal_pools(ccol_r_mempool *rmp, char **err) {
     }
     return false;
   }
-  ccol_mem_zero(rmp->mem_pools,
-                rmp->number_of_mempools * sizeof(ccol_mempool *));
+  memset(rmp->mem_pools, 0, rmp->number_of_mempools * sizeof(ccol_mempool *));
 
   size_t first_size = rmp->smallest_size;
   size_t first_count = rmp->smallest_elem_count;
@@ -2304,7 +2303,7 @@ void *ccol_r_mempool_calloc_entry(ccol_r_mempool *rmp, size_t size) {
   void *result = ccol_r_mempool_alloc_entry(rmp, size);
 
   if (result) {
-    ccol_mem_zero(result, size);
+    memset(result, 0, size);
   }
 
   return result;
@@ -2514,7 +2513,7 @@ void *ccol_r_mempool_realloc_entry(ccol_r_mempool *rmp, void *addr,
     size_t copy_size =
         old_user_size < new_user_size ? old_user_size : new_user_size;
 
-    ccol_mem_cpy(new_entry, addr, copy_size);
+    memcpy(new_entry, addr, copy_size);
     /* Released through the sub-pool that owns it rather than through rmp: this
        is an internal release of an entry this function has already resolved, so
        it needs no second ownership check. */

@@ -144,13 +144,13 @@ static void csort_merge(void *col, size_t left, size_t mid, size_t right,
   for (i = 0; i < n1; i++) {
     void *src = getter_proc(col, left + i);
     void *dst = (unsigned char *)temp_buffer + i * elem_size;
-    ccol_mem_cpy(dst, src, elem_size);
+    memcpy(dst, src, elem_size);
   }
 
   for (j = 0; j < n2; j++) {
     void *src = getter_proc(col, mid + 1 + j);
     void *dst = (unsigned char *)temp_buffer + (n1 + j) * elem_size;
-    ccol_mem_cpy(dst, src, elem_size);
+    memcpy(dst, src, elem_size);
   }
 
   // Merge the two subarrays back into col
@@ -164,10 +164,10 @@ static void csort_merge(void *col, size_t left, size_t mid, size_t right,
     void *dst = getter_proc(col, k);
 
     if (comparison_proc(elem_i, elem_j) <= 0) {
-      ccol_mem_cpy(dst, elem_i, elem_size);
+      memcpy(dst, elem_i, elem_size);
       i++;
     } else {
-      ccol_mem_cpy(dst, elem_j, elem_size);
+      memcpy(dst, elem_j, elem_size);
       j++;
     }
     k++;
@@ -177,7 +177,7 @@ static void csort_merge(void *col, size_t left, size_t mid, size_t right,
   while (i < n1) {
     void *src = (unsigned char *)temp_buffer + i * elem_size;
     void *dst = getter_proc(col, k);
-    ccol_mem_cpy(dst, src, elem_size);
+    memcpy(dst, src, elem_size);
     i++;
     k++;
   }
@@ -186,7 +186,7 @@ static void csort_merge(void *col, size_t left, size_t mid, size_t right,
   while (j < n1 + n2) {
     void *src = (unsigned char *)temp_buffer + j * elem_size;
     void *dst = getter_proc(col, k);
-    ccol_mem_cpy(dst, src, elem_size);
+    memcpy(dst, src, elem_size);
     j++;
     k++;
   }

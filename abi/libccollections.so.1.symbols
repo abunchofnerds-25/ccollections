@@ -64,7 +64,6 @@ ccol_find_nearest_gte_power_of_two
 ccol_growbuf_append
 ccol_growbuf_init
 ccol_growbuf_init_hint
-ccol_mem_cpy
 ccol_mempool_allocated_bytes
 ccol_mempool_alloc_entry
 _ccol_mempool_built_with_fast_layout
@@ -76,7 +75,6 @@ ccol_mempool_dynamic_allocs_count
 _ccol_mempool_free_entry
 ccol_mempool_total_capacity
 ccol_mempool_used_count
-ccol_mem_zero
 ccol_r_mempool_allocated_bytes
 ccol_r_mempool_alloc_entry
 ccol_r_mempool_calloc_entry

@@ -676,11 +676,9 @@ static inline size_t hash_key_data(const void* key_ptr, size_t key_size,
     return hash_mix_bits(custom_proc(key_ptr, key_size));
   }
 
-  // Use fast Fibonacci hashing for all integral types. Plain memcpy, not this
-  // project's own wrapper: the sizes here are compile-time constants, which the
-  // compiler turns into a single unaligned load, where an out-of-line wrapper
-  // cannot be inlined away and costs a call plus a runtime alignment test per
-  // hash. Every multi-byte read below goes through ccol_mem_cpy rather than a
+  // Use fast Fibonacci hashing for all integral types. The sizes here are
+  // compile-time constants, which the compiler turns into a single unaligned
+  // load. Every multi-byte read below goes through memcpy rather than a
   // direct pointer-cast dereference: key_ptr may come straight from a
   // caller-supplied cmap_pair (the raw
   // chmap_insert_elem/_get_elem_ref/_delete_elem function layer), which carries
@@ -1068,7 +1066,7 @@ static void oa_find_insertion_slot(const open_addr_map* map, size_t hash_val,
  *
  * Callers (chmap_insert_elem) have already rejected any key_pair/val_pair
  * whose size does not exactly match map->key_size/map->val_size, so both
- * ccol_mem_cpy calls below are always bounded by the 8-byte key_data/val_data
+ * memcpy calls below are always bounded by the 8-byte key_data/val_data
  * fields they target; nothing here can spill into a neighbouring slot. */
 static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
                                const cmap_pair* val_pair) {
@@ -1103,8 +1101,8 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
       // val_pair->ptr may alias this slot's own val_data (e.g. a caller
       // re-inserting a value derived from a pointer previously obtained via
       // chmap_get_elem_ref/chmap_get_ptr for this exact key, through the raw
-      // chmap_insert_elem function layer). ccol_mem_cpy's underlying memcpy
-      // requires src/dst to never overlap; snapshot into a small stack
+      // chmap_insert_elem function layer). memcpy requires src/dst to
+      // never overlap; snapshot into a small stack
       // buffer first when they do (val_pair->size is always <= 8 bytes for
       // this backend), mirroring sc_reset_val_of_llist_node's identical
       // aliasing protection for the separate-chaining backend.
@@ -1112,10 +1110,10 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
       uint64_t snapshot;
       if (ranges_overlap(src, val_pair->size, &map->slots[index].val_data,
                          map->val_size)) {
-        ccol_mem_cpy(&snapshot, src, val_pair->size);
+        memcpy(&snapshot, src, val_pair->size);
         src = &snapshot;
       }
-      ccol_mem_cpy(&map->slots[index].val_data, src, val_pair->size);
+      memcpy(&map->slots[index].val_data, src, val_pair->size);
       return ccol_key_already_present;
     }
 
@@ -1160,10 +1158,10 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
       map->deleted_count--;
     }
 
-    ccol_mem_zero(&map->slots[index].key_data, sizeof(uint64_t));
-    ccol_mem_zero(&map->slots[index].val_data, sizeof(uint64_t));
-    ccol_mem_cpy(&map->slots[index].key_data, key_pair->ptr, key_pair->size);
-    ccol_mem_cpy(&map->slots[index].val_data, val_pair->ptr, val_pair->size);
+    memset(&map->slots[index].key_data, 0, sizeof(uint64_t));
+    memset(&map->slots[index].val_data, 0, sizeof(uint64_t));
+    memcpy(&map->slots[index].key_data, key_pair->ptr, key_pair->size);
+    memcpy(&map->slots[index].val_data, val_pair->ptr, val_pair->size);
     map->metadata[index] = SLOT_OCCUPIED;
     map->val_accessors[index].ptr = &map->slots[index].val_data;
     map->val_accessors[index].size = map->val_size;
@@ -1173,12 +1171,10 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
 
   if (first_deleted < map->capacity) {
     map->deleted_count--;
-    ccol_mem_zero(&map->slots[first_deleted].key_data, sizeof(uint64_t));
-    ccol_mem_zero(&map->slots[first_deleted].val_data, sizeof(uint64_t));
-    ccol_mem_cpy(&map->slots[first_deleted].key_data, key_pair->ptr,
-                 key_pair->size);
-    ccol_mem_cpy(&map->slots[first_deleted].val_data, val_pair->ptr,
-                 val_pair->size);
+    memset(&map->slots[first_deleted].key_data, 0, sizeof(uint64_t));
+    memset(&map->slots[first_deleted].val_data, 0, sizeof(uint64_t));
+    memcpy(&map->slots[first_deleted].key_data, key_pair->ptr, key_pair->size);
+    memcpy(&map->slots[first_deleted].val_data, val_pair->ptr, val_pair->size);
     map->metadata[first_deleted] = SLOT_OCCUPIED;
     map->val_accessors[first_deleted].ptr = &map->slots[first_deleted].val_data;
     map->val_accessors[first_deleted].size = map->val_size;
@@ -1298,8 +1294,8 @@ static void oa_destroy(open_addr_map* map) {
  * rather than leaving the old table (and all its data) completely
  * untouched. */
 static void oa_clear_in_place(open_addr_map* map) {
-  ccol_mem_zero(map->slots, map->capacity * sizeof(oa_slot) + map->capacity);
-  ccol_mem_zero(map->val_accessors, map->capacity * sizeof(cmap_pair));
+  memset(map->slots, 0, map->capacity * sizeof(oa_slot) + map->capacity);
+  memset(map->val_accessors, 0, map->capacity * sizeof(cmap_pair));
   map->count = 0;
   map->deleted_count = 0;
 }
@@ -1433,8 +1429,7 @@ static llist_node* sc_create_llist_node(dllist_ref_node** head_of_all_elems,
 
   if (data->key_size <= INLINE_STORAGE_THRESHOLD) {
     new_elem->data.key_is_inline = true;
-    ccol_mem_cpy(&new_elem->data.key_storage.inline_data, key_ptr,
-                 data->key_size);
+    memcpy(&new_elem->data.key_storage.inline_data, key_ptr, data->key_size);
     new_elem->key_pair_accessor.ptr = &new_elem->data.key_storage.inline_data;
     new_elem->key_pair_accessor.size = data->key_size;
   } else {
@@ -1445,7 +1440,7 @@ static llist_node* sc_create_llist_node(dllist_ref_node** head_of_all_elems,
       sc_destroy_llist_node(NULL, new_elem);
       return NULL;
     }
-    ccol_mem_cpy(new_elem->data.key_storage.ptr, key_ptr, data->key_size);
+    memcpy(new_elem->data.key_storage.ptr, key_ptr, data->key_size);
     new_elem->key_pair_accessor.ptr = new_elem->data.key_storage.ptr;
     new_elem->key_pair_accessor.size = data->key_size;
   }
@@ -1453,8 +1448,7 @@ static llist_node* sc_create_llist_node(dllist_ref_node** head_of_all_elems,
   new_elem->data.val_size = data->val_size;
   if (data->val_size <= INLINE_STORAGE_THRESHOLD) {
     new_elem->data.val_is_inline = true;
-    ccol_mem_cpy(&new_elem->data.val_storage.inline_data, val_ptr,
-                 data->val_size);
+    memcpy(&new_elem->data.val_storage.inline_data, val_ptr, data->val_size);
     new_elem->val_pair_accessor.ptr = &new_elem->data.val_storage.inline_data;
     new_elem->val_pair_accessor.size = data->val_size;
   } else {
@@ -1465,7 +1459,7 @@ static llist_node* sc_create_llist_node(dllist_ref_node** head_of_all_elems,
       sc_destroy_llist_node(NULL, new_elem);
       return NULL;
     }
-    ccol_mem_cpy(new_elem->data.val_storage.ptr, val_ptr, data->val_size);
+    memcpy(new_elem->data.val_storage.ptr, val_ptr, data->val_size);
     new_elem->val_pair_accessor.ptr = new_elem->data.val_storage.ptr;
     new_elem->val_pair_accessor.size = data->val_size;
   }
@@ -1492,8 +1486,8 @@ static llist_node* sc_create_llist_node(dllist_ref_node** head_of_all_elems,
 static inline bool long_double_keys_equal(const void* a_ptr,
                                           const void* b_ptr) {
   long double a, b;
-  ccol_mem_cpy(&a, a_ptr, sizeof(a));
-  ccol_mem_cpy(&b, b_ptr, sizeof(b));
+  memcpy(&a, a_ptr, sizeof(a));
+  memcpy(&b, b_ptr, sizeof(b));
 
   bool a_nan = isnan(a);
   bool b_nan = isnan(b);
@@ -1603,9 +1597,9 @@ static bool sc_reset_val_of_llist_node(llist_node* elem, const void* val_ptr,
   bool ok = true;
   if (val_size == elem->data.val_size) {
     if (elem->data.val_is_inline) {
-      ccol_mem_cpy(&elem->data.val_storage.inline_data, val_ptr, val_size);
+      memcpy(&elem->data.val_storage.inline_data, val_ptr, val_size);
     } else {
-      ccol_mem_cpy(elem->data.val_storage.ptr, val_ptr, val_size);
+      memcpy(elem->data.val_storage.ptr, val_ptr, val_size);
     }
   } else if (val_size <= INLINE_STORAGE_THRESHOLD) {
     if (!elem->data.val_is_inline) {
@@ -1613,7 +1607,7 @@ static bool sc_reset_val_of_llist_node(llist_node* elem, const void* val_ptr,
     }
     elem->data.val_is_inline = true;
     elem->data.val_size = val_size;
-    ccol_mem_cpy(&elem->data.val_storage.inline_data, val_ptr, val_size);
+    memcpy(&elem->data.val_storage.inline_data, val_ptr, val_size);
     elem->val_pair_accessor.ptr = &elem->data.val_storage.inline_data;
     elem->val_pair_accessor.size = val_size;
   } else {
@@ -1636,7 +1630,7 @@ static bool sc_reset_val_of_llist_node(llist_node* elem, const void* val_ptr,
     }
 
     if (ok) {
-      ccol_mem_cpy(elem->data.val_storage.ptr, val_ptr, val_size);
+      memcpy(elem->data.val_storage.ptr, val_ptr, val_size);
       elem->data.val_size = val_size;
       elem->val_pair_accessor.ptr = elem->data.val_storage.ptr;
       elem->val_pair_accessor.size = val_size;
@@ -1922,8 +1916,7 @@ static ccol_retval_t sc_reset(sep_chain_map* map,
        failed allocation, which is what it is, and every element is still
        destroyed above, matching what chmap_reset documents. */
     if (new_bucket_array_size > SIZE_MAX / sizeof(llist_node*)) {
-      ccol_mem_zero(map->bucket_arr,
-                    map->bucket_arr_size * sizeof(llist_node*));
+      memset(map->bucket_arr, 0, map->bucket_arr_size * sizeof(llist_node*));
       map->elem_count = 0;
       sc_set_scaling_limits(map);
       return ccol_not_enough_memory;
@@ -1934,8 +1927,7 @@ static ccol_retval_t sc_reset(sep_chain_map* map,
                           new_bucket_array_size * sizeof(llist_node*));
     if (!map->bucket_arr) {
       map->bucket_arr = orig;
-      ccol_mem_zero(map->bucket_arr,
-                    map->bucket_arr_size * sizeof(llist_node*));
+      memset(map->bucket_arr, 0, map->bucket_arr_size * sizeof(llist_node*));
       map->elem_count = 0;
       sc_set_scaling_limits(map);
       return ccol_not_enough_memory;
@@ -1943,7 +1935,7 @@ static ccol_retval_t sc_reset(sep_chain_map* map,
     map->bucket_arr_size = new_bucket_array_size;
   }
 
-  ccol_mem_zero(map->bucket_arr, map->bucket_arr_size * sizeof(llist_node*));
+  memset(map->bucket_arr, 0, map->bucket_arr_size * sizeof(llist_node*));
   map->elem_count = 0;
   sc_set_scaling_limits(map);
 
@@ -2025,7 +2017,7 @@ chmap chmap_create_full(size_t initial_bucket_array_size,
         _ccol_mem_free(mmgmt_procs, chm);
         return NULL;
       }
-      ccol_mem_cpy(procs_copy, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
+      memcpy(procs_copy, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
     }
 
     chm->impl.oa_map =
@@ -2049,7 +2041,7 @@ chmap chmap_create_full(size_t initial_bucket_array_size,
         _ccol_mem_free(mmgmt_procs, chm);
         return NULL;
       }
-      ccol_mem_cpy(procs_copy, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
+      memcpy(procs_copy, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
     }
 
     chm->impl.sc_map = sc_create(initial_bucket_array_size, key_type, val_type,
@@ -2096,13 +2088,13 @@ static inline const cmap_pair* canonicalize_key_pair_if_needed(
   }
 
   *out_canon_buf = 0;
-  ccol_mem_cpy(out_canon_buf, key_pair->ptr, key_pair->size);
+  memcpy(out_canon_buf, key_pair->ptr, key_pair->size);
 
   if (key_type == ccol_float) {
     uint32_t bits;
-    ccol_mem_cpy(&bits, out_canon_buf, sizeof(bits));
+    memcpy(&bits, out_canon_buf, sizeof(bits));
     if (bits == 0x80000000u) {
-      ccol_mem_zero(out_canon_buf, sizeof(bits));
+      memset(out_canon_buf, 0, sizeof(bits));
     }
   } else if (*out_canon_buf == 0x8000000000000000ULL) {
     *out_canon_buf = 0;
@@ -2129,7 +2121,7 @@ size_t ccol_chmap_hash_key(const void* key_ptr, size_t key_size,
 }
 
 /* The open-addressing backend stores a key/value pair inline in a slot's
- * fixed 8-byte key_data/val_data fields (see oa_slot); oa_insert's ccol_mem_cpy
+ * fixed 8-byte key_data/val_data fields (see oa_slot); oa_insert's memcpy
  * calls trust key_pair->size/val_pair->size completely and have no bounds
  * check of their own. A caller-supplied size that does not match what this
  * particular map was created for (map->key_size/map->val_size, both fixed
@@ -2263,10 +2255,10 @@ ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair* key_pair,
   if (ret == ccol_success && val_pair) {
     size_t copy_size =
         val_pair->size < target_buf_size ? val_pair->size : target_buf_size;
-    ccol_mem_cpy(target_buf, val_pair->ptr, copy_size);
+    memcpy(target_buf, val_pair->ptr, copy_size);
     if (val_pair->size < target_buf_size) {
-      ccol_mem_zero((uint8_t*)target_buf + val_pair->size,
-                    target_buf_size - val_pair->size);
+      memset((uint8_t*)target_buf + val_pair->size, 0,
+             target_buf_size - val_pair->size);
     }
   }
   return ret;

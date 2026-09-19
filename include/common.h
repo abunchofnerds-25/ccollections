@@ -907,8 +907,8 @@ typedef struct cmap_iterator {
         }                                                          \
         result = false;                                            \
       } else {                                                     \
-        ccol_mem_cpy((container)->m_procs, (mmgmt_procs),          \
-                     sizeof(ccol_memmgmt_procs_t));                \
+        memcpy((container)->m_procs, (mmgmt_procs),                \
+               sizeof(ccol_memmgmt_procs_t));                      \
       }                                                            \
     } else {                                                       \
       (container)->m_procs = NULL;                                 \
@@ -1629,55 +1629,6 @@ static inline size_t ccol_fixed_width_data_type_size(ccol_data_type type) {
 size_t ccol_find_nearest_gte_power_of_two(size_t input);
 
 /**
- * @brief Optimized memory copy for small and large buffers
- *
- * Uses direct assignments for small sizes (1-8 bytes) and falls back to
- * memcpy for larger buffers. Small copies use packed structs for optimal
- * performance and avoid function call overhead.
- *
- * @param dst Destination pointer (must not overlap with src)
- * @param src Source pointer
- * @param n Number of bytes to copy
- *
- * @note For n <= 32: Uses direct uint8/16/32/64 assignments
- * @note For n > 32: Falls back to standard memcpy
- * @note Does not handle overlapping regions (use memmove for that)
- * @note Inlined for optimal performance
- *
- * @warning Behavior undefined if src and dst overlap
- *
- * Example:
- * @code
- * int src = 42;
- * int dst;
- * ccol_mem_cpy(&dst, &src, sizeof(int));  // Optimized for 4 bytes
- * @endcode
- */
-void ccol_mem_cpy(void *dst, const void *src, size_t n);
-
-/**
- * @brief Optimized memory zeroing for small and large buffers
- *
- * Uses direct zero assignments for small sizes (1-8 bytes) and falls back
- * to memset for larger buffers. Small zeros use packed structs for optimal
- * performance and avoid function call overhead.
- *
- * @param dst Destination pointer to zero
- * @param n Number of bytes to zero
- *
- * @note For n <= 32: Uses direct zero assignments to uint8/16/32/64
- * @note For n > 32: Falls back to memset(dst, 0, n)
- * @note Inlined for optimal performance
- *
- * Example:
- * @code
- * int array[100];
- * ccol_mem_zero(array, sizeof(array));  // Zeros entire array
- * @endcode
- */
-void ccol_mem_zero(void *dst, size_t n);
-
-/**
  * @brief A strdup variant that uses the custom memory management procs
  *
  * Duplicates the input string using the custom memory allocation function and
@@ -1698,7 +1649,7 @@ static inline __attribute__((always_inline)) char *ccol_strdup(
   size_t len = strlen(input) + 1;  // The '\0' at the end
   char *result = (char *)_ccol_mem_alloc(mp, len * sizeof(char));
   if (result) {
-    ccol_mem_cpy(result, input, len);
+    memcpy(result, input, len);
   }
   return result;
 }

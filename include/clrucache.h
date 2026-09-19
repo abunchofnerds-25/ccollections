@@ -26,6 +26,7 @@ SOFTWARE.
 
 #include <common.h>
 #include <stdbool.h>
+#include <string.h>
 
 /* Everything declared from here to the end of this header is part of the
  * public ABI of libccollections and is exported from the shared library.
@@ -478,15 +479,28 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
     cmap_pair _clru_kp = {};                                                  \
     _populate_cmap_pair(&_clru_kp, _clru_k);                                  \
     ccol_retval_t _clru_r;                                                    \
+    /* Both arms below are compiled for every ValT, since the condition is a  \
+     * constant the compiler folds rather than a preprocessor test. Every     \
+     * statement in each arm therefore has to be well formed, and diagnosed   \
+     * clean, for the ValT that makes it dead as well as the one that makes   \
+     * it live. This shared temporary is what keeps that true: it is typed    \
+     * as the cache's own declared ValT, so each arm's copy is sized by that  \
+     * type rather than by a width only one arm's ValT has. Sizing the char*  \
+     * arm's copy by sizeof(void *) instead is a _FORTIFY_SOURCE "will        \
+     * always overflow" error in a caller's own -Werror build whenever ValT   \
+     * is narrower than a pointer, on a statement that never runs. */         \
+    typeof(*(name##__clru_val_type_var)) _clru_vtmp;                          \
     if (ccol_is_char_ptr(*(name##__clru_val_type_var))) {                     \
       /* char* path: heap-allocate a copy and transfer ownership to caller */ \
       cmap_pair _clru_vout = {};                                              \
       _clru_r = clrucache_get_full((name), &_clru_kp, &_clru_vout);           \
       if (_clru_r == ccol_success && _clru_vout.ptr) {                        \
-        /* Write the heap pointer via memcpy to avoid strict-aliasing         \
-         * violations when val_ptr is not char**. */                          \
-        void *_clru_str_out = _clru_vout.ptr;                                 \
-        ccol_mem_cpy((val_ptr), &_clru_str_out, sizeof(void *));              \
+        /* Move the heap pointer into the ValT temporary as bytes, since a    \
+         * cast would be a pointer-to-integer conversion for every ValT that  \
+         * makes this arm dead. The assignment out of the temporary is then   \
+         * an ordinary typed store, so it carries no aliasing question. */    \
+        memcpy(&_clru_vtmp, &_clru_vout.ptr, sizeof(_clru_vtmp));             \
+        *(val_ptr) = _clru_vtmp;                                              \
       }                                                                       \
     } else {                                                                  \
       /* Non-char* path: read into a temporary typed as the cache's own       \
@@ -498,7 +512,6 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
        * bytes reinterpreted as *val_ptr's type. Left untouched on failure,   \
        * matching __clrucache_get_into's own "buf untouched on failure"       \
        * contract. */                                                         \
-      typeof(*(name##__clru_val_type_var)) _clru_vtmp;                        \
       _clru_r = __clrucache_get_into((name), &_clru_kp, &_clru_vtmp,          \
                                      sizeof(_clru_vtmp));                     \
       if (_clru_r == ccol_success) *(val_ptr) = _clru_vtmp;                   \

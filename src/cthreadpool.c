@@ -1132,7 +1132,7 @@ ctpool ccol_create_cthread_pool_mp(size_t num_threads, size_t queue_capacity,
       if (err_str) *err_str = CCOL_ERR_STR("failed to allocate m_procs copy");
       return CTPOOL_INVALID;
     }
-    ccol_mem_cpy(pool->m_procs, mprocs, sizeof(*mprocs));
+    memcpy(pool->m_procs, mprocs, sizeof(*mprocs));
   }
 
   /* Treat ccol_invalid_size as unbounded. */

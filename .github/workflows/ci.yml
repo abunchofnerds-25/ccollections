@@ -26,13 +26,14 @@ jobs:
     # keeping a recurrence cheap rather than silent.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
         # abigail-tools supplies abidiff, which upgrades the ABI check from a
         # comparison of exported symbol names to one that also covers function
-        # signatures and public struct layouts. It engages on its own once an
-        # x86_64 corpus baseline exists under abi/; until then check_abi says
-        # so on every run rather than passing silently.
+        # signatures and public struct layouts. That layer reads the x86_64
+        # corpus baseline under abi/, which this job's architecture matches, so
+        # it runs here. Without the package check_abi reports that signature
+        # and layout checking did not run rather than passing silently.
         run: sudo apt-get update && sudo apt-get install -y libssl-dev zlib1g-dev valgrind abigail-tools
       - name: make test
         run: make test
@@ -80,7 +81,7 @@ jobs:
     # keeping a recurrence cheap rather than silent.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y clang libssl-dev zlib1g-dev valgrind
       - name: make test
@@ -102,7 +103,7 @@ jobs:
       # Deliberately installs neither libssl-dev nor zlib1g-dev. A build with
       # every optional module disabled must need neither, and the surest way to
       # keep that true is to build it where they are absent.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: make test (all optional modules off)
         run: |
           make WITH_CJSON=0 WITH_CYAML=0 WITH_CLOGGER=0 \
@@ -143,7 +144,7 @@ jobs:
     # keeping a recurrence cheap rather than silent.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libssl-dev zlib1g-dev lcov
       # Every file in src/ and include/ must reach the threshold that
@@ -168,7 +169,7 @@ jobs:
     # keeping a recurrence cheap rather than silent.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y clang libssl-dev zlib1g-dev
       - name: make test (EXTRA_CFLAGS=-fsanitize=address,undefined -fno-sanitize-recover=undefined)
@@ -192,7 +193,7 @@ jobs:
     # keeping a recurrence cheap rather than silent.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libssl-dev zlib1g-dev
       - name: cpintable test_tsan
@@ -225,7 +226,7 @@ jobs:
     # keeping a recurrence cheap rather than silent.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
         run: |
           sudo dpkg --add-architecture i386
@@ -248,7 +249,7 @@ jobs:
     # keeping a recurrence cheap rather than silent.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
         # gcc-multilib is still required even though gcc is not the compiler
         # used here: clang -m32 relies on the same 32-bit crt objects/libgcc
@@ -277,7 +278,7 @@ jobs:
     # keeping a recurrence cheap rather than silent.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
         # No separate sanitizer package for the GCC leg: gcc-multilib pulls the
         # 32-bit UndefinedBehaviorSanitizer runtime in transitively, through
@@ -331,7 +332,7 @@ jobs:
     # cheap instead of silently burning runner time.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
         # arm64 is a ports architecture: its package indices live on
         # ports.ubuntu.com, not on the primary/security archive mirrors this
@@ -442,7 +443,7 @@ jobs:
     # carries the identical residual deadlock risk.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
         # Same arm64-ports setup as the aarch64 GCC job above (see its own
         # comment for why); additionally installs clang itself, and keeps
@@ -538,7 +539,7 @@ jobs:
     # identical residual deadlock risk.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
         # armhf is a ports architecture, exactly like arm64 above: its
         # package indices live on ports.ubuntu.com, not on the primary/
@@ -625,7 +626,7 @@ jobs:
     # identical residual deadlock risk.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
         # Same armhf-ports setup as the arm32 GCC job above (see its own
         # comment for why); additionally installs clang itself, and keeps

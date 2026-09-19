@@ -635,8 +635,9 @@ static inline int compare_keys(cbmap cbm, const cmap_pair *key_pair1,
  * zero-byte key/value as ccol_not_enough_memory under an allocator that
  * legitimately chooses NULL for a zero-size request. A zero-size pair is
  * instead stored as ptr == NULL, size == 0, which every reader in this file
- * (compare_keys' memcmp, ccol_mem_cpy, destroy_bmap_node's _ccol_mem_free)
- * already handles safely for a zero length. */
+ * (compare_keys' memcmp, create_new_node's and cbmap_get_elem_copy's own
+ * size-guarded copies, destroy_bmap_node's _ccol_mem_free) already handles
+ * safely for a zero length. */
 static bmap_node *create_new_node(cbmap cbm, const cmap_pair *key_pair,
                                   const cmap_pair *val_pair) {
   /* Node, key and value are one allocation, so the byte count is formed here
@@ -673,9 +674,18 @@ static bmap_node *create_new_node(cbmap cbm, const cmap_pair *key_pair,
       (val_pair->size > 0) ? (char *)new_node + val_offset : NULL;
   new_node->val_is_external = false;
 
-  ccol_mem_cpy(new_node->key_pair.ptr, key_pair->ptr, key_pair->size);
+  /* Guarded on size because a zero-size key or value carries a NULL pointer
+     here, which is this file's representation of empty, and memcpy declares
+     both of its pointer parameters as never null even for a zero length.
+     Without these guards UndefinedBehaviorSanitizer reports "null pointer
+     passed as argument 1, which is declared to never be null". */
+  if (key_pair->size > 0) {
+    memcpy(new_node->key_pair.ptr, key_pair->ptr, key_pair->size);
+  }
   new_node->key_pair.size = key_pair->size;
-  ccol_mem_cpy(new_node->val_pair.ptr, val_pair->ptr, val_pair->size);
+  if (val_pair->size > 0) {
+    memcpy(new_node->val_pair.ptr, val_pair->ptr, val_pair->size);
+  }
   new_node->val_pair.size = val_pair->size;
 
   new_node->left = NULL;
@@ -745,7 +755,7 @@ static void update_bmap_node_value(cbmap cbm, bmap_node *node,
        hands a caller a pointer into the node's own value, and handing it back
        to resize that value is an ordinary thing to do. Reading it after the
        free is a use-after-free that AddressSanitizer reports. */
-    ccol_mem_cpy(new_ptr, val_pair->ptr, val_pair->size);
+    memcpy(new_ptr, val_pair->ptr, val_pair->size);
     if (node->val_is_external) {
       _ccol_mem_free(cbm->m_procs, node->val_pair.ptr);
     }
@@ -1100,7 +1110,12 @@ ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
       if (target_buf_size != tracker->val_pair.size) {
         return ccol_invalid_args;
       }
-      ccol_mem_cpy(target_buf, tracker->val_pair.ptr, target_buf_size);
+      /* A stored value of size 0 keeps a NULL pointer, and the caller's
+         buffer for one is equally allowed to be NULL, so the copy is guarded
+         for the same reason create_bmap_node's is. */
+      if (target_buf_size > 0) {
+        memcpy(target_buf, tracker->val_pair.ptr, target_buf_size);
+      }
       return ccol_success;
     }
 

@@ -2851,7 +2851,7 @@ TEST(chash_maps, sc_value_update_self_referential_same_size) {
 // source, must not corrupt the stored value. This mirrors the
 // sc_value_update_self_referential_* group above, but for the
 // open-addressing backend's own existing-key update path (a plain in-place
-// ccol_mem_cpy into the slot's val_data field, which needs an aliasing
+// memcpy into the slot's val_data field, which needs an aliasing
 // guard to stay correct), reached through the raw chmap_insert_elem
 // function layer rather than the type-safe macros (which always copy
 // through an on-stack local and can never alias map-owned storage this
@@ -4313,7 +4313,7 @@ TEST(chash_maps, sc_integral_key_size_mismatch_returns_invalid_args) {
 // Same hazard, but through canonicalize_key_pair_if_needed's float/double
 // canonicalization path, which must verify that key_pair->size is exactly
 // the true 4-byte float / 8-byte double size rather than trusting any size
-// <= 8 and ccol_mem_cpy'ing that many (caller-claimed) bytes out of the
+// <= 8 and copying that many (caller-claimed) bytes out of the
 // caller's pointer. Without that check, a float-keyed separate-chaining
 // map, given a key_pair claiming size 8 (as if it were a double) backed by
 // an exactly-4-byte allocation, reads 4 bytes past the end of that

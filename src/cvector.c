@@ -252,8 +252,8 @@ ccol_retval_t cvector_push_back(cvec v, const void *new_elem) {
   ccol_retval_t result = ccol_success;
 
   if (v->elem_count < v->capacity) {
-    ccol_mem_cpy((void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
-                 new_elem, v->elem_size);
+    memcpy((void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
+           new_elem, v->elem_size);
     ++v->elem_count;
   } else {
     const char *buf_start = (const char *)v->data_ptr;
@@ -271,8 +271,8 @@ ccol_retval_t cvector_push_back(cvec v, const void *new_elem) {
         // buffer.
         new_elem = (const char *)v->data_ptr + new_elem_offset;
       }
-      ccol_mem_cpy((void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
-                   new_elem, v->elem_size);
+      memcpy((void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
+             new_elem, v->elem_size);
       ++v->elem_count;
     } else {
       result = grow_result;
@@ -301,9 +301,9 @@ ccol_retval_t cvector_pop_back(cvec v, void *target_elem) {
     result = ccol_success;
     --v->elem_count;
 
-    ccol_mem_cpy(target_elem,
-                 (void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
-                 v->elem_size);
+    memcpy(target_elem,
+           (void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
+           v->elem_size);
 
     if (v->elem_count < (v->capacity / shrink_threshold_divisor)) {
       scale_the_cvector_size_down(v);
@@ -363,12 +363,9 @@ bool cvector_reserve(cvec v, size_t new_capacity_count) {
  * arr_ptr is permitted to alias anywhere inside v's own backing buffer,
  * including into reserved-but-not-yet-live capacity past v->elem_count; if the
  * caller-supplied elem_count is large enough, the source range can overlap the
- * destination range. ccol_mem_cpy is not overlap-safe (it degrades to a plain,
- * non-overlap-safe memcpy for n > 32 bytes, and even its <=32-byte
- * packed-struct-assignment fast path has no overlap guarantee), so an
- * overlap-safe memmove is used whenever the two ranges actually overlap;
- * ccol_mem_cpy's faster path is kept for the overwhelmingly common non-aliasing
- * case. */
+ * destination range. memcpy is not overlap-safe, so an overlap-safe memmove is
+ * used whenever the two ranges actually overlap; memcpy is kept for the
+ * overwhelmingly common non-aliasing case. */
 #ifdef RUNNING_UNIT_TESTS
 /* Counts how many cvector_copy_into_tail calls actually took the
  * overlap-safe memmove branch, so a white-box test can assert the branch
@@ -390,7 +387,7 @@ static void cvector_copy_into_tail(cvec v, const void *src, size_t n) {
 #endif
     memmove(dst, src, n);
   } else {
-    ccol_mem_cpy(dst, src, n);
+    memcpy(dst, src, n);
   }
 }
 

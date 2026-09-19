@@ -277,7 +277,7 @@ TEST(cvectors, push_back_self_alias_triggers_expansion) {
   // 4 elements, capacity=4 (exactly full): pushing an existing element back
   // onto itself forces scale_the_cvector_size_up to realloc. Unguarded,
   // new_elem (a pointer into the vector's own buffer) dangles the moment
-  // that realloc moves the buffer, and the subsequent ccol_mem_cpy reads
+  // that realloc moves the buffer, and the subsequent copy reads
   // freed memory.
   cvector *cvec = cvector_create(sizeof(int), NULL);
   for (int i = 0; i < 4; ++i) {
@@ -826,7 +826,7 @@ TEST(cvectors, append_array_self_alias_no_realloc) {
   REQUIRE_EQ(cvector_get_capacity(cvec),
              _ccol_cvector_minimum_capacity);  // no realloc
   // Source range ends exactly where the destination begins (touching, not
-  // overlapping): the cheaper ccol_mem_cpy path must still be used, not
+  // overlapping): the cheaper memcpy path must still be used, not
   // memmove.
   REQUIRE_EQ(cvector_overlap_copy_count_for_tests, overlap_count_before);
 
@@ -842,7 +842,7 @@ TEST(cvectors, append_array_self_alias_triggers_expansion) {
   // 3 elements, capacity=4: appending the whole buffer back onto itself
   // needs 6 slots, forcing cvector_reserve to realloc. Unguarded, arr_ptr
   // (== cvector_data_ptr(cvec)) dangles the moment that realloc moves the
-  // buffer, and the second ccol_mem_cpy reads freed memory.
+  // buffer, and the second copy reads freed memory.
   cvector *cvec = cvector_create(sizeof(int), NULL);
   cvector_push_back(cvec, &(int){10});
   cvector_push_back(cvec, &(int){20});

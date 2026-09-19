@@ -47,9 +47,10 @@ SOFTWARE.
  *
  * **Open-addressing** (used when both key and value are integral types <=8
  * bytes):
- * - Compact 24-byte slots (8-byte key + 8-byte value + 1-byte metadata,
- * padded to a 24-byte multiple of 8 so key/value storage stays naturally
- * aligned for direct in-place access, e.g. via chmap_get_ptr)
+ * - Compact 16-byte slots (an 8-byte key beside an 8-byte value, and nothing
+ * else: the occupied and deleted bits live in a parallel byte array allocated
+ * as the tail of the same block). Key and value storage therefore stays
+ * naturally aligned for direct in-place access, e.g. via chmap_get_ptr
  * - Linear probing with Fibonacci hashing for integers
  * - Load factor thresholds: 0.70 (grow) / 0.25 (shrink)
  * - Zero allocations per entry (contiguous array)

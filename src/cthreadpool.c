@@ -22,6 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
+#include <cpintable.h>
 #include <cthreadpool.h>
 #include <cvector.h>
 #include <errno.h>
@@ -93,6 +94,15 @@ static struct {
   cvec slots;        /* cvec of ctpool_slot_t; grows via push_back only,
                          indices permanent once allocated */
   cvec free_indices; /* cvec of uint32_t; LIFO free list, O(1) reuse */
+  /* Set when the process-exit destructor found a pool still live and left this
+     table alone, so that whichever destroy releases the last slot afterwards
+     performs the release the destructor could not. Without it, a pool outliving
+     this translation unit's destructor (this library's own lazily created HTTP
+     client owns one, and its reaper runs from a destructor linked earlier)
+     would leave the table and the pin index allocated for the rest of the
+     process, which a leak checker treating still-reachable memory as an error
+     reports. Read and written only under the write lock. */
+  bool release_deferred;
 } ctpool_slot_table = {0};
 
 #if CCOL_FORK_SAFETY_REQUIRED
@@ -186,6 +196,13 @@ struct ctpool_future {
   int refcount;
 };
 
+/* The hot half of the slot table: handle to pointer, plus the pin that holds a
+ * pool alive for the duration of a call. Separate from the table itself
+ * because a resolve runs on every public call and must not write anything
+ * another thread reads, while slot recycling is cold and stays under the
+ * rwlock. */
+static ccol_pintable ctpool_pintable;
+
 struct cthread_pool {
   /* Task queue (intrusive singly-linked list) */
   ctpool_task *head;
@@ -235,18 +252,10 @@ struct cthread_pool {
 
   ccol_memmgmt_procs_t *m_procs;
 
-  /* Pinned by _ctpool_resolve (lock-free atomic increment) for as long as
-   * some caller holds a just-resolved cthread_pool* it hasn't yet released
-   * via _ctpool_resolve_unpin. __ctpool_destroy blocks until this reaches 0
-   * (via pin_cv, under mu) before freeing the object, closing a real
-   * resolve-then-use race a naive "look up, unlock, return the pointer"
-   * resolve step would otherwise leave open. Reuses this pool's own mu for
-   * the unpin side's decrement+broadcast (unlike ccol_event_loop's fully
-   * lock-free pin, this module is already a single-global-mutex design, so
-   * this introduces no new contention beyond what every entry point
-   * already pays today). */
-  _Atomic size_t pending_resolve_count;
-  ccol_cond_var_t pin_cv; /* wakes __ctpool_destroy's wait; shares mu */
+  /* This pool's own handle, so an unpin can find the slot holding its pin
+   * without the caller carrying one. Written once, before the handle is
+   * published, and never again. */
+  ctpool self_handle;
 
 #if CCOL_FORK_SAFETY_REQUIRED
   /* Set to true, exclusively by this process's own CHILD-side fork handler
@@ -359,6 +368,9 @@ struct cthread_pool {
  * instructions, never held across a callback or a blocking wait), low-
  * probability gap, left open rather than silently claimed as covered. */
 static void _ctpool_atfork_prepare(void) {
+#ifdef RUNNING_UNIT_TESTS
+  _ccol_atfork_order_record(ccol_atfork_module_cthreadpool);
+#endif
   ccol_rw_lock_wrlock(ctpool_slot_table.rwlock);
 
   size_t n = cvector_elem_count(ctpool_slot_table.slots);
@@ -380,7 +392,7 @@ static void _ctpool_atfork_prepare(void) {
  * needed to do so is still held at this exact point.
  *
  * is_child additionally marks every still-live pool as foreign_since_fork
- * and resets its own pending_resolve_count; see
+ * and drops every pin outstanding against it; see
  * _ctpool_atfork_child_release's own doc comment for why both are needed
  * in the child specifically, and struct cthread_pool's own
  * foreign_since_fork field comment for the SIGSEGV this closes. Neither
@@ -409,11 +421,11 @@ static void _ctpool_atfork_release_impl(bool is_child) {
       atomic_store(&pool->foreign_since_fork, true);
       /* A now-vanished parent-side thread may have been mid-resolve (a
        * pinned _ctpool_resolve call) at the instant of fork(), leaving
-       * pending_resolve_count permanently nonzero from this process's
+       * that pin permanently outstanding from this process's
        * own point of view: nothing here can ever run the matching
        * _ctpool_resolve_unpin call that vanished thread would have
-       * made. _ctpool_teardown_raw's own wait loop blocks on this
-       * reaching 0 before doing anything else, so left untouched this
+       * made. _ctpool_teardown_raw's own wait loop blocks on the pin
+       * count reaching 0 before doing anything else, so left untouched this
        * would hang the child's own destroy forever, the same class of
        * hang an inherited locked mutex causes (see
        * _ctpool_atfork_prepare's own doc comment above). Resetting it here
@@ -423,7 +435,7 @@ static void _ctpool_atfork_release_impl(bool is_child) {
        * cover (the forking thread's OWN resolve still in flight across its
        * own fork() call) is an inherent limitation of calling fork() from
        * inside a held pin at all, not a regression this introduces. */
-      atomic_store(&pool->pending_resolve_count, (size_t)0);
+      ccol_pintable_reset_for(&ctpool_pintable, pool->self_handle);
 
       /* A live pool's own worker threads spend most of their lives blocked
        * in ccol_cond_var_wait(pool->not_empty, pool->mu) (see
@@ -467,8 +479,6 @@ static void _ctpool_atfork_release_impl(bool is_child) {
         ccol_fatal_err("ctpool atfork release: failed to reinit not_full");
       if (ccol_cond_var_init(pool->idle_cv) != 0)
         ccol_fatal_err("ctpool atfork release: failed to reinit idle_cv");
-      if (ccol_cond_var_init(pool->pin_cv) != 0)
-        ccol_fatal_err("ctpool atfork release: failed to reinit pin_cv");
     }
 
     ccol_mutex_unlock(pool->mu);
@@ -514,9 +524,37 @@ static void _ctpool_atfork_child_release(void) {
 }
 #endif /* CCOL_FORK_SAFETY_REQUIRED */
 
+/* Defined with the process-exit teardown below; declared here because
+   __ctpool_destroy's own final locked section performs the release the
+   destructor deferred. */
+static bool _ctpool_any_slot_live_locked(void);
+static void _ctpool_release_slot_table_locked(void);
+static void _ctpool_release_slot_table_if_deferred_locked(void);
+
 /* ========================================================================== */
 /*                    CTPOOL HANDLE RESOLVE / UNPIN                           */
 /* ========================================================================== */
+
+/* Waits out every in-flight caller that resolved this pool before its slot was
+ * retired. Polls rather than sleeping on a condition variable, because the
+ * unpin side deliberately performs no wakeup: the whole point of it is to touch
+ * nothing but the pin. Unbounded by design; giving up would mean freeing memory
+ * a live resolver still points at. */
+static void _ctpool_wait_for_pins(cthread_pool *pool) {
+  /* A pool whose handle was never published has no slot to wait on, and must
+   * not guess one: a teardown reached from a failed construction would
+   * otherwise derive an index from a zeroed handle, or from a slot already
+   * handed back to the free list, and wait out the pins of whichever unrelated
+   * pool happens to occupy it. */
+  if (pool->self_handle == 0) return;
+  uint32_t idx = (uint32_t)(pool->self_handle >> 32);
+  long delay_ns = 1000;
+  while (ccol_pintable_pins(&ctpool_pintable, idx) > 0) {
+    struct timespec ts = {.tv_sec = 0, .tv_nsec = delay_ns};
+    nanosleep(&ts, NULL);
+    if (delay_ns < 1000000L) delay_ns *= 2;
+  }
+}
 
 /* Resolves h and pins the result against concurrent destroy, or returns NULL
  * if h is 0, garbage, or references a currently-free or already-reused
@@ -524,39 +562,23 @@ static void _ctpool_atfork_child_release(void) {
  * _ctpool_resolve_unpin(result) exactly once, as soon as it is done touching
  * the resolved cthread_pool*. */
 static cthread_pool *_ctpool_resolve(ctpool h) {
-  ccol_call_once(ctpool_slot_table.once, _ctpool_slot_table_init_globals);
-  if (h == 0) return NULL;
-  uint32_t idx = (uint32_t)(h >> 32);
-  uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
-  ccol_rw_lock_rdlock(ctpool_slot_table.rwlock);
-  cthread_pool *raw = NULL;
-  if (idx < cvector_elem_count(ctpool_slot_table.slots)) {
-    ctpool_slot_t *slot =
-        (ctpool_slot_t *)cvector_at(ctpool_slot_table.slots, idx);
-    if (slot->in_use && slot->generation == gen) raw = slot->ptr;
-  }
-  /* Lock-free: no raw->mu acquisition here at all, so nothing can ever
-   * block while ctpool_slot_table.rwlock is held; matches chttpcli's own
-   * _chttpcli_resolve reasoning exactly. Safe because raw is guaranteed
-   * still-allocated here regardless: the only thing that could make it
-   * unsafe to touch, __ctpool_destroy's slot-release step, also requires
-   * ctpool_slot_table.rwlock's write side, which cannot run concurrently
-   * with this read side regardless. */
-  if (raw) atomic_fetch_add(&raw->pending_resolve_count, 1);
-  ccol_rw_lock_unlock(ctpool_slot_table.rwlock);
-  return raw;
+  /* No lock and no shared write: every public entry point of this module runs
+   * this, so anything here that wrote memory another thread reads would be
+   * paid by every submit, from every submitting thread. */
+  return (cthread_pool *)ccol_pintable_pin(&ctpool_pintable, h);
 }
 
 static void _ctpool_resolve_unpin(cthread_pool *raw) {
-  /* The decrement itself MUST happen under raw->mu, not as a bare atomic op
-   * outside it: see _chttpcli_resolve_unpin's own comment in
-   * src/chttpclient.c for the full account of the lost-wakeup
-   * use-after-free a bare atomic decrement causes here; this mirrors that
-   * function exactly. */
-  ccol_mutex_lock(raw->mu);
-  atomic_fetch_sub(&raw->pending_resolve_count, 1);
-  ccol_cond_var_broadcast(raw->pin_cv); /* wake a destroy waiting on this */
-  ccol_mutex_unlock(raw->mu);
+  /* Releases the pin and touches nothing else. Acquiring raw->mu here would
+   * mean every call took this pool's own lock an extra time, immediately after
+   * releasing it, which is what turns concurrent submitters into a convoy.
+   * There is no wakeup to deliver either: __ctpool_destroy polls the pin count
+   * rather than sleeping on a condition variable waiting for this function.
+   *
+   * Reading raw->self_handle before releasing is safe precisely because the
+   * pin is still held at that point; after the release the pool may be freed
+   * at any instant, so nothing may touch raw past this call. */
+  ccol_pintable_unpin(&ctpool_pintable, raw->self_handle);
 }
 
 /* Allocates a fresh slot (or reuses a freed one) for pool and returns the
@@ -572,6 +594,15 @@ static ctpool _ctpool_handle_slot_acquire(cthread_pool *pool) {
     cvector_pop_back(ctpool_slot_table.free_indices, &idx);
     slot = (ctpool_slot_t *)cvector_at(ctpool_slot_table.slots, idx);
   } else {
+    /* A slot whose index is beyond what the pin table can hold could never be
+     * published, so it is refused here rather than claimed and rolled back:
+     * rolling one back would put an index no later publish can use onto the
+     * free list every acquire pops from. Reported as an ordinary failure,
+     * which is how a caller already has to treat a table that cannot grow. */
+    if (cvector_elem_count(ctpool_slot_table.slots) >= CCOL_PIN_MAX_SLOTS) {
+      ccol_rw_lock_unlock(ctpool_slot_table.rwlock);
+      return 0;
+    }
     ctpool_slot_t fresh = {0};
     if (cvector_push_back(ctpool_slot_table.slots, &fresh) != ccol_success) {
       ccol_rw_lock_unlock(ctpool_slot_table.rwlock);
@@ -586,6 +617,32 @@ static ctpool _ctpool_handle_slot_acquire(cthread_pool *pool) {
    * index; see chttpcli_handle_slot_acquire's identical guard for the full
    * rationale. */
   if (slot->generation == 0) slot->generation++;
+  ctpool h = ((ctpool)idx << 32) | (ctpool)slot->generation;
+
+  /* Written before the handle is published, so a resolver that finds this pool
+   * also finds the handle its own unpin needs. */
+  pool->self_handle = h;
+
+  /* Publishing can allocate, and a failure would leave a handle no call could
+   * resolve, so the slot goes back on the free list instead. */
+  if (!ccol_pintable_publish(&ctpool_pintable, idx, slot->generation, pool)) {
+    /* Cleared because the slot is going back on the free list: leaving the
+     * handle behind would point this pool's own teardown at a slot that now
+     * belongs to somebody else. */
+    pool->self_handle = 0;
+    /* Returned to the free list in the same shape a slot retired by a destroy
+     * ends up in, rather than merely unused. _ctpool_atfork_prepare's walk
+     * processes any slot with either flag set and dereferences its ptr, so a
+     * slot going back on the free list must leave both clear. */
+    slot->ptr = NULL;
+#if CCOL_FORK_SAFETY_REQUIRED
+    slot->torn_down = false;
+#endif
+    cvector_push_back(ctpool_slot_table.free_indices, &idx);
+    ccol_rw_lock_unlock(ctpool_slot_table.rwlock);
+    return 0;
+  }
+
   slot->ptr = pool;
   slot->in_use = true;
 #if CCOL_FORK_SAFETY_REQUIRED
@@ -594,7 +651,6 @@ static ctpool _ctpool_handle_slot_acquire(cthread_pool *pool) {
                                comment); reset explicitly anyway, defensively,
                                rather than relying on that invariant alone */
 #endif
-  ctpool h = ((ctpool)idx << 32) | (ctpool)slot->generation;
   ccol_rw_lock_unlock(ctpool_slot_table.rwlock);
   return h;
 }
@@ -619,7 +675,7 @@ static ctpool _ctpool_handle_slot_acquire(cthread_pool *pool) {
  * very pool it is currently executing on. worker_thread_fn receives `pool`
  * as a bare pointer captured once at thread start, entirely independent of
  * the resolve/pin mechanism every public API entry point otherwise goes
- * through, so nothing about pending_resolve_count reflects "a worker of
+ * through, so nothing about the pin count reflects "a worker of
  * this pool is still using it": the only thing that normally keeps a
  * worker's continued use of `pool` safe across a shutdown is
  * _ctpool_shutdown_drain_internal/_immediate_internal's own ccol_thread_join
@@ -1108,16 +1164,7 @@ ctpool ccol_create_cthread_pool_mp(size_t num_threads, size_t queue_capacity,
     pool_free_self(pool);
     return CTPOOL_INVALID;
   }
-  if (ccol_cond_var_init(pool->pin_cv) != 0) {
-    if (err_str) *err_str = CCOL_ERR_STR("cond_var init failed");
-    ccol_mutex_destroy(pool->mu);
-    ccol_cond_var_destroy(pool->not_empty);
-    ccol_cond_var_destroy(pool->not_full);
-    ccol_cond_var_destroy(pool->idle_cv);
-    pool_free_self(pool);
-    return CTPOOL_INVALID;
-  }
-  atomic_init(&pool->pending_resolve_count, (size_t)0);
+
 #if CCOL_FORK_SAFETY_REQUIRED
   atomic_init(&pool->foreign_since_fork, false);
 #endif
@@ -1130,7 +1177,6 @@ ctpool ccol_create_cthread_pool_mp(size_t num_threads, size_t queue_capacity,
     ccol_cond_var_destroy(pool->not_empty);
     ccol_cond_var_destroy(pool->not_full);
     ccol_cond_var_destroy(pool->idle_cv);
-    ccol_cond_var_destroy(pool->pin_cv);
     pool_free_self(pool);
     return CTPOOL_INVALID;
   }
@@ -1157,7 +1203,6 @@ ctpool ccol_create_cthread_pool_mp(size_t num_threads, size_t queue_capacity,
       ccol_cond_var_destroy(pool->not_empty);
       ccol_cond_var_destroy(pool->not_full);
       ccol_cond_var_destroy(pool->idle_cv);
-      ccol_cond_var_destroy(pool->pin_cv);
       pool_free_self(pool);
       return CTPOOL_INVALID;
     }
@@ -1745,13 +1790,13 @@ size_t ctpool_active_count(ctpool pool) {
  * bounded queue is released ONLY by a not_full broadcast, and in the worst
  * case (every worker thread itself stuck) nothing but shutdown's own
  * broadcast would ever release a blocked, pinned submitter. Running
- * shutdown-drain BEFORE waiting on pending_resolve_count guarantees that
+ * shutdown-drain BEFORE waiting on the pin count guarantees that
  * broadcast has already happened, so the wait below is guaranteed to
  * complete rather than risk deadlocking against a submitter this same
  * function would otherwise never wake. When called from
- * ccol_create_cthread_pool_mp's rollback path, pending_resolve_count is
- * provably already 0 (no handle was ever exposed to any caller), so the
- * wait phase there is trivially instant.
+ * ccol_create_cthread_pool_mp's rollback path no handle was ever exposed
+ * to any caller, so there is no slot to wait on at all and the wait phase
+ * there returns immediately.
  *
  * The non-foreign path below always calls _ctpool_shutdown_drain_internal
  * unconditionally rather than first peeking at pool->shutdown_started: such
@@ -1789,8 +1834,8 @@ static void _ctpool_teardown_raw(cthread_pool *pool, uint32_t idx) {
   if (atomic_load(&pool->foreign_since_fork)) {
     /* This process inherited `pool` across a fork() call (see
      * foreign_since_fork's own field comment): every one of its
-     * synchronization primitives (mu, not_empty, not_full, idle_cv,
-     * pin_cv) may, at the instant of fork(), have had a genuinely live,
+     * synchronization primitives (mu, not_empty, not_full, idle_cv)
+     * may, at the instant of fork(), have had a genuinely live,
      * still-running PARENT-side thread blocked on or otherwise actively
      * referencing it. Actually DESTROYING one of them here is undefined
      * behaviour at best, and for ccol_cond_var_destroy specifically it
@@ -1818,17 +1863,19 @@ static void _ctpool_teardown_raw(cthread_pool *pool, uint32_t idx) {
      * to already be in a clean, unlocked state, regardless of who held it in
      * the parent at the instant of fork().
      *
-     * That lock is still needed here for two real reasons, not merely for
-     * symmetry with the non-foreign path below: (1) pending_resolve_count
-     * must still be waited on before freeing pool, exactly like the
-     * non-foreign path does: a resolve from another thread in THIS
+     * Two things below are needed here for real reasons, not merely for
+     * symmetry with the non-foreign path. (1) The pin wait, which precedes
+     * the lock and deliberately holds none, is just as necessary here as on
+     * that path: a resolve from another thread in THIS
      * process (e.g. a concurrent ctpool_pending_count/ctpool_submit call
      * racing this exact destroy) is a perfectly ordinary, in-process race
      * the pin mechanism exists to protect against, and is entirely
-     * independent of anything fork-related; skipping this wait here would
+     * independent of anything fork-related; skipping it would
      * reopen the exact resolve-then-use-after-free race the
      * generation-tagged slot table exists to close, just for this one
-     * code path. (2) any task still sitting in pool->head/pool->tail at
+     * code path. (2) The lock itself, because steal_queue mutates the task
+     * list and requires it, and because any task still sitting in
+     * pool->head/pool->tail at
      * this instant is ordinary, private (copy-on-write) heap memory this
      * process CAN safely free (unlike the OS-level thread/mutex/condvar
      * state above, no worker thread's ownership is involved), so it is
@@ -1842,14 +1889,12 @@ static void _ctpool_teardown_raw(cthread_pool *pool, uint32_t idx) {
      * stack) and so cannot be recovered here; this is an inherent
      * limitation of forking with in-flight work, not something this mechanism
      * can close. */
+    _ctpool_wait_for_pins(pool);
     ccol_mutex_lock(pool->mu);
-    while (atomic_load(&pool->pending_resolve_count) > 0) {
-      ccol_cond_var_wait(pool->pin_cv, pool->mu);
-    }
     ctpool_task *discarded = steal_queue(pool);
     ccol_mutex_unlock(pool->mu);
     /* Frees each discarded task directly via _ccol_mem_free, deliberately NOT
-     * through task_free: by this point pending_resolve_count is already 0
+     * through task_free: by this point the pin count is already 0
      * and this handle's slot is already marked not-in-use (see
      * __ctpool_destroy's own ordering), so no task_alloc call for this pool
      * can ever happen again, in this process, for the rest of its life.
@@ -1879,11 +1924,7 @@ static void _ctpool_teardown_raw(cthread_pool *pool, uint32_t idx) {
 
   _ctpool_shutdown_drain_internal(pool);
 
-  ccol_mutex_lock(pool->mu);
-  while (atomic_load(&pool->pending_resolve_count) > 0) {
-    ccol_cond_var_wait(pool->pin_cv, pool->mu);
-  }
-  ccol_mutex_unlock(pool->mu);
+  _ctpool_wait_for_pins(pool);
 
   /* Every worker is joined and no pin is outstanding, so no further
    * task_alloc/task_free call for this pool is possible from here on;
@@ -1901,7 +1942,6 @@ static void _ctpool_teardown_raw(cthread_pool *pool, uint32_t idx) {
   ccol_cond_var_destroy(pool->not_empty);
   ccol_cond_var_destroy(pool->not_full);
   ccol_cond_var_destroy(pool->idle_cv);
-  ccol_cond_var_destroy(pool->pin_cv);
 
   pool_free_self(pool);
 }
@@ -1963,6 +2003,9 @@ void __ctpool_destroy(ctpool pool) {
   slot->in_use = false; /* blocks ALL future resolves for this handle from
                             this instant, including a second concurrent
                             destroy attempt */
+  /* Same step, same lock: from here no new pin can be granted, which is what
+   * lets the count reach zero and stay there. */
+  ccol_pintable_retire(&ctpool_pintable, idx);
 #if CCOL_FORK_SAFETY_REQUIRED
   /* See ctpool_slot_t's own torn_down field comment: raw's worker threads
    * are not actually gone yet, only unreachable via this handle from now
@@ -1991,17 +2034,21 @@ void __ctpool_destroy(ctpool pool) {
       the just-freed pool's handle carried, so that stale handle can never
       again match a FUTURE acquire's generation for this same index */
   cvector_push_back(ctpool_slot_table.free_indices, &idx);
+  /* The process-exit destructor has already run and found this pool live, so
+     the release it could not perform belongs to whoever frees the last slot,
+     which may be this call. */
+  _ctpool_release_slot_table_if_deferred_locked();
   ccol_rw_lock_unlock(ctpool_slot_table.rwlock);
 }
 
 #ifdef RUNNING_UNIT_TESTS
 /* Resolves h to its underlying cthread_pool* WITHOUT pinning it (does not
- * touch pending_resolve_count at all): a bare slot-table lookup, safe for
+ * touch the pin index at all): a bare slot-table lookup, safe for
  * tests specifically because test code calling this runs synchronously,
  * single-threaded, with no concurrent destroy to race in the first place;
  * unlike _ctpool_resolve, there is no matching _unpin call a test needs to
  * remember, which would otherwise be an easy gap to leave (a forgotten
- * unpin would leave pending_resolve_count permanently nonzero on that
+ * unpin would leave a pin permanently outstanding against that
  * pool, silently hanging every future ctpool_destroy call against it).
  * Returns NULL under the exact same conditions _ctpool_resolve does. */
 cthread_pool *_ctpool_resolve_for_tests(ctpool h) {
@@ -2024,6 +2071,19 @@ cthread_pool *_ctpool_resolve_for_tests(ctpool h) {
  * plus freed-but-not-yet-reused ones): lets a test assert that a
  * create/destroy churn loop reuses freed slots rather than growing the
  * table without bound. */
+/* Indices currently sitting on the free list. Read alongside the capacity
+ * above: a rollback that loses a slot shows up as a table that grew, but only
+ * while the free list was empty, so a test that measures growth alone passes
+ * or fails according to how many handles earlier tests happened to hold at
+ * once. Consumed together, the two describe the table independently of that. */
+size_t _ctpool_free_index_count_for_tests(void) {
+  ccol_call_once(ctpool_slot_table.once, _ctpool_slot_table_init_globals);
+  ccol_rw_lock_rdlock(ctpool_slot_table.rwlock);
+  size_t n = cvector_elem_count(ctpool_slot_table.free_indices);
+  ccol_rw_lock_unlock(ctpool_slot_table.rwlock);
+  return n;
+}
+
 size_t _ctpool_slot_table_capacity_for_tests(void) {
   ccol_call_once(ctpool_slot_table.once, _ctpool_slot_table_init_globals);
   ccol_rw_lock_rdlock(ctpool_slot_table.rwlock);
@@ -2057,16 +2117,16 @@ size_t _ctpool_task_free_list_cap_for_tests(cthread_pool *pool) {
   return n;
 }
 
-/* Reads pool's own current pending_resolve_count (already an _Atomic
- * field; see _ctpool_resolve's own comment for why it needs no additional
- * lock to read safely). Lets a test observe, with no timing assumption at
+/* Reads how many pins are currently outstanding against pool's own slot.
+ * The count lives in the pin index rather than in the pool itself, and is
+ * read with no lock held. Lets a test observe, with no timing assumption at
  * all, that a concurrent resolve/pin has genuinely already happened,
  * rather than assuming a fixed sleep was long enough for it to have
  * happened by now: a genuinely slow/loaded machine could starve that
  * thread past any fixed bound, silently reopening the exact resolve-then-
  * use race a test like this exists to close. */
 size_t _ctpool_pending_resolve_count_for_tests(cthread_pool *pool) {
-  return atomic_load(&pool->pending_resolve_count);
+  return ccol_pintable_pins_for(&ctpool_pintable, pool->self_handle);
 }
 
 /* Test-only: locks/unlocks ctpool_slot_table's own rwlock write side
@@ -2107,10 +2167,86 @@ void ctpool_test_wrunlock_slot_table_for_tests(void) {
  * shared object regardless of which parts of it were actually used, so a
  * process that links this library but never creates a single ctpool would
  * otherwise lock a never-pthread_mutex_init'd mutex here. */
+/* Whether any slot still names a pool. Caller holds the write lock.
+ *
+ * slot->ptr, not slot->in_use: in_use is cleared as the first step of a
+ * destroy, so that a second destroy or a new resolve is rejected as early as
+ * possible, and the rest of the teardown (joining threads, draining pins, the
+ * final locked release of the index) runs after it. A scan that trusted in_use
+ * alone would free this table out from under a destroy still in that window,
+ * which the last step of it then indexes. ptr is written only once a slot is
+ * fully acquired and cleared only in that final locked step, so it is true for
+ * exactly as long as the table must not be released, and it does not depend on
+ * any build-time switch. */
+static bool _ctpool_any_slot_live_locked(void) {
+  size_t slot_count = cvector_elem_count(ctpool_slot_table.slots);
+  for (size_t i = 0; i < slot_count; i++) {
+    ctpool_slot_t *slot =
+        (ctpool_slot_t *)cvector_at(ctpool_slot_table.slots, i);
+    if (slot->ptr != NULL) return true;
+  }
+  return false;
+}
+
+/* Releases the table's own bookkeeping and the pin index. Caller holds the
+ * write lock and has established that no slot is live.
+ *
+ * The pin index's slot storage is deliberately never released while the
+ * process runs, because a resolve indexes it with no lock held, so a leak
+ * checker configured to treat still-reachable memory as an error reports it at
+ * exit unless it is released here. The vectors are NULLed as they go, which is
+ * what makes a later call answer "already released" rather than index a freed
+ * one. The rwlock is not destroyed here: this can run from an ordinary destroy
+ * that is still holding it. */
+/* The check and the release both live behind one out-of-line call, so the
+ * destroy path that has to make it keeps the code shape it would have without
+ * any of this. Cold code in a hot object file is not free: inlined here, the
+ * same handful of instructions measurably slows an unrelated container's push
+ * path by shifting what the linker laid out around it, with the instruction
+ * count unchanged. */
+static __attribute__((noinline)) void
+_ctpool_release_slot_table_if_deferred_locked(void) {
+  if (ctpool_slot_table.release_deferred && !_ctpool_any_slot_live_locked()) {
+    _ctpool_release_slot_table_locked();
+  }
+}
+
+static void _ctpool_release_slot_table_locked(void) {
+  cvector_destroy(ctpool_slot_table.slots);
+  cvector_destroy(ctpool_slot_table.free_indices);
+  ccol_pintable_dispose(&ctpool_pintable);
+  ctpool_slot_table.release_deferred = false;
+}
+
 __attribute__((destructor)) static void _cleanup_ctpool_slot_table(void) {
   ccol_call_once(ctpool_slot_table.once, _ctpool_slot_table_init_globals);
+  /* Nothing to do, and nothing safe to touch: the vectors are NULLed as they
+     are destroyed, so a second run of this answers here rather than indexing a
+     freed one. */
+  if (!ctpool_slot_table.slots) return;
   ccol_rw_lock_wrlock(ctpool_slot_table.rwlock);
-  __cvector_destroy(ctpool_slot_table.slots);
-  __cvector_destroy(ctpool_slot_table.free_indices);
+  /* Only once nothing is left that could still resolve a handle. The ordering
+   * of one translation unit's destructor against another's is not this
+   * library's to decide, and a later one that still holds a live handle would
+   * otherwise find the table and the pin index freed under it. When that
+   * happens the release is handed to whichever destroy frees the last slot,
+   * rather than skipped, so an application that does destroy its pools leaves
+   * nothing behind whatever order the destructors ran in. */
+  if (_ctpool_any_slot_live_locked()) {
+    ctpool_slot_table.release_deferred = true;
+    ccol_rw_lock_unlock(ctpool_slot_table.rwlock);
+    return;
+  }
+  _ctpool_release_slot_table_locked();
   ccol_rw_lock_unlock(ctpool_slot_table.rwlock);
+  /* The rwlock itself is deliberately not destroyed. It has static storage
+     duration, so leaving it holds nothing a leak checker reports, and the
+     destructor cannot own its lifetime in any case: the deferred branch above
+     returns with the table still live, and the release that eventually happens
+     runs while holding this very lock, so there is no path on which every user
+     is provably finished with it. Destroying it here would leave the other
+     branch's entry points taking a read lock on a destroyed object, turning a
+     stale-handle call that is documented to fail cleanly through
+     ccol_fatal_err into undefined behaviour instead, and destructor ordering
+     across translation units is not this library's to decide. */
 }

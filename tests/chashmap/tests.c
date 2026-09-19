@@ -1,3 +1,4 @@
+#include <chashkey.h>
 #include <chashmap.h>
 #include <common_invariants.h>
 #include <float.h>
@@ -4623,4 +4624,208 @@ TEST(chash_maps, oa_reset_allocation_failure_still_clears_elements) {
   }
 
   chmap_destroy(hm);
+}
+
+static int chmap_hash_size_cmp(const void *a, const void *b) {
+  size_t x = *(const size_t *)a, y = *(const size_t *)b;
+  return (x > y) - (x < y);
+}
+
+/* Two distinct long double values must not collapse to one hash.
+ *
+ * The scaling inside the value hash puts the significant bits at the top of a
+ * 64-bit intermediate, so a mantissa with 32 or fewer significant bits (an
+ * integer, a half, a third: essentially every number anyone stores) has a zero
+ * low half. Narrowing that to size_t without folding discards exactly the bits
+ * that tell such keys apart, leaving the hash a function of the exponent alone.
+ * In a hash map that only lengthens a chain; in anything that partitions a
+ * fixed budget by hash it throws data away.
+ *
+ * This test is non-vacuous on a 32-bit build, where narrowing is what the cast
+ * does: without the fold, 4096 distinct keys produce 13 distinct hashes. On a
+ * 64-bit build there is nothing to narrow and it is a round-trip check. */
+TEST(chmap_hash, distinct_long_doubles_do_not_share_one_hash) {
+  enum { N = 4096 };
+  size_t *hashes = (size_t *)malloc(N * sizeof(*hashes));
+  REQUIRE_NE((void *)hashes, NULL);
+
+  for (int i = 0; i < N; i++) {
+    long double v = (long double)i + 0.5L;
+    hashes[i] = ccol_chmap_hash_key(&v, sizeof v, ccol_long_double);
+  }
+
+  /* Counted by sorting, so the check is O(n log n) rather than quadratic. */
+  qsort(hashes, N, sizeof(*hashes), chmap_hash_size_cmp);
+  size_t distinct = 1;
+  for (int i = 1; i < N; i++) {
+    if (hashes[i] != hashes[i - 1]) distinct++;
+  }
+  free(hashes);
+
+  /* A good 64-bit hash over 4096 keys collides a handful of times at most;
+   * the bound is far below that and far above the 13 a truncating cast
+   * produces. */
+  REQUIRE_GT(distinct, (size_t)4000);
+}
+
+/* The convention this suite already uses for reaching a RUNNING_UNIT_TESTS-only
+ * accessor in the module under test. */
+extern unsigned long long chashmap_oa_probe_steps_for_tests(void);
+extern void chashmap_reset_oa_probe_steps_for_tests(void);
+
+/* chmap_reset accepts any power of two up to the architectural element-count
+ * ceiling, and the separate-chaining backend turns that into a byte count by
+ * multiplying it by a pointer's width. At the top of the range that product
+ * overflows size_t, and a product that wraps to zero is the dangerous one:
+ * realloc is then permitted to release the block and return NULL, after which
+ * the recovery path writes through a pointer the allocator has reclaimed.
+ *
+ * The count below is chosen so the wrapped product is ZERO rather than merely
+ * too large to satisfy: a count that wraps to something huge fails cleanly at
+ * the allocator and would pass against the unguarded code, testing nothing.
+ *
+ * This test is non-vacuous: without the guard, AddressSanitizer reports a
+ * heap-use-after-free write inside the reset, and an ordinary build corrupts
+ * the heap silently. */
+TEST(chashmap_reset, a_bucket_count_whose_byte_size_wraps_is_refused) {
+  chmap_construct(m, char *, int);
+  int v = 1;
+  chmap_insert(m, "alpha", v);
+
+  /* Rounds up to the largest representable power of two, whose product with
+     sizeof(void *) is exactly zero. */
+  size_t wraps_to_zero = ((size_t)1 << (sizeof(size_t) * 8 - 2)) + 1;
+  ccol_retval_t r = chmap_reset(m, wraps_to_zero);
+
+  /* The map must still be usable, which is what proves the bucket array was
+     not freed underneath it. Through the raw function layer, not the macro
+     one: the macro calls ccol_fatal_err on a hard error, so a regression that
+     left the map broken here would abort the whole binary and destroy every
+     other suite's result instead of failing this one assertion. */
+  int again = 7;
+  const char *k = "beta";
+  cmap_pair kp = {(void *)k, strlen(k) + 1};
+  cmap_pair vp = {&again, sizeof again};
+  ccol_retval_t ins = chmap_insert_elem(m, &kp, &vp);
+  int got = 0;
+  ccol_retval_t fetched = chmap_get_elem_copy(m, &kp, &got, sizeof got);
+  bool survived = (ins == ccol_success && fetched == ccol_success && got == 7);
+  size_t count = chmap_elem_count(m);
+  chmap_destroy(m);
+
+  REQUIRE_EQ(r, ccol_not_enough_memory);
+  REQUIRE_TRUE(survived);
+  REQUIRE_EQ(count, (size_t)1);
+}
+
+/* Keys whose low bits are all zero, which is what aligned addresses and
+ * power-of-two-scaled identifiers look like. The map's hash for an integral key
+ * is a single multiply, whose mixing lands in the high bits, so an index has to
+ * be taken from the top of it; reading the bottom instead sends every one of
+ * these keys to the same handful of slots.
+ *
+ * This test is non-vacuous: replacing the index derivation with a mask over the
+ * hash's low bits takes this insert loop from 6772 probes to 6254142, against a
+ * bound of 40960. The bound is expressed in probes per operation rather than
+ * against any constant the implementation owns, so it cannot silently follow a
+ * change to the hash the way an assertion written in terms of the module's own
+ * macros would. */
+TEST(chashmap_open_addressing,
+     low_bit_constant_keys_do_not_collapse_the_table) {
+  enum { N = 4096, STRIDE = 4096 };
+  chmap_construct(m, long, int);
+
+  chashmap_reset_oa_probe_steps_for_tests();
+  for (long i = 0; i < (long)N; i++) {
+    int v = (int)i;
+    long k = i * (long)STRIDE;
+    chmap_insert(m, k, v);
+  }
+  unsigned long long insert_probes = chashmap_oa_probe_steps_for_tests();
+
+  chashmap_reset_oa_probe_steps_for_tests();
+  long long acc = 0;
+  for (long i = 0; i < (long)N; i++) {
+    long k = i * (long)STRIDE;
+    int *p = chmap_get_ptr(m, k);
+    if (p) acc += *p;
+  }
+  unsigned long long lookup_probes = chashmap_oa_probe_steps_for_tests();
+
+  size_t stored = chmap_elem_count(m);
+  chmap_destroy(m);
+
+  /* Every key is distinct, so all of them must be present however they were
+     distributed; this separates a distribution failure from a correctness one.
+   */
+  REQUIRE_EQ(stored, (size_t)N);
+  REQUIRE_EQ(acc, (long long)N * (N - 1) / 2);
+
+  /* A table kept under its maximum load factor probes a small constant number
+     of slots per operation on average. Ten is far above what any reasonable
+     spread produces here and far below the hundreds a collapsed table needs. */
+  /* Cast for the assertion macro's own printer, which has no case for
+     unsigned long long; the values here are far inside long long's range. */
+  REQUIRE_LT((long long)insert_probes, (long long)N * 10);
+  REQUIRE_LT((long long)lookup_probes, (long long)N * 10);
+}
+
+/* A caller's hash may put its entropy anywhere; an identity hash over dense
+ * integer keys is the ordinary shape of that, and the map has to spread it
+ * before deriving an index. This is the custom-hash counterpart of
+ * low_bit_constant_keys_do_not_collapse_the_table, and it needs its own case
+ * because a caller's hash bypasses every hash the module computes itself.
+ *
+ * Non-vacuous: without the finalizer applied to a custom hash's result, every
+ * key here lands in one slot and the probe count goes quadratic, which this
+ * bound catches by two orders of magnitude. The existing custom-hash tests
+ * cannot: they store three keys, and three keys in one slot probe three times.
+ */
+static unsigned long low_bit_entropy_hasher(const void *key_ptr,
+                                            size_t key_size) {
+  (void)key_size;
+  return (unsigned long)*(const int *)key_ptr;
+}
+
+TEST(chashmap_hash, custom_hash_with_low_bit_entropy_does_not_collapse) {
+  enum { N = 4096 };
+  char *err = NULL;
+  chmap m = chmap_create_full(16, ccol_int, ccol_int, NULL,
+                              low_bit_entropy_hasher, &err);
+  REQUIRE_NE((void *)m, NULL);
+
+  chashmap_reset_oa_probe_steps_for_tests();
+  /* The outcome is captured rather than asserted here: an assertion inside this
+     loop returns from the test with the map still allocated, which memtest then
+     reports as a leak on top of whatever actually failed. Every check runs
+     after the destroy below. */
+  bool all_inserted = true;
+  for (int i = 0; i < N; i++) {
+    cmap_pair k = {&i, sizeof i};
+    cmap_pair v = {&i, sizeof i};
+    if (chmap_insert_elem(m, &k, &v) != ccol_success) all_inserted = false;
+  }
+  unsigned long long insert_probes = chashmap_oa_probe_steps_for_tests();
+
+  chashmap_reset_oa_probe_steps_for_tests();
+  long long acc = 0;
+  for (int i = 0; i < N; i++) {
+    cmap_pair k = {&i, sizeof i};
+    cmap_pair *out = NULL;
+    if (chmap_get_elem_ref(m, &k, &out) == ccol_success && out)
+      acc += *(int *)out->ptr;
+  }
+  unsigned long long lookup_probes = chashmap_oa_probe_steps_for_tests();
+
+  size_t stored = chmap_elem_count(m);
+  __chmap_destroy(m);
+
+  REQUIRE_TRUE(all_inserted);
+  /* Every key is distinct, so all of them must be present and readable however
+     they were distributed; that separates a distribution failure from a
+     correctness one. */
+  REQUIRE_EQ(stored, (size_t)N);
+  REQUIRE_EQ(acc, (long long)N * (N - 1) / 2);
+  REQUIRE_LT((long long)insert_probes, (long long)N * 10);
+  REQUIRE_LT((long long)lookup_probes, (long long)N * 10);
 }

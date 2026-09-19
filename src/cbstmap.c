@@ -41,6 +41,59 @@ SOFTWARE.
  * allocation failure on every mutation. */
 #define CBMAP_MAX_TREE_HEIGHT 128
 
+/* The alignment a key of this declared type actually requires. Taken with
+ * _Alignof on the very type the enumerator names, so it is the target's own
+ * answer rather than an assumption that alignment equals width; the two differ
+ * on more than one supported target.
+ *
+ * ccol_other_types is an opaque caller struct whose real requirement this
+ * module cannot know, and anything unrecognized is treated the same way, so
+ * both keep max_align_t. A string key stores its bytes rather than a pointer to
+ * them, so char alignment is the honest answer for it. */
+static inline size_t cbmap_key_alignment(ccol_data_type type) {
+  switch (type) {
+    case ccol_char:
+    case ccol_signed_char:
+    case ccol_unsigned_char:
+    case ccol_string:
+      return _Alignof(char);
+    case ccol_short:
+    case ccol_unsigned_short:
+      return _Alignof(short);
+    case ccol_int:
+    case ccol_unsigned_int:
+      return _Alignof(int);
+    case ccol_long:
+    case ccol_unsigned_long:
+      return _Alignof(long);
+    case ccol_long_long:
+    case ccol_unsigned_long_long:
+      return _Alignof(long long);
+    case ccol_float:
+      return _Alignof(float);
+    case ccol_double:
+      return _Alignof(double);
+    case ccol_long_double:
+      return _Alignof(long double);
+    case ccol_pointer:
+      return _Alignof(void *);
+    default:
+      return _Alignof(max_align_t);
+  }
+}
+
+#define CBMAP_ALIGN_UP_TO(n, a) (((n) + (a) - 1u) & ~(size_t)((a) - 1u))
+/* The value keeps max_align_t: a map records the type of its keys but not of
+   its values, so the requirement of whatever a caller casts the value pointer
+   to is not knowable here, and the strongest alignment is the only sound
+   answer. Nothing is lost on the path that matters, because a descent reads
+   keys and never values. */
+#define CBMAP_NODE_VAL_ALIGN _Alignof(max_align_t)
+
+_Static_assert(CBMAP_MAX_TREE_HEIGHT <= UINT8_MAX,
+               "bmap_node stores a height in one byte; raising "
+               "CBMAP_MAX_TREE_HEIGHT past UINT8_MAX needs a wider field");
+
 typedef struct bmap_node {
   // Data related containers
   cmap_pair key_pair;
@@ -48,8 +101,22 @@ typedef struct bmap_node {
   // Relational pointers
   struct bmap_node *left;
   struct bmap_node *right;
-  // Metadata for self-balancing
-  size_t height;
+  /* An AVL tree's height is bounded by roughly 1.44*log2(n+2), and
+     CBMAP_MAX_TREE_HEIGHT is the ceiling this module enforces, so one byte
+     holds any height reachable here. The narrow field is storage only: every
+     computation on a height still runs at the width node_height() returns, so
+     no arithmetic changes. It earns its place by shrinking the struct enough
+     that a node's key bytes start inside the same 64-byte span as the pointers
+     and sizes a descent reads, rather than at the boundary just past them. */
+  uint8_t height;
+  /* False while the value's bytes sit in this node's own allocation, which is
+     how every node starts. An update that changes the value's size moves it to
+     a buffer of its own and latches this, because the space reserved here is
+     exactly the size the value was created with and cannot grow. Resizes are
+     the exception rather than the rule: a typed map writes the same width every
+     time, so the common update path keeps the value inline for the node's whole
+     life. */
+  bool val_is_external;
 } bmap_node;
 
 typedef struct cbinarymap {
@@ -57,6 +124,10 @@ typedef struct cbinarymap {
   bmap_node *root;
   ccol_memmgmt_procs_t *m_procs;
   ccol_data_type key_type;
+  /* Derived from key_type once, when the map is created, because it cannot
+     change afterwards and every node built by this map would otherwise redo
+     the same switch on the path that builds it. */
+  size_t key_alignment;
   ccol_comparison_proc_t custom_comparison_proc;
 } cbinarymap;
 
@@ -217,17 +288,22 @@ cbmap cbmap_create_full(ccol_data_type key_type,
   cbm->elem_count = 0;
   cbm->root = NULL;
   cbm->key_type = key_type;
+  cbm->key_alignment = cbmap_key_alignment(key_type);
   cbm->custom_comparison_proc = custom_comparison_proc;
 
   return cbm;
 }
 
-/* Frees the key buffer, value buffer, and the node struct itself. Does not
- * touch left/right pointers; callers must have already unlinked the node. */
+/* Frees the node struct, and the value buffer only where an update moved the
+ * value out of that struct's own allocation. The key never needs a free of its
+ * own, and neither does a value that is still inline (see create_new_node).
+ * Does not touch left/right pointers; callers must have already unlinked the
+ * node. */
 static void destroy_bmap_node(cbmap cbm, bmap_node *node) {
   if (node) {
-    _ccol_mem_free(cbm->m_procs, node->key_pair.ptr);
-    _ccol_mem_free(cbm->m_procs, node->val_pair.ptr);
+    if (node->val_is_external) {
+      _ccol_mem_free(cbm->m_procs, node->val_pair.ptr);
+    }
     _ccol_mem_free(cbm->m_procs, node);
   }
 }
@@ -533,9 +609,25 @@ static inline int compare_keys(cbmap cbm, const cmap_pair *key_pair1,
   }
 }
 
-/* Allocates a new BST node and copies the key and value data into separately
- * allocated buffers. On any allocation failure, previously allocated buffers
- * are freed before returning NULL.
+/* Allocates a new BST node. The key's bytes AND the value's bytes are both
+ * carried in the node's own single allocation; neither starts in a buffer of
+ * its own.
+ *
+ * Nothing here frees node->key_pair.ptr, and nothing frees node->val_pair.ptr
+ * unless val_is_external says an update moved that value out. Freeing either
+ * unconditionally is a free of an interior pointer, which is heap corruption
+ * rather than a leak, so read destroy_bmap_node and val_is_external's own
+ * comment before changing what this function allocates.
+ *
+ * The key is immutable for the node's whole life: nothing here resizes one, and
+ * a removal that needs a replacement relinks the donor node rather than copying
+ * its contents (see perform_element_removal), so a key never has to outlive or
+ * move between nodes. Carrying both inline saves two allocations per node, and
+ * for the key it also removes the pointer chase every comparison along a search
+ * path would otherwise pay: a traversal reads keys only, and reading them from
+ * the node it has already loaded is what keeps a descent inside the cache lines
+ * it has already taken. Only the value can be resized by an update, and that is
+ * what moves it out.
  *
  * A zero-size key or value is never passed to the allocator: malloc(0) is
  * permitted by the C standard to return either NULL or a unique pointer, so
@@ -544,35 +636,42 @@ static inline int compare_keys(cbmap cbm, const cmap_pair *key_pair1,
  * legitimately chooses NULL for a zero-size request. A zero-size pair is
  * instead stored as ptr == NULL, size == 0, which every reader in this file
  * (compare_keys' memcmp, ccol_mem_cpy, destroy_bmap_node's _ccol_mem_free)
- * already
- * handles safely for a zero length. */
+ * already handles safely for a zero length. */
 static bmap_node *create_new_node(cbmap cbm, const cmap_pair *key_pair,
                                   const cmap_pair *val_pair) {
-  bmap_node *new_node = _ccol_mem_alloc(cbm->m_procs, sizeof(bmap_node));
+  /* Node, key and value are one allocation, so the byte count is formed here
+     rather than left to the allocator; a size that made this sum wrap would
+     otherwise become a small allocation that succeeds, followed by copies
+     through it. Each term is checked against what remains, so no intermediate
+     can overflow either. */
+  /* Each offset is rounded to what the thing stored there actually needs: the
+     key to its own declared type's requirement, the value to the strongest,
+     since its type is not recorded. Rounding the key to max_align_t instead
+     would push its bytes past the end of the struct's own 64-byte span for
+     every key narrower than that, and that span is what a descent has already
+     loaded by the time it compares. */
+  size_t key_offset = CBMAP_ALIGN_UP_TO(sizeof(bmap_node), cbm->key_alignment);
+  if (key_pair->size > SIZE_MAX - key_offset - CBMAP_NODE_VAL_ALIGN) {
+    return NULL;
+  }
+  size_t val_offset =
+      CBMAP_ALIGN_UP_TO(key_offset + key_pair->size, CBMAP_NODE_VAL_ALIGN);
+  if (val_pair->size > SIZE_MAX - val_offset) {
+    return NULL;
+  }
+  bmap_node *new_node =
+      _ccol_mem_alloc(cbm->m_procs, val_offset + val_pair->size);
   if (!new_node) {
     return NULL;
   }
 
-  if (key_pair->size > 0) {
-    new_node->key_pair.ptr = _ccol_mem_alloc(cbm->m_procs, key_pair->size);
-    if (!new_node->key_pair.ptr) {
-      _ccol_mem_free(cbm->m_procs, new_node);
-      return NULL;
-    }
-  } else {
-    new_node->key_pair.ptr = NULL;
-  }
-
-  if (val_pair->size > 0) {
-    new_node->val_pair.ptr = _ccol_mem_alloc(cbm->m_procs, val_pair->size);
-    if (!new_node->val_pair.ptr) {
-      _ccol_mem_free(cbm->m_procs, new_node->key_pair.ptr);
-      _ccol_mem_free(cbm->m_procs, new_node);
-      return NULL;
-    }
-  } else {
-    new_node->val_pair.ptr = NULL;
-  }
+  /* A zero-size key or value keeps the NULL/size-0 representation every reader
+     in this file already handles, rather than pointing one past the block. */
+  new_node->key_pair.ptr =
+      (key_pair->size > 0) ? (char *)new_node + key_offset : NULL;
+  new_node->val_pair.ptr =
+      (val_pair->size > 0) ? (char *)new_node + val_offset : NULL;
+  new_node->val_is_external = false;
 
   ccol_mem_cpy(new_node->key_pair.ptr, key_pair->ptr, key_pair->size);
   new_node->key_pair.size = key_pair->size;
@@ -601,42 +700,68 @@ static size_t maximum(size_t x, size_t y) {
  * ccol_not_enough_memory. On success, both the value bytes and the size field
  * are updated and *result is set to ccol_key_already_present.
  *
- * A new size of 0 is handled without ever calling the allocator's realloc:
- * realloc(ptr, 0) has implementation-defined behavior per the C standard,
- * and on glibc it frees ptr and returns NULL, which is indistinguishable
- * from "reallocation failed, old buffer still valid" via the return value
- * alone. Treating that NULL as failure (the naive realloc-and-check-NULL
- * approach) would leave node->val_pair.ptr dangling while reporting the old,
- * already-freed value as still present; a use-after-free on the next read
- * and a double free at node/map destruction. Shrinking to zero is instead
- * always a genuine, unconditional success: free the old buffer directly and
- * store the same NULL/size-0 representation create_new_node uses for a
- * zero-size value. */
+ * A value whose size does not change is written straight into wherever it
+ * already lives, which for almost every map is the node's own allocation: a
+ * typed map writes the same width every time. Only a size change moves the
+ * value out to a buffer of its own, because the room reserved inside the node
+ * is exactly the size the value was created with. That move is one way, and
+ * deliberately so: the node does not record how much room it reserved, so a
+ * value that later shrinks back stays in its own buffer rather than being
+ * placed back inside the node on an assumption about space that is no longer
+ * known. The allocator is never asked to realloc a pointer into the node's own
+ * block, which would be undefined; the new buffer is allocated first and the
+ * old one released only once that has succeeded, so a failure leaves the node
+ * exactly as it was and the caller sees ccol_not_enough_memory.
+ *
+ * A new size of 0 frees any buffer the value had moved out to and stores the
+ * same NULL/size-0 representation create_new_node uses for a zero-size value,
+ * rather than asking realloc for zero bytes, whose behavior the C standard
+ * leaves implementation-defined and which glibc answers by freeing and
+ * returning NULL, indistinguishable through the return value alone from a
+ * failure that left the old buffer valid. */
 static void update_bmap_node_value(cbmap cbm, bmap_node *node,
                                    const cmap_pair *val_pair,
                                    ccol_retval_t *result) {
   if (node->val_pair.size != val_pair->size) {
     if (val_pair->size == 0) {
-      _ccol_mem_free(cbm->m_procs, node->val_pair.ptr);
+      if (node->val_is_external) {
+        _ccol_mem_free(cbm->m_procs, node->val_pair.ptr);
+      }
       node->val_pair.ptr = NULL;
       node->val_pair.size = 0;
+      node->val_is_external = false;
       *result = ccol_key_already_present;
       return;
     }
 
-    // Different, non-zero value size, reallocation needed. node->val_pair.ptr
-    // may itself be NULL here (the node's current value has size 0), which
-    // is fine: realloc(NULL, n) is defined to behave like malloc(n).
-    void *new_ptr =
-        _ccol_mem_realloc(cbm->m_procs, node->val_pair.ptr, val_pair->size);
+    void *new_ptr = _ccol_mem_alloc(cbm->m_procs, val_pair->size);
     if (!new_ptr) {
-      // reallocation attempt failed!
+      // allocation attempt failed; the node keeps the value it already had
       return;
+    }
+    /* Copied into the new storage BEFORE the old storage is released, and the
+       function returns here rather than falling through to the copy below.
+       val_pair->ptr may BE the storage about to be freed: cbmap_get_elem_ref
+       hands a caller a pointer into the node's own value, and handing it back
+       to resize that value is an ordinary thing to do. Reading it after the
+       free is a use-after-free that AddressSanitizer reports. */
+    ccol_mem_cpy(new_ptr, val_pair->ptr, val_pair->size);
+    if (node->val_is_external) {
+      _ccol_mem_free(cbm->m_procs, node->val_pair.ptr);
     }
     node->val_pair.ptr = new_ptr;
     node->val_pair.size = val_pair->size;
+    node->val_is_external = true;
+    *result = ccol_key_already_present;
+    return;
   }
-  ccol_mem_cpy(node->val_pair.ptr, val_pair->ptr, val_pair->size);
+  /* Same size, so the value is written where it already lives. The source may
+     alias that storage for the same reason as above; nothing is freed on this
+     path, but a copy whose ranges overlap is still undefined, so it goes
+     through memmove's semantics rather than memcpy's. */
+  if (node->val_pair.ptr != val_pair->ptr && val_pair->size > 0) {
+    memmove(node->val_pair.ptr, val_pair->ptr, val_pair->size);
+  }
   *result = ccol_key_already_present;
 }
 
@@ -668,7 +793,16 @@ static void recalculate_node_height(bmap_node *node) {
     return;
   }
 
-  node->height = maximum(node_height(node->left), node_height(node->right)) + 1;
+  /* The narrowing is unconditional rather than checked. An AVL tree's height is
+     bounded by roughly 1.44*log2(n+2), and a node count is bounded by the
+     address space, so the tallest tree any 64-bit target can hold is about 92
+     levels; the field holds 255. The only way to reach a height this cast could
+     truncate is to raise CBMAP_MAX_TREE_HEIGHT past what one byte holds, which
+     is what the _Static_assert beside that constant refuses at compile time. A
+     run-time check here would sit on the path every insert walks and could
+     never fire. */
+  node->height =
+      (uint8_t)(maximum(node_height(node->left), node_height(node->right)) + 1);
 }
 
 /* Restores the AVL invariant at parent if needed, performing one of four

@@ -2451,13 +2451,21 @@ TEST(http, concurrent_requests) {
   concurrent_req_arg_t args[NTHREADS];
   pthread_t threads[NTHREADS];
 
+  int started = 0;
   for (int i = 0; i < NTHREADS; i++) {
     args[i].cli = cli;
     memcpy(args[i].url, url, sizeof(url));
     args[i].result_status = 0;
     args[i].result_rv = ccol_unexpected_failure;
-    REQUIRE_EQ(
-        pthread_create(&threads[i], NULL, concurrent_req_thread, &args[i]), 0);
+    /* Counted rather than asserted inside this loop. A REQUIRE_* here is the
+     * very stack-use-after-return the join-first rule below exists to prevent:
+     * it returns from this function while the threads earlier iterations
+     * already created keep running and keep writing into args[]/threads[],
+     * which live on this frame. Only the threads that actually started are
+     * joined, and the count is checked once every one of them is back. */
+    if (pthread_create(&threads[i], NULL, concurrent_req_thread, &args[i]) != 0)
+      break;
+    started++;
   }
 
   /* Join every thread FIRST, in its own loop, before any REQUIRE_* runs:
@@ -2469,7 +2477,8 @@ TEST(http, concurrent_requests) {
    * assertion failed - a real stack-use-after-return, not just a lost test
    * result, that could corrupt whatever later test happens to reuse that
    * same stack memory. */
-  for (int i = 0; i < NTHREADS; i++) pthread_join(threads[i], NULL);
+  for (int i = 0; i < started; i++) pthread_join(threads[i], NULL);
+  REQUIRE_EQ(started, NTHREADS);
   for (int i = 0; i < NTHREADS; i++) {
     REQUIRE_EQ(args[i].result_rv, ccol_success);
     REQUIRE_EQ(args[i].result_status, 200);
@@ -2744,19 +2753,25 @@ TEST(pool, idle_handles_freed_on_shrink) {
   /* Fire POOL_LARGE concurrent requests so every slot is exercised. */
   concurrent_req_arg_t args[POOL_LARGE];
   pthread_t threads[POOL_LARGE];
+  int started = 0;
   for (int i = 0; i < POOL_LARGE; i++) {
     args[i].cli = cli;
     memcpy(args[i].url, url, sizeof(url));
     args[i].result_status = 0;
     args[i].result_rv = ccol_unexpected_failure;
-    REQUIRE_EQ(
-        pthread_create(&threads[i], NULL, concurrent_req_thread, &args[i]), 0);
+    /* Counted, not asserted here; see http.concurrent_requests's identical
+     * comment for why a REQUIRE_* inside this loop is itself the
+     * stack-use-after-return the join below exists to prevent. */
+    if (pthread_create(&threads[i], NULL, concurrent_req_thread, &args[i]) != 0)
+      break;
+    started++;
   }
   /* Join every thread FIRST, in its own loop, before any REQUIRE_* runs;
    * see http.concurrent_requests's identical comment for why (a
    * stack-use-after-return via a not-yet-joined thread, not just a lost
    * test result). */
-  for (int i = 0; i < POOL_LARGE; i++) pthread_join(threads[i], NULL);
+  for (int i = 0; i < started; i++) pthread_join(threads[i], NULL);
+  REQUIRE_EQ(started, POOL_LARGE);
   for (int i = 0; i < POOL_LARGE; i++) {
     REQUIRE_EQ(args[i].result_rv, ccol_success);
     REQUIRE_EQ(args[i].result_status, 200);
@@ -2798,21 +2813,30 @@ TEST(pool, shrink_while_in_flight_exiles_slots) {
 
   concurrent_req_arg_t args[POOL_LARGE];
   pthread_t threads[POOL_LARGE];
+  int started = 0;
   for (int i = 0; i < POOL_LARGE; i++) {
     args[i].cli = cli;
     memcpy(args[i].url, url, sizeof(url));
     args[i].result_status = 0;
     args[i].result_rv = ccol_unexpected_failure;
-    REQUIRE_EQ(
-        pthread_create(&threads[i], NULL, concurrent_req_thread, &args[i]), 0);
+    /* Counted, not asserted here; see http.concurrent_requests's identical
+     * comment for why a REQUIRE_* inside this loop is itself the
+     * stack-use-after-return the join below exists to prevent. */
+    if (pthread_create(&threads[i], NULL, concurrent_req_thread, &args[i]) != 0)
+      break;
+    started++;
   }
 
-  /* Spin until the test server has received all POOL_LARGE requests.  At that
-   * point each client thread is blocked inside chttp_do_internal (past
-   * _slot_acquire, which already incremented cli->in_flight_count) waiting on
-   * its own response, so the shrink below drops pool_cap below the number of
-   * slots genuinely occupied right now. */
-  while (atomic_load(&g_slow_started) < POOL_LARGE) {
+  /* Spin until the test server has received a request from every thread that
+   * actually started.  At that point each of those client threads is blocked
+   * inside chttp_do_internal (past _slot_acquire, which already incremented
+   * cli->in_flight_count) waiting on its own response, so the shrink below
+   * drops pool_cap below the number of slots genuinely occupied right now.
+   *
+   * The bound is `started`, never POOL_LARGE: a count no live thread will
+   * ever reach turns a pthread_create failure into a binary that hangs here
+   * with no diagnostic, instead of one that fails the assertion below. */
+  while (atomic_load(&g_slow_started) < started) {
     struct timespec ts = {.tv_sec = 0, .tv_nsec = 1000000}; /* 1 ms */
     nanosleep(&ts, NULL);
   }
@@ -2827,8 +2851,9 @@ TEST(pool, shrink_while_in_flight_exiles_slots) {
    * see http.concurrent_requests's identical comment for why (a
    * stack-use-after-return via a not-yet-joined thread, not just a lost
    * test result). */
-  for (int i = 0; i < POOL_LARGE; i++) pthread_join(threads[i], NULL);
+  for (int i = 0; i < started; i++) pthread_join(threads[i], NULL);
 
+  REQUIRE_EQ(started, POOL_LARGE);
   REQUIRE_EQ(set_pool_size_rv, ccol_success);
   for (int i = 0; i < POOL_LARGE; i++) {
     REQUIRE_EQ(args[i].result_rv, ccol_success);
@@ -3548,18 +3573,26 @@ TEST(pool, do_returns_not_permitted_when_destroying) {
   /* Fill both slots with 100 ms slow requests. */
   concurrent_req_arg_t slow_args[2];
   pthread_t slow_tids[2];
+  int slow_started = 0;
   for (int i = 0; i < 2; i++) {
     slow_args[i].cli = cli;
     memcpy(slow_args[i].url, slow_url, sizeof(slow_url));
     slow_args[i].result_status = 0;
     slow_args[i].result_rv = ccol_unexpected_failure;
-    REQUIRE_EQ(pthread_create(&slow_tids[i], NULL, concurrent_req_thread,
-                              &slow_args[i]),
-               0);
+    /* Counted, not asserted here; see http.concurrent_requests's identical
+     * comment. Every thread this test starts is joined in the one block
+     * further down, and every outcome, this count included, is asserted only
+     * after that. */
+    if (pthread_create(&slow_tids[i], NULL, concurrent_req_thread,
+                       &slow_args[i]) != 0)
+      break;
+    slow_started++;
   }
 
-  /* Spin until both requests are confirmed in-flight by the server side. */
-  while (atomic_load(&g_slow_started) < 2) {
+  /* Spin until every slow request that actually started is confirmed
+   * in-flight by the server side. The bound is slow_started, never 2: a count
+   * no live thread will ever reach would hang here rather than fail below. */
+  while (atomic_load(&g_slow_started) < slow_started) {
     struct timespec ts = {.tv_sec = 0, .tv_nsec = 1000000};
     nanosleep(&ts, NULL);
   }
@@ -3576,9 +3609,12 @@ TEST(pool, do_returns_not_permitted_when_destroying) {
   probe.result_rv = ccol_unexpected_failure;
   atomic_store(&probe.ready, 0);
   pthread_t probe_tid;
-  REQUIRE_EQ(pthread_create(&probe_tid, NULL, probe_thread, &probe), 0);
+  bool probe_started =
+      (pthread_create(&probe_tid, NULL, probe_thread, &probe) == 0);
 
-  while (!atomic_load(&probe.ready)) {
+  /* Only waited on if it is actually running; probe.ready is set by that
+   * thread alone. */
+  while (probe_started && !atomic_load(&probe.ready)) {
     struct timespec ts = {.tv_sec = 0, .tv_nsec = 100000}; /* 0.1 ms */
     nanosleep(&ts, NULL);
   }
@@ -3587,7 +3623,8 @@ TEST(pool, do_returns_not_permitted_when_destroying) {
    * broadcasts (waking the probe), then waits for in_flight_count == 0.
    * The probe sees destroying==true and returns ccol_not_permitted. */
   pthread_t destroy_tid;
-  REQUIRE_EQ(pthread_create(&destroy_tid, NULL, do_destroy_thread, &cli), 0);
+  bool destroy_started =
+      (pthread_create(&destroy_tid, NULL, do_destroy_thread, &cli) == 0);
 
   /* Every thread is joined FIRST, in this one block, before any REQUIRE_*
    * below runs: tau's REQUIRE_* macros return from this function
@@ -3599,12 +3636,17 @@ TEST(pool, do_returns_not_permitted_when_destroying) {
    * chttpclient_destroy on a `cli` variable that no longer exists), the
    * moment any earlier assertion fails: a real stack-use-after-return, not
    * just a lost test result. */
-  pthread_join(probe_tid, NULL);
-  for (int i = 0; i < 2; i++) pthread_join(slow_tids[i], NULL);
-  pthread_join(destroy_tid, NULL);
-  /* cli has been freed by do_destroy_thread; do not call chttpclient_destroy.
-   */
+  if (probe_started) pthread_join(probe_tid, NULL);
+  for (int i = 0; i < slow_started; i++) pthread_join(slow_tids[i], NULL);
+  if (destroy_started) pthread_join(destroy_tid, NULL);
+  /* cli is freed by do_destroy_thread when that thread ran. If it never
+   * started, this function still owns the handle and has to release it, or
+   * the failure reported below arrives buried under a leak report. */
+  if (!destroy_started) chttpclient_destroy(cli);
 
+  REQUIRE_EQ(slow_started, 2);
+  REQUIRE_TRUE(probe_started);
+  REQUIRE_TRUE(destroy_started);
   REQUIRE_EQ(probe.result_rv, ccol_not_permitted);
   REQUIRE_EQ(probe.result_status, 0);
   for (int i = 0; i < 2; i++) {
@@ -6845,6 +6887,7 @@ extern struct chttpclient *_chttpcli_resolve_for_tests(chttpcli h);
  * chttpcli_handle_reuse.bounded_slot_reuse_under_churn test below for the
  * one place this is used. */
 extern size_t _chttpcli_slot_table_capacity_for_tests(void);
+extern size_t _chttpcli_free_index_count_for_tests(void);
 /* Forces _async_idle_pool_offer's very next cvector_push_back call to be
  * treated as if it had failed (real OOM cannot reach this call site: see
  * async_idle_pool.offer_push_failure_no_double_free below for why). */
@@ -6936,15 +6979,21 @@ TEST(async_engine, concurrent_acquire_release_no_corruption) {
   atomic_int acquired_ok = 0;
   engine_thread_arg_t arg = {.acquired_ok = &acquired_ok};
 
+  int started = 0;
   for (int i = 0; i < N; i++) {
-    REQUIRE_EQ(
-        pthread_create(&threads[i], NULL, engine_acquire_release_thread, &arg),
-        0);
+    /* Counted, not asserted here; see http.concurrent_requests's identical
+     * comment. threads[] and arg are stack-local, so a REQUIRE_* inside this
+     * loop returns while earlier threads are still running against them. */
+    if (pthread_create(&threads[i], NULL, engine_acquire_release_thread,
+                       &arg) != 0)
+      break;
+    started++;
   }
-  for (int i = 0; i < N; i++) {
+  for (int i = 0; i < started; i++) {
     pthread_join(threads[i], NULL);
   }
 
+  REQUIRE_EQ(started, N);
   REQUIRE_EQ(atomic_load(&acquired_ok), N);
   /* Every acquire was matched by exactly one release. */
   REQUIRE_EQ(_chttpclient_engine_ref_count_for_tests(), 0);
@@ -7727,16 +7776,22 @@ TEST(async_step_a, concurrent_requests_all_succeed) {
   pthread_t threads[N];
   async_concurrent_arg_t args[N];
 
+  int started = 0;
   for (int i = 0; i < N; i++) {
     args[i].cli = cli;
     make_url(args[i].url, sizeof(args[i].url), "/get");
     args[i].expected_status = 200;
     args[i].ok = false;
-    REQUIRE_EQ(
-        pthread_create(&threads[i], NULL, async_concurrent_thread, &args[i]),
-        0);
+    /* Counted, not asserted here; see http.concurrent_requests's identical
+     * comment for why a REQUIRE_* inside this loop is itself the
+     * stack-use-after-return the join below exists to prevent. */
+    if (pthread_create(&threads[i], NULL, async_concurrent_thread, &args[i]) !=
+        0)
+      break;
+    started++;
   }
-  for (int i = 0; i < N; i++) pthread_join(threads[i], NULL);
+  for (int i = 0; i < started; i++) pthread_join(threads[i], NULL);
+  REQUIRE_EQ(started, N);
   for (int i = 0; i < N; i++) REQUIRE_TRUE(args[i].ok);
 
   wait_for_async_engine_idle();
@@ -9572,8 +9627,8 @@ TEST(async_idle_pool, offer_push_failure_no_double_free) {
    *
    * cvector_push_back can never actually fail at this call site under real
    * allocator pressure (CHTTP_MAX_IDLE_PER_ORIGIN equals cvector's own
-   * minimum_capacity, so the per-origin list never needs to grow for any
-   * push this function's own has_room check lets through), so ordinary
+   * _ccol_cvector_minimum_capacity, so the per-origin list never needs to grow
+   * for any push this function's own has_room check lets through), so ordinary
    * allocator-failure injection (the g_hop_fail_mp pattern used elsewhere in
    * this file) cannot reach this branch at all;
    * _chttpclient_force_offer_push_fail_once_for_tests exists specifically to
@@ -10705,6 +10760,104 @@ static bool destroy_completes_promptly(chttpcli h) {
  * this. Run in a forked child (mirroring tests/clogger/tests.c's own
  * fork-test precedent for process-terminating misuse) since ccol_fatal_err
  * aborts the whole process. */
+/* Publishing the handle into the pin index is the last step of client
+ * creation, and it can fail: the index allocates a chunk and a stripe block on
+ * an index's first use, with plain calloc, which no caller-supplied allocator
+ * reaches. The rollback that failure runs has to clear the client's own record
+ * of the handle and put the slot back on the free list, or the next client to
+ * take that slot inherits a handle naming somebody else's. Without the hook
+ * below that path needs a real out-of-memory condition, so it is unreachable
+ * from an ordinary test run. */
+extern void _ccol_pintable_force_next_publish_failure_for_tests(void);
+extern size_t _chttpcli_pin_count_for_tests(chttpcli h);
+
+TEST(chttpcli_handle_lifecycle, handle_publish_failure_rolls_the_slot_back) {
+  /* Repeated, and the table's growth over the whole run is what is asserted.
+   * A single cycle cannot tell the rollback apart from its absence: one lost
+   * slot simply makes the next client grow the table by one, which is
+   * indistinguishable from the table having had no free slot to start with.
+   * Over CYCLES rounds a working rollback grows it by nothing at all, while a
+   * missing free-list push grows it by one per round. */
+  enum { CYCLES = 8 };
+  size_t before = _chttpcli_slot_table_capacity_for_tests();
+  size_t free_before = _chttpcli_free_index_count_for_tests();
+
+  bool all_failed = true, all_created = true;
+  for (int i = 0; i < CYCLES; i++) {
+    _ccol_pintable_force_next_publish_failure_for_tests();
+    chttpcli bad = ccol_create_chttpclient(NULL);
+    if (bad != CHTTPCLI_INVALID) {
+      all_failed = false;
+      __chttpclient_destroy(bad);
+      break;
+    }
+    chttpcli good = ccol_create_chttpclient(NULL);
+    if (good == CHTTPCLI_INVALID) {
+      all_created = false;
+      break;
+    }
+    __chttpclient_destroy(good);
+  }
+
+  _ccol_pintable_force_next_publish_failure_for_tests();
+  char *err = NULL;
+  chttpcli failed = ccol_create_chttpclient(&err);
+  /* Captured, not asserted here: if the forced failure did not apply, `failed`
+     is a live client and returning now would leak it plus everything below. */
+  bool forced_failure_applied = (failed == CHTTPCLI_INVALID);
+  if (!forced_failure_applied) __chttpclient_destroy(failed);
+
+  /* The slot went back on the free list, so the next client takes it again and
+   * the table does not grow for the failed attempt. That client must also be
+   * fully usable, which the pin count below checks. Clearing the client's own
+   * record of the handle on the rollback path is defence in depth rather than
+   * something this can detect: the failed create frees that struct, so the next
+   * client is a fresh allocation either way. */
+  char url[128];
+  make_url(url, sizeof(url), "/get");
+  chttpcli_construct(cli);
+  REQUIRE_NE(cli, CHTTPCLI_INVALID);
+
+  chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+  bool req_built = (req != NULL);
+  ccol_retval_t rv = ccol_unexpected_failure;
+  bool pins_measured = false;
+  size_t pins = 0;
+  if (req_built) {
+    chttpcli_response *resp = NULL;
+    rv = chttpclient_do(cli, req, &resp);
+    if (resp) chttpclient_resp_free(resp);
+    chttp_request_free(req);
+    pins = _chttpcli_pin_count_for_tests(cli);
+    pins_measured = true;
+  }
+  size_t after = _chttpcli_slot_table_capacity_for_tests();
+  size_t free_after = _chttpcli_free_index_count_for_tests();
+
+  /* Asserted before the destroy only where a leaked pin would make that
+   * destroy never return; everything else is checked after it. Gated on the
+   * count having actually been taken, so a request that could not be built
+   * fails on its own check below with the client still destroyed, rather than
+   * being reported as a leaked pin and skipping the destroy. */
+  if (pins_measured && pins != 0) {
+    REQUIRE_EQ(pins, (size_t)0);
+    return;
+  }
+  chttpclient_destroy(cli);
+
+  REQUIRE_TRUE(forced_failure_applied);
+  REQUIRE_TRUE(req_built);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_TRUE(all_failed);
+  REQUIRE_TRUE(all_created);
+  /* Growth alone is not enough: a lost slot only grows the table while the free
+     list is empty, so a run in which earlier tests left several free indices
+     behind would absorb every loss silently. The free list has to come back to
+     where it started too, which holds however deep it was. */
+  REQUIRE_LE(after, before + 2);
+  REQUIRE_GE(free_after + 2, free_before);
+}
+
 TEST(chttpcli_handle_lifecycle, sequential_double_destroy_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
@@ -10836,6 +10989,65 @@ TEST(chttpcli_handle_lifecycle, resolve_then_use_race_destroy_waits) {
    * would mean it did NOT actually wait for the in-flight call, i.e. the
    * resolve-then-use protection failed to pin it. */
   REQUIRE_GT(elapsed_ms, 50);
+}
+
+/* Resolve and unpin must stay exactly balanced. An unpin that is skipped, or
+ * one that releases against the wrong slot, leaves a pin outstanding forever;
+ * nothing fails at that moment, and the damage only surfaces later as a
+ * chttpclient_destroy that never returns. Asserting on the count directly
+ * turns that silent, deferred hang into an immediate, local failure.
+ *
+ * This test is non-vacuous: removing the ccol_pintable_unpin call from
+ * _chttpcli_resolve_unpin makes it fail here rather than hanging a later
+ * destroy. */
+TEST(chttpcli_handle_lifecycle, resolve_and_unpin_leave_no_outstanding_pin) {
+  char url[128];
+  make_url(url, sizeof(url), "/hello");
+
+  chttpcli_construct(cli);
+
+  /* Every outcome is captured into a local and every assertion deferred until
+   * after the client has been destroyed: a REQUIRE_* that fires returns from
+   * this function immediately, and a client left alive here would keep
+   * any_slot_in_use true at exit, suppressing the slot table's and the pin
+   * index's own teardown and burying the real failure under leak reports. */
+  size_t pins_fresh = _chttpcli_pin_count_for_tests(cli);
+
+  /* A configuration setter: resolves, pins, does its work, unpins. */
+  ccol_retval_t set_rv = chttpclient_set_pool_size(cli, 2);
+  size_t pins_after_set = _chttpcli_pin_count_for_tests(cli);
+
+  /* A full request, which hands off to in_flight_count and back again. */
+  chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+  bool req_built = (req != NULL);
+  ccol_retval_t rv = ccol_unexpected_failure;
+  size_t pins_after_req = 0;
+  if (req_built) {
+    chttpcli_response *resp = NULL;
+    rv = chttpclient_do(cli, req, &resp);
+    if (resp) chttpclient_resp_free(resp);
+    chttp_request_free(req);
+    pins_after_req = _chttpcli_pin_count_for_tests(cli);
+  }
+
+  /* The pin assertions have to fire BEFORE destroy, not after it like the
+   * others. chttpclient_destroy waits for the pin count to reach zero, so
+   * calling it with one leaked would never return, and the failure would
+   * surface as a hung job with no diagnostic instead of an assertion. Leaking
+   * this one client is the lesser cost, and only on a run that has already
+   * failed; every other outcome is still asserted after cleanup. */
+  if (pins_fresh != 0 || pins_after_set != 0 || pins_after_req != 0) {
+    REQUIRE_EQ(pins_fresh, (size_t)0);
+    REQUIRE_EQ(pins_after_set, (size_t)0);
+    REQUIRE_EQ(pins_after_req, (size_t)0);
+    return;
+  }
+
+  chttpclient_destroy(cli);
+
+  REQUIRE_TRUE(req_built);
+  REQUIRE_EQ(set_rv, ccol_success);
+  REQUIRE_EQ(rv, ccol_success);
 }
 
 typedef struct {

@@ -1,13 +1,18 @@
 .vscode/
 .project
 obj/
-libccollections.so
+# Build artefacts, anchored to the repository root with a leading slash so
+# that these patterns describe only the products of a root `make`. Unanchored,
+# they match at every level, and libccollections.so.* would then also swallow
+# the committed ABI baselines under abi/.
+/libccollections.so
 # versioned shared objects: libccollections.so.<ABI> and .<VERSION>
-libccollections.so.*
-libccollections.a
+/libccollections.so.*
+/libccollections.a
 # generated from ccollections.pc.in at build time (prefix/version are
 # substituted in), so only the .in template is tracked
-ccollections.pc
+/ccollections.pc
+/ccollections.pc.tmp
 tests/*/tests
 tests/*/tests_*
 !tests/*/tests_*.*
@@ -46,5 +51,13 @@ massif.out.*
 
 # Per-suite build-identity stamps (compiler + flags the objects were built with)
 tests/*/.build-flags
+
+# Benchmark build products. baseline.json is deliberately not committed: it
+# records absolute timings for one machine, and comparing a run against a
+# baseline taken on different hardware reports a difference that has nothing to
+# do with any change to the library.
+/bench/bench
+/bench/baseline.json
+/bench/.build-flags
 
 # An unnecessary line for triggering a new CI run - 0

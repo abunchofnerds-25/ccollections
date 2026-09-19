@@ -13,9 +13,9 @@ clru_destroy(name);
 .nf
 Calls __clrucache_destroy() to wait for every in-flight resolved use
 of the handle to finish, evict all remaining entries (invoking the
-eviction callback for each while the mutex is held), destroy the
-internal map, and free all memory. Then sets name to
-CLRU_CACHE_INVALID.
+eviction callback for each while the owning segment's lock is held),
+destroy every segment's own map, and free all memory. Then sets name
+to CLRU_CACHE_INVALID.
 .fi
 .SH PARAMETERS
 .nf

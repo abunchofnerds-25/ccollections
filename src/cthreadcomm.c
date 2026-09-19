@@ -49,8 +49,8 @@ SOFTWARE.
  * behaviour per POSIX for a struct timespec outside [0, 999999999]).
  * Normalised by borrowing whole seconds until tv_nsec is non-negative, the
  * same technique as the >= max_nsecs case, just in the other direction. */
-void add_duration_to_timespec(struct timespec *target,
-                              struct timespec *duration) {
+void _ccol_add_duration_to_timespec(struct timespec *target,
+                                    struct timespec *duration) {
   static const long int max_nsecs = 1000000000;
 
   if (target->tv_nsec >= max_nsecs) {
@@ -431,6 +431,20 @@ struct ccol_circular_queue {
   ccol_cond_var_t read_cond;
   ccol_cond_var_t write_cond;
 
+  /* How many threads are blocked on the condition variables above,
+   * maintained under the mutex by the waiters themselves. A signal is issued
+   * only when the relevant count is non-zero.
+   *
+   * This is a throughput property, not a correctness one. A signal with no
+   * waiter still costs the call into the threading library and a read of the
+   * condition variable's own shared state, which its waiters write; skipping
+   * it on every send and every receive removes both from the common path, on
+   * top of the mutex those callers already share. What the gate must never do
+   * is leave a real waiter invisible, which is why every wait site, timed ones
+   * included, sits between the increment and the decrement of these counts. */
+  size_t readers_waiting;
+  size_t writers_waiting;
+
   size_t read_index;
   size_t write_index;
   size_t max_size;
@@ -454,9 +468,8 @@ struct ccol_circular_queue {
  * and within ccol_max_elem_count, and the custom allocator (if any) must be
  * well-formed.
  */
-bool verify_circular_queue_create_inputs(size_t max_size,
-                                         ccol_memmgmt_procs_t *mmgmt_procs,
-                                         char **err_str) {
+static bool verify_circular_queue_create_inputs(
+    size_t max_size, ccol_memmgmt_procs_t *mmgmt_procs, char **err_str) {
   if (max_size == 0) {
     if (err_str) {
       *err_str = CCOL_ERR_STR("max_size should be positive");
@@ -561,6 +574,13 @@ ccol_circular_queue *ccol_circular_queue_create_with_mprocs(
   cq->write_index = 0;
   cq->max_size = max_size;
   cq->msg_count = 0;
+  /* Explicit, like every other field here: this struct comes from an
+   * allocation that does not zero, and a signal is only issued when one of
+   * these is non-zero. Left uninitialised, the common case is a stray non-zero
+   * that costs a signal nobody is waiting for, and the rare case is a value
+   * whose increment wraps to zero, so a genuine waiter is never woken. */
+  cq->readers_waiting = 0;
+  cq->writers_waiting = 0;
   cq->writing_disabled = false;
   cq->sel_read_waiters_head = NULL;
   cq->sel_write_waiters_head = NULL;
@@ -597,12 +617,13 @@ ccol_circular_queue *ccol_circular_queue_create_with_mprocs(
 /* Destroys the circular queue. Asserts if any messages remain unconsumed
  * (their data pointers would be leaked), or if a ccol_select()/ccol_event_loop
  * waiter is still linked into either waiter list. The second case is a real
- * use-after-free hazard, not just a leak: a still-linked waiter node's own
- * sel_mtx points at &cq->mutex, so destroying cq out from under it (rather than
+ * use-after-free hazard, not just a leak: a linked node is unlinked through the
+ * queue that holds the list, so the deregister reads cq->sel_*_waiters_head,
+ * cq->sel_*_rotor and cq->mutex. Destroying cq out from under it (rather than
  * requiring the caller to ccol_event_loop_remove()/let ccol_select() return
- * first) leaves that node holding a dangling pointer that the next touch of it
- * (ccol_event_loop_remove, __ccol_event_loop_destroy's own teardown walk, or
- * ccol_select_timed's own Phase 3 deregister) would dereference. Both
+ * first) means the next touch of that node (ccol_event_loop_remove,
+ * __ccol_event_loop_destroy's own teardown walk, or ccol_select_timed's own
+ * Phase 3 deregister) dereferences freed queue memory. Both
  * conditions are caller bugs and must be made visible here, before the
  * memory is actually freed, rather than surfacing later as corruption. */
 void __ccol_circular_queue_destroy(ccol_circular_queue *cq) {
@@ -686,12 +707,32 @@ bool ccol_circq_test_has_sel_read_waiter_for_tests(ccol_circular_queue *cq) {
   ccol_mutex_unlock(cq->mutex);
   return has_waiter;
 }
+
+/* Test-only: the counters the send/receive paths gate their condvar signals
+ * on. A test polls one of these to know a background thread has genuinely
+ * parked in the matching wait before it performs the operation meant to wake
+ * it, which is what makes such a test both deterministic and non-vacuous: a
+ * wait site that failed to register itself never lets the poll succeed. Read
+ * under the mutex, which a parked waiter has released. */
+size_t ccol_circq_waiting_readers_for_tests(ccol_circular_queue *cq) {
+  ccol_mutex_lock(cq->mutex);
+  size_t n = cq->readers_waiting;
+  ccol_mutex_unlock(cq->mutex);
+  return n;
+}
+
+size_t ccol_circq_waiting_writers_for_tests(ccol_circular_queue *cq) {
+  ccol_mutex_lock(cq->mutex);
+  size_t n = cq->writers_waiting;
+  ccol_mutex_unlock(cq->mutex);
+  return n;
+}
 #endif
 
 /* Writes msg into the circular array at write_index and advances the index
  * (wrapping to 0 at max_size). Nullifies msg->data to transfer ownership to
  * the receiver (zero-copy contract). Must be called with the mutex held. */
-void _sendto_cq(ccol_circular_queue *cq, c_message_t *msg) {
+static void _sendto_cq(ccol_circular_queue *cq, c_message_t *msg) {
   cq->msg_array[cq->write_index].data = msg->data;
   cq->msg_array[cq->write_index++].size = (msg->data == NULL) ? 0 : msg->size;
   msg->data = NULL;
@@ -700,7 +741,7 @@ void _sendto_cq(ccol_circular_queue *cq, c_message_t *msg) {
   }
   ++cq->msg_count;
 
-  ccol_cond_var_signal(cq->read_cond);
+  if (cq->readers_waiting) ccol_cond_var_signal(cq->read_cond);
   notify_one_sel_waiter(&cq->sel_read_waiters_head, &cq->sel_read_rotor);
 }
 
@@ -708,7 +749,8 @@ void _sendto_cq(ccol_circular_queue *cq, c_message_t *msg) {
  * message must have a consistent data/size pair: data != NULL requires size > 0
  * (no empty payload with a live pointer), and data == NULL requires size == 0
  * (NULL with a non-zero size is an inconsistent sentinel). */
-bool verify_circq_send_zc_params(ccol_circular_queue *cq, c_message_t *msg) {
+static bool verify_circq_send_zc_params(ccol_circular_queue *cq,
+                                        c_message_t *msg) {
   if (!cq || !msg || (msg->size == 0 && msg->data != NULL) ||
       (msg->data == NULL && msg->size != 0)) {
     return false;
@@ -734,7 +776,9 @@ ccol_retval_t ccol_circq_send_zc(ccol_circular_queue *cq, c_message_t *msg) {
   }
 
   while (cq->msg_count == cq->max_size && !cq->writing_disabled) {
+    ++cq->writers_waiting;
     ccol_cond_var_wait(cq->write_cond, cq->mutex);
+    --cq->writers_waiting;
   }
 
   if (cq->writing_disabled) {
@@ -780,7 +824,7 @@ ccol_retval_t ccol_circq_try_send_zc(ccol_circular_queue *cq,
 /* Forward declaration: defined below, right before ccol_circq_recv_zc; needed
  * here for ccol_circq_timed_send_zc's own RUNNING_UNIT_TESTS-only
  * racing-consumer simulation. */
-void _recvfrom_cq(ccol_circular_queue *cq, c_message_t *target_buf);
+static void _recvfrom_cq(ccol_circular_queue *cq, c_message_t *target_buf);
 
 #ifdef RUNNING_UNIT_TESTS
 /* Test-only hooks: force the very next ccol_cond_var_timedwait call inside
@@ -839,9 +883,14 @@ ccol_retval_t ccol_circq_timed_send_zc(ccol_circular_queue *cq,
     int retval;
     struct timespec abs_time;
     clock_gettime(CLOCK_REALTIME, &abs_time);
-    add_duration_to_timespec(&abs_time, timeout_duration);
+    _ccol_add_duration_to_timespec(&abs_time, timeout_duration);
 
     while (cq->msg_count == cq->max_size && !cq->writing_disabled) {
+      /* Counted around the wait, not just the untimed one: a sender only
+       * signals when this is non-zero, so a waiter that did not register
+       * itself here would sleep until its own timeout with a message
+       * already queued for it. */
+      ++cq->writers_waiting;
 #ifdef RUNNING_UNIT_TESTS
       if (atomic_load(&g_circq_send_force_condvar_wait_error)) {
         atomic_store(&g_circq_send_force_condvar_wait_error, false);
@@ -856,6 +905,7 @@ ccol_retval_t ccol_circq_timed_send_zc(ccol_circular_queue *cq,
 #else
       retval = ccol_cond_var_timedwait(cq->write_cond, cq->mutex, abs_time);
 #endif
+      --cq->writers_waiting;
       if (retval) {
         /* Re-check under the mutex before committing to either outcome
          * below, regardless of which one ccol_cond_var_timedwait's own return
@@ -897,9 +947,9 @@ ccol_retval_t ccol_circq_timed_send_zc(ccol_circular_queue *cq,
 }
 
 /* Reads one message from the circular array at read_index, advances the index
- * (wrapping to 0 at max_size), and signals write_cond so any blocked sender
- * can proceed. Must be called with the mutex held. */
-void _recvfrom_cq(ccol_circular_queue *cq, c_message_t *target_buf) {
+ * (wrapping to 0 at max_size), and signals write_cond when a sender is blocked
+ * on it. Must be called with the mutex held. */
+static void _recvfrom_cq(ccol_circular_queue *cq, c_message_t *target_buf) {
   target_buf->data = cq->msg_array[cq->read_index].data;
   target_buf->size = cq->msg_array[cq->read_index++].size;
   if (cq->read_index == cq->max_size) {
@@ -908,14 +958,14 @@ void _recvfrom_cq(ccol_circular_queue *cq, c_message_t *target_buf) {
 
   --cq->msg_count;
 
-  ccol_cond_var_signal(cq->write_cond);
+  if (cq->writers_waiting) ccol_cond_var_signal(cq->write_cond);
   notify_one_sel_waiter(&cq->sel_write_waiters_head, &cq->sel_write_rotor);
 }
 
 /* Validates receive arguments: both the queue and the target buffer must be
  * non-NULL. */
-bool verify_recvfrom_cq_zc_params(ccol_circular_queue *cq,
-                                  c_message_t *target_buf) {
+static bool verify_recvfrom_cq_zc_params(ccol_circular_queue *cq,
+                                         c_message_t *target_buf) {
   if (!cq || !target_buf) {
     return false;
   }
@@ -934,7 +984,9 @@ ccol_retval_t ccol_circq_recv_zc(ccol_circular_queue *cq,
   ccol_mutex_lock(cq->mutex);
 
   while (cq->msg_count == 0) {
+    ++cq->readers_waiting;
     ccol_cond_var_wait(cq->read_cond, cq->mutex);
+    --cq->readers_waiting;
   }
 
   _recvfrom_cq(cq, target_buf);
@@ -1009,9 +1061,14 @@ ccol_retval_t ccol_circq_timed_recv_zc(ccol_circular_queue *cq,
     int retval;
     struct timespec abs_time;
     clock_gettime(CLOCK_REALTIME, &abs_time);
-    add_duration_to_timespec(&abs_time, timeout);
+    _ccol_add_duration_to_timespec(&abs_time, timeout);
 
     while (cq->msg_count == 0) {
+      /* Counted around the wait, not just the untimed one: a sender only
+       * signals when this is non-zero, so a waiter that did not register
+       * itself here would sleep until its own timeout with a message
+       * already queued for it. */
+      ++cq->readers_waiting;
 #ifdef RUNNING_UNIT_TESTS
       if (atomic_load(&g_circq_recv_force_condvar_wait_error)) {
         atomic_store(&g_circq_recv_force_condvar_wait_error, false);
@@ -1027,6 +1084,7 @@ ccol_retval_t ccol_circq_timed_recv_zc(ccol_circular_queue *cq,
 #else
       retval = ccol_cond_var_timedwait(cq->read_cond, cq->mutex, abs_time);
 #endif
+      --cq->readers_waiting;
       if (retval) {
         /* Re-check under the mutex before committing to either outcome
          * below, regardless of which one ccol_cond_var_timedwait's own return
@@ -1115,6 +1173,11 @@ struct ccol_dynamic_queue {
   ccol_mutex_t mutex;
   ccol_cond_var_t read_cond;
 
+  /* See the identical field on ccol_circular_queue for why a signal is gated
+   * on this rather than issued unconditionally. This queue is unbounded, so it
+   * has readers to wake but never writers to block. */
+  size_t readers_waiting;
+
   size_t msg_count;
 
   dllist_node *head;
@@ -1136,7 +1199,8 @@ struct ccol_dynamic_queue {
 /* Allocates a new dllist_node, copies the message metadata into it, nullifies
  * msg->data to transfer ownership, and appends the node to the tail of the
  * queue's doubly-linked list. Must be called with the mutex held. */
-ccol_retval_t append_msg_to_dq_tail(ccol_dynamic_queue *dq, c_message_t *msg) {
+static ccol_retval_t append_msg_to_dq_tail(ccol_dynamic_queue *dq,
+                                           c_message_t *msg) {
   dllist_node *new_elem =
       (dllist_node *)_ccol_mem_alloc(dq->m_procs, sizeof(dllist_node));
   if (!new_elem) {
@@ -1171,8 +1235,8 @@ ccol_retval_t append_msg_to_dq_tail(ccol_dynamic_queue *dq, c_message_t *msg) {
  * both head and tail are set to NULL to keep the invariant consistent. The
  * node struct is freed after its message is copied out. Must be called with
  * the mutex held. */
-ccol_retval_t remove_msg_from_dq_head(ccol_dynamic_queue *dq,
-                                      c_message_t *target_buf) {
+static ccol_retval_t remove_msg_from_dq_head(ccol_dynamic_queue *dq,
+                                             c_message_t *target_buf) {
   if (!dq->head) {
 #ifdef RUNNING_UNIT_TESTS
     ccol_assert(!dq->tail);
@@ -1204,7 +1268,7 @@ ccol_retval_t remove_msg_from_dq_head(ccol_dynamic_queue *dq,
 /* Frees all dllist_node structs in the dynamic queue. Does not free the data
  * pointers stored in each message; those should have already been consumed
  * (the destroy function asserts non-zero msg_count to catch leaks). */
-void destroy_dq_dllist(ccol_dynamic_queue *dq) {
+static void destroy_dq_dllist(ccol_dynamic_queue *dq) {
   dllist_node *node_to_be_freed = NULL;
   while (dq->head) {
     node_to_be_freed = dq->head;
@@ -1255,6 +1319,9 @@ ccol_dynamic_queue *ccol_dynamic_queue_create_with_mprocs(
   dq->msg_count = 0;
   dq->head = NULL;
   dq->tail = NULL;
+  /* Explicit for the same reason as ccol_circular_queue's own counters; see
+   * the note there. */
+  dq->readers_waiting = 0;
   dq->writing_disabled = false;
   dq->sel_read_waiters_head = NULL;
   dq->sel_write_waiters_head = NULL;
@@ -1329,15 +1396,27 @@ void __ccol_dynamic_queue_destroy(ccol_dynamic_queue *dq) {
   }
 }
 
-/* Appends msg to the dynamic queue's tail and signals read_cond. Must be
- * called with the mutex held. Returns ccol_not_enough_memory on allocation
- * failure without modifying msg->data. */
-ccol_retval_t _sendto_dq(ccol_dynamic_queue *dq, c_message_t *msg) {
+#ifdef RUNNING_UNIT_TESTS
+/* Test-only: the counter the dynamic queue's send path gates its read_cond
+ * signal on. See ccol_circq_waiting_readers_for_tests for why a test polls
+ * this rather than guessing a background thread has already parked. */
+size_t ccol_dynmq_waiting_readers_for_tests(ccol_dynamic_queue *dq) {
+  ccol_mutex_lock(dq->mutex);
+  size_t n = dq->readers_waiting;
+  ccol_mutex_unlock(dq->mutex);
+  return n;
+}
+#endif
+
+/* Appends msg to the dynamic queue's tail and signals read_cond when a
+ * receiver is blocked on it. Must be called with the mutex held. Returns
+ * ccol_not_enough_memory on allocation failure without modifying msg->data. */
+static ccol_retval_t _sendto_dq(ccol_dynamic_queue *dq, c_message_t *msg) {
   ccol_retval_t retval = append_msg_to_dq_tail(dq, msg);
 
   if (retval == ccol_success) {
     ++dq->msg_count;
-    ccol_cond_var_signal(dq->read_cond);
+    if (dq->readers_waiting) ccol_cond_var_signal(dq->read_cond);
     notify_one_sel_waiter(&dq->sel_read_waiters_head, &dq->sel_read_rotor);
   }
 
@@ -1346,7 +1425,8 @@ ccol_retval_t _sendto_dq(ccol_dynamic_queue *dq, c_message_t *msg) {
 
 /* Validates dynamic queue send arguments (mirrors verify_circq_send_zc_params
  * but for ccol_dynamic_queue). */
-bool verify_dynmq_send_zc_params(ccol_dynamic_queue *dq, c_message_t *msg) {
+static bool verify_dynmq_send_zc_params(ccol_dynamic_queue *dq,
+                                        c_message_t *msg) {
   if (!dq || !msg || (msg->size == 0 && msg->data != NULL) ||
       (msg->data == NULL && msg->size != 0)) {
     return false;
@@ -1384,7 +1464,8 @@ ccol_retval_t ccol_dynmq_send_zc(ccol_dynamic_queue *dq, c_message_t *msg) {
 
 /* Removes the head message from the dynamic queue and decrements msg_count.
  * Must be called with the mutex held. */
-ccol_retval_t _recvfrom_dq(ccol_dynamic_queue *dq, c_message_t *target_buf) {
+static ccol_retval_t _recvfrom_dq(ccol_dynamic_queue *dq,
+                                  c_message_t *target_buf) {
   ccol_retval_t retval = remove_msg_from_dq_head(dq, target_buf);
 
   if (retval == ccol_success) {
@@ -1396,8 +1477,8 @@ ccol_retval_t _recvfrom_dq(ccol_dynamic_queue *dq, c_message_t *target_buf) {
 }
 
 /* Validates dynamic queue receive arguments. */
-bool verify_recvfrom_dq_zc_params(ccol_dynamic_queue *dq,
-                                  c_message_t *target_buf) {
+static bool verify_recvfrom_dq_zc_params(ccol_dynamic_queue *dq,
+                                         c_message_t *target_buf) {
   if (!dq || !target_buf) {
     return false;
   }
@@ -1416,7 +1497,9 @@ ccol_retval_t ccol_dynmq_recv_zc(ccol_dynamic_queue *dq,
   ccol_mutex_lock(dq->mutex);
 
   while (dq->msg_count == 0) {
+    ++dq->readers_waiting;
     ccol_cond_var_wait(dq->read_cond, dq->mutex);
+    --dq->readers_waiting;
   }
 
   ccol_retval_t result = _recvfrom_dq(dq, target_buf);
@@ -1488,9 +1571,14 @@ ccol_retval_t ccol_dynmq_timed_recv_zc(ccol_dynamic_queue *dq,
     int retval;
     struct timespec abs_time;
     clock_gettime(CLOCK_REALTIME, &abs_time);
-    add_duration_to_timespec(&abs_time, timeout);
+    _ccol_add_duration_to_timespec(&abs_time, timeout);
 
     while (dq->msg_count == 0) {
+      /* Counted around the wait, not just the untimed one: a sender only
+       * signals when this is non-zero, so a waiter that did not register
+       * itself here would sleep until its own timeout with a message
+       * already queued for it. */
+      ++dq->readers_waiting;
 #ifdef RUNNING_UNIT_TESTS
       if (atomic_load(&g_dynmq_recv_force_condvar_wait_error)) {
         atomic_store(&g_dynmq_recv_force_condvar_wait_error, false);
@@ -1506,6 +1594,7 @@ ccol_retval_t ccol_dynmq_timed_recv_zc(ccol_dynamic_queue *dq,
 #else
       retval = ccol_cond_var_timedwait(dq->read_cond, dq->mutex, abs_time);
 #endif
+      --dq->readers_waiting;
       if (retval) {
         /* Re-check under the mutex before committing to either outcome
          * below, regardless of which one ccol_cond_var_timedwait's own return
@@ -1742,18 +1831,19 @@ ccol_retval_t ccol_chan_timed_recv_zc(ccol_channel *ch, c_message_t *target_buf,
   return ccol_circq_timed_recv_zc(ch->owner_to_workers_cq, target_buf, timeout);
 }
 
-/* Disables sending on the specified direction (owner_to_workers or
- * workers_to_owner). An explicit direction is required here because the caller
- * may want to disable only one side of the ccol_channel independently. */
+/* Disables sending on the specified direction (ccol_owner_to_workers or
+ * ccol_workers_to_owner). An explicit direction is required here because the
+ * caller may want to disable only one side of the ccol_channel independently.
+ */
 ccol_retval_t ccol_chan_disable_sending(ccol_channel *ch,
                                         ccol_channel_direction d) {
   if (!ch) {
     return ccol_invalid_args;
   }
 
-  if (d == owner_to_workers) {
+  if (d == ccol_owner_to_workers) {
     return ccol_circq_disable_sending(ch->owner_to_workers_cq);
-  } else if (d == workers_to_owner) {
+  } else if (d == ccol_workers_to_owner) {
     return ccol_circq_disable_sending(ch->workers_to_owner_cq);
   }
 
@@ -1767,9 +1857,9 @@ ccol_retval_t ccol_chan_enable_sending(ccol_channel *ch,
     return ccol_invalid_args;
   }
 
-  if (d == owner_to_workers) {
+  if (d == ccol_owner_to_workers) {
     return ccol_circq_enable_sending(ch->owner_to_workers_cq);
-  } else if (d == workers_to_owner) {
+  } else if (d == ccol_workers_to_owner) {
     return ccol_circq_enable_sending(ch->workers_to_owner_cq);
   }
 
@@ -1783,9 +1873,9 @@ size_t ccol_chan_msg_count(ccol_channel *ch, ccol_channel_direction d) {
     return ccol_invalid_size;
   }
 
-  if (d == owner_to_workers) {
+  if (d == ccol_owner_to_workers) {
     return ccol_circq_msg_count(ch->owner_to_workers_cq);
-  } else if (d == workers_to_owner) {
+  } else if (d == ccol_workers_to_owner) {
     return ccol_circq_msg_count(ch->workers_to_owner_cq);
   }
 
@@ -2896,7 +2986,18 @@ static struct {
   cvec slots; /* cvec of ccol_event_loop_slot_t; grows via push_back only,
                   indices permanent once allocated */
   cvec free_indices; /* cvec of uint32_t; LIFO free list, O(1) reuse */
+  /* Set when the process-exit destructor found a loop still live and left this
+     table alone, so that whichever destroy frees the last slot afterwards
+     performs the release the destructor could not. Without it this table is
+     freed unconditionally at exit while another translation unit's destructor
+     can still be holding a loop, and the destroy it eventually runs indexes a
+     freed vector. */
+  bool release_deferred;
 } ccol_event_loop_slot_table = {0};
+
+/* Defined below, next to the process-exit destructor that sets the flag it
+   reads; called from __ccol_event_loop_destroy, which appears first. */
+static void _release_event_loop_slot_table_if_deferred_locked(void);
 
 /* Forward declarations: bodies defined further below, once struct
  * ccol_event_loop_s itself is declared (they dereference a live loop's own
@@ -3388,6 +3489,9 @@ struct ccol_event_loop_s {
  * for the remainder of its teardown, not a new gap this mechanism
  * introduces. */
 static void _cthreadcomm_atfork_prepare(void) {
+#ifdef RUNNING_UNIT_TESTS
+  _ccol_atfork_order_record(ccol_atfork_module_cthreadcomm);
+#endif
   ccol_mutex_lock(queue_mutex_registry.mutex);
   ccol_rw_lock_wrlock(ccol_event_loop_slot_table.rwlock);
 
@@ -6817,6 +6921,11 @@ void __ccol_event_loop_destroy(ccol_event_loop loop) {
       the just-freed loop's handle carried, so that stale handle can never
       again match a FUTURE acquire's generation for this same index */
   cvector_push_back(ccol_event_loop_slot_table.free_indices, &idx);
+  /* Last statement under this lock: with the slot's ptr now cleared, this call
+     is what performs the release the process-exit destructor deferred. Nothing
+     below reads the table, so there is no re-acquisition window for another
+     destroy to be caught in. */
+  _release_event_loop_slot_table_if_deferred_locked();
   ccol_rw_lock_unlock(ccol_event_loop_slot_table.rwlock);
 }
 
@@ -6951,11 +7060,61 @@ void ccol_event_loop_test_wrunlock_slot_table_for_tests(void) {
  * shared object regardless of which parts of it were actually used, so a
  * process that links this library but never creates a single ccol_event_loop
  * would otherwise lock a never-pthread_mutex_init'd mutex here. */
+/* Whether any slot still names a loop. Caller holds the write lock.
+ *
+ * slot->ptr, not slot->in_use: in_use is cleared as the first step of a
+ * destroy so that a second destroy or a new resolve is rejected early, and the
+ * rest of the teardown runs after it, where ptr is cleared only in that final
+ * locked step. A scan that trusted in_use would free this table out from under
+ * a destroy still in that window. */
+static bool _event_loop_any_slot_live_locked(void) {
+  size_t slot_count = cvector_elem_count(ccol_event_loop_slot_table.slots);
+  for (size_t i = 0; i < slot_count; i++) {
+    ccol_event_loop_slot_t *slot = (ccol_event_loop_slot_t *)cvector_at(
+        ccol_event_loop_slot_table.slots, i);
+    if (slot->ptr != NULL) return true;
+  }
+  return false;
+}
+
+/* cvector_destroy, not __cvector_destroy: it NULLs the handle as it frees, so
+   a later call answers "already released" here rather than indexing a freed
+   vector. The rwlock is deliberately not destroyed, since this can run from an
+   ordinary destroy that is still holding it. */
+static void _release_event_loop_slot_table_locked(void) {
+  cvector_destroy(ccol_event_loop_slot_table.slots);
+  cvector_destroy(ccol_event_loop_slot_table.free_indices);
+  ccol_event_loop_slot_table.release_deferred = false;
+}
+
+/* Kept behind one out-of-line call so the destroy path that has to make it
+   keeps the code shape it would have without any of this. */
+static __attribute__((noinline)) void
+_release_event_loop_slot_table_if_deferred_locked(void) {
+  if (ccol_event_loop_slot_table.release_deferred &&
+      !_event_loop_any_slot_live_locked()) {
+    _release_event_loop_slot_table_locked();
+  }
+}
+
 __attribute__((destructor)) static void _cleanup_event_loop_slot_table(void) {
   ccol_call_once(ccol_event_loop_slot_table.once,
                  _ccol_event_loop_slot_table_init_globals);
+  /* Nothing left to free, and nothing safe to touch: the vectors are NULLed as
+     they are destroyed, so a second run answers here. */
+  if (!ccol_event_loop_slot_table.slots) return;
   ccol_rw_lock_wrlock(ccol_event_loop_slot_table.rwlock);
-  __cvector_destroy(ccol_event_loop_slot_table.slots);
-  __cvector_destroy(ccol_event_loop_slot_table.free_indices);
+  /* Only once nothing can still resolve a handle. Destructor ordering between
+     translation units is not this library's to decide, and a later one holding
+     a live loop would otherwise find this table freed underneath it; the
+     release is then handed to whichever destroy frees the last slot rather
+     than skipped, so a program that does destroy its loops leaves nothing
+     behind whatever order the destructors ran in. */
+  if (_event_loop_any_slot_live_locked()) {
+    ccol_event_loop_slot_table.release_deferred = true;
+    ccol_rw_lock_unlock(ccol_event_loop_slot_table.rwlock);
+    return;
+  }
+  _release_event_loop_slot_table_locked();
   ccol_rw_lock_unlock(ccol_event_loop_slot_table.rwlock);
 }

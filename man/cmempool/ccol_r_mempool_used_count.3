@@ -1,4 +1,4 @@
-.TH CCOL_R_MEMPOOL_USED_COUNT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CCOL_R_MEMPOOL_USED_COUNT 3 "2026-09-17" "c_collections" "C Collections Library - Functions"
 .SH NAME
 ccol_r_mempool_used_count \- get number of used entries for a size
 .SH LIBRARY
@@ -30,6 +30,14 @@ Returns 0 if size is invalid (0 or > largest_size)
 Size is rounded up to next power-of-2 pool
 Thread-safe if pool created with single_threaded=false
 Dynamic allocations are tracked separately
+
+Exact whenever the sub-pool is quiescent. Entries parked in a thread's
+own cache count as free, since nothing has them. Under concurrent
+allocation on a tier that maintains per-thread caches the result can
+briefly sit a few entries above ccol_r_mempool_total_capacity() for that
+size, and never above the physical slot count that
+ccol_r_mempool_allocated_bytes(3) accounts for; see
+ccol_mempool_total_capacity(3) for why.
 .fi
 .SH "SEE ALSO"
 .BR ccol_r_mempool_total_capacity (3),

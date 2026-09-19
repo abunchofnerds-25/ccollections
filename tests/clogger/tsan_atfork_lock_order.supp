@@ -1,0 +1,49 @@
+# Suppresses a lock-order-inversion report that ThreadSanitizer raises against
+# the fork-prepare handlers of this module and cthreadcomm.
+#
+# What the report says. Every module here that registers a pthread_atfork()
+# prepare handler takes its own locks in that handler and holds them until after
+# the fork, so the handlers' locks nest in whichever order the handlers run in.
+# The reported cycle pairs clog_slot_table.rwlock, taken in
+# _clog_atfork_prepare, against the queue registry mutex taken in
+# _cthreadcomm_atfork_prepare, each appearing to be acquired while the other is
+# held.
+#
+# Why it cannot deadlock. The C library runs prepare handlers one sequence at a
+# time under its own atfork lock, so two handler sequences never interleave and
+# neither can wait on a lock the other holds. Within a process the relative
+# order of any two handlers is also fixed, since it is reverse registration
+# order and the modules force their dependencies to register ahead of them; the
+# two directions of the cycle therefore come from separate processes rather than
+# from one lock-order graph that a single process could deadlock on.
+# ThreadSanitizer's own graph does not distinguish them, because a forked child
+# inherits the parent's graph and keeps adding to it.
+#
+# The second half of that argument is checked rather than asserted. Each prepare
+# handler reports itself to _ccol_atfork_order_record (see ccol_atfork_module_t
+# in common.h), which records the pairwise order and aborts if two handlers ever
+# run in opposite relative orders, which is the condition that would make this
+# cycle real. tests/common's atfork_order tests pin both directions of that
+# check. So a genuine inversion stops the run even while this file keeps the
+# detector quiet, which is what a suppression over our own code has to earn.
+#
+# What this file is worth. It silences output and nothing else: the deadlock
+# detector's reports do not set the exit status, so the ThreadSanitizer target
+# passes with or without it. Keeping it costs the reports; removing it costs a
+# handful of lines of noise on every run of this suite.
+#
+# Anchored on this module's own frame, always symbol-resolved, rather than on
+# any pthread-internal frame name, mirroring tests/chttpclient/tsan_openssl.supp's
+# own "anchor on our own code" choice. It names _clog_atfork_prepare, which is
+# where the write lock is taken: an anchor naming a function that no longer takes
+# the lock suppresses nothing, silently, and nothing fails until the reports
+# resurface somewhere else.
+#
+# Know what this hides. The anchor matches every lock-order-inversion report
+# carrying that frame, including one between this module's prepare handler and
+# another module's that did not arise from an inherited graph. That is the class
+# _ccol_atfork_order_record exists to catch independently; anyone changing which
+# locks a fork-prepare handler takes, or the order the handlers register in,
+# should re-derive the reasoning above rather than trusting a clean
+# ThreadSanitizer run here.
+deadlock:_clog_atfork_prepare

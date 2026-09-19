@@ -2094,3 +2094,179 @@ TEST(cbst_maps, invariants_random_ops) {
 
   cbmap_destroy(hm);
 }
+
+/* A value's bytes start inside the node's own allocation and move out to a
+ * buffer of their own the first time an update changes their size. Every
+ * transition across that boundary is exercised here, in both directions,
+ * because each one decides whether a later free is aimed at the node's own
+ * block or at a buffer of its own; a
+ * mistake either way is a free of an interior pointer or a leak, which is what
+ * this suite's memtest run is there to catch on top of the values compared.
+ * The zero-size representation is a separate transition again and belongs to
+ * update_value_to_zero_size_does_not_corrupt; a char * value is always at
+ * least one byte, so nothing here reaches it. */
+/* cbmap_get_elem_ref hands back a pointer into the node's own value, and
+ * handing that pointer straight back to resize the value is an ordinary thing
+ * for a caller to do. The resize allocates new storage, releases the old, and
+ * copies; if the copy reads its source after the release, the source IS the
+ * released buffer.
+ *
+ * This test is non-vacuous: with the copy placed after the release,
+ * AddressSanitizer reports a heap-use-after-free inside the update, and the
+ * value that lands in the node is whatever the allocator left behind. */
+TEST(cbstmap_value_storage, resizing_a_value_from_its_own_buffer_is_safe) {
+  cbmap_construct_scoped(bm, int, char *);
+  int key = 3;
+
+  cbmap_insert(bm, key, "first value, short enough to sit inside the node");
+  /* A different size moves it out to a buffer of its own, which is the state
+     where the release below has something to release. */
+  cbmap_insert(bm, key, "second value, a different length, now external");
+
+  cmap_pair kp = {&key, sizeof key};
+  cmap_pair *held = NULL;
+  ccol_retval_t got = cbmap_get_elem_ref(bm, &kp, &held);
+
+  /* Resize using the map's own buffer as the source. */
+  bool shrank = false;
+  if (got == ccol_success && held && held->ptr) {
+    cmap_pair selfref = {held->ptr, 14};
+    shrank = (cbmap_insert_elem(bm, &kp, &selfref) == ccol_key_already_present);
+  }
+
+  cmap_pair *after = NULL;
+  ccol_retval_t reread = cbmap_get_elem_ref(bm, &kp, &after);
+  bool intact = (reread == ccol_success && after && after->size == 14 &&
+                 memcmp(after->ptr, "second value,", 13) == 0);
+
+  REQUIRE_EQ(got, ccol_success);
+  REQUIRE_TRUE(shrank);
+  REQUIRE_TRUE(intact);
+}
+
+/* Read through cbmap_get_ptr rather than cbmap_get throughout. A regression in
+   the resize path loses the key outright, and cbmap_get answers a missing key
+   with ccol_fatal_err, which aborts the whole binary and every other suite's
+   result in the same run; cbmap_get_ptr answers NULL, so the same regression
+   fails this test alone and reports what it found. */
+#define REQUIRE_STRING_VALUE_IS(map_, key_, expected_) \
+  do {                                                 \
+    char **found_ = cbmap_get_ptr(map_, key_);         \
+    REQUIRE_NE((void *)found_, NULL);                  \
+    if (found_) REQUIRE_STREQ(*found_, (expected_));   \
+  } while (0)
+
+TEST(cbstmap_value_storage, resizing_a_value_across_the_inline_boundary) {
+  cbmap_construct_scoped(bm, int, char *);
+
+  int key = 7;
+  cbmap_insert(bm, key, "short");
+  REQUIRE_STRING_VALUE_IS(bm, key, "short");
+
+  /* Longer than the room reserved when the node was built: moves out. */
+  cbmap_insert(bm, key, "a considerably longer value than the first one");
+  REQUIRE_STRING_VALUE_IS(bm, key,
+                          "a considerably longer value than the first one");
+
+  /* Shorter again: stays in its own buffer rather than going back inline. */
+  cbmap_insert(bm, key, "tiny");
+  REQUIRE_STRING_VALUE_IS(bm, key, "tiny");
+
+  /* Same size twice running: written in place, whichever side it lives on. */
+  cbmap_insert(bm, key, "tin2");
+  REQUIRE_STRING_VALUE_IS(bm, key, "tin2");
+
+  /* Back up to a longer one, then a second node to prove the first node's own
+     storage was not disturbed by any of it. */
+  cbmap_insert(bm, key, "grown back out to something long again");
+  int other = 8;
+  cbmap_insert(bm, other, "other");
+  REQUIRE_STRING_VALUE_IS(bm, key, "grown back out to something long again");
+  REQUIRE_STRING_VALUE_IS(bm, other, "other");
+
+  /* Removing the resized node must free exactly one buffer of its own and the
+     node block, and leave the untouched node readable. */
+  cbmap_remove(bm, key);
+  REQUIRE_STRING_VALUE_IS(bm, other, "other");
+  REQUIRE_EQ(cbmap_elem_count(bm), (size_t)1);
+}
+
+#undef REQUIRE_STRING_VALUE_IS
+
+/* A node's key bytes sit inside the node's own allocation, at an offset rounded
+ * to what that key type actually requires rather than to the strongest
+ * alignment any type could need. Every declared key type is stored and read
+ * back here through the macro layer, which casts the stored pointer to the
+ * caller's type and dereferences it, so an offset that under-aligns any one of
+ * them is a real misaligned access on this path rather than a latent one.
+ *
+ * On x86-64 a misaligned scalar read still returns the right value, so the
+ * value comparisons alone cannot prove the offsets right; this test earns its
+ * keep under -fsanitize=alignment and on a strict-alignment target, which is
+ * where a wrong offset stops being invisible. long double is the case that
+ * actually needs 16 and the one a narrower rounding would break first. */
+TEST(cbstmap_key_storage, every_key_type_round_trips_through_inline_storage) {
+  /* Read back through cbmap_get_ptr: an under-aligned or mis-sized key offset
+     makes the key unfindable, and cbmap_get answers that with ccol_fatal_err,
+     taking the whole binary down with it. NULL keeps the failure local. */
+#define ROUND_TRIP(ctype, keyval, valval)        \
+  do {                                           \
+    cbmap_construct_scoped(m_, ctype, int);      \
+    ctype k_ = (keyval);                         \
+    int v_ = (valval);                           \
+    cbmap_insert(m_, k_, v_);                    \
+    int *found_ = cbmap_get_ptr(m_, k_);         \
+    REQUIRE_NE((void *)found_, NULL);            \
+    if (found_) REQUIRE_EQ(*found_, (valval));   \
+    REQUIRE_EQ(cbmap_elem_count(m_), (size_t)1); \
+  } while (0)
+
+  ROUND_TRIP(char, 'q', 1);
+  ROUND_TRIP(signed char, (signed char)-7, 2);
+  ROUND_TRIP(unsigned char, (unsigned char)250, 3);
+  ROUND_TRIP(short, (short)-300, 4);
+  ROUND_TRIP(unsigned short, (unsigned short)60000, 5);
+  ROUND_TRIP(int, -123456, 6);
+  ROUND_TRIP(unsigned int, 4000000000u, 7);
+  ROUND_TRIP(long, -1234567L, 8);
+  ROUND_TRIP(unsigned long, 1234567UL, 9);
+  ROUND_TRIP(long long, -123456789LL, 10);
+  ROUND_TRIP(unsigned long long, 123456789ULL, 11);
+  ROUND_TRIP(float, 1.5f, 12);
+  ROUND_TRIP(double, 2.25, 13);
+#undef ROUND_TRIP
+
+  /* long double separately: it carries the strongest alignment requirement of
+     any key type here, so it is the one that fails first if the offset is
+     rounded to anything narrower than the type really needs. */
+  {
+    cbmap_construct_scoped(mld, long double, int);
+    long double k = 3.0625L;
+    int v = 14;
+    cbmap_insert(mld, k, v);
+    int *found = cbmap_get_ptr(mld, k);
+    REQUIRE_NE((void *)found, NULL);
+    if (found) REQUIRE_EQ(*found, 14);
+  }
+
+  /* A pointer key, and a string key whose bytes are stored rather than a
+     pointer to them. */
+  {
+    int target = 0;
+    cbmap_construct_scoped(mp, int *, int);
+    int *pk = &target;
+    int pv = 15;
+    cbmap_insert(mp, pk, pv);
+    int *found = cbmap_get_ptr(mp, pk);
+    REQUIRE_NE((void *)found, NULL);
+    if (found) REQUIRE_EQ(*found, 15);
+  }
+  {
+    cbmap_construct_scoped(ms, char *, int);
+    int sv = 16;
+    cbmap_insert(ms, "a string key", sv);
+    int *found = cbmap_get_ptr(ms, "a string key");
+    REQUIRE_NE((void *)found, NULL);
+    if (found) REQUIRE_EQ(*found, 16);
+  }
+}

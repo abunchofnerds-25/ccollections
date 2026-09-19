@@ -26,18 +26,19 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 
-const size_t minimum_capacity = 4;
-const size_t scaling_factor = 2;
+const size_t _ccol_cvector_minimum_capacity = 4;
+const size_t _ccol_cvector_scaling_factor = 2;
 
 /* The load-factor divisor cvector_pop_back uses to decide when to shrink:
  * capacity halves once elem_count drops below capacity /
  * shrink_threshold_divisor (i.e. below 1/4 full). Deliberately kept as its own
- * constant rather than reusing minimum_capacity for this, even though both
- * happen to be 4 today: minimum_capacity is the capacity floor, this is the
- * "how empty is too empty" ratio, and the two describe unrelated invariants.
- * Coupling them (as a shared value used for two purposes) would silently change
- * the shrink ratio the moment minimum_capacity is ever tuned for its own,
- * unrelated reason. */
+ * constant rather than reusing _ccol_cvector_minimum_capacity for this, even
+ * though both happen to be 4 today: _ccol_cvector_minimum_capacity is the
+ * capacity floor, this is the "how empty is too empty" ratio, and the two
+ * describe unrelated invariants. Coupling them (as a shared value used for two
+ * purposes) would silently change the shrink ratio the moment
+ * _ccol_cvector_minimum_capacity is ever tuned for its own, unrelated reason.
+ */
 static const size_t shrink_threshold_divisor = 4;
 
 struct cvector {
@@ -72,12 +73,13 @@ void __cvector_destroy(cvec v) {
 /* Guards cvector_create_full against logically invalid arguments. An elem_size
  * of zero would corrupt every byte-offset calculation, so it is rejected
  * early rather than propagating a silent bad state. An elem_size large enough
- * that minimum_capacity * elem_size (the very first backing-buffer
- * allocation) would overflow size_t is rejected for the same reason: every
- * later capacity-growth path (scale_the_cvector_size_up, cvector_reserve)
- * already guards its own byte-size multiplication against overflow, and the
- * initial allocation must not be the one place that silently wraps to an
- * undersized buffer while v->elem_size still records the real, huge value. */
+ * that _ccol_cvector_minimum_capacity * elem_size (the very first
+ * backing-buffer allocation) would overflow size_t is rejected for the same
+ * reason: every later capacity-growth path (scale_the_cvector_size_up,
+ * cvector_reserve) already guards its own byte-size multiplication against
+ * overflow, and the initial allocation must not be the one place that silently
+ * wraps to an undersized buffer while v->elem_size still records the real, huge
+ * value. */
 static bool verify_cvector_create_inputs(size_t elem_size,
                                          ccol_memmgmt_procs_t *mmgt_procs,
                                          char **err) {
@@ -88,7 +90,7 @@ static bool verify_cvector_create_inputs(size_t elem_size,
     return false;
   }
 
-  if (elem_size > SIZE_MAX / minimum_capacity) {
+  if (elem_size > SIZE_MAX / _ccol_cvector_minimum_capacity) {
     if (err) {
       *err = CCOL_ERR_STR(
           "elem_size too large: initial capacity allocation would overflow");
@@ -104,9 +106,10 @@ static bool verify_cvector_create_inputs(size_t elem_size,
 }
 
 /* Allocates and initialises a new vector with the given element size and an
- * optional custom allocator. The initial backing buffer holds minimum_capacity
- * elements. On any allocation failure the partially constructed vector is torn
- * down and NULL is returned; *err receives a static error string when provided.
+ * optional custom allocator. The initial backing buffer holds
+ * _ccol_cvector_minimum_capacity elements. On any allocation failure the
+ * partially constructed vector is torn down and NULL is returned; *err receives
+ * a static error string when provided.
  */
 cvec cvector_create_full(size_t elem_size, ccol_memmgmt_procs_t *mmgt_procs,
                          char **err) {
@@ -128,7 +131,8 @@ cvec cvector_create_full(size_t elem_size, ccol_memmgmt_procs_t *mmgt_procs,
     return NULL;
   }
 
-  v->data_ptr = _ccol_mem_alloc(mmgt_procs, minimum_capacity * elem_size);
+  v->data_ptr =
+      _ccol_mem_alloc(mmgt_procs, _ccol_cvector_minimum_capacity * elem_size);
   if (!v->data_ptr) {
     __cvector_destroy(v);
     if (err) {
@@ -141,7 +145,7 @@ cvec cvector_create_full(size_t elem_size, ccol_memmgmt_procs_t *mmgt_procs,
     *err = NULL;
   }
 
-  v->capacity = minimum_capacity;
+  v->capacity = _ccol_cvector_minimum_capacity;
   v->elem_count = 0;
   v->elem_size = elem_size;
 
@@ -172,11 +176,11 @@ static ccol_retval_t scale_the_cvector_size_up(cvec v) {
     ccol_assert(false);
   }
 
-  if (v->capacity > (ccol_max_elem_count / scaling_factor)) {
+  if (v->capacity > (ccol_max_elem_count / _ccol_cvector_scaling_factor)) {
     return ccol_container_full;  // Would overflow elem_count
   }
 
-  size_t new_capacity = scaling_factor * v->capacity;
+  size_t new_capacity = _ccol_cvector_scaling_factor * v->capacity;
   if (new_capacity > SIZE_MAX / v->elem_size) {
     return ccol_container_full;  // byte size would overflow
   }
@@ -189,36 +193,38 @@ static ccol_retval_t scale_the_cvector_size_up(cvec v) {
     return ccol_not_enough_memory;
   }
 
-  v->capacity *= scaling_factor;
+  v->capacity *= _ccol_cvector_scaling_factor;
   return ccol_success;
 }
 
-/* Halves the backing buffer capacity, but never below minimum_capacity. On
- * reallocation failure the original pointer is silently restored; shrinking
- * is best-effort and a failure does not corrupt any existing data. */
+/* Halves the backing buffer capacity, but never below
+ * _ccol_cvector_minimum_capacity. On reallocation failure the original pointer
+ * is silently restored; shrinking is best-effort and a failure does not corrupt
+ * any existing data. */
 static void scale_the_cvector_size_down(cvec v) {
   if (!v) {
     ccol_assert(false);
   }
 
-  if (v->capacity == minimum_capacity) {
+  if (v->capacity == _ccol_cvector_minimum_capacity) {
     return;
   }
 
   void *orig = v->data_ptr;
   v->data_ptr = _ccol_mem_realloc(
-      v->m_procs, v->data_ptr, (v->capacity / scaling_factor) * v->elem_size);
+      v->m_procs, v->data_ptr,
+      (v->capacity / _ccol_cvector_scaling_factor) * v->elem_size);
   if (!v->data_ptr) {
     v->data_ptr = orig;
     return;
   }
 
-  v->capacity /= scaling_factor;
+  v->capacity /= _ccol_cvector_scaling_factor;
 }
 
 /* Appends a copy of *new_elem at the end of the vector, growing the backing
- * buffer by scaling_factor if the current capacity is exhausted. Returns
- * ccol_not_enough_memory if the growth reallocation itself fails, or
+ * buffer by _ccol_cvector_scaling_factor if the current capacity is exhausted.
+ * Returns ccol_not_enough_memory if the growth reallocation itself fails, or
  * ccol_container_full if the architectural growth ceiling has already been
  * reached (see scale_the_cvector_size_up).
  *
@@ -277,9 +283,9 @@ ccol_retval_t cvector_push_back(cvec v, const void *new_elem) {
 }
 
 /* Removes the last element and copies it into *target_elem. When the element
- * count drops below capacity / minimum_capacity the buffer is shrunk to avoid
- * holding on to excessive memory. Returns ccol_container_empty on an empty
- * vector without touching *target_elem. */
+ * count drops below capacity / _ccol_cvector_minimum_capacity the buffer is
+ * shrunk to avoid holding on to excessive memory. Returns ccol_container_empty
+ * on an empty vector without touching *target_elem. */
 ccol_retval_t cvector_pop_back(cvec v, void *target_elem) {
   if (!v) {
     ccol_assert(false);
@@ -309,8 +315,8 @@ ccol_retval_t cvector_pop_back(cvec v, void *target_elem) {
 
 /* Pre-allocates enough backing storage for at least new_capacity_count
  * elements. The requested count is rounded up to the nearest power of two
- * (minimum minimum_capacity) so that subsequent push_back calls hit a
- * predictable capacity boundary. Does nothing if current capacity already
+ * (minimum _ccol_cvector_minimum_capacity) so that subsequent push_back calls
+ * hit a predictable capacity boundary. Does nothing if current capacity already
  * satisfies the request. */
 bool cvector_reserve(cvec v, size_t new_capacity_count) {
   if (!v) {
@@ -319,8 +325,8 @@ bool cvector_reserve(cvec v, size_t new_capacity_count) {
 
   size_t refined_new_capacity_count =
       ccol_find_nearest_gte_power_of_two(new_capacity_count);
-  if (refined_new_capacity_count < minimum_capacity) {
-    refined_new_capacity_count = minimum_capacity;
+  if (refined_new_capacity_count < _ccol_cvector_minimum_capacity) {
+    refined_new_capacity_count = _ccol_cvector_minimum_capacity;
   }
 
   if (refined_new_capacity_count > ccol_max_elem_count) {
@@ -521,24 +527,25 @@ size_t cvector_elem_count(cvec v) {
 }
 
 /* Clears all elements and attempts to shrink the backing buffer to
- * minimum_capacity to reclaim memory. The element count is set to zero
- * regardless of whether the reallocation succeeds. Skips the reallocation
- * entirely when already at minimum_capacity (a true no-op shrink), mirroring
- * scale_the_cvector_size_down's identical early-return guard. */
+ * _ccol_cvector_minimum_capacity to reclaim memory. The element count is set to
+ * zero regardless of whether the reallocation succeeds. Skips the reallocation
+ * entirely when already at _ccol_cvector_minimum_capacity (a true no-op
+ * shrink), mirroring scale_the_cvector_size_down's identical early-return
+ * guard. */
 void cvector_reset(cvec v) {
   if (!v) {
     ccol_assert(false);
   }
 
-  if (v->capacity != minimum_capacity) {
+  if (v->capacity != _ccol_cvector_minimum_capacity) {
     void *orig = v->data_ptr;
-    v->data_ptr = _ccol_mem_realloc(v->m_procs, v->data_ptr,
-                                    minimum_capacity * v->elem_size);
+    v->data_ptr = _ccol_mem_realloc(
+        v->m_procs, v->data_ptr, _ccol_cvector_minimum_capacity * v->elem_size);
     if (!v->data_ptr) {
       // Capacity should remain unchanged if reallocation fails.
       v->data_ptr = orig;
     } else {
-      v->capacity = minimum_capacity;
+      v->capacity = _ccol_cvector_minimum_capacity;
     }
   }
   v->elem_count = 0;

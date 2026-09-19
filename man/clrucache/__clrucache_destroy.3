@@ -26,9 +26,9 @@ handle to finish (a clrucache_get_full/_set_full/clrucache_size/
 _capacity call currently executing on another thread, including one
 still blocked inside a slow remote getter/setter callback), then
 evicts all remaining live entries (invoking the eviction callback
-for each while the mutex is held), destroys the internal hash map,
-frees the mutex and the handle's own pin condition variable, and
-releases all memory.
+for each while the owning segment's lock is held), destroys each
+segment's own hash map, frees each segment's lock and the handle's own
+pin condition variable, and releases all memory.
 
 This is the low-level destructor. In application code use the
 clru_destroy() macro, which also sets the handle to

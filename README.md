@@ -26,6 +26,15 @@ Every public function and macro also has a real troff manual page under [`man/`]
    - [Error Handling](#34-error-handling)
    - [Scoped Raw Pointers](#35-scoped-raw-pointers)
 4. [Building and Linking](#4-building-and-linking)
+   - [Fuzz Testing](#fuzz-testing)
+   - [Benchmarks](#benchmarks)
+   - [Installing](#installing)
+   - [Linking](#linking)
+   - [Module Layering](#module-layering)
+   - [Supported Platforms](#supported-platforms)
+   - [Compatibility and Versioning](#compatibility-and-versioning)
+   - [Compile-Time Configuration](#compile-time-configuration)
+   - [Leaving Modules Out](#leaving-modules-out)
 5. [Dynamic Array - `cvector`](#5-dynamic-array---cvector)
 6. [Dynamic String - `cstring`](#6-dynamic-string---cstring)
 7. [Hash Map - `chashmap`](#7-hash-map---chashmap)
@@ -232,7 +241,30 @@ to `coverage_site/summary.txt`. `coverage_check` reads the merged data that run
 produces and fails if any file in `src/` or `include/` is covered by less than
 80 percent of its instrumented lines, so run `make coverage_site` first. The
 threshold and the short list of modules that have no unit tests of their own
-live in `check_test_coverages.sh`.
+live in `ci_scripts/check_test_coverages.sh`.
+
+Two targets guard the public interface itself. Neither can be satisfied by the
+test suites, which link the `.c` files directly and so never observe what the
+shared library does or does not export:
+
+```bash
+make check_namespace       # every exported symbol, public macro and public
+                           # typedef carries its namespace prefix
+make check_abi             # the exported ABI matches the baseline in abi/
+make update_abi_baseline   # re-record that baseline after adding public API
+```
+
+See [Compatibility and Versioning](#compatibility-and-versioning) for what the
+baseline promises and when it is allowed to change.
+
+Performance is measured by its own target:
+
+```bash
+make bench                 # run every benchmark against recorded baseline
+make bench_update          # re-record the baseline on the current machine
+```
+
+See [Benchmarks](#benchmarks) below.
 
 Individual module test suites can be run in isolation:
 
@@ -278,6 +310,114 @@ make fuzz_parse fuzz_path                       # builds ./fuzz_cjson_parse, ./f
 ```
 
 Each corpus directory seeds the fuzzer with a small set of curated byte sequences. Drop `-max_total_time` to run indefinitely; doing so mutates and grows the corpus directory in place with newly-discovered inputs, so `git status` will show new files afterward. Any crash, timeout, or out-of-memory finding is written to a `crash-*`/`timeout-*`/`oom-*` file in the same directory; pass that file as the sole argument (e.g. `./fuzz_cyaml crash-<hash>`) to replay it deterministically once you're ready to debug it.
+
+### Benchmarks
+
+`bench/` holds benchmarks for the modules with a run-time cost worth tracking:
+the containers, the string, the sort, the memory pools, the LRU cache, the
+thread pool and queues, the logger, both serializers, and an HTTP round trip.
+It links against the
+`libccollections.so` the root `make` produced, rather than compiling the
+library's sources into its own binary, so what it measures is the code that
+ships, at the flags it ships with, reached through the same dynamic call an
+application makes.
+
+```bash
+make bench_calibrate # record a baseline, and measure what each case's own
+                     # figure does between runs on the current machine
+make bench_update    # record a baseline without measuring that
+make bench           # run everything and report against that baseline
+make bench_gate      # the same, but exit non-zero on a flagged case
+make bench_list      # list the cases without running them
+```
+
+`BENCH_ARGS` passes options through to the runner:
+
+```bash
+make bench BENCH_ARGS="--filter=chashmap --reps=15"
+make bench BENCH_ARGS="--threshold=10"
+make bench_calibrate BENCH_ARGS="--calibrate=7"
+```
+
+Each case reports nanoseconds per operation, taken as the median across
+repetitions. The median rather than the mean because the distribution is
+one-sided: a repetition can be arbitrarily slowed by a scheduler preemption,
+and nothing makes one arbitrarily fast. Setup and teardown run for every
+repetition and are not timed, so a case that fills a container measures the
+same work each time rather than an ever larger one. Several cases carry a
+comparison arm measured in the same run (`[malloc]` for the pools, `[glib]` or
+`[uthash]` for the maps), and a ratio between two rows of one run is the figure
+that travels between machines, where a nanosecond count does not.
+
+Workers are pinned one logical CPU per physical core, and to the performance
+cores where the current machine has more than one kind, so that two of them never share
+one core's execution resources by accident. The CPU list is derived at run time
+from the current machine's own topology.
+
+**The baseline is per machine and is not committed.** An absolute timing
+describes one particular machine's cache hierarchy, clock behavior and background load,
+so comparing a run against a baseline recorded on different hardware reports a
+difference that has nothing to do with the library. What is worth measuring is
+the same machine before and after a change, which is what `make bench_update`
+followed by `make bench` gives.
+
+**`make bench` reports; it does not fail.** How large a difference has to be
+before it means anything is measured rather than assumed: `make bench_calibrate`
+runs the suite several times over and records, per case, how far that case's own
+figure moves between runs with nothing about the library changing. `make
+bench_gate` turns a flagged case into a non-zero exit, for a machine that
+calibration has shown repeats well enough to carry it.
+
+[bench/README.md](bench/README.md) is the full guide: what each column means,
+how to get a run worth trusting, and how to add a case.
+[bench/RESULTS.md](bench/RESULTS.md) records two runs with the machine they were
+taken on.
+
+For the same reason CI builds the benchmarks and lists their cases, but times
+nothing and compares nothing. A shared, virtualized runner's timing variance is
+wider than most regressions worth catching, so a threshold tight enough to be
+useful would fail constantly and a threshold loose enough to be stable would
+catch nothing.
+
+Cases whose name ends in `_4t`, `_8t` or `_12t` run the same workload on that
+many threads. They report the same nanoseconds per operation, measured as wall
+time divided by the total operations across every thread, so a multi-threaded
+figure sits directly alongside the single-threaded one: a number that falls as
+threads are added means the work is spreading out, and a number that rises means
+the threads are getting in each other's way. The threads are created and parked
+before the clock starts, so what is timed is the work rather than the cost of
+spawning them.
+
+What the threads share depends on what the module promises. A module with
+internal locking (`cmempool`, `clrucache`, `clogger`, `cthreadcomm`,
+`cthreadpool`, and the HTTP client and server) gives every thread one shared
+instance, which is what measures the cost of that locking under real contention.
+The containers listed under "Intentionally Unguarded Containers" hold no locks
+at all, so a shared instance would be a data race rather than a measurement;
+each of their threads builds and drives its own instance instead, which is the
+supported way to use them concurrently and measures whether that use scales.
+
+Expect a wider spread on the multi-threaded cases than on the single-threaded
+ones. A repetition ends when its slowest thread does, so anything that slows one
+thread slows the whole repetition, and on a CPU with both performance and
+efficiency cores the placement of a given thread varies from one repetition to
+the next. The median stays meaningful; a single repetition does not.
+
+Where uthash, GLib, jansson or libyaml is installed, cases marked with the
+library's name in brackets run the identical workload through it. They are
+detected at build time and simply absent when they are not installed; none is
+required. They are reported for scale rather than as targets, and the
+comparison is not always like for like: `GHashTable` stores pointers and leaves
+key ownership to the caller, for instance, while `chashmap` copies keys and
+values into its own storage.
+
+Two figures are easy to misread. The `http` cases run a real server and a real
+client over loopback, so they measure the library's own per-request cost and
+not throughput over a network; the sequential case is much slower per request
+than the concurrent one because a request is latency-bound through the
+reactor-to-worker handoff, which overlaps once several requests are in flight.
+And `csort` reports per element rather than per sort, so the figure stays
+comparable if the element count changes.
 
 ### Installing
 
@@ -340,13 +480,225 @@ Include only the headers you need:
 
 The shared library exports exactly the symbols declared in the installed public headers and nothing else, so an internal helper can neither be linked against by accident nor become an unintended part of the interface.
 
-### Compiler Requirements
+### Module Layering
 
-The library targets C11 plus the GNU C extensions that GCC and Clang both implement: `typeof`, statement expressions, and `__attribute__((cleanup(...)))`. The type-safe container macros are built on them and there is no fallback path, so a strictly conforming compiler is not enough. In practice this means:
+The library ships as a single `libccollections.so`, so linking never requires
+picking modules apart. The layering below describes what each module actually
+pulls in, which matters in two situations: when linking statically and caring
+about the size of the result, and when deciding how much of the library to
+adopt.
 
-- GCC and Clang are supported, and both are exercised in CI on x86-64, i386, ARM32 and AArch64.
-- MSVC is not supported.
-- `-std=c11 -pedantic` rejects the extensions the macros rely on. Use `-std=gnu11` (or a later `gnu` standard), which is GCC's and Clang's own default.
+```
+Core                    depends on nothing else in the library
+  common                ccol_retval_t, cmap_pair, type introspection,
+                        the memory-management hooks, the pthread wrappers
+  cvector               dynamic array
+  chashmap              hash map
+  cbstmap               ordered map (AVL)
+  cstring               dynamic string
+  csort                 iterative bottom-up mergesort
+  cmempool              fixed-size and ranged memory pools
+  citerators            header-only; one iteration API over the containers
+
+Concurrency             builds on Core
+  cthreadpool           cvector, cpintable
+  cthreadcomm           cvector, chashmap, cthreadpool
+
+Services                builds on Core and Concurrency
+  clogger               cvector, chashmap, cthreadcomm, cthreadpool,
+                        cpintable
+  clrucache             cvector, chashmap, cthreadcomm, cthreadpool,
+                        cpintable
+
+Serialization           builds on Core
+  cjson                 cvector, chashmap
+  cyaml                 cvector, chashmap
+
+Networking              builds on all of the above, plus OpenSSL and zlib
+  chttp                 shared HTTP types, base64, RFC 7617 Basic auth
+  chttpclient           chttp, cvector, chashmap, cthreadcomm,
+                        cthreadpool, clogger, cpintable
+  chttpserver           chttp, cvector, chashmap, cthreadcomm,
+                        cthreadpool, clogger
+```
+
+Four further modules are internal. Two sit under Networking: a
+reactor-agnostic OpenSSL wrapper and the hand-written HTTP/1.1 parser that the
+client and the server share. Two sit under Core: the lock-free handle-to-pointer
+index that `cthreadpool`, `clogger`, `clrucache` and `chttpclient` resolve their
+opaque `uint64_t` handles through (`cpintable` above), and the key hash
+`chashmap` exposes so that `clrucache`'s segments agree with it on which keys
+are the same key. None of the four has an
+installed header, and none exports a symbol from the shared library.
+
+The dependency direction never reverses: nothing in Core knows about
+Concurrency, and nothing below Networking knows about it. `zlib` is reached
+only through `clogger`'s compression of rotated files, and OpenSSL only
+through the networking layer, so a program using containers alone still links
+them but calls into neither.
+
+### Supported Platforms
+
+**Operating system: Linux only.** This is structural rather than a matter of
+testing effort. The reactor that `cthreadcomm`, `chttpclient` and
+`chttpserver` are built on uses `epoll(7)`, and the same modules use
+`eventfd(2)` and `accept4(2)`. None of the three has a portable equivalent, so
+macOS and the BSDs do not compile and are not supported.
+
+**C library: glibc.** musl is not supported. Two things stand in the way:
+`chttpserver` calls the GNU flavour of `strerror_r`, using its return value
+directly, where musl provides the POSIX flavour that returns an `int`; and the
+`clogger` backtrace emitter needs `execinfo.h`, which musl does not ship. The
+backtrace path already degrades cleanly when the header is absent, so
+`strerror_r` is the harder of the two.
+
+**Architectures.** x86-64, i386 (ILP32), AArch64 and ARM32 (armhf) are all
+built and tested in CI, the latter two under emulation. The library is
+explicitly written for both LP64 and ILP32: a 32-bit `long`, a 32-bit
+`uintptr_t`, and the platform-dependent size of `long double` are all
+accounted for.
+
+**Compilers: GCC and Clang.** Both are exercised in CI on every architecture
+above. There are two separate floors worth keeping apart:
+
+- *The source* needs C11 plus three GNU C extensions that GCC and Clang both
+  implement: `typeof`, statement expressions, and
+  `__attribute__((cleanup(...)))`. The type-safe container macros are built on
+  them and there is no fallback path, so a strictly conforming compiler is not
+  enough. `-std=c11 -pedantic` rejects them; use `-std=gnu11` or a later `gnu`
+  standard, which is both compilers' own default.
+- *The default build flags* ask for more. `-D_FORTIFY_SOURCE=3` needs
+  `__builtin_dynamic_object_size`, which puts the floor at GCC 12 and
+  Clang 9, and `-fstack-clash-protection` raises the Clang floor to 11. CI
+  builds with whatever GCC and Clang its runner image ships, rather than a
+  pinned pair. Anything between the floor and those versions is expected to
+  work but is not tested.
+
+An older compiler can still build the library by overriding `CFLAGS` to drop
+the hardening flags it does not understand, at the cost of that hardening.
+Nothing in the library's own source requires them.
+
+**Loading with `dlopen`.** The library's thread-local fast paths (`cmempool`'s
+per-thread cache, and the per-thread slot the handle resolve behind `clogger`,
+`clrucache`, `cthreadpool` and `chttpclient` pins on) use the initial-exec
+thread-local storage model, which removes a function call from each of them.
+The trade-off is that the thread-local block they need is reserved when the
+library is loaded: a program that links against `libccollections.so` in the
+ordinary way, whether at build time or by loading it before its own threads
+start, is unaffected. A program that `dlopen()`s it late, in a process whose
+static thread-local block has already been exhausted by other libraries, gets a
+load failure instead. If that applies, build with
+`EXTRA_CFLAGS=-DCCOL_MEMPOOL_DYNAMIC_TLS=1`, which selects the general model at
+a cost of roughly 25 percent on the pool's thread-safe path.
+
+**MSVC is not supported**, and will not be: it implements neither the GNU
+extensions the macro layer depends on nor the Linux system calls the reactor
+depends on.
+
+### Compatibility and Versioning
+
+Releases are numbered `MAJOR.MINOR.PATCH`, and each field carries a specific
+promise.
+
+| Change | Version field | SONAME |
+|---|---|---|
+| Bug fix, no interface change | `PATCH` | unchanged |
+| New function, macro or type added | `MINOR` | unchanged |
+| Any existing interface removed or changed | `MAJOR` | incremented |
+
+The shared library's SONAME encodes `MAJOR` alone, so the whole `1.x` series
+links as `libccollections.so.1`.
+
+#### Source compatibility
+
+Code that compiles against `1.0` compiles unchanged against every later `1.x`
+release. Within the `1.x` series nothing in an installed header is removed,
+renamed, or given a different meaning: no function or macro disappears, no
+parameter changes type or order, no enumerator changes value, and no field is
+removed from or reordered within a public struct.
+
+#### Binary compatibility
+
+An application linked against `libccollections.so.1` runs against every later
+`1.x` release without relinking. Concretely, within `1.x`:
+
+- No exported symbol is removed, and no existing one changes its signature.
+- No public struct changes size or layout. This is the constraint that most
+  easily goes unnoticed, because it forbids something that looks additive:
+  appending a field to a by-value configuration struct such as
+  `chttpsvr_config_t`, `chttp_tls_config_t`, `clog_rotation_cfg_t` or
+  `clog_async_cfg_t` changes its size and breaks every caller that allocates
+  one. Such a struct grows only in a new `MAJOR`.
+- No enumerator's numeric value changes. `ccol_retval_t` in particular pins
+  every enumerator to an explicit value, and `ccol_success` is zero.
+
+Thirty of the exported symbols begin with an underscore. They look
+internal and are not meant to be named directly, but they are part of the ABI
+just as firmly as the rest: the type-safe macros expand into calls to them (and
+in one case into a reference to a link-time marker object), so an application's
+own object code references them directly. They are covered by
+the same guarantee as every other exported symbol.
+
+#### Behavioral compatibility
+
+The guarantee covers observable behavior, not just the shape of the
+interface. Within `1.x`, none of the following changes without a new `MAJOR`:
+
+- The `ccol_retval_t` a given input produces, and which conditions call
+  `ccol_fatal_err()` rather than returning a value.
+- Which operations invalidate an iterator or a borrowed element pointer.
+- The ownership rules for keys, values, and nodes, including which APIs return
+  a borrowed reference and which transfer ownership.
+- The order in which registered callbacks run, and the thread each is invoked
+  on.
+- The circumstances under which a caller-supplied allocator is invoked.
+- The documented thread-safety class of any type.
+
+Performance is deliberately not on that list. An algorithm or data structure
+may be replaced within a `1.x` release when the replacement is faster, as long
+as every behavior above is preserved.
+
+#### What the guarantee does not cover
+
+- Anything not declared in an installed public header. `chashkey.h`,
+  `chttp1_parser.h`, `ctls.h`, `cdebuglog.h` and `cpintable.h` are internal,
+  are excluded from `make install`, and export no symbols at all from the
+  shared library. They change freely.
+- Anything reachable only by defining `RUNNING_UNIT_TESTS`. Those accessors
+  exist for this repository's own test suites.
+- The exact text of log output, of error strings, and of serializer whitespace
+  where the format does not pin it.
+- The static archive's transitive dependency list, which follows whatever
+  OpenSSL and zlib require on the building system.
+
+#### How this is enforced
+
+Two checks run in CI on every push and pull request, and neither can be
+satisfied by the test suites alone, since every suite links the `.c` files
+directly and so resolves an unexported symbol exactly as it resolves an
+exported one:
+
+```bash
+make check_namespace   # every exported symbol, public macro and public
+                       # typedef carries its namespace prefix
+make check_abi         # the exported ABI matches the committed baseline
+                       # under abi/
+```
+
+`make check_abi` fails on a removed symbol, which breaks every linked
+application, and equally on a symbol that appears without being recorded,
+which is how an internal helper missing a `static` gets caught before it
+becomes something the project is obliged to keep. Adding public API is an
+ordinary, compatible change: run `make update_abi_baseline` and commit the
+updated baseline alongside it. Where libabigail is installed and an
+architecture-matched baseline exists under `abi/`, the same check also
+compares function signatures and public struct layouts, which a list of symbol
+names cannot describe. A difference there fails the check exactly as a symbol
+difference does, and is cleared the same way, by re-recording the baseline;
+the check does not try to sort such a difference into breaking and
+non-breaking by itself, because a public struct that grows relocates every
+later field in every struct embedding it and so breaks already-compiled
+applications, while the tool reports only that something changed.
 
 ### Compile-Time Configuration
 
@@ -359,6 +711,98 @@ make EXTRA_CFLAGS="-DCCOL_FORK_SAFETY_REQUIRED=0"
 Every other aspect of these modules' thread safety (locking, concurrent create/destroy safety via the generation-tagged handle tables) is unaffected either way; this switch controls fork() protection alone. With it turned off, calling `fork()` while any of these modules' locks might be held by another thread is the caller's own responsibility to avoid.
 
 The supported way to combine `fork(2)` with a `cthreadcomm`, `cthreadpool`, `clogger` or `chttpserver` handle is one of two patterns: `fork(2)` before creating the handle, so each process builds its own; or create the handle and `fork(2)` immediately followed by `exec(3)`. Continuing to run in a child that did not `exec(3)`, while a handle created before the fork is still live, is NOT supported: `fork()` does not duplicate the threads those handles depend on, so an inherited handle cannot serve work in the child and cannot be revived there.
+
+`CCOL_MEMPOOL_COMPACT_LAYOUT` (defined to `0` by default in `cmempool.h`) controls how far `cmempool` rounds the distance between one entry and the next. At `0` that distance is the element size, raised to hold a free entry's own list link and rounded up to 16 bytes, rounded on up to a power of two, so recovering an entry's position in the pool from its address is a shift. Building with `-DCCOL_MEMPOOL_COMPACT_LAYOUT=1` leaves it at the aligned element size and recovers the position with a multiply instead, against a reciprocal the pool computes and verifies when it is built.
+
+```bash
+make EXTRA_CFLAGS="-DCCOL_MEMPOOL_COMPACT_LAYOUT=1"
+```
+
+The compact setting costs a little on every allocation and release and can save a great deal of memory. An element size just above a power of two very nearly doubles under the default (a 1040-byte element strides at 2048) and does not move at all under the compact setting. An element size that is already a power of two, which is the common case, produces byte-identical pools either way, so there is nothing to gain from the switch unless your element sizes are awkward.
+
+It is a build-wide switch rather than a per-pool argument deliberately. A choice made per pool would have to be consulted on the path that every allocation and release takes, at a measurable cost to every caller, including those whose element sizes make the two layouts identical.
+
+No function, type or struct in the public interface changes with this setting. One macro does: `CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER` sizes an array in your own translation unit from the same stride the library derives, so **if you declare such a buffer, the setting has to match the library's own.** It differs only for element sizes that are not already powers of two, since that is the only case where the two roundings disagree:
+
+| `elem_size` | default stride | compact stride |
+|---|---|---|
+| 16, 64, 4096 | 16, 64, 4096 | 16, 64, 4096 |
+| 96 | 128 | 96 |
+| 100 | 128 | 112 |
+| 5000 | 8192 | 5008 |
+
+`CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER` is unaffected: every tier's element size is a power of two at or above the entry alignment, where the two roundings agree.
+
+You do not have to take the matching on trust. A mismatch is caught at link time rather than becoming a wrongly sized pool at run time: the library defines one of two objects named for the setting it was built with, the buffer-declaring macro references the one its own setting names, and a mismatch is an undefined reference naming the layout your code expected:
+
+```
+undefined reference to `_ccol_mempool_built_with_compact_layout'
+```
+
+Seeing that means the translation unit declaring the buffer was compiled with the compact setting against a library built without it. Rebuild whichever side is wrong. Only that macro carries the reference, so a file that includes `cmempool.h` without declaring a preallocated buffer needs nothing from the library it did not already need. Switching the setting does not need a `make clean` first: the build records the compiler and flags it last used and recompiles when they change.
+
+A compact build is a different ABI from the default one, so `make check_abi` recognises it and skips rather than reporting the difference as a break. The committed baseline under `abi/` describes the default build, and `make update_abi_baseline` declines to overwrite it from a compact build.
+
+`CCOL_MEMPOOL_DYNAMIC_TLS` (undefined by default) selects the general
+thread-local storage model instead of initial-exec for the library's
+thread-local fast paths: `cmempool`'s per-thread cache, and the per-thread slot
+the handle resolve used by `clogger`, `clrucache`, `cthreadpool` and
+`chttpclient` pins on. The default keeps a function call off those paths;
+defining this trades roughly 25 percent of the pool's thread-safe throughput
+for the ability to `dlopen()` the library into a process whose static
+thread-local block is already exhausted. See "Supported Platforms" above for
+when that applies.
+
+```bash
+make EXTRA_CFLAGS="-DCCOL_MEMPOOL_DYNAMIC_TLS=1"
+```
+
+### Leaving Modules Out
+
+Five modules can be left out of the library entirely. All are built by default;
+set any of these to `0` to drop one:
+
+| Switch | Module | Dropping it also drops |
+|---|---|---|
+| `WITH_CJSON` | `cjson` | nothing |
+| `WITH_CYAML` | `cyaml` | nothing |
+| `WITH_CLOGGER` | `clogger` | `zlib` |
+| `WITH_CHTTPCLIENT` | `chttpclient` | (with the server) OpenSSL |
+| `WITH_CHTTPSERVER` | `chttpserver` | (with the client) OpenSSL |
+
+```bash
+# no OpenSSL
+make WITH_CHTTPCLIENT=0 WITH_CHTTPSERVER=0
+
+# pthread and libm only
+make WITH_CJSON=0 WITH_CYAML=0 WITH_CLOGGER=0 \
+     WITH_CHTTPCLIENT=0 WITH_CHTTPSERVER=0
+```
+
+The point is dependencies rather than code size. OpenSSL enters the build
+through a single internal file that only the two HTTP modules use, so turning
+both off removes `libssl` and `libcrypto` completely; `zlib` arrives with
+`clogger` alone. With all five off the library needs nothing beyond `pthread`
+and `libm`. The generated `pkg-config` metadata follows, so
+`pkg-config --libs --static ccollections` names only what the build actually contains.
+
+Two switches interact. `chttpclient` and `chttpserver` both log through
+`clogger`, so `WITH_CLOGGER=0` is ignored, with a warning, while either is
+enabled. Everything else is independent: no module includes another optional
+module's header.
+
+A disabled module's public header is not installed, so `#include <cyaml.h>`
+fails at compile time with a missing file rather than at link time with
+undefined symbols. Its tests are skipped by `make test`, and `make check_abi`
+skips too, since the committed baseline describes the full library and a smaller
+symbol set is the expected result rather than a defect.
+
+**A reduced build is not ABI-interchangeable with a full one.** It carries the
+same SONAME while exporting fewer symbols, so an application linked against a
+full build will fail to start against a reduced one, reporting a missing symbol.
+These switches are for embedding a library you build and link yourself. If you
+are producing something other programs will resolve `libccollections.so.1`
+against, build the full library.
 
 ### Quick Start
 
@@ -771,7 +1215,7 @@ A hash map stores key-value pairs and answers "what value is associated with thi
 
 ### Implementation Selection
 
-**Open-addressing** is selected when both the key and the value are integral types no wider than eight bytes; `long double` is always excluded, whatever its width on the platform. It uses compact 24-byte slots (8-byte key, 8-byte value, 1-byte metadata, padded to a multiple of 8 so key/value storage stays naturally aligned for direct in-place access), Fibonacci hashing for integers, and linear probing. Load factor thresholds are 0.70 (grow) and 0.25 (shrink), with a 2x scale factor. There are zero per-entry heap allocations, and cache locality is quite good.
+**Open-addressing** is selected when both the key and the value are integral types no wider than eight bytes; `long double` is always excluded, whatever its width on the platform. It uses compact 16-byte slots (8-byte key, 8-byte value, naturally aligned for direct in-place access), with each slot's occupied and deleted bits held in a parallel byte array so that a probe screens many slots per cache line, Fibonacci hashing for integers read from the high bits of the product, and linear probing. Load factor thresholds are 0.70 (grow) and 0.25 (shrink), with a 2x scale factor. There are zero per-entry heap allocations, and cache locality is quite good.
 
 **Separate chaining** is selected for all other type combinations. It uses a linked-list per bucket, Small String Optimisation (23-byte inline buffer for short strings), and a doubly-linked list that preserves reverse insertion order. The minimum bucket count is 16 (always a power of two), and the scale factor is 4x.
 
@@ -897,6 +1341,13 @@ unsigned long fnv1a_hash(const void *ptr, size_t size) {
 
 chmap_construct_ch(m, char*, int, fnv1a_hash);
 ```
+
+A custom hash does not have to spread its own entropy. The map derives a bucket
+or slot index from the high bits of a hash, which suits the hashes it computes
+itself, so a value arriving from a caller is passed through an avalanche step
+first. A hash that is an identity, a counter, or something already reduced
+modulo a small number therefore still distributes, at the cost of a few
+operations per call that the built-in hashes do not pay.
 
 For a fixed-size key type (an integer, `float`, `double`, a pointer), `size` is always that type's own `sizeof`.
 
@@ -1424,11 +1875,127 @@ Because `csort` is a stable sort, two documents submitted at times `t1 < t2` wit
 
 ## 11. Memory Pools - `cmempool`
 
-A memory pool pre-allocates a large block of memory up front and hands out slices from it on demand. Compared to calling `malloc` for every object, pool allocation is faster (O(1) with no system calls for each request), produces no fragmentation, and makes peak memory usage predictable: the pool has a fixed capacity that cannot grow beyond what you set at creation.
+A memory pool pre-allocates a large block of memory up front and hands out slices from it on demand. Compared to calling `malloc` for every object, pool allocation is O(1) with no system call per request, produces no fragmentation, and makes peak memory usage predictable: a pool's capacity is fixed when it is created and never grows at run time.
 
 The library provides two pool allocators: a fixed-size pool (`ccol_mempool`) for objects of a single size, and a ranged pool (`ccol_r_mempool`) for objects across a range of sizes. Both offer optional thread safety and an optional fallback to the system allocator when the pool is exhausted.
 
+Every entry either pool hands out is aligned for any object type, which is the same guarantee `malloc()` makes, so anything you can store in heap memory can be stored in a pool entry. That holds for every way a pool can be built: heap-allocated or from a preallocated buffer, fixed-size or ranged, and for entries served by the dynamic fallback once a pool is exhausted.
+
 **Header:** `#include <cmempool.h>`
+
+### Performance and Sizing
+
+A thread-safe pool normally takes no lock at all. Each thread keeps a small
+private cache of entries and touches the shared free list only to refill or
+flush that cache, so threads allocating and freeing concurrently do not contend
+with each other on the common path.
+
+Two consequences matter when choosing a pool's size.
+
+**Give a thread-safe pool at least 8 elements.** A pool smaller than that has no
+room to carve a per-thread cache out of, so every allocation and every free takes
+the pool's lock, and concurrent callers serialise against one another. Pools of 8
+or more elements get the cache. The larger the pool, the larger each thread's
+cache and the less often it needs the shared list, so 8 is a floor rather than a
+target: a pool sized for real use will do considerably better than one sized at
+exactly 8.
+
+Pools created with `single_threaded = true`, and pools created from a
+preallocated buffer, never use the cache and are unaffected by this.
+
+**A pool that gets a cache allocates a reserve beyond the elements you asked
+for.** The reserve is what keeps the pool's promise intact: the element count you
+asked for stays obtainable by any thread no matter how many entries other threads
+are holding in their own caches. It costs memory, at most half of the requested
+count, falling to a quarter at 8192 elements, an eighth at 16384, and to a few
+percent or less from roughly 65536 upward: a cache has a maximum depth, so once
+a pool is large enough to reach it the reserve stops growing and the proportion
+keeps halving with every doubling of the count.
+
+`ccol_mempool_total_capacity()` still reports exactly the count you asked for,
+and `ccol_mempool_used_count()` still counts only entries genuinely handed out
+rather than entries merely pulled into a cache.
+
+What the reserve does change is how exact the upper end of the count is under
+concurrent load. A thread takes an entry out of its own cache without a lock,
+and therefore without consulting any count, so the decision to put entries in
+that cache has to be made ahead of time. That decision is deliberately biased
+towards the guarantee above: a thread is never refused while it is another
+thread's cache holding the entries it was entitled to. The cost is that
+concurrent callers can briefly hold a few more entries at once than the count
+you asked for, never more than the physical slot count (the count you asked for
+plus the reserve, which is the count `ccol_mempool_allocated_bytes()` accounts
+for). The
+extra entries come out of memory the pool already owns, so its footprint is
+unaffected; nothing grows at run time. A pool with no cache, which includes
+every single-threaded pool and every pool built on a preallocated buffer, is
+exact in both directions.
+
+That footprint is queryable, so sizing a pool against a memory budget does not
+mean reproducing the reserve formula yourself. `ccol_mempool_allocated_bytes()`
+returns the size of the block the pool holds for its entries and their per-entry
+state, reserve included, and `ccol_r_mempool_allocated_bytes()` sums that over a
+ranged pool's tiers:
+
+```c
+ccol_mempool *mp = ccol_mempool_create(1024, 64, false, false, NULL, NULL);
+
+ccol_mempool_total_capacity(mp);    // 1024, the count you asked for
+ccol_mempool_allocated_bytes(mp);   // 99840, what it costs
+```
+
+It counts the entry block only. The handle itself is a small fixed allocation,
+per-thread caches are separate allocations made lazily as threads first touch the
+pool, and entries served by the dynamic fallback are not part of the block at
+all. For a pool built on a buffer you supplied, it reports the part of that
+buffer divided into entries, none of which the pool allocated.
+
+The figures below come from one machine (Intel Core Ultra 7 155H, GCC 14, `-O3`)
+on a 64-byte allocate-and-free workload, expressed as a ratio against glibc
+`malloc`/`free` measured in the same run. Ratios rather than absolute times,
+because absolute figures move with CPU frequency and power state while the ratio
+between two allocators measured together does not.
+
+Each row gives the range repeated runs on that machine fall in. The range is
+wide enough to be worth stating: the hardware contributes more of it than the
+allocator does.
+
+| Configuration | Time per operation, relative to glibc malloc/free |
+|---|---|
+| Thread-safe, one thread | 0.77x to 0.88x (faster than malloc) |
+| `single_threaded = true` | 0.84x to 0.93x (faster than malloc) |
+
+With 8 threads sharing one pool on the same machine, the pool sustains roughly
+370 to 460 million operations per second, against roughly 340 to 420 million for
+glibc `malloc` measured beside it. Aggregate throughput rises with thread count
+rather than collapsing, which is what the per-thread cache exists to provide; a
+design that locks on every operation behaves the opposite way under the same
+load. The rise is not monotonic, and both arms dip at the same thread counts,
+which places that dip in that machine's own scheduling and power behaviour rather
+than in either allocator.
+
+Treat these as one particular machine's measurements rather than a
+specification. They will differ on other hardware, and on the same hardware
+under a different CPU governor.
+
+**Benchmark your own configuration rather than adopting these settings.** The
+best `elem_count`, `elem_size`, `single_threaded` choice and, for a ranged pool,
+the tier range all depend on the size distribution, thread count, and object
+lifetimes of the program doing the allocating, and no default is right for all of
+them. A pool tuned for short-lived objects churned by one thread looks nothing
+like one tuned for long-lived objects shared across eight. The benchmark suite is
+there for exactly this:
+
+```bash
+make bench_update                       # record a baseline on the current machine
+make bench                              # compare a later change against it
+make bench BENCH_ARGS="--filter=cmempool --reps=31"
+```
+
+Every pool case runs alongside the system allocator in the same process, so the
+comparison is against `malloc` as it behaves on your machine rather than against
+a number published here. Compare ratios between the two rather than absolute
+times.
 
 ### Fixed-Size Pool - `ccol_mempool`
 
@@ -1443,8 +2010,8 @@ void *b = ccol_mempool_calloc_entry(pool);   /* Zero-initialized */
 
 /* Use entries ... */
 
-ccol_mempool_free_entry(a);
-ccol_mempool_free_entry(b);
+ccol_mempool_free_entry(pool, a);
+ccol_mempool_free_entry(pool, b);
 ccol_mempool_destroy(pool);
 ```
 
@@ -1462,11 +2029,11 @@ ccol_mempool *pool = ccol_mempool_create_from_preallocated_buffer(
 
 void *slot = ccol_mempool_alloc_entry(pool);
 /* ... */
-ccol_mempool_free_entry(slot);
+ccol_mempool_free_entry(pool, slot);
 ccol_mempool_destroy(pool);  /* The buffer itself is not freed */
 ```
 
-`CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER` declares its buffer with the alignment the pool's internal per-element bookkeeping needs, so it can be handed straight to `ccol_mempool_create_from_preallocated_buffer()`. A hand-rolled buffer (not declared via the macro) must be aligned to at least `_Alignof(max_align_t)`, or creation fails with an error. `elem_size` smaller than `sizeof(uintptr_t)` is silently rounded up to fit the free-list pointer, the same way `ccol_mempool_create()` handles it; a genuine `elem_size` of `0` is rejected, and so is an `elem_count` of `0`. The per-element stride used to lay out the buffer (and, correspondingly, the pool's own heap-allocated buffer when not using a preallocated one) is further rounded up so that every element the pool hands out is correctly aligned, not just the first.
+`CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER` declares its buffer with the alignment every entry the pool hands out is guaranteed to meet, so it can be handed straight to `ccol_mempool_create_from_preallocated_buffer()`. Entry 0 sits at the buffer's own address, so the buffer decides whether that guarantee holds at all; the stride rounding described below only carries it from entry 0 to the rest. A hand-rolled buffer (not declared via the macro) must be aligned to at least 16 bytes, or creation fails with an error. `elem_size` smaller than `sizeof(uintptr_t)` is silently rounded up to fit the free-list pointer, the same way `ccol_mempool_create()` handles it; a genuine `elem_size` of `0` is rejected, and so is an `elem_count` of `0`. The per-element stride used to lay out the buffer (and, correspondingly, the pool's own heap-allocated buffer when not using a preallocated one) is further rounded up to 16 bytes, and then to a power of two unless the library and your translation unit were both built with `-DCCOL_MEMPOOL_COMPACT_LAYOUT=1`, so that every element the pool hands out is aligned for any object type, not just the first. Sixteen is a fixed constant rather than `_Alignof(max_align_t)`, because your code and the shared library are not necessarily built by the same compiler and these macros size an array on your side from a value the library derives its own layout from.
 
 ### Ranged Pool - `ccol_r_mempool`
 
@@ -1491,7 +2058,7 @@ ccol_r_mempool *rpool = ccol_r_mempool_create(
     4,  /* smallest_size_power_of_two */
     12, /* largest_size_power_of_two */
     9,  /* number_of_smallest_size_elems_power_of_two */
-    fallback_at_last_exhaustion,  /* Fall back to malloc only after all sub-pools are exhausted */
+    ccol_fallback_at_last_exhaustion,  /* Fall back to malloc only after all sub-pools are exhausted */
     /*single_threaded=*/false,
     NULL,   /* Use default allocator */
     NULL);  /* No error string output */
@@ -1503,9 +2070,9 @@ void *large  = ccol_r_mempool_alloc_entry(rpool, 500);  /* Served from the 512-b
 /* Resize; the entry is moved to the nearest fitting sub-pool if necessary */
 medium = ccol_r_mempool_realloc_entry(rpool, medium, 200);
 
-ccol_r_mempool_free_entry(small);
-ccol_r_mempool_free_entry(medium);
-ccol_r_mempool_free_entry(large);
+ccol_r_mempool_free_entry(rpool, small);
+ccol_r_mempool_free_entry(rpool, medium);
+ccol_r_mempool_free_entry(rpool, large);
 ccol_r_mempool_destroy(rpool);
 ```
 
@@ -1521,16 +2088,18 @@ CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(rmempool_buf, /* pool buffer name */
 
 ccol_r_mempool *pool = ccol_r_mempool_create_from_preallocated_buffer(
     rmempool_buf, sizeof(rmempool_buf), 4, 12, 9,
-    fallback_at_last_exhaustion, /*single_threaded=*/true,
+    ccol_fallback_at_last_exhaustion, /*single_threaded=*/true,
     NULL, NULL);
 
 void *slot = ccol_r_mempool_alloc_entry(pool, 100);
 /* ... */
-ccol_r_mempool_free_entry(slot);
+ccol_r_mempool_free_entry(pool, slot);
 ccol_r_mempool_destroy(pool);  /* The buffer itself is not freed */
 ```
 
-The same alignment requirement applies here: `CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER` already declares a suitably aligned buffer (every sub-pool segment inside it stays correctly aligned as a consequence), while a hand-rolled buffer must be aligned to at least `_Alignof(max_align_t)`.
+The same alignment requirement applies here: `CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER` already declares a suitably aligned buffer (every sub-pool segment inside it stays correctly aligned as a consequence), while a hand-rolled buffer must be aligned to at least 16 bytes.
+
+The macro rejects at compile time, rather than declaring an array that could not be used, any parameters that would overflow `size_t`, a `number_of_smallest_size_elems_power_of_two` below `largest_size_power_of_two - smallest_size_power_of_two`, or a `smallest_size_power_of_two` below 4: 16 bytes is the smallest element a ranged pool serves, so a buffer declared for anything smaller could only be handed to a constructor that refuses it.
 
 ### Real-World Use Case: A Fixed Pool of Bullets for a Game
 
@@ -1563,7 +2132,7 @@ Bullet *fire_bullet(float x, float y, float vx, float vy) {
 }
 
 void bullet_expire(Bullet *b) {
-    ccol_mempool_free_entry(b);   /* O(1) - returned to the free list */
+    ccol_mempool_free_entry(bullet_pool, b);   /* O(1) - returned to the free list */
 }
 ```
 
@@ -1947,13 +2516,41 @@ A cache stores the results of expensive operations so that repeated requests for
 
 ### Concurrency Guarantees
 
-All operations are serialised via a single global mutex combined with per-entry condition variables. The key properties are:
+A cache large enough to be worth it is divided into several independently
+locked segments, and a key belongs to exactly one of them, chosen from a hash of
+the key. Two threads working on keys in different segments do not wait
+for each other, so throughput holds up as threads are added rather than
+collapsing onto one lock. A small cache is left unsplit; see below.
+Operations on the same key still serialise, which is what the guarantees below
+rest on:
 
 - Multiple threads requesting the same uncached key coalesce: exactly one remote fetch executes; all others block and receive the same result when it completes.
 - A getter for a key that is currently being set blocks until the set completes, so it always reads a consistent value.
 - Multiple setters for the same key are serialised.
 
-The eviction callback is invoked while the cache mutex is held. It **must not** call back into the cache.
+The eviction callback is invoked while the owning segment's lock is held. It **must not** call back into the cache. Only that segment's lock is held, so two evictions in different segments can run the callback at the same time on two threads; state the callback keeps of its own needs its own protection.
+
+**A small cache is not split, and evicts in one exact global order.** Splitting
+begins at a capacity of 128, the first that gives two segments 64 entries each.
+Below that a cache is a single segment and keeps one exact, global
+least-recently-used order.
+
+**Above that size, eviction is per segment.** `capacity` is divided across the
+segments, and each evicts its own least recently used entry when its own share
+is full. The cache is sized for the capacity you asked for and
+`clrucache_capacity()` reports exactly that, but the entry chosen to make room
+is the oldest within one segment rather than the oldest in the whole cache. One
+practical consequence is worth knowing: because keys are spread by hash, some
+segments run fuller than others at any instant, so a cache filled to exactly its
+capacity holds a little less than that number. The shortfall is a few percent:
+up to about ten below roughly a thousand entries, and around two at eight
+thousand and above, falling further as the cache grows. It does not depend on
+the key type or on the width of the build. It disappears entirely below the split
+threshold, where the cache is not split at all.
+
+`clrucache_size()` sums the segments, reading each under its own lock. The
+result is a snapshot rather than an instant: a segment can gain or lose an
+entry after it has been counted, so the total describes no single moment.
 
 ### Basic Usage
 
@@ -4412,19 +5009,19 @@ The following components include their own internal synchronisation and are safe
 
 | Component | Synchronisation model |
 |---|---|
-| `ccol_mempool` | Internal read-write lock; disabled when created with `single_threaded = true` |
-| `ccol_r_mempool` | Internal read-write lock (one per size tier); disabled when created with `single_threaded = true` |
+| `ccol_mempool` | Internal mutex; disabled when created with `single_threaded = true` |
+| `ccol_r_mempool` | Internal mutex (one per size tier); disabled when created with `single_threaded = true` |
 | `ccol_circular_queue` | Internal mutex + condition variables |
 | `ccol_dynamic_queue` | Internal mutex + condition variable |
 | `ccol_channel` | Two internal circular queues (one per direction) |
-| `clrucache` | Single mutex + per-entry condition variables; see constraints below |
+| `clrucache` | Independently locked segments + per-entry condition variables; see constraints below |
 | `clogger` | Mutex on the shared backing store; all handles writing to the same fd are fully serialised; see constraints below |
 | `cthreadpool` | Internal mutex + condition variables; every public function, including `ctpool_shutdown_drain`, `ctpool_shutdown_immediate`, and `ctpool_destroy`, is safe to call concurrently with any other on the same handle; see constraints below |
 | `chttpclient` | Internal pool mutex + condition variable; all public functions including `chttpclient_do`, `chttpclient_do_streaming`, `chttpclient_do_async`, `chttpclient_do_async_streaming`, `chttpclient_do_pooled`, and `chttpclient_do_pooled_streaming` are safe to call concurrently on the same handle |
 
 ### Per-Component Constraints
 
-**`clrucache` eviction callback.** The callback passed to `clru_construct` is invoked **while the cache mutex is held**. It must not call back into the same cache handle, doing so will deadlock. It may allocate memory or write to a logger, but must not call `clru_get` or `clru_set` on the cache that triggered the eviction.
+**`clrucache` eviction callback.** The callback passed to `clru_construct` is invoked **while the owning segment's lock is held**. It must not call back into the same cache handle, doing so will deadlock. It may allocate memory or write to a logger, but must not call `clru_get` or `clru_set` on the cache that triggered the eviction. Only the one segment's lock is held, so the callback is not serialised against itself: two segments evicting at once run it concurrently on two threads, and any state it keeps of its own must be guarded by the callback.
 
 **`cthreadpool` shutdown and destroy.** `ctpool_shutdown_drain` and `ctpool_shutdown_immediate` are each idempotent, and `ctpool_destroy` may be called concurrently with either on a still-live handle. The one hard restriction is `ctpool_destroy` itself: calling it twice on the same handle, or racing two concurrent `ctpool_destroy` calls on one still-live handle, is a fatal error rather than a safe no-op. Every other public function, including the future functions, is safe to call concurrently.
 
@@ -4466,11 +5063,36 @@ cvec_construct_mp(vec, int, &arena_mprocs);
 chmap_construct_mp(map, char*, double, &arena_mprocs);
 ```
 
+**How long the allocator has to stay alive.** For every container except
+`cmempool`, the last call into these functions happens before the container's
+own destroy returns, so an allocator only has to outlive the containers using
+it.
+
+A `ccol_mempool` or `ccol_r_mempool` shared between threads is the exception.
+It keeps a small per-thread cache of entries, and destroying the pool marks
+those caches dead rather than freeing them, because a cache belongs to the
+thread holding it and another thread must not free it underneath that thread.
+Each is released when its owning thread next has to acquire a cache for a pool
+it does not already hold one for, when that thread exits, or, if that thread is
+the one that runs the library's process-exit handler, at process exit; each
+release calls the pool's `free`. None of those is guaranteed to happen: a thread
+that keeps using the same few pools answers every request from the caches it
+already holds and never acquires another, so it can hold a dead one
+indefinitely. A program that needs its allocator to see every free should join
+such threads. So a pool's allocator can be called after
+`ccol_mempool_destroy()` returns, and after `main()` returns.
+
+The arena above is exactly the shape that notices: if `g_arena` is released at
+the end of `main()` or by the application's own exit handler, a pool built on it
+can call `my_free` after the arena is gone. Allocators built on `malloc`/`free`,
+or on storage that lives for the whole process, are unaffected, and a pool
+created with `single_threaded` set keeps no such cache and has no such tail.
+
 ### Driving a Container from a Ranged Pool
 
 ```c
 ccol_r_mempool *node_pool = ccol_r_mempool_create(4, 10, 6,
-                                        fallback_at_last_exhaustion,
+                                        ccol_fallback_at_last_exhaustion,
                                         false, NULL, NULL);
 
 void *pool_malloc(size_t size) {
@@ -4486,7 +5108,7 @@ void *pool_realloc(void *p, size_t size) {
 }
 
 void  pool_free(void *p) {
-    ccol_r_mempool_free_entry(p);
+    ccol_r_mempool_free_entry(node_pool, p);
 }
 
 ccol_memmgmt_procs_t pool_mprocs = {

@@ -28,9 +28,24 @@ Returns NULL if pool exhausted and no fallback enabled
 .nf
 O(1) complexity
 Returned memory is uninitialized
-Thread-safe if pool created with single_threaded=false
+The returned pointer is aligned for any object type, the same guarantee
+malloc() makes, so any object that can be stored in heap memory can be
+stored in a pool entry
 Entry must be freed with ccol_mempool_free_entry()
+
+On a thread-safe pool this draws from a small per-thread cache, reaching
+the shared free list only when that cache needs refilling. A pool too
+small to maintain one, meaning fewer than 8 elements, takes the pool's
+lock on every call instead. See
+ccol_mempool_create(3) for how to size a pool, and for the recommendation
+to measure a candidate configuration rather than assume one.
+.fi
+.SH "THREAD SAFETY"
+.nf
+Thread-safe if the pool was created with single_threaded = false.
+Concurrent callers do not contend on the common path.
 .fi
 .SH "SEE ALSO"
 .BR ccol_mempool_calloc_entry (3),
-.BR ccol_mempool_free_entry (3)
+.BR ccol_mempool_free_entry (3),
+.BR ccol_mempool_create (3)

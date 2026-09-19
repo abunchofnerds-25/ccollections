@@ -9,7 +9,7 @@ SRC_FILE_PREFIX = cthreadcomm
 # slot table (a cvec of slots plus a cvec free-index stack).
 SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c \
             ../../src/chashmap.c ../../src/cthreadpool.c \
-            ../../src/cvector.c ../../src/common.c
+            ../../src/cvector.c ../../src/common.c ../../src/cpintable.c
 ALL_SRC_FILES = tests.c $(SRC_FILES)
 EXTRA_CFLAGS ?=
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-strong -Wstrict-overflow \

@@ -26,6 +26,7 @@ TAU_MAIN()
 
 extern struct cthread_pool *_ctpool_resolve_for_tests(ctpool h);
 extern size_t _ctpool_slot_table_capacity_for_tests(void);
+extern size_t _ctpool_free_index_count_for_tests(void);
 extern size_t _ctpool_task_free_list_size_for_tests(struct cthread_pool *pool);
 extern size_t _ctpool_task_free_list_cap_for_tests(struct cthread_pool *pool);
 extern size_t _ctpool_pending_resolve_count_for_tests(
@@ -601,7 +602,7 @@ TEST(timed_submit, malformed_negative_tv_nsec_normalized_correctly) {
    * that subtraction's own result). Letting it flow straight through into
    * the absolute deadline handed to ccol_cond_var_timedwait leaves that
    * deadline's own tv_nsec also possibly negative: undefined behaviour per
-   * POSIX. The identical hazard applies to ccol_add_duration_to_timespec
+   * POSIX. The identical hazard applies to _ccol_add_duration_to_timespec
    * in cthreadcomm.c.
    *
    * {1, -500000000} means "0.5 seconds" once correctly normalised (borrow
@@ -1362,18 +1363,22 @@ TEST(wait, concurrent_shutdown_drain_unblocks_wait) {
   }
 
   pthread_t waiter;
-  REQUIRE_EQ(pthread_create(&waiter, NULL, pool_wait_thread, &pool), 0);
+  bool started_waiter =
+      (pthread_create(&waiter, NULL, pool_wait_thread, &pool) == 0);
   sleep_ms(10); /* let waiter block inside ctpool_wait */
 
   /* A helper thread releases the gate after a delay so the worker exits
    * blocker_fn and drains the queued tasks while shutdown_drain is already
    * in progress. */
   pthread_t releaser;
-  REQUIRE_EQ(pthread_create(&releaser, NULL, release_gate_fn, &gate), 0);
+  bool started_releaser =
+      (pthread_create(&releaser, NULL, release_gate_fn, &gate) == 0);
 
   ctpool_shutdown_drain(pool);
-  pthread_join(releaser, NULL);
-  pthread_join(waiter, NULL); /* must not deadlock */
+  if (started_releaser) pthread_join(releaser, NULL);
+  REQUIRE_TRUE(started_waiter);
+  REQUIRE_TRUE(started_releaser);
+  if (started_waiter) pthread_join(waiter, NULL); /* must not deadlock */
   REQUIRE_EQ(atomic_load(&counter), 5);
   ctpool_destroy(pool);
 }
@@ -1813,6 +1818,108 @@ TEST(load, concurrent_producers) {
  * fatal error. Run in a forked child (mirroring tests/clogger/tests.c's own
  * fork-test precedent for process-terminating misuse) since ccol_fatal_err
  * aborts the whole process. */
+/* Publishing the handle into the pin index is the last step of pool creation,
+ * and it can fail: the index allocates a chunk and a stripe block on an index's
+ * first use, with plain calloc, which no caller-supplied allocator reaches. The
+ * rollback that failure runs has to put the slot back on the free list, or the
+ * index is lost for the life of the process. It also restores the slot to the
+ * shape a destroy leaves it in, which the fork below exercises as a smoke test
+ * rather than as a discriminating check: this rollback never sets in_use, and
+ * _ctpool_atfork_prepare skips any slot with neither in_use nor torn_down set,
+ * so the walk cannot reach a rolled-back slot whatever its ptr holds. Without
+ * the hook below that path needs a real out-of-memory condition, so it is
+ * unreachable from an ordinary test run. */
+extern void _ccol_pintable_force_next_publish_failure_for_tests(void);
+
+TEST(ctpool_handle_lifecycle, handle_publish_failure_rolls_the_slot_back) {
+  /* Repeated, and the table's growth over the whole run is what is asserted.
+   * A single cycle cannot tell the rollback apart from its absence: one lost
+   * slot simply makes the next pool grow the table by one, which is
+   * indistinguishable from the table having had no free slot to start with.
+   * Over CYCLES rounds a working rollback grows it by nothing at all, while a
+   * missing free-list push grows it by one per round. */
+  enum { CYCLES = 8 };
+  size_t before = _ctpool_slot_table_capacity_for_tests();
+  size_t free_before = _ctpool_free_index_count_for_tests();
+
+  bool all_failed = true, all_created = true;
+  for (int i = 0; i < CYCLES; i++) {
+    _ccol_pintable_force_next_publish_failure_for_tests();
+    ctpool bad = ccol_create_cthread_pool(2, 0, NULL);
+    if (bad != CTPOOL_INVALID) {
+      all_failed = false;
+      __ctpool_destroy(bad);
+      break;
+    }
+    ctpool good = ccol_create_cthread_pool(2, 0, NULL);
+    if (good == CTPOOL_INVALID) {
+      all_created = false;
+      break;
+    }
+    __ctpool_destroy(good);
+  }
+
+  _ccol_pintable_force_next_publish_failure_for_tests();
+  char *err = NULL;
+  ctpool failed = ccol_create_cthread_pool(2, 0, &err);
+  /* Captured, not asserted here: the only way the first of these is false is
+     that the forced failure did not apply, in which case `failed` is a live
+     pool with two worker threads and returning now would leak it along with
+     everything the rest of this test still has to clean up. */
+  bool forced_failure_applied = (failed == CTPOOL_INVALID);
+  bool err_reported = (err != NULL);
+  if (!forced_failure_applied) __ctpool_destroy(failed);
+
+  /* A fork with that slot sitting on the free list: the prepare handler walks
+   * every slot, and a rolled-back one it still considers live would be
+   * dereferenced here. The child does nothing but exit, so reaching an exit at
+   * all is the whole result being checked.
+   *
+   * Only WIFEXITED is asserted, never a particular exit code: a leak checker
+   * run with an error exit code and still-reachable memory treated as an error
+   * replaces a forked child's own status with that code, because the child
+   * inherits the parent's entire live image and reports all of it at exit. A
+   * WEXITSTATUS check here would therefore fail under memtest and pass
+   * everywhere else, for a reason that has nothing to do with the property
+   * under test. A crash in the prepare handler still shows up, as
+   * WIFEXITED being false. */
+  pid_t pid = fork();
+  if (pid == 0) _exit(0);
+  int status = 0;
+  bool forked = (pid != -1);
+  bool reaped = forked && (waitpid(pid, &status, 0) == pid);
+
+  /* The slot went back on the free list, so the next pool takes it again and
+   * the table does not grow for the failed attempt; and that pool must be
+   * fully usable, which a stale self_handle left behind would break on its
+   * first call. */
+  ctpool pool = ccol_create_cthread_pool(2, 0, NULL);
+  bool pool_ok = (pool != CTPOOL_INVALID);
+  size_t after = _ctpool_slot_table_capacity_for_tests();
+  size_t free_after = _ctpool_free_index_count_for_tests();
+  size_t pending = 0;
+  if (pool_ok) {
+    pending = ctpool_pending_count(pool);
+    ctpool_destroy(pool);
+  }
+
+  REQUIRE_TRUE(forked);
+  REQUIRE_TRUE(reaped);
+  REQUIRE_TRUE(forced_failure_applied);
+  REQUIRE_TRUE(err_reported);
+  REQUIRE_TRUE(WIFEXITED(status));
+  REQUIRE_TRUE(pool_ok);
+  REQUIRE_EQ(pending, (size_t)0);
+  REQUIRE_TRUE(all_failed);
+  REQUIRE_TRUE(all_created);
+  /* Growth alone is not enough: a lost slot only grows the table while the free
+     list is empty, so a run in which earlier tests left several free indices
+     behind would absorb every loss silently. The free list has to come back to
+     where it started too, which holds however deep it was. */
+  REQUIRE_LE(after, before + 2);
+  REQUIRE_GE(free_after + 2, free_before);
+}
+
 TEST(ctpool_handle_lifecycle, sequential_double_destroy_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
@@ -2258,14 +2365,16 @@ TEST(ctpool_handle_lifecycle, resolve_unpin_race_stress) {
     ctp_pending_count_arg_t pending_arg = {.h = pool};
     ctp_concurrent_destroy_arg_t destroy_arg = {.h = pool};
     pthread_t pending_tid, destroy_tid;
-    REQUIRE_EQ(pthread_create(&pending_tid, NULL, ctp_pending_count_thread,
-                              &pending_arg),
-               0);
-    REQUIRE_EQ(pthread_create(&destroy_tid, NULL, ctp_concurrent_destroy_thread,
-                              &destroy_arg),
-               0);
-    pthread_join(pending_tid, NULL);
-    pthread_join(destroy_tid, NULL);
+    bool started_pending_tid =
+        (pthread_create(&pending_tid, NULL, ctp_pending_count_thread,
+                        &pending_arg) == 0);
+    bool started_destroy_tid =
+        (pthread_create(&destroy_tid, NULL, ctp_concurrent_destroy_thread,
+                        &destroy_arg) == 0);
+    if (started_pending_tid) pthread_join(pending_tid, NULL);
+    if (started_destroy_tid) pthread_join(destroy_tid, NULL);
+    REQUIRE_TRUE(started_pending_tid);
+    REQUIRE_TRUE(started_destroy_tid);
   }
 }
 
@@ -2301,11 +2410,12 @@ TEST(ctpool_handle_lifecycle,
         pthread_create(&shutdown_tid, NULL,
                        ctp_concurrent_shutdown_immediate_thread, &shutdown_arg),
         0);
-    REQUIRE_EQ(pthread_create(&destroy_tid, NULL, ctp_concurrent_destroy_thread,
-                              &destroy_arg),
-               0);
+    bool started_destroy_tid =
+        (pthread_create(&destroy_tid, NULL, ctp_concurrent_destroy_thread,
+                        &destroy_arg) == 0);
     pthread_join(shutdown_tid, NULL);
-    pthread_join(destroy_tid, NULL);
+    if (started_destroy_tid) pthread_join(destroy_tid, NULL);
+    REQUIRE_TRUE(started_destroy_tid);
   }
 }
 
@@ -2815,8 +2925,8 @@ static void *ctp_fork_feeder_thread(void *arg) {
 TEST(fork_safety, fork_does_not_inherit_a_locked_ctpool_mutex) {
   ctp_fork_stop_arg_t churn = {.stop = 0};
   pthread_t churn_tid;
-  REQUIRE_EQ(pthread_create(&churn_tid, NULL, ctp_fork_churn_thread, &churn),
-             0);
+  bool started_churn_tid =
+      (pthread_create(&churn_tid, NULL, ctp_fork_churn_thread, &churn) == 0);
 
   char *err = NULL;
   ctpool pool = ccol_create_cthread_pool(3, 0, &err);
@@ -2825,8 +2935,8 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_ctpool_mutex) {
 
   ctp_fork_feeder_arg_t feeder = {.pool = pool, .stop = 0};
   pthread_t feeder_tid;
-  REQUIRE_EQ(pthread_create(&feeder_tid, NULL, ctp_fork_feeder_thread, &feeder),
-             0);
+  bool started_feeder_tid =
+      (pthread_create(&feeder_tid, NULL, ctp_fork_feeder_thread, &feeder) == 0);
 
   /* 60 trials, not hundreds: this configuration's own empirically-measured
    * hang rate with the protection disabled (roughly 10-20% of trials,
@@ -2910,9 +3020,11 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_ctpool_mutex) {
   REQUIRE_EQ(hangs, 0);
 
   atomic_store(&feeder.stop, 1);
-  pthread_join(feeder_tid, NULL);
+  if (started_feeder_tid) pthread_join(feeder_tid, NULL);
   atomic_store(&churn.stop, 1);
-  pthread_join(churn_tid, NULL);
+  if (started_churn_tid) pthread_join(churn_tid, NULL);
+  REQUIRE_TRUE(started_churn_tid);
+  REQUIRE_TRUE(started_feeder_tid);
 
   ctpool_shutdown_drain(pool);
   ctpool_destroy(pool);

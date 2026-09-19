@@ -27,6 +27,7 @@ SOFTWARE.
 #include <chashmap.h>
 #include <clogger.h>
 #include <common.h>
+#include <cpintable.h>
 #include <cthreadcomm.h>
 #include <ctype.h>
 #include <cvector.h>
@@ -272,13 +273,10 @@ struct clogger {
   ccol_mutex_t fields_mutex;
   chmap fields;   /* chmap(char* -> char*); per-logger fields */
   clog_buf_t buf; /* per-logger reusable write buffer          */
-  /* Pinned by _clog_resolve() (lock-free atomic increment) for as long as a
-   * caller holds a resolved pointer to this handle; clog_close() poll-waits
-   * on this reaching 0 (see _clog_resolve_unpin()'s own doc comment for why
-   * that decrement is a bare atomic op with no lock/broadcast, unlike the
-   * chttpsvr/chttpcli slot tables' own analogous field) before touching any
-   * per-handle state. */
-  _Atomic size_t pending_resolve_count;
+  /* This logger's own handle, so an unpin can find the slot holding its pin
+   * without the caller having to carry one. Written once, before the handle is
+   * published, and never again. */
+  clog self_handle;
 };
 
 /* ========================================================================== */
@@ -291,11 +289,10 @@ struct clogger {
  * (src/chttpserver.c, src/chttpclient.c) closely, with one deliberate
  * deviation: clogger's own resolve is on the hot path of every single
  * log_* call (including filtered-out ones), far more frequent than either
- * of those modules' own resolve sites, so this table uses a reader-writer
- * lock (concurrent resolvers never serialise against each other) instead of
- * a plain mutex, and a lock-free unpin (a bare atomic decrement, no
- * mutex+condvar broadcast) instead of the mutex-guarded decrement those two
- * modules use.
+ * of those modules' own resolve sites. The table itself is guarded by a
+ * reader-writer lock for the cold paths that mutate it (acquire, close, the
+ * fork walk), while resolving and pinning go through the lock-free handle
+ * index in cpintable.h and take no lock of this table's at all.
  */
 typedef struct {
   struct clogger *ptr; /* NULL when free */
@@ -309,6 +306,13 @@ typedef struct {
                before ptr->fields_mutex is actually destroyed */
 } clog_slot_t;
 
+/* The hot half of the table above: handle to pointer, plus the pin that holds
+ * a logger alive for the duration of a call. Kept separate because a resolve
+ * runs on every single log call and must not write anything another thread
+ * reads, while everything else this table does (fork handling, live_shareds,
+ * slot recycling) is cold and stays under the rwlock. */
+static ccol_pintable clog_pintable;
+
 static struct {
   ccol_rw_lock_t rwlock;
   ccol_once_flag_t once;
@@ -319,7 +323,31 @@ static struct {
       independent of any individual handle's in_use flag; see "Fork
       safety" below for why this dedicated registry exists rather than
       deriving the set of live clog_shared_t objects from the handle table */
+  /* How many clog_close calls have passed the point where they stop being
+     visible as a live slot and have not yet finished with this table. A close
+     clears its own slot->ptr partway through and then re-acquires the write
+     lock to remove its shared object from live_shareds, so slot->ptr alone does
+     not cover the whole window during which the table must survive. Within one
+     thread that is harmless, because the later step always follows; across
+     threads it is not, and without this counter a second close completing in
+     between destroys live_shareds and the first close then indexes it. */
+  size_t closes_in_flight;
+  /* Set when the process-exit destructor found a logger still open and left
+     this table alone, so that whichever close is the last one out afterwards
+     performs the release the destructor could not. Without it, a logger closed
+     from a destructor linked earlier than this one would leave the table and
+     the pin index allocated for the rest of the process, which a leak checker
+     treating still-reachable memory as an error reports. Read and written only
+     under the write lock. */
+  bool release_deferred;
 } clog_slot_table = {0};
+
+/* Defined with the process-exit teardown below; declared here because
+   clog_close's own final locked section performs the release the destructor
+   deferred. */
+static bool _clog_any_slot_live_locked(void);
+static void _clog_release_slot_table_locked(void);
+static void _clog_release_slot_table_if_deferred_locked(void);
 
 #if CCOL_FORK_SAFETY_REQUIRED
 /*
@@ -415,6 +443,20 @@ bool clog_test_close_finalize_delay_entered(void) {
   return atomic_load(&_clog_test_close_finalize_delay_entered);
 }
 
+/* See clog_test_set_close_release_window_us()'s own doc comment in clogger.h.
+ * Like the hook above, deliberately does not auto-disarm. */
+static _Atomic unsigned int _clog_test_close_release_window_us = 0;
+static _Atomic bool _clog_test_close_release_window_entered = false;
+
+void clog_test_set_close_release_window_us(unsigned int delay_us) {
+  atomic_store(&_clog_test_close_release_window_entered, false);
+  atomic_store(&_clog_test_close_release_window_us, delay_us);
+}
+
+bool clog_test_close_release_window_entered(void) {
+  return atomic_load(&_clog_test_close_release_window_entered);
+}
+
 size_t clog_test_live_shareds_count(void) {
   ccol_call_once(clog_slot_table.once, _clog_slot_table_init_globals);
   ccol_rw_lock_rdlock(clog_slot_table.rwlock);
@@ -492,48 +534,33 @@ void _clog_ensure_atfork_registered_before_caller(void) {
  * Resolve h, pinning the result against a concurrent clog_close(). Returns
  * NULL if h == 0, out of range, or references a free/wrong-generation slot.
  * Caller must call _clog_resolve_unpin() exactly once on every path once
- * resolution succeeded. Takes the table's READ lock only; concurrent
- * resolvers never serialise against each other, only against a concurrent
- * _clog_handle_acquire/clog_close (both take the WRITE lock).
+ * resolution succeeded. Takes no lock at all and writes nothing another thread
+ * reads: this runs on every log_* call, including one its own level check
+ * discards, so anything shared written here would be paid by every core.
  */
 static struct clogger *_clog_resolve(clog h) {
-  ccol_call_once(clog_slot_table.once, _clog_slot_table_init_globals);
-  if (h == 0) return NULL;
-  uint32_t idx = (uint32_t)(h >> 32);
-  uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
-  ccol_rw_lock_rdlock(clog_slot_table.rwlock);
-  struct clogger *raw = NULL;
-  if (idx < cvector_elem_count(clog_slot_table.slots)) {
-    clog_slot_t *slot = (clog_slot_t *)cvector_at(clog_slot_table.slots, idx);
-    if (slot->in_use && slot->generation == gen) raw = slot->ptr;
-  }
-  if (raw) atomic_fetch_add(&raw->pending_resolve_count, 1);
-  ccol_rw_lock_unlock(clog_slot_table.rwlock);
-  return raw;
+  /* No lock, and no write to anything another thread reads. The pin index is a
+   * zeroed static, so a handle presented before any logger has ever been
+   * opened simply finds no chunk and resolves to NULL, which is the same
+   * answer an empty slot table gives. */
+  return (struct clogger *)ccol_pintable_pin(&clog_pintable, h);
 }
 
 /*
- * Lock-free, deliberately, and safely. A bare atomic decrement is only safe
- * in an unpin that has nothing left to do afterward, which is exactly what
- * separates this one from the analogous unpins in chttpserver.c and
- * chttpclient.c: those two must still acquire their own lock and broadcast
- * to a condvar-waiting destroyer, so decrementing their own
- * pending_resolve_count to 0 outside that lock lets the destroyer free the
- * object before the delayed lock/broadcast call ever runs; a use-after-free
- * their own doc comments spell out.
+ * Lock-free, deliberately, and safely: it releases the pin and touches nothing
+ * else. clog_close() never sleeps on a condvar waiting for this function to
+ * wake it; it polls the pin count instead (see clog_close()'s own step 3), so
+ * there is no wakeup to deliver. Do NOT add a lock, a broadcast, or any other
+ * touch of raw here later "to be safe": once the pin is released the object
+ * may be freed at any instant, so anything after the release is a
+ * use-after-free, and anything before it is a shared write on a path whose
+ * whole purpose is to have none.
  *
- * This function's body is, and must remain, exactly the one
- * atomic_fetch_sub statement below, with no lock acquisition and no
- * broadcast afterward, because clog_close() never sleeps on a condvar
- * waiting for this function to wake it; it polls instead (see
- * clog_close()'s own step 3), so there is no wakeup left to deliver and
- * therefore nothing left for this function to do once the decrement
- * completes. Do NOT add a lock/broadcast/any other touch of raw to this
- * function later "to be safe"; that opens exactly the touch-after-decrement
- * window described above.
+ * Reading raw->self_handle before releasing is safe precisely because the pin
+ * is still held at that point.
  */
 static void _clog_resolve_unpin(struct clogger *raw) {
-  atomic_fetch_sub(&raw->pending_resolve_count, 1);
+  ccol_pintable_unpin(&clog_pintable, raw->self_handle);
 }
 
 /*
@@ -574,6 +601,15 @@ static clog _clog_handle_acquire(struct clogger *lg) {
     cvector_pop_back(clog_slot_table.free_indices, &idx);
     slot = (clog_slot_t *)cvector_at(clog_slot_table.slots, idx);
   } else {
+    /* A slot whose index is beyond what the pin table can hold could never be
+     * published, so it is refused here rather than claimed and rolled back:
+     * rolling one back would put an index no later publish can use onto the
+     * free list every acquire pops from. Reported as an ordinary failure,
+     * which is how a caller already has to treat a table that cannot grow. */
+    if (cvector_elem_count(clog_slot_table.slots) >= CCOL_PIN_MAX_SLOTS) {
+      ccol_rw_lock_unlock(clog_slot_table.rwlock);
+      return CLOG_INVALID;
+    }
     clog_slot_t fresh = {0};
     if (cvector_push_back(clog_slot_table.slots, &fresh) != ccol_success) {
       ccol_rw_lock_unlock(clog_slot_table.rwlock);
@@ -646,11 +682,47 @@ static clog _clog_handle_acquire(struct clogger *lg) {
 
   slot->generation++;
   if (slot->generation == 0) slot->generation++; /* skip the sentinel value */
+
+  clog h = ((clog)idx << 32) | (clog)slot->generation;
+
+  /* Written before the handle is published, so a resolver that finds this
+   * logger also finds the handle its own unpin needs. */
+  lg->self_handle = h;
+
+  /* Publishing can allocate (a first-use chunk or stripe block), and a failure
+   * leaves the slot unpublished, so the handle would resolve to nothing. Roll
+   * the slot back exactly as the live_shareds failure above does rather than
+   * hand out a handle no call could ever resolve. */
+  if (!ccol_pintable_publish(&clog_pintable, idx, slot->generation, lg)) {
+    /* This is the one failure that can happen after lg->shared has already
+     * been registered, so the registration has to be undone here. Leaving it
+     * behind would keep a pointer to a shared object in the set
+     * _clog_atfork_prepare walks and locks, while the caller, having been
+     * handed CLOG_INVALID, goes on to free it: the next fork() in the process
+     * would then lock a mutex inside freed memory.
+     *
+     * Popping the tail is exactly right rather than a search: live_shareds is
+     * only ever mutated under the write lock this function holds for its whole
+     * body, so if this call pushed at all (which is precisely when the entry
+     * was not already registered) its entry is still the last one. */
+    if (!already_registered) {
+      clog_shared_t *rolled_back = NULL;
+      cvector_pop_back(clog_slot_table.live_shareds, &rolled_back);
+    }
+    /* Cleared because the slot is going back on the free list: a handle left
+     * behind here names a slot that now belongs to somebody else, and an unpin
+     * carrying it would charge that object's count for a pin nobody took. */
+    lg->self_handle = 0;
+    slot->freed = true;
+    slot->ptr = NULL;
+    cvector_push_back(clog_slot_table.free_indices, &idx);
+    ccol_rw_lock_unlock(clog_slot_table.rwlock);
+    return CLOG_INVALID;
+  }
+
   slot->ptr = lg;
   slot->in_use = true;
   slot->freed = false;
-
-  clog h = ((clog)idx << 32) | (clog)slot->generation;
 
   ccol_rw_lock_unlock(clog_slot_table.rwlock);
   return h;
@@ -686,6 +758,9 @@ static clog _clog_handle_acquire(struct clogger *lg) {
  * may still legitimately hold it during that same window.
  */
 static void _clog_atfork_prepare(void) {
+#ifdef RUNNING_UNIT_TESTS
+  _ccol_atfork_order_record(ccol_atfork_module_clogger);
+#endif
   /* Per this file's own standing pthread-wrapper rule: every function that
    * directly touches clog_slot_table.rwlock must guard it with this same
    * ccol_call_once, even though pthread_atfork() can only ever invoke this
@@ -778,12 +853,11 @@ static void _clog_atfork_release(bool in_child) {
     struct clogger *lg =
         *(struct clogger **)cvector_at(_clog_atfork_state.locked_fields, i);
     if (in_child) {
-      /* pending_resolve_count is pinned (lock-free atomic increment) by
-       * _clog_resolve() for as long as SOME thread holds a resolved pointer
-       * to this handle, e.g. any thread currently inside a call to one of
-       * the log_ macros or one of the other public clog_ functions on it,
-       * and clog_close() poll-waits on it reaching 0 with no upper bound
-       * (see that field's own doc comment). fork() duplicates only the
+      /* A pin is held for as long as SOME thread holds a resolved pointer to
+       * this handle, e.g. any thread currently inside a call to one of the
+       * log_ macros or one of the other public clog_ functions on it, and
+       * clog_close() poll-waits on the count reaching 0 with no upper bound.
+       * fork() duplicates only the
        * calling thread, so a pin held by any OTHER thread at fork() time can
        * now never be released: that thread's own eventual
        * _clog_resolve_unpin() call, the only thing that would ever decrement
@@ -802,7 +876,7 @@ static void _clog_atfork_release(bool in_child) {
        * the sh->async_enabled/sh->pending_compress handling below, which
        * similarly assumes the forking thread is not itself mid-operation on
        * the shared target). */
-      atomic_store(&lg->pending_resolve_count, 0);
+      ccol_pintable_reset_for(&clog_pintable, lg->self_handle);
     }
     ccol_mutex_unlock(lg->fields_mutex);
   }
@@ -892,7 +966,7 @@ static void _clog_atfork_release(bool in_child) {
        * since a slot recorded as "closing" is not guaranteed to also have
        * made it into locked_fields, e.g. under the same OOM degradation
        * documented on that push above). */
-      atomic_store(&raw->pending_resolve_count, 0);
+      ccol_pintable_reset_for(&clog_pintable, raw->self_handle);
 
       /* Step 4: retire the slot. fields_mutex was already unlocked above
        * (unconditionally, by the locked_fields loop, or immediately inline
@@ -961,26 +1035,116 @@ static void _clog_atfork_child(void) { _clog_atfork_release(true); }
  * unconditional one): clog handles are expected to be plentiful and
  * independently owned across a process, rather than having one obvious
  * owner responsible for closing everything before exit, so this only frees
- * the slot table's own bookkeeping vectors if every slot has already been
- * closed; if any handle is still open at process exit, freeing them out
- * from under a destructor/atexit handler in some other translation unit
- * that runs later would risk a use-after-free, so this leaves them (and
- * whatever they still reference) for the OS to reclaim instead. */
-__attribute__((destructor)) static void _cleanup_clog_slot_table(void) {
-  if (!clog_slot_table.slots) return; /* never initialized; nothing to do */
+ * the slot table's own bookkeeping vectors once nothing can still reach them;
+ * with a handle still open, or a close still in flight, freeing them out from
+ * under a destructor/atexit handler in some other translation unit that runs
+ * later would risk a use-after-free. In that case the release is handed to
+ * whichever close is the last one out rather than skipped, so a program that
+ * does close its loggers leaves nothing behind whatever order the destructors
+ * ran in; a program that does not leaves them for the OS to reclaim. */
+/* Whether any slot still names a logger. Caller holds the write lock.
+ *
+ * slot->ptr, not slot->in_use: in_use is cleared as the first step of a close,
+ * so that a second close or a new resolve is rejected as early as possible,
+ * and the rest of the teardown (draining pins, the final locked release of the
+ * index) runs after it. A scan that trusted in_use alone would free this table
+ * out from under a close still in that window, which the last step of it then
+ * indexes. ptr is written only once a slot is fully acquired and cleared only
+ * in that final locked step.
+ *
+ * ptr still does not cover the whole window on its own: a close clears it and
+ * then re-acquires the write lock to remove its shared object from
+ * live_shareds, so between those two points it is invisible here while still
+ * needing the table. closes_in_flight covers exactly that remainder, which is
+ * why every decision to release goes through _clog_table_still_needed_locked()
+ * rather than calling this directly. */
+/* Whether anything still needs this table: a slot that still names a logger,
+ * or a close that has already cleared its slot but has not finished with the
+ * table's other vectors. Caller holds the write lock. Both deciders use this
+ * rather than the slot scan alone, since a close in its own final steps is
+ * invisible to that scan by construction. */
+static bool _clog_table_still_needed_locked(void);
+
+static bool _clog_any_slot_live_locked(void) {
   size_t n = cvector_elem_count(clog_slot_table.slots);
   for (size_t i = 0; i < n; i++) {
     clog_slot_t *slot = (clog_slot_t *)cvector_at(clog_slot_table.slots, i);
-    if (slot->in_use) return;
+    if (slot->ptr != NULL) return true;
   }
+  return false;
+}
+
+/* Releases the table's own bookkeeping and the pin index. Caller holds the
+ * write lock and has established that nothing still needs this table.
+ *
+ * The pin index's slot storage is deliberately never released while the
+ * process runs, because a resolve indexes it with no lock held, so a leak
+ * checker configured to treat still-reachable memory as an error reports it at
+ * exit unless it is released here. The vectors are NULLed as they go, which is
+ * what makes a later call answer "already released" rather than index a freed
+ * one. The rwlock is not destroyed here: this can run from an ordinary close
+ * that is still holding it. */
+/* The check and the release both live behind one out-of-line call, so the
+ * destroy path that has to make it keeps the code shape it would have without
+ * any of this. Cold code in a hot object file is not free: inlined here, the
+ * same handful of instructions measurably slows an unrelated container's push
+ * path by shifting what the linker laid out around it, with the instruction
+ * count unchanged. */
+static __attribute__((noinline)) void
+_clog_release_slot_table_if_deferred_locked(void) {
+  if (clog_slot_table.release_deferred && !_clog_table_still_needed_locked()) {
+    _clog_release_slot_table_locked();
+  }
+}
+
+static bool _clog_table_still_needed_locked(void) {
+  return clog_slot_table.closes_in_flight != 0 || _clog_any_slot_live_locked();
+}
+
+static void _clog_release_slot_table_locked(void) {
   cvector_destroy(clog_slot_table.slots);
   cvector_destroy(clog_slot_table.free_indices);
   cvector_destroy(clog_slot_table.live_shareds);
+  ccol_pintable_dispose(&clog_pintable);
 #if CCOL_FORK_SAFETY_REQUIRED
   cvector_destroy(_clog_atfork_state.locked_fields);
   cvector_destroy(_clog_atfork_state.closing_slots);
 #endif
-  ccol_rw_lock_destroy(clog_slot_table.rwlock);
+  clog_slot_table.release_deferred = false;
+}
+
+__attribute__((destructor)) static void _cleanup_clog_slot_table(void) {
+  if (!clog_slot_table.slots)
+    return; /* never initialized, or already released */
+  /* Held across the scan and everything it decides, the way every other
+   * module's equivalent teardown holds its own: a thread still calling into
+   * this module while the process tears itself down would otherwise be inside
+   * an acquire, publishing a chunk into the very index being freed here. */
+  ccol_rw_lock_wrlock(clog_slot_table.rwlock);
+  /* Only once nothing is left that could still resolve a handle. With a logger
+   * still open, the release is handed to whichever close is the last one out
+   * rather than skipped, so an application that does close its loggers leaves
+   * nothing behind whatever order the destructors ran in. */
+  if (_clog_table_still_needed_locked()) {
+    clog_slot_table.release_deferred = true;
+    ccol_rw_lock_unlock(clog_slot_table.rwlock);
+    return;
+  }
+  _clog_release_slot_table_locked();
+  ccol_rw_lock_unlock(clog_slot_table.rwlock);
+  /* The rwlock itself is deliberately not destroyed. It has static storage
+     duration, so leaving it holds nothing a leak checker reports, and the
+     destructor cannot own its lifetime in any case: the deferred branch above
+     returns with the table still live, and the release that eventually happens
+     runs while holding this very lock, so there is no path on which every user
+     is provably finished with it. Destroying it here would leave the other
+     branch's entry points taking a lock on a destroyed object, which is
+     undefined, in place of the defined abort they otherwise reach: a call made
+     once the table has been released stops at an assertion inside the vector it
+     indexes, and one made on a stale handle stops at this module's own
+     ccol_fatal_err. Destructor ordering across translation units is not this
+     library's to decide, so neither outcome can be ruled out by arranging who
+     runs first. */
 }
 
 /* ========================================================================== */
@@ -4147,6 +4311,15 @@ void clog_close(clog h) {
     raw = slot->ptr;
     sh = raw->shared;
     slot->in_use = false;
+    /* Charged from here, where this close stops being findable, to the last
+     * statement of the function, which is the whole span over which it still
+     * reads the table's vectors. Every exit between the two is a fatal abort,
+     * so the count cannot be stranded. */
+    clog_slot_table.closes_in_flight++;
+    /* Same step, same lock: from here no new resolve can find this handle,
+     * which is what makes the pin count below able to reach zero and stay
+     * there. */
+    ccol_pintable_retire(&clog_pintable, idx);
     ccol_rw_lock_unlock(clog_slot_table.rwlock);
   }
 
@@ -4157,8 +4330,9 @@ void clog_close(clog h) {
    * at. usleep() is not a pthread/sem primitive, so it needs no common.h
    * wrapper. */
   {
+    uint32_t idx = (uint32_t)(h >> 32);
     unsigned int delay_us = 1;
-    while (atomic_load(&raw->pending_resolve_count) > 0) {
+    while (ccol_pintable_pins(&clog_pintable, idx) > 0) {
       usleep(delay_us);
       if (delay_us < 1000) delay_us *= 2;
     }
@@ -4198,6 +4372,20 @@ void clog_close(clog h) {
     cvector_push_back(clog_slot_table.free_indices, &idx);
     ccol_rw_lock_unlock(clog_slot_table.rwlock);
   }
+
+#ifdef RUNNING_UNIT_TESTS
+  /* Test-only, deterministic widening of the window in which this close has
+   * cleared its own slot->ptr but has not yet finished with the table; see
+   * clog_test_set_close_release_window_us()'s own doc comment. A no-op (reads
+   * a plain 0) outside of a test that has armed it. */
+  {
+    unsigned int w = atomic_load(&_clog_test_close_release_window_us);
+    if (w) {
+      atomic_store(&_clog_test_close_release_window_entered, true);
+      usleep(w);
+    }
+  }
+#endif
 
   /* Step 5: decrement the shared ref count. Never overlaps holding both the
    * slot table's write lock and shared->mutex at once (step 4 has already
@@ -4242,6 +4430,27 @@ void clog_close(clog h) {
     ccol_mutex_destroy(sh->mutex);
     _shared_free_partial(sh);
   }
+
+  /* Last of all. Where the process-exit destructor already ran and found a
+   * logger still open, the release it could not perform falls to whichever
+   * close is the last one out, which may be this call; it has to happen after
+   * everything above, because releasing the table destroys live_shareds along
+   * with the slot vectors, and step 6 walks live_shareds. Releasing in step 4
+   * instead makes the two conditions the same condition rather than independent
+   * ones: a release attempted there could never fire at all, since this close
+   * has charged itself against the table since step 1 and so is still counted
+   * as needing it; the table would then simply never be released.
+   *
+   * Position alone is only enough for one thread. A concurrent close that has
+   * cleared its own slot is invisible to the "is any slot still live" scan
+   * while it is still between its own steps 4 and 6, so this call would
+   * destroy live_shareds underneath it; the closes_in_flight count this
+   * decrement belongs to is what makes the guard cover that too. A sibling
+   * handle still open keeps the table either way. */
+  ccol_rw_lock_wrlock(clog_slot_table.rwlock);
+  clog_slot_table.closes_in_flight--;
+  _clog_release_slot_table_if_deferred_locked();
+  ccol_rw_lock_unlock(clog_slot_table.rwlock);
 }
 
 clog clog_derive(clog parent_h) {

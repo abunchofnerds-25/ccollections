@@ -7527,6 +7527,9 @@ __attribute__((destructor)) static void _cleanup_chttpsvr_router_shells(void) {
  * identical treatment just below, and ctpool's/ccol_event_loop's own foreign_
  * since_fork machinery for their own worker threads. */
 static void _chttpsvr_atfork_prepare(void) {
+#ifdef RUNNING_UNIT_TESTS
+  _ccol_atfork_order_record(ccol_atfork_module_chttpserver);
+#endif
   ccol_call_once(chttpsvr_slot_table.once, _chttpsvr_slot_table_init_globals);
   ccol_mutex_lock(chttpsvr_slot_table.mutex);
 

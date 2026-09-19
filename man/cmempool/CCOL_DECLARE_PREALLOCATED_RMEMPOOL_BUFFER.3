@@ -18,8 +18,8 @@ CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(
 Declares a uint8_t array sized correctly for a ranged memory pool with
 the specified parameters. The buffer can then be passed to
 ccol_r_mempool_create_from_preallocated_buffer(). Automatically includes
-header overhead for every sub-pool in the size calculation; the buffer
-contains all sub-pools in contiguous memory.
+every sub-pool's own per-element status bytes in the size calculation;
+the buffer contains all sub-pools in contiguous memory.
 .fi
 .SH PARAMETERS
 .nf
@@ -32,19 +32,27 @@ number_of_smallest_size_elems_power_of_two  Exponent for smallest pool count
 .nf
 Buffer is allocated on stack or in static storage depending on context
 Useful for embedded systems or avoiding heap allocation
-Buffer is declared with the alignment the pool's internal per-element
-  header (a size_t plus a pointer) requires, so it can be handed
+Buffer is declared with the alignment every entry the pool hands out is
+  guaranteed to meet, which is 16 bytes, so it can be handed
   directly to ccol_r_mempool_create_from_preallocated_buffer() with no
   further alignment considerations; every individual sub-pool segment
   within the buffer stays correctly aligned as a consequence
 Size is computed via CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE
+Rejected at compile time, via a _Static_assert, rather than silently
+  producing a wrongly-sized array: parameters that would make the required
+  buffer size overflow size_t; a
+  number_of_smallest_size_elems_power_of_two below
+  largest_size_power_of_two - smallest_size_power_of_two; and a
+  smallest_size_power_of_two below 4, since 16 bytes is the smallest
+  element a ranged pool serves and a buffer declared for anything
+  smaller could only be handed to a constructor that refuses it
 .fi
 .SH EXAMPLES
 .nf
 CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(my_buffer, 4, 8, 10);
 ccol_r_mempool *rmp = ccol_r_mempool_create_from_preallocated_buffer(
     my_buffer, sizeof(my_buffer), 4, 8, 10,
-    fallback_disabled, false, NULL, NULL);
+    ccol_fallback_disabled, false, NULL, NULL);
 .fi
 .SH "SEE ALSO"
 .BR ccol_r_mempool_create_from_preallocated_buffer (3)

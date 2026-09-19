@@ -1,4 +1,4 @@
-.TH CLRUCACHE_CREATE_FULL 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
+.TH CLRUCACHE_CREATE_FULL 3 "2026-09-17" "c_collections" "C Collections Library - Functions"
 .SH NAME
 clrucache_create_full \- create an LRU cache with full control
 .SH LIBRARY
@@ -22,6 +22,11 @@ Creates a thread-safe LRU cache backed by a hash map (O(1) lookup) and
 a doubly-linked list (O(1) eviction). The cache holds up to capacity
 live entries; inserting beyond that limit evicts the least-recently-used
 entry first.
+
+The cache is divided into independently locked segments, and a key
+belongs to exactly one of them. Threads working on keys in different
+segments do not wait for one another, so throughput holds up as threads
+are added. Eviction is per segment; see NOTES.
 
 This is the low-level constructor. Prefer the clru_construct() macro
 family in application code.
@@ -48,10 +53,11 @@ setter       Remote setter callback, or NULL. Called synchronously
              before each cache update. Receives the key and value as
              const cmap_pair* pointers. If it returns false the cache
              is not updated.
-eviction_cb  Eviction callback, or NULL. Called while the cache mutex
-             is held when an entry is evicted to make room. Receives
-             the evicted key and value as const cmap_pair* pointers.
-             Must not call back into the cache.
+eviction_cb  Eviction callback, or NULL. Called while the owning
+             segment's lock is held when an entry is evicted to make
+             room. Receives the evicted key and value as const
+             cmap_pair* pointers. Must not call back into the cache,
+             and is not serialised against itself: see NOTES.
 mprocs       Custom memory management procedures, or NULL for default
              malloc/free.
 err          Optional pointer to receive an error string on failure.
@@ -67,10 +73,34 @@ non-NULL.
 The returned handle is an opaque VALUE (a packed {slot index,
 generation} pair), not a pointer; never cast it to/from void* or
 treat it as an address.
-Thread-safe: all operations on the returned handle are protected by
-an internal mutex and per-entry condition variables.
-The eviction callback is invoked while the cache mutex is held; it
-must not re-enter the cache.
+Thread-safe: operations on the returned handle are protected by
+per-segment locks and per-entry condition variables. Operations on the
+same key still serialise against each other, which is what the
+coalescing of concurrent misses for one key rests on.
+
+Splitting begins at a capacity of 128, the first that gives two segments
+64 entries each. Below that a cache is a single segment and evicts in one
+exact global least-recently-used order.
+
+Above that size eviction is per segment. capacity is divided across the
+segments, and each evicts its own least-recently-used entry when its
+own share is full, so the cache is sized for the capacity requested (and
+clrucache_capacity() reports exactly that) while the entry chosen to
+make room is the oldest within one segment rather than the oldest
+overall. Because keys are spread by hash, some segments run fuller than
+others at any instant, so a cache filled to exactly its capacity holds a
+little less than that number. The shortfall is a few percent: up to
+about ten below roughly a thousand entries, and around two at eight
+thousand and above, falling further as the cache grows. It does not
+depend on the key type or on the width of the build.
+Benchmark the configuration against
+the intended access pattern rather than assuming either behaviour.
+
+The eviction callback is invoked while the owning segment's lock is
+held; it must not re-enter the cache. Only that one segment's lock is
+held, so two evictions in different segments run the callback
+concurrently on two threads. Any state the callback keeps of its own
+needs its own protection.
 __clrucache_destroy waits for every in-flight resolved use of the
 handle (a concurrently executing clrucache_get_full/_set_full/
 clrucache_size/_capacity call) to finish before freeing anything, so

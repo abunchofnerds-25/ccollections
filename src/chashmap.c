@@ -22,8 +22,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
+#include <chashkey.h>
 #include <chashmap.h>
 #include <math.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -47,15 +49,22 @@ static const size_t scale_factor = 4;
 /*                    OPEN ADDRESSING STRUCTURES                              */
 /* ========================================================================== */
 
-// 24-byte slot (8-byte key + 8-byte value + 1-byte metadata + 7 bytes natural
-// padding). Natural alignment keeps key_data and val_data at 8-byte boundaries
-// across all array indices, which is required for correctness on strict-
-// alignment architectures and allows chmap_get_ptr to return an aligned pointer
-// directly into the slot array for in-place modification.
+// 16-byte slot (8-byte key + 8-byte value, with the status bits held in a
+// parallel byte array rather than here; see open_addr_map's metadata field
+// and the note above oa_slot for why). Natural alignment keeps key_data and
+// val_data at 8-byte boundaries across all array indices, which is required for
+// correctness on strict-alignment architectures and allows chmap_get_ptr to
+// return an aligned pointer directly into the slot array for in-place
+// modification.
+/* Exactly two words, with no padding and nothing a probe does not read. The
+ * occupied and deleted bits live in a separate byte array (see open_addr_map's
+ * own metadata field) rather than here: a third member one byte wide pads this
+ * struct out to 24, so a third of every cache line a probe pulls in would carry
+ * nothing, and the bits a probe tests first would be spread one per 24 bytes
+ * instead of packed. */
 typedef struct {
   uint64_t key_data;
   uint64_t val_data;
-  uint8_t metadata;  // bit 0: occupied, bit 1: deleted
 } oa_slot;
 
 #define SLOT_OCCUPIED 0x01
@@ -63,20 +72,41 @@ typedef struct {
 
 typedef struct {
   oa_slot* slots;
+  // One byte per slot, same indices as slots[], holding that slot's occupied
+  // and deleted bits. It is the tail of the slots allocation rather than an
+  // allocation of its own (see oa_alloc_block), so the two can never disagree
+  // about their length and a resize frees one block rather than two.
+  //
+  // Separate from oa_slot so a probe reads its bits densely: one 64-byte line
+  // covers 64 slots' worth of them, where a byte embedded in each slot would
+  // need sixteen lines to test the same number of slots, and all but one byte
+  // of each of those lines would be key and value bytes the probe only needs
+  // for the slot it actually stops at.
+  uint8_t* metadata;
   // Parallel array, one entry per slot (indices always match slots[]), each
   // holding a stable {ptr, size} accessor for that slot's value. Kept
   // separate from oa_slot itself (rather than embedded in it) so the hot
   // insert/probe/delete loops, which only ever touch key_data/val_data/
-  // metadata, keep scanning the compact 24-byte oa_slot array without also
+  // metadata, keep scanning the compact 16-byte oa_slot array without also
   // dragging an extra 16 bytes per slot through cache on every probe; only
   // chmap_get_elem_ref's own, comparatively cold, final lookup ever reads
   // this array. A slot's own val_accessors[index].ptr is always
-  // &slots[index].val_data and .size is always the map's own val_size, both
-  // populated once whenever that slot is (re)written (see oa_insert /
-  // oa_rehash), never on the read side. This is what gives every distinct
-  // occupied slot its own permanently stable cmap_pair, so that two
-  // concurrently-held chmap_get_elem_ref results (for two different keys)
-  // never alias one another the way a single shared accessor field would.
+  // &slots[index].val_data and .size is always the map's own val_size, so the
+  // array holds nothing that cannot be recomputed from the slot it describes.
+  // Each entry is written wherever its slot is written, which is oa_insert and
+  // oa_rehash; oa_get only takes the address of one. The write belongs on the
+  // paths that write a slot rather than on the one that hands an entry out:
+  // filling an entry where it is read spares the insert path a write into a
+  // second array the size of the table and charges every lookup one in its
+  // place, which costs more than it saves wherever lookups outnumber inserts.
+  // Whichever path writes it, exactly one must: an entry handed out before
+  // anything filled it in is {NULL, 0}, so a caller asking for an element
+  // reference gets a null pointer for every key.
+  //
+  // What the array provides is an entry per slot, so that two
+  // chmap_get_elem_ref results held concurrently for different keys never alias
+  // one another the way a single shared accessor field would, and each stays
+  // valid until the slot itself is rewritten or the table rehashes.
   cmap_pair* val_accessors;
   size_t capacity;
   size_t count;
@@ -122,23 +152,31 @@ typedef struct {
 // in cjson.c/cyaml.c/clrucache.c/cthreadcomm.c/chttpclient.c, just reached
 // via a union that under-declares its own alignment requirement rather
 // than via an explicit __attribute__((packed)).
+// The two over-aligned unions lead, and everything else follows in descending
+// width. Their alignment is a requirement (see above) but it is also what makes
+// field order matter here: each one placed after a narrower member forces the
+// struct to pad out to the next multiple of that alignment, and with one union
+// after a size_t and the other after a bool that came to 23 bytes of padding in
+// a 112-byte struct. Leading with them, and grouping the pointer-width members
+// after, leaves one run of padding instead of three and takes the struct to 96
+// bytes, which is 16 fewer per entry that a chain walk pulls through cache.
 typedef struct chmap_entry {
-  size_t hash_val;
   _Alignas(max_align_t) union {
     void* ptr;
     // SSO: 23 bytes + null terminator
     char inline_data[INLINE_STORAGE_THRESHOLD + 1];
   } key_storage;
-  size_t key_size;
-  bool key_is_inline;
   _Alignas(max_align_t) union {
     void* ptr;
     // SSO: 23 bytes + null terminator
     char inline_data[INLINE_STORAGE_THRESHOLD + 1];
   } val_storage;
+  size_t hash_val;
+  size_t key_size;
   size_t val_size;
-  bool val_is_inline;
   ccol_memmgmt_procs_t* m_procs;
+  bool key_is_inline;
+  bool val_is_inline;
 } chmap_entry;
 
 // Not packed: provides no size benefit (two same-size pointer fields need no
@@ -149,10 +187,13 @@ typedef struct dllist_ref_node {
   struct dllist_ref_node* next;
 } dllist_ref_node;
 
+// data leads for the same reason its own members are ordered as they are: it
+// carries the struct's alignment, so anything ahead of it is padded out to that
+// boundary, and it is also the part a chain walk reads first.
 typedef struct llist_node {
+  chmap_entry data;
   struct llist_node* next;
   dllist_ref_node dllist_refs;
-  chmap_entry data;
   cmap_pair key_pair_accessor;
   cmap_pair val_pair_accessor;
   ccol_memmgmt_procs_t* m_procs;
@@ -460,11 +501,87 @@ static inline size_t xxhash64_buffer(const void* input, size_t len,
 
 #endif
 
-/* Fibonacci hashing: multiplies key by the golden-ratio-derived constant to
- * achieve excellent bit distribution with a single multiply. The constant is
- * architecture-specific (64-bit or 32-bit) to match the native word size. */
+/* Fibonacci hashing: multiplies key by the golden-ratio-derived constant. The
+ * constant is architecture-specific (64-bit or 32-bit) to match the native word
+ * size.
+ *
+ * The mixing lives in the HIGH bits of the product: bit k depends only on bits
+ * 0 through k of the key, so nothing from the key's upper half reaches the
+ * lower one. An index must therefore be taken from the top of this value and
+ * never by masking its bottom; hash_index_for() below is the only place that
+ * decides, and every reduction in this file goes through it.
+ *
+ * Nothing is folded down into the low bits to make masking safe, deliberately.
+ * The multiply on its own is a bijection, which is what makes the top bits of
+ * the product a permutation of a sequential key range and gives a table
+ * holding such keys exactly one probe per operation. Measured over a 262144
+ * slot table holding 100000 keys, taking the high bits costs 1.00 lookup
+ * probes per operation for sequential keys, for keys scaled by 4096 and for
+ * aligned pointers alike; masking the low bits of a folded product costs 1.48,
+ * 1.15 and 1.28 on the same three, and masking the low bits without folding
+ * costs 1.00, 781.75 and 12.71. */
 static inline size_t hash_int_fast(size_t key) {
   return key * FIBONACCI_HASH_MULTIPLIER;
+}
+
+/* Spreads a value's entropy over all of its bits, so that reading any window of
+ * them is sound. Applied to a CALLER's hash and to nothing else: every hash
+ * this module computes itself is already built to be read from the top, where a
+ * hash arriving through ccol_hashing_proc_t carries no such guarantee and is
+ * free to be an identity, a counter, or a value already reduced modulo
+ * something small. Without this, hash_index_for's high-bit read of such a hash
+ * is zero for every key, every entry lands in one slot, and the table degrades
+ * to a linear scan; measured on 20000 identity-hashed integer keys, inserts
+ * take 179 milliseconds where they otherwise take under one, and lookups 139.
+ *
+ * The finalizer is murmur3's, which is what clrucache's own segment chooser
+ * already applies for the same reason. It costs a handful of operations and
+ * only on the custom-hash path; the default path does not reach it. */
+static inline size_t hash_mix_bits(size_t h) {
+#if SIZE_MAX == UINT64_MAX
+  h ^= h >> 33;
+  h *= 0xff51afd7ed558ccdULL;
+  h ^= h >> 33;
+  h *= 0xc4ceb9fe1a85ec53ULL;
+  h ^= h >> 33;
+#else
+  h ^= h >> 16;
+  h *= 0x85ebca6bU;
+  h ^= h >> 13;
+  h *= 0xc2b2ae35U;
+  h ^= h >> 16;
+#endif
+  return h;
+}
+
+/* Reduces a hash to an index into a power-of-two table by taking its HIGH
+ * bits. Every reduction in this file goes through here so that the choice is
+ * made once: see hash_int_fast above for why the low bits of an integer key's
+ * hash are the wrong end to read.
+ *
+ * capacity is always a power of two and never below
+ * minimum_allowed_bucket_array_size, so the shift is at most one less than the
+ * width of the type and can never be a full-width shift, which would be
+ * undefined.
+ *
+ * A caller that adds a new reduction site must read that precondition: a
+ * capacity of 1 makes the shift as wide as the type and a capacity of 0 reaches
+ * __builtin_clz with zero, both of which are undefined. */
+static inline size_t hash_index_for(size_t hash_val, size_t capacity) {
+  /* The shift is the leading-zero count plus one: keeping log2(capacity) as an
+     intermediate would mean writing the type's width twice (once to derive it,
+     once to subtract it), and the two must agree with each other AND with the
+     builtin's own operand width. Stating it as the count itself removes both
+     restatements, so only the builtin has to match size_t. Getting that wrong
+     underflows an unsigned intermediate into a shift wider than the type,
+     which is undefined and which compilers fold to a constant zero, putting
+     every key in slot 0 while every answer stays correct. */
+#if SIZE_MAX == UINT64_MAX
+  return hash_val >>
+         ((unsigned)__builtin_clzll((unsigned long long)capacity) + 1u);
+#else
+  return hash_val >> ((unsigned)__builtin_clz((unsigned int)capacity) + 1u);
+#endif
 }
 
 /* Hashes a long double key by its numeric VALUE rather than its raw byte
@@ -534,7 +651,16 @@ static inline size_t hash_long_double_value(long double v) {
   // |mantissa| is in [0.5, 1), so the scaled value below always fits
   // safely within int64_t (magnitude strictly less than 2^62).
   int64_t scaled_mantissa = (int64_t)(mantissa * 4611686018427387904.0L);
-  size_t h1 = hash_int_fast((size_t)(uint64_t)scaled_mantissa);
+  // Folded down rather than truncated. The scaling puts the significant bits
+  // at the TOP of the 64-bit value, so a mantissa with 32 or fewer significant
+  // bits (every ordinary number: an integer, a half, a third) has a zero low
+  // half. Casting that straight to a 32-bit size_t would discard every bit
+  // that distinguishes one such key from another and leave the hash depending
+  // on the exponent alone: measured on i386, 4096 distinct long doubles
+  // produce 13 distinct hashes. The fold costs one shift and one exclusive or
+  // on a path that already calls frexpl.
+  uint64_t scaled_bits = (uint64_t)scaled_mantissa;
+  size_t h1 = hash_int_fast((size_t)(scaled_bits ^ (scaled_bits >> 32)));
   size_t h2 = hash_int_fast((size_t)(int64_t)exp);
   return h1 ^ (h2 * XXH_PRIME_2 + XXH_PRIME_1);
 }
@@ -547,19 +673,22 @@ static inline size_t hash_key_data(const void* key_ptr, size_t key_size,
                                    ccol_data_type key_type,
                                    ccol_hashing_proc_t custom_proc) {
   if (custom_proc) {
-    return custom_proc(key_ptr, key_size);
+    return hash_mix_bits(custom_proc(key_ptr, key_size));
   }
 
-  // Use fast Fibonacci hashing for all integral types. Every multi-byte
-  // read below goes through ccol_mem_cpy rather than a direct pointer-cast
-  // dereference: key_ptr may come straight from a caller-supplied cmap_pair
-  // (the raw chmap_insert_elem/_get_elem_ref/_delete_elem function layer),
-  // which carries no alignment guarantee the way a type-safe macro's own
-  // local variable address does. A direct `*(uint32_t*)key_ptr`-style read
-  // of a misaligned pointer is UB and can fault on strict-alignment
-  // architectures; see this file's own chmap_entry _Alignas(max_align_t)
-  // comment for the identical hazard class guarded against elsewhere in
-  // this module.
+  // Use fast Fibonacci hashing for all integral types. Plain memcpy, not this
+  // project's own wrapper: the sizes here are compile-time constants, which the
+  // compiler turns into a single unaligned load, where an out-of-line wrapper
+  // cannot be inlined away and costs a call plus a runtime alignment test per
+  // hash. Every multi-byte read below goes through ccol_mem_cpy rather than a
+  // direct pointer-cast dereference: key_ptr may come straight from a
+  // caller-supplied cmap_pair (the raw
+  // chmap_insert_elem/_get_elem_ref/_delete_elem function layer), which carries
+  // no alignment guarantee the way a type-safe macro's own local variable
+  // address does. A direct `*(uint32_t*)key_ptr`-style read of a misaligned
+  // pointer is UB and can fault on strict-alignment architectures; see this
+  // file's own chmap_entry _Alignas(max_align_t) comment for the identical
+  // hazard class guarded against elsewhere in this module.
   switch (key_type) {
     case ccol_char:
     case ccol_signed_char:
@@ -568,24 +697,24 @@ static inline size_t hash_key_data(const void* key_ptr, size_t key_size,
     case ccol_short:
     case ccol_unsigned_short: {
       uint16_t bits;
-      ccol_mem_cpy(&bits, key_ptr, sizeof(bits));
+      memcpy(&bits, key_ptr, sizeof(bits));
       return hash_int_fast((size_t)bits);
     }
     case ccol_int:
     case ccol_unsigned_int: {
       uint32_t bits;
-      ccol_mem_cpy(&bits, key_ptr, sizeof(bits));
+      memcpy(&bits, key_ptr, sizeof(bits));
       return hash_int_fast((size_t)bits);
     }
     case ccol_long:
     case ccol_unsigned_long: {
 #if SIZE_MAX == UINT64_MAX
       uint64_t bits;
-      ccol_mem_cpy(&bits, key_ptr, sizeof(bits));
+      memcpy(&bits, key_ptr, sizeof(bits));
       return hash_int_fast((size_t)bits);
 #else
       uint32_t bits;
-      ccol_mem_cpy(&bits, key_ptr, sizeof(bits));
+      memcpy(&bits, key_ptr, sizeof(bits));
       return hash_int_fast((size_t)bits);
 #endif
     }
@@ -593,12 +722,12 @@ static inline size_t hash_key_data(const void* key_ptr, size_t key_size,
     case ccol_unsigned_long_long: {
 #if SIZE_MAX == UINT64_MAX
       uint64_t bits;
-      ccol_mem_cpy(&bits, key_ptr, sizeof(bits));
+      memcpy(&bits, key_ptr, sizeof(bits));
       return hash_int_fast((size_t)bits);
 #else
       // On 32-bit, hash the 64-bit value by combining high and low parts
       uint64_t val;
-      ccol_mem_cpy(&val, key_ptr, sizeof(val));
+      memcpy(&val, key_ptr, sizeof(val));
       uint32_t low = (uint32_t)val;
       uint32_t high = (uint32_t)(val >> 32);
       return hash_int_fast((size_t)(low ^ high));
@@ -606,18 +735,18 @@ static inline size_t hash_key_data(const void* key_ptr, size_t key_size,
     }
     case ccol_float: {
       uint32_t bits;
-      ccol_mem_cpy(&bits, key_ptr, 4);
+      memcpy(&bits, key_ptr, 4);
       return hash_int_fast((size_t)bits);
     }
     case ccol_double: {
 #if SIZE_MAX == UINT64_MAX
       uint64_t bits;
-      ccol_mem_cpy(&bits, key_ptr, 8);
+      memcpy(&bits, key_ptr, 8);
       return hash_int_fast((size_t)bits);
 #else
       // On 32-bit, hash the 64-bit double by combining parts
       uint64_t bits;
-      ccol_mem_cpy(&bits, key_ptr, 8);
+      memcpy(&bits, key_ptr, 8);
       uint32_t low = (uint32_t)bits;
       uint32_t high = (uint32_t)(bits >> 32);
       return hash_int_fast((size_t)(low ^ high));
@@ -625,12 +754,12 @@ static inline size_t hash_key_data(const void* key_ptr, size_t key_size,
     }
     case ccol_pointer: {
       uintptr_t bits;
-      ccol_mem_cpy(&bits, key_ptr, sizeof(uintptr_t));
+      memcpy(&bits, key_ptr, sizeof(uintptr_t));
       return hash_int_fast((size_t)bits);
     }
     case ccol_long_double: {
       long double v;
-      ccol_mem_cpy(&v, key_ptr, sizeof(v));
+      memcpy(&v, key_ptr, sizeof(v));
       return hash_long_double_value(v);
     }
     default:
@@ -657,12 +786,103 @@ static inline bool ranges_overlap(const void* a, size_t a_size, const void* b,
 /*                   OPEN ADDRESSING IMPLEMENTATION                           */
 /* ========================================================================== */
 
-/* Compares the key stored in a slot against key_ptr byte-for-byte. The key is
- * stored inline in slot->key_data (up to 8 bytes), so memcmp directly against
- * that field works for all supported integral key sizes. */
-static inline bool oa_keys_equal(const oa_slot* slot, const void* key_ptr,
-                                 size_t key_size) {
-  return memcmp(&slot->key_data, key_ptr, key_size) == 0;
+#ifdef RUNNING_UNIT_TESTS
+/* White-box regression guard for hash quality. Counts slots examined by
+ * open-addressing probes, which is what a hash that fails to spread keys
+ * actually costs: the map stays correct however badly it clusters, so
+ * correctness tests cannot see the difference and a timing test would measure
+ * the machine. A key set whose low bits are constant (aligned addresses,
+ * identifiers scaled by a power of two) drives this count quadratic when the
+ * index reads bits the hash did not mix, and leaves it near one probe per
+ * operation when it does. */
+/* Atomic, and relaxed: this counter sits in the probe loop of a map that many
+ * threads may read concurrently, so a plain increment here is a data race that
+ * ThreadSanitizer reports against every caller that shares a map, which would
+ * make this instrumentation a source of findings rather than a guard against
+ * one. Relaxed ordering is all a count needs, and the accessor is only read
+ * once the threads under test have been joined. */
+static _Atomic unsigned long long g_oa_probe_steps_for_tests = 0;
+unsigned long long chashmap_oa_probe_steps_for_tests(void) {
+  return atomic_load_explicit(&g_oa_probe_steps_for_tests,
+                              memory_order_relaxed);
+}
+void chashmap_reset_oa_probe_steps_for_tests(void) {
+  atomic_store_explicit(&g_oa_probe_steps_for_tests, 0, memory_order_relaxed);
+}
+#define OA_COUNT_PROBE()                                        \
+  (atomic_fetch_add_explicit(&g_oa_probe_steps_for_tests, 1ull, \
+                             memory_order_relaxed))
+#else
+#define OA_COUNT_PROBE() ((void)0)
+#endif /* RUNNING_UNIT_TESTS */
+
+/* Widens a caller's key to the same 64-bit form a slot stores, so a probe can
+ * compare two integers instead of calling memcmp once per step. Every write of
+ * key_data zeroes the full 8 bytes before copying key_size bytes in (see
+ * oa_insert), so a key widened the same way here compares equal exactly when
+ * the bytes do, whatever the byte order: both sides place the key's bytes at
+ * the start of the object and zero the rest.
+ *
+ * The switch exists so each copy has a compile-time constant size, which the
+ * compiler turns into a single unaligned load; a memcpy whose size is only
+ * known at run time is a call.
+ *
+ * The listed cases are every width an integral key can have, and every entry
+ * point validates a caller-supplied key against its declared type's width
+ * before reaching here, so the default is unreachable today. It still clamps
+ * rather than copying key_size bytes: the destination is one 8-byte object, so
+ * a size that ever did arrive unvalidated would be a stack buffer overflow,
+ * where a comparison that only read the bytes would merely over-READ. A key
+ * wider than the slot cannot compare equal to a stored one anyway, so clamping
+ * loses no answer that the wider copy would have given. */
+static inline uint64_t oa_widen_key(const void* key_ptr, size_t key_size) {
+  uint64_t k = 0;
+  switch (key_size) {
+    case 1:
+      memcpy(&k, key_ptr, 1);
+      break;
+    case 2:
+      memcpy(&k, key_ptr, 2);
+      break;
+    case 4:
+      memcpy(&k, key_ptr, 4);
+      break;
+    case 8:
+      memcpy(&k, key_ptr, 8);
+      break;
+    default:
+      memcpy(&k, key_ptr, key_size > sizeof(k) ? sizeof(k) : key_size);
+      break;
+  }
+  return k;
+}
+
+/* Compares the key stored in a slot against a key already widened by
+ * oa_widen_key. Hoist that widening out of the probe loop: the caller's key
+ * does not change as the probe walks, so repeating the work per step is the
+ * whole cost this arrangement avoids. */
+static inline bool oa_keys_equal(const oa_slot* slot, uint64_t probe_key) {
+  return slot->key_data == probe_key;
+}
+
+/* Allocates capacity slots followed by capacity metadata bytes as one block,
+ * and reports where the metadata starts. Zeroed, so every slot begins with
+ * neither SLOT_OCCUPIED nor SLOT_DELETED set, which is the empty sentinel.
+ *
+ * The byte count is formed here rather than handed to calloc as a count and a
+ * size, so the overflow check calloc would have made has to be made here: a
+ * product that wraps would otherwise become a small allocation that succeeds,
+ * followed by a probe loop walking capacity entries through it. */
+static oa_slot* oa_alloc_block(ccol_memmgmt_procs_t* m_procs, size_t capacity,
+                               uint8_t** metadata_out) {
+  if (capacity == 0 || capacity > (SIZE_MAX - capacity) / sizeof(oa_slot)) {
+    return NULL;
+  }
+  size_t bytes = capacity * sizeof(oa_slot) + capacity;
+  oa_slot* slots = (oa_slot*)_ccol_mem_calloc(m_procs, 1, bytes);
+  if (!slots) return NULL;
+  *metadata_out = (uint8_t*)slots + capacity * sizeof(oa_slot);
+  return slots;
 }
 
 /* Allocates and initialises the open-addressing map struct and its slot array.
@@ -676,7 +896,7 @@ static open_addr_map* oa_create(size_t capacity, ccol_data_type key_type,
       (open_addr_map*)_ccol_mem_alloc(m_procs, sizeof(open_addr_map));
   if (!map) return NULL;
 
-  map->slots = (oa_slot*)_ccol_mem_calloc(m_procs, capacity, sizeof(oa_slot));
+  map->slots = oa_alloc_block(m_procs, capacity, &map->metadata);
   if (!map->slots) {
     _ccol_mem_free(m_procs, map);
     return NULL;
@@ -708,7 +928,7 @@ static open_addr_map* oa_create(size_t capacity, ccol_data_type key_type,
  * which reduces probing length after many deletions. The hash is recomputed
  * for each entry because the slot array does not store hash values.
  * new_capacity is always a power of two (see should_use_open_addressing's
- * callers), so index arithmetic uses & (new_capacity - 1) instead of the far
+ * callers), so a probe advances with & (new_capacity - 1) instead of the far
  * costlier % new_capacity.
  *
  * Returns ccol_not_enough_memory (leaving the map completely untouched) if
@@ -721,10 +941,11 @@ static ccol_retval_t oa_rehash(open_addr_map* map, size_t new_capacity) {
   cmap_pair* old_val_accessors = map->val_accessors;
   size_t old_capacity = map->capacity;
 
-  map->slots =
-      (oa_slot*)_ccol_mem_calloc(map->m_procs, new_capacity, sizeof(oa_slot));
+  uint8_t* old_metadata = map->metadata;
+  map->slots = oa_alloc_block(map->m_procs, new_capacity, &map->metadata);
   if (!map->slots) {
     map->slots = old_slots;
+    map->metadata = old_metadata;
     return ccol_not_enough_memory;
   }
 
@@ -733,6 +954,7 @@ static ccol_retval_t oa_rehash(open_addr_map* map, size_t new_capacity) {
   if (!map->val_accessors) {
     _ccol_mem_free(map->m_procs, map->slots);
     map->slots = old_slots;
+    map->metadata = old_metadata;
     map->val_accessors = old_val_accessors;
     return ccol_not_enough_memory;
   }
@@ -743,28 +965,28 @@ static ccol_retval_t oa_rehash(open_addr_map* map, size_t new_capacity) {
 
   // Rehash all existing entries - recalculate hash since we don't store it
   for (size_t i = 0; i < old_capacity; i++) {
-    if ((old_slots[i].metadata & SLOT_OCCUPIED) &&
-        !(old_slots[i].metadata & SLOT_DELETED)) {
+    if ((old_metadata[i] & SLOT_OCCUPIED) &&
+        !(old_metadata[i] & SLOT_DELETED)) {
       size_t hash_val = hash_key_data(&old_slots[i].key_data, map->key_size,
                                       map->key_type, map->custom_hashing_proc);
-      size_t index = hash_val & (new_capacity - 1);
+      size_t index = hash_index_for(hash_val, new_capacity);
 
       // Prefetch likely next location
       __builtin_prefetch(&map->slots[(index + 1) & (new_capacity - 1)], 1, 1);
 
-      while (map->slots[index].metadata & SLOT_OCCUPIED) {
+      while (map->metadata[index] & SLOT_OCCUPIED) {
         index = (index + 1) & (new_capacity - 1);
         __builtin_prefetch(&map->slots[(index + 1) & (new_capacity - 1)], 1, 1);
       }
 
       map->slots[index] = old_slots[i];
-      map->slots[index].metadata = SLOT_OCCUPIED;  // Clear deleted flag
+      map->metadata[index] = SLOT_OCCUPIED;  // Clear deleted flag
+      map->val_accessors[index].ptr = &map->slots[index].val_data;
+      map->val_accessors[index].size = map->val_size;
       // The accessor's .ptr is self-referential (it must point at this
       // slot's own val_data), so it can never simply be copied over from
       // the old array like the rest of the slot's bytes; it has to be
       // recomputed against the new array's own address for this index.
-      map->val_accessors[index].ptr = &map->slots[index].val_data;
-      map->val_accessors[index].size = map->val_size;
       map->count++;
     }
   }
@@ -786,7 +1008,7 @@ static ccol_retval_t oa_rehash(open_addr_map* map, size_t new_capacity) {
 static void oa_find_insertion_slot(const open_addr_map* map, size_t hash_val,
                                    size_t* out_index, bool* out_found_empty,
                                    size_t* out_first_deleted) {
-  size_t index = hash_val & (map->capacity - 1);
+  size_t index = hash_index_for(hash_val, map->capacity);
   size_t start_index = index;
   size_t first_deleted = map->capacity;
 
@@ -795,14 +1017,14 @@ static void oa_find_insertion_slot(const open_addr_map* map, size_t hash_val,
   do {
     __builtin_prefetch(&map->slots[(index + 1) & (map->capacity - 1)], 0, 1);
 
-    if (!(map->slots[index].metadata & SLOT_OCCUPIED)) {
+    if (!(map->metadata[index] & SLOT_OCCUPIED)) {
       *out_index = index;
       *out_found_empty = true;
       *out_first_deleted = first_deleted;
       return;
     }
 
-    if ((map->slots[index].metadata & SLOT_DELETED) &&
+    if ((map->metadata[index] & SLOT_DELETED) &&
         first_deleted == map->capacity) {
       first_deleted = index;
     }
@@ -852,30 +1074,32 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
                                const cmap_pair* val_pair) {
   size_t hash_val = hash_key_data(key_pair->ptr, key_pair->size, map->key_type,
                                   map->custom_hashing_proc);
-  size_t index = hash_val & (map->capacity - 1);
+  size_t index = hash_index_for(hash_val, map->capacity);
   size_t start_index = index;
   size_t first_deleted = map->capacity;
   bool found_empty = false;
+  const uint64_t probe_key = oa_widen_key(key_pair->ptr, key_pair->size);
 
   // Prefetch first location
   __builtin_prefetch(&map->slots[index], 1, 1);
 
   do {
+    OA_COUNT_PROBE();
     // Prefetch next likely location
     __builtin_prefetch(&map->slots[(index + 1) & (map->capacity - 1)], 1, 1);
 
-    if (!(map->slots[index].metadata & SLOT_OCCUPIED)) {
+    if (!(map->metadata[index] & SLOT_OCCUPIED)) {
       found_empty = true;
       break;
     }
 
-    if ((map->slots[index].metadata & SLOT_DELETED) &&
+    if ((map->metadata[index] & SLOT_DELETED) &&
         first_deleted == map->capacity) {
       first_deleted = index;
     }
 
-    if (!(map->slots[index].metadata & SLOT_DELETED) &&
-        oa_keys_equal(&map->slots[index], key_pair->ptr, key_pair->size)) {
+    if (!(map->metadata[index] & SLOT_DELETED) &&
+        oa_keys_equal(&map->slots[index], probe_key)) {
       // val_pair->ptr may alias this slot's own val_data (e.g. a caller
       // re-inserting a value derived from a pointer previously obtained via
       // chmap_get_elem_ref/chmap_get_ptr for this exact key, through the raw
@@ -940,7 +1164,7 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
     ccol_mem_zero(&map->slots[index].val_data, sizeof(uint64_t));
     ccol_mem_cpy(&map->slots[index].key_data, key_pair->ptr, key_pair->size);
     ccol_mem_cpy(&map->slots[index].val_data, val_pair->ptr, val_pair->size);
-    map->slots[index].metadata = SLOT_OCCUPIED;
+    map->metadata[index] = SLOT_OCCUPIED;
     map->val_accessors[index].ptr = &map->slots[index].val_data;
     map->val_accessors[index].size = map->val_size;
     map->count++;
@@ -955,7 +1179,7 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
                  key_pair->size);
     ccol_mem_cpy(&map->slots[first_deleted].val_data, val_pair->ptr,
                  val_pair->size);
-    map->slots[first_deleted].metadata = SLOT_OCCUPIED;
+    map->metadata[first_deleted] = SLOT_OCCUPIED;
     map->val_accessors[first_deleted].ptr = &map->slots[first_deleted].val_data;
     map->val_accessors[first_deleted].size = map->val_size;
     map->count++;
@@ -973,9 +1197,9 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
 /* Looks up key_pair using linear probing. An empty slot (no OCCUPIED or DELETED
  * bit) terminates the search immediately; this is safe because insertions
  * never leave a gap between a key and its probe chain. Returns a pointer to
- * this slot's own entry in map->val_accessors: a stable, permanently-owned
- * cmap_pair distinct from every other slot's, populated once by oa_insert/
- * oa_rehash and never mutated by oa_get itself. Unlike a single shared
+ * this slot's own entry in map->val_accessors: a cmap_pair distinct from every
+ * other slot's, filled in wherever the slot itself is written, so this path
+ * only takes its address. Unlike a single shared
  * scratch field, this means two (or more) chmap_get_elem_ref results held
  * concurrently for different keys never alias one another; each remains
  * valid, per this function's own documented contract, until the map is
@@ -984,24 +1208,26 @@ static ccol_retval_t oa_get(open_addr_map* map, const cmap_pair* key_pair,
                             cmap_pair** val_pair) {
   size_t hash_val = hash_key_data(key_pair->ptr, key_pair->size, map->key_type,
                                   map->custom_hashing_proc);
-  size_t index = hash_val & (map->capacity - 1);
+  size_t index = hash_index_for(hash_val, map->capacity);
   size_t start_index = index;
+  const uint64_t probe_key = oa_widen_key(key_pair->ptr, key_pair->size);
 
   // Prefetch first location
   __builtin_prefetch(&map->slots[index], 0, 1);
 
   do {
+    OA_COUNT_PROBE();
     // Prefetch next likely location
     __builtin_prefetch(&map->slots[(index + 1) & (map->capacity - 1)], 0, 1);
 
-    if (!(map->slots[index].metadata & SLOT_OCCUPIED) &&
-        !(map->slots[index].metadata & SLOT_DELETED)) {
+    if (!(map->metadata[index] & SLOT_OCCUPIED) &&
+        !(map->metadata[index] & SLOT_DELETED)) {
       return ccol_key_not_found;
     }
 
-    if ((map->slots[index].metadata & SLOT_OCCUPIED) &&
-        !(map->slots[index].metadata & SLOT_DELETED) &&
-        oa_keys_equal(&map->slots[index], key_pair->ptr, key_pair->size)) {
+    if ((map->metadata[index] & SLOT_OCCUPIED) &&
+        !(map->metadata[index] & SLOT_DELETED) &&
+        oa_keys_equal(&map->slots[index], probe_key)) {
       *val_pair = &map->val_accessors[index];
       return ccol_success;
     }
@@ -1018,19 +1244,20 @@ static ccol_retval_t oa_get(open_addr_map* map, const cmap_pair* key_pair,
 static ccol_retval_t oa_delete(open_addr_map* map, const cmap_pair* key_pair) {
   size_t hash_val = hash_key_data(key_pair->ptr, key_pair->size, map->key_type,
                                   map->custom_hashing_proc);
-  size_t index = hash_val & (map->capacity - 1);
+  size_t index = hash_index_for(hash_val, map->capacity);
   size_t start_index = index;
+  const uint64_t probe_key = oa_widen_key(key_pair->ptr, key_pair->size);
 
   do {
-    if (!(map->slots[index].metadata & SLOT_OCCUPIED) &&
-        !(map->slots[index].metadata & SLOT_DELETED)) {
+    if (!(map->metadata[index] & SLOT_OCCUPIED) &&
+        !(map->metadata[index] & SLOT_DELETED)) {
       return ccol_key_not_found;
     }
 
-    if ((map->slots[index].metadata & SLOT_OCCUPIED) &&
-        !(map->slots[index].metadata & SLOT_DELETED) &&
-        oa_keys_equal(&map->slots[index], key_pair->ptr, key_pair->size)) {
-      map->slots[index].metadata |= SLOT_DELETED;
+    if ((map->metadata[index] & SLOT_OCCUPIED) &&
+        !(map->metadata[index] & SLOT_DELETED) &&
+        oa_keys_equal(&map->slots[index], probe_key)) {
+      map->metadata[index] |= SLOT_DELETED;
       map->count--;
       map->deleted_count++;
 
@@ -1071,7 +1298,7 @@ static void oa_destroy(open_addr_map* map) {
  * rather than leaving the old table (and all its data) completely
  * untouched. */
 static void oa_clear_in_place(open_addr_map* map) {
-  ccol_mem_zero(map->slots, map->capacity * sizeof(oa_slot));
+  ccol_mem_zero(map->slots, map->capacity * sizeof(oa_slot) + map->capacity);
   ccol_mem_zero(map->val_accessors, map->capacity * sizeof(cmap_pair));
   map->count = 0;
   map->deleted_count = 0;
@@ -1095,8 +1322,9 @@ static ccol_retval_t oa_reset(open_addr_map* map, size_t new_capacity) {
     return ccol_success;
   }
 
+  uint8_t* new_metadata = NULL;
   oa_slot* new_slots =
-      (oa_slot*)_ccol_mem_calloc(map->m_procs, new_capacity, sizeof(oa_slot));
+      oa_alloc_block(map->m_procs, new_capacity, &new_metadata);
   if (!new_slots) {
     oa_clear_in_place(map);
     return ccol_not_enough_memory;
@@ -1112,6 +1340,7 @@ static ccol_retval_t oa_reset(open_addr_map* map, size_t new_capacity) {
 
   _ccol_mem_free(map->m_procs, map->slots);
   map->slots = new_slots;
+  map->metadata = new_metadata;
   _ccol_mem_free(map->m_procs, map->val_accessors);
   map->val_accessors = new_val_accessors;
 
@@ -1488,7 +1717,9 @@ static void sc_set_scaling_limits(sep_chain_map* map) {
 
 /* Resizes the bucket array by scale_factor (up or down) and rehashes all
  * existing nodes into their new bucket positions. Scaling uses & (new_size-1)
- * rather than modulo, which is why all sizes are kept as powers of two. */
+ * rather than modulo. A power-of-two size is still required, but for
+ * hash_index_for's sake rather than this one: it is what makes the shift that
+ * turns a hash into an index well defined. */
 static void sc_scale(sep_chain_map* map, bool up) {
   if (up &&
       (map->bucket_arr_size > ccol_max_power_of_two_size_t / scale_factor)) {
@@ -1520,7 +1751,7 @@ static void sc_scale(sep_chain_map* map, bool up) {
     llist_node* tracker = map->bucket_arr[i];
     while (tracker) {
       llist_node* next = tracker->next;
-      size_t new_index = tracker->data.hash_val & (new_size - 1);
+      size_t new_index = hash_index_for(tracker->data.hash_val, new_size);
       tracker->next = new_arr[new_index];
       new_arr[new_index] = tracker;
       tracker = next;
@@ -1583,7 +1814,7 @@ static ccol_retval_t sc_insert(sep_chain_map* map, const cmap_pair* key_pair,
       .val_size = val_pair->size,
       .m_procs = map->m_procs};
 
-  size_t index = data.hash_val & (map->bucket_arr_size - 1);
+  size_t index = hash_index_for(data.hash_val, map->bucket_arr_size);
 
   llist_node* existing =
       sc_find_in_llist(map->bucket_arr[index], data.hash_val, key_pair->ptr,
@@ -1621,7 +1852,7 @@ static ccol_retval_t sc_get(sep_chain_map* map, const cmap_pair* key_pair,
                             cmap_pair** val_pair) {
   size_t hash_val = hash_key_data(key_pair->ptr, key_pair->size, map->key_type,
                                   map->custom_hashing_proc);
-  size_t index = hash_val & (map->bucket_arr_size - 1);
+  size_t index = hash_index_for(hash_val, map->bucket_arr_size);
 
   llist_node* node =
       sc_find_in_llist(map->bucket_arr[index], hash_val, key_pair->ptr,
@@ -1639,7 +1870,7 @@ static ccol_retval_t sc_get(sep_chain_map* map, const cmap_pair* key_pair,
 static ccol_retval_t sc_delete(sep_chain_map* map, const cmap_pair* key_pair) {
   size_t hash_val = hash_key_data(key_pair->ptr, key_pair->size, map->key_type,
                                   map->custom_hashing_proc);
-  size_t index = hash_val & (map->bucket_arr_size - 1);
+  size_t index = hash_index_for(hash_val, map->bucket_arr_size);
 
   bool found = false;
   map->bucket_arr[index] = sc_delete_from_llist(
@@ -1681,6 +1912,22 @@ static ccol_retval_t sc_reset(sep_chain_map* map,
 
   if (new_bucket_array_size > 0 &&
       new_bucket_array_size != map->bucket_arr_size) {
+    /* The byte count is formed here rather than left to the allocator, which
+       cannot check a product it is handed already multiplied. chmap_reset
+       accepts any power of two up to ccol_max_elem_count, and that many
+       pointers overflows size_t on every supported target. A product that
+       wraps to zero is the dangerous one: realloc is then free to release the
+       block and return NULL, which sends the recovery path below writing
+       through a pointer the allocator has already reclaimed. Reported as a
+       failed allocation, which is what it is, and every element is still
+       destroyed above, matching what chmap_reset documents. */
+    if (new_bucket_array_size > SIZE_MAX / sizeof(llist_node*)) {
+      ccol_mem_zero(map->bucket_arr,
+                    map->bucket_arr_size * sizeof(llist_node*));
+      map->elem_count = 0;
+      sc_set_scaling_limits(map);
+      return ccol_not_enough_memory;
+    }
     llist_node** orig = map->bucket_arr;
     map->bucket_arr =
         _ccol_mem_realloc(map->m_procs, map->bucket_arr,
@@ -1864,6 +2111,21 @@ static inline const cmap_pair* canonicalize_key_pair_if_needed(
   out_canon_pair->ptr = out_canon_buf;
   out_canon_pair->size = key_pair->size;
   return out_canon_pair;
+}
+
+/* The map's own notion of key identity, exposed for a module that has to
+ * agree with it on which keys are the same key. Canonicalising first is what
+ * makes the answer identity rather than representation: -0.0 and 0.0 are one
+ * key for float and double, and a long double is decomposed by value so its
+ * padding bytes are never read. See chashkey.h. */
+size_t ccol_chmap_hash_key(const void* key_ptr, size_t key_size,
+                           ccol_data_type key_type) {
+  cmap_pair given = {.ptr = (void*)key_ptr, .size = key_size};
+  uint64_t canon_buf = 0;
+  cmap_pair canon_pair = {.ptr = NULL, .size = 0};
+  const cmap_pair* key = canonicalize_key_pair_if_needed(
+      &given, key_type, &canon_buf, &canon_pair);
+  return hash_key_data(key->ptr, key->size, key_type, NULL);
 }
 
 /* The open-addressing backend stores a key/value pair inline in a slot's
@@ -2160,8 +2422,8 @@ cmap_iterator* chashmap_begin_iter(chmap chm, char** err) {
 
     // Find first occupied slot
     size_t i = 0;
-    while (i < map->capacity && (!(map->slots[i].metadata & SLOT_OCCUPIED) ||
-                                 (map->slots[i].metadata & SLOT_DELETED))) {
+    while (i < map->capacity && (!(map->metadata[i] & SLOT_OCCUPIED) ||
+                                 (map->metadata[i] & SLOT_DELETED))) {
       i++;
     }
 
@@ -2243,8 +2505,8 @@ static cmap_iterator* chmap_iter_next(cmap_iterator* iter) {
     size_t i = real_iter->iter.oa_index + 1;
 
     // Find next occupied slot
-    while (i < map->capacity && (!(map->slots[i].metadata & SLOT_OCCUPIED) ||
-                                 (map->slots[i].metadata & SLOT_DELETED))) {
+    while (i < map->capacity && (!(map->metadata[i] & SLOT_OCCUPIED) ||
+                                 (map->metadata[i] & SLOT_DELETED))) {
       i++;
     }
 
@@ -2323,8 +2585,8 @@ void chmap_destroy_with_dtor(chmap chm,
     open_addr_map* map = chm->impl.oa_map;
     if (map) {
       for (size_t i = 0; i < map->capacity; i++) {
-        if ((map->slots[i].metadata & SLOT_OCCUPIED) &&
-            !(map->slots[i].metadata & SLOT_DELETED)) {
+        if ((map->metadata[i] & SLOT_OCCUPIED) &&
+            !(map->metadata[i] & SLOT_DELETED)) {
           cmap_pair vp = {.ptr = &map->slots[i].val_data,
                           .size = map->val_size};
           val_dtor(&vp, dtor_ctx);

@@ -21,25 +21,53 @@ SO="${1:-libccollections.so}"
 NS='^_*(ccol_|CCOL_|cvec|cvector|chmap|chashmap|cbmap|cbstmap|cstr|cstring|csort|cjson|cyaml|clog|clru|cmap|cmempool|cthreadcomm|cthreadpool|ctpool|chttp|ctls|citer|CVEC|CHMAP|CBMAP|CSTR|CSORT|CJSON|CYAML|CLOG|CLRU|CMAP|CMEMPOOL|CTHREAD|CTPOOL|CHTTP|CTLS|CITER)'
 
 # Struct tags that are already c-prefixed and are not generic English words.
-ALLOW='^(cbinarymap|c_message_t|cthread_pool|__internal_entry_header)$'
+ALLOW='^(cbinarymap|c_message_t|cthread_pool)$'
 
-PUBLIC_HEADERS='cbstmap chashmap chttp chttpclient chttpserver citerators cjson
-clogger clrucache cmempool common csort cstring cthreadcomm cthreadpool cvector cyaml'
+# Headers that ship. Derived from what is there rather than listed, so a header
+# added later is checked without anyone remembering to add it here, and an
+# internal one (no visibility block, excluded from make install) is skipped by
+# naming only those. Keep in step with INTERNAL_HEADER_FILES in the Makefile.
+INTERNAL_HEADERS='chashkey chttp1_parser cpintable ctls cdebuglog'
 
 fail=0
 
-bad_syms=$(readelf --dyn-syms -W "$SO" \
+# readelf's own status is checked, separately from the pipeline's (which would
+# be sort's): an unreadable or non-ELF artifact otherwise yields an empty symbol
+# list and this reports a fully namespaced interface having examined nothing.
+if ! raw_syms=$(readelf --dyn-syms -W "$SO"); then
+  echo "check_public_namespace: could not read dynamic symbols from $SO" >&2
+  exit 2
+fi
+all_syms=$(printf '%s\n' "$raw_syms" \
   | awk '$7!="UND" && ($5=="GLOBAL"||$5=="WEAK"){print $8}' \
-  | sed 's/@.*//' | sort -u | grep -Ev "$NS" || true)
+  | sed 's/@.*//' | sort -u)
+# An empty set is never a legitimate answer for this library, and is exactly
+# what a stripped, truncated or wrong-format artifact produces.
+if [ -z "$all_syms" ]; then
+  echo "check_public_namespace: $SO exports no dynamic symbols; refusing to" >&2
+  echo "                        report on an empty interface." >&2
+  exit 2
+fi
+bad_syms=$(printf '%s\n' "$all_syms" | grep -Ev "$NS" || true)
 if [ -n "$bad_syms" ]; then
   echo "Exported symbols without a namespace prefix:" >&2
   echo "$bad_syms" | sed 's/^/  /' >&2
   fail=1
 fi
 
-for m in $PUBLIC_HEADERS; do
-  h="include/$m.h"
-  [ -f "$h" ] || continue
+headers=$(ls include/*.h) || headers=''
+if [ -z "$headers" ]; then
+  echo "check_public_namespace: no headers found under include/;" >&2
+  echo "                        run this from the repository root." >&2
+  exit 2
+fi
+for h in $headers; do
+  m=$(basename "$h" .h)
+  skip=0
+  for i in $INTERNAL_HEADERS; do
+    [ "$m" = "$i" ] && skip=1
+  done
+  [ "$skip" -eq 1 ] && continue
   bad=$( { grep -hoE '^#define +[A-Za-z_][A-Za-z0-9_]*' "$h" | sed 's/#define *//'
            grep -hoE '^typedef .*\b[A-Za-z_][A-Za-z0-9_]*;$' "$h" | grep -oE '[A-Za-z_][A-Za-z0-9_]*;$' | tr -d ';'
            grep -hoE '^\} *[A-Za-z_][A-Za-z0-9_]*;' "$h" | grep -oE '[A-Za-z_][A-Za-z0-9_]*'

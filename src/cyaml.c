@@ -1180,13 +1180,13 @@ cyaml cyaml_clone(cyaml node) {
  * line_cache_disabled: back line_start_pos()'s amortized line-boundary
  * cache (see that function's own doc comment). line_starts holds every
  * line-start byte offset discovered so far, in increasing order, with
- * line_starts[0] always 0; line_scan_pos is the highest ctx->pos the cache
- * has been extended to. Allocated once, eagerly, by parse_common() itself
- * before any parsing function runs (a failure there is a fatal parse
- * failure, not a degraded fallback); line_cache_disabled latches true
- * (permanently) only if a LATER growth of the cache fails under OOM, at
- * which point line_start_pos() falls back to a direct per-call backward
- * scan for the rest of the parse.
+ * line_starts[0] seeded to first_line_start (0, or past a byte-order mark);
+ * line_scan_pos is the highest ctx->pos the cache has been extended to.
+ * Allocated once, eagerly, by parse_common() itself before any parsing function
+ * runs (a failure there is a fatal parse failure, not a degraded fallback);
+ * line_cache_disabled latches true (permanently) only if a LATER growth of the
+ * cache fails under OOM, at which point line_start_pos() falls back to a direct
+ * per-call backward scan for the rest of the parse.
  */
 typedef struct {
   const char *src;
@@ -1197,6 +1197,26 @@ typedef struct {
   chmap anchors;
   chmap tag_handles;
   size_t depth;
+  /* The last answer line_start_pos() gave, and the position it was asked
+     about. Which line a byte offset belongs to is a property of the document
+     text, which never changes during a parse, so a repeat question about the
+     same offset can always be answered from here regardless of what the line
+     cache has scanned since. The parser asks the same question several times
+     per position (indentation comparisons, tab checks, and the speculative
+     paths that re-ask after rewinding), which is what makes one remembered
+     answer worth its two fields. memo_pos starts at SIZE_MAX, an offset no
+     document can reach, so the first call cannot hit a stale entry. */
+  size_t memo_pos;
+  size_t memo_line_start;
+  /* Where this stream's content begins: 0, or past a byte-order mark. The
+     first line starts here rather than at offset 0, and the two implementations
+     of "where does the line containing this byte begin" both have to say so.
+     The cached one does by construction, since line_starts[0] is seeded with
+     it; the backward scan needs it as a floor, or it walks past the mark and
+     reports a line start three bytes early. Every column on the first line is
+     then three too large, which is enough to break the block structure the
+     columns decide rather than merely to misreport a position. */
+  size_t first_line_start;
   size_t *line_starts;
   size_t line_starts_len;
   size_t line_starts_cap;
@@ -1336,9 +1356,23 @@ static inline char cur(parse_ctx_t *ctx) {
  * call; kept as a small standalone helper so the cache-disabled path (used
  * only immediately after a cache-growth OOM, an already-degraded state) and
  * the cache's own first-ever call still share one implementation. */
+#ifdef RUNNING_UNIT_TESTS
+/* Forces the degraded, cache-free line-start path that a growth failure of
+   line_starts otherwise latches. Reaching that state through allocation
+   pressure alone cannot exercise the one position class where the two
+   implementations can disagree: the latch needs at least 64 line boundaries to
+   have been crossed first, and by then no query lands on the first line, which
+   is the only line a byte-order mark moves. Declared extern by the suite
+   rather than in the public header, matching how the other modules reach their
+   own test-only accessors. */
+bool cyaml_test_force_line_cache_disabled = false;
+#endif
+
 static size_t line_start_pos_backward_scan(parse_ctx_t *ctx) {
   size_t p = ctx->pos;
-  while (p > 0 && ctx->src[p - 1] != '\n' && ctx->src[p - 1] != '\r') p--;
+  while (p > ctx->first_line_start && ctx->src[p - 1] != '\n' &&
+         ctx->src[p - 1] != '\r')
+    p--;
   return p;
 }
 
@@ -1377,6 +1411,8 @@ static void line_starts_extend(parse_ctx_t *ctx, size_t up_to) {
   ctx->line_scan_pos = p;
 }
 
+static size_t line_start_pos_uncached(parse_ctx_t *ctx);
+
 /* Return the byte offset of the start of ctx->pos's own physical line: the
  * position immediately after the nearest preceding '\n' or '\r', or 0 if
  * none precedes it. Shared by current_col() and line_indent_has_tab(),
@@ -1407,7 +1443,10 @@ static void line_starts_extend(parse_ctx_t *ctx, size_t up_to) {
  * the common case only ever needs to extend the cache forward past bytes
  * never scanned before, making the total scanning work O(n) for the whole
  * parse rather than O(n) per call.
- * A query is then answered by binary-searching the recorded line starts for
+ * A query that has advanced past everything the cache has seen is answered
+ * from the last entry, which the extend above has just made the right one; a
+ * query from a position a speculative parse rewound to is answered by
+ * binary-searching the recorded line starts for
  * the largest one <= ctx->pos, which is correct regardless of whether
  * ctx->pos is ahead of or behind the highest point reached so far - unlike
  * a scheme that only remembers the single most recent line start, this
@@ -1430,13 +1469,62 @@ static void line_starts_extend(parse_ctx_t *ctx, size_t up_to) {
  * unlike the initial allocation's all-or-nothing, parse-hasn't-even-
  * started-yet position. */
 static size_t line_start_pos(parse_ctx_t *ctx) {
+  if (ctx->pos == ctx->memo_pos) {
+#ifdef RUNNING_UNIT_TESTS
+    /* The memo rests on which line a byte belongs to being a property of the
+       document text, which does not change while it is parsed. That is the
+       whole of its correctness and none of it is evident at the call sites, so
+       wherever tests run the remembered answer is checked against a fresh
+       computation. Without this a wrong memo bypasses every other check in the
+       file: the fast-path assertion below only compares two readings of the
+       same array, and a memo hit never reaches it. */
+    ccol_assert(ctx->memo_line_start == line_start_pos_uncached(ctx));
+#endif
+    return ctx->memo_line_start;
+  }
+
+  size_t result = line_start_pos_uncached(ctx);
+  ctx->memo_pos = ctx->pos;
+  ctx->memo_line_start = result;
+  return result;
+}
+
+static size_t line_start_pos_uncached(parse_ctx_t *ctx) {
   if (ctx->line_cache_disabled) return line_start_pos_backward_scan(ctx);
 
   if (ctx->pos > ctx->line_scan_pos) {
     line_starts_extend(ctx, ctx->pos);
     if (ctx->line_cache_disabled) return line_start_pos_backward_scan(ctx);
+    /* Extending stops exactly at ctx->pos and appends one entry per line
+       boundary it crosses, so every entry is now at or below ctx->pos and the
+       last one is therefore the greatest that can be: the answer, with no
+       search. This is the path nearly every call takes, because a parse
+       advances through the document far more often than it rewinds. */
+    size_t answer = ctx->line_starts[ctx->line_starts_len - 1];
+#ifdef RUNNING_UNIT_TESTS
+    /* The invariant above is load-bearing rather than obvious, so it is
+       checked against the general search wherever tests run. A future change
+       that lets an entry past ctx->pos into the cache would otherwise silently
+       return a line start from further down the document, which reads as a
+       mis-detected indentation level far from its cause. */
+    {
+      size_t vlo = 0, vhi = ctx->line_starts_len;
+      while (vlo + 1 < vhi) {
+        size_t vmid = vlo + (vhi - vlo) / 2;
+        if (ctx->line_starts[vmid] <= ctx->pos)
+          vlo = vmid;
+        else
+          vhi = vmid;
+      }
+      ccol_assert(answer == ctx->line_starts[vlo]);
+    }
+#endif
+    return answer;
   }
 
+  /* ctx->pos is at or behind what the cache has already scanned, which is what
+     a speculative parse leaves behind when it rewinds. Entries past ctx->pos
+     exist in that case and have to be excluded, so this path searches. */
   size_t lo = 0, hi = ctx->line_starts_len;
   while (lo + 1 < hi) {
     size_t mid = lo + (hi - lo) / 2;
@@ -1925,17 +2013,40 @@ static bool parse_anchor_name(parse_ctx_t *ctx, char **name_out) {
  * make_typed_scalar's own sequential fallthrough does.
  */
 static bool try_parse_bool_scalar(const char *s, bool *out) {
-  if (strcmp(s, "true") == 0 || strcmp(s, "True") == 0 ||
-      strcmp(s, "TRUE") == 0) {
-    *out = true;
-    return true;
+  /* Dispatched on the first character before any comparison runs. Every scalar
+     in a document reaches here, and almost none of them is a boolean, so what
+     decides the cost is how quickly a scalar that is not one can be ruled out.
+     A chain of strcmp calls rules it out only after entering the C library
+     once per spelling, which is a call and its setup each time even when the
+     very first byte already settles it; a switch on that byte settles it with
+     one load and one branch, and the comparisons that remain are exactly the
+     two or three spellings still possible. The accepted set is what the YAML
+     1.2 core schema admits: the all-lower, capitalised and all-upper forms,
+     and nothing else. */
+  switch (s[0]) {
+    case 't':
+      if (strcmp(s, "true") == 0) break;
+      return false;
+    case 'T':
+      if (strcmp(s, "True") == 0 || strcmp(s, "TRUE") == 0) break;
+      return false;
+    case 'f':
+      if (strcmp(s, "false") == 0) {
+        *out = false;
+        return true;
+      }
+      return false;
+    case 'F':
+      if (strcmp(s, "False") == 0 || strcmp(s, "FALSE") == 0) {
+        *out = false;
+        return true;
+      }
+      return false;
+    default:
+      return false;
   }
-  if (strcmp(s, "false") == 0 || strcmp(s, "False") == 0 ||
-      strcmp(s, "FALSE") == 0) {
-    *out = false;
-    return true;
-  }
-  return false;
+  *out = true;
+  return true;
 }
 
 /*
@@ -2065,21 +2176,29 @@ static bool try_parse_float_scalar(const char *s, double *out) {
    * be silently accepted as 3.5 instead of failing as it must. */
   if (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') return false;
 
-  if (strcmp(s, ".inf") == 0 || strcmp(s, ".Inf") == 0 ||
-      strcmp(s, ".INF") == 0 || strcmp(s, "+.inf") == 0 ||
-      strcmp(s, "+.Inf") == 0 || strcmp(s, "+.INF") == 0) {
-    *out = __builtin_inf();
-    return true;
-  }
-  if (strcmp(s, "-.inf") == 0 || strcmp(s, "-.Inf") == 0 ||
-      strcmp(s, "-.INF") == 0) {
-    *out = -__builtin_inf();
-    return true;
-  }
-  if (strcmp(s, ".nan") == 0 || strcmp(s, ".NaN") == 0 ||
-      strcmp(s, ".NAN") == 0) {
-    *out = __builtin_nan("");
-    return true;
+  /* The infinity and not-a-number spellings all begin with '.', '+' or '-',
+     so one look at the first character excludes every ordinary number here
+     before any comparison runs; see try_parse_bool_scalar for why that matters
+     on a path every scalar in the document takes. A leading '+' or '-' still
+     has to fall through to the numeric parse below when it is not one of these
+     spellings, which is why those two cases do not return early. */
+  if (s[0] == '.' || s[0] == '+' || s[0] == '-') {
+    if (strcmp(s, ".inf") == 0 || strcmp(s, ".Inf") == 0 ||
+        strcmp(s, ".INF") == 0 || strcmp(s, "+.inf") == 0 ||
+        strcmp(s, "+.Inf") == 0 || strcmp(s, "+.INF") == 0) {
+      *out = __builtin_inf();
+      return true;
+    }
+    if (strcmp(s, "-.inf") == 0 || strcmp(s, "-.Inf") == 0 ||
+        strcmp(s, "-.INF") == 0) {
+      *out = -__builtin_inf();
+      return true;
+    }
+    if (strcmp(s, ".nan") == 0 || strcmp(s, ".NaN") == 0 ||
+        strcmp(s, ".NAN") == 0) {
+      *out = __builtin_nan("");
+      return true;
+    }
   }
 
   const char *q = s;
@@ -2090,18 +2209,28 @@ static bool try_parse_float_scalar(const char *s, double *out) {
     neg = true;
     q++;
   }
-  if (strcasecmp(q, "nan") == 0 || strcasecmp(q, "inf") == 0 ||
-      strcasecmp(q, "infinity") == 0)
-    return false;
-  /* glibc's strtod() also accepts C99's nan(n-char-sequence) syntax (e.g.
-   * "nan(123)", "nan()"), which is not part of the YAML core schema float
-   * grammar at all (only the bare/dot-prefixed forms already handled
-   * above are); left unguarded, the generic strtod() call below would
-   * silently accept it as a NaN float, discarding the original text and
-   * colliding every distinct "nan(...)" spelling onto the same
-   * canonicalized dictionary key. Reject the whole q up front so it falls
-   * through to CYAML_STRING like any other non-numeric token. */
-  if (strncasecmp(q, "nan(", 4) == 0) return false;
+  /* Dispatch on the first byte before any comparison runs. Every spelling the
+     four case-insensitive comparisons here can match begins with n, N, i or I,
+     so one load and one branch settle all of them for any other scalar, and a
+     plain string is the case that dominates a real document. Unguarded, the
+     chain enters the C library up to four times per scalar purely to be ruled
+     out: measured on a string-heavy document, that puts the case-insensitive
+     comparisons at 4.6 percent of every instruction the parse executes. */
+  const char qc = *q;
+  if (qc == 'n' || qc == 'N' || qc == 'i' || qc == 'I') {
+    if (strcasecmp(q, "nan") == 0 || strcasecmp(q, "inf") == 0 ||
+        strcasecmp(q, "infinity") == 0)
+      return false;
+    /* glibc's strtod() also accepts C99's nan(n-char-sequence) syntax (e.g.
+     * "nan(123)", "nan()"), which is not part of the YAML core schema float
+     * grammar at all (only the bare/dot-prefixed forms already handled
+     * above are); left unguarded, the generic strtod() call below would
+     * silently accept it as a NaN float, discarding the original text and
+     * colliding every distinct "nan(...)" spelling onto the same
+     * canonicalized dictionary key. Reject the whole q up front so it falls
+     * through to CYAML_STRING like any other non-numeric token. */
+    if (strncasecmp(q, "nan(", 4) == 0) return false;
+  }
 
   /* Hex/octal integer syntax has no float representation of its own in the
    * YAML core schema at all; the ONLY reason this function ever accepts
@@ -2197,8 +2326,19 @@ static bool try_parse_float_scalar(const char *s, double *out) {
 }
 
 static bool is_null_scalar_text(const char *s) {
-  return s[0] == '\0' || strcmp(s, "~") == 0 || strcmp(s, "null") == 0 ||
-         strcmp(s, "Null") == 0 || strcmp(s, "NULL") == 0;
+  /* First character first, for the same reason as try_parse_bool_scalar. */
+  switch (s[0]) {
+    case '\0':
+      return true;
+    case '~':
+      return s[1] == '\0';
+    case 'n':
+      return strcmp(s, "null") == 0;
+    case 'N':
+      return strcmp(s, "Null") == 0 || strcmp(s, "NULL") == 0;
+    default:
+      return false;
+  }
 }
 
 /*
@@ -5025,7 +5165,26 @@ static char *node_to_dict_key_string(parse_ctx_t *ctx, cyaml_node_t *key_node,
   char *key_str = NULL;
   switch (key_node->type) {
     case CYAML_STRING:
-      key_str = ccol_strdup(ctx->mp, key_node->value.string);
+      /* Moved out of the node rather than copied. This function destroys
+         key_node before it returns, so a duplicate made here would be paid for
+         twice over: once to allocate and copy it, and once to free the
+         original a few lines below, for a string the caller then copies again
+         into the dictionary's own storage. Taking the pointer and clearing the
+         node's reference to it leaves the node's teardown with nothing to free
+         for this member, which node_clear_value already handles since that is
+         exactly the state it leaves a cleared node in.
+
+         Conditional on the two allocators being the same object, because the
+         caller releases this string through ctx->mp while the node would have
+         released it through its own; for every node this parser builds they
+         are the same, and the copy remains correct for any node that ever
+         arrives from elsewhere. */
+      if (key_node->m_procs == ctx->mp && key_node->value.string) {
+        key_str = key_node->value.string;
+        key_node->value.string = NULL;
+      } else {
+        key_str = ccol_strdup(ctx->mp, key_node->value.string);
+      }
       break;
     case CYAML_INTEGER: {
       char tmp[32];
@@ -7671,8 +7830,20 @@ static cyaml parse_common(const char *src, size_t len, char **err_str,
     set_err_str(err_str, mp, "null input");
     return NULL;
   }
-  parse_ctx_t ctx = {
-      .src = src, .pos = 0, .len = len, .error = "", .mp = mp, .anchors = NULL};
+  parse_ctx_t ctx = {.src = src,
+                     .pos = 0,
+                     .len = len,
+                     .error = "",
+                     .mp = mp,
+                     .anchors = NULL,
+                     /* No document reaches this offset, so the first question
+                        asked cannot match a memo that was never filled in.
+                        Stated rather than left to the zero this field would
+                        otherwise get, because zero is a real position, and the
+                        BOM branch below rewrites line_starts[0] after this
+                        point: a memo that appeared valid at position zero would
+                        answer with the pre-BOM line start. */
+                     .memo_pos = SIZE_MAX};
   parse_node_budget_arm();
 
   /* Eagerly allocate line_start_pos()'s own position cache before any
@@ -7700,7 +7871,12 @@ static cyaml parse_common(const char *src, size_t len, char **err_str,
     ctx.pos = 3;
     ctx.line_starts[0] = 3;
     ctx.line_scan_pos = 3;
+    ctx.first_line_start = 3;
   }
+
+#ifdef RUNNING_UNIT_TESTS
+  if (cyaml_test_force_line_cache_disabled) ctx.line_cache_disabled = true;
+#endif
 
   skip_ws_comments(&ctx);
   /* The stream's very own leading whitespace (before the first document's

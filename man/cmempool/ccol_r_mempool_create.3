@@ -1,4 +1,4 @@
-.TH CCOL_R_MEMPOOL_CREATE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CCOL_R_MEMPOOL_CREATE 3 "2026-09-17" "c_collections" "C Collections Library - Functions"
 .SH NAME
 ccol_r_mempool_create \- create a ranged memory pool
 .SH LIBRARY
@@ -44,10 +44,56 @@ Minimum allowed smallest size is 16 bytes (power = 4)
 Example: smallest=4 (16 bytes), largest=6 (64 bytes), count=8 (256 elems)
   Creates pools: 16 bytes (256 elems), 32 bytes (128), 64 bytes (64)
 Fallback policies:
-  - fallback_disabled: Returns NULL when pools exhausted
-  - fallback_at_first_exhaustion: Uses heap when first pool exhausted
-  - fallback_at_last_exhaustion: Uses heap only after all pools exhausted
+  - ccol_fallback_disabled: Returns NULL when pools exhausted
+  - ccol_fallback_at_first_exhaustion: Uses heap when first pool exhausted
+  - ccol_fallback_at_last_exhaustion: Uses heap only after all pools exhausted
+
+Sizing for performance:
+
+Each sub-pool is sized independently, so the 8-element floor described in
+ccol_mempool_create(3) applies per tier rather than to the pool as a
+whole. Because each tier holds half the elements of the one below it, the
+largest few element sizes have the fewest entries and are the first to
+fall under that floor: a tier with fewer than 8 elements takes its lock
+on every allocation and every free.
+
+Raising number_of_smallest_size_elems_power_of_two lifts every tier at
+once and is usually the simplest way to keep the large-element tiers
+above the floor. Narrowing the range between smallest_size_power_of_two
+and largest_size_power_of_two has the same effect, by producing fewer
+tiers to divide the elements between.
+
+Every tier that receives a cache allocates a reserve of its own, so a
+ranged pool's memory can exceed the sum of its nominal tier sizes by up
+to half, and by proportionally less for tiers large enough that their
+caches reach maximum depth. That memory is allocated when the pool is
+created, so nothing grows at run time.
+ccol_r_mempool_total_capacity() reports a tier's nominal count, and a
+tier escalates or falls back once that count is exhausted. The exception
+is the same one ccol_mempool_total_capacity(3) describes: an entry leaves
+a thread's cache with no lock held and so with no count to consult, so
+concurrent callers can briefly hold a few entries more than a tier's
+nominal count at once, never more than that count plus the tier's own
+reserve.
+
+The best range, tier count and single_threaded setting depend on the size
+distribution of the program's own allocations, which no default can
+predict. Measure rather than assume: "make bench" in the source tree runs
+these pools alongside the system allocator on the current machine.
+.fi
+.SH "THREAD SAFETY"
+.nf
+Thread-safe when single_threaded is false. Each sub-pool carries its own
+lock, so allocations for different size classes never contend with one
+another, and within a tier large enough to maintain per-thread caches the
+common path takes no lock at all.
+
+Entries held in a thread's cache return to their tier when that thread
+exits or when the pool is destroyed. Join a thread before destroying a
+pool it used.
 .fi
 .SH "SEE ALSO"
 .BR ccol_r_mempool_create_from_preallocated_buffer (3),
-.BR ccol_r_mempool_destroy (3)
+.BR ccol_r_mempool_destroy (3),
+.BR ccol_mempool_create (3),
+.BR ccol_r_mempool_total_capacity (3)

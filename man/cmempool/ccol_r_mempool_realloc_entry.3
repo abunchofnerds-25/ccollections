@@ -18,6 +18,14 @@ one of the pool's own fixed-size tiers or by the dynamic/heap fallback
 path. Otherwise, allocates a new entry sized for the request, copies
 min(old_size, new_size) bytes, and frees the old entry.
 .fi
+.PP
+When that new entry cannot be allocated, a pool-owned entry the request still
+fits inside is returned unmoved rather than reported as a failure. An entry
+sits in a tier at least as large as the size it was created for, and may sit in
+a larger one than the request alone would choose, so a shrink (or a resize to
+the size already held) can be honoured by the entry staying where it is. The
+pointer that comes back then addresses at least the requested bytes, as it does
+on every other successful path.
 .SH PARAMETERS
 .nf
 rmp   Ranged memory pool
@@ -34,7 +42,9 @@ Returns NULL on failure
 If addr is NULL, equivalent to ccol_r_mempool_alloc_entry()
 If the new size does not require a differently-sized allocation, returns
 the original pointer unchanged (no copy)
-Otherwise, allocates new, copies data, frees old
+Otherwise, allocates new, copies data, frees old; if that allocation fails
+and addr is a pool-owned entry the request still fits inside, addr is
+returned unmoved instead of NULL
 Copies min(old_user_size, new_user_size) bytes
 Old entry is automatically freed if reallocation succeeds
 Thread-safe if pool created with single_threaded=false

@@ -798,6 +798,33 @@ void clog_test_force_next_fresh_slot_registration_failure(bool force);
 void clog_test_set_close_finalize_delay_us(unsigned int delay_us);
 
 /**
+ * @brief Test-only: widen the window in which a close has cleared its slot
+ *        but still needs the slot table.
+ *
+ * A clog_close() stops being visible as a live slot partway through, and then
+ * re-acquires the table's write lock to finish. While armed (delay_us != 0),
+ * every clog_close() sleeps for delay_us microseconds inside exactly that
+ * span, so a test can let a second close complete in the middle of it on
+ * demand rather than relying on scheduling luck. Does not auto-disarm, for the
+ * same reason as the hook above.
+ *
+ * @param delay_us Microseconds to sleep inside that window, or 0 to disarm.
+ */
+void clog_test_set_close_release_window_us(unsigned int delay_us);
+
+/**
+ * @brief Test-only: whether any clog_close() has entered that window since it
+ *        was last armed.
+ *
+ * Lets a test wait for the window to be genuinely occupied rather than sleeping
+ * for a guessed interval, so a thread that is slow to start cannot leave the
+ * test passing having exercised nothing.
+ *
+ * @return true once a clog_close() has entered the armed window.
+ */
+bool clog_test_close_release_window_entered(void);
+
+/**
  * @brief Report whether the delay armed by the most recent call to
  *        clog_test_set_close_finalize_delay_us() has actually been entered
  *        by some clog_close() call yet, for testing.

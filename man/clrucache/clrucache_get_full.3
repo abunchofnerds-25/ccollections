@@ -27,8 +27,8 @@ a heap-allocated copy of its value is written into val_out.
 Cache miss without a remote getter: returns ccol_key_not_found.
 
 Cache miss with a remote getter: a placeholder entry is inserted and
-the remote getter is called outside the mutex. Concurrent get calls
-for the same key coalesce: only the first caller runs the fetch; all
+the remote getter is called outside the segment's lock. Concurrent get
+calls for the same key coalesce: only the first caller runs the fetch; all
 others block until the result is available and receive the same
 result the fetching caller did. On getter success the fetched value
 is cached and a heap-allocated copy is written into val_out for all
@@ -58,7 +58,9 @@ ccol_success           val_out populated; caller owns val_out->ptr.
 ccol_key_not_found     Key absent and no getter, or getter failed.
 ccol_invalid_args      cache is CLRU_CACHE_INVALID or a stale
                        (already-destroyed) handle; or key_pair or
-                       val_out is NULL.
+                       val_out is NULL; or key_pair->size disagrees
+                       with the width of the key type the cache was
+                       created for.
 ccol_not_enough_memory Allocation failed (placeholder entry or output
                        copy).
 ccol_unexpected_failure

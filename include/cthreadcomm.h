@@ -596,7 +596,8 @@ size_t ccol_dynmq_msg_count(ccol_dynamic_queue *dq);
  *
  * @return Pointer to newly created ccol_channel, or NULL on failure
  *
- * @note Contains two circular queues: owner_to_workers and workers_to_owner
+ * @note Contains two circular queues: ccol_owner_to_workers and
+ * ccol_workers_to_owner
  * @note Creating thread is designated as owner; all others are workers
  * @note Direction is automatically selected based on thread ID
  * @note The ccol_channel must be destroyed with ccol_channel_destroy() when
@@ -668,8 +669,8 @@ void __ccol_channel_destroy(ccol_channel *ch);
  * @brief Send a message through the ccol_channel (blocking, zero-copy)
  *
  * Automatically selects the appropriate queue based on calling thread:
- * - Owner thread sends to owner_to_workers queue
- * - Worker threads send to workers_to_owner queue
+ * - Owner thread sends to ccol_owner_to_workers queue
+ * - Worker threads send to ccol_workers_to_owner queue
  *
  * @param ch Channel to send through
  * @param msg Message to send (data ownership transfers on success)
@@ -744,8 +745,8 @@ ccol_retval_t ccol_chan_timed_send_zc(ccol_channel *ch, c_message_t *msg,
  * @brief Receive a message from the ccol_channel (blocking, zero-copy)
  *
  * Automatically selects the appropriate queue based on calling thread:
- * - Owner thread receives from workers_to_owner queue
- * - Worker threads receive from owner_to_workers queue
+ * - Owner thread receives from ccol_workers_to_owner queue
+ * - Worker threads receive from ccol_owner_to_workers queue
  *
  * @param ch Channel to receive from
  * @param target_buf Buffer to receive the message (receives ownership of data)
@@ -814,8 +815,8 @@ ccol_retval_t ccol_chan_timed_recv_zc(ccol_channel *ch, c_message_t *target_buf,
  * @brief Direction specifier for ccol_channel control operations
  */
 typedef enum ccol_channel_direction {
-  owner_to_workers = 0, /**< Messages from owner to worker threads */
-  workers_to_owner      /**< Messages from worker threads to owner */
+  ccol_owner_to_workers = 0, /**< Messages from owner to worker threads */
+  ccol_workers_to_owner      /**< Messages from worker threads to owner */
 } ccol_channel_direction;
 
 /**
@@ -825,7 +826,8 @@ typedef enum ccol_channel_direction {
  * threads currently blocked in send operations on that direction.
  *
  * @param ch Channel to modify
- * @param d Direction to disable (owner_to_workers or workers_to_owner)
+ * @param d Direction to disable (ccol_owner_to_workers or
+ * ccol_workers_to_owner)
  *
  * @return ccol_success on success
  * @return ccol_invalid_args if ch is NULL or d is invalid
@@ -846,7 +848,7 @@ ccol_retval_t ccol_chan_disable_sending(ccol_channel *ch,
  * disabled and wakes all threads currently blocked waiting to send.
  *
  * @param ch Channel to modify
- * @param d Direction to enable (owner_to_workers or workers_to_owner)
+ * @param d Direction to enable (ccol_owner_to_workers or ccol_workers_to_owner)
  *
  * @return ccol_success on success
  * @return ccol_invalid_args if ch is NULL or d is invalid
@@ -867,7 +869,7 @@ ccol_retval_t ccol_chan_enable_sending(ccol_channel *ch,
  * queue.
  *
  * @param ch Channel to query
- * @param d Direction to query (owner_to_workers or workers_to_owner)
+ * @param d Direction to query (ccol_owner_to_workers or ccol_workers_to_owner)
  *
  * @return Number of messages in the specified direction, or (size_t)-1 on error
  *
@@ -1396,7 +1398,7 @@ typedef void (*event_removed_fn)(void *arg);
  * when release is safe, such as the reg's own destruction of arg well
  * after ccol_event_loop_remove() returns instead of exactly when it returns).
  */
-typedef struct event_handlers {
+typedef struct ccol_event_handlers {
   ccol_event_readable_fn
       on_readable; /**< EPOLLIN|EPOLLRDHUP, or a queue message */
   ccol_event_writable_fn on_writable; /**< EPOLLOUT, or queue room available */
@@ -2245,6 +2247,33 @@ void ccol_event_loop_test_wrunlock_slot_table_for_tests(void);
  * such guarantee.
  */
 bool ccol_circq_test_has_sel_read_waiter_for_tests(ccol_circular_queue *cq);
+
+/**
+ * @brief Test-only: how many receivers are currently parked in cq's read
+ *        condition variable.
+ *
+ * A send signals that condition variable only when this count is non-zero, so
+ * a test that wants to prove a blocked receiver is actually woken by a send
+ * (rather than released by its own timeout) polls this in a bounded loop until
+ * the receiver has registered itself, and only then sends. A wait site that
+ * fails to register never lets that poll succeed, which is what keeps such a
+ * test from passing vacuously.
+ */
+size_t ccol_circq_waiting_readers_for_tests(ccol_circular_queue *cq);
+
+/**
+ * @brief Test-only: how many senders are currently parked in cq's write
+ *        condition variable; the send-side counterpart of
+ *        ccol_circq_waiting_readers_for_tests.
+ */
+size_t ccol_circq_waiting_writers_for_tests(ccol_circular_queue *cq);
+
+/**
+ * @brief Test-only: how many receivers are currently parked in dq's read
+ *        condition variable; ccol_circq_waiting_readers_for_tests for a
+ *        dynamic queue.
+ */
+size_t ccol_dynmq_waiting_readers_for_tests(ccol_dynamic_queue *dq);
 
 /**
  * @brief Like ccol_circq_test_force_next_send_condvar_wait_error, but also

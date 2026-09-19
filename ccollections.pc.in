@@ -7,7 +7,7 @@ Name: ccollections
 Description: Generic data structures and utilities for C: containers, strings, memory pools, thread communication and pools, structured logging, JSON, YAML, and an HTTP client and server
 URL: https://github.com/abunchofnerds-25/ccollections
 Version: @VERSION@
-Requires.private: libssl libcrypto zlib
+Requires.private: @REQUIRES_PRIVATE@
 Libs: -L${libdir} -lccollections
 Libs.private: -lpthread -lm
 Cflags: -I${includedir}

@@ -35,25 +35,26 @@ Every public function and macro also has a real troff manual page under [`man/`]
    - [Compatibility and Versioning](#compatibility-and-versioning)
    - [Compile-Time Configuration](#compile-time-configuration)
    - [Leaving Modules Out](#leaving-modules-out)
-5. [Dynamic Array - `cvector`](#5-dynamic-array---cvector)
-6. [Dynamic String - `cstring`](#6-dynamic-string---cstring)
-7. [Hash Map - `chashmap`](#7-hash-map---chashmap)
-8. [Ordered Map - `cbstmap`](#8-ordered-map---cbstmap)
-9. [Unified Iteration - `citerators`](#9-unified-iteration---citerators)
-10. [Sorting - `csort`](#10-sorting---csort)
-11. [Memory Pools - `cmempool`](#11-memory-pools---cmempool)
-12. [Thread Communication - `cthreadcomm`](#12-thread-communication---cthreadcomm)
-13. [LRU Cache - `clrucache`](#13-lru-cache---clrucache)
-14. [Structured Logger - `clogger`](#14-structured-logger---clogger)
-15. [JSON Parser / Serializer / DOM - `cjson`](#15-json-parser--serializer--dom---cjson)
-16. [YAML Parser / Serializer / DOM - `cyaml`](#16-yaml-parser--serializer--dom---cyaml)
-17. [Thread Pool - `cthreadpool`](#17-thread-pool---cthreadpool)
-18. [HTTP Client - `chttpclient`](#18-http-client---chttpclient)
-19. [HTTP Server - `chttpserver`](#19-http-server---chttpserver)
-20. [Thread Safety](#20-thread-safety)
-21. [Custom Memory Management](#21-custom-memory-management)
-22. [Authors](#22-authors)
-23. [License](#23-license)
+5. [Quick Start](#5-quick-start)
+6. [Dynamic Array - `cvector`](#6-dynamic-array---cvector)
+7. [Dynamic String - `cstring`](#7-dynamic-string---cstring)
+8. [Hash Map - `chashmap`](#8-hash-map---chashmap)
+9. [Ordered Map - `cbstmap`](#9-ordered-map---cbstmap)
+10. [Unified Iteration - `citerators`](#10-unified-iteration---citerators)
+11. [Sorting - `csort`](#11-sorting---csort)
+12. [Memory Pools - `cmempool`](#12-memory-pools---cmempool)
+13. [Thread Communication - `cthreadcomm`](#13-thread-communication---cthreadcomm)
+14. [LRU Cache - `clrucache`](#14-lru-cache---clrucache)
+15. [Structured Logger - `clogger`](#15-structured-logger---clogger)
+16. [JSON Parser / Serializer / DOM - `cjson`](#16-json-parser--serializer--dom---cjson)
+17. [YAML Parser / Serializer / DOM - `cyaml`](#17-yaml-parser--serializer--dom---cyaml)
+18. [Thread Pool - `cthreadpool`](#18-thread-pool---cthreadpool)
+19. [HTTP Client - `chttpclient`](#19-http-client---chttpclient)
+20. [HTTP Server - `chttpserver`](#20-http-server---chttpserver)
+21. [Thread Safety](#21-thread-safety)
+22. [Custom Memory Management](#22-custom-memory-management)
+23. [Authors](#23-authors)
+24. [License](#24-license)
 
 ---
 
@@ -180,7 +181,7 @@ The `*_construct_scoped` macros in section 3.2 only cover the library's own cont
 | Macro | Purpose |
 |---|---|
 | `ccol_scoped_ptr(name, type)` | Declares `type *name`, initialised to `NULL`, freed via the default allocator at scope exit |
-| `ccol_scoped_ptr_mp(name, type, mmgmt_procs)` | Same, but frees `name`'s final value via `mmgmt_procs` (see [Custom Memory Management](#21-custom-memory-management)) |
+| `ccol_scoped_ptr_mp(name, type, mmgmt_procs)` | Same, but frees `name`'s final value via `mmgmt_procs` (see [Custom Memory Management](#22-custom-memory-management)) |
 | `ccol_scoped_ptr_release(name)` | Returns `name`'s current value and sets `name` to `NULL`, cancelling the pending auto-free |
 
 Assign to the declared pointer normally; whatever value it holds when the enclosing scope ends is freed automatically:
@@ -804,7 +805,7 @@ These switches are for embedding a library you build and link yourself. If you
 are producing something other programs will resolve `libccollections.so.1`
 against, build the full library.
 
-### Quick Start
+## 5. Quick Start
 
 The following example uses the two most commonly needed modules: a dynamic array and a hash map.
 
@@ -852,7 +853,7 @@ int main(void) {
 
 Each module is fully independent: include only the headers your code needs. The remaining sections cover every module in depth, starting with the simpler containers and building toward the more advanced ones.
 
-## 5. Dynamic Array - `cvector`
+## 6. Dynamic Array - `cvector`
 
 `cvector` is a resizable array. Unlike a plain C array (`int arr[100]`), a vector grows automatically when you push more elements than it can currently hold; you do not need to know the final size in advance. Indexed access is O(1) (constant time regardless of the array's size). Insertion at the end is amortised O(1): the array occasionally doubles its capacity, but the average cost per insertion, spread over many insertions, stays constant. Sorting is O(n log n) and stable (equal elements keep their original relative order). The internal capacity is always at least four elements, doubles when the array is full, and halves when occupancy drops below one quarter.
 
@@ -1007,7 +1008,7 @@ void print_page(Student *all_students, size_t count,
 
 ---
 
-## 6. Dynamic String - `cstring`
+## 7. Dynamic String - `cstring`
 
 `cstring` is a heap-allocated string that grows automatically as you append to it. Unlike a fixed `char` array, you do not need to declare a maximum length in advance. Its internal buffer is always null-terminated, so you can pass it directly to any standard library function that expects a `const char *`. Capacity is always a power of two (minimum 16 bytes); when more space is needed the buffer grows to the smallest power of two that fits the result.
 
@@ -1205,7 +1206,7 @@ void load_config(const char *path, chmap config) {
 
 ---
 
-## 7. Hash Map - `chashmap`
+## 8. Hash Map - `chashmap`
 
 A hash map stores key-value pairs and answers "what value is associated with this key?" in constant time on average (O(1)), regardless of how many pairs are stored. If you have used C++'s `std::unordered_map`, Java's `HashMap`, or Python's `dict`, this is the same concept.
 
@@ -1275,7 +1276,7 @@ for (it = ccol_begin(index); it != NULL; it = ccol_iter_next(it)) {
 }
 ```
 
-The unified iteration macros are provided by `citerators.h`, which is automatically included when you include `chashmap.h`. See [Section 9](#9-unified-iteration---citerators) for the full API reference.
+The unified iteration macros are provided by `citerators.h`, which is automatically included when you include `chashmap.h`. See [Section 10](#10-unified-iteration---citerators) for the full API reference.
 
 Iteration order differs by implementation: separate chaining iterates in reverse insertion order via its internal doubly-linked list; open-addressing iterates in slot order, which can be considered random.
 
@@ -1457,7 +1458,7 @@ The map copies each key string into its own storage (inline for strings up to 23
 
 **Iteration**
 
-These macros come from `citerators.h`, which `chashmap.h` includes automatically. See [Section 9](#9-unified-iteration---citerators) for the full reference.
+These macros come from `citerators.h`, which `chashmap.h` includes automatically. See [Section 10](#10-unified-iteration---citerators) for the full reference.
 
 | Macro | Description |
 |---|---|
@@ -1471,7 +1472,7 @@ These macros come from `citerators.h`, which `chashmap.h` includes automatically
 
 ---
 
-## 8. Ordered Map - `cbstmap`
+## 9. Ordered Map - `cbstmap`
 
 An ordered map works like a hash map (you look up values by key) but it always keeps its keys in sorted order. Iterating over it visits entries from smallest key to largest. This makes it the right choice when you need both fast lookup and ordered traversal.
 
@@ -1635,7 +1636,7 @@ The AVL self-balancing property keeps the tree height bounded at O(log n) even u
 
 **Iteration**
 
-These macros come from `citerators.h`, which `cbstmap.h` includes automatically. See [Section 9](#9-unified-iteration---citerators) for the full reference.
+These macros come from `citerators.h`, which `cbstmap.h` includes automatically. See [Section 10](#10-unified-iteration---citerators) for the full reference.
 
 | Macro | Description |
 |---|---|
@@ -1649,7 +1650,7 @@ These macros come from `citerators.h`, which `cbstmap.h` includes automatically.
 
 ---
 
-## 9. Unified Iteration - `citerators`
+## 10. Unified Iteration - `citerators`
 
 `citerators.h` provides a single iteration API that works identically across `cvector`, `chashmap`, and `cbstmap`. You do not need to learn a different loop pattern for each container type. There is no need to include this header explicitly: each of the three container headers pulls it in automatically.
 
@@ -1782,7 +1783,7 @@ The same `ccol_for_each` / `ccol_iter_next` / `ccol_iter_key_ptr` / `ccol_iter_v
 
 ---
 
-## 10. Sorting - `csort`
+## 11. Sorting - `csort`
 
 `csort` is a sorting algorithm module. It provides a stable, iterative mergesort.
 
@@ -1873,7 +1874,7 @@ Because `csort` is a stable sort, two documents submitted at times `t1 < t2` wit
 
 ---
 
-## 11. Memory Pools - `cmempool`
+## 12. Memory Pools - `cmempool`
 
 A memory pool pre-allocates a large block of memory up front and hands out slices from it on demand. Compared to calling `malloc` for every object, pool allocation is O(1) with no system call per request, produces no fragmentation, and makes peak memory usage predictable: a pool's capacity is fixed when it is created and never grows at run time.
 
@@ -2140,11 +2141,11 @@ Because every slot is the same size as `Bullet`, there is no fragmentation withi
 
 ### Driving Other Containers from a Pool
 
-Any container that accepts a `ccol_memmgmt_procs_t *` can be directed to allocate from a pool. See [Section 21](#21-custom-memory-management) for the complete pattern.
+Any container that accepts a `ccol_memmgmt_procs_t *` can be directed to allocate from a pool. See [Section 22](#22-custom-memory-management) for the complete pattern.
 
 ---
 
-## 12. Thread Communication - `cthreadcomm`
+## 13. Thread Communication - `cthreadcomm`
 
 When two threads need to share data, you need a safe handoff mechanism. Simply reading and writing the same variable from two threads without coordination is a data race; the result is undefined behaviour that can corrupt data or crash unpredictably.
 
@@ -2504,7 +2505,7 @@ ccol_event_loop_resume(loop, reg);   /* interest restored; same reg, same genera
 
 ---
 
-## 13. LRU Cache - `clrucache`
+## 14. LRU Cache - `clrucache`
 
 A cache stores the results of expensive operations so that repeated requests for the same input return immediately without redoing the work. An LRU (Least-Recently-Used) cache has a fixed capacity; when it is full and a new entry needs to be added, the entry that has gone the longest without being accessed is evicted first. This keeps frequently requested results in memory and lets old, rarely used ones fall out automatically.
 
@@ -2772,7 +2773,7 @@ void process(void) {
 
 ---
 
-## 14. Structured Logger - `clogger`
+## 15. Structured Logger - `clogger`
 
 Logging is how a running program records what it is doing and what went wrong. `clogger` writes structured log lines: instead of free-form text, every message is a sequence of `key=value` pairs that can be filtered, searched, and aggregated programmatically. Three output formats are supported: logfmt (default, plain text, human-readable), NDJSON (one JSON object per line, easy to parse with tools like `jq`), and RFC 5424 syslog (for integration with system logging infrastructure). All writes are serialised through a mutex, making the logger safe to call from multiple threads without any extra coordination, for as long as every handle involved stays open. Closing a handle (`clog_close`) is the one operation this does not cover: as with every other handle-based type in this library, it is the caller's responsibility to ensure no other thread is still using (or concurrently closing) that same handle when it is closed.
 
@@ -3096,7 +3097,7 @@ Order-scoped fields (`order_id`, `customer`) appear in every line emitted by `or
 
 ---
 
-## 15. JSON Parser / Serializer / DOM - `cjson`
+## 16. JSON Parser / Serializer / DOM - `cjson`
 
 JSON (JavaScript Object Notation) is a text format for structured data, widely used in web APIs and configuration files. `cjson` parses a JSON string into a tree of nodes held in memory (a DOM; Document Object Model), lets you read and modify any node in the tree, and serialises the result back to a JSON string when you are done.
 
@@ -3318,7 +3319,7 @@ cjson_destroy(root);
 
 ---
 
-## 16. YAML Parser / Serializer / DOM - `cyaml`
+## 17. YAML Parser / Serializer / DOM - `cyaml`
 
 `cyaml` parses a YAML document into a mutable tree of nodes, lets you read and modify those nodes, and serialises the result back to YAML. The API mirrors `cjson` closely: the same dot-separated path macros (`cyaml_get` and `cyaml_set`) work on YAML trees using the same syntax.
 
@@ -3638,7 +3639,7 @@ The allocator is stamped on every node at creation time.  `cyaml_destroy()` uses
 
 ---
 
-## 17. Thread Pool - `cthreadpool`
+## 18. Thread Pool - `cthreadpool`
 
 Creating a new OS thread for every task is expensive: each `pthread_create` call allocates a stack and involves a system call. A thread pool solves this (for ephemeral threads to perform some work in parallel and terminate) by creating a fixed number of worker threads once and reusing them. You submit tasks to a queue; the next available worker picks one up. This bounds concurrent thread count and eliminates the per-task creation overhead.
 
@@ -3902,7 +3903,7 @@ The pool is created with `ccol_invalid_size` (unbounded queue) so that submittin
 
 ---
 
-## 18. HTTP Client - `chttpclient`
+## 19. HTTP Client - `chttpclient`
 
 `chttpclient` lets your C program send HTTP requests (GET, POST, PUT, DELETE, PATCH) to any URL and receive the response. It is a hand-rolled HTTP/1.1 client: an internal `chttp1_parser` module drives request/response framing over raw sockets, TLS is provided by `ctls` (a reactor-agnostic OpenSSL wrapper), the reactor backing Tier 2/3's async engine is `ccol_event_loop` (from `cthreadcomm`), and this module adds a concurrency-limiting pool, a keep-alive connection cache, case-insensitive header maps, and an API that integrates with the rest of the library. `chttpclient` has no dependency on any vendored third-party code.
 
@@ -4471,7 +4472,7 @@ Internally, `chttpclient.c`'s own URL parser calls `chttp_basic_auth_mp` to turn
 
 ---
 
-## 19. HTTP Server - `chttpserver`
+## 20. HTTP Server - `chttpserver`
 
 `chttpserver` is an embedded HTTP/1.1 server. It provides a Go-style routing API: register handlers for method+pattern pairs, attach middleware chains, and create sub-routers with their own prefix and middleware. Multiple server instances may run simultaneously on different ports (or Unix domain sockets) within the same process, all sharing one process-wide reactor.
 
@@ -4977,7 +4978,7 @@ cfg.tls = &tls;
 
 ---
 
-## 20. Thread Safety
+## 21. Thread Safety
 
 The library applies a consistent policy: **components that pass data between threads or provide shared services carry their own synchronisation; components used for single-threaded data manipulation are deliberately left unguarded.**
 
@@ -5031,7 +5032,7 @@ The following components include their own internal synchronisation and are safe
 
 ---
 
-## 21. Custom Memory Management
+## 22. Custom Memory Management
 
 Every container accepts a `ccol_memmgmt_procs_t *` at creation time. Passing `NULL` selects the standard `malloc`/`calloc`/`realloc`/`free` family.
 
@@ -5128,7 +5129,7 @@ ccol_r_mempool_destroy(node_pool);
 
 ---
 
-## 22. Authors
+## 23. Authors
 
 This library started as a hobby project on Danis Ozdemir's PC and grew into its current shape over four years. As the license says, the authors are a bunch of nerds with deep respect for the legacy of Dennis Ritchie and Ken Thompson, whose work on C and Unix laid the foundations of modern computing.
 
@@ -5137,7 +5138,7 @@ This library started as a hobby project on Danis Ozdemir's PC and grew into its 
 
 ---
 
-## 23. License
+## 24. License
 
 MIT License
 

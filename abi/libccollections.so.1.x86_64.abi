@@ -89,8 +89,6 @@
     <elf-symbol name='ccol_growbuf_append' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='ccol_growbuf_init' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='ccol_growbuf_init_hint' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_mem_cpy' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
-    <elf-symbol name='ccol_mem_zero' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='ccol_mempool_alloc_entry' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='ccol_mempool_allocated_bytes' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
     <elf-symbol name='ccol_mempool_calloc_entry' type='func-type' binding='global-binding' visibility='default-visibility' is-defined='yes'/>
@@ -814,6 +812,9 @@
     <pointer-type-def type-id='type-id-48' size-in-bits='64' id='type-id-20'/>
     <pointer-type-def type-id='type-id-80' size-in-bits='64' id='type-id-16'/>
     <pointer-type-def type-id='type-id-81' size-in-bits='64' id='type-id-23'/>
+    <function-decl name='__builtin_memcpy' mangled-name='memcpy' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='memcpy' hash='7f32ffea222edbe7'>
+      <return type-id='type-id-47'/>
+    </function-decl>
     <function-decl name='__builtin_memmove' mangled-name='memmove' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='memmove' hash='7f32ffea222edbe7'>
       <return type-id='type-id-47'/>
     </function-decl>
@@ -876,28 +877,28 @@
       <parameter type-id='type-id-54' name='cbm' filepath='src/cbstmap.c' line='378' column='1'/>
       <return type-id='type-id-61'/>
     </function-decl>
-    <function-decl name='cbmap_insert_elem' mangled-name='cbmap_insert_elem' filepath='src/cbstmap.c' line='994' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbmap_insert_elem' hash='81cd262c57c2eedd'>
-      <parameter type-id='type-id-54' name='cbm' filepath='src/cbstmap.c' line='994' column='1'/>
-      <parameter type-id='type-id-72' name='key_pair' filepath='src/cbstmap.c' line='994' column='1'/>
-      <parameter type-id='type-id-72' name='val_pair' filepath='src/cbstmap.c' line='995' column='1'/>
+    <function-decl name='cbmap_insert_elem' mangled-name='cbmap_insert_elem' filepath='src/cbstmap.c' line='1004' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbmap_insert_elem' hash='81cd262c57c2eedd'>
+      <parameter type-id='type-id-54' name='cbm' filepath='src/cbstmap.c' line='1004' column='1'/>
+      <parameter type-id='type-id-72' name='key_pair' filepath='src/cbstmap.c' line='1004' column='1'/>
+      <parameter type-id='type-id-72' name='val_pair' filepath='src/cbstmap.c' line='1005' column='1'/>
       <return type-id='type-id-61'/>
     </function-decl>
-    <function-decl name='cbmap_get_elem_copy' mangled-name='cbmap_get_elem_copy' filepath='src/cbstmap.c' line='1086' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbmap_get_elem_copy' hash='a3586793af677deb'>
-      <parameter type-id='type-id-54' name='cbm' filepath='src/cbstmap.c' line='1086' column='1'/>
-      <parameter type-id='type-id-72' name='key_pair' filepath='src/cbstmap.c' line='1086' column='1'/>
-      <parameter type-id='type-id-24' name='target_buf' filepath='src/cbstmap.c' line='1087' column='1'/>
-      <parameter type-id='type-id-31' name='target_buf_size' filepath='src/cbstmap.c' line='1087' column='1'/>
+    <function-decl name='cbmap_get_elem_copy' mangled-name='cbmap_get_elem_copy' filepath='src/cbstmap.c' line='1096' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbmap_get_elem_copy' hash='a3586793af677deb'>
+      <parameter type-id='type-id-54' name='cbm' filepath='src/cbstmap.c' line='1096' column='1'/>
+      <parameter type-id='type-id-72' name='key_pair' filepath='src/cbstmap.c' line='1096' column='1'/>
+      <parameter type-id='type-id-24' name='target_buf' filepath='src/cbstmap.c' line='1097' column='1'/>
+      <parameter type-id='type-id-31' name='target_buf_size' filepath='src/cbstmap.c' line='1097' column='1'/>
       <return type-id='type-id-61'/>
     </function-decl>
-    <function-decl name='cbmap_get_elem_ref' mangled-name='cbmap_get_elem_ref' filepath='src/cbstmap.c' line='1120' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbmap_get_elem_ref' hash='beae062924ab7431'>
-      <parameter type-id='type-id-54' name='cbm' filepath='src/cbstmap.c' line='1120' column='1'/>
-      <parameter type-id='type-id-72' name='key_pair' filepath='src/cbstmap.c' line='1120' column='1'/>
-      <parameter type-id='type-id-68' name='val_pair' filepath='src/cbstmap.c' line='1121' column='1'/>
+    <function-decl name='cbmap_get_elem_ref' mangled-name='cbmap_get_elem_ref' filepath='src/cbstmap.c' line='1135' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbmap_get_elem_ref' hash='beae062924ab7431'>
+      <parameter type-id='type-id-54' name='cbm' filepath='src/cbstmap.c' line='1135' column='1'/>
+      <parameter type-id='type-id-72' name='key_pair' filepath='src/cbstmap.c' line='1135' column='1'/>
+      <parameter type-id='type-id-68' name='val_pair' filepath='src/cbstmap.c' line='1136' column='1'/>
       <return type-id='type-id-61'/>
     </function-decl>
-    <function-decl name='cbmap_delete_elem' mangled-name='cbmap_delete_elem' filepath='src/cbstmap.c' line='1194' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbmap_delete_elem' hash='139985da247acdb1'>
-      <parameter type-id='type-id-54' name='cbm' filepath='src/cbstmap.c' line='1194' column='1'/>
-      <parameter type-id='type-id-72' name='key_pair' filepath='src/cbstmap.c' line='1194' column='1'/>
+    <function-decl name='cbmap_delete_elem' mangled-name='cbmap_delete_elem' filepath='src/cbstmap.c' line='1209' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cbmap_delete_elem' hash='139985da247acdb1'>
+      <parameter type-id='type-id-54' name='cbm' filepath='src/cbstmap.c' line='1209' column='1'/>
+      <parameter type-id='type-id-72' name='key_pair' filepath='src/cbstmap.c' line='1209' column='1'/>
       <return type-id='type-id-61'/>
     </function-decl>
     <type-decl name='variadic parameter type' id='type-id-82'/>
@@ -1129,10 +1130,13 @@
     <pointer-type-def type-id='type-id-29' size-in-bits='64' hash='24d8cca8965ce13e' id='type-id-105'/>
     <pointer-type-def type-id='type-id-121' size-in-bits='64' hash='fd7a63c0c6c822c4' id='type-id-111'/>
     <pointer-type-def type-id='type-id-122' size-in-bits='64' hash='fd7a63c0c6c822c4' id='type-id-123'/>
+    <function-decl name='__builtin___memcpy_chk' mangled-name='__memcpy_chk' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__memcpy_chk' hash='7f32ffea222edbe7'>
+      <return type-id='type-id-47'/>
+    </function-decl>
     <function-decl name='__builtin_memcmp' mangled-name='memcmp' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='memcmp' hash='7f32ffea222edbe7'>
       <return type-id='type-id-47'/>
     </function-decl>
-    <function-decl name='__builtin_memcpy' mangled-name='memcpy' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='memcpy' hash='7f32ffea222edbe7'>
+    <function-decl name='__builtin_memset' mangled-name='memset' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='memset' hash='7f32ffea222edbe7'>
       <return type-id='type-id-47'/>
     </function-decl>
     <function-decl name='calloc' filepath='/usr/include/stdlib.h' line='675' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='calloc' hash='91495cdf6321a116'>
@@ -1150,65 +1154,65 @@
       <parameter type-id='type-id-119'/>
       <return type-id='type-id-88'/>
     </function-decl>
-    <function-decl name='chmap_create_full' mangled-name='chmap_create_full' filepath='src/chashmap.c' line='1980' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_create_full' hash='92e428cac4df0153'>
-      <parameter type-id='type-id-31' name='initial_bucket_array_size' filepath='src/chashmap.c' line='1980' column='1'/>
-      <parameter type-id='type-id-34' name='key_type' filepath='src/chashmap.c' line='1981' column='1'/>
-      <parameter type-id='type-id-34' name='val_type' filepath='src/chashmap.c' line='1981' column='1'/>
-      <parameter type-id='type-id-33' name='mmgmt_procs' filepath='src/chashmap.c' line='1982' column='1'/>
-      <parameter type-id='type-id-106' name='custom_hashing_proc' filepath='src/chashmap.c' line='1983' column='1'/>
-      <parameter type-id='type-id-64' name='err' filepath='src/chashmap.c' line='1983' column='1'/>
+    <function-decl name='chmap_create_full' mangled-name='chmap_create_full' filepath='src/chashmap.c' line='1978' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_create_full' hash='92e428cac4df0153'>
+      <parameter type-id='type-id-31' name='initial_bucket_array_size' filepath='src/chashmap.c' line='1978' column='1'/>
+      <parameter type-id='type-id-34' name='key_type' filepath='src/chashmap.c' line='1979' column='1'/>
+      <parameter type-id='type-id-34' name='val_type' filepath='src/chashmap.c' line='1979' column='1'/>
+      <parameter type-id='type-id-33' name='mmgmt_procs' filepath='src/chashmap.c' line='1980' column='1'/>
+      <parameter type-id='type-id-106' name='custom_hashing_proc' filepath='src/chashmap.c' line='1981' column='1'/>
+      <parameter type-id='type-id-64' name='err' filepath='src/chashmap.c' line='1981' column='1'/>
       <return type-id='type-id-114'/>
     </function-decl>
-    <function-decl name='chmap_insert_elem' mangled-name='chmap_insert_elem' filepath='src/chashmap.c' line='2199' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_insert_elem' hash='2dd08b38ce34f00a'>
-      <parameter type-id='type-id-114' name='chm' filepath='src/chashmap.c' line='2199' column='1'/>
-      <parameter type-id='type-id-72' name='key_pair' filepath='src/chashmap.c' line='2199' column='1'/>
-      <parameter type-id='type-id-72' name='val_pair' filepath='src/chashmap.c' line='2200' column='1'/>
+    <function-decl name='chmap_insert_elem' mangled-name='chmap_insert_elem' filepath='src/chashmap.c' line='2197' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_insert_elem' hash='2dd08b38ce34f00a'>
+      <parameter type-id='type-id-114' name='chm' filepath='src/chashmap.c' line='2197' column='1'/>
+      <parameter type-id='type-id-72' name='key_pair' filepath='src/chashmap.c' line='2197' column='1'/>
+      <parameter type-id='type-id-72' name='val_pair' filepath='src/chashmap.c' line='2198' column='1'/>
       <return type-id='type-id-61'/>
     </function-decl>
-    <function-decl name='chmap_get_elem_ref' mangled-name='chmap_get_elem_ref' filepath='src/chashmap.c' line='2230' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_get_elem_ref' hash='f39941d2c0fca899'>
-      <parameter type-id='type-id-114' name='chm' filepath='src/chashmap.c' line='2230' column='1'/>
-      <parameter type-id='type-id-72' name='key_pair' filepath='src/chashmap.c' line='2230' column='1'/>
-      <parameter type-id='type-id-68' name='val_pair' filepath='src/chashmap.c' line='2231' column='1'/>
+    <function-decl name='chmap_get_elem_ref' mangled-name='chmap_get_elem_ref' filepath='src/chashmap.c' line='2228' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_get_elem_ref' hash='f39941d2c0fca899'>
+      <parameter type-id='type-id-114' name='chm' filepath='src/chashmap.c' line='2228' column='1'/>
+      <parameter type-id='type-id-72' name='key_pair' filepath='src/chashmap.c' line='2228' column='1'/>
+      <parameter type-id='type-id-68' name='val_pair' filepath='src/chashmap.c' line='2229' column='1'/>
       <return type-id='type-id-61'/>
     </function-decl>
-    <function-decl name='chmap_get_elem_copy' mangled-name='chmap_get_elem_copy' filepath='src/chashmap.c' line='2256' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_get_elem_copy' hash='cafb554cf0fca099'>
-      <parameter type-id='type-id-114' name='chm' filepath='src/chashmap.c' line='2256' column='1'/>
-      <parameter type-id='type-id-72' name='key_pair' filepath='src/chashmap.c' line='2256' column='1'/>
-      <parameter type-id='type-id-24' name='target_buf' filepath='src/chashmap.c' line='2257' column='1'/>
-      <parameter type-id='type-id-31' name='target_buf_size' filepath='src/chashmap.c' line='2257' column='1'/>
+    <function-decl name='chmap_get_elem_copy' mangled-name='chmap_get_elem_copy' filepath='src/chashmap.c' line='2254' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_get_elem_copy' hash='cafb554cf0fca099'>
+      <parameter type-id='type-id-114' name='chm' filepath='src/chashmap.c' line='2254' column='1'/>
+      <parameter type-id='type-id-72' name='key_pair' filepath='src/chashmap.c' line='2254' column='1'/>
+      <parameter type-id='type-id-24' name='target_buf' filepath='src/chashmap.c' line='2255' column='1'/>
+      <parameter type-id='type-id-31' name='target_buf_size' filepath='src/chashmap.c' line='2255' column='1'/>
       <return type-id='type-id-61'/>
     </function-decl>
-    <function-decl name='chmap_delete_elem' mangled-name='chmap_delete_elem' filepath='src/chashmap.c' line='2276' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_delete_elem' hash='728778840ce44588'>
-      <parameter type-id='type-id-114' name='chm' filepath='src/chashmap.c' line='2276' column='1'/>
-      <parameter type-id='type-id-72' name='key_pair' filepath='src/chashmap.c' line='2276' column='1'/>
+    <function-decl name='chmap_delete_elem' mangled-name='chmap_delete_elem' filepath='src/chashmap.c' line='2274' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_delete_elem' hash='728778840ce44588'>
+      <parameter type-id='type-id-114' name='chm' filepath='src/chashmap.c' line='2274' column='1'/>
+      <parameter type-id='type-id-72' name='key_pair' filepath='src/chashmap.c' line='2274' column='1'/>
       <return type-id='type-id-61'/>
     </function-decl>
-    <function-decl name='chmap_elem_count' mangled-name='chmap_elem_count' filepath='src/chashmap.c' line='2299' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_elem_count' hash='59af44bdd8352edc'>
-      <parameter type-id='type-id-114' name='chm' filepath='src/chashmap.c' line='2299' column='1'/>
+    <function-decl name='chmap_elem_count' mangled-name='chmap_elem_count' filepath='src/chashmap.c' line='2297' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_elem_count' hash='59af44bdd8352edc'>
+      <parameter type-id='type-id-114' name='chm' filepath='src/chashmap.c' line='2297' column='1'/>
       <return type-id='type-id-31'/>
     </function-decl>
-    <function-decl name='chmap_reset' mangled-name='chmap_reset' filepath='src/chashmap.c' line='2314' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_reset' hash='9751520b42c42cb5'>
-      <parameter type-id='type-id-114' name='chm' filepath='src/chashmap.c' line='2314' column='1'/>
-      <parameter type-id='type-id-31' name='new_bucket_array_size' filepath='src/chashmap.c' line='2314' column='1'/>
+    <function-decl name='chmap_reset' mangled-name='chmap_reset' filepath='src/chashmap.c' line='2312' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_reset' hash='9751520b42c42cb5'>
+      <parameter type-id='type-id-114' name='chm' filepath='src/chashmap.c' line='2312' column='1'/>
+      <parameter type-id='type-id-31' name='new_bucket_array_size' filepath='src/chashmap.c' line='2312' column='1'/>
       <return type-id='type-id-61'/>
     </function-decl>
-    <function-decl name='chashmap_begin_iter' mangled-name='chashmap_begin_iter' filepath='src/chashmap.c' line='2380' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chashmap_begin_iter' hash='a52d1b8e75c0fd6a'>
-      <parameter type-id='type-id-114' name='chm' filepath='src/chashmap.c' line='2380' column='1'/>
-      <parameter type-id='type-id-64' name='err' filepath='src/chashmap.c' line='2380' column='1'/>
+    <function-decl name='chashmap_begin_iter' mangled-name='chashmap_begin_iter' filepath='src/chashmap.c' line='2378' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chashmap_begin_iter' hash='a52d1b8e75c0fd6a'>
+      <parameter type-id='type-id-114' name='chm' filepath='src/chashmap.c' line='2378' column='1'/>
+      <parameter type-id='type-id-64' name='err' filepath='src/chashmap.c' line='2378' column='1'/>
       <return type-id='type-id-66'/>
     </function-decl>
-    <function-decl name='__chmap_iterator_destroy' mangled-name='__chmap_iterator_destroy' filepath='src/chashmap.c' line='2468' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__chmap_iterator_destroy' hash='968529aeac74c0f5#2'>
+    <function-decl name='__chmap_iterator_destroy' mangled-name='__chmap_iterator_destroy' filepath='src/chashmap.c' line='2466' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__chmap_iterator_destroy' hash='968529aeac74c0f5#2'>
       <parameter type-id='type-id-66' name='iter' filepath='src/cbstmap.c' line='240' column='1'/>
       <return type-id='type-id-47'/>
     </function-decl>
-    <function-decl name='__chmap_destroy' mangled-name='__chmap_destroy' filepath='src/chashmap.c' line='2537' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__chmap_destroy' hash='8e8b8f437bac63eb'>
-      <parameter type-id='type-id-114' name='chm' filepath='src/chashmap.c' line='2537' column='1'/>
+    <function-decl name='__chmap_destroy' mangled-name='__chmap_destroy' filepath='src/chashmap.c' line='2535' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__chmap_destroy' hash='8e8b8f437bac63eb'>
+      <parameter type-id='type-id-114' name='chm' filepath='src/chashmap.c' line='2535' column='1'/>
       <return type-id='type-id-47'/>
     </function-decl>
-    <function-decl name='chmap_destroy_with_dtor' mangled-name='chmap_destroy_with_dtor' filepath='src/chashmap.c' line='2574' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_destroy_with_dtor' hash='840602d1f4442e2b'>
-      <parameter type-id='type-id-114' name='chm' filepath='src/chashmap.c' line='2574' column='1'/>
-      <parameter type-id='type-id-123' name='val_dtor' filepath='src/chashmap.c' line='2575' column='1'/>
-      <parameter type-id='type-id-24' name='dtor_ctx' filepath='src/chashmap.c' line='2577' column='1'/>
+    <function-decl name='chmap_destroy_with_dtor' mangled-name='chmap_destroy_with_dtor' filepath='src/chashmap.c' line='2572' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='chmap_destroy_with_dtor' hash='840602d1f4442e2b'>
+      <parameter type-id='type-id-114' name='chm' filepath='src/chashmap.c' line='2572' column='1'/>
+      <parameter type-id='type-id-123' name='val_dtor' filepath='src/chashmap.c' line='2573' column='1'/>
+      <parameter type-id='type-id-24' name='dtor_ctx' filepath='src/chashmap.c' line='2575' column='1'/>
       <return type-id='type-id-47'/>
     </function-decl>
     <function-type size-in-bits='64' hash='91495cdf6321a116' id='type-id-121'>
@@ -1293,12 +1297,6 @@
     <pointer-type-def type-id='type-id-137' size-in-bits='64' hash='d45af7d02199c707' id='type-id-142'/>
     <pointer-type-def type-id='type-id-129' size-in-bits='64' hash='4dd6d46112846be5' id='type-id-143'/>
     <pointer-type-def type-id='type-id-130' size-in-bits='64' hash='abfdebaa4180c5b7' id='type-id-144'/>
-    <function-decl name='__builtin___memcpy_chk' mangled-name='__memcpy_chk' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__memcpy_chk' hash='7f32ffea222edbe7'>
-      <return type-id='type-id-47'/>
-    </function-decl>
-    <function-decl name='__builtin_memset' mangled-name='memset' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='memset' hash='7f32ffea222edbe7'>
-      <return type-id='type-id-47'/>
-    </function-decl>
     <class-decl name='ctls_conn' is-struct='yes' visibility='default' size-in-bits='2560' filepath='src/ctls.c' line='165' column='1' hash='1949c213258f73b5' id='type-id-136'>
       <data-member access='public' layout-offset-in-bits='0'>
         <var-decl name='ssl' type-id='type-id-145' visibility='default' filepath='src/ctls.c' line='166' column='1'/>
@@ -2213,21 +2211,21 @@
         <var-decl name='refcount' type-id='type-id-11' visibility='default' filepath='src/cthreadpool.c' line='196' column='1'/>
       </data-member>
     </class-decl>
-    <class-decl name='cvector' is-struct='yes' visibility='default' size-in-bits='320' filepath='src/cvector.c' line='43' column='1' hash='15f63e39b8e2dc65' id='type-id-257'>
+    <class-decl name='cvector' is-struct='yes' visibility='default' size-in-bits='320' filepath='src/cvector.c' line='44' column='1' hash='15f63e39b8e2dc65' id='type-id-257'>
       <data-member access='public' layout-offset-in-bits='0'>
-        <var-decl name='elem_size' type-id='type-id-31' visibility='default' filepath='src/cvector.c' line='44' column='1'/>
+        <var-decl name='elem_size' type-id='type-id-31' visibility='default' filepath='src/cvector.c' line='45' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='64'>
-        <var-decl name='elem_count' type-id='type-id-31' visibility='default' filepath='src/cvector.c' line='45' column='1'/>
+        <var-decl name='elem_count' type-id='type-id-31' visibility='default' filepath='src/cvector.c' line='46' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='128'>
-        <var-decl name='capacity' type-id='type-id-31' visibility='default' filepath='src/cvector.c' line='46' column='1'/>
+        <var-decl name='capacity' type-id='type-id-31' visibility='default' filepath='src/cvector.c' line='47' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='192'>
-        <var-decl name='m_procs' type-id='type-id-33' visibility='default' filepath='src/cvector.c' line='47' column='1'/>
+        <var-decl name='m_procs' type-id='type-id-33' visibility='default' filepath='src/cvector.c' line='48' column='1'/>
       </data-member>
       <data-member access='public' layout-offset-in-bits='256'>
-        <var-decl name='data_ptr' type-id='type-id-24' visibility='default' filepath='src/cvector.c' line='48' column='1'/>
+        <var-decl name='data_ptr' type-id='type-id-24' visibility='default' filepath='src/cvector.c' line='49' column='1'/>
       </data-member>
     </class-decl>
     <qualified-type-def type-id='type-id-24' restrict='yes' id='type-id-354'/>
@@ -4245,53 +4243,53 @@
     </function-decl>
   </abi-instr>
   <abi-instr address-size='64' path='src/clrucache.c' comp-dir-path='/home/danis/Workspace/c/ccollections' language='LANG_C11'>
-    <typedef-decl name='clru_cache' type-id='type-id-101' size-in-bits='64' filepath='include/clrucache.h' line='151' column='1' hash='8fdc5eea2983a729' id='type-id-510'/>
-    <typedef-decl name='clru_eviction_cb_t' type-id='type-id-511' size-in-bits='64' filepath='include/clrucache.h' line='127' column='1' hash='fd7a63c0c6c822c4' id='type-id-512'/>
-    <typedef-decl name='clru_remote_getter_t' type-id='type-id-513' size-in-bits='64' filepath='include/clrucache.h' line='99' column='1' hash='fd7a63c0c6c822c4' id='type-id-514'/>
-    <typedef-decl name='clru_remote_setter_t' type-id='type-id-515' size-in-bits='64' filepath='include/clrucache.h' line='110' column='1' hash='fd7a63c0c6c822c4' id='type-id-516'/>
+    <typedef-decl name='clru_cache' type-id='type-id-101' size-in-bits='64' filepath='include/clrucache.h' line='152' column='1' hash='8fdc5eea2983a729' id='type-id-510'/>
+    <typedef-decl name='clru_eviction_cb_t' type-id='type-id-511' size-in-bits='64' filepath='include/clrucache.h' line='128' column='1' hash='fd7a63c0c6c822c4' id='type-id-512'/>
+    <typedef-decl name='clru_remote_getter_t' type-id='type-id-513' size-in-bits='64' filepath='include/clrucache.h' line='100' column='1' hash='fd7a63c0c6c822c4' id='type-id-514'/>
+    <typedef-decl name='clru_remote_setter_t' type-id='type-id-515' size-in-bits='64' filepath='include/clrucache.h' line='111' column='1' hash='fd7a63c0c6c822c4' id='type-id-516'/>
     <pointer-type-def type-id='type-id-517' size-in-bits='64' hash='fd7a63c0c6c822c4' id='type-id-513'/>
     <pointer-type-def type-id='type-id-518' size-in-bits='64' hash='fd7a63c0c6c822c4' id='type-id-515'/>
     <pointer-type-def type-id='type-id-519' size-in-bits='64' hash='fd7a63c0c6c822c4' id='type-id-511'/>
-    <function-decl name='clrucache_create_full' mangled-name='clrucache_create_full' filepath='src/clrucache.c' line='658' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='clrucache_create_full' hash='28a4f5a184b9221b'>
-      <parameter type-id='type-id-31' name='capacity' filepath='src/clrucache.c' line='658' column='1'/>
-      <parameter type-id='type-id-34' name='key_type' filepath='src/clrucache.c' line='658' column='1'/>
-      <parameter type-id='type-id-34' name='val_type' filepath='src/clrucache.c' line='659' column='1'/>
-      <parameter type-id='type-id-514' name='getter' filepath='src/clrucache.c' line='660' column='1'/>
-      <parameter type-id='type-id-516' name='setter' filepath='src/clrucache.c' line='661' column='1'/>
-      <parameter type-id='type-id-512' name='eviction_cb' filepath='src/clrucache.c' line='662' column='1'/>
-      <parameter type-id='type-id-33' name='mprocs' filepath='src/clrucache.c' line='663' column='1'/>
-      <parameter type-id='type-id-64' name='err' filepath='src/clrucache.c' line='663' column='1'/>
+    <function-decl name='clrucache_create_full' mangled-name='clrucache_create_full' filepath='src/clrucache.c' line='659' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='clrucache_create_full' hash='28a4f5a184b9221b'>
+      <parameter type-id='type-id-31' name='capacity' filepath='src/clrucache.c' line='659' column='1'/>
+      <parameter type-id='type-id-34' name='key_type' filepath='src/clrucache.c' line='659' column='1'/>
+      <parameter type-id='type-id-34' name='val_type' filepath='src/clrucache.c' line='660' column='1'/>
+      <parameter type-id='type-id-514' name='getter' filepath='src/clrucache.c' line='661' column='1'/>
+      <parameter type-id='type-id-516' name='setter' filepath='src/clrucache.c' line='662' column='1'/>
+      <parameter type-id='type-id-512' name='eviction_cb' filepath='src/clrucache.c' line='663' column='1'/>
+      <parameter type-id='type-id-33' name='mprocs' filepath='src/clrucache.c' line='664' column='1'/>
+      <parameter type-id='type-id-64' name='err' filepath='src/clrucache.c' line='664' column='1'/>
       <return type-id='type-id-510'/>
     </function-decl>
-    <function-decl name='__clrucache_destroy' mangled-name='__clrucache_destroy' filepath='src/clrucache.c' line='741' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__clrucache_destroy' hash='e0055d99adb0e173'>
-      <parameter type-id='type-id-510' name='cache' filepath='src/clrucache.c' line='741' column='1'/>
+    <function-decl name='__clrucache_destroy' mangled-name='__clrucache_destroy' filepath='src/clrucache.c' line='742' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__clrucache_destroy' hash='e0055d99adb0e173'>
+      <parameter type-id='type-id-510' name='cache' filepath='src/clrucache.c' line='742' column='1'/>
       <return type-id='type-id-47'/>
     </function-decl>
-    <function-decl name='clrucache_get_full' mangled-name='clrucache_get_full' filepath='src/clrucache.c' line='1046' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='clrucache_get_full' hash='219897617afc6709'>
-      <parameter type-id='type-id-510' name='cache' filepath='src/clrucache.c' line='1046' column='1'/>
-      <parameter type-id='type-id-72' name='key_pair' filepath='src/clrucache.c' line='1046' column='1'/>
-      <parameter type-id='type-id-42' name='val_out' filepath='src/clrucache.c' line='1047' column='1'/>
+    <function-decl name='clrucache_get_full' mangled-name='clrucache_get_full' filepath='src/clrucache.c' line='1047' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='clrucache_get_full' hash='219897617afc6709'>
+      <parameter type-id='type-id-510' name='cache' filepath='src/clrucache.c' line='1047' column='1'/>
+      <parameter type-id='type-id-72' name='key_pair' filepath='src/clrucache.c' line='1047' column='1'/>
+      <parameter type-id='type-id-42' name='val_out' filepath='src/clrucache.c' line='1048' column='1'/>
       <return type-id='type-id-61'/>
     </function-decl>
-    <function-decl name='clrucache_set_full' mangled-name='clrucache_set_full' filepath='src/clrucache.c' line='1329' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='clrucache_set_full' hash='a05b23be385498d7'>
-      <parameter type-id='type-id-510' name='cache' filepath='src/clrucache.c' line='1329' column='1'/>
-      <parameter type-id='type-id-72' name='key_pair' filepath='src/clrucache.c' line='1329' column='1'/>
-      <parameter type-id='type-id-72' name='val_pair' filepath='src/clrucache.c' line='1330' column='1'/>
+    <function-decl name='clrucache_set_full' mangled-name='clrucache_set_full' filepath='src/clrucache.c' line='1330' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='clrucache_set_full' hash='a05b23be385498d7'>
+      <parameter type-id='type-id-510' name='cache' filepath='src/clrucache.c' line='1330' column='1'/>
+      <parameter type-id='type-id-72' name='key_pair' filepath='src/clrucache.c' line='1330' column='1'/>
+      <parameter type-id='type-id-72' name='val_pair' filepath='src/clrucache.c' line='1331' column='1'/>
       <return type-id='type-id-61'/>
     </function-decl>
-    <function-decl name='__clrucache_get_into' mangled-name='__clrucache_get_into' filepath='src/clrucache.c' line='1531' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__clrucache_get_into' hash='b0ae5e6c70eaad67'>
-      <parameter type-id='type-id-510' name='cache' filepath='src/clrucache.c' line='1531' column='1'/>
-      <parameter type-id='type-id-72' name='key_pair' filepath='src/clrucache.c' line='1531' column='1'/>
-      <parameter type-id='type-id-24' name='buf' filepath='src/clrucache.c' line='1532' column='1'/>
-      <parameter type-id='type-id-31' name='buf_size' filepath='src/clrucache.c' line='1532' column='1'/>
+    <function-decl name='__clrucache_get_into' mangled-name='__clrucache_get_into' filepath='src/clrucache.c' line='1532' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__clrucache_get_into' hash='b0ae5e6c70eaad67'>
+      <parameter type-id='type-id-510' name='cache' filepath='src/clrucache.c' line='1532' column='1'/>
+      <parameter type-id='type-id-72' name='key_pair' filepath='src/clrucache.c' line='1532' column='1'/>
+      <parameter type-id='type-id-24' name='buf' filepath='src/clrucache.c' line='1533' column='1'/>
+      <parameter type-id='type-id-31' name='buf_size' filepath='src/clrucache.c' line='1533' column='1'/>
       <return type-id='type-id-61'/>
     </function-decl>
-    <function-decl name='clrucache_size' mangled-name='clrucache_size' filepath='src/clrucache.c' line='1714' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='clrucache_size' hash='91495cdf6321a116'>
-      <parameter type-id='type-id-510' name='cache' filepath='src/clrucache.c' line='1732' column='1'/>
+    <function-decl name='clrucache_size' mangled-name='clrucache_size' filepath='src/clrucache.c' line='1715' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='clrucache_size' hash='91495cdf6321a116'>
+      <parameter type-id='type-id-510' name='cache' filepath='src/clrucache.c' line='1733' column='1'/>
       <return type-id='type-id-31'/>
     </function-decl>
-    <function-decl name='clrucache_capacity' mangled-name='clrucache_capacity' filepath='src/clrucache.c' line='1732' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='clrucache_capacity' hash='91495cdf6321a116'>
-      <parameter type-id='type-id-510' name='cache' filepath='src/clrucache.c' line='1732' column='1'/>
+    <function-decl name='clrucache_capacity' mangled-name='clrucache_capacity' filepath='src/clrucache.c' line='1733' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='clrucache_capacity' hash='91495cdf6321a116'>
+      <parameter type-id='type-id-510' name='cache' filepath='src/clrucache.c' line='1733' column='1'/>
       <return type-id='type-id-31'/>
     </function-decl>
     <function-type size-in-bits='64' hash='800720c6a855ac74' id='type-id-517'>
@@ -4575,29 +4573,18 @@
       <parameter type-id='type-id-31'/>
       <return type-id='type-id-31'/>
     </function-decl>
-    <function-decl name='ccol_mem_cpy' mangled-name='ccol_mem_cpy' filepath='src/common.c' line='467' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_mem_cpy' hash='e0055d99adb0e173'>
-      <parameter type-id='type-id-24'/>
-      <parameter type-id='type-id-24'/>
-      <parameter type-id='type-id-31'/>
-      <return type-id='type-id-47'/>
-    </function-decl>
-    <function-decl name='ccol_mem_zero' mangled-name='ccol_mem_zero' filepath='src/common.c' line='636' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_mem_zero' hash='e0055d99adb0e173'>
-      <parameter type-id='type-id-24'/>
-      <parameter type-id='type-id-31'/>
-      <return type-id='type-id-47'/>
-    </function-decl>
-    <function-decl name='ccol_growbuf_init' mangled-name='ccol_growbuf_init' filepath='src/common.c' line='661' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_growbuf_init' hash='b133f11e3a50d4fd'>
+    <function-decl name='ccol_growbuf_init' mangled-name='ccol_growbuf_init' filepath='src/common.c' line='144' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_growbuf_init' hash='b133f11e3a50d4fd'>
       <parameter type-id='type-id-449'/>
       <parameter type-id='type-id-33'/>
       <return type-id='type-id-47'/>
     </function-decl>
-    <function-decl name='ccol_growbuf_init_hint' mangled-name='ccol_growbuf_init_hint' filepath='src/common.c' line='670' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_growbuf_init_hint' hash='e0100b471a300f1c'>
+    <function-decl name='ccol_growbuf_init_hint' mangled-name='ccol_growbuf_init_hint' filepath='src/common.c' line='153' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_growbuf_init_hint' hash='e0100b471a300f1c'>
       <parameter type-id='type-id-449'/>
       <parameter type-id='type-id-33'/>
       <parameter type-id='type-id-31'/>
       <return type-id='type-id-47'/>
     </function-decl>
-    <function-decl name='ccol_growbuf_append' mangled-name='ccol_growbuf_append' filepath='src/common.c' line='703' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_growbuf_append' hash='c68564cc5792eca2'>
+    <function-decl name='ccol_growbuf_append' mangled-name='ccol_growbuf_append' filepath='src/common.c' line='186' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='ccol_growbuf_append' hash='c68564cc5792eca2'>
       <parameter type-id='type-id-449'/>
       <parameter type-id='type-id-70'/>
       <parameter type-id='type-id-31'/>
@@ -5999,72 +5986,72 @@
     </function-type>
   </abi-instr>
   <abi-instr address-size='64' path='src/cvector.c' comp-dir-path='/home/danis/Workspace/c/ccollections' language='LANG_C11'>
-    <function-decl name='__cvector_destroy' mangled-name='__cvector_destroy' filepath='src/cvector.c' line='56' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__cvector_destroy' hash='811535f3b4fa4a8a'>
+    <function-decl name='__cvector_destroy' mangled-name='__cvector_destroy' filepath='src/cvector.c' line='57' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='__cvector_destroy' hash='811535f3b4fa4a8a'>
       <parameter type-id='type-id-256'/>
       <return type-id='type-id-47'/>
     </function-decl>
-    <function-decl name='cvector_create_full' mangled-name='cvector_create_full' filepath='src/cvector.c' line='111' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_create_full' hash='4aaec618659410a8'>
+    <function-decl name='cvector_create_full' mangled-name='cvector_create_full' filepath='src/cvector.c' line='114' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_create_full' hash='4aaec618659410a8'>
       <parameter type-id='type-id-31'/>
       <parameter type-id='type-id-33'/>
       <parameter type-id='type-id-64'/>
       <return type-id='type-id-256'/>
     </function-decl>
-    <function-decl name='cvector_get_mprocs' mangled-name='cvector_get_mprocs' filepath='src/cvector.c' line='153' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_get_mprocs' hash='cb53e1ffe6047f50'>
-      <parameter type-id='type-id-256' name='v' filepath='src/cvector.c' line='153' column='1'/>
+    <function-decl name='cvector_get_mprocs' mangled-name='cvector_get_mprocs' filepath='src/cvector.c' line='157' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_get_mprocs' hash='cb53e1ffe6047f50'>
+      <parameter type-id='type-id-256' name='v' filepath='src/cvector.c' line='157' column='1'/>
       <return type-id='type-id-33'/>
     </function-decl>
-    <function-decl name='cvector_push_back' mangled-name='cvector_push_back' filepath='src/cvector.c' line='233' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_push_back' hash='338cde2c878bbde7'>
+    <function-decl name='cvector_push_back' mangled-name='cvector_push_back' filepath='src/cvector.c' line='239' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_push_back' hash='338cde2c878bbde7'>
       <parameter type-id='type-id-256'/>
       <parameter type-id='type-id-24'/>
       <return type-id='type-id-61'/>
     </function-decl>
-    <function-decl name='cvector_pop_back' mangled-name='cvector_pop_back' filepath='src/cvector.c' line='283' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_pop_back' hash='338cde2c878bbde7'>
+    <function-decl name='cvector_pop_back' mangled-name='cvector_pop_back' filepath='src/cvector.c' line='289' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_pop_back' hash='338cde2c878bbde7'>
       <parameter type-id='type-id-256'/>
       <parameter type-id='type-id-24'/>
       <return type-id='type-id-61'/>
     </function-decl>
-    <function-decl name='cvector_reserve' mangled-name='cvector_reserve' filepath='src/cvector.c' line='315' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_reserve' hash='fe0bf292587f4491'>
-      <parameter type-id='type-id-256' name='v' filepath='src/cvector.c' line='315' column='1'/>
-      <parameter type-id='type-id-31' name='new_capacity_count' filepath='src/cvector.c' line='315' column='1'/>
+    <function-decl name='cvector_reserve' mangled-name='cvector_reserve' filepath='src/cvector.c' line='321' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_reserve' hash='fe0bf292587f4491'>
+      <parameter type-id='type-id-256' name='v' filepath='src/cvector.c' line='321' column='1'/>
+      <parameter type-id='type-id-31' name='new_capacity_count' filepath='src/cvector.c' line='321' column='1'/>
       <return type-id='type-id-1'/>
     </function-decl>
-    <function-decl name='cvector_append_array' mangled-name='cvector_append_array' filepath='src/cvector.c' line='404' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_append_array' hash='fe0bf292587f4491'>
-      <parameter type-id='type-id-256' name='v' filepath='src/cvector.c' line='404' column='1'/>
-      <parameter type-id='type-id-24' name='arr_ptr' filepath='src/cvector.c' line='404' column='1'/>
-      <parameter type-id='type-id-31' name='elem_count' filepath='src/cvector.c' line='404' column='1'/>
+    <function-decl name='cvector_append_array' mangled-name='cvector_append_array' filepath='src/cvector.c' line='407' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_append_array' hash='fe0bf292587f4491'>
+      <parameter type-id='type-id-256' name='v' filepath='src/cvector.c' line='407' column='1'/>
+      <parameter type-id='type-id-24' name='arr_ptr' filepath='src/cvector.c' line='407' column='1'/>
+      <parameter type-id='type-id-31' name='elem_count' filepath='src/cvector.c' line='407' column='1'/>
       <return type-id='type-id-1'/>
     </function-decl>
-    <function-decl name='cvector_append_cvector' mangled-name='cvector_append_cvector' filepath='src/cvector.c' line='460' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_append_cvector' hash='7187878be78b087a'>
-      <parameter type-id='type-id-256' name='v_to' filepath='src/cvector.c' line='460' column='1'/>
-      <parameter type-id='type-id-256' name='v_from' filepath='src/cvector.c' line='460' column='1'/>
+    <function-decl name='cvector_append_cvector' mangled-name='cvector_append_cvector' filepath='src/cvector.c' line='463' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_append_cvector' hash='7187878be78b087a'>
+      <parameter type-id='type-id-256' name='v_to' filepath='src/cvector.c' line='463' column='1'/>
+      <parameter type-id='type-id-256' name='v_from' filepath='src/cvector.c' line='463' column='1'/>
       <return type-id='type-id-1'/>
     </function-decl>
-    <function-decl name='cvector_data_ptr' mangled-name='cvector_data_ptr' filepath='src/cvector.c' line='491' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_data_ptr' hash='811535f3b4fa4a8a'>
-      <parameter type-id='type-id-256' name='v' filepath='src/cvector.c' line='491' column='1'/>
+    <function-decl name='cvector_data_ptr' mangled-name='cvector_data_ptr' filepath='src/cvector.c' line='494' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_data_ptr' hash='811535f3b4fa4a8a'>
+      <parameter type-id='type-id-256' name='v' filepath='src/cvector.c' line='494' column='1'/>
       <return type-id='type-id-24'/>
     </function-decl>
-    <function-decl name='cvector_at' mangled-name='cvector_at' filepath='src/cvector.c' line='502' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_at' hash='d6885ed779820888'>
+    <function-decl name='cvector_at' mangled-name='cvector_at' filepath='src/cvector.c' line='505' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_at' hash='d6885ed779820888'>
       <parameter type-id='type-id-256'/>
       <parameter type-id='type-id-31'/>
       <return type-id='type-id-24'/>
     </function-decl>
-    <function-decl name='cvector_elem_count' mangled-name='cvector_elem_count' filepath='src/cvector.c' line='515' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_elem_count' hash='0214ca98e6181ad3'>
+    <function-decl name='cvector_elem_count' mangled-name='cvector_elem_count' filepath='src/cvector.c' line='518' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_elem_count' hash='0214ca98e6181ad3'>
       <parameter type-id='type-id-256'/>
       <return type-id='type-id-31'/>
     </function-decl>
-    <function-decl name='cvector_reset' mangled-name='cvector_reset' filepath='src/cvector.c' line='528' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_reset' hash='811535f3b4fa4a8a'>
+    <function-decl name='cvector_reset' mangled-name='cvector_reset' filepath='src/cvector.c' line='532' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_reset' hash='811535f3b4fa4a8a'>
       <parameter type-id='type-id-256'/>
       <return type-id='type-id-47'/>
     </function-decl>
-    <function-decl name='cvector_find' mangled-name='cvector_find' filepath='src/cvector.c' line='550' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_find' hash='dca3419d653364b4'>
-      <parameter type-id='type-id-256' name='v' filepath='src/cvector.c' line='550' column='1'/>
-      <parameter type-id='type-id-24' name='elem' filepath='src/cvector.c' line='550' column='1'/>
-      <parameter type-id='type-id-35' name='cmp' filepath='src/cvector.c' line='550' column='1'/>
+    <function-decl name='cvector_find' mangled-name='cvector_find' filepath='src/cvector.c' line='554' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_find' hash='dca3419d653364b4'>
+      <parameter type-id='type-id-256' name='v' filepath='src/cvector.c' line='554' column='1'/>
+      <parameter type-id='type-id-24' name='elem' filepath='src/cvector.c' line='554' column='1'/>
+      <parameter type-id='type-id-35' name='cmp' filepath='src/cvector.c' line='554' column='1'/>
       <return type-id='type-id-31'/>
     </function-decl>
-    <function-decl name='cvector_begin_iter' mangled-name='cvector_begin_iter' filepath='src/cvector.c' line='604' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_begin_iter' hash='52ba281c39f9e36d'>
-      <parameter type-id='type-id-256' name='v' filepath='src/cvector.c' line='604' column='1'/>
-      <parameter type-id='type-id-64' name='err' filepath='src/cvector.c' line='604' column='1'/>
+    <function-decl name='cvector_begin_iter' mangled-name='cvector_begin_iter' filepath='src/cvector.c' line='608' column='1' visibility='default' binding='global' size-in-bits='64' elf-symbol-id='cvector_begin_iter' hash='52ba281c39f9e36d'>
+      <parameter type-id='type-id-256' name='v' filepath='src/cvector.c' line='608' column='1'/>
+      <parameter type-id='type-id-64' name='err' filepath='src/cvector.c' line='608' column='1'/>
       <return type-id='type-id-66'/>
     </function-decl>
   </abi-instr>

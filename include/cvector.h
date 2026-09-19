@@ -300,7 +300,7 @@ bool cvector_reserve(cvec v, size_t new_capacity_count);
  * @return true on success, false on failure
  *
  * @note More efficient than multiple push_back calls
- * @note Uses optimized ccol_mem_cpy for bulk copying
+ * @note Copies the whole range in bulk rather than element by element
  * @note May trigger capacity expansion via cvector_reserve
  * @note Returns false if result would exceed ccol_max_elem_count
  * @note Returns false if elem_count would cause overflow

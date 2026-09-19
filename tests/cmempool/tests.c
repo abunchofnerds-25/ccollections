@@ -3764,7 +3764,7 @@ TEST(r_mempools, realloc_escalated_to_pseudo_pool_does_not_overflow_buffer) {
   // ccol_fallback_at_last_exhaustion, when both the ideal tier and every larger
   // real tier are exhausted, the actual new entry is served by the
   // pseudo_pool with exactly `size` real bytes, fewer than the ideal tier's
-  // own capacity, so copying the ideal tier's capacity makes ccol_mem_cpy
+  // own capacity, so copying the ideal tier's capacity makes the copy
   // write past the end of that smaller, genuine allocation; a heap buffer
   // overflow AddressSanitizer reports. SS=4, LS=6, SC=7: pool0=128x16B,
   // pool1=64x32B, pool2=32x64B.

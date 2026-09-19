@@ -17,7 +17,7 @@ jobs:
     name: cyaml (libFuzzer)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y clang libssl-dev zlib1g-dev
       - name: Build fuzz target
@@ -26,7 +26,7 @@ jobs:
         run: cd tests/cyaml && ./fuzz_cyaml fuzz/corpus -max_total_time=900
       - name: Upload crash artifact
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: cyaml-fuzz-crash
           path: |
@@ -39,7 +39,7 @@ jobs:
     name: cjson (libFuzzer, parse + path)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y clang
       - name: Build fuzz targets
@@ -50,7 +50,7 @@ jobs:
         run: cd tests/cjson && ./fuzz_cjson_path fuzz/corpus_path -max_total_time=450
       - name: Upload crash artifact
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: cjson-fuzz-crash
           path: |
@@ -63,7 +63,7 @@ jobs:
     name: chttp1_parser (libFuzzer, request + response)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y clang libssl-dev zlib1g-dev
       - name: Build fuzz targets
@@ -74,7 +74,7 @@ jobs:
         run: cd tests/chttpclient && ./fuzz_chttp1_response fuzz/corpus_response -max_total_time=450
       - name: Upload crash artifact
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: chttp1-parser-fuzz-crash
           path: |

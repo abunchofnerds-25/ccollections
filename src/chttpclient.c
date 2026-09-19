@@ -1504,7 +1504,7 @@ chttp_request_t *chttp_request_new_mp(chttp_method_t method, const char *url,
       if (err_str) *err_str = CCOL_ERR_STR("failed to allocate mprocs");
       return NULL;
     }
-    ccol_mem_cpy(mp, mprocs, sizeof(ccol_memmgmt_procs_t));
+    memcpy(mp, mprocs, sizeof(ccol_memmgmt_procs_t));
   }
 
   chttp_request_t *req =
@@ -8569,7 +8569,7 @@ chttpcli ccol_create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs,
       if (err_str) *err_str = CCOL_ERR_STR("failed to allocate mprocs");
       return CHTTPCLI_INVALID;
     }
-    ccol_mem_cpy(mp, mprocs, sizeof(ccol_memmgmt_procs_t));
+    memcpy(mp, mprocs, sizeof(ccol_memmgmt_procs_t));
   }
 
   struct chttpclient *cli =

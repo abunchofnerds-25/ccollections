@@ -29,6 +29,7 @@ SOFTWARE.
 #include <cthreadcomm.h>
 #include <cvector.h>
 #include <stdatomic.h>
+#include <string.h>
 #ifdef RUNNING_UNIT_TESTS
 #include <unistd.h> /* usleep(); not a pthread/sem primitive, needs no
                         common.h wrapper */
@@ -685,7 +686,7 @@ clru_cache clrucache_create_full(size_t capacity, ccol_data_type key_type,
       if (err) *err = CCOL_ERR_STR("failed to allocate m_procs copy");
       return CLRU_CACHE_INVALID;
     }
-    ccol_mem_cpy(router->m_procs, mprocs, sizeof(*mprocs));
+    memcpy(router->m_procs, mprocs, sizeof(*mprocs));
   }
 
   router->capacity = capacity;
@@ -1099,7 +1100,7 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
       _clrucache_resolve_unpin(raw);
       return ccol_not_enough_memory;
     }
-    ccol_mem_cpy(entry->key, key_pair->ptr, key_pair->size);
+    memcpy(entry->key, key_pair->ptr, key_pair->size);
     entry->key_size = key_pair->size;
     entry->fetch_in_progress = true;
 
@@ -1146,7 +1147,7 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
         _clrucache_resolve_unpin(raw);
         return ccol_not_enough_memory;
       }
-      ccol_mem_cpy(copy, fetched.ptr, fetched.size);
+      memcpy(copy, fetched.ptr, fetched.size);
       val_out->ptr = copy;
       val_out->size = fetched.size;
 
@@ -1236,7 +1237,7 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
     return ccol_not_enough_memory;
   }
   if (!entry->evicted) lru_move_to_front(shard, entry);
-  ccol_mem_cpy(copy, entry->value, entry->value_size);
+  memcpy(copy, entry->value, entry->value_size);
   val_out->ptr = copy;
   val_out->size = entry->value_size;
 
@@ -1285,7 +1286,7 @@ static clru_entry *create_and_insert_placeholder(clru_shard *cache,
     *err_out = ccol_not_enough_memory;
     return NULL;
   }
-  ccol_mem_cpy(e->key, key_pair->ptr, key_pair->size);
+  memcpy(e->key, key_pair->ptr, key_pair->size);
   e->key_size = key_pair->size;
 
   /* ccol_key_already_present is a documented success outcome of
@@ -1310,7 +1311,7 @@ static ccol_retval_t entry_store_value(clru_shard *cache, clru_entry *entry,
                                        const cmap_pair *val_pair) {
   void *new_val = _ccol_mem_alloc(cache->m_procs, val_pair->size);
   if (!new_val) return ccol_not_enough_memory;
-  ccol_mem_cpy(new_val, val_pair->ptr, val_pair->size);
+  memcpy(new_val, val_pair->ptr, val_pair->size);
 
   _ccol_mem_free(cache->m_procs, entry->value);
   entry->value = new_val;
@@ -1572,7 +1573,7 @@ ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
       _clrucache_resolve_unpin(raw);
       return ccol_not_enough_memory;
     }
-    ccol_mem_cpy(entry->key, key_pair->ptr, key_pair->size);
+    memcpy(entry->key, key_pair->ptr, key_pair->size);
     entry->key_size = key_pair->size;
     entry->fetch_in_progress = true;
 
@@ -1625,7 +1626,7 @@ ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
       lru_add_to_front(shard, entry);
       shard->size++;
 
-      ccol_mem_cpy(buf, fetched.ptr, fetched.size);
+      memcpy(buf, fetched.ptr, fetched.size);
 
 #ifdef RUNNING_UNIT_TESTS
       _clru_test_maybe_delay_post_publish();
@@ -1698,7 +1699,7 @@ ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
     return ccol_unexpected_failure;
   }
   if (!entry->evicted) lru_move_to_front(shard, entry);
-  ccol_mem_cpy(buf, entry->value, entry->value_size);
+  memcpy(buf, entry->value, entry->value_size);
 
   bool should_free = (entry->evicted && entry->waiters == 0);
   ccol_mutex_unlock(shard->mutex);

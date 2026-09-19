@@ -4135,6 +4135,11 @@ TEST(ccol_event_loop, queue_circq_readable_delivers_message) {
   REQUIRE_EQ(*(int *)ctx.last_msg.data, 123);
 
   ccol_event_loop_remove(loop, reg);
+  /* Joins the poller thread, and any dispatch workers, so no callback can
+     still be running with &ctx when the sync context is torn down below.
+     ccol_event_loop_remove alone does not wait for a dispatch that was
+     already in flight when it was called. */
+  ccol_event_loop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
   ccol_circular_queue_destroy(cq);
 }
@@ -4234,6 +4239,11 @@ TEST(ccol_event_loop, queue_dynq_readable_delivers_message) {
   REQUIRE_EQ(*(int *)ctx.last_msg.data, 321);
 
   ccol_event_loop_remove(loop, reg);
+  /* Joins the poller thread, and any dispatch workers, so no callback can
+     still be running with &ctx when the sync context is torn down below.
+     ccol_event_loop_remove alone does not wait for a dispatch that was
+     already in flight when it was called. */
+  ccol_event_loop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
   ccol_dynamic_queue_destroy(dq);
 }
@@ -4283,6 +4293,11 @@ TEST(ccol_event_loop, queue_channel_selectable) {
   REQUIRE_EQ(*(int *)ctx.last_msg.data, 88);
 
   ccol_event_loop_remove(loop, reg);
+  /* Joins the poller thread, and any dispatch workers, so no callback can
+     still be running with &ctx when the sync context is torn down below.
+     ccol_event_loop_remove alone does not wait for a dispatch that was
+     already in flight when it was called. */
+  ccol_event_loop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
   ccol_channel_destroy(ch);
 }
@@ -4314,6 +4329,11 @@ TEST(ccol_event_loop, queue_persistent_across_multiple_cycles) {
   }
 
   ccol_event_loop_remove(loop, reg);
+  /* Joins the poller thread, and any dispatch workers, so no callback can
+     still be running with &ctx when the sync context is torn down below.
+     ccol_event_loop_remove alone does not wait for a dispatch that was
+     already in flight when it was called. */
+  ccol_event_loop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
   ccol_circular_queue_destroy(cq);
 }
@@ -4345,6 +4365,11 @@ TEST(ccol_event_loop, queue_already_pending_message_at_registration_time) {
   REQUIRE_EQ(*(int *)ctx.last_msg.data, 999);
 
   ccol_event_loop_remove(loop, reg);
+  /* Joins the poller thread, and any dispatch workers, so no callback can
+     still be running with &ctx when the sync context is torn down below.
+     ccol_event_loop_remove alone does not wait for a dispatch that was
+     already in flight when it was called. */
+  ccol_event_loop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
   ccol_circular_queue_destroy(cq);
 }
@@ -4739,6 +4764,11 @@ TEST(ccol_event_loop, remove_from_within_callback) {
   REQUIRE_EQ(ccol_circq_recv_zc(cq, &drained), ccol_success);
   free(drained.data);
 
+  /* Joins the poller thread, and any dispatch workers, so no callback can
+     still be running with &ctx when the sync context is torn down below.
+     ccol_event_loop_remove alone does not wait for a dispatch that was
+     already in flight when it was called. */
+  ccol_event_loop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
   ccol_circular_queue_destroy(cq);
 }
@@ -5680,6 +5710,11 @@ TEST(ccol_event_loop, pause_stops_delivery_then_resume_restores_it) {
   REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
 
   ccol_event_loop_remove(loop, reg);
+  /* Joins the poller thread, and any dispatch workers, so no callback can
+     still be running with &ctx when the sync context is torn down below.
+     ccol_event_loop_remove alone does not wait for a dispatch that was
+     already in flight when it was called. */
+  ccol_event_loop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
   close(pfd[0]);
   close(pfd[1]);
@@ -5731,6 +5766,11 @@ TEST(ccol_event_loop, pause_write_direction) {
   REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, baseline + 1, 2000));
 
   ccol_event_loop_remove(loop, reg);
+  /* Joins the poller thread, and any dispatch workers, so no callback can
+     still be running with &ctx when the sync context is torn down below.
+     ccol_event_loop_remove alone does not wait for a dispatch that was
+     already in flight when it was called. */
+  ccol_event_loop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
   close(pfd[0]);
   close(pfd[1]);
@@ -5780,6 +5820,11 @@ TEST(ccol_event_loop, resume_never_paused_is_idempotent_and_harmless) {
   REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
 
   ccol_event_loop_remove(loop, reg);
+  /* Joins the poller thread, and any dispatch workers, so no callback can
+     still be running with &ctx when the sync context is torn down below.
+     ccol_event_loop_remove alone does not wait for a dispatch that was
+     already in flight when it was called. */
+  ccol_event_loop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
   close(pfd[0]);
   close(pfd[1]);
@@ -5993,6 +6038,11 @@ TEST(ccol_event_loop,
   pthread_mutex_unlock(&ctx.mtx);
 
   ccol_event_loop_remove(loop, reg);
+  /* Joins the poller thread, and any dispatch workers, so no callback can
+     still be running with &ctx when the sync context is torn down below.
+     ccol_event_loop_remove alone does not wait for a dispatch that was
+     already in flight when it was called. */
+  ccol_event_loop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
   close(pfd[0]);
 }
@@ -6039,6 +6089,11 @@ TEST(ccol_event_loop,
   pthread_mutex_unlock(&ctx.mtx);
 
   ccol_event_loop_remove(loop, reg);
+  /* Joins the poller thread, and any dispatch workers, so no callback can
+     still be running with &ctx when the sync context is torn down below.
+     ccol_event_loop_remove alone does not wait for a dispatch that was
+     already in flight when it was called. */
+  ccol_event_loop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
   close(pfd[0]);
 }
@@ -6084,6 +6139,11 @@ TEST(ccol_event_loop, resume_after_hangup_while_paused_delivers_dispatch) {
   REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.error_count, 1, 2000));
 
   ccol_event_loop_remove(loop, reg);
+  /* Joins the poller thread, and any dispatch workers, so no callback can
+     still be running with &ctx when the sync context is torn down below.
+     ccol_event_loop_remove alone does not wait for a dispatch that was
+     already in flight when it was called. */
+  ccol_event_loop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
   close(pfd[0]);
 }
@@ -6161,6 +6221,11 @@ TEST(ccol_event_loop,
   REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 2, 2000));
 
   ccol_event_loop_remove(loop, reg);
+  /* Joins the poller thread, and any dispatch workers, so no callback can
+     still be running with &ctx when the sync context is torn down below.
+     ccol_event_loop_remove alone does not wait for a dispatch that was
+     already in flight when it was called. */
+  ccol_event_loop_shutdown(loop);
   evl_sync_ctx_destroy(&ctx);
   close(pfd[0]);
   close(pfd[1]);
@@ -6456,11 +6521,14 @@ TEST(ccol_event_loop, multi_thread_basic_smoke) {
 
   {
     /* Nested block, same reasoning as the other multi-thread tests below:
-     * evl_sync_ctx_destroy (like every other caller of it in this file)
-     * assumes no callback can still be touching ctx by the time it runs;
-     * true by construction with the single-reactor-thread tests elsewhere
-     * in this file, but only an assumption here with 6 reactor threads
-     * unless this block's join actually guarantees it. */
+     * evl_sync_ctx_destroy assumes no callback can still be touching ctx by
+     * the time it runs, and nothing else in this test establishes that. The
+     * reactor thread count does not matter here: even with one, the poller
+     * is a thread of its own, and ccol_event_loop_remove explicitly does not
+     * wait for a dispatch already in flight when it is called. What makes
+     * this safe is the join, so ctx must outlive the loop; either this
+     * block's scope exit or an explicit ccol_event_loop_shutdown before the
+     * teardown supplies it. */
     ccol_event_loop_construct_scoped(loop, 8, 4, 6);
 
     ccol_event_handlers_t handlers = {

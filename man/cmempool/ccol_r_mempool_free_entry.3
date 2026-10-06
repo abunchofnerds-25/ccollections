@@ -5,21 +5,20 @@ ccol_r_mempool_free_entry \- free an entry back to the ranged pool
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cmempool.h>
+#include <ccollections/cmempool.h>
 
 ccol_r_mempool_free_entry(rmp, entry);
 .fi
 .SH DESCRIPTION
 .nf
-Returns an allocated entry to the sub-pool that owns it. Macro wrapper
-around _ccol_r_mempool_free_entry() that sets the caller's pointer to
-NULL.
+Returns an allocated entry to the sub-pool that owns it. It then sets the
+pointer of the caller to NULL.
 
-The ranged pool is named by the caller rather than derived from the
-entry. Which of its sub-pools owns the entry is resolved from the
-address, so the caller never has to track that. Free an entry to the
-ranged pool it was allocated from; passing a different one is a caller
-error and is fatal.
+The caller names the ranged pool. The macro does not derive it from the
+entry. The macro resolves which sub-pool owns the entry from the address of
+that entry. The caller therefore never has to track that. Free an entry to
+the ranged pool that it came from. To pass a different pool is a caller
+error, and it is fatal.
 .fi
 .SH PARAMETERS
 .nf
@@ -28,22 +27,33 @@ entry  Entry to free (will be set to NULL after freeing)
 .fi
 .SH NOTES
 .nf
-O(1) in the number of sub-pools
-Works for entries from any sub-pool in the ranged pool
-Also works for dynamically allocated entries (fallback)
-Safe to call with a NULL entry; a NULL pool is a caller error and fatal
-Performs corruption detection via assertions
+The search for the owning sub-pool visits each tier at most once; the
+  free itself is O(1)
+It works for an entry from any sub-pool in the ranged pool
+It also works for an entry that the dynamic fallback allocated
+It is safe to call with a NULL entry. A NULL pool is a caller error, and it
+  is fatal
+It detects corruption with assertions
 
-Which sub-pool owns the entry is resolved from its address; see
-ccol_mempool_free_entry(3) and ccol_r_mempool_create(3).
+The macro resolves which sub-pool owns the entry from the address of that
+entry, and it reads nothing through an address that no sub-pool owns. An
+entry of the dynamic fallback is found in the record of fallback entries
+that its sub-pool keeps. An entry of another pool, and a fallback entry
+that is already free, end in the assert. See ccol_mempool_free_entry(3)
+and ccol_r_mempool_create(3).
+
+The macro evaluates each argument exactly once. entry must be a
+modifiable lvalue, such as a variable or an element of an array, so an
+expression with a side effect, such as entries[i++], frees and clears
+one element.
 .fi
 .SH "THREAD SAFETY"
 .nf
 Thread-safe if the pool was created with single_threaded = false.
-Sub-pools are locked independently, so frees of different size classes
-never contend with one another, and within a tier that maintains
-per-thread caches the common path takes no lock at all. An entry freed
-by one thread may be handed out to another.
+Each sub-pool has its own lock. Frees of different size classes therefore
+never contend with one another. Inside a tier that keeps a cache for each
+thread, the common path takes no lock at all. An entry that one thread frees
+can go to another thread.
 .fi
 .SH "SEE ALSO"
 .BR ccol_mempool_free_entry (3),

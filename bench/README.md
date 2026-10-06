@@ -1,13 +1,13 @@
 # Benchmarks
 
-`bench/` measures the modules with a run-time cost worth tracking: the
-containers, the string, the sort, the memory pools, the LRU cache, the thread
-pool and queues, the logger, both serializers, and an HTTP round trip.
+`bench/` measures the modules whose run-time cost is worth watching. These are
+the containers, the string, the sort, the memory pools, the LRU cache, the
+thread pool, the queues, the logger, both serializers, and one HTTP round trip.
 
-It links against the `libccollections.so` that the root `make` produced rather
-than compiling the library's sources into its own binary, so what it measures
-is the code that ships, at the flags it ships with, reached through the same
-dynamic call an application makes.
+The harness links against the `libccollections.so` that the root `make` built.
+It does not compile the sources of the library into its own binary. It
+therefore measures the code that ships, at the flags that it ships with,
+through the same dynamic call that an application makes.
 
 --------------------------------------------------------------------------
 
@@ -20,9 +20,9 @@ make bench           # run everything and report against that baseline
 make bench_list      # list the cases without running them
 ```
 
-`make bench` reports. It does not fail the build; see "Gating" below.
+`make bench` only reports. It does not stop the build. See "Gating" below.
 
-`BENCH_ARGS` passes options through to the runner:
+`BENCH_ARGS` sends options through to the runner:
 
 ```bash
 make bench BENCH_ARGS="--filter=cmempool"
@@ -49,77 +49,89 @@ case                              ns/op          rate   spread      n  vs baseli
 | `n` | how many repetitions were taken |
 | `vs baseline` | change against the recorded baseline for this case |
 
-The median rather than the mean, because the distribution is one sided: a
-repetition can be arbitrarily slowed by a scheduler preemption, and nothing
-makes one arbitrarily fast. Setup and teardown run for every repetition and are
-not timed, so a case that fills a container measures the same work each time
-rather than an ever larger one.
+The harness reports the median and not the mean, because the distribution has
+one long side. The scheduler can stop a repetition for any length of time, and
+nothing can make one faster than the work it does. Setup and teardown run for
+every repetition, and the harness does not time them. A case that fills a
+container therefore measures the same work each time, and not a larger amount
+each time.
 
-A row in brackets is a comparison arm measured in the same run as the case
-above it: `[malloc]` for the pools, `[GHashTable]`, `[GTree]` or `[uthash]` for the
-maps, `[GAsyncQueue]` and `[GThreadPool]` for the concurrency cases, and
-`[jansson]` or `[libyaml]` for the serializers. **These are the most portable
-numbers here.** A ratio between two rows of one run cancels the clock, the
-cache hierarchy and the thermal state they were both measured under, so it
-travels between machines in a way that a nanosecond figure does not.
+A row in brackets is a comparison arm. The harness measures it in the same run
+as the case above it. The arms are `[malloc]` for the pools, `[GHashTable]`,
+`[GTree]` and `[uthash]` for the maps, `[GAsyncQueue]` and `[GThreadPool]` for
+the concurrency cases, and `[jansson]` and `[libyaml]` for the serializers.
+**These are the numbers here that travel best between machines.** A ratio
+between two rows of one run removes the clock, the cache hierarchy and the
+thermal state that both rows share. A figure in nanoseconds keeps all three.
 
 --------------------------------------------------------------------------
 
 ## Reproducibility
 
-Three things decide whether two runs can be compared at all.
+Three things decide whether you can compare two runs at all.
 
-**Workers are pinned, one logical CPU per physical core.** A core's two
-simultaneous threads are not two cores: they share execution resources, so a
-pair of workers landing on one core runs at roughly half speed while the same
-pair on two cores does not, and which happens is the scheduler's choice afresh
-every run. Where the current machine has cores of more than one kind, only the
-performance cores are used, because a case ends when its slowest worker does
-and an efficiency core sets the whole figure. The CPU list is derived at run
-time from `/sys/devices/cpu_core/cpus` and each core's sibling list, so it
-needs no configuration and makes no assumption about CPU numbering. `--no-pin`
-turns it off.
+**The harness pins the workers, one logical CPU for each physical core.** The
+two simultaneous threads of one core are not two cores. They share the
+execution resources of that core. Two workers on one core therefore run at
+about half speed, and the same two workers on two cores do not. The scheduler
+chooses again on every run, so you cannot know which one you get. Where the
+machine has cores of more than one kind, the harness uses only the performance
+cores. A case ends when its slowest worker ends, so one efficiency core decides
+the whole figure. The harness builds the CPU list at run time from
+`/sys/devices/cpu_core/cpus` and from the sibling list of each core. It
+therefore needs no configuration, and it assumes nothing about how the machine
+numbers its CPUs. `--no-pin` turns the pinning off.
 
-A consequence worth knowing: a case asking for more workers than the current machine
-has performance cores has to double up on some of them. The assignment is
-fixed, so it repeats, but such a case is inherently noisier than one that fits.
+One result of this is worth knowing. A case that asks for more workers than the
+machine has performance cores must put two workers on some of them. The
+assignment is fixed, so it repeats. But such a case is always noisier than a
+case that fits.
 
-**A run heats the hardware it measures.** A portable machine reaches its
-thermal ceiling roughly a minute into a run, and the same case can cost
-noticeably more at that ceiling than it does cold. A run therefore measures its
-first group in a state its last group is never in. `--warmup=SEC` loads every
-core before measuring so a run starts in the state a long run settles into
-anyway; it is off by default
-because it adds heat of its own, which helps one full run and makes a sequence
-of short ones less comparable rather than more.
+Threads that a case's fixture starts are not pinned. The workers of a thread
+pool and the writer thread of an asynchronous logger are such threads. The
+harness builds each fixture while its own thread may run on every CPU in the
+list, so those threads can run on any of the performance cores, and it pins
+its own thread again afterwards. A thread inherits the CPU affinity of the
+thread that creates it, so a fixture built on a pinned thread would put all of
+its threads on that one CPU. A four-worker pool would then measure how the
+scheduler interleaves four threads on one core, not four workers.
 
-**The baseline is per machine and is not committed.** An absolute timing
-describes one particular machine's cache hierarchy, clock behavior and background load, so
-comparing a run against a baseline recorded on different hardware reports a
-difference that has nothing to do with the library. Record your own with
-`make bench_update` or `make bench_calibrate`.
+**A run heats the hardware that it measures.** A portable machine reaches its
+thermal ceiling about a minute into a run. The same case can cost much more at
+that ceiling than it does when the machine is cold. A run therefore measures
+its first group in a state that its last group is never in. `--warmup=SEC`
+loads every core before the harness measures anything. A run then starts in the
+state that a long run reaches anyway. This option is off by default, because it
+adds heat of its own. That helps one full run, and it makes a sequence of short
+runs harder to compare, not easier.
 
-For a run worth trusting: close what else is running, leave the current machine
-alone for its duration, and run a battery-powered one on mains power. Then read
-the ratios in preference to the nanoseconds.
+**The baseline belongs to one machine, and the project does not commit it.** An
+absolute time describes the cache hierarchy, the clock behavior and the
+background load of one machine. A run against a baseline from other hardware
+therefore reports a difference that has nothing to do with the library. Record
+your own baseline with `make bench_update` or `make bench_calibrate`.
+
+Do this for a run that you can trust. Close the other programs. Leave the
+machine alone for the length of the run. Put a machine that runs on a battery
+on mains power. Then read the ratios and not the nanoseconds.
 
 --------------------------------------------------------------------------
 
 ## Knowing how much a difference is worth
 
-A percentage is meaningless without knowing how far the same number moves on
-its own. `make bench_calibrate` measures that:
+A percentage means nothing until you know how far the same number moves on its
+own. `make bench_calibrate` measures that:
 
 ```bash
 make bench_calibrate                       # runs the suite several times over
 make bench_calibrate BENCH_ARGS="--calibrate=7"
 ```
 
-It runs the whole suite K times (default 5) and records, for each case
-separately, how far that case's own figure moved between those runs with
-nothing about the library changing. Whole passes rather than repeats of one
-case back to back, because part of what separates two runs is where in the run
-a case sits, which a back-to-back repeat cannot see.
+It runs the whole suite K times. The default for K is 5. For each case on its
+own, it records how far the figure of that case moved between those runs, while
+nothing in the library changed. It runs whole passes and does not repeat one
+case several times together. Part of what separates two runs is where a case
+sits inside the run, and a repeat of one case cannot show that.
 
 ```
 case                              ns/op   run-to-run       gate
@@ -127,16 +139,16 @@ case                              ns/op   run-to-run       gate
   alloc_free_64b_12t               2.53        42.4%  not gated
 ```
 
-`run-to-run` is that measured movement, and it is the number to compare a
-result against: a case that moves 42 percent by itself has told you that a 30
-percent difference in your own measurement means nothing. A case above 30
-percent is reported but never flagged, because on it the hardware contributes
-more than the library does.
+`run-to-run` is that measured movement. Compare your own result against it. A
+case that moves 42 percent by itself tells you that a difference of 30 percent
+in your own measurement means nothing. The harness reports a case above 30
+percent, but it never flags one. On such a case the hardware contributes more
+than the library does.
 
-Expect the single-threaded cases to be much steadier than the wide ones. On the original
-benchmarking machine, which has six performance cores, the single-threaded cases
-repeat within a few percent while the twelve-thread cases move by tens of
-percent, which is why one shared threshold cannot serve both.
+Expect a single-threaded case to be much steadier than a case with many
+threads. The first benchmarking machine has six performance cores. There, a
+single-threaded case repeats within a few percent, and a twelve-thread case
+moves by tens of percent. This is why one shared threshold cannot serve both.
 
 --------------------------------------------------------------------------
 
@@ -148,23 +160,24 @@ percent, which is why one shared threshold cannot serve both.
 make bench_gate
 ```
 
-**This is not for CI, and this project's own CI does not use it.** A shared,
-virtualized runner's timing variance is wider than most regressions worth
-catching, so a threshold tight enough to be useful fails constantly and one
-loose enough to be stable catches nothing. CI here builds the benchmarks and
-lists their cases, which catches the ways a benchmark can rot (a case that no
-longer compiles, a fixture that no longer builds) without pretending to
-measure anything.
+**This is not for CI, and the CI of this project does not use it.** The times
+on a shared, virtual runner move more than most regressions that are worth
+catching. A threshold that is tight enough to be useful therefore fails
+constantly, and one that is loose enough to be steady catches nothing. CI here
+builds the benchmarks and lists their cases. That catches the ways in which a
+benchmark decays, such as a case that no longer compiles or a fixture that no
+longer builds. It does not pretend to measure anything.
 
-Use `--gate` only on a machine that `make bench_calibrate` has shown repeats
-well enough to carry it, and read the run-to-run column before trusting it.
+Use `--gate` only on a machine where `make bench_calibrate` has shown that the
+figures repeat well enough. Read the run-to-run column before you trust it.
 
 --------------------------------------------------------------------------
 
 ## Optional comparison libraries
 
-Each is detected at build time and contributes its own comparison arms. None is
-required; a missing one removes its cases and nothing else.
+The build detects each of these libraries, and each one adds its own comparison
+arms. You need none of them. A library that is missing removes its own cases
+and changes nothing else.
 
 | library | Debian or Ubuntu package | what it compares against |
 |---|---|---|
@@ -181,52 +194,54 @@ make -C bench config     # shows which were found
 
 ## What the comparison rows do and do not compare
 
-A bracketed row is another library doing the nearest equivalent thing, not the
-identical thing. Where the two sides genuinely differ, the difference is listed
-here rather than corrected, because correcting it would mean measuring
-something neither library actually does. They do not all lean the same way: the
-first two below cost this library time it would not otherwise spend, and the
-last two spare it time the other side spends.
+A row in brackets is another library that does the nearest equivalent thing. It
+does not do the identical thing. Where the two sides really differ, this list
+names the difference. It does not correct the difference, because a correction
+would measure something that neither library does. The differences do not all
+go the same way. The first two below cost this library time that it would not
+otherwise spend. The last two save it time that the other side spends.
 
-- `GHashTable` and `GTree` store the benchmark's keys and values AS POINTERS
-  and leave ownership to the caller, where this library copies both into its
-  own storage, so those rows charge this library a copy the other side does not
-  make. Node allocation is NOT part of that difference on the tree rows:
-  measured with a counting allocator over 100000 inserts, `GTree` allocates one
-  node per distinct key and `cbstmap` allocates exactly the same number, so
-  those two differ only by the copy. `GHashTable` is the one that allocates
-  almost nothing per entry.
-- The uthash rows allocate their entry nodes once in untimed setup. On the
-  integer-keyed rows that costs neither side anything per entry: over the same
-  100000 inserts `chashmap` makes 28 allocations and uthash 13, both of them
-  table growth inside the timed loop rather than per-entry work. On the
-  string-keyed rows it is a real difference: a string key selects the
-  separate-chaining backend, which allocates a chain node per insert inside the
-  clock, measured at 1.00 per insert, so those rows charge this library an
-  allocation uthash is not charged.
-- `GAsyncQueue` is a linked queue and allocates a node per push, measured at
-  one allocation and one free per round trip. It is reported against
-  `circular_queue_roundtrip`, a preallocated ring that allocates nothing at
-  all.
-- The `[malloc]` rows for `cmempool` obtain their memory inside the timed loop,
-  where the pool's backing block is allocated in setup, so the pool's pages are
-  faulted in untimed and malloc's are not.
+- `GHashTable` and `GTree` keep the keys and the values of the benchmark AS
+  POINTERS, and the caller keeps ownership of them. This library copies both
+  into its own storage. Those rows therefore charge this library for a copy
+  that the other side does not make. Node allocation is NOT part of that
+  difference on the tree rows. Measured with a counting allocator over 100000
+  inserts, `GTree` allocates one node for each distinct key, and `cbstmap`
+  allocates the same number. Those two therefore differ by the copy alone.
+  `GHashTable` is the one that allocates almost nothing for each entry.
+- The uthash rows allocate their entry nodes one time, in the setup, which the
+  harness does not time. On the rows with an integer key that costs neither
+  side anything for each entry. Over the same 100000 inserts, `chashmap` makes
+  28 allocations and uthash makes 13. Both sets come from table growth inside
+  the timed loop, and not from work for each entry. On the rows with a string
+  key the difference is real. A string key selects the separate chaining
+  backend, which allocates one chain node for each insert inside the clock,
+  measured at 1.00 for each insert. Those rows therefore charge this library
+  for an allocation that uthash does not pay.
+- `GAsyncQueue` is a linked queue. It allocates one node for each push,
+  measured at one allocation and one free for each round trip. The harness
+  reports it against `circular_queue_roundtrip`, which is a preallocated ring
+  that allocates nothing at all.
+- The `[malloc]` rows for `cmempool` get their memory inside the timed loop.
+  The pool allocates its backing block in the setup. The pages of the pool
+  therefore fault in outside the clock, and the pages of malloc fault in inside
+  it.
 
-The rows that are like for like are `cjson` against jansson and `cyaml` against
-libyaml: both sides parse the same bytes into a DOM of their own, and both own
-what they build. The jansson serialize row additionally pins jansson's real
-number precision to the same 15 significant digits `cjson` uses, since its
-default of 17 makes it emit about 8 percent more bytes for the same document
-and a serializer's cost tracks how much it writes.
+Two comparisons are like for like: `cjson` against jansson, and `cyaml` against
+libyaml. Both sides parse the same bytes into a DOM of their own, and both own
+what they build. The jansson serialize row also sets the real number precision
+of jansson to the same 15 significant digits that `cjson` uses. The default for
+jansson is 17 digits, which makes it write about 8 percent more bytes for the
+same document, and the cost of a serializer follows how much it writes.
 
 ## Adding a case
 
-Cases live in `bench_core.c`, `bench_maps.c`, `bench_concurrency.c`,
-`bench_cache.c`, `bench_logging.c`, `bench_serialization.c` and
-`bench_http.c`, and register themselves through `bench_add`. `bench_add_mt`
-registers the same case at several thread counts at once. `bench.h` carries the
-case structure and what each field means.
+The cases are in `bench_core.c`, `bench_maps.c`, `bench_concurrency.c`,
+`bench_cache.c`, `bench_logging.c`, `bench_serialization.c` and `bench_http.c`.
+Each case registers itself through `bench_add`. `bench_add_mt` registers the
+same case at several thread counts together. `bench.h` holds the case structure
+and describes each field.
 
-A case owns its fixture: `setup` builds it, `teardown` releases it, and neither
-is timed. Keep the timed body doing one kind of work, so that a figure that
-moves names something.
+A case owns its fixture. `setup` builds the fixture and `teardown` frees it.
+The harness times neither. Keep the timed body to one kind of work. A figure
+that moves then tells you what moved.

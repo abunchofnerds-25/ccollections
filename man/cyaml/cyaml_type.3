@@ -5,25 +5,25 @@ cyaml_type \- return the type tag of a node
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cyaml.h>
+#include <ccollections/cyaml.h>
 
 cyaml_node_type_t cyaml_type(cyaml node);
 .fi
 .SH DESCRIPTION
 .nf
-Return the cyaml_node_type_t tag of node.  If node is NULL, returns
-CYAML_NULL.
+Return the cyaml_node_type_t tag of node.  The function returns
+CYAML_NULL when node is NULL.
 
 The enum values are: CYAML_NULL, CYAML_BOOL, CYAML_INTEGER,
 CYAML_FLOAT, CYAML_STRING, CYAML_LIST, CYAML_DICTIONARY.
 .fi
 .SH PARAMETERS
 .nf
-node  DOM node handle; may be NULL.
+node  DOM node handle.  It can be NULL.
 .fi
 .SH RETURN VALUE
 .nf
-cyaml_node_type_t constant.
+A cyaml_node_type_t constant.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_type_str (3)

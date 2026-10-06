@@ -1,29 +1,33 @@
-.TH CHTTPCLIENT_SET_CONNECT_TIMEOUT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CHTTPCLIENT_SET_CONNECT_TIMEOUT 3 "2026-10-01" "c_collections" "C Collections Library - Functions"
 .SH NAME
 chttpclient_set_connect_timeout \- set the TCP connect timeout
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpclient.h>
+#include <ccollections/chttpclient.h>
 
-ccol_retval_t chttpclient_set_connect_timeout(chttpcli cli, long ms);
+ccol_retval_t chttpclient_set_connect_timeout(chttpcli cli, uint64_t us);
 .fi
 .SH DESCRIPTION
 .nf
-Sets the maximum time allowed for the TCP connection phase (and, for
-HTTPS, the TLS handshake).  Pass 0 to disable the timeout (default).
+This function sets the maximum time for the phase of the TCP
+connection. For HTTPS this time also covers the TLS handshake. Give 0
+to turn the timeout off, which is the default. Every other value is
+honoured as a limit, however far away it lies. A value too large for
+the clock to reach, such as UINT64_MAX, saturates to the latest
+deadline that the clock can hold, and never wraps into the past.
 .fi
 .SH PARAMETERS
 .nf
-cli   Client handle; must not be CHTTPCLI_INVALID.
-ms    Timeout in milliseconds.
+cli   The client handle. It must not be CHTTPCLI_INVALID.
+us    The timeout in microseconds. 0 means no timeout.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success      Timeout updated.
-ccol_invalid_args cli is CHTTPCLI_INVALID, or a stale/already-
-                  destroyed handle.
+ccol_success      The client has the new timeout.
+ccol_invalid_args cli is CHTTPCLI_INVALID, or a stale handle of a
+                  client that is already destroyed.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_set_request_timeout (3)

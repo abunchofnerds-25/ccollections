@@ -1,19 +1,20 @@
 .TH CLRU_DECLARE_SCOPED 3 "2026-08-02" "c_collections" "C Collections Library - Macros"
 .SH NAME
-clru_declare_scoped \- declare an LRU cache with automatic RAII destruction
+clru_declare_scoped \- declare an LRU cache that is destroyed at scope exit
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <clrucache.h>
+#include <ccollections/clrucache.h>
 
 clru_declare_scoped(name, KeyT, ValT);
 .fi
 .SH DESCRIPTION
 .nf
-Like clru_declare() but attaches __attribute__((cleanup(___clrucache_destroy)))
-so that the cache is destroyed automatically when the variable leaves
-scope. Must be followed by clru_init() before use.
+This macro does what clru_declare() does. It also attaches
+__attribute__((cleanup(___clrucache_destroy))) to the variable. The
+compiler then destroys the cache automatically when the variable leaves
+its scope. Call clru_init() on the variable before you use the cache.
 .fi
 .SH PARAMETERS
 .nf
@@ -23,7 +24,7 @@ ValT  Value type
 .fi
 .SH NOTES
 .nf
-Requires GCC or Clang (uses __attribute__((cleanup))).
+This macro needs GCC or Clang, because it uses __attribute__((cleanup)).
 .fi
 .SH "SEE ALSO"
 .BR clru_declare (3),

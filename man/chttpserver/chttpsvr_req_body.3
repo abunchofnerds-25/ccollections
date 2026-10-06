@@ -5,20 +5,22 @@ chttpsvr_req_body \- access the buffered request body
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 const void *chttpsvr_req_body(const chttpsvr_req *req,
                                size_t *len_out);
 .fi
 .SH DESCRIPTION
 .nf
-Returns a pointer to the buffered request body bytes.  If len_out is
-non-NULL, the body length in bytes is stored there.  Returns NULL and
-stores 0 if there is no body, or if req belongs to a streaming route
-(chttpsvr_register_streaming_handler); a streaming route's body is
-never pre-extracted; use chttpsvr_req_read instead.
+Returns a pointer to the buffered bytes of the request body.  It
+stores the body length in bytes in len_out, when len_out is not NULL.
+It returns NULL and stores 0 in two cases: the request has no body, or
+req belongs to a streaming route that
+chttpsvr_register_streaming_handler registered.  The server never
+extracts the body of a streaming route in advance.  Use
+chttpsvr_req_read for such a route.
 
-The buffer is valid for the lifetime of the handler invocation.
+The buffer stays valid for the length of the handler call.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_req_read (3)

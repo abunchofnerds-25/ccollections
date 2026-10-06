@@ -1,0 +1,75 @@
+.TH CHMAP_DECLARE_SCOPED 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chmap_declare_scoped \- declare a hash map handle that is destroyed on scope exit
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chashmap.h>
+
+chmap_declare_scoped(hm_name, key_t, val_t);
+.fi
+.SH DESCRIPTION
+.nf
+Declares a hash map handle named hm_name. It also declares the companion
+type variables. These variables carry key_t and val_t to every later
+type-inferred macro. The macro also attaches the cleanup attribute. This
+attribute destroys the map at every exit from the enclosing scope. The
+macro creates nothing. The handle holds NULL until one of the init macros
+runs.
+
+It is different from chmap_declare(3) in exactly three ways. It sets the
+handle to NULL, and does not leave it uninitialized. It sets both
+companion type variables to NULL as well. It gives the handle a cleanup
+attribute, so an exit from the scope destroys the map that the handle
+names at that moment. The handle starts as NULL, and the library ignores
+a NULL handle. A return before an init macro runs is therefore safe, and
+nothing in the block reads an indeterminate object.
+
+Use this macro with chmap_init(3) or one of its variants when the code
+decides the configuration of the map inside the scope.
+chmap_construct_scoped(3) is the one-step form for a map whose
+configuration is known at the declaration.
+.fi
+.SH PARAMETERS
+.nf
+hm_name  Name for the map handle to declare
+key_t    Key type; it tells every later macro how to read a key and, with
+         val_t, which implementation strategy the init macro selects
+val_t    Value type
+.fi
+.SH RETURN VALUE
+.nf
+None. This macro expands to declarations and does not expand to an
+expression.
+.fi
+.SH NOTES
+.nf
+Needs GCC or Clang, because it uses the cleanup attribute
+An explicit chmap_destroy(3) before the end of the scope stays correct.
+It sets the handle to NULL, and the cleanup at scope exit then does
+nothing
+The handle must not outlive its scope. Do not return the handle. Do not
+store it somewhere that outlives the scope. Both of these hand out a
+pointer that is freed at the exit from the scope
+The companion type variables follow the scope of the handle. A function
+that gets the handle therefore needs chmap_redeclare(3) there
+.fi
+.SH EXAMPLES
+.nf
+chmap_declare_scoped(scores, char *, int);
+if (!load_config()) {
+    return -1;             /* nothing was created; cleanup is a no-op */
+}
+chmap_init(scores);
+int score = 42;
+chmap_insert(scores, "alice", score);
+return 0;                  /* scores is destroyed here */
+.fi
+.SH "SEE ALSO"
+.BR chmap_declare (3),
+.BR chmap_construct_scoped (3),
+.BR chmap_init (3),
+.BR chmap_init_full (3),
+.BR chmap_redeclare (3),
+.BR chmap_destroy (3)

@@ -1,0 +1,57 @@
+.TH CCOL_CIRCQ_DISABLE_SENDING 3 "2026-09-20" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccol_circq_disable_sending \- turn off sends on a circular queue
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_retval_t ccol_circq_disable_sending(ccol_circular_queue *cq);
+.fi
+.SH DESCRIPTION
+.nf
+This function marks the queue as closed to new sends. It then wakes every
+thread that blocks inside ccol_circq_send_zc() or
+ccol_circq_timed_send_zc() and waits for free space. Each of those threads
+checks the flag again when it wakes up. It then returns ccol_not_permitted
+and does not put its message into the queue. Each one therefore keeps the
+ownership of its own msg->data.
+
+Every later send also returns ccol_not_permitted. This is true for
+ccol_circq_send_zc(), ccol_circq_try_send_zc() and
+ccol_circq_timed_send_zc(). It continues until a call to
+ccol_circq_enable_sending().
+
+A receive does not change. The messages that are already in the queue stay
+there, and a receive still gets them in the normal way. This is what makes
+this function the natural way to close a producer side and let a consumer
+drain what is left.
+
+The function also wakes every write-direction waiter on this queue. Such a
+waiter is a ccol_select() call, a ccol_select_timed() call, or an
+ccol_event_loop registration. Each of them scans again and sees the new
+state. It therefore does not wait for room that no send can use.
+.fi
+.SH PARAMETERS
+.nf
+cq   Circular queue that gets sends turned off
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success       - The function turned sends off
+ccol_invalid_args  - cq is NULL
+.fi
+.SH NOTES
+.nf
+The function wakes every blocked sender immediately with a broadcast.
+ccol_circq_enable_sending() turns sends on again.
+The function does not change a receive.
+The function is thread-safe.
+.fi
+.SH "SEE ALSO"
+.BR ccol_circq_enable_sending (3),
+.BR ccol_circq_send_zc (3),
+.BR ccol_circq_try_send_zc (3),
+.BR ccol_circq_timed_send_zc (3),
+.BR ccol_circq_msg_count (3)

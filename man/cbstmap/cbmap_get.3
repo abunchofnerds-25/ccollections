@@ -1,18 +1,24 @@
 .TH CBMAP_GET 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cbmap_get \- get value by key (type-safe, returns value)
+cbmap_get \- get value by key (type-inferred, returns value)
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cbstmap.h>
+#include <ccollections/cbstmap.h>
 
 value = cbmap_get(hm_name, key);
 .fi
 .SH DESCRIPTION
 .nf
-Type-safe wrapper for cbmap_get_elem_ref() that returns the actual value.
-Calls ccol_fatal_err() if key not found or size mismatch.
+Type-inferred wrapper for cbmap_get_elem_ref(). It returns the value itself.
+It calls ccol_fatal_err() if the key is not in the map. It also calls
+ccol_fatal_err() if the two sizes do not match.
+
+The lookup key goes through the DECLARED key type of the tree, in the
+same way as in cbmap_insert(3). A key that the tree stored through that
+conversion is only ever found again by a lookup that makes the same
+one. A literal and a computed expression are both accepted.
 .fi
 .SH PARAMETERS
 .nf
@@ -21,16 +27,18 @@ key      Key to look up
 .fi
 .SH RETURN VALUE
 .nf
-Returns value associated with key
+Returns the value of that key
 .fi
 .SH NOTES
 .nf
-Returns value, not pointer
-For strings, returns the char* itself
-Terminates program if key not found
-Terminates program if the stored value's size does not match the
-size of the declared value type
-O(log n) search time
+The macro returns the value, not a pointer
+For a string, the macro returns the char* itself
+The macro stops the program if the key is not in the map
+The macro stops the program with ccol_invalid_args if key is a NULL
+character pointer, which is not a string
+The macro stops the program if the size of the stored value does not
+match the size of the declared value type
+The search takes O(log n) time
 .fi
 .SH "SEE ALSO"
 .BR cbmap_get_ptr (3),

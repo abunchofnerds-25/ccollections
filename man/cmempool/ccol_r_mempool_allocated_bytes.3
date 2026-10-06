@@ -5,20 +5,20 @@ ccol_r_mempool_allocated_bytes \- report the memory a ranged pool holds for its 
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cmempool.h>
+#include <ccollections/cmempool.h>
 
 size_t ccol_r_mempool_allocated_bytes(ccol_r_mempool *rmp);
 .fi
 .SH DESCRIPTION
 .nf
-Returns every tier's entry block added together, in bytes, which is what
-a ranged pool costs.
+Returns the entry block of every tier added together, in bytes. That
+total is what a ranged pool costs.
 
-Each tier is a pool in its own right with its own element size and
-element count, and each one large enough to keep per-thread caches holds
-a reserve of its own, so this exceeds the sum of the tier capacities.
-It is the figure to use when sizing a ranged pool against a memory
-budget, where working it out by hand is least practical.
+Each tier is a pool in its own right, with its own element size and
+element count. Each tier large enough to keep a cache for each thread
+holds a reserve of its own. This total therefore exceeds the sum of the
+tier capacities. Use this figure when you size a ranged pool against a
+memory budget. That is where a computation by hand is hardest.
 .fi
 .SH PARAMETERS
 .nf
@@ -26,21 +26,23 @@ rmp                       Ranged memory pool to query (must not be NULL)
 .fi
 .SH RETURN VALUE
 .nf
-Returns the size in bytes of every tier's entry block, summed
+Returns the size in bytes of the entry block of every tier, added
+together
 .fi
 .SH NOTES
 .nf
-The tiers' entry blocks are counted and nothing else, on the same terms
-as ccol_mempool_allocated_bytes(3): handles, per-thread caches and
-entries served by a fallback policy are all outside this figure.
+The call counts the entry blocks of the tiers and nothing else. It
+counts them on the same terms as ccol_mempool_allocated_bytes(3). The
+handles, the cache of each thread, and every entry that a fallback
+policy serves all stay outside this figure.
 
-The value does not change over the pool's lifetime.
+The value does not change over the lifetime of the pool.
 .fi
 .SH "THREAD SAFETY"
 .nf
 Thread-safe when the pool was created with single_threaded = false.
-Acquires each tier's lock in turn, so it is a cold-path call and not
-intended for use inside a hot loop.
+The call takes the lock of each tier in turn. It is therefore a
+cold-path call. Do not use it inside a hot loop.
 .fi
 .SH "SEE ALSO"
 .BR ccol_mempool_allocated_bytes (3),

@@ -5,18 +5,18 @@ ccol_event_loop_declare \- declare an uninitialised ccol_event_loop variable
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadcomm.h>
+#include <ccollections/cthreadcomm.h>
 
 ccol_event_loop_declare(name);
 .fi
 .SH DESCRIPTION
 .nf
-Expands to `ccol_event_loop name`.  The variable is left uninitialised and
-must be assigned via ccol_event_loop_construct() or a ccol_event_loop_create*()
-call before use.
+This macro expands to `ccol_event_loop name`. It does not initialise
+the variable. You must assign the variable before you use it. Use
+ccol_event_loop_construct(), or a ccol_event_loop_create*() call.
 
-Provided for naming-convention symmetry with other c_collections
-modules (compare ctpool_declare()).
+This macro exists so that the names match those of the other
+c_collections modules. Compare it with ctpool_declare().
 .fi
 .SH PARAMETERS
 .nf

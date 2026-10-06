@@ -1,11 +1,11 @@
 .TH CHTTPSVR_RESP_SET_HEADER 3 "2026-09-01" "c_collections" "C Collections Library - Functions"
 .SH NAME
-chttpsvr_resp_set_header \- set a response header
+chttpsvr_resp_set_header \- set a response header, replacing every field of that name
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 ccol_retval_t chttpsvr_resp_set_header(chttpsvr_resp *resp,
                                         const char *name,
@@ -13,62 +13,95 @@ ccol_retval_t chttpsvr_resp_set_header(chttpsvr_resp *resp,
 .fi
 .SH DESCRIPTION
 .nf
-Sets or replaces a response header.  If a header with the same name
-already exists (case-insensitive comparison per RFC 7230), the stored
-value is replaced in-place and the function returns immediately.
+Sets a response header to one value.  When fields with the same name
+already exist, the first one takes the new value in place and keeps its
+position, and the others go, so the response then carries exactly one
+field of that name.  The name comparison ignores case, as RFC 7230
+needs.  Use chttpsvr_resp_add_header(3) to send one more field of a
+name instead, such as a second Set-Cookie.  The fields go on the wire
+in the order of the calls that first set each of them.
 
-Name casing: when a duplicate is detected the stored header name retains
-the casing supplied by the FIRST call; the casing of subsequent calls is
-ignored.  HTTP/1.1 header names are case-insensitive on the wire, so
-this does not affect correctness, but callers who read back stored header
-names directly should account for this behaviour.
+Letter case of the name: the stored header name keeps the letter case
+of the FIRST call, and the function ignores the letter case of every
+later call.  HTTP/1.1 header names ignore case on the wire, so this
+does not affect correctness.  But a caller that reads the stored
+header names back directly needs to account for this behaviour.
 
-All three arguments must be non-NULL; passing NULL for any of them
-returns ccol_invalid_args without modifying the response.  name must
-also be a non-empty RFC 7230 SS3.2.6 tchar-only token: every byte must be
-an ASCII letter, digit, or one of "!#$%&'*+-.^_`|~".  A zero-length name
-has no valid on-the-wire representation; a name containing any other
-byte (e.g. a space or a literal ':') is not itself a CRLF-injection
-vector but still produces a structurally malformed wire line a strict
-downstream parser could misread.
+All three arguments must not be NULL.  A NULL in any of them gives
+ccol_invalid_args, and changes nothing in the response.  name must
+also be a token that is not empty and that holds only tchar bytes, as
+RFC 7230 SS3.2.6 defines them.  Every byte must be an ASCII letter, an
+ASCII digit, or one of "!#$%&'*+-.^_`|~".  A name of zero length has
+no valid form on the wire.  A name with any other byte in it, for
+example a space or a literal ':', is not itself a way to inject a
+CRLF.  But it still makes a structurally malformed wire line, and a
+strict parser downstream can read it wrongly.
 
-value must not contain a CR or LF byte.  Both name and value are written
-onto the wire verbatim (as "name:value\er\en"), with no further escaping,
-so an embedded CR/LF in value would let a caller that reflects
-request-controlled data (a query parameter, a path parameter, an echoed
-request header) into a response header inject arbitrary extra header
-lines, or split the response into two, on behalf of whoever controls
-that data (HTTP response splitting / CRLF injection).  Rejected with
-ccol_invalid_args rather than silently stripped or truncated.
+value must not hold a CR byte or an LF byte.  The server writes both
+name and value onto the wire exactly as they are, as
+"name:value\er\en", with no further escaping.  A CR or LF inside value
+would therefore let a caller inject extra header lines, or split the
+response in two, for whoever controls the data that the caller
+reflects.  A caller reflects such data when it puts a query parameter,
+a path parameter or an echoed request header into a response header.
+That attack is HTTP response splitting, or CRLF injection.  The
+function rejects a CR or LF with ccol_invalid_args.  It does not
+silently strip it or truncate the value.
 
-A "Connection" or "Content-Length" header is accepted and validated like
-any other name, but is never sent verbatim: the server always emits its
-own Connection header, reflecting whether the connection is actually kept
-open afterward, and always computes and emits its own Content-Length
-header from the response body actually written (via chttpsvr_resp_write
-and its variants), since both decisions drive real wire framing and must
-never disagree with what the client is told.
+The function accepts a "Connection" header and checks it like any
+other name, but the server never sends it.  The server always emits
+its own Connection header, and that header shows whether the server
+really keeps the connection open afterwards.
 
-A name of "Transfer-Encoding" (case-insensitive) is rejected outright
-instead of being accepted-but-filtered: this server never transfer-codes
-a response body (every response is Content-Length-framed), so honoring a
-caller-set Transfer-Encoding header is impossible, and letting one reach
-the wire would pair it with this function's own auto-computed
-Content-Length header over a body that was never actually
-transfer-coded; an ambiguous framing (RFC 7230 SS3.3.3) an
-intermediary that honors Transfer-Encoding over Content-Length could
-misparse, the same class of hazard the Connection/Content-Length
-handling above exists to prevent.  Mirrors chttp_request_set_header's
-identical Transfer-Encoding rejection on the client side.
+A "Content-Length" value must be one or more ASCII digits whose number
+fits in a signed 64-bit integer.  Any other value gives
+ccol_invalid_args.  Whether the server sends it depends on the
+response.  A response that sends a body carries the length of the body
+that chttpsvr_resp_write and the functions beside it really wrote, and
+never the value that you set, because that length is the framing on
+the wire.  A 304, and a response to HEAD for which the handler wrote
+no body, send no body whatever the field says.  They carry the
+Content-Length that you set, which is the length that a 200 to a GET
+would carry (RFC 9110 section 8.6), and none at all when you set none.
+A 1xx and a 204 never carry one.  This is the rule of Go's net/http
+server.
+
+A "Date" header that you set is sent as you gave it, and
+it replaces the Date that the server otherwise adds, so the response
+carries exactly one.  Without one from you, every final response
+carries the current time in UTC, in the IMF-fixdate form of RFC 9110
+section 5.6.7, such as "Sun, 06 Nov 1994 08:49:37 GMT".  A 1xx
+response, and the interim "100 Continue", carry none.  This is the rule
+of Go's net/http server.  A second call with the same name, in any
+letter case, replaces the value, through this function or through
+chttpsvr_resp_add_header(3), so no sequence of calls can produce two
+Date lines.
+
+The function rejects a name of "Transfer-Encoding", in any letter
+case, outright.  It does not accept it and then filter it out.  This
+server never transfer-codes a response body, because it frames every
+response with Content-Length.  It therefore cannot obey a
+Transfer-Encoding header that a caller sets.  Such a header on the
+wire would also sit next to the Content-Length header that this
+function computes, over a body that nothing transfer-coded.  That
+framing is ambiguous (RFC 7230 SS3.3.3).  An intermediary that obeys
+Transfer-Encoding over Content-Length can parse it wrongly.  That is
+the same class of hazard that the handling of Connection and
+Content-Length above prevents.  chttp_request_set_header rejects
+Transfer-Encoding in the same way on the client side.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success on success.
-ccol_invalid_args if resp, name, or value is NULL; name is empty or
-contains a byte outside the RFC 7230 tchar set; value contains a CR or
-LF byte; or name is "Transfer-Encoding" (case-insensitive).
-ccol_not_enough_memory if the underlying allocation fails.
+ccol_invalid_args when resp, name or value is NULL; when name is empty
+or holds a byte outside the RFC 7230 tchar set; when value holds a CR
+byte or an LF byte; when name is "Transfer-Encoding" in any letter
+case; or when name is "Content-Length" and value is not a number as
+described above.
+ccol_not_enough_memory when the allocation under it fails.
+A failed call changes nothing in the response.
 .fi
 .SH "SEE ALSO"
+.BR chttpsvr_resp_add_header (3),
 .BR chttpsvr_resp_set_status (3),
 .BR chttpsvr_resp_write (3)

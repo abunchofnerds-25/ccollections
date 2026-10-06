@@ -1,18 +1,22 @@
 .TH CHTTPSVR_DECLARE_SCOPED 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-chttpsvr_declare_scoped \- declare an uninitialised chttpsvr variable with automatic destruction
+chttpsvr_declare_scoped \- declare a chttpsvr variable with automatic destruction
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 chttpsvr_declare_scoped(name);
 .fi
 .SH DESCRIPTION
 .nf
-Like chttpsvr_declare but attaches a GCC cleanup attribute so that
-__chttpsvr_destroy is called automatically when name leaves scope.
+This macro works like chttpsvr_declare, but it also attaches a GCC
+cleanup attribute.  The compiler therefore destroys the server
+automatically when name leaves the scope.  It destroys the server in
+exactly the way that chttpsvr_destroy does.  The macro initializes the
+variable to CHTTPSVR_INVALID.  The cleanup destroys nothing when name
+still holds that value at the end of the scope.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_construct_scoped (3),

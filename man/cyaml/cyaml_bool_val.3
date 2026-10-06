@@ -5,14 +5,15 @@ cyaml_bool_val \- extract a boolean value from a CYAML_BOOL node
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cyaml.h>
+#include <ccollections/cyaml.h>
 
 bool cyaml_bool_val(cyaml node);
 .fi
 .SH DESCRIPTION
 .nf
-Return the C bool stored in node.  Calls ccol_fatal_err() if node is NULL
-or if its type is not CYAML_BOOL.
+Return the C bool that node stores.  This function calls ccol_fatal_err()
+when node is NULL.  It also calls ccol_fatal_err() when the type of node is
+not CYAML_BOOL.
 .fi
 .SH PARAMETERS
 .nf

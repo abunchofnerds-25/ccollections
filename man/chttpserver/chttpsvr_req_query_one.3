@@ -5,7 +5,7 @@ chttpsvr_req_query_one \- look up a single-valued query parameter
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 ccol_retval_t chttpsvr_req_query_one(chttpsvr_req *req,
                                       const char *key,
@@ -13,19 +13,24 @@ ccol_retval_t chttpsvr_req_query_one(chttpsvr_req *req,
 .fi
 .SH DESCRIPTION
 .nf
-Looks up a query parameter that is expected to appear exactly once.
-Unlike chttpsvr_req_query, this function distinguishes an OOM failure
-from a missing key and avoids allocating a scratch result array.
+Looks up a query parameter that must appear exactly once.  It matches
+key against the URL-decoded keys of the query string, exactly as
+chttpsvr_req_query does.  This
+function tells an out-of-memory failure apart from a key that is
+absent, and chttpsvr_req_query cannot do that.  It also allocates no
+scratch array for the result.
 
-On any failure return, *val_out (if val_out itself is non-NULL) is
-reset to NULL.
+On any failure return it sets *val_out to NULL, when val_out itself is
+not NULL.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success; exactly one value found; stored in *val_out.
-ccol_key_not_found; key is absent.
-ccol_not_permitted; key appears more than once.
-ccol_not_enough_memory; query-string parse buffer could not be allocated.
+ccol_success; the function found exactly one value and stored it in
+*val_out.
+ccol_key_not_found; the key is absent.
+ccol_not_permitted; the key appears more than once.
+ccol_not_enough_memory; the library could not allocate the parse
+buffer for the query string.
 ccol_invalid_args; req or key is NULL.
 .fi
 .SH "SEE ALSO"

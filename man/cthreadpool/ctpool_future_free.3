@@ -1,31 +1,45 @@
-.TH CTPOOL_FUTURE_FREE 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
+.TH CTPOOL_FUTURE_FREE 3 "2026-09-21" "c_collections" "C Collections Library - Functions"
 .SH NAME
 ctpool_future_free \- release the caller's reference to a future
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadpool.h>
+#include <ccollections/cthreadpool.h>
 
 void ctpool_future_free(ctpool_future *f);
 .fi
 .SH DESCRIPTION
 .nf
-Decrements the future's reference count. When the count reaches zero
-(both the caller and the worker, or the producer for a detached
-future, have released their references) the future object is freed
-with standard free(). This never touches the task function's own
-void* result value, which this module never allocates, copies, or
-frees; see ctpool_future_get(3) for who owns that result.
+Takes one off the reference count of the future. The library frees the
+future object with the standard free() when that count reaches zero.
+Three kinds of holder release a reference: the caller, the worker, and
+every ctpool_future_get call that is still in progress. For a detached
+future the producer holds one in place of the worker.
 
-Must be called exactly once per successful ctpool_submit_future,
-ctpool_try_submit_future, ctpool_timed_submit_future, or
-ctpool_future_create_detached call. May be called before or after
-ctpool_future_get. Calling before ctpool_future_get is safe: the task
-still runs and the future is freed automatically when the worker
-finishes.
+This never touches the void* result value of the task function. This
+module never allocates, copies or frees that value. See
+ctpool_future_get(3) for who owns the result.
 
-Calling ctpool_future_free on a NULL pointer is a no-op.
+Call this exactly one time for each ctpool_submit_future,
+ctpool_try_submit_future, ctpool_timed_submit_future or
+ctpool_future_create_detached call that succeeds. Do so whether or not
+anything called ctpool_future_get.
+
+A call with no ctpool_future_get at all gives fire-and-forget behavior.
+The task still runs. The library frees the future by itself when the
+worker finishes, and it discards the result.
+
+You can call this while other threads are inside ctpool_future_get on
+the same future. Each of them holds a reference of its own. The library
+therefore destroys the future only after the last of them leaves.
+
+This call ends the claim of the caller on f, in the same way as when a
+thread gives up its last reference. The caller must not use f again
+after this call. The caller must also not hand f to a thread that is
+not yet inside ctpool_future_get.
+
+A call to ctpool_future_free with a NULL pointer does nothing.
 .fi
 .SH PARAMETERS
 .nf

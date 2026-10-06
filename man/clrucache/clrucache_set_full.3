@@ -5,7 +5,7 @@ clrucache_set_full \- store a value by key (write-through)
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <clrucache.h>
+#include <ccollections/clrucache.h>
 
 ccol_retval_t clrucache_set_full(clru_cache cache,
                                  const cmap_pair *key_pair,
@@ -13,51 +13,74 @@ ccol_retval_t clrucache_set_full(clru_cache cache,
 .fi
 .SH DESCRIPTION
 .nf
-Associates key_pair with val_pair in the cache.
+Pairs key_pair with val_pair in the cache.
 
-If a remote setter was provided at construction it is called
-synchronously outside the segment's lock before the cache is updated.
-On setter failure the function returns ccol_unexpected_failure and the
-cache is left unchanged for that key (an existing value is preserved).
+The library calls the remote setter synchronously, outside the lock of
+the segment, before it updates the cache. It does this only when the
+caller gives a remote setter at construction. When the setter fails,
+this function returns ccol_unexpected_failure and the cache does not
+change for that key. The existing value stays, and the exact position
+of that key in the eviction order of its segment stays too. A set that
+stored nothing therefore gets no protection from eviction. It also
+cannot cost another key its place as the next entry to evict.
 
-Multiple setters for the same key are serialised. Concurrent getters
-for the same key block until the set completes.
+The set takes effect when the remote setter returns. While the setter
+runs, the key keeps its old value, its place in the eviction order and
+its place in clrucache_size(). A concurrent insert of another key that
+needs room evicts the least recently used entry, and that can be the
+key of the set. The eviction callback then receives the old value. When
+the setter then fails, the key stays evicted. When it succeeds, the key
+comes back with the new value as the most recently used entry of its
+segment, which can evict another key. The outcome is always that of the
+insert followed by the set. A segment never holds more entries than its
+capacity.
 
-If the cache is at capacity and the key is new, the least-recently-
-used live entry is evicted first.
+The library serialises many setters for the same key. A concurrent
+getter for the same key blocks until the set completes. When the set
+fails and the key is then absent from the cache, that getter continues
+as a cache miss, so it runs the remote getter when the cache has one.
+
+When the cache is at its capacity and the key is new, the library first
+evicts the least recently used live entry. A set that succeeds for a key
+that the cache already holds makes that key the most recently used entry
+of its segment.
 .fi
 .SH PARAMETERS
 .nf
 cache     Cache handle.
-key_pair  Key to store (ptr and size fields must be set).
-val_pair  Value to associate with the key (ptr and size must be set;
-          size must be > 0).
+key_pair  The key to store. The ptr and size fields must be set.
+val_pair  The value to pair with the key. The ptr and size fields must
+          be set, and size must be > 0.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success             Value stored (and remote setter succeeded if
-                         one was provided).
-ccol_unexpected_failure  Remote setter returned false; cache unchanged.
-ccol_invalid_args        cache is CLRU_CACHE_INVALID or a stale
-                         (already-destroyed) handle; or key_pair or
-                         val_pair is NULL; or val_pair->size is 0; or
-                         key_pair->size disagrees with the width of the
-                         key type the cache was created for.
-ccol_not_enough_memory   Memory allocation for the new value failed.
-ccol_container_full      When storing a brand-new key, the cache's own
-                         internal bookkeeping has reached its maximum
-                         element count; not reachable in practice.
+ccol_success             The function stored the value. The remote
+                         setter also succeeded, if the caller gave one.
+ccol_unexpected_failure  The remote setter returned false. The cache
+                         did not change.
+ccol_invalid_args        cache is CLRU_CACHE_INVALID, or cache is a
+                         stale handle that a call already destroyed, or
+                         key_pair is NULL, or val_pair is NULL, or
+                         val_pair->size is 0, or key_pair->size does
+                         not agree with the width of the key type of
+                         the cache.
+ccol_not_enough_memory   The allocation of memory for the new value
+                         failed.
+ccol_container_full      The internal bookkeeping of the cache reached
+                         its maximum element count while the function
+                         stored a completely new key. A real program
+                         cannot reach this.
 .fi
 .SH NOTES
 .nf
-cache is an opaque VALUE handle, resolved through a library-owned
-slot table before the underlying cache object is touched; the pin
-established by that resolve is held for the entire duration of this
-call, including any time spent blocked inside a remote setter
-callback, so a concurrent __clrucache_destroy on the same handle
-waits for this call to finish rather than freeing the cache out from
-under it.
-O(1) average-case complexity for the hash map operations.
+cache is an opaque VALUE handle. The library resolves it through a slot
+table that the library owns, before it touches the cache object behind
+the handle. That resolve takes a pin, and this call holds the pin for
+its whole duration. This includes any time that the call blocks inside
+a remote setter callback. A concurrent clru_destroy() on the same handle
+therefore waits for this call to finish. It does not free the cache
+under this call.
+The average-case complexity of the hash map operations is O(1).
 .fi
 .SH "SEE ALSO"
 .BR clru_set (3),

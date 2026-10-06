@@ -5,33 +5,37 @@ ctpool_construct \- declare and initialise a thread pool in one step
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadpool.h>
+#include <ccollections/cthreadpool.h>
 
 ctpool_construct(name, num_threads, queue_capacity);
 .fi
 .SH DESCRIPTION
 .nf
-Declares a ctpool variable named name, calls ccol_create_cthread_pool() to
-initialise it, and calls ccol_fatal_err() if creation fails.
+Declares a ctpool variable with the name name. It then calls
+ccol_create_cthread_pool() to initialise the variable. It calls
+ccol_fatal_err() if the creation fails.
 
-queue_capacity controls the queue mode:
-  0 or ccol_invalid_size  ->  unbounded queue (submit never blocks on
-                               capacity; only failure is OOM)
-  N > 0                   ->  bounded queue of capacity N (submit blocks
-                               when full; try_submit returns
-                               ccol_container_full instead)
+queue_capacity selects the queue mode:
+  0 or ccol_invalid_size  ->  unbounded queue. submit never blocks on
+                               capacity. The only failure is a lack of
+                               memory.
+  N > 0                   ->  bounded queue of capacity N. submit
+                               blocks when the queue is full.
+                               try_submit does not block. It returns
+                               ccol_container_full.
 .fi
 .SH PARAMETERS
 .nf
 name            Variable name for the pool handle.
-num_threads     Number of worker threads to spawn (must be >= 1).
+num_threads     Number of worker threads to create (must be >= 1).
 queue_capacity  Maximum pending tasks (0 or ccol_invalid_size for
                 unbounded).
 .fi
 .SH NOTES
 .nf
-Calls ccol_fatal_err() on failure; use ccol_create_cthread_pool() directly when
-graceful error handling is required.
+This macro calls ccol_fatal_err() on failure. Call
+ccol_create_cthread_pool() directly if you must handle an error
+gracefully.
 .fi
 .SH EXAMPLES
 .nf

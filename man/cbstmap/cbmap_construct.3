@@ -1,42 +1,46 @@
 .TH CBMAP_CONSTRUCT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cbmap_construct \- type-safe BST map construction
+cbmap_construct \- type-inferred BST map construction
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cbstmap.h>
+#include <ccollections/cbstmap.h>
 
 cbmap_construct(hm_name, key_type, val_type);
 .fi
 .SH DESCRIPTION
 .nf
-Type-safe macro for creating a BST map with default settings.
-Automatically determines the key type (signed/unsigned integer,
-floating-point, string, or other) and creates type marker variables that
-let the other type-dispatching macros know the declared key and value
-types at each call site.
+Type-inferred macro that creates a BST map with the default settings.
+The macro finds the key type by itself. The key type is a signed
+integer, an unsigned integer, a floating-point type, a string or
+another type. The macro also creates type marker variables. These
+variables give the declared key type and the declared value type to
+the other type-dispatching macros, at each place that calls them.
 .fi
 .SH PARAMETERS
 .nf
 hm_name   Name of the BST map variable to create
-key_type  Type of keys
-val_type  Type of values
+key_type  Type of the keys
+val_type  Type of the values
 .fi
 .SH NOTES
 .nf
-Terminates program on allocation failure
-Uses default memory management and comparison
-For a struct key_type, this falls back to a raw memcmp ordering; see
-cbmap_create_full(3) for the default-comparison rules and how to
-supply a custom_comparison_proc instead (the cbmap_construct_cc
-macro is the type-safe equivalent for a struct key_type)
+The macro stops the program if an allocation fails
+The macro uses the default memory management and the default
+comparison
+For a struct key_type, the macro uses a raw memcmp order. See
+cbmap_create_full(3) for the rules of the default comparison. That
+page also shows how to give a custom_comparison_proc instead. The
+cbmap_construct_cc macro is the type-inferred equivalent for a struct
+key_type
 .fi
 .SH EXAMPLES
 .nf
 cbmap_construct(map, int, char*);
 int key = 42;
 cbmap_insert(map, key, "hello");
+cbmap_destroy(map);
 .fi
 .SH "SEE ALSO"
 .BR cbmap_create (3),

@@ -1,0 +1,49 @@
+.TH CCOL_RETVAL_TO_STR 3 "2026-10-06" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccol_retval_to_str \- name of a ccol_retval_t code as a string
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/common.h>
+
+static inline const char *ccol_retval_to_str(ccol_retval_t r);
+.fi
+.SH DESCRIPTION
+.nf
+Gives the name of the enumerator r as a string literal. For example,
+it gives "ccol_key_not_found" for ccol_key_not_found. Use it in a
+diagnostic message or in a log record. ccollections(7) gives a list of
+all the codes and their values.
+.fi
+.SH PARAMETERS
+.nf
+r  The code to name
+.fi
+.SH RETURN VALUE
+.nf
+A pointer to a string literal with static storage duration. For a value
+that is not an enumerator of ccol_retval_t, the function gives
+"unknown". The function never gives NULL.
+.fi
+.SH THREAD SAFETY
+.nf
+Thread-safe. The function reads no state.
+.fi
+.SH EXAMPLES
+.nf
+#include <stdio.h>
+#include <ccollections/cthreadcomm.h>
+
+int main(void) {
+  ccol_circular_queue *q = ccol_circular_queue_create(4, NULL);
+  if (!q) return 1;
+  c_message_t msg;
+  ccol_retval_t rv = ccol_circq_try_recv_zc(q, &msg);
+  printf("%s\en", ccol_retval_to_str(rv));   /* ccol_container_empty */
+  ccol_circular_queue_destroy(q);
+  return 0;
+}
+.fi
+.SH "SEE ALSO"
+.BR ccollections (7)

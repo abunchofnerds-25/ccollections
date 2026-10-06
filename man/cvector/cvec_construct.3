@@ -1,37 +1,45 @@
 .TH CVEC_CONSTRUCT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cvec_construct \- type-safe vector construction
+cvec_construct \- type-inferred vector construction
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cvector.h>
+#include <ccollections/cvector.h>
 
 cvec_construct(vec_name, type);
 .fi
 .SH DESCRIPTION
 .nf
-Type-safe macro for creating a vector. Automatically determines element
-size from the type and creates a type marker variable that lets the
-other type-dispatching macros know the declared element type at each
+This type-inferred macro creates a vector. It finds the element size from the
+type automatically. It also makes a type marker variable. That variable
+tells the other type-dispatching macros the declared element type at each
 call site.
 .fi
 .SH PARAMETERS
 .nf
 vec_name  Name of the vector variable to create
-type      Element type (e.g., int, double, struct foo)
+type      Element type, for example int, double or struct foo
+          Any type name is accepted, including a function
+          pointer type such as void (*)(int) and an array
+          type such as int[4]. For an array element type,
+          give cvec_push(3) an array or a string literal.
+          The macro copies its bytes into the element
 .fi
 .SH NOTES
 .nf
-Terminates program on allocation failure
-Creates a hidden type marker variable that the other type-dispatching
-macros read; cvec_redeclare(3) recreates it in another scope
-Equivalent to cvector_create(sizeof(type), &err) with error handling
+The macro stops the program when an allocation fails.
+The macro makes a hidden type marker variable. The other type-dispatching
+macros read that variable. cvec_redeclare(3) makes it again in another
+scope.
+The macro is equal to cvector_create(sizeof(type), &err) with error
+handling.
 .fi
 .SH EXAMPLES
 .nf
 cvec_construct(my_vec, int);
-cvec_push_rvalue(my_vec, 42);
+cvec_push(my_vec, 42);
+cvec_destroy(my_vec);
 .fi
 .SH "SEE ALSO"
 .BR cvec_construct_scoped (3),

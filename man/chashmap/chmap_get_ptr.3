@@ -1,19 +1,24 @@
 .TH CHMAP_GET_PTR 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-chmap_get_ptr \- get pointer to value by key (type-safe)
+chmap_get_ptr \- get pointer to value by key (type-inferred)
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chashmap.h>
+#include <ccollections/chashmap.h>
 
 value_ptr = chmap_get_ptr(hm_name, key);
 .fi
 .SH DESCRIPTION
 .nf
-Type-safe wrapper for chmap_get_elem_ref() that returns a pointer to the
-value, or NULL if key not found. Unlike chmap_get(), does not terminate
-on key_not_found.
+Type-inferred wrapper for chmap_get_elem_ref(). It returns a pointer to the
+value. It returns NULL when the map does not hold the key. It does not
+stop the program for a key that is not there. chmap_get() does stop.
+
+The lookup key goes through the DECLARED key type of the map, in the
+same way as in chmap_insert(3). A key that the map stored through that
+conversion is only ever found again by a lookup that makes the same
+one. A literal and a computed expression are both accepted.
 .fi
 .SH PARAMETERS
 .nf
@@ -27,13 +32,26 @@ Returns NULL if key not found
 .fi
 .SH NOTES
 .nf
-Returns NULL if key not found (does not terminate)
-Terminates program if value size doesn't match type size
-Returns pointer to value for in-place modification
-Pointer is correctly aligned for the value's type regardless of which
-internal backend the map uses
-Pointer invalidated by later insert/delete/resize operations
-For strings, returns pointer to the char* itself
+Returns NULL when the map does not hold the key (it does not stop the
+program)
+Returns NULL when key is a NULL character pointer, which is not a
+string
+Stops the program when the size of the value does not match the size
+of the type
+Returns a pointer to the value, so that the caller can change the
+value in place
+The pointer is correctly aligned for the type of the value. This is
+true for both internal backends
+A later insert, delete or resize invalidates the pointer
+For a char* value type, the target of the pointer is const
+(char *const *). The caller can read the stored string. The caller can
+also edit its bytes in place, inside the stored length. But a
+replacement of the pointer itself is a compile error. The map owns the
+string bytes and keeps its own accessor in step with them. A
+replacement of the pointer therefore leaves the length of the accessor
+describing the earlier string. Call chmap_insert(3) to replace a string
+value. It frees the old bytes and copies the new ones into storage that
+the map owns
 For a float or double key, see chmap_construct(3) for the map's
 key equality contract (bitwise, except -0.0 canonicalized to 0.0)
 For a long double key, see chmap_construct(3) for the map's key
@@ -48,8 +66,20 @@ int* ptr = chmap_get_ptr(map, key);
 if (ptr) {
   *ptr = 200; // Modify in-place
 }
+
+chmap_construct(names, int, char *);
+chmap_insert(names, key, "hello");
+char *const *sptr = chmap_get_ptr(names, key);
+if (sptr) {
+  printf("%s\en", *sptr);  // Read the stored string
+  (*sptr)[0] = 'j';         // Edit its bytes in place: "jello"
+  chmap_insert(names, key, "a longer replacement");  // Replace it
+}
+chmap_destroy(map);
+chmap_destroy(names);
 .fi
 .SH "SEE ALSO"
 .BR chmap_get (3),
 .BR chmap_get_elem_ref (3),
+.BR chmap_insert (3),
 .BR chmap_construct (3)

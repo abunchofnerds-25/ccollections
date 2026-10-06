@@ -5,16 +5,15 @@ clog_set_level \- change the minimum log level at runtime
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <clogger.h>
+#include <ccollections/clogger.h>
 
 void clog_set_level(clog logger, clog_level_t level);
 .fi
 .SH DESCRIPTION
 .nf
-Updates the minimum severity level. Messages with a level strictly
-below the new minimum are silently discarded on subsequent calls.
-The change takes effect immediately and is visible to all threads
-sharing the logger.
+Updates the minimum severity level.  A later call that carries a level
+strictly below the new minimum is silently discarded.  The change takes
+effect at once.  Every thread that shares the logger sees it.
 .fi
 .SH PARAMETERS
 .nf
@@ -26,12 +25,16 @@ level   New minimum level (CLOG_TRACE through CLOG_OFF).
 .nf
 CLOG_FATAL bypasses this filter entirely and is always written,
 whatever the current minimum level is.
-Thread-safe: the minimum level is a per-logger, atomically updated
-value, independent of the lock that serialises writes/rotation for
-the shared output target, so changing one logger's level never
-contends with a write in progress on a sibling logger sharing the
-same target.
-Asserts if logger is CLOG_INVALID, stale, or already closed.
+A log call on a different thread can run at the same time as this
+call.  The minimum that applies to that log call can be the old one or
+the new one.  On an async logger, the logger writes a record that is in
+the queue when the change takes effect.
+Thread-safe.  The minimum level is an atomic value that belongs to each
+logger.  It is separate from the lock that serialises the writes and
+the rotation for the shared output target.  A change to the level of
+one logger therefore never contends with a write in progress on a
+sibling logger that shares the same target.
+Asserts when logger is CLOG_INVALID, stale or already closed.
 .fi
 .SH "SEE ALSO"
 .BR clog_get_level (3),

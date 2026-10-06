@@ -5,33 +5,34 @@ ccol_create_chttpclient_mp \- create an HTTP client with a custom allocator
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpclient.h>
+#include <ccollections/chttpclient.h>
 
 chttpcli ccol_create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs,
                                char **err_str);
 .fi
 .SH DESCRIPTION
 .nf
-Allocates and initialises a new HTTP client.  The connection pool is
-NOT created at this point; it is lazily initialised on the first
-request.
+This function allocates and initializes a new HTTP client. It does NOT
+create the connection pool at this point. The library initializes that
+pool on the first request.
 
-Default configuration after creation:
-  pool_size              = CPU count (resolved on first request)
-  connect_timeout_ms     = 0 (no timeout)
-  request_timeout_ms     = 0 (no timeout)
-  max_response_body_size = 0 (no limit)
-  TLS                    = peer and host verification enabled,
+The default configuration after the creation is:
+  pool size              = the CPU count (resolved on the first
+                           request)
+  connect timeout        = 0 (no timeout)
+  request timeout        = 0 (no timeout)
+  max response body size = 0 (no limit)
+  TLS                    = peer and host verification on,
                            system CA
 .fi
 .SH PARAMETERS
 .nf
-mprocs    Custom allocator, or NULL for malloc/free.
-err_str   Optional; receives a static error string on failure.
+mprocs    A custom allocator, or NULL for malloc/free.
+err_str   Optional. It gets a static error string if the call fails.
 .fi
 .SH RETURN VALUE
 .nf
-New client handle, or CHTTPCLI_INVALID on failure.
+A new client handle, or CHTTPCLI_INVALID if the call fails.
 .fi
 .SH "SEE ALSO"
 .BR ccol_create_chttpclient (3),

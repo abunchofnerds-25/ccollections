@@ -5,36 +5,37 @@ ccol_iter_key_ptr \- get a typed const pointer to the current key
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <citerators.h>   /* or any container header */
+#include <ccollections/citerators.h>   /* or any container header */
 
 const KeyT *ccol_iter_key_ptr(it);
 .fi
 .SH DESCRIPTION
 .nf
-Returns a typed const pointer to the key of the element currently
-pointed to by it.
+This macro gives a typed const pointer to the key of the element that it
+points at now.
 
-For cvec iterators the key is the element index (size_t).
-For chmap and cbmap iterators the key is the actual map key.
-Char-pointer keys are returned as (const char **) pointing into the
-map's internal storage; all other key types are returned as a direct
+For a cvec iterator, the key is the index of the element, a size_t.
+For a chmap iterator and a cbmap iterator, the key is the real map key.
+For a char-pointer key, the macro gives a (char *const *). That pointer
+points into the internal storage of the map. The map owns the string
+that the key points to. The macro gives all other key types as a direct
 typed pointer.
 .fi
 .SH PARAMETERS
 .nf
-it   Iterator variable declared with ccol_iter_declare() or inside
-     ccol_for_each().
+it   Iterator variable that ccol_iter_declare() declares, or an iterator
+     inside ccol_for_each().
 .fi
 .SH RETURN VALUE
 .nf
-const KeyT* to the current key.  Do not free or mutate the pointed-to
-value through this pointer.
+const KeyT* to the current key. Do not free the value through this
+pointer, and do not change the value through it.
 .fi
 .SH NOTES
 .nf
-The returned pointer is valid only while the iterator is alive and
-the container has not been modified.
-Uses a GNU C statement expression; requires GCC or Clang.
+The pointer stays valid only while the iterator is alive and the
+container stays unchanged.
+This macro uses a GNU C statement expression. It needs GCC or Clang.
 .fi
 .SH "SEE ALSO"
 .BR ccol_iter_val_ptr (3),

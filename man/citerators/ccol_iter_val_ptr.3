@@ -1,34 +1,45 @@
-.TH CCOL_ITER_VAL_PTR 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH CCOL_ITER_VAL_PTR 3 "2026-09-21" "c_collections" "C Collections Library - Macros"
 .SH NAME
 ccol_iter_val_ptr \- get a typed pointer to the current value
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <citerators.h>   /* or any container header */
+#include <ccollections/citerators.h>   /* or any container header */
 
-ValT *ccol_iter_val_ptr(it);
+ValT *ccol_iter_val_ptr(it);            /* ValT const * for a char pointer */
 .fi
 .SH DESCRIPTION
 .nf
-Returns a typed pointer to the value of the element currently pointed
-to by it.  Mutations through this pointer are reflected in the
-underlying container.
+This macro gives a typed pointer to the value of the element that it points
+at now. A change through this pointer also changes the container below it.
+
+For a value type that is a character pointer, the target carries a const
+qualifier. The caller therefore reads the stored string, and edits its
+bytes in place inside the stored length. The caller does not replace the
+string. A map can name only one such object: its own accessor slot. The
+companion size field of that slot describes the string that the slot points
+at now. A stored pointer that the map did not allocate and did not size
+leaves that size for a different string. The next read of the element then
+runs past the end of the new string. Use the insert operation of the owning
+container to store a different string. Every other value type names the
+element itself, and the caller can write through it.
 .fi
 .SH PARAMETERS
 .nf
-it   Iterator variable declared with ccol_iter_declare() or inside
-     ccol_for_each().
+it   Iterator variable that ccol_iter_declare() declares, or an iterator
+     inside ccol_for_each().
 .fi
 .SH RETURN VALUE
 .nf
-ValT* to the current element.
+ValT* to the current element. The macro gives ValT const* when ValT is a
+character pointer.
 .fi
 .SH NOTES
 .nf
-The returned pointer is valid only while the iterator is alive and
-the container has not been modified.
-Uses a GNU C statement expression; requires GCC or Clang.
+The pointer stays valid only while the iterator is alive and the
+container stays unchanged.
+This macro uses a GNU C statement expression. It needs GCC or Clang.
 .fi
 .SH "SEE ALSO"
 .BR ccol_iter_key_ptr (3),

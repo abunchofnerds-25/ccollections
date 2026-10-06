@@ -39,17 +39,18 @@ TAU_MAIN()
 /* ========================================================================== */
 /*     chttpsvr_set_engine_mem_mgmt_procs COVERAGE (dedicated binary)         */
 /*                                                                            */
-/* chttpsvr_set_engine_mem_mgmt_procs() may only be called before the first  */
-/* chttpsvr_start() in the process; a process-wide, set-once-ever            */
-/* requirement, matching the shared reactor it configures. The rest of the   */
-/* chttpserver test suite (tests.c, sharing this same directory)             */
-/* already calls chttpsvr_start() during its own shared _setup(), so testing */
-/* the "install procs, then start" happy path there is impossible. This      */
-/* file is therefore compiled into its own binary, tests_mem_mgmt, separate  */
-/* from tests.c's tests binary (see the Makefile in this same directory;     */
-/* same reasoning as tests_tls.c) so it can install counting procs and       */
-/* start the shared engine exactly once, before anything else in the        */
-/* process has a chance to.                                                  */
+/* You may call chttpsvr_set_engine_mem_mgmt_procs() only before the first  */
+/* chttpsvr_start() in the process. That requirement covers the whole       */
+/* process, and you may set it only one time ever. It matches the shared    */
+/* reactor that the call configures. The rest of the chttpserver test suite */
+/* lives in tests.c, in this same directory. That file already calls        */
+/* chttpsvr_start() during its own shared _setup(). A test of the happy     */
+/* path, where you install the procs and then start, is therefore           */
+/* impossible there. The build compiles this file into a binary of its own, */
+/* tests_mem_mgmt, separate from the tests binary of tests.c. See the       */
+/* Makefile in this same directory. tests_tls.c has the same reasoning.     */
+/* This file can therefore install counting procs and start the shared      */
+/* engine exactly one time, before anything else in the process can.        */
 /* ========================================================================== */
 
 #define TEST_PORT 18795
@@ -63,10 +64,11 @@ static size_t g_mm_free_count = 0;
 static size_t g_mm_calloc_count = 0;
 static size_t g_mm_realloc_count = 0;
 
-/* Counting wrappers around libc: prove that the shared reactor's internal
- * allocations are actually routed through the configured procs, without
- * changing allocator behavior (so the engine keeps working normally while we
- * count). */
+/* These are counting wrappers around the C library. They prove that the
+ * library really routes the internal allocations of the shared reactor
+ * through the procs that this file configures. They do not change how the
+ * allocator behaves, so the engine keeps working normally while the count
+ * runs. */
 static void *_counting_malloc(size_t size) {
   __atomic_fetch_add(&g_mm_malloc_count, 1, __ATOMIC_RELAXED);
   return malloc(size);
@@ -96,14 +98,14 @@ static void _teardown(void) {
     __chttpsvr_destroy(g_srv);
     g_srv = CHTTPSVR_INVALID;
   }
-  /* __chttpsvr_destroy releases this server's shared-engine reference but
-   * hands teardown of the shared ccol_event_loop reactor off to a joinable
-   * reaper thread rather than joining it inline; chttpsvr_engine_wait()
-   * blocks until that reaper thread has actually joined, which is required
-   * here so no reactor thread is still running when this atexit handler
-   * returns (otherwise valgrind's leak check can race process exit against
-   * the reactor's own teardown). tests_tls.c in this same directory relies
-   * on the same reasoning. */
+  /* __chttpsvr_destroy releases the shared-engine reference of this server.
+   * But it gives the teardown of the shared ccol_event_loop reactor to a
+   * joinable reaper thread, and it does not join that thread inline.
+   * chttpsvr_engine_wait() blocks until something joins that reaper thread.
+   * This file needs that, so that no reactor thread still runs when this
+   * atexit handler returns. Without it, the leak check of valgrind can race
+   * the exit of the process against the teardown of the reactor.
+   * tests_tls.c in this same directory relies on the same reasoning. */
   chttpsvr_engine_wait();
   if (g_test_logger) {
     clog_close(g_test_logger);
@@ -152,10 +154,10 @@ __attribute__((constructor)) static void _setup(void) {
     exit(1);
   }
 
-  /* Drive one real request through the engine so its internal allocations
-   * (the ccol_event_loop registration table, per-connection dispatch state,
-   * and so on) actually happen before any TEST() body inspects the
-   * counters. */
+  /* Drive one real request through the engine. Its internal allocations
+   * then really happen before any TEST() body reads the counters. Those
+   * allocations cover the registration table of the ccol_event_loop, the
+   * dispatch state of each connection, and more. */
   chttpcli cli = ccol_create_chttpclient(NULL);
   if (cli) {
     chttp_request_t *req =
@@ -169,10 +171,11 @@ __attribute__((constructor)) static void _setup(void) {
     chttpclient_destroy(cli);
   }
 
-  /* Registered after chttpsvr_start purely as a defensive habit; nothing in
-     this codebase registers its own atexit handler that this one would need
-     to run before or after, but there is no reason to disturb working
-     setup/teardown symmetry with the rest of this codebase's test suites. */
+  /* This code registers the handler after chttpsvr_start, purely as a
+     defensive habit. Nothing in this codebase registers an atexit handler
+     of its own that this one would have to run before or after. But there
+     is no reason to break the symmetry of setup and teardown that works
+     across the other test suites of this codebase. */
   atexit(_teardown);
 }
 
@@ -181,41 +184,46 @@ __attribute__((constructor)) static void _setup(void) {
 /* ========================================================================== */
 
 TEST(chttpserver_mem_mgmt, procs_wired_into_engine_allocations) {
-  /* _setup() installs counting procs before the first chttpsvr_start() and
-   * then drives a real request through the running engine. The shared
-   * ccol_event_loop reactor's own internal allocations (the registry chmaps,
-   * the per-connection dispatch state, and so on) are routed through the
-   * configured procs, so malloc/calloc/free must all be nonzero by the time
-   * this test body runs.
+  /* _setup() installs counting procs before the first chttpsvr_start(). It
+   * then drives a real request through the engine while it runs. The
+   * library routes the internal allocations of the shared ccol_event_loop
+   * reactor through the procs that this file configured. Those allocations
+   * cover the chmaps of the registry, the dispatch state of each
+   * connection, and more. The counts for malloc, calloc and free must
+   * therefore all be above zero by the time that this test body runs.
    *
-   * realloc is deliberately not asserted on here: ccol_event_loop has no
-   * _ccol_mem_realloc call site at all. Its own fd registry chooses open
-   * addressing (both key and value types are integral; see chashmap.c's
-   * should_use_open_addressing), and open addressing's own growth path
-   * (oa_rehash) allocates a fresh, larger slot array via calloc and frees
-   * the old one, rather than reallocating in place. mp->realloc is still a
-   * hard requirement (see null_function_pointer_rejected below) for
-   * interface completeness and in case a future change introduces a genuine
-   * realloc call site, but there is no way to *exercise* it through this
-   * engine's own allocations, so there is deliberately no dedicated
-   * procs_wired_into_engine_reallocations test: one could only be built
-   * around an artificial trigger. */
+   * This code deliberately asserts nothing about realloc. ccol_event_loop
+   * has no _ccol_mem_realloc call site at all. Its own fd registry chooses
+   * open addressing, because both the key type and the value type are
+   * integral; see should_use_open_addressing in chashmap.c. The growth path
+   * of open addressing is oa_rehash. It allocates a fresh, larger slot
+   * array with calloc and frees the old one. It does not reallocate in
+   * place. mp->realloc is still a hard requirement; see
+   * null_function_pointer_rejected below. It keeps the interface complete,
+   * and it covers a future change that adds a real realloc call site. But
+   * there is no way to drive it through the allocations of this engine.
+   * There is therefore deliberately no
+   * procs_wired_into_engine_reallocations test. Such a test could only be
+   * built around an artificial trigger. */
   REQUIRE_GT(__atomic_load_n(&g_mm_malloc_count, __ATOMIC_RELAXED) +
                  __atomic_load_n(&g_mm_calloc_count, __ATOMIC_RELAXED),
              (size_t)0);
 
-  /* g_mm_free_count's own source is the server noticing _setup()'s client
-   * connection has gone away (chttpclient_destroy closes it) and freeing its
-   * own chttpsvr_conn_t in response; an event the server's reactor must
-   * still observe and dispatch asynchronously, not something guaranteed to
-   * have already happened the instant _setup()'s constructor returns.
-   * Bounded retry rather than an immediate single check: the dispatch goes
-   * through cthreadcomm's poller-to-ctpool-worker handoff, whose small but
-   * real latency makes a bare immediate assertion here measurably flaky.
-   * 150 x 20ms = 3s total, matching the headroom this codebase's other
-   * dispatch-latency-sensitive waits use (e.g. chttpclient's
-   * async_expect_continue bounds) to stay reliable under make memtest or a
-   * loaded CI runner, not just a native run. */
+  /* g_mm_free_count comes from one source. The server notices that the
+   * client connection of _setup() went away, because chttpclient_destroy
+   * closes it. The server then frees its own chttpsvr_conn_t. The reactor
+   * of the server must still observe that event and dispatch it
+   * asynchronously. Nothing guarantees that it already happened the instant
+   * that the constructor of _setup() returns. This code therefore retries
+   * with a bound, and does not make one immediate check. The dispatch goes
+   * through the hand-off from the poller of cthreadcomm to a ctpool worker.
+   * The latency of that hand-off is small but real, and it makes a bare
+   * immediate assertion here measurably flaky. 150 attempts of 20ms give 3s
+   * in total. That matches the headroom that the other waits of this
+   * codebase use where dispatch latency matters. The bounds of
+   * async_expect_continue in chttpclient are one example. It stays reliable
+   * under make memtest, and on a loaded CI runner, and not only on a native
+   * run. */
   for (int attempt = 0;
        __atomic_load_n(&g_mm_free_count, __ATOMIC_RELAXED) == 0 &&
        attempt < 150;
@@ -229,17 +237,18 @@ extern size_t _chttpsvr_engine_num_reactor_threads_for_tests(void);
 
 TEST(chttpserver_mem_mgmt,
      num_reactor_threads_defaults_to_one_when_unconfigured) {
-  /* _setup() never called chttpsvr_set_engine_num_reactor_threads before
-   * starting g_srv, so the reactor must have used the default of 1 (a
-   * single dedicated thread, not an auto-detected CPU count), matching
-   * chttpsvr_set_engine_num_reactor_threads's own documented, benchmarked
-   * default. */
+  /* _setup() never called chttpsvr_set_engine_num_reactor_threads before it
+   * started g_srv. The reactor must therefore have used the default of 1.
+   * That is a single dedicated thread, and not a CPU count that the library
+   * detects. It matches the documented default of
+   * chttpsvr_set_engine_num_reactor_threads, which a benchmark chose. */
   REQUIRE_EQ(_chttpsvr_engine_num_reactor_threads_for_tests(), (size_t)1);
 }
 
 TEST(chttpserver_mem_mgmt, null_function_pointer_rejected) {
-  /* One missing function pointer must be rejected regardless of engine
-   * state; validated unconditionally before the "already running" check. */
+  /* The library must reject one missing function pointer, whatever the
+   * state of the engine is. It validates the pointers unconditionally,
+   * before the "the engine already runs" check. */
   ccol_memmgmt_procs_t bad_procs = {
       .malloc = _counting_malloc,
       .free = NULL,
@@ -250,10 +259,10 @@ TEST(chttpserver_mem_mgmt, null_function_pointer_rejected) {
 }
 
 TEST(chttpserver_mem_mgmt, rejected_after_engine_already_running) {
-  /* _setup() already started the shared engine, so a second, fully valid
-   * call must be rejected: swapping allocators after memory has already been
-   * allocated with the previous set would produce mismatched malloc/free
-   * pairs. */
+  /* _setup() already started the shared engine. A second call must
+   * therefore be rejected, even one that is fully valid. To swap the
+   * allocators after the library already allocated memory with the previous
+   * set would produce malloc and free pairs that do not match. */
   ccol_memmgmt_procs_t procs = {
       .malloc = _counting_malloc,
       .free = _counting_free,
@@ -264,46 +273,51 @@ TEST(chttpserver_mem_mgmt, rejected_after_engine_already_running) {
 }
 
 TEST(chttpserver_mem_mgmt, null_procs_reverts_rejected_while_running) {
-  /* NULL (revert-to-default) is also subject to the "not while running"
-   * rule; it is still a live allocator swap. */
+  /* A NULL value reverts to the default. The "not while the engine runs"
+   * rule covers it too, because it is still a live swap of the
+   * allocator. */
   REQUIRE_EQ(chttpsvr_set_engine_mem_mgmt_procs(NULL), ccol_not_permitted);
 }
 
 TEST(chttpserver_mem_mgmt, num_reactor_threads_rejected_while_running) {
-  /* Same "baked into the reactor at construction time" restriction as
-   * chttpsvr_set_engine_mem_mgmt_procs above, including the 0
-   * (revert-to-default) sentinel. */
+  /* This has the same restriction as chttpsvr_set_engine_mem_mgmt_procs
+   * above. The library bakes the value into the reactor when it builds it.
+   * That restriction covers the 0 sentinel too, which reverts to the
+   * default. */
   REQUIRE_EQ(chttpsvr_set_engine_num_reactor_threads(2), ccol_not_permitted);
   REQUIRE_EQ(chttpsvr_set_engine_num_reactor_threads(0), ccol_not_permitted);
 }
 
 TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
-  /* chttpsvr_set_engine_mem_mgmt_procs's own doc comment states it "may be
-   * called again after the engine has fully stopped (chttpsvr_engine_wait()
-   * has returned), before the next chttpsvr_start()", and this is the only
-   * test in the file covering that path; every other one covers just
-   * install-before-start (implicitly, via _setup()) and reject-while-running.
-   * This test is non-vacuous: making the "engine already running" check
-   * sticky (e.g. a latch never cleared on stop) fails here and nowhere else
-   * in this file.
+  /* The doc comment of chttpsvr_set_engine_mem_mgmt_procs says that you
+   * "may call it again after the engine fully stops, which is after
+   * chttpsvr_engine_wait() returns, and before the next chttpsvr_start()".
+   * This is the only test in this file that covers that path. Every other
+   * one covers only an install before a start, which _setup() does
+   * implicitly, and a rejection while the engine runs. This test is not
+   * vacuous. Make the "the engine already runs" check sticky, for example
+   * with a latch that nothing clears on a stop, and this test fails, and no
+   * other test in this file does.
    *
-   * This must be the last test in the file: it fully tears down g_srv (the
-   * only thing keeping the shared engine's refcount above zero in this
-   * process) and blocks until the shared engine has genuinely stopped, then
-   * reinstalls procs and starts a fresh server on the same port; every test
-   * declared after this one would otherwise run with no server listening.
-   * g_srv is repointed at the new server so _teardown() still cleans up
-   * normally at process exit. */
+   * This must be the last test in this file. It tears g_srv down in full.
+   * g_srv is the only thing that keeps the refcount of the shared engine
+   * above zero in this process. The test then blocks until the shared
+   * engine truly stops. It installs the procs again and starts a fresh
+   * server on the same port. Every test that this file declares after this
+   * one would otherwise run with no server that listens. The test repoints
+   * g_srv at the new server, so that _teardown() still cleans up normally
+   * at the exit of the process. */
   chttpsvr_stop(g_srv);
   __chttpsvr_destroy(g_srv);
   g_srv = CHTTPSVR_INVALID;
   chttpsvr_engine_wait();
 
-  /* Reinstalled procs must genuinely be exercised, not merely accepted, by
-   * the next engine start below; snapshot the counters first so the check
-   * after the restart can require real forward progress rather than just
-   * "still nonzero from before" (which would pass even if the reinstall
-   * silently did nothing). */
+  /* The engine start below must really use the procs that this test
+   * installs again. It is not enough that it accepts them. This code
+   * therefore takes a snapshot of the counters first. The check after the
+   * restart can then require real forward progress. Without the snapshot,
+   * that check only says "the counters are still above zero from before",
+   * and it passes even when the reinstall silently did nothing. */
   size_t malloc_calloc_before =
       __atomic_load_n(&g_mm_malloc_count, __ATOMIC_RELAXED) +
       __atomic_load_n(&g_mm_calloc_count, __ATOMIC_RELAXED);
@@ -316,23 +330,25 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
   };
   REQUIRE_EQ(chttpsvr_set_engine_mem_mgmt_procs(&procs), ccol_success);
 
-  /* Exercise chttpsvr_set_engine_num_reactor_threads's own "after a full
-   * stop, before the next chttpsvr_start" reinstall path in the same
-   * restart cycle, since this is the only one this file performs; a
-   * dedicated explicit value must be the exact one wired into the freshly
-   * (re)created reactor below, not merely accepted and then silently
-   * ignored. */
+  /* This drives the reinstall path of
+   * chttpsvr_set_engine_num_reactor_threads too, in the same restart cycle.
+   * That path runs after a full stop and before the next chttpsvr_start.
+   * This is the only restart cycle that this file makes. An explicit value
+   * must be the exact value that the library wires into the reactor that it
+   * creates again below. It is not enough that the library accepts that
+   * value and then ignores it silently. */
   REQUIRE_EQ(chttpsvr_set_engine_num_reactor_threads(3), ccol_success);
 
   char *err = NULL;
-  /* _ccol_destructor: a safety net for a REQUIRE_* failure between here and
-     the ownership transfer to g_srv below. Tau's REQUIRE_* returns from this
-     function immediately on failure, which without this destructor leaks
-     this server's own shared-engine reference and hangs
-     chttpsvr_engine_wait() in this file's own _teardown() at process exit.
-     Neutralized (set to CHTTPSVR_INVALID) immediately after ownership is
-     actually handed to g_srv, so it never double-destroys the handle g_srv
-     then owns. */
+  /* _ccol_destructor is a safety net for a REQUIRE_* failure between here
+     and the transfer of ownership to g_srv below. A REQUIRE_* of Tau
+     returns from this function at once on a failure. Without this
+     destructor, that return leaks the shared-engine reference of this
+     server. It then hangs the chttpsvr_engine_wait() call in the
+     _teardown() of this file at the exit of the process. This code sets the
+     variable to CHTTPSVR_INVALID right after it hands ownership to g_srv.
+     The destructor therefore never destroys the handle that g_srv then owns
+     a second time. */
   chttpsvr new_srv _ccol_destructor(___chttpsvr_destroy) =
       ccol_create_chttpsvr(g_test_logger, &err);
   REQUIRE_TRUE(new_srv != CHTTPSVR_INVALID);
@@ -347,13 +363,13 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
   g_srv = new_srv;
   new_srv = CHTTPSVR_INVALID; /* ownership transferred to g_srv; see above */
 
-  /* The shared ccol_event_loop reactor is a plain static variable, fully
-   * destroyed (ccol_event_loop_destroy) when the last reference is released
-   * above and fully reconstructed from scratch
-   * (ccol_event_loop_create_with_mprocs) by chttpsvr_start below; there is
-   * no pool to recycle allocations from
-   * across a restart, so a fresh malloc/calloc call through the
-   * just-reinstalled procs is guaranteed, not merely likely. */
+  /* The shared ccol_event_loop reactor is a plain static variable.
+   * ccol_event_loop_destroy destroys it in full when the code above
+   * releases the last reference. chttpsvr_start below then builds it again
+   * from the start, with ccol_event_loop_create_with_mprocs. There is no
+   * pool that recycles an allocation across a restart. A fresh malloc or
+   * calloc call through the procs that this test just installed again is
+   * therefore guaranteed, and not merely likely. */
   REQUIRE_GT(__atomic_load_n(&g_mm_malloc_count, __ATOMIC_RELAXED) +
                  __atomic_load_n(&g_mm_calloc_count, __ATOMIC_RELAXED),
              malloc_calloc_before);
@@ -369,10 +385,11 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
   rv = chttpclient_do(cli, req, &resp);
   chttp_request_free(req);
 
-  /* Every check below on resp's own contents is captured into a local first
-     and resp is freed unconditionally right after, before any REQUIRE_*
-     that could otherwise return early and leak it (resp has no RAII
-     destructor of its own, unlike cli above). */
+  /* This code captures each check below on the contents of resp into a
+     local first. It then frees resp unconditionally, right after, and
+     before any REQUIRE_*. Such a REQUIRE_* could otherwise return early and
+     leak resp. resp has no scoped destructor of its own, unlike cli
+     above. */
   bool resp_present = resp != NULL;
   int status_code = resp_present ? resp->status_code : -1;
   bool body_present = resp_present && resp->body != NULL;

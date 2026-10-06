@@ -1,26 +1,29 @@
 .TH CHTTPCLIENT_ASYNC_RESULT_FREE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-chttpclient_async_result_free \- release a chttpcli_async_result_t
+chttpclient_async_result_free \- free a chttpcli_async_result_t
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpclient.h>
+#include <ccollections/chttpclient.h>
 
 void chttpclient_async_result_free(chttpcli_async_result_t *result);
 .fi
 .SH DESCRIPTION
 .nf
-Releases a chttpcli_async_result_t obtained via
-chttpclient_async_result_get.  Does NOT free result->resp; free
-that separately with chttpclient_resp_free first if
-result->rv == ccol_success.  Does NOT free the future itself; pair
-with exactly one ctpool_future_free, called separately (before or
-after this call, order does not matter).
+This function frees a chttpcli_async_result_t that
+chttpclient_async_result_get gave you. It does NOT free result->resp.
+Free that on its own first, with chttpclient_resp_free, if
+result->rv == ccol_success. This function does NOT free the future
+either. Pair it with exactly one ctpool_future_free. Call that
+function on its own, before or after this call. The order makes no
+difference. The result carries its own copy of the allocator of the
+client, so this call is valid before or after chttpclient_destroy of
+that client.
 .fi
 .SH PARAMETERS
 .nf
-result Result to free; NULL is a safe no-op.
+result The result to free. NULL is a safe no-op.
 .fi
 .SH RETURN VALUE
 .nf

@@ -1,63 +1,88 @@
-.TH CSORT_GET_DEFAULT_COMPARISON_PROC 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH CSORT_GET_DEFAULT_COMPARISON_PROC 3 "2026-09-21" "c_collections" "C Collections Library - Macros"
 .SH NAME
 csort_get_default_comparison_proc \- get default comparison for a type
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <csort.h>
+#include <ccollections/csort.h>
 
 ccol_comparison_proc_t csort_get_default_comparison_proc(dummy_var);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the default comparison function for a given type. Uses C11
-_Generic to select the appropriate comparison based on the type of the
-dummy variable.
+This macro gives the default comparison function for a given type. It uses
+C11 _Generic. The type of the dummy variable decides which comparison
+function the macro selects.
 
-Supports all standard C integral types (char, signed char, short, int,
-long, long long, unsigned variants) and floating-point types (float,
-double, long double), as well as strings (char*, const char*).
+The macro supports all the standard C integral types: char, signed char,
+short, int, long, long long and the unsigned variants. It supports the
+floating-point types float, double and long double. It also supports the
+string types char* and const char*, with any signed or unsigned character
+type. A pointer that is itself const or volatile, such as a
+static const char *const, is a string type too. The comparator for a string
+type puts a
+stored NULL before every string that is not NULL. That NULL is equal only to
+another NULL.
 
-A fixed-size char array (char[N]), as opposed to a char* pointer variable,
-is not a supported type and returns NULL, the same as any other
-unsupported type; such an array's own inline byte content is not a char*
-value, so csort_default_string_comparison_proc's pointer-dereferencing
-contract does not apply to it. Sort a collection of fixed-size string
-buffers with an explicit, hand-written comparator passed directly to
-cvector_sort_with_comparison_proc() / csort_sort() instead.
+The macro supports an enumerated type too. C makes every enumerated type
+compatible with one of the standard integer types. The macro gives the
+comparison function of that compatible type.
+
+A NULL result for an unsupported type is part of the contract of this macro.
+A caller with its own fallback depends on that result. For example, cvec_find
+compares such an element byte-wise. A caller with no fallback must refuse
+the type at compile time and not at run time. cvec_sort works in that way.
+
+A fixed-size char array (char[N]) is not a supported type. A char* pointer
+variable is a different thing. The macro gives NULL for such an array, as it
+does for every other unsupported type. The inline byte content of such an
+array is not a char* value. The contract of
+_csort_default_string_comparison_proc dereferences a pointer, so that
+contract does not hold for an array. Sort a collection of fixed-size string
+buffers with an explicit comparator that you write yourself. Give that
+comparator directly to cvector_sort_with_comparison_proc() or to
+csort_sort().
 .fi
 .SH PARAMETERS
 .nf
-dummy_var  A variable of the type you want to compare (not evaluated)
+dummy_var  A variable of the type that you want to compare. The macro does
+           not evaluate it.
 .fi
 .SH RETURN VALUE
 .nf
-Returns pointer to appropriate comparison function
-Returns NULL if type is not supported
+Gives a pointer to the correct comparison function
+Gives NULL when the macro does not support the type
 .fi
 .SH NOTES
 .nf
-Variable is only used for type deduction, not evaluated; dummy_var may be
-any expression of the type you want to compare, including an rvalue
-(a cast, a literal, ...), not only an addressable variable
-For a genuine char* / const char* pointer variable, returns
-csort_default_string_comparison_proc
-For a fixed-size char array (char[N]), returns NULL, not
-csort_default_string_comparison_proc
-For integral types, uses three-way comparison: (a > b) - (a < b)
-For floating-point types (float, double, long double), a NaN operand
-compares greater than every non-NaN value and equal only to another NaN,
-so the result is always a genuine total order
+The macro uses the variable only to find the type. It does not evaluate
+the variable. dummy_var can be any expression of the type that you want to
+compare. An rvalue such as a cast or a literal is therefore legal. The
+expression does not need an address.
+For a real char* or const char* pointer variable, the macro gives
+_csort_default_string_comparison_proc. That includes a pointer variable
+that is itself const or volatile
+For a fixed-size char array (char[N]), the macro gives NULL. It does not
+give _csort_default_string_comparison_proc.
+For an enumerated type, the macro gives the comparison function of the
+standard integer type that is compatible with that enumerated type
+For an integral type, the comparison is three-way: (a > b) - (a < b)
+For a floating-point type (float, double or long double), a NaN operand is
+greater than every value that is not NaN. It is equal only to another NaN.
+The result is therefore always a real total order.
+Every default comparator reads its two operands byte-wise. An operand
+address therefore needs neither the alignment nor the effective type of the
+element, which matters for a custom getter over a packed buffer.
 .fi
 .SH EXAMPLES
 .nf
-// Get comparator for strings
+// Get the comparator for a string
 char* dummy_str;
 ccol_comparison_proc_t cmp = csort_get_default_comparison_proc(dummy_str);
-// cmp now points to csort_default_string_comparison_proc
+// cmp now points to _csort_default_string_comparison_proc
 
-// Get comparator for doubles
+// Get the comparator for a double
 double dummy_double;
 cmp = csort_get_default_comparison_proc(dummy_double);
 .fi

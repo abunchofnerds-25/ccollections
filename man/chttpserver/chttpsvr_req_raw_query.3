@@ -5,15 +5,15 @@ chttpsvr_req_raw_query \- return the raw query string of a request
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 const char *chttpsvr_req_raw_query(const chttpsvr_req *req);
 .fi
 .SH DESCRIPTION
 .nf
-Returns a NUL-terminated string containing the raw (un-decoded) query
-string, without the leading '?'.  Returns NULL if no query string is
-present.
+Returns the raw query string, in the form in which it arrived, and
+without the '?' at its start.  That string ends with a NUL byte.  This
+function returns NULL when the request has no query string.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_req_query (3),

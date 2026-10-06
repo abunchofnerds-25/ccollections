@@ -1,25 +1,27 @@
 name: Coverage
 
-# Runs on every push to main, which is what a merged pull request produces,
-# and publishes the merged coverage report to GitHub Pages. Branch pushes and
-# pull requests deliberately do not trigger it: a full run rebuilds and
-# re-executes every module suite under gcov instrumentation, and only the
-# state of main is worth publishing.
+# This workflow runs on every push to main, which is what a merged pull
+# request makes. It then publishes the merged coverage report to GitHub Pages.
+# A push to another branch, and a pull request, do not start it, on purpose. A
+# full run builds and runs every module suite again with gcov instrumentation,
+# and only the state of main is worth publishing.
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-# The Pages deployment needs to mint an OIDC token (id-token) and write the
-# Pages artifact; nothing here needs write access to the repository contents.
+# The Pages deployment must make an OpenID Connect (OIDC) token, which is
+# id-token, and it must write the Pages artifact. Nothing here needs write
+# access to the contents of the repository.
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# Never let two deployments race for the single Pages environment. Unlike the
-# CI workflow, an in-flight run is allowed to finish: cancelling a half-done
-# deployment can leave the published site inconsistent.
+# Never let two deployments compete for the one Pages environment. A run that
+# has started is permitted to finish here, and the CI workflow does not permit
+# that. If you cancel a deployment that is half done, the published site can be
+# left in a state where its parts do not agree.
 concurrency:
   group: pages
   cancel-in-progress: false

@@ -1,31 +1,46 @@
-.TH CHTTPCLIENT_SET_REQUEST_TIMEOUT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CHTTPCLIENT_SET_REQUEST_TIMEOUT 3 "2026-10-01" "c_collections" "C Collections Library - Functions"
 .SH NAME
 chttpclient_set_request_timeout \- set the total request timeout
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpclient.h>
+#include <ccollections/chttpclient.h>
 
-ccol_retval_t chttpclient_set_request_timeout(chttpcli cli, long ms);
+ccol_retval_t chttpclient_set_request_timeout(chttpcli cli, uint64_t us);
 .fi
 .SH DESCRIPTION
 .nf
-Sets the maximum time from when chttpclient_do is called to when the
-last byte of the response body is received.  Pass 0 to disable.
+This function sets the maximum time from the call to chttpclient_do to
+the arrival of the last byte of the response body. Give 0 to turn the
+timeout off.
 
-When a request times out chttpclient_do returns ccol_timed_out.
+chttpclient_do gives ccol_timed_out when a request goes past that
+time.
+
+Every tier checks this deadline before each read of the response. Once
+it has passed, the request ends with ccol_timed_out, even when the rest
+of the response has already arrived and one more read would complete
+it. A response that the client finished reading before the deadline
+passed is a success. chttpclient_do, chttpclient_do_async and
+chttpclient_do_pooled, and their streaming forms, give the same result
+for the same timeline.
+
+Every value other than 0 is honoured as a limit, however far away it
+lies. A value too large for the clock to reach, such as UINT64_MAX,
+saturates to the latest deadline that the clock can hold, and never
+wraps into the past.
 .fi
 .SH PARAMETERS
 .nf
-cli   Client handle; must not be CHTTPCLI_INVALID.
-ms    Timeout in milliseconds.
+cli   The client handle. It must not be CHTTPCLI_INVALID.
+us    The timeout in microseconds. 0 means no timeout.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success      Timeout updated.
-ccol_invalid_args cli is CHTTPCLI_INVALID, or a stale/already-
-                  destroyed handle.
+ccol_success      The client has the new timeout.
+ccol_invalid_args cli is CHTTPCLI_INVALID, or a stale handle of a
+                  client that is already destroyed.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_set_connect_timeout (3),

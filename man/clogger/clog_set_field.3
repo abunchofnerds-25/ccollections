@@ -5,55 +5,59 @@ clog_set_field \- attach or update a persistent structured field
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <clogger.h>
+#include <ccollections/clogger.h>
 
 void clog_set_field(clog logger, const char *key, const char *value);
 .fi
 .SH DESCRIPTION
 .nf
-Associates key with value as a persistent field. The field appears in
-every subsequent log line emitted by this logger, inserted between the
+Attaches key with value as a persistent field.  The field then appears
+in every later log line that this logger writes.  It sits between the
 func= and msg= tokens:
 
   ts=... level=INFO proc=prog(pid):tname(tid) src=... func=... key=value msg=...
 
-Both key and value are copied internally; the caller may free or
-modify them after this call without affecting the logger.
+The library copies both key and value internally.  The caller can free
+them or change them after this call, and the logger does not notice.
 
-If key already exists its value is replaced. Otherwise a new field is
-added to the field set.
+A key that already exists gets the new value.  Otherwise the field set
+takes a new field.
 
-A key must consist entirely of printable US-ASCII characters
-(0x21-0x7e) excluding '=', ']', '"', and '\e\e'; a key that is empty,
-contains any of those excluded characters, contains whitespace or an
-ASCII control character, or contains any non-ASCII byte is silently
-ignored. So is a key that names one of the fixed tokens every log
-line already carries: ts, level, proc, src, func, msg, bt, bt_error.
-Allowing one of those through would produce a duplicate key= token in
-logfmt, a duplicate JSON key, or a duplicate RFC 5424 SD-PARAM-NAME
-within the same SD-ELEMENT.
+Every character of a key must be a printable US-ASCII character
+(0x21-0x7e).  The characters '=', ']', '"' and '\e\e' are not allowed.
+The library silently ignores a key that is empty.  It also ignores a
+key that holds one of those forbidden characters, whitespace, an ASCII
+control character, or any byte that is not ASCII.  Every log line
+already carries a set of fixed tokens.  They are ts, level, proc, src,
+func, msg, bt and bt_error.  The library ignores a key that names one
+of them too.  Such a key would make a duplicate key= token in logfmt,
+a duplicate JSON key, or a duplicate RFC 5424 SD-PARAM-NAME inside one
+SD-ELEMENT.
 
-Values that contain spaces, '=', '"', '\e\e', or ASCII control
-characters are automatically double-quoted and backslash-escaped in
-the output:
+A value can hold a space, an '=', a '"', a '\e\e' or an ASCII control
+character.  The library then double-quotes that value in the output,
+and it escapes those characters with a backslash:
   - '"' -> \e"
   - '\e\e' -> \e\e
   - control chars -> \en, \er, \et, or \exNN
 
-The exact escape syntax differs by output format (see
-clog_set_format(3)): JSON uses \euNNNN Unicode escapes, and RFC 5424
-syslog escapes '"', '\e\e', and ']' in addition to control characters.
-When the output format is CLOG_FMT_JSON, a value that is not
-well-formed UTF-8 has each invalid byte replaced with the Unicode
-replacement character (U+FFFD) rather than being embedded raw, since
-JSON text must be valid Unicode.
-An RFC 5424 SD-PARAM-NAME longer than 32 characters is shortened to
-its first 23 characters followed by '~' and an 8-hex-digit hash of the
-full key, rather than a bare 32-character prefix, so two distinct long
-keys sharing a common prefix still get distinct SD-PARAM-NAMEs.
-In every format, control characters (including a literal newline or
-carriage return) are always neutralized, so a field value can never
-split a single record across multiple lines.
+The exact syntax of an escape differs by output format.  See
+clog_set_format(3).  JSON uses \euNNNN Unicode escapes.  RFC 5424
+syslog escapes a '"', a '\e\e' and a ']', as well as a control
+character.
+When the output format is CLOG_FMT_JSON or CLOG_FMT_SYSLOG, a value can
+hold text that is not well-formed UTF-8.  The library replaces each
+invalid byte with the Unicode replacement character (U+FFFD), and it
+does not embed the byte raw.  JSON text must be valid Unicode, and RFC
+5424 requires an SD-PARAM-VALUE to be UTF-8.
+An RFC 5424 SD-PARAM-NAME longer than 32 characters becomes its first
+23 characters, then a '~', and then a hash of the full key in 8 hex
+digits.  A bare prefix of 32 characters would not do.  Two different
+long keys that share a prefix therefore still get different
+SD-PARAM-NAMEs.
+In every format, the library always neutralizes a control character.
+That covers a literal newline and a carriage return.  A field value can
+therefore never split one record across several lines.
 .fi
 .SH PARAMETERS
 .nf
@@ -67,7 +71,7 @@ value   Field value. Copied internally. May be arbitrary text.
 Thread-safe: protected by the per-logger mutex.
 Every emitted line visits each attached field once; keep the field
 count small if logging is a hot path.
-Asserts if logger is CLOG_INVALID, stale, or already closed.
+Asserts when logger is CLOG_INVALID, stale or already closed.
 .fi
 .SH "SEE ALSO"
 .BR clog_remove_field (3),

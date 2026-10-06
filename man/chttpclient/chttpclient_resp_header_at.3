@@ -1,0 +1,58 @@
+.TH CHTTPCLIENT_RESP_HEADER_AT 3 "2026-09-29" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpclient_resp_header_at \- get one occurrence of a response header
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpclient.h>
+
+const char *chttpclient_resp_header_at(const chttpcli_response *resp,
+                                       const char *name, size_t index);
+.fi
+.SH DESCRIPTION
+.nf
+This function gives the value of one line of the response header
+block with the name that you give. The lookup ignores the case of the
+name. index counts the lines with that name in the order in which the
+server sent them, from 0. Each value is the value of one line exactly
+as the server sent it. It is never a combined value.
+
+chttpclient_resp_header_count gives the number of lines with a name.
+chttpclient_resp_header gives the combined value of a repeated name,
+and the first value of a repeated Set-Cookie.
+
+The pointer that the function gives back stays valid until a call to
+chttpclient_resp_free.
+.fi
+.SH PARAMETERS
+.nf
+resp   The response to query. It can be NULL, and the function then
+       gives NULL.
+name   The header name. It can be NULL, and the function then gives
+       NULL.
+index  Which occurrence to give, from 0 to
+       chttpclient_resp_header_count(resp, name) - 1.
+.fi
+.SH RETURN VALUE
+.nf
+A pointer to the value string of that occurrence, or NULL when index
+is not below the number of lines with that name.
+.fi
+.SH NOTES
+.nf
+Only the header block of the response counts. A trailer field of a
+chunked response body is not a response header, and this function
+never gives one.
+.fi
+.SH EXAMPLES
+.nf
+size_t n = chttpclient_resp_header_count(resp, "Set-Cookie");
+for (size_t i = 0; i < n; i++)
+    printf("cookie: %s\\n",
+           chttpclient_resp_header_at(resp, "Set-Cookie", i));
+.fi
+.SH "SEE ALSO"
+.BR chttpclient_resp_header_count (3),
+.BR chttpclient_resp_header (3),
+.BR chttpclient_resp_free (3)

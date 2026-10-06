@@ -1,55 +1,109 @@
-.TH CHTTPSVR_USE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CHTTPSVR_USE 3 "2026-10-01" "c_collections" "C Collections Library - Functions"
 .SH NAME
 chttpsvr_use \- append global middleware to the root router
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 ccol_retval_t chttpsvr_use(chttpsvr srv,
                             chttpsvr_middleware_fn fn, void *ctx);
 .fi
 .SH DESCRIPTION
 .nf
-Appends a middleware function to the global middleware chain.  Global
-middleware runs before router-specific middleware and before the route
-handler for every request.
+Appends a middleware function to the global middleware chain.  A
+global middleware runs before the middleware of each router, and
+before the route handler, for every request.
 
-fn receives a next callback; calling it continues the chain.  Omitting
-the call short-circuits the chain and sends the response as-is.
+fn gets a next callback.  A call to next continues the chain.  A
+middleware that never calls next stops the chain there, and the server
+sends the response as it stands.
 
-This function is thread-safe and may be called before or after the
-server is started.
+A global middleware also runs for a request that the server rejects
+before a handler can run.  Therefore, a rate limiter, a ban list for each
+peer, or an access log that you make as a middleware sees that
+traffic.  Three rejections run the chain:
+  - A 404, when no route matched the path.
+  - A 405, when no route matched the method.
+  - A 413, when the declared Content-Length is above max_body_size.
+For a 404 or a 405 of a path under a mounted prefix, the chain is the
+global chain plus the chain of the sub-router that owns the path; see
+chttpsvr_subrouter(3).  For a 404 or a 405 of all other paths, the
+chain is the global chain only.  The server decides a 413 after a route
+matched.  A 413 therefore runs the full effective chain of that request,
+with the sub-router middleware.
+
+The server reaches no handler in these cases.  A chain that runs to
+its end therefore sends the rejection response as it stands.  A
+middleware that does not call next answers the request itself, exactly
+as it does for a matched route.  The request has a method, a path,
+headers and a query string to read.  It has no path parameters,
+because no pattern captured any, and the server never reads its body.
+chttpsvr_req_param therefore returns NULL, and chttpsvr_req_read
+returns -1.  The server closes the connection after the response in
+both cases.
+
+The send treats a response that a middleware makes for such a request
+as an internally generated rejection.  The small unconditional ceiling
+on the write duration therefore applies to it.
+max_response_write_duration_us in CHTTPSVR_CONFIG_DEFAULT(3) describes
+that ceiling.  Keep such a response small, the way a rejection
+response is.
+
+Three rejections run no middleware, by design:
+  - A 500 comes from an allocation failure of the server.  Application
+    code that allocates more memory is the wrong answer to memory
+    pressure.
+  - A 503 means that the worker pool is full.  More application work
+    must therefore not start.
+  - The server decides a 501 or a 505 before it routes the request.
+    It sends a 501 for a method token outside the seven chttp_method_t
+    names, or for a transfer coding that it does not implement.  It
+    sends a 505 for an HTTP version whose major number is not 1.  There
+    is therefore no routed request for a middleware to see.
+The server also sends a rejection with no middleware in two more
+cases:
+  - Its rejection thread pool is full or shuts down, and the server
+    must write the response inline.  This limits the quantity of
+    application code that a flood of rejected requests can start.
+  - The server cannot allocate the decoded path of the request.  The
+    reason is that the server guarantees a readable
+    chttpsvr_req_path(3) to each middleware.
+
+This function is thread-safe.  You can call it before the server
+starts, and after it starts.
 .fi
 .SH NOTES
 .nf
-Each router (the root router for global middleware, and each
-sub-router) caps its own middleware chain at 32 entries.  This cap is
-enforced at REGISTRATION time: chttpsvr_use and chttpsvr_router_use
-return ccol_not_permitted, without adding the entry, on the call that
-would exceed the 32-entry cap for that specific router.
+Each router caps its own middleware chain at 32 entries.  This applies
+to the root router, which holds the global middleware, and to each
+sub-router.  The library applies this cap at REGISTRATION time.
+chttpsvr_use and chttpsvr_router_use return ccol_not_permitted, and
+add no entry, on the call that would go above the cap of 32 entries
+for that one router.
 
-Separately, dispatch time also enforces a combined cap of 32 for the
-effective chain of a given request (global middleware + the matched
-router's own middleware).  Because each side of that sum can
-independently hold up to 32 entries, the combined count can still
-exceed 32 even though neither router individually hit its own
-registration-time cap; when this happens the server responds with
-HTTP 500 on the affected request.
+Dispatch time applies a separate combined cap of 32 for the effective
+chain of one request.  That chain is the global middleware plus the
+middleware of the router that matched.  Each side of that sum can hold
+up to 32 entries on its own.  The combined count can therefore go
+above 32 while neither router reaches its own cap at registration
+time.  The server then answers the affected request with HTTP 500.
 
-Registering the same path and method more than once is permitted and
-returns ccol_success each time, but only the FIRST registered handler
-is ever invoked (first-wins policy).
+You can register the same path and method more than once.  Each
+registration returns ccol_success.  But the server only ever calls the
+FIRST handler that you registered, under a policy where the first one
+wins.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success on success.
-ccol_invalid_args if srv is CHTTPSVR_INVALID or a stale/already-
-                  destroyed handle, or if fn is NULL.
-ccol_not_enough_memory if allocation fails.
-ccol_not_permitted if the root router's middleware chain is already at
-the 32-entry cap.
+ccol_invalid_args when srv is CHTTPSVR_INVALID, when srv is a stale
+                  handle that something already destroyed, or when fn
+                  is NULL.
+ccol_not_enough_memory when an allocation fails.
+ccol_not_permitted when the middleware chain of the root router is
+already at the cap of 32 entries.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_register_handler (3),

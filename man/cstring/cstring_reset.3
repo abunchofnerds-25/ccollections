@@ -5,15 +5,15 @@ cstring_reset \- clear all characters and shrink capacity to minimum
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 void cstring_reset(cstr s);
 .fi
 .SH DESCRIPTION
 .nf
-Sets the length to zero and attempts to shrink the buffer back to the
-minimum capacity (16 bytes). If the reallocation to shrink fails the
-capacity is left unchanged; the length is always reset to zero regardless.
+Sets the length to zero. It then tries to shrink the buffer back to the
+minimum capacity of 16 bytes. The capacity stays the same when that
+reallocation fails. The length always becomes zero in both cases.
 .fi
 .SH PARAMETERS
 .nf

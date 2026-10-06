@@ -1,0 +1,67 @@
+.TH CCOL_SET_THREAD_NAME 3 "2026-09-26" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccol_set_thread_name \- rename the calling thread and make its log records carry the new name
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/clogger.h>
+
+ccol_retval_t ccol_set_thread_name(const char *thread_name);
+.fi
+.SH DESCRIPTION
+.nf
+Renames the calling thread, with prctl(PR_SET_NAME) on Linux and
+pthread_setname_np(3) on FreeBSD and macOS.  The next record
+that the thread writes, through any logger, carries the new name in
+the thread group of its proc field.
+
+Every record names the process and the thread that wrote it.  Each
+thread reads its process ID, thread ID and thread name once, the first
+time that it logs, and keeps them for the rest of its life.  A record
+therefore costs no system call for them.  This function updates the
+name that the thread keeps.  A child that fork(2) makes reads all
+three again.
+
+The Linux kernel stores at most 15 bytes of a thread name.  The
+function keeps the first 15 bytes of thread_name on every platform, so
+the records and tools such as ps(1) and top(1) show the same name.
+
+The function needs no logger.  A thread can name itself before any
+logger exists.  It affects only the calling thread.
+.fi
+.SH PARAMETERS
+.nf
+thread_name  The new name.  It must not be NULL or empty.  Only its
+             first 15 bytes are used.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        The thread has the new name, and its records
+                    carry it.
+ccol_invalid_args   thread_name is NULL or empty.  Nothing changes.
+ccol_not_permitted  The system refused the rename, or the platform is
+                    not Linux, FreeBSD or macOS.  Nothing changes.
+.fi
+.SH NOTES
+.nf
+A thread renamed by any other means after its first record, such as
+pthread_setname_np(3) or prctl(PR_SET_NAME), keeps its old name in its
+records.  Use this function to rename a thread that logs.
+Thread-safe.  Each thread renames only itself.
+.fi
+.SH EXAMPLES
+.nf
+static void *worker(void *arg) {
+    clog lg = *(clog *)arg;
+    if (ccol_set_thread_name("ingest-worker") != ccol_success)
+        return NULL;
+    ccol_log_info(lg, "started");
+    /* proc=myapp(1234):ingest-worker(1240) */
+    return NULL;
+}
+.fi
+.SH "SEE ALSO"
+.BR clog_open_fd_mp (3),
+.BR clog_open_file_mp (3),
+.BR prctl (2)

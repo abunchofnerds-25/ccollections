@@ -1,0 +1,81 @@
+.TH CVEC_DECLARE 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cvec_declare \- declare a vector variable and its companion type variables
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cvector.h>
+
+cvec_declare(v, type);
+.fi
+.SH DESCRIPTION
+.nf
+This macro declares a vector variable with the name v. That vector holds
+elements of the given type. The macro also declares the two hidden
+companion type variables. The type-dispatching macros read those variables
+at each call site. The macro creates no vector. v stays uninitialized.
+cvec_init(3) or cvec_init_mp(3) must give it a vector before any other
+macro or function touches it.
+
+Use this macro when the creation and the declaration must be separate. One
+example is a choice of allocator that comes further down the function.
+Another example is a variable at the top of a block, where the later paths
+create it in different ways. cvec_construct(3) and cvec_construct_mp(3) do
+both steps together when they do not need to be separate.
+cvec_construct_scoped(3) and cvec_construct_mp_scoped(3) also add automatic
+destruction at the end of the scope.
+
+The names of the companion variables come from v. The variables carry only
+type information. Nothing reads them at run time, and they are marked
+unused. A vector that goes only to the raw functions therefore costs
+nothing. The value companion carries the element type. cvec_init(3) takes
+the element size from it. cvec_at(3), cvec_push(3) and the other
+type-dispatching macros also use it to type their result. The key companion
+carries size_t. That is the type of the index which a vector iterator
+reports through ccol_iter_key_ptr(3).
+.fi
+.SH PARAMETERS
+.nf
+v     Name of the vector variable to declare
+type  Element type, for example int, double or struct foo
+      Any type name is accepted, including a function
+      pointer type such as void (*)(int) and an array
+      type such as int[4]. For an array element type,
+      give cvec_push(3) an array or a string literal.
+      The macro copies its bytes into the element
+.fi
+.SH NOTES
+.nf
+The macro expands to a sequence of declarations. It needs a semicolon at
+the end of the call site. It therefore belongs where declarations are
+legal. It cannot be the body of an if or a loop without braces.
+The companion variables must stay in scope everywhere that you use a
+type-dispatching macro on v. cvec_redeclare(3) makes them again for a
+handle that comes from another scope.
+Destroy a vector from this macro with cvec_destroy(3), after the
+initialization.
+.fi
+.SH WARNINGS
+.nf
+v holds an indeterminate value until cvec_init(3) or cvec_init_mp(3)
+gives it one. A read of v before that point is undefined behavior. This
+includes a call to cvec_destroy(3) on a path that skipped the
+initialization. cvec_declare_scoped(3) is the variant that starts at
+NULL.
+.fi
+.SH EXAMPLES
+.nf
+cvec_declare(my_vec, int);
+cvec_init(my_vec);
+cvec_push(my_vec, 42);
+cvec_destroy(my_vec);
+.fi
+.SH "SEE ALSO"
+.BR cvec_declare_scoped (3),
+.BR cvec_init (3),
+.BR cvec_init_mp (3),
+.BR cvec_construct (3),
+.BR cvec_construct_mp (3),
+.BR cvec_redeclare (3),
+.BR cvec_destroy (3)

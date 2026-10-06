@@ -1,0 +1,87 @@
+.TH CBMAP_REDECLARE 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cbmap_redeclare \- re-establish the companion type variables for an ordered map handle from another scope
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cbstmap.h>
+
+cbmap_redeclare(hm_name, key_t, val_t);
+.fi
+.SH DESCRIPTION
+.nf
+Declares the companion type variables that carry key_t and val_t for an
+ordered map handle that already exists. The macro declares no handle. It
+creates no map and it destroys none. It gives back only the type
+information that the type-inferred macros need.
+
+Every type-inferred macro gets the key type and the value type of a map from
+two ordinary local variables. Those variables carry the name of the handle.
+cbmap_construct(3) and cbmap_declare(3) create them beside the handle. They
+are local declarations, so they do not travel with the handle to another
+function. Inside that function, cbmap_insert(hm_name, ...) and its siblings
+name variables that nothing declares there, and the translation unit does
+not compile. This macro declares those variables again. Every caller that
+passes a cbmap across a function boundary needs this macro.
+
+The types here must be the types that the caller created the map with. The
+macros use them to read a key and to size a value. They also use them to
+decide whether a value is a char * that the map stores by contents.
+.fi
+.SH PARAMETERS
+.nf
+hm_name  Name of the map handle that already exists
+key_t    Key type that the caller created the map with
+val_t    Value type that the caller created the map with
+.fi
+.SH RETURN VALUE
+.nf
+None. This macro expands to declarations and does not expand to an
+expression.
+.fi
+.SH NOTES
+.nf
+The macro expands to a sequence of declarations. Put it where a declaration
+is legal, and give it a semicolon of its own at the end
+The declared variables are pointers. Nothing dereferences them at run time.
+They exist so that typeof and the type-introspection macros can read the
+types from them. They cost nothing in the generated code
+The macro declares variables only. This is also the way to reach a handle
+that a struct field or a global holds. Name the macro in each function that
+works on that handle
+.fi
+.SH WARNINGS
+.nf
+The declared value type can have a width that differs from the stored
+width. cbmap_get(3) and cbmap_get_ptr(3) report that at run time. They
+describe the size mismatch and stop the program through ccol_fatal_err().
+But they find no mismatch between two types of the same width. The types
+here are therefore a promise that the caller keeps, and not a promise that
+the compiler checks. A key of the wrong width gets a report and not an
+acceptance. The raw entry points return ccol_invalid_args for it. The order
+of the tree has a meaning only for keys of the width that the caller
+created the map for.
+.fi
+.SH EXAMPLES
+.nf
+void bump(cbmap scores, int who) {
+    cbmap_redeclare(scores, int, int);
+    int *slot = cbmap_get_ptr(scores, who);
+    if (slot) {
+        (*slot)++;
+    }
+}
+
+cbmap_construct(scores, int, int);
+int who = 7, score = 42;
+cbmap_insert(scores, who, score);
+bump(scores, 7);
+cbmap_destroy(scores);
+.fi
+.SH "SEE ALSO"
+.BR cbmap_declare (3),
+.BR cbmap_construct (3),
+.BR cbmap_get (3),
+.BR cbmap_get_ptr (3),
+.BR cbmap_insert (3)

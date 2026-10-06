@@ -1,0 +1,85 @@
+.TH CHTTPSVR_REQ_PEER_CERT_DER 3 "2026-10-01" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_req_peer_cert_der \- give the DER encoding of the verified client certificate
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpserver.h>
+
+const void *chttpsvr_req_peer_cert_der(const chttpsvr_req *req,
+                                       size_t *len_out);
+.fi
+.SH DESCRIPTION
+.nf
+Gives the DER encoding of the leaf certificate that the TLS client of
+the request presented and that verified against the ca_bundle_path of
+the server.  It gives the certificate only when
+chttpsvr_req_peer_cert_verified(3) reports true for req.
+
+Use it to read any field of the certificate with a library of your
+choice, for example d2i_X509() of OpenSSL, or to compare the whole
+certificate with a pinned one.  chttpsvr_req_peer_cert_sha256(3) and
+chttpsvr_req_peer_cert_subject(3) give the two values that a handler
+most often needs without a parse of its own.
+
+The certificate belongs to the connection, so every request on one
+keep-alive connection gives the same bytes.  A resumed TLS session
+gives the certificate that the handshake which established it
+verified.
+.fi
+.SH PARAMETERS
+.nf
+req      The request handle.
+len_out  Optional.  It receives the byte length of the encoding, and 0
+         whenever the function gives NULL.
+.fi
+.SH RETURN VALUE
+.nf
+A pointer to the DER bytes, which stay valid for the lifetime of the
+request.  Do not free them.
+
+NULL in every case where chttpsvr_req_peer_cert_verified(3) reports
+false: a plaintext connection, a server with no ca_bundle_path, a
+client that presented no certificate, and a NULL req.  NULL also when
+an allocation fails; call chttpsvr_req_peer_cert_verified(3) to tell
+the two apart.
+.fi
+.SH THREAD SAFETY
+.nf
+Call it only on the thread that runs the handler or the middleware of
+req, as every other accessor of a request.
+.fi
+.SH EXAMPLES
+.nf
+#include <ccollections/chttpserver.h>
+#include <openssl/x509.h>
+
+static void handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx)
+{
+    (void)ctx;
+    size_t len = 0;
+    const unsigned char *der = chttpsvr_req_peer_cert_der(req, &len);
+    if (!der) {
+        /* No verified certificate, or an allocation failed. */
+        chttpsvr_resp_set_status(resp, chttpsvr_req_peer_cert_verified(req)
+                                           ? CHTTP_STATUS_INTERNAL_ERROR
+                                           : CHTTP_STATUS_FORBIDDEN);
+        return;
+    }
+    X509 *cert = d2i_X509(NULL, &der, (long)len);
+    if (!cert) {
+        chttpsvr_resp_set_status(resp, CHTTP_STATUS_INTERNAL_ERROR);
+        return;
+    }
+    /* ... read the extensions that the policy needs ... */
+    X509_free(cert);
+    chttpsvr_resp_write_str(resp, "ok");
+}
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_req_peer_cert_verified (3),
+.BR chttpsvr_req_peer_cert_sha256 (3),
+.BR chttpsvr_req_peer_cert_subject (3),
+.BR CHTTP_TLS_DEFAULT (3),
+.BR chttpsvr_start (3)

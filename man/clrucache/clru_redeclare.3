@@ -1,27 +1,40 @@
 .TH CLRU_REDECLARE 3 "2026-08-02" "c_collections" "C Collections Library - Macros"
 .SH NAME
-clru_redeclare \- restore type-tracking variables for a cache passed across scopes
+clru_redeclare \- restore the type-tracking variables for a cache that crosses scopes
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <clrucache.h>
+#include <ccollections/clrucache.h>
 
 clru_redeclare(name, KeyT, ValT);
 .fi
 .SH DESCRIPTION
 .nf
-The type-dispatching macros clru_get() and clru_set() rely on hidden
-companion variables created by clru_declare() or clru_construct(). When
-a clru_cache handle is passed to another function, those companion
-variables are absent. clru_redeclare() re-creates them so that all
-type-safe macros work correctly in the new scope.
+The type-dispatching macros clru_get() and clru_set() need hidden
+companion variables. clru_declare() and clru_construct() create those
+variables. When you pass a clru_cache handle to another function, those
+companion variables are absent there. clru_redeclare() creates them
+again. Every type-inferred macro then works correctly in the new scope.
 .fi
 .SH PARAMETERS
 .nf
-name  Existing clru_cache variable to re-attach type information to
-KeyT  Key type (must match the type used at construction)
-ValT  Value type (must match the type used at construction)
+name  The existing clru_cache variable that gets the type information
+KeyT  Key type. It must match the type of the construction
+ValT  Value type. It must match the type of the construction
+.fi
+.SH NOTES
+.nf
+Always call clru_redeclare() before you call clru_get() or clru_set() in
+a new scope. A missing call is the most common error when a cache
+crosses a function boundary.
+The name argument must be a simple identifier. The macro pastes it into
+the names of the companion variables. It cannot be a different
+expression, such as the struct member ga->cache. Copy such a handle into
+a local variable. Then redeclare that local variable:
+
+    clru_cache c = ga->cache;
+    clru_redeclare(c, int, double);
 .fi
 .SH EXAMPLES
 .nf
@@ -32,12 +45,6 @@ void use_cache(clru_cache c) {
         printf("%.2f\en", out);
     }
 }
-.fi
-.SH NOTES
-.nf
-Omitting clru_redeclare() before calling clru_get() or clru_set() in a
-new scope is the most common error when passing caches across function
-boundaries.
 .fi
 .SH "SEE ALSO"
 .BR clru_declare (3),

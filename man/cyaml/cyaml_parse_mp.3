@@ -5,7 +5,7 @@ cyaml_parse_mp, cyaml_parse \- parse a null-terminated YAML string into a DOM tr
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cyaml.h>
+#include <ccollections/cyaml.h>
 
 cyaml cyaml_parse_mp(const char *yaml_str, char **err_str,
                      ccol_memmgmt_procs_t *mp);
@@ -13,151 +13,312 @@ cyaml cyaml_parse(const char *yaml_str, char **err_str);
 .fi
 .SH DESCRIPTION
 .nf
-Parse a null-terminated YAML string and return the root DOM node.
-Comments (#) are silently discarded.  Anchors (&name) and aliases
-(*name) are resolved to independent deep clones.  Implicit YAML 1.2
-core schema typing is applied to unquoted scalars.
+Parse a null-terminated YAML string and return the root DOM node.  The
+parser discards comments (#) silently.  It resolves anchors (&name) and
+aliases (*name) into independent deep clones.  It applies implicit
+YAML 1.2 core schema typing to an unquoted scalar.
 
-A tag (!tag, !!tag, !<verbatim>, or a %TAG-directive shorthand) is
-resolved and attached to its node; see cyaml_node_tag(3) for how a
-tag interacts with a node's type.  A "<<" mapping key written as a
-plain, untagged scalar is expanded as a merge key; see the Merge
-keys section of README.md for the expansion and precedence rules.
-A tag/content type mismatch (!!null excepted: it forces CYAML_NULL
-unconditionally, on any text, since there is no canonical "wrong"
-spelling for it), a malformed %TAG directive, or an invalid
-merge-key source is a parse failure, exactly like any other
-malformed input.
+The parser resolves a tag (!tag, !!tag, !<verbatim>, or a shorthand
+from a %TAG directive) and attaches it to its node.  cyaml_node_tag(3)
+describes how a tag and the type of a node work together.  The parser
+expands a "<<" mapping key as a merge key when that key is a plain,
+untagged scalar, or when it carries the core merge tag (!!merge).
+cyaml(7) gives the rules for the expansion and for precedence.  It
+also gives the rules for anchors, aliases and tags.  The merged members take the
+place of the "<<" entry in the member order of the mapping; see
+cyaml_dictionary_first(3).  A dictionary keeps its members in the order
+of the text, and a key that the text repeats keeps the place of its
+first occurrence and the value of its last.  Three more cases are a parse
+failure, exactly like any other input that is malformed.  They are a
+tag that does not match the type of the content, a %TAG directive that
+is malformed, and a merge-key source that is not valid.  !!null is the
+one exception to the first of the three.  It forces CYAML_NULL on any
+text, because there is no canonical "wrong" spelling for it.
 
 SINGLE-DOCUMENT STREAMS
-When the input contains exactly one document (with or without a leading
-"---" marker and an optional trailing "..." marker), the root node of
-that document is returned directly.
+The input can hold exactly one document.  That document can have a
+leading "---" marker, or no such marker.  It can also have a trailing
+"..." marker, or no such marker.  The function then returns the root
+node of that document directly.
 
 MULTI-DOCUMENT STREAMS
-When the input contains multiple documents separated by "---" markers,
-all document roots are collected and returned as a single CYAML_LIST
-node whose elements are the individual document roots in order.  The
-anchor table is reset between documents so an anchor defined in one
-document cannot be referenced by a later document.  A later document
-may omit its own "---" marker only when the document immediately
-before it ended with an explicit "..." marker; otherwise it must begin
-with "---".  Bare content directly following a document with no
-"..." is rejected as a parse error.  A document that begins with its
-own "%YAML" directive always requires an explicit "..." before it,
-even when it supplies its own "---" marker.
+The input can hold more than one document, with "---" markers between
+them.  The function then collects every document root and returns one
+CYAML_LIST node.  The elements of that list are the document roots, in
+order.  The parser resets the anchor table between two documents.  An
+anchor from one document therefore cannot be named by a later
+document.  An empty document gives a CYAML_NULL element.  An example is
+the document between two "---" markers that come one after the other.
+A later document can omit its own "---" marker only when
+the document just before it ended with an explicit "..." marker.  In
+every other case that document must start with "---".  The parser
+rejects bare content that comes directly after a document with no
+"...", as a parse error.  A document that starts with its own "%YAML"
+directive always needs an explicit "..." before it, even when it gives
+its own "---" marker.
+cyaml_serialize_stream(3) writes such a list back as a stream, one
+document for each element.
 
 cyaml_parse() is an inline wrapper that passes NULL for mp.
 
-On parse failure *err_str (if non-NULL) normally receives a
-heap-allocated, null-terminated error message, allocated through mp,
-that the caller must free with cyaml_serialize_free_mp() (passing the
-same mp); this is a safe no-op if *err_str is NULL.  On success
-*err_str is set to NULL.  *err_str may itself remain NULL even on
-failure if allocating the message text also fails (only reachable
-under an already-exhausted custom allocator); the return value, not
-*err_str, always indicates success or failure.  Pass NULL for err_str
-to discard error details.
+On a parse failure the function points *err_str at a null-terminated
+error message, when err_str is not NULL.  The LIBRARY owns that
+message.  Never free it.  It is not an allocation, and mp never sees
+it.  The text stays readable until the next FAILING parse on the same
+thread, which is the lifetime that strerror(3) gives.  The storage is
+per-thread, so two threads that parse at the same time never overwrite
+one another's message.  Copy the text to keep it longer.  On success
+the function sets *err_str to NULL.  The return value always shows
+success or failure, and *err_str never does.  Pass NULL for err_str to
+discard the error details.
+
+The message is printable ASCII whatever the input holds.  Where it
+quotes text of the input (a scalar, a tag, an anchor or alias name, a
+single character), it writes a byte from 0x20 to 0x7E as it is and any
+other byte as <0xNN>, and it cuts a long quoted text short at a whole
+byte with "...".  A raw control character, a terminal escape sequence
+or a byte of a multi-byte UTF-8 sequence in the input therefore never
+reaches a log that records the message.  A character that the input may
+not hold at all is named as 0xNN, with its line and column.
 .fi
 .SH PARAMETERS
 .nf
 yaml_str   Null-terminated YAML input.
-err_str    Out-parameter for the error string (allocated through mp;
-           free with cyaml_serialize_free_mp()), or NULL to ignore.
-mp         Custom allocator for all nodes in the resulting tree, or
-           NULL for the default allocator.
+err_str    Out-parameter for the error string, or NULL to ignore it.
+           The library owns that string and the caller never frees
+           it.
+mp         Custom allocator for all the nodes of the tree that this
+           function builds, or NULL for the default allocator.
+           The library keeps its own copy of the struct, so the caller
+           may release or reuse the struct once this call returns. The
+           functions that it names must stay callable until the last
+           node built with them is destroyed. A process can use at most
+           64 distinct sets of four functions; a call that would need a
+           65th fails and returns NULL.
 .fi
 .SH RETURN VALUE
 .nf
-For a single-document input: the root cyaml node.
-For a multi-document input: a CYAML_LIST node wrapping all document
-roots.
-NULL on parse failure or OOM.
+For an input with one document: the root cyaml node.
+For an input with more than one document: a CYAML_LIST node that holds
+every document root.
+NULL on a parse failure, and also when the parser runs out of memory.
 .fi
 .SH NOTES
 .nf
-The caller owns the returned tree and must free it with cyaml_destroy().
+The caller owns the tree that this function gives.  The caller must
+free it with cyaml_destroy().
 
-To distinguish single- from multi-document results, check the type of
-the returned node with cyaml_type().
+The caller does NOT own the error string.  One rule covers the err and
+err_str out-parameter of every module in this library: the library owns
+the string and the caller never frees it.  See the note at the top of
+common.h.
 
-A plain, single-quoted, or double-quoted scalar VALUE may span multiple
-physical lines, folded to a single space per line break (consecutive
-blank lines fold to that many newlines instead), matching a folded
-block scalar's own folding rules.  An implicit mapping KEY ("key:",
-with no leading "?"), by contrast, must always fit on a single
-physical line regardless of scalar style; an explicit key ("? key")
-has no such restriction.  A sequence, mapping, or flow collection used
-directly as a dictionary key is canonicalized to its flow-style text
-representation.  A scalar dictionary key's own core-schema type is
-also resolved before it is stored, exactly like an ordinary value
-position ("~", "null", and an empty key all canonicalize to the
-identical "null" string key); this applies uniformly to an implicit
-key, an explicit key, a flow dictionary key, and a flow sequence's
-"key: value" shorthand, so every spelling of the same value collides
-on the same key regardless of notation.  A quoted key is never
-subject to this: its stored key text is always exactly its own
-decoded content.
+Check the type of the node with cyaml_type() to see whether the result
+holds one document or more than one.
 
-A node may carry at most one anchor and one tag (in either order); an
-alias may never itself carry either.  A tag decorating a dictionary
-key is parsed for validity but discarded, since this DOM's keys are
-plain strings rather than nodes.  A "<<" key is treated as a merge
-directive whenever it is a plain, untagged scalar, in any mapping
-regardless of how that mapping arose: a block mapping's implicit
-("<<: value") or explicit ("? <<" / ": value") style; a flow
-mapping's implicit ("{<<: value}") or explicit ("{? <<: value}")
-style; or the single-entry mapping produced by a block or flow
-sequence's own "key: value" / "? key: value" compact-mapping
-shorthand ("- <<: value", "[<<: value]", "[? <<: value]"); and
-regardless of whether the key itself carries an anchor.  A quoted or
-explicitly tagged "<<" is always an ordinary literal key in every one
-of those forms.
+A plain, single-quoted or double-quoted scalar VALUE can cover more
+than one physical line.  Each line break folds to one space.  A run of
+blank lines folds to that many newlines instead.  These are the folding
+rules of a folded block scalar.  An implicit mapping KEY is different.
+It must always fit on one physical line, whatever its scalar style.  An
+implicit key is written "key:", with no leading "?".  An explicit key
+("? key") has no such restriction.  The parser canonicalizes a
+sequence, mapping or flow collection that is a dictionary key directly
+into its flow-style text.  It also resolves the core-schema type of a
+scalar dictionary key before it stores that key, exactly as it does in
+an ordinary value position.  For example, "~", "null" and an empty key
+all canonicalize to the identical "null" string key.  "true", "True"
+and "TRUE" give "true", and "false", "False" and "FALSE" give "false".
+"yes", "no", "on" and "off" are strings under YAML 1.2 and keep their
+own text.  An integer key gives its decimal text, so "0x10" gives
+"16".  A float key gives the shortest decimal text that reads back as
+the same double: "3.10" gives "3.1", "0.1" stays "0.1", and "1e300"
+gives "1e+300".  ".inf", "-.inf" and ".nan" keep those spellings.  Both
+zeros give "0", and a float with an integral value has no fractional
+part, so the keys 1.0 and 1 are the same key.  Look such a key up by
+its canonical text, for example cyaml_get(doc, "python.3\e\e.1") for
+the key that "3.10:" wrote, or quote the key in the document to keep
+its text as written.  This holds for an
+implicit key, an explicit key, a flow dictionary key, and the
+"key: value" shorthand of a flow sequence.  Every spelling of the same
+value therefore collides on the same key, whatever the notation.  A
+quoted key with no tag never obeys this rule.  The key text that the
+parser stores for it is always exactly its own decoded content.
 
-A raw, unescaped C0 control byte (0x00-0x1F other than tab) or DEL
-(0x7F) is a parse error wherever it appears literally in scalar
-content, in every scalar style; a double-quoted scalar's own escape
-sequences (e.g. "\ex01", "\ex7f") remain the only way to embed a
-non-null one of these bytes in a string value.  An escape that decodes
-to the null byte itself ("\e0", "\ex00", "\eu0000", "\eU00000000") is
-rejected instead: a node's scalar value is a plain null-terminated C
-string, so an embedded null byte can never be represented.
+A tag on a key types that key exactly as it types a value, in every
+key notation, and the parser then stores the canonical text of the
+typed key.  "!!str 010:" and "!!str 10:" are two different keys,
+\&'!!int "0x10":' is the key "16", and "!!int abc:" is a parse error.
+The keys of this DOM are plain strings and not nodes, so the tag itself
+is not kept.  An anchor on a tagged key names the typed node.
 
-Input is otherwise treated as an opaque byte string: no byte is
-checked for well-formed UTF-8, so a byte sequence that is not valid
-UTF-8 is accepted as literal scalar content and reproduced unchanged
-by cyaml_serialize(3)/cyaml_serialize_flow(3). Feed well-formed UTF-8
-text if a downstream consumer of the resulting strings requires it.
+A node can carry at most one anchor and one tag, in either order.  An
+alias can never carry either of them.  The parser reads a "<<" key
+as a merge directive every time that key is a plain, untagged scalar,
+and every time its tag is the core merge tag, tag:yaml.org,2002:merge
+(!!merge, a %TAG shorthand of it, or its verbatim form), whether the
+key is plain or quoted.  It does this in any mapping, whatever built that mapping.  There are
+five forms.  The first is the implicit style of a block mapping
+("<<: value").  The second is the explicit style of a block mapping
+("? <<" and ": value").  The third is the implicit style of a flow
+mapping ("{<<: value}").  The fourth is the explicit style of a flow
+mapping ("{? <<: value}").  The fifth is the one-entry mapping that the
+compact-mapping shorthand of a block or flow sequence gives
+("- <<: value", "[<<: value]", "[? <<: value]").
+That shorthand is the "key: value"
+and "? key: value" notation.  An anchor on the key itself changes none
+of this.  A "<<" that is quoted with no tag, or that carries any tag
+other than the merge tag, is always an ordinary literal key, in every
+one of those forms.
 
-An implicit decimal, hex, or octal integer literal whose value does
-not fit in a signed 64-bit long long falls back to CYAML_FLOAT (or,
-failing that, a plain CYAML_STRING) rather than being silently
-reinterpreted as a wrapped-around or wrong-signed integer.
+The input must be UTF-8 text made only of the printable characters of
+YAML 1.2 section 5.1 (c-printable): TAB, LF, CR, 0x20 to 0x7E, NEL
+(U+0085), U+00A0 to U+D7FF, U+E000 to U+FFFD and U+10000 to U+10FFFF.
+The parser checks every byte of the stream before it parses anything:
+scalars of every style, keys, comments, tags, anchors, directives and
+the space between tokens.  It refuses the whole document at the first
+byte that breaks the rule.  Refused are a byte sequence that is not
+well-formed UTF-8 (a truncated sequence, a continuation byte with no
+lead byte, an overlong form, an encoded surrogate, a code point above
+U+10FFFF, a byte from 0xF5 to 0xFF), a C0 control other than TAB, LF
+and CR, DEL, a C1 control (U+0080 to U+009F) other than NEL, and the
+noncharacters U+FFFE and U+FFFF.  The error message names the defect,
+shows the offending bytes as 0xNN, and gives the line and the column,
+both counted from 1: LF, CR and CRLF each end a line, and the column
+counts characters.  For example:
 
-A tab character is never valid as block-structural indentation or as
-the separator directly after a block sequence ('-') or explicit-key
-('?') indicator.  Block-structured content (a mapping or sequence)
-must begin on its own line following an explicit "---" marker, not
-share that line; a scalar or flow collection may share it.
+    raw control character 0x01 is not allowed in a YAML stream
+    (line 3, column 7); write it as an escape sequence in a
+    double-quoted scalar
 
-A document nesting mappings, sequences, or explicit keys more than
-500 levels deep is rejected with a parse error.  A non-scalar
-dictionary key whose canonicalized flow-YAML text exceeds 64 KiB is
-also rejected; this bounds a key that is itself a mapping containing
-another such key many levels deep, since canonicalizing it re-quotes
-each enclosing level's own already-quoted text, growing rapidly with
-nesting depth.  Neither limit is reachable by any realistic
-hand-written or generated document.
+    invalid UTF-8 in a YAML stream (line 1, column 4): overlong
+    encoding (lead byte 0xc0)
 
-A single parse call also rejects a document that would require
-allocating more than 4,000,000 DOM nodes in total, with a parse
-error naming the limit explicitly; reachable only by a document with
-millions of distinct scalar values, an extent no realistic
-hand-written or generated document approaches.
+The parser never repairs the input and never substitutes a character:
+fix the data.  An escape sequence in a double-quoted scalar is the one
+way to put such a character into a value: "\ex01", "\ex7f", "\ex80"
+and "\euFFFE" are printable text that names it.  Two "\eu" escapes
+that form a UTF-16 surrogate pair ("\euD83D\euDE00") name one
+character, as in JSON.  An escape that names no character is a parse
+error: a lone surrogate in a "\eu" escape, and a "\eU" value that is a
+surrogate or above U+10FFFF.  Percent-escapes in a tag must decode to
+well-formed UTF-8.
+
+The parser rejects an escape that decodes to the null character
+("\e0", "\ex00", "\eu0000", "\eU00000000"), and the percent-escaped
+spelling of the same byte inside a tag ("%00").  The scalar value of a
+node, its anchor name and its tag are each a plain null-terminated C
+string, so a null byte inside one of them can never be represented.  A
+raw null byte is outside c-printable; it can reach the parser only
+through cyaml_parse_n(3) and cyaml_parse_n_mp(3), which take an
+explicit length, because cyaml_parse(3) stops at the first one.
+
+An implicit decimal, hex or octal integer literal whose value does not
+fit in a signed 64-bit long long falls back to CYAML_FLOAT.  When the
+text does not parse as a float either, it falls back to a plain
+CYAML_STRING.  The parser never turns it silently into an integer that
+wrapped around or that has the wrong sign.
+
+Indentation is spaces only, as YAML 1.2 defines it.  A tab is
+separation whitespace wherever the grammar allows separation: after a
+\&'-', '?' or ':' indicator ("key:\etvalue"), after the spaces that indent
+a line, inside a flow collection, after "---" or "...", between the
+parts of a directive, and before a comment.  JSON indented with tabs
+therefore parses.  A tab is refused where it would decide a
+block-structural column: in front of a block mapping key or a block
+sequence '-' on its line ("\eta: 1", "key:\et- a", "-\etb: c"), and as the
+indentation of a block scalar.  Inside a scalar a tab is content.
+
+Block-structured content is a mapping or a sequence.  It must start on
+its own line after an explicit "---" marker, and it must not share that
+line.  A scalar or a flow collection can share that line.
+
+A UTF-8 byte order mark may stand in the prefix of a document: at the
+start of the stream, at the start of the line of a later document
+after a "..." or before a "---", and at the end of the stream.  A
+prefix may hold several marks, with comment lines between them.  The
+mark is not content, and a comment may follow it directly.  YAML 1.2
+section 5.2 forbids a mark inside a document, so a mark at the start of
+a line anywhere else is a parse error.  A concatenation of a file that
+ends without a "..." and a file that starts with a mark therefore needs
+a "---" after the mark.  A mark in the middle of a line is ordinary
+content.
+
+Every continuation line of a flow collection must be indented more
+than the block mapping key or the "- " that holds the collection,
+counting spaces only.  A line that starts with the closing ']' or '}'
+is the one exception.  It may sit exactly at that indentation, after
+spaces only, which closes the collection under the line that opened
+it:
+
+    key: [
+      a,
+      b
+    ]
+
+Any other content at that column, and a closing indicator further to
+the left, is a parse error.
+
+The parser rejects a document that nests mappings, sequences or
+explicit keys more than 500 levels deep, with a parse error.  An
+explicit worklist drives the parse, not recursion.  The call stack that
+one parse needs is therefore a constant that does not grow with the
+nesting depth of the document.  That limit bounds the work of a single
+call, not the stack that the caller must give.  The parser also rejects
+a non-scalar dictionary key whose canonicalized flow-YAML text is
+larger than 64 KiB.  This second limit bounds a key that is itself a
+mapping which holds another such key many levels deep.
+Canonicalization re-quotes the already quoted text of each enclosing
+level, so that text grows fast with the nesting depth.  The parser
+builds that text only up to the limit, so a refused key costs at most
+64 KiB of text whatever its shape, however many aliases it expands.
+The limit applies to a key only: a flow collection in a value
+position, anchored or tagged or not, has no length limit of its own.  No realistic
+document that a person writes or a program generates reaches either
+limit.
+
+One parse call also rejects a document that needs more DOM nodes than
+the larger of 4,000,000 and 4 for each byte of input.  The parse error
+names the limit explicitly.
+
+One parse call also rejects a document whose DOM would use more than
+the larger of 256 MiB and 512 bytes for each byte of input.  An
+ordinary document of any size stays well below both limits.
+The count covers the node structs, their backing containers,
+the text of every scalar, every tag and every dictionary key.  The
+parse error again names this limit explicitly instead of a report of
+out of memory.  This limit bounds what the node count alone cannot.  A
+node is not a fixed amount of memory, and an alias deep-copies
+everything that its anchor holds.  A small document whose bytes sit in
+a few large anchored scalars can therefore expand without bound while
+its node count stays low.
+
+The nodes and bytes that a parse makes by copying what it already
+built also count against a fixed alias expansion limit of 4,000,000
+nodes and 256 MiB, which does not grow with the input.  A copy is the
+anchored node that an anchor registers, the node that an alias
+resolves to, a member that a merge key copies into its mapping, and the
+canonical text of a key that is a sequence or a mapping.  These are
+the only ways in which a document makes more DOM than its text
+describes, so a nested-alias document meets this limit at the same
+point whether or not a long comment pads it.  The parse error names
+this limit too.
+
+None of these limits applies to a tree that the caller builds directly
+through the construction API outside a parse.
+
+A float always uses '.' as its decimal point, whatever LC_NUMERIC the
+process or the calling thread uses.  For the length of the call, the
+calling thread runs in the "C" locale through uselocale(3), which
+changes no other thread, and the call restores the locale of the
+thread before it returns.  A custom allocator that the call invokes
+runs inside that window.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_parse_n_mp (3),
 .BR cyaml_destroy (3),
 .BR cyaml_node_tag (3),
 .BR cyaml_serialize (3),
-.BR cyaml_serialize_free_mp (3)
+.BR cyaml_serialize_stream (3),
+.BR cyaml_serialize_free_mp (3),
+.BR cyaml (7)

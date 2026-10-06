@@ -1,221 +1,616 @@
-.TH CHTTPSVR_START 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CHTTPSVR_START 3 "2026-10-01" "c_collections" "C Collections Library - Functions"
 .SH NAME
 chttpsvr_start \- register a listener with the running engine
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 ccol_retval_t chttpsvr_start(chttpsvr srv,
                              const chttpsvr_config_t *cfg);
 .fi
 .SH DESCRIPTION
 .nf
-Starts the server on the port and host specified in cfg.  cfg may be
-NULL, in which case the defaults from CHTTPSVR_CONFIG_DEFAULT are used.
+Starts the server on the port and the host that cfg names.  cfg may be
+NULL, and the server then uses the defaults of
+CHTTPSVR_CONFIG_DEFAULT.
 
-cfg->host may be a plain address ("0.0.0.0", "127.0.0.1", ...) for a
-TCP listener, or a "unix://path/to/socket" string to bind a Unix
-domain socket at that path instead (cfg->port is then ignored; a stale
-socket file already at that path is removed automatically before
-binding).  A single chttpsvr instance listens on either TCP or a Unix
-socket, never both; create two instances for both.
+cfg->host names the TCP listener, with the rules of the listener of
+the Go net package:
 
-If the shared, process-wide ccol_event_loop reactor (and its companion
-idle-timeout sweep thread) is not yet running in this process, it is
-started implicitly on this call and this call blocks until it is
-confirmed running before proceeding.  This reactor is independent of
-chttpclient's own engine; starting or stopping one has no effect on
-the other.  The listener socket is then bound synchronously and the
-function returns once the socket is in LISTEN state and registered
-with the reactor.
+  NULL or ""     (NULL is the default of CHTTPSVR_CONFIG_DEFAULT)
+                 every interface, with one dual-stack socket on [::]
+                 (IPV6_V6ONLY off) that also takes IPv4 clients through
+                 v4-mapped addresses; 0.0.0.0 on a host without IPv6.
+                 cfg->ipv6_only makes it an IPv6-only listener.
+  an address     exactly that address: "0.0.0.0" is every IPv4
+                 interface, "::" every IPv6 interface, "127.0.0.1" the
+                 IPv4 loopback alone.  An address in brackets, as in
+                 "[::1]", is the address inside the brackets; a name
+                 in brackets fails the start.
+  a host name    its first IPv4 address when it has one, else its first
+                 IPv6 address; "localhost" listens on 127.0.0.1.  With
+                 cfg->ipv6_only, its first IPv6 address when it has
+                 one, else its first IPv4 address.
 
-Multiple chttpsvr handles may be started on different ports (or Unix
-socket paths) simultaneously, all sharing the same reactor.
+The server tries that one address alone.  When it cannot bind it, for
+example because another socket holds the port on that address, the
+start fails with ccol_unexpected_failure, and the server never listens
+on another address of the same name in its place.  A host name that
+does not resolve, or a malformed bracketed address, fails the start in
+the same way, and the engine logger reports the reason.
 
-Port 0 is rejected with ccol_invalid_args, unless cfg->host is a
-"unix://" path (where port is meaningless and ignored).
+cfg->host can also be a "unix://path/to/socket" string.  The server
+then binds a Unix domain socket at that path, and ignores cfg->port.
+The server replaces a socket file at that path when no process listens
+on it.  The start fails with ccol_unexpected_failure, and does not
+change the file, in these cases:
+  - The path gives an object that is not a socket.
+  - The path gives a socket on which a live server listens.
+chttpsvr_stop and the destroy remove the socket file only while the
+path gives the socket that this server created.  They get to the file
+through the directory that held it at the start.  A later chdir() therefore
+has no effect.  One chttpsvr instance listens on TCP or on a Unix
+socket, never on both.  To use both, create two instances.
 
-A ctpool for dispatching all handlers (buffered and streaming) is
-created at start time using cfg->worker_thread_count threads and a
-queue whose capacity is cfg->worker_queue_capacity (0 = 1024 * threads;
-CHTTPSVR_QUEUE_UNBOUNDED = no capacity limit).  The pool is owned by
-the server and destroyed in __chttpsvr_destroy.
+An empty path fails the start with ccol_unexpected_failure.  A path
+that does not fit in the sun_path field of struct sockaddr_un also
+fails the start with ccol_unexpected_failure.  That field holds 108
+bytes on Linux and 104 bytes on the BSDs, with the terminating NUL.
+The server resolves a relative path against the working directory at
+the time of the start.
 
-Route rejections: an unmatched/malformed route (404/405/500, decided
-before any body byte is read) and a matched route whose ctpool is at
-capacity (503) are both rejected with a courtesy error response whose
-write is carried out on a small dedicated pool of its own, never the
-sole reactor thread; a slow-reading client being told "no" therefore
-cannot delay dispatch for any other, unrelated connection.
+This call starts the shared ccol_event_loop reactor of the process,
+and the idle-timeout sweep thread beside it, when they do not run yet.
+It then blocks until the library confirms that they run, and only then
+continues.  This reactor is separate from the engine of chttpclient.
+A start or a stop of one has no effect on the other.  The function
+then binds the listener socket synchronously.  It returns after the
+socket is in the LISTEN state and registered with the reactor.
 
-Body size limit: cfg->max_body_size caps the request body; 0 means
-unlimited.  A buffered route whose body exceeds this is rejected with
-413 before the handler ever runs; a streaming route's handler is
-always invoked, and chttpsvr_req_read() returns -1 with
-chttpsvr_req_stream_error() == ccol_msg_too_large once the limit is
-crossed.  Either way the connection is closed after the resulting
-response (Connection: close) rather than kept alive, since the excess
-body bytes beyond the limit are discarded, not drained.
+You can start more than one chttpsvr handle at the same time, on
+different ports or on different Unix socket paths.  All of them share
+the same reactor.
 
-A buffered route whose declared Content-Length already exceeds
-max_body_size is rejected with 413 immediately, before ever waiting for
-a body byte (which, for a stalled or malicious peer, may never arrive);
-this does not apply to a streaming route, whose handler is still always
-invoked regardless of the declared Content-Length, matching its own
-documented contract above.  Independently of route kind, any single
-chunk (chunked Transfer-Encoding) whose declared size exceeds
-max_body_size is also rejected as soon as its chunk-size line is parsed,
-before waiting for that chunk's data; this surfaces the same way any
-other malformed body already does for the route's kind (413/
-ccol_msg_too_large).
+The function rejects a port of 0 with ccol_invalid_args.  It accepts
+it only when cfg->host is a "unix://" path, where the port has no
+meaning and the server ignores it.
 
-Body read timeouts: cfg->stream_read_timeout_ms bounds how long a
-worker will wait for the next batch of body bytes (buffered or
-streaming); 0 waits indefinitely.  Because it resets on any new byte,
-a client that trickles data just fast enough never trips it, so
-cfg->max_body_read_duration_ms (0 = disabled, the default) separately
-bounds the *total* time spent reading one request's body regardless of
-per-gap progress; see chttpsvr_req_read.  cfg->response_write_timeout_ms
-(0 = use stream_read_timeout_ms's value) bounds the analogous per-call
-wait on the response-write side, protecting a worker thread from a
-slow-reading client during response send; cfg->max_response_write_
-duration_ms (0 = disabled, the default) is the write-side analogue of
-max_body_read_duration_ms, separately bounding the *total* time spent
-sending one response regardless of per-call progress.  On expiry the
-response send fails and the connection is closed.
+The server creates a ctpool at start time, and it dispatches every
+buffered handler through that pool.  The pool has
+cfg->worker_thread_count threads.  Its queue capacity is
+cfg->worker_queue_capacity, where 0 means 1024 slots for each thread,
+and CHTTPSVR_QUEUE_UNBOUNDED means no limit on the capacity.
+Streaming handlers run on a second pool of their own, which the server
+creates at the first streaming request that it receives; see "Slow
+clients" below.  cfg->streaming_thread_count set to
+CHTTPSVR_STREAMING_POOL_OFF runs them on the worker pool instead.  The
+server owns both pools, and destroys them when something destroys the
+server.
 
-Connection idle timeout: cfg->read_timeout_ms/idle_timeout_ms are
-enforced by the module-local idle-timeout sweep thread (shared by
-every chttpsvr instance in the process), not by any per-connection OS
-timer.  When idle_timeout_ms is non-zero it takes precedence over
-read_timeout_ms; otherwise read_timeout_ms is used; 0 for both
-disables idle-timeout enforcement entirely.  This only bounds time
-spent idle between requests (awaiting the next pipelined/keep-alive
-request), never time spent actively being handled by a worker thread.
+Rejection of a route: the server rejects a route that does not match,
+or that is malformed, with 404, 405 or 500.  It decides this before it
+reads any body byte.  It rejects a matched route whose ctpool is at
+capacity with 503 and a "Retry-After: 5" header.  It answers both with a
+courtesy error response, and a small dedicated pool of its own runs
+any middleware of that rejection.  No thread ever waits for the client
+to read that response: a write that meets a full socket parks the
+connection, with no thread, until the client reads, and the internal
+ceiling of 2 seconds (see max_response_write_duration_us) ends it.  A
+client that reads slowly and gets a "no" therefore cannot hold a
+thread, nor delay the dispatch of any other, unrelated connection.
+The interim "100 Continue" line of a buffered route parks in the same
+way, and the body is read once the line is out.
 
-Header size limit: cfg->max_header_bytes (0 = library default, 64 KiB)
-bounds the combined size of one request's header block; a request
-whose headers exceed this has its connection closed outright (no HTTP
-response is sent, matching every other pre-routing parse error this
-module's request parser reports).
+Lingering close: when the server closes a connection after a complete
+response while the client can still be sending (the unread body of a
+refused request, a body that a handler left unread, or pipelined
+bytes), a plain close would make the kernel answer with a reset, which
+can destroy the response before the client reads it.  The server
+instead sends a TLS close_notify when the connection uses TLS, shuts
+down its side of the connection for writing, and reads and discards
+what the client still sends, for at most 2 seconds, before it closes.
+The client therefore reads the whole response and then an orderly end
+of the stream, and so does a client that sends the whole body of a
+refused upload before it reads the response, as long as it finishes
+sending within that time.  A lingering connection holds no
+thread, and it counts against cfg->max_connections until it closes.  A
+refused request whose framing has no body, with nothing more in the
+socket, closes at once.
 
-Connection count limit: cfg->max_connections (0 = unlimited) bounds
-how many connections this listener may have open at once; once at
-capacity, new connections are simply left pending in the kernel's own
-listen backlog rather than accepted and immediately rejected, and the
-listener itself stops accepting until a slot frees, resuming
-automatically with a worst case of about one second between a slot
-freeing and the listener noticing.
+Limit on the body size: cfg->max_body_size caps the request body, and
+0 means unlimited.  The server rejects a buffered route whose body is
+above this with 413, before the handler runs.  The server always calls
+the handler of a streaming route.  For a streaming route,
+chttpsvr_req_read() returns -1 and chttpsvr_req_stream_error() gives
+ccol_msg_too_large after the body crosses the limit.  In both cases
+the server closes the connection after the response (Connection:
+close), and does not keep it alive.  It does this because it does not
+read the body bytes above the limit.  That close is a lingering close;
+see "Lingering close" above.
 
-Transient resource exhaustion (the process or system temporarily out
-of file descriptors, or a custom allocator supplied via
-ccol_create_chttpsvr_mp temporarily unable to satisfy a per-connection
-allocation) pauses this listener the same way: new connections are
-left pending until a periodic sweep resumes the listener, with the
-same worst-case one-second latency. This keeps a transient shortage on
-one listener from delaying any other, unrelated connection on any
-other chttpsvr instance sharing the same reactor thread.
+The server rejects a buffered route whose declared Content-Length is
+already above max_body_size with 413 at once.  It does not wait for a
+body byte first, and a stalled or malicious peer may never send one.
+This does not apply to a streaming route.  The server always calls the
+handler of a streaming route, whatever the declared Content-Length is,
+which matches the contract above.  The route kind does not matter for
+one more check.  The server also rejects any single chunk of a chunked
+Transfer-Encoding whose declared size is above max_body_size.  It does
+so as soon as it parses the chunk-size line of that chunk, and before
+it waits for the data of that chunk.  This appears in the same way as
+any other malformed body for that route kind, that is, as a 413 or as
+ccol_msg_too_large.
 
-Socket options (all default false, all best-effort, all no-ops for a
-Unix domain socket listener): cfg->enable_keepalive sets SO_KEEPALIVE
-on every accepted connection. cfg->enable_reuseport sets SO_REUSEPORT
-on the listening socket, letting multiple chttpsvr instances bind the
-identical host:port for kernel-load-balanced accept. cfg->ipv6_only
-sets IPV6_V6ONLY on an AF_INET6 listener, so it does not also
-implicitly accept IPv4-mapped connections.
+Every timeout and duration of chttpsvr_config_t is a uint64_t count of
+microseconds, rounded up to whole milliseconds inside the server; see
+CHTTPSVR_CONFIG_DEFAULT(3).
 
-Restart: after chttpsvr_stop is called, chttpsvr_start may be called
-again on the same handle to register a new listener.  The old ctpool is
-drained and replaced with a fresh one.  Any TLS context from the
-previous cycle is freed automatically before the new one is installed.
+Timeouts for a body read: cfg->stream_read_timeout_us bounds the gap
+between two batches of body bytes.  It applies to a buffered body and
+to a streaming body.  A value of 0 waits forever.  It resets on every
+new byte, so a client that sends its data just fast enough never trips
+it.  cfg->max_body_read_duration_us therefore
+separately bounds the *total* time that the server spends to read the
+body of one request, whatever the progress in each gap is.  Its
+default is 300000000, that is, 5 minutes, and 0 turns it off.  See
+chttpsvr_req_read.  cfg->response_write_timeout_us bounds the
+equivalent gap on the response-write side, and 0 there means the value
+of stream_read_timeout_us.  It bounds how long a response can wait on
+a client that stops reading; the send queue of the socket shrinking
+counts as progress.  See CHTTPSVR_CONFIG_DEFAULT(3).
+cfg->max_response_write_duration_us is the write-side equivalent of
+max_body_read_duration_us.  Its default is 300000000, that is, 5 minutes,
+and 0 turns it off.  It separately bounds the *total* time that the
+server spends to send one response, whatever the progress in each call
+is.  After it expires, the send of the response fails and the server
+closes the connection.
 
-Calling chttpsvr_start from within one of srv's own request handlers or
-middleware to restart the very server that handler is running on
-(typically preceded by that same handler calling chttpsvr_stop) is
-refused with ccol_not_permitted rather than attempted: that thread's
-own in-flight request can never finish while it is itself blocked
-draining that exact request, so the restart could never safely
-proceed.  Refusing it leaves srv in a perfectly safe, recoverable state
-(its previous configuration, or, if chttpsvr_stop already ran, simply
-stopped); a later, legitimate call to chttpsvr_start from a different
-thread still restarts it normally.
+For a buffered route no thread waits out any of these four limits: a
+body that stops arriving, or a response that meets a full socket,
+parks its connection with no thread (see "Slow clients" below), and
+the limits then apply to the parked connection.  The idle-timeout
+sweep thread checks them once a second, and the server checks them
+again when the connection becomes ready, so a client that stalls past
+a limit and then comes back meets the same answer.  An expired body
+gets 408 Request Timeout and a close, and an expired response is cut
+off and closed.  A streaming handler waits on its own thread inside
+chttpsvr_req_read(), and there the limits bound that wait directly.
 
-TLS: cfg->tls, when non-NULL, must have both cert_path and key_path
-set; any other shape (exactly one of the two set, cfg->tls->ca_bundle_path
-set with neither, or cfg->tls left otherwise empty, e.g. CHTTP_TLS_DEFAULT)
-is rejected with ccol_invalid_args before any other work is attempted,
-rather than silently starting the server as plain, unencrypted HTTP.  A
-trust store, or an otherwise-empty chttp_tls_config_t, is never valid
-server-side configuration without a server identity certificate (unlike
-the client side, where ca_bundle_path alone is the ordinary way to
-configure custom-CA verification with no client certificate involved).
-If cert_path/key_path are both set but the certificate/key pair cannot
-be loaded (a missing/unreadable file, a file larger than the 16 MB
-ceiling every PEM artefact is read under, or malformed contents),
-chttpsvr_start fails with ccol_unexpected_failure and no listener is
-registered.  If cfg->tls->ca_bundle_path is also set, it must load
-successfully too (this is what enables client-certificate verification
-on the resulting listener), and must contribute at least one
-certificate: a readable bundle that parses to none is a load failure,
-not an empty trust store.  A failure to load it is likewise reported
-as ccol_unexpected_failure rather than silently starting the server
-without the client-certificate verification that was requested.
-That verification is request-and-verify, not require: a client
-presenting a certificate must have it verify against the bundle or the
-handshake fails, while a client presenting none is still accepted.
-Rejecting anonymous clients must be enforced above this library.
+Slow clients: a worker thread never waits on the socket of a client
+for a buffered route.  When the body of a request stops arriving, the
+worker parks the connection, which then holds no thread, and returns
+to the pool.  When more of the body is ready, the reactor hands the
+connection to any free worker, which continues where the other one
+stopped.  A response write that meets a full socket parks the
+connection in the same way, and a later worker writes the rest.
+Keep-alive, pipelining, "Expect: 100-continue", HEAD, 204 and 304 work
+across a park exactly as without one.  A parked body asks the kernel
+to wake the reactor only once the rest of the body, or 16 KiB of it,
+is queued (SO_RCVLOWAT), so that a client that sends a byte at a time
+costs one wake-up and not one for each byte.
+
+cfg->min_transfer_rate_bps sets a minimum average rate, 240 bytes a
+second by default, for the body of a request and for the response to
+it.  The server measures it from the start of the body read, or of the
+response write, and judges it once cfg->min_transfer_rate_grace_us,
+5000000 (5 s) by default, has passed.  A body below the floor gets 408
+Request Timeout and a close; a response below it is cut off and
+closed; a streaming handler sees chttpsvr_req_read() fail with
+chttpsvr_req_stream_error() giving ccol_timed_out.  Time that the
+server itself holds a request back, in a wait for body memory or in
+the streaming queue, never counts against the client.
+CHTTPSVR_NO_RATE_FLOOR turns the floor off.
+
+cfg->max_partial_body_memory, 256 MiB by default, caps the memory that
+the bodies of buffered requests hold together on this server, from the
+first byte that the server reads until the handler returns.  A body
+with a Content-Length reserves its whole
+length before the server reads a byte of it.  When it does not fit,
+the request waits with no thread, the server reads nothing from it,
+and it sends no "100 Continue" until memory frees.  A chunked body
+reserves its buffer as the buffer grows, the old buffer included
+while a growth copies it, and waits in the same way when it runs out.
+The buffer of a body with a Content-Length takes exactly that length,
+so a reservation always covers the memory that the body holds.
+Waiting requests are admitted strictly in the order in which they
+began to wait, so a large body is never starved by small ones.  When
+every body that holds memory is itself waiting for more, the oldest
+waiter goes ahead past the limit, one request at a time, so the limit
+is exceeded by less than twice max_body_size and the server never
+deadlocks.  The server frees a body, and gives its reservation back,
+as soon as its handler returns, before the response goes out, so a
+response that waits for a slow reader holds no body; a request that is
+refused, cut off or closed frees both at once.  A body whose handler
+runs is not waiting, so a request that a handler waits for, and whose
+body does not fit beside the bodies that running handlers hold, waits
+until its deadline.  A request that waits longer than cfg->body_memory_wait_timeout_us, 30000000 (30 s)
+by default, gets 503 Service Unavailable with "Retry-After: 5" and a
+close.  A body that arrives complete together with its headers, and
+every streaming route, reserves nothing.  CHTTPSVR_NO_MEMORY_CAP turns
+the limit off, and CHTTPSVR_NO_DEADLINE removes the deadline of the
+wait.
+
+Streaming handlers run on their own pool of
+cfg->streaming_thread_count threads, the worker thread count by
+default, so that slow streaming clients can occupy at most that pool
+and never the threads that serve buffered routes.  A streaming request
+that finds no free streaming thread waits, with no thread, in a queue
+of cfg->streaming_queue_capacity entries, four times the streaming
+thread count by default.  A request that finds the queue full gets 503
+with "Retry-After: 5" at once, and one that waits longer than
+cfg->streaming_queue_timeout_us, 5000000 (5 s) by default, gets the same
+answer.  A handler never runs for a request that got that 503.
+
+Every limit here reads 0 as its default, so a configuration that
+never mentions a field keeps the defense.  Each one turns off only
+through its own named constant, from <ccollections/chttpserver.h>:
+
+  CHTTPSVR_NO_RATE_FLOOR       ((unsigned)-1), for min_transfer_rate_bps:
+                               no minimum rate; a body read or a
+                               response write is then bounded only by
+                               stream_read_timeout_us,
+                               max_body_read_duration_us,
+                               response_write_timeout_us and
+                               max_response_write_duration_us.
+  CHTTPSVR_NO_MEMORY_CAP       ((size_t)-1), for max_partial_body_memory:
+                               no limit on body memory, so no request
+                               waits for it.
+  CHTTPSVR_NO_DEADLINE         UINT64_MAX, for body_memory_wait_timeout_us
+                               and streaming_queue_timeout_us: the wait
+                               lasts as long as it takes.  It holds no
+                               thread, and a destroy of the server still
+                               ends it.  Every other value, however
+                               large, is a finite deadline.
+  CHTTPSVR_QUEUE_UNBOUNDED     ((size_t)-1), for worker_queue_capacity and
+                               streaming_queue_capacity: no limit on the
+                               queue, so no request gets a 503 because the
+                               queue is full.
+  CHTTPSVR_STREAMING_POOL_OFF  (-1), for streaming_thread_count:
+                               streaming handlers run on the worker
+                               pool, with no pool and no queue of their
+                               own.  worker_queue_capacity then bounds
+                               them, and a slow streaming client can
+                               hold a worker thread for as long as the
+                               read limits allow.
+
+The 503 that the server writes itself always carries "Retry-After: 5".
+
+Idle timeout of a connection: the idle-timeout sweep thread of this
+module applies cfg->read_timeout_us and cfg->idle_timeout_us.  Every
+chttpsvr instance in the process shares that thread.  No OS timer for
+each connection applies these two fields.  idle_timeout_us wins over
+read_timeout_us when idle_timeout_us is above 0.  The server uses
+read_timeout_us otherwise.  A value of 0 in both turns the idle
+timeout off completely.  This only bounds the time that a connection
+spends idle between requests, while it waits for the next pipelined or
+keep-alive request.  It never bounds the time that a worker thread
+spends to handle a request.
+
+Limit on the duration of a header read:
+cfg->max_header_read_duration_us bounds the *total* wall-clock time
+that one connection can spend in the reactor-owned phase of one
+request.  That phase is the TLS handshake, where there is one, plus
+the read of the whole header block of that request.  Its default is
+30000000, that is, 30 s, and 0 turns it off.  read_timeout_us and
+idle_timeout_us above reset on every byte that arrives.  A peer that
+sends its request headers, or its handshake, one byte at a time, and
+never completes them, therefore defeats both of them.  Such a peer
+never comes near max_header_bytes either.  This field is the
+header-phase equivalent of max_body_read_duration_us.  The same
+idle-timeout sweep thread applies it.  That sweep runs once a second
+and closes every connection that expired, however many there are, so a
+connection lives up to about a second longer than its deadline.  See
+CHTTPSVR_CONFIG_DEFAULT(3).  The budget is for each
+request.  It starts at the first handshake step, or at the first byte
+of the header block of the request when there is no handshake.  The
+next request of a keep-alive connection starts a fresh budget when its
+own first byte arrives.  After the budget expires, the server closes
+the connection and sends no response, because the header block was
+never complete enough to answer.
+
+Limit on the header size: cfg->max_header_bytes bounds the combined
+size of the header block of one request, and 0 means the library
+default of 64 KiB.  The server answers a request whose headers are
+above this with 400 Bad Request and then closes the connection.  The
+request parser of this module reports every other malformed request
+before the routing in the same way.  The answer is best effort: a peer
+that is still streaming its oversized header block when the server
+closes can meet a reset before it reads anything.  Whatever this
+value, the request line and each header line must end within 8 KiB,
+CRLF included, and a request holds at most 100 header lines.
+
+Request validation: the server refuses these requests before any
+route, middleware or handler sees them, and closes the connection
+after the answer.  A request line whose HTTP version is not 1.x, such
+as HTTP/0.9, HTTP/2.0 or HTTP/3.0, gets 505 HTTP Version Not Supported;
+a higher minor version of HTTP/1 is served as HTTP/1.1 (RFC 9110
+section 2.5).  A Host header outside the uri-host [ ":" port ] grammar
+of RFC 9112 section 3.2 gets 400: the host must be a reg-name of
+unreserved, sub-delims and percent-encoded bytes, an IPv4 address, or
+a bracketed IP literal, so a '/', '@', '?', '#' or whitespace, an
+empty host, or a port that is not all digits is refused.  A
+Transfer-Encoding that names a coding other than chunked, such as
+"gzip, chunked", gets 501 Not Implemented, because the server decodes
+no other coding; one that does not end in chunked gets 400.  The chunk
+framing of a body (size lines, chunk extensions and CRLFs) may exceed
+16 bytes plus twice the data of each chunk by 16 KiB in all; a body
+past that is malformed, so a buffered route answers 400 and
+chttpsvr_req_read of a streaming route fails with
+ccol_http_transfer_aborted.  An HTTP/1.0 request that carries
+"Expect: 100-continue" gets no interim 100 response (RFC 9110 section
+10.1.1).
+
+Request target: the server accepts an origin-form target, which is a
+path that begins with "/", and an absolute-form target with the scheme
+http or https, whose path it serves and whose authority it ignores.
+An absolute-form target with an empty path stands for "/".  Every
+other target gets 400 Bad Request and a close, before the route search
+and before any middleware runs.  That covers a path with no leading
+"/", a bare query such as "?x", and any other scheme.
+
+The asterisk form follows Go's net/http server exactly.  The server
+answers "OPTIONS *" itself with 200 OK and a Content-Length of 0, and
+runs no route, no middleware and no handler.  The response carries the
+same headers as any other response, date, content-length and
+connection, and no Allow header.  The connection follows the ordinary
+keep-alive rules.
+The server reads and discards a request body of up to 4 KiB.  A larger
+body, or one that fails to arrive, still gets the 200, and the
+connection closes after it.  A declared Content-Length above 4 KiB is
+not read at all, and no 100 Continue invites it.  Any other method with
+the target "*" gets 400 Bad Request and a close, a method outside the
+seven chttp_method_t names included, such as "PROPFIND *".  Such a
+method with any other target gets 501 Not Implemented.
+
+Date: each final response has a Date header with the current time in
+UTC, in the IMF-fixdate form of RFC 9110 section 5.6.7.  The exception
+is a handler that set its own Date with chttpsvr_resp_set_header(3).
+This rule applies to handler responses, HEAD, each rejection that the
+server writes itself, "OPTIONS *", and each response on a keep-alive
+connection.  A 1xx response and the interim 100 Continue have no Date,
+as in the net/http server of Go.  The headers that the server adds
+itself are therefore:
+  - date.
+  - content-length.  The server does not add it to a 1xx, a 204, a
+    304, or a HEAD response for which the handler wrote no body.
+  - connection.
+  - allow on a 405, and retry-after on a 503 that the server writes
+    itself.
+
+Host: a request with more than one Host header gets 400 Bad Request,
+for all versions.  An HTTP/1.1 request with no Host header also gets
+400 Bad Request.  An HTTP/1.0 request does not need a Host header.
+With two Host lines, a front-end can forward one authority while this
+server reads a different authority.
+
+The request target must not hold whitespace (a space or a horizontal
+tab), other control characters or DEL.  A request line that does not
+obey this rule gets 400 Bad Request and a close, before the routing.
+
+Framing: the server reads Transfer-Encoding as one list.  It merges
+that list from all Transfer-Encoding lines.  These rules apply:
+  - chunked must be the last coding of that list.
+  - chunked must occur in the list one time at most.
+  - The server refuses a Transfer-Encoding together with a
+    Content-Length.
+A request that does not obey one of these rules gets 400 Bad Request
+and a close, before the routing.
+
+A malformed body is a client error.  It gets 400, not 500.  These
+bodies are malformed:
+  - A body with a chunk size that is not hexadecimal.
+  - A body with a chunk that has no CRLF at its end.
+  - A body with a malformed trailer line.
+  - A body that ends before the length that its framing gives.
+A body above max_body_size gets 413, not 400.  A body that stops
+arriving gets 408, not 400.
+
+An HTTP/1.0 request that has Transfer-Encoding gets 400 Bad Request and
+a close, whatever its Connection header says, as RFC 9112 section 6.1
+requires.  A chunk-size line must obey the full chunk-extension grammar
+of RFC 9112 section 7.1.1.  A control byte in an extension makes the
+body malformed, and the request gets 400.  A "close" token in a
+Connection header closes the connection after the response, for all
+HTTP versions.  This is also true when the header also has a
+"keep-alive" token.
+
+Limit on the connection count: cfg->max_connections bounds how many
+connections this listener can have open at one time, and 0 means
+unlimited.  At capacity, new connections stay pending in the listen
+backlog of the kernel.  The server does not accept them and then
+reject them.  The listener itself stops accepting until a slot frees,
+and then resumes automatically.  The worst case is about one second
+between the free of a slot and the moment that the listener notices
+it.
+
+A temporary shortage of resources pauses this listener in the same
+way.  Such a shortage happens when the process or the system is
+temporarily out of file descriptors, and when a custom allocator from
+ccol_create_chttpsvr_mp temporarily cannot serve an allocation for a
+connection.  New connections then stay pending until a periodic sweep
+resumes the listener, with the same worst case of one second.  This
+keeps a temporary shortage on one listener from a delay of any other,
+unrelated connection on any other chttpsvr instance that shares the
+same reactor thread.
+
+Socket options: the server sets TCP_NODELAY on every TCP connection
+that it accepts, and it leaves the socket buffer sizes of such a
+connection to the kernel, so that the buffer autotuning of Linux
+(tcp(7)) stays on.  On a connection of a Unix domain socket listener,
+which has no autotuning, it raises both socket buffers to at least 128
+KiB.  The three configurable options below all default to false, the
+server applies each one as well as it can, and each one does nothing
+on a Unix domain socket listener.  cfg->enable_keepalive sets SO_KEEPALIVE on
+every
+connection that the server accepts.  cfg->enable_reuseport sets
+SO_REUSEPORT on the socket that listens, which lets more than one
+chttpsvr instance bind the same host and port, so that the kernel
+load-balances the accepts.  cfg->ipv6_only sets IPV6_V6ONLY on an
+AF_INET6 listener, so that the listener does not also accept
+IPv4-mapped connections.
+
+Restart: you can call chttpsvr_start again on the same handle after a
+call to chttpsvr_stop, and that registers a new listener with the new
+configuration.  The call returns at once.  Fresh pools replace the
+pools of the previous run at once, and the old pools drain in the
+background: a request of the previous run that still runs finishes
+normally, with its own response, and the restart neither waits for it
+nor cuts it off.  A keep-alive connection that stayed open across the
+stop is served under the new configuration from its next request on.
+The server frees any TLS context of the cycle before that
+automatically, before it installs the new one; a connection that still
+uses it keeps it until that connection closes.
+
+Do not call chttpsvr_start from a request handler or a middleware of
+srv to restart the very server that the handler runs on.  That handler
+usually calls chttpsvr_stop first.  The library refuses such a call
+with ccol_not_permitted, and does not try it.  The refusal leaves srv in a safe state that you can recover from.
+That state is the configuration that srv had before, or a stopped
+server when chttpsvr_stop already ran.  A later, legitimate call to
+chttpsvr_start from a different thread still restarts it normally.
+
+TLS: cfg->tls, when it is not NULL, must have both cert_path and
+key_path set.  The function rejects any other shape with
+ccol_invalid_args, before it tries any other work.  It does not
+silently start the server as plain, unencrypted HTTP.  Those other
+shapes are: exactly one of the two set; cfg->tls->ca_bundle_path set
+with neither of the two; and a cfg->tls that is otherwise empty, for
+example CHTTP_TLS_DEFAULT.  A trust store alone is never valid
+server-side configuration, and neither is an otherwise empty
+chttp_tls_config_t.  Server-side configuration always needs an
+identity certificate for the server.  The client side is different
+there: ca_bundle_path alone is the ordinary way to set up verification
+against a custom CA with no client certificate at all.
+
+chttpsvr_start fails with ccol_unexpected_failure, and registers no
+listener, when cert_path and key_path are both set but the library
+cannot load the certificate and key pair.  That load fails for a file
+that is missing or unreadable, for a path that does not name a regular
+file (a directory, a FIFO or a device, which the library refuses at
+once without waiting on it), for a file above the ceiling of 16 MB that
+the library reads every PEM artefact under, and for malformed contents.
+cfg->tls->ca_bundle_path must also load successfully when you set it,
+under the same rules.  That bundle is what turns on mutual TLS on the
+resulting listener.  It must also contribute at least one certificate.
+A bundle that the library can read but that parses to no certificate,
+or to certificate revocation lists alone, is a load failure, and not an
+empty trust store.  The function reports a failure to load it as
+ccol_unexpected_failure too.  It does not silently start the server
+without the verification of client certificates that you asked for.
+
+A ca_bundle_path that holds certificate revocation lists (CRLs) beside
+its CA certificates enforces them.  Every certificate of the chain that
+a client presents, below its trust anchor, then needs a CRL of its
+issuer in the bundle, as the ssl_crl directive of nginx needs.  The
+handshake fails for a revoked client certificate, for a certificate
+whose issuer has no CRL in the bundle, and for a CRL past its next
+update time.  The bundle is read here, so a renewed CRL takes effect at
+the next chttpsvr_start.  See CHTTP_TLS_DEFAULT(3).
+
+Mutual TLS requires a client certificate by default.  The handshake of
+a client that presents none fails, and so does the handshake of a
+client whose certificate does not verify against the bundle.
+cfg->tls->client_cert_optional relaxes the first rule only: the server
+then also serves a client that presents no certificate, and
+chttpsvr_req_peer_cert_verified(3) tells a handler which kind of
+client it serves.  chttpsvr_req_peer_cert_der(3),
+chttpsvr_req_peer_cert_sha256(3) and chttpsvr_req_peer_cert_subject(3)
+tell it which client authenticated.
+
+The listener resumes TLS sessions, from its session cache and from TLS
+1.3 tickets, for TLS 1.2 and TLS 1.3, with or without a ca_bundle_path,
+and for a client that presents a certificate and one that does not.
+Each call of chttpsvr_start builds a new TLS configuration with a new
+session cache, so a session from an earlier cycle ends in a full
+handshake, and never in a failure.
+
+Pipelining: a client can write its next request before it reads the
+previous response.  A keep-alive connection serves such a client, on a
+buffered route and on a streaming route.  Bytes of a later request can
+arrive in the same read as the headers or the body of the current
+request.  The server keeps those bytes for the next request.  It never
+drops them.  Pipelined requests can arrive together in one TLS record.
+The server answers all of them with no more bytes from the client,
+exactly as over plain TCP.
+
+Each response that has a body gives its length in Content-Length.  The
+server sends a TLS close_notify before it closes a TLS connection whose
+handshake is complete.  Some clients treat a TLS end of stream without
+close_notify as a truncation.  Such a client therefore never sees a
+truncation from this server.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success on success.
-ccol_invalid_args if srv is CHTTPSVR_INVALID, a stale/already-destroyed
-handle, if cfg->port is 0 and cfg->host is not a "unix://" path, or if
-cfg->tls is set without both cert_path and key_path also set.
-ccol_not_permitted if this server is already started, or if this call
-was made from within one of srv's own request handlers/middleware.
-ccol_not_enough_memory if memory allocation fails, or if the shared
-engine (its reactor threads or its own diagnostics logger) could not
-be created.
-ccol_unexpected_failure if the listen socket could not be created/bound
-or registered with the shared reactor, if the shared idle-timeout
-sweep thread could not be started, or if cfg->tls was set but its
-certificate/key pair or ca_bundle_path could not be loaded.
+ccol_invalid_args when srv is CHTTPSVR_INVALID or a stale handle that
+something already destroyed; when cfg->port is 0 and cfg->host is not
+a "unix://" path; when cfg->tls is set but cert_path and key_path are
+not both set; or when cfg->streaming_thread_count is negative and not
+CHTTPSVR_STREAMING_POOL_OFF.
+ccol_not_permitted when this server already started, or when this call
+came from a request handler or a middleware of srv.
+ccol_not_enough_memory when a memory allocation fails, or when the
+library could not create the shared engine, that is, its reactor
+threads or its own diagnostics logger.
+ccol_unexpected_failure when the library could not create or bind the
+listen socket (for example because another socket holds the port on
+the address that cfg->host names, or because cfg->host does not
+resolve or is malformed), could not register it with the shared
+reactor, or could not start the shared idle-timeout sweep thread.  It also gives this
+when cfg->tls was set and the library could not load its certificate
+and key pair or its ca_bundle_path.  It also gives this when the
+process already holds PTHREAD_KEYS_MAX thread-specific keys, so that
+the library cannot create the key that marks the worker threads of a
+server.  The server then does not start, and a later call tries again.
+.fi
+.SH NOTES
+.nf
+The library leaves the disposition of SIGPIPE to the application.  It
+never changes it, neither here nor anywhere else.  No write of the
+server raises that signal: every write to a connection, a TLS record
+and the close_notify of a TLS teardown included, is a send(2) or a
+sendmsg(2) with MSG_NOSIGNAL.  A client that closes or resets its
+connection while the server writes a response therefore ends that one
+connection, and never the process, whatever disposition of SIGPIPE the
+application has chosen.
 .fi
 .SH "THREAD SAFETY"
 .nf
-chttpsvr_stop only closes the listener socket; connections already
-accepted before the stop keep running and may still dispatch further
-requests on this same handle at any point during a subsequent restart.
-The old ctpool is only drained and destroyed once every request already
-in flight has completed, so a restart is safe to call even while such a
-connection is still active; no request can ever be handed to a ctpool
-that is concurrently being torn down. This wait is bounded (up to 30
-seconds, plus a further short grace period), even for a connection
-whose worker thread is genuinely blocked reading or writing it under a
-0 ("wait indefinitely") stream_read_timeout_ms/max_body_read_duration_ms/
-response_write_timeout_ms/max_response_write_duration_ms configuration;
-see chttpsvr_config_t's own
-documentation (CHTTPSVR_CONFIG_DEFAULT(3)) for the mechanism.
+chttpsvr_stop closes only the listener socket.  A connection that the
+server accepted before the stop keeps running.  It can still dispatch
+more requests on this same handle at any point during a later restart.
+Every such request goes to the pools that the server runs with at that
+moment, and a request that runs on a pool of the previous run finishes
+there before that pool is destroyed.  A restart is therefore safe to
+call while such a connection is still active, and no request ever goes
+to a pool that something tears down at the same time.  A parked
+connection holds no thread; it stays with the server and resumes on
+the new worker pool.  chttpsvr_destroy waits for the requests of every
+run, with the bound that CHTTPSVR_CONFIG_DEFAULT(3) describes.
 
-A chttpsvr_start call restarting srv is also safe to race against a
+A chttpsvr_start call that restarts srv is also safe in a race with a
 concurrent chttpsvr_stop call on the same handle from a different
-thread: this function waits for that in-flight stop's own teardown of
-the old listener to fully finish before binding a new one on the same
-host/port, rather than racing a bind() against a socket the stop has
-not yet closed.
+thread.  This function waits for the teardown of the old listener in
+that stop to finish completely, and then binds a new listener on the
+same host and port.  It does not race a bind() against a socket that
+the stop did not close yet.
 
-chttpsvr_start is also safe to race against a concurrent, engine-wide
-teardown (chttpsvr_engine_stop(), or the shared reactor's own graceful
-shutdown when the last other server referencing it is destroyed): it
-transparently retries until that teardown has finished, rather than
-racing it.
+chttpsvr_start is also safe in a race with a concurrent engine-wide
+teardown.  Such a teardown comes from chttpsvr_engine_stop(), or from
+the graceful shutdown of the shared reactor after the destruction of
+the last other server that references it.  This function retries
+transparently until that teardown finishes.  It does not race it.
 .fi
 .SH "SEE ALSO"
+.BR chttpsvr_req_peer_cert_verified (3),
+.BR chttpsvr_req_peer_cert_der (3),
+.BR chttpsvr_req_peer_cert_sha256 (3),
+.BR chttpsvr_req_peer_cert_subject (3),
+.BR CHTTPSVR_CONFIG_DEFAULT (3),
 .BR chttpsvr_stop (3),
 .BR chttpsvr_engine_stop (3),
 .BR chttpsvr_set_engine_logger (3),
 .BR chttpsvr_set_engine_mem_mgmt_procs (3),
-.BR chttpsvr_engine_wait (3),
-.BR __chttpsvr_destroy (3)
+.BR chttpsvr_engine_wait (3)

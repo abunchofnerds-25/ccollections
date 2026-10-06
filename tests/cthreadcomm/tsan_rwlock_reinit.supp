@@ -21,8 +21,9 @@
 # involved at all) that reproduces the identical "lock-order-inversion
 # (potential deadlock)" report, attributing the cycle to the exact same
 # nested-lock call site the real report names. The underlying rwlock is
-# genuinely safe post-fork (POSIX explicitly permits this reinit idiom, and
-# there is no real concurrent deadlock: prepare()/release() run fully
+# genuinely safe post-fork (glibc's own fork handling re-initializes its
+# internal locks in the child the same way, and there is no real concurrent
+# deadlock: prepare()/release() run fully
 # serialized around each individual fork() call, on one thread at a time, and
 # the child has exactly one surviving thread); this is a detector limitation
 # around the reinit-in-child pattern colliding with an earlier, unrelated
@@ -30,10 +31,9 @@
 # module's own logic.
 #
 # Anchored on _cthreadcomm_atfork_prepare (this module's own nested-lock call
-# site, always symbol-resolved, and the exact function every real report so
-# far has named) rather than any pthread-internal frame name, mirroring
-# tests/clogger/tsan_rwlock_reinit.supp's own identical "anchor on our own
-# code" choice.
+# site, always symbol-resolved, and the exact function every real report
+# names) rather than any pthread-internal frame name, so that the anchor is
+# on our own code.
 deadlock:_cthreadcomm_atfork_prepare
 
 # Second symptom of the exact same root cause above, not a separate issue:

@@ -5,19 +5,19 @@ chmap_get_elem_copy \- copy the value associated with a key out of a hash map
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chashmap.h>
+#include <ccollections/chashmap.h>
 
 ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair *key_pair,
                                   void *target_buf, size_t target_buf_size);
 .fi
 .SH DESCRIPTION
 .nf
-Searches the map for key_pair and copies the associated value into
-target_buf, copying min(value_size, target_buf_size) bytes so an
-undersized buffer receives a partial copy rather than an error. When
-target_buf_size exceeds the stored value's size, the remaining bytes of
-target_buf are zeroed rather than left untouched. cbmap_get_elem_copy(3)
-takes the stricter approach of requiring an exact size match.
+Searches the map for key_pair and copies the value into target_buf. It
+copies min(value_size, target_buf_size) bytes. A buffer that is too
+small therefore gets a partial copy, and not an error. The function sets
+the rest of target_buf to zero when target_buf_size is larger than the
+stored value. cbmap_get_elem_copy(3) is stricter: it needs an exact
+match of the sizes.
 .fi
 .SH PARAMETERS
 .nf
@@ -36,6 +36,12 @@ ccol_invalid_args   - Any pointer is NULL, a size is 0, or key_pair's
 .fi
 .SH NOTES
 .nf
+The ptr of a key_pair needs no specified alignment. The map hashes and
+compares the key bytes through memcpy. It does not use a pointer cast to
+the key type. key_pair->ptr can therefore point directly at key bytes at
+any offset in a larger buffer. Examples are a field in a packed network
+frame and a memory-mapped record. You do not have to copy the key bytes
+into an aligned local variable first
 O(1) average complexity
 Open-addressing: O(n) worst case for linear probing
 Separate chaining: O(n) worst case per bucket, where n is chain length

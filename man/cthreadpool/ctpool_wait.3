@@ -5,19 +5,19 @@ ctpool_wait \- block until the pool is idle
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadpool.h>
+#include <ccollections/cthreadpool.h>
 
 void ctpool_wait(ctpool pool);
 .fi
 .SH DESCRIPTION
 .nf
-Blocks until the task queue is empty and all active tasks have
-finished executing. Does not shut down the pool; worker threads
-remain alive and new tasks may be submitted after this call returns.
+Blocks until the task queue is empty and every active task stops. It
+does not shut the pool down. Every worker thread stays alive, and the
+caller can submit new tasks after this call returns.
 
-Contract: no other thread should be submitting tasks concurrently
-when ctpool_wait is called. With an unbounded queue, concurrent
-submissions can cause indefinite blocking.
+Contract: no other thread should submit a task while ctpool_wait runs.
+With an unbounded queue, a submission from another thread can block
+this call for ever.
 .fi
 .SH PARAMETERS
 .nf
@@ -25,17 +25,27 @@ pool   Thread pool handle (CTPOOL_INVALID or a stale/already-destroyed handle is
 .fi
 .SH NOTES
 .nf
-A pool inherited across a fork(2) call (its worker threads are not
-duplicated into the child) is treated as vacuously idle: ctpool_wait
-on such a pool in the child returns immediately rather than waiting
-for progress no worker thread in that process can ever make.
+ctpool_wait waits for the queue and for the tasks that workers run. It
+does not wait for the on_complete callbacks of discarded tasks. A
+ctpool_shutdown_immediate(3) on another thread empties the queue at
+once, and then calls the on_complete of each discarded task, with
+ran == false, on its own thread. ctpool_wait can therefore return while
+those callbacks still run. Wait for the return of the
+ctpool_shutdown_immediate call itself to know that every one of them
+finished.
 
-Calling ctpool_wait on pool from within a task (or that task's
-on_complete callback) currently executing on one of pool's own
-worker threads is also treated as vacuously idle and returns
-immediately: the calling task is itself still counted among pool's
-active tasks until it returns, so waiting here would otherwise
-deadlock the calling worker against itself.
+The library treats a pool that a child inherited across a fork(2) call
+as idle by default. fork(2) does not duplicate the worker threads of
+that pool into the child. ctpool_wait on such a pool in the child
+therefore returns at once. It does not wait for progress that no worker
+thread in that process can ever make.
+
+A call to ctpool_wait on pool from inside a task is also idle by
+default, and returns at once. That holds when the task runs on one of
+the worker threads of pool. A call from the on_complete callback of
+that task is the same. The pool still counts the task that calls among
+its own active tasks until that task returns. Without this, a wait here
+would deadlock the worker that calls against itself.
 .fi
 .SH "SEE ALSO"
 .BR ctpool_shutdown_drain (3),

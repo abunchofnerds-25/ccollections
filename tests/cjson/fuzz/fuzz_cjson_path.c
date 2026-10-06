@@ -23,23 +23,26 @@ SOFTWARE.
 */
 
 /*
- * libFuzzer target for cjson's path-navigation grammar: the dot-separated
- * component syntax (plain keys, '#N' list indices, '\.'/'\\' escapes; see
- * cjson.h's own "Path syntax" section) consumed by _cjson_get() / cjson_set()
- * / _cjson_delete() via navigate()/path_find_unescaped_dot()/
- * path_find_last_unescaped_dot()/path_unescape_component()/
- * parse_list_index_component() in cjson.c. This is a second, independent
- * hand-written parser in this module besides the JSON grammar itself;
- * fuzz_cjson_parse.c already covers that one in isolation, so this target
- * instead parses a JSON document once and fuzzes the PATH string repeatedly
- * navigated/mutated/deleted against it.
+ * A libFuzzer target for the path navigation grammar of cjson. That grammar
+ * is the dot-separated component syntax: plain keys, '#N' list indices, and
+ * the '\.' and '\\' escapes. The "Path syntax" section of cjson.h describes
+ * it. _cjson_get(), cjson_set() and _cjson_delete() read it. They do so
+ * through navigate(), path_find_unescaped_dot(),
+ * path_find_last_unescaped_dot(), path_unescape_component() and
+ * parse_list_index_component() in cjson.c. This is a second hand-written
+ * parser in this module, beside the JSON grammar itself, and the two are
+ * independent. fuzz_cjson_parse.c already covers the JSON grammar on its own.
+ * This target therefore parses one JSON document one time. It then fuzzes the
+ * PATH string, and navigates, changes and deletes against that document again
+ * and again.
  *
- * The fuzz input is split on the first NUL byte: everything before it is
- * parsed as JSON (drawing on the same seed material as fuzz_cjson_parse's
- * own corpus so mutation can freely explore malformed JSON and malformed
- * paths together); everything after is used verbatim as the path string. An
- * input with no NUL byte, or an empty path, is skipped, since there is
- * nothing here beyond what fuzz_cjson_parse already exercises.
+ * The target splits the fuzz input on the first NUL byte. It parses
+ * everything before that byte as JSON. That half draws on the same seed
+ * material as the corpus of fuzz_cjson_parse, so a mutation can explore
+ * malformed JSON and malformed paths together. The target uses everything
+ * after that byte as the path string, byte for byte. It skips an input with
+ * no NUL byte, and an input with an empty path. Such an input adds nothing
+ * beyond what fuzz_cjson_parse already covers.
  */
 
 #include <cjson.h>
@@ -63,7 +66,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 
   char *err = NULL;
   cjson root = cjson_parse_n_mp((const char *)data, json_len, &err, NULL);
-  if (err) free(err);
   if (!root) {
     free(path);
     return 0;
@@ -72,9 +74,10 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   cjson got = cjson_get(root, path);
   (void)got;
 
-  /* Exercise every cjson_set()-accepted C type, not just one, selecting
-   * among them deterministically from the fuzz input's own last byte so a
-   * saved crash reproduces the identical branch on replay. */
+  /* Drive every C type that cjson_set() accepts, and not only one of them.
+   * The last byte of the fuzz input selects the type. That choice is
+   * deterministic, so a saved crash takes the identical branch on a
+   * replay. */
   switch (path_bytes[path_len - 1] % 5) {
     case 0:
       cjson_set(root, path, (long long)42);

@@ -5,14 +5,14 @@ ccol_r_mempool_total_capacity \- get total capacity for a size
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cmempool.h>
+#include <ccollections/cmempool.h>
 
 size_t ccol_r_mempool_total_capacity(ccol_r_mempool *rmp, size_t size);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the total number of entries in the pool that services the given
-size. Does not include dynamic allocations.
+Returns the total number of entries in the pool that serves the given size.
+It does not count a dynamic allocation.
 .fi
 .SH PARAMETERS
 .nf
@@ -26,15 +26,16 @@ Returns 0 on error
 .fi
 .SH NOTES
 .nf
-Returns 0 if size is invalid (0 or > largest_size)
-Size is rounded up to next power-of-2 pool
-Thread-safe if pool created with single_threaded=false
+It returns 0 if size is invalid, which means 0 or above largest_size
+It rounds size up to the next power-of-two pool
+Thread-safe if the pool was created with single_threaded=false
 
-The count this reports for a size is the count that tier was built for,
-and that many entries of that size are always obtainable. A tier large
-enough to maintain per-thread caches allocates a reserve beyond it, so
-concurrent callers can briefly hold a few more than this at once; see
-ccol_mempool_total_capacity(3) for the full account.
+The count that this reports for a size is the count that the tier was built
+for. You can always get that many entries of that size. A tier that is large
+enough to keep a cache for each thread allocates a reserve beyond that
+count. Concurrent callers can therefore hold a few more than this at one
+time, for a short while. See ccol_mempool_total_capacity(3) for the full
+account.
 .fi
 .SH "SEE ALSO"
 .BR ccol_r_mempool_used_count (3),

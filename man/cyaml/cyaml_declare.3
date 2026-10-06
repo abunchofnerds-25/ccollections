@@ -5,17 +5,18 @@ cyaml_declare \- declare an uninitialized cyaml variable
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cyaml.h>
+#include <ccollections/cyaml.h>
 
 cyaml_declare(var_name);
 .fi
 .SH DESCRIPTION
 .nf
-Declares a cyaml handle variable named var_name without initializing
-it.  Provided for naming-convention symmetry with other c_collections
-modules (which all expose a _declare variant).
+Declare a cyaml handle variable with the name var_name.  This macro does
+not initialize the variable.  It exists so that the naming convention
+matches the other c_collections modules.  Each of those modules has its
+own _declare macro.
 
-This macro simply expands to "cyaml var_name".
+This macro expands to "cyaml var_name".
 .fi
 .SH PARAMETERS
 .nf

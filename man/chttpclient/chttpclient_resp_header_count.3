@@ -1,0 +1,51 @@
+.TH CHTTPCLIENT_RESP_HEADER_COUNT 3 "2026-09-29" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpclient_resp_header_count \- count the lines of a response header
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpclient.h>
+
+size_t chttpclient_resp_header_count(const chttpcli_response *resp,
+                                     const char *name);
+.fi
+.SH DESCRIPTION
+.nf
+This function gives the number of lines of the response header block
+that carry the name that you give. The lookup ignores the case of the
+name. Every such line counts once, whatever its value, and an empty
+value counts too.
+
+Use it with chttpclient_resp_header_at to read each occurrence of a
+header that a server can send more than once, such as Set-Cookie.
+.fi
+.SH PARAMETERS
+.nf
+resp  The response to query. It can be NULL, and the function then
+      gives 0.
+name  The header name. It can be NULL, and the function then gives 0.
+.fi
+.SH RETURN VALUE
+.nf
+The number of lines with that name, or 0 if the response has none.
+The function also gives 0 for a response from a streaming request,
+which keeps no headers.
+.fi
+.SH NOTES
+.nf
+Only the header block of the response counts. A trailer field of a
+chunked response body is not a response header, and it never counts
+here.
+.fi
+.SH EXAMPLES
+.nf
+size_t n = chttpclient_resp_header_count(resp, "Set-Cookie");
+for (size_t i = 0; i < n; i++)
+    printf("cookie: %s\\n",
+           chttpclient_resp_header_at(resp, "Set-Cookie", i));
+.fi
+.SH "SEE ALSO"
+.BR chttpclient_resp_header_at (3),
+.BR chttpclient_resp_header (3),
+.BR chttpclient_resp_free (3)

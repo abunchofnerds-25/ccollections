@@ -1,37 +1,41 @@
 .TH CCOL_CHAN_RECV_ZC 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-ccol_chan_recv_zc \- receive a message from the ccol_channel (blocking)
+ccol_chan_recv_zc \- receive a message from the ccol_channel (it blocks)
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadcomm.h>
+#include <ccollections/cthreadcomm.h>
 
 ccol_retval_t ccol_chan_recv_zc(ccol_channel *ch, c_message_t *target_buf);
 .fi
 .SH DESCRIPTION
 .nf
-Automatically selects the appropriate queue based on calling thread:
-- Owner thread receives from ccol_workers_to_owner queue
-- Worker threads receive from ccol_owner_to_workers queue
+The function picks the correct queue itself. It uses the thread that calls
+it:
+- The owner thread receives from the ccol_workers_to_owner queue
+- A worker thread receives from the ccol_owner_to_workers queue
 
-Blocks until a message arrives and transfers ownership.
+The function blocks until a message arrives. Then it transfers the
+ownership.
 .fi
 .SH PARAMETERS
 .nf
 ch          Channel to receive from
-target_buf  Buffer to receive the message (receives ownership of data)
+target_buf  Buffer that gets the message. It also gets the ownership of
+            the data.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success       - Message received (caller must free target_buf->data)
+ccol_success       - The function received a message. The caller must free
+                     target_buf->data.
 ccol_invalid_args  - ch or target_buf is NULL
 .fi
 .SH NOTES
 .nf
-Blocks until a message arrives in the selected queue
-Direction is automatically determined by thread ID
-Caller receives ownership of target_buf->data and must free it
+The function blocks until a message arrives in the chosen queue.
+The function picks the direction itself from the ID of the thread.
+The caller gets the ownership of target_buf->data and must free it.
 .fi
 .SH "SEE ALSO"
 .BR ccol_chan_try_recv_zc (3),

@@ -5,16 +5,25 @@ cjson_declare_scoped \- declare a cjson variable with automatic destruction
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cjson.h>
+#include <ccollections/cjson.h>
 
 cjson_declare_scoped(var_name);
 .fi
 .SH DESCRIPTION
 .nf
-Expands to `cjson var_name` decorated with the GCC cleanup attribute so
-that cjson_destroy() is called automatically when the variable goes out
-of scope.  The variable must be initialized before use (set to NULL or
-to a valid node).
+Declares a cjson handle variable with the name var_name and sets it to
+NULL.  The macro also attaches a cleanup attribute to the variable.
+When var_name goes out of scope, the cleanup frees the tree that the
+variable holds, exactly as cjson_destroy() does.  The cleanup runs at
+the end of the enclosing block, on all ways out of the block: a normal
+exit, break, continue, return and goto.
+
+Give the variable only a tree that the caller owns.  Examples are the
+result of cjson_parse() and the result of a cjson_create_*() function.
+Do not give it a borrowed reference from cjson_get().  The cleanup
+frees such a reference while its parent still holds it.
+
+The macro uses a GCC and Clang extension.
 .fi
 .SH PARAMETERS
 .nf
@@ -30,5 +39,4 @@ var_name  Name of the variable to declare.
 .fi
 .SH "SEE ALSO"
 .BR cjson_declare (3),
-.BR cjson_destroy (3),
-.BR _ccol_destructor (3)
+.BR cjson_destroy (3)

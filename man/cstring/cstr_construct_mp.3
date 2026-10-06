@@ -5,14 +5,14 @@ cstr_construct_mp \- declare and initialise a cstr with custom memory management
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 cstr_construct_mp(s, initial, mprocs);
 .fi
 .SH DESCRIPTION
 .nf
-Combines cstr_declare() and cstr_init_mp() into a single statement. Creates
-a cstr using the supplied custom memory management procedures.
+This macro combines cstr_declare() and cstr_init_mp() into one statement. It
+creates a cstr with the custom memory management procedures that you give.
 .fi
 .SH PARAMETERS
 .nf

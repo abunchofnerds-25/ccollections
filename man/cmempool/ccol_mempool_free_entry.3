@@ -5,49 +5,67 @@ ccol_mempool_free_entry \- free an entry back to the pool
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cmempool.h>
+#include <ccollections/cmempool.h>
 
 ccol_mempool_free_entry(mp, entry);
 .fi
 .SH DESCRIPTION
 .nf
-Returns an allocated entry to the pool's free list. Macro wrapper around
-_ccol_mempool_free_entry() that sets pointer to NULL.
+Returns an allocated entry to the free list of the pool. It sets the
+pointer of the caller to NULL.
 
-The pool is named by the caller rather than derived from the entry. Free
-an entry to the pool it was allocated from; passing a different pool is a
-caller error and is fatal.
+The caller names the pool. The macro does not derive it from the entry.
+Free an entry to the pool that it came from. A different pool is an error
+of the caller, and it is fatal.
+
+The pool decides from the address alone whether the entry is one of its
+own, before it reads anything through it. An entry inside the buffer of
+the pool is checked in the status array of the pool. The pool records the
+address of every entry that its dynamic fallback hands out, until that
+entry is freed, and it checks any other address against that record. An
+entry of another pool, an address that the pool never handed out, and a
+fallback entry that is already free all end in the assert, and none of
+them is read.
 .fi
 .SH PARAMETERS
 .nf
-mp     Pool the entry was allocated from
-entry  Entry to free (will be set to NULL after freeing)
+mp     Pool that the entry came from
+entry  Entry to free. The macro sets it to NULL afterward
 .fi
 .SH NOTES
 .nf
 O(1) complexity
-Safe to call with a NULL entry; a NULL pool is a caller error and fatal
-Performs corruption detection via assertions
+It is safe to call this macro with a NULL entry. A NULL pool is an error
+of the caller, and it is fatal
+The macro does corruption detection with assertions
 
-On a thread-safe pool the entry is parked in a small per-thread cache,
-and the shared free list is reached only when that cache is full. A pool
-too small to maintain one, meaning fewer than 8 elements, takes the
-pool's lock on every call instead. See
-ccol_mempool_create(3) for how to size a pool.
+On a thread-safe pool the entry goes into a small cache of the calling
+thread. The macro reaches the shared free list only when that cache is
+full. A pool too small to keep a cache, which means fewer than 8
+elements, takes the lock of the pool on every call instead. So does a
+thread that the pool has no cache left to give: one lock for each call,
+as on a pool without a cache. See ccol_mempool_create(3) for how to size
+a pool.
 
-Corruption and double-free detection are unaffected by caching. An entry
-sitting in a cache is still marked free, so freeing it a second time is
-detected exactly as it would be otherwise. Two threads freeing the same
-entry at the same instant are the exception: the check that catches it
-runs outside the lock, so one of the two can miss the other's mark. That
-is a data race in the calling program either way, and it is the same
-limit a thread-caching general purpose allocator has.
+The cache does not change corruption detection or double-free detection.
+An entry in a cache is still marked free, so a second free of it is
+detected exactly as it is otherwise. There is one exception: two threads
+that free the same entry at the same instant. The check that catches a
+double free runs outside the lock, so one of the two threads can miss
+the mark of the other. Such a call is a data race in the program of the
+caller in either case. It is also the same limit that a general purpose
+allocator with a thread cache has.
+
+The macro evaluates each argument exactly once. entry must be a
+modifiable lvalue, such as a variable or an element of an array, so an
+expression with a side effect, such as entries[i++], frees and clears
+one element.
 .fi
 .SH "THREAD SAFETY"
 .nf
 Thread-safe if the pool was created with single_threaded = false.
-Concurrent callers do not contend on the common path. An entry freed by
-one thread may be handed out to another.
+Concurrent callers do not contend on the common path. The pool can hand
+an entry that one thread freed out to another thread.
 .fi
 .SH "SEE ALSO"
 .BR ccol_mempool_alloc_entry (3),

@@ -5,26 +5,38 @@ clog_close \- flush, close, and free a logger
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <clogger.h>
+#include <ccollections/clogger.h>
 
 void clog_close(clog logger);
 .fi
 .SH DESCRIPTION
 .nf
-Releases all resources owned by the logger:
-  - If the logger is file-backed and this is the last handle sharing
-    the underlying file (i.e. all derived loggers have also been
-    closed), the file descriptor is closed.  If derived loggers still
-    exist the fd remains open and the file's ref-count is decremented.
-  - If async logging is enabled (see clog_open_fd_mp(3)) and this is
-    the last handle, everything already queued is drained and the
-    writer thread is joined before the file descriptor is closed.
-  - All attached key=value fields are freed.
-  - The internal write buffer is freed.
-  - The per-handle state is freed; the shared backing store is freed
-    only when the last handle is released.
+Releases every resource that the logger owns.
+  - The logger can sit on a file, and this can be the last handle that
+    shares that file.  Every derived logger is then also closed, and
+    this call closes the file descriptor.  When a derived logger still
+    exists, the fd stays open and the call lowers the refcount of the
+    file.  A handle that a second clog_open_file_mp(3) of the same
+    rotating file returns shares that file in the same way.
+  - Async logging can be on.  See clog_open_fd_mp(3).  When this is the
+    last handle, the call drains everything that is already queued.  It
+    joins the writer thread before it closes the file descriptor.  That
+    drain is the last delivery attempt of the logger.  What it cannot
+    deliver has no later retry, so the call writes a "log record
+    truncated: undelivered batch dropped (records=<n> bytes=<m>): the
+    logger closed" record in its place.
+  - The logger can compress its rotated files.  See
+    clog_open_file_mp(3).  When this is the last handle, the call waits
+    until every compression that a rotation queued has finished.  It
+    then stops the compression thread.  Every rotated file of the
+    logger is therefore compressed, or left whole and uncompressed after
+    a failed compression, by the time that the call returns.
+  - It frees every key=value field that the logger holds.
+  - It frees the internal write buffer.
+  - It frees the state of this handle.  It frees the shared backing
+    store only when it releases the last handle.
 
-After this call, the handle must not be used.
+Do not use the handle after this call.
 .fi
 .SH PARAMETERS
 .nf
@@ -32,17 +44,18 @@ logger  Logger handle to close.
 .fi
 .SH NOTES
 .nf
-clog_close() must not be called while another thread is still making any
-call (log_* macros, clog_set_level, clog_set_field and friends,
-clog_derive, or another clog_close()) with that same handle. Callers are
-responsible for ensuring all other use of a handle has finished before
-closing it. Closing one handle concurrently with a sibling handle (root
-vs. derived, or two derived loggers) that is still logging is unaffected
-by this and remains safe, since that sibling is a different, still-open
-handle.
-For fd-based loggers (clog_open_fd_mp), the file descriptor is NOT
-closed; it is the caller's responsibility.
-Asserts if logger is CLOG_INVALID, stale, or already closed.
+Do not call clog_close() while another thread still makes any call with
+that same handle.  Such a call is a log_* macro, clog_set_level,
+clog_set_field and the functions beside it, clog_derive, or another
+clog_close().  The caller must make sure that every other use of a
+handle has stopped before it closes that handle.  This rule does not
+cover a close that runs at the same time as a sibling handle that still
+logs.  That sibling can be the root against a derived logger, or two
+derived loggers.  Such a close stays safe, because the sibling is a
+different handle that is still open.
+For a logger that sits on an fd, from clog_open_fd_mp, this call does
+NOT close the file descriptor.  The caller must do that.
+Asserts when logger is CLOG_INVALID, stale or already closed.
 .fi
 .SH "SEE ALSO"
 .BR clog_open_fd_mp (3),

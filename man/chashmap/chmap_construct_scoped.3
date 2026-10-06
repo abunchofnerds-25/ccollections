@@ -1,0 +1,84 @@
+.TH CHMAP_CONSTRUCT_SCOPED 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chmap_construct_scoped \- declare and create a hash map that is destroyed on scope exit
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chashmap.h>
+
+chmap_construct_scoped(hm_name, key_t, val_t);
+.fi
+.SH DESCRIPTION
+.nf
+Declares a hash map handle named hm_name. It also declares the companion
+type variables. These variables carry key_t and val_t to every later
+type-inferred macro. The macro then creates the map with the default allocator
+and with the map's own hashing for key_t. It also attaches the cleanup
+attribute. This attribute destroys the map at every exit from the enclosing
+scope, an early return included.
+
+This macro is chmap_construct(3) plus that cleanup attribute. Nothing else
+is different: the same allocator, the same hashing, and the same choice of
+implementation strategy from key_t and val_t. Use this macro when the whole
+useful life of the map is one block. Use chmap_construct(3) when the caller
+returns the handle, stores it, or destroys it somewhere that the compiler
+cannot see.
+
+chmap_declare_scoped(3) and then chmap_init(3) is the two-step form. Use
+the two-step form for a map whose configuration is decided inside the
+scope, and not at the declaration.
+.fi
+.SH PARAMETERS
+.nf
+hm_name  Name for the map handle to declare
+key_t    Key type; it tells every later macro how to read a key and, with
+         val_t, which implementation strategy the map uses
+val_t    Value type
+.fi
+.SH RETURN VALUE
+.nf
+None. This macro declares variables and does not expand to an expression.
+.fi
+.SH NOTES
+.nf
+Stops the program through ccol_fatal_err() if the creation fails. Use
+chmap_declare_scoped(3) with chmap_init(3) when the caller must handle a
+failure
+Needs GCC or Clang, because it uses the cleanup attribute
+Uses the default allocator and CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16)
+buckets
+Scope exit destroys the map and clears the handle. An explicit
+chmap_destroy(3) earlier in the scope therefore stays correct, and the
+cleanup at scope exit then does nothing
+The companion type variables follow the scope of the handle. A function
+that gets the handle therefore needs chmap_redeclare(3) there
+Destruction of the map frees the copies of the keys and values that it
+owns. It does not free anything that a stored pointer value points at
+.fi
+.SH WARNINGS
+.nf
+The handle must not outlive its scope. Do not return the handle. Do not
+store it somewhere that outlives the scope. Both of these hand out a handle
+whose map is freed at the exit from the scope.
+.fi
+.SH EXAMPLES
+.nf
+int count_unique(char **words, size_t n) {
+    chmap_construct_scoped(seen, char *, int);
+    int one = 1;
+    for (size_t i = 0; i < n; i++) {
+        chmap_insert(seen, words[i], one);
+    }
+    return (int)chmap_elem_count(seen);   /* seen is destroyed here */
+}
+.fi
+.SH "SEE ALSO"
+.BR chmap_construct (3),
+.BR chmap_construct_mp_scoped (3),
+.BR chmap_construct_ch_scoped (3),
+.BR chmap_construct_full_scoped (3),
+.BR chmap_declare_scoped (3),
+.BR chmap_init (3),
+.BR chmap_redeclare (3),
+.BR chmap_destroy (3)

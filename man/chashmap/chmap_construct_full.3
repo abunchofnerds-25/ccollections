@@ -1,0 +1,95 @@
+.TH CHMAP_CONSTRUCT_FULL 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chmap_construct_full \- declare and create a hash map with custom allocation, hashing and key equality
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chashmap.h>
+
+chmap_construct_full(hm_name, key_t, val_t, mmgmt_procs,
+                     custom_hashing_proc, custom_key_equality_proc);
+.fi
+.SH DESCRIPTION
+.nf
+Declares a hash map handle named hm_name. It also declares the companion
+type variables. These variables carry key_t and val_t to every later
+type-inferred macro. The macro then creates the map. It is the widest of the
+construct macros. chmap_construct(3) is this macro with the default
+allocator and the map's own hashing. chmap_construct_mp(3) gives only an
+allocator. chmap_construct_ch(3) gives only a hashing procedure.
+
+Stops the program through ccol_fatal_err() if the creation fails. Use
+chmap_init_full(3) on an already declared handle when the caller must
+handle a failure instead of the failure being fatal.
+
+The map picks its implementation strategy from the key and value types, as
+chmap_create_full(3) describes. A custom hashing procedure does not change
+that choice. A custom key equality procedure selects separate chaining.
+.fi
+.SH PARAMETERS
+.nf
+hm_name              Name for the map handle to declare
+key_t                Key type
+val_t                Value type
+mmgmt_procs          Pointer to ccol_memmgmt_procs_t, or NULL for the
+                     default allocator
+custom_hashing_proc  A ccol_hashing_proc_t, or NULL to use the map's own
+                     hashing for the key type
+custom_key_equality_proc
+                     A ccol_key_equality_proc_t, or NULL to use the map's
+                     own key comparison
+.fi
+.SH "CUSTOM HASHING"
+.nf
+A custom procedure gets the key bytes and their length. It returns an
+unsigned long. It must return the same value for two keys that the map
+considers equal. For a char * key, equal means equal contents and not an
+equal pointer.
+
+The return value does not need to avalanche. The map finalizes the value
+that a custom procedure returns with its own bit-mixing step. It does this
+before it reduces the value to a slot or a bucket. A procedure that puts
+all of its entropy in the low bits (a sum, a small identifier, a truncated
+checksum) therefore still distributes correctly. This is why the contract
+of the procedure is only "any function of the key that respects equality".
+There is no rule about which end of the result carries the entropy.
+.fi
+.SH "CUSTOM KEY EQUALITY"
+.nf
+custom_key_equality_proc gets both keys and both sizes, and returns true
+when the two are the same key. The map uses it in place of its built-in
+comparison. It must agree with custom_hashing_proc: two keys that it
+reports as equal must get the same hash. A key equality procedure
+without a hashing procedure makes the creation fail, and this macro then
+stops the program. A struct key with padding bytes needs both
+procedures; see chmap_create_full(3).
+.fi
+.SH RETURN VALUE
+.nf
+None. This macro declares a variable and does not expand to an expression.
+.fi
+.SH NOTES
+.nf
+chmap_destroy(3) destroys the handle. Use chmap_construct_full_scoped(3)
+when scope exit must destroy it instead
+The companion type variables follow the scope of the handle. A function
+that gets the handle therefore needs chmap_redeclare(3) there
+.fi
+.SH EXAMPLES
+.nf
+unsigned long my_hash(const void *key, size_t len);
+
+chmap_construct_full(cache, char *, int, &my_procs, my_hash, NULL);
+int score = 42;
+chmap_insert(cache, "alice", score);
+chmap_destroy(cache);
+.fi
+.SH "SEE ALSO"
+.BR chmap_construct (3),
+.BR chmap_construct_mp (3),
+.BR chmap_construct_ch (3),
+.BR chmap_construct_full_scoped (3),
+.BR chmap_init_full (3),
+.BR chmap_create_full (3),
+.BR chmap_destroy (3)

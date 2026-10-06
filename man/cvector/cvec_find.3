@@ -1,45 +1,103 @@
-.TH CVEC_FIND 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH CVEC_FIND 3 "2026-09-28" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cvec_find \- find the first occurrence of an element by value (type-safe)
+cvec_find \- find the first element with a given value (type-inferred)
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cvector.h>
+#include <ccollections/cvector.h>
 
 size_t idx = cvec_find(v, elem);
 .fi
 .SH DESCRIPTION
 .nf
-Type-safe wrapper for cvector_find() that accepts a value (including
-rvalues and literals) and compares using memcmp (byte-wise equality).
-Use cvector_find() directly when a custom comparator is needed.
+This macro is a type-inferred wrapper for cvector_find(). It accepts a value,
+and an rvalue or a literal is also a value. The macro converts the needle
+to the declared element type of the vector. It compares the elements with
+the default comparison procedure of that type. Equality is therefore the
+equality of the type and not the equality of its object representation.
+chashmap and cbstmap use the same idea of equality for a key of the same
+type. For example, -0.0 and 0.0 are one value. A long double compares by
+value, and not through the padding bytes that its representation carries on
+some targets.
+
+A char*, signed char* or unsigned char* element (uint8_t* is an
+unsigned char*) is a NUL-terminated string to this library, and the
+comparison reads it with strcmp(). Do not search a vector of pointers to
+binary buffers this way: a buffer with no NUL byte is read past its end.
+Search such a vector with cvector_find(3) and a comparator that compares
+the pointers, or declare the element type as void*, whose byte-wise
+equality is the identity of the pointer.
+
+An element type that is an array, such as char[64], takes an array or a
+string literal as elem. The macro zero-fills its copy to the element size
+and copies the bytes of elem into it, up to the smaller of the two sizes,
+exactly as cvec_push(3) stores such a value. A pointer as elem for an
+array element type is a compile error, because the macro cannot see the
+size of what it points at.
+
+A char* element can be NULL, and the needle can also be NULL. The default
+string comparison procedure puts NULL before every string that is not NULL.
+NULL is equal only to another NULL. A search for NULL in a sparse char*
+vector therefore gives the index of the first empty slot. The macro
+dereferences nothing.
+
+Some element types have no default comparison procedure. These are a bool,
+a struct, a union, a pointer to anything other than char, and a fixed-size
+char array. For such a type, the comparison falls back to byte-wise
+equality over the whole representation of the element, and that includes
+the padding bytes of a struct. With GCC 11 or later, the macro sets the
+padding bytes of its own copy of elem to zero. cvec_push(3) does the
+same for each element that it stores. The macro therefore finds a
+struct that went in through cvec_push(3) with any value whose members
+are equal. The padding bytes of that value have no effect. An element that went
+in through cvector_push_back(3), cvector_append_array(3) or an assignment
+through cvec_at(3) keeps the padding bytes that the caller wrote. With a
+compiler that offers no __builtin_clear_padding, such as Clang, the
+padding bytes of the macro copies are unspecified. Search for a padded
+struct with cvector_find(3) and a comparator that reads the members.
+cvec_find compiles for every element type. cvec_sort is deliberately
+different. An ordering cannot come from the bytes of an element in the way that equality can.
+cvec_sort therefore has no fallback and rejects such an element type at
+compile time.
+
+Use cvector_find() directly when you need a custom comparator. Use it also
+when you want byte-wise equality for a type that has a default comparison
+procedure.
 .fi
 .SH PARAMETERS
 .nf
 v     Vector to search
-elem  Element value to search for (rvalue or lvalue)
+elem  Element value to search for. It can be an rvalue or an lvalue.
 .fi
 .SH RETURN VALUE
 .nf
-Zero-based index of the first matching element.
-ccol_invalid_size if no match is found.
+Zero-based index of the first element that matches.
+ccol_invalid_size when there is no match.
 .fi
 .SH NOTES
 .nf
 O(n) complexity
-Uses memcmp for comparison (byte-wise equality)
-Structs with padding bytes may not compare correctly
+The macro compares with the default comparison procedure of the element
+type.
+The macro orders a NULL char* element, and a NULL needle for a char*
+vector. It dereferences neither of them.
+The macro falls back to byte-wise equality for a type that has no default
+comparison procedure. A struct with padding bytes compares correctly only
+when both copies carry zero padding. See DESCRIPTION.
+The macro compiles for every element type. cvec_sort does not.
 .fi
 .SH EXAMPLES
 .nf
 cvec_construct(vec, int);
-cvec_push_rvalue(vec, 10);
-cvec_push_rvalue(vec, 20);
-cvec_push_rvalue(vec, 30);
+cvec_push(vec, 10);
+cvec_push(vec, 20);
+cvec_push(vec, 30);
 size_t idx = cvec_find(vec, 20);   // idx == 1
 size_t nf  = cvec_find(vec, 99);   // nf  == ccol_invalid_size
 cvec_destroy(vec);
 .fi
 .SH "SEE ALSO"
-.BR cvector_find (3)
+.BR cvector_find (3),
+.BR cvec_push (3),
+.BR cvec_sort (3)

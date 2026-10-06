@@ -1,0 +1,75 @@
+.TH CHTTPSVR_REQ_PEER_CERT_SHA256 3 "2026-10-01" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_req_peer_cert_sha256 \- write the SHA-256 fingerprint of the verified client certificate
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpserver.h>
+
+ccol_retval_t chttpsvr_req_peer_cert_sha256(
+    const chttpsvr_req *req,
+    unsigned char out[CHTTPSVR_PEER_CERT_SHA256_LEN]);
+.fi
+.SH DESCRIPTION
+.nf
+Writes the SHA-256 digest of the DER encoding of the client
+certificate of the request into out.  That is the encoding that
+chttpsvr_req_peer_cert_der(3) gives, and the digest is the value that
+
+    openssl x509 -noout -fingerprint -sha256 -in client.pem
+
+prints, without its colons.  It identifies one certificate exactly, so
+a handler or a middleware can compare it with a list of the clients
+that it allows.
+
+It succeeds only when chttpsvr_req_peer_cert_verified(3) reports true
+for req.
+.fi
+.SH PARAMETERS
+.nf
+req  The request handle.
+out  A buffer of CHTTPSVR_PEER_CERT_SHA256_LEN bytes.  That macro, from
+     <ccollections/chttpserver.h>, expands to 32, the length of a
+     SHA-256 digest.  Every failure leaves the buffer all zeroes.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success            out holds the fingerprint.
+ccol_key_not_found      chttpsvr_req_peer_cert_verified(3) reports
+                        false for req: no client certificate verified
+                        on this connection.
+ccol_not_enough_memory  An allocation failed.
+ccol_invalid_args       req or out is NULL.
+.fi
+.SH THREAD SAFETY
+.nf
+Call it only on the thread that runs the handler or the middleware of
+req, as every other accessor of a request.
+.fi
+.SH EXAMPLES
+.nf
+#include <ccollections/chttpserver.h>
+#include <string.h>
+
+/* The fingerprint of the one client that may call this route. */
+static const unsigned char allowed[CHTTPSVR_PEER_CERT_SHA256_LEN] = {
+    0x3a, 0x7f, /* ... the 32 bytes ... */
+};
+
+static void handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx)
+{
+    (void)ctx;
+    unsigned char fp[CHTTPSVR_PEER_CERT_SHA256_LEN];
+    if (chttpsvr_req_peer_cert_sha256(req, fp) != ccol_success ||
+        memcmp(fp, allowed, sizeof(fp)) != 0) {
+        chttpsvr_resp_set_status(resp, CHTTP_STATUS_FORBIDDEN);
+        return;
+    }
+    chttpsvr_resp_write_str(resp, "ok");
+}
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_req_peer_cert_der (3),
+.BR chttpsvr_req_peer_cert_subject (3),
+.BR chttpsvr_req_peer_cert_verified (3)

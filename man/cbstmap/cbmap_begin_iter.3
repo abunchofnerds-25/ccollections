@@ -1,0 +1,94 @@
+.TH CBMAP_BEGIN_ITER 3 "2026-09-20" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cbmap_begin_iter \- create an iterator positioned at an ordered map's first entry
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cbstmap.h>
+
+cmap_iterator *cbmap_begin_iter(cbmap cbm, char **err);
+.fi
+.SH DESCRIPTION
+.nf
+Allocates an iterator at the first element of the map. Each step gives
+the key and the value of one element. The caller reads them through the
+unified accessors ccol_iter_key_ptr(3) and ccol_iter_val_ptr(3). The
+value pointer points into the storage of the map itself. A write through
+that pointer therefore updates the stored value in place.
+
+The generic ccol_begin(3) macro selects this function for a cbmap. Call
+this function directly only when you already know the container type and
+you want the error string. ccol_begin(3) is the ordinary entry point.
+.fi
+.SH PARAMETERS
+.nf
+cbm   Ordered map to iterate over, or NULL
+err   Optional pointer that receives an error string on failure, or
+      NULL
+.fi
+.SH RETURN VALUE
+.nf
+Returns a pointer to a new iterator at the first element.
+Returns NULL when there is nothing to iterate over, and sets *err to
+NULL. This happens when cbm is NULL or when the map holds no elements.
+Returns NULL and sets *err to an error string when the library cannot
+allocate the iterator.
+.fi
+.SH "ITERATION ORDER"
+.nf
+The walk goes in order over the AVL tree. It therefore visits the
+elements in ascending key order. It uses the same order that the map
+itself uses to place a key. A hash map gives no such order. This order is
+part of the contract of the container, and the caller can depend on it.
+It is the reason to choose cbmap and not chmap when the order matters.
+.fi
+.SH NOTES
+.nf
+The function sets *err to NULL on entry, before anything else. To
+separate an empty result from a failure, test *err and not the return
+value
+A NULL cbm iterates as an empty map. The function reports no error. This
+is a deliberate contract across modules. chashmap_begin_iter(3) and
+cvector_begin_iter(3) share it. A map field can still be NULL because the
+caller put nothing into it yet. The caller can iterate such a field
+directly, and no caller needs its own NULL guard first
+The iterator frees itself when ccol_iter_next(3) steps past the last
+element and returns NULL. A walk that stops early must end with a call to
+ccol_iter_destroy(3). The caller can also declare the iterator with
+ccol_iter_declare(3), which destroys it at the exit of the scope
+The iterator carries a fixed-size stack for the walk. That stack has room
+for the maximum height that an AVL tree of any element count can reach. A
+new iterator therefore costs one allocation, and each step costs none
+The library allocates the iterator through the memory management
+procedures of the map
+An insert into the map, or a removal from it, during the walk makes the
+iterator invalid. A change of a value in place through
+ccol_iter_val_ptr(3) does not
+.fi
+.SH EXAMPLES
+.nf
+cbmap_construct(ages, char *, int);
+int age = 30;
+cbmap_insert(ages, "alice", age);
+age = 41;
+cbmap_insert(ages, "bob", age);
+
+char *err = NULL;
+ccol_iter_declare(ages, it);
+for (it = cbmap_begin_iter(ages, &err); it; it = ccol_iter_next(it)) {
+    printf("%s = %d\en", *ccol_iter_key_ptr(it),
+                         *ccol_iter_val_ptr(it));
+}
+if (err) {
+    fprintf(stderr, "cannot iterate: %s\en", err);
+}
+cbmap_destroy(ages);
+.fi
+.SH "SEE ALSO"
+.BR ccol_begin (3),
+.BR ccol_iter_next (3),
+.BR ccol_iter_destroy (3),
+.BR ccol_iter_declare (3),
+.BR chashmap_begin_iter (3),
+.BR cvector_begin_iter (3)

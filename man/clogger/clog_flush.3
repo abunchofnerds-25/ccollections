@@ -5,23 +5,25 @@ clog_flush \- block until queued log records are durably written
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <clogger.h>
+#include <ccollections/clogger.h>
 
 void clog_flush(clog logger);
 .fi
 .SH DESCRIPTION
 .nf
-Blocks the calling thread until every record queued through logger
-(or any sibling handle sharing the same underlying target) as of the
-moment this call is made, plus any partially-filled aggregation
-buffer, has been durably written via write(2).
+Blocks the calling thread until write(2) has durably written two
+things.  The first is every record that something queued through logger
+at the moment of this call.  A sibling handle that shares the same
+target below counts as well.  The second is whatever an aggregation
+buffer holds that is only part filled.
 
-A no-op that returns immediately for a synchronous (non-async)
-logger, i.e. one created without a clog_async_cfg_t (see
-clog_open_fd_mp(3) / clog_open_file_mp(3)).
+This call does nothing and returns at once for a synchronous logger,
+which is one with no async mode.  Such a logger is one that somebody
+created with no clog_async_cfg_t.  See clog_open_fd_mp(3) and
+clog_open_file_mp(3).
 
-A record submitted by some other thread concurrently with, but
-strictly after, this call is not guaranteed to be included.
+Another thread can submit a record at the same time as this call, and
+strictly after it.  This call does not promise to cover that record.
 .fi
 .SH PARAMETERS
 .nf
@@ -33,17 +35,24 @@ None.
 .fi
 .SH NOTES
 .nf
-Safe to call on any still-open handle at any time, including
-concurrently with ordinary log_*() calls on the same or a sibling
-handle.
-If the underlying async queue cannot accept the flush request (a rare
-allocation failure), this function returns immediately without
-blocking rather than waiting for an acknowledgment that will never
-arrive.
+It is safe to call this on any handle that is still open, at any time.
+That covers a call at the same time as an ordinary log_*() call, on the
+same handle or on a sibling handle.
+The async queue below can fail to accept the flush request, on a rare
+allocation failure.  This function then returns at once and does not
+block.  It does not wait for an acknowledgment that will never arrive.
 In a forked child, a logger whose async mode has fallen back to
-synchronous logging (see clog_open_fd_mp(3)) treats this call as the
-same no-op a synchronous logger's own call would be.
-Asserts if logger is CLOG_INVALID, stale, or already closed.
+synchronous logging does nothing here.  See clog_open_fd_mp(3).  The
+call behaves exactly as it does on a synchronous logger.
+A write can stop early with an error that a later attempt can
+outlast, such as ENOSPC.  The bytes that it did not take stay in the
+aggregation buffer, and the next flush offers them again.  This call
+can therefore return while part of what it flushed is still pending.
+After any other write error, such as EPIPE, the flush drops those
+bytes and writes a record that names the loss.  See clog_open_fd_mp(3)
+for both rules and for what they promise about the framing of a
+record.
+Asserts when logger is CLOG_INVALID, stale or already closed.
 .fi
 .SH "SEE ALSO"
 .BR clog_open_fd_mp (3),

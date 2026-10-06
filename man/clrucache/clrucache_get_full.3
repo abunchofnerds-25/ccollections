@@ -1,11 +1,11 @@
 .TH CLRUCACHE_GET_FULL 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
 .SH NAME
-clrucache_get_full \- retrieve a value by key
+clrucache_get_full \- get a value by key
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <clrucache.h>
+#include <ccollections/clrucache.h>
 
 ccol_retval_t clrucache_get_full(clru_cache cache,
                                  const cmap_pair *key_pair,
@@ -13,85 +13,96 @@ ccol_retval_t clrucache_get_full(clru_cache cache,
 .fi
 .SH DESCRIPTION
 .nf
-Looks up key_pair in the cache and, on success, heap-allocates a copy
-of the associated value using the cache's custom allocator (if one was
-provided at construction) or malloc() otherwise, assigns the pointer to
-val_out->ptr, and sets val_out->size to the stored byte size. The caller
-is responsible for freeing val_out->ptr with the matching allocator: the
-custom free function if a custom allocator was configured, or free()
-otherwise.
+Looks up key_pair in the cache. On success it allocates a copy of the
+paired value on the heap. It uses the custom allocator of the cache if
+the caller gave one at construction, and malloc() if not. It assigns
+that pointer to val_out->ptr, and it sets val_out->size to the stored
+byte size. The caller must free val_out->ptr with the matching
+allocator. That is the custom free function if the caller configured a
+custom allocator, and free() if not.
 
-Cache hit: the entry is moved to the most-recently-used position and
-a heap-allocated copy of its value is written into val_out.
+Cache hit: the library moves the entry to the most recently used
+position. It writes a copy of the value of that entry, on the heap, into
+val_out.
 
-Cache miss without a remote getter: returns ccol_key_not_found.
+Cache miss and no remote getter: the function returns
+ccol_key_not_found.
 
-Cache miss with a remote getter: a placeholder entry is inserted and
-the remote getter is called outside the segment's lock. Concurrent get
-calls for the same key coalesce: only the first caller runs the fetch; all
-others block until the result is available and receive the same
-result the fetching caller did. On getter success the fetched value
-is cached and a heap-allocated copy is written into val_out for all
-waiters. On an ordinary getter failure, all waiters receive
-ccol_key_not_found; if instead the fetched value was rejected for
-being the wrong size for a concurrent, coalesced clru_get()/
-__clrucache_get_into() caller's own fixed-size buffer, all waiters
-(including this call, if it is one of them) receive
-ccol_unexpected_failure instead.
+Cache miss with a remote getter: the library inserts a placeholder
+entry. It then calls the remote getter outside the lock of the segment.
+Concurrent get calls for the same key coalesce. Only the first caller
+runs the fetch. All the other callers block until the result is ready,
+and they get the same result as the caller that ran the fetch. When the
+getter succeeds, the library caches the fetched value and writes a copy
+of it, on the heap, into val_out for every waiter. When the getter fails
+in an ordinary way, every waiter gets ccol_key_not_found. The library
+can also reject the fetched value because it has the wrong size for the
+own fixed-size buffer of a concurrent, coalesced clru_get() caller.
+Every waiter then gets ccol_unexpected_failure, and this call gets it
+too when it is one of those waiters.
 
-If a set is in progress for the same key this call blocks until the
-set completes and the cache is in a consistent state.
+This call blocks while a set for the same key is in progress. It waits
+until the set completes and the cache is in a consistent state. When
+the set fails and the key is then absent from the cache, this call
+continues exactly as a get that starts after the failed set: it runs
+the remote getter (or joins a fetch of the same key that has already
+started), and it reports ccol_key_not_found only when the cache has no
+remote getter.
 .fi
 .SH PARAMETERS
 .nf
 cache     Cache handle.
-key_pair  Key to look up (ptr and size fields must be set).
-val_out   Output pair populated on success. val_out->ptr is set to a
-          heap-allocated copy of the value (caller must free it with
-          the cache's custom allocator, or free() if no custom
-          allocator was provided); val_out->size is set to the stored
-          value size. Must not be NULL.
+key_pair  The key to look up. The ptr and size fields must be set.
+val_out   The output pair that the function fills on success.
+          val_out->ptr becomes a copy of the value on the heap. The
+          caller must free it with the custom allocator of the cache,
+          or with free() when the caller gave no custom allocator.
+          val_out->size becomes the size of the stored value. val_out
+          must not be NULL.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success           val_out populated; caller owns val_out->ptr.
-ccol_key_not_found     Key absent and no getter, or getter failed.
-ccol_invalid_args      cache is CLRU_CACHE_INVALID or a stale
-                       (already-destroyed) handle; or key_pair or
-                       val_out is NULL; or key_pair->size disagrees
-                       with the width of the key type the cache was
-                       created for.
-ccol_not_enough_memory Allocation failed (placeholder entry or output
-                       copy).
+ccol_success           The function filled val_out. The caller owns
+                       val_out->ptr.
+ccol_key_not_found     The key is absent and there is no getter, or
+                       the getter failed.
+ccol_invalid_args      cache is CLRU_CACHE_INVALID, or cache is a
+                       stale handle that a call already destroyed, or
+                       key_pair is NULL, or val_out is NULL, or
+                       key_pair->size does not agree with the width of
+                       the key type of the cache.
+ccol_not_enough_memory An allocation failed. It is the allocation of
+                       the placeholder entry or of the output copy.
 ccol_unexpected_failure
                        This call coalesced onto another, concurrent
-                       cache-miss fetch for the same key, and that
-                       fetch's own caller rejected the fetched value
-                       for being the wrong size for its own fixed-size
-                       destination buffer. Every caller coalesced onto
-                       the same fetch receives this same result.
-ccol_container_full    On a cache miss, the cache's own internal
-                       bookkeeping has reached its maximum element
-                       count; not reachable in practice.
+                       cache-miss fetch for the same key. The own
+                       caller of that fetch rejected the fetched value,
+                       because the value has the wrong size for its own
+                       fixed-size destination buffer. Every caller that
+                       coalesces onto the same fetch gets this same
+                       result.
+ccol_container_full    The internal bookkeeping of the cache reached
+                       its maximum element count on a cache miss. A
+                       real program cannot reach this.
 .fi
 .SH NOTES
 .nf
-cache is an opaque VALUE handle, resolved through a library-owned
-slot table before the underlying cache object is touched; the pin
-established by that resolve is held for the entire duration of this
-call, including any time spent blocked inside a remote getter
-callback, so a concurrent __clrucache_destroy on the same handle
-waits for this call to finish rather than freeing the cache out from
-under it.
-The returned val_out->ptr is allocated with the cache's custom
-allocator if one was provided at construction, or with the standard
-malloc() otherwise. Free it with the matching allocator.
-When the value type is char*, the returned copy is a heap-allocated
-null-terminated string: this allocation is also made with the custom
-allocator (or malloc() if none was configured).
-The cache never exposes a pointer into its internal storage (such a
-pointer would dangle after eviction).
-O(1) average-case complexity for the hash map lookup.
+cache is an opaque VALUE handle. The library resolves it through a slot
+table that the library owns, before it touches the cache object behind
+the handle. That resolve takes a pin, and this call holds the pin for
+its whole duration. This includes any time that the call blocks inside
+a remote getter callback. A concurrent clru_destroy() on the same handle
+therefore waits for this call to finish. It does not free the cache
+under this call.
+The val_out->ptr that the function gives back comes from the custom
+allocator of the cache, if the caller gave one at construction. It comes
+from the standard malloc() if not. Free it with the matching allocator.
+When the value type is char*, the copy is a null-terminated string on
+the heap. This allocation also comes from the custom allocator, or from
+malloc() when the caller configured none.
+The cache never gives out a pointer into its internal storage. Such a
+pointer dangles after an eviction.
+The average-case complexity of the hash map lookup is O(1).
 .fi
 .SH "SEE ALSO"
 .BR clru_get (3),

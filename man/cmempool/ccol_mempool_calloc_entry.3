@@ -5,13 +5,14 @@ ccol_mempool_calloc_entry \- allocate zero-initialized entry from pool
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cmempool.h>
+#include <ccollections/cmempool.h>
 
 void *ccol_mempool_calloc_entry(ccol_mempool *mp);
 .fi
 .SH DESCRIPTION
 .nf
-Like ccol_mempool_alloc_entry(), but zeros the entry before returning.
+This function is like ccol_mempool_alloc_entry(). It zeros the entry
+before it returns.
 .fi
 .SH PARAMETERS
 .nf
@@ -19,15 +20,15 @@ mp   Memory pool to allocate from
 .fi
 .SH RETURN VALUE
 .nf
-Returns pointer to zero-initialized entry on success
-Returns NULL if pool exhausted and no fallback enabled
+Returns a pointer to the zeroed entry on success
+Returns NULL when the pool is empty and the fallback is off
 .fi
 .SH NOTES
 .nf
 O(1) complexity
-Zeros the whole element
-Thread-safe if pool created with single_threaded=false
-Will assert if mp is NULL
+The function zeros the whole element
+Thread-safe if the pool was created with single_threaded=false
+This function asserts if mp is NULL
 .fi
 .SH "SEE ALSO"
 .BR ccol_mempool_alloc_entry (3),

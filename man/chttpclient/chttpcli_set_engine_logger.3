@@ -1,50 +1,71 @@
 .TH CHTTPCLI_SET_ENGINE_LOGGER 3 "2026-07-14" "c_collections" "C Collections Library - Functions"
 .SH NAME
-chttpcli_set_engine_logger \- set the logger for chttpclient's async-engine diagnostics
+chttpcli_set_engine_logger \- set the logger for the diagnostics of the async engine of chttpclient
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpclient.h>
+#include <ccollections/chttpclient.h>
 
 ccol_retval_t chttpcli_set_engine_logger(clog cl);
 .fi
 .SH DESCRIPTION
 .nf
-Derives a child logger from cl, adds the field
-component=http-client-engine, and installs it as the shared Tier 2/3
-async engine's diagnostics logger.  Any previously installed engine
-logger is closed.
+This function derives a child logger from cl. It adds the field
+component=http-client-engine. It then installs that child logger as
+the diagnostics logger of the shared async engine of Tier 2 and Tier
+3. It closes the engine logger that was there before, if there was
+one.
 
-chttpclient_do_async/_streaming and the pooled-sync wrappers built on
-top of them (chttpclient_do_pooled/_streaming) share one lazily-started,
-process-wide ccol_event_loop reactor across every chttpcli instance in the
-process, including the default client.  This function captures that
-reactor's own diagnostics (TLS handshake failures, connect errors); it
-is separate from the per-client logger, and separate from
-chttpsvr_set_engine_logger's own reactor (chttpserver and chttpclient
-each own a fully independent static reactor; a process may freely run
-both at once).
+You can call this function at any time. It takes effect at once. The
+engine keeps the child logger across every stop and restart of the
+engine, until another call to this function replaces it.
 
-Call this before the first chttpclient_do_async/_streaming call
-anywhere in the process if a custom engine logger is wanted.  If no
-logger has been installed when the engine first starts, a fallback
-logger (fd 2, level CLOG_FATAL) is installed automatically; since
-this engine's own diagnostics are never logged above CLOG_INFO, that
-fallback logger is silent in practice unless this function is used
-to install a more verbose one.
+chttpclient_do_async, chttpclient_do_async_streaming and the
+pooled-sync wrappers on top of them share one ccol_event_loop reactor.
+Those wrappers are chttpclient_do_pooled and
+chttpclient_do_pooled_streaming. The reactor covers the whole process
+and every chttpcli instance in it, and this includes the default
+client. The library starts that reactor only when it first needs it.
+This function captures the diagnostics of that reactor, such as a
+failure of a TLS handshake or an error on a connect. It is separate
+from the logger of each client. It is also separate from the reactor
+of chttpsvr_set_engine_logger. chttpserver and chttpclient each own a
+fully independent static reactor, and one process can run both at the
+same time.
 
-cl must not be CLOG_INVALID; the derived child logger is owned by the
-engine and must not be closed by the caller.
+While no logger from this function is installed, the library opens a
+fallback logger each time that the engine starts, and closes it when
+the engine stops. That fallback logger writes to fd 2 at the level
+CLOG_FATAL. This engine never logs its own diagnostics above
+CLOG_INFO. The fallback logger is therefore silent, until you use this
+function to install a logger that says more.
+
+cl must not be CLOG_INVALID. The caller keeps the ownership of cl, and
+may close it after this call returns: the child logger shares the
+destination of cl, and clogger keeps that destination open while any
+logger that shares it is open. The engine owns the child logger, and
+the caller must not close it. The library closes it when another call
+replaces it, and at the exit of the process or the unload of the
+library when no engine runs then.
+
+For a logger from clog_open_fd or clog_open_fd_mp, that destination is
+the state of the logger and not the file descriptor. Such a logger
+never owns its fd, and no clog_close closes it; see clog_open_fd(3).
+The engine keeps writing to that fd after you close cl, so the fd
+itself must stay open until another call to this function replaces
+the engine logger, or until the process exits.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success on success.
-ccol_invalid_args if cl is CLOG_INVALID.
-ccol_not_enough_memory if the child logger cannot be allocated.
+ccol_success, if the call succeeds.
+ccol_invalid_args, if cl is CLOG_INVALID.
+ccol_not_enough_memory, if the library cannot allocate the child
+    logger.
 .fi
 .SH "SEE ALSO"
 .BR chttpcli_set_engine_mem_mgmt_procs (3),
+.BR clog_open_fd (3),
 .BR chttpclient_do_async (3),
 .BR chttpclient_do_pooled (3),
 .BR chttpsvr_set_engine_logger (3)

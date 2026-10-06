@@ -1,0 +1,79 @@
+.TH CCOL_CIRCULAR_QUEUE_CREATE_WITH_MPROCS 3 "2026-09-20" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccol_circular_queue_create_with_mprocs \- create a circular queue with custom memory management
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_circular_queue *ccol_circular_queue_create_with_mprocs(size_t max_size,
+                        ccol_memmgmt_procs_t *mmgmt_procs, char **err_str);
+.fi
+.SH DESCRIPTION
+.nf
+This function creates a queue with a fixed size. Inside, the queue uses a
+circular buffer. A send blocks while the queue is full. It waits for free
+space. A new queue starts with sends turned on.
+
+Every allocation of the queue goes through mmgmt_procs. This is true at
+creation time and for all the life of the queue. The queue keeps its own
+copy of those procedures and frees itself through them. The
+ccol_memmgmt_procs_t of the caller therefore does not need to live longer
+than this call. A NULL value selects the default malloc and free, which is
+what the ccol_circular_queue_create() macro does.
+
+One array of max_size * sizeof(c_message_t) bytes holds the queue, and the
+function allocates it at the start. The memory that the queue uses
+therefore does not change as messages come and go.
+.fi
+.SH PARAMETERS
+.nf
+max_size     Maximum number of messages that the queue can hold. The value
+             must be at least 1, no larger than ccol_max_elem_count, and
+             no larger than SIZE_MAX / sizeof(c_message_t). A larger value
+             makes the size computation of the backing array overflow.
+mmgmt_procs  Custom memory management procedures, or NULL to use the
+             default malloc and free. If the value is not NULL, all of
+             malloc, calloc, realloc and free must be set.
+err_str      Optional pointer that gets an error string on failure. Pass
+             NULL to ignore it.
+.fi
+.SH RETURN VALUE
+.nf
+On success, the function gives a pointer to the new circular queue. If
+err_str is not NULL, the function sets *err_str to NULL.
+
+On failure, the function gives NULL. If err_str is not NULL, *err_str then
+describes the reason. The reasons for a failure are: max_size is 0;
+max_size is larger than ccol_max_elem_count; max_size is larger than
+SIZE_MAX / sizeof(c_message_t); mmgmt_procs is malformed, because it sets
+some but not all of malloc, calloc, realloc and free; an allocation failed;
+the function could not initialize the mutex of the queue or one of its
+condition variables; or, in a build that has fork-safety protection
+compiled in, the function could not register the mutex of the queue with
+the fork-safety registry. That registration also fails once the
+process-exit destructors of the library have run and the last queue is
+gone, for example in an application destructor that runs after them. None
+of these paths leaves anything allocated.
+.fi
+.SH NOTES
+.nf
+All operations on this queue are thread-safe.
+You must destroy the queue with ccol_circular_queue_destroy() after you
+finish with it.
+There are two supported ways to combine fork(2) with this queue. The first
+way is to call fork(2) before you create the queue. The second way is to
+create the queue, then call fork(2) and immediately call exec(3). One
+pattern is not supported: a program continues to run with no exec(3) in
+between while a queue from before the fork is still live. On top of that
+rule, the library adds a defense in depth. The child never inherits a lock
+in the locked state from another thread that held it at the instant of the
+fork. Also, the queue owns no thread of its own. A queue that a child
+inherits in that way therefore stays fully usable.
+.fi
+.SH "SEE ALSO"
+.BR ccol_circular_queue_create (3),
+.BR ccol_circular_queue_destroy (3),
+.BR ccol_circq_send_zc (3),
+.BR ccol_circq_recv_zc (3)

@@ -1,34 +1,35 @@
 .TH CCOL_CHAN_ENABLE_SENDING 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-ccol_chan_enable_sending \- enable sending on a ccol_channel direction
+ccol_chan_enable_sending \- turn on sends on a ccol_channel direction
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadcomm.h>
+#include <ccollections/cthreadcomm.h>
 
 ccol_retval_t ccol_chan_enable_sending(ccol_channel *ch, ccol_channel_direction d);
 .fi
 .SH DESCRIPTION
 .nf
-Re-enables send operations on the specified direction that were previously
-disabled and wakes all threads currently blocked waiting to send.
+This function turns sends on the given direction on again after a call
+turned them off. It also wakes every thread that blocks and waits to send.
 .fi
 .SH PARAMETERS
 .nf
-ch   Channel to modify
-d    Direction to enable (ccol_owner_to_workers or ccol_workers_to_owner)
+ch   Channel to change
+d    Direction that gets sends turned on (ccol_owner_to_workers or
+     ccol_workers_to_owner)
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success       - Sending enabled successfully
-ccol_invalid_args  - ch is NULL or d is invalid
+ccol_success       - The function turned sends on
+ccol_invalid_args  - ch is NULL, or d is not valid
 .fi
 .SH NOTES
 .nf
-Wakes all blocked senders via broadcast
-Threads can immediately attempt to send if space is available
-Does not affect the opposite direction
+The function wakes every blocked sender with a broadcast.
+A thread can try to send immediately if the queue has free space.
+The function does not change the other direction.
 .fi
 .SH "SEE ALSO"
 .BR ccol_chan_disable_sending (3)

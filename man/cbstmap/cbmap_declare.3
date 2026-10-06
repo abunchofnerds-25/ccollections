@@ -1,0 +1,84 @@
+.TH CBMAP_DECLARE 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cbmap_declare \- declare an ordered map handle and its companion type variables
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cbstmap.h>
+
+cbmap_declare(hm_name, key_t, val_t);
+.fi
+.SH DESCRIPTION
+.nf
+Declares an ordered map handle with the name hm_name. It also declares the
+companion type variables. Those variables carry key_t and val_t to every
+later type-inferred macro. The macro creates nothing. The handle holds no map
+until one of the init macros runs.
+
+This is the declare half of a declare-then-create pair. cbmap_init(3),
+cbmap_init_mp(3), cbmap_init_cc(3) and cbmap_init_full(3) are the matching
+create half. cbmap_construct(3) and its variants do both steps at one time.
+They are the shorter way to write the common case. The two steps stay
+separate for a handle that one place declares and another place creates. An
+example is a map whose comparison procedure comes from a condition. Another
+example is a map that the code creates only after the enclosing function
+validates its arguments.
+
+The macro leaves the handle and the companion type variables uninitialized.
+The handle therefore holds no usable value before an init macro assigns one,
+not even NULL. cbmap_declare_scoped(3) initializes the handle to NULL
+instead. It also destroys the map at the exit of the scope.
+.fi
+.SH PARAMETERS
+.nf
+hm_name  Name for the map handle to declare
+key_t    Key type. It tells every later macro how to read a key. It also
+         tells the init macro which order to give the tree
+val_t    Value type. Only the type-inferred macros read it. The library never
+         gives it to the container
+.fi
+.SH RETURN VALUE
+.nf
+None. This macro expands to declarations and does not expand to an
+expression.
+.fi
+.SH NOTES
+.nf
+The macro expands to a sequence of declarations. Put it where a declaration
+is legal, and give it a semicolon of its own at the end
+The container is an AVL tree. The key type here therefore also fixes the
+order of the walk over the elements. cbmap_begin_iter(3) describes that
+order
+The companion type variables follow the scope of the handle. A function
+that receives the handle therefore needs cbmap_redeclare(3) there
+The macro destroys nothing by itself. Destroy the map in this handle with
+cbmap_destroy(3)
+.fi
+.SH WARNINGS
+.nf
+Every other type-inferred macro reads the handle. A call to one of them between
+this declaration and an init macro reads an uninitialized variable.
+.fi
+.SH EXAMPLES
+.nf
+cbmap_declare(sorted, int, char *);
+if (use_custom_allocator) {
+    cbmap_init_mp(sorted, &my_procs);
+} else {
+    cbmap_init(sorted);
+}
+int k = 42;
+cbmap_insert(sorted, k, "hello");
+cbmap_destroy(sorted);
+.fi
+.SH "SEE ALSO"
+.BR cbmap_declare_scoped (3),
+.BR cbmap_init (3),
+.BR cbmap_init_mp (3),
+.BR cbmap_init_cc (3),
+.BR cbmap_init_full (3),
+.BR cbmap_construct (3),
+.BR cbmap_redeclare (3),
+.BR cbmap_begin_iter (3),
+.BR cbmap_destroy (3)

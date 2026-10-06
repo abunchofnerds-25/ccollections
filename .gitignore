@@ -1,23 +1,26 @@
 .vscode/
 .project
 obj/
-# Build artefacts, anchored to the repository root with a leading slash so
-# that these patterns describe only the products of a root `make`. Unanchored,
-# they match at every level, and libccollections.so.* would then also swallow
-# the committed ABI baselines under abi/.
+# These are build products. Each pattern starts with a slash, which ties it to
+# the root of the repository. The patterns therefore describe only what a
+# `make` in the root makes. Without that slash, a pattern matches at every
+# level, and libccollections.so.* would then also hide the committed ABI
+# baselines under abi/.
 /libccollections.so
-# versioned shared objects: libccollections.so.<ABI> and .<VERSION>
+# The shared objects with a version in the name: libccollections.so.<ABI> and
+# libccollections.so.<VERSION>
 /libccollections.so.*
 /libccollections.a
-# generated from ccollections.pc.in at build time (prefix/version are
-# substituted in), so only the .in template is tracked
+# The build makes this file from ccollections.pc.in and puts the prefix and the
+# version into it. Only the .in template is under version control.
 /ccollections.pc
 /ccollections.pc.tmp
 tests/*/tests
 tests/*/tests_*
 !tests/*/tests_*.*
 tests/*/coverage/
-# merged, browsable coverage report produced by `make coverage_site`
+# The merged coverage report that `make coverage_site` makes. You can read it
+# in a browser.
 coverage_site/
 tests/*/fuzz_*
 tests/*/crash-*
@@ -25,20 +28,26 @@ tests/*/oom-*
 tests/*/timeout-*
 __pycache__/
 tests/cyaml/differential/cyaml_to_json
-# libFuzzer auto-discovers and writes new corpus entries (bare-hash
-# filenames, no extension) back into whatever corpus directory it's
-# pointed at; only the deliberately-extracted seed files (*.bin, or *.yaml
-# for cyaml) should be committed.
+# libFuzzer finds new corpus entries and writes them back into the corpus
+# directory that you give it. It names each one with a plain hash and no
+# extension. Commit only the seed files that somebody took out on purpose.
+# Those are the *.bin files, and the *.yaml files for the document corpus of
+# cyaml. The path corpus of cyaml carries a NUL inside each input, so its
+# seeds are *.bin like the matching corpus of cjson.
 tests/chttpclient/fuzz/corpus_request/*
 !tests/chttpclient/fuzz/corpus_request/*.bin
 tests/chttpclient/fuzz/corpus_response/*
 !tests/chttpclient/fuzz/corpus_response/*.bin
+tests/chttpclient/fuzz/corpus_url/*
+!tests/chttpclient/fuzz/corpus_url/*.bin
 tests/cjson/fuzz/corpus_parse/*
 !tests/cjson/fuzz/corpus_parse/*.bin
 tests/cjson/fuzz/corpus_path/*
 !tests/cjson/fuzz/corpus_path/*.bin
 tests/cyaml/fuzz/corpus/*
 !tests/cyaml/fuzz/corpus/*.yaml
+tests/cyaml/fuzz/corpus_path/*
+!tests/cyaml/fuzz/corpus_path/*.bin
 *.gcno
 *.gcda
 *.gcov
@@ -49,15 +58,26 @@ main
 .envrc
 massif.out.*
 
-# Per-suite build-identity stamps (compiler + flags the objects were built with)
+# The build identity stamp of each suite. It holds the compiler and the flags
+# that the build used for the objects.
 tests/*/.build-flags
 
-# Benchmark build products. baseline.json is deliberately not committed: it
-# records absolute timings for one machine, and comparing a run against a
-# baseline taken on different hardware reports a difference that has nothing to
-# do with any change to the library.
+# These are the build products of the benchmarks. baseline.json is not under
+# version control, on purpose. It records absolute times for one machine. A
+# comparison of a run against a baseline from other hardware therefore reports
+# a difference that has nothing to do with a change to the library.
 /bench/bench
 /bench/baseline.json
 /bench/.build-flags
 
-# An unnecessary line for triggering a new CI run - 0
+# The build identity stamp for the consumer view translation unit of clogger
+tests/*/.build-flags-consumer
+
+# The hardening-flag probe of the root Makefile and of tests/hardening.mk
+# writes these while it asks the compiler what it supports, and removes them
+# again. An interrupted build can leave one behind.
+.ccol_probe.c
+.ccol_probe.o
+
+# A line with no side effects. It starts a new CI run - 0
+

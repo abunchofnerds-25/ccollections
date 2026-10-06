@@ -26,19 +26,20 @@
  * @file bench_serialization.c
  * @brief Benchmarks for cjson and cyaml.
  *
- * Both parsers are measured on one document each, built once at startup and
- * shared by every case so that the two formats are compared on the same
- * content. The document is a nested structure of objects, arrays, strings and
- * numbers rather than a flat list, because a parser's recursion and its
- * container growth are where its cost actually is.
+ * Each parser gets one document. The harness builds each document one time at
+ * startup, and every case shares it. The comparison between the two formats
+ * therefore uses the same content. Each document is a nested structure of
+ * objects, arrays, strings and numbers, and not a flat list. The cost of a
+ * parser is in its recursion and in the growth of its containers.
  *
- * Timings are reported per document, not per byte, so the figure moves with
- * the document size constant chosen here; the same constant is used for every
- * case and for the third-party comparisons.
+ * The harness reports a time for each document, and not for each byte. The
+ * figure therefore follows the document size constant in this file. Every case
+ * and every third-party comparison uses that same constant.
  *
- * Where jansson or libyaml is installed, each is measured parsing the exact
- * same bytes. Both build a DOM of their own, so the comparison is between
- * comparable amounts of work, unlike a streaming or callback-based parser.
+ * Where jansson or libyaml is on the machine, the harness measures each one on
+ * exactly the same bytes. Both build a DOM of their own, so the comparison is
+ * between similar amounts of work. A parser that streams, or that calls back
+ * into the application, would not be.
  */
 
 #include <cjson.h>
@@ -57,9 +58,10 @@
 #include <yaml.h>
 #endif
 
-/* Records in the generated document. Large enough that per-call overhead does
- * not dominate, small enough that a repetition stays in the millisecond range
- * and the suite finishes in reasonable time. */
+/* This is the number of records in the generated document. It is large enough
+ * that the cost of one call does not decide the figure. It is small enough
+ * that one repetition stays in the range of milliseconds, and that the whole
+ * suite finishes in an acceptable time. */
 #define BENCH_DOC_RECORDS 200
 
 typedef struct {
@@ -76,14 +78,15 @@ typedef struct {
 /* Document generation                                                       */
 /* ------------------------------------------------------------------------ */
 
-/* snprintf reports the length it would have written, not the length it wrote,
- * so adding its return value straight onto an offset takes that offset past the
- * end of the buffer the instant anything is truncated, and the remaining-space
- * expression then wraps to an enormous size_t that tells the next call it may
- * write far beyond it. Every append below goes through this instead, which
- * refuses a truncation rather than absorbing it: these documents are built here
- * from a record count this file chooses, so a buffer that does not fit is a
- * sizing mistake in this file and not something a measurement should continue
+/* snprintf reports the length that it would have written, and not the length
+ * that it wrote. Do not add its return value straight onto an offset. As soon
+ * as anything truncates, that offset goes past the end of the buffer. The
+ * expression for the space that is left then wraps to a very large size_t,
+ * which tells the next call that it may write far past the end. Every append
+ * below goes through this helper instead. The helper refuses a truncation and
+ * does not absorb it. This file builds these documents from a record count
+ * that it chooses itself. A buffer that does not fit is therefore a sizing
+ * mistake in this file, and not something that a measurement should continue
  * past. */
 __attribute__((format(printf, 4, 5))) static size_t doc_append(
     char *buf, size_t cap, size_t off, const char *fmt, ...) {
@@ -166,7 +169,7 @@ static void doc_teardown(void *state) {
 
 static void *json_text_setup(size_t n) {
   (void)n;
-  doc_state_t *st = calloc(1, sizeof *st);
+  doc_state_t *st = calloc(1, sizeof(*st));
   if (!st) return NULL;
   st->text = build_json_doc(BENCH_DOC_RECORDS, &st->len);
   if (!st->text) {
@@ -178,7 +181,7 @@ static void *json_text_setup(size_t n) {
 
 static void *yaml_text_setup(size_t n) {
   (void)n;
-  doc_state_t *st = calloc(1, sizeof *st);
+  doc_state_t *st = calloc(1, sizeof(*st));
   if (!st) return NULL;
   st->text = build_yaml_doc(BENCH_DOC_RECORDS, &st->len);
   if (!st->text) {
@@ -198,10 +201,10 @@ static void cjson_parse_run(void *state, size_t n) {
     char *err = NULL;
     cjson d = cjson_parse(st->text, &err);
     if (!d) {
-      cjson_serialize_free(err);
-      /* Fatal rather than a quiet stop: the harness divides the elapsed time
-       * by the full count, so returning early reports partial work at full
-       * price, and a parse that fails is far cheaper than one that works. */
+      /* This stops the run, and does not return quietly. The harness divides
+       * the measured time by the full count. An early return therefore
+       * reports part of the work at the full price. A parse that fails also
+       * costs much less than a parse that works. */
       bench_die("cjson parse failed");
     }
     bench_sink(d);
@@ -214,7 +217,6 @@ static void *cjson_dom_setup(size_t n) {
   if (!st) return NULL;
   char *err = NULL;
   st->json_dom = cjson_parse(st->text, &err);
-  cjson_serialize_free(err);
   if (!st->json_dom) {
     doc_teardown(st);
     return NULL;
@@ -242,7 +244,6 @@ static void cyaml_parse_run(void *state, size_t n) {
     char *err = NULL;
     cyaml d = cyaml_parse(st->text, &err);
     if (!d) {
-      cyaml_serialize_free(err);
       bench_die("cyaml parse failed"); /* see cjson_parse_run */
     }
     bench_sink(d);
@@ -255,7 +256,6 @@ static void *cyaml_dom_setup(size_t n) {
   if (!st) return NULL;
   char *err = NULL;
   st->yaml_dom = cyaml_parse(st->text, &err);
-  cyaml_serialize_free(err);
   if (!st->yaml_dom) {
     doc_teardown(st);
     return NULL;

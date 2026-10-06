@@ -5,20 +5,22 @@ chttpcli_declare_scoped \- declare a scoped chttpcli handle variable
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpclient.h>
+#include <ccollections/chttpclient.h>
 
 chttpcli_declare_scoped(name)
 .fi
 .SH DESCRIPTION
 .nf
-Declares a chttpcli variable named name with automatic destruction via
-GCC cleanup attribute.  ___chttpclient_destroy is called when name goes
-out of scope regardless of how the scope is exited.
+This macro declares a chttpcli variable with the name name. It uses
+the cleanup attribute of GCC for an automatic destroy. The library
+destroys the handle when name goes out of the scope, and it destroys
+the handle in the same way as chttpclient_destroy. This happens
+whatever path leaves the scope.
 
-The variable is initialised to CHTTPCLI_INVALID.  Assigning
-CHTTPCLI_INVALID before scope exit suppresses the cleanup call.
+The macro sets the variable to CHTTPCLI_INVALID. Set the variable to
+CHTTPCLI_INVALID again before the exit of the scope to stop the
+cleanup call.
 .fi
 .SH "SEE ALSO"
 .BR chttpcli_construct_scoped (3),
-.BR chttpcli_declare (3),
-.BR ___chttpclient_destroy (3)
+.BR chttpcli_declare (3)

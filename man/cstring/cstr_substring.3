@@ -1,19 +1,20 @@
-.TH CSTR_SUBSTRING 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH CSTR_SUBSTRING 3 "2026-09-28" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cstr_substring \- create a new string from a sub-range; calls ccol_fatal_err() on failure
+cstr_substring \- create a new string from a sub-range, and call ccol_fatal_err() on failure
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 cstr result = cstr_substring(s, start, len);
 .fi
 .SH DESCRIPTION
 .nf
-GNU C statement expression that calls cstring_substring() and calls
-ccol_fatal_err() if the result is NULL (allocation failure). Returns the new
-cstring as a value so it can be used directly in expressions.
+This macro is a GNU C statement expression. It calls cstring_substring(). It
+then calls ccol_fatal_err() if the result is NULL, which means that an
+allocation failed. The macro gives the new cstring as a value. You can
+therefore use the macro directly inside an expression.
 .fi
 .SH PARAMETERS
 .nf
@@ -23,15 +24,19 @@ len    Number of characters to include
 .fi
 .SH RETURN VALUE
 .nf
-New cstr containing the requested sub-range
+A new cstr that holds the sub-range that you asked for
 .fi
 .SH NOTES
 .nf
-This macro uses a GNU C statement expression ({...}) and requires GCC or
+This macro uses a GNU C statement expression ({...}), so it needs GCC or
 Clang
-The range is clamped at the string end rather than rejected
-Caller must destroy the returned cstring when done
-Use cstring_substring() directly if you need to handle errors gracefully
+The macro clamps the range at the end of the string, and it does not reject
+the range
+The caller must destroy the cstring that this macro returns
+The macro evaluates each of s, start and len exactly once. The failure
+message therefore reports the start and the length that the call used
+Call cstring_substring() directly when you want to handle an error
+yourself
 .fi
 .SH EXAMPLES
 .nf

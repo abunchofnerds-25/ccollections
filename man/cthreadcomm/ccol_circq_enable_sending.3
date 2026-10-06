@@ -1,0 +1,48 @@
+.TH CCOL_CIRCQ_ENABLE_SENDING 3 "2026-09-20" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccol_circq_enable_sending \- turn on sends on a circular queue
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_retval_t ccol_circq_enable_sending(ccol_circular_queue *cq);
+.fi
+.SH DESCRIPTION
+.nf
+This function clears the flag that ccol_circq_disable_sending() set. The
+queue therefore accepts a send again. The function also wakes every thread
+that blocks and waits to send. A woken sender continues as soon as the
+queue has room for its message.
+
+A new queue already has sends turned on. You need this call only to open a
+queue again after a call turned sends off. A call on a queue that already
+has sends on is harmless.
+
+The function also wakes every write-direction waiter on this queue. Such a
+waiter is a ccol_select() call, a ccol_select_timed() call, or an
+ccol_event_loop registration. Each of them scans again and sees the new
+state.
+.fi
+.SH PARAMETERS
+.nf
+cq   Circular queue that gets sends turned on
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success       - The function turned sends on
+ccol_invalid_args  - cq is NULL
+.fi
+.SH NOTES
+.nf
+The function wakes every blocked sender with a broadcast.
+A thread can try to send immediately if the queue has free space.
+The function does not change a receive.
+The function is thread-safe.
+.fi
+.SH "SEE ALSO"
+.BR ccol_circq_disable_sending (3),
+.BR ccol_circq_send_zc (3),
+.BR ccol_circq_try_send_zc (3),
+.BR ccol_circq_timed_send_zc (3)

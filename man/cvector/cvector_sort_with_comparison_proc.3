@@ -1,45 +1,61 @@
-.TH CVECTOR_SORT_WITH_COMPARISON_PROC 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH CVECTOR_SORT_WITH_COMPARISON_PROC 3 "2026-09-28" "c_collections" "C Collections Library - Macros"
 .SH NAME
 cvector_sort_with_comparison_proc \- sort vector with custom comparison
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cvector.h>
+#include <ccollections/cvector.h>
 
 cvector_sort_with_comparison_proc(v, comparison_proc);
 .fi
 .SH DESCRIPTION
 .nf
-Sorts the vector in-place using the csort library with a custom comparison
-function. The comparison function should follow the standard comparator
-convention (return <0, 0, or >0).
+Sorts the vector in place. It uses the csort library with a custom
+comparison function. The comparison function must obey the standard
+comparator convention. It returns a value <0, a value 0, or a value >0.
+
+This macro is the supported way to sort a vector whose element type has no
+default comparison procedure. Those are the element types that cvec_sort
+refuses to compile: bool, a struct, a union, a pointer to anything other
+than char, and a fixed-size char array. This macro also sorts a type that
+does have a default comparison procedure. The given comparison procedure
+then defines the order.
 .fi
 .SH PARAMETERS
 .nf
-v                 Vector to sort
-comparison_proc   Comparison function for sorting
+v                 Vector to sort. The macro evaluates it exactly once.
+comparison_proc   Comparison function for sorting. The macro evaluates it
+                  exactly once.
 .fi
 .SH NOTES
 .nf
-Sorts in-place using stable mergesort algorithm
+Sorts in place with a stable mergesort algorithm
 O(n log n) time complexity, O(n) space complexity
 Asserts if v is NULL
-Uses csort for sorting
-Calls ccol_fatal_err() if comparison_proc is NULL
-Calls ccol_fatal_err() if the sort's internal temporary buffer could not be
-allocated, matching every other mutating type-safe macro in cvector.h
-(cvec_push, cvec_reserve, cvec_append_array, ...); the vector is left
-completely unsorted in that case.
+Uses the stable mergesort of csort, and moves the elements inside the
+backing array directly, with no call for each element access
+Calls ccol_fatal_err() if comparison_proc is NULL. A comparison procedure
+comes here from the caller's own expression. The value of that expression
+is in general not known before the program runs. This check therefore
+stays a run-time check. The element-type check of cvec_sort is a
+compile-time _Static_assert instead, and a cvec_sort call never reaches
+this diagnostic
+Calls ccol_fatal_err() if the allocation of the internal temporary buffer
+of the sort fails. Every other type-inferred macro in cvector.h that changes
+a vector does the same (cvec_push, cvec_reserve, cvec_append_array and
+the others). The vector stays completely unsorted in that case
 .fi
 .SH EXAMPLES
 .nf
 int compare_ints(const void *a, const void *b) {
-  return *(int*)a - *(int*)b;
+  int x = *(const int *)a, y = *(const int *)b;
+  return (x > y) - (x < y);
 }
 cvec_construct(vec, int);
 // ... add elements ...
 cvector_sort_with_comparison_proc(vec, compare_ints);
+cvec_destroy(vec);
 .fi
 .SH "SEE ALSO"
 .BR cvec_sort (3),

@@ -5,19 +5,26 @@ cjson_serialize_pretty \- serialize a DOM tree to an indented JSON string
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cjson.h>
+#include <ccollections/cjson.h>
 
 char *cjson_serialize_pretty(cjson node, unsigned int indent);
 .fi
 .SH DESCRIPTION
 .nf
-Like cjson_serialize() but inserts newlines and indent spaces per
-nesting level.  indent = 0 uses a default indent of 4 spaces; to
-produce compact (non-indented) output, use cjson_serialize() instead.
+Works like cjson_serialize(), but it adds newlines.  It also adds
+indent spaces for each nesting level.  An indent of 0 gives the
+default indent of 4 spaces.  Use cjson_serialize() for compact
+output with no indent.  The members of each object come in the
+same insertion order as in cjson_serialize(3).
 .fi
 .SH RETURN VALUE
 .nf
-Heap-allocated null-terminated string; free with cjson_serialize_free().
+A null-terminated string on the heap, from the allocator of the root
+node.  Free it with cjson_serialize_free() for a tree that uses the
+default allocator.  Free it with cjson_serialize_free_mp() for a
+tree that uses a custom allocator.  This is the same rule as for the
+result of cjson_serialize(3).
 .fi
 .SH "SEE ALSO"
+.BR cjson_dictionary_first (3),
 .BR cjson_serialize (3)

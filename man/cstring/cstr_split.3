@@ -5,14 +5,14 @@ cstr_split \- split the string by a delimiter
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 cstr_split(s, delim, err);
 .fi
 .SH DESCRIPTION
 .nf
-Pass-through wrapper for cstring_split(). Returns a cvec of individually
-heap-allocated cstr tokens.
+This macro is a pass-through wrapper for cstring_split(). It returns a cvec
+of cstr tokens. Each token is its own allocation on the heap.
 .fi
 .SH PARAMETERS
 .nf
@@ -26,7 +26,8 @@ cvec of cstr tokens on success, NULL on failure
 .fi
 .SH NOTES
 .nf
-Caller must destroy every cstr in the vector and then the vector itself
+The caller must destroy every cstr in the vector. The caller must then
+destroy the vector
 .fi
 .SH "SEE ALSO"
 .BR cstring_split (3),

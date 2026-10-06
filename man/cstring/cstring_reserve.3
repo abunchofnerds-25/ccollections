@@ -5,26 +5,27 @@ cstring_reserve \- pre-allocate capacity for at least min_capacity bytes
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 bool cstring_reserve(cstr s, size_t min_capacity);
 .fi
 .SH DESCRIPTION
 .nf
-Ensures the internal buffer has room for at least min_capacity bytes
-(including the null terminator). The requested size is rounded up to the
-nearest power of two (minimum 16). Does nothing if the current capacity
-already satisfies the request.
+Makes sure that the internal buffer has room for min_capacity bytes or
+more. That count includes the null terminator. The function rounds the
+requested size up to the nearest power of two (minimum 16). It does
+nothing when the current capacity is already large enough.
 .fi
 .SH PARAMETERS
 .nf
-s              String to modify
+s              String to change
 min_capacity   Minimum number of bytes to reserve (including null terminator)
 .fi
 .SH RETURN VALUE
 .nf
-true on success or if capacity was already sufficient
-false if reallocation failed or the requested size is too large
+true on success, and also when the capacity was already large enough
+false when the reallocation fails, or when the requested size is too
+large
 .fi
 .SH NOTES
 .nf

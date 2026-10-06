@@ -1,32 +1,35 @@
 .TH CHTTP_BASE64_ENCODE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-chttp_base64_encode \- base64-encode a buffer (default allocator)
+chttp_base64_encode \- encode a buffer as base64 (default allocator)
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttp.h>
+#include <ccollections/chttp.h>
 
 char *chttp_base64_encode(const void *data, size_t len,
                           size_t *out_len);
 .fi
 .SH DESCRIPTION
 .nf
-Static inline wrapper around chttp_base64_encode_mp() with NULL
-memory management procedures (uses malloc/free).
+This is a static inline wrapper around chttp_base64_encode_mp(). It
+gives NULL for the memory management procedures, so the function uses
+malloc and free.
 .fi
 .SH PARAMETERS
 .nf
-data     Buffer to encode. May be NULL only if len is 0.
-len      Number of bytes in data.
-out_len  Optional; receives the length of the returned string
-         (excluding the terminating NUL). Pass NULL to ignore.
+data     The buffer to encode. It can be NULL only if len is 0.
+len      The number of bytes in data.
+out_len  Optional. It gets the length of the string that the function
+         gives back. This length does not count the terminating NUL.
+         Give NULL to ignore it.
 .fi
 .SH RETURN VALUE
 .nf
-Newly allocated, NUL-terminated base64 string on success.
-NULL on allocation failure, if data is NULL and len is nonzero, or
-if len is large enough that the encoded size would overflow size_t.
+A new base64 string that ends with a NUL, if the call succeeds.
+NULL, if the allocation fails. NULL also, if data is NULL and len is
+not zero. NULL also, if len is so large that the encoded size
+overflows size_t.
 .fi
 .SH "SEE ALSO"
 .BR chttp_base64_encode_mp (3),

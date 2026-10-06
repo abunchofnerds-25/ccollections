@@ -5,20 +5,26 @@ cyaml_create_list_mp, cyaml_create_list \- allocate an empty YAML list node
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cyaml.h>
+#include <ccollections/cyaml.h>
 
 cyaml cyaml_create_list_mp(ccol_memmgmt_procs_t *mp);
 cyaml cyaml_create_list(void);
 .fi
 .SH DESCRIPTION
 .nf
-Allocate a DOM node of type CYAML_LIST backed by a cvector.
-The list is initially empty.  Children are added with
+Allocate a DOM node of type CYAML_LIST.  A cvector holds its elements.
+The list is empty at first.  Add children to it with
 cyaml_list_push().  cyaml_create_list() passes NULL for mp.
 .fi
 .SH PARAMETERS
 .nf
 mp   Custom allocator, or NULL for default.
+     The library keeps its own copy of the struct, so the caller may
+     release or reuse the struct once this call returns. The functions
+     that it names must stay callable until the last node built with
+     them is destroyed. A process can use at most 64 distinct sets of
+     four functions; a call that would need a 65th fails and returns
+     NULL.
 .fi
 .SH RETURN VALUE
 .nf

@@ -5,15 +5,20 @@ chttpsvr_req_param \- look up a named path parameter
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 const char *chttpsvr_req_param(const chttpsvr_req *req,
                                 const char *name);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the URL-decoded value of the named path parameter, or NULL if
-the parameter is not part of the matched route pattern.
+Returns the URL-decoded value of the named path parameter.  It returns
+NULL when that parameter is not a part of the route pattern that
+matched.
+
+The parameter captures one raw segment of the path, decoded on its
+own.  The value can therefore hold a '/' that arrived as %2F, and it
+can be "." or "..".  Never use it as a file name without checking it.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_req_path (3),

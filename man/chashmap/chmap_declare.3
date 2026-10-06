@@ -1,0 +1,80 @@
+.TH CHMAP_DECLARE 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chmap_declare \- declare a hash map handle and its companion type variables
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chashmap.h>
+
+chmap_declare(hm_name, key_t, val_t);
+.fi
+.SH DESCRIPTION
+.nf
+Declares a hash map handle named hm_name. It also declares the companion
+type variables. These variables carry key_t and val_t to every later
+type-inferred macro. The macro creates nothing. The handle holds no map until
+one of the init macros runs.
+
+This is the declare half of a declare-then-create pair. chmap_init(3),
+chmap_init_mp(3), chmap_init_ch(3) and chmap_init_full(3) are the matching
+create half. chmap_construct(3) and its variants do both in one step. They
+are the shorter way to write the common case. Two separate steps are what
+a handle needs when the code declares it in one place and creates it in
+another. Examples are a map whose allocator a condition chooses, and a map
+that the code creates only after the enclosing function checks its
+arguments.
+
+The macro leaves the handle and the companion type variables
+uninitialized. The handle therefore holds no usable value, not even NULL,
+before an init macro assigns one. chmap_declare_scoped(3) sets the handle
+to NULL instead, and it also destroys the map at scope exit.
+.fi
+.SH PARAMETERS
+.nf
+hm_name  Name for the map handle to declare
+key_t    Key type; it tells every later macro how to read a key and, with
+         val_t, which implementation strategy the init macro selects
+val_t    Value type
+.fi
+.SH RETURN VALUE
+.nf
+None. This macro expands to declarations and does not expand to an
+expression.
+.fi
+.SH NOTES
+.nf
+Expands to a sequence of declarations. Put it where a declaration is
+allowed. It takes a trailing semicolon of its own
+The companion type variables follow the scope of the handle. A function
+that gets the handle therefore needs chmap_redeclare(3) there
+Nothing is destroyed automatically. Call chmap_destroy(3) to destroy the
+map that an init macro creates into this handle
+.fi
+.SH WARNINGS
+.nf
+Every other type-inferred macro reads the handle. Do not call one between this
+declaration and an init macro. Such a call reads an uninitialized
+variable.
+.fi
+.SH EXAMPLES
+.nf
+chmap_declare(scores, char *, int);
+if (use_custom_allocator) {
+    chmap_init_mp(scores, &my_procs);
+} else {
+    chmap_init(scores);
+}
+int score = 42;
+chmap_insert(scores, "alice", score);
+chmap_destroy(scores);
+.fi
+.SH "SEE ALSO"
+.BR chmap_declare_scoped (3),
+.BR chmap_init (3),
+.BR chmap_init_mp (3),
+.BR chmap_init_ch (3),
+.BR chmap_init_full (3),
+.BR chmap_construct (3),
+.BR chmap_redeclare (3),
+.BR chmap_destroy (3)

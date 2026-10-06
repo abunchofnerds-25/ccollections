@@ -5,15 +5,16 @@ cvector_reserve \- reserve capacity for future elements
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cvector.h>
+#include <ccollections/cvector.h>
 
 bool cvector_reserve(cvec v, size_t new_capacity_count);
 .fi
 .SH DESCRIPTION
 .nf
-Pre-allocates capacity to hold at least new_capacity_count elements,
-rounded up to the nearest power of two (minimum 4). Helps avoid multiple
-reallocations when the expected size is known in advance.
+Allocates capacity for new_capacity_count elements or more. It rounds
+the capacity up to the nearest power of two (minimum 4). This helps you
+to prevent many reallocations when you know the expected size in
+advance.
 .fi
 .SH PARAMETERS
 .nf
@@ -22,18 +23,31 @@ new_capacity_count   Minimum number of elements to reserve
 .fi
 .SH RETURN VALUE
 .nf
-Returns true if reservation succeeds or capacity is already sufficient
-Returns false if allocation fails or new_capacity_count > ccol_max_elem_count
+Returns true when the reservation succeeds. It also returns true when
+the capacity is already large enough
+Returns false in three cases. The first case is a failed allocation.
+The second case is a capacity above ccol_max_elem_count. The third case
+is a capacity that overflows a size_t after the multiplication by the
+element size
 .fi
 .SH NOTES
 .nf
-Does nothing if requested capacity <= current capacity
-Actual capacity may be larger due to power-of-2 rounding
-Does not change element count
+Does nothing when the requested capacity <= the current capacity
+The real capacity can be larger, because of the rounding to a power
+of 2
+The function tests both limits in RETURN VALUE against the rounded-up
+capacity. It does not test them against new_capacity_count itself. A
+request that is inside a limit can therefore still fail after the
+rounding
+A vector of wide elements reaches the size_t overflow limit first.
+That limit bounds the capacity at SIZE_MAX divided by the element
+size. For an element wider than one byte, that limit is the lower of
+the two
+Does not change the element count
 Asserts if v is NULL
-The cvec_reserve(3) macro evaluates new_capacity_count exactly once,
-including on the failure path, so a side-effecting expression is safe
-to pass
+The cvec_reserve(3) macro evaluates new_capacity_count exactly once.
+This is also true on the failure path. An expression with a side
+effect is therefore safe to give
 .fi
 .SH "SEE ALSO"
 .BR cvec_reserve (3)

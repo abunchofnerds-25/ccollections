@@ -1,0 +1,72 @@
+.TH CBMAP_INIT_MP 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cbmap_init_mp \- create an ordered map with a custom allocator into an already declared handle
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cbstmap.h>
+
+cbmap_init_mp(hm_name, mmgmt_procs);
+.fi
+.SH DESCRIPTION
+.nf
+Creates an ordered map that takes all of its memory from mmgmt_procs. The
+macro then assigns that map to hm_name. The caller must declare the handle
+first, with cbmap_declare(3) or cbmap_declare_scoped(3). The key type and
+the value type do not come to this macro as arguments. The macro reads them
+from the companion type variables that the declare macro created.
+
+The macro is cbmap_init(3) plus an allocator. It uses the default order for
+the declared key type. cbmap_init_cc(3) replaces the order instead, and
+cbmap_init_full(3) takes both.
+
+The one-step equivalents are cbmap_construct_mp(3) and
+cbmap_construct_mp_scoped(3).
+.fi
+.SH PARAMETERS
+.nf
+hm_name      The map handle that the caller declared before. The macro
+             creates the map into it
+mmgmt_procs  Pointer to a ccol_memmgmt_procs_t, or NULL for the default
+             allocator
+.fi
+.SH RETURN VALUE
+.nf
+None. This macro expands to a statement and does not expand to an
+expression.
+.fi
+.SH NOTES
+.nf
+The macro stops the program through ccol_fatal_err() if the creation fails
+All four members of ccol_memmgmt_procs_t must not be NULL
+The map copies the procedures into itself. The ccol_memmgmt_procs_t of
+the caller therefore does not have to outlive the call. But the procedures
+themselves must stay callable for the whole life of the map
+Every tree node that the map allocates later comes from these procedures.
+Everything that the map frees goes back to them
+The allocator has no effect on the order. The declared key type decides
+the order, as cbmap_create_full(3) describes. The walk goes in ascending
+key order
+.fi
+.SH EXAMPLES
+.nf
+ccol_memmgmt_procs_t procs = {
+    .malloc = my_malloc, .calloc = my_calloc,
+    .realloc = my_realloc, .free = my_free,
+};
+
+cbmap_declare(sorted, int, char *);
+cbmap_init_mp(sorted, &procs);
+int k = 42;
+cbmap_insert(sorted, k, "hello");
+cbmap_destroy(sorted);
+.fi
+.SH "SEE ALSO"
+.BR cbmap_init (3),
+.BR cbmap_init_cc (3),
+.BR cbmap_init_full (3),
+.BR cbmap_declare (3),
+.BR cbmap_construct_mp (3),
+.BR cbmap_create_full (3),
+.BR cbmap_destroy (3)

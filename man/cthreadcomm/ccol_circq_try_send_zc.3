@@ -1,35 +1,37 @@
 .TH CCOL_CIRCQ_TRY_SEND_ZC 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-ccol_circq_try_send_zc \- try to send without blocking
+ccol_circq_try_send_zc \- try to send a message with no block
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadcomm.h>
+#include <ccollections/cthreadcomm.h>
 
 ccol_retval_t ccol_circq_try_send_zc(ccol_circular_queue *cq, c_message_t *msg);
 .fi
 .SH DESCRIPTION
 .nf
-Attempts to send immediately. If the queue is full, returns immediately
-with ccol_container_full. On success, transfers ownership of msg->data.
+This function tries to send the message immediately. If the queue is full,
+it returns ccol_container_full immediately. On success it transfers the
+ownership of msg->data.
 .fi
 .SH PARAMETERS
 .nf
 cq   Circular queue to send to
-msg  Message to send (data ownership transfers on success)
+msg  Message to send. On success the ownership of the data moves to the
+     queue.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success         - Message sent successfully
-ccol_invalid_args    - cq or msg is NULL, or msg validation fails
-ccol_not_permitted   - Sending has been disabled
-ccol_container_full  - Queue is full
+ccol_success         - The function sent the message
+ccol_invalid_args    - cq or msg is NULL, or the check of msg fails
+ccol_not_permitted   - Sends on the queue are turned off
+ccol_container_full  - The queue is full
 .fi
 .SH NOTES
 .nf
-Never blocks
-On failure, caller retains ownership of msg->data
+The function never blocks.
+On failure, the caller keeps the ownership of msg->data.
 .fi
 .SH "SEE ALSO"
 .BR ccol_circq_send_zc (3),

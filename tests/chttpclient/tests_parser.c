@@ -23,20 +23,24 @@ SOFTWARE.
 */
 
 /*
- * White-box, byte-sequence-level tests for chttp1_parser, exercised directly
- * (no TLS, no chttpclient.c at all) with hand-crafted input, including
- * malformed/hostile input the real-socket-based tests.c suite structurally
- * cannot reach (its mock server only ever sends well-formed responses). See
- * tests.c/tests_tls.c for the "does real traffic still work" end-to-end
- * coverage; this file is purely about the parser's own correctness in
- * isolation. The "stream" test group (chttp1_stream_t) does use local
- * AF_UNIX socketpairs, but only to exercise its own read/write/poll logic
- * directly; no chttpclient.c, no TLS, no real network traffic.
+ * White-box tests for chttp1_parser, at the level of a byte sequence. They
+ * drive the parser directly, with no TLS and no chttpclient.c at all. The
+ * input is built by hand, and some of it is malformed or hostile. The
+ * suite in tests.c sits on a real socket, and its shape cannot reach such
+ * input. Its mock server only ever sends a response that is well formed.
+ * See tests.c and tests_tls.c for the end-to-end coverage of "does
+ * real traffic still work". This file is only about the correctness of the
+ * parser on its own.
+ *
+ * The "stream" test group, which covers chttp1_stream_t, does use local
+ * AF_UNIX socketpairs. It uses them only to drive its own logic for read,
+ * write and poll. It uses no chttpclient.c, no TLS and no real network
+ * traffic.
  */
 
-#include <chttp1_parser.h>
-#include <ctls.h>
 #include <fcntl.h>
+#include <internal/chttp1_parser.h>
+#include <internal/ctls.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -52,6 +56,7 @@ typedef struct {
   int status_code;
   bool is_head;
   bool force_on_header_error;
+  bool force_on_trailer_error;
   bool force_on_body_error;
   bool force_on_headers_complete_error;
   bool want_divert; /* on_headers_complete returns CHTTP1_HEADERS_DIVERT_BODY */
@@ -59,6 +64,15 @@ typedef struct {
   char header_names[MAX_TEST_HEADERS][256];
   char header_values[MAX_TEST_HEADERS][256];
   size_t header_count;
+
+  /* Trailer fields land here, never in header_names/header_values: the
+     parser delivers them through a callback of their own precisely so a
+     caller keeping one collection cannot let a trailer displace a real
+     header of the same name. Keeping the two arrays separate here is what
+     lets these tests assert on that split directly. */
+  char trailer_names[MAX_TEST_HEADERS][256];
+  char trailer_values[MAX_TEST_HEADERS][256];
+  size_t trailer_count;
 
   char body[TEST_BODY_CAP];
   size_t body_len;
@@ -85,6 +99,22 @@ static int t_on_header(chttp1_parser_t *p, const char *name, size_t name_len,
     memcpy(ctx->header_values[ctx->header_count], value, vl);
     ctx->header_values[ctx->header_count][vl] = '\0';
     ctx->header_count++;
+  }
+  return 0;
+}
+
+static int t_on_trailer(chttp1_parser_t *p, const char *name, size_t name_len,
+                        const char *value, size_t value_len) {
+  test_ctx_t *ctx = (test_ctx_t *)p->data;
+  if (ctx->force_on_trailer_error) return 1;
+  if (ctx->trailer_count < MAX_TEST_HEADERS) {
+    size_t nl = name_len < 255 ? name_len : 255;
+    size_t vl = value_len < 255 ? value_len : 255;
+    memcpy(ctx->trailer_names[ctx->trailer_count], name, nl);
+    ctx->trailer_names[ctx->trailer_count][nl] = '\0';
+    memcpy(ctx->trailer_values[ctx->trailer_count], value, vl);
+    ctx->trailer_values[ctx->trailer_count][vl] = '\0';
+    ctx->trailer_count++;
   }
   return 0;
 }
@@ -131,12 +161,14 @@ static int t_on_message_complete(chttp1_parser_t *p) {
   return 0;
 }
 
-/* Static storage duration: chttp1_parser_init only borrows the settings
- * pointer (per its own documented "settings must outlive parser" contract)
- * rather than copying it, so a stack-local here would leave every parser's
- * ->settings dangling the moment init_test() returns. */
+/* This object has static storage duration. chttp1_parser_init only borrows
+ * the settings pointer, and it does not copy it. Its documented contract
+ * says that the settings must outlive the parser. A local on the stack here
+ * would therefore leave the ->settings of every parser dangling the moment
+ * init_test() returns. */
 static const chttp1_settings_t g_test_settings = {
     .on_header = t_on_header,
+    .on_trailer = t_on_trailer,
     .on_headers_complete = t_on_headers_complete,
     .on_body = t_on_body,
     .on_message_complete = t_on_message_complete,
@@ -152,6 +184,7 @@ static void init_test(chttp1_parser_t *parser, test_ctx_t *ctx) {
 static const chttp1_settings_t g_test_request_settings = {
     .on_request_line = t_on_request_line,
     .on_header = t_on_header,
+    .on_trailer = t_on_trailer,
     .on_headers_complete = t_on_headers_complete,
     .on_body = t_on_body,
     .on_message_complete = t_on_message_complete,
@@ -169,6 +202,27 @@ static const char *find_header(const test_ctx_t *ctx, const char *name) {
   return NULL;
 }
 
+static const char *find_trailer(const test_ctx_t *ctx, const char *name) {
+  for (size_t i = 0; i < ctx->trailer_count; i++)
+    if (strcmp(ctx->trailer_names[i], name) == 0) return ctx->trailer_values[i];
+  return NULL;
+}
+
+/* REQUIRE_STREQ expands to strcmp, which is undefined on NULL and takes the
+   whole binary down with a SIGSEGV rather than failing one test, destroying
+   every other test's pass/fail signal in the run. These two report a
+   missing field as a distinctive string instead, so an assertion about a
+   field's value fails cleanly when the field is absent. */
+static const char *header_or_absent(const test_ctx_t *ctx, const char *name) {
+  const char *v = find_header(ctx, name);
+  return v ? v : "(absent)";
+}
+
+static const char *trailer_or_absent(const test_ctx_t *ctx, const char *name) {
+  const char *v = find_trailer(ctx, name);
+  return v ? v : "(absent)";
+}
+
 /* ========================================================================== */
 /*                     STATUS LINE                                           */
 /* ========================================================================== */
@@ -183,9 +237,9 @@ TEST(status_line, basic_with_reason) {
 }
 
 TEST(status_line, missing_reason_and_trailing_space_accepted) {
-  /* Real-world compatibility: RFC 7230's ABNF technically requires a
-   * trailing SP even for an empty reason phrase, but real servers omit it
-   * (e.g. "HTTP/1.1 304\r\n"). */
+  /* This is for compatibility with the real world. The ABNF of RFC 7230
+   * asks for a trailing SP, even for an empty reason phrase. But real
+   * servers leave it out, as in "HTTP/1.1 304\r\n". */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -204,9 +258,10 @@ TEST(status_line, any_major_minor_digit_accepted) {
 }
 
 TEST(status_line, nonstandard_but_wellformed_code_accepted) {
-  /* No magnitude restriction: real, in-use nonstandard status codes exist
-   * up to 599 (e.g. 599 Network Connect Timeout Error, used by some
-   * load balancers/proxies), so the parser accepts any 3-digit code. */
+  /* There is no restriction on the size of the number. Real nonstandard
+   * status codes are in use up to 599. One example is 599 Network Connect
+   * Timeout Error, which some load balancers and proxies use. The parser
+   * therefore accepts any code of 3 digits. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -328,14 +383,15 @@ TEST(keep_alive, http_1_0_connection_keep_alive_overrides_default) {
 }
 
 TEST(keep_alive, version_greater_than_1_with_zero_minor_defaults_keep_alive) {
-  /* Regression test: chttp1_should_keep_alive must not test
-   * "http_major > 0 && http_minor > 0" to decide "HTTP/1.1 or later", which
-   * treats any version with a zero minor component (e.g. a
-   * literal "HTTP/2.0" status line, which this parser's grammar accepts;
-   * see status_line.any_major_minor_digit_accepted) as HTTP/1.0-or-earlier,
-   * requiring an explicit "Connection: keep-alive" token no real server of
-   * that vintage would send, and silently defeating connection reuse. The
-   * correct test is "major > 1, or major == 1 with minor >= 1". */
+  /* A regression test. chttp1_should_keep_alive must not decide "HTTP/1.1
+   * or later" with the test "http_major > 0 && http_minor > 0". That test
+   * reads any version with a zero minor part as HTTP/1.0 or earlier. A
+   * literal "HTTP/2.0" status line is one such version, and the grammar of
+   * this parser accepts it; see status_line.any_major_minor_digit_accepted.
+   * The parser would then need an explicit "Connection: keep-alive" token.
+   * No real server of that age sends one, and connection reuse quietly
+   * stops. The correct test is "major > 1, or major == 1 with minor >=
+   * 1". */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -537,12 +593,14 @@ TEST(headers, too_many_headers_rejected) {
 }
 
 TEST(headers, total_header_bytes_cap_rejected) {
-  /* 80 headers of ~1000 bytes each (80KB) comfortably exceeds the 64KB
-   * total cap while staying well under the 100-header count cap and the
-   * 8192-byte per-line cap, isolating the total-bytes limit specifically.
-   * Fed incrementally (status line first, then one header line per
-   * chttp1_parser_execute call) so the test can stop as soon as the parser
-   * reports the error, rather than building one giant buffer up front. */
+  /* This test uses 80 headers of about 1000 bytes each, which is 80KB.
+   * That is well above the total cap of 64KB. It stays well below the cap
+   * of 100 headers, and well below the cap of 8192 bytes for each line. It
+   * therefore isolates the limit on the total bytes. The test feeds the
+   * bytes one piece at a time. It sends the status line first, and then one
+   * header line for each chttp1_parser_execute call. It can therefore stop
+   * as soon as the parser reports the error. It does not build one huge
+   * buffer up front. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -601,14 +659,15 @@ TEST(headers, max_total_header_bytes_override_rejects_below_builtin_default) {
 
 TEST(headers,
      request_line_itself_counts_against_max_total_header_bytes_override) {
-  /* Regression test: chttpsvr_config_t.max_header_bytes is documented as
-   * bounding "request line + all header lines", so total_header_bytes must
-   * be incremented by the request/status line itself, not only by
-   * process_header_line. Otherwise a request-target far larger than a
-   * configured cap is still accepted, bounded only by the much larger
-   * CHTTP1_MAX_LINE_LEN. A request line alone, comfortably over the tiny
-   * override below but nowhere near CHTTP1_MAX_LINE_LEN, must be rejected
-   * before any header is even seen. */
+  /* A regression test. chttpsvr_config_t.max_header_bytes is documented to
+   * bound "request line + all header lines". The request line, or the
+   * status line, must therefore add to total_header_bytes itself.
+   * process_header_line must not be the only thing that adds to it.
+   * Without that, a request-target far above the configured cap is still
+   * accepted. Only the much larger CHTTP1_MAX_LINE_LEN then bounds it. The
+   * request line alone here is well above the small override below, and
+   * nowhere near CHTTP1_MAX_LINE_LEN. The parser must reject it before it
+   * sees any header. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -623,10 +682,11 @@ TEST(headers,
 }
 
 TEST(headers, request_line_and_headers_share_the_same_total_bytes_budget) {
-  /* A request line and a header line that individually fit, but whose SUM
-   * exceeds the override, must still be rejected; confirming the request
-   * line's own contribution is genuinely added to the same running total a
-   * header line contributes to, not tracked separately/ignored. */
+  /* A request line and a header line can each fit on their own, while
+   * their SUM is above the override. The parser must still reject them.
+   * This confirms that the request line really adds to the same running
+   * total that a header line adds to. The parser does not track it
+   * separately, and it does not ignore it. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -682,11 +742,11 @@ TEST(framing, content_length_decimal_overflow_rejected) {
 }
 
 TEST(framing, transfer_encoding_not_chunked_reads_until_eof) {
-  /* RFC 7230 SS3.3.3: for a RESPONSE, a Transfer-Encoding whose last token
-   * isn't "chunked" means the body is read until the connection closes; it
-   * is not rejected. A REQUEST in the same situation is rejected instead
-   * (see the request_body_framing group), since it has no EOF-delimited
-   * framing to fall back on. */
+  /* RFC 7230 SS3.3.3 covers a RESPONSE here. The last token of its
+   * Transfer-Encoding is not "chunked". The recipient therefore reads the
+   * body until the connection closes. The parser does not reject it. It
+   * rejects a REQUEST in the same case; see the request_body_framing group.
+   * A request has no EOF framing to fall back on. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -696,6 +756,421 @@ TEST(framing, transfer_encoding_not_chunked_reads_until_eof) {
   REQUIRE_EQ(chttp1_parser_finish(&parser), CHTTP1_PAUSED);
   REQUIRE_STREQ(ctx.body, "some-bytes");
   REQUIRE_FALSE(chttp1_should_keep_alive(&parser));
+}
+
+TEST(framing,
+     response_content_length_with_non_chunked_transfer_encoding_rejected) {
+  /* RFC 7230 SS3.3.3 covers this. A Transfer-Encoding and a Content-Length
+   * that frame the same message are an ambiguous pair. A recipient must
+   * resolve it in favour of the Transfer-Encoding, or reject the message.
+   * A recipient that accepts it frames the response at exactly
+   * Content-Length bytes. It leaves whatever follows those bytes unread,
+   * and it reports the message as cleanly complete and eligible for
+   * keep-alive. The surplus bytes then sit on a connection that the client
+   * gives back to its idle pool. The next request that reuses that
+   * connection reads those bytes as its own response.
+   *
+   * This test is not vacuous. Narrow this rejection to request mode and it
+   * fails. It then reports CHTTP1_PAUSED, a body of 3 bytes, and a
+   * chttp1_should_keep_alive() that answers true, with "EXTRA" left
+   * unread. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg =
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\nContent-Length: "
+      "3\r\n\r\nabcEXTRA";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+}
+
+TEST(framing,
+     response_non_chunked_transfer_encoding_before_content_length_rejected) {
+  /* The order of the headers does not change the ambiguity. The parser
+   * decides the rejection after it reads every Transfer-Encoding line. It
+   * does not decide it on the line that arrives second. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg =
+      "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nTransfer-Encoding: "
+      "gzip\r\n\r\nabcEXTRA";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+}
+
+TEST(framing,
+     response_content_length_with_chunked_then_non_chunked_te_rejected) {
+  /* RFC 7230 SS3.2.2 merges the Transfer-Encoding lines into one list. That
+   * list ends in "gzip" here. This is therefore the same ambiguous pair,
+   * although "chunked" appears in the list. A test on each line that only
+   * looked for that word would accept it. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg =
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: "
+      "gzip\r\nContent-Length: 3\r\n\r\nabcEXTRA";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+}
+
+TEST(framing,
+     response_non_chunked_transfer_encoding_alone_still_reads_until_eof) {
+  /* The counterpart that the rejection above must not swallow. There is no
+   * Content-Length here, so there is nothing to disagree with. RFC 7230
+   * SS3.3.3 frames exactly this response: the recipient reads until the
+   * connection closes. Such a message is never eligible for keep-alive. It
+   * therefore carries no hazard of its own for a pooled connection. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg =
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: "
+      "gzip\r\n\r\nsome-bytes";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_OK);
+  REQUIRE_EQ(chttp1_parser_finish(&parser), CHTTP1_PAUSED);
+  REQUIRE_STREQ(ctx.body, "some-bytes");
+  REQUIRE_FALSE(chttp1_should_keep_alive(&parser));
+}
+
+TEST(framing, response_chunked_applied_twice_across_lines_rejected) {
+  /* RFC 7230 SS3.3.1 says this: "A sender MUST NOT apply chunked more than
+   * once to a message body". RFC 7230 SS3.2.2 merges these two lines into
+   * one list, "chunked, gzip, chunked". That list applies chunked twice.
+   * One recipient de-chunks once, and another de-chunks twice. The two then
+   * disagree about where the body ends. That framing disagreement is what
+   * response smuggling needs. The parser therefore refuses the message, and
+   * it resolves it in neither direction.
+   *
+   * This test is not vacuous. Without the count of occurrences over the
+   * merged list, the parser accepts the message as an ordinary chunked
+   * response. It then completes with CHTTP1_PAUSED, a body of 3 bytes, and
+   * a chttp1_should_keep_alive() that answers true. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg =
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked, "
+      "gzip\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+  REQUIRE_EQ(ctx.body_len, (size_t)0);
+  REQUIRE_FALSE(ctx.message_complete_called);
+}
+
+TEST(framing, response_chunked_repeated_on_two_lines_rejected) {
+  /* The same rule, in its plainest form. Two Transfer-Encoding lines that
+   * each say "chunked" merge into the list "chunked, chunked". */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg =
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: "
+      "chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+  REQUIRE_EQ(ctx.body_len, (size_t)0);
+  REQUIRE_FALSE(ctx.message_complete_called);
+}
+
+TEST(framing, response_chunked_twice_within_one_line_rejected) {
+  /* Both occurrences on one line make the same message, and the parser
+   * refuses it in the same way. The count is over transfer-codings, and not
+   * over header lines. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg =
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked, "
+      "chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+  REQUIRE_EQ(ctx.body_len, (size_t)0);
+  REQUIRE_FALSE(ctx.message_complete_called);
+}
+
+TEST(framing, response_chunked_applied_twice_is_case_insensitive) {
+  /* The name of a transfer-coding ignores the letter case. Other spellings
+   * therefore count as the same coding. A literal match would let this
+   * message through. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg =
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: ChUnKeD\r\nTransfer-Encoding: "
+      "CHUNKED\r\n\r\n3\r\nabc\r\n0\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+  REQUIRE_EQ(ctx.body_len, (size_t)0);
+  REQUIRE_FALSE(ctx.message_complete_called);
+}
+
+TEST(framing, response_chunked_last_after_an_earlier_chunked_rejected) {
+  /* The merged list ends in "chunked" here, as "gzip, chunked, chunked".
+   * The framing that this message would otherwise get is therefore chunked
+   * framing. It is still chunked applied twice, and the parser still
+   * refuses it. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg =
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, "
+      "chunked\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+  REQUIRE_EQ(ctx.body_len, (size_t)0);
+  REQUIRE_FALSE(ctx.message_complete_called);
+}
+
+TEST(framing, response_single_nonfinal_chunked_still_reads_until_eof) {
+  /* The counterpart that the rejection above must not swallow. RFC 7230
+   * SS3.3.1 lets a response apply chunked ONCE in a position that is not
+   * the last one. RFC 7230 SS3.3.3 frames such a message: the recipient
+   * reads until the connection closes. A rule that refused every "chunked"
+   * before the end of the list would refuse this legal message. The parser
+   * therefore counts occurrences, and not position. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg =
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked, gzip\r\n\r\nsome-bytes";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_OK);
+  REQUIRE_EQ(chttp1_parser_finish(&parser), CHTTP1_PAUSED);
+  REQUIRE_STREQ(ctx.body, "some-bytes");
+  REQUIRE_FALSE(chttp1_should_keep_alive(&parser));
+}
+
+TEST(framing, response_transfer_encoding_ending_in_chunked_still_accepted) {
+  /* Merging across lines keeps working: "gzip" then "chunked" is a valid
+   * way to spell the list "gzip, chunked", which is chunked-framed and
+   * keep-alive eligible. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg =
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\nTransfer-Encoding: "
+      "chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_STREQ(ctx.body, "abc");
+  REQUIRE_TRUE(chttp1_should_keep_alive(&parser));
+}
+
+/* A Transfer-Encoding line that names no coding adds only empty elements to
+ * the merged list, and RFC 7230 SS7 has a recipient ignore those. The list
+ * "chunked" followed by such a line is therefore still the list "chunked",
+ * exactly as the single line "chunked," is. The tests below pin that for
+ * both modes, and pin that the rules about the merged list (chunked applied
+ * twice, chunked beside Content-Length, a final coding that is not chunked)
+ * still see through the empty line in every position. */
+
+typedef struct {
+  const char *label;
+  const char *te_lines; /* the Transfer-Encoding lines, each ending in CRLF */
+} te_empty_case_t;
+
+/* Each of these merged lists is "chunked" once empty elements are dropped. */
+static const te_empty_case_t g_te_lists_equal_to_chunked[] = {
+    {"chunked, then empty",
+     "Transfer-Encoding: chunked\r\n"
+     "Transfer-Encoding:\r\n"},
+    {"chunked, then comma",
+     "Transfer-Encoding: chunked\r\n"
+     "Transfer-Encoding: ,\r\n"},
+    {"chunked, then OWS and commas",
+     "Transfer-Encoding: chunked\r\n"
+     "Transfer-Encoding:  , \t,\r\n"},
+    {"empty, then chunked",
+     "Transfer-Encoding:\r\n"
+     "Transfer-Encoding: chunked\r\n"},
+    {"gzip, empty, chunked",
+     "Transfer-Encoding: gzip\r\n"
+     "Transfer-Encoding: ,\r\n"
+     "Transfer-Encoding: chunked\r\n"},
+    {"gzip then chunked, then empty",
+     "Transfer-Encoding: gzip\r\n"
+     "Transfer-Encoding: chunked\r\n"
+     "Transfer-Encoding:\r\n"},
+};
+
+/* Each of these merged lists ends in a coding that is not chunked. */
+static const te_empty_case_t g_te_lists_not_ending_in_chunked[] = {
+    {"gzip, then empty",
+     "Transfer-Encoding: gzip\r\n"
+     "Transfer-Encoding:\r\n"},
+    {"chunked, empty, gzip",
+     "Transfer-Encoding: chunked\r\n"
+     "Transfer-Encoding: ,\r\n"
+     "Transfer-Encoding: gzip\r\n"},
+};
+
+/* Each of these merged lists applies chunked twice. */
+static const te_empty_case_t g_te_lists_chunked_twice[] = {
+    {"chunked, empty, chunked",
+     "Transfer-Encoding: chunked\r\n"
+     "Transfer-Encoding:\r\n"
+     "Transfer-Encoding: chunked\r\n"},
+    {"chunked, comma, CHUNKED",
+     "Transfer-Encoding: chunked\r\n"
+     "Transfer-Encoding: ,\r\n"
+     "Transfer-Encoding: CHUNKED\r\n"},
+};
+
+#define TE_CASE_COUNT(a) (sizeof(a) / sizeof((a)[0]))
+
+static void build_te_message(char *out, size_t cap, const char *start_line,
+                             const char *te_lines, const char *extra_headers,
+                             const char *body) {
+  int n = snprintf(out, cap, "%s%s%s\r\n%s", start_line, te_lines,
+                   extra_headers, body);
+  if (n < 0 || (size_t)n >= cap) out[0] = '\0';
+}
+
+#define TE_RESPONSE_START "HTTP/1.1 200 OK\r\n"
+#define TE_REQUEST_START "POST /u HTTP/1.1\r\nHost: h\r\n"
+#define TE_CHUNKED_BODY "3\r\nabc\r\n0\r\n\r\n"
+
+TEST(framing, response_empty_te_line_keeps_the_list_chunked) {
+  /* This test is not vacuous. When an empty line re-derives the final
+   * coding, "chunked, then empty" and its siblings take EOF framing: the
+   * execute call returns CHTTP1_OK instead of CHTTP1_PAUSED, and the chunk
+   * framing reaches the caller as body bytes. */
+  for (size_t i = 0; i < TE_CASE_COUNT(g_te_lists_equal_to_chunked); i++) {
+    chttp1_parser_t parser;
+    test_ctx_t ctx;
+    init_test(&parser, &ctx);
+    char msg[512];
+    build_te_message(msg, sizeof(msg), TE_RESPONSE_START,
+                     g_te_lists_equal_to_chunked[i].te_lines, "",
+                     TE_CHUNKED_BODY);
+    REQUIRE_NE(msg[0], '\0');
+    chttp1_errno_t rc = chttp1_parser_execute(&parser, msg, strlen(msg));
+    if (rc != CHTTP1_PAUSED || strcmp(ctx.body, "abc") != 0)
+      printf("case '%s': rc=%d body=[%s]\n",
+             g_te_lists_equal_to_chunked[i].label, (int)rc, ctx.body);
+    REQUIRE_EQ(rc, CHTTP1_PAUSED);
+    REQUIRE_STREQ(ctx.body, "abc");
+    REQUIRE_TRUE(ctx.message_complete_called);
+    REQUIRE_TRUE(chttp1_should_keep_alive(&parser));
+  }
+}
+
+TEST(framing, response_empty_te_line_does_not_make_a_list_chunked) {
+  /* An empty line changes nothing in the other direction either: a list
+   * that ends in "gzip" stays framed by EOF, wherever the empty line sits. */
+  for (size_t i = 0; i < TE_CASE_COUNT(g_te_lists_not_ending_in_chunked); i++) {
+    chttp1_parser_t parser;
+    test_ctx_t ctx;
+    init_test(&parser, &ctx);
+    char msg[512];
+    build_te_message(msg, sizeof(msg), TE_RESPONSE_START,
+                     g_te_lists_not_ending_in_chunked[i].te_lines, "",
+                     "some-bytes");
+    REQUIRE_NE(msg[0], '\0');
+    REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_OK);
+    REQUIRE_EQ(chttp1_parser_finish(&parser), CHTTP1_PAUSED);
+    REQUIRE_STREQ(ctx.body, "some-bytes");
+    REQUIRE_FALSE(chttp1_should_keep_alive(&parser));
+  }
+}
+
+TEST(framing, response_empty_te_line_does_not_hide_chunked_applied_twice) {
+  for (size_t i = 0; i < TE_CASE_COUNT(g_te_lists_chunked_twice); i++) {
+    chttp1_parser_t parser;
+    test_ctx_t ctx;
+    init_test(&parser, &ctx);
+    char msg[512];
+    build_te_message(msg, sizeof(msg), TE_RESPONSE_START,
+                     g_te_lists_chunked_twice[i].te_lines, "", TE_CHUNKED_BODY);
+    REQUIRE_NE(msg[0], '\0');
+    REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+    REQUIRE_EQ(ctx.body_len, (size_t)0);
+    REQUIRE_FALSE(ctx.message_complete_called);
+  }
+}
+
+TEST(framing, response_empty_te_line_with_content_length_rejected) {
+  /* The merged list is "chunked" whatever the order of the lines, so a
+   * Content-Length beside it is the ambiguous pair in every case. */
+  for (size_t i = 0; i < TE_CASE_COUNT(g_te_lists_equal_to_chunked); i++) {
+    for (int cl_first = 0; cl_first < 2; cl_first++) {
+      chttp1_parser_t parser;
+      test_ctx_t ctx;
+      init_test(&parser, &ctx);
+      char msg[512];
+      char start[128];
+      snprintf(start, sizeof(start), "%s%s", TE_RESPONSE_START,
+               cl_first ? "Content-Length: 3\r\n" : "");
+      build_te_message(
+          msg, sizeof(msg), start, g_te_lists_equal_to_chunked[i].te_lines,
+          cl_first ? "" : "Content-Length: 3\r\n", TE_CHUNKED_BODY);
+      REQUIRE_NE(msg[0], '\0');
+      REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)),
+                 CHTTP1_ERROR);
+      REQUIRE_FALSE(ctx.message_complete_called);
+    }
+  }
+}
+
+TEST(request_body_framing, empty_te_line_keeps_the_list_chunked) {
+  /* This test is not vacuous. When an empty line re-derives the final
+   * coding, the request below reads as a Transfer-Encoding that does not
+   * end in chunked, and the parser refuses it with CHTTP1_ERROR. */
+  for (size_t i = 0; i < TE_CASE_COUNT(g_te_lists_equal_to_chunked); i++) {
+    chttp1_parser_t parser;
+    test_ctx_t ctx;
+    init_test_request(&parser, &ctx);
+    char msg[512];
+    build_te_message(msg, sizeof(msg), TE_REQUEST_START,
+                     g_te_lists_equal_to_chunked[i].te_lines, "",
+                     TE_CHUNKED_BODY);
+    REQUIRE_NE(msg[0], '\0');
+    chttp1_errno_t rc = chttp1_parser_execute(&parser, msg, strlen(msg));
+    if (rc != CHTTP1_PAUSED)
+      printf("case '%s': rc=%d reason=%s\n",
+             g_te_lists_equal_to_chunked[i].label, (int)rc,
+             parser.reason ? parser.reason : "-");
+    REQUIRE_EQ(rc, CHTTP1_PAUSED);
+    REQUIRE_STREQ(ctx.body, "abc");
+    REQUIRE_TRUE(ctx.message_complete_called);
+    REQUIRE_TRUE(chttp1_should_keep_alive(&parser));
+  }
+}
+
+TEST(request_body_framing, empty_te_line_does_not_make_a_list_chunked) {
+  for (size_t i = 0; i < TE_CASE_COUNT(g_te_lists_not_ending_in_chunked); i++) {
+    chttp1_parser_t parser;
+    test_ctx_t ctx;
+    init_test_request(&parser, &ctx);
+    char msg[512];
+    build_te_message(msg, sizeof(msg), TE_REQUEST_START,
+                     g_te_lists_not_ending_in_chunked[i].te_lines, "",
+                     TE_CHUNKED_BODY);
+    REQUIRE_NE(msg[0], '\0');
+    REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+    REQUIRE_FALSE(ctx.message_complete_called);
+  }
+}
+
+TEST(request_body_framing, empty_te_line_does_not_hide_chunked_applied_twice) {
+  for (size_t i = 0; i < TE_CASE_COUNT(g_te_lists_chunked_twice); i++) {
+    chttp1_parser_t parser;
+    test_ctx_t ctx;
+    init_test_request(&parser, &ctx);
+    char msg[512];
+    build_te_message(msg, sizeof(msg), TE_REQUEST_START,
+                     g_te_lists_chunked_twice[i].te_lines, "", TE_CHUNKED_BODY);
+    REQUIRE_NE(msg[0], '\0');
+    REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+    REQUIRE_FALSE(ctx.message_complete_called);
+  }
+}
+
+TEST(request_body_framing, empty_te_line_with_content_length_rejected) {
+  for (size_t i = 0; i < TE_CASE_COUNT(g_te_lists_equal_to_chunked); i++) {
+    chttp1_parser_t parser;
+    test_ctx_t ctx;
+    init_test_request(&parser, &ctx);
+    char msg[512];
+    build_te_message(msg, sizeof(msg), TE_REQUEST_START,
+                     g_te_lists_equal_to_chunked[i].te_lines,
+                     "Content-Length: 3\r\n", TE_CHUNKED_BODY);
+    REQUIRE_NE(msg[0], '\0');
+    REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+    REQUIRE_FALSE(ctx.message_complete_called);
+  }
 }
 
 /* ========================================================================== */
@@ -764,7 +1239,11 @@ TEST(chunked, terminal_chunk_with_trailers) {
       "5\r\nhello\r\n0\r\nX-Trailer: trailer-value\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
   REQUIRE_STREQ(ctx.body, "hello");
-  REQUIRE_STREQ(find_header(&ctx, "X-Trailer"), "trailer-value");
+  /* A trailer field is delivered through the trailer callback, never
+     through on_header: a caller that keeps one headers collection must not
+     be able to have a header displaced by a same-named trailer. */
+  REQUIRE_STREQ(trailer_or_absent(&ctx, "X-Trailer"), "trailer-value");
+  REQUIRE_TRUE(find_header(&ctx, "X-Trailer") == NULL);
 }
 
 TEST(chunked, terminal_chunk_without_trailers) {
@@ -816,6 +1295,160 @@ TEST(chunked, eof_mid_trailer_is_unsafe) {
       "5\r\nhello\r\n0\r\nX-Trail";
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_OK);
   REQUIRE_EQ(chttp1_parser_finish(&parser), CHTTP1_ERROR);
+}
+
+/* ========================================================================== */
+/*                     TRAILER ISOLATION                                     */
+/* ========================================================================== */
+
+/* RFC 7230 SS4.1.2 trailer fields arrive after a message's framing has
+   already been settled and, on the server side, after the request has
+   already been routed. These tests pin the two properties that follow from
+   that: a trailer is delivered through a callback of its own (never
+   on_header), and it changes nothing about how the parser itself sees the
+   message. */
+
+TEST(trailer_isolation, trailer_does_not_reach_on_header_in_response_mode) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg =
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n"
+      "X-Origin: upstream\r\n\r\n"
+      "5\r\nhello\r\n0\r\nX-Origin: forged\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  /* The response header keeps its own value; a consumer inserting every
+     on_header line into one map (chttpclient.c does exactly that, and its
+     insert overwrites) can never have it replaced by the trailer. */
+  REQUIRE_STREQ(header_or_absent(&ctx, "X-Origin"), "upstream");
+  REQUIRE_EQ(ctx.header_count, (size_t)2);
+  REQUIRE_STREQ(trailer_or_absent(&ctx, "X-Origin"), "forged");
+}
+
+TEST(trailer_isolation, trailer_does_not_reach_on_header_in_request_mode) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  /* The privilege-escalation shape this split exists to close: a request
+     behind a proxy that sets X-Forwarded-For and an authentication gateway
+     that sets X-Authenticated-User, with the client appending trailers of
+     the same names. Both header values must survive. */
+  const char *msg =
+      "POST /x HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n"
+      "X-Forwarded-For: 203.0.113.9\r\n"
+      "X-Authenticated-User: guest\r\n\r\n"
+      "5\r\nhello\r\n"
+      "0\r\nX-Forwarded-For: 127.0.0.1\r\nX-Authenticated-User: admin\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_STREQ(header_or_absent(&ctx, "X-Forwarded-For"), "203.0.113.9");
+  REQUIRE_STREQ(header_or_absent(&ctx, "X-Authenticated-User"), "guest");
+  /* Host, Transfer-Encoding, X-Forwarded-For and X-Authenticated-User. The
+     Host line is not optional: RFC 7230 SS5.4 makes a request without one a
+     400, and this parser enforces that in request mode. */
+  REQUIRE_EQ(ctx.header_count, (size_t)4);
+  REQUIRE_EQ(ctx.trailer_count, (size_t)2);
+  REQUIRE_STREQ(trailer_or_absent(&ctx, "X-Forwarded-For"), "127.0.0.1");
+  REQUIRE_STREQ(trailer_or_absent(&ctx, "X-Authenticated-User"), "admin");
+}
+
+TEST(trailer_isolation, trailer_cannot_change_framing_or_connection_state) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  /* Every framing-relevant header name, all in the trailer part: a
+     Transfer-Encoding that would clear chunked framing, a Content-Length
+     that would then be accepted without tripping the mutual-exclusion
+     check, and a Connection token that would turn a keep-alive connection
+     into a closing one. None of them may be interpreted. */
+  const char *msg =
+      "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n"
+      "0\r\nTransfer-Encoding: identity\r\nContent-Length: 100\r\n"
+      "Connection: close\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_EQ((int)chttp1_has_content_length(&parser), 0);
+  REQUIRE_EQ(chttp1_declared_content_length(&parser), (uint64_t)0);
+  REQUIRE_EQ((int)chttp1_should_keep_alive(&parser), 1);
+  REQUIRE_EQ(ctx.trailer_count, (size_t)3);
+}
+
+TEST(trailer_isolation, trailer_cannot_raise_expect_100_continue) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg =
+      "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n"
+      "0\r\nExpect: 100-continue\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_EQ((int)chttp1_expects_continue(&parser), 0);
+  REQUIRE_STREQ(trailer_or_absent(&ctx, "Expect"), "100-continue");
+}
+
+TEST(trailer_isolation, trailer_grammar_is_still_validated) {
+  /* Being inert is not the same as being unchecked: a trailer line is held
+     to the identical name-token and value-byte grammar a header line is. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *bad_name =
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+      "0\r\nX Bad: value\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, bad_name, strlen(bad_name)),
+             CHTTP1_ERROR);
+
+  chttp1_parser_t parser2;
+  test_ctx_t ctx2;
+  init_test(&parser2, &ctx2);
+  const char *bad_value =
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+      "0\r\nX-Bad: va\x01lue\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser2, bad_value, strlen(bad_value)),
+             CHTTP1_ERROR);
+
+  chttp1_parser_t parser3;
+  test_ctx_t ctx3;
+  init_test(&parser3, &ctx3);
+  const char *no_colon =
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+      "0\r\nnot-a-field-line\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser3, no_colon, strlen(no_colon)),
+             CHTTP1_ERROR);
+}
+
+TEST(trailer_isolation, on_trailer_error_reports_user) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  ctx.force_on_trailer_error = true;
+  const char *msg =
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+      "0\r\nX-T: v\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_USER);
+}
+
+TEST(trailer_isolation, unset_on_trailer_discards_trailers_without_error) {
+  /* The configuration both chttpclient.c and chttpserver.c ship: no trailer
+     callback at all, so a trailer is validated, charged against the caps,
+     and then dropped. Neither the message nor the header set is affected. */
+  static const chttp1_settings_t no_trailer_settings = {
+      .on_header = t_on_header,
+      .on_headers_complete = t_on_headers_complete,
+      .on_body = t_on_body,
+      .on_message_complete = t_on_message_complete,
+  };
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  memset(&ctx, 0, sizeof(ctx));
+  chttp1_parser_init(&parser, &no_trailer_settings);
+  parser.data = &ctx;
+  const char *msg =
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n"
+      "X-Origin: upstream\r\n\r\n"
+      "5\r\nhello\r\n0\r\nX-Origin: forged\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_STREQ(ctx.body, "hello");
+  REQUIRE_EQ(ctx.header_count, (size_t)2);
+  REQUIRE_STREQ(header_or_absent(&ctx, "X-Origin"), "upstream");
+  REQUIRE_EQ(ctx.trailer_count, (size_t)0);
 }
 
 TEST(chunked, trailer_bytes_count_against_same_header_caps) {
@@ -953,8 +1586,8 @@ static void assert_fragmented_matches_oneshot(const char *msg, size_t len) {
     init_test(&parser, &ctx);
     chttp1_errno_t rv1 = chttp1_parser_execute(&parser, msg, split);
     if (rv1 == CHTTP1_PAUSED) {
-      /* The whole message happened to fit before this split point (e.g. a
-       * short message with a large split); nothing left to feed. */
+      /* The whole message fits before this split point. A short message
+       * with a large split is one such case. Nothing is left to feed. */
       REQUIRE_EQ(chttp1_parser_consumed(&parser), ref_consumed);
       continue;
     }
@@ -966,13 +1599,13 @@ static void assert_fragmented_matches_oneshot(const char *msg, size_t len) {
     REQUIRE_EQ(ctx.header_count, ref_ctx.header_count);
     REQUIRE_EQ(ctx.body_len, ref_ctx.body_len);
     REQUIRE_TRUE(memcmp(ctx.body, ref_ctx.body, ctx.body_len) == 0);
-    /* bool isn't one of tau's REQUIRE_EQ _Generic printer associations, cast to
-     * int. */
+    /* The _Generic printer of REQUIRE_EQ in tau does not handle bool. This
+     * code therefore casts to int. */
     REQUIRE_EQ((int)chttp1_should_keep_alive(&parser), (int)ref_keep_alive);
-    /* Hard contract: execute() never returns CHTTP1_OK with bytes left
-     * unconsumed; rv1 == CHTTP1_OK above already implies the first call
-     * consumed all `split` bytes (nothing else to check here beyond having
-     * reached this point at all). */
+    /* A hard contract. execute() never returns CHTTP1_OK with bytes left
+     * over. The "rv1 == CHTTP1_OK" above therefore already means that the
+     * first call consumed all `split` bytes. There is nothing more to
+     * check here. To reach this point is the check. */
   }
 }
 
@@ -1037,12 +1670,13 @@ TEST(finish_matrix, mid_chunk_is_unsafe) {
 
 TEST(finish_matrix, at_clean_boundary_is_safe_no_callback) {
   /* chttpclient.c itself never calls chttp1_parser_finish after execute()
-   * already returned CHTTP1_PAUSED (it returns success immediately instead,
-   * per chttp1_parser_execute's own documented contract); this test calls
-   * it anyway, purely to exercise the CHTTP1_FINISH_SAFE switch case
-   * directly: a message that completed via a normal (non-EOF-delimited)
-   * path leaves finish_state at CHTTP1_FINISH_SAFE, which finish() reports
-   * as CHTTP1_OK without invoking on_message_complete a second time. */
+   * returned CHTTP1_PAUSED. It reports success at once instead, and the
+   * documented contract of chttp1_parser_execute says so. This test calls
+   * finish anyway. It does that only to drive the CHTTP1_FINISH_SAFE case
+   * of the switch directly. A message that completed on a normal path,
+   * which the EOF does not frame, leaves finish_state at
+   * CHTTP1_FINISH_SAFE. finish() reports that as CHTTP1_OK, and it does not
+   * call on_message_complete a second time. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -1066,15 +1700,16 @@ TEST(finish_matrix, inside_eof_delimited_body_is_safe_with_callback) {
 
 TEST(finish_matrix,
      calling_finish_twice_after_eof_delimited_body_does_not_refire_callback) {
-  /* The CHTTP1_FINISH_SAFE_WITH_CB case must update finish_state (not only
-   * parser->state) after firing on_message_complete. With finish_state left
-   * at CHTTP1_FINISH_SAFE_WITH_CB, a second finish() call on an
-   * already-CHTTP1_ST_MESSAGE_DONE parser re-enters that same branch and
-   * re-invokes on_message_complete, violating both that callback's own
-   * "fired exactly once" contract and this function's own documented
-   * "already at a clean boundary returns CHTTP1_OK" contract. The two extra
-   * finish() calls below are what makes this test non-vacuous: each one
-   * must report CHTTP1_OK without firing the callback again. */
+  /* The CHTTP1_FINISH_SAFE_WITH_CB case must update finish_state after it
+   * fires on_message_complete. It must not update parser->state alone.
+   * Without that, finish_state stays at CHTTP1_FINISH_SAFE_WITH_CB. A
+   * second finish() call on a parser that is already at
+   * CHTTP1_ST_MESSAGE_DONE then enters that same branch again, and it calls
+   * on_message_complete again. That breaks two contracts. The callback
+   * documents that it fires exactly one time. This function documents that
+   * a parser which is already at a clean boundary gets CHTTP1_OK. The two
+   * extra finish() calls below are what make this test non-vacuous. Each
+   * one must report CHTTP1_OK, and neither may fire the callback again. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -1128,7 +1763,8 @@ TEST(request_line, post_with_content_length_body) {
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
-  const char *msg = "POST /submit HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello";
+  const char *msg =
+      "POST /submit HTTP/1.1\r\nHost: h\r\nContent-Length: 5\r\n\r\nhello";
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
   REQUIRE_STREQ(ctx.method, "POST");
   REQUIRE_STREQ(ctx.target, "/submit");
@@ -1140,7 +1776,7 @@ TEST(request_line, query_string_preserved_in_target) {
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
-  const char *msg = "GET /path?a=1&b=2 HTTP/1.1\r\n\r\n";
+  const char *msg = "GET /path?a=1&b=2 HTTP/1.1\r\nHost: h\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
   REQUIRE_STREQ(ctx.target, "/path?a=1&b=2");
 }
@@ -1149,7 +1785,7 @@ TEST(request_line, asterisk_target_accepted) {
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
-  const char *msg = "OPTIONS * HTTP/1.1\r\n\r\n";
+  const char *msg = "OPTIONS * HTTP/1.1\r\nHost: h\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
   REQUIRE_STREQ(ctx.method, "OPTIONS");
   REQUIRE_STREQ(ctx.target, "*");
@@ -1205,6 +1841,44 @@ TEST(request_line, control_char_in_target_rejected) {
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
 }
 
+TEST(request_line, htab_in_target_rejected) {
+  /* RFC 7230 SS3.1.1 delimits the request-line's fields with single spaces
+     and SS5.3 admits no whitespace inside the request-target itself, so a
+     HTAB is not content the way it is inside a header value. Accepting one
+     lets a front-end that splits the request-line on whitespace and this
+     server disagree about which resource was asked for, which is a request
+     smuggling primitive rather than a leniency. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "GET /a\tb HTTP/1.1\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+  REQUIRE_FALSE(ctx.request_line_called);
+}
+
+TEST(request_line, del_in_target_rejected) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg =
+      "GET /a\x7f"
+      "b HTTP/1.1\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+  REQUIRE_FALSE(ctx.request_line_called);
+}
+
+TEST(request_line, ordinary_target_bytes_still_accepted) {
+  /* The target check rejects every byte at or below SP plus DEL, and
+     nothing else: a target made of printable bytes, punctuation included,
+     must still get through. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "GET /a~b%7Cc!$&'()*+,;=:@/-._ HTTP/1.1\r\nHost: h\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_STREQ(ctx.target, "/a~b%7Cc!$&'()*+,;=:@/-._");
+}
+
 TEST(request_line, on_request_line_callback_error_reports_user) {
   chttp1_parser_t parser;
   test_ctx_t ctx;
@@ -1215,7 +1889,8 @@ TEST(request_line, on_request_line_callback_error_reports_user) {
 }
 
 TEST(request_line, split_across_every_byte_boundary) {
-  const char *msg = "PUT /a/b/c HTTP/1.1\r\nContent-Length: 3\r\n\r\nxyz";
+  const char *msg =
+      "PUT /a/b/c HTTP/1.1\r\nHost: h\r\nContent-Length: 3\r\n\r\nxyz";
   size_t len = strlen(msg);
   for (size_t split = 0; split <= len; split++) {
     chttp1_parser_t parser;
@@ -1234,15 +1909,15 @@ TEST(request_line, split_across_every_byte_boundary) {
 }
 
 TEST(request_line, single_leading_blank_line_tolerated) {
-  /* RFC 7230 SS3.5: a server SHOULD ignore at least one empty line received
-   * prior to the request-line (some clients send a stray CRLF after a POST
-   * body). Regression test: this must not hard-reject with PH_ERROR
-   * (method_len == 0), which closes an otherwise-healthy keep-alive/
-   * pipelined connection over one stray CRLF. */
+  /* RFC 7230 SS3.5 says that a server SHOULD ignore at least one empty line
+   * before the request-line. Some clients send a stray CRLF after a POST
+   * body. This is a regression test. The parser must not reject such a line
+   * outright with PH_ERROR, where method_len == 0. That rejection closes a
+   * healthy keep-alive or pipelined connection over one stray CRLF. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
-  const char *msg = "\r\nGET /path HTTP/1.1\r\n\r\n";
+  const char *msg = "\r\nGET /path HTTP/1.1\r\nHost: h\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
   REQUIRE_TRUE(ctx.request_line_called);
   REQUIRE_STREQ(ctx.method, "GET");
@@ -1253,13 +1928,13 @@ TEST(request_line, multiple_leading_blank_lines_tolerated) {
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
-  const char *msg = "\r\n\r\n\r\nGET /path HTTP/1.1\r\n\r\n";
+  const char *msg = "\r\n\r\n\r\nGET /path HTTP/1.1\r\nHost: h\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
   REQUIRE_STREQ(ctx.target, "/path");
 }
 
 TEST(request_line, leading_blank_lines_split_across_byte_boundaries) {
-  const char *msg = "\r\n\r\nGET /path HTTP/1.1\r\n\r\n";
+  const char *msg = "\r\n\r\nGET /path HTTP/1.1\r\nHost: h\r\n\r\n";
   size_t len = strlen(msg);
   for (size_t split = 1; split < len; split++) {
     chttp1_parser_t parser;
@@ -1298,10 +1973,10 @@ TEST(request_line, excessive_leading_blank_lines_rejected) {
 /* ========================================================================== */
 
 TEST(request_body_framing, no_framing_headers_means_no_body_not_eof) {
-  /* Unlike a response, a request with neither Content-Length nor chunked
-   * Transfer-Encoding has NO body at all; the message completes
-   * immediately after headers, it does not wait for EOF (there would be
-   * nothing to wait for anyway; the connection isn't closing). */
+  /* A request with no Content-Length and no chunked Transfer-Encoding has
+   * NO body at all. A response is different. The message completes at once
+   * after the headers. It does not wait for an EOF. There would be nothing
+   * to wait for, because the connection does not close. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -1311,11 +1986,161 @@ TEST(request_body_framing, no_framing_headers_means_no_body_not_eof) {
   REQUIRE_EQ(ctx.body_len, (size_t)0);
 }
 
+/* ========================================================================== */
+/*                    HOST HEADER (RFC 7230 SS5.4)                            */
+/* ========================================================================== */
+
+/* RFC 7230 SS5.4: "A server MUST respond with a 400 (Bad Request) status code
+   to any HTTP/1.1 request message that lacks a Host header field and to any
+   request message that contains more than one Host header field or a Host
+   header field with an invalid field-value."
+
+   The parser enforces it in request mode, at the blank line that ends the
+   header block, because only there is the count of Host lines final. Two Host
+   lines are what let a front end and a back end disagree about the authority
+   that a request names, which is a request-smuggling primitive. Response mode
+   must not enforce any of this: a Host header in a response is an ordinary,
+   meaningless field. */
+
+TEST(host_header, http_1_1_without_host_rejected) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "GET /path HTTP/1.1\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+  REQUIRE_FALSE(ctx.message_complete_called);
+}
+
+TEST(host_header, http_1_1_with_one_host_accepted) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "GET /path HTTP/1.1\r\nHost: example.com\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_TRUE(ctx.message_complete_called);
+}
+
+TEST(host_header, duplicate_host_rejected) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg =
+      "GET /path HTTP/1.1\r\nHost: a.example\r\nHost: b.example\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+  REQUIRE_FALSE(ctx.message_complete_called);
+}
+
+TEST(host_header, duplicate_host_rejected_for_http_1_0_too) {
+  /* The text of the rule puts no version condition on the duplicate case:
+     "any request message that contains more than one Host header field". The
+     reason does not depend on a version either. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "GET /path HTTP/1.0\r\nHost: a\r\nHost: b\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+}
+
+TEST(host_header, http_1_0_without_host_accepted) {
+  /* The missing-Host half of the rule names HTTP/1.1 alone. HTTP/1.0
+     predates the field, and a request without one is ordinary there. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "GET /path HTTP/1.0\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_TRUE(ctx.message_complete_called);
+}
+
+TEST(host_header, host_matched_without_regard_to_case) {
+  /* A field name is case-insensitive (RFC 7230 SS3.2). A sender that spells
+     it "HOST" or "hOsT" must satisfy the rule, and two such spellings must
+     still count as two. */
+  {
+    chttp1_parser_t parser;
+    test_ctx_t ctx;
+    init_test_request(&parser, &ctx);
+    const char *msg = "GET / HTTP/1.1\r\nHOST: example.com\r\n\r\n";
+    REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  }
+  {
+    chttp1_parser_t parser;
+    test_ctx_t ctx;
+    init_test_request(&parser, &ctx);
+    const char *msg = "GET / HTTP/1.1\r\nHost: a\r\nhOsT: b\r\n\r\n";
+    REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+  }
+}
+
+TEST(host_header, empty_host_value_rejected) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "GET / HTTP/1.1\r\nHost:\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+}
+
+TEST(host_header, host_value_with_interior_whitespace_rejected) {
+  /* RFC 3986 SS3.2 lets no whitespace into an authority. A front end that
+     splits on it forwards a different authority than a back end reads. The
+     leading and trailing optional whitespace is trimmed before this check,
+     so only an interior byte can reach it. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "GET / HTTP/1.1\r\nHost: a.example b.example\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+}
+
+TEST(host_header, surrounding_optional_whitespace_still_accepted) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "GET / HTTP/1.1\r\nHost:   example.com\t \r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_STREQ(header_or_absent(&ctx, "Host"), "example.com");
+}
+
+TEST(host_header, response_mode_ignores_the_rule_completely) {
+  /* Response mode must not gain any of this. A response with no Host, and a
+     response with two, are both ordinary messages. */
+  {
+    chttp1_parser_t parser;
+    test_ctx_t ctx;
+    init_test(&parser, &ctx);
+    const char *msg = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+    REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  }
+  {
+    chttp1_parser_t parser;
+    test_ctx_t ctx;
+    init_test(&parser, &ctx);
+    const char *msg =
+        "HTTP/1.1 200 OK\r\nHost: a\r\nHost: b\r\nContent-Length: 0\r\n\r\n";
+    REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  }
+}
+
+TEST(host_header, a_trailer_named_host_cannot_satisfy_or_break_the_rule) {
+  /* A trailer field arrives after the framing is already settled. It must
+     neither supply the Host of a request that had none, nor turn a request
+     with exactly one into a duplicate. process_header_line() reaches the
+     counter only for a real header line. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg =
+      "POST /x HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n"
+      "0\r\nHost: smuggled\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_TRUE(ctx.message_complete_called);
+}
+
 TEST(request_body_framing, content_length_zero_completes_immediately) {
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
-  const char *msg = "POST /x HTTP/1.1\r\nContent-Length: 0\r\n\r\n";
+  const char *msg = "POST /x HTTP/1.1\r\nHost: h\r\nContent-Length: 0\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
   REQUIRE_EQ(ctx.body_len, (size_t)0);
 }
@@ -1325,7 +2150,7 @@ TEST(request_body_framing, chunked_request_body) {
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
   const char *msg =
-      "POST /x HTTP/1.1\r\nTransfer-Encoding: "
+      "POST /x HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: "
       "chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
   REQUIRE_EQ(ctx.body_len, (size_t)5);
@@ -1340,21 +2165,23 @@ TEST(request_body_framing, trailer_name_not_whitelisted) {
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
   const char *msg =
-      "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n"
+      "POST /x HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n"
       "5\r\nhello\r\n0\r\nCustom-Trailer: allowed\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
-  REQUIRE_STREQ(find_header(&ctx, "Custom-Trailer"), "allowed");
+  REQUIRE_STREQ(trailer_or_absent(&ctx, "Custom-Trailer"), "allowed");
+  REQUIRE_TRUE(find_header(&ctx, "Custom-Trailer") == NULL);
 }
 
 TEST(request_body_framing,
      transfer_encoding_present_but_final_coding_not_chunked_rejected) {
-  /* RFC 7230 SS3.3.3: a request's Transfer-Encoding whose final coding is
-   * not "chunked" leaves the message length indeterminate; a conforming
-   * server MUST reject it outright rather than silently treating it as
-   * bodyless (the request/response asymmetry means a request has no
-   * EOF-delimited fallback the way a response does). Regression test: this
-   * must be rejected, not silently accepted as if Transfer-Encoding were
-   * absent. */
+  /* RFC 7230 SS3.3.3 covers this. The final coding of the
+   * Transfer-Encoding of a request can be something other than "chunked".
+   * The length of the message is then undetermined. A server that obeys the
+   * RFC MUST reject such a request outright. It must not quietly read it as
+   * a request with no body. A request and a response are asymmetric here: a
+   * request has no fallback to EOF framing, and a response does. This is a
+   * regression test. The parser must reject the request. It must not accept
+   * it quietly, as if the Transfer-Encoding were absent. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -1365,12 +2192,12 @@ TEST(request_body_framing,
 TEST(
     request_body_framing,
     transfer_encoding_chunked_not_last_split_across_two_header_lines_rejected) {
-  /* Regression test: transfer_encoding_has_nonfinal_chunked only sees one
-   * header line at a time, so "chunked" claimed as final by an EARLIER
-   * Transfer-Encoding line and then followed by a SECOND Transfer-Encoding
-   * line (RFC 7230 SS3.2.2: repeated header lines are one concatenated
-   * comma-separated list, in order) must not bypass that check, which is
-   * what validating each line in isolation would do. */
+  /* A regression test. transfer_encoding_has_nonfinal_chunked sees only
+   * one header line at a time. An EARLIER Transfer-Encoding line can claim
+   * "chunked" as final, and a SECOND Transfer-Encoding line can follow it.
+   * RFC 7230 SS3.2.2 joins repeated header lines into one comma-separated
+   * list, in order. Such a pair must not get past that check. A check of
+   * each line on its own does let it past. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -1382,15 +2209,15 @@ TEST(
 
 TEST(request_body_framing,
      transfer_encoding_chunked_last_split_across_two_header_lines_accepted) {
-  /* The legitimate counterpart of the above: "chunked" arriving as the
-   * LAST token of the LAST Transfer-Encoding line (here, on the second
-   * line, following a first line that doesn't end in chunked) is valid
-   * framing and must still be accepted. */
+  /* The legal counterpart of the case above. "chunked" arrives as the LAST
+   * token of the LAST Transfer-Encoding line. Here that is the second line,
+   * and the first line does not end in chunked. That is valid framing, and
+   * the parser must still accept it. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
   const char *msg =
-      "POST /x HTTP/1.1\r\nTransfer-Encoding: gzip\r\n"
+      "POST /x HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: gzip\r\n"
       "Transfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
   REQUIRE_EQ(ctx.body_len, (size_t)5);
@@ -1399,11 +2226,11 @@ TEST(request_body_framing,
 
 TEST(request_body_framing,
      response_mode_final_coding_not_chunked_still_reads_until_eof) {
-  /* Response mode's own, separate, documented scope reduction (see
-   * value_ends_with_chunked's doc comment) is independent of the
-   * request-mode-only rejection covered above: a response with a
-   * Transfer-Encoding whose final coding isn't "chunked" falls back to
-   * EOF-delimited framing rather than being rejected. */
+  /* Response mode has a separate, documented reduction of scope of its
+   * own. See the doc comment of value_ends_with_chunked. It does not depend
+   * on the rejection above, which belongs to request mode alone. A response
+   * whose Transfer-Encoding does not end in "chunked" falls back to EOF
+   * framing. The parser does not reject it. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -1415,11 +2242,11 @@ TEST(request_body_framing,
 }
 
 TEST(request_body_framing, single_line_chunked_then_gzip_rejected) {
-  /* transfer_encoding_has_nonfinal_chunked's single-line path (as opposed
-   * to the split-across-two-header-lines path already covered above):
-   * "chunked" appearing before the end of one line's own token list is
-   * unconditionally wrong and must be rejected immediately, regardless of
-   * what the trailing token is. */
+  /* The single-line path of transfer_encoding_has_nonfinal_chunked. The
+   * path above covers a list that two header lines split. Here "chunked"
+   * appears before the end of the token list of one line. That is always
+   * wrong, and the parser must reject it at once. The last token makes no
+   * difference. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -1429,14 +2256,15 @@ TEST(request_body_framing, single_line_chunked_then_gzip_rejected) {
 }
 
 TEST(request_body_framing, single_line_gzip_then_chunked_accepted) {
-  /* The legitimate single-line counterpart: multiple comma-separated
-   * codings on ONE Transfer-Encoding line, ending in "chunked", is valid
-   * framing and must be accepted with chunked body parsing. */
+  /* The legal counterpart on one line. More than one coding, separated by
+   * commas, sits on ONE Transfer-Encoding line, and the list ends in
+   * "chunked". That is valid framing. The parser must accept it and parse
+   * the body as chunked. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
   const char *msg =
-      "POST /x HTTP/1.1\r\nTransfer-Encoding: gzip, chunked\r\n\r\n"
+      "POST /x HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: gzip, chunked\r\n\r\n"
       "5\r\nhello\r\n0\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
   REQUIRE_EQ(ctx.body_len, (size_t)5);
@@ -1445,12 +2273,13 @@ TEST(request_body_framing, single_line_gzip_then_chunked_accepted) {
 
 TEST(request_body_framing,
      response_mode_single_line_chunked_then_gzip_reads_until_eof) {
-  /* Response mode's scope reduction applies just as much to a single-line
-   * multi-coding value as to the single-coding case already covered above:
-   * "chunked" not being the final token on a response's Transfer-Encoding
-   * line is NOT rejected (transfer_encoding_has_nonfinal_chunked is gated
-   * to CHTTP1_PARSE_REQUEST only), it just means the final coding isn't
-   * "chunked", so the response falls back to EOF-delimited framing. */
+  /* The reduction of scope in response mode applies to a value with more
+   * than one coding on one line. It applies there as much as to the
+   * single-coding case above. The parser does NOT reject a response whose
+   * Transfer-Encoding line ends in something other than "chunked".
+   * transfer_encoding_has_nonfinal_chunked runs only under
+   * CHTTP1_PARSE_REQUEST. The final coding is then not "chunked", so the
+   * response falls back to EOF framing. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -1464,10 +2293,11 @@ TEST(request_body_framing,
 
 TEST(request_body_framing,
      response_mode_single_line_gzip_then_chunked_accepted) {
-  /* Mirrors single_line_gzip_then_chunked_accepted above for response mode:
-   * value_ends_with_chunked doesn't distinguish request from response, so a
-   * response whose Transfer-Encoding line ends in "chunked" uses chunked
-   * body parsing regardless of what precedes it on the same line. */
+  /* This matches single_line_gzip_then_chunked_accepted above, for
+   * response mode. value_ends_with_chunked does not tell a request from a
+   * response. A response whose Transfer-Encoding line ends in "chunked"
+   * therefore parses its body as chunked. What comes before it on the same
+   * line makes no difference. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -1479,6 +2309,45 @@ TEST(request_body_framing,
   REQUIRE_EQ(memcmp(ctx.body, "hello", 5), 0);
 }
 
+TEST(request_body_framing, chunked_applied_twice_across_lines_rejected) {
+  /* RFC 7230 SS3.3.1 says "MUST NOT apply chunked more than once". That
+   * binds a request exactly as it binds a response. RFC 7230 SS3.2.2 merges
+   * these two lines into "chunked, chunked", and the parser refuses the
+   * message. This test is not vacuous. Without the count of occurrences
+   * over the merged list, the final coding of the second line is "chunked".
+   * The parser then accepts the message as an ordinary chunked request, and
+   * it completes with CHTTP1_PAUSED and a body of 3 bytes. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg =
+      "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: "
+      "chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+  REQUIRE_EQ(ctx.body_len, (size_t)0);
+  REQUIRE_FALSE(ctx.message_complete_called);
+}
+
+TEST(request_body_framing, chunked_twice_within_one_line_rejected) {
+  /* Both occurrences sit on one line, and the parser refuses them in the
+   * same way. Two separate rules reject this message in request mode. The
+   * first is the count of occurrences. The second is "chunked must be the
+   * last transfer-coding of a request". This test therefore pins the
+   * outcome, and it does not isolate the count of occurrences.
+   * framing.response_chunked_twice_within_one_line_rejected is the
+   * non-vacuous test for that rule. The rule about the final coding does
+   * not bind a response at all. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg =
+      "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked, "
+      "chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+  REQUIRE_EQ(ctx.body_len, (size_t)0);
+  REQUIRE_FALSE(ctx.message_complete_called);
+}
+
 /* ========================================================================== */
 /*              HEADERS-COMPLETE BODY DIVERSION (CHTTP1_HEADERS_ONLY)        */
 /* ========================================================================== */
@@ -1488,7 +2357,8 @@ TEST(divert, content_length_body_diverts_before_consuming) {
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
   ctx.want_divert = true;
-  const char *headers = "POST /x HTTP/1.1\r\nContent-Length: 5\r\n\r\n";
+  const char *headers =
+      "POST /x HTTP/1.1\r\nHost: h\r\nContent-Length: 5\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, headers, strlen(headers)),
              CHTTP1_HEADERS_ONLY);
   REQUIRE_EQ(chttp1_parser_consumed(&parser), strlen(headers));
@@ -1502,17 +2372,19 @@ TEST(divert, content_length_body_diverts_before_consuming) {
 }
 
 TEST(divert, body_already_in_same_buffer_is_not_consumed_by_divert) {
-  /* The critical carry-over case: header block AND body bytes arrive in
-   * the SAME chttp1_parser_execute call. Diversion must still stop exactly
-   * at the header boundary, leaving the body bytes unconsumed for the
-   * caller to hand off as carry-over; not swallow them into on_body
-   * simply because they happened to already be available. */
+  /* The critical carry-over case. The header block AND the body bytes
+   * arrive in the SAME chttp1_parser_execute call. The diversion must still
+   * stop exactly at the header boundary. It must leave the body bytes
+   * unconsumed, so that the caller can hand them on as carry-over. It must
+   * not swallow them into on_body because they are already available. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
   ctx.want_divert = true;
-  const char *headers = "POST /x HTTP/1.1\r\nContent-Length: 5\r\n\r\n";
-  const char *whole = "POST /x HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello";
+  const char *headers =
+      "POST /x HTTP/1.1\r\nHost: h\r\nContent-Length: 5\r\n\r\n";
+  const char *whole =
+      "POST /x HTTP/1.1\r\nHost: h\r\nContent-Length: 5\r\n\r\nhello";
   REQUIRE_EQ(chttp1_parser_execute(&parser, whole, strlen(whole)),
              CHTTP1_HEADERS_ONLY);
   REQUIRE_EQ(chttp1_parser_consumed(&parser), strlen(headers));
@@ -1535,7 +2407,7 @@ TEST(divert, chunked_body_diverts_before_consuming) {
   init_test_request(&parser, &ctx);
   ctx.want_divert = true;
   const char *headers =
-      "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n";
+      "POST /x HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, headers, strlen(headers)),
              CHTTP1_HEADERS_ONLY);
   REQUIRE_EQ(chttp1_parser_consumed(&parser), strlen(headers));
@@ -1553,7 +2425,7 @@ TEST(divert, no_body_downgrades_to_immediate_complete) {
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
   ctx.want_divert = true;
-  const char *msg = "GET /path HTTP/1.1\r\n\r\n";
+  const char *msg = "GET /path HTTP/1.1\r\nHost: h\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
   REQUIRE_TRUE(ctx.message_complete_called);
 }
@@ -1563,7 +2435,7 @@ TEST(divert, content_length_zero_downgrades_to_immediate_complete) {
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
   ctx.want_divert = true;
-  const char *msg = "POST /x HTTP/1.1\r\nContent-Length: 0\r\n\r\n";
+  const char *msg = "POST /x HTTP/1.1\r\nHost: h\r\nContent-Length: 0\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
   REQUIRE_TRUE(ctx.message_complete_called);
 }
@@ -1593,17 +2465,19 @@ TEST(content_length_accessor, false_before_headers_complete) {
 }
 
 TEST(content_length_accessor, true_with_declared_value_once_headers_complete) {
-  /* want_divert pauses parsing right at headers-complete, before any body
-   * byte is consumed, so the accessor's own documented caveat ("reused
-   * internally to track the CURRENT chunk's remaining byte count once
-   * chunked parsing begins... calling this after body parsing has already
-   * started returns a value with a different meaning") does not yet apply;
-   * this is exactly the window chttpserver.c's real caller uses it in. */
+  /* want_divert pauses the parse at headers-complete, before the parser
+   * consumes any body byte. The accessor carries a documented caveat:
+   * "reused internally to track the CURRENT chunk's remaining byte count
+   * once chunked parsing begins... calling this after body parsing has
+   * already started returns a value with a different meaning". That caveat
+   * does not apply yet. This is exactly the window that the real caller in
+   * chttpserver.c uses it in. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
   ctx.want_divert = true;
-  const char *headers = "POST /x HTTP/1.1\r\nContent-Length: 42\r\n\r\n";
+  const char *headers =
+      "POST /x HTTP/1.1\r\nHost: h\r\nContent-Length: 42\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, headers, strlen(headers)),
              CHTTP1_HEADERS_ONLY);
   REQUIRE_TRUE(chttp1_has_content_length(&parser));
@@ -1616,7 +2490,7 @@ TEST(content_length_accessor, false_for_chunked_body) {
   init_test_request(&parser, &ctx);
   ctx.want_divert = true;
   const char *headers =
-      "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n";
+      "POST /x HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, headers, strlen(headers)),
              CHTTP1_HEADERS_ONLY);
   REQUIRE_FALSE(chttp1_has_content_length(&parser));
@@ -1626,7 +2500,7 @@ TEST(content_length_accessor, false_for_no_body) {
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
-  const char *msg = "GET /path HTTP/1.1\r\n\r\n";
+  const char *msg = "GET /path HTTP/1.1\r\nHost: h\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
   REQUIRE_FALSE(chttp1_has_content_length(&parser));
 }
@@ -1682,7 +2556,7 @@ TEST(chunk_size_limit, unset_override_accepts_any_size_that_fits) {
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
   const char *headers =
-      "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n";
+      "POST /x HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, headers, strlen(headers)),
              CHTTP1_OK);
   /* max_chunk_size_override defaults to 0 (no cap): even a large chunk-size
@@ -1700,13 +2574,14 @@ TEST(chunk_size_limit, override_rejects_oversized_chunk_before_reading_data) {
   init_test_request(&parser, &ctx);
   parser.max_chunk_size_override = 1024;
   const char *headers =
-      "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n";
+      "POST /x HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, headers, strlen(headers)),
              CHTTP1_OK);
-  /* Declares a chunk far larger than the override and never sends any of
-   * its data: rejection must happen the instant the chunk-size line itself
-   * is parsed, not after waiting (forever) for data that will never come. */
-  const char *chunk_size = "8000000000000000\r\n"; /* ~9.2 exabytes */
+  /* This declares a chunk far larger than the override, and it sends none
+   * of the data of that chunk. The rejection must happen the instant the
+   * parser reads the chunk-size line. It must not wait for ever for data
+   * that never comes. */
+  const char *chunk_size = "8000000000000000\r\n"; /* about 9.2 exabytes */
   REQUIRE_EQ(chttp1_parser_execute(&parser, chunk_size, strlen(chunk_size)),
              CHTTP1_ERROR);
   REQUIRE_TRUE(chttp1_chunk_size_limit_exceeded(&parser));
@@ -1718,7 +2593,7 @@ TEST(chunk_size_limit, override_accepts_chunk_at_exactly_the_limit) {
   init_test_request(&parser, &ctx);
   parser.max_chunk_size_override = 5;
   const char *headers =
-      "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n";
+      "POST /x HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, headers, strlen(headers)),
              CHTTP1_OK);
   const char *rest = "5\r\nhello\r\n0\r\n\r\n";
@@ -1728,10 +2603,10 @@ TEST(chunk_size_limit, override_accepts_chunk_at_exactly_the_limit) {
 }
 
 TEST(chunk_size_limit, not_set_for_an_unrelated_parse_error) {
-  /* chttp1_chunk_size_limit_exceeded() must be false for every OTHER
-   * CHTTP1_ERROR cause, not merely default-initialised false; confirmed by
-   * triggering a genuinely different rejection (a malformed status line)
-   * and checking the flag afterward. */
+  /* chttp1_chunk_size_limit_exceeded() must be false for every OTHER cause
+   * of a CHTTP1_ERROR. It must not be false only because nobody set it.
+   * This test forces a different rejection, with a malformed status line,
+   * and then reads the flag. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -1775,15 +2650,17 @@ TEST(expect_continue, other_expect_value_not_detected) {
 }
 
 TEST(expect_continue, works_with_divert) {
-  /* The whole point: a caller diverting body ingestion to a worker thread
-   * still needs to know, at CHTTP1_HEADERS_ONLY time, whether to have
-   * already written a "100 Continue" interim response. */
+  /* This is the point of the feature. A caller can divert the read of the
+   * body to a worker thread. Such a caller still needs to know one thing at
+   * CHTTP1_HEADERS_ONLY time. It must know whether it already wrote a "100
+   * Continue" interim response. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
   ctx.want_divert = true;
   const char *headers =
-      "POST /x HTTP/1.1\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\n";
+      "POST /x HTTP/1.1\r\nHost: h\r\nContent-Length: 5\r\nExpect: "
+      "100-continue\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, headers, strlen(headers)),
              CHTTP1_HEADERS_ONLY);
   REQUIRE_TRUE(chttp1_expects_continue(&parser));
@@ -1797,27 +2674,30 @@ static void make_pair(int fds[2]) {
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
 }
 
-/* Non-blocking variant, required for the stream_tls tests below: a TLS
- * handshake driven by tls_drive_handshake()'s single-threaded ping-pong
- * loop (call one side's step, then the other's, repeat) deadlocks on a
- * blocking socketpair; SSL_accept/SSL_connect's internal BIO_read can
- * itself block waiting for bytes the peer never gets a chance to send,
- * since driving that peer's own step is exactly what this thread would do
- * next, if it weren't already stuck. Under gdb that hang shows up as
- * ctls_conn_handshake_step blocked inside a plain BIO_read -> read(2)
- * syscall. The plaintext "stream" tests above don't need this: they always
- * gate any read/write with chttp1_stream_read/_write's own poll(2) call
- * first (or, for the handful of direct read(2)/write(2) calls, only ever
- * touch a fd after the peer has already synchronously written to it in the
- * same thread), so blocking-mode sockets never actually block there. */
+/* The variant that does not block. The stream_tls tests below need it.
+ * tls_drive_handshake() drives a TLS handshake with one thread, in a
+ * ping-pong loop. It calls the step of one side, then the step of the
+ * other, and it repeats. That loop deadlocks on a socketpair that blocks.
+ * The BIO_read inside SSL_accept and SSL_connect can block itself. It then
+ * waits for bytes that the peer never gets a chance to send. The next thing
+ * this thread would do is drive the step of that peer. Under gdb
+ * that hang appears as ctls_conn_handshake_step blocked inside a plain
+ * BIO_read, which calls the read(2) syscall.
+ *
+ * The plaintext "stream" tests above need none of this. They always put the
+ * poll(2) call of chttp1_stream_read or chttp1_stream_write in front of
+ * every read and every write. A few of them call read(2) or write(2)
+ * directly. Those only touch a fd after the peer wrote to it, on the same
+ * thread. A socket in blocking mode therefore never blocks there. */
 static void make_nonblocking_pair(int fds[2]) {
   make_pair(fds);
   for (int i = 0; i < 2; i++) {
-    /* An unchecked failure here would leave fds[i] blocking; this file's own
-     * comment right above this function explains why that specifically
-     * deadlocks tls_drive_handshake()'s single-threaded ping-pong loop, so a
-     * silent fcntl() failure here would turn into a real, hard-to-diagnose
-     * hang rather than a clean, immediate test failure. */
+    /* A failure here that nobody checks leaves fds[i] in blocking mode.
+     * The comment directly above this function explains why that deadlocks
+     * the single-threaded ping-pong loop of tls_drive_handshake(). A quiet
+     * failure of fcntl() would therefore become a real hang that is hard to
+     * diagnose. This check turns it into a clean, immediate test
+     * failure. */
     int flags = fcntl(fds[i], F_GETFL, 0);
     REQUIRE_GE(flags, 0);
     REQUIRE_EQ(fcntl(fds[i], F_SETFL, flags | O_NONBLOCK), 0);
@@ -1828,7 +2708,7 @@ TEST(stream, prepare_no_leftover) {
   int fds[2];
   make_pair(fds);
   chttp1_stream_t s;
-  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], NULL, 0));
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], NULL, 0, NULL));
   REQUIRE_EQ(s.carry_len, (size_t)0);
   chttp1_stream_release(&s);
   close(fds[0]);
@@ -1839,7 +2719,7 @@ TEST(stream, leftover_drained_before_touching_fd) {
   int fds[2];
   make_pair(fds);
   chttp1_stream_t s;
-  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], "hello", 5));
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], "hello", 5, NULL));
 
   char buf[3] = {0};
   REQUIRE_EQ(chttp1_stream_read(&s, buf, 3, 100), (ssize_t)3);
@@ -1865,7 +2745,7 @@ TEST(stream, read_real_fd_no_leftover) {
   int fds[2];
   make_pair(fds);
   chttp1_stream_t s;
-  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], NULL, 0));
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], NULL, 0, NULL));
   REQUIRE_EQ(write(fds[1], "abc", 3), (ssize_t)3);
   char buf[8] = {0};
   REQUIRE_EQ(chttp1_stream_read(&s, buf, sizeof(buf), 1000), (ssize_t)3);
@@ -1879,7 +2759,7 @@ TEST(stream, read_eof_when_peer_closes) {
   int fds[2];
   make_pair(fds);
   chttp1_stream_t s;
-  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], NULL, 0));
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], NULL, 0, NULL));
   close(fds[1]);
   char buf[8];
   REQUIRE_EQ(chttp1_stream_read(&s, buf, sizeof(buf), 1000), (ssize_t)0);
@@ -1891,7 +2771,7 @@ TEST(stream, read_timeout_when_nothing_available) {
   int fds[2];
   make_pair(fds);
   chttp1_stream_t s;
-  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], NULL, 0));
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], NULL, 0, NULL));
   char buf[8];
   REQUIRE_EQ(chttp1_stream_read(&s, buf, sizeof(buf), 50), (ssize_t)-1);
   REQUIRE_TRUE(chttp1_stream_timed_out(&s));
@@ -1901,32 +2781,36 @@ TEST(stream, read_timeout_when_nothing_available) {
   close(fds[1]);
 }
 
-/* Coverage for timeout_ms == 0's own documented contract ("return
- * immediately if fd is not already readable/writable right now").
- * chttp1_stream_write (both its TLS and plaintext branches, via their one
- * shared retry loop) and chttp1_stream_read's plaintext branch must not
- * compute a fresh "now + timeout_ms" deadline and then immediately
- * re-derive "time remaining until it" via a SECOND clock_gettime() call
- * before ever calling poll(2) or attempting the real I/O: for
- * timeout_ms == 0 specifically, any nonzero elapsed time between two such
- * clock reads (guaranteed, however small) already exceeds a zero-length
- * budget, so the recomputed value is unconditionally <= 0 and both
- * functions report a timeout even when the fd is ready right now, without
- * ever calling poll(2) or attempting the real read(2)/write(2) at all. The
- * three tests below construct exactly that "already ready" condition (data
- * already sitting in the socket's receive buffer for read; an ordinary,
- * freshly-connected socketpair, which is always immediately writable, for
- * write), so they are non-vacuous: a synthesized timeout in place of a real
- * transfer fails them. */
+/* Coverage for the documented contract of timeout_ms == 0. That contract
+ * is "return immediately if fd is not already readable/writable right now".
+ * Two code paths must obey it. The first is chttp1_stream_write, in its TLS
+ * branch and in its plaintext branch, which share one retry loop. The
+ * second is the plaintext branch of chttp1_stream_read.
+ *
+ * Neither path may compute a fresh deadline of "now + timeout_ms" and then
+ * derive "the time that is left until it" from a SECOND clock_gettime()
+ * call. That must not happen before the path calls poll(2), or before it
+ * tries the real I/O. For timeout_ms == 0, any time at all between two such
+ * reads of the clock is already above a budget of zero. Some time always
+ * passes, however little. The value that the path computes again is
+ * therefore always at or below 0. Both functions then report a timeout,
+ * even when the fd is ready right now. They never call poll(2), and they
+ * never try the real read(2) or write(2).
+ *
+ * The three tests below build exactly that "already ready" condition. For a
+ * read, the data already sits in the receive buffer of the socket. For a
+ * write, an ordinary socketpair that was just connected is always writable
+ * at once. The tests are therefore not vacuous. A timeout that the code
+ * makes up, in place of a real transfer, fails them. */
 TEST(stream, read_timeout_zero_returns_data_when_already_available) {
   int fds[2];
   make_pair(fds);
   chttp1_stream_t s;
-  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], NULL, 0));
-  /* Written synchronously, from this same thread, before the read below: by
-     the time chttp1_stream_read runs, these bytes are already sitting in
-     fds[0]'s own kernel receive buffer, i.e. genuinely available "right
-     now" with no wait required at all. */
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], NULL, 0, NULL));
+  /* This thread writes these bytes itself, before the read below. By the
+     time chttp1_stream_read runs, the bytes already sit in the receive
+     buffer of the kernel for fds[0]. They are therefore really available
+     "right now", and no wait at all is needed. */
   REQUIRE_EQ(write(fds[1], "hi", 2), (ssize_t)2);
   char buf[4] = {0};
   REQUIRE_EQ(chttp1_stream_read(&s, buf, sizeof(buf), 0), (ssize_t)2);
@@ -1944,7 +2828,7 @@ TEST(stream, read_timeout_zero_times_out_when_nothing_available) {
   int fds[2];
   make_pair(fds);
   chttp1_stream_t s;
-  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], NULL, 0));
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], NULL, 0, NULL));
   char buf[8];
   REQUIRE_EQ(chttp1_stream_read(&s, buf, sizeof(buf), 0), (ssize_t)-1);
   REQUIRE_TRUE(chttp1_stream_timed_out(&s));
@@ -1957,7 +2841,7 @@ TEST(stream, write_basic) {
   int fds[2];
   make_pair(fds);
   chttp1_stream_t s;
-  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[1], NULL, 0));
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[1], NULL, 0, NULL));
   REQUIRE_EQ(chttp1_stream_write(&s, "hi", 2, 1000), (ssize_t)2);
   char buf[4] = {0};
   REQUIRE_EQ(read(fds[0], buf, sizeof(buf)), (ssize_t)2);
@@ -1976,7 +2860,7 @@ TEST(stream, write_timeout_zero_succeeds_when_already_writable) {
   int fds[2];
   make_pair(fds);
   chttp1_stream_t s;
-  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[1], NULL, 0));
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[1], NULL, 0, NULL));
   REQUIRE_EQ(chttp1_stream_write(&s, "hi", 2, 0), (ssize_t)2);
   REQUIRE_FALSE(chttp1_stream_timed_out(&s));
   char buf[4] = {0};
@@ -1988,12 +2872,12 @@ TEST(stream, write_timeout_zero_succeeds_when_already_writable) {
 }
 
 TEST(stream, read_error_on_bad_fd) {
-  /* A negative fd is specially ignored by poll(2) itself (POSIX: an entry
-   * with fd < 0 is never reported ready, so it would just silently time
-   * out here, not error); a real invalid-fd error needs a syntactically
-   * valid but already-closed fd number instead, which poll(2) reports
-   * ready with POLLNVAL for, and the subsequent read(2) then genuinely
-   * fails with EBADF. */
+  /* poll(2) itself ignores a negative fd. POSIX says that an entry with
+   * fd < 0 is never reported ready. Such an fd would therefore only time
+   * out here, with no error. A real error for an invalid fd needs an fd
+   * number that is well formed and already closed. poll(2) reports such an
+   * fd as ready with POLLNVAL. The read(2) after it then really fails with
+   * EBADF. */
   int fds[2];
   make_pair(fds);
   int bad_fd = fds[0];
@@ -2001,7 +2885,7 @@ TEST(stream, read_error_on_bad_fd) {
   close(fds[1]);
 
   chttp1_stream_t s;
-  REQUIRE_TRUE(chttp1_stream_prepare(&s, bad_fd, NULL, 0));
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, bad_fd, NULL, 0, NULL));
   char buf[8];
   ssize_t r = chttp1_stream_read(&s, buf, sizeof(buf), 1000);
   REQUIRE_EQ(r, (ssize_t)-1);
@@ -2014,7 +2898,7 @@ TEST(stream, release_is_idempotent) {
   int fds[2];
   make_pair(fds);
   chttp1_stream_t s;
-  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], "x", 1));
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], "x", 1, NULL));
   chttp1_stream_release(&s);
   chttp1_stream_release(&s);
   close(fds[0]);
@@ -2025,7 +2909,7 @@ TEST(stream, push_back_leftover_prepends_ahead_of_existing_carry) {
   int fds[2];
   make_pair(fds);
   chttp1_stream_t s;
-  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], "world", 5));
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], "world", 5, NULL));
   REQUIRE_TRUE(chttp1_stream_push_back_leftover(&s, "hello ", 6));
 
   char buf[11] = {0};
@@ -2041,7 +2925,7 @@ TEST(stream, push_back_leftover_zero_len_is_a_noop) {
   int fds[2];
   make_pair(fds);
   chttp1_stream_t s;
-  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], "x", 1));
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], "x", 1, NULL));
   REQUIRE_TRUE(chttp1_stream_push_back_leftover(&s, "unused", 0));
   REQUIRE_EQ(s.carry_len, (size_t)1);
   chttp1_stream_release(&s);
@@ -2050,15 +2934,18 @@ TEST(stream, push_back_leftover_zero_len_is_a_noop) {
 }
 
 TEST(stream, push_back_leftover_overflow_guard_rejects_without_allocating) {
-  /* `total = len + existing` needs its own overflow check before `total`
-   * bytes are allocated: two independently sized values (a freshly
-   * pushed-back chunk and whatever carry-over the stream already holds)
-   * summing close to SIZE_MAX would otherwise wrap, producing a far too
-   * small allocation that the copy then writes far past. existing is faked
-   * to SIZE_MAX directly on the struct (carry left NULL; no real buffer of
-   * that size is ever allocated or touched), matching this project's own
-   * established "assert the guard rejects before any real work happens"
-   * pattern for this exact class of overflow guard. */
+  /* `total = len + existing` needs an overflow check of its own, before
+   * the code allocates `total` bytes. Two values of separate sizes make
+   * that sum. One is a chunk that the caller just pushed back. The other is
+   * whatever carry-over the stream already holds. A sum near SIZE_MAX wraps
+   * without that check. The allocation is then far too small, and the copy
+   * writes far past its end.
+   *
+   * This test fakes `existing` to SIZE_MAX directly on the struct. It
+   * leaves carry NULL, so nothing ever allocates or touches a real buffer
+   * of that size. This follows the pattern that this project uses for this
+   * class of overflow guard: assert that the guard rejects before any real
+   * work happens. */
   chttp1_stream_t s;
   memset(&s, 0, sizeof(s));
   s.prepared = true;
@@ -2068,7 +2955,8 @@ TEST(stream, push_back_leftover_overflow_guard_rejects_without_allocating) {
 
   char buf[4] = {'a', 'b', 'c', 'd'};
   REQUIRE_FALSE(chttp1_stream_push_back_leftover(&s, buf, sizeof(buf)));
-  /* Existing carry-over must be left completely untouched on rejection. */
+  /* On a rejection, the carry-over that is already there must stay
+     completely untouched. */
   REQUIRE_EQ((void *)s.carry, NULL);
   REQUIRE_EQ(s.carry_len, (size_t)SIZE_MAX);
 }
@@ -2111,7 +2999,8 @@ TEST(stream_tls, read_over_real_tls_connection) {
   REQUIRE_EQ(ctls_conn_write(client_conn, "hello", 5), (ssize_t)5);
 
   chttp1_stream_t s;
-  REQUIRE_TRUE(chttp1_stream_prepare_tls(&s, fds[0], server_conn, NULL, 0));
+  REQUIRE_TRUE(
+      chttp1_stream_prepare_tls(&s, fds[0], server_conn, NULL, 0, NULL));
   char buf[16] = {0};
   ssize_t got = -1;
   for (int i = 0; i < 100 && got <= 0; i++)
@@ -2143,7 +3032,8 @@ TEST(stream_tls, write_over_real_tls_connection) {
   REQUIRE_TRUE(tls_drive_handshake(client_conn, server_conn));
 
   chttp1_stream_t s;
-  REQUIRE_TRUE(chttp1_stream_prepare_tls(&s, fds[0], server_conn, NULL, 0));
+  REQUIRE_TRUE(
+      chttp1_stream_prepare_tls(&s, fds[0], server_conn, NULL, 0, NULL));
   REQUIRE_EQ(chttp1_stream_write(&s, "response body", 14, 1000), (ssize_t)14);
 
   char buf[32] = {0};
@@ -2163,10 +3053,11 @@ TEST(stream_tls, write_over_real_tls_connection) {
 }
 
 TEST(stream_tls, leftover_decrypted_bytes_drained_before_ctls_conn_read) {
-  /* Mirrors the plaintext carry-over test: leftover bytes here represent
-   * already-decrypted application bytes the reactor thread would have
-   * produced via ctls_conn_read() during its own header-parsing loop;
-   * chttp1_stream_prepare_tls's leftover argument is never raw wire bytes. */
+  /* This matches the plaintext carry-over test. The leftover bytes here
+   * stand for application bytes that are already decrypted. The reactor
+   * thread produces them with ctls_conn_read(), inside its own loop that
+   * parses the headers. The leftover argument of
+   * chttp1_stream_prepare_tls is never raw bytes off the wire. */
   ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL),
              ccol_success);
@@ -2182,7 +3073,7 @@ TEST(stream_tls, leftover_decrypted_bytes_drained_before_ctls_conn_read) {
 
   chttp1_stream_t s;
   REQUIRE_TRUE(
-      chttp1_stream_prepare_tls(&s, fds[0], server_conn, "carried", 7));
+      chttp1_stream_prepare_tls(&s, fds[0], server_conn, "carried", 7, NULL));
   char buf[16] = {0};
   REQUIRE_EQ(chttp1_stream_read(&s, buf, sizeof(buf), 1000), (ssize_t)7);
   REQUIRE_EQ(memcmp(buf, "carried", 7), 0);

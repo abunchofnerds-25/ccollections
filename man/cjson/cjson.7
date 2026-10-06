@@ -1,0 +1,88 @@
+.TH CJSON 7 "2026-10-06" "c_collections" "C Collections Library - Overview"
+.SH NAME
+cjson \- overview of the JSON parser, serializer and DOM
+.SH DESCRIPTION
+.nf
+cjson parses JSON text (RFC 8259) into a tree of nodes.  A program can
+read and change that tree.  cjson then writes the tree back as JSON.
+An opaque cjson handle identifies each node.
+.fi
+.SH "NODE TYPES"
+.nf
+cjson_type(3) gives the type of a node, as a cjson_node_type_t:
+
+  CJSON_NULL         null
+  CJSON_BOOL         true or false, read with cjson_bool_val(3)
+  CJSON_INTEGER      a number with no '.' and no exponent that fits a
+                     long long, read with cjson_int_val(3)
+  CJSON_FLOAT        all other numbers, a double, read with
+                     cjson_double_val(3)
+  CJSON_STRING       a UTF-8 string, read with cjson_str_val(3)
+  CJSON_LIST         an array of child nodes
+  CJSON_DICTIONARY   an object: string keys, each with a child node
+
+A value accessor stops the program through ccol_fatal_err() when the
+node has a different type.  This includes a NULL node.  Therefore,
+call cjson_type(3) before you read a node whose type the input sets.
+cjson_parse(3) gives the rules for large integers, strings and UTF-8.
+.fi
+.SH "PATHS"
+.nf
+cjson_get(3), cjson_set(3) and cjson_delete(3) find a node through a
+string of components with dots between them, for example
+"users.#0.name".  On an array, a component "#N" is the element at
+index N.  All other components are object keys.  Write "\e." for a dot
+in a key, and "\e\e" for a backslash.  cjson_set(3) creates a missing
+object key at the leaf.  It never creates a missing parent, and never
+an array element after the end.
+.fi
+.SH "ORDER"
+.nf
+An object keeps its members in insertion order:
+  - For a parsed document, the order of the text.
+  - For a tree that a program makes, the order of the calls that added
+    the keys.
+A replacement keeps the position of its key.  The serializers,
+cjson_clone(3) and the cursor of cjson_dictionary_first(3) all use
+this order.  Therefore, the output for one tree is the same in each
+run.
+.fi
+.SH "OWNERSHIP"
+.nf
+cjson_parse(3), cjson_clone(3) and the cjson_create_*(3) functions give
+a tree that the caller owns.  Free that tree with cjson_destroy(3).
+
+cjson_get(3), cjson_list_get(3), cjson_dictionary_get(3) and the
+dictionary cursor give borrowed references.  The tree continues to own
+them.  To attach such a node at a different location, clone it first.
+
+cjson_list_push(3) and cjson_dictionary_set(3) take the child.  Only
+ccol_invalid_args leaves the child with the caller.
+
+Each node keeps a record of its allocator.  Therefore, the destroy of
+a tree needs no allocator from the caller.  The allocator of the root
+frees a string from cjson_serialize(3).
+.fi
+.SH "LIMITS"
+.nf
+A parse refuses nesting deeper than 500 containers.  The serializers
+and cjson_clone(3) also refuse it for a tree that a program makes.
+The size of the tree of a parse is linear in the length of the input;
+cjson_parse(3) gives the limit.  A string never holds a null byte,
+because each string is a null-terminated C string.
+.fi
+.SH "THREAD SAFETY"
+.nf
+A tree is not thread safe.  Many threads can read one tree at the
+same time while no thread changes it.  Separate trees are independent.
+Separate threads can parse and serialize at the same time.
+.fi
+.SH "SEE ALSO"
+.BR cjson_parse (3),
+.BR cjson_serialize (3),
+.BR cjson_get (3),
+.BR cjson_set (3),
+.BR cjson_dictionary_first (3),
+.BR cjson_list_push (3),
+.BR cjson_destroy (3),
+.BR cyaml (7)

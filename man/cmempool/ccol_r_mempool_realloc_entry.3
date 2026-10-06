@@ -5,27 +5,39 @@ ccol_r_mempool_realloc_entry \- reallocate an entry to a different size
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cmempool.h>
+#include <ccollections/cmempool.h>
 
 void *ccol_r_mempool_realloc_entry(ccol_r_mempool *rmp, void *addr, size_t size);
 .fi
 .SH DESCRIPTION
 .nf
-Changes the size of an allocated entry. If the new size does not require
-moving to a differently-sized underlying allocation, returns the original
-pointer unchanged (no copy); this applies whether the entry is served by
-one of the pool's own fixed-size tiers or by the dynamic/heap fallback
-path. Otherwise, allocates a new entry sized for the request, copies
+Changes the size of an allocated entry. The original pointer comes back
+unchanged, with no copy, when a move could not give the entry more bytes
+than it already holds. That happens in two cases. The entry already holds
+exactly what the tier for the new size would give it. Or the entry already
+holds exactly the number of bytes that the caller asked for. In every other
+case the function allocates a new entry for the request. It then copies
 min(old_size, new_size) bytes, and frees the old entry.
 .fi
 .PP
-When that new entry cannot be allocated, a pool-owned entry the request still
-fits inside is returned unmoved rather than reported as a failure. An entry
-sits in a tier at least as large as the size it was created for, and may sit in
-a larger one than the request alone would choose, so a shrink (or a resize to
-the size already held) can be honoured by the entry staying where it is. The
-pointer that comes back then addresses at least the requested bytes, as it does
-on every other successful path.
+Both of those questions ask about the bytes that the entry holds. A
+pool-owned entry and a dynamic fallback entry that hold the same number of
+bytes therefore behave the same way here.
+.PP
+How many bytes an entry holds does depend on where it came from. That is the
+one difference that the two representations really force. A pool-owned
+entry holds the whole element size of its tier. A dynamic fallback entry
+that a tier handed out after it ran out of its own slots holds that same
+size. An entry from the shared fallback that
+ccol_fallback_at_last_exhaustion uses holds exactly the size that it was
+created for.
+.PP
+The function can fail to allocate a new entry. It then returns the entry
+unmoved, when the request still fits inside it. It does not report a
+failure. This too is the same for both kinds of entry. A shrink does not
+fail for want of memory that it does not need. The pointer that comes back
+then addresses at least the bytes that the caller asked for, as it does on
+every other path that succeeds.
 .SH PARAMETERS
 .nf
 rmp   Ranged memory pool
@@ -35,25 +47,29 @@ size  New size in bytes (must be > 0 and <= largest_size)
 .SH RETURN VALUE
 .nf
 Returns pointer to reallocated entry on success
-Returns NULL on failure
+Returns NULL on failure. In that case, addr stays valid, it does not
+move, and the caller keeps it, as with realloc(3). This is true for an
+invalid size. It is also true for a valid size that the pool cannot
+serve
 .fi
 .SH NOTES
 .nf
-If addr is NULL, equivalent to ccol_r_mempool_alloc_entry()
-If the new size does not require a differently-sized allocation, returns
-the original pointer unchanged (no copy)
-Otherwise, allocates new, copies data, frees old; if that allocation fails
-and addr is a pool-owned entry the request still fits inside, addr is
-returned unmoved instead of NULL
-Copies min(old_user_size, new_user_size) bytes
-Old entry is automatically freed if reallocation succeeds
-Thread-safe if pool created with single_threaded=false
-Returns NULL if size is 0 or > largest_size, WITHOUT touching addr: a
-  non-NULL addr is neither freed nor moved when size itself is invalid,
-  exactly as if the call had never been made
-Will assert if addr is non-NULL and was not obtained from this
-ccol_r_mempool (corruption/foreign-pointer detection, mirroring
-ccol_r_mempool_free_entry())
+A NULL addr makes this call the same as ccol_r_mempool_alloc_entry()
+The function returns the original pointer unchanged, and copies nothing,
+  when the entry already holds as many bytes as a move could give it
+In every other case it allocates a new entry, copies the data and frees the
+  old entry. That allocation can fail. The function then returns addr
+  unmoved, and not NULL, when the request still fits inside the bytes that
+  addr already holds
+It copies min(old_user_size, new_user_size) bytes
+It frees the old entry by itself when the reallocation succeeds
+Thread-safe if the pool was created with single_threaded=false
+It returns NULL if size is 0 or above largest_size, and it does NOT touch
+  addr. It neither frees nor moves an addr that is not NULL when size itself
+  is invalid. The state is the same as if you had never made the call
+It asserts if addr is not NULL and did not come from this ccol_r_mempool.
+  That is the check for corruption and for a foreign pointer. It mirrors
+  ccol_r_mempool_free_entry()
 .fi
 .SH "SEE ALSO"
 .BR ccol_r_mempool_alloc_entry (3),

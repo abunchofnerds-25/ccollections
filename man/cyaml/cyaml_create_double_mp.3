@@ -5,22 +5,29 @@ cyaml_create_double_mp, cyaml_create_double \- allocate a YAML floating-point no
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cyaml.h>
+#include <ccollections/cyaml.h>
 
 cyaml cyaml_create_double_mp(double val, ccol_memmgmt_procs_t *mp);
 cyaml cyaml_create_double(double val);
 .fi
 .SH DESCRIPTION
 .nf
-Allocate a DOM node of type CYAML_FLOAT.  Unlike cjson, YAML
-explicitly supports non-finite values: +Inf serializes as .inf,
--Inf as -.inf, and NaN as .nan.  All three are accepted and stored.
+Allocate a DOM node of type CYAML_FLOAT.  YAML supports values that are
+not finite, and cjson does not.  +Inf serializes as .inf, -Inf as -.inf,
+and NaN as .nan.  The node accepts and stores all three.
 cyaml_create_double() passes NULL for mp.
 .fi
 .SH PARAMETERS
 .nf
-val  Double value; finite, infinite, and NaN are all accepted.
+val  Double value.  The node accepts a finite value, an infinite value
+     and NaN.
 mp   Custom allocator, or NULL for default.
+     The library keeps its own copy of the struct, so the caller may
+     release or reuse the struct once this call returns. The functions
+     that it names must stay callable until the last node built with
+     them is destroyed. A process can use at most 64 distinct sets of
+     four functions; a call that would need a 65th fails and returns
+     NULL.
 .fi
 .SH RETURN VALUE
 .nf

@@ -1,0 +1,86 @@
+.TH CVEC_CONSTRUCT_MP 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cvec_construct_mp \- declare and create a vector with a custom allocator
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cvector.h>
+
+cvec_construct_mp(v, type, mprocs);
+.fi
+.SH DESCRIPTION
+.nf
+This macro declares a vector variable with the name v. That vector holds
+elements of the given type. The macro also creates the vector in the same
+step. The vector takes every allocation that it makes from mprocs. The
+macro is cvec_declare(3) and then cvec_init_mp(3). Everything that those
+two macros document holds here unchanged. The macro declares the companion
+type variables in the same way, and the other type-dispatching macros read
+them. A failed creation stops the program through ccol_fatal_err().
+
+The vector keeps a private copy of the procedure table. The
+ccol_memmgmt_procs_t object here therefore does not need to live longer
+than the vector. The functions in that table do need to live that long.
+The vector frees the backing buffer, the copy of the table and the
+container itself through those functions, when it is destroyed. A NULL
+mprocs is the same as a call to cvec_construct(3).
+
+The new vector holds no elements. It starts at the minimum capacity of 4.
+The capacity doubles when a push finds the buffer full. It halves when the
+element count falls below a quarter of it. It never falls below that
+minimum of 4.
+
+Destroy the vector with cvec_destroy(3). You can also use
+cvec_construct_mp_scoped(3), which destroys the vector automatically at the
+end of the scope.
+.fi
+.SH PARAMETERS
+.nf
+v       Name of the vector variable to declare and create
+type    Element type, for example int, double or struct foo
+mprocs  Pointer to a ccol_memmgmt_procs_t. Its malloc, calloc, realloc
+        and free members must all be set. Pass NULL for the default
+        allocator.
+.fi
+.SH RETURN VALUE
+.nf
+None. The macro expands to declarations and then a statement. It does not
+expand to an expression.
+.fi
+.SH NOTES
+.nf
+The macro stops the program through ccol_fatal_err() when it cannot
+create the vector. The message names v and the error below it. Use
+cvector_create_full(3) directly to handle a failed creation yourself.
+That function does not stop the program.
+The macro rejects a procedure table with any of its four members left as
+NULL. That rejection is one of the failures that stops the program here.
+The macro expands to declarations and then a statement. It therefore
+belongs where declarations are legal. It cannot be the body of an if or
+a loop without braces.
+The macro pastes v into the names of the companion variables. v must
+therefore be a plain identifier.
+The companion type variables must stay in scope everywhere that you use a
+type-dispatching macro on v. cvec_redeclare(3) makes them again for a
+handle that comes from another scope.
+.fi
+.SH EXAMPLES
+.nf
+ccol_memmgmt_procs_t procs = {
+    .malloc = my_malloc, .calloc = my_calloc,
+    .realloc = my_realloc, .free = my_free,
+};
+
+cvec_construct_mp(my_vec, int, &procs);
+cvec_push(my_vec, 42);
+cvec_destroy(my_vec);
+.fi
+.SH "SEE ALSO"
+.BR cvec_construct (3),
+.BR cvec_construct_mp_scoped (3),
+.BR cvec_declare (3),
+.BR cvec_init_mp (3),
+.BR cvec_redeclare (3),
+.BR cvec_destroy (3),
+.BR cvector_create_full (3)

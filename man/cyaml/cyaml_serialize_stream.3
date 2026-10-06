@@ -1,0 +1,78 @@
+.TH CYAML_SERIALIZE_STREAM 3 "2026-09-29" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_serialize_stream \- serialize a list of documents as a multi-document YAML stream
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cyaml.h>
+
+char *cyaml_serialize_stream(cyaml node);
+.fi
+.SH DESCRIPTION
+.nf
+Write a list of documents back as a YAML stream.  This is the
+counterpart of the parse of a stream: cyaml_parse(3) gives a CYAML_LIST
+with one element for each document of an input that holds more than
+one document, and this function writes each element of such a list as
+a document of its own.  Each document starts with a "---" line, and the
+block-style YAML that cyaml_serialize(3) writes for the element
+follows it.  A parse of the result of a list of two or more documents
+therefore gives back an equal list.  A stream of Kubernetes manifests,
+for example, can be parsed, edited and written back for a tool that
+reads it one document at a time.
+
+An empty list gives an empty stream, the empty string "".  A parse of
+an empty string gives a CYAML_NULL and not an empty list, because a
+stream with no documents and an empty document read the same.
+
+A node that is not a list, a NULL node included, is written as a
+stream of one document, so that the root of a one-document parse
+writes back as that same document.  A list that is the root of a
+single document cannot be told apart from a stream of documents, in
+the parse as here.  Write such a document with cyaml_serialize(3).
+
+A tag of the list itself is not written, because a stream has no node
+that could carry it.  A list that a parse of a stream gives never
+carries one.
+
+Each document stands alone.  The output holds no directive and no
+anchor.  A tag goes out in the same form as in cyaml_serialize(3),
+which needs no %TAG directive, and an alias of the parsed input is
+already an independent copy in the tree.  Scalars, dictionary keys,
+floats, the member order of a dictionary and the locale all follow the
+rules of cyaml_serialize(3), and each document obeys the same 500-level
+nesting limit.
+
+The string that this function gives comes from the allocator of node.
+Free it with cyaml_serialize_free() when the tree used the default
+allocator, and with cyaml_serialize_free_mp() and that same allocator
+when the tree used a custom one.
+.fi
+.SH RETURN VALUE
+.nf
+A null-terminated string on the heap on success.  The function returns
+NULL when it runs out of memory, and also when a document is nested
+more than 500 levels deep.
+.fi
+.SH EXAMPLES
+.nf
+char *err = NULL;
+cyaml docs = cyaml_parse(stream, &err);   /* three manifests */
+if (!docs) {
+    fprintf(stderr, "parse failed: %s\en", err);
+    return -1;
+}
+cyaml_set(docs, "#1.spec.replicas", 5);
+char *out = cyaml_serialize_stream(docs);
+if (out)   /* "---\enapiVersion: v1\en...\en---\enapiVersion: apps/v1\en..." */
+    fputs(out, stdout);
+cyaml_serialize_free(out);
+cyaml_destroy(docs);
+.fi
+.SH "SEE ALSO"
+.BR cyaml_parse (3),
+.BR cyaml_serialize (3),
+.BR cyaml_serialize_flow (3),
+.BR cyaml_serialize_free (3),
+.BR cyaml_serialize_free_mp (3)

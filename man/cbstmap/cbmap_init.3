@@ -1,0 +1,80 @@
+.TH CBMAP_INIT 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cbmap_init \- create an ordered map with defaults into an already declared handle
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cbstmap.h>
+
+cbmap_init(hm_name);
+.fi
+.SH DESCRIPTION
+.nf
+Creates an ordered map with the default allocator and the default order for
+the declared key type. It then assigns that map to hm_name. The caller must
+declare the handle first, with cbmap_declare(3) or cbmap_declare_scoped(3).
+The key type and the value type do not come to this macro as arguments. The
+macro reads them from the companion type variables that the declare macro
+created.
+
+This is the narrowest of the init macros. cbmap_init_mp(3) adds an
+allocator, cbmap_init_cc(3) adds a comparison procedure, and
+cbmap_init_full(3) takes both.
+
+The one-step equivalents are cbmap_construct(3) and
+cbmap_construct_scoped(3).
+.fi
+.SH PARAMETERS
+.nf
+hm_name  The map handle that the caller declared before. The macro
+         creates the map into it
+.fi
+.SH RETURN VALUE
+.nf
+None. This macro expands to a statement and does not expand to an
+expression.
+.fi
+.SH "ORDERING"
+.nf
+The container is an AVL tree. It therefore keeps its elements in key order,
+and the walk visits them in ascending key order. cbmap_begin_iter(3)
+describes that contract. The order comes from the declared key type. The
+signed integer types get a signed integer comparison. The unsigned types
+and pointers get an unsigned comparison. The floating-point types get a
+numeric comparison. A string key gets a lexicographic byte comparison.
+cbmap_create_full(3) gives all of these in full. That page also says where
+a NaN key sorts.
+
+The map does not recognize every key type. A struct is one such type. Such
+a key type gets a raw comparison of the representation of the key. That
+comparison reads padding bytes. It also orders a pointer member by its
+address. Use cbmap_init_cc(3) for such a key type.
+.fi
+.SH NOTES
+.nf
+The macro stops the program through ccol_fatal_err() if the creation fails
+The macro uses the default allocator
+Only the key type reaches the container. Only the type-inferred macros read the
+declared value type
+.fi
+.SH EXAMPLES
+.nf
+cbmap_declare(sorted, int, char *);
+cbmap_init(sorted);
+int k = 42;
+cbmap_insert(sorted, k, "hello");
+k = 10;
+cbmap_insert(sorted, k, "world");    /* The walk visits 10 before 42 */
+cbmap_destroy(sorted);
+.fi
+.SH "SEE ALSO"
+.BR cbmap_init_mp (3),
+.BR cbmap_init_cc (3),
+.BR cbmap_init_full (3),
+.BR cbmap_declare (3),
+.BR cbmap_declare_scoped (3),
+.BR cbmap_construct (3),
+.BR cbmap_begin_iter (3),
+.BR cbmap_create_full (3),
+.BR cbmap_destroy (3)

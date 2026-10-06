@@ -1,11 +1,11 @@
 .TH CHTTPCLIENT_DO_POOLED 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-chttpclient_do_pooled \- perform an HTTP request using the shared Tier 2 engine, blocking until it completes
+chttpclient_do_pooled \- do an HTTP request on the shared Tier 2 engine, and block until it finishes
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpclient.h>
+#include <ccollections/chttpclient.h>
 
 ccol_retval_t chttpclient_do_pooled(chttpcli cli,
                                     const chttp_request_t *req,
@@ -13,35 +13,32 @@ ccol_retval_t chttpclient_do_pooled(chttpcli cli,
 .fi
 .SH DESCRIPTION
 .nf
-A thin wrapper over chttpclient_do_async: submits the request to the
-shared engine, blocks until it completes, and returns the exact same
-ccol_retval_t / resp_out call shape chttpclient_do uses; but the
-connect/write/read work happens on the engine's own reactor threads
-rather than the calling thread, and concurrent callers across many
-chttpcli handles share one small, fixed-size reactor thread pool
-instead of each blocking its own OS thread for the duration of its
-request.
+This is a thin wrapper over chttpclient_do_async. It submits the
+request to the shared engine and blocks until the request finishes. It
+gives back the same ccol_retval_t and uses the same resp_out call
+shape as chttpclient_do. But the connect, the write and the read run
+on the reactor threads of the engine, and not on the thread of the
+caller. Many callers across many chttpcli handles share one small
+reactor thread pool of a fixed size. With chttpclient_do, each caller
+instead blocks its own OS thread for the whole request.
 .fi
 .SH PARAMETERS
 .nf
-cli      Client handle; must not be CHTTPCLI_INVALID.
-req      Request to execute; must not be NULL.
-resp_out Must not be NULL. Set to NULL immediately, then, on
-         success, receives the response (matching chttpclient_do's
-         identical *resp_out contract).
+cli      The client handle. It must not be CHTTPCLI_INVALID.
+req      The request to run. It must not be NULL.
+resp_out It must not be NULL. The function sets it to NULL at once.
+         If the call succeeds, it then gets the response. This is
+         the same *resp_out contract as in chttpclient_do.
 .fi
 .SH RETURN VALUE
 .nf
-Same result codes as chttpclient_do, with one difference: a failure
-to even submit the request to the engine (OOM, or the engine
-failing to start) is reported as ccol_unexpected_failure rather than
-a more specific code; an allocation failure that happens after the
-request has been submitted (for example while copying the request's
-headers or body) is still reported as ccol_not_enough_memory.
-Everything detected once the request is actually in flight (bad URL,
-TLS failure, connection failure, transfer errors, timeouts, too many
-redirects) is reported with the exact same specific codes
-chttpclient_do uses.
+The same result codes as chttpclient_do. An allocation that fails,
+before the request reaches the engine or while the engine runs it,
+gives ccol_not_enough_memory. An engine that fails to start gives the
+code of that failure, which is ccol_not_enough_memory or
+ccol_unexpected_failure. A bad URL, a TLS failure, a connection
+failure, a transfer error, a timeout and too many redirects each give
+the same specific code that chttpclient_do uses.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_do (3),

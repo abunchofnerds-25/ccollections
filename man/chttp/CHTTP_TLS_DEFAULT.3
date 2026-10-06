@@ -1,37 +1,102 @@
-.TH CHTTP_TLS_DEFAULT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH CHTTP_TLS_DEFAULT 3 "2026-09-23" "c_collections" "C Collections Library - Macros"
 .SH NAME
-CHTTP_TLS_DEFAULT \- default TLS configuration initialiser
+CHTTP_TLS_DEFAULT \- the initializer for the default TLS configuration
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttp.h>
+#include <ccollections/chttp.h>
 
 CHTTP_TLS_DEFAULT
 .fi
 .SH DESCRIPTION
 .nf
-Expands to a chttp_tls_config_t initialiser with:
-  verify_peer    = true
-  verify_host    = true
-  ca_bundle_path = NULL  (use system CA bundle)
-  cert_path      = NULL  (no client certificate)
-  key_path       = NULL  (no client key)
+This macro expands to an initializer for a chttp_tls_config_t with:
+  insecure_skip_verify         = false (verify the certificate chain)
+  insecure_skip_hostname_check = false (match the hostname)
+  ca_bundle_path               = NULL  (use the system CA bundle)
+  cert_path                    = NULL  (no client certificate)
+  key_path                     = NULL  (no client key)
+  client_cert_optional         = false (a server with ca_bundle_path
+                                        requires a client certificate)
 .fi
 .PP
-verify_host always implies verify_peer in practice: hostname matching
-against a certificate whose chain was never validated gives no real
-security guarantee, since the certificate itself could be forged.
-Setting verify_peer = false with verify_host left at true (the
-CHTTP_TLS_DEFAULT value) still performs full certificate verification.
-To disable all server certificate checking, set both verify_peer and
-verify_host to false.
+Every field of the default is zero, so this macro and a zero-initialized
+struct name the same settings. A chttp_tls_config_t that a caller builds
+with = {0}, or with a designated initializer that names only some of the
+fields, therefore verifies the chain of the server and matches its
+hostname on a client. On a server, such a struct with a ca_bundle_path
+requires every client to present a certificate that verifies against
+it. A caller cannot reach a weaker setting by writing less than
+they meant to. Weakening a check takes an explicit assignment, and the
+name of the field says what that assignment costs.
+.PP
+insecure_skip_verify accepts any certificate from any peer. An attacker
+who can intercept the connection can then read and rewrite every byte of
+it. It also makes insecure_skip_hostname_check irrelevant, because a
+hostname matched against a certificate that nothing validated proves
+nothing. There is deliberately no way to ask for the hostname check
+without the chain check.
+.PP
+insecure_skip_hostname_check is the narrower relaxation. It keeps the
+full chain verification and drops only the match of the hostname against
+the subject of the certificate. Use it to reach a host by an address or
+an internal name that its certificate does not carry, while still
+requiring that the certificate chains to a CA that you pinned with
+ca_bundle_path.
+.PP
+client_cert_optional is a setting of the server alone, and a client
+ignores it. It turns the requirement of a client certificate into a
+request: the server still refuses a certificate that does not verify,
+and also serves a client that presents none.
+chttpsvr_req_peer_cert_verified(3) then tells a handler which kind of
+client it serves.
+.PP
+cert_path, key_path and ca_bundle_path must each name a regular file of
+at most 16 MB.  A path that names a directory, a FIFO or a device is
+refused at once as a load failure, before a byte of it is read.
+.PP
+A ca_bundle_path holds one or more CA certificates in PEM form, and may
+hold certificate revocation lists (CRLs) beside them.  A file of CRLs
+alone names no CA and is refused.  When the bundle holds a CRL,
+revocation is checked for the whole chain that the peer presents, as
+the ssl_crl directive of nginx does: every certificate of that chain
+below its trust anchor needs a CRL of its issuer in the bundle.  The
+handshake then fails for a revoked certificate, for a certificate whose
+issuer has no CRL in the bundle, and for a CRL past its next update
+time, because a chain that cannot be checked is not accepted.  An
+operator who enables revocation for a chain of a root and an
+intermediate CA therefore puts the CRL of the root, which covers the
+intermediate, and the CRL of the intermediate, which covers the leaf,
+into the bundle, and renews both before they expire.  A bundle with no
+CRL checks no revocation.  The library reads the bundle when it applies
+the configuration, so a renewed CRL takes effect at the next
+chttpsvr_start(3) of a server, or the next chttpclient_set_tls(3) of a
+client.
 .SH EXAMPLES
 .nf
+/* The defaults: verify the chain and the hostname. */
 chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
-tls.verify_peer = false;
-tls.verify_host = false;
 chttpclient_set_tls(cli, &tls);
+
+/* The same defaults, written as a zero-initialized struct. */
+chttp_tls_config_t same = {0};
+chttpclient_set_tls(cli, &same);
+
+/* Pin a private CA and skip only the hostname match. */
+chttp_tls_config_t pinned = {
+    .ca_bundle_path = "/etc/myapp/ca-chain.pem",
+    .insecure_skip_hostname_check = true,
+};
+chttpclient_set_tls(cli, &pinned);
+
+/* Accept any certificate. Development and throwaway self-signed
+   servers only; this gives an interceptor full control of the
+   connection. */
+chttp_tls_config_t insecure = {.insecure_skip_verify = true};
+chttpclient_set_tls(cli, &insecure);
 .fi
 .SH "SEE ALSO"
-.BR chttpclient_set_tls (3)
+.BR chttpclient_set_tls (3),
+.BR chttpsvr_start (3),
+.BR chttpsvr_req_peer_cert_verified (3)

@@ -1,29 +1,31 @@
 .TH CHTTPSVR_CONSTRUCT_SCOPED 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-chttpsvr_construct_scoped \- declare, initialise, and auto-destroy a chttpsvr handle
+chttpsvr_construct_scoped \- declare a chttpsvr handle, initialize it, and destroy it automatically
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 chttpsvr_construct_scoped(name, cl);
 .fi
 .SH DESCRIPTION
 .nf
-Combines chttpsvr_declare_scoped and a ccol_create_chttpsvr(cl) call.
-Declares name with a GCC cleanup attribute so that __chttpsvr_destroy
-is called automatically when name leaves scope.  Calls ccol_fatal_err() and
-does not return on failure.
+This macro joins chttpsvr_declare_scoped and a call to
+ccol_create_chttpsvr(cl).  It declares name with a GCC cleanup
+attribute.  The compiler therefore destroys the server automatically
+when name leaves the scope.  It destroys the server in exactly the way
+that chttpsvr_destroy does.  On a failure the macro calls
+ccol_fatal_err() and does not return.
 .fi
 .SH PARAMETERS
 .nf
-name     Identifier for the new handle variable.
-cl       Parent logger to derive this server's logger from, or
-         CLOG_INVALID to use an internal stderr/FATAL-only logger.  See
-         ccol_create_chttpsvr_mp for details.
+name     The identifier for the new handle variable.
+cl       The parent logger to derive the logger of this server from.
+         Pass CLOG_INVALID to use an internal logger that writes only
+         FATAL messages to stderr.  See ccol_create_chttpsvr_mp for
+         the details.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_construct (3),
-.BR chttpsvr_declare_scoped (3),
-.BR __chttpsvr_destroy (3)
+.BR chttpsvr_declare_scoped (3)

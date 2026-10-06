@@ -1,43 +1,45 @@
 #!/bin/sh
-# Fails if any library source file or installed header is covered by less than
-# MIN_COVERAGE percent of its instrumented lines.
+# This script fails when a library source file, or an installed header, has
+# coverage below MIN_COVERAGE percent of its instrumented lines.
 #
-# The file list is taken from src/*.c and include/*.h on disk rather than from
-# whatever the tracefile happens to contain. A file compiled into no test suite
-# at all produces no tracefile entry, and a check that iterated over the
-# report's own contents would skip it silently, which is indistinguishable from
-# passing. Reading the directory instead turns that case into a failure.
+# The script takes the file list from src/*.c, include/*.h and
+# include/internal/*.h on disk. It does not take the list from the contents of
+# the tracefile. A file that no test suite compiles makes no tracefile entry. A
+# check that read the contents of the report would therefore skip that file
+# without a word, and you could not tell that from a pass. A read of the
+# directory makes that case a failure instead.
 #
-# Run from the repository root, after `make coverage_site`. Used by
-# `make coverage_check` and by CI.
+# Run this from the root of the repository, after `make coverage_site`.
+# `make coverage_check` and CI both use it.
 #
-# CCOL_DISABLED_SOURCES may carry a space-separated list of source paths that
-# this build deliberately left out (see the WITH_* switches in the root
-# Makefile). Those files are still present on disk, so without being told about
-# them the directory scan below would report each one as compiled by no suite,
-# which is exactly the failure it exists to raise for a file that fell out by
-# accident. Being explicit keeps that check meaningful for everything else.
+# CCOL_DISABLED_SOURCES can hold a list of source paths, separated by spaces,
+# that this build left out on purpose. See the WITH_* switches in the root
+# Makefile. Those files are still on disk. Without this list, the directory
+# scan below would report each one as compiled by no suite. That is exactly the
+# failure that the scan exists to report for a file that fell out by accident.
+# An explicit list therefore keeps the check useful for every other file.
 set -eu
 
 MIN_COVERAGE=80
 CCOL_DISABLED_SOURCES="${CCOL_DISABLED_SOURCES:-}"
 
-# Modules with no unit tests of their own. Whatever coverage they show comes
-# incidentally from another module's suite, so holding them to the threshold
-# would be measuring that other suite rather than them.
+# These are the modules with no unit tests of their own. Any coverage that they
+# show comes by chance from the suite of another module. A threshold on them
+# would therefore measure that other suite and not them.
 #
-# cdebuglog is an opt-in diagnostic buffer for chasing hard-to-reproduce timing
-# issues; it is excluded from the shipped library entirely and only compiled
-# when a suite adds it to its own SRC_FILES for the duration of one
-# investigation.
+# cdebuglog is a diagnostic buffer that you turn on yourself. It helps you find
+# a timing problem that is hard to reproduce. It is not part of the shipped
+# library at all. A suite compiles it only when that suite adds it to its own
+# SRC_FILES, for the length of one investigation.
 #
-# Add a file here only when it genuinely has no unit tests. A file that is
-# tested from another module's directory does not belong: src/chttp1_parser.c
-# has no tests/chttp1_parser/ but is exercised directly by
-# tests/chttpclient/tests_parser.c, and is held to the threshold like any other.
+# Add a file here only when it truly has no unit tests. A file that another
+# module's directory tests does not belong here. For example, there is no
+# tests/chttp1_parser/ directory, but tests/chttp1_parser is not in this list:
+# tests/chttpclient/tests_parser.c exercises src/chttp1_parser.c directly, and
+# the threshold applies to it in the same way as to any other file.
 NOT_UNIT_TESTED="
 src/cdebuglog.c
-include/cdebuglog.h
+include/internal/cdebuglog.h
 "
 
 INFO="${1:-coverage_site/library.info}"
@@ -47,13 +49,23 @@ INFO="${1:-coverage_site/library.info}"
 	exit 2
 }
 
-# Files this build left out join the never-unit-tested list: both mean "present
-# on disk, legitimately absent from the report".
+# The files that this build left out go into the same list as the files with no
+# unit tests. Both mean that the file is on disk, and that its absence from the
+# report is correct.
 EXCLUDED="$NOT_UNIT_TESTED
 $(printf '%s\n' $CCOL_DISABLED_SOURCES)"
 
 awk -v info="$INFO" -v minimum="$MIN_COVERAGE" -v excluded="$EXCLUDED" '
-	function basename(p,   n, a) { n = split(p, a, "/"); return a[n - 1] "/" a[n] }
+	# The key for each file, both when the script records it and when the
+	# script looks it up, is the path of that file relative to the root of
+	# the repository. The directory listing in END gives exactly that. Do not
+	# keep a fixed number of path components from the end instead. That form
+	# cannot describe both include/cvector.h and include/internal/cgrowbuf.h.
+	# Whichever depth it takes, the records of the other file go under a key
+	# that no listing ever gives. That file then goes into the "no
+	# instrumented lines" group, which does not fail, however low its real
+	# coverage is.
+	function relative_path(p, r) { return substr(p, length(r) + 2) }
 
 	BEGIN {
 		n = split(excluded, e, /[ \t\n]+/)
@@ -64,18 +76,19 @@ awk -v info="$INFO" -v minimum="$MIN_COVERAGE" -v excluded="$EXCLUDED" '
 	/^SF:/ {
 		path = substr($0, 4)
 		cur = ""
-		# Only this library. An unanchored match would also take in
-		# /usr/include/..., pulling glibc and OpenSSL headers into the check.
+		# This matches only this library. A match with no start point
+		# would also take in /usr/include/..., and bring glibc and
+		# OpenSSL headers into the check.
 		if (index(path, root "/src/") == 1 || index(path, root "/include/") == 1)
-			cur = basename(path)
+			cur = relative_path(path, root)
 		next
 	}
 	/^DA:/ && cur != "" {
 		split(substr($0, 4), d, ",")
 		line = d[1] + 0; hits = d[2] + 0
 		k = cur SUBSEP line
-		# A line counts as covered if any build in the merged report ran it,
-		# matching how the published report computes its own totals.
+		# A line counts as covered when any build in the merged report
+		# ran it. This is how the published report makes its own totals.
 		if (!(k in seen) || hits > seen[k]) seen[k] = hits
 		next
 	}
@@ -89,14 +102,15 @@ awk -v info="$INFO" -v minimum="$MIN_COVERAGE" -v excluded="$EXCLUDED" '
 		}
 		status = 0
 		nfiles = 0
-		while (("ls src/*.c include/*.h 2>/dev/null" | getline f) > 0) {
+		while (("ls src/*.c include/*.h include/internal/*.h 2>/dev/null" | getline f) > 0) {
 			nfiles++
 			if (f in skip) { nskipped++; continue }
 			if (!(f in total)) {
-				# A header made only of macros and declarations legitimately
-				# has no instrumented lines. A .c file never does: if one has
-				# none it has dropped out of every suite, which is a failure
-				# rather than an exemption.
+				# A header that holds only macros and declarations
+				# correctly has no instrumented lines. A .c file
+				# always has some. A .c file with none has fallen
+				# out of every suite. That is a failure, not a
+				# file to pass over.
 				if (f ~ /\.c$/) {
 					printf "  NOT COMPILED BY ANY SUITE  %s\n", f
 					status = 1
@@ -107,8 +121,9 @@ awk -v info="$INFO" -v minimum="$MIN_COVERAGE" -v excluded="$EXCLUDED" '
 				continue
 			}
 			pct = 100.0 * hit[f] / total[f]
-			# The 0.05 slack absorbs the printed value rounding up to exactly
-			# the threshold; it is far below the 0.08-point run-to-run spread.
+			# The 0.05 margin covers a printed value that rounds up to
+			# exactly the threshold. It is much smaller than the
+			# 0.08 point spread between two runs.
 			if (pct + 0.05 < minimum) {
 				printf "  BELOW %d%%             %-24s %5.1f%% (%d/%d)\n", minimum, f, pct, hit[f], total[f]
 				status = 1
@@ -116,9 +131,10 @@ awk -v info="$INFO" -v minimum="$MIN_COVERAGE" -v excluded="$EXCLUDED" '
 				npassed++
 			}
 		}
-		# An empty listing is the one result that has to be refused rather
-		# than reported: it is what a wrong working directory produces, and
-		# every check below it then passes by examining nothing at all.
+		# An empty listing is the one result that the script must refuse
+		# and not report. A wrong working directory gives an empty
+		# listing. Every check below it then passes after it examined
+		# nothing at all.
 		if (nfiles == 0) {
 			printf "check_test_coverages: found no src/*.c or include/*.h to check;\n"
 			printf "                      run this from the repository root.\n"

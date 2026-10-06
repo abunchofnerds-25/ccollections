@@ -5,21 +5,20 @@ ccol_log_trace \- emit a log line at TRACE level
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <clogger.h>
+#include <ccollections/clogger.h>
 
 ccol_log_trace(clog lg, const char *fmt, ...);
 .fi
 .SH DESCRIPTION
 .nf
-Expands to a call to _clog_write() that captures __FILE__, __LINE__,
-and __func__ automatically and emits a log line at CLOG_TRACE level.
-No backtrace is appended.
+Captures __FILE__, __LINE__ and __func__ by itself.  It then writes a
+log line at CLOG_TRACE level.  It appends no backtrace.
 
 The output format is:
   ts=<ISO-8601-UTC> level=TRACE proc=<name>(<pid>):<tname>(<tid>) src=<file>:<line> func=<fn> [fields] msg=<text>
 
-The call is a no-op when the logger's current minimum level is above
-CLOG_TRACE.
+The call does nothing when the current minimum level of the logger is
+above CLOG_TRACE.
 .fi
 .SH PARAMETERS
 .nf
@@ -29,11 +28,12 @@ fmt    printf-style format string.
 .fi
 .SH NOTES
 .nf
-TRACE is the finest-grained level. Enable it only when diagnosing
-low-level behaviour; it generates high-volume output.
-All log_* macros share the same thread-safety guarantee: the entire
-format-and-write cycle is protected by the shared write lock, ensuring
-no partial lines are interleaved between threads.
+TRACE is the finest level.  Turn it on only to diagnose low-level
+behaviour, because it makes a high volume of output.
+Every log_* macro shares the same guarantee about thread safety.  The
+shared write lock protects the whole cycle that formats and writes a
+record.  No partial line therefore falls between the lines of another
+thread.
 .fi
 .SH EXAMPLES
 .nf
@@ -46,6 +46,5 @@ ccol_log_trace(lg, "entered function, x=%d", x);
 .BR ccol_log_error (3),
 .BR ccol_log_alert (3),
 .BR ccol_log_fatal (3),
-.BR _clog_write (3),
 .BR clog_open_fd_mp (3),
 .BR clog_set_level (3)

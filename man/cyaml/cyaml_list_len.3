@@ -5,18 +5,19 @@ cyaml_list_len \- return the number of elements in a list
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cyaml.h>
+#include <ccollections/cyaml.h>
 
 size_t cyaml_list_len(cyaml node);
 .fi
 .SH DESCRIPTION
 .nf
-Return the number of child nodes in the CYAML_LIST node.  Calls
-ccol_fatal_err() if node is NULL or its type is not CYAML_LIST.
+Return the number of child nodes in the CYAML_LIST node.  This function
+calls ccol_fatal_err() when node is NULL.  It also calls
+ccol_fatal_err() when the type of node is not CYAML_LIST.
 .fi
 .SH RETURN VALUE
 .nf
-Element count (0 for empty lists).
+Element count.  It is 0 for an empty list.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_list_get (3),

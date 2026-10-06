@@ -5,28 +5,42 @@ chttp_basic_auth_mp \- build an HTTP Basic auth header value with a custom alloc
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttp.h>
+#include <ccollections/chttp.h>
 
 char *chttp_basic_auth_mp(ccol_memmgmt_procs_t *mp,
                           const char *username, const char *password);
 .fi
 .SH DESCRIPTION
 .nf
-Builds a "Basic <base64(username:password)>" header value per RFC
-7617. Produces only the header VALUE, not the "Authorization: " key
-part; pass the result directly to chttp_request_set_header(req,
-"authorization", ...) or the chttpsvr equivalent.
+This function builds a "Basic <base64(username:password)>" header
+value, as RFC 7617 asks. It makes only the header VALUE. It does not
+make the "Authorization: " key part. You can give the result directly
+to chttp_request_set_header(req, "authorization", ...) or to the
+equivalent function of chttpsvr.
+
+RFC 7617 SS2 makes the colon the one delimiter of the encoded
+"user-id:password" string. A recipient cuts that string at its FIRST
+colon. A username with a colon in it is therefore not transmittable
+without ambiguity, and the function rejects it. Without that
+rejection, the username "a:b" with the password "c" encodes to the
+same bytes as the username "a" with the password "b:c". A caller that
+asks for one identity therefore sends a different one. A colon in the
+password needs no escape, and the function builds the string as the
+caller asks.
 .fi
 .SH PARAMETERS
 .nf
-mp        Custom allocator, or NULL for malloc/free.
-username  Username. Must not be NULL; may be empty.
-password  Password. Must not be NULL; may be empty.
+mp        A custom allocator, or NULL for malloc/free.
+username  The username. It must not be NULL. It can be empty. It must
+          not contain a colon (':').
+password  The password. It must not be NULL. It can be empty. It can
+          contain colons.
 .fi
 .SH RETURN VALUE
 .nf
-Newly allocated "Basic <base64>" string on success.
-NULL on allocation failure, or if username or password is NULL.
+A new "Basic <base64>" string, if the call succeeds.
+NULL, if the allocation fails, if username or password is NULL, or if
+username contains a colon.
 .fi
 .SH "SEE ALSO"
 .BR chttp_basic_auth (3),

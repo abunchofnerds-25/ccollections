@@ -5,7 +5,7 @@ chmap_destroy \- destroy a hash map and set pointer to NULL
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chashmap.h>
+#include <ccollections/chashmap.h>
 
 chmap_destroy(hm);
 .fi
@@ -23,8 +23,11 @@ hm   Hash map to destroy (will be set to NULL after destruction)
 Safe to call with NULL pointer
 Frees all keys and values
 Frees every bucket collision chain and the bucket/slot array itself
+
+The macro evaluates hm exactly once. It must be a modifiable lvalue,
+such as a variable or an element of an array, so an expression with a
+side effect, such as handles[i++], destroys and clears one element.
 .fi
 .SH "SEE ALSO"
 .BR chmap_create (3),
-.BR __chmap_destroy (3),
 .BR chmap_destroy_with_dtor (3)

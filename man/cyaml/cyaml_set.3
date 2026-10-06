@@ -5,73 +5,112 @@ cyaml_set \- write a C scalar to the DOM leaf addressed by a path
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cyaml.h>
+#include <ccollections/cyaml.h>
 
 ccol_retval_t cyaml_set(cyaml root, const char *path, val);
 .fi
 .SH DESCRIPTION
 .nf
-Detect the compile-time type of val via _Generic and call
-_cyaml_set_typed() to write a scalar value to the leaf node addressed
-by path.
+Detect the compile-time type of val with _Generic.  Write val as a
+scalar value to the leaf node that path addresses.
 
-Accepted C types for val and the resulting CYAML node type:
+The accepted C types for val, and the CYAML node type of each:
   bool                      -> CYAML_BOOL
-  any integer type          -> CYAML_INTEGER (stored as long long)
+  any integer type          -> CYAML_INTEGER (stored as long long),
+                               or CYAML_FLOAT above LLONG_MAX
   float / double            -> CYAML_FLOAT (stored as double)
   char * / const char *     -> CYAML_STRING (heap copy made)
+  char array (char buf[N])  -> CYAML_STRING
   string literal ("...")    -> CYAML_STRING
   void * (NULL included)    -> CYAML_NULL
+  C23 nullptr               -> CYAML_NULL
 
-Any other C type (long double, a struct, or any pointer type
-other than char *, const char *, or void *) is rejected: cyaml_set
-returns ccol_invalid_args and the target leaf is left untouched
-(created leaves are not left behind as CYAML_NULL for an unsupported
-type; an existing leaf's value is not overwritten).
+Before C23 the macro true is the int 1, so cyaml_set(doc, k, true)
+stores the CYAML_INTEGER 1.  Write (bool)true for a CYAML_BOOL.  In C23
+true has the type bool and needs no cast. The library headers do not
+include <stdbool.h> under C23; a C library whose <stdbool.h> still
+defines true as 1 there (FreeBSD 14) brings the int back into every
+file that includes it.
 
-A char[N] ARRAY VARIABLE (as opposed to a string literal written
-directly at the call site) cannot be passed directly; cast it to
-(char *) first.  This is a plain C language restriction (the macro
-copies val into a same-typed local, which is not possible for a
-non-literal array), not a cyaml-specific one.
+The macro rejects every other C type.  Such a type is long double, a
+struct, or a pointer type other than char *, const char * and void *.
+cyaml_set then returns ccol_invalid_args and leaves the target leaf
+untouched.  For an unsupported type it creates no leaf that stays
+behind as CYAML_NULL.  It also does not overwrite the value of a leaf
+that already exists.
 
-For a dictionary leaf, the key is created when absent; its immediate
-parent dictionary must already exist.  For a list leaf ("#N"), the
-index must already be in range; a list has no way to be
-auto-extended to fit an arbitrary index.  Either way, if the leaf
-exists its type is replaced unconditionally: existing list or
-dictionary subtrees are deep-freed before the new value is written.
+The macro copies val into a local whose type is the type of val after
+array-to-pointer conversion, with top-level qualifiers removed.  A
+char array, such as a buffer that snprintf(3) filled, therefore
+arrives as a pointer to its first character, and a pointer that is
+itself const, such as a static const char *const, arrives as an
+ordinary pointer.  Each one gives the text of the string.
 
-Non-finite doubles (Inf, -Inf, NaN) are accepted and stored (unlike
-cjson_set, which rejects them).  They serialize as .inf, -.inf, .nan.
+Signed integer types are sign-extended to long long.  Unsigned
+integers in the range [0, LLONG_MAX] round-trip faithfully.  An
+unsigned value above LLONG_MAX fits no long long, so the leaf becomes
+CYAML_FLOAT and holds the nearest double.  That is the same node that
+cyaml_parse(3) gives for the decimal literal of the value, which is
+too large for the integer grammar of the core schema and resolves as a
+float.  cyaml_double_val(3) then reads it; cyaml_int_val(3) does not.
 
-Passing (bool)true / (bool)false is required to produce a CYAML_BOOL
-node; without the explicit cast, integer literal 1 or 0 produces a
-CYAML_INTEGER node instead.
+A string value, and a leaf component that addresses a dictionary key,
+must be well-formed UTF-8.  The macro returns ccol_invalid_args for
+one that is not, and changes nothing.  Every Unicode character is
+accepted; the serializer escapes one that a YAML document may not hold
+raw.
+
+For a dictionary leaf, the macro creates the key when it is absent.
+The parent dictionary of that key must already exist.  For a list leaf
+("#N"), the index must already be in range.  A list has no way to grow
+by itself to fit an index that the caller chooses.  In both cases the
+macro always replaces the type of a leaf that already exists.  It
+deep-frees an existing list subtree or dictionary subtree before it
+writes the new value.
+
+The macro accepts and stores a double that is not finite (Inf, -Inf and
+NaN).  cjson_set differs here, because it rejects these values.  They
+serialize as .inf, -.inf and .nan.
+
+A custom tag on an existing leaf survives the call.  A core-schema
+tag survives only while it still names the type of the new value.
+The macro drops a core-schema tag that the new value no longer
+matches.  For example, on a node parsed from "port: !!int 8080",
+cyaml_set(doc, "port", "auto") drops the !!int tag, and
+cyaml_set(doc, "port", 9090) keeps it.  See cyaml_node_set_tag(3).
+
+You must write (bool)true or (bool)false to get a CYAML_BOOL node.
+Without that cast, the integer literal 1 or 0 gives a CYAML_INTEGER
+node instead.
 .fi
 .SH PARAMETERS
 .nf
 root   Root cyaml handle.
 path   Dot-separated path string.
-       Escape sequences: '\e.' -> literal '.', '\e\e' -> literal '\e'.
-       A '\e' before any other character is left unchanged.
-val    C value; type is resolved at compile time.
+       Escape sequences: '\e.' gives a literal '.', and '\e\e' gives a
+       literal '\e'.  A '\e' before any other character stays
+       unchanged.
+val    C value.  The compiler resolves its type at compile time.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_retval_t: ccol_success on success.
-ccol_invalid_args; empty path, type incompatible at a path step,
-                      malformed "#N" list-index syntax, an empty path
-                      component (nothing between two dots, or a
-                      leading or trailing dot), or val's C type is
-                      not one of the accepted types listed above.
-ccol_key_not_found; a non-leaf component of the path does not exist,
-                      or a leaf "#N" list index is syntactically
-                      valid but out of range.
-ccol_not_enough_memory; allocation failure.
-ccol_container_full; creating a new leaf dictionary key would exceed
-                      the parent's maximum representable element
-                      count (not reachable in practice).
+ccol_invalid_args; an empty path, a type that does not fit at a path
+                      step, a bad "#N" list-index syntax, an empty
+                      path component (nothing between two dots, a
+                      leading dot, or a trailing dot), a C type for
+                      val that is not one of the accepted types above,
+                      a string value that is not well-formed UTF-8, or
+                      a dictionary leaf component that is not
+                      well-formed UTF-8.
+ccol_key_not_found; a component of the path above the leaf does not
+                      exist, or a leaf "#N" list index has correct
+                      syntax but is out of range.
+ccol_not_enough_memory; an allocation failure.
+ccol_container_full; a new leaf dictionary key would take the parent
+                      past the largest element count that it can
+                      represent.  A real program does not reach that
+                      count.
 .fi
 .SH EXAMPLES
 .nf
@@ -88,4 +127,4 @@ cyaml_set(doc, "server.deprecated", NULL);
 .fi
 .SH "SEE ALSO"
 .BR cyaml_get (3),
-.BR _cyaml_set_typed (3)
+.BR cyaml_node_set_tag (3)

@@ -5,14 +5,14 @@ ccol_log_info \- emit a log line at INFO level
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <clogger.h>
+#include <ccollections/clogger.h>
 
 ccol_log_info(clog lg, const char *fmt, ...);
 .fi
 .SH DESCRIPTION
 .nf
-Expands to a call to _clog_write() at CLOG_INFO level with automatic
-source location capture. No backtrace is appended.
+Writes a log line at CLOG_INFO level.  It captures __FILE__, __LINE__
+and __func__ by itself.  It appends no backtrace.
 
 INFO is the recommended default minimum level for production services.
 .fi
@@ -33,5 +33,4 @@ ccol_log_info(lg, "request handled in %ldms", elapsed_ms);
 .BR ccol_log_warn (3),
 .BR ccol_log_error (3),
 .BR ccol_log_alert (3),
-.BR ccol_log_fatal (3),
-.BR _clog_write (3)
+.BR ccol_log_fatal (3)

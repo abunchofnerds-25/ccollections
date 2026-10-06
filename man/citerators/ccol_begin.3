@@ -5,32 +5,34 @@ ccol_begin \- begin iteration over any supported container
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <citerators.h>   /* or any container header */
+#include <ccollections/citerators.h>   /* or any container header */
 
 cmap_iterator *ccol_begin(container);
 .fi
 .SH DESCRIPTION
 .nf
-Returns an iterator positioned at the first element of container.
-The correct begin_iter function is selected at compile time via
-_Generic on the type of container.  Supported types: cvec, chmap,
-cbmap.
+This macro gives an iterator at the first element of container. It selects
+the correct begin_iter function at compile time. It uses _Generic on the
+type of container. The supported types are cvec, chmap and cbmap.
+A container of any other type, a void * included, is a compile error.
 
-Returns NULL without error when the container is empty.
-Calls ccol_fatal_err() on allocation failure.
+The macro gives NULL, and no error, when the container is empty. A
+container handle that is NULL iterates as an empty container. Therefore, the
+macro gives NULL for it, and no error.
+It calls ccol_fatal_err() when an allocation fails.
 .fi
 .SH PARAMETERS
 .nf
-container  A cvec, chmap, or cbmap variable.
+container  A cvec, chmap or cbmap variable.
 .fi
 .SH RETURN VALUE
 .nf
-cmap_iterator* positioned at the first element, or NULL if empty.
+cmap_iterator* at the first element, or NULL when the container is empty.
 .fi
 .SH NOTES
 .nf
-Use ccol_iter_declare(container, it) before calling ccol_begin in a
-for loop to obtain typed accessors for the iterator.
+Use ccol_iter_declare(container, it) before a call to ccol_begin in a for
+loop. That macro gives you typed accessors for the iterator.
 .fi
 .SH EXAMPLES
 .nf

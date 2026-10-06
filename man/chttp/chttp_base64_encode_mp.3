@@ -1,11 +1,11 @@
 .TH CHTTP_BASE64_ENCODE_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-chttp_base64_encode_mp \- base64-encode a buffer with a custom allocator
+chttp_base64_encode_mp \- encode a buffer as base64 with a custom allocator
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttp.h>
+#include <ccollections/chttp.h>
 
 char *chttp_base64_encode_mp(ccol_memmgmt_procs_t *mp,
                              const void *data, size_t len,
@@ -13,23 +13,25 @@ char *chttp_base64_encode_mp(ccol_memmgmt_procs_t *mp,
 .fi
 .SH DESCRIPTION
 .nf
-Encodes len bytes of data as standard RFC 4648 base64 (the '+'/'/'
-alphabet, '=' padding); the variant required by RFC 7617 Basic auth
-and used throughout HTTP.
+This function encodes len bytes of data as standard RFC 4648 base64.
+That format uses the '+' and '/' alphabet with '=' padding. RFC 7617
+Basic auth needs this variant, and HTTP uses it everywhere.
 .fi
 .SH PARAMETERS
 .nf
-mp       Custom allocator, or NULL for malloc/free.
-data     Buffer to encode. May be NULL only if len is 0.
-len      Number of bytes in data.
-out_len  Optional; receives the length of the returned string
-         (excluding the terminating NUL). Pass NULL to ignore.
+mp       A custom allocator, or NULL for malloc/free.
+data     The buffer to encode. It can be NULL only if len is 0.
+len      The number of bytes in data.
+out_len  Optional. It gets the length of the string that the function
+         gives back. This length does not count the terminating NUL.
+         Give NULL to ignore it.
 .fi
 .SH RETURN VALUE
 .nf
-Newly allocated, NUL-terminated base64 string on success.
-NULL on allocation failure, if data is NULL and len is nonzero, or
-if len is large enough that the encoded size would overflow size_t.
+A new base64 string that ends with a NUL, if the call succeeds.
+NULL, if the allocation fails. NULL also, if data is NULL and len is
+not zero. NULL also, if len is so large that the encoded size
+overflows size_t.
 .fi
 .SH "SEE ALSO"
 .BR chttp_base64_encode (3),

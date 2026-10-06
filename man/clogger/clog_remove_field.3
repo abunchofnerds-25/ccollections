@@ -5,15 +5,15 @@ clog_remove_field \- remove a previously attached structured field
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <clogger.h>
+#include <ccollections/clogger.h>
 
 void clog_remove_field(clog logger, const char *key);
 .fi
 .SH DESCRIPTION
 .nf
-Removes the field with the given key from the logger's field list.
-The field will no longer appear in subsequent log lines. If the key
-is not present the call is a no-op.
+Removes the field with the given key from the field list of the logger.
+That field then appears in no later log line.  The call does nothing
+when the field list holds no such key.
 .fi
 .SH PARAMETERS
 .nf
@@ -22,8 +22,8 @@ key     Field name to remove. The match is case-sensitive and exact.
 .fi
 .SH NOTES
 .nf
-Thread-safe: protected by the per-logger mutex.
-Asserts if logger is CLOG_INVALID, stale, or already closed.
+Thread-safe.  The mutex of the logger protects it.
+Asserts when logger is CLOG_INVALID, stale or already closed.
 .fi
 .SH "SEE ALSO"
 .BR clog_set_field (3),

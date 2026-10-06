@@ -5,14 +5,15 @@ chttpcli_declare \- declare a chttpcli handle variable
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpclient.h>
+#include <ccollections/chttpclient.h>
 
 chttpcli_declare(name)
 .fi
 .SH DESCRIPTION
 .nf
-Declares an uninitialised chttpcli variable named name.  Equivalent to
-writing "chttpcli name;".
+This macro declares a chttpcli variable with the name name. The
+variable has no value yet. The macro is the same as the text
+"chttpcli name;".
 .fi
 .SH "SEE ALSO"
 .BR chttpcli_construct (3),

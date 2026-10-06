@@ -5,22 +5,29 @@ cyaml_dictionary_remove \- remove and free a key from a dictionary node
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cyaml.h>
+#include <ccollections/cyaml.h>
 
 ccol_retval_t cyaml_dictionary_remove(cyaml map, const char *key);
 .fi
 .SH DESCRIPTION
 .nf
-Removes the entry identified by key from the dictionary node map and
-recursively frees the associated value subtree.
+Remove the entry that carries this key from the dictionary node map.
+The function then frees the value subtree of that entry recursively.
+The other members keep their order.  A cyaml_dictionary_iter cursor
+stays valid across the removal of any member other than the one that
+its next step reads, the successor of the member that it stands on;
+the removal of the current member is therefore allowed during a walk.
+The removal of that successor invalidates the cursor.  See
+cyaml_dictionary_first(3).
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success        - entry removed and freed.
-ccol_invalid_args   - map is NULL or not CYAML_DICTIONARY.
-ccol_key_not_found  - key does not exist in the dictionary.
+ccol_success        - the function removed and freed the entry.
+ccol_invalid_args   - map is NULL, or map is not CYAML_DICTIONARY.
+ccol_key_not_found  - the dictionary holds no such key.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_dictionary_set (3),
 .BR cyaml_dictionary_get (3),
+.BR cyaml_dictionary_first (3),
 .BR cyaml_list_remove (3)

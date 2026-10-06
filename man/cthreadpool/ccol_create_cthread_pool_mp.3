@@ -1,11 +1,11 @@
-.TH CCOL_CREATE_CTHREAD_POOL_MP 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
+.TH CCOL_CREATE_CTHREAD_POOL_MP 3 "2026-09-27" "c_collections" "C Collections Library - Functions"
 .SH NAME
 ccol_create_cthread_pool_mp \- create a thread pool with custom memory management
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadpool.h>
+#include <ccollections/cthreadpool.h>
 
 ctpool ccol_create_cthread_pool_mp(size_t num_threads,
                               size_t queue_capacity,
@@ -14,80 +14,99 @@ ctpool ccol_create_cthread_pool_mp(size_t num_threads,
 .fi
 .SH DESCRIPTION
 .nf
-Creates a new thread pool with the specified number of worker threads.
-The queue_capacity parameter controls the task queue mode:
+Creates a new thread pool with the given number of worker threads.
+The queue_capacity parameter selects the task queue mode:
 
   0 or ccol_invalid_size -> unbounded task queue. ctpool_submit never
-    blocks on capacity; the only non-argument failure path is
-    ccol_not_enough_memory.
+    blocks on capacity. The only failure path that does not come from
+    an argument is ccol_not_enough_memory.
 
   N > 0 -> bounded task queue of capacity N. ctpool_submit blocks when
-    the queue is full; ctpool_try_submit returns ccol_container_full
-    instead of blocking.
+    the queue is full. ctpool_try_submit does not block. It returns
+    ccol_container_full.
 
-All num_threads worker threads are started before the function returns.
-If any pthread_create call fails the already-started threads are joined
-cleanly before the function returns CTPOOL_INVALID.
+This function starts all num_threads worker threads before it returns.
+If a pthread_create call fails, it joins the threads that already
+started, cleanly, and then it returns CTPOOL_INVALID.
+
+Each worker thread records its pool on one thread-specific key that the
+library creates for the whole process, on the first creation of a pool.
+That key is what lets a task that destroys its own pool fail loudly. When
+the process has no key left to give (PTHREAD_KEYS_MAX), this function
+returns CTPOOL_INVALID, and so does every later call in that process.
+The library deletes the key when it unloads with no pool left, so a
+cycle of dlopen(3) and dlclose(3) gives the key back.
 .fi
 .SH PARAMETERS
 .nf
 num_threads    Number of worker threads (must be >= 1)
 queue_capacity 0 or ccol_invalid_size for unbounded; N > 0 for bounded
 mprocs         Custom allocator, or NULL for malloc/free
-err_str        Optional: receives a static error string on failure
+err_str        Optional. It gets a static error string on failure
 .fi
 .SH RETURN VALUE
 .nf
 Returns a new ctpool handle on success.
-Returns CTPOOL_INVALID on failure and sets *err_str if err_str is
-non-NULL.
+Returns CTPOOL_INVALID on failure, and sets *err_str if err_str is
+not NULL.
 .fi
 .SH NOTES
 .nf
-The returned handle is an opaque VALUE (a packed {slot index,
-generation} pair), not a pointer; never cast it to/from void* or
-treat it as an address.
-Futures always use standard malloc/free regardless of mprocs.
-The small internal task node backing each submission is recycled
-through a bounded per-pool cache rather than allocated and freed via
-mprocs on every single call; a caller relying on mprocs to observe
-one allocation and one free per submission (for example a tracking or
-instrumenting allocator) will instead see calls only when the cache is
-empty or already full, not on every call.
-ctpool_destroy performs a drain shutdown itself when neither
-ctpool_shutdown_drain nor ctpool_shutdown_immediate was called
-beforehand.
-__ctpool_destroy waits for every in-flight resolved use of the handle
-(a concurrently executing ctpool_submit/_wait/_pending_count/... call)
-to finish before freeing anything, so the caller does not need to
-independently prove no other thread is still using the pool; see
-__ctpool_destroy(3).
+The handle that this function gives is an opaque VALUE, and not a
+pointer. Do not cast it to void* or from void*. Do not use it as an
+address. Compare it with CTPOOL_INVALID. CTPOOL_INVALID is 0. Therefore, a
+test such as if (!pool) is also correct.
+A future always uses the standard malloc and free, whatever mprocs is.
+Each submission has a small internal task node behind it. The library
+recycles that node through a cache in each pool. It does not allocate
+and free the node through mprocs on every call. A caller can therefore
+not depend on mprocs to see one allocation and one free for each
+submission. A tracking or measuring allocator is one such caller. Such
+a caller sees a call only when the cache is empty or already full, and
+when the pool trims the cache.
+The cache keeps the nodes that the recent traffic of the pool needed,
+so a burst of submissions of the same depth as an earlier one
+allocates no node. It holds at most max(num_threads * 4, 32768) idle
+nodes. At every 256th point where the pool goes idle, it gives back to
+mprocs half of what it holds above num_threads * 4, unless the traffic
+since the previous such point emptied it. A cache that nothing needs
+therefore halves at each of those points, down to num_threads * 4.
+ctpool_destroy does a drain shutdown itself, when the caller called
+neither ctpool_shutdown_drain nor ctpool_shutdown_immediate before it.
+ctpool_destroy waits for every in-flight resolved use of the handle to
+stop, before it frees anything. Such a use is a ctpool_submit,
+ctpool_wait or ctpool_pending_count call that runs at the same time.
+The caller therefore does not need to prove on its own that no other
+thread still uses the pool.
 
-The supported way to combine fork(2) with cthreadpool is to fork(2)
-before creating a pool, or create one and fork(2) immediately followed
-by exec(3); continuing to run without an intervening exec(3) while a
-pool created before the fork is still live is not a supported pattern.
-As a defense-in-depth measure on top of that, a fresh
-ccol_create_cthread_pool_mp/ctpool_submit/_try_submit/_timed_submit/
-ctpool_destroy (and the future/wait/shutdown variants) call, from any
-thread, in either the parent or a freshly forked child, never hangs on
-a lock some other (possibly no-longer-existing, since fork(2)
-duplicates only the calling thread) thread happened to hold at the
-instant of the fork. A pool already live across the fork is a
-different matter regardless of that measure: its worker threads are
-not duplicated into the child, so an inherited pool can no longer run
-any queued or future task there; treat such a pool as inert in the
-child (not usable for further submission). ctpool_wait on such a pool
-in the child returns immediately rather than waiting for progress that
-can never happen, and ctpool_destroy still discards any work still
-queued at the moment of the fork (cancelling any queued futures, so a
-caller blocked in ctpool_future_get on one of them wakes up rather
-than hanging) before releasing the pool's own memory, even with no
-prior explicit shutdown call.
+There are two supported ways to combine fork(2) with cthreadpool. The
+first is a fork(2) before the creation of a pool. The second is the
+creation of a pool and then a fork(2) with an exec(3) right after it.
+A child that keeps running with no exec(3) in between, while a pool
+created before the fork is still live, is not a supported pattern.
+On top of that, the library adds a standing defence. A fresh call to
+ccol_create_cthread_pool_mp, ctpool_submit, ctpool_try_submit,
+ctpool_timed_submit or ctpool_destroy, or to one of the future, wait
+and shutdown variants, never hangs on a lock. This holds for a call
+from any thread, in the parent or in a child that forked a moment ago.
+The lock can belong to another thread that held it at the instant of
+the fork. That thread may no longer exist, because fork(2) duplicates
+only the thread that calls it.
+A pool that is already live across the fork is a different matter,
+whatever that defence does. The child does not get copies of its
+worker threads. An inherited pool can therefore run no queued task and
+no future task there. Treat such a pool as inert in the child, and do
+not submit to it. ctpool_wait on such a pool in the child returns at
+once. It does not wait for progress that can never happen.
+ctpool_destroy still discards any work that was in the queue at the
+moment of the fork. It cancels every queued future, so a caller that
+is blocked in ctpool_future_get on one of them wakes up and does not
+hang. ctpool_destroy does this before it frees the memory of the pool,
+and it does it even with no explicit shutdown call before it.
 .fi
 .SH "SEE ALSO"
 .BR ccol_create_cthread_pool (3),
 .BR ctpool_construct (3),
-.BR __ctpool_destroy (3),
+.BR ctpool_destroy (3),
 .BR ctpool_shutdown_drain (3),
 .BR ctpool_shutdown_immediate (3)

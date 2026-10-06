@@ -5,7 +5,7 @@ cjson_bool_val, cjson_int_val, cjson_double_val, cjson_str_val \- read a scalar 
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cjson.h>
+#include <ccollections/cjson.h>
 
 bool        cjson_bool_val(cjson node);
 long long   cjson_int_val(cjson node);
@@ -14,11 +14,17 @@ const char *cjson_str_val(cjson node);
 .fi
 .SH DESCRIPTION
 .nf
-Each function returns the value stored in node, asserting via ccol_fatal_err()
-if the node's type does not match.
+Each function returns the value that node holds.  A function calls
+ccol_fatal_err() when the type of the node does not match.
 
-cjson_str_val() returns a pointer to the node's own internal copy of
-the string; the caller must not free it.
+cjson_str_val() returns a pointer to the internal copy of the string
+inside the node.  The caller must not free that pointer.  The string
+is always well-formed UTF-8, whatever built the tree.  The parser
+refuses a document whose strings are not UTF-8, and
+cjson_create_string(3) and cjson_set(3) refuse a string from the
+caller that is not UTF-8.
 .fi
 .SH "SEE ALSO"
-.BR cjson_type (3)
+.BR cjson_type (3),
+.BR cjson_create_string (3),
+.BR cjson_parse (3)

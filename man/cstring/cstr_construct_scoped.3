@@ -5,14 +5,15 @@ cstr_construct_scoped \- declare and initialise a cstr with automatic RAII
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 cstr_construct_scoped(s, initial);
 .fi
 .SH DESCRIPTION
 .nf
-Combines cstr_declare_scoped() and cstr_init() into a single statement.
-The string is automatically destroyed when the variable leaves scope.
+This macro combines cstr_declare_scoped() and cstr_init() into one
+statement. The program destroys the string automatically when the variable
+leaves its scope.
 .fi
 .SH PARAMETERS
 .nf
@@ -21,14 +22,14 @@ initial  Initial content (C string or NULL for empty string)
 .fi
 .SH NOTES
 .nf
-Requires GCC or Clang (uses __attribute__((cleanup)))
+This macro needs GCC or Clang, because it uses __attribute__((cleanup))
 .fi
 .SH EXAMPLES
 .nf
 {
   cstr_construct_scoped(s, "auto-freed");
   /* use s ... */
-}  /* s is destroyed here automatically */
+}  /* the program destroys s here automatically */
 .fi
 .SH "SEE ALSO"
 .BR cstr_construct (3),

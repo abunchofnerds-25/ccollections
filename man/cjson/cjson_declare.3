@@ -5,15 +5,17 @@ cjson_declare \- declare an uninitialized cjson variable
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cjson.h>
+#include <ccollections/cjson.h>
 
 cjson_declare(var_name);
 .fi
 .SH DESCRIPTION
 .nf
-Expands to `cjson var_name`.  Provided for naming-convention symmetry
-with the other container modules.  The variable must be assigned (e.g.
-via cjson_parse() or cjson_create_*()) before it is used.
+Expands to `cjson var_name`.  It exists so that the naming
+convention matches the other container modules.  The caller must
+assign a value to the variable before any use of it.  For example,
+the caller can assign the result of cjson_parse() or of one of the
+cjson_create_*() functions.
 .fi
 .SH PARAMETERS
 .nf

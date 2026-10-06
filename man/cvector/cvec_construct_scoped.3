@@ -1,0 +1,66 @@
+.TH CVEC_CONSTRUCT_SCOPED 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cvec_construct_scoped \- construct a vector destroyed automatically at scope exit
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cvector.h>
+
+cvec_construct_scoped(v, type);
+.fi
+.SH DESCRIPTION
+.nf
+This macro declares a vector variable with the name v. That vector holds
+elements of the given type. The macro creates the vector. It also adds a
+cleanup handler. That handler destroys the vector when control leaves the
+scope around it. The macro is cvec_construct(3) plus that cleanup handler,
+with one more difference. This macro initializes the hidden type marker
+variables to NULL, and the other type-dispatching macros read them.
+cvec_construct(3) deliberately leaves them indeterminate. Everything else
+that cvec_construct(3) documents holds here unchanged. This includes the
+stop of the program through ccol_fatal_err() for a failed creation.
+
+The destruction happens on every exit from the scope. Such an exit is the
+closing brace, a return, a break, a continue, or a goto out of the block.
+The macro sets the variable to NULL as it destroys the vector. Nothing is
+therefore freed twice when you also call cvec_destroy() before the end of
+the scope.
+.fi
+.SH PARAMETERS
+.nf
+v     Name of the vector variable to declare and create
+type  Element type, for example int, double or struct foo
+.fi
+.SH NOTES
+.nf
+The macro stops the program through ccol_fatal_err() when an allocation
+fails.
+The macro is built on __attribute__((cleanup)), so it needs GCC or Clang.
+Use cvec_construct(3) with an explicit cvec_destroy() on a toolchain that
+does not have that attribute.
+The macro expands to a declaration. It therefore belongs among the
+statements of a block. It cannot be the body of an if or a loop without
+braces.
+The vector must not live longer than its scope. Do not return v. Do not
+store it anywhere that code reads after the end of the block.
+The macro does not free the elements one by one when the vector holds
+pointers to heap buffers. Free the element data before you leave the
+scope.
+.fi
+.SH EXAMPLES
+.nf
+void process(void) {
+    cvec_construct_scoped(vec, int);
+    cvec_push(vec, 42);
+
+    if (cvec_size(vec) != 1) {
+        return;   // vec is destroyed here
+    }
+}                 // and here
+.fi
+.SH "SEE ALSO"
+.BR cvec_construct (3),
+.BR cvector_create (3),
+.BR cvector_destroy (3),
+.BR ccol_scoped_ptr (3)

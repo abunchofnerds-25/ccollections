@@ -1,11 +1,11 @@
 .TH CHTTP_REQUEST_NEW_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-chttp_request_new_mp \- allocate and initialise an HTTP request with a custom allocator
+chttp_request_new_mp \- allocate and initialize an HTTP request with a custom allocator
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpclient.h>
+#include <ccollections/chttpclient.h>
 
 chttp_request_t *chttp_request_new_mp(chttp_method_t method,
                                       const char *url,
@@ -15,54 +15,65 @@ chttp_request_t *chttp_request_new_mp(chttp_method_t method,
 .fi
 .SH DESCRIPTION
 .nf
-Allocates a new chttp_request_t and copies the URL and, if non-NULL,
-the body data and content_type string into privately owned buffers.
-The caller may free its originals immediately after this call returns.
+This function allocates a new chttp_request_t. It copies the URL into
+a buffer that the request owns. It copies the body data and the
+content_type string in the same way if they are not NULL. The caller
+can free its own originals at once after this call returns.
 
-Pass NULL for body or use the CHTTP_NO_BODY macro when no request body
-is needed (e.g. GET, DELETE). body->data may be NULL only when
-body->len == 0; a NULL body->data paired with a nonzero body->len is
-rejected (returns NULL) rather than silently treated as no body.
+Give NULL for body, or use the CHTTP_NO_BODY macro, when the request
+needs no body. GET and DELETE are such requests. body->data can be
+NULL only when body->len == 0. The function rejects a NULL body->data
+with a body->len that is not zero, and gives NULL. It does not treat
+that pair as a request with no body.
 
-The returned request's expect_continue field defaults to false (the
-struct is zero-initialised). Set it to true after construction (e.g.
-req->expect_continue = true) to send "Expect: 100-continue" and wait
-for the server's interim response before sending the body; see
-chttpclient_do(3) for the full protocol. Has no effect on a request
-with no body, or one that already has an explicit "Expect" header set
-via chttp_request_set_header. Honored uniformly by every tier
-(chttpclient_do/chttpclient_do_streaming, chttpclient_do_async/
-chttpclient_do_async_streaming, and chttpclient_do_pooled/
-chttpclient_do_pooled_streaming).
+Only CHTTP_POST, CHTTP_PUT and CHTTP_PATCH send a body. For a request
+with a different method, the client never sends the body. The client
+also sends no Content-Length and no Content-Type for that request. A
+POST, PUT or PATCH with no body goes out with "Content-Length: 0".
+
+The expect_continue field of the new request defaults to false,
+because the library fills the struct with zero. Set the field to true
+after construction, for example with req->expect_continue = true. The
+client then sends "Expect: 100-continue". It waits for the interim
+response of the server before it sends the body. See chttpclient_do(3)
+for the full protocol. The field has no effect on a request with no
+body. It also has no effect on a request that already has an explicit
+"Expect" header from chttp_request_set_header. Every tier honors this
+field in the same way: chttpclient_do and chttpclient_do_streaming,
+chttpclient_do_async and chttpclient_do_async_streaming, and
+chttpclient_do_pooled and chttpclient_do_pooled_streaming.
 .fi
 .SH PARAMETERS
 .nf
-method    HTTP method (CHTTP_GET, CHTTP_POST, ...).
-url       Target URL; must not be NULL (copied into the request).
-body      Pointer to a chttp_request_body_t, or NULL for no body.
-mprocs    Custom allocator, or NULL for malloc/free.
-err_str   Optional; receives a static error string on failure.
+method    The HTTP method (CHTTP_GET, CHTTP_POST and the others).
+url       The target URL. It must not be NULL. The function copies it
+          into the request.
+body      A pointer to a chttp_request_body_t, or NULL for no body.
+mprocs    A custom allocator, or NULL for malloc/free.
+err_str   Optional. It gets a static error string if the call fails.
 .fi
 .SH RETURN VALUE
 .nf
-Pointer to the new request, or NULL on failure (including a NULL url,
-a NULL body->data with a nonzero body->len, or allocation failure).
+A pointer to the new request, or NULL if the call fails. The call
+fails for a NULL url, for a NULL body->data with a body->len that is
+not zero, and for a failure of an allocation.
 .fi
 .SH NOTES
 .nf
-All allocations use mprocs when non-NULL.
-The request must remain alive until any chttpclient_do call using it
-returns: the request's method/body/headers are read directly during
-that synchronous call.
+Every allocation uses mprocs when mprocs is not NULL.
+The request must stay alive until every chttpclient_do call that uses
+it returns. Such a synchronous call reads the method, the body and the
+headers of the request directly.
 
-body->content_type is copied verbatim here with no validation (this
-function cannot yet know whether it will even be used on the wire; an
-explicit "content-type" header set later via chttp_request_set_header
-takes precedence and suppresses it). If it reaches serialization time
-still containing an embedded CR or LF byte, the chttpclient_do/
-chttp_run_query/etc. call using this request fails with
-ccol_invalid_args instead of writing it onto the wire; see
-chttp_request_set_header(3) for why.
+The function copies body->content_type here without a change and
+without a check. It cannot know yet whether that value ever reaches
+the wire. An explicit "content-type" header that you set later with
+chttp_request_set_header wins over it and stops it. Does
+body->content_type still hold a CR byte or an LF byte when the library
+serializes the request? The chttpclient_do call, the chttp_run_query
+call or the other call that uses this request then fails with
+ccol_invalid_args. The library does not write that value onto the
+wire. See chttp_request_set_header(3) for the reason.
 .fi
 .SH "SEE ALSO"
 .BR chttp_request_new (3),

@@ -1,37 +1,40 @@
 .TH CCOL_DYNMQ_RECV_ZC 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-ccol_dynmq_recv_zc \- receive a message from a dynamic queue (blocking)
+ccol_dynmq_recv_zc \- receive a message from a dynamic queue (it blocks)
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadcomm.h>
+#include <ccollections/cthreadcomm.h>
 
 ccol_retval_t ccol_dynmq_recv_zc(ccol_dynamic_queue *dq, c_message_t *target_buf);
 .fi
 .SH DESCRIPTION
 .nf
-Blocks until a message is available in the dynamic queue, then removes
-the head message and transfers ownership of its data pointer to the
-caller via target_buf. The caller must free target_buf->data when done.
+This function blocks until a message arrives in the dynamic queue. Then it
+removes the message at the head. It transfers the ownership of the data
+pointer of that message to the caller in target_buf. The caller must free
+target_buf->data after it finishes with the data.
 .fi
 .SH PARAMETERS
 .nf
 dq          Dynamic queue to receive from
-target_buf  Buffer to receive the message (receives ownership of data)
+target_buf  Buffer that gets the message. It also gets the ownership of
+            the data.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success        - Message received (caller must free target_buf->data)
+ccol_success        - The function received a message. The caller must
+                      free target_buf->data.
 ccol_invalid_args   - dq or target_buf is NULL
 .fi
 .SH NOTES
 .nf
-Blocks indefinitely until a message arrives
-Remains blocked even when sending is temporarily disabled; unblocks
-  when sending is re-enabled and a message arrives
-Caller receives ownership of target_buf->data and must free it
-Thread-safe
+The function blocks with no time limit. It waits for a message.
+The function stays blocked while sends on the queue are off. It unblocks
+  after a call turns sends on again and a message arrives.
+The caller gets the ownership of target_buf->data and must free it.
+The function is thread-safe.
 .fi
 .SH "SEE ALSO"
 .BR ccol_dynmq_try_recv_zc (3),

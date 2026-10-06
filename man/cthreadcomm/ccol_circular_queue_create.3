@@ -5,44 +5,47 @@ ccol_circular_queue_create \- create a circular queue
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadcomm.h>
+#include <ccollections/cthreadcomm.h>
 
 ccol_circular_queue_create(max_size, err_str);
 .fi
 .SH DESCRIPTION
 .nf
-Creates a fixed-size bounded queue that uses a circular buffer internally.
-Send operations block when the queue is full until space becomes available.
-Uses standard malloc/free for memory management.
+This macro creates a queue with a fixed size. Inside, the queue uses a
+circular buffer. A send blocks while the queue is full. It waits for free
+space. The macro uses the standard malloc and free for memory management.
 
-This is a convenience macro for ccol_circular_queue_create_with_mprocs() with
-NULL memory management procedures.
+This macro is the short form of ccol_circular_queue_create_with_mprocs()
+with NULL memory management procedures.
 .fi
 .SH PARAMETERS
 .nf
-max_size  Maximum number of messages the queue can hold (1 to
-          SIZE_MAX / sizeof(c_message_t); a larger value is rejected,
-          since the queue is backed by a single max_size * sizeof(c_message_t)
-          array and a larger value would overflow that computation)
-err_str   Optional pointer to receive error string on failure
+max_size  Maximum number of messages that the queue can hold. The value
+          must be from 1 to SIZE_MAX / sizeof(c_message_t). The macro
+          refuses a larger value. One array of
+          max_size * sizeof(c_message_t) bytes holds the queue, and a
+          larger value makes that computation overflow.
+err_str   Optional pointer that gets an error string on failure
 .fi
 .SH RETURN VALUE
 .nf
-Returns pointer to newly created circular queue on success
-Returns NULL on failure
+On success, the macro gives a pointer to the new circular queue.
+On failure, it gives NULL.
 .fi
 .SH NOTES
 .nf
-All operations on this queue are thread-safe
-Queue must be destroyed with ccol_circular_queue_destroy() when done
-The supported way to combine fork(2) with this queue is to fork(2)
-before creating it, or create it and fork(2) immediately followed by
-exec(3); continuing to run without an intervening exec(3) while a
-queue created before the fork is still live is not a supported
-pattern. As a defense-in-depth measure on top of that, a lock held by
-some other thread at the instant of the fork is never inherited by
-the child already locked, and the queue owns no thread of its own, so
-one inherited that way happens to remain fully usable regardless.
+All operations on this queue are thread-safe.
+You must destroy the queue with ccol_circular_queue_destroy() after you
+finish with it.
+There are two supported ways to combine fork(2) with this queue. The first
+way is to call fork(2) before you create the queue. The second way is to
+create the queue, then call fork(2) and immediately call exec(3). One
+pattern is not supported: a program continues to run with no exec(3) in
+between while a queue from before the fork is still live. On top of that
+rule, the library adds a defense in depth. The child never inherits a lock
+in the locked state from another thread that held it at the instant of the
+fork. Also, the queue owns no thread of its own. A queue that a child
+inherits in that way therefore stays fully usable.
 .fi
 .SH "SEE ALSO"
 .BR ccol_circular_queue_create_with_mprocs (3),

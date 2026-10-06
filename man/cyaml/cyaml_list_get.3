@@ -5,19 +5,19 @@ cyaml_list_get \- access a list element by index
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cyaml.h>
+#include <ccollections/cyaml.h>
 
 cyaml cyaml_list_get(cyaml seq, size_t index);
 .fi
 .SH DESCRIPTION
 .nf
-Return a non-owning reference to the child at position index within
+Return a non-owning reference to the child at the position index inside
 seq.
 .fi
 .SH RETURN VALUE
 .nf
-Child node, or NULL if index is out of bounds or seq is not a
-CYAML_LIST.
+The child node.  The function returns NULL when index is out of bounds,
+and also when seq is not a CYAML_LIST.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_list_push (3),

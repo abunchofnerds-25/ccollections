@@ -5,40 +5,43 @@ chttpclient_set_pool_size \- set the connection pool size
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpclient.h>
+#include <ccollections/chttpclient.h>
 
 ccol_retval_t chttpclient_set_pool_size(chttpcli cli, size_t n);
 .fi
 .SH DESCRIPTION
 .nf
-Sets the maximum number of concurrent in-flight requests.  Callers
-that call chttpclient_do when the limit is reached will block until
-one becomes free.
+This function sets the maximum number of requests that can be in
+flight at the same time. A caller of chttpclient_do blocks after the
+client reaches that limit. It waits until one slot becomes free.
 
-This cap applies only to Tier 1 (chttpclient_do and
-chttpclient_do_streaming).  Tier 2 (chttpclient_do_async/_streaming)
-and Tier 3 (chttpclient_do_pooled/_streaming) are not subject to it:
-any number of those may be submitted concurrently, all handled by
-the shared async engine without blocking at submission time.
+This cap applies only to Tier 1, which is chttpclient_do and
+chttpclient_do_streaming. It does not apply to Tier 2, which is
+chttpclient_do_async and chttpclient_do_async_streaming. It also does
+not apply to Tier 3, which is chttpclient_do_pooled and
+chttpclient_do_pooled_streaming. You can submit any number of those
+requests at the same time. The shared async engine handles all of
+them, and a submit never blocks.
 
-Passing 0 selects the CPU count (the default).
+An n of 0 selects the CPU count, and that is the default.
 
-May be called before or after the client has issued any requests, and
-takes effect immediately (broadcasting to wake any blocked callers if
-the limit grew).  This is purely a concurrency cap; it is unrelated to
-the separate keep-alive idle-connection cache, which has its own
-internal, fixed per-origin and total caps.
+You can call this function before the client sends its first request
+or after it. It takes effect at once. If the limit grows, the client
+broadcasts and wakes every caller that waits. This is only a cap on
+concurrency. It has no link to the separate keep-alive cache of idle
+connections. That cache has its own fixed internal caps for each
+origin and in total.
 .fi
 .SH PARAMETERS
 .nf
-cli   Client handle; must not be CHTTPCLI_INVALID.
-n     Pool size; 0 = CPU count.
+cli   The client handle. It must not be CHTTPCLI_INVALID.
+n     The pool size. 0 means the CPU count.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success            Pool size updated.
-ccol_invalid_args       cli is CHTTPCLI_INVALID, or a stale/
-                        already-destroyed handle.
+ccol_success            The client has the new pool size.
+ccol_invalid_args       cli is CHTTPCLI_INVALID, or a stale handle
+                        of a client that is already destroyed.
 .fi
 .SH "SEE ALSO"
 .BR ccol_create_chttpclient (3),

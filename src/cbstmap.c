@@ -30,26 +30,28 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 
-/* Upper bound on the height of any AVL tree this library could ever hold: an
- * AVL tree's height is bounded by roughly 1.44 * log2(n + 2), so this covers
- * every element count representable by a 64-bit size_t with a wide safety
- * margin. Every internal traversal stack in this file (ancestor-path
- * tracking for insert/delete/rebalancing, the post-order destroy stack, and
- * the in-order iterator's stack) holds at most one entry per tree level, so a
- * fixed array of this size can never overflow for a real AVL tree, letting
- * these hot paths avoid a heap allocation entirely instead of risking an
- * allocation failure on every mutation. */
+/* Upper bound on the height of any AVL tree that this library can hold. The
+ * height of an AVL tree is not more than about 1.44 * log2(n + 2). This
+ * bound covers every element count that a 64-bit size_t can hold, and it
+ * keeps a wide safety margin. Every internal stack in this file holds at
+ * most one entry for each tree level. These stacks are the ancestor path for
+ * an insert, a delete or a balance operation, the post-order destroy stack,
+ * and the stack of the in-order iterator. A fixed array of this size can
+ * never overflow for a real AVL tree. This lets these hot paths use no heap
+ * memory at all. A heap allocation on every change to the map could fail. */
 #define CBMAP_MAX_TREE_HEIGHT 128
 
-/* The alignment a key of this declared type actually requires. Taken with
- * _Alignof on the very type the enumerator names, so it is the target's own
- * answer rather than an assumption that alignment equals width; the two differ
- * on more than one supported target.
+/* The alignment that a key of this declared type needs. The function takes
+ * it with _Alignof on the type that the enumerator names. The answer is the
+ * answer of the target itself. The function does not assume that the
+ * alignment equals the width. The two differ on more than one supported
+ * target.
  *
- * ccol_other_types is an opaque caller struct whose real requirement this
- * module cannot know, and anything unrecognized is treated the same way, so
- * both keep max_align_t. A string key stores its bytes rather than a pointer to
- * them, so char alignment is the honest answer for it. */
+ * ccol_other_types is an opaque struct of the caller. This module cannot
+ * know its real requirement. The function treats a type that it does not
+ * recognize in the same way. Both keep max_align_t. A string key stores its
+ * bytes and not a pointer to them. This is why char alignment is the correct
+ * answer for a string key. */
 static inline size_t cbmap_key_alignment(ccol_data_type type) {
   switch (type) {
     case ccol_char:
@@ -83,11 +85,11 @@ static inline size_t cbmap_key_alignment(ccol_data_type type) {
 }
 
 #define CBMAP_ALIGN_UP_TO(n, a) (((n) + (a) - 1u) & ~(size_t)((a) - 1u))
-/* The value keeps max_align_t: a map records the type of its keys but not of
-   its values, so the requirement of whatever a caller casts the value pointer
-   to is not knowable here, and the strongest alignment is the only sound
-   answer. Nothing is lost on the path that matters, because a descent reads
-   keys and never values. */
+/* The value keeps max_align_t. A map records the type of its keys. It does
+   not record the type of its values. This module cannot know the type that
+   the caller casts the value pointer to. The strongest alignment is the only
+   correct answer here. This costs nothing on the path that matters, because
+   a descent through the tree reads keys and never values. */
 #define CBMAP_NODE_VAL_ALIGN _Alignof(max_align_t)
 
 _Static_assert(CBMAP_MAX_TREE_HEIGHT <= UINT8_MAX,
@@ -95,27 +97,29 @@ _Static_assert(CBMAP_MAX_TREE_HEIGHT <= UINT8_MAX,
                "CBMAP_MAX_TREE_HEIGHT past UINT8_MAX needs a wider field");
 
 typedef struct bmap_node {
-  // Data related containers
+  // Containers for the data
   cmap_pair key_pair;
   cmap_pair val_pair;
-  // Relational pointers
+  // Pointers to the other nodes
   struct bmap_node *left;
   struct bmap_node *right;
-  /* An AVL tree's height is bounded by roughly 1.44*log2(n+2), and
-     CBMAP_MAX_TREE_HEIGHT is the ceiling this module enforces, so one byte
-     holds any height reachable here. The narrow field is storage only: every
-     computation on a height still runs at the width node_height() returns, so
-     no arithmetic changes. It earns its place by shrinking the struct enough
-     that a node's key bytes start inside the same 64-byte span as the pointers
-     and sizes a descent reads, rather than at the boundary just past them. */
+  /* The height of an AVL tree is not more than about 1.44*log2(n+2).
+     CBMAP_MAX_TREE_HEIGHT is the ceiling that this module enforces. One byte
+     holds any height that can happen here. The narrow field is storage only.
+     Every computation on a height still runs at the width that node_height()
+     returns, so no arithmetic changes. The narrow field makes the struct
+     small enough that the key bytes of a node start inside the same 64-byte
+     span as the pointers and the sizes that a descent reads. With a wider
+     field the key bytes start at the boundary just past that span. */
   uint8_t height;
-  /* False while the value's bytes sit in this node's own allocation, which is
-     how every node starts. An update that changes the value's size moves it to
-     a buffer of its own and latches this, because the space reserved here is
-     exactly the size the value was created with and cannot grow. Resizes are
-     the exception rather than the rule: a typed map writes the same width every
-     time, so the common update path keeps the value inline for the node's whole
-     life. */
+  /* False while the bytes of the value sit in the allocation of this
+     node. Every node starts in that state. An update that changes the size of
+     the value moves the bytes into a buffer of their own, and it sets this
+     flag to true. The space inside the node is exactly the size that the
+     value had at creation, and that space cannot grow. A change of size is
+     the exception and not the rule. A typed map writes the same width every
+     time, so the common update path keeps the value inside the node for the
+     whole life of the node. */
   bool val_is_external;
 } bmap_node;
 
@@ -124,15 +128,29 @@ typedef struct cbinarymap {
   bmap_node *root;
   ccol_memmgmt_procs_t *m_procs;
   ccol_data_type key_type;
-  /* Derived from key_type once, when the map is created, because it cannot
-     change afterwards and every node built by this map would otherwise redo
-     the same switch on the path that builds it. */
+  /* The map computes this from key_type one time, at creation. The value
+     cannot change after that. Without this field, every node that the map
+     builds repeats the same switch on the path that builds it. */
   size_t key_alignment;
   ccol_comparison_proc_t custom_comparison_proc;
+  /* The offset of the key bytes inside every node, and the kind of
+     comparison that every descent of this map makes. Both follow from
+     key_type and custom_comparison_proc at creation and never change. A
+     descent therefore chooses its comparison once per call, reads the key it
+     looks for once, and reads each node key at this fixed offset; it does not
+     dispatch on the key type, compare two sizes and chase key_pair.ptr at
+     every node. */
+  size_t key_offset;
+  uint8_t cmp_kind;
 } cbinarymap;
 
-typedef struct cbmap_cmap_iterator {  // Extended cmap_iterator for cbmap
-  cbmap parent_map;
+typedef struct cbmap_cmap_iterator {  // A cmap_iterator with more fields
+  /* The free function of the allocator that made this iterator, or NULL for
+   * the default one. The scope-exit cleanup of ccol_iter_declare can free an
+   * iterator that a loop left early after the caller has already destroyed
+   * the map, and with it the procs struct that the map owns. Freeing the
+   * iterator must therefore never read the map. */
+  ccol_free_t free_fn;
   bmap_node *node_stack[CBMAP_MAX_TREE_HEIGHT];
   size_t node_stack_len;
   cmap_iterator user_iter;
@@ -142,19 +160,20 @@ typedef struct cbmap_cmap_iterator {  // Extended cmap_iterator for cbmap
   (cbmap_cmap_iterator *)((uint8_t *)u_iter - \
                           offsetof(cbmap_cmap_iterator, user_iter))
 
-// Helper structure for tracking parent-child relationships during tree
-// operations
+// Helper structure that keeps the parent-child relations during a tree
+// operation
 typedef struct node_stack_entry {
   bmap_node *node;
-  bmap_node **parent_link;  // Pointer to the parent's left or right pointer
+  bmap_node **parent_link;  // Points to the left or right pointer of the parent
 } node_stack_entry;
 
-/* Pushes node and all of its left descendants onto the iterator's node stack.
- * This implements the "visit left subtree first" invariant of the iterative
- * in-order traversal: the next pop will yield the smallest unvisited key in
- * this subtree. The stack is a fixed CBMAP_MAX_TREE_HEIGHT-entry array
- * embedded directly in the iterator, since at most one entry per tree level
- * is ever pending at a time (see CBMAP_MAX_TREE_HEIGHT's own comment). */
+/* Pushes node and all of its left descendants onto the node stack of the
+ * iterator. This keeps the "visit the left subtree first" invariant of the
+ * iterative in-order walk. The next pop then gives the smallest key of this
+ * subtree that the walk did not visit yet. The stack is a fixed array of
+ * CBMAP_MAX_TREE_HEIGHT entries inside the iterator itself. At most one entry
+ * for each tree level waits at one time (see the comment on
+ * CBMAP_MAX_TREE_HEIGHT). */
 static void push_all_lefts_into_iter_stack(cbmap_cmap_iterator *real_iter,
                                            bmap_node *node) {
   while (node) {
@@ -164,10 +183,12 @@ static void push_all_lefts_into_iter_stack(cbmap_cmap_iterator *real_iter,
   }
 }
 
-/* Pops one node from the iterator stack (the current in-order node), pushes
- * all left descendants of its right child, then updates the user-facing
- * key/val pair pointers. When the stack is empty the iterator is destroyed
- * and NULL is returned to signal end of traversal. */
+/* Pops one node from the stack of the iterator. That node is the current
+ * in-order node. The function then pushes all the left descendants of the
+ * right child of that node. It then updates the key pair pointer and the
+ * value pair pointer that the caller sees. If the stack is empty, the
+ * function destroys the iterator and returns NULL. The NULL shows that the
+ * walk is complete. */
 static cmap_iterator *cmap_real_iter_next(cbmap_cmap_iterator *real_iter) {
   if (real_iter->node_stack_len == 0) {
     // Nowhere to advance
@@ -184,10 +205,10 @@ static cmap_iterator *cmap_real_iter_next(cbmap_cmap_iterator *real_iter) {
   return &real_iter->user_iter;
 }
 
-/* Creates and returns an in-order iterator positioned at the first (smallest)
- * key. The iterator uses an explicit fixed-size stack (an array of
- * bmap_node* embedded directly in the iterator) to implement the traversal
- * iteratively. Returns NULL when the map is empty. */
+/* Creates an in-order iterator at the first key, which is the smallest key,
+ * and returns it. The iterator uses an explicit fixed-size stack to walk the
+ * tree iteratively. That stack is an array of bmap_node* inside the iterator
+ * itself. The function returns NULL when the map is empty. */
 static cmap_iterator *cbmap_iter_next(cmap_iterator *iter);
 
 cmap_iterator *cbmap_begin_iter(cbmap cbm, char **err) {
@@ -195,11 +216,11 @@ cmap_iterator *cbmap_begin_iter(cbmap cbm, char **err) {
     *err = NULL;
   }
 
-  // A NULL cbm is treated the same as an empty map (see this function's own
-  // doc comment in cbstmap.h): consistent with chashmap_begin_iter's
-  // identical, deliberate NULL-tolerance, so a lazily-created map field left
-  // uninitialized because nothing has been inserted into it yet can be
-  // iterated directly without every caller needing its own NULL guard first.
+  // This function treats a NULL cbm in the same way as an empty map. See the
+  // doc comment of this function in cbstmap.h. chashmap_begin_iter tolerates
+  // a NULL handle in the same deliberate way. A map field can stay
+  // uninitialized because the caller put nothing into it yet. The caller can
+  // iterate such a field directly. No caller needs its own NULL guard first.
   if (!cbm || !cbm->root) {
     return NULL;
   }
@@ -214,7 +235,7 @@ cmap_iterator *cbmap_begin_iter(cbmap cbm, char **err) {
   }
 
   real_iter->node_stack_len = 0;
-  real_iter->parent_map = cbm;
+  real_iter->free_fn = cbm->m_procs ? cbm->m_procs->free : NULL;
   real_iter->user_iter._next_fn = cbmap_iter_next;
   real_iter->user_iter._free_fn = __cbmap_iterator_destroy;
   real_iter->user_iter._direct_ptr = false;
@@ -222,8 +243,8 @@ cmap_iterator *cbmap_begin_iter(cbmap cbm, char **err) {
   return cmap_real_iter_next(real_iter);
 }
 
-/* Advances the iterator to the next in-order node and returns it. Returns NULL
- * (and destroys the iterator) when iteration is complete. */
+/* Moves the iterator to the next in-order node and returns it. The function
+ * returns NULL when the walk is complete, and it destroys the iterator. */
 static cmap_iterator *cbmap_iter_next(cmap_iterator *iter) {
   // Advance to the next node
   if (!iter) {
@@ -234,20 +255,92 @@ static cmap_iterator *cbmap_iter_next(cmap_iterator *iter) {
   return cmap_real_iter_next(real_iter);
 }
 
-/* Releases the iterator's node stack and the iterator struct itself. Called
- * automatically by cmap_real_iter_next when the end of traversal is reached,
- * but can also be called early to abort mid-iteration. */
+/* Frees the iterator struct, which holds its node stack inline.
+ * cmap_real_iter_next calls this function at the end of the walk. The caller
+ * can also call it early to stop the walk before its end. It reads nothing
+ * of the map, so it stays valid after the map is destroyed. */
 void __cbmap_iterator_destroy(cmap_iterator *iter) {
   if (iter) {
     cbmap_cmap_iterator *real_iter = cmapIter2CbmapIter(iter);
-    _ccol_mem_free(real_iter->parent_map->m_procs, real_iter);
+    ccol_free_t free_fn = real_iter->free_fn;
+    if (free_fn) {
+      free_fn(real_iter);
+    } else {
+      ccol_mem_free(real_iter);
+    }
   }
 }
 
-/* Validates the creation inputs for the BST map. Currently only validates the
- * memory management procedures; the key type needs no validation since all
- * ccol_data_type values are legal (an unrecognized value simply falls back to
- * memcmp comparison, the same as ccol_other_types). */
+/* Validates the creation inputs for the BST map. The function validates only
+ * the memory management procedures. The key type needs no validation,
+ * because every ccol_data_type value is legal. A value that the library does
+ * not recognize uses the memcmp comparison, in the same way as
+ * ccol_other_types. */
+/* The comparison that a descent makes. CBMAP_CMP_GENERIC goes through
+ * compare_keys(). Every other kind is a fixed-width integer key, or a plain
+ * char key, with no custom comparison proc: the descent compares two values
+ * of that type with < and ==, which is exactly the order that compare_keys()
+ * gives such a key (ccol_typed_cmp, and the native char for ccol_char). */
+enum {
+  CBMAP_CMP_GENERIC = 0,
+  CBMAP_CMP_CHAR,
+  CBMAP_CMP_S8,
+  CBMAP_CMP_S16,
+  CBMAP_CMP_S32,
+  CBMAP_CMP_S64,
+  CBMAP_CMP_U8,
+  CBMAP_CMP_U16,
+  CBMAP_CMP_U32,
+  CBMAP_CMP_U64
+};
+
+static uint8_t cbmap_cmp_kind(ccol_data_type key_type,
+                              ccol_comparison_proc_t custom_proc) {
+  if (custom_proc) return CBMAP_CMP_GENERIC;
+  size_t width = ccol_fixed_width_data_type_size(key_type);
+  switch (key_type) {
+    case ccol_char:
+      return CBMAP_CMP_CHAR;
+    case ccol_signed_char:
+    case ccol_short:
+    case ccol_int:
+    case ccol_long:
+    case ccol_long_long:
+      switch (width) {
+        case 1:
+          return CBMAP_CMP_S8;
+        case 2:
+          return CBMAP_CMP_S16;
+        case 4:
+          return CBMAP_CMP_S32;
+        case 8:
+          return CBMAP_CMP_S64;
+        default:
+          return CBMAP_CMP_GENERIC;
+      }
+    case ccol_unsigned_char:
+    case ccol_unsigned_short:
+    case ccol_unsigned_int:
+    case ccol_unsigned_long:
+    case ccol_unsigned_long_long:
+    case ccol_pointer:
+      switch (width) {
+        case 1:
+          return CBMAP_CMP_U8;
+        case 2:
+          return CBMAP_CMP_U16;
+        case 4:
+          return CBMAP_CMP_U32;
+        case 8:
+          return CBMAP_CMP_U64;
+        default:
+          return CBMAP_CMP_GENERIC;
+      }
+    default:
+      return CBMAP_CMP_GENERIC;
+  }
+}
+
 static bool verify_cbmap_create_inputs(ccol_memmgmt_procs_t *mmgmt_procs,
                                        char **err) {
   if (!ccol_verify_memmgmt_procs(mmgmt_procs, err)) {
@@ -258,8 +351,8 @@ static bool verify_cbmap_create_inputs(ccol_memmgmt_procs_t *mmgmt_procs,
 }
 
 /* Creates an empty AVL-balanced BST map. key_type selects the default
- * comparison strategy (see compare_keys()); custom_comparison_proc overrides
- * all built-in key comparison when non-NULL. */
+ * comparison strategy (see compare_keys()). A custom_comparison_proc that is
+ * not NULL replaces every built-in key comparison. */
 cbmap cbmap_create_full(ccol_data_type key_type,
                         ccol_memmgmt_procs_t *mmgmt_procs,
                         ccol_comparison_proc_t custom_comparison_proc,
@@ -290,15 +383,17 @@ cbmap cbmap_create_full(ccol_data_type key_type,
   cbm->key_type = key_type;
   cbm->key_alignment = cbmap_key_alignment(key_type);
   cbm->custom_comparison_proc = custom_comparison_proc;
+  cbm->key_offset = CBMAP_ALIGN_UP_TO(sizeof(bmap_node), cbm->key_alignment);
+  cbm->cmp_kind = cbmap_cmp_kind(key_type, custom_comparison_proc);
 
   return cbm;
 }
 
-/* Frees the node struct, and the value buffer only where an update moved the
- * value out of that struct's own allocation. The key never needs a free of its
- * own, and neither does a value that is still inline (see create_new_node).
- * Does not touch left/right pointers; callers must have already unlinked the
- * node. */
+/* Frees the node struct. It frees the value buffer only when an update moved
+ * the value out of the allocation of that struct. The key never needs a
+ * free of its own. A value that is still inside the node does not need one
+ * either (see create_new_node). This function does not touch the left and
+ * right pointers. The caller must unlink the node before this call. */
 static void destroy_bmap_node(cbmap cbm, bmap_node *node) {
   if (node) {
     if (node->val_is_external) {
@@ -308,11 +403,12 @@ static void destroy_bmap_node(cbmap cbm, bmap_node *node) {
   }
 }
 
-/* Destroys all nodes via an iterative post-order traversal using a fixed
- * CBMAP_MAX_TREE_HEIGHT-entry stack (see that constant's own comment for why
- * this bound is always sufficient). Post-order ensures both children are
- * freed before the parent so the parent's left/right pointers remain valid
- * during traversal. Resets root and elem_count to zero on completion. */
+/* Destroys all the nodes with an iterative post-order walk. The walk uses a
+ * fixed stack of CBMAP_MAX_TREE_HEIGHT entries. The comment on that constant
+ * explains why this bound is always enough. A post-order walk frees both
+ * children before the parent. The left and right pointers of the parent
+ * therefore stay valid during the walk. At the end, the function sets root to
+ * NULL and elem_count to zero. */
 static void _clear_nodes(cbmap cbm) {
   if (!cbm->root) {
     return;
@@ -331,14 +427,14 @@ static void _clear_nodes(cbmap cbm) {
       stack[stack_len++] = current;
       current = current->left;
     } else {
-      // Peek at the top of stack
+      // Look at the top of the stack
       bmap_node *peek = stack[stack_len - 1];
 
-      // If right child exists and not yet processed
+      // If a right child exists and the walk did not handle it yet
       if (peek->right && peek->right != last_visited) {
         current = peek->right;
       } else {
-        // Process this node (both children done)
+        // Handle this node. Both children are done
         --stack_len;
         destroy_bmap_node(cbm, peek);
         last_visited = peek;
@@ -350,7 +446,8 @@ static void _clear_nodes(cbmap cbm) {
   cbm->elem_count = 0;
 }
 
-/* Destroys all nodes then frees the map struct and its custom allocator. */
+/* Destroys all the nodes. It then frees the map struct and its custom
+ * allocator. */
 void __cbmap_destroy(cbmap cbm) {
   if (cbm) {
     _clear_nodes(cbm);
@@ -365,7 +462,7 @@ void __cbmap_destroy(cbmap cbm) {
   }
 }
 
-/* Returns the number of key-value pairs stored in the map. */
+/* Returns the number of key-value pairs that the map stores. */
 size_t cbmap_elem_count(cbmap cbm) {
   if (!cbm) {
     ccol_assert(false);
@@ -374,7 +471,8 @@ size_t cbmap_elem_count(cbmap cbm) {
   return cbm->elem_count;
 }
 
-/* Removes all entries from the map, leaving it empty but otherwise reusable. */
+/* Removes all the elements from the map. The map becomes empty, and the
+ * caller can still use it. */
 ccol_retval_t cbmap_reset(cbmap cbm) {
   if (!cbm) {
     ccol_assert(false);
@@ -385,18 +483,20 @@ ccol_retval_t cbmap_reset(cbmap cbm) {
   return ccol_success;
 }
 
-/* Compares two signed integers of size 1/2/4/8 bytes (signed
- * char/short/int/long/long_long) pointed to by ptr1 and ptr2. Using typed
- * dereferences rather than memcmp avoids sign-extension issues (e.g. 0xFF in
- * a signed byte is -1, not 255). Deliberately never invoked for ccol_char
- * (plain `char` keys): whether plain `char` is signed or unsigned is
- * platform-defined, and compare_keys() gives ccol_char its own dedicated case
- * using the native `char` type instead of forcing a signed int8_t
- * reinterpretation here, so a char key sorts exactly the way this platform's
- * own `<`/`>` on `char` would. A genuinely-declared `signed char` (or its
- * typedef, `int8_t`) key is a distinct type (ccol_signed_char) and gets a
- * real, platform-independent signed comparison here, same as every other
- * signed integer width. */
+/* Compares two signed integers of size 1, 2, 4 or 8 bytes. ptr1 and ptr2
+ * point at them. The types are signed char, short, int, long and long long.
+ * The function uses typed dereferences and not memcmp. A typed dereference
+ * has no sign-extension problem. For example, 0xFF in a signed byte is -1,
+ * and not 255. This function never runs for ccol_char, which is a plain
+ * `char` key. The C standard leaves the signedness of a plain `char` to the
+ * platform. This is why compare_keys() gives ccol_char its own case, and
+ * that case uses the native `char` type. The library does not force a signed
+ * int8_t reinterpretation on a plain `char` key. A char key then sorts
+ * exactly like the `<` and `>` operators of this platform on `char`. A key
+ * that the caller declares as `signed char`, or as its typedef `int8_t`, is
+ * a different type. That type is ccol_signed_char. It gets a real signed
+ * comparison here, and that comparison does not depend on the platform. The
+ * same is true for every other signed integer width. */
 static inline int cmp_signed_small(void *ptr1, void *ptr2, size_t size) {
   switch (size) {
     case 1: {
@@ -412,21 +512,22 @@ static inline int cmp_signed_small(void *ptr1, void *ptr2, size_t size) {
       return ccol_typed_cmp(ptr1, ptr2, int64_t);
     }
     default: {
-      // For non-standard sizes, just complain, as this should not
-      // have been classified as a 'signed' number
+      // For any other size, report a failure. The library must not classify
+      // such a key as a 'signed' number
       ccol_assert(false);
-      return 0;  // Unreachable: ccol_assert(false) always aborts. Present
-                 // only so this non-void function has a defined return on
-                 // every path, satisfying -Wreturn-type.
+      return 0;  // The code never reaches this line, because
+                 // ccol_assert(false) always aborts. The line is here so
+                 // that this non-void function has a defined return on every
+                 // path. This keeps -Wreturn-type quiet.
     }
   }
 }
 
-/* Compares two unsigned integers (or raw pointer values) of size 1/2/4/8
- * bytes, falling back to memcmp for non-standard sizes. Only ever invoked for
- * a key_type genuinely known to be an unsigned integer or a pointer; never
- * for an opaque struct that merely happens to share one of these sizes (see
- * ccol_other_types in compare_keys(), which always uses memcmp instead). */
+/* Compares two unsigned integers, or two raw pointer values, of size 1, 2, 4
+ * or 8 bytes. For any other size it uses memcmp. This function runs only for
+ * a key_type that the library knows to be an unsigned integer or a pointer.
+ * It never runs for an opaque struct that has one of these sizes. See
+ * ccol_other_types in compare_keys(), which always uses memcmp. */
 static inline int cmp_unsigned_small(void *ptr1, void *ptr2, size_t size) {
   switch (size) {
     case 1: {
@@ -447,37 +548,56 @@ static inline int cmp_unsigned_small(void *ptr1, void *ptr2, size_t size) {
   }
 }
 
-/* Three-way comparison for a floating-point type T, with an explicit NaN
- * rule: a BST requires a genuine strict total order to stay internally
- * consistent (every lookup/insert/delete descent must agree on which side of
- * any given node a key belongs on), and IEEE 754's native `<`/`>` cannot
- * provide that for NaN (both are false for any comparison involving a NaN
- * operand, silently collapsing to "equal" against every other key, including
- * completely unrelated ones). Ordering NaN as greater than every non-NaN
- * value, and equal only to another NaN, restores a real total order: NaN
- * keys sort together at the high end of the tree instead of each one
- * comparing "equal" to whatever node the search happens to visit first
- * (which silently corrupts that unrelated node's value instead of ever
- * inserting the NaN key at all). isnan() is a type-generic
- * (C99 <math.h>) macro, so this one helper serves float/double/long double
- * without needing a per-type variant. */
-#define cmp_float_val(T, ptr1, ptr2)                           \
-  ({                                                           \
-    T _v1 = *(T *)(ptr1);                                      \
-    T _v2 = *(T *)(ptr2);                                      \
-    bool _nan1 = isnan(_v1);                                   \
-    bool _nan2 = isnan(_v2);                                   \
-    (_nan1 || _nan2) ? (_nan1 == _nan2 ? 0 : (_nan1 ? 1 : -1)) \
-                     : (_v1 > _v2) - (_v1 < _v2);              \
+/* Three-way comparison for a floating-point type T. It has an explicit rule
+ * for NaN. A BST needs a real strict total order to stay consistent. Every
+ * descent for a lookup, an insert or a delete must agree on the side of a
+ * node that a key belongs to. The native `<` and `>` of IEEE 754 cannot give
+ * that order for NaN. Both operators are false for any comparison with a NaN
+ * operand. A NaN key then compares "equal" to every other key, and some of
+ * those keys have no relation to it. This macro orders NaN as greater than
+ * every non-NaN value, and equal only to another NaN. That rule gives a real
+ * total order. NaN keys then sort together at the high end of the tree.
+ * Without the rule, a NaN key compares "equal" to the first node that the
+ * search visits. The insert then corrupts the value of that unrelated node,
+ * and it never adds the NaN key. isnan() is a type-generic macro from the
+ * C99 <math.h>. This one helper serves float, double and long double. It
+ * needs no variant for each type. */
+/* The macro reads both operands with memcpy, and it does not dereference a
+ * pointer that it cast to T *. ccol_typed_cmp in common.h carries the full
+ * reasoning: a key pair that a caller built by hand and passed through
+ * cbmap_insert_elem, cbmap_get_elem_ref or cbmap_delete_elem carries neither
+ * an alignment guarantee for T nor an effective type of T. A constant-size
+ * memcpy compiles to the same single load.
+ *
+ * Each temporary carries a name that names this module. A caller of this
+ * macro supplies ptr1 and ptr2 as arbitrary expressions, and those
+ * expressions land inside the scope of these temporaries. A temporary called
+ * _v1 would capture a caller identifier of the same name and read an
+ * uninitialised value instead. */
+#define cmp_float_val(T, ptr1, ptr2)                 \
+  ({                                                 \
+    T _cbmap_cfv_lhs;                                \
+    T _cbmap_cfv_rhs;                                \
+    memcpy(&_cbmap_cfv_lhs, (ptr1), sizeof(T));      \
+    memcpy(&_cbmap_cfv_rhs, (ptr2), sizeof(T));      \
+    bool _cbmap_cfv_nan_lhs = isnan(_cbmap_cfv_lhs); \
+    bool _cbmap_cfv_nan_rhs = isnan(_cbmap_cfv_rhs); \
+    (_cbmap_cfv_nan_lhs || _cbmap_cfv_nan_rhs)       \
+        ? (_cbmap_cfv_nan_lhs == _cbmap_cfv_nan_rhs  \
+               ? 0                                   \
+               : (_cbmap_cfv_nan_lhs ? 1 : -1))      \
+        : (_cbmap_cfv_lhs > _cbmap_cfv_rhs) -        \
+              (_cbmap_cfv_lhs < _cbmap_cfv_rhs);     \
   })
 
-/* Compares two floating-point values pointed to by ptr1 and ptr2, dispatched
- * by the map's own declared key_type rather than by size, since long
- * double's size varies by platform (and can coincide with double's size on
- * some ABIs) in a way a size-based switch cannot disambiguate. Native
- * floating-point comparison orders negative and positive values correctly
- * and treats -0.0 and 0.0 as equal, unlike a raw bit-pattern
- * reinterpretation. See cmp_float_val's own comment for the NaN rule. */
+/* Compares two floating-point values. ptr1 and ptr2 point at them. The
+ * function dispatches on the declared key_type of the map, and not on the
+ * size. The size of a long double changes with the platform. On some ABIs it
+ * equals the size of a double. A switch on the size cannot separate the two
+ * in that case. A native floating-point comparison orders negative and
+ * positive values correctly. It also treats -0.0 and 0.0 as equal. A raw
+ * reinterpretation of the bit pattern does neither. See the comment on
+ * cmp_float_val for the NaN rule. */
 static inline int cmp_float_small(ccol_data_type key_type, void *ptr1,
                                   void *ptr2) {
   switch (key_type) {
@@ -491,29 +611,34 @@ static inline int cmp_float_small(ccol_data_type key_type, void *ptr1,
       return cmp_float_val(long double, ptr1, ptr2);
     }
     default: {
-      // Only ever called for one of the three floating-point key types.
+      // The library calls this function only for one of the three
+      // floating-point key types.
       ccol_assert(false);
-      return 0;  // Unreachable: ccol_assert(false) always aborts. Present
-                 // only so this non-void function has a defined return on
-                 // every path, satisfying -Wreturn-type.
+      return 0;  // The code never reaches this line, because
+                 // ccol_assert(false) always aborts. The line is here so
+                 // that this non-void function has a defined return on every
+                 // path. This keeps -Wreturn-type quiet.
     }
   }
 }
 
-/* Central key comparison dispatch. Priority: custom_comparison_proc > a
- * differing-size fallback (expected only for variable-length keys such as
- * strings) > a dispatch on the map's declared key_type. Keys of differing
- * sizes are compared on their common prefix then by length (shorter <
- * longer), which gives consistent BST ordering for variable-length keys.
+/* Central dispatch for the key comparison. The function tries three things,
+ * in this order. First it uses custom_comparison_proc. Then it uses the path
+ * for two keys of different sizes. That path runs only for keys of variable
+ * length, such as strings. Last it dispatches on the declared key_type of
+ * the map. For two keys of different sizes, the function compares the common
+ * prefix first, and then the length. A shorter key sorts before a longer
+ * one. This gives a consistent BST order for keys of variable length.
  *
- * The key_type dispatch deliberately distinguishes genuine signed integers,
- * genuine unsigned integers/pointers, genuine floating-point types, strings,
- * and everything else (ccol_other_types, e.g. a struct or enum key): only the
- * first three get a typed numeric reinterpretation, since that is only valid
- * for a type that is actually a number of that kind. Anything not
- * specifically recognized (including ccol_other_types) always falls back to
- * a raw memcmp of its representation, matching this module's own documented
- * behavior for struct keys regardless of the struct's size. */
+ * The dispatch on key_type separates five groups: real signed integers, real
+ * unsigned integers and pointers, real floating-point types, strings, and
+ * everything else. The last group is ccol_other_types, for example a struct
+ * key or an enum key. Only the first three groups get a typed numeric
+ * reinterpretation. That reinterpretation is only valid for a type that is a
+ * number of that kind. Every type that the dispatch does not recognize uses
+ * a raw memcmp of its representation, and this includes ccol_other_types.
+ * This matches the documented behavior of this module for a struct key, for
+ * any size of that struct. */
 static inline int compare_keys(cbmap cbm, const cmap_pair *key_pair1,
                                const cmap_pair *key_pair2) {
   if (cbm->custom_comparison_proc) {
@@ -521,15 +646,16 @@ static inline int compare_keys(cbmap cbm, const cmap_pair *key_pair1,
   }
 
   if (key_pair1->size != key_pair2->size) {
-    // Different sizes - compare common prefix, then by size. min_size == 0
-    // (one side is a zero-size key, stored as ptr == NULL, size == 0 by
-    // create_new_node) is skipped without calling memcmp at all: comparing
-    // zero bytes is unconditionally "equal" regardless of the pointers
-    // involved, but memcmp's own pointer parameters are declared nonnull
-    // (glibc's <string.h>, enforced by UBSan) even for a zero length, so
-    // calling it with a genuinely NULL pointer (as a zero-size key's own
-    // stored representation always is) is undefined behavior in its own
-    // right, independent of whether any byte is ever actually read.
+    // The sizes differ. Compare the common prefix first, then the size. The
+    // function calls no memcmp when min_size is 0. A min_size of 0 means
+    // that one side is a key of size zero. create_new_node stores such a key
+    // as ptr == NULL and size == 0. A comparison of zero bytes is always
+    // "equal", whatever the two pointers are. But the pointer parameters of
+    // memcmp are declared nonnull in the <string.h> of glibc, and UBSan
+    // enforces that even for a length of zero. A call to memcmp with a real
+    // NULL pointer is undefined behavior on its own. This is true even when
+    // memcmp reads no byte at all. The stored representation of a key of
+    // size zero always has such a NULL pointer.
     size_t min_size = ccol_min(key_pair1->size, key_pair2->size);
     int cmp =
         min_size == 0 ? 0 : memcmp(key_pair1->ptr, key_pair2->ptr, min_size);
@@ -537,33 +663,33 @@ static inline int compare_keys(cbmap cbm, const cmap_pair *key_pair1,
       return cmp;
     }
 
-    // Common prefix is equal, shorter string comes first
+    // The common prefix is equal. The shorter string comes first
     return (key_pair1->size > key_pair2->size) -
            (key_pair1->size < key_pair2->size);
   }
 
   switch (cbm->key_type) {
     case ccol_string: {
-      // A string key's own size always includes at least a null terminator
-      // (see _populate_cmap_pair), so key_pair1->size is never genuinely 0
-      // via any macro-driven call site; the guard is defensive, matching
-      // the identical one below for ccol_other_types, for a caller using
-      // the raw cbmap_insert_elem/cbmap_get_elem_ref layer directly with a
-      // hand-built, zero-size cmap_pair for a ccol_string-typed map.
+      // The size of a string key always includes at least a null terminator
+      // (see _populate_cmap_pair). key_pair1->size is never 0 for a call
+      // that comes through a macro. This guard is a standing defence. The
+      // same guard is below for ccol_other_types. It protects a caller that
+      // uses the raw cbmap_insert_elem or cbmap_get_elem_ref layer directly
+      // with a hand-built cmap_pair of size zero, on a map whose key type is
+      // ccol_string.
       if (key_pair1->size == 0) return 0;
       return memcmp(key_pair1->ptr, key_pair2->ptr, key_pair1->size);
     }
 
     case ccol_char: {
-      // Plain `char` is a distinct type from both `signed char` and
-      // `unsigned char`, and the C standard leaves its signedness
-      // platform-defined (e.g. signed on x86/x86_64, unsigned on the
-      // standard aarch64 AAPCS64 ABI). Comparing via the native `char` type
-      // itself (rather than forcing a signed int8_t reinterpretation)
-      // guarantees this default comparator always agrees with what this
-      // platform's own `<`/`>` on `char` would produce, matching how
-      // ccol_unsigned_char is already given its own, unforced comparison
-      // below.
+      // A plain `char` is a different type from both `signed char` and
+      // `unsigned char`. The C standard leaves its signedness to the
+      // platform. For example, it is signed on x86 and x86_64, and unsigned
+      // on the standard aarch64 AAPCS64 ABI. This case compares with the
+      // native `char` type itself. It does not force a signed int8_t
+      // reinterpretation. The default comparator then always agrees with the
+      // `<` and `>` operators of this platform on `char`. ccol_unsigned_char
+      // gets its own comparison below, in the same way.
       return ccol_typed_cmp(key_pair1->ptr, key_pair2->ptr, char);
     }
 
@@ -593,65 +719,242 @@ static inline int compare_keys(cbmap cbm, const cmap_pair *key_pair1,
 
     case ccol_other_types:
     default: {
-      // Arbitrary POD types (structs, unions, enums, bool, wchar_t, ...) have
-      // no numeric interpretation; order them by raw byte representation.
-      // key_pair1->size == 0 (a genuine, deliberately-zero-size key; see
-      // create_new_node's own NULL/size-0 representation for one) is
-      // checked before calling memcmp, for the same reason as the
-      // differing-sizes branch above: memcmp's pointer parameters are
-      // declared nonnull even for a zero length, and a zero-size key's own
-      // stored ptr genuinely is NULL, so calling memcmp here unconditionally
-      // is undefined behavior regardless of no byte ever actually being
-      // read. Two zero-size keys of this type are always equal.
+      // A POD type has no numeric interpretation. These types are structs,
+      // unions, enums, bool, wchar_t and other types of that kind. This case
+      // orders them by their raw byte representation. The case checks for
+      // key_pair1->size == 0 before it calls memcmp. That size is a real key
+      // of size zero, and create_new_node stores it as a NULL pointer with a
+      // size of 0. The reason for the check is the reason of the branch
+      // above for two different sizes. The pointer parameters of memcmp are
+      // declared nonnull even for a length of zero. The stored ptr of a key
+      // of size zero is NULL. A call to memcmp here without the check is
+      // undefined behavior, even when memcmp reads no byte at all. Two keys
+      // of size zero of this type are always equal.
       if (key_pair1->size == 0) return 0;
       return memcmp(key_pair1->ptr, key_pair2->ptr, key_pair1->size);
     }
   }
 }
 
-/* Allocates a new BST node. The key's bytes AND the value's bytes are both
- * carried in the node's own single allocation; neither starts in a buffer of
- * its own.
+/* Copies n bytes. A key or a value is most often a scalar of 1, 2, 4, 8 or
+ * 16 bytes, and for those sizes each case is a memcpy of constant length that
+ * the compiler turns into one load and one store, where a memcpy of a length
+ * known only at run time is a call into the C library. cbmap_move_bytes is
+ * the same for ranges that may overlap: a constant-size memmove loads every
+ * byte before it stores any. */
+#define CBMAP_SMALL_COPY_BODY(fn) \
+  switch (n) {                    \
+    case 1:                       \
+      fn(dst, src, 1);            \
+      break;                      \
+    case 2:                       \
+      fn(dst, src, 2);            \
+      break;                      \
+    case 4:                       \
+      fn(dst, src, 4);            \
+      break;                      \
+    case 8:                       \
+      fn(dst, src, 8);            \
+      break;                      \
+    case 16:                      \
+      fn(dst, src, 16);           \
+      break;                      \
+    default:                      \
+      fn(dst, src, n);            \
+      break;                      \
+  }
+static inline void cbmap_copy_bytes(void *restrict dst,
+                                    const void *restrict src, size_t n) {
+  CBMAP_SMALL_COPY_BODY(memcpy)
+}
+static inline void cbmap_move_bytes(void *dst, const void *src, size_t n) {
+  CBMAP_SMALL_COPY_BODY(memmove)
+}
+#undef CBMAP_SMALL_COPY_BODY
+
+/* The descents of this map. Both choose the comparison once per call from
+ * cbm->cmp_kind. For an integer or char key with no custom proc they read
+ * the key they look for once, read each node key at cbm->key_offset with a
+ * constant-size memcpy, and compare with < and ==; every other key goes
+ * through compare_keys(). Both rely on the caller having checked that a
+ * fixed-width key has the width of its type (key_size_matches_type_if_fixed_
+ * width), so the read of the key the caller passed never runs past its
+ * bytes. */
+#define CBMAP_FIND_TYPED(T)                                                    \
+  do {                                                                         \
+    T cbmap_want_;                                                             \
+    memcpy(&cbmap_want_, key_pair->ptr, sizeof(T));                            \
+    const size_t cbmap_off_ = cbm->key_offset;                                 \
+    bmap_node *cbmap_n_ = cbm->root;                                           \
+    while (cbmap_n_) {                                                         \
+      T cbmap_have_;                                                           \
+      memcpy(&cbmap_have_, (const char *)cbmap_n_ + cbmap_off_, sizeof(T));    \
+      if (cbmap_want_ == cbmap_have_) return cbmap_n_;                         \
+      cbmap_n_ = cbmap_want_ < cbmap_have_ ? cbmap_n_->left : cbmap_n_->right; \
+    }                                                                          \
+    return NULL;                                                               \
+  } while (0)
+
+/* Gives the node that holds key_pair, or NULL. */
+static inline bmap_node *cbmap_find_node(cbmap cbm, const cmap_pair *key_pair) {
+  switch (cbm->cmp_kind) {
+    case CBMAP_CMP_CHAR:
+      CBMAP_FIND_TYPED(char);
+    case CBMAP_CMP_S8:
+      CBMAP_FIND_TYPED(int8_t);
+    case CBMAP_CMP_S16:
+      CBMAP_FIND_TYPED(int16_t);
+    case CBMAP_CMP_S32:
+      CBMAP_FIND_TYPED(int32_t);
+    case CBMAP_CMP_S64:
+      CBMAP_FIND_TYPED(int64_t);
+    case CBMAP_CMP_U8:
+      CBMAP_FIND_TYPED(uint8_t);
+    case CBMAP_CMP_U16:
+      CBMAP_FIND_TYPED(uint16_t);
+    case CBMAP_CMP_U32:
+      CBMAP_FIND_TYPED(uint32_t);
+    case CBMAP_CMP_U64:
+      CBMAP_FIND_TYPED(uint64_t);
+    default:
+      break;
+  }
+  bmap_node *tracker = cbm->root;
+  while (tracker) {
+    int comparison = compare_keys(cbm, key_pair, &tracker->key_pair);
+    if (comparison == 0) return tracker;
+    tracker = comparison < 0 ? tracker->left : tracker->right;
+  }
+  return NULL;
+}
+#undef CBMAP_FIND_TYPED
+
+#define CBMAP_DESCEND_TYPED(T)                                             \
+  do {                                                                     \
+    T cbmap_want_;                                                         \
+    memcpy(&cbmap_want_, key_pair->ptr, sizeof(T));                        \
+    const size_t cbmap_off_ = cbm->key_offset;                             \
+    while (current) {                                                      \
+      T cbmap_have_;                                                       \
+      memcpy(&cbmap_have_, (const char *)current + cbmap_off_, sizeof(T)); \
+      if (cbmap_want_ == cbmap_have_) break;                               \
+      ccol_assert(len < CBMAP_MAX_TREE_HEIGHT);                            \
+      path[len++] = (node_stack_entry){current, link};                     \
+      if (cbmap_want_ < cbmap_have_) {                                     \
+        link = &current->left;                                             \
+        current = current->left;                                           \
+      } else {                                                             \
+        link = &current->right;                                            \
+        current = current->right;                                          \
+      }                                                                    \
+    }                                                                      \
+  } while (0)
+
+/* Walks from the root toward key_pair and records every node it passes in
+ * path, each with the link that points at it. It gives the node that holds
+ * the key, or NULL when the key is absent. *link_out is then the link that
+ * points at the node found, or the empty link where the key belongs. */
+static inline __attribute__((always_inline)) bmap_node *cbmap_descend_with_path(
+    cbmap cbm, const cmap_pair *key_pair, node_stack_entry *path,
+    size_t *path_len_out, bmap_node ***link_out) {
+  bmap_node *current = cbm->root;
+  bmap_node **link = &cbm->root;
+  size_t len = 0;
+  switch (cbm->cmp_kind) {
+    case CBMAP_CMP_CHAR:
+      CBMAP_DESCEND_TYPED(char);
+      break;
+    case CBMAP_CMP_S8:
+      CBMAP_DESCEND_TYPED(int8_t);
+      break;
+    case CBMAP_CMP_S16:
+      CBMAP_DESCEND_TYPED(int16_t);
+      break;
+    case CBMAP_CMP_S32:
+      CBMAP_DESCEND_TYPED(int32_t);
+      break;
+    case CBMAP_CMP_S64:
+      CBMAP_DESCEND_TYPED(int64_t);
+      break;
+    case CBMAP_CMP_U8:
+      CBMAP_DESCEND_TYPED(uint8_t);
+      break;
+    case CBMAP_CMP_U16:
+      CBMAP_DESCEND_TYPED(uint16_t);
+      break;
+    case CBMAP_CMP_U32:
+      CBMAP_DESCEND_TYPED(uint32_t);
+      break;
+    case CBMAP_CMP_U64:
+      CBMAP_DESCEND_TYPED(uint64_t);
+      break;
+    default:
+      while (current) {
+        int comparison = compare_keys(cbm, key_pair, &current->key_pair);
+        if (comparison == 0) break;
+        ccol_assert(len < CBMAP_MAX_TREE_HEIGHT);
+        path[len++] = (node_stack_entry){current, link};
+        if (comparison > 0) {
+          link = &current->right;
+          current = current->right;
+        } else {
+          link = &current->left;
+          current = current->left;
+        }
+      }
+      break;
+  }
+  *path_len_out = len;
+  *link_out = link;
+  return current;
+}
+#undef CBMAP_DESCEND_TYPED
+
+/* Allocates a new BST node. One single allocation of the node carries the key
+ * bytes and the value bytes. Neither one starts in a buffer of its own.
  *
- * Nothing here frees node->key_pair.ptr, and nothing frees node->val_pair.ptr
- * unless val_is_external says an update moved that value out. Freeing either
- * unconditionally is a free of an interior pointer, which is heap corruption
- * rather than a leak, so read destroy_bmap_node and val_is_external's own
- * comment before changing what this function allocates.
+ * This function never frees node->key_pair.ptr. It frees node->val_pair.ptr
+ * only when val_is_external says that an update moved that value out. A free
+ * of one of these two pointers without that condition is a free of an
+ * interior pointer. That is heap corruption, and not a leak. Read
+ * destroy_bmap_node and the comment on val_is_external before you change what
+ * this function allocates.
  *
- * The key is immutable for the node's whole life: nothing here resizes one, and
- * a removal that needs a replacement relinks the donor node rather than copying
- * its contents (see perform_element_removal), so a key never has to outlive or
- * move between nodes. Carrying both inline saves two allocations per node, and
- * for the key it also removes the pointer chase every comparison along a search
- * path would otherwise pay: a traversal reads keys only, and reading them from
- * the node it has already loaded is what keeps a descent inside the cache lines
- * it has already taken. Only the value can be resized by an update, and that is
- * what moves it out.
+ * The key does not change for the whole life of the node. This function never
+ * resizes a key. A removal that needs a replacement relinks the donor node
+ * and does not copy its contents (see perform_element_removal). A key never
+ * has to outlive a node or to move between nodes. One allocation for all
+ * three parts saves two allocations for each node. For the key it also
+ * removes a pointer chase. Every comparison along a search path pays that
+ * chase when the key sits in a buffer of its own. A walk reads only keys. It
+ * reads them from the node that it already loaded, and this keeps a descent
+ * inside the cache lines that it already took. Only an update can change the
+ * size of a value, and that is what moves the value out.
  *
- * A zero-size key or value is never passed to the allocator: malloc(0) is
- * permitted by the C standard to return either NULL or a unique pointer, so
- * treating a NULL result as "allocation failed" would misreport a genuine
- * zero-byte key/value as ccol_not_enough_memory under an allocator that
- * legitimately chooses NULL for a zero-size request. A zero-size pair is
- * instead stored as ptr == NULL, size == 0, which every reader in this file
- * (compare_keys' memcmp, create_new_node's and cbmap_get_elem_copy's own
- * size-guarded copies, destroy_bmap_node's _ccol_mem_free) already handles
- * safely for a zero length. */
+ * This function never gives a key or a value of size zero to the allocator.
+ * The C standard lets malloc(0) return NULL or a unique pointer. An allocator
+ * can legally choose NULL for a request of size zero. A test of the result
+ * against NULL then reports a real key or value of zero bytes as
+ * ccol_not_enough_memory. A pair of size zero is stored as ptr == NULL and
+ * size == 0 instead. Every reader in this file already handles that
+ * representation safely for a length of zero. Those readers are the memcmp of
+ * compare_keys, the size-guarded copies of create_new_node and
+ * cbmap_get_elem_copy, and the _ccol_mem_free of destroy_bmap_node. */
 static bmap_node *create_new_node(cbmap cbm, const cmap_pair *key_pair,
                                   const cmap_pair *val_pair) {
-  /* Node, key and value are one allocation, so the byte count is formed here
-     rather than left to the allocator; a size that made this sum wrap would
-     otherwise become a small allocation that succeeds, followed by copies
-     through it. Each term is checked against what remains, so no intermediate
+  /* The node, the key and the value are one allocation. This function forms
+     the byte count here, and it does not leave that to the allocator. Without
+     these checks, a size that makes this sum wrap becomes a small allocation
+     that succeeds, and copies through that small block then follow. The
+     function checks each term against what remains, so no intermediate value
      can overflow either. */
-  /* Each offset is rounded to what the thing stored there actually needs: the
-     key to its own declared type's requirement, the value to the strongest,
-     since its type is not recorded. Rounding the key to max_align_t instead
-     would push its bytes past the end of the struct's own 64-byte span for
-     every key narrower than that, and that span is what a descent has already
-     loaded by the time it compares. */
-  size_t key_offset = CBMAP_ALIGN_UP_TO(sizeof(bmap_node), cbm->key_alignment);
+  /* Each offset is rounded to what the object at that offset needs. The key
+     is rounded to the requirement of its own declared type. The value is
+     rounded to the strongest alignment, because the map does not record the
+     type of a value. A key that is rounded to max_align_t starts past the end
+     of the 64-byte span of the struct, for every key that is narrower than
+     max_align_t. A descent has already loaded that span when it compares. */
+  size_t key_offset = cbm->key_offset;
   if (key_pair->size > SIZE_MAX - key_offset - CBMAP_NODE_VAL_ALIGN) {
     return NULL;
   }
@@ -666,25 +969,27 @@ static bmap_node *create_new_node(cbmap cbm, const cmap_pair *key_pair,
     return NULL;
   }
 
-  /* A zero-size key or value keeps the NULL/size-0 representation every reader
-     in this file already handles, rather than pointing one past the block. */
+  /* A key or a value of size zero keeps the representation with a NULL
+     pointer and a size of 0. Every reader in this file already handles that
+     representation. The pointer does not point one past the block. */
   new_node->key_pair.ptr =
       (key_pair->size > 0) ? (char *)new_node + key_offset : NULL;
   new_node->val_pair.ptr =
       (val_pair->size > 0) ? (char *)new_node + val_offset : NULL;
   new_node->val_is_external = false;
 
-  /* Guarded on size because a zero-size key or value carries a NULL pointer
-     here, which is this file's representation of empty, and memcpy declares
-     both of its pointer parameters as never null even for a zero length.
-     Without these guards UndefinedBehaviorSanitizer reports "null pointer
-     passed as argument 1, which is declared to never be null". */
+  /* These copies are guarded on the size. A key or a value of size zero
+     carries a NULL pointer here, and that is the representation of empty in
+     this file. memcpy declares both of its pointer parameters as never null,
+     even for a length of zero. Without these guards,
+     UndefinedBehaviorSanitizer reports "null pointer passed as argument 1,
+     which is declared to never be null". */
   if (key_pair->size > 0) {
-    memcpy(new_node->key_pair.ptr, key_pair->ptr, key_pair->size);
+    cbmap_copy_bytes(new_node->key_pair.ptr, key_pair->ptr, key_pair->size);
   }
   new_node->key_pair.size = key_pair->size;
   if (val_pair->size > 0) {
-    memcpy(new_node->val_pair.ptr, val_pair->ptr, val_pair->size);
+    cbmap_copy_bytes(new_node->val_pair.ptr, val_pair->ptr, val_pair->size);
   }
   new_node->val_pair.size = val_pair->size;
 
@@ -695,8 +1000,8 @@ static bmap_node *create_new_node(cbmap cbm, const cmap_pair *key_pair,
   return new_node;
 }
 
-/* Returns the larger of x and y. Implemented locally to avoid pulling in
- * <stdlib.h> just for a two-argument max. */
+/* Returns the larger value of x and y. This file has its own version so that
+ * it does not include <stdlib.h> only for a max of two arguments. */
 static size_t maximum(size_t x, size_t y) {
   if (x >= y) {
     return x;
@@ -704,31 +1009,34 @@ static size_t maximum(size_t x, size_t y) {
   return y;
 }
 
-/* Overwrites the value of an existing node. If the new value has a different
- * size a reallocation is attempted; on failure the old value and size are
- * preserved and *result is left unchanged so the caller sees
- * ccol_not_enough_memory. On success, both the value bytes and the size field
- * are updated and *result is set to ccol_key_already_present.
+/* Writes over the value of a node that is already in the map. If the new
+ * value has a different size, the function tries a new allocation. On a
+ * failure it keeps the old value and the old size, and it does not change
+ * *result. The caller then sees ccol_not_enough_memory. On success it updates
+ * the value bytes and the size field, and it sets *result to
+ * ccol_key_already_present.
  *
- * A value whose size does not change is written straight into wherever it
- * already lives, which for almost every map is the node's own allocation: a
- * typed map writes the same width every time. Only a size change moves the
- * value out to a buffer of its own, because the room reserved inside the node
- * is exactly the size the value was created with. That move is one way, and
- * deliberately so: the node does not record how much room it reserved, so a
- * value that later shrinks back stays in its own buffer rather than being
- * placed back inside the node on an assumption about space that is no longer
- * known. The allocator is never asked to realloc a pointer into the node's own
- * block, which would be undefined; the new buffer is allocated first and the
- * old one released only once that has succeeded, so a failure leaves the node
- * exactly as it was and the caller sees ccol_not_enough_memory.
+ * A value whose size does not change goes straight into the place where it
+ * already is. For almost every map that place is the allocation of the
+ * node, because a typed map writes the same width every time. Only a change
+ * of size moves the value out into a buffer of its own. The room inside the
+ * node is exactly the size that the value had at creation. That move goes
+ * only one way, and this is deliberate. The node does not record how much
+ * room it reserved. A value that becomes smaller later stays in its own
+ * buffer. The function does not put it back inside the node, because the
+ * space inside the node is no longer known. The function never asks the
+ * allocator to realloc a pointer into the block of the node, which is
+ * undefined. It allocates the new buffer first. It frees the old buffer only
+ * after the new allocation succeeds. A failure leaves the node exactly as it
+ * was, and the caller sees ccol_not_enough_memory.
  *
- * A new size of 0 frees any buffer the value had moved out to and stores the
- * same NULL/size-0 representation create_new_node uses for a zero-size value,
- * rather than asking realloc for zero bytes, whose behavior the C standard
- * leaves implementation-defined and which glibc answers by freeing and
- * returning NULL, indistinguishable through the return value alone from a
- * failure that left the old buffer valid. */
+ * A new size of 0 frees any buffer that the value moved out to. It then
+ * stores the representation with a NULL pointer and a size of 0, which is the
+ * representation that create_new_node uses for a value of size zero. The
+ * function does not ask realloc for zero bytes. The C standard leaves that
+ * behavior to the implementation. glibc answers such a request with a free
+ * and a NULL return. The return value alone cannot separate that answer from
+ * a failure that left the old buffer valid. */
 static void update_bmap_node_value(cbmap cbm, bmap_node *node,
                                    const cmap_pair *val_pair,
                                    ccol_retval_t *result) {
@@ -746,15 +1054,16 @@ static void update_bmap_node_value(cbmap cbm, bmap_node *node,
 
     void *new_ptr = _ccol_mem_alloc(cbm->m_procs, val_pair->size);
     if (!new_ptr) {
-      // allocation attempt failed; the node keeps the value it already had
+      // The allocation failed. The node keeps the value that it already had
       return;
     }
-    /* Copied into the new storage BEFORE the old storage is released, and the
-       function returns here rather than falling through to the copy below.
-       val_pair->ptr may BE the storage about to be freed: cbmap_get_elem_ref
-       hands a caller a pointer into the node's own value, and handing it back
-       to resize that value is an ordinary thing to do. Reading it after the
-       free is a use-after-free that AddressSanitizer reports. */
+    /* This copy goes into the new storage BEFORE the function frees the old
+       storage. The function then returns here and does not fall through to
+       the copy below. val_pair->ptr can BE the storage that the function is
+       about to free. cbmap_get_elem_ref gives a caller a pointer into the own
+       value of the node, and a caller can normally give that pointer back to
+       resize the value. A read of that pointer after the free is a
+       use-after-free that AddressSanitizer reports. */
     memcpy(new_ptr, val_pair->ptr, val_pair->size);
     if (node->val_is_external) {
       _ccol_mem_free(cbm->m_procs, node->val_pair.ptr);
@@ -765,18 +1074,19 @@ static void update_bmap_node_value(cbmap cbm, bmap_node *node,
     *result = ccol_key_already_present;
     return;
   }
-  /* Same size, so the value is written where it already lives. The source may
-     alias that storage for the same reason as above; nothing is freed on this
-     path, but a copy whose ranges overlap is still undefined, so it goes
-     through memmove's semantics rather than memcpy's. */
+  /* The size is the same, so the value goes where it already is. The source
+     can alias that storage, for the same reason as above. This path frees
+     nothing. But a copy whose ranges overlap is still undefined. This is why
+     the copy uses memmove and not memcpy. */
   if (node->val_pair.ptr != val_pair->ptr && val_pair->size > 0) {
-    memmove(node->val_pair.ptr, val_pair->ptr, val_pair->size);
+    cbmap_move_bytes(node->val_pair.ptr, val_pair->ptr, val_pair->size);
   }
   *result = ccol_key_already_present;
 }
 
-/* Returns the height of a node, or 0 for NULL. Leaf nodes start at height 1,
- * so the NULL sentinel is 0 and all arithmetic stays in size_t. */
+/* Returns the height of a node. It returns 0 for NULL. A leaf node starts at
+ * height 1, so the NULL sentinel is 0 and all the arithmetic stays in
+ * size_t. */
 static size_t node_height(bmap_node *node) {
   if (!node) {
     return 0;
@@ -785,8 +1095,9 @@ static size_t node_height(bmap_node *node) {
   return node->height;
 }
 
-/* Returns the balance factor of a node as right_height - left_height.
- * A value outside [-1, 1] means the node violates the AVL invariant. */
+/* Returns the balance factor of a node. The factor is right_height minus
+ * left_height. A value outside [-1, 1] means that the node breaks the AVL
+ * invariant. */
 static int node_balance(bmap_node *node) {
   if (!node) {
     return 0;
@@ -795,30 +1106,33 @@ static int node_balance(bmap_node *node) {
   return (int)node_height(node->right) - (int)node_height(node->left);
 }
 
-/* Recomputes node->height from the heights of its children. Must be called
- * after any rotation or structural change to keep the height metadata accurate
- * for balance factor calculations up the ancestor chain. */
+/* Computes node->height again from the heights of its children. The caller
+ * must call this function after every rotation and after every change to the
+ * structure. This keeps the height data correct for the balance factor
+ * computations up the chain of ancestors. */
 static void recalculate_node_height(bmap_node *node) {
   if (!node) {
     return;
   }
 
-  /* The narrowing is unconditional rather than checked. An AVL tree's height is
-     bounded by roughly 1.44*log2(n+2), and a node count is bounded by the
-     address space, so the tallest tree any 64-bit target can hold is about 92
-     levels; the field holds 255. The only way to reach a height this cast could
-     truncate is to raise CBMAP_MAX_TREE_HEIGHT past what one byte holds, which
-     is what the _Static_assert beside that constant refuses at compile time. A
-     run-time check here would sit on the path every insert walks and could
+  /* The cast narrows the value without a check. The height of an AVL tree is
+     not more than about 1.44*log2(n+2). The address space bounds the node
+     count. The tallest tree that any 64-bit target can hold is therefore
+     about 92 levels, and the field holds 255. Only one thing can make this
+     cast truncate: a CBMAP_MAX_TREE_HEIGHT above what one byte holds. The
+     _Static_assert beside that constant refuses such a value at compile time.
+     A run-time check here would sit on the path of every insert, and it could
      never fire. */
   node->height =
       (uint8_t)(maximum(node_height(node->left), node_height(node->right)) + 1);
 }
 
-/* Restores the AVL invariant at parent if needed, performing one of four
- * rotations: simple left, simple right, right-left double, or left-right
- * double. Returns the new subtree root after the rotation (which may be a
- * different node). Heights are recalculated bottom-up after each rotation. */
+/* Restores the AVL invariant at parent when the tree needs it. The function
+ * does one of four rotations: a simple left one, a simple right one, a
+ * right-left double one, or a left-right double one. It returns the new root
+ * of the subtree after the rotation, and that root can be a different node.
+ * The function computes the heights again, from the bottom up, after each
+ * rotation. */
 static bmap_node *check_node_balance(bmap_node *parent) {
   recalculate_node_height(parent);
   int balance = node_balance(parent);
@@ -834,7 +1148,7 @@ static bmap_node *check_node_balance(bmap_node *parent) {
         parent = parent->right;
         p->right = parent->left;
         parent->left = p;
-        // Recalculate heights bottom-up
+        // Compute the heights again, from the bottom up
         recalculate_node_height(p);
         recalculate_node_height(parent);
       } else {  // node_balance(parent->right) < 0
@@ -846,7 +1160,7 @@ static bmap_node *check_node_balance(bmap_node *parent) {
         parent->right = p->right;
         parent->right->left = rl_right;
         parent->left->right = rl_left;
-        // Recalculate heights for both children, then parent
+        // Compute the heights of both children again, then the parent
         recalculate_node_height(parent->left);
         recalculate_node_height(parent->right);
         recalculate_node_height(parent);
@@ -858,7 +1172,7 @@ static bmap_node *check_node_balance(bmap_node *parent) {
         parent = parent->left;
         p->left = parent->right;
         parent->right = p;
-        // Recalculate heights bottom-up
+        // Compute the heights again, from the bottom up
         recalculate_node_height(p);
         recalculate_node_height(parent);
       } else {  // node_balance(parent->left) > 0
@@ -870,7 +1184,7 @@ static bmap_node *check_node_balance(bmap_node *parent) {
         parent->left = p->left;
         parent->left->right = lr_left;
         parent->right->left = lr_right;
-        // Recalculate heights for both children, then parent
+        // Compute the heights of both children again, then the parent
         recalculate_node_height(parent->left);
         recalculate_node_height(parent->right);
         recalculate_node_height(parent);
@@ -885,20 +1199,21 @@ static bmap_node *check_node_balance(bmap_node *parent) {
   return parent;
 }
 
-/* Detaches and returns the minimum (max=false) or maximum (max=true) node from
- * the subtree rooted at root. The replacement node (the detached node's only
- * child, if any) is linked into the parent's slot. The ancestor path is then
- * rebalanced bottom-up using check_node_balance. Used by
- * perform_element_removal to find an in-order successor/predecessor without
- * recursive calls.
+/* Detaches the minimum node or the maximum node of the subtree at root, and
+ * returns it. A max of false selects the minimum node. A max of true selects
+ * the maximum node. The detached node can have one child. The function links
+ * that child into the slot of the parent. It then balances the ancestor path
+ * again, from the bottom up, with check_node_balance.
+ * perform_element_removal uses this function to find an in-order successor or
+ * predecessor without any recursive call.
  *
- * The ancestor path is tracked in a fixed CBMAP_MAX_TREE_HEIGHT-entry array
- * rather than a heap-allocated stack, so this function has no allocation to
- * fail: unlike a heap allocation, which could otherwise abort the whole
- * process under memory pressure on what is supposed to be a graceful
- * deletion path, this can only ever fail via the same
- * provably-unreachable-for-a-real-AVL-tree depth bound the rest of this file
- * already treats as structurally impossible (see CBMAP_MAX_TREE_HEIGHT). */
+ * The function keeps the ancestor path in a fixed array of
+ * CBMAP_MAX_TREE_HEIGHT entries, and not in a stack on the heap. This
+ * function therefore has no allocation that can fail. A heap allocation can
+ * abort the whole process under memory pressure, on a delete path that must
+ * stay graceful. This function can only fail through the same depth bound
+ * that the rest of this file treats as structurally impossible for a real AVL
+ * tree (see CBMAP_MAX_TREE_HEIGHT). */
 static bmap_node *cbmap_detach_extreme_iter(bmap_node *root, bool max,
                                             bmap_node **extreme) {
   if (!root) {
@@ -938,15 +1253,16 @@ static bmap_node *cbmap_detach_extreme_iter(bmap_node *root, bool max,
     }
   }
 
-  // Replace extreme node with its child
+  // Replace the extreme node with its child
   bmap_node *replacement = max ? current->left : current->right;
 
-  // Update parent link or return replacement if extreme was root
+  // Update the parent link. Return the replacement if the extreme node is
+  // the root
   if (path_len == 0) {
     return replacement;
   }
 
-  // Update the last parent's child pointer
+  // Update the child pointer of the last parent
   node_stack_entry last_entry = path[path_len - 1];
   if (max) {
     last_entry.node->right = replacement;
@@ -954,12 +1270,12 @@ static bmap_node *cbmap_detach_extreme_iter(bmap_node *root, bool max,
     last_entry.node->left = replacement;
   }
 
-  // Rebalance from bottom to top
+  // Balance the tree again, from the bottom to the top
   for (size_t i = path_len; i-- > 0;) {
     node_stack_entry entry = path[i];
     bmap_node *balanced = check_node_balance(entry.node);
 
-    // Update parent's pointer using the parent_link from the path
+    // Update the pointer of the parent with the parent_link from the path
     if (entry.parent_link) {
       *(entry.parent_link) = balanced;
     } else {
@@ -974,47 +1290,78 @@ static bmap_node *cbmap_detach_extreme_iter(bmap_node *root, bool max,
 /* A key of a fixed-width key type must arrive at exactly that type's own
  * size, on every raw-layer entry point that takes a key_pair.
  *
- * compare_keys() orders two keys of differing sizes by their common prefix
- * and then by size, which is what gives a variable-width key type
- * (ccol_string, ccol_other_types) its total order. Letting that same rule
- * apply to a fixed-width key type would silently turn a mistyped key (a long
- * handed to an int-keyed map) into a genuinely distinct key that no
- * correctly typed lookup can ever reach again, with nothing reported at any
- * point. A custom_comparison_proc does not make the mismatch harmless
- * either: it is handed two bare pointers and no sizes, so it can only read a
- * width fixed by the declared key type, and a shorter key_pair makes it read
- * past the caller's own buffer.
+ * compare_keys() orders two keys of different sizes by their common prefix
+ * first, and then by their size. That rule gives a key type of variable
+ * width its total order. Such key types are ccol_string and
+ * ccol_other_types. The same rule on a fixed-width key type turns a key of
+ * the wrong type into a different key. An example is a long that a caller
+ * gives to a map with int keys. No lookup with the correct type can reach
+ * that key again, and nothing reports the mistake. A custom_comparison_proc
+ * does not make the mismatch harmless. It gets two bare pointers and no
+ * sizes, so it can only read the width of the declared key type. A shorter
+ * key_pair then makes it read past the buffer of the caller.
  *
  * ccol_fixed_width_data_type_size() reports 0 for a key type whose width is
- * genuinely not fixed, which is what lets a string or struct key keep
- * arriving at any size (including 0) exactly as before. chashmap enforces
- * the identical rule through the same helper, so the two map modules agree
- * on which key types it covers. */
+ * not fixed. This is what lets a string key or a struct key arrive at any
+ * size, 0 included. chashmap enforces the same rule through the same helper.
+ * The two map modules therefore agree on the key types that the rule
+ * covers. */
 static inline bool key_size_matches_type_if_fixed_width(
     cbmap cbm, const cmap_pair *key_pair) {
   size_t fixed_width = ccol_fixed_width_data_type_size(cbm->key_type);
   return fixed_width == 0 || key_pair->size == fixed_width;
 }
 
-/* Inserts or updates a key-value pair. Uses an explicit, fixed-size path
- * array (see CBMAP_MAX_TREE_HEIGHT) to record the ancestor chain so the tree
- * can be rebalanced bottom-up after insertion without recursion and without
- * a heap allocation on every call. Returns ccol_key_already_present when the
- * key already exists and its value was updated successfully. */
+/* Answers the question whether a pair from the caller describes bytes that
+ * the library can read. Every reader in this file trusts the size of the
+ * pair. Those readers are the memcmp of compare_keys, the copy of
+ * create_new_node and the copy of update_bmap_node_value. A NULL pointer with
+ * a non-zero size is a read through a null pointer, and not a lookup miss.
+ * Without this check, the first such call gets a segmentation fault inside
+ * memcpy or memcmp.
+ *
+ * A size of 0 stays legal, with a pointer or without one. That is the
+ * representation of an empty key or value in this module, and every reader
+ * here already handles it. chashmap differs on exactly that point, because it
+ * rejects a pair of size zero. The two map modules agree on the null-pointer
+ * half of the rule. They part on the zero-size half, and this is
+ * deliberate. */
+static inline bool pair_bytes_are_readable(const cmap_pair *pair) {
+  return pair->ptr != NULL || pair->size == 0;
+}
+
+/* Inserts a key-value pair, or updates one that is already in the map. The
+ * function records the chain of ancestors in an explicit, fixed-size path
+ * array (see CBMAP_MAX_TREE_HEIGHT). With that array it can balance the tree
+ * again after the insert, from the bottom up, with no recursion and with no
+ * heap allocation on any call. The function returns ccol_key_already_present
+ * when the key is already in the map and the update of its value succeeds. */
 ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
                                 const cmap_pair *val_pair) {
   if (!cbm) {
     ccol_assert(false);
   }
 
+  /* This function reads a pair from the caller. It does not only pass the
+     pair on. It therefore reports a NULL pair, and a pair that promises
+     bytes but has no pointer to them. It does not dereference either one.
+     chmap_insert_elem rejects both of them in the same way. It also rejects
+     a key or a value of size zero, and this module accepts one (see
+     pair_bytes_are_readable). */
+  if (!key_pair || !val_pair || !pair_bytes_are_readable(key_pair) ||
+      !pair_bytes_are_readable(val_pair)) {
+    return ccol_invalid_args;
+  }
+
   if (!key_size_matches_type_if_fixed_width(cbm, key_pair)) {
     return ccol_invalid_args;
   }
 
-  // Handle empty tree case. elem_count is always 0 here (root is only ever
-  // NULL when the map is empty), so no capacity check is needed: this is
-  // always a genuinely new element, and ccol_max_elem_count (a real, if
-  // astronomically large, cap) can never already be reached.
+  // Handle the case of an empty tree. elem_count is always 0 here, because
+  // root is NULL only when the map is empty. No capacity check is needed
+  // here. This is always a new element, and the map can never hold
+  // ccol_max_elem_count elements at this point. That cap is real, but it is
+  // very large.
   if (!cbm->root) {
     cbm->root = create_new_node(cbm, key_pair, val_pair);
     if (!cbm->root) {
@@ -1024,46 +1371,31 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
     return ccol_success;
   }
 
-  // Fixed-size stack to track path from root to insertion point
+  // A fixed-size stack that keeps the path from the root to the insert point
   node_stack_entry path[CBMAP_MAX_TREE_HEIGHT];
   size_t path_len = 0;
-
-  bmap_node *current = cbm->root;
-  bmap_node **parent_link = &(cbm->root);
+  bmap_node **parent_link = NULL;
   ccol_retval_t result = ccol_not_enough_memory;
 
-  // Navigate to insertion point or existing key
-  while (current) {
-    int comparison = compare_keys(cbm, key_pair, &current->key_pair);
-
-    if (comparison == 0) {
-      // Key already exists - update value
-      update_bmap_node_value(cbm, current, val_pair, &result);
-      return result;
-    }
-
-    // Push current node onto path
-    ccol_assert(path_len < CBMAP_MAX_TREE_HEIGHT);
-    path[path_len++] = (node_stack_entry){current, parent_link};
-
-    if (comparison > 0) {
-      parent_link = &(current->right);
-      current = current->right;
-    } else {
-      parent_link = &(current->left);
-      current = current->left;
-    }
+  // Go to the insert point, or to the key that is already in the map
+  bmap_node *existing =
+      cbmap_descend_with_path(cbm, key_pair, path, &path_len, &parent_link);
+  if (existing) {
+    // The key is already in the map. Update its value
+    update_bmap_node_value(cbm, existing, val_pair, &result);
+    return result;
   }
 
-  // Key genuinely not found: this insertion would grow elem_count, so this
-  // is the correct point to enforce the capacity cap (checked only now,
-  // after confirming the key doesn't already exist, so updating an existing
-  // key's value at a full map still succeeds rather than being rejected).
+  // The key is not in the map. This insert grows elem_count, so this is the
+  // correct point for the capacity cap. The function checks the cap only
+  // here, after it confirms that the key is not in the map. An update of the
+  // value of a key in a full map therefore still succeeds, and the function
+  // does not reject it.
   if (cbm->elem_count == ccol_max_elem_count) {
     return ccol_container_full;
   }
 
-  // Create new node at insertion point
+  // Create a new node at the insert point
   bmap_node *new_node = create_new_node(cbm, key_pair, val_pair);
   if (!new_node) {
     return ccol_not_enough_memory;
@@ -1072,17 +1404,30 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
   *parent_link = new_node;
   result = ccol_success;
 
-  // Rebalance from bottom to top
+  /* Balance the tree again, from the bottom up, and stop as soon as the
+     height of a subtree is the height it had before the insert. Every
+     ancestor above that point then sees the same child heights as before, so
+     it needs neither a new height nor a rotation. An insert into an AVL tree
+     causes at most one rotation, and that rotation gives its subtree back
+     the height it had before the insert, so the walk also stops right after
+     it. Without the stop, every insert recomputes the height of every
+     ancestor and reads both children of each, which touches nodes off the
+     search path all the way to the root. */
   for (size_t i = path_len; i-- > 0;) {
     node_stack_entry entry = path[i];
+    size_t height_before = entry.node->height;
     bmap_node *balanced = check_node_balance(entry.node);
 
-    // Update parent's pointer to this node
+    // Update the pointer of the parent to this node
     if (entry.parent_link) {
       *(entry.parent_link) = balanced;
     } else {
       // This is the root
       cbm->root = balanced;
+    }
+
+    if (balanced != entry.node || balanced->height == height_before) {
+      break;
     }
   }
 
@@ -1090,80 +1435,84 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
   return result;
 }
 
-/* Searches for key_pair and copies the associated value into target_buf.
- * Returns ccol_invalid_args when target_buf_size does not match the stored
- * value size exactly (this prevents silent truncation). */
+/* Searches for key_pair and copies the value of that key into target_buf.
+ * The function returns ccol_invalid_args when target_buf_size does not match
+ * the size of the stored value exactly. This stops a truncation that nothing
+ * would report. */
 ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
                                   void *target_buf, size_t target_buf_size) {
   if (!cbm) {
     ccol_assert(false);
   }
 
+  /* See the guard of cbmap_insert_elem. */
+  if (!key_pair || !pair_bytes_are_readable(key_pair)) {
+    return ccol_invalid_args;
+  }
+
+  /* A stored value of size 0 is read with a NULL buffer of size 0. */
+  if (!target_buf && target_buf_size != 0) {
+    return ccol_invalid_args;
+  }
+
   if (!key_size_matches_type_if_fixed_width(cbm, key_pair)) {
     return ccol_invalid_args;
   }
 
-  bmap_node *tracker = cbm->root;
-  while (tracker) {
-    register int comparison = compare_keys(cbm, key_pair, &tracker->key_pair);
-    if (comparison == 0) {
-      if (target_buf_size != tracker->val_pair.size) {
-        return ccol_invalid_args;
-      }
-      /* A stored value of size 0 keeps a NULL pointer, and the caller's
-         buffer for one is equally allowed to be NULL, so the copy is guarded
-         for the same reason create_bmap_node's is. */
-      if (target_buf_size > 0) {
-        memcpy(target_buf, tracker->val_pair.ptr, target_buf_size);
-      }
-      return ccol_success;
-    }
-
-    if (comparison < 0) {
-      tracker = tracker->left;
-    } else {
-      tracker = tracker->right;
-    }
+  bmap_node *tracker = cbmap_find_node(cbm, key_pair);
+  if (!tracker) {
+    return ccol_key_not_found;
   }
-
-  return ccol_key_not_found;
+  if (target_buf_size != tracker->val_pair.size) {
+    return ccol_invalid_args;
+  }
+  /* A stored value of size 0 keeps a NULL pointer. The buffer of the
+     caller for such a value can also be NULL. This copy is guarded for
+     the same reason as the copy in create_bmap_node. */
+  if (target_buf_size > 0) {
+    cbmap_copy_bytes(target_buf, tracker->val_pair.ptr, target_buf_size);
+  }
+  return ccol_success;
 }
 
-/* Searches for key_pair and sets *val_pair to point directly into the node's
- * value buffer. The returned pointer is valid only as long as the key is not
- * deleted or updated with a value of different size. */
+/* Searches for key_pair and reports the {ptr, size} accessor of the node
+ * for its value. The accessor stays valid only while the key is in the map
+ * and no update gives it a value of a different size. The target of the
+ * accessor is const. The caller can read the accessor and edit the bytes
+ * that it describes. An assignment to either field is a compile error. The
+ * pointer and the size describe one another, and the map cannot own a
+ * pointer that it did not allocate. */
 ccol_retval_t cbmap_get_elem_ref(cbmap cbm, const cmap_pair *key_pair,
-                                 cmap_pair **val_pair) {
+                                 const cmap_pair **val_pair) {
   if (!cbm) {
     ccol_assert(false);
   }
 
+  /* val_pair is the out-parameter that this function writes its result
+     through. A NULL val_pair has nowhere to report a hit. See the guard of
+     cbmap_insert_elem for the reason why the key pair gets the same
+     answer. */
+  if (!key_pair || !val_pair || !pair_bytes_are_readable(key_pair)) {
+    return ccol_invalid_args;
+  }
+
   if (!key_size_matches_type_if_fixed_width(cbm, key_pair)) {
     return ccol_invalid_args;
   }
 
-  bmap_node *tracker = cbm->root;
-  while (tracker) {
-    register int comparison = compare_keys(cbm, key_pair, &tracker->key_pair);
-    if (comparison == 0) {
-      *val_pair = &tracker->val_pair;
-      return ccol_success;
-    }
-
-    if (comparison < 0) {
-      tracker = tracker->left;
-    } else {
-      tracker = tracker->right;
-    }
+  bmap_node *tracker = cbmap_find_node(cbm, key_pair);
+  if (!tracker) {
+    return ccol_key_not_found;
   }
-
-  return ccol_key_not_found;
+  *val_pair = &tracker->val_pair;
+  return ccol_success;
 }
 
-/* Removes parent from the tree and returns the replacement subtree root.
- * When both children exist, the deeper side donates its extreme node
- * (right side -> min node; left side -> max node) to replace parent, which
- * preserves the BST ordering and keeps the tree balanced with minimal rotation.
+/* Removes parent from the tree and returns the new root of the subtree. If
+ * both children exist, the deeper side gives its extreme node as the
+ * replacement for parent. The right side gives its minimum node, and the
+ * left side gives its maximum node. This keeps the BST order. It also keeps
+ * the tree balanced with the smallest number of rotations.
  */
 static bmap_node *perform_element_removal(cbmap cbm, bmap_node *parent) {
   bmap_node *left = parent->left;
@@ -1175,7 +1524,7 @@ static bmap_node *perform_element_removal(cbmap cbm, bmap_node *parent) {
   } else if (!right) {
     parent = left;
   } else {
-    // Both left and right are non-NULL
+    // Both left and right are not NULL
     if (right->height >= left->height) {
       // Right side is deeper
       bmap_node *right_min = NULL;
@@ -1183,8 +1532,8 @@ static bmap_node *perform_element_removal(cbmap cbm, bmap_node *parent) {
       parent = right_min;
       parent->right = right;
       parent->left = left;
-      // Recalculate the height of the replacement node after assigning new
-      // children
+      // Compute the height of the replacement node again, after the new
+      // children go into it
       recalculate_node_height(parent);
     } else {
       // Left side is deeper
@@ -1193,8 +1542,8 @@ static bmap_node *perform_element_removal(cbmap cbm, bmap_node *parent) {
       parent = left_max;
       parent->right = right;
       parent->left = left;
-      // Recalculate the height of the replacement node after assigning new
-      // children
+      // Compute the height of the replacement node again, after the new
+      // children go into it
       recalculate_node_height(parent);
     }
   }
@@ -1202,13 +1551,19 @@ static bmap_node *perform_element_removal(cbmap cbm, bmap_node *parent) {
   return parent;
 }
 
-/* Deletes the entry with key_pair from the map. Uses the same explicit,
- * fixed-size path array as cbmap_insert_elem to rebalance ancestors
- * bottom-up after the node is removed, with no heap allocation involved.
- * Returns ccol_key_not_found when the key does not exist. */
+/* Deletes the element with key_pair from the map. The function uses the same
+ * explicit, fixed-size path array as cbmap_insert_elem. With that array it
+ * balances the ancestors again after it removes the node, from the bottom up,
+ * and it needs no heap allocation. The function returns ccol_key_not_found
+ * when the key is not in the map. */
 ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair *key_pair) {
   if (!cbm) {
     ccol_assert(false);
+  }
+
+  /* See the guard of cbmap_insert_elem. */
+  if (!key_pair || !pair_bytes_are_readable(key_pair)) {
+    return ccol_invalid_args;
   }
 
   if (!key_size_matches_type_if_fixed_width(cbm, key_pair)) {
@@ -1219,51 +1574,44 @@ ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair *key_pair) {
     return ccol_key_not_found;
   }
 
-  // Fixed-size stack to track path from root to node to delete
+  // A fixed-size stack that keeps the path from the root to the node to
+  // delete
   node_stack_entry path[CBMAP_MAX_TREE_HEIGHT];
   size_t path_len = 0;
-
-  bmap_node *current = cbm->root;
-  bmap_node **parent_link = &(cbm->root);
+  bmap_node **parent_link = NULL;
   ccol_retval_t result = ccol_key_not_found;
 
-  // Navigate to node to delete
-  while (current) {
-    int comparison = compare_keys(cbm, key_pair, &current->key_pair);
-
-    if (comparison == 0) {
-      // Found the node to delete
-      bmap_node *replacement = perform_element_removal(cbm, current);
-      *parent_link = replacement;
-      result = ccol_success;
-      break;
-    }
-
-    // Push current node onto path
-    ccol_assert(path_len < CBMAP_MAX_TREE_HEIGHT);
-    path[path_len++] = (node_stack_entry){current, parent_link};
-
-    if (comparison > 0) {
-      parent_link = &(current->right);
-      current = current->right;
-    } else {
-      parent_link = &(current->left);
-      current = current->left;
-    }
+  // Go to the node to delete
+  bmap_node *current =
+      cbmap_descend_with_path(cbm, key_pair, path, &path_len, &parent_link);
+  if (current) {
+    // This is the node to delete
+    bmap_node *replacement = perform_element_removal(cbm, current);
+    *parent_link = replacement;
+    result = ccol_success;
   }
 
   if (result == ccol_success) {
-    // Rebalance from bottom to top
+    /* Balance the tree again, from the bottom up, and stop at the first
+       subtree whose height after balancing equals the height it had before
+       the delete. The ancestors above it then see the same child heights as
+       before. A rotation after a delete can lower the height of its subtree,
+       so the walk stops on the height and not on whether it rotated. */
     for (size_t i = path_len; i-- > 0;) {
       node_stack_entry entry = path[i];
+      size_t height_before = entry.node->height;
       bmap_node *balanced = check_node_balance(entry.node);
 
-      // Update parent's pointer to this node
+      // Update the pointer of the parent to this node
       if (entry.parent_link) {
         *(entry.parent_link) = balanced;
       } else {
         // This is the root
         cbm->root = balanced;
+      }
+
+      if (balanced->height == height_before) {
+        break;
       }
     }
 
@@ -1274,18 +1622,18 @@ ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair *key_pair) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-/* Walks the whole tree, checking at every node that the AVL balance
- * invariant (abs(right_height - left_height) <= 1) and the height
- * bookkeeping invariant (height == max(height(left), height(right)) + 1)
- * both hold. bmap_node is opaque outside this translation unit, so this is
- * the only way for test code to check these invariants; it deliberately
- * returns a single pass/fail rather than any node pointer, so no internal
- * pointer ever crosses the public API boundary.
+/* Walks the whole tree. At every node it checks two invariants. The first is
+ * the AVL balance invariant, abs(right_height - left_height) <= 1. The second
+ * is the height invariant, height == max(height(left), height(right)) + 1.
+ * bmap_node is opaque outside this translation unit, so this function is the
+ * only way for test code to check these invariants. The function returns one
+ * pass or fail answer, and no node pointer. No internal pointer therefore
+ * crosses the boundary of the public API.
  *
- * Iterative (an explicit fixed-size stack, not recursion), matching this
- * module's own established preference for iterative tree traversal, and
- * using the same CBMAP_MAX_TREE_HEIGHT bound the rest of this file's own
- * traversal stacks rely on. */
+ * The walk is iterative and uses an explicit fixed-size stack, and not
+ * recursion. This matches the preference of this module for an iterative tree
+ * walk. The stack uses the same CBMAP_MAX_TREE_HEIGHT bound as every other
+ * walk stack in this file. */
 bool cbmap_debug_validate_avl(cbmap cbm) {
   if (!cbm || !cbm->root) {
     return true;
@@ -1313,7 +1661,7 @@ bool cbmap_debug_validate_avl(cbmap cbm) {
 
     if (node->left) {
       if (sp >= CBMAP_MAX_TREE_HEIGHT)
-        return false; /* tree deeper than any real AVL tree can be */
+        return false; /* Deeper than any real AVL tree can be */
       stack[sp++] = node->left;
     }
     if (node->right) {

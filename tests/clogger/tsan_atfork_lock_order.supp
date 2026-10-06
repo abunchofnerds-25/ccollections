@@ -47,3 +47,36 @@
 # should re-derive the reasoning above rather than trusting a clean
 # ThreadSanitizer run here.
 deadlock:_clog_atfork_prepare
+
+# A second, separate case: ThreadSanitizer does not model the re-initialization
+# of a write-locked rwlock in a fork child.
+#
+# What happens. The fork-prepare handlers of this module and of cthreadcomm
+# write-lock their process-wide slot-table rwlocks (clog_slot_table.rwlock and
+# ccol_event_loop_slot_table.rwlock) on the thread that calls fork(). In the
+# child, that thread has a new thread ID, and the unlock of a glibc rwlock
+# compares the recorded writer ID with the caller's, so a plain unlock would
+# return 0 and release nothing. The child handlers therefore re-initialize
+# both rwlocks. ThreadSanitizer keeps treating them as write-held by
+# the child's main thread after the re-initialization. A later write lock of
+# either one in the child, by the exit drain or by a module destructor, is then
+# reported as "double lock of a mutex", and every lock the main thread takes
+# afterwards is recorded as nested inside them, which yields the
+# "lock-order-inversion" reports. Destroying the rwlock before the
+# re-initialization only changes the report to "destroy of a locked mutex".
+#
+# Where it appears. Only in forked children of the two exit-drain tests that
+# call exit() on the writer or compressor thread, or with the slot table held
+# for ever, because only those children take the slot-table locks again after
+# the fork. The behaviour these reports flag is checked directly instead: the
+# fork_safety tests of every module lock the same rwlocks in a child after a
+# fork and fail with a hang if the child cannot.
+#
+# Each anchor names the frame of our own code that takes the lock in the
+# report, never a pthread or ThreadSanitizer frame, and the deadlock anchor
+# names the test helper whose child produces the inversion, so that an
+# inversion anywhere else is still reported.
+mutex:_clog_exit_drain
+mutex:_cleanup_event_loop_slot_table
+mutex:clog_test_lock_table_forever
+deadlock:exit_from_worker_child

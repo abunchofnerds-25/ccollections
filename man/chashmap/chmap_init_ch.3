@@ -1,0 +1,91 @@
+.TH CHMAP_INIT_CH 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chmap_init_ch \- create a hash map with a custom hashing procedure into an already declared handle
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chashmap.h>
+
+chmap_init_ch(hm_name, custom_hashing_proc);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a hash map that hashes its keys with custom_hashing_proc, and not
+with the map's own hashing for the declared key type. It assigns the map
+to hm_name. The caller must declare the handle first, with chmap_declare(3)
+or chmap_declare_scoped(3). The key and value types are not arguments here.
+The macro reads them from the companion type variables that the declare
+macro created.
+
+This macro is chmap_init(3) plus a hashing procedure. It uses the default
+allocator. chmap_init_mp(3) replaces the allocator instead, and
+chmap_init_full(3) takes both.
+
+A custom procedure changes only how the map turns a key into a number. It
+does not change which implementation strategy the map picks. It also does
+not change which keys the map considers equal.
+
+The one-step equivalents are chmap_construct_ch(3) and
+chmap_construct_ch_scoped(3).
+.fi
+.SH PARAMETERS
+.nf
+hm_name              The already declared map handle to create the map into
+custom_hashing_proc  A ccol_hashing_proc_t, or NULL to use the map's own
+                     hashing for the declared key type
+.fi
+.SH RETURN VALUE
+.nf
+None. This macro expands to a statement and does not expand to an
+expression.
+.fi
+.SH "CUSTOM HASHING"
+.nf
+A custom procedure gets a pointer to the key bytes and their length. It
+returns an unsigned long. It must return the same value for two keys that
+the map considers equal. For a char * key, equal means equal contents and
+not an equal pointer. For a fixed-width key type, the length is the map's
+own fixed key width. For a string or other buffer-like key, the length is
+the byte length that the caller gave. The procedure can therefore always
+hash exactly that number of bytes. It needs no NUL terminator and no length
+prefix of its own.
+
+The return value does not need to avalanche. The map finalizes the value
+that a custom procedure returns with its own bit-mixing step. It does this
+before it reduces the value to a slot or a bucket. A procedure that puts
+all of its entropy in the low bits therefore still spreads across the
+table. Examples are a sum, a small identifier and a truncated checksum.
+The contract is only
+"any function of the key that respects the map's notion of key equality".
+There is no rule about which end of the result carries the entropy.
+.fi
+.SH NOTES
+.nf
+Stops the program through ccol_fatal_err() if the creation fails
+Uses the default allocator and CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16)
+buckets
+The map canonicalizes a float or double key before the procedure sees it.
+A custom procedure therefore never gets a raw -0.0
+A long double key is the one case where a custom procedure changes key
+handling. chmap_create_full(3) states what such a procedure has to do
+The procedure must stay callable for the whole life of the map
+.fi
+.SH EXAMPLES
+.nf
+unsigned long hash_bytes(const void *p, size_t size);
+
+chmap_declare(scores, char *, int);
+chmap_init_ch(scores, hash_bytes);
+int score = 42;
+chmap_insert(scores, "alice", score);
+chmap_destroy(scores);
+.fi
+.SH "SEE ALSO"
+.BR chmap_init (3),
+.BR chmap_init_mp (3),
+.BR chmap_init_full (3),
+.BR chmap_declare (3),
+.BR chmap_construct_ch (3),
+.BR chmap_create_full (3),
+.BR chmap_destroy (3)

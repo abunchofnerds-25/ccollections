@@ -1,38 +1,41 @@
 .TH CCOL_CHAN_SEND_ZC 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-ccol_chan_send_zc \- send a message through the ccol_channel (blocking)
+ccol_chan_send_zc \- send a message through the ccol_channel (it blocks)
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadcomm.h>
+#include <ccollections/cthreadcomm.h>
 
 ccol_retval_t ccol_chan_send_zc(ccol_channel *ch, c_message_t *msg);
 .fi
 .SH DESCRIPTION
 .nf
-Automatically selects the appropriate queue based on calling thread:
-- Owner thread sends to ccol_owner_to_workers queue
-- Worker threads send to ccol_workers_to_owner queue
+The function picks the correct queue itself. It uses the thread that calls
+it:
+- The owner thread sends to the ccol_owner_to_workers queue
+- A worker thread sends to the ccol_workers_to_owner queue
 
-Blocks until space is available and transfers ownership.
+The function blocks until the queue has free space. Then it transfers the
+ownership.
 .fi
 .SH PARAMETERS
 .nf
 ch   Channel to send through
-msg  Message to send (data ownership transfers on success)
+msg  Message to send. On success the ownership of the data moves to the
+     channel.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success       - Message sent successfully
-ccol_invalid_args  - ch or msg is NULL, or msg validation fails
-ccol_not_permitted - Sending has been disabled on the selected direction
+ccol_success       - The function sent the message
+ccol_invalid_args  - ch or msg is NULL, or the check of msg fails
+ccol_not_permitted - Sends on the chosen direction are turned off
 .fi
 .SH NOTES
 .nf
-Blocks until space is available in the selected queue
-Direction is automatically determined by thread ID
-On failure, caller retains ownership of msg->data
+The function blocks until the chosen queue has free space.
+The function picks the direction itself from the ID of the thread.
+On failure, the caller keeps the ownership of msg->data.
 .fi
 .SH "SEE ALSO"
 .BR ccol_chan_try_send_zc (3),

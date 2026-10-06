@@ -1,11 +1,11 @@
 .TH CHTTPCLIENT_DO_ASYNC_STREAMING 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-chttpclient_do_async_streaming \- submit an HTTP request for asynchronous execution with a streaming response body
+chttpclient_do_async_streaming \- submit an HTTP request for asynchronous execution, and stream the response body
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpclient.h>
+#include <ccollections/chttpclient.h>
 
 ctpool_future *chttpclient_do_async_streaming(chttpcli cli,
                                                const chttp_request_t *req,
@@ -14,39 +14,43 @@ ctpool_future *chttpclient_do_async_streaming(chttpcli cli,
 .fi
 .SH DESCRIPTION
 .nf
-Same non-blocking submission semantics as chttpclient_do_async, but
-write_fn is invoked one or more times with chunks of the response
-body as they arrive over the wire, exactly like
-chttpclient_do_streaming.
+The submit works in the same way as in chttpclient_do_async, and it
+does not block. But the client calls write_fn one or more times with
+chunks of the response body, while those chunks arrive over the wire.
+This is the same behaviour as in chttpclient_do_streaming.
 
-write_fn runs on one of the engine's own reactor threads, NOT on the
-calling thread and NOT on a dedicated thread for this request.  This
-has two hard requirements, unlike chttpclient_do_streaming's
-caller-thread callback: write_fn must not block (no blocking I/O, no
-long-held locks, no waiting on another request's future) (doing so
-stalls every other connection the engine is currently multiplexing
-on that reactor thread) and write_fn must not call back into
-chttpclient_do_async/_streaming (or anything that transitively waits
-on this same request's future) for the same or a different chttpcli
-sharing the engine, or it may deadlock against the very reactor
-thread it is running on.
+write_fn runs on one of the reactor threads of the engine. It does NOT
+run on the thread of the caller, and it does NOT run on a thread of
+its own for this request. The callback of chttpclient_do_streaming
+runs on the thread of the caller, so this path adds two hard rules.
+First, write_fn must not block. It must do no blocking I/O, hold no
+lock for a long time, and wait on the future of no other request. A
+block there stalls every other connection that the engine multiplexes
+on that reactor thread. Second, write_fn must not call
+chttpclient_do_async or chttpclient_do_async_streaming again. It must
+also call nothing that waits on the future of this same request,
+directly or indirectly. This holds for the same chttpcli and for a
+different chttpcli that shares the engine. Such a call can deadlock
+against the reactor thread that runs write_fn.
 .fi
 .SH PARAMETERS
 .nf
-cli       Client handle; must not be CHTTPCLI_INVALID.
-req       Request to execute; must not be NULL.
-write_fn  Chunk delivery callback; must not be NULL.
-write_ctx Opaque context pointer passed verbatim to write_fn.
+cli       The client handle. It must not be CHTTPCLI_INVALID.
+req       The request to run. It must not be NULL.
+write_fn  The callback that gets each chunk. It must not be NULL.
+write_ctx An opaque context pointer. The client gives it to write_fn
+          without a change.
 .fi
 .SH RETURN VALUE
 .nf
-A future, or NULL under the same conditions as chttpclient_do_async
-(including a NULL write_fn).  On success, the future's eventual
-result carries ccol_http_transfer_aborted if write_fn ever returns
-anything other than len (not just fewer bytes than len, but more
-too), aborting the transfer.  Never carries
-ccol_msg_too_large: chttpclient_set_max_response_body_size has no
-effect on this streaming path.
+A future, or NULL in the same conditions as in chttpclient_do_async. A
+write_fn of NULL is one more such condition. After a success, the
+result of the future holds ccol_http_transfer_aborted if write_fn ever
+gives back a value other than len. Such a value aborts the transfer,
+and it covers a value above len as well as a value below len. The
+result never holds ccol_msg_too_large, because
+chttpclient_set_max_response_body_size has no effect on this streaming
+path.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_do_async (3),

@@ -1,0 +1,76 @@
+.TH CHMAP_CONSTRUCT_MP 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chmap_construct_mp \- declare and create a hash map that takes its memory from a custom allocator
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chashmap.h>
+
+chmap_construct_mp(hm_name, key_t, val_t, mmgmt_procs);
+.fi
+.SH DESCRIPTION
+.nf
+Declares a hash map handle named hm_name. It also declares the companion
+type variables. These variables carry key_t and val_t to every later
+type-inferred macro. The macro then creates a map that takes all of its memory
+from mmgmt_procs.
+
+This macro is chmap_construct(3) plus an allocator. The map uses its own
+hashing for key_t. chmap_construct_ch(3) replaces the hashing instead, and
+chmap_construct_full(3) takes both. chmap_construct_mp_scoped(3) is the
+same macro with a cleanup attribute that destroys the map at scope exit.
+
+chmap_declare(3) and then chmap_init_mp(3) is the two-step form. Use the
+two-step form when the caller must handle a creation failure instead of
+the failure being fatal.
+.fi
+.SH PARAMETERS
+.nf
+hm_name      Name for the map handle to declare
+key_t        Key type; it tells every later macro how to read a key and,
+             with val_t, which implementation strategy the map uses
+val_t        Value type
+mmgmt_procs  Pointer to a ccol_memmgmt_procs_t, or NULL for the default
+             allocator
+.fi
+.SH RETURN VALUE
+.nf
+None. This macro declares variables and does not expand to an expression.
+.fi
+.SH NOTES
+.nf
+Stops the program through ccol_fatal_err() if the creation fails
+All four members of ccol_memmgmt_procs_t must be non-NULL
+The macro copies the procedures into the map. The caller's own
+ccol_memmgmt_procs_t therefore need not outlive the call. The procedures
+themselves must stay callable for the whole life of the map
+Everything that the map allocates later comes from these procedures, its
+bucket array included. Everything that the map frees goes back to them
+Uses CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets
+chmap_destroy(3) destroys the map. The companion type variables follow the
+scope of the handle, so a function that gets the handle needs
+chmap_redeclare(3) there
+.fi
+.SH EXAMPLES
+.nf
+ccol_memmgmt_procs_t procs = {
+    .malloc = my_malloc, .calloc = my_calloc,
+    .realloc = my_realloc, .free = my_free,
+};
+
+chmap_construct_mp(scores, char *, int, &procs);
+int score = 42;
+chmap_insert(scores, "alice", score);
+chmap_destroy(scores);
+.fi
+.SH "SEE ALSO"
+.BR chmap_construct (3),
+.BR chmap_construct_mp_scoped (3),
+.BR chmap_construct_ch (3),
+.BR chmap_construct_full (3),
+.BR chmap_init_mp (3),
+.BR chmap_declare (3),
+.BR chmap_redeclare (3),
+.BR chmap_create_full (3),
+.BR chmap_destroy (3)

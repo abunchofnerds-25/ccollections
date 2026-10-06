@@ -1,11 +1,11 @@
-.TH CTPOOL_SUBMIT_FUTURE 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
+.TH CTPOOL_SUBMIT_FUTURE 3 "2026-09-21" "c_collections" "C Collections Library - Functions"
 .SH NAME
 ctpool_submit_future \- submit a task that returns a void* result (blocking)
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadpool.h>
+#include <ccollections/cthreadpool.h>
 
 ctpool_future *ctpool_submit_future(ctpool pool,
                                     void *(*fn)(void *),
@@ -14,19 +14,31 @@ ctpool_future *ctpool_submit_future(ctpool pool,
 .SH DESCRIPTION
 .nf
 Allocates a future object and submits a task to the pool. The task
-calls fn(arg) on a worker thread and stores the returned void* pointer
-in the future for later retrieval by ctpool_future_get.
+calls fn(arg) on a worker thread. It then stores the void* pointer that
+fn returned in the future, so that ctpool_future_get can read it
+later.
 
-The returned future has a reference count of 2 on success: one
-reference held by the caller, one held internally by the queued task.
-The caller must call ctpool_future_free exactly once when done.
+The future that comes back has a reference count of 2 on success. The
+caller holds one reference. The task in the queue holds the other
+inside the library. Each ctpool_future_get call that runs on the future
+adds one more. The caller must call ctpool_future_free exactly one time
+when it is done.
 
-For bounded queues this function blocks until a slot is available.
-Use ctpool_try_submit_future or ctpool_timed_submit_future to avoid
-blocking.
+For a bounded queue this function blocks until the queue has a free
+slot. Use ctpool_try_submit_future or ctpool_timed_submit_future when
+you do not want a block.
 
-Futures always use standard malloc/free regardless of any custom
-allocator configured at pool creation.
+The call returns NULL, and does not wait, in one case. That case is a
+call from a task that runs on this same pool, while a bounded queue is
+already at capacity. A call from the on_complete callback of that task
+is the same case. The reason is the one that ctpool_submit(3) gives.
+Only the workers of this pool can free a slot, and the caller is one of
+them. ctpool_try_submit_future(3) and ctpool_timed_submit_future(3)
+report that case as ccol_container_full. An unbounded queue never
+reaches it at all.
+
+A future always uses the standard malloc and free. It does not use a
+custom allocator that the caller set at pool creation.
 .fi
 .SH PARAMETERS
 .nf
@@ -37,9 +49,13 @@ arg   Passed to fn (may be NULL)
 .SH RETURN VALUE
 .nf
 Returns a new ctpool_future handle on success.
-Returns NULL if pool is CTPOOL_INVALID or a stale/already-destroyed
-handle, if fn is NULL, if the pool is shutting down, or if memory
-allocation fails.
+Returns NULL in these five cases:
+  pool is CTPOOL_INVALID, or a stale and already destroyed handle
+  fn is NULL
+  the pool is in shutdown
+  a bounded queue is at capacity and the caller is a worker of this
+    same pool
+  a memory allocation fails
 .fi
 .SH "SEE ALSO"
 .BR ctpool_try_submit_future (3),

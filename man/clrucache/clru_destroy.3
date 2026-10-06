@@ -5,32 +5,42 @@ clru_destroy \- destroy an LRU cache and invalidate the handle
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <clrucache.h>
+#include <ccollections/clrucache.h>
 
 clru_destroy(name);
 .fi
 .SH DESCRIPTION
 .nf
-Calls __clrucache_destroy() to wait for every in-flight resolved use
-of the handle to finish, evict all remaining entries (invoking the
-eviction callback for each while the owning segment's lock is held),
-destroy every segment's own map, and free all memory. Then sets name
-to CLRU_CACHE_INVALID.
+Waits until every in-flight resolved use of the handle stops. It then
+evicts all the entries that remain. It calls the eviction callback for
+each one, and it holds the lock of the owning segment during that call.
+It then destroys the map of every segment and frees all the memory.
+Then it sets name to CLRU_CACHE_INVALID.
 .fi
 .SH PARAMETERS
 .nf
-name  Cache variable to destroy (will be set to CLRU_CACHE_INVALID
-      after destruction)
+name  The cache variable to destroy. The macro sets it to
+      CLRU_CACHE_INVALID after the destruction
 .fi
 .SH NOTES
 .nf
-Safe to call when name is CLRU_CACHE_INVALID (no-op). Calling this
-on a stale handle (one already destroyed, sequentially by an
-earlier call or concurrently by another thread) is a FATAL ERROR
-(abort()/SIGABRT), not a silent double-free; see
-__clrucache_destroy(3) for further detail.
+A call is safe when name is CLRU_CACHE_INVALID, and it does nothing.
+A call on a stale handle is a FATAL ERROR. It calls abort() and raises
+SIGABRT. It is never a silent double-free. A handle is stale when an
+earlier, sequential call destroyed it, or when another thread destroys
+it at the same time. A forged value and garbage are fatal errors too.
+The handle carries a generation tag, and the library checks that tag
+before it touches the cache behind the handle. The library therefore
+always detects such a value, and it never dereferences it.
+A concurrent, ordinary call to clrucache_get_full(),
+clrucache_set_full(), clrucache_size() or clrucache_capacity() on the
+same handle is not misuse. This call waits for that call to finish
+before it frees anything.
+
+The macro evaluates name exactly once. It must be a modifiable lvalue,
+such as a variable or an element of an array, so an expression with a
+side effect, such as handles[i++], destroys and clears one element.
 .fi
 .SH "SEE ALSO"
 .BR clru_construct (3),
-.BR __clrucache_destroy (3),
 .BR clrucache_create_full (3)

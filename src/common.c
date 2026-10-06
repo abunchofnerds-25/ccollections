@@ -23,118 +23,31 @@ SOFTWARE.
 */
 
 #include <common.h>
+#include <internal/cgrowbuf.h>
+#include <internal/cpow2.h>
+#include <internal/cprocsintern.h>
+#include <limits.h>
+#include <stdatomic.h>
 
-#define POWERS_OF_TWO_LEN 64
-static uint64_t uint64_powers_of_two[POWERS_OF_TWO_LEN] = {
-    1ULL,
-    2ULL,
-    4ULL,
-    8ULL,
-    16ULL,
-    32ULL,
-    64ULL,
-    128ULL,
-    256ULL,
-    512ULL,
-    1024ULL,
-    2048ULL,
-    4096ULL,
-    8192ULL,
-    16384ULL,
-    32768ULL,
-    65536ULL,
-    131072ULL,
-    262144ULL,
-    524288ULL,
-    1048576ULL,
-    2097152ULL,
-    4194304ULL,
-    8388608ULL,
-    16777216ULL,
-    33554432ULL,
-    67108864ULL,
-    134217728ULL,
-    268435456ULL,
-    536870912ULL,
-    1073741824ULL,
-    2147483648ULL,
-    4294967296ULL,
-    8589934592ULL,
-    17179869184ULL,
-    34359738368ULL,
-    68719476736ULL,
-    137438953472ULL,
-    274877906944ULL,
-    549755813888ULL,
-    1099511627776ULL,
-    2199023255552ULL,
-    4398046511104ULL,
-    8796093022208ULL,
-    17592186044416ULL,
-    35184372088832ULL,
-    70368744177664ULL,
-    140737488355328ULL,
-    281474976710656ULL,
-    562949953421312ULL,
-    1125899906842624ULL,
-    2251799813685248ULL,
-    4503599627370496ULL,
-    9007199254740992ULL,
-    18014398509481984ULL,
-    36028797018963968ULL,
-    72057594037927936ULL,
-    144115188075855872ULL,
-    288230376151711744ULL,
-    576460752303423488ULL,
-    1152921504606846976ULL,
-    2305843009213693952ULL,
-    4611686018427387904ULL,
-    9223372036854775808ULL};
-
-/* Returns the smallest power of two that is >= _input, using binary search
- * over a precomputed table. The table covers all 64-bit powers of two, so the
- * result is architecture-dependent (capped at the pointer-size maximum).
- * Returns ccol_invalid_size when _input exceeds the largest representable
- * power of two for the current architecture. */
-size_t ccol_find_nearest_gte_power_of_two(size_t _input) {
-  uint64_t input = _input;
-  size_t result = 0;
-
-  if (input <= uint64_powers_of_two[0]) {
-    result = (size_t)uint64_powers_of_two[0];
-    return result;
-  }
-
-  int max_index = sizeof(size_t) * 8 - 1;  // Arch dependent
-
-  if (input > uint64_powers_of_two[max_index]) {
-    return ccol_invalid_size;
-  }
-
-  int left = 0, right = max_index, middle = (left + right) / 2;
-
-  while (true) {
-    if (uint64_powers_of_two[middle] == input) {
-      // Found it
-      result = (size_t)uint64_powers_of_two[middle];
-      return result;
-    } else if (uint64_powers_of_two[middle] < input) {
-      // Go right
-      left = middle + 1;
-    } else {
-      if (middle > 0 && uint64_powers_of_two[middle - 1] < input) {
-        // Found it
-        result = (size_t)uint64_powers_of_two[middle];
-        return result;
-      }
-      // Go left
-      right = middle;
-    }
-
-    middle = (left + right) / 2;
-  }
-
-  return ccol_invalid_size;
+/* Returns the smallest power of two that is >= input, or ccol_invalid_size
+ * when that power does not fit in a size_t. For an input of at least 2, the
+ * answer is 2 to the power of the bit length of input - 1. One count of
+ * leading zeros gives that bit length, so the whole computation is a
+ * subtraction, a count and a shift. The width of size_t is named once, as
+ * the width of the operand of the builtin: unsigned long has the width of
+ * size_t on every target this library supports (LP64 and ILP32), and the
+ * _Static_assert holds that. */
+_Static_assert(sizeof(unsigned long) == sizeof(size_t),
+               "the power-of-two rounding needs size_t as wide as long");
+size_t _ccol_find_nearest_gte_power_of_two(size_t input) {
+  if (input <= 1) return 1;
+  unsigned long below = (unsigned long)(input - 1);
+  int bits = (int)(sizeof(unsigned long) * CHAR_BIT) - __builtin_clzl(below);
+  /* bits is the bit length of input - 1, from 1 up to the width. A bit
+   * length equal to the width means the answer is 2^width, which a size_t
+   * cannot hold. */
+  if (bits >= (int)(sizeof(unsigned long) * CHAR_BIT)) return ccol_invalid_size;
+  return (size_t)1 << bits;
 }
 
 /* ========================================================================== */
@@ -152,17 +65,29 @@ void ccol_growbuf_init(ccol_growbuf_t *b, ccol_memmgmt_procs_t *mp) {
 
 void ccol_growbuf_init_hint(ccol_growbuf_t *b, ccol_memmgmt_procs_t *mp,
                             size_t hint) {
-  size_t cap = hint + 1 > 64 ? hint + 1 : 64;
   b->m_procs = mp;
-  b->buf = _ccol_mem_alloc(mp, cap);
   b->len = 0;
+  /* The store that the hint asks for is hint content bytes plus the NUL at
+   * the end. A hint of SIZE_MAX names a size that is not representable. The
+   * function refuses it here, and does not let the code form hint + 1. That
+   * expression wraps to 0. The 64-byte floor then wins, and the function
+   * gives back a buffer much smaller than the caller asked for. It also
+   * reports success. */
+  if (hint == SIZE_MAX) {
+    b->buf = NULL;
+    b->cap = 0;
+    b->oom = true;
+    return;
+  }
+  size_t cap = hint + 1 > 64 ? hint + 1 : 64;
+  b->buf = _ccol_mem_alloc(mp, cap);
   b->cap = b->buf ? cap : 0;
   b->oom = b->buf ? false : true;
   if (b->buf) b->buf[0] = '\0';
 }
 
-/* Double the buffer capacity until it holds 'needed' bytes.
- * Sets b->oom on reallocation failure or size_t overflow. */
+/* Doubles the capacity of the buffer until it holds 'needed' bytes. This
+ * function sets b->oom if the reallocation fails, or if a size_t overflows. */
 static void growbuf_grow(ccol_growbuf_t *b, size_t needed) {
   if (b->oom) return;
   size_t new_cap =
@@ -185,43 +110,164 @@ static void growbuf_grow(ccol_growbuf_t *b, size_t needed) {
 
 void ccol_growbuf_append(ccol_growbuf_t *b, const char *data, size_t n) {
   if (b->oom) return;
-  if (b->len + n + 1 > b->cap) growbuf_grow(b, b->len + n + 1);
+  /* The size that this append needs is b->len + n + 1. The code must test
+   * that sum for representability BEFORE it forms the sum, and not after. The
+   * sum wraps if the code forms it first. The wrapped value then compares
+   * below b->cap, and no growth happens. The memcpy below then runs with the
+   * enormous original n of the caller, against a buffer that has room for
+   * none of it.
+   *
+   * A subtraction cannot wrap, because b->len is always below b->cap, and so
+   * is at most SIZE_MAX - 1. The function refuses a request whose size is not
+   * representable in the same way as a failed allocation. It latches oom, so
+   * a caller that checks for an error only at the end of a build pass still
+   * sees the failure. */
+  if (n > SIZE_MAX - 1 - b->len) {
+    b->oom = true;
+    return;
+  }
+  size_t needed = b->len + n + 1;
+  if (needed > b->cap) growbuf_grow(b, needed);
   if (b->oom) return;
+  /* An empty append is already complete, because b->buf[b->len] holds the NUL
+   * that every other path leaves. A return here also stops a (NULL, 0) append
+   * from reaching memcpy. The pointer arguments of memcpy must be valid even
+   * for a length of zero. A caller writes such an append naturally, because
+   * the wrapper for a NUL-terminated string accepts a NULL string. */
+  if (n == 0) return;
   memcpy(b->buf + b->len, data, n);
   b->len += n;
   b->buf[b->len] = '\0';
 }
 
+/* ========================================================================== */
+/*                         ALLOCATOR PROCS INTERN TABLE                       */
+/* ========================================================================== */
+
+/* The state of one slot. A slot goes from EMPTY to WRITING once, when a
+ * thread claims it, and from WRITING to READY once, when that thread has
+ * written the copy. It never goes back. A thread claims only the first slot
+ * that it sees EMPTY, after it saw every earlier slot claimed, so the claimed
+ * slots always form a prefix of the table and a lookup stops at the first
+ * EMPTY slot. */
+enum {
+  _CCOL_PROCS_SLOT_EMPTY = 0,
+  _CCOL_PROCS_SLOT_WRITING = 1,
+  _CCOL_PROCS_SLOT_READY = 2
+};
+
+static ccol_memmgmt_procs_t _ccol_procs_slots[CCOL_PROCS_INTERN_CAPACITY];
+static atomic_uchar _ccol_procs_slot_state[CCOL_PROCS_INTERN_CAPACITY];
+
+static inline bool _ccol_procs_same(const ccol_memmgmt_procs_t *a,
+                                    const ccol_memmgmt_procs_t *b) {
+  return a->malloc == b->malloc && a->free == b->free &&
+         a->calloc == b->calloc && a->realloc == b->realloc;
+}
+
+bool ccol_procs_is_interned(const ccol_memmgmt_procs_t *mp) {
+  /* The comparison runs on integers, because a relational comparison of
+   * pointers into different objects is undefined. */
+  uintptr_t addr = (uintptr_t)mp;
+  uintptr_t base = (uintptr_t)&_ccol_procs_slots[0];
+  return addr >= base && addr < base + sizeof(_ccol_procs_slots) &&
+         (addr - base) % sizeof(ccol_memmgmt_procs_t) == 0;
+}
+
+ccol_retval_t ccol_procs_intern(ccol_memmgmt_procs_t *mp,
+                                ccol_memmgmt_procs_t **out) {
+  *out = NULL;
+  if (mp == NULL) return ccol_success;
+  /* A pointer into the table is already interned. */
+  if (ccol_procs_is_interned(mp)) {
+    *out = mp;
+    return ccol_success;
+  }
+  /* Read the caller's struct once, into a local, so that every comparison
+   * and the copy use the same four values. */
+  ccol_memmgmt_procs_t want;
+  memcpy(&want, mp, sizeof(want));
+  for (size_t i = 0; i < CCOL_PROCS_INTERN_CAPACITY; i++) {
+    unsigned char st =
+        atomic_load_explicit(&_ccol_procs_slot_state[i], memory_order_acquire);
+    if (st == _CCOL_PROCS_SLOT_READY) {
+      if (_ccol_procs_same(&_ccol_procs_slots[i], &want)) {
+        *out = &_ccol_procs_slots[i];
+        return ccol_success;
+      }
+      continue;
+    }
+    if (st == _CCOL_PROCS_SLOT_WRITING) continue;
+    unsigned char expected = _CCOL_PROCS_SLOT_EMPTY;
+    if (atomic_compare_exchange_strong_explicit(
+            &_ccol_procs_slot_state[i], &expected, _CCOL_PROCS_SLOT_WRITING,
+            memory_order_acq_rel, memory_order_acquire)) {
+      _ccol_procs_slots[i] = want;
+      atomic_store_explicit(&_ccol_procs_slot_state[i], _CCOL_PROCS_SLOT_READY,
+                            memory_order_release);
+      *out = &_ccol_procs_slots[i];
+      return ccol_success;
+    }
+    /* Another thread claimed this slot first. Look at it again: when it is
+     * already READY it can hold the content that this call wants. */
+    if (expected == _CCOL_PROCS_SLOT_READY &&
+        _ccol_procs_same(&_ccol_procs_slots[i], &want)) {
+      *out = &_ccol_procs_slots[i];
+      return ccol_success;
+    }
+  }
+  return ccol_container_full;
+}
+
+#ifdef RUNNING_UNIT_TESTS
+size_t _ccol_procs_intern_used_for_tests(void) {
+  size_t n = 0;
+  while (n < CCOL_PROCS_INTERN_CAPACITY &&
+         atomic_load_explicit(&_ccol_procs_slot_state[n],
+                              memory_order_acquire) != _CCOL_PROCS_SLOT_EMPTY)
+    n++;
+  return n;
+}
+
+void _ccol_procs_intern_truncate_for_tests(size_t keep) {
+  for (size_t i = keep; i < CCOL_PROCS_INTERN_CAPACITY; i++) {
+    memset(&_ccol_procs_slots[i], 0, sizeof(_ccol_procs_slots[i]));
+    atomic_store_explicit(&_ccol_procs_slot_state[i], _CCOL_PROCS_SLOT_EMPTY,
+                          memory_order_release);
+  }
+}
+#endif /* RUNNING_UNIT_TESTS */
+
 #ifdef RUNNING_UNIT_TESTS
 /* See ccol_atfork_module_t in common.h for what this exists to catch. */
 static const char *const _ccol_atfork_module_names[ccol_atfork_module_count] = {
-    "clogger", "cthreadcomm", "cthreadpool", "chttpserver"};
+    "clogger", "cthreadcomm", "cthreadpool", "chttpserver", "chttpclient"};
 
-/* The handlers that have already run in the fork currently being prepared, in
-   the order they ran. */
+/* The handlers that already ran in the fork that the process prepares now, in
+   the order that they ran. _ccol_atfork_order_reset empties it after every
+   fork, in the parent and in the child. */
 static unsigned char _ccol_atfork_seq[ccol_atfork_module_count];
 static unsigned _ccol_atfork_seq_len;
 
-/* _ccol_atfork_ran_before[a][b] records that a's handler ran before b's in some
-   earlier fork. */
+/* _ccol_atfork_ran_before[a][b] records that the handler of a ran before the
+   handler of b in an earlier fork. */
 static bool _ccol_atfork_ran_before[ccol_atfork_module_count]
                                    [ccol_atfork_module_count];
 
 void _ccol_atfork_order_record(ccol_atfork_module_t ccol_module) {
   if ((unsigned)ccol_module >= (unsigned)ccol_atfork_module_count) return;
 
-  /* No lock, deliberately. This runs only from inside a fork-prepare handler,
-     and those run one sequence at a time under the C library's own atfork lock,
-     so there is no concurrent caller to exclude. Taking a lock here would nest
-     one more lock inside the very handlers whose nesting this exists to police,
-     which is the thing least worth adding to them. */
+  /* There is no lock here, and this is deliberate. This code runs only inside
+     a fork-prepare handler. Those handlers run one sequence at a time, under
+     the atfork lock of the C library. There is no concurrent caller to
+     exclude. A lock here would nest one more lock inside the handlers whose
+     nesting this code exists to police. That is the last thing worth an
+     addition to them. */
+  /* A handler that is registered once runs once in each fork, so it is in
+     the sequence already only when it is registered twice. Its pairs with
+     the handlers before it are recorded, and nothing more is learned. */
   for (unsigned i = 0; i < _ccol_atfork_seq_len; i++) {
-    if (_ccol_atfork_seq[i] == (unsigned char)ccol_module) {
-      /* This handler is running a second time, so a new fork has begun and the
-         recorded sequence belongs to the previous one. */
-      _ccol_atfork_seq_len = 0;
-      break;
-    }
+    if (_ccol_atfork_seq[i] == (unsigned char)ccol_module) return;
   }
 
   for (unsigned i = 0; i < _ccol_atfork_seq_len; i++) {
@@ -239,5 +285,22 @@ void _ccol_atfork_order_record(ccol_atfork_module_t ccol_module) {
 
   if (_ccol_atfork_seq_len < (unsigned)ccol_atfork_module_count)
     _ccol_atfork_seq[_ccol_atfork_seq_len++] = (unsigned char)ccol_module;
+}
+
+void _ccol_atfork_order_reset(void) { _ccol_atfork_seq_len = 0; }
+
+/* Ends the sequence of every fork explicitly. The parent and the child
+   handlers of pthread_atfork run after every prepare handler of the fork, so
+   the next fork always starts from an empty sequence. A reset that guessed
+   the start of a fork from a handler that runs again would lose every pair
+   between that handler and a handler that joins the order later, and would
+   record false pairs for it. The registration runs from a constructor, so it
+   precedes every fork that a test makes and every handler that a module
+   registers. */
+__attribute__((constructor)) static void _ccol_atfork_order_register(void) {
+  if (ccol_at_fork(NULL, _ccol_atfork_order_reset, _ccol_atfork_order_reset) !=
+      0) {
+    ccol_fatal_err("cannot register the fork-prepare order recorder");
+  }
 }
 #endif /* RUNNING_UNIT_TESTS */

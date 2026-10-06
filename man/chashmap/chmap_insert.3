@@ -1,26 +1,55 @@
 .TH CHMAP_INSERT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-chmap_insert \- insert a key-value pair (type-safe)
+chmap_insert \- insert a key-value pair (type-inferred)
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chashmap.h>
+#include <ccollections/chashmap.h>
 
 chmap_insert(hm_name, key, val);
 .fi
 .SH DESCRIPTION
 .nf
-Type-safe wrapper for chmap_insert_elem() that builds the cmap_pair for
-the key and the value from the expressions passed. If the key already
-exists the value is updated silently. Calls ccol_fatal_err() only on a
-true failure (ccol_not_enough_memory, ccol_container_full, or
-ccol_invalid_args).
+Type-inferred wrapper for chmap_insert_elem(). It builds the cmap_pair for
+the key and the cmap_pair for the value from the given expressions. The
+macro updates the value silently when the map already holds the key. It
+calls ccol_fatal_err() only on a true failure. The true failures are
+ccol_not_enough_memory, ccol_container_full and ccol_invalid_args.
 
-key and val must be of the map's declared key and value types. Both are
-stored as the raw bytes of the expression passed, sized with sizeof,
-rather than converted to the declared type the way a plain C assignment
-would convert them.
+key and val go through the DECLARED key type and value type of the
+map. The macro makes a private copy of each argument with that type,
+and the copy is a plain C assignment, so the value is CONVERTED. It
+is never reinterpreted byte for byte. A float that goes into a map of
+int becomes 1 for 1.5f, in the same way as "int x = 1.5f;". It does
+not become 1069547520. An argument whose type has no implicit
+conversion to the declared type is a compile error at the call site.
+cvec_push(3) follows the same rule.
+
+Because the macro copies rather than takes an address, an lvalue, an
+rvalue, a literal and a computed expression are all accepted.
+
+A declared key or value type that is a CHARACTER POINTER is the one
+exception, and it converts nothing. char *, signed char * and
+unsigned char * are one single type to this library: all three
+classify as ccol_string, a NUL-terminated string. The macro measures
+it with strlen, and the map compares the bytes of the string and
+never the pointer type. A map keyed on unsigned char * therefore
+stays reachable through a char * that addresses the same string. An
+array key, such as a char buf[64] or a string literal, decays to a
+pointer in the same way as it does in any other assignment.
+
+A macro cannot know the length of a buffer that a pointer addresses,
+so a character pointer is never a binary key. Use one of two forms
+for a binary key. A key of a fixed length, such as a digest, can be
+a struct that wraps an array, such as
+struct { unsigned char b[32]; }; the map hashes and compares all of its
+bytes, zero bytes included. A key whose length is known only at run
+time goes through the raw chmap_insert_elem(3) layer, with that
+length in cmap_pair.size.
+
+A NULL character pointer is not a string. A NULL key or value of a
+character-pointer type stops the program with ccol_invalid_args.
 .fi
 .SH PARAMETERS
 .nf
@@ -30,22 +59,26 @@ val      Value to associate with key
 .fi
 .SH NOTES
 .nf
-Terminates program only on true failure, not on existing-key update
-Automatically takes address of key and value
+Stops the program only on a true failure. An update of an existing key
+is not a failure
+Copies the key and the value. Therefore, the key and the value do not have
+to be addressable
 Handles both value types and string types correctly
-For a float or double key, equality is bitwise except that -0.0 and
-0.0 are canonicalized to the same key; NaN keys follow bitwise
-equality, not IEEE 754 equality (see chmap_construct(3))
-For a long double key, equality is value-based (native ==) rather
-than bitwise, unlike every other key type; every NaN long double
-collapses into a single key (see chmap_construct(3))
+For a float or double key, equality is bitwise. There is one
+exception: the map canonicalizes -0.0 and 0.0 to the same key. A NaN
+key obeys bitwise equality, and not IEEE 754 equality (see
+chmap_construct(3))
+For a long double key, equality uses the value (native ==) and not
+the bytes. Every other key type uses the bytes. Every NaN long double
+collapses into one key (see chmap_construct(3))
 .fi
 .SH EXAMPLES
 .nf
 chmap_construct(map, int, char*);
-int first = 42, second = 100;
+int first = 42;
 chmap_insert(map, first, "hello");
-chmap_insert(map, second, "world");
+chmap_insert(map, 100, "world");   /* a literal key is fine */
+chmap_destroy(map);
 .fi
 .SH "SEE ALSO"
 .BR chmap_insert_elem (3),

@@ -1,0 +1,88 @@
+.TH CBMAP_CONSTRUCT_SCOPED 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cbmap_construct_scoped \- declare and create an ordered map that is destroyed on scope exit
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cbstmap.h>
+
+cbmap_construct_scoped(hm_name, key_t, val_t);
+.fi
+.SH DESCRIPTION
+.nf
+Declares an ordered map handle with the name hm_name. It also declares the
+companion type variables. Those variables carry key_t and val_t to every
+later type-inferred macro. The macro then creates the map with the default
+allocator and the default order for key_t. The macro also attaches the
+cleanup attribute. That attribute destroys the map on every exit from the
+enclosing scope, an early return included.
+
+The macro is cbmap_construct(3) plus that cleanup attribute. Nothing else
+differs. Use this macro when the whole useful life of the map is one block.
+Use cbmap_construct(3) when your code returns the handle, stores it, or
+destroys it in a place that the compiler cannot see.
+
+cbmap_declare_scoped(3) and then cbmap_init(3) is the two-step form. Use
+that form for a map whose configuration comes from inside the scope, and not
+from the declaration.
+.fi
+.SH PARAMETERS
+.nf
+hm_name  Name for the map handle to declare
+key_t    Key type. It tells every later macro how to read a key. It also
+         tells the container which order to give the tree
+val_t    Value type. Only the type-inferred macros read it. The library never
+         gives it to the container
+.fi
+.SH RETURN VALUE
+.nf
+None. This macro declares variables and does not expand to an expression.
+.fi
+.SH NOTES
+.nf
+The macro stops the program through ccol_fatal_err() if the creation fails.
+Use cbmap_declare_scoped(3) with cbmap_init(3) when the caller must handle a
+failure instead
+The macro needs GCC or Clang, because it uses the cleanup attribute
+The map keeps the elements in key order, and the walk visits them in
+ascending key order. cbmap_begin_iter(3) describes that contract.
+cbmap_create_full(3) describes the order that each key type gets
+For a struct key_t, the default order is a raw comparison of the
+representation of the key. Use cbmap_construct_cc_scoped(3) for such a key
+The exit of the scope destroys the map and clears the handle. An explicit
+cbmap_destroy(3) earlier in the scope therefore stays correct
+The companion type variables follow the scope of the handle. A function
+that receives the handle therefore needs cbmap_redeclare(3) there
+.fi
+.SH WARNINGS
+.nf
+The handle must not outlive its scope. Do not return it. Do not store it in
+a place that outlives the scope. Both actions give out a handle whose map
+the cleanup attribute frees at the exit of the scope.
+.fi
+.SH EXAMPLES
+.nf
+void report(int *ids, size_t n) {
+    cbmap_construct_scoped(seen, int, int);
+    int one = 1;
+    for (size_t i = 0; i < n; i++) {
+        cbmap_insert(seen, ids[i], one);
+    }
+    /* The walk visits the smallest id first */
+    ccol_iter_declare(seen, it);
+    for (it = ccol_begin(seen); it; it = ccol_iter_next(it)) {
+        print_id(*ccol_iter_key_ptr(it));
+    }
+}                                 /* The macro destroys seen here */
+.fi
+.SH "SEE ALSO"
+.BR cbmap_construct (3),
+.BR cbmap_construct_mp_scoped (3),
+.BR cbmap_construct_cc_scoped (3),
+.BR cbmap_construct_full_scoped (3),
+.BR cbmap_declare_scoped (3),
+.BR cbmap_init (3),
+.BR cbmap_redeclare (3),
+.BR cbmap_begin_iter (3),
+.BR cbmap_destroy (3)

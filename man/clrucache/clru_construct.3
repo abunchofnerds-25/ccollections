@@ -5,22 +5,22 @@ clru_construct \- declare and initialise an LRU cache in one step
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <clrucache.h>
+#include <ccollections/clrucache.h>
 
 clru_construct(name, KeyT, ValT, capacity, getter, setter, evict_cb);
 .fi
 .SH DESCRIPTION
 .nf
-Combines clru_declare() and clru_init() into a single statement. This
-is the most common way to create an LRU cache. Calls ccol_fatal_err() if
-creation fails.
+Puts clru_declare() and clru_init() together into a single statement.
+This is the most common way to create an LRU cache. It calls
+ccol_fatal_err() when the creation fails.
 .fi
 .SH PARAMETERS
 .nf
 name      Variable name for the cache handle
 KeyT      Key type
 ValT      Value type
-capacity  Maximum number of live entries before eviction
+capacity  The maximum number of live entries before eviction
 getter    Remote getter callback, or NULL
 setter    Remote setter callback, or NULL
 evict_cb  Eviction callback, or NULL

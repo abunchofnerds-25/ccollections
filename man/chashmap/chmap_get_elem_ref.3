@@ -5,23 +5,27 @@ chmap_get_elem_ref \- get reference to value by key
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chashmap.h>
+#include <ccollections/chashmap.h>
 
 ccol_retval_t chmap_get_elem_ref(chmap chm,
                                   const cmap_pair *key_pair,
-                                  cmap_pair **val_pair);
+                                  const cmap_pair **val_pair);
 .fi
 .SH DESCRIPTION
 .nf
-Retrieves a reference to the value associated with the given key. The
-returned reference points to internal storage and can be used to read
-or modify the value in-place.
+Gets a reference to the value that belongs to the given key. The
+reference points at internal storage. The caller can read the value
+through it, and can change the bytes of the value in place.
+
+The out-parameter is a const cmap_pair **. The caller's own variable
+must therefore be a const cmap_pair *. The address of a plain
+cmap_pair * does not compile.
 .fi
 .SH PARAMETERS
 .nf
 chm        Hash map to search
 key_pair   Key to look up
-val_pair   Pointer to receive reference to value
+val_pair   Address of a const cmap_pair * to receive the reference
 .fi
 .SH RETURN VALUE
 .nf
@@ -37,12 +41,26 @@ ccol_key_not_found  - Key does not exist in map
 .fi
 .SH NOTES
 .nf
+The ptr of a key_pair needs no specified alignment. The map hashes and
+compares the key bytes through memcpy. It does not use a pointer cast to
+the key type. key_pair->ptr can therefore point directly at key bytes at
+any offset in a larger buffer. Examples are a field in a packed network
+frame and a memory-mapped record. You do not have to copy the key bytes
+into an aligned local variable first
+The cmap_pair is the map's own accessor for that entry. It describes
+the value. It is not a part of the value. Its target is const. The
+caller can therefore read through val_pair->ptr. The caller can also
+write to the bytes that it points at, inside val_pair->size. But an
+assignment to val_pair->ptr or to val_pair->size itself is a compile
+error. The two fields describe one another. The map also cannot own
+a pointer that it did not allocate. Use chmap_insert_elem(3) to
+replace a value
 Average O(1) complexity
-Returned reference is valid until next insert/delete/resize; a
-lookup for a different key never invalidates it, and references
-returned for distinct keys may be held concurrently
-val_pair->ptr is correctly aligned for any value type, regardless
-of which internal backend the map uses
+The reference stays valid until the next insert, delete or resize. A
+lookup for a different key never invalidates it. The caller can hold
+references for different keys at the same time
+val_pair->ptr is correctly aligned for any value type. This is true
+for both internal backends
 For a float or double key, see chmap_construct(3) for the map's
 key equality contract (bitwise, except -0.0 canonicalized to 0.0)
 For a long double key, see chmap_construct(3) for the map's key

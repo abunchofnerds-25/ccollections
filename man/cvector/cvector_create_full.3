@@ -5,7 +5,7 @@ cvector_create_full \- create a vector with custom memory management
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cvector.h>
+#include <ccollections/cvector.h>
 
 cvec cvector_create_full(size_t elem_size,
                          ccol_memmgmt_procs_t *mmgmt_procs,
@@ -13,9 +13,9 @@ cvec cvector_create_full(size_t elem_size,
 .fi
 .SH DESCRIPTION
 .nf
-Creates a new vector container with full customization of memory
-management. The vector stores elements of the specified size and
-automatically manages capacity.
+Creates a new vector container. The caller sets every memory management
+option. The vector stores elements of the given size. It controls its
+capacity by itself.
 .fi
 .SH PARAMETERS
 .nf
@@ -27,14 +27,15 @@ err           Optional pointer to receive error string on failure
 .fi
 .SH RETURN VALUE
 .nf
-Returns pointer to newly created vector on success
-Returns NULL on failure (including if elem_size is 0, or large enough
-that the initial 4-element backing buffer allocation would overflow)
+Returns a pointer to the new vector on success
+Returns NULL on failure. An elem_size of 0 is a failure. An elem_size
+that makes the allocation of the first 4-element backing buffer
+overflow is also a failure
 .fi
 .SH NOTES
 .nf
-Initial capacity is 4 elements
-Capacity scaling: 2x when full, 0.5x when < 1/4 filled
+The first capacity is 4 elements
+Capacity scaling: 2x when full, 0.5x when less than 1/4 full
 Minimum capacity: 4 elements
 .fi
 .SH "SEE ALSO"

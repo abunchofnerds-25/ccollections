@@ -5,26 +5,43 @@ cyaml_create_string_mp, cyaml_create_string \- allocate a YAML string node
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cyaml.h>
+#include <ccollections/cyaml.h>
 
 cyaml cyaml_create_string_mp(const char *val, ccol_memmgmt_procs_t *mp);
 cyaml cyaml_create_string(const char *val);
 .fi
 .SH DESCRIPTION
 .nf
-Allocate a DOM node of type CYAML_STRING containing a heap-owned copy
-of val.  Passing NULL for val produces a CYAML_NULL node (the function
-itself never returns NULL due to a null val argument).
+Allocate a DOM node of type CYAML_STRING.  The node holds its own copy
+of val on the heap.  A NULL val gives a CYAML_NULL node.  A NULL val
+therefore never makes this function return NULL.
+
+val must be well-formed UTF-8.  The function refuses a string that is
+not, and returns NULL.  It never rewrites such a string.  Every Unicode
+character is accepted, including those that a YAML document may hold
+only as an escape (a C0 control, DEL, a C1 control, U+FFFE and
+U+FFFF): cyaml_serialize(3) writes a string that holds one
+double-quoted, with an escape, so the output parses back to the same
+text.
 cyaml_create_string() passes NULL for mp.
 .fi
 .SH PARAMETERS
 .nf
-val  Null-terminated source string, or NULL to produce a null node.
+val  Null-terminated, well-formed UTF-8 source string, or NULL for a
+     null node.
 mp   Custom allocator, or NULL for default.
+     The library keeps its own copy of the struct, so the caller may
+     release or reuse the struct once this call returns. The functions
+     that it names must stay callable until the last node built with
+     them is destroyed. A process can use at most 64 distinct sets of
+     four functions; a call that would need a 65th fails and returns
+     NULL.
 .fi
 .SH RETURN VALUE
 .nf
-New cyaml node on success, NULL only on allocation failure.
+New cyaml node on success.  NULL when val is not well-formed UTF-8,
+when the allocation fails, or when the allocator table is full (see
+mp).
 .fi
 .SH "SEE ALSO"
 .BR cyaml_str_val (3),

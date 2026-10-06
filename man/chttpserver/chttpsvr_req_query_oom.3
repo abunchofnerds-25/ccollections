@@ -5,30 +5,33 @@ chttpsvr_req_query_oom \- check whether chttpsvr_req_query ran out of memory
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 bool chttpsvr_req_query_oom(const chttpsvr_req *req);
 .fi
 .SH DESCRIPTION
 .nf
-Returns true if a query-string allocation for this request has failed
-under OOM: either chttpsvr_req_query's own result-array growth, or the
-one-time, shared query-string parse that chttpsvr_req_query and
-chttpsvr_req_query_one each lazily trigger on first use.
+Returns true when an allocation for the query string of this request
+failed because the library ran out of memory.  Two allocations can
+fail this way.  The first is the growth of the result array inside
+chttpsvr_req_query.  The second is the one-time, shared parse of the
+query string, which chttpsvr_req_query and chttpsvr_req_query_one each
+start lazily on their first use.
 
-chttpsvr_req_query returns (NULL, count=0) both when the requested key
-is absent and when an OOM condition prevents building the result array.
-Use this function to distinguish the two cases after any NULL return
-from chttpsvr_req_query.
+chttpsvr_req_query gives NULL and a count of 0 in two cases: the
+requested key is absent, or a lack of memory stopped the build of the
+result array.  Use this function to tell the two cases apart after any
+NULL return from chttpsvr_req_query.
 
-The flag is latching: once set it remains true for the remainder of the
-request regardless of subsequent query calls.  Returns false when req is
-NULL.
+The flag latches.  After the library sets it, it stays true for the
+rest of the request, whatever query calls follow.  This function
+returns false when req is NULL.
 .fi
 .SH RETURN VALUE
 .nf
-true; a query-string allocation for this request failed under OOM.
-false; no allocation error occurred (or req is NULL).
+true; an allocation for the query string of this request failed out of
+memory.
+false; no allocation error happened, or req is NULL.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_req_query (3),

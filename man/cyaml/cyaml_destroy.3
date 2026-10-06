@@ -5,25 +5,34 @@ cyaml_destroy \- recursively free a DOM tree and null the handle
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cyaml.h>
+#include <ccollections/cyaml.h>
 
 cyaml_destroy(node);
 .fi
 .SH DESCRIPTION
 .nf
-If node is non-NULL, recursively frees the entire DOM subtree rooted at
-node using each node's stored allocator, then sets node to NULL.
+When node is not NULL, this macro frees the whole DOM subtree under node
+recursively.  It frees each node with the allocator that the node
+stores.  It then sets node to NULL.
 
-List children, dictionary values, and string copies are all freed
-recursively.  Double-freeing a destroyed handle is safe because the
-macro nulls the variable once the subtree has been freed.
+The macro frees the children of a list, the values of a dictionary and
+the string copies, all recursively.  A second destroy of the same handle
+is safe, because the macro sets the variable to NULL after it frees the
+subtree.
 
-To destroy a tree without nulling the pointer, call __cyaml_destroy()
-directly.
+node must therefore be an assignable lvalue.  You cannot give a plain
+NULL literal, or any other expression that is not an lvalue.
 .fi
 .SH PARAMETERS
 .nf
-node  cyaml variable to destroy.  The variable itself is set to NULL.
+node  cyaml variable to destroy.  The macro sets the variable itself to
+      NULL.
+.fi
+.SH NOTES
+.nf
+The macro evaluates node exactly once. It must be a modifiable lvalue,
+such as a variable or an element of an array, so an expression with a
+side effect, such as handles[i++], destroys and clears one element.
 .fi
 .SH EXAMPLES
 .nf
@@ -32,5 +41,4 @@ cyaml root = cyaml_parse("a: 1\en", NULL);
 cyaml_destroy(root);   /* root is now NULL */
 .fi
 .SH "SEE ALSO"
-.BR cyaml_declare_scoped (3),
-.BR __cyaml_destroy (3)
+.BR cyaml_declare_scoped (3)

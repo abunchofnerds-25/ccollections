@@ -1,0 +1,47 @@
+.TH CHTTPSVR_RESP_ADD_HEADER 3 "2026-09-29" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_resp_add_header \- add one more field of a response header
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpserver.h>
+
+ccol_retval_t chttpsvr_resp_add_header(chttpsvr_resp *resp,
+                                        const char *name,
+                                        const char *value);
+.fi
+.SH DESCRIPTION
+.nf
+Adds one "name:value" field line to the response, after every field
+that is already set.  Unlike chttpsvr_resp_set_header(3), it keeps the
+fields of the same name that already exist, so a response can carry,
+for example, two Set-Cookie lines.  The fields go on the wire in the
+order of the calls.
+
+It checks name and value exactly as chttpsvr_resp_set_header(3) does,
+with the same results: name must be a non-empty RFC 7230 token, value
+must hold no CR byte and no LF byte, "Transfer-Encoding" is refused,
+and a "Content-Length" value must be a number.
+
+Three names carry one field at most in any response: "Connection",
+"Content-Length" and "Date".  For those three, this function does what
+chttpsvr_resp_set_header(3) does and replaces the value.  See that page
+for how the server treats each of them.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success on success.
+ccol_invalid_args in the cases that chttpsvr_resp_set_header(3)
+lists.
+ccol_not_enough_memory when the allocation under it fails.
+A failed call changes nothing in the response.
+.fi
+.SH EXAMPLES
+.nf
+chttpsvr_resp_add_header(resp, "Set-Cookie", "a=1; Path=/");
+chttpsvr_resp_add_header(resp, "Set-Cookie", "b=2; Path=/");
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_resp_set_header (3),
+.BR chttpsvr_resp_write (3)

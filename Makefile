@@ -1,23 +1,24 @@
-CC = gcc
+include platform.mk
 AR = ar
 RANLIB = ranlib
 
 SHORT_LIBRARY_NAME = ccollections
 
-# Release version, and the ABI version encoded in the shared library's SONAME.
+# The release version, and the Application Binary Interface (ABI) version that
+# the SONAME of the shared library holds.
 #
-# VERSION names the release. ABI_VERSION names the binary interface, and is
-# what a linked application actually records a dependency on: an application
-# built against this library gets DT_NEEDED libccollections.so.$(ABI_VERSION),
-# so the dynamic loader will only ever satisfy it with a library promising
-# that same interface. The two are deliberately separate numbers, because a
-# release that only adds symbols or fixes behavior keeps the same ABI while
-# VERSION moves on.
+# VERSION names the release. ABI_VERSION names the binary interface. An
+# application records a dependency on the ABI version, not on the release
+# version. An application that you build against this library gets DT_NEEDED
+# libccollections.so.$(ABI_VERSION). The dynamic loader then accepts only a
+# library that promises that same interface. The two numbers are separate on
+# purpose. A release that only adds symbols, or only corrects behavior, keeps
+# the same ABI while VERSION goes up.
 #
-# ABI_VERSION is the major version, and a change that breaks the interface
-# requires incrementing it. The VERSION_MAJOR = 0 branch below covers a
-# pre-1.0 major, where an interface is still settling and every minor release
-# counts as an ABI of its own.
+# ABI_VERSION is the major version. You must increase it when a change breaks
+# the interface. The VERSION_MAJOR = 0 branch below is for a major version
+# before 1.0. An interface is not yet stable at that time, so each minor
+# release counts as its own ABI.
 VERSION_MAJOR = 1
 VERSION_MINOR = 0
 VERSION_PATCH = 0
@@ -28,59 +29,73 @@ else
 ABI_VERSION = $(VERSION_MAJOR)
 endif
 
-# The real file carries the full version; the SONAME and the bare development
-# link are symlinks onto it, which is the usual three-name ELF layout:
+# The real file has the full version in its name. The SONAME and the plain
+# development link are symlinks to it. This is the usual ELF layout with three
+# names:
 #   libccollections.so             -> what -lccollections resolves at link time
 #   libccollections.so.1           -> the SONAME, what a built binary records
 #   libccollections.so.1.0.0       -> the actual file
+#
+# macOS puts the version before the suffix, and the install name of the
+# library plays the part of the SONAME:
+#   libccollections.dylib, libccollections.1.dylib, libccollections.1.0.0.dylib
+ifeq ($(CCOL_UNAME_S),Darwin)
+SHARED_LIBRARY_NAME = lib$(SHORT_LIBRARY_NAME).dylib
+SHARED_LIBRARY_SONAME = lib$(SHORT_LIBRARY_NAME).$(ABI_VERSION).dylib
+SHARED_LIBRARY_REAL = lib$(SHORT_LIBRARY_NAME).$(VERSION).dylib
+SHARED_LIBRARY_ANY_VERSION = lib$(SHORT_LIBRARY_NAME).*.dylib
+else
 SHARED_LIBRARY_NAME = lib$(SHORT_LIBRARY_NAME).so
 SHARED_LIBRARY_SONAME = $(SHARED_LIBRARY_NAME).$(ABI_VERSION)
 SHARED_LIBRARY_REAL = $(SHARED_LIBRARY_NAME).$(VERSION)
+SHARED_LIBRARY_ANY_VERSION = $(SHARED_LIBRARY_NAME).*
+endif
 STATIC_LIBRARY_NAME = lib$(SHORT_LIBRARY_NAME).a
 PKGCONFIG_FILE = $(SHORT_LIBRARY_NAME).pc
 
 # ---------------------------------------------------------------------------
 # Optional modules
 # ---------------------------------------------------------------------------
-# Every module is built by default. Set any of these to 0, here or on the
-# command line, to leave that module out of the library entirely:
+# The build includes every module by default. Set any of these to 0, here or on
+# the command line, to leave that module out of the library:
 #
 #   make WITH_CHTTPCLIENT=0 WITH_CHTTPSERVER=0
 #
-# Modules are selected by choosing which sources to compile rather than by
-# wrapping their bodies in #ifdef. The four optional modules are leaves (no
-# other module includes their headers), so leaving one out needs no conditional
-# compilation anywhere, and the sources stay free of build-configuration
-# clutter. A disabled module's public header is not installed either, so
-# including it fails at compile time with a missing file rather than at link
-# time with undefined symbols.
+# The build selects a module by the sources that it compiles. It does not wrap
+# the body of a module in #ifdef. No other module includes the headers of the
+# four optional modules, so each one is a leaf. This is why the build needs no
+# conditional compilation to leave one out, and why the sources hold no build
+# configuration clutter. The build also does not install the public header of a
+# module that you turn off. An application that includes that header then fails
+# at compile time with a missing file. It does not fail at link time with
+# undefined symbols.
 #
-# What this is actually for is dropping dependencies. OpenSSL enters the build
-# through exactly one file (src/ctls.c) which only the two HTTP modules use, so
-# turning both off removes libssl and libcrypto completely. zlib enters through
-# clogger alone. With all five off, the library needs nothing beyond pthread and
-# libm.
+# The purpose of these switches is to drop dependencies. OpenSSL comes into the
+# build through one file only (src/ctls.c), and only the two HTTP modules use
+# it. Turn both of them off and the build needs neither libssl nor libcrypto.
+# zlib comes in through clogger alone. Turn all five modules off and the
+# library needs only pthread and libm.
 #
-# A reduced build is NOT ABI-interchangeable with a full one. It carries the
-# same SONAME while exporting fewer symbols, so an application linked against a
-# full build fails to start against a reduced one. Reduced builds are for
-# embedding a library you build yourself, not for distributing something another
-# program might mistake for the complete one. `make check_abi` recognises a
-# reduced build and skips, since the committed baseline describes the full
-# library.
+# A reduced build is NOT interchangeable with a full build at the ABI level. It
+# keeps the same SONAME but exports fewer symbols. An application that you link
+# against a full build then fails to start against a reduced one. Use a reduced
+# build for a library that you build and embed yourself. Do not distribute one,
+# because another program can mistake it for the complete library. `make
+# check_abi` detects a reduced build and skips, because the committed baseline
+# describes the full library.
 WITH_CJSON ?= 1
 WITH_CYAML ?= 1
 WITH_CLOGGER ?= 1
 WITH_CHTTPCLIENT ?= 1
 WITH_CHTTPSERVER ?= 1
 
-# src/ctls.c and src/chttp1_parser.c are internal and used only by the two HTTP
-# modules, so they follow rather than carry a switch of their own.
-# Each half is tested the same way every other switch is tested, against 1
-# rather than against 0: any other spelling means off, and matching the two
-# concatenated against a single literal would read "no" as "on" for one of them
-# and leave a half-configured build that still compiles ctls and chttp1_parser,
-# still links OpenSSL, and still runs their suites.
+# src/ctls.c and src/chttp1_parser.c are internal. Only the two HTTP modules
+# use them, so they follow those modules and have no switch of their own.
+# The build tests each half against 1, in the same way as every other switch.
+# It does not test against 0. Any other spelling means off. Do not join the two
+# values and match them against one literal. That form reads "no" as "on" for
+# one of them. The result is a half-configured build that still compiles ctls
+# and chttp1_parser, still links OpenSSL, and still runs their suites.
 WITH_HTTP := 0
 ifeq ($(WITH_CHTTPCLIENT),1)
 WITH_HTTP := 1
@@ -89,10 +104,11 @@ ifeq ($(WITH_CHTTPSERVER),1)
 WITH_HTTP := 1
 endif
 
-# chttpclient and chttpserver both log through clogger, so it cannot be dropped
-# while either of them is present. Forcing it rather than failing keeps
-# `make WITH_CLOGGER=0` from being a build error for anyone who simply wanted
-# less and did not know the dependency.
+# chttpclient and chttpserver both write their logs through clogger. You cannot
+# drop clogger while one of them is in the build. The build turns clogger back
+# on instead of stopping with an error. This keeps `make WITH_CLOGGER=0` from
+# being a build error for a user who wants a smaller library and does not know
+# about this dependency.
 ifeq ($(WITH_HTTP),1)
 ifneq ($(WITH_CLOGGER),1)
 $(warning WITH_CLOGGER=0 ignored: chttpclient/chttpserver depend on clogger)
@@ -103,16 +119,17 @@ endif
 SOURCE_DIR = src
 INCLUDE_DIR = include
 OBJECT_DIR = obj
-# chttpclient's HTTP/1.1 response parser (src/chttp1_parser.c) and the rest of
-# the c_collections-native HTTP stack (ctls, ccol_event_loop, chttpserver,
-# chttpclient) are first-party modules, needing no vendor build rules at all:
-# they are picked up automatically by SOURCE_FILES' wildcard over
-# $(SOURCE_DIR)/*.c below, exactly like any other module in this library.
-# The library vendors no third-party source: every .c it builds is its own.
-# A disabled module's own test directory is skipped, along with tests/mixed/
-# whenever anything is disabled: that suite links across modules and cannot
-# build against a partial library. tests/ctls/ and tests/chttp/ follow the HTTP
-# switches, since they exercise code those modules bring in.
+# The HTTP/1.1 response parser of chttpclient (src/chttp1_parser.c) and the
+# other parts of the HTTP stack (ctls, ccol_event_loop, chttpserver,
+# chttpclient) all belong to this project. They need no build rules for a
+# third party. The SOURCE_FILES wildcard over $(SOURCE_DIR)/*.c below finds
+# them, in the same way as it finds every other module of this library.
+# The library holds no third-party source: it builds only its own .c files.
+# The build skips the test directory of a module that you turn off. It also
+# skips tests/mixed/ when you turn off anything, because that suite links
+# across modules and cannot build against a partial library. tests/ctls/ and
+# tests/chttp/ follow the HTTP switches, because they exercise the code that
+# those modules bring in.
 DISABLED_TEST_DIRS :=
 ifneq ($(WITH_CJSON),1)
 DISABLED_TEST_DIRS += cjson
@@ -129,11 +146,12 @@ endif
 ifneq ($(WITH_CHTTPSERVER),1)
 DISABLED_TEST_DIRS += chttpserver
 endif
-# ctls only: src/ctls.c goes with the HTTP modules, so its suite has nothing
-# left to compile. tests/chttp stays, because src/chttp.c (the shared types,
-# base64 and RFC 7617 helpers) ships in every configuration and that suite
-# needs nothing else; dropping it would leave a shipped file with no suite,
-# which the per-file coverage gate reports as not compiled by any suite.
+# This is for ctls only. src/ctls.c goes out with the HTTP modules, so its
+# suite has nothing left to compile. tests/chttp stays. src/chttp.c holds the
+# shared types, the base64 helpers and the RFC 7617 helpers, and it ships in
+# every configuration. That suite needs nothing else. If the build dropped it,
+# a shipped file would have no suite. The coverage gate for each file then
+# reports that file as not compiled by any suite.
 ifneq ($(WITH_HTTP),1)
 DISABLED_TEST_DIRS += ctls
 endif
@@ -151,54 +169,89 @@ COVERAGE_TEST_FOLDERS = $(shell ls -1d tests/*/ | grep -vE '/tau/|/mixed/' $(TES
 _create_object_dir := $(shell mkdir -p $(OBJECT_DIR))
 
 EXTRA_CFLAGS ?=
-# -Wl,-z,relro,-z,now is a *linker* flag (the -Wl, prefix passes it straight
-# through to ld), not a compiler flag: it belongs in SHARED_LDFLAGS, applied
-# at the actual link step that produces libccollections.so, not here in
-# COMMON_CFLAGS, which this Makefile only ever uses for the separate,
-# link-less `$(CC) -c ...` object-compile steps below. Put here instead, it
-# is silently discarded before reaching any real link invocation, providing
-# no RELRO/BIND_NOW hardening at all, and under clang it breaks the build
-# outright: clang's driver treats an unused linker argument passed to a
-# compile-only invocation as an error under -Werror, where gcc tolerates it
-# silently. See SHARED_LDFLAGS below for where it takes effect. A static
-# archive (STATIC_LDFLAGS, built via `ar`, not a real linker invocation at
-# all) has no equivalent: RELRO/BIND_NOW are properties of a real ELF
-# executable/shared object, and applying them is the responsibility of
-# whatever a caller of libccollections.a itself ultimately links into.
-# -D_FILE_OFFSET_BITS=64: on a 32-bit (ILP32) target, glibc's readdir() must
-# narrow the kernel's 64-bit d_ino into the caller's own ino_t; without this
-# flag that ino_t is only 32 bits wide, so readdir() fails with EOVERFLOW
-# the moment a directory contains an entry whose real inode number does not
-# fit (routine on a modern 64-bit-inode filesystem, not a corrupt or
-# adversarial input). This flag makes ino_t (and off_t, stat, etc.) 64 bits
-# wide on every target, a no-op on a 64-bit build where they already are.
+# -Wl,-z,relro,-z,now is a *linker* flag. The -Wl, prefix sends it straight to
+# ld. It is not a compiler flag. It belongs in SHARED_LDFLAGS, which applies at
+# the link step that makes libccollections.so. It does not belong here in
+# COMMON_CFLAGS. This Makefile uses COMMON_CFLAGS only for the `$(CC) -c ...`
+# steps below, which compile an object and do not link. A linker flag here goes
+# away before it reaches a real link, so it gives no RELRO or BIND_NOW
+# hardening at all. Under clang it also breaks the build. The clang driver
+# treats an unused linker argument on a compile-only command as an error under
+# -Werror, and gcc accepts it silently. See SHARED_LDFLAGS below, where the
+# flag takes effect. A static archive has no equivalent, because `ar` builds
+# STATIC_LDFLAGS and `ar` is not a linker. RELRO and BIND_NOW are properties of
+# a real ELF executable or shared object. Whatever links libccollections.a into
+# a program must apply them.
+# -D_FILE_OFFSET_BITS=64 is for a 32-bit (ILP32) target. There, readdir() in
+# glibc must narrow the 64-bit d_ino of the kernel into the ino_t of the
+# caller. Without this flag that ino_t is only 32 bits wide. readdir() then
+# fails with EOVERFLOW as soon as a directory holds an entry whose real inode
+# number does not fit. This is normal on a modern filesystem with 64-bit
+# inodes. It is not a corrupt input and not an attack. This flag makes ino_t,
+# off_t, stat and the related types 64 bits wide on every target. It changes
+# nothing on a 64-bit build, where they are already 64 bits wide.
 # -fvisibility=hidden makes every function and object internal to the library
-# by default; only the declarations inside the `#pragma GCC visibility
-# push(default)` blocks of the installed public headers are exported. This
-# keeps the dynamic symbol table equal to the documented public API, so an
-# internal helper never silently becomes part of the ABI, and an application
-# symbol of the same name can never interpose one of the library's own
-# internal calls. It also removes a real indirection: a call to an exported
-# function from elsewhere inside the library is preemptible and therefore
-# routed through the PLT, while a hidden one is called directly.
+# by default. The build exports only the declarations inside the `#pragma GCC
+# visibility push(default)` blocks of the installed public headers. This keeps
+# the dynamic symbol table equal to the documented public API. An internal
+# helper therefore never becomes part of the ABI without notice. An application
+# symbol of the same name can also never interpose an internal call of the
+# library. The flag removes one indirection as well. A call to an exported
+# function from inside the library can be interposed, so it goes through the
+# PLT. A call to a hidden function is direct.
+# -std=gnu11 pins the language mode of the public headers. That mode is C11
+# plus the GNU extensions that the macro layer needs: typeof, statement
+# expressions and __auto_type. Without this flag the build takes the default
+# mode of the compiler. Those defaults change over time. A toolchain whose
+# default is gnu23 changes the meaning of `bool`, of `static_assert`, and of an
+# empty parameter list. An unset mode therefore makes the build machine decide
+# which language the library is compiled as. A named mode keeps one build the
+# same across compilers, and across versions of one compiler.
+# A hardening flag is only worth passing where the compiler really implements
+# it FOR THIS TARGET. -fstack-clash-protection is the one that forced this
+# probe. Clang implements it on x86 and s390x and not on 32-bit ARM. On armhf
+# the clang driver accepts the flag, does nothing with it, and then reports
+# "argument unused during compilation", which -Werror turns into a hard error.
+# The library therefore could not be built at all with clang on armhf. GCC
+# accepts the flag on armhf and implements it, so this is a property of the
+# pair (compiler, target) and not of either one alone.
+#
+# The probe compiles an empty translation unit with the flag and with -Werror.
+# It keeps the flag only when that succeeds. This is strictly better than
+# dropping the flag on a hardcoded list of targets, which goes stale as
+# compilers gain support, and better than the -Wno-error=unused-command-line-
+# argument that the alternative needs: that silences the diagnostic for the
+# whole build, including the places where it reports a real mistake.
+#
+# The probe must never hide the LOSS of hardening, so `make hardening_report`
+# below prints which flags survived for the current compiler and target. See
+# also check_hardening in ci_scripts, which reads the built artifact rather
+# than the flags, because a flag in the wrong variable disappears in silence.
+cc-option = $(shell printf 'int main(void){return 0;}' > .ccol_probe.c 2>/dev/null && 	if $(CC) $(1) -Werror -c .ccol_probe.c -o .ccol_probe.o >/dev/null 2>&1; 	then printf '%s' '$(1)'; fi; rm -f .ccol_probe.c .ccol_probe.o)
+
+HARDENING_CFLAGS := $(call cc-option,-fstack-protector-strong) \
+	$(call cc-option,-fstack-clash-protection) \
+	$(call cc-option,-D_FORTIFY_SOURCE=3)
+
 COMMON_CFLAGS = -I$(INCLUDE_DIR) \
+	-std=gnu11 \
 	-fvisibility=hidden \
-	-fstack-protector-strong \
-	-fstack-clash-protection \
-	-D_FORTIFY_SOURCE=3 \
+	$(HARDENING_CFLAGS) \
 	-D_FILE_OFFSET_BITS=64 \
 	-Wstrict-overflow -Wformat=2 -Wformat-security -Wall -Wextra \
 	-g -O3 -Werror -fPIC $(EXTRA_CFLAGS)
 
-# Separate cflags for shared and static builds
+
+# Different cflags for the shared build and the static build
 SHARED_CFLAGS = $(COMMON_CFLAGS)
 STATIC_CFLAGS = $(COMMON_CFLAGS)
 
-# Separate ldflags for shared and static builds
-# Only the libraries the enabled modules actually need. zlib arrives with
-# clogger and OpenSSL with the HTTP modules, so a build without them links
-# neither, and `pkg-config --libs --static ccollections` stops naming them too.
-EXTERNAL_LIBS = -lpthread -lm
+# Different ldflags for the shared build and the static build.
+# This names only the libraries that the modules in the build need. zlib comes
+# with clogger, and OpenSSL comes with the HTTP modules. A build without those
+# modules links neither library. `pkg-config --libs --static ccollections` then
+# does not name them either.
+EXTERNAL_LIBS = $(CCOL_PLATFORM_LIBS)
 PC_REQUIRES_PRIVATE =
 ifeq ($(WITH_CLOGGER),1)
 EXTERNAL_LIBS += -lz
@@ -209,17 +262,27 @@ EXTERNAL_LIBS += -lssl -lcrypto
 PC_REQUIRES_PRIVATE += libssl libcrypto
 endif
 
-SHARED_LDFLAGS = -Wl,-z,relro,-z,now -Wl,-soname,$(SHARED_LIBRARY_SONAME) -shared $(EXTERNAL_LIBS)
+ifeq ($(CCOL_UNAME_S),Darwin)
+# The install name is where an application that links the library looks for
+# it at run time, so it names the installed copy.
+SHARED_LDFLAGS = -dynamiclib -install_name $(LIBDIR)/$(SHARED_LIBRARY_SONAME) \
+	-compatibility_version $(ABI_VERSION) -current_version $(VERSION) \
+	$(EXTERNAL_LIBS)
+else
+SHARED_LDFLAGS = $(CCOL_LD_HARDENING) -Wl,-soname,$(SHARED_LIBRARY_SONAME) -shared $(EXTERNAL_LIBS)
+endif
 STATIC_LDFLAGS =
 
-# cdebuglog.c (an opt-in, RUNNING_UNIT_TESTS-only diagnostic log buffer for
-# chasing hard-to-reproduce CI timing/hang issues; see its own doc comment
-# in include/cdebuglog.h) is deliberately excluded here: it is not part of
-# the shipped library, even as the empty translation unit it would compile
-# to in a production (non-RUNNING_UNIT_TESTS) build. A test suite that wants
-# it adds src/cdebuglog.c to its own Makefile's SRC_FILES explicitly.
-# Sources left out by the WITH_* switches above, alongside cdebuglog.c which is
-# never part of the shipped library.
+# cdebuglog.c is not in this list on purpose. It is a diagnostic log buffer
+# that a suite turns on for itself. It compiles to nothing unless the build
+# defines RUNNING_UNIT_TESTS. Its purpose is to help you find a CI timing
+# problem or a hang that is hard to reproduce. See the doc comment in
+# include/internal/cdebuglog.h. It is not part of the shipped library, not even
+# as the empty translation unit that a production build would compile it to. A
+# test suite that needs it adds src/cdebuglog.c to the SRC_FILES of its own
+# Makefile.
+# The list below holds the sources that the WITH_* switches above leave out,
+# together with cdebuglog.c, which is never part of the shipped library.
 DISABLED_SOURCES :=
 DISABLED_HEADERS :=
 ifneq ($(WITH_CJSON),1)
@@ -247,53 +310,110 @@ DISABLED_SOURCES += $(SOURCE_DIR)/ctls.c $(SOURCE_DIR)/chttp1_parser.c
 endif
 
 SOURCE_FILES = $(filter-out $(SOURCE_DIR)/cdebuglog.c $(DISABLED_SOURCES),$(wildcard $(SOURCE_DIR)/*.c))
-HEADER_FILES = $(filter-out $(DISABLED_HEADERS),$(wildcard $(INCLUDE_DIR)/*.h))
+# This reads both directories. include/ holds the installed public headers and
+# include/internal/ holds the internal ones. The second wildcard is necessary,
+# not only tidy. This list is a prerequisite of every object. An internal
+# header that is not in the list no longer starts a rebuild of the sources that
+# include it. You then get a stale object, and no error tells you so.
+HEADER_FILES = $(filter-out $(DISABLED_HEADERS),\
+                 $(wildcard $(INCLUDE_DIR)/*.h) \
+                 $(wildcard $(INCLUDE_DIR)/internal/*.h))
 OBJ_FILES_SHARED = $(SOURCE_FILES:$(SOURCE_DIR)/%.c=$(OBJECT_DIR)/%.o)
 OBJ_FILES_STATIC = $(SOURCE_FILES:$(SOURCE_DIR)/%.c=$(OBJECT_DIR)/%.static.o)
 
 default: all
 
+# Prints which hardening flags this compiler and target really accept. A flag
+# that the probe above dropped is a real loss of hardening for this build, and
+# it must be visible rather than silent.
+.PHONY: hardening_report
+hardening_report:
+	@echo "CC                = $(CC)"
+	@echo "HARDENING_CFLAGS  = $(HARDENING_CFLAGS)"
+	@for f in -fstack-protector-strong -fstack-clash-protection -D_FORTIFY_SOURCE=3; do \
+		case " $(HARDENING_CFLAGS) " in \
+			*" $$f "*) echo "  ok       $$f" ;; \
+			*) echo "  DROPPED  $$f (this compiler does not implement it for this target)" ;; \
+		esac; \
+	done
+
 test:
-	$(foreach folder,$(TEST_FOLDERS),(cd $(folder) && make test) &&) true
+	$(foreach folder,$(TEST_FOLDERS),(cd $(folder) && $(MAKE) test) &&) true
 
 memtest:
-	$(foreach folder,$(TEST_FOLDERS),(cd $(folder) && make memtest) &&) true
+	$(foreach folder,$(TEST_FOLDERS),(cd $(folder) && $(MAKE) memtest) &&) true
 
-# Each module runs in its own subshell, and the list is chained with && so the
-# first failure stops the sweep and propagates. A `cd $(folder) && ... && cd -`
-# chain joined by `;` instead would leave the shell parked in the failing
-# module's directory, so every following module's own relative cd fails too and
-# sixteen misleading "can't cd" lines bury the one real error.
+# Each module runs in its own subshell, and && joins the list. The first
+# failure therefore stops the sweep and gives a non-zero status. Do not join a
+# `cd $(folder) && ... && cd -` chain with `;` instead. That form leaves the
+# shell in the directory of the module that failed. The relative cd of every
+# module after it then fails too, and sixteen "can't cd" lines hide the one
+# real error.
 generate_coverage_report:
-	$(foreach folder,$(COVERAGE_TEST_FOLDERS),(cd $(folder) && make generate_coverage_report) &&) true
+	$(foreach folder,$(COVERAGE_TEST_FOLDERS),(cd $(folder) && $(MAKE) generate_coverage_report) &&) true
 
 # ---------------------------------------------------------------------------
 # Aggregate coverage site
 # ---------------------------------------------------------------------------
-# Each module's own generate_coverage_report leaves its lcov tracefiles in
-# tests/<module>/coverage/. This target merges every one of them into a single
-# report covering the library as a whole. Merging is what makes the numbers
-# meaningful: a file such as src/common.c is compiled into most of the module
-# test binaries, and only the union of their runs describes how much of it the
-# suite actually reaches.
+# The generate_coverage_report target of each module leaves its lcov
+# tracefiles in tests/<module>/coverage/. This target merges all of them into
+# one report for the whole library. The merge is what makes the numbers mean
+# something. A file such as src/common.c is compiled into most of the module
+# test binaries. Only the union of their runs shows how much of that file the
+# suite reaches.
 #
-# A module may leave more than one tracefile behind, and every one of them is
-# picked up: a suite that builds several binaries from one directory emits one
-# per binary.
+# A module can leave more than one tracefile, and this target reads every one
+# of them. A suite that builds several binaries from one directory writes one
+# tracefile for each binary.
 #
-# The merged data is then narrowed to src/ and include/ alone. Coverage of the
-# test code itself, of the vendored test framework, and of system headers says
-# nothing about how well the library is tested, and leaving it in inflates
-# every headline number. The extract patterns are anchored to $(CURDIR) rather
-# than written as '*/include/*', which also matches /usr/include/... and pulls
-# six glibc and OpenSSL headers into the report, one of them at 0.0 percent.
-# Fails the build if anything in the public interface loses its namespace
-# prefix. This cannot be checked by the test suites: they compile the .c files
-# straight into their own binaries, where an unprefixed or unexported symbol
-# links exactly like a correct one.
+# This target then narrows the merged data to src/ and include/ alone. The
+# coverage of the test code, of the test framework, and of the system headers
+# says nothing about how well the library is tested. It also makes every
+# headline number look better than it is. The extract patterns start at
+# $(CURDIR). Do not write them as '*/include/*'. That pattern also matches
+# /usr/include/... and brings six glibc and OpenSSL headers into the report,
+# one of them at 0.0 percent.
+# This stops the build if any part of the public interface loses its namespace
+# prefix. The test suites cannot check this. They compile the .c files straight
+# into their own binaries, where a symbol without a prefix, or a symbol that is
+# not exported, links in the same way as a correct one.
+#
+# The check reads both shipped artifacts, because hidden visibility makes the
+# two disagree about what the interface is. A helper that stays out of the
+# dynamic symbol table of the shared object is still a global definition in the
+# archive. A static link resolves it in the same way as an exported symbol. An
+# application that defines its own symbol of that name then fails to link. A
+# check of the shared object alone reports a clean interface for a name that
+# can still collide in the archive.
+# Every installed header must compile on its own under a strict -std=c11 with
+# -pedantic-errors, with both compilers. Code that USES a typed macro still
+# needs -std=gnu11, because the macros use statement expressions. Merely
+# INCLUDING a header must not, or a consumer's own header cannot include one
+# without forcing gnu11 on everything downstream of it. The check also
+# compiles each header from the installed layout, behind an application
+# directory that shadows every other public name.
+.PHONY: check_headers
+check_headers:
+	@./ci_scripts/check_public_headers_standalone.sh
+
 .PHONY: check_namespace
-check_namespace: $(SHARED_LIBRARY_NAME)
-	@./ci_scripts/check_public_namespace.sh $(SHARED_LIBRARY_REAL)
+check_namespace: $(SHARED_LIBRARY_NAME) $(STATIC_LIBRARY_NAME)
+	@./ci_scripts/check_public_namespace.sh $(SHARED_LIBRARY_REAL) $(STATIC_LIBRARY_NAME)
+
+# Fails if a file under include/ or man/ carries a name that the install would
+# paste onto the installation directory as a shell pattern rather than as one
+# literal path. The install and uninstall recipes build their argument lists
+# from these basenames. A `*`, `?` or `[` in one of them makes `rm -f` delete,
+# and `sed -i` rewrite, whatever it matches inside the installation directory,
+# which is other packages' files. The recipes run under `set -f` so that the
+# shell expands nothing; this check is the other half of the same guard, and it
+# keeps such a name out of the tree so that the property does not rest on one
+# `set -f` surviving a future edit. It also requires every man alias page to
+# be the single line ".so <module>/<symbol>.3" that the install rewrites, with
+# a target that exists. It needs no build artifact.
+.PHONY: check_filenames
+check_filenames:
+	@./ci_scripts/check_installable_filenames.sh
 
 # Fails if the set of exported symbols has drifted from abi/, which records the
 # ABI that libccollections.so.$(ABI_VERSION) promises. A removed symbol breaks
@@ -315,8 +435,26 @@ else
 	@echo "           smaller symbol set here is expected rather than a defect."
 endif
 
-# Re-records the baseline from the current build. Run this when the public API
-# gains a symbol, and commit the result with it.
+# This check proves that a process can still fork() after it loads this library
+# with dlopen(), uses a module that registers pthread_atfork() handlers, and
+# then unloads the library again. Like the two checks above, it needs the built
+# .so. The test suites link the .c files directly, so no test ever loads or
+# unloads a shared object.
+.PHONY: check_dso_unload
+check_dso_unload: $(SHARED_LIBRARY_NAME)
+	@./ci_scripts/check_dso_unload.sh $(SHARED_LIBRARY_REAL)
+
+# This target links a program that uses little of the library against the built
+# shared object. It fails when valgrind finds memory of the library that is
+# allocated at exit. The test suites compile the sources into their own
+# binaries. Therefore, no suite sees what the destructors of the shared object
+# do at exit.
+.PHONY: check_exit_reachable
+check_exit_reachable: $(SHARED_LIBRARY_NAME)
+	@CC="$(CC)" CCOL_VALGRIND_SUPP="$(CCOL_VALGRIND_SUPP)" ./ci_scripts/check_exit_reachable.sh $(SHARED_LIBRARY_REAL)
+
+# This records the baseline again from the current build. Run it when the
+# public API gets a new symbol, and commit the new baseline with that change.
 .PHONY: update_abi_baseline
 update_abi_baseline: $(SHARED_LIBRARY_NAME)
 ifeq ($(strip $(DISABLED_SOURCES)),)
@@ -332,17 +470,17 @@ endif
 # ---------------------------------------------------------------------------
 # Benchmarks
 # ---------------------------------------------------------------------------
-# bench/ links against the shared library this build produces rather than
-# compiling the sources into its own binary, so what it measures is the code
-# that ships, at the flags it ships with, reached through the same dynamic call
-# an application makes. The baseline it compares against is per machine and is
-# not committed: an absolute nanoseconds-per-operation figure describes one
-# machine's cache hierarchy and background load, so comparing a run here
-# against one recorded elsewhere reports a difference that has nothing to do
-# with the library. Record a baseline with bench_update, then bench reports
-# every later run against it.
+# bench/ links against the shared library that this build produces. It does not
+# compile the sources into its own binary. It therefore measures the code that
+# ships, at the flags that it ships with, through the same dynamic call that an
+# application makes. The baseline that it compares against belongs to one
+# machine, and the project does not commit it. A figure in nanoseconds for each
+# operation describes the cache hierarchy and the background load of one
+# machine. A run here against a baseline from another machine therefore reports
+# a difference that has nothing to do with the library. Record a baseline with
+# bench_update. After that, bench reports every later run against it.
 #
-# BENCH_ARGS passes options straight through, e.g.
+# BENCH_ARGS sends options straight through. For example:
 #   make bench BENCH_ARGS="--filter=chashmap --reps=15"
 BENCH_ARGS ?=
 
@@ -368,10 +506,11 @@ bench_list: $(SHARED_LIBRARY_NAME)
 
 COVERAGE_SITE_DIR = coverage_site
 
-# Fails if any file in src/ or include/ is covered by less than 80 percent of
-# its instrumented lines. Separate from coverage_site so that the report can be
-# regenerated and inspected without the check, and so the check can be re-run
-# against an existing report without paying for the instrumented rebuild.
+# This fails when a file in src/ or include/ has coverage below 80 percent of
+# its instrumented lines. It is a separate target from coverage_site for two
+# reasons. You can make the report again and look at it without the check. You
+# can also run the check again against a report that exists, without the cost
+# of another instrumented build.
 .PHONY: coverage_check
 coverage_check:
 	@CCOL_DISABLED_SOURCES="$(DISABLED_SOURCES) $(DISABLED_HEADERS)" \
@@ -407,32 +546,34 @@ coverage_site: generate_coverage_report
 # view_coverage_report:
 # 	firefox $(for i in $(ls -1 ./tests/ | grep -vE 'mixed|tau'); do s=$(basename $i); echo ./tests/$s/coverage/src/$s.c.gcov.html; done | xargs)
 
-# An object file records nothing about the compiler or the flags that produced
-# it, so an ordinary prerequisite list lets a build with different ones relink
-# objects compiled for the previous build: a sanitizer that is half applied, a
-# CC= change that leaves objects of the wrong architecture, or a switch such as
-# CCOL_MEMPOOL_COMPACT_LAYOUT that appears to have been ignored because the
-# object holding it was never recompiled. The stamp carries the current compiler
-# and flags and is rewritten only when they actually differ, so nothing rebuilds
-# needlessly and everything rebuilds when it must. FORCE rather than a file
+# An object file records nothing about the compiler or the flags that made it.
+# An ordinary prerequisite list therefore lets a build with different flags
+# link objects from the build before it. You then get a sanitizer that is only
+# half applied, or, after a CC= change, objects for the wrong architecture. A
+# switch such as CCOL_MEMPOOL_COMPACT_LAYOUT also looks as if the build ignored
+# it, because the object that holds it was never compiled again. The stamp
+# holds the current compiler and the current flags. The build writes the stamp
+# again only when one of them changes. Nothing is built again without need, and
+# everything is built again when it must be. The stamp uses FORCE and not a
 # prerequisite because these values arrive on the command line, with no input
 # file changing alongside them.
 BUILD_FLAGS_STAMP = $(OBJECT_DIR)/.build_flags
 
-# The link has its own identity, separate from the compile's, because the
-# WITH_* switches change which objects go into the library and which libraries
-# it is linked against without changing how any object is compiled. Every
-# object a reduced build needs is therefore already present and up to date
-# after a full one, so the library is not relinked and keeps the modules and
-# the NEEDED entries of the build before it: `make WITH_CHTTPSERVER=0
-# WITH_CHTTPCLIENT=0` after an ordinary build produces a library that still
-# exports both modules and still links OpenSSL, with nothing in the output to
-# say so. A clean tree hides this completely, which is why the CI job that
-# checks a reduced build's dependencies cannot catch it.
+# The link has its own identity, separate from the identity of the compile.
+# The WITH_* switches change which objects go into the library, and which
+# libraries the build links against. They do not change how the build compiles
+# any object. After a full build, every object that a reduced build needs is
+# therefore already there and up to date. The build then does not link the
+# library again. The library keeps the modules and the NEEDED entries of the
+# build before it. For example, `make WITH_CHTTPSERVER=0 WITH_CHTTPCLIENT=0`
+# after an ordinary build gives you a library that still exports both modules
+# and still links OpenSSL. Nothing in the output tells you so. A clean tree
+# hides this completely. This is why the CI job that checks the dependencies of
+# a reduced build cannot catch it.
 #
-# Kept as a second stamp rather than folded into the one above so that
-# toggling a module does not also force every object to be recompiled for a
-# compile that has not changed.
+# This is a second stamp and not part of the stamp above. A change to a module
+# switch must not compile every object again for a compile that has not
+# changed.
 LINK_FLAGS_STAMP = $(OBJECT_DIR)/.link_flags
 
 $(BUILD_FLAGS_STAMP): FORCE
@@ -456,158 +597,275 @@ $(SHARED_LIBRARY_SONAME): $(SHARED_LIBRARY_REAL)
 $(SHARED_LIBRARY_NAME): $(SHARED_LIBRARY_SONAME)
 	ln -sf $(SHARED_LIBRARY_SONAME) $(SHARED_LIBRARY_NAME)
 
-# The pkg-config metadata is generated rather than committed so that the
-# version and the install prefix can never drift from the ones this build
-# actually used. FORCE is what makes that true: PREFIX arrives on the command
-# line, so it can change with no input file changing with it, and an ordinary
-# prerequisite list would leave a stale prefix baked into the installed file.
-# The file is only rewritten when the rendered text actually differs, so
-# regenerating every time still does not make anything downstream rebuild.
+# The build generates the pkg-config metadata and the project does not commit
+# it. The version and the installation directories in that file can therefore
+# never differ from the ones that this build used. FORCE is what makes this
+# true. PREFIX, LIBDIR and INCLUDEDIR come in on the command line, so they can
+# change while no input file changes with them. An ordinary prerequisite list
+# would leave an old directory in the installed file. The build writes the file
+# again only when the new text differs from the old text. It therefore
+# generates the file every time and still starts no other build step.
+#
+# A LIBDIR or an INCLUDEDIR under PREFIX is written relative to ${prefix} or
+# ${exec_prefix}, so that `pkg-config --define-prefix` and a relocated tree
+# keep working. A directory outside PREFIX is written as it is.
 .PHONY: FORCE
 FORCE:
 
+PC_LIBDIR = $(patsubst $(PREFIX)/%,$${exec_prefix}/%,$(LIBDIR))
+PC_INCLUDEDIR = $(patsubst $(PREFIX)/%,$${prefix}/%,$(INCLUDEDIR))
+
 $(PKGCONFIG_FILE): $(PKGCONFIG_FILE).in FORCE
 	@sed -e 's|@PREFIX@|$(PREFIX)|g' \
+	     -e 's|@LIBDIR@|$(PC_LIBDIR)|g' \
+	     -e 's|@INCLUDEDIR@|$(PC_INCLUDEDIR)|g' \
 	     -e 's|@VERSION@|$(VERSION)|g' \
 	     -e 's|@REQUIRES_PRIVATE@|$(strip $(PC_REQUIRES_PRIVATE))|g' \
+	     -e 's|@LIBS_PRIVATE@|$(strip $(CCOL_PLATFORM_LIBS))|g' \
 	     $(PKGCONFIG_FILE).in > $(PKGCONFIG_FILE).tmp
 	@if cmp -s $(PKGCONFIG_FILE).tmp $(PKGCONFIG_FILE); then \
 		rm -f $(PKGCONFIG_FILE).tmp; \
 	else \
 		mv $(PKGCONFIG_FILE).tmp $(PKGCONFIG_FILE); \
-		echo "generated $(PKGCONFIG_FILE) (prefix=$(PREFIX) version=$(VERSION))"; \
+		echo "generated $(PKGCONFIG_FILE) (prefix=$(PREFIX) libdir=$(LIBDIR) includedir=$(INCLUDEDIR) version=$(VERSION))"; \
 	fi
 
-# `ar rcs` adds to an existing archive rather than replacing it, so a reduced
-# build over a full one would leave the dropped modules' members in place even
-# once the archive is rebuilt. Removing it first is what makes the member list
-# follow $(OBJ_FILES_STATIC) exactly.
+# `ar rcs` adds to an archive that exists. It does not replace it. A reduced
+# build over a full one would therefore keep the members of the modules that
+# you dropped, even after the build makes the archive again. The build removes
+# the archive first. This is what makes the member list follow
+# $(OBJ_FILES_STATIC) exactly.
 $(STATIC_LIBRARY_NAME): $(OBJ_FILES_STATIC) $(LINK_FLAGS_STAMP)
 	@rm -f $(STATIC_LIBRARY_NAME)
 	$(AR) rcs $(STATIC_LIBRARY_NAME) $(OBJ_FILES_STATIC) $(STATIC_LDFLAGS)
 	$(RANLIB) $(STATIC_LIBRARY_NAME)
 
-# Objects for shared library (with -fPIC)
+# The objects for the shared library, built with -fPIC
 $(OBJECT_DIR)/%.o: $(SOURCE_DIR)/%.c $(HEADER_FILES) $(BUILD_FLAGS_STAMP)
 	$(CC) -c $(SHARED_CFLAGS) $< -o $@
 
-# Objects for the static library. Still built with -fPIC so the archive can be
-# linked into a shared library by a consumer. Note that an archive is not a
-# linked object and records no dependency of its own on pthread, zlib, OpenSSL
-# or libm: everything the library needs must be named on the consumer's own
-# link line. $(PKGCONFIG_FILE) carries that list so `pkg-config --libs
-# --static ccollections` produces it automatically.
+# The objects for the static library. The build still uses -fPIC, so that a
+# user can link the archive into a shared library. Note: an archive is not a
+# linked object. It records no dependency of its own on pthread, zlib,
+# OpenSSL or libm. The user must name everything that the library needs on
+# their own link line. $(PKGCONFIG_FILE) holds that list, so `pkg-config --libs
+# --static ccollections` gives it to them automatically.
 $(OBJECT_DIR)/%.static.o: $(SOURCE_DIR)/%.c $(HEADER_FILES) $(BUILD_FLAGS_STAMP)
 	$(CC) -c $(STATIC_CFLAGS) $< -o $@
 
-# The shared library is removed by glob rather than by its three current
-# names, so that a build tree carrying artifacts from a different VERSION is
-# cleaned out as well. Naming only the current version leaves a stale
-# libccollections.so.<other> sitting next to the new one, where it can still
-# satisfy an older binary's own DT_NEEDED at run time.
+# This recipe names tests/cyaml/differential/cyaml_to_json directly. It does
+# not match it. That binary is the only built binary that is neither directly
+# in a suite directory nor named tests_ or fuzz_, so the find below cannot
+# describe it.
+#
+# The recipe finds the test binaries instead of listing them. A directory that
+# gets a new binary, such as tests/mixed/tests_compat and its ThreadSanitizer
+# twin, is therefore cleaned with no edit to this recipe. The name filter is
+# what makes that safe. tests_compat.c and tests_tls.c sit beside the binaries
+# that they build, so a plain tests/*/tests_* would delete sources. A binary
+# here never has a dot in its name, and every other match does. The filter
+# refuses every match whose name holds a dot, and so it keeps exactly the
+# binaries.
+#
+# The recipe removes the shared library by glob and not by its three current
+# names. This also cleans a build tree that holds artifacts from a different
+# VERSION. If the recipe named only the current version, an old
+# libccollections.so.<other> (libccollections.<other>.dylib on macOS) would
+# stay beside the new one. At run time it can
+# still satisfy the DT_NEEDED of an older binary.
 clean:
-	rm -rf $(SHARED_LIBRARY_NAME) $(SHARED_LIBRARY_NAME).* \
+	rm -rf $(SHARED_LIBRARY_NAME) $(SHARED_LIBRARY_ANY_VERSION) \
 		$(STATIC_LIBRARY_NAME) $(PKGCONFIG_FILE) $(PKGCONFIG_FILE).tmp $(OBJECT_DIR) \
-		tests/*/tests tests/*/tests_tls tests/*/tests_mem_mgmt \
-		tests/*/tests_parser tests/*/tests_default_client \
-		tests/*/tests_engine_stop tests/*/tests_engine_stop_tsan \
-		tests/*/tests_spec_suite tests/*/tests_differential \
-		tests/*/*.o tests/*/.build-flags \
+		tests/*/*.o tests/*/.build-flags* \
 		bench/bench bench/*.o bench/.build-flags \
-		tests/*/tests_tsan tests/*/fuzz_* \
 		tests/*/coverage tests/*/third_party_obj $(COVERAGE_SITE_DIR) \
+		tests/*/differential/cyaml_to_json \
 		tests/*/*.gcno tests/*/*.gcda tests/*/*.gcov tests/*/*.c.info
+	@if [ -d tests ]; then \
+		find tests -maxdepth 2 -type f \
+			\( -name tests -o -name 'tests_*' -o -name 'fuzz_*' \) \
+			! -name '*.*' -print0 | xargs -0 -r rm -f; \
+	fi
 
-# PREFIX relocates an entire install in one step (a distribution package, a
-# per-user install into $HOME/.local, a staged install into a container image).
-# DESTDIR prepends a staging directory to every install path without appearing
-# anywhere in the installed files' own contents, which is what a package build
-# needs: it must never leak into $(PKGCONFIG_FILE)'s recorded prefix.
+# PREFIX moves a whole install in one step. Use it for a distribution package,
+# for an install into $HOME/.local for one user, or for a staged install into a
+# container image.
+# DESTDIR puts a staging directory in front of every install path. It does not
+# appear in the contents of any installed file. This is what a package build
+# needs. DESTDIR must never reach the prefix that $(PKGCONFIG_FILE) records.
+#
+# LIBDIR, INCLUDEDIR, MANDIR and PKGCONFIGDIR each move one part of the
+# install, for a distribution whose layout differs from PREFIX/lib and the
+# rest. A Fedora package passes LIBDIR=/usr/lib64, and a Debian package passes
+# LIBDIR=/usr/lib/<triplet>. $(PKGCONFIG_FILE) records LIBDIR and INCLUDEDIR,
+# so a pkg-config consumer finds whatever this install chose.
+#
+# The public headers go into a directory of their own,
+# INCLUDEDIR/$(SHORT_LIBRARY_NAME), and never straight into INCLUDEDIR. Names
+# such as common.h and cstring.h are generic, and in a shared include
+# directory they would shadow, or be shadowed by, a header of another package
+# or of the application. Each public header includes its sibling headers with
+# quotes, so it always finds its own copy first, in its own directory. An
+# application writes #include <ccollections/chashmap.h>, and the pkg-config
+# Cflags name INCLUDEDIR itself with -I. No -I flag ever names the directory
+# of the library headers, so an application header of the same name as one of
+# ours, such as its own common.h, is never shadowed by ours and never shadows
+# ours, whatever order the -I flags of the application come in.
 PREFIX ?= /usr/local
 DESTDIR ?=
-HEADER_INSTALL_DIR = $(DESTDIR)$(PREFIX)/include
-LIBRARY_INSTALL_DIR = $(DESTDIR)$(PREFIX)/lib
-MAN_INSTALL_DIR = $(DESTDIR)$(PREFIX)/share/man
-PKGCONFIG_INSTALL_DIR = $(DESTDIR)$(PREFIX)/lib/pkgconfig
+LIBDIR ?= $(PREFIX)/lib
+INCLUDEDIR ?= $(PREFIX)/include
+MANDIR ?= $(PREFIX)/share/man
+PKGCONFIGDIR ?= $(CCOL_DEFAULT_PKGCONFIGDIR)
+HEADER_INSTALL_DIR = $(DESTDIR)$(INCLUDEDIR)/$(SHORT_LIBRARY_NAME)
+LIBRARY_INSTALL_DIR = $(DESTDIR)$(LIBDIR)
+MAN_INSTALL_DIR = $(DESTDIR)$(MANDIR)
+PKGCONFIG_INSTALL_DIR = $(DESTDIR)$(PKGCONFIGDIR)
 
-# chashkey.h, chttp1_parser.h, ctls.h, cdebuglog.h and cpintable.h are internal
-# to the library: no public header includes them, and the symbols they declare
-# are not exported from the shared library, so an installed copy could not be
-# linked against. They stay in the source tree and out of the install.
-INTERNAL_HEADER_FILES = $(INCLUDE_DIR)/chashkey.h \
-                        $(INCLUDE_DIR)/chttp1_parser.h \
-                        $(INCLUDE_DIR)/ctls.h \
-                        $(INCLUDE_DIR)/cdebuglog.h \
-                        $(INCLUDE_DIR)/cpintable.h
+# The recipes paste these directories into shell command lines unquoted, and
+# the pkg-config rule pastes them into a sed script. A value with a space or a
+# tab in it is split into several words there. `install -d` and `rm -f` then
+# act on each word as a path of its own, relative to the source tree, and the
+# install creates stray directories inside it. The install and the uninstall
+# therefore refuse such a value before they touch anything. The test catches
+# a blank inside a value (a second word) and a trailing blank (make keeps it,
+# and strip removes it).
+INSTALL_PATH_VARIABLES = DESTDIR PREFIX LIBDIR INCLUDEDIR MANDIR PKGCONFIGDIR
+BLANK_INSTALL_PATH_VARIABLES = $(strip $(foreach v,$(INSTALL_PATH_VARIABLES),\
+	$(if $(or $(word 2,$($(v))),$(subst $(strip $($(v))),,$($(v)))),$(v))))
+
+.PHONY: _install_path_guard
+_install_path_guard:
+ifneq ($(BLANK_INSTALL_PATH_VARIABLES),)
+	@echo "install, uninstall: refused, these directories contain a space or a tab:" \
+	      "$(BLANK_INSTALL_PATH_VARIABLES)." >&2
+	@echo "         The recipes cannot pass such a path through intact." >&2
+	@echo "         Choose a directory whose path holds no blank." >&2
+	@false
+endif
+	@:
+
+# Everything under $(INCLUDE_DIR)/internal/ is internal to the library. No
+# public header includes it. The shared library does not export the symbols
+# that it declares, so you could not link against an installed copy. These
+# headers stay in the source tree and out of the install. The directory itself
+# is the boundary. This is why the wildcard below needs no list of names beside
+# it, and why a new header there is left out of the install automatically.
+INTERNAL_HEADER_FILES = $(wildcard $(INCLUDE_DIR)/internal/*.h)
 PUBLIC_HEADER_FILES = $(filter-out $(INTERNAL_HEADER_FILES),$(HEADER_FILES))
-# Every header this project would ever install, whatever the WITH_* switches
-# say. uninstall reads this rather than the switch-filtered list above: an
-# uninstall run with different switches from the install that placed the files
-# would otherwise walk past the headers it does not currently build and leave
-# them behind, declaring symbols the library no longer has.
+# Every header that this project can install, whatever the WITH_* switches say.
+# The uninstall target reads this list and not the filtered list above. An
+# uninstall with different switches from the install that put the files there
+# would otherwise step past the headers that it does not build now. It would
+# leave them behind, and they would declare symbols that the library no longer
+# has.
 ALL_PUBLIC_HEADER_FILES = $(filter-out $(INTERNAL_HEADER_FILES),\
                             $(wildcard $(INCLUDE_DIR)/*.h))
 
-# man/<module>/*.3 (functions and their companion type-safe macros, side by
-# side, see man/README) install flat into one man3 dir; real symbol names
-# never collide across the two, so nothing is lost by flattening. man/<module>/*.7
-# are the module overview pages. Alias pages contain a ".so <module>/<symbol>.3"
-# redirect that is relative to the source tree layout, so it is rewritten to
-# ".so man3/<symbol>.3" (relative to the installed MANPATH root) as part of install.
+# The man/<module>/*.3 pages document the functions and their companion
+# type-inferred macros, side by side. See man/README. The install puts them all
+# into one flat man3 directory. Real symbol names never collide across the two
+# kinds of page, so this flat layout loses nothing. The man/<module>/*.7 pages
+# are the module overview pages. An alias page holds a ".so <module>/<symbol>.3"
+# redirect, which is relative to the layout of the source tree. The install
+# rewrites it to ".so man3/<symbol>.3", which is relative to the root of the
+# installed MANPATH.
 ALL_MAN3_SRC_FILES = $(wildcard man/*/*.3)
 ALL_MAN7_SRC_FILES = $(wildcard man/*/*.7)
-# A disabled module's pages follow its header out of the install: they document
-# functions that are neither declared in an installed header nor present in the
-# installed library, which is the same reason the header itself is dropped.
-# uninstall uses the unfiltered lists above, for the reason given there.
+# The pages of a module that you turn off leave the install with its header.
+# They document functions that no installed header declares, and that the
+# installed library does not hold. This is the same reason that the build drops
+# the header itself. The uninstall target uses the unfiltered lists above, for
+# the reason given there.
 DISABLED_MAN_DIRS = $(patsubst $(SOURCE_DIR)/%.c,man/%/,$(DISABLED_SOURCES))
 DISABLED_MAN_FILES = $(foreach d,$(DISABLED_MAN_DIRS),$(wildcard $(d)*))
 MAN3_SRC_FILES = $(filter-out $(DISABLED_MAN_FILES),$(ALL_MAN3_SRC_FILES))
 MAN7_SRC_FILES = $(filter-out $(DISABLED_MAN_FILES),$(ALL_MAN7_SRC_FILES))
 
-# Escalate only when the install actually needs it. Installing into a prefix
-# the current user already owns ($HOME/.local, a DESTDIR staging tree used by
-# a package build or a CI job) must not prompt for a password. The nearest
-# existing ancestor of the install root is the thing to test for writability,
-# since the leaf directories are created by the install itself. Override
-# explicitly with `make install SUDO=` or `make install SUDO=doas`.
-# Guarded by origin rather than ?=, so that both `make install SUDO=doas` and an
-# environment SUDO still win while the probe below runs exactly once. A plain
-# `?=` would re-run the whole shell on each of the fifteen or so expansions one
-# install performs, and a plain `:=` would silently ignore the environment form.
+# Ask for more rights only when the install needs them. An install into a
+# prefix that the current user owns must not ask for a password. $HOME/.local
+# is one such prefix, and so is a DESTDIR staging tree that a package build or
+# a CI job uses. The thing to test is whether the nearest ancestor that exists
+# is writable, because the install itself makes the leaf directories. Set the
+# value yourself with `make install SUDO=` or `make install SUDO=doas`.
+# This uses origin and not ?=, for two reasons. Both `make install SUDO=doas`
+# and a SUDO from the environment still win, and the probe below runs one time
+# only. A plain `?=` would run the whole shell again at each of the fifteen or
+# so expansions that one install makes. A plain `:=` would ignore the form that
+# comes from the environment.
 #
-# The walk stops at a component with no separator left in it, because `$${d%/*}`
-# is a no-op once there is no slash to strip and a relative DESTDIR or PREFIX
-# (`make install DESTDIR=stage PREFIX=/usr`, an ordinary packaging invocation)
-# would otherwise spin forever. Which fallback that ends at is not the same for
-# both shapes: stripping the last component of a single-component ABSOLUTE path
-# leaves nothing, and the nearest existing ancestor there is /, not the working
-# directory, so `make install PREFIX=/newroot` has to see an unwritable / and
-# escalate rather than testing a directory the caller happens to own.
+# The walk stops at a component that holds no separator. `$${d%/*}` does
+# nothing once there is no slash left to remove. Without that stop, a relative
+# DESTDIR or PREFIX would make the walk run forever. `make install DESTDIR=stage
+# PREFIX=/usr` is one such ordinary packaging command. The two shapes do not
+# end at the same fallback. If you remove the last component of an ABSOLUTE
+# path that has one component, nothing is left. The nearest ancestor that
+# exists there is /, not the working directory. `make install PREFIX=/newroot`
+# must therefore see that / is not writable and ask for more rights. It must
+# not test a directory that the caller happens to own.
+#
+# The probe tests every installation directory and not PREFIX alone, because
+# LIBDIR, INCLUDEDIR, MANDIR and PKGCONFIGDIR can each point outside PREFIX.
+# One directory that the user cannot write is enough to need the escalation.
 ifeq ($(origin SUDO),undefined)
-SUDO := $(shell d="$(DESTDIR)$(PREFIX)"; \
-                root=.; \
-                if [ "$${d#/}" != "$$d" ]; then root=/; fi; \
-                while [ -n "$$d" ] && [ ! -e "$$d" ]; do \
-                  nd=$${d%/*}; \
-                  if [ "$$nd" = "$$d" ]; then nd=""; fi; \
-                  d="$$nd"; \
+SUDO := $(shell need=""; \
+                for d in "$(HEADER_INSTALL_DIR)" "$(LIBRARY_INSTALL_DIR)" \
+                         "$(MAN_INSTALL_DIR)" "$(PKGCONFIG_INSTALL_DIR)"; do \
+                  root=.; \
+                  if [ "$${d#/}" != "$$d" ]; then root=/; fi; \
+                  while [ -n "$$d" ] && [ ! -e "$$d" ]; do \
+                    nd=$${d%/*}; \
+                    if [ "$$nd" = "$$d" ]; then nd=""; fi; \
+                    d="$$nd"; \
+                  done; \
+                  [ -n "$$d" ] || d="$$root"; \
+                  if [ "$$(id -u)" -ne 0 ] && [ ! -w "$$d" ]; then need=sudo; fi; \
                 done; \
-                [ -n "$$d" ] || d="$$root"; \
-                if [ "$$(id -u)" -eq 0 ] || [ -w "$$d" ]; then echo ""; else echo "sudo"; fi)
+                echo "$$need")
 endif
 
-# ldconfig refreshes the dynamic linker's cache and mandb the man index. Both
-# act on the live system, so both are skipped (ldconfig actively misleadingly
-# so) when the install is being staged into a DESTDIR for packaging. Neither
-# failing is a reason to fail the install.
+# ldconfig makes the cache of the dynamic linker current, and mandb (makewhatis
+# on FreeBSD; see platform.mk) does the same for the man index. Both act on the live system. The install skips both
+# when it stages files into a DESTDIR for packaging, because the live system is
+# exactly what a staged install does not touch. A run of ldconfig there would
+# also give a misleading result. If either command fails, the install still
+# succeeds.
 REFRESH_SYSTEM_CACHES = \
 	if [ -z "$(strip $(DESTDIR))" ]; then \
-		$(SUDO) ldconfig || true; \
-		$(SUDO) mandb -q || true; \
+		$(SUDO) $(CCOL_LDCONFIG) || true; \
+		$(SUDO) $(CCOL_MAN_INDEX) || true; \
 	fi
 
-install: $(SHARED_LIBRARY_NAME) $(STATIC_LIBRARY_NAME) $(PKGCONFIG_FILE)
+# A reduced build has the SONAME of the full build but exports fewer symbols.
+# An application that you linked against a full build therefore fails to start
+# after you install a reduced build over it. Nothing in the installed files
+# says which kind of build they came from. The failure also appears in an
+# unrelated program at its next start, and not here. You must therefore ask for
+# the reduced case. ALLOW_REDUCED_INSTALL=1 is that request. It serves the
+# embedding case that a reduced build exists for. A full build does not need
+# it.
+ALLOW_REDUCED_INSTALL ?= 0
+
+.PHONY: _install_reduced_guard
+_install_reduced_guard:
+ifneq ($(strip $(DISABLED_SOURCES)),)
+ifneq ($(ALLOW_REDUCED_INSTALL),1)
+	@echo "install: refused, this is a reduced build (modules disabled:$(patsubst $(SOURCE_DIR)/%.c, %,$(DISABLED_SOURCES)))." >&2
+	@echo "         It exports fewer symbols than the full library while carrying the" >&2
+	@echo "         same SONAME ($(SHARED_LIBRARY_SONAME)), so installing it where a full" >&2
+	@echo "         build is expected stops every application already linked against" >&2
+	@echo "         that SONAME from starting." >&2
+	@echo "" >&2
+	@echo "         Re-run with ALLOW_REDUCED_INSTALL=1 if this prefix is meant to hold" >&2
+	@echo "         a reduced build, and prefer a PREFIX or DESTDIR of its own over a" >&2
+	@echo "         shared system path." >&2
+	@false
+endif
+endif
+	@:
+
+install: _install_path_guard _install_reduced_guard $(SHARED_LIBRARY_NAME) \
+         $(STATIC_LIBRARY_NAME) $(PKGCONFIG_FILE)
 	$(SUDO) install -d $(HEADER_INSTALL_DIR) $(LIBRARY_INSTALL_DIR) $(PKGCONFIG_INSTALL_DIR)
 	$(SUDO) install -m 644 $(PUBLIC_HEADER_FILES) $(HEADER_INSTALL_DIR)
 	$(SUDO) install -m 755 $(SHARED_LIBRARY_REAL) $(LIBRARY_INSTALL_DIR)
@@ -616,18 +874,27 @@ install: $(SHARED_LIBRARY_NAME) $(STATIC_LIBRARY_NAME) $(PKGCONFIG_FILE)
 	$(SUDO) install -m 644 $(STATIC_LIBRARY_NAME) $(LIBRARY_INSTALL_DIR)
 	$(SUDO) install -m 644 $(PKGCONFIG_FILE) $(PKGCONFIG_INSTALL_DIR)
 	$(SUDO) install -d $(MAN_INSTALL_DIR)/man3 $(MAN_INSTALL_DIR)/man7
-	if [ -n "$(MAN3_SRC_FILES)" ]; then $(SUDO) install -m 644 $(MAN3_SRC_FILES) $(MAN_INSTALL_DIR)/man3; fi
+	if [ -n "$(MAN3_SRC_FILES)" ]; then \
+		tmp=$$(mktemp -d) || exit 1; \
+		for f in $(MAN3_SRC_FILES); do \
+			sed -E 's#^\.so [A-Za-z0-9_]+/#.so man3/#' "$$f" > "$$tmp/$${f##*/}" || { rm -rf "$$tmp"; exit 1; }; \
+		done; \
+		$(SUDO) install -m 644 "$$tmp"/*.3 $(MAN_INSTALL_DIR)/man3; rc=$$?; rm -rf "$$tmp"; exit $$rc; \
+	fi
 	if [ -n "$(MAN7_SRC_FILES)" ]; then $(SUDO) install -m 644 $(MAN7_SRC_FILES) $(MAN_INSTALL_DIR)/man7; fi
-	$(SUDO) sed -i -E 's#^\.so [A-Za-z0-9_]+/#.so man3/#' $(addprefix $(MAN_INSTALL_DIR)/man3/,$(notdir $(MAN3_SRC_FILES)))
 	@$(REFRESH_SYSTEM_CACHES)
 
-uninstall:
-	$(SUDO) rm -f $(addprefix $(HEADER_INSTALL_DIR)/,$(notdir $(ALL_PUBLIC_HEADER_FILES)))
-	$(SUDO) rm -f $(LIBRARY_INSTALL_DIR)/$(SHARED_LIBRARY_NAME)
-	$(SUDO) rm -f $(LIBRARY_INSTALL_DIR)/$(SHARED_LIBRARY_SONAME)
-	$(SUDO) rm -f $(LIBRARY_INSTALL_DIR)/$(SHARED_LIBRARY_REAL)
-	$(SUDO) rm -f $(LIBRARY_INSTALL_DIR)/$(STATIC_LIBRARY_NAME)
-	$(SUDO) rm -f $(PKGCONFIG_INSTALL_DIR)/$(PKGCONFIG_FILE)
-	$(SUDO) rm -f $(addprefix $(MAN_INSTALL_DIR)/man3/,$(notdir $(ALL_MAN3_SRC_FILES)))
-	$(SUDO) rm -f $(addprefix $(MAN_INSTALL_DIR)/man7/,$(notdir $(ALL_MAN7_SRC_FILES)))
+# The header directory belongs to this library alone. The uninstall removes it
+# once it is empty, and leaves it, with a message from rmdir, when it still
+# holds a file that this install did not put there.
+uninstall: _install_path_guard
+	set -f; $(SUDO) rm -f $(addprefix $(HEADER_INSTALL_DIR)/,$(notdir $(ALL_PUBLIC_HEADER_FILES)))
+	if [ -d $(HEADER_INSTALL_DIR) ]; then $(SUDO) rmdir $(HEADER_INSTALL_DIR) || true; fi
+	set -f; $(SUDO) rm -f $(LIBRARY_INSTALL_DIR)/$(SHARED_LIBRARY_NAME)
+	set -f; $(SUDO) rm -f $(LIBRARY_INSTALL_DIR)/$(SHARED_LIBRARY_SONAME)
+	set -f; $(SUDO) rm -f $(LIBRARY_INSTALL_DIR)/$(SHARED_LIBRARY_REAL)
+	set -f; $(SUDO) rm -f $(LIBRARY_INSTALL_DIR)/$(STATIC_LIBRARY_NAME)
+	set -f; $(SUDO) rm -f $(PKGCONFIG_INSTALL_DIR)/$(PKGCONFIG_FILE)
+	set -f; $(SUDO) rm -f $(addprefix $(MAN_INSTALL_DIR)/man3/,$(notdir $(ALL_MAN3_SRC_FILES)))
+	set -f; $(SUDO) rm -f $(addprefix $(MAN_INSTALL_DIR)/man7/,$(notdir $(ALL_MAN7_SRC_FILES)))
 	@$(REFRESH_SYSTEM_CACHES)

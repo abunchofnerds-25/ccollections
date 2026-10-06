@@ -27,20 +27,22 @@
  * @brief INTERNAL ONLY. Lock-free handle-to-pointer index with per-slot pins.
  */
 
-#include "cpintable.h"
+#include "internal/cpintable.h"
 
+#include <internal/ctlsmodel.h>
 #include <stdlib.h>
 
-/* Which stripe this thread pins on. Assigned once per thread from a global
- * counter, so concurrent threads land on different stripes and their pins
- * write different cache lines.
+/* The stripe that this thread pins on. Each thread takes its value one time
+ * from a global counter. This is why concurrent threads land on different
+ * stripes, and why their pins write different cache lines.
  *
- * initial-exec rather than the default general model, matching cmempool's own
- * thread-local state and for the same reason: under the general model every
- * access to a thread-local in a shared library goes through a __tls_get_addr
- * call, which would put a function call on the very path this type exists to
- * keep cheap. The cost is a slot in the static thread-local block, which only
- * affects a library dlopen()ed into a process that has already exhausted it. */
+ * The model is initial-exec, and not the default general model. The
+ * thread-local state of cmempool uses the same model, for the same reason.
+ * Under the general model, every access to a thread-local in a shared library
+ * goes through a __tls_get_addr call. That call would sit on the exact path
+ * that this type exists to keep cheap. The cost is one slot in the static
+ * thread-local block. This only affects a library that a process dlopen()s
+ * after that process already used every slot. */
 #if defined(CCOL_MEMPOOL_DYNAMIC_TLS) && CCOL_MEMPOOL_DYNAMIC_TLS
 static __thread unsigned _pin_stripe_id;
 #else
@@ -49,17 +51,18 @@ static __thread unsigned _pin_stripe_id
 #endif
 static _Atomic unsigned _pin_stripe_next = 1;
 
-/* Claims this thread's id, once. Out of line deliberately: it runs on a
- * thread's first pin and never again, while pin_stripe_self() below is inlined
- * into both of this file's hot entry points, and code that never executes still
- * costs them through register allocation and code layout. Keeping the whole
- * claim behind a call leaves those two functions the shape they would have with
- * no assignment path at all.
+/* Claims the id of this thread, one time. This function is out of line on
+ * purpose. It runs on the first pin of a thread and never again. The compiler
+ * inlines pin_stripe_self() below into both hot entry points of this file.
+ * Code that never runs still costs those two functions through register
+ * allocation and code layout. The call keeps the whole claim out of them, so
+ * they have the shape that they would have with no assignment path at all.
  *
- * The counter wraps after 2^32 assignments, and a thread that took 0 out of it
- * would store the unassigned marker: it would then re-derive its stripe on
- * every call, contending the counter on the hot path and releasing pins on a
- * different stripe from the one it took them on. */
+ * The counter wraps after 2^32 assignments. A thread that takes 0 from it
+ * would store the marker for "not yet assigned". That thread would then
+ * derive its stripe again on every call. It would contend the counter on the
+ * hot path. It would also release a pin on a stripe that is not the stripe
+ * that it took the pin on. */
 static __attribute__((noinline)) unsigned pin_stripe_claim(void) {
   unsigned id =
       atomic_fetch_add_explicit(&_pin_stripe_next, 1, memory_order_relaxed);
@@ -68,18 +71,18 @@ static __attribute__((noinline)) unsigned pin_stripe_claim(void) {
   return id;
 }
 
-/* Zero means "not yet assigned", so ids start at 1 and the stored value is one
- * more than the stripe it selects. */
+/* Zero means "not yet assigned". This is why an id starts at 1. The stored
+ * value is one more than the stripe that it selects. */
 static inline unsigned pin_stripe_self(void) {
   unsigned id = _pin_stripe_id;
   if (id == 0) id = pin_stripe_claim();
   return (id - 1u) % CCOL_PIN_STRIPES;
 }
 
-/* A live slot's state word carries its generation and its liveness together.
- * Keeping them in one word is what lets a resolve validate both with a single
- * load, and lets the post-pin re-check be one comparison rather than a pair of
- * reads that could straddle a retire. */
+/* The state word of a live slot carries its generation and its liveness
+ * together. One word is what lets a resolve validate both with one load. One
+ * word also makes the re-check after the pin one comparison. Two separate
+ * reads could fall on both sides of a retire. */
 static inline uint64_t pin_state(uint32_t gen, bool live) {
   return ((uint64_t)gen << 1) | (live ? 1u : 0u);
 }
@@ -94,14 +97,14 @@ static ccol_pin_slot *pin_slot_lookup(ccol_pintable *t, uint32_t idx) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-/* See the declaration in cpintable.h. Consumed by the next publish, and read
- * before that publish stores anything, so a rollback sees the same state a
- * genuine allocation failure would leave behind. */
+/* See the declaration in cpintable.h. The next publish consumes this flag. It
+ * reads the flag before it stores anything. This is why a rollback sees the
+ * same state that a real allocation failure leaves. */
 static atomic_bool _pin_force_publish_failure;
 
-/* Forces the stripe block's allocation to fail on the next publish that would
- * perform one, which is the only refusal that can happen after a chunk has
- * already been published. Nothing else reaches that state. */
+/* Forces the allocation of the stripe block to fail on the next publish that
+ * does one. This is the only refusal that can happen after the table already
+ * published a chunk. Nothing else reaches that state. */
 static _Atomic bool _pin_force_stripe_alloc_failure = false;
 
 void _ccol_pintable_force_next_stripe_alloc_failure_for_tests(void) {
@@ -122,7 +125,7 @@ bool ccol_pintable_publish(ccol_pintable *t, uint32_t idx, uint32_t gen,
   uint32_t chunk_idx = idx / CCOL_PIN_CHUNK_SLOTS;
   if (chunk_idx >= CCOL_PIN_MAX_CHUNKS) return false;
 
-  /* The caller holds its own writer lock, so no two publishes race here and a
+  /* The caller holds its own writer lock. No two publishes race here, and a
    * relaxed load is enough to find out whether the chunk already exists. The
    * store below is still a release, because a concurrent reader acquires it. */
   ccol_pin_chunk *chunk =
@@ -146,8 +149,8 @@ bool ccol_pintable_publish(ccol_pintable *t, uint32_t idx, uint32_t gen,
   }
 
   atomic_store_explicit(&slot->ptr, ptr, memory_order_relaxed);
-  /* Release, and last: a reader that acquires a live state must see the
-   * pointer that goes with it. */
+  /* This store is a release, and it is the last one. A reader that acquires a
+   * live state must see the pointer that belongs to it. */
   atomic_store_explicit(&slot->state, pin_state(gen, true),
                         memory_order_release);
   return true;
@@ -157,14 +160,15 @@ void ccol_pintable_retire(ccol_pintable *t, uint32_t idx) {
   ccol_pin_slot *slot = pin_slot_lookup(t, idx);
   if (!slot) return;
   uint64_t st = atomic_load_explicit(&slot->state, memory_order_relaxed);
-  /* Generation is preserved so a handle naming this occupancy stays
-   * distinguishable from one naming the next; only liveness is cleared.
+  /* This store keeps the generation, and clears only the liveness. A handle
+   * that names this occupancy must stay different from a handle that names
+   * the next one.
    *
-   * Sequentially consistent, and it must be. This store and the pin count read
-   * that follows it form one half of a store-then-load pair whose other half
-   * is in ccol_pintable_pin(); see the note there for why release ordering
-   * alone would let both halves miss each other and free an object a caller
-   * had already been handed. */
+   * The store is sequentially consistent, and it must be. This store and the
+   * read of the pin count after it are one half of a store-then-load pair.
+   * The other half is in ccol_pintable_pin(). See the note there. It explains
+   * why release ordering alone lets the two halves miss each other. The
+   * result is a free of an object that a caller already holds. */
   atomic_store_explicit(&slot->state, st & ~(uint64_t)1, memory_order_seq_cst);
 }
 
@@ -186,26 +190,29 @@ void *ccol_pintable_pin(ccol_pintable *t, uint64_t handle) {
 
   unsigned stripe = pin_stripe_self();
 
-  /* This increment and the state load after it are sequentially consistent, as
-   * are the retiring side's own store and its read of the pin count. All four
-   * being seq_cst is what makes the two sides unable to miss each other, and
-   * nothing weaker will do.
+  /* This increment and the state load after it are sequentially consistent.
+   * The store on the retire side and its read of the pin count are also
+   * sequentially consistent. All four operations must be seq_cst. This is
+   * what makes it impossible for the two sides to miss each other. Nothing
+   * weaker is enough.
    *
-   * The two sides race in opposite directions: this one writes the pin then
-   * reads the liveness, the retiring one writes the liveness then reads the
-   * pin. Under acquire and release alone, each side's read may still be
-   * satisfied from before the other side's write, so a retiring destroy can
-   * read a pin count of zero while this call reads a state that is still live,
-   * and the object is then freed with a caller already holding the pointer.
-   * With every one of the four operations sequentially consistent there is a
-   * single total order over them: whichever write lands first in that order is
-   * observed by the other side's read, so either the destroy sees this pin and
-   * waits for it, or this call sees the retire and backs out. Exactly one, and
-   * never neither.
+   * The two sides race in opposite directions. This side writes the pin and
+   * then reads the liveness. The retire side writes the liveness and then
+   * reads the pin. Under acquire and release alone, the read of each side can
+   * still come from before the write of the other side. A destroy that
+   * retires can then read a pin count of zero while this call reads a state
+   * that is still live. The object is then freed while a caller already holds
+   * the pointer.
    *
-   * The cost is nothing on x86-64, where the increment is already a locked
-   * read-modify-write and a sequentially consistent load is an ordinary load.
-   */
+   * With all four operations sequentially consistent there is one total order
+   * over them. The read of one side sees whichever write comes first in that
+   * order. This means that the destroy sees this pin and waits for it, or
+   * that this call sees the retire and backs out. Exactly one of the two
+   * happens, and never neither of them.
+   *
+   * The cost is nothing on x86-64. There the increment is already a locked
+   * read-modify-write, and a sequentially consistent load is an ordinary
+   * load. */
   atomic_fetch_add_explicit(&stripes[stripe].count, 1, memory_order_seq_cst);
 
   if (atomic_load_explicit(&slot->state, memory_order_seq_cst) != want) {
@@ -217,13 +224,14 @@ void *ccol_pintable_pin(ccol_pintable *t, uint64_t handle) {
 }
 
 void ccol_pintable_unpin(ccol_pintable *t, uint64_t handle) {
-  /* Mirrors ccol_pintable_pin's own guard. A zero handle never yields a pin
-   * there, so releasing one here must do nothing: slot 0 is an ordinary,
-   * usually occupied slot, and decrementing it on behalf of a pin that was
-   * never taken drives its count below the truth, which lets a later drain
-   * finish while a real caller still holds the object. The realistic way to
-   * arrive here with zero is an owner whose self-handle field has not been
-   * written yet, since those structs are normally zero-initialised. */
+  /* This guard is the same as the guard in ccol_pintable_pin. A zero handle
+   * never gives a pin there, so a release of one here must do nothing. Slot 0
+   * is an ordinary slot, and it usually holds an object. A decrement for a
+   * pin that nobody took drives the count of that slot below the truth. A
+   * later drain then finishes while a real caller still holds the object. The
+   * realistic way to arrive here with zero is an owner that did not yet write
+   * its own self-handle field, because such structs normally start as all
+   * zero bytes. */
   if (handle == 0) return;
   uint32_t idx = (uint32_t)(handle >> 32);
   ccol_pin_slot *slot = pin_slot_lookup(t, idx);
@@ -241,16 +249,16 @@ size_t ccol_pintable_pins(ccol_pintable *t, uint32_t idx) {
   ccol_pin_stripe *stripes =
       atomic_load_explicit(&slot->stripes, memory_order_acquire);
   if (!stripes) return 0;
-  /* Summed signed, then clamped: an individual stripe can legitimately read
-   * negative while a pin taken on one stripe is released on another, and only
-   * the total is meaningful.
+  /* The sum is signed, and the code clamps it afterwards. One stripe can
+   * correctly read negative while a release for a pin of one stripe lands on
+   * another stripe. Only the total has a meaning.
    *
-   * Accumulated in an unsigned type and converted once at the end. A workload
-   * that systematically pins on one thread and releases on another drives the
-   * two stripes apart without bound while their sum stays right, so a partial
-   * sum can exceed what a signed accumulator holds long before the total does;
-   * unsigned arithmetic wraps by definition, where signed overflow is
-   * undefined. */
+   * The accumulator has an unsigned type, and the code converts it one time
+   * at the end. A workload can always pin on one thread and release on
+   * another. The two stripes then move apart without a bound, and their sum
+   * stays correct. A partial sum can pass the limit of a signed accumulator
+   * long before the total does. Unsigned arithmetic wraps by definition, but
+   * signed overflow is undefined. */
   uintptr_t accumulated = 0;
   for (unsigned i = 0; i < CCOL_PIN_STRIPES; ++i) {
     accumulated += (uintptr_t)atomic_load_explicit(&stripes[i].count,
@@ -261,8 +269,9 @@ size_t ccol_pintable_pins(ccol_pintable *t, uint32_t idx) {
 }
 
 size_t ccol_pintable_pins_for(ccol_pintable *t, uint64_t handle) {
-  /* Same guard as unpin above: a zero handle names no slot, and answering
-   * with slot 0's count would report some unrelated object's pins. */
+  /* This guard is the same as the one in unpin above. A zero handle names no
+   * slot. An answer that used the count of slot 0 would report the pins of an
+   * unrelated object. */
   if (handle == 0) return 0;
   return ccol_pintable_pins(t, (uint32_t)(handle >> 32));
 }
@@ -272,8 +281,9 @@ void ccol_pintable_dispose(ccol_pintable *t) {
     ccol_pin_chunk *chunk =
         atomic_load_explicit(&t->chunks[c], memory_order_acquire);
     if (!chunk) continue;
-    /* Unpublished before it is freed, so a resolve racing this finds no chunk
-     * and answers NULL rather than reading freed memory. */
+    /* The loop unpublishes the chunk before it frees it. A resolve that races
+     * this loop then finds no chunk and answers NULL. It does not read freed
+     * memory. */
     atomic_store_explicit(&t->chunks[c], NULL, memory_order_release);
     for (unsigned i = 0; i < CCOL_PIN_CHUNK_SLOTS; ++i) {
       ccol_pin_stripe *stripes =
@@ -287,9 +297,9 @@ void ccol_pintable_dispose(ccol_pintable *t) {
 }
 
 void ccol_pintable_reset_for(ccol_pintable *t, uint64_t handle) {
-  /* Same guard as unpin and pins_for above: a zero handle names no slot, and
-   * clearing slot 0's counters on its behalf would drop pins belonging to
-   * whichever object happens to occupy that slot. */
+  /* This guard is the same as the ones in unpin and pins_for above. A zero
+   * handle names no slot. A clear of the counters of slot 0 would drop the
+   * pins of whichever object occupies that slot. */
   if (handle == 0) return;
   ccol_pintable_reset(t, (uint32_t)(handle >> 32));
 }

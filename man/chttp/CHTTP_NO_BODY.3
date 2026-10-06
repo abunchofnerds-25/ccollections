@@ -5,14 +5,15 @@ CHTTP_NO_BODY \- construct a chttp_request_body_t for a bodyless request
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttp.h>
+#include <ccollections/chttp.h>
 
 CHTTP_NO_BODY
 .fi
 .SH DESCRIPTION
 .nf
-Expands to a chttp_request_body_t initialiser with all fields zeroed.
-Use for GET, HEAD, DELETE, and other methods that carry no body.
+This macro expands to an initializer for a chttp_request_body_t. Every
+field in it is zero. Use it for GET, HEAD, DELETE and the other
+methods that carry no body.
 .fi
 .SH EXAMPLES
 .nf

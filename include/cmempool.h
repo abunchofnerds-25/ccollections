@@ -24,15 +24,15 @@ SOFTWARE.
 
 #pragma once
 
-#include <common.h>
+#include "common.h"
 
-/* Everything declared from here to the end of this header is part of the
- * public ABI of libccollections and is exported from the shared library.
- * The library itself is built with -fvisibility=hidden, so any function or
- * object that is not covered by one of these blocks stays internal to the
- * library, is absent from its dynamic symbol table, and cannot be
- * interposed by, or collide with, a symbol of the same name in the
- * application that links against it. */
+/* Everything that this header declares from here to its end is part of the
+ * public ABI of libccollections. The shared library exports all of it.
+ * The library itself is built with -fvisibility=hidden. Any function or
+ * object that one of these blocks does not cover stays internal to the
+ * library and is absent from its dynamic symbol table. The application
+ * that links against the library cannot interpose it. A symbol of the same
+ * name in that application cannot collide with it. */
 #pragma GCC visibility push(default)
 
 /**
@@ -40,17 +40,17 @@ SOFTWARE.
  * @brief Fixed-size and ranged memory pool allocators for efficient memory
  * management
  *
- * Provides two types of memory pools:
+ * This header gives you two types of memory pools:
  * - ccol_mempool: Fixed-size element pool with optional dynamic fallback
- * - ccol_r_mempool: Ranged pool supporting power-of-2 sizes with intelligent
- * allocation
+ * - ccol_r_mempool: Ranged pool that serves power-of-2 sizes and selects the
+ * best pool for each request
  *
  * Key features:
  * - O(1) allocation and deallocation
  * - Thread-safe or single-threaded operation
- * - Preallocated buffer support for embedded systems
- * - Corruption detection via assertions
- * - Configurable fallback to dynamic allocation
+ * - Support for a preallocated buffer, for embedded systems
+ * - Corruption detection with assertions
+ * - Fallback to dynamic allocation, which you can configure
  * - Zero external fragmentation (fixed-size pools)
  */
 
@@ -62,43 +62,47 @@ SOFTWARE.
 typedef struct ccol_mempool ccol_mempool;
 
 /**
- * @brief The alignment every entry a pool hands out is guaranteed to meet.
+ * @brief The alignment that every entry a pool hands out is sure to meet.
  *
- * At least what malloc() guarantees, so any object a caller can store in heap
- * memory can be stored in a pool entry. The stride between entries is rounded
- * up to a multiple of this, which is what extends the guarantee from the first
- * entry to every entry: a buffer whose start is correctly aligned still hands
- * out misaligned entries if the stride is not itself a multiple of the
- * alignment, since the offset drifts one stride at a time.
+ * This is at least what malloc() guarantees. The caller can store any object
+ * in a pool entry that it can store in heap memory. The library rounds the
+ * stride between entries up to a multiple of this value. That rounding extends
+ * the guarantee from the first entry to every entry. Consider a buffer that
+ * starts at a correctly aligned address, where the stride is not a multiple
+ * of the alignment. It still hands out misaligned entries, because the
+ * offset drifts one stride at a time.
  *
- * A fixed constant rather than _Alignof(max_align_t), because it is part of the
- * interface between a caller's code and the shared library and the two are not
- * necessarily built by the same compiler. The preallocated-buffer macros size a
- * caller's array with this value while the library derives its stride from it,
- * so a compiler that disagrees about max_align_t mis-sizes every preallocated
- * pool built against a library another compiler produced; GCC and Clang do
- * disagree about it on i386, reporting 16 and 8. Sixteen is what glibc's own
- * malloc returns on every target this library supports, so pinning it costs
- * nothing a caller could observe and removes the toolchain from the contract.
+ * This is a fixed constant and not _Alignof(max_align_t). The reason is that
+ * it is part of the interface between the code of a caller and the shared
+ * library. The same compiler does not have to build both of them. The
+ * preallocated-buffer macros size an array of the caller with this value, and
+ * the library derives its stride from it. A compiler that disagrees about
+ * max_align_t therefore mis-sizes every preallocated pool that is built
+ * against a library another compiler produced. GCC and Clang do disagree about
+ * it on i386, where they report 16 and 8. Sixteen is what the malloc of glibc
+ * returns on every target that this library supports. A pinned value therefore
+ * costs nothing that a caller can see, and it removes the toolchain from the
+ * contract.
  */
 #define _ccol_mempool_entry_align 16
 
-/* A target whose widest fundamental type needs more than the pinned value would
- * be handed entries it cannot legally store that type in, which is the one way
- * the constant above can be wrong. It fails to compile instead. */
+/* There is one way the constant above can be wrong. On a target whose widest
+ * fundamental type needs more than the pinned value, the pool hands out
+ * entries that cannot legally store that type. Such a target fails to compile
+ * instead. */
 _Static_assert(_ccol_mempool_entry_align >= _Alignof(max_align_t),
                "_ccol_mempool_entry_align must be at least the alignment this "
                "target requires for any object type");
 
 /**
- * @brief True iff _ccol_mempool_align_up(x) is well-defined for x, i.e. the
- * rounding-up addition it performs does not overflow size_t.
+ * @brief True only when _ccol_mempool_align_up(x) is well-defined for x. That
+ * is, the addition that rounds x up does not overflow size_t.
  *
- * Not meant to be used directly; ccol_mempool_create(),
+ * Do not use this macro directly. ccol_mempool_create(),
  * ccol_mempool_create_from_ preallocated_buffer(), and
- * CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER all check this (directly or via
- * _ccol_mempool_buffer_params_fit) before relying on _ccol_mempool_align_up()'s
- * result.
+ * CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER all check it before they use the
+ * result of _ccol_mempool_align_up(). They check it directly or through
+ * _ccol_mempool_buffer_params_fit.
  */
 #define _ccol_mempool_align_up_fits(x) \
   ((x) <= SIZE_MAX - (_ccol_mempool_entry_align - 1))
@@ -106,27 +110,30 @@ _Static_assert(_ccol_mempool_entry_align >= _Alignof(max_align_t),
 /**
  * @brief Rounds x up to the nearest multiple of _ccol_mempool_entry_align.
  *
- * Every entry in a ccol_mempool's contiguous backing buffer (whether heap
- * allocated or supplied via ccol_mempool_create_from_preallocated_buffer /
- * CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER) sits extended_elem_size bytes after
- * the previous one. The buffer's own starting address being aligned to
- * _ccol_mempool_entry_align (validated separately at construction) is only
- * enough to keep entry 0 aligned; every later entry's alignment depends on
- * extended_elem_size ITSELF being a multiple of that same alignment, or the
- * per-entry offset drifts one stride at a time.
+ * Every entry in the contiguous backing buffer of a ccol_mempool sits
+ * extended_elem_size bytes after the entry before it. This is true for a heap
+ * buffer and for a buffer that comes from
+ * ccol_mempool_create_from_preallocated_buffer or
+ * CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER. The start address of the buffer is
+ * aligned to _ccol_mempool_entry_align, which the constructor validates on its
+ * own. That alignment keeps only entry 0 aligned. The alignment of every later
+ * entry depends on extended_elem_size ITSELF being a multiple of that same
+ * alignment. If it is not, the offset of each entry drifts one stride at a
+ * time.
  *
- * Two things depend on that, and the caller-facing one is the more important.
- * An entry a caller receives must be aligned for any object type it might hold,
- * matching what malloc() guarantees, so that storing a long double or a vector
- * type in a pool entry is as valid as storing one in heap memory. The pool's
- * own reads and writes through an entry (the free-list link a free entry holds
- * in its own first bytes) are then correctly aligned as a consequence. Either
- * way a drifting offset is undefined behavior
- * and a real fault risk on strict-alignment architectures, invisible on
- * x86/x86_64's alignment-tolerant loads and stores.
+ * Two things depend on that, and the one that faces the caller is the more
+ * important. An entry that a caller receives must be aligned for any object
+ * type that it can hold. This matches what malloc() guarantees. A long double
+ * or a vector type is therefore as valid in a pool entry as it is in heap
+ * memory. The result is that the reads and writes of the pool through an entry
+ * are correctly aligned too. A free entry holds the free-list link in its own
+ * first bytes. In both cases a drifting offset is undefined behavior. It is a
+ * real fault risk on strict-alignment architectures. The loads and stores of
+ * x86 and x86_64 tolerate misalignment, so the fault is invisible there.
  *
- * Callers must first confirm x fits via _ccol_mempool_align_up_fits(x), since
- * the addition below can otherwise overflow.
+ * The caller must first confirm that x fits with
+ * _ccol_mempool_align_up_fits(x). If it does not, the addition below can
+ * overflow.
  */
 #define _ccol_mempool_align_up(x)            \
   (((x) + (_ccol_mempool_entry_align - 1)) & \
@@ -136,35 +143,43 @@ _Static_assert(_ccol_mempool_entry_align >= _Alignof(max_align_t),
  * @brief Create a fixed-size memory pool
  *
  * Creates a memory pool that manages a fixed number of fixed-size elements.
- * All allocations return elements of the same size. Provides O(1) allocation
- * and deallocation using a free list.
+ * Every allocation returns an element of the same size. The pool gives O(1)
+ * allocation and deallocation with a free list.
  *
  * @param elem_count Number of elements in the pool (must be > 0)
- * @param elem_size Size of each element in bytes (must be > 0, minimum
- * sizeof(uintptr_t), maximum SIZE_MAX minus the alignment and power-of-two
- * rounding the stride adds)
- * @param fallback_to_dynamic_memory If true, allocate from heap when pool
- * exhausted
- * @param single_threaded If true, omit locking (faster but not thread-safe)
- * @param mmgmt_procs Custom memory management procedures, or NULL for default
- * malloc/free
- * @param err Optional pointer to receive error string on failure (pass NULL to
- * ignore)
+ * @param elem_size Size of each element in bytes. It must be > 0. The minimum
+ * is sizeof(uintptr_t). The maximum is SIZE_MAX less the alignment and the
+ * power-of-two rounding that the stride adds
+ * @param fallback_to_dynamic_memory If true, allocate from the heap when the
+ * pool is empty
+ * @param single_threaded If true, do not lock (faster but not thread-safe)
+ * @param mmgmt_procs Custom memory management procedures, or NULL for the
+ * default malloc and free
+ * @param err Optional pointer that receives an error string on failure (pass
+ * NULL to ignore)
  *
- * @return Pointer to newly created memory pool, or NULL on failure
+ * @return Pointer to the new memory pool, or NULL on failure
  *
  * @note The stride between entries is elem_size rounded up to
- * _ccol_mempool_entry_align and then, unless the library was built with
- * CCOL_MEMPOOL_COMPACT_LAYOUT, on up to a power of two, so every entry in the
- * pool's contiguous buffer, not just the first, lands on an address aligned for
- * any object type; one status byte per entry follows the entry array in the
+ * _ccol_mempool_entry_align. The library then rounds it on up to a power of
+ * two, unless it was built with CCOL_MEMPOOL_COMPACT_LAYOUT. Every entry in
+ * the contiguous buffer of the pool therefore lands on an address that is
+ * aligned for any object type. That covers every entry, and not only the
+ * first one. One status byte for each entry follows the entry array in the
  * same block
- * @note If elem_size < sizeof(uintptr_t), it is rounded up
- * @note Returns NULL with error if elem_size would overflow size_t once that
- * rounding is applied
- * @note Thread-safe if single_threaded is false (uses a mutex)
- * @note With fallback enabled, pool never fails allocation (until system OOM)
- * @note The pool must be destroyed with ccol_mempool_destroy() when done
+ * @note If elem_size < sizeof(uintptr_t), the library rounds it up
+ * @note Returns NULL with an error if elem_size would overflow size_t after
+ * that rounding
+ * @note Thread-safe if single_threaded is false (it uses a mutex)
+ * @note The pool calls the functions of mmgmt_procs for its dynamic fallback
+ * entries, and for its own bookkeeping of them, in the middle of an update of
+ * its own state, with its lock held when it has one. Those functions must
+ * therefore not call back into this same pool: with a lock the call
+ * deadlocks, and without one it corrupts that state. An allocator built on a
+ * pool must draw from a different pool
+ * @note With fallback turned on, an allocation from the pool never fails until
+ * the system runs out of memory
+ * @note The caller must destroy the pool with ccol_mempool_destroy()
  *
  * @see ccol_mempool_create_from_preallocated_buffer
  * @see ccol_mempool_destroy
@@ -179,41 +194,45 @@ ccol_mempool *ccol_mempool_create(size_t elem_count, size_t elem_size,
 /**
  * @brief Declare a preallocated buffer for a memory pool
  *
- * Macro that declares a uint8_t array sized correctly for a memory pool with
- * the specified parameters. The buffer can then be passed to
+ * This macro declares a uint8_t array with the correct size for a memory pool
+ * that has the given parameters. The caller can then give the buffer to
  * ccol_mempool_create_from_preallocated_buffer().
  *
  * @param name Variable name for the buffer
- * @param elem_count Number of elements the pool will hold
+ * @param elem_count Number of elements that the pool holds
  * @param elem_size Size of each element in bytes
  *
- * @note Automatically includes the pool's own status bytes in the size
- * calculation
- * @note Useful for embedded systems or avoiding heap allocation
- * @note The declared buffer is aligned to _ccol_mempool_entry_align, the
- * alignment every entry the pool hands out is guaranteed to meet, so it can be
- * handed directly to ccol_mempool_create_from_preallocated_buffer() without any
- * extra alignment considerations on the caller's part
- * @note elem_size smaller than sizeof(uintptr_t) is rounded up to fit the
- * free-list pointer before the buffer's size is computed, the same way
- * ccol_mempool_create_from_preallocated_buffer() itself rounds it; this keeps
- * the declared buffer's element count in agreement with what that constructor
- * will actually carve it into, rather than the buffer being sized for the
- * caller's smaller, unrounded elem_size while the constructor divides it up
- * using the larger, rounded one
- * @note The per-element stride is the rounded elem_size taken up to
- * _ccol_mempool_entry_align and then, unless the library was built with
- * CCOL_MEMPOOL_COMPACT_LAYOUT, on up to a power of two, again matching
- * ccol_mempool_create_from_preallocated_buffer()'s own stride exactly; this
- * keeps every entry in the resulting pool aligned for any object type, not
- * just entry 0
- * @note One status byte per element is reserved after the elements, in the same
- * buffer, so the pool needs no allocation of its own for them
- * @note elem_count must be nonzero; rejected at compile time (via a
- * _Static_assert), rather than silently producing an undersized (or, for
- * elem_count == 0, zero-length) array, if elem_count is zero or if
- * elem_count * (the stride plus that element's own status byte) would
- * overflow size_t
+ * @note The macro includes the status bytes of the pool in the size that it
+ * computes
+ * @note This is useful for embedded systems, or when you do not want a heap
+ * allocation
+ * @note The macro aligns the declared buffer to _ccol_mempool_entry_align.
+ * That is the alignment that every entry the pool hands out is sure to meet.
+ * The caller can therefore give the buffer directly to
+ * ccol_mempool_create_from_preallocated_buffer(). The caller does not have to
+ * think about alignment
+ * @note An elem_size smaller than sizeof(uintptr_t) is rounded up to hold the
+ * free-list pointer. The macro rounds it before it computes the size of the
+ * buffer, in the same way as
+ * ccol_mempool_create_from_preallocated_buffer(). This keeps the element count
+ * of the declared buffer in agreement with what that constructor carves it
+ * into. Without this, the buffer has the size for the smaller elem_size of
+ * the caller, which nothing rounded. The constructor then divides it up with
+ * the larger, rounded one
+ * @note The stride for each element is the rounded elem_size taken up to
+ * _ccol_mempool_entry_align. The macro then takes it on up to a power of two,
+ * unless the library was built with CCOL_MEMPOOL_COMPACT_LAYOUT. This again
+ * matches the stride of ccol_mempool_create_from_preallocated_buffer()
+ * exactly. It keeps every entry in the resulting pool aligned for any object
+ * type, and not only entry 0
+ * @note The macro reserves one status byte for each element after the
+ * elements, in the same buffer. The pool therefore needs no allocation of its
+ * own for them
+ * @note elem_count must be nonzero. A _Static_assert rejects two cases at
+ * compile time. The first is an elem_count of zero. The second is an
+ * elem_count * (the stride plus the status byte of that element) that would
+ * overflow size_t. Without the assert, the macro silently produces an array
+ * that is too small, or a zero-length array when elem_count is 0
  *
  * @see ccol_mempool_create_from_preallocated_buffer
  *
@@ -225,90 +244,102 @@ ccol_mempool *ccol_mempool_create(size_t elem_count, size_t elem_size,
  * @endcode
  */
 /**
- * @brief Selects how far the distance between entries is rounded up.
+ * @brief Selects how far the library rounds up the distance between entries.
  *
- * The distance from one entry to the next is at least the element size raised
- * to hold a free entry's own list link and rounded up to
- * _ccol_mempool_entry_align. This switch decides whether it is rounded further.
+ * The distance from one entry to the next is at least the element size. The
+ * library raises that size to hold the list link of a free entry, then rounds
+ * it up to _ccol_mempool_entry_align. This switch decides whether the library
+ * rounds it further.
  *
- * Left at 0, the default, it is rounded on up to a power of two, so recovering
- * an entry's position in the pool from its address is a shift. Defined to 1
- * (e.g. -DCCOL_MEMPOOL_COMPACT_LAYOUT=1) it is left at the aligned element
- * size, and the position is recovered with a multiply against a reciprocal
- * computed when the pool is built. That costs a little on every allocation and
- * release, and can save a great deal of memory: an element size just above a
- * power of two very nearly doubles under the default and does not move at all
- * under the compact setting. For an element size that is already a power of two
- * the two settings produce identical pools.
+ * At 0, the default, the library rounds it on up to a power of two. A shift
+ * then recovers the position of an entry in the pool from its address. At 1
+ * (for example -DCCOL_MEMPOOL_COMPACT_LAYOUT=1) the library leaves it at the
+ * aligned element size. A multiply against a reciprocal then recovers the
+ * position. The library computes that reciprocal when it builds the pool. The
+ * multiply costs a little on every allocation and release. It can also save a
+ * great deal of memory. An element size a little above a power of two almost
+ * doubles under the default, and does not move at all under the compact
+ * setting. For an element size that is already a power of two, the two
+ * settings produce identical pools.
  *
- * It is a build-wide switch rather than a per-pool argument because a choice
- * made per pool would put that choice on the path every allocation and release
- * takes; measured, that costs roughly 8 percent for a pool with a thread cache
- * and 20 percent for a single-threaded one, paid by every caller including
- * those whose element sizes make the two layouts identical.
+ * This is a build-wide switch and not a per-pool argument. A choice made for
+ * each pool would put that choice on the path of every allocation and release.
+ * Measured, that costs about 8 percent for a pool with a thread cache and 20
+ * percent for a single-threaded one. Every caller pays it, including the
+ * callers whose element sizes make the two layouts identical.
  *
  * @warning This value is part of the interface between an application and the
- * library, not only a build detail of the library. The buffer-declaring macros
- * below size an array in the application's own translation unit while the
- * library derives its stride from the same setting, so a library built with one
- * value and an application compiled against another disagree about how large a
- * preallocated buffer has to be, and every pool built on one is mis-sized.
- * Whatever value is chosen must be used for the library and for every
- * translation unit that includes this header.
+ * library. It is not only a build detail of the library. The macros below that
+ * declare a buffer size an array in the translation unit of the application.
+ * The library derives its stride from the same setting. Consider a library
+ * built with one value, and an application compiled against another. The two
+ * then disagree about how large a preallocated buffer has to be, and every
+ * pool built on one has the wrong size. Use the same value for the library
+ * and for every translation unit that includes this header.
  */
 #ifndef CCOL_MEMPOOL_COMPACT_LAYOUT
 #define CCOL_MEMPOOL_COMPACT_LAYOUT 0
 #endif
 
-/* Enforces the warning above at link time rather than leaving it to be read.
+/* This enforces the warning above at link time. A reader does not have to
+ * obey it on trust.
  *
- * The library defines exactly one of these two objects, named for the setting
- * it was built with, and CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER takes the
- * address of the one its own setting names. Build the two sides differently and
- * the link fails with an undefined reference naming the layout the declaring
- * code expected, instead of producing a buffer that is quietly the wrong size.
+ * The library defines exactly one of these two objects. The name of that
+ * object states the setting that the library was built with.
+ * CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER takes the address of the one that
+ * its own setting names. Build the two sides differently and the link fails.
+ * The failure is an undefined reference that names the layout the declaring
+ * code expected. Without this, the build quietly produces a buffer of the
+ * wrong size.
  *
- * Only that macro carries the reference, because only that macro is at risk:
- * nothing else here depends on the setting. No function signature, type or
- * struct does, the ranged buffer macro does not (every tier's element size is a
- * power of two at or above the entry alignment, where the two roundings agree),
- * and a translation unit that merely includes this header has nothing that
- * could be mis-sized. Putting the reference on every includer would make a file
- * using only the macros fail to link without the library, for a risk it does
- * not carry. A file that declares such a buffer has to link the library in any
- * case, since it exists to be handed to a constructor. */
+ * Only that macro carries the reference, because only that macro is at risk.
+ * Nothing else here depends on the setting. No function signature, type or
+ * struct depends on it. The ranged buffer macro does not depend on it
+ * either. The element size of every tier is a power of two at or above the
+ * entry alignment, and the two roundings agree there. A translation unit that
+ * only includes this header has nothing that can get the wrong size.
+ *
+ * A reference on every includer would make a file that uses only the macros
+ * fail to link without the library. That file does not carry the risk. A
+ * file that declares such a buffer must link the library in any case,
+ * because the buffer exists to go to a constructor. */
+/* The tag is a scalar, so the reference below takes its address explicitly
+ * rather than relying on array-to-pointer decay. See the note beside the
+ * definition in cmempool.c for why it is not a one-element array. */
 #if CCOL_MEMPOOL_COMPACT_LAYOUT
-extern const char _ccol_mempool_built_with_compact_layout[];
-#define _ccol_mempool_layout_tag _ccol_mempool_built_with_compact_layout
+extern const char _ccol_mempool_built_with_compact_layout;
+#define _ccol_mempool_layout_tag (&_ccol_mempool_built_with_compact_layout)
 #else
-extern const char _ccol_mempool_built_with_fast_layout[];
-#define _ccol_mempool_layout_tag _ccol_mempool_built_with_fast_layout
+extern const char _ccol_mempool_built_with_fast_layout;
+#define _ccol_mempool_layout_tag (&_ccol_mempool_built_with_fast_layout)
 #endif
 
 /**
  * @brief Smallest power of two that is at least x, as a constant expression.
  *
- * The buffer-declaring macros size a static array with this, so it cannot be a
- * function or a builtin the compiler is merely likely to fold; it is a
- * conditional chain. Its first entry is the alignment itself rather than a
- * fixed constant: the value handed to it is always already rounded up to that
- * alignment, so a chain that floored at anything else would disagree with the
- * runtime's own stride on a target where the two differ. It yields 0 above
- * 2^40, which
- * _ccol_mempool_buffer_params_fit() rejects, so an absurd element size fails at
- * compile time rather than silently wrapping.
+ * The macros that declare a buffer size a static array with this macro. It
+ * therefore cannot be a function, or a builtin that the compiler is only
+ * likely to fold. It is a conditional chain. Its first entry is the alignment
+ * itself and not some other fixed constant. The reason is that the value which
+ * reaches it is always already rounded up to that alignment. A chain with a
+ * different floor would disagree with the stride of the runtime on a target
+ * where the two differ. The chain gives 0 above 2^40, and
+ * _ccol_mempool_buffer_params_fit() rejects that. An absurd element size
+ * therefore fails at compile time and does not wrap in silence.
  *
- * The same holds at every width: a chain entry beyond what a size_t can hold
- * (every entry from 2^32 up, on a 32-bit one) converts to exactly 0, which is
- * the same "no stride fits" answer the chain's own ceiling gives, so the entry
- * above which a size is rejected simply moves down with the width.
+ * The same is true at every width. A chain entry beyond what a size_t can hold
+ * converts to exactly 0. On a 32-bit size_t that is every entry from 2^32 up.
+ * That 0 is the same "no stride fits" answer that the ceiling of the chain
+ * gives. The entry above which a size is rejected therefore moves down with
+ * the width.
  */
-/* Split by width: every entry above 2^31 is a comparison against a constant a
-   32-bit size_t cannot hold, which clang rejects outright under -Werror rather
-   than folding, so those entries are not emitted at all on such a target. A
-   size that reaches past the chain's last entry yields 0, which
-   _ccol_mempool_buffer_params_fit() and the runtime both read as "no stride
-   fits"; the point at which that happens simply follows the width. */
+/* The chain is split by width. Every entry above 2^31 is a comparison against
+   a constant that a 32-bit size_t cannot hold. Clang rejects such a comparison
+   outright under -Werror and does not fold it. Those entries are therefore not
+   emitted at all on such a target. A size that reaches past the last entry of
+   the chain gives 0. Both _ccol_mempool_buffer_params_fit() and the runtime
+   read that 0 as "no stride fits". The point at which that happens follows the
+   width. */
 #if SIZE_MAX > 0xFFFFFFFFu
 #define _ccol_mp_pow2_ceil_wide(x)                                                     \
   ((x) <= 4294967296u                                                                  \
@@ -393,15 +424,17 @@ extern const char _ccol_mempool_built_with_fast_layout[];
 /**
  * @brief The distance between one entry and the next.
  *
- * An entry carries no header, so the stride is the caller's element size,
- * raised to hold the free-list link a free entry stores in its own first bytes,
- * rounded to the alignment every entry is guaranteed to meet, and then, in the
- * default layout, rounded on up to a power of two so that turning an entry's
- * address into its index is a shift rather than a division.
+ * An entry carries no header. The stride is therefore the element size of
+ * the caller, raised to hold the free-list link. A free entry stores that
+ * link in its own first bytes. The library then rounds it to the alignment
+ * that every entry is sure to meet. In the default layout the library rounds
+ * it on up to a power of two. A shift, and not a division, then turns the
+ * address of an entry into its index.
  *
- * CCOL_MEMPOOL_COMPACT_LAYOUT stops at the alignment and keeps the stride the
- * element size needs, trading that shift for a multiply by a precomputed
- * reciprocal and spending no bytes on the rounding.
+ * CCOL_MEMPOOL_COMPACT_LAYOUT stops at the alignment. It keeps the stride that
+ * the element size needs. It trades that shift for a multiply by a reciprocal
+ * that the library computes in advance, and it spends no bytes on the
+ * rounding.
  */
 #if CCOL_MEMPOOL_COMPACT_LAYOUT
 #define _ccol_mempool_stride(elem_size) \
@@ -413,11 +446,12 @@ extern const char _ccol_mempool_built_with_fast_layout[];
 #endif
 
 /**
- * @brief Bytes a pool of elem_count elements of elem_size needs.
+ * @brief Bytes that a pool of elem_count elements of elem_size needs.
  *
- * The entries themselves, followed by one status byte per entry. Both live in
- * the same block, so a preallocated buffer holds everything the pool needs and
- * a heap-allocated pool takes exactly one allocation.
+ * The block holds the entries themselves, then one status byte for each entry.
+ * Both parts stay in the same block. A preallocated buffer therefore holds
+ * everything that the pool needs, and a heap pool takes exactly one
+ * allocation.
  */
 #define _ccol_mempool_buffer_bytes(elem_count, elem_size) \
   ((elem_count) * _ccol_mempool_stride(elem_size) + (elem_count))
@@ -444,48 +478,55 @@ extern const char _ccol_mempool_built_with_fast_layout[];
 /**
  * @brief Create a memory pool from a preallocated buffer
  *
- * Creates a memory pool using a user-provided buffer instead of allocating
- * from the heap. Useful for embedded systems or when heap allocation is
- * undesirable. The buffer must be properly sized using
- * CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER or manual calculation.
+ * Creates a memory pool that uses a buffer from the caller. The pool does not
+ * allocate from the heap. This is useful for embedded systems, and when you do
+ * not want a heap allocation. The buffer must have the correct size. Use
+ * CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER, or compute the size by hand.
  *
- * @param buffer Pointer to preallocated buffer
- * @param buf_size Size of buffer in bytes
- * @param elem_size Size of each element in bytes (must be > 0; if smaller
- * than sizeof(uintptr_t) it is rounded up, mirroring ccol_mempool_create();
- * maximum SIZE_MAX minus the stride rounding)
- * @param fallback_to_dynamic_memory If true, allocate from heap when pool
- * exhausted
- * @param single_threaded If true, omit locking (faster but not thread-safe)
- * @param mmgmt_procs Custom memory management procedures, or NULL for default
- * malloc/free
- * @param err Optional pointer to receive error string on failure
+ * @param buffer Pointer to the preallocated buffer
+ * @param buf_size Size of the buffer in bytes
+ * @param elem_size Size of each element in bytes. It must be > 0. If it is
+ * smaller than sizeof(uintptr_t), the library rounds it up, in the same way as
+ * ccol_mempool_create(). The maximum is SIZE_MAX less the stride rounding
+ * @param fallback_to_dynamic_memory If true, allocate from the heap when the
+ * pool is empty
+ * @param single_threaded If true, do not lock (faster but not thread-safe)
+ * @param mmgmt_procs Custom memory management procedures, or NULL for the
+ * default malloc and free
+ * @param err Optional pointer that receives an error string on failure
  *
- * @return Pointer to newly created memory pool, or NULL on failure
+ * @return Pointer to the new memory pool, or NULL on failure
  *
- * @note Element count is calculated as buf_size / (stride + 1). An entry
- * carries no header; stride is elem_size rounded up to
- * _ccol_mempool_entry_align and then, unless the library was built with
- * CCOL_MEMPOOL_COMPACT_LAYOUT, on up to a power of two (so every entry, not
- * just the first, lands on an address aligned for any object type, and an
- * address converts to an index with a shift), and the one extra byte per
- * element is that element's own status byte, which lives in the same buffer
- * after the entries. _ccol_mempool_stride() computes exactly that stride;
+ * @note The element count is buf_size / (stride + 1). An entry carries no
+ * header. The stride is elem_size rounded up to _ccol_mempool_entry_align, and
+ * then rounded on up to a power of two unless the library was built with
+ * CCOL_MEMPOOL_COMPACT_LAYOUT. Every entry therefore lands on an address
+ * that is aligned for any object type, and not only the first one. A shift
+ * converts an address to an index. The one extra byte for each element
+ * is the status byte of that element. It stays in the same buffer, after the
+ * entries. _ccol_mempool_stride() computes exactly that stride.
  * CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER sizes its own buffer with the same
- * arithmetic, and is the way to get it right without restating it
- * @note Buffer is not freed by ccol_mempool_destroy() (user manages buffer
- * lifetime)
- * @note Pool struct itself is still allocated via mmgmt_procs
- * @note Returns NULL with error if elem_size is zero
- * @note If elem_size is nonzero but < sizeof(uintptr_t), it is rounded up
- * (same as ccol_mempool_create())
- * @note Returns NULL with error if elem_size would overflow size_t once the
- * alignment and power-of-two rounding are applied
- * @note Returns NULL with error if the buffer is not sufficiently aligned (a
- * buffer declared via
- * CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER is always properly aligned; a
- * hand-rolled buffer must be aligned to at least _ccol_mempool_entry_align,
- * which is 16 and is what the constructor checks for)
+ * arithmetic. It is the way to get the size right without a second statement
+ * of the formula
+ * @note ccol_mempool_destroy() does not free the buffer. The caller owns the
+ * lifetime of the buffer
+ * @note The pool struct itself still comes from mmgmt_procs
+ * @note The pool calls the functions of mmgmt_procs for its dynamic fallback
+ * entries, and for its own bookkeeping of them, in the middle of an update of
+ * its own state, with its lock held when it has one. Those functions must
+ * therefore not call back into this same pool: with a lock the call
+ * deadlocks, and without one it corrupts that state. An allocator built on a
+ * pool must draw from a different pool
+ * @note Returns NULL with an error if elem_size is zero
+ * @note If elem_size is nonzero but < sizeof(uintptr_t), the library rounds it
+ * up. This is the same as ccol_mempool_create()
+ * @note Returns NULL with an error if elem_size would overflow size_t after
+ * the alignment and the power-of-two rounding
+ * @note Returns NULL with an error if the buffer is not aligned enough. A
+ * buffer that comes from CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER is always
+ * aligned correctly. A buffer that you build by hand must be aligned to at
+ * least _ccol_mempool_entry_align. That value is 16, and it is what the
+ * constructor checks for
  *
  * @see CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER
  * @see ccol_mempool_create
@@ -501,71 +542,90 @@ ccol_mempool *ccol_mempool_create_from_preallocated_buffer(
  *
  * @param mp Memory pool to destroy
  *
- * @warning Do not call directly - use ccol_mempool_destroy() macro instead
+ * @warning Do not call this function directly. Use the
+ * ccol_mempool_destroy() macro instead
  *
- * @note A custom allocator's free function can still be called after this
- * returns, and after main() returns. A pool shared between threads keeps a
- * small per-thread cache of entries; destroying the pool marks those caches
- * dead but does not free them, because a cache belongs to the thread holding
- * it and another thread must not free it underneath that thread. Each is
- * released later: when its owning thread next has to look up a magazine for a
- * pool its own per-thread cache does not already hold, when that thread exits,
- * or, if that thread is the one that runs the library's process-exit handler,
- * at process exit. Each release calls the free function the pool was created
- * with. None of those is guaranteed to happen: a thread that keeps using the
- * same few pools answers every request from its cache without ever looking a
- * magazine up, and so holds an orphaned one indefinitely. A program that needs
- * its allocator to see every free should join such threads.
+ * @note The library can call the free function of a custom allocator after
+ * this function returns, and after main() returns. A pool that threads share
+ * keeps a small cache of entries for each thread. A destroy of the pool marks
+ * those caches dead. It does not free them, because a cache belongs to the
+ * thread that holds it and another thread must not free it under that thread.
+ * The library frees each cache later, at one of three points. The first is
+ * when the owning thread next has to look a magazine up for a pool that its
+ * own cache does not already hold. The second is when that thread exits. The
+ * third is at process exit, or when dlclose() unloads the library, if that
+ * thread is the one that runs the unload handler of the library. Each free
+ * calls the free function that the pool was created with. None of these three
+ * points is sure to happen. A thread that keeps using the same few pools
+ * answers every request from its cache. It never looks a magazine up, and so
+ * it holds an orphaned cache for ever. A program that needs its allocator to
+ * see every free should join such threads. Once dlclose() unloads the library,
+ * the cache of every other thread that still runs stays allocated for the rest
+ * of the process, and that thread exits cleanly.
  *
- * An allocator that is itself torn down at a known point therefore has to
- * outlive that: one drawing from an arena released at the end of main(), or
- * from storage freed by the application's own exit handler, can be called after
- * it is gone. Allocators built on malloc/free, or on storage that lives for the
- * process, are unaffected. A pool created with single_threaded set keeps no
- * such cache and has no such tail.
+ * An allocator that is itself torn down at a known point must therefore
+ * outlive that point. The library can call an allocator that draws from an
+ * arena after the end of main() frees that arena. The same is true for an
+ * allocator that draws from storage which the exit handler of the application
+ * frees. An allocator built on malloc and free is not affected. Neither is one
+ * built on storage that lives for the whole process. A pool created with
+ * single_threaded keeps no such cache and has no such tail.
  */
 void _ccol_mempool_destroy(ccol_mempool *mp);
 
 /**
  * @brief Destroy a memory pool and set pointer to NULL
  *
- * Frees all resources associated with the memory pool. For pools created from
- * preallocated buffers, the buffer itself is not freed (only the pool struct).
+ * Frees every resource of the memory pool. For a pool that was created from a
+ * preallocated buffer, this macro frees only the pool struct. It does not free
+ * the buffer itself.
  *
- * @param mp Memory pool to destroy (will be set to NULL after destruction)
+ * @param mp Memory pool to destroy. The macro sets it to NULL afterward
  *
- * @warning Unfreed, dynamically allocated pointers via the fallback memory
- * management mechanism will make this function assert to make sure a potential
- * leak does not go unnoticed. If no fallback is requested during the creation
- * of this pool, such an assert does not happen. As a rule of thumb, the
- * allocated buffers should always be freed.
- * @note Safe to call with NULL pointer
- * @note For preallocated pools, user must manage buffer lifetime
+ * @warning This function asserts when the dynamic fallback still holds
+ * pointers that nobody freed. The assert makes sure that a possible leak does
+ * not stay unnoticed. Such an assert does not happen if you did not ask for a
+ * fallback when you created this pool. As a rule, always free the allocated
+ * buffers.
+ * @note It is safe to call this macro with a NULL pointer
+ * @note For a preallocated pool, the caller owns the lifetime of the buffer
+ * @note The macro evaluates mp exactly once. It must be a modifiable
+ * lvalue, such as a variable or an element of an array
  */
 #define ccol_mempool_destroy(mp) \
-  do {                           \
-    _ccol_mempool_destroy((mp)); \
-    mp = NULL;                   \
+  _ccol_mempool_destroy_impl(    \
+      mp, _ccol_uniq(__ccol_mempool_destroy_slot, __COUNTER__))
+
+/* Internal. The body of ccol_mempool_destroy. slot is a name from
+ * _ccol_uniq(), so the macro nests inside the argument of another destroy
+ * macro and stays -Wshadow clean. The argument is evaluated exactly once. */
+#define _ccol_mempool_destroy_impl(mp, slot) \
+  do {                                       \
+    __typeof__(mp) *slot = &(mp);            \
+    _ccol_mempool_destroy(*slot);            \
+    *slot = NULL;                            \
   } while (0)
 
 /**
  * @brief Allocate an entry from the pool
  *
- * Returns a pointer to an available entry from the pool. If the pool is
- * exhausted and fallback is enabled, allocates from the heap. Contents are
- * uninitialized.
+ * Returns a pointer to a free entry from the pool. The function allocates from
+ * the heap when the pool is empty and the fallback is on. The contents of the
+ * entry are uninitialized.
  *
  * @param mp Memory pool to allocate from
  *
- * @return Pointer to allocated entry, or NULL if pool exhausted and no fallback
+ * @return Pointer to the allocated entry. The function returns NULL when the
+ * pool is empty and there is no fallback
  *
  * @note O(1) complexity
- * @note Returned memory is uninitialized (use ccol_mempool_calloc_entry() for
- * zeroed)
- * @note Thread-safe if pool was created with single_threaded=false
- * @note Will assert if mp is NULL
- * @note Entry must be freed with ccol_mempool_free_entry()
- * @note With fallback enabled, only returns NULL on system OOM
+ * @note The memory that comes back is uninitialized. Use
+ * ccol_mempool_calloc_entry() for zeroed memory
+ * @note Thread-safe if the pool was created with single_threaded=false
+ * @note This function asserts if mp is NULL
+ * @note The caller must free the entry with ccol_mempool_free_entry()
+ * @note With the fallback on, the function returns NULL only when the system
+ * runs out of memory
  *
  * @see ccol_mempool_calloc_entry
  * @see ccol_mempool_free_entry
@@ -575,17 +635,18 @@ void *ccol_mempool_alloc_entry(ccol_mempool *mp);
 /**
  * @brief Allocate a zero-initialized entry from the pool
  *
- * Like ccol_mempool_alloc_entry(), but zeros the memory before returning.
+ * This function is like ccol_mempool_alloc_entry(). It zeros the memory before
+ * it returns.
  *
  * @param mp Memory pool to allocate from
  *
- * @return Pointer to zero-initialized entry, or NULL if pool exhausted and no
- * fallback
+ * @return Pointer to the zeroed entry. The function returns NULL when the pool
+ * is empty and there is no fallback
  *
- * @note O(1) allocation + mem_set cost
- * @note Zeros the whole element
- * @note Thread-safe if pool was created with single_threaded=false
- * @note Will assert if mp is NULL
+ * @note O(1) allocation, plus the cost of the memory set
+ * @note The function zeros the whole element
+ * @note Thread-safe if the pool was created with single_threaded=false
+ * @note This function asserts if mp is NULL
  *
  * @see ccol_mempool_alloc_entry
  * @see ccol_mempool_free_entry
@@ -595,65 +656,84 @@ void *ccol_mempool_calloc_entry(ccol_mempool *mp);
 /**
  * @brief Free an entry back to the pool (internal function)
  *
- * @param entry Entry to free (obtained from ccol_mempool_alloc_entry or
- * ccol_mempool_calloc_entry)
+ * @param entry Entry to free. It comes from ccol_mempool_alloc_entry or
+ * ccol_mempool_calloc_entry
  *
- * @warning Do not call directly - use ccol_mempool_free_entry() macro instead
+ * @warning Do not call this function directly. Use the
+ * ccol_mempool_free_entry() macro instead
  */
 void _ccol_mempool_free_entry(ccol_mempool *mp, void *entry);
 
 /**
  * @brief Free an entry back to the pool and set pointer to NULL
  *
- * Returns an allocated entry to the pool's free list for reuse. Performs
- * extensive corruption detection via assertions. Safe to call with NULL.
+ * Returns an allocated entry to the free list of the pool for reuse. The macro
+ * does careful corruption detection with assertions. It is safe to call with
+ * NULL.
  *
- * @param entry Entry to free (will be set to NULL after freeing)
+ * @param entry Entry to free. The macro sets it to NULL afterward
  *
  * @note O(1) complexity
- * @note Safe to call with NULL (no-op, like free())
- * @note Thread-safe if pool was created with single_threaded=false
- * @note Detects double-free via assertions. Two threads freeing the same entry
- * at the same instant are the exception, since the check runs outside the pool
- * lock; that is a data race in the calling program in any case.
- * @note Ownership is established from the address alone, before anything is
- * read through the caller's pointer: a pool-owned entry carries no header, and
- * its state is one byte in the pool's own status array. A dynamic fallback
- * entry is the exception and does carry a header, with its own sentinel
- * distinct from a pool-owned entry's
- * @note For dynamically allocated entries (fallback), frees to heap
- * @note Will assert on: double free, an address this pool does not own, and,
- * for a dynamic entry, a corrupted header
+ * @note It is safe to call this macro with NULL. It then does nothing, like
+ * free()
+ * @note Thread-safe if the pool was created with single_threaded=false
+ * @note Assertions detect a double free. There is one exception: two threads
+ * that free the same entry at the same instant. The check runs outside the
+ * pool lock. Such a call is a data race in the program of the caller in any
+ * case.
+ * @note The macro establishes ownership from the address alone. It does this
+ * before it reads anything through the pointer of the caller. A pool-owned
+ * entry carries no header. Its state is one byte in the status array of the
+ * pool. The pool also records the address of every dynamic fallback entry
+ * that it hands out, until that entry is freed, and it checks an address
+ * outside its buffer against that record
+ * @note For a dynamic entry from the fallback, the macro frees to the heap
+ * @note The macro asserts on a double free, and on an address that this pool
+ * does not own. That includes an entry of another pool, and a dynamic entry
+ * that is already free. It reads nothing through such an address
  *
  * @see ccol_mempool_alloc_entry
  * @see ccol_mempool_calloc_entry
+ *
+ * @note The macro evaluates each argument exactly once. entry must be a
+ * modifiable lvalue, such as a variable or an element of an array
  */
-#define ccol_mempool_free_entry(mp, entry)   \
-  do {                                       \
-    _ccol_mempool_free_entry((mp), (entry)); \
-    entry = NULL;                            \
+#define ccol_mempool_free_entry(mp, entry) \
+  _ccol_mempool_free_entry_impl(           \
+      (mp), entry, _ccol_uniq(__ccol_mempool_free_entry_slot, __COUNTER__))
+
+/* Internal. The body of ccol_mempool_free_entry. slot is a name from
+ * _ccol_uniq(), so the macro nests inside the argument of another destroy
+ * macro and stays -Wshadow clean. The argument is evaluated exactly once. */
+#define _ccol_mempool_free_entry_impl(mp, entry, slot) \
+  do {                                                 \
+    __typeof__(entry) *slot = &(entry);                \
+    _ccol_mempool_free_entry((mp), *slot);             \
+    *slot = NULL;                                      \
   } while (0)
 
 /**
  * @brief Get total capacity of the pool
  *
- * Returns the total number of fixed-size entries the pool was created with.
- * Does not include dynamically allocated entries.
+ * Returns the total number of fixed-size entries that the pool was created
+ * with. This count does not include dynamic entries.
  *
  * @param mp Memory pool to query
  *
- * @return Total number of pool entries (not counting dynamic allocations)
+ * @return Total number of pool entries. The count does not include dynamic
+ * entries
  *
- * @note Thread-safe if pool was created with single_threaded=false
- * @note Will assert if mp is NULL
- * @note Dynamic allocations are tracked separately
- * @note A pool with per-thread caches holds a reserve beyond this count, which
- * keeps this count obtainable by any thread however much other threads have
- * cached. An entry leaves a cache with no lock held and so with no count to
- * consult, so in exchange concurrent callers can briefly hold a few entries
- * more than this at once, never more than this plus that reserve. A pool with
- * no cache (single_threaded, or built on a preallocated buffer) is exact in
- * both directions
+ * @note Thread-safe if the pool was created with single_threaded=false
+ * @note This function asserts if mp is NULL
+ * @note The pool tracks dynamic entries on their own
+ * @note A pool with a cache for each thread holds a reserve above this count.
+ * The reserve keeps this count available to any thread, no matter how much
+ * other threads cached. An entry leaves a cache with no lock held, and so with
+ * no count to consult. In exchange, concurrent callers can hold a few entries
+ * more than this count at one time, for a short time. They never hold more
+ * than this count plus that reserve. A pool with no cache is exact in both
+ * directions. A pool is without a cache when it is single_threaded, or when it
+ * is built on a preallocated buffer
  *
  * @see ccol_mempool_used_count
  * @see ccol_mempool_allocated_bytes
@@ -664,25 +744,26 @@ size_t ccol_mempool_total_capacity(ccol_mempool *mp);
 /**
  * @brief Get the memory the pool holds for its entries
  *
- * Returns the size in bytes of the single block the pool uses for its entries
- * and their per-entry state. This is what the pool actually costs, which
- * ccol_mempool_total_capacity() deliberately does not report: a pool that
- * receives a thread cache holds a reserve beyond the count it was created with,
- * so its memory exceeds its usable capacity. Use this to size a pool against a
- * memory budget.
+ * Returns the size in bytes of the single block that the pool uses for its
+ * entries and for the state of each entry. This is what the pool costs.
+ * ccol_mempool_total_capacity() does not report that cost, and this is
+ * deliberate. A pool that receives a thread cache holds a reserve above the
+ * count that it was created with. Its memory therefore exceeds its usable
+ * capacity. Use this function to size a pool against a memory budget.
  *
  * @param mp Memory pool to query
  *
- * @return Size in bytes of the pool's entry block
+ * @return Size in bytes of the entry block of the pool
  *
- * @note Counts the entry block only. The handle itself is a fixed, small
- * allocation, per-thread caches are separate allocations made lazily as threads
- * first use the pool, and entries served by the dynamic fallback are not part
- * of this block at all
- * @note For a pool built on a caller-supplied buffer, this is the part of that
- * buffer the pool divided into entries, and the pool allocated none of it
- * @note Thread-safe if pool was created with single_threaded=false
- * @note Will assert if mp is NULL
+ * @note The function counts the entry block only. The handle itself is a
+ * small, fixed allocation. The cache for each thread is a separate allocation
+ * that the library makes when that thread first uses the pool. An entry that
+ * the dynamic fallback serves is not part of this block at all
+ * @note A pool can be built on a buffer from the caller. This is then the
+ * part of that buffer that the pool divided into entries. The pool allocated
+ * none of it
+ * @note Thread-safe if the pool was created with single_threaded=false
+ * @note This function asserts if mp is NULL
  *
  * @see ccol_mempool_total_capacity
  * @see ccol_mempool_dynamic_allocs_count
@@ -692,22 +773,23 @@ size_t ccol_mempool_allocated_bytes(ccol_mempool *mp);
 /**
  * @brief Get number of currently allocated pool entries
  *
- * Returns the number of entries from the pool that are currently handed out to
- * callers. Entries sitting in a per-thread cache have been taken off the shared
- * free list but given to nobody, and are not counted. Does not include dynamic
- * allocations.
+ * Returns the number of entries from the pool that the pool holds out to
+ * callers now. An entry that sits in the cache of a thread left the shared
+ * free list, but the pool gave it to nobody. The count does not include such
+ * an entry. It does not include a dynamic entry either.
  *
  * @param mp Memory pool to query
  *
- * @return Number of pool entries currently in use
+ * @return Number of pool entries in use now
  *
- * @note Thread-safe if pool was created with single_threaded=false
- * @note Will assert if mp is NULL
- * @note Dynamic allocations are tracked separately
- * @note Exact on a quiescent pool, where it never exceeds
- * ccol_mempool_total_capacity(). On a pool with per-thread caches, concurrent
- * allocation can put it a few entries above that and never above the slot count
- * ccol_mempool_allocated_bytes() accounts for; see ccol_mempool_total_capacity
+ * @note Thread-safe if the pool was created with single_threaded=false
+ * @note This function asserts if mp is NULL
+ * @note The pool tracks dynamic entries on their own
+ * @note The count is exact on a quiet pool. There it never exceeds
+ * ccol_mempool_total_capacity(). On a pool with a cache for each thread,
+ * concurrent allocation can put the count a few entries above that. It never
+ * goes above the slot count that ccol_mempool_allocated_bytes() reports. See
+ * ccol_mempool_total_capacity
  *
  * @see ccol_mempool_total_capacity
  * @see ccol_mempool_dynamic_allocs_count
@@ -717,17 +799,18 @@ size_t ccol_mempool_used_count(ccol_mempool *mp);
 /**
  * @brief Get number of dynamically allocated entries
  *
- * Returns the number of entries allocated from the heap because the pool
- * was exhausted. Only non-zero if fallback_to_dynamic_memory was enabled.
+ * Returns the number of entries that came from the heap because the pool was
+ * empty. The count is non-zero only when fallback_to_dynamic_memory was on.
  *
  * @param mp Memory pool to query
  *
- * @return Number of heap-allocated entries currently active
+ * @return Number of heap entries that are active now
  *
- * @note Returns 0 if fallback was not enabled at creation
- * @note Thread-safe if pool was created with single_threaded=false
- * @note Will assert if mp is NULL
- * @note These entries are freed normally with ccol_mempool_free_entry()
+ * @note Returns 0 if the fallback was off at creation
+ * @note Thread-safe if the pool was created with single_threaded=false
+ * @note This function asserts if mp is NULL
+ * @note The caller frees these entries in the usual way, with
+ * ccol_mempool_free_entry()
  *
  * @see ccol_mempool_total_capacity
  * @see ccol_mempool_used_count
@@ -744,52 +827,58 @@ typedef struct ccol_r_mempool ccol_r_mempool;
 /**
  * @brief Fallback policy for ranged memory pools
  *
- * Determines when and how the ranged memory pool falls back to dynamic
- * allocation when individual pools are exhausted.
+ * This policy decides when and how the ranged memory pool falls back to
+ * dynamic allocation after a single sub-pool becomes empty.
  */
 typedef enum ccol_r_memory_fallback_policy_t {
   ccol_fallback_disabled = 0,        /**< Never use dynamic allocation */
   ccol_fallback_at_first_exhaustion, /**< Each size pool has its own fallback */
-  ccol_fallback_at_last_exhaustion, /**< Only fallback after all pools exhausted
-                                     */
-  ccol_fallback_end_place_holder    /**< Sentinel value (internal use) */
+  ccol_fallback_at_last_exhaustion,  /**< Fall back only after every pool is
+                                        empty */
+  ccol_fallback_end_place_holder     /**< Sentinel value (internal use) */
 } ccol_r_memory_fallback_policy_t;
 
 /**
  * @brief Create a ranged memory pool
  *
- * Creates a collection of fixed-size memory pools covering a range of
- * power-of-2 sizes. Allocations are satisfied from the smallest pool that
- * can accommodate the requested size. Pool sizes double while element counts
- * halve as sizes increase.
+ * Creates a group of fixed-size memory pools that cover a range of power-of-2
+ * sizes. The smallest pool that can hold the requested size serves each
+ * allocation. As the sizes rise, the pool sizes double and the element counts
+ * halve.
  *
- * For example: smallest_size=4, largest_size=6, elem_count=8 creates:
+ * For example, smallest_size=4, largest_size=6, elem_count=8 creates:
  * - Pool 0: 2^4=16 bytes, 2^8=256 elements
  * - Pool 1: 2^5=32 bytes, 2^7=128 elements
  * - Pool 2: 2^6=64 bytes, 2^6=64 elements
  *
- * @param smallest_size_power_of_two log2 of smallest element size (e.g., 4 for
- * 16 bytes)
- * @param largest_size_power_of_two log2 of largest element size (e.g., 10 for
- * 1024 bytes)
- * @param smallest_elem_count_power_of_two log2 of element count in smallest
- * pool
- * @param fb_policy Fallback policy when pools are exhausted
- * @param single_threaded If true, omit locking (faster but not thread-safe)
- * @param mmgmt_procs Custom memory management procedures, or NULL for default
- * malloc/free
- * @param err Optional pointer to receive error string on failure
+ * @param smallest_size_power_of_two log2 of the smallest element size (for
+ * example 4 for 16 bytes)
+ * @param largest_size_power_of_two log2 of the largest element size (for
+ * example 10 for 1024 bytes)
+ * @param smallest_elem_count_power_of_two log2 of the element count in the
+ * smallest pool
+ * @param fb_policy Fallback policy for the time when the pools are empty
+ * @param single_threaded If true, do not lock (faster but not thread-safe)
+ * @param mmgmt_procs Custom memory management procedures, or NULL for the
+ * default malloc and free
+ * @param err Optional pointer that receives an error string on failure
  *
- * @return Pointer to newly created ranged memory pool, or NULL on failure
+ * @return Pointer to the new ranged memory pool, or NULL on failure
  *
- * @note All parameters must be > 0
+ * @note Every parameter must be > 0
  * @note largest_size_power_of_two must be > smallest_size_power_of_two
  * @note smallest_elem_count_power_of_two must be >= (largest - smallest)
- * @note Smallest size must be >= 16 bytes (min_allowed_smallest_size)
- * @note Largest size must be <= 2^63 bytes (max_allowed_largest_size)
- * @note Number of pools = (largest - smallest + 1)
+ * @note The smallest size must be >= 16 bytes (min_allowed_smallest_size)
+ * @note The largest size must be <= 2^63 bytes (max_allowed_largest_size)
+ * @note The number of pools is (largest - smallest + 1)
  * @note Thread-safe if single_threaded is false
- * @note The pool must be destroyed with ccol_r_mempool_destroy() when done
+ * @note Each sub-pool calls the functions of mmgmt_procs for its dynamic
+ * fallback entries, and for its own bookkeeping of them, in the middle of an
+ * update of its own state, with its lock held when it has one. Those
+ * functions must therefore not call back into this same ranged pool: with a
+ * lock the call can deadlock, and without one it corrupts that state. An
+ * allocator built on a pool must draw from a different pool
+ * @note The caller must destroy the pool with ccol_r_mempool_destroy()
  *
  * @see ccol_r_mempool_create_from_preallocated_buffer
  * @see ccol_r_mempool_destroy
@@ -804,76 +893,81 @@ ccol_r_mempool *ccol_r_mempool_create(
 /**
  * @brief Calculate buffer size for preallocated ranged memory pool
  *
- * Internal macro for calculating the exact buffer size needed for a ranged
- * memory pool with given parameters. Used by
- * CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER.
+ * This internal macro computes the exact buffer size that a ranged memory pool
+ * with the given parameters needs. CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER
+ * uses it.
  *
  * @param SS smallest_size_power_of_two
  * @param LS largest_size_power_of_two
  * @param SC smallest_elem_count_power_of_two
  *
- * @return Size in bytes required for the buffer
+ * @return Size in bytes that the buffer needs
  *
- * @note For internal use -use CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER instead
+ * @note This macro is for internal use. Use
+ * CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER instead
  *
  * Sub-pool i holds 2^(SC - i) entries of 2^(SS + i) bytes, for i from 0 to
- * N - 1 where N = LS - SS + 1, and needs one stride per entry plus one status
- * byte per entry. ccol_r_mempool_create() requires the smallest element size to
- * be at least 16 bytes, so every element size here is already a power of two at
- * or above the alignment every entry is guaranteed to meet, and the stride is
- * the element size itself. The entry bytes therefore total N * 2^(SS + SC) (the
- * first term below) and the status bytes total 2 * 2^SC * (2^N - 1) / 2^N (the
- * second).
+ * N - 1, where N = LS - SS + 1. It needs one stride and one status byte for
+ * each entry. ccol_r_mempool_create() needs the smallest element size to be at
+ * least 16 bytes. Every element size here is therefore already a power of two
+ * at or above the alignment that every entry is sure to meet. The stride is
+ * the element size itself. The entry bytes therefore total N * 2^(SS + SC),
+ * which is the first term below. The status bytes total
+ * 2 * 2^SC * (2^N - 1) / 2^N, which is the second term.
  *
- * Each sub-pool's segment is laid out as its entries followed by its status
- * bytes, and the next segment begins where it ends, so a segment whose length
- * is not a multiple of the alignment would hand the following sub-pool a
- * misaligned first entry. A tier's entry bytes are always a whole number of
- * strides and so already aligned; its status bytes are one per entry, which
- * falls below the alignment for the last few tiers, where the element count has
- * halved down into single digits. Those tiers' status regions are rounded up,
- * which is the third term below; the rounding is pure slack, never read or
- * written, and totals a few dozen bytes for any configuration.
+ * The segment of each sub-pool holds its entries, then its status bytes. The
+ * next segment begins where that segment ends. A segment whose length is not a
+ * multiple of the alignment would therefore give the sub-pool after it a
+ * misaligned first entry. The entry bytes of a tier are always a whole number
+ * of strides, and so already aligned. Its status bytes are one for each entry.
+ * That count falls below the alignment for the last few tiers, where the
+ * element count has halved down into single digits. The macro rounds the
+ * status regions of those tiers up, which is the third term below. The
+ * rounding is pure slack. Nothing reads or writes it. It totals a few dozen
+ * bytes for any configuration.
  *
- * The ccol_r_mempool_create() validation this macro's own parameters must
- * already satisfy (SC >= LS - SS, i.e. SC + 1 >= N) guarantees that division is
- * exact. Rather than forming the full, un-reduced product 2 * 2^SC * (2^N - 1)
- * and dividing it down afterward (which can overflow size_t well before the
- * final division would have brought the value back into range, silently
- * wrapping to a wrong, too-small buffer size), the 2 * 2^SC / 2^N factor is
- * reduced first via a single right shift (exact under the same precondition,
- * and always well-defined since (LS - SS) is itself bounded below size_t's
- * width by ccol_r_mempool_create()'s own validation) before multiplying by the
- * much smaller remaining factor. This does not (and cannot) avoid overflow for
- * parameters large enough that the requested buffer itself is not
- * representable in a size_t; it only ensures no further overflow is
- * introduced on top of that inherent limit.
+ * The parameters of this macro must already satisfy the validation of
+ * ccol_r_mempool_create(). That validation is SC >= LS - SS, that is,
+ * SC + 1 >= N. It guarantees that the division is exact. The macro does not
+ * form the full, un-reduced product 2 * 2^SC * (2^N - 1) and divide it down
+ * afterward. Such a product can overflow size_t well before the final division
+ * brings the value back into range. It then wraps in silence to a wrong buffer
+ * size that is too small. The macro instead reduces the 2 * 2^SC / 2^N factor
+ * first, with a single right shift. That shift is exact under the same
+ * precondition. It is also always well-defined, because the validation of
+ * ccol_r_mempool_create() keeps (LS - SS) below the width of size_t. The macro
+ * then multiplies by the much smaller factor that remains. This cannot avoid
+ * an overflow for parameters that are large enough to make the requested
+ * buffer itself too big for a size_t. It only makes sure that no further
+ * overflow arrives on top of that inherent limit.
  */
-/* One tier's own share of the padding described above: the bytes its status
- * region is rounded up by so the next tier's entries stay aligned. C is a
- * candidate element count; the term is zero unless that count is genuinely one
- * of this configuration's tiers, and zero again for any count already at or
- * above the alignment. */
-/* The leading guard keeps the shift below from having a negative count when the
- * parameters are invalid. The declaring macro asserts them, but a size macro is
- * expanded in a declarator that the compiler diagnoses before it reaches that
- * assertion, so without this the first thing a caller sees for a bad parameter
- * is a page of -Wshift-count-negative from inside this header, which the
- * project's own -Werror baseline turns into errors. */
-/* Tiers between the smallest and largest size, guarded so an inverted pair
- * shifts by zero instead of by a negative count. */
+/* The share of one tier in the padding above. These are the bytes that the
+ * macro adds to the status region of that tier, so that the entries of the
+ * next tier stay aligned. C is a candidate element count. The term is zero
+ * unless that count is truly one of the tiers of this configuration. It is
+ * zero again for any count that is already at or above the alignment. */
+/* The leading guard keeps the shift below from taking a negative count when
+ * the parameters are invalid. The declaring macro asserts the parameters. But
+ * a size macro expands inside a declarator, and the compiler diagnoses that
+ * declarator before it reaches the assertion. Without this guard, the first
+ * thing a caller sees for a bad parameter is a page of
+ * -Wshift-count-negative from inside this header. The -Werror baseline of this
+ * project turns those into errors. */
+/* The tiers between the smallest and the largest size. The guard makes an
+ * inverted pair shift by zero instead of by a negative count. */
 #define _ccol_rmempool_tier_span(SS, LS) ((LS) >= (SS) ? (LS) - (SS) : 0)
 
-/* Clamps a shift count into range. Short-circuiting governs evaluation, not
- * diagnosis: a compiler still diagnoses a shift it can see is out of range on a
- * branch it never reaches, so an invalid triple would answer the declaring
- * macro's _Static_assert AND a page of shift diagnostics from inside this
- * header, which the project's -Werror baseline turns into errors. The two ways
- * out of range are covered by one clamp, because a negative count casts to a
- * size_t above the width. Clamping rather than reducing modulo the width is
- * load-bearing for the reason given at _ccol_rmempool_buffer_params_fit below.
- * It is a value no-op for every triple that is accepted at all, where both
- * counts are already below the width. */
+/* This macro clamps a shift count into range. A short circuit governs
+ * evaluation, not diagnosis. A compiler still diagnoses a shift that it can
+ * see is out of range on a branch that it never reaches. Without the clamp, an
+ * invalid triple produces the _Static_assert message of the declaring macro
+ * AND a page of shift diagnostics from inside this header. The -Werror
+ * baseline of this project turns those into errors. One clamp covers both ways
+ * to go out of range, because a negative count casts to a size_t above the
+ * width. The macro clamps and does not reduce modulo the width, and that
+ * choice is load-bearing. See _ccol_rmempool_buffer_params_fit below for the
+ * reason. The clamp changes no value for any triple that the predicate accepts
+ * at all, because there both counts are already below the width. */
 #define _ccol_rmempool_shift_count(x)                \
   ((size_t)(x) < (size_t)(sizeof(size_t) * CHAR_BIT) \
        ? (size_t)(x)                                 \
@@ -888,10 +982,10 @@ ccol_r_mempool *ccol_r_mempool_create(
        ? (_ccol_mempool_align_up((size_t)(C)) - (size_t)(C))                \
        : (size_t)0)
 
-/* Every element count that can need padding, enumerated. A count is a power of
- * two and only a count below _ccol_mempool_entry_align rounds up at all, so the
- * chain is complete for any alignment up to 128, which the assertion below
- * pins. */
+/* This chain names every element count that can need padding. A count is a
+ * power of two, and only a count below _ccol_mempool_entry_align rounds up at
+ * all. The chain is therefore complete for any alignment up to 128. The
+ * assertion below pins that limit. */
 #define _ccol_rmempool_status_padding(SS, LS, SC)         \
   (_ccol_rmempool_status_pad_term((SS), (LS), (SC), 1) +  \
    _ccol_rmempool_status_pad_term((SS), (LS), (SC), 2) +  \
@@ -906,20 +1000,29 @@ _Static_assert(_ccol_mempool_entry_align <= 128,
                "that can be rounded up, which is complete only while the "
                "alignment stays at or below 128");
 
-/* Every shift below is guarded against a NEGATIVE count, so that a triple the
- * declaring macro rejects for an inverted pair (LS below SS, or SC below
- * LS - SS) produces that macro's own _Static_assert message and nothing else.
- * This expression sits in an array declarator, which a compiler diagnoses
- * before it reaches the assertion, so an unguarded shift there would bury the
- * explanation under a page of -Wshift-count-negative, which this project's
- * -Werror baseline turns into the first errors the caller sees.
+/* This macro is internal. The leading underscore says so. It is the size
+ * arithmetic that CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER applies for the
+ * caller, and it sits in this installed header only because that public macro
+ * expands into it in the translation unit of the caller. Declare a buffer with
+ * CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER and pass sizeof() on it. The name
+ * and the expression here can change in any release.
  *
- * An exponent wider than size_t itself is NOT covered: such a triple is
- * rejected, but the caller sees shift-count diagnostics alongside the
- * assertion. Guarding that case as well costs more than it saves, because the
- * counts here are the caller's own literals and the assertion still names the
- * real problem. The guards change no value for any triple the macro accepts. */
-#define CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE(SS, LS, SC)          \
+ * A guard protects every shift below from a NEGATIVE count. The declaring
+ * macro rejects a triple with an inverted pair, that is, LS below SS, or SC
+ * below LS - SS. Such a triple then produces the _Static_assert message of
+ * that macro and nothing else. This expression sits in an array declarator. A
+ * compiler diagnoses that declarator before it reaches the assertion. An
+ * unguarded shift there buries the explanation under a page of
+ * -Wshift-count-negative. The -Werror baseline of this project turns those
+ * into the first errors that the caller sees.
+ *
+ * The guards do NOT cover an exponent wider than size_t itself. The macro
+ * rejects such a triple, but the caller sees shift-count diagnostics beside
+ * the assertion. A guard for that case costs more than it saves. The counts
+ * here are the literals of the caller, and the assertion still names the real
+ * problem. The guards change no value for any triple that the macro accepts.
+ */
+#define _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE(SS, LS, SC)         \
   ((size_t)(_ccol_rmempool_tier_span((SS), (LS)) + 1) * ((size_t)1 << (SC)) * \
        ((size_t)1 << (SS)) +                                                  \
    ((((size_t)1 << (SC)) >> _ccol_rmempool_tier_span((SS), (LS))) *           \
@@ -929,74 +1032,80 @@ _Static_assert(_ccol_mempool_entry_align <= 128,
 /**
  * @brief Compile-time guard for CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER
  *
- * True iff the three power-of-two parameters produce a well-defined
- * CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE result that fits in a
- * size_t. Not meant to be used directly;
+ * This predicate is true only when the three power-of-two parameters produce a
+ * well-defined _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE result that
+ * fits in a size_t. Do not use it directly.
  * CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER is the public entry point.
  *
- * Every sub-condition below is ordered so that a term is only ever
- * evaluated once every condition it depends on for well-definedness has
- * already been confirmed true by an earlier, short-circuited && operand
- * (the short-circuited side of && / || is not evaluated, so an out-of-range
- * shift or a division by zero written there does not make the condition
- * undefined). That ordering governs EVALUATION, not diagnosis: a compiler is
- * still free to warn about a shift count it can see is too wide for the type
- * even on an operand the short circuit means it never reaches, and GCC does
- * exactly that, at both widths, once shifts are instrumented (clang does not).
- * The shift counts below are therefore clamped where a rejected shape could
- * push them out of range; see _ccol_rmempool_shift_count. In order: every
- * power-of-two exponent is small enough that a 1 << exponent is well-defined;
- * largest_size_power_of_two is genuinely larger than
- * smallest_size_power_of_two; their difference stays small enough that the
- * widest shift CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE performs stays
- * well-defined; number_of_smallest_size_elems_power_of_two is at least
- * largest_size_power_of_two - smallest_size_power_of_two (the exact
- * precondition CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE's own division
- * requires to be mathematically exact, matching what
- * ccol_r_mempool_create's own input validation separately enforces at runtime);
- * then each of the two terms CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE
- * sums is checked for overflow via division rather than by forming the
- * (possibly overflowing) product directly, followed by a check that the sum
- * of those two terms does not itself overflow size_t.
+ * The order of the sub-conditions below is deliberate. A term is evaluated
+ * only after an earlier, short-circuited && operand confirms every condition
+ * that the term needs to be well-defined. The short-circuited side of && or ||
+ * is not evaluated. An out-of-range shift or a division by zero written there
+ * therefore does not make the condition undefined. That order governs
+ * EVALUATION, not diagnosis. A compiler is still free to warn about a shift
+ * count that it can see is too wide for the type. It warns even on an
+ * operand that the short circuit never reaches. GCC does that, at both
+ * widths, once a build instruments its shifts. Clang does not. The shift
+ * counts below are
+ * therefore clamped wherever a rejected shape can push them out of range. See
+ * _ccol_rmempool_shift_count.
+ *
+ * The conditions come in this order. First, every power-of-two exponent is
+ * small enough to make a 1 << exponent well-defined. Second,
+ * largest_size_power_of_two is truly larger than smallest_size_power_of_two.
+ * Third, their difference stays small enough to keep the widest shift of
+ * _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE well-defined. Fourth,
+ * number_of_smallest_size_elems_power_of_two is at least
+ * largest_size_power_of_two - smallest_size_power_of_two. That is the exact
+ * precondition that the division inside
+ * _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE needs to be
+ * mathematically exact. It matches what the input validation of
+ * ccol_r_mempool_create enforces on its own at run time. Fifth, the predicate
+ * checks each of the two terms that
+ * _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE adds for overflow. It
+ * checks them with a division and does not form the product, which can
+ * overflow. Last, it checks that the sum of those two terms does not itself
+ * overflow size_t.
  */
-/* Reduces a shift count modulo the width of size_t. Applied below to the two
- * counts derived from (LS) - (SS), and to nothing else, because those are the
- * only ones a shape the predicate rejects can push out of range: an inverted
- * pair makes that unsigned subtraction underflow to an enormous value.
+/* This brings a shift count into the range of the width of size_t. The
+ * predicate below needs it for the two counts that come from (LS) - (SS), and
+ * for nothing else. Those are the only counts that a shape the predicate
+ * rejects can push out of range. An inverted pair makes that unsigned
+ * subtraction underflow to an enormous value.
  *
- * For any shape the predicate ACCEPTS the reduction changes nothing, since an
- * earlier && operand has already established the difference is smaller than
- * the width. Its whole purpose is the rejected shape: the short circuit means
- * the operand is never evaluated, but a compiler may still diagnose a shift
- * count it can see exceeds the type. Measured, GCC does so once shifts are
- * instrumented, at both widths (clang does not, at either), which would turn a
- * caller's -Werror build into a hard failure on exactly the input this macro
- * exists to answer "no" for.
+ * For any shape that the predicate ACCEPTS, the clamp changes nothing. An
+ * earlier && operand has already established that the difference is smaller
+ * than the width. The clamp exists for the rejected shape. The short circuit
+ * means that the operand is never evaluated. But a compiler can still diagnose
+ * a shift count that it can see exceeds the type. Measured, GCC does so once
+ * shifts are instrumented, at both widths. Clang does not, at either width.
+ * Without the clamp, the -Werror build of a caller fails hard on exactly the
+ * input that this macro exists to answer "no" for.
  *
- * It CLAMPS rather than reducing modulo the width, and that distinction is
- * load-bearing: a modulo maps a count of exactly the width to zero, which
- * collapses the surrounding (1 << count) - 1 to zero, and GCC then reports the
- * comparison it sits in as always true under -Wtype-limits. That trades one
- * diagnostic for another and breaks a -Werror build that is otherwise clean,
- * for every shape whose tier span is exactly the width. Clamping to one below
- * the width yields a legal shift that folds to nothing in particular, so no
- * such comparison appears. The clamp is a value no-op: over every exponent
- * triple from 0 to 70, at both widths, the predicate answers identically with
- * it and without it.
+ * The macro CLAMPS. It does not reduce modulo the width, and that difference
+ * is load-bearing. A modulo maps a count of exactly the width to zero. That
+ * zero collapses the (1 << count) - 1 around it to zero. GCC then reports the
+ * comparison that it sits in as always true, under -Wtype-limits. That trades
+ * one diagnostic for another. It breaks an otherwise clean -Werror build, for
+ * every shape whose tier span is exactly the width. A clamp to one below the
+ * width gives a legal shift that folds to nothing in particular, so no such
+ * comparison appears. The clamp changes no value. Over every exponent triple
+ * from 0 to 70, at both widths, the predicate answers the same with it and
+ * without it.
  *
- * Applied to every shift the predicate performs, including the (SS) and (SC)
- * ones. Excluding those on the grounds that an earlier clause has already
- * bounded them is the mistake this whole block exists to describe: an earlier
- * clause bounds what is EVALUATED, and a compiler diagnoses a shift it can see
- * is out of range whether or not the branch is taken. Measured, a triple such
- * as (33, 35, 35) at 32 bits produces -Wshift-count-overflow on the (SS) shift
- * with the exclusion in place. */
+ * The predicate clamps every shift that it does, the (SS) and (SC) ones
+ * included. Do not exclude those on the grounds that an earlier clause already
+ * bounds them. That is the mistake this whole block describes. An earlier
+ * clause bounds what is EVALUATED. A compiler diagnoses a shift that it can
+ * see is out of range whether or not the branch is taken. Measured, with that
+ * exclusion in place, a triple such as (33, 35, 35) at 32 bits produces
+ * -Wshift-count-overflow on the (SS) shift. */
 
-/* The smallest element size a ranged pool will serve, as a power of two.
-   ccol_r_mempool_create refuses anything below it at run time, so a buffer
-   declared for such a shape could never be handed to a pool that accepted it;
-   the predicate below carries the same floor so the mistake is a compile-time
-   rejection rather than a buffer that is merely never usable. */
+/* The smallest element size that a ranged pool serves, as a power of two.
+   ccol_r_mempool_create refuses anything below it at run time. A buffer
+   declared for such a shape could never go to a pool that accepted it. The
+   predicate below carries the same floor. The mistake is therefore a
+   compile-time rejection, and not a buffer that is merely never usable. */
 #define _ccol_rmempool_min_smallest_size_power 4
 
 #define _ccol_rmempool_buffer_params_fit(SS, LS, SC)                           \
@@ -1031,38 +1140,41 @@ _Static_assert(_ccol_mempool_entry_align <= 128,
 /**
  * @brief Declare a preallocated buffer for a ranged memory pool
  *
- * Macro that declares a uint8_t array sized correctly for a ranged memory pool
- * with the specified parameters. The buffer can then be passed to
- * ccol_r_mempool_create_from_preallocated_buffer().
+ * This macro declares a uint8_t array with the correct size for a ranged
+ * memory pool that has the given parameters. The caller can then give the
+ * buffer to ccol_r_mempool_create_from_preallocated_buffer().
  *
  * @param name Variable name for the buffer
- * @param smallest_size_power_of_two log2 of smallest element size
- * @param largest_size_power_of_two log2 of largest element size
+ * @param smallest_size_power_of_two log2 of the smallest element size
+ * @param largest_size_power_of_two log2 of the largest element size
  * @param number_of_smallest_size_elems_power_of_two log2 of element count in
  * smallest pool
  *
- * @note Automatically includes every sub-pool's own status bytes in the
- * size calculation
- * @note Useful for embedded systems or avoiding heap allocation
- * @note Buffer contains all sub-pools in contiguous memory
- * @note The declared buffer is aligned to _ccol_mempool_entry_align, the
- * alignment every entry the pool hands out is guaranteed to meet, so it can be
- * handed directly to ccol_r_mempool_create_from_preallocated_buffer() without
- * any extra alignment considerations on the caller's part; every individual
- * sub-pool segment within the buffer stays correctly aligned as a consequence
- * @note Rejected at compile time (via a _Static_assert), rather than silently
- * producing a wrongly-sized array, if the three parameters would make the
- * pool's own required buffer size overflow size_t, or if
- * number_of_smallest_size_elems_power_of_two is smaller than
- * largest_size_power_of_two -smallest_size_power_of_two (the same precondition
- * ccol_r_mempool_create's own input validation enforces at runtime, required
- * here too for CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE's own division
- * to be exact rather than silently truncated), or if
- * smallest_size_power_of_two is below 4, since 16 bytes is the smallest
- * element a ranged pool serves and a buffer declared for anything smaller
- * could only ever be handed to a constructor that refuses it
+ * @note The macro includes the status bytes of every sub-pool in the size that
+ * it computes
+ * @note This is useful for embedded systems, and when you do not want a heap
+ * allocation
+ * @note The buffer holds every sub-pool in contiguous memory
+ * @note The macro aligns the declared buffer to _ccol_mempool_entry_align.
+ * That is the alignment that every entry the pool hands out is sure to meet.
+ * The caller can therefore give the buffer directly to
+ * ccol_r_mempool_create_from_preallocated_buffer(). The caller does not have
+ * to think about alignment. The result is that every single sub-pool segment
+ * inside the buffer stays correctly aligned
+ * @note A _Static_assert rejects three cases at compile time. The first is a
+ * set of three parameters that would make the required buffer size of the pool
+ * overflow size_t. The second is a
+ * number_of_smallest_size_elems_power_of_two that is smaller than
+ * largest_size_power_of_two - smallest_size_power_of_two. That is the same
+ * precondition that the input validation of ccol_r_mempool_create enforces at
+ * run time. It is needed here too, to keep the division inside
+ * _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE exact rather than silently
+ * truncated. The third is a smallest_size_power_of_two below 4. The smallest
+ * element that a ranged pool serves is 16 bytes. A buffer declared for
+ * anything smaller could only go to a constructor that refuses it. Without
+ * the assert, the macro produces an array of the wrong size in silence
  *
- * @see CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE
+ * @see _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE
  * @see ccol_r_mempool_create_from_preallocated_buffer
  *
  * Example:
@@ -1073,56 +1185,88 @@ _Static_assert(_ccol_mempool_entry_align <= 128,
  *     ccol_fallback_disabled, false, NULL, NULL);
  * @endcode
  */
-#define CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(                            \
-    name, smallest_size_power_of_two, largest_size_power_of_two,              \
-    number_of_smallest_size_elems_power_of_two)                               \
-  _Alignas(_ccol_mempool_entry_align)                                         \
-      uint8_t name[CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE(          \
-          (smallest_size_power_of_two), (largest_size_power_of_two),          \
-          (number_of_smallest_size_elems_power_of_two))];                     \
-  _Static_assert(                                                             \
-      _ccol_rmempool_buffer_params_fit(                                       \
-          (smallest_size_power_of_two), (largest_size_power_of_two),          \
-          (number_of_smallest_size_elems_power_of_two)),                      \
-      "CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER: parameters would make the " \
-      "pool's own required buffer size overflow size_t, or violate "          \
-      "number_of_smallest_size_elems_power_of_two >= "                        \
-      "largest_size_power_of_two - smallest_size_power_of_two, or name a "    \
-      "smallest_size_power_of_two below 4, which is the smallest element "    \
-      "size a ranged pool serves")
+#define CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(                             \
+    name, smallest_size_power_of_two, largest_size_power_of_two,               \
+    number_of_smallest_size_elems_power_of_two)                                \
+  _Alignas(_ccol_mempool_entry_align)                                          \
+      uint8_t name[_CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE(          \
+          (smallest_size_power_of_two), (largest_size_power_of_two),           \
+          (number_of_smallest_size_elems_power_of_two))];                      \
+  /* Each rule that a caller can name gets an assertion of its own, before the \
+   * catch-all below. A single assertion over the whole predicate can only     \
+   * recite every rule and leave the reader to work out which one they broke,  \
+   * and it recites them from a list that has to be kept in step with the      \
+   * predicate by hand. A separate assertion per rule says which rule failed.  \
+   * Each condition below is one clause of                                     \
+   * _ccol_rmempool_buffer_params_fit, so none of them can reject a triple     \
+   * that the predicate accepts. */                                            \
+  _Static_assert(                                                              \
+      (smallest_size_power_of_two) >= _ccol_rmempool_min_smallest_size_power,  \
+      "CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER: "                            \
+      "smallest_size_power_of_two must be at least 4. The smallest element "   \
+      "a ranged pool serves is 16 bytes");                                     \
+  _Static_assert(                                                              \
+      (largest_size_power_of_two) > (smallest_size_power_of_two),              \
+      "CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER: "                            \
+      "largest_size_power_of_two must be strictly greater than "               \
+      "smallest_size_power_of_two. A ranged pool spans at least two size "     \
+      "tiers; use CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER for one size");     \
+  _Static_assert(                                                              \
+      (size_t)(number_of_smallest_size_elems_power_of_two) >=                  \
+          (size_t)((largest_size_power_of_two) -                               \
+                   (smallest_size_power_of_two)),                              \
+      "CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER: "                            \
+      "number_of_smallest_size_elems_power_of_two must be at least "           \
+      "largest_size_power_of_two - smallest_size_power_of_two, so that every " \
+      "tier ends up with at least one element");                               \
+  _Static_assert(                                                              \
+      _ccol_rmempool_buffer_params_fit(                                        \
+          (smallest_size_power_of_two), (largest_size_power_of_two),           \
+          (number_of_smallest_size_elems_power_of_two)),                       \
+      "CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER: these parameters would "     \
+      "make the pool's own required buffer size overflow size_t, or name a "   \
+      "power of two that a size_t on this target cannot hold")
 
 /**
  * @brief Create a ranged memory pool from a preallocated buffer
  *
- * Creates a ranged memory pool using a user-provided buffer instead of
- * allocating from the heap. The buffer is divided into contiguous segments
- * for each size pool. Useful for embedded systems.
+ * Creates a ranged memory pool that uses a buffer from the caller. The pool
+ * does not allocate from the heap. The constructor divides the buffer into
+ * contiguous segments, one for each size pool. This is useful for embedded
+ * systems.
  *
- * @param buffer Pointer to preallocated buffer
- * @param buf_size Size of buffer in bytes (must match calculated size exactly)
- * @param smallest_size_power_of_two log2 of smallest element size
- * @param largest_size_power_of_two log2 of largest element size
+ * @param buffer Pointer to the preallocated buffer
+ * @param buf_size Size of the buffer in bytes. It must match the computed size
+ * exactly
+ * @param smallest_size_power_of_two log2 of the smallest element size
+ * @param largest_size_power_of_two log2 of the largest element size
  * @param number_of_smallest_size_elems_power_of_two log2 of element count in
  * smallest pool
- * @param fb_policy Fallback policy when pools are exhausted
- * @param single_threaded If true, omit locking (faster but not thread-safe)
- * @param mmgmt_procs Custom memory management procedures, or NULL for default
- * malloc/free
- * @param err Optional pointer to receive error string on failure
+ * @param fb_policy Fallback policy for the time when the pools are empty
+ * @param single_threaded If true, do not lock (faster but not thread-safe)
+ * @param mmgmt_procs Custom memory management procedures, or NULL for the
+ * default malloc and free
+ * @param err Optional pointer that receives an error string on failure
  *
- * @return Pointer to newly created ranged memory pool, or NULL on failure
+ * @return Pointer to the new ranged memory pool, or NULL on failure
  *
- * @note Buffer size must exactly match
- * CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE
- * @note Buffer is not freed by ccol_r_mempool_destroy() (user manages buffer
- * lifetime)
- * @note Pool structs are still allocated via mmgmt_procs
- * @note Buffer contains all sub-pools in adjacent segments
- * @note Returns NULL with error if the buffer is not sufficiently aligned (a
- * buffer declared via
- * CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER is always properly aligned; a
- * hand-rolled buffer must be aligned to at least _ccol_mempool_entry_align,
- * which is 16 and is what the constructor checks for)
+ * @note The buffer size must match
+ * _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE exactly
+ * @note ccol_r_mempool_destroy() does not free the buffer. The caller owns the
+ * lifetime of the buffer
+ * @note The pool structs still come from mmgmt_procs
+ * @note Each sub-pool calls the functions of mmgmt_procs for its dynamic
+ * fallback entries, and for its own bookkeeping of them, in the middle of an
+ * update of its own state, with its lock held when it has one. Those
+ * functions must therefore not call back into this same ranged pool: with a
+ * lock the call can deadlock, and without one it corrupts that state. An
+ * allocator built on a pool must draw from a different pool
+ * @note The buffer holds every sub-pool in adjacent segments
+ * @note Returns NULL with an error if the buffer is not aligned enough. A
+ * buffer that comes from CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER is always
+ * aligned correctly. A buffer that you build by hand must be aligned to at
+ * least _ccol_mempool_entry_align. That value is 16, and it is what the
+ * constructor checks for
  *
  * @see CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER
  * @see ccol_r_mempool_create
@@ -1140,49 +1284,60 @@ ccol_r_mempool *ccol_r_mempool_create_from_preallocated_buffer(
  *
  * @param rmp Ranged memory pool to destroy
  *
- * @warning Do not call directly - use ccol_r_mempool_destroy() macro instead
+ * @warning Do not call this function directly. Use the
+ * ccol_r_mempool_destroy() macro instead
  */
 void _ccol_r_mempool_destroy(ccol_r_mempool *rmp);
 
 /**
  * @brief Destroy a ranged memory pool and set pointer to NULL
  *
- * Frees all resources associated with the ranged memory pool including all
- * sub-pools. For pools created from preallocated buffers, the buffer itself
- * is not freed.
+ * Frees every resource of the ranged memory pool, every sub-pool included. For
+ * a pool that was created from a preallocated buffer, this macro does not free
+ * the buffer itself.
  *
- * @param rmp Ranged memory pool to destroy (will be set to NULL after
- * destruction)
+ * @param rmp Ranged memory pool to destroy. The macro sets it to NULL
+ * afterward
  *
- * @warning Unfreed, dynamically allocated pointers via the fallback memory
- * management mechanism will make this function assert to make sure a potential
- * leak does not go unnoticed. If no fallback is requested during the creation
- * of this pool, such an assert does not happen. As a rule of thumb, the
- * allocated buffers should always be freed.
- * @note Safe to call with NULL pointer
- * @note For preallocated pools, user must manage buffer lifetime
+ * @warning This function asserts when the dynamic fallback still holds
+ * pointers that nobody freed. The assert makes sure that a possible leak does
+ * not stay unnoticed. Such an assert does not happen if you did not ask for a
+ * fallback when you created this pool. As a rule, always free the allocated
+ * buffers.
+ * @note It is safe to call this macro with a NULL pointer
+ * @note For a preallocated pool, the caller owns the lifetime of the buffer
+ * @note The macro evaluates rmp exactly once. It must be a modifiable
+ * lvalue, such as a variable or an element of an array
  */
 #define ccol_r_mempool_destroy(rmp) \
-  do {                              \
-    _ccol_r_mempool_destroy((rmp)); \
-    rmp = NULL;                     \
+  _ccol_r_mempool_destroy_impl(     \
+      rmp, _ccol_uniq(__ccol_r_mempool_destroy_slot, __COUNTER__))
+
+/* Internal. The body of ccol_r_mempool_destroy. slot is a name from
+ * _ccol_uniq(), so the macro nests inside the argument of another destroy
+ * macro and stays -Wshadow clean. The argument is evaluated exactly once. */
+#define _ccol_r_mempool_destroy_impl(rmp, slot) \
+  do {                                          \
+    __typeof__(rmp) *slot = &(rmp);             \
+    _ccol_r_mempool_destroy(*slot);             \
+    *slot = NULL;                               \
   } while (0)
 
 /**
  * @brief Get number of used entries for a specific size
  *
- * Returns the number of currently allocated entries from the pool that would
- * service the given size. Does not include dynamic allocations.
+ * Returns the number of entries in use now from the pool that serves the given
+ * size. The count does not include dynamic entries.
  *
  * @param rmp Ranged memory pool to query
- * @param size Size in bytes to query (maps to a specific sub-pool)
+ * @param size Size in bytes to query. It maps to one sub-pool
  *
- * @return Number of entries in use for this size, or 0 on error
+ * @return Number of entries in use for this size, or 0 on an error
  *
- * @note Returns 0 if size is invalid (0 or > largest_size)
- * @note Size is rounded up to next power-of-2 pool
- * @note Thread-safe if pool was created with single_threaded=false
- * @note Dynamic allocations are tracked separately
+ * @note Returns 0 if the size is invalid, that is, 0 or > largest_size
+ * @note The function rounds the size up to the next power-of-2 pool
+ * @note Thread-safe if the pool was created with single_threaded=false
+ * @note The pool tracks dynamic entries on their own
  *
  * @see ccol_r_mempool_total_capacity
  * @see ccol_r_mempool_dynamic_allocs_count
@@ -1192,17 +1347,17 @@ size_t ccol_r_mempool_used_count(ccol_r_mempool *rmp, size_t size);
 /**
  * @brief Get total capacity for a specific size
  *
- * Returns the total number of entries in the pool that services the given
- * size. Does not include dynamic allocations.
+ * Returns the total number of entries in the pool that serves the given size.
+ * The count does not include dynamic entries.
  *
  * @param rmp Ranged memory pool to query
- * @param size Size in bytes to query (maps to a specific sub-pool)
+ * @param size Size in bytes to query. It maps to one sub-pool
  *
- * @return Total capacity for this size, or 0 on error
+ * @return Total capacity for this size, or 0 on an error
  *
- * @note Returns 0 if size is invalid (0 or > largest_size)
- * @note Size is rounded up to next power-of-2 pool
- * @note Thread-safe if pool was created with single_threaded=false
+ * @note Returns 0 if the size is invalid, that is, 0 or > largest_size
+ * @note The function rounds the size up to the next power-of-2 pool
+ * @note Thread-safe if the pool was created with single_threaded=false
  *
  * @see ccol_r_mempool_used_count
  * @see ccol_r_mempool_dynamic_allocs_count
@@ -1212,19 +1367,19 @@ size_t ccol_r_mempool_total_capacity(ccol_r_mempool *rmp, size_t size);
 /**
  * @brief Get the memory the ranged pool holds for its entries
  *
- * Returns the size in bytes of every tier's entry block added together, which
- * is what a ranged pool costs. Each tier that receives a thread cache holds a
- * reserve beyond its own nominal count, so this exceeds the sum of the tier
- * capacities.
+ * Returns the size in bytes of the entry block of every tier, added together.
+ * That total is what a ranged pool costs. Each tier that receives a thread
+ * cache holds a reserve above its own nominal count. This total therefore
+ * exceeds the sum of the tier capacities.
  *
  * @param rmp Ranged memory pool to query
  *
- * @return Size in bytes of every tier's entry block, summed
+ * @return Size in bytes of the entry block of every tier, added together
  *
- * @note Counts the tiers' entry blocks only, on the same terms as
- * ccol_mempool_allocated_bytes()
+ * @note The function counts the entry blocks of the tiers only. It counts them
+ * on the same terms as ccol_mempool_allocated_bytes()
  * @note Thread-safe if the pool was created with single_threaded=false
- * @note Will assert if rmp is NULL
+ * @note This function asserts if rmp is NULL
  *
  * @see ccol_mempool_allocated_bytes
  * @see ccol_r_mempool_total_capacity
@@ -1234,20 +1389,22 @@ size_t ccol_r_mempool_allocated_bytes(ccol_r_mempool *rmp);
 /**
  * @brief Get number of dynamic allocations for a specific size
  *
- * Returns the number of heap-allocated entries for the given size. Behavior
- * depends on fallback policy.
+ * Returns the number of heap entries for the given size. The behavior depends
+ * on the fallback policy.
  *
  * @param rmp Ranged memory pool to query
  * @param size Size in bytes to query
  *
- * @return Number of dynamic allocations, or 0 on error or if disabled
+ * @return Number of dynamic entries. The function returns 0 on an error, and 0
+ * when the fallback is off
  *
- * @note Returns 0 if ccol_fallback_disabled
- * @note With ccol_fallback_at_first_exhaustion, tracks per-pool dynamic
- * allocations
- * @note With ccol_fallback_at_last_exhaustion, tracks all dynamic allocations
- * @note Returns 0 if size is invalid (0 or > largest_size)
- * @note Thread-safe if pool was created with single_threaded=false
+ * @note Returns 0 for ccol_fallback_disabled
+ * @note With ccol_fallback_at_first_exhaustion, the function tracks the
+ * dynamic entries of each pool
+ * @note With ccol_fallback_at_last_exhaustion, the function tracks every
+ * dynamic entry
+ * @note Returns 0 if the size is invalid, that is, 0 or > largest_size
+ * @note Thread-safe if the pool was created with single_threaded=false
  *
  * @see ccol_r_mempool_used_count
  * @see ccol_r_mempool_total_capacity
@@ -1257,24 +1414,25 @@ size_t ccol_r_mempool_dynamic_allocs_count(ccol_r_mempool *rmp, size_t size);
 /**
  * @brief Allocate an entry from the ranged pool
  *
- * Allocates memory of the requested size from the most appropriate sub-pool.
- * The size is rounded up to the nearest power-of-2 pool. If the optimal pool
- * is exhausted, tries larger pools. Fallback behavior depends on policy.
+ * Allocates memory of the requested size from the best sub-pool. The function
+ * rounds the size up to the nearest power-of-2 pool. If that pool is empty,
+ * the function tries larger pools. The fallback behavior depends on the
+ * policy.
  *
  * @param rmp Ranged memory pool to allocate from
- * @param size Size in bytes to allocate (must be > 0 and <= largest_size)
+ * @param size Size in bytes to allocate. It must be > 0 and <= largest_size
  *
- * @return Pointer to allocated entry, or NULL on failure
+ * @return Pointer to the allocated entry, or NULL on failure
  *
- * @note O(1) in common case, O(number_of_pools) worst case
- * @note Returned memory is uninitialized (use ccol_r_mempool_calloc_entry() for
- * zeroed)
- * @note Size is rounded up to next power-of-2 pool size
- * @note Tries progressively larger pools if optimal pool is exhausted
- * @note Fallback behavior depends on fb_policy
- * @note Thread-safe if pool was created with single_threaded=false
- * @note Returns NULL if size is 0 or > largest_size
- * @note Entry must be freed with ccol_r_mempool_free_entry()
+ * @note O(1) in the common case, O(number_of_pools) in the worst case
+ * @note The memory that comes back is uninitialized. Use
+ * ccol_r_mempool_calloc_entry() for zeroed memory
+ * @note The function rounds the size up to the next power-of-2 pool size
+ * @note The function tries larger and larger pools when the best pool is empty
+ * @note The fallback behavior depends on fb_policy
+ * @note Thread-safe if the pool was created with single_threaded=false
+ * @note Returns NULL if the size is 0 or > largest_size
+ * @note The caller must free the entry with ccol_r_mempool_free_entry()
  *
  * @see ccol_r_mempool_calloc_entry
  * @see ccol_r_mempool_realloc_entry
@@ -1285,17 +1443,17 @@ void *ccol_r_mempool_alloc_entry(ccol_r_mempool *rmp, size_t size);
 /**
  * @brief Allocate a zero-initialized entry from the ranged pool
  *
- * Like ccol_r_mempool_alloc_entry(), but zeros the requested number of bytes
- * before returning.
+ * This function is like ccol_r_mempool_alloc_entry(). It zeros the requested
+ * number of bytes before it returns.
  *
  * @param rmp Ranged memory pool to allocate from
  * @param size Size in bytes to allocate
  *
- * @return Pointer to zero-initialized entry, or NULL on failure
+ * @return Pointer to the zeroed entry, or NULL on failure
  *
- * @note Zeros exactly 'size' bytes (not the full pool element)
- * @note Thread-safe if pool was created with single_threaded=false
- * @note Will assert if rmp is NULL
+ * @note The function zeros exactly 'size' bytes, and not the full pool element
+ * @note Thread-safe if the pool was created with single_threaded=false
+ * @note This function asserts if rmp is NULL
  *
  * @see ccol_r_mempool_alloc_entry
  * @see ccol_r_mempool_realloc_entry
@@ -1305,92 +1463,116 @@ void *ccol_r_mempool_calloc_entry(ccol_r_mempool *rmp, size_t size);
 /**
  * @brief Reallocate an entry to a different size
  *
- * Changes the size of an allocated entry. If the new size does not require
- * moving to a differently-sized underlying allocation, returns the original
- * pointer unchanged (no copy); this applies uniformly whether addr is
- * served by one of the pool's own fixed-size tiers or by the dynamic/heap
- * fallback path. Otherwise, allocates a new entry sized for the request,
- * copies min(old_size, new_size) bytes, and frees the old entry.
+ * Changes the size of an allocated entry. The original pointer comes back
+ * unchanged, with no copy, whenever a move could not give the entry more bytes
+ * than it already holds. There are two such cases. In the first, the entry
+ * already holds exactly what the tier that serves the new size would give it.
+ * In the second, it already holds exactly the number of bytes requested. In
+ * every other case the function allocates a new entry sized for the request.
+ * It copies min(old_size, new_size) bytes into the new entry, and frees the
+ * old one.
  *
- * A pool-owned entry that the request still fits inside is returned unmoved
- * when that move cannot be made, rather than reported as a failure. An entry
- * sits in a tier at least as large as the size it was created for, and may sit
- * in a larger one than the request alone would choose, so a shrink (or a
- * resize to the size already held) can be honoured by the entry staying where
- * it is. The pointer that comes back then addresses at least the requested
- * bytes, as it does on every other successful path.
+ * Both of those questions are about the bytes that the entry holds. A
+ * pool-owned entry and a dynamic fallback entry that hold the same number of
+ * bytes therefore behave in the same way here. How many bytes an entry holds
+ * does depend on where it came from. That is the one difference which the two
+ * representations truly force. A pool-owned entry holds the whole element size
+ * of its tier. A dynamic fallback entry that a tier handed out after its own
+ * slots ran out holds that same whole element size. An entry from the shared
+ * fallback that ccol_fallback_at_last_exhaustion uses holds exactly the size
+ * that it was created for.
+ *
+ * The function returns an entry that the request still fits inside unmoved,
+ * when it cannot make the move. It does not report a failure. This too is the
+ * same for both kinds of entry. A shrink does not fail for want of memory that
+ * it does not need. The pointer that comes back then addresses at least the
+ * requested bytes, as it does on every other successful path.
  *
  * @param rmp Ranged memory pool
- * @param addr Existing entry to reallocate, or NULL to allocate new
- * @param size New size in bytes (must be > 0 and <= largest_size)
+ * @param addr Entry to reallocate, or NULL to allocate a new one
+ * @param size New size in bytes. It must be > 0 and <= largest_size
  *
- * @return Pointer to reallocated entry, or NULL on failure
+ * @return Pointer to the reallocated entry, or NULL on failure
  *
- * @note If addr is NULL, equivalent to ccol_r_mempool_alloc_entry()
- * @note If the new size does not require a differently-sized allocation,
- * returns the original pointer unchanged (no copy)
- * @note Otherwise, allocates new, copies data, frees old; if that allocation
- * fails and addr is a pool-owned entry the request still fits inside, addr is
- * returned unmoved instead of NULL
- * @note Copies min(old_user_size, new_user_size) bytes
- * @note Old entry is automatically freed if reallocation succeeds
- * @note Thread-safe if pool was created with single_threaded=false
- * @note Returns NULL if size is 0 or > largest_size, WITHOUT touching addr:
- * a non-NULL addr is neither freed nor moved when size itself is invalid,
- * exactly as if the call had never been made; a genuinely failed
- * reallocation (a valid size that simply cannot be satisfied) leaves addr
- * equally untouched, so both failure modes share the same "original
- * pointer still valid, still owned by the caller" contract
- * @note Will assert if addr is non-NULL and was not obtained from this
- * ccol_r_mempool (corruption/foreign-pointer detection, mirroring
- * ccol_mempool_free_entry())
+ * @note If addr is NULL, this function does the same as
+ * ccol_r_mempool_alloc_entry()
+ * @note If the entry already holds as many bytes as a move could give it, the
+ * function returns the original pointer unchanged and copies nothing
+ * @note In every other case the function allocates a new entry, copies the
+ * data, and frees the old entry. If that allocation fails and the request
+ * still fits inside the bytes that addr already holds, the function returns
+ * addr unmoved instead of NULL
+ * @note The function copies min(old_user_size, new_user_size) bytes
+ * @note The function frees the old entry when the reallocation succeeds
+ * @note Thread-safe if the pool was created with single_threaded=false
+ * @note Returns NULL if the size is 0 or > largest_size, and does NOT touch
+ * addr. For an invalid size, the function neither frees nor moves a non-NULL
+ * addr. The state is exactly as if the call had never happened. A real failed
+ * reallocation is a valid size that the pool cannot serve. It leaves addr
+ * equally untouched. Both failure modes therefore share one contract: the
+ * original pointer is still valid, and the caller still owns it
+ * @note This function asserts if addr is non-NULL and did not come from this
+ * ccol_r_mempool. This detects corruption and a foreign pointer. It matches
+ * ccol_mempool_free_entry()
  *
  * @see ccol_r_mempool_alloc_entry
  * @see ccol_r_mempool_free_entry
  */
+void *ccol_r_mempool_realloc_entry(ccol_r_mempool *rmp, void *addr,
+                                   size_t size);
+
 /**
  * @brief Return an entry to the ranged pool it came from (internal function)
  *
- * Prefer the ccol_r_mempool_free_entry() macro, which also NULLs the caller's
- * pointer. The ranged pool locates the sub-pool the entry belongs to; the
- * caller supplies the ranged pool, not that sub-pool, which it has no way to
- * know.
+ * Prefer the ccol_r_mempool_free_entry() macro. It also sets the pointer of
+ * the caller to NULL. The ranged pool finds the sub-pool that the entry
+ * belongs to. The caller gives the ranged pool and not that sub-pool, because
+ * the caller has no way to know which sub-pool it is.
  *
- * @param rmp Ranged pool the entry was allocated from
- * @param entry Entry to release; a NULL entry is a no-op, matching free()
+ * @param rmp Ranged pool that the entry came from
+ * @param entry Entry to free. A NULL entry does nothing, which matches free()
  *
- * @note Passing an entry that did not come from this ranged pool is a caller
- * error and is fatal, not silently tolerated
+ * @note An entry that did not come from this ranged pool is an error of the
+ * caller. It is fatal. The function does not tolerate it in silence
  *
  * @see ccol_r_mempool_free_entry
  * @see ccol_r_mempool_alloc_entry
  */
 void _ccol_r_mempool_free_entry(ccol_r_mempool *rmp, void *entry);
 
-void *ccol_r_mempool_realloc_entry(ccol_r_mempool *rmp, void *addr,
-                                   size_t size);
-
 /**
  * @brief Free an entry back to the ranged pool
  *
- * Returns an allocated entry to the appropriate sub-pool's free list.
- * Macro wrapper around ccol_mempool_free_entry() that sets pointer to NULL.
+ * Returns an allocated entry to the free list of the correct sub-pool. This
+ * macro calls _ccol_r_mempool_free_entry() and then sets the pointer to NULL.
  *
- * @param entry Entry to free (will be set to NULL after freeing)
+ * @param rmp Ranged pool that the entry came from
+ * @param entry Entry to free. The macro sets it to NULL afterward
  *
- * @note Works for entries from any sub-pool in the ranged pool
- * @note Also works for dynamically allocated entries (fallback)
- * @note Safe to call with NULL
- * @note Thread-safe if pool was created with single_threaded=false
- * @note Performs corruption detection via assertions
+ * @note The macro works for an entry from any sub-pool in the ranged pool
+ * @note It also works for a dynamic entry from the fallback
+ * @note It is safe to call this macro with NULL
+ * @note Thread-safe if the pool was created with single_threaded=false
+ * @note The macro does corruption detection with assertions
  *
  * @see ccol_mempool_free_entry
  * @see ccol_r_mempool_alloc_entry
+ *
+ * @note The macro evaluates each argument exactly once. entry must be a
+ * modifiable lvalue, such as a variable or an element of an array
  */
-#define ccol_r_mempool_free_entry(rmp, entry)   \
-  do {                                          \
-    _ccol_r_mempool_free_entry((rmp), (entry)); \
-    entry = NULL;                               \
+#define ccol_r_mempool_free_entry(rmp, entry) \
+  _ccol_r_mempool_free_entry_impl(            \
+      (rmp), entry, _ccol_uniq(__ccol_r_mempool_free_entry_slot, __COUNTER__))
+
+/* Internal. The body of ccol_r_mempool_free_entry. slot is a name from
+ * _ccol_uniq(), so the macro nests inside the argument of another destroy
+ * macro and stays -Wshadow clean. The argument is evaluated exactly once. */
+#define _ccol_r_mempool_free_entry_impl(rmp, entry, slot) \
+  do {                                                    \
+    __typeof__(entry) *slot = &(entry);                   \
+    _ccol_r_mempool_free_entry((rmp), *slot);             \
+    *slot = NULL;                                         \
   } while (0)
 
 #pragma GCC visibility pop

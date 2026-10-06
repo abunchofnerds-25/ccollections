@@ -5,15 +5,16 @@ cstr_construct_mp_scoped \- declare and initialise a cstr with custom mprocs and
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 cstr_construct_mp_scoped(s, initial, mprocs);
 .fi
 .SH DESCRIPTION
 .nf
-Combines cstr_declare_scoped() and cstr_init_mp() into a single statement.
-The string is automatically destroyed when the variable leaves scope, using
-the custom memory management procedures.
+This macro combines cstr_declare_scoped() and cstr_init_mp() into one
+statement. The program destroys the string automatically when the variable
+leaves its scope. The destruction uses the custom memory management
+procedures.
 .fi
 .SH PARAMETERS
 .nf
@@ -23,7 +24,7 @@ mprocs   Custom memory management procedures (ccol_memmgmt_procs_t *)
 .fi
 .SH NOTES
 .nf
-Requires GCC or Clang (uses __attribute__((cleanup)))
+This macro needs GCC or Clang, because it uses __attribute__((cleanup))
 .fi
 .SH "SEE ALSO"
 .BR cstr_construct_scoped (3),

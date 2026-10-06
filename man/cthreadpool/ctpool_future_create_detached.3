@@ -1,31 +1,36 @@
-.TH CTPOOL_FUTURE_CREATE_DETACHED 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
+.TH CTPOOL_FUTURE_CREATE_DETACHED 3 "2026-09-21" "c_collections" "C Collections Library - Functions"
 .SH NAME
 ctpool_future_create_detached \- create a standalone future with no pool or queued task
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadpool.h>
+#include <ccollections/cthreadpool.h>
 
 ctpool_future *ctpool_future_create_detached(char **err_str);
 .fi
 .SH DESCRIPTION
 .nf
-Allocates a future object that is not backed by any cthread_pool task
-queue. An external producer (for example an event-driven engine that
-is not itself a ctpool worker) is responsible for calling
-ctpool_future_fulfill exactly once to deliver the result.
+Allocates a future object that no cthread_pool task queue backs. An
+outside producer must call ctpool_future_fulfill exactly one time to
+deliver the result. An engine driven by events, which is not itself a
+ctpool worker, is one such producer.
 
-The returned future has a reference count of 2 on success, mirroring
-ctpool_submit_future's convention: one reference held by the caller
-(released via ctpool_future_free), one held by the producer (released
-by ctpool_future_fulfill). The struct is freed once both sides have
-released their reference, in either order; ctpool_future_free may
-be called before ctpool_future_fulfill, exactly as with pool-backed
-futures.
+The future that comes back has a reference count of 2 on success. That
+mirrors the convention of ctpool_submit_future. The caller holds one
+reference, and ctpool_future_free releases it. The producer holds the
+other, and ctpool_future_fulfill releases it. Each ctpool_future_get
+call that runs on the future adds one more.
 
-Always uses standard malloc/free, independent of any custom
-allocator, matching ctpool_submit_future's own futures.
+The library frees the struct after every reference goes, in whatever
+order they go. A call to ctpool_future_free can come before a call to
+ctpool_future_fulfill. Either call can come while other threads still
+wait in ctpool_future_get. This is exactly how a future that a pool
+backs behaves.
+
+This function always uses the standard malloc and free. It does not use
+any custom allocator. The futures of ctpool_submit_future work the same
+way.
 .fi
 .SH PARAMETERS
 .nf

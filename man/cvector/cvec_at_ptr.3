@@ -1,44 +1,46 @@
 .TH CVEC_AT_PTR 3 "2026-08-15" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cvec_at_ptr \- access element at index (type-safe, returns pointer or NULL)
+cvec_at_ptr \- access element at index (type-inferred, returns pointer or NULL)
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cvector.h>
+#include <ccollections/cvector.h>
 
 element_ptr = cvec_at_ptr(v, index);
 .fi
 .SH DESCRIPTION
 .nf
-Type-safe wrapper for cvector_at() that returns a pointer to the element,
-or NULL if index is out of bounds. Automatically casts to the correct
-type. Unlike cvec_at, does not terminate the program on an
-out-of-bounds index.
+This macro is a type-inferred wrapper for cvector_at(). It gives a pointer to
+the element. It gives NULL when the index is out of bounds. The macro casts
+to the correct type automatically. cvec_at stops the program for such an
+index, but this macro does not.
 .fi
 .SH PARAMETERS
 .nf
 v      Vector to access
-index  Zero-based index of element
+index  Zero-based index of the element
 .fi
 .SH RETURN VALUE
 .nf
-Returns pointer to element at index
-Returns NULL if index is out of bounds
+Gives a pointer to the element at the index
+Gives NULL when the index is out of bounds
 .fi
 .SH NOTES
 .nf
-Returns NULL if index is out of bounds (does not terminate)
-Returned pointer is only valid until the vector is resized
+The macro gives NULL when the index is out of bounds. It does not stop
+the program.
+The pointer stays valid only until the size of the vector changes.
 .fi
 .SH EXAMPLES
 .nf
 cvec_construct(vec, int);
-cvec_push_rvalue(vec, 42);
+cvec_push(vec, 42);
 int *ptr = cvec_at_ptr(vec, 0);
 if (ptr) {
-  *ptr = 5; // Modify in-place
+  *ptr = 5; // Change the element in place
 }
+cvec_destroy(vec);
 .fi
 .SH "SEE ALSO"
 .BR cvector_at (3),

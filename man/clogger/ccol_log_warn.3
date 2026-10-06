@@ -5,17 +5,18 @@ ccol_log_warn \- emit a log line at WARN level
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <clogger.h>
+#include <ccollections/clogger.h>
 
 ccol_log_warn(clog lg, const char *fmt, ...);
 .fi
 .SH DESCRIPTION
 .nf
-Expands to a call to _clog_write() at CLOG_WARN level with automatic
-source location capture. No backtrace is appended.
+Writes a log line at CLOG_WARN level.  It captures __FILE__, __LINE__
+and __func__ by itself.  It appends no backtrace.
 
-Use WARN for recoverable abnormalities that do not interrupt normal
-operation but merit attention.
+Use WARN for a condition that the program recovers from.  Such a
+condition does not stop normal operation, and it still deserves
+attention.
 .fi
 .SH PARAMETERS
 .nf
@@ -32,5 +33,4 @@ ccol_log_warn(lg, "config key %s missing, using default", key);
 .BR ccol_log_info (3),
 .BR ccol_log_error (3),
 .BR ccol_log_alert (3),
-.BR ccol_log_fatal (3),
-.BR _clog_write (3)
+.BR ccol_log_fatal (3)

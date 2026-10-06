@@ -5,33 +5,36 @@ cyaml_node_tag \- return a node's YAML tag
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cyaml.h>
+#include <ccollections/cyaml.h>
 
 const char *cyaml_node_tag(cyaml node);
 .fi
 .SH DESCRIPTION
 .nf
-Return node's YAML tag, or NULL if it carries none.
+Return the YAML tag of node.  Return NULL when node carries no tag.
 
-A node parsed from a document with an explicit tag ("!!str", a custom
-"!foo", or a %TAG-resolved shorthand/verbatim tag) carries the fully
-resolved tag string here: one of the seven CYAML_TAG_* constants
-(CYAML_TAG_NULL, _BOOL, _INT, _FLOAT, _STR, _SEQ, _MAP), or a custom
-tag string.  An untagged node, including one whose type was
-determined purely by implicit core-schema resolution, returns NULL.
+A node that the parser reads from a document with an explicit tag
+carries the fully resolved tag string here.  Such a tag is "!!str", a
+custom "!foo", a shorthand that %TAG resolves, or a verbatim tag.  The
+tag is one of the seven CYAML_TAG_* constants (CYAML_TAG_NULL, _BOOL,
+_INT, _FLOAT, _STR, _SEQ, _MAP), or a custom tag string.  A node with
+no tag returns NULL.  This includes a node whose type comes only from
+implicit core-schema resolution.
 
-A dictionary key can never carry a tag: this DOM's keys are plain
-strings, not nodes (see cyaml_dictionary_get(3)), so a tag decorating
-a key is parsed for validity but has nowhere to be stored and is
-discarded.
+A dictionary key can never carry a tag.  The keys of this DOM are plain
+strings, not nodes (see cyaml_dictionary_get(3)).  A tag on a key in
+the document types that key, exactly as it types a value, and the
+dictionary stores the canonical text of the typed key.  There is no
+place to store the tag itself.
 .fi
 .SH PARAMETERS
 .nf
-node  DOM node handle; may be NULL (returns NULL).
+node  DOM node handle.  It can be NULL, and the function then returns
+      NULL.
 .fi
 .SH RETURN VALUE
 .nf
-Borrowed, non-owning tag string, or NULL.
+A borrowed, non-owning tag string, or NULL.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_node_set_tag (3),

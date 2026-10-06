@@ -5,31 +5,58 @@ ccol_log_fatal \- emit a log line at FATAL level with a backtrace, then terminat
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <clogger.h>
+#include <ccollections/clogger.h>
 
 ccol_log_fatal(clog lg, const char *fmt, ...);
 .fi
 .SH DESCRIPTION
 .nf
-Writes a structured log line at CLOG_FATAL severity, appends a full
-stack backtrace, then terminates the calling process by invoking
-exit(EXIT_FAILURE).  This macro never returns to the caller.
+Writes a structured log line at CLOG_FATAL severity.  It then appends
+a full stack backtrace.  It then stops the calling process with a call
+to exit(EXIT_FAILURE).  This macro never returns to the caller.
 
-Unlike all other log_* macros, ccol_log_fatal bypasses the logger's
-min_level filter.  The log line and backtrace are always written,
-regardless of the logger's current minimum level (including CLOG_OFF),
-so the cause of process termination is never silently suppressed.
+exit() runs the exit drain of the library (see clog_open_fd_mp(3)).
+It delivers what every other async logger still holds, and it lets
+every gzip compression that a rotation of any logger in the process
+has queued finish, the one that the fatal record itself can cause
+included.  No rotated file is therefore left as a half-written \&.gz
+file beside its source.  One budget of 5 seconds bounds that drain,
+and it takes the lock of a logger only when that logger has a queue or
+a compression to drain.  A thread of another logger that blocks for
+ever, inside a write to a pipe that nobody reads for example,
+therefore never keeps the process from stopping.
 
-The log line and backtrace are written inside the shared write lock so
-they always appear contiguously in the output, even when other threads
-are logging concurrently.
+The same budget, counted from the start of the first fatal call of the
+process, bounds the fatal record itself.  On an async logger the drain
+of its own queue and batch ends by then, and every write of the record
+to an output that is not a regular file (a pipe, a FIFO, a socket, a
+terminal) ends by then too.  An output that takes nothing more in that
+time, such as a full pipe whose reader stopped reading, loses the
+record.  The library then writes one line to stderr that says so,
+unless stderr is that same output, and the process stops anyway.  A
+write to a regular file waits on the disk and not on a reader, and
+keeps no bound.  The exit drain that follows shares the deadline, so
+one budget bounds the whole stop.  The writer thread of an async logger
+takes on no new work while a fatal call waits for the logger, and that
+wait may run up to 100 milliseconds past the budget, so that a write
+which is in progress on the logger ends and hands the logger over.
 
-In CLOG_FMT_JSON mode the backtrace is embedded as an inline "bt"
-array inside the JSON object (same as ccol_log_error / ccol_log_alert).  In
-logfmt mode it is emitted as tab-indented continuation lines
-following the main record; in CLOG_FMT_SYSLOG mode each frame is
-emitted as a separate syslog message carrying the same PRI,
-TIMESTAMP, and MSGID as the main record.
+ccol_log_fatal goes past the min_level filter of the logger.  Every
+other log_* macro obeys that filter.  The library always writes the log
+line and the backtrace.  It does so whatever the current minimum level
+of the logger is, and that includes CLOG_OFF.  Nothing therefore
+silently suppresses the cause of the stop.
+
+The library writes the log line and the backtrace inside the shared
+write lock.  They therefore always appear together in the output.  That
+holds when other threads log at the same time.
+
+In CLOG_FMT_JSON mode the library embeds the backtrace as an inline
+"bt" array inside the JSON object.  ccol_log_error and ccol_log_alert
+do the same.  In logfmt mode it writes the backtrace as continuation
+lines that a tab indents, after the main record.  In CLOG_FMT_SYSLOG
+mode it writes each frame as a separate syslog message.  That message
+carries the same PRI, TIMESTAMP and MSGID as the main record.
 .fi
 .SH PARAMETERS
 .nf
@@ -39,22 +66,46 @@ fmt    printf-style format string.
 .fi
 .SH NOTES
 .nf
-Backtrace requires the binary to be linked with -rdynamic.  On
-platforms without execinfo.h, or on a transient allocation failure
-while resolving symbol names, capture itself fails but the process
-still terminates; a single "backtrace unavailable" marker line (or, in
-CLOG_FMT_SYSLOG mode, marker record) is emitted in place of the usual
-per-frame output, so the omission is visible rather than silent.
-Under sustained memory pressure, or when the record's own content
-already leaves little room before the internal buffer cap, an
-individual backtrace frame that cannot be formatted is likewise
-omitted (in favor of any shorter frame that follows) rather than
-written incomplete; every line that is written is always a complete,
-well-formed record.  If none of the frames fit at all, the same
-"backtrace unavailable" marker used on capture failure takes their
-place.  In CLOG_FMT_JSON mode, if the backtrace cannot be embedded at
-all under such pressure, a "bt_error":"unavailable" key takes the
-place of "bt" so the omission is visible rather than silent.
+A backtrace needs the binary to be linked with -rdynamic.  The capture
+itself can fail.  It fails on a platform with no execinfo.h, and on a
+transient allocation failure while the library resolves symbol names.
+The process still stops.  The logger writes one "backtrace
+unavailable" marker line in place of the usual output for each frame.
+In CLOG_FMT_SYSLOG mode it writes a marker record instead.  The
+omission is therefore visible, and not silent.
+Memory pressure can last for a time.  The content of a record can also
+leave little room before the internal buffer cap.  A single backtrace
+frame that the library cannot format is then omitted in the same way.
+A shorter frame that follows it can still go out.  The library never
+writes a frame that is incomplete, so every line that it writes is a
+complete, well-formed record.  When not one frame fits at all, the
+same "backtrace unavailable" marker takes their place.  In
+CLOG_FMT_JSON mode the library can fail to embed the backtrace at all
+under such pressure.  A "bt_error":"unavailable" key then takes the
+place of "bt", so the omission is visible and not silent.
+
+On an async logger, ccol_log_fatal first drains everything that
+earlier calls already queued.  A message that the application logged
+moments before the fatal one therefore reaches the log, and does not
+die in the queue.  The macro then writes the fatal record itself
+synchronously.  Nothing on that path waits without a bound.  The
+library skips a drain request that the queue cannot accept, and it
+does not wait on one.  The batch of the writer thread can still hold
+bytes that an earlier write could not deliver.  See clog_open_fd_mp(3).
+Those bytes get one bounded attempt at delivery, and the library then
+gives up on them.  It repairs the framing that a split record left
+open, and it writes a "log record truncated: undelivered batch dropped
+(records=<n> bytes=<m>): the process stopped" record for the whole
+records that it gives up on, ahead of the fatal record.  It does not
+hold up the stop on a descriptor that will not take them.
+
+The fatal record is written on the calling thread.  When the logger
+writes to a pipe whose reader is gone, that write fails with EPIPE,
+and the process still ends through exit(EXIT_FAILURE): under the
+default CLOG_SIGPIPE_AUTO policy it sets SIGPIPE to SIG_IGN first, if
+the disposition is still SIG_DFL.  Under CLOG_SIGPIPE_UNTOUCHED the
+disposition of the application decides.  See
+clog_set_sigpipe_policy(3).
 
 Because ccol_log_fatal terminates the process immediately, any logger
 handles that have not been closed are not explicitly freed.  This is
@@ -62,12 +113,15 @@ intentional: on program exit the OS reclaims all resources.
 .fi
 .SH EXAMPLES
 .nf
-ccol_log_fatal(lg, "unrecoverable state: %s", reason);
+if (!recovered)
+    ccol_log_fatal(lg, "unrecoverable state: %s", reason);  /* exits */
 
-ccol_log_fatal(lg, "assertion failed: invariant violated at step %d", step);
+if (balance < 0)
+    ccol_log_fatal(lg, "invariant violated at step %d", step);  /* exits */
 .fi
 .SH "SEE ALSO"
 .BR ccol_log_alert (3),
 .BR ccol_log_error (3),
-.BR _clog_write (3),
-.BR clog_open_fd_mp (3)
+.BR clog_open_fd_mp (3),
+.BR clog_open_file_mp (3),
+.BR clog_set_sigpipe_policy (3)

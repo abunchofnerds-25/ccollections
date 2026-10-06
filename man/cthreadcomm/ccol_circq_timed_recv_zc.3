@@ -1,39 +1,54 @@
-.TH CCOL_CIRCQ_TIMED_RECV_ZC 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CCOL_CIRCQ_TIMED_RECV_ZC 3 "2026-10-01" "c_collections" "C Collections Library - Functions"
 .SH NAME
-ccol_circq_timed_recv_zc \- receive with timeout
+ccol_circq_timed_recv_zc \- receive a message with a timeout
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadcomm.h>
+#include <ccollections/cthreadcomm.h>
 
 ccol_retval_t ccol_circq_timed_recv_zc(ccol_circular_queue *cq,
                                    c_message_t *target_buf,
-                                   struct timespec *timeout);
+                                   uint64_t timeout_us);
 .fi
 .SH DESCRIPTION
 .nf
-Blocks up to the specified timeout waiting for a message. If a message
-arrives, receives it and transfers ownership.
+This function blocks and waits for a message. It waits for the given
+timeout at most. If a message arrives, the function receives it and
+transfers the ownership.
 .fi
 .SH PARAMETERS
 .nf
 cq          Circular queue to receive from
-target_buf  Buffer to receive the message
-timeout     Relative timeout duration
+target_buf  Buffer that gets the message
+timeout_us  Longest time to wait, in microseconds, from the call. 0 does
+            not wait: the call is then ccol_circq_try_recv_zc.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success              - Message received
-ccol_invalid_args         - cq, target_buf, or timeout is NULL
-ccol_timed_out            - Timeout expired
-ccol_unexpected_failure   - System error (check errno)
+ccol_success              - The function received a message
+ccol_invalid_args         - cq or target_buf is NULL
+ccol_container_empty      - The timeout is 0 and the queue is empty
+ccol_timed_out            - The timeout ended
+ccol_unexpected_failure   - The wait failed with an error other than a
+                            timeout; errno holds that error
 .fi
 .SH NOTES
 .nf
-Blocks up to timeout duration
-On success, caller receives ownership and must free target_buf->data
-Uses CLOCK_REALTIME for timeout calculations
+The function blocks for the duration of the timeout at most.
+On success, the caller gets the ownership and must free
+  target_buf->data.
+A timeout of 0 does not wait. The call then does exactly what
+ccol_circq_try_recv_zc does, and returns its result:
+ccol_container_empty, and not ccol_timed_out, when it cannot proceed at
+once.
+A timeout too large to form a deadline, such as UINT64_MAX, saturates
+to the latest deadline that the clock can hold and in practice waits
+with no end; it never wraps into the past.
+The library measures the timeout against CLOCK_MONOTONIC. A change to the
+wall clock of the system does not make the timeout longer or shorter. An
+administrator, NTP, or the resume of a virtual machine can change that
+clock. The call waits for the duration that the caller gave.
 .fi
 .SH "SEE ALSO"
 .BR ccol_circq_recv_zc (3),

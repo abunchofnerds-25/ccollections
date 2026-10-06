@@ -1,27 +1,27 @@
 .TH CSTR_SET 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cstr_set \- replace entire content; calls ccol_fatal_err() on failure
+cstr_set \- replace the full content, and call ccol_fatal_err() on failure
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 cstr_set(s, str);
 .fi
 .SH DESCRIPTION
 .nf
-Calls cstring_set() and calls ccol_fatal_err() if the return value is not
-ccol_success.
+This macro calls cstring_set(). It then calls ccol_fatal_err() if the return
+value is not ccol_success.
 .fi
 .SH PARAMETERS
 .nf
-s     cstr to modify
+s     cstr to change
 str   New content (must not be NULL)
 .fi
 .SH NOTES
 .nf
-Use cstring_set() directly if you need to handle errors gracefully
+Call cstring_set() directly when you want to handle an error yourself
 .fi
 .SH "SEE ALSO"
 .BR cstring_set (3),

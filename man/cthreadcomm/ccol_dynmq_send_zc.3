@@ -1,0 +1,70 @@
+.TH CCOL_DYNMQ_SEND_ZC 3 "2026-09-20" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccol_dynmq_send_zc \- send a message to a dynamic queue (no block)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_retval_t ccol_dynmq_send_zc(ccol_dynamic_queue *dq, c_message_t *msg);
+.fi
+.SH DESCRIPTION
+.nf
+This function puts the message at the tail of the dynamic queue and returns
+immediately. The queue has no size limit, so this call never waits for free
+space. It is the only send entry point of the dynamic queue. There is no
+send that blocks and no send with a timeout.
+
+On success, the ownership of msg->data moves to the queue. The function
+sets msg->data to NULL as the record of that move. The caller must not
+free, read, or otherwise use that pointer after the call. Later, a receiver
+takes the message out with ccol_dynmq_recv_zc(3),
+ccol_dynmq_try_recv_zc(3), or ccol_dynmq_timed_recv_zc(3). That receiver
+becomes the owner and is the one that frees the data. The library copies no
+bytes at any point. Only the pointer and its size move.
+
+On every failure, msg stays exactly as the caller gave it. The caller still
+owns msg->data and must free it or send it somewhere else.
+
+A message with msg->data == NULL and msg->size == 0 is valid, and it
+carries no payload. This is the usual way to send a wake-up sentinel or an
+end-of-stream sentinel through the queue.
+.fi
+.SH PARAMETERS
+.nf
+dq   Dynamic queue to send to
+msg  Message to send. On success the ownership of msg->data moves to the
+     queue.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success            - The function put the message into the queue.
+                          msg->data is now NULL, and the queue owns what
+                          it pointed to.
+ccol_invalid_args       - dq or msg is NULL. Or msg->data is NULL while
+                          msg->size is not zero. Or msg->data is not NULL
+                          while msg->size is 0.
+ccol_not_permitted      - A ccol_dynmq_disable_sending() call turned sends
+                          off
+ccol_container_full     - The queue already holds ccol_max_elem_count
+                          messages
+ccol_not_enough_memory  - The function could not allocate the list node
+                          for the message
+.fi
+.SH NOTES
+.nf
+The function never blocks. It returns immediately with a success code or
+an error code.
+A send that succeeds wakes a blocked ccol_dynmq_recv_zc() receiver or a
+blocked ccol_dynmq_timed_recv_zc() receiver. It also wakes one
+read-direction waiter on this queue. Such a waiter is a ccol_select()
+call, a ccol_select_timed() call, or an ccol_event_loop registration.
+The function is thread-safe.
+.fi
+.SH "SEE ALSO"
+.BR ccol_dynmq_recv_zc (3),
+.BR ccol_dynmq_try_recv_zc (3),
+.BR ccol_dynmq_timed_recv_zc (3),
+.BR ccol_dynmq_disable_sending (3),
+.BR ccol_dynmq_msg_count (3)

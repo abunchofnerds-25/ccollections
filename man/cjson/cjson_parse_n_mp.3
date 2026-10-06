@@ -5,7 +5,7 @@ cjson_parse_n_mp, cjson_parse_n \- parse a bounded JSON buffer into a DOM tree
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cjson.h>
+#include <ccollections/cjson.h>
 
 cjson cjson_parse_n_mp(const char *json_str, size_t len,
                        char **err_str, ccol_memmgmt_procs_t *mp);
@@ -26,6 +26,12 @@ len       Number of bytes to parse.
 err_str   Out-parameter for the parse error message (same semantics
           as cjson_parse_mp).  Pass NULL to discard.
 mp        Custom allocator for all nodes, or NULL for default.
+          The library keeps its own copy of the struct, so the caller
+          may release or reuse the struct once this call returns. The
+          functions that it names must stay callable until the last node
+          built with them is destroyed. A process can use at most 64
+          distinct sets of four functions; a call that would need a 65th
+          fails and returns NULL.
 .fi
 .SH RETURN VALUE
 .nf

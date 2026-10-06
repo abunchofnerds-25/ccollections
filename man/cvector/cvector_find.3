@@ -5,16 +5,16 @@ cvector_find \- find the index of the first occurrence of an element
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cvector.h>
+#include <ccollections/cvector.h>
 
 size_t cvector_find(cvec v, const void *elem,
                     ccol_comparison_proc_t cmp);
 .fi
 .SH DESCRIPTION
 .nf
-Performs a linear scan and returns the zero-based index of the first
-element that compares equal to *elem. When cmp is NULL the comparison
-is done with memcmp over the element size (byte-wise equality).
+Does a linear scan. It returns the zero-based index of the first
+element that is equal to *elem. When cmp is NULL, the function compares
+with memcmp over the element size. That is equality byte by byte.
 .fi
 .SH PARAMETERS
 .nf
@@ -25,8 +25,8 @@ cmp   Comparison function (int(*)(const void*,const void*)), or NULL
 .fi
 .SH RETURN VALUE
 .nf
-Zero-based index of the first matching element.
-ccol_invalid_size if no match is found or elem is NULL.
+Zero-based index of the first element that matches.
+ccol_invalid_size when there is no match, and when elem is NULL.
 .fi
 .SH NOTES
 .nf

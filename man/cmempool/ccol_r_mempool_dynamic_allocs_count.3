@@ -5,14 +5,14 @@ ccol_r_mempool_dynamic_allocs_count \- get number of dynamic allocations
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cmempool.h>
+#include <ccollections/cmempool.h>
 
 size_t ccol_r_mempool_dynamic_allocs_count(ccol_r_mempool *rmp, size_t size);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the number of heap-allocated entries for the given size. Behavior
-depends on fallback policy.
+Returns the number of heap entries for the given size. The behavior
+depends on the fallback policy.
 .fi
 .SH PARAMETERS
 .nf
@@ -21,16 +21,18 @@ size  Size in bytes to query
 .fi
 .SH RETURN VALUE
 .nf
-Returns number of dynamic allocations
-Returns 0 on error or if disabled
+Returns the number of dynamic entries
+Returns 0 on an error, and 0 when the fallback is off
 .fi
 .SH NOTES
 .nf
-Returns 0 if ccol_fallback_disabled
-With ccol_fallback_at_first_exhaustion, tracks per-pool dynamic allocations
-With ccol_fallback_at_last_exhaustion, tracks all dynamic allocations
-Returns 0 if size is invalid
-Thread-safe if pool created with single_threaded=false
+Returns 0 for ccol_fallback_disabled
+With ccol_fallback_at_first_exhaustion, the function tracks the dynamic
+entries of each pool
+With ccol_fallback_at_last_exhaustion, the function tracks every dynamic
+entry
+Returns 0 if the size is invalid
+Thread-safe if the pool was created with single_threaded=false
 .fi
 .SH "SEE ALSO"
 .BR ccol_r_mempool_used_count (3),

@@ -5,15 +5,16 @@ cvector_push_back \- append an element to the end of the vector
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cvector.h>
+#include <ccollections/cvector.h>
 
 ccol_retval_t cvector_push_back(cvec v, const void *new_elem);
 .fi
 .SH DESCRIPTION
 .nf
-Adds a new element to the end of the vector. If the vector is at capacity,
-it automatically grows by doubling its capacity. The element is copied
-into the vector using an optimized assignment based on element size.
+Adds a new element to the end of the vector. The vector doubles its
+capacity by itself when it is full. The function copies the element into
+the vector. The copy uses an assignment that the library selects from the
+element size.
 .fi
 .SH PARAMETERS
 .nf
@@ -30,14 +31,13 @@ ccol_not_enough_memory - Capacity expansion failed
 .SH NOTES
 .nf
 Amortized O(1) complexity
-Element is copied into the vector
-Capacity doubles when full (2x scaling factor)
+The function copies the element into the vector
+The capacity doubles when the vector is full (2x scaling factor)
 Asserts if v is NULL
-new_elem may safely point into v's own backing buffer (for example a
-pointer returned by cvector_data_ptr(3) or cvector_at(3)); any
-capacity expansion this call triggers will not invalidate it
+new_elem can safely point into the backing buffer of v. One example is
+a pointer from cvector_data_ptr(3) or from cvector_at(3). A capacity
+growth that this call starts does not invalidate such a pointer
 .fi
 .SH "SEE ALSO"
 .BR cvector_pop_back (3),
-.BR cvec_push (3),
-.BR cvec_push_rvalue (3)
+.BR cvec_push (3)

@@ -1,9 +1,14 @@
 name: macOS
 
-# The port to macOS is in progress, so this workflow starts only by hand
-# (Actions -> macOS -> Run workflow). It joins the push and pull_request
-# triggers of ci.yml when every suite passes here.
+# The port to macOS is in progress, so this workflow runs only for the branch
+# of that port, and by hand (Actions -> macOS -> Run workflow). GitHub shows
+# the button only for a workflow that is on the default branch. The workflow
+# joins the push and pull_request triggers of ci.yml when every suite passes
+# here.
 on:
+  push:
+    branches:
+      - adding-support-for-unix-platforms
   workflow_dispatch:
 
 concurrency:

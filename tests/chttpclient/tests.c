@@ -36,7 +36,13 @@ SOFTWARE.
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#if defined(__APPLE__)
+#include <malloc/malloc.h>
+/* The usable size of a block of malloc(3); macOS names it malloc_size(). */
+#define malloc_usable_size(p) malloc_size(p)
+#else
 #include <malloc.h>
+#endif
 #include <netdb.h>
 #include <netinet/in.h>
 #include <openssl/err.h>
@@ -70,7 +76,9 @@ TAU_MAIN()
 
 /* Joins t when it has already ended and gives 0, or gives non-zero at once
  * when it still runs. glibc has pthread_tryjoin_np(); FreeBSD gets the same
- * from pthread_timedjoin_np() with a deadline that has already passed.
+ * from pthread_timedjoin_np() with a deadline that has already passed. macOS
+ * has neither, so there this never reaps early, as under ThreadSanitizer
+ * below.
  *
  * ThreadSanitizer on FreeBSD intercepts pthread_join() and pthread_detach()
  * and not pthread_timedjoin_np(). A thread joined through the latter stays
@@ -90,7 +98,7 @@ TAU_MAIN()
 static int test_tryjoin(pthread_t t) {
 #if defined(__GLIBC__)
   return pthread_tryjoin_np(t, NULL);
-#elif defined(TEST_UNDER_TSAN)
+#elif defined(TEST_UNDER_TSAN) || defined(__APPLE__)
   (void)t;
   return EBUSY;
 #else

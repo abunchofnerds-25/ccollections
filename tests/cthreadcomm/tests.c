@@ -16,7 +16,6 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/eventfd.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <tau/tau.h>
@@ -12550,10 +12549,26 @@ static void fa_on_readable(ccol_event_loop l, ccol_event_reg reg,
     atomic_fetch_add((_Atomic int *)arg, 1);
 }
 
-/* Answers whether l dispatches a readable eventfd within a bounded time.
+/* The read end of a pipe, non-blocking and close-on-exec, with its write end
+ * in *wfd. One 8-byte write makes it readable, and it stays readable until
+ * fa_on_readable() reads those bytes, as a level-triggered fd does on every
+ * system. */
+static int fa_wake_pipe(int *wfd) {
+  int p[2];
+  if (pipe(p) != 0) return -1;
+  for (int i = 0; i < 2; i++) {
+    (void)fcntl(p[i], F_SETFL, fcntl(p[i], F_GETFL) | O_NONBLOCK);
+    (void)fcntl(p[i], F_SETFD, FD_CLOEXEC);
+  }
+  *wfd = p[1];
+  return p[0];
+}
+
+/* Answers whether l dispatches a readable fd within a bounded time.
  * Every allocation succeeds while it runs. */
 static bool fa_loop_dispatches(ccol_event_loop l) {
-  int efd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+  int wfd = -1;
+  int efd = fa_wake_pipe(&wfd);
   if (efd < 0) return false;
   _Atomic int got = 0;
   ccol_event_handlers_t h = {.on_readable = fa_on_readable};
@@ -12562,13 +12577,14 @@ static bool fa_loop_dispatches(ccol_event_loop l) {
   bool ok = false;
   if (r != CCOL_EVENT_REG_INVALID) {
     uint64_t one = 1;
-    test_write_retry_eintr(efd, &one, sizeof(one));
+    test_write_retry_eintr(wfd, &one, sizeof(one));
     ok = derr_wait_count(&got, 1, 5000);
     ccol_event_loop_remove(l, r);
   }
   /* The shutdown joins every thread that could still hold &got. */
   ccol_event_loop_shutdown(l);
   close(efd);
+  if (wfd >= 0) close(wfd);
   return ok;
 }
 
@@ -12639,7 +12655,8 @@ TEST(ccol_event_loop, failed_dispatch_submit_backs_off_instead_of_spinning) {
   ccol_event_loop l =
       ccol_event_loop_create_with_mprocs(8, 1, 3, &fa_procs, NULL);
   REQUIRE_NE(l, CCOL_EVENT_LOOP_INVALID);
-  int efd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+  int wfd = -1;
+  int efd = fa_wake_pipe(&wfd);
   _Atomic int got = 0;
   ccol_event_handlers_t h = {.on_readable = fa_on_readable};
   ccol_event_reg r = ccol_event_loop_add(
@@ -12652,7 +12669,7 @@ TEST(ccol_event_loop, failed_dispatch_submit_backs_off_instead_of_spinning) {
     evl_sleep_ms(20);
     atomic_store(&fa_fail_all, 1);
     uint64_t one = 1;
-    test_write_retry_eintr(efd, &one, sizeof(one));
+    test_write_retry_eintr(wfd, &one, sizeof(one));
     evl_sleep_ms(100);
     uint64_t before = ccol_event_loop_poller_iterations_for_tests(l);
     evl_sleep_ms(300);
@@ -12664,6 +12681,7 @@ TEST(ccol_event_loop, failed_dispatch_submit_backs_off_instead_of_spinning) {
   }
   ccol_event_loop_destroy(l);
   close(efd);
+  if (wfd >= 0) close(wfd);
   fa_reset();
   REQUIRE_TRUE(added);
   REQUIRE_EQ(got_while_failing, 0);

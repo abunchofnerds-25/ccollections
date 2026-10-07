@@ -1,0 +1,73 @@
+name: macOS
+
+# The port to macOS is in progress, so this workflow starts only by hand
+# (Actions -> macOS -> Run workflow). It joins the push and pull_request
+# triggers of ci.yml when every suite passes here.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS ${{ matrix.arch }} (Apple clang)
+    strategy:
+      # One architecture that fails must not cancel the other: each run
+      # must give as many failures as it can.
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    # A test that hangs has no bound inside the process on macOS, because a
+    # bounded join needs pthread_timedjoin_np(), which macOS does not have.
+    # This timeout bounds such a hang.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install dependencies
+        # The build needs GNU make 4; macOS ships GNU make 3.81 as make, and
+        # Homebrew installs a current one as gmake. OpenSSL comes from
+        # Homebrew, outside the paths that clang searches by default, so
+        # CPATH and LIBRARY_PATH give clang its headers and its libraries.
+        # zlib is part of the macOS SDK.
+        run: |
+          brew install make openssl@3
+          ssl="$(brew --prefix openssl@3)"
+          echo "CPATH=$ssl/include" >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=$ssl/lib" >> "$GITHUB_ENV"
+      - name: Show the toolchain
+        run: |
+          sw_vers
+          uname -m
+          cc --version
+          gmake --version | head -1
+      - name: Build the shared library
+        run: gmake
+      - name: Test every module
+        # Every module runs, also after a module fails, so that one run shows
+        # every failure. A plain `gmake test` stops at the first failing
+        # module. macOS gives a process 256 descriptors by default, and some
+        # suites open more than 300 connections at once.
+        run: |
+          ulimit -n 4096
+          failed=""
+          for dir in tests/*/; do
+            [ -f "$dir/Makefile" ] || continue
+            m="$(basename "$dir")"
+            echo "::group::$m"
+            if ! gmake -C "$dir" test; then
+              failed="$failed $m"
+            fi
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "Failed modules:$failed"
+            exit 1
+          fi
+          echo "Every module passed."

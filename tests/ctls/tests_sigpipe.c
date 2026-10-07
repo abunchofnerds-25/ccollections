@@ -48,6 +48,7 @@ SOFTWARE.
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #include <tau/tau.h>
+#include <test_signals.h>
 #pragma GCC diagnostic pop
 
 TAU_MAIN()
@@ -78,13 +79,7 @@ static bool _take_pending_sigpipe_and_unblock(const sigset_t *old) {
   sigemptyset(&pending);
   sigpending(&pending);
   bool raised = sigismember(&pending, SIGPIPE) == 1;
-  if (raised) {
-    sigset_t set;
-    sigemptyset(&set);
-    sigaddset(&set, SIGPIPE);
-    struct timespec zero = {0, 0};
-    (void)sigtimedwait(&set, NULL, &zero);
-  }
+  if (raised) test_consume_pending_sigpipe();
   pthread_sigmask(SIG_SETMASK, old, NULL);
   return raised;
 }

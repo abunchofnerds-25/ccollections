@@ -61,9 +61,11 @@ SOFTWARE.
  * and not pthread_timedjoin_np(). A thread joined through the latter stays
  * live for the runtime: it sees no ordering between that thread and what the
  * joiner does next, and the next thread that libthr starts in the same thread
- * structure stops the process with a CHECK failure of the runtime. A bounded
- * join therefore joins without its bound in such a build. */
-#if defined(TEST_SANITIZER_THREAD) && defined(__FreeBSD__)
+ * structure stops the process with a CHECK failure of the runtime. macOS has
+ * no pthread_timedjoin_np() at all. A bounded join therefore joins without
+ * its bound in those builds, and the timeout of the CI job bounds a hang. */
+#if (defined(TEST_SANITIZER_THREAD) && defined(__FreeBSD__)) || \
+    defined(__APPLE__)
 #define TEST_TIMEDJOIN_VISIBLE 0
 #else
 #define TEST_TIMEDJOIN_VISIBLE 1

@@ -1280,6 +1280,23 @@ size_t clog_test_live_shareds_count(void);
 bool clog_test_gzip_compress_file(const char *src, const char *dst);
 
 /**
+ * @brief Test-only: clog_test_gzip_compress_file() for a log whose live file
+ *        live_uid owns.
+ *
+ * A rotation compresses a generation that the effective user owns, or that
+ * the owner of the live file owns. This hook gives that owner, as a rotation
+ * does. A test that runs as root can therefore give the source to a
+ * different user and still see it compressed.
+ *
+ * @param src Path of the uncompressed source file.
+ * @param dst Destination path.
+ * @param live_uid The owner of the live file of the log.
+ * @return The same as clog_test_gzip_compress_file().
+ */
+bool clog_test_gzip_compress_file_for_owner(const char *src, const char *dst,
+                                            uid_t live_uid);
+
+/**
  * @brief Test-only: call hook inside the window of a rotation in which the
  *        live name names neither the old file nor the new one.
  *

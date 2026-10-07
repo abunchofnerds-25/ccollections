@@ -7735,7 +7735,12 @@ static void *_stall_forever_bg_thread(void *arg) {
     return NULL;
   }
   const char *partial = "only-a-few-bytes-of-a-much-larger-declared-body";
-  write(fd, partial, strlen(partial)); /* far short of the declared length */
+  /* far short of the declared length */
+  if (write(fd, partial, strlen(partial)) != (ssize_t)strlen(partial)) {
+    close(fd);
+    fd = -1;
+    return NULL;
+  }
 
   /* This thread never sends the rest, and it never closes from this side.
      It blocks and waits for whatever the server does. The unblock itself

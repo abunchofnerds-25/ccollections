@@ -3651,6 +3651,11 @@ done:
 bool clog_test_gzip_compress_file(const char *src, const char *dst) {
   return _gzip_compress_file(AT_FDCWD, src, dst, NULL, geteuid()) == 0;
 }
+
+bool clog_test_gzip_compress_file_for_owner(const char *src, const char *dst,
+                                            uid_t live_uid) {
+  return _gzip_compress_file(AT_FDCWD, src, dst, NULL, live_uid) == 0;
+}
 #endif
 
 /* ========================================================================== */

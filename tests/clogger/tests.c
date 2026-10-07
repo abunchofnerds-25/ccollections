@@ -8231,7 +8231,7 @@ TEST(compression,
    * all. */
   clog lg = clog_open_file_mp("app.log", CLOG_INFO, &cfg, NULL, NULL);
   if (lg == CLOG_INVALID) {
-    chdir(oldcwd);
+    if (chdir(oldcwd) != 0) perror("chdir back to the original directory");
     REQUIRE_NE(lg, CLOG_INVALID);
   }
 
@@ -8242,7 +8242,7 @@ TEST(compression,
   if (prv != 0) {
     clog_test_set_pending_compress_delay_us(0);
     clog_close(lg);
-    chdir(oldcwd);
+    if (chdir(oldcwd) != 0) perror("chdir back to the original directory");
     REQUIRE_EQ(prv, 0);
   }
 
@@ -12863,7 +12863,11 @@ TEST(compression,
   bool prepared = fd >= 0 && write(fd, "RECORD\n", 7) == 7 &&
                   fchown(fd, owner, group) == 0 && fchmod(fd, 0640) == 0;
   if (fd >= 0) close(fd);
-  bool compressed = prepared && clog_test_gzip_compress_file(src, dst);
+  /* A rotation gives the owner of the live file as the owner that it
+   * accepts. As root, the source belongs to a different user, as the live
+   * file of a log that root writes for that user does. */
+  bool compressed =
+      prepared && clog_test_gzip_compress_file_for_owner(src, dst, owner);
   struct stat st;
   bool has_dst = stat(dst, &st) == 0;
   cleanup_dir(dir, "app.log");
@@ -13434,11 +13438,15 @@ TEST(fatal,
  * name names neither the old file nor the new one, and puts an entry there
  * the way another user who can write the directory would. It acts once. */
 static atomic_int g_rh_hook_fired;
+/* The link hook sets this only when symlinkat() succeeds. The test asserts
+ * it. Otherwise a failed plant checks nothing. */
+static atomic_int g_rh_link_planted;
 static int g_rh_fifo_reader = -1;
 
 static void rh_plant_link(int dir_fd, const char *base) {
   if (atomic_exchange(&g_rh_hook_fired, 1)) return;
-  (void)symlinkat("app.log-victim", dir_fd, base);
+  if (symlinkat("app.log-victim", dir_fd, base) == 0)
+    atomic_store(&g_rh_link_planted, 1);
 }
 
 static void rh_plant_fifo(int dir_fd, const char *base) {
@@ -13482,6 +13490,7 @@ TEST(rotation_hijack, a_link_put_at_the_live_name_gets_no_record) {
   bool setup = write_whole_file(victim, "VICTIM\n", 7);
 
   atomic_store(&g_rh_hook_fired, 0);
+  atomic_store(&g_rh_link_planted, 0);
   clog_test_set_rotate_window_hook(rh_plant_link);
   clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
                              .max_file_size = 200,
@@ -13494,6 +13503,7 @@ TEST(rotation_hijack, a_link_put_at_the_live_name_gets_no_record) {
   clog_test_set_rotate_window_hook(NULL);
 
   bool fired = atomic_load(&g_rh_hook_fired) != 0;
+  bool planted = atomic_load(&g_rh_link_planted) != 0;
   char vbuf[256];
   read_file(victim, vbuf, sizeof(vbuf));
   mode_t live_kind = rh_entry_kind(path);
@@ -13504,6 +13514,7 @@ TEST(rotation_hijack, a_link_put_at_the_live_name_gets_no_record) {
   REQUIRE_TRUE(setup);
   REQUIRE_NE(lg, CLOG_INVALID);
   REQUIRE_TRUE(fired);
+  REQUIRE_TRUE(planted);
   REQUIRE_STREQ(vbuf, "VICTIM\n");
   REQUIRE_EQ((unsigned)live_kind, (unsigned)S_IFREG);
   REQUIRE_TRUE(last_record_kept);

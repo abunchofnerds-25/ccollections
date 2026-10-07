@@ -16867,6 +16867,12 @@ static long ers_now_ms(void) {
  * request cannot finish before the server answers. */
 #define ERS_BIG_BODY (16u * 1024u * 1024u)
 
+/* The request timeout of a test that echoes ERS_BIG_BODY back, so that 16 MiB
+ * go each way. Under valgrind on a host with 2 CPUs, one such exchange takes
+ * about 10 s alone and more than 20 s beside the rest of the suite. A client
+ * that deadlocks still reports ccol_timed_out with this limit. */
+#define ERS_ECHO_TIMEOUT_US 90000000u
+
 static chttp_request_t *ers_post(int port, size_t body_len, char **body_out) {
   char *body = (char *)malloc(body_len);
   if (!body) return NULL;
@@ -17025,7 +17031,8 @@ TEST(early_response, streamed_2xx_answer_keeps_the_upload_going_in_every_tier) {
   ers_srv_t s;
   REQUIRE_TRUE(ers_start(&s, ERS_STREAM_ECHO));
   chttpcli cli = ccol_create_chttpclient(NULL);
-  if (cli != CHTTPCLI_INVALID) chttpclient_set_request_timeout(cli, 20000000);
+  if (cli != CHTTPCLI_INVALID)
+    chttpclient_set_request_timeout(cli, ERS_ECHO_TIMEOUT_US);
   size_t len = ERS_BIG_BODY;
   char *sent = NULL;
   chttp_request_t *req = ers_post(s.port, len, &sent);
@@ -17777,7 +17784,8 @@ TEST(early_response, a_response_that_started_during_the_send_is_never_pooled) {
   ers_srv_t s;
   REQUIRE_TRUE(ers_start(&s, ERS_STREAM_ECHO_KA));
   chttpcli cli = ccol_create_chttpclient(NULL);
-  if (cli != CHTTPCLI_INVALID) chttpclient_set_request_timeout(cli, 20000000);
+  if (cli != CHTTPCLI_INVALID)
+    chttpclient_set_request_timeout(cli, ERS_ECHO_TIMEOUT_US);
   chttp_request_t *req = ers_post(s.port, ERS_BIG_BODY, NULL);
   char get_url[128];
   snprintf(get_url, sizeof(get_url), "http://127.0.0.1:%d/after", s.port);

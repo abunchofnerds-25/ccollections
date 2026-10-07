@@ -79,5 +79,4 @@ tests/*/.build-flags-consumer
 .ccol_probe.c
 .ccol_probe.o
 
-# A line with no side effects. It starts a new CI run - 0
-
+# A line with no side effects. It starts a new CI run - 1

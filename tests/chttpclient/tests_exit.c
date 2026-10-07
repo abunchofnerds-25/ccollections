@@ -248,10 +248,26 @@ static int g_report_fd = -1;
 static int g_thread_baseline = 1;
 static int g_scenario_code = CHILD_OK;
 
+/* The thread count of the child once every thread that the exit handlers
+ * joined has gone. pthread_join() returns when the kernel clears the ID of
+ * the thread, and the kernel removes the thread from /proc/self/task a moment
+ * later, so a thread joined just before this check can still be listed. Such
+ * a thread goes within microseconds; a thread that nobody joined stays. The
+ * count is therefore read until it reaches the baseline, for at most 2 s. */
+static int _settled_thread_count(void) {
+  int threads = _thread_count();
+  for (int i = 0; i < 2000 && threads != g_thread_baseline; i++) {
+    struct timespec ts = {0, 1000L * 1000L};
+    nanosleep(&ts, NULL);
+    threads = _thread_count();
+  }
+  return threads;
+}
+
 /* This runs after every other exit handler of the child. */
 static void _check_at_exit(void) {
   unsigned char code = (unsigned char)g_scenario_code;
-  int threads = _thread_count();
+  int threads = _settled_thread_count();
   if (code == CHILD_OK && (threads < 1 || threads != g_thread_baseline))
     code = CHILD_THREADS_LEFT;
   if (code == CHILD_OK && _chttpclient_engine_running_for_tests())

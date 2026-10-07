@@ -24,7 +24,7 @@
 # case therefore carries the diagnostic it expects, matched against the
 # compiler's own output, and a rejection that does not match is a failure.
 #
-# Usage: ./compile_probe.sh [compiler ...]   (default: gcc clang)
+# Usage: ./compile_probe.sh [compiler ...]   (default: GCC and clang)
 
 set -eu
 
@@ -37,7 +37,19 @@ INCLUDE_DIR=${CCOL_PROBE_INCLUDE_DIR:-"$SCRIPT_DIR/../../include"}
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-COMPILERS=${*:-"gcc clang"}
+# The GCC of the default list: gcc, or else the newest versioned gccNN in
+# PATH (FreeBSD installs GCC only under a versioned name such as gcc14).
+probe_gcc() {
+  if command -v gcc > /dev/null 2>&1; then
+    echo gcc
+    return
+  fi
+  found=$(IFS=:; for d in $PATH; do ls "$d" 2>/dev/null; done |
+    grep -E '^gcc[0-9]+$' | sed 's/^gcc//' | sort -n | tail -1)
+  if [ -n "$found" ]; then echo "gcc$found"; else echo gcc; fi
+}
+
+COMPILERS=${*:-"$(probe_gcc) clang"}
 FLAGS="-std=gnu11 -Wall -Wextra -Werror -fsyntax-only -I$INCLUDE_DIR"
 
 # A reject case matches the compiler's own wording, so the compiler is run in

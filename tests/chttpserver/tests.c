@@ -17217,6 +17217,7 @@ TEST(chttpserver, a_lost_copy_of_pipelined_bytes_closes_the_connection) {
 /* ========================================================================== */
 
 extern size_t _chttpsvr_idle_count_for_tests(chttpsvr h);
+extern size_t _chttpsvr_sweep_ahead_for_tests(chttpsvr h, unsigned ahead_ms);
 extern size_t _chttpsvr_retired_drained_for_tests(void);
 extern void _chttpsvr_fail_next_servers_register_for_tests(void);
 
@@ -17234,10 +17235,12 @@ TEST(sweep, one_tick_closes_every_expired_idle_and_parked_connection) {
      idle one and answer every parked one with 408. Non-vacuous: a sweep
      that takes a fixed batch per tick closes 64 of the idle ones and never
      reaches the parked list on that tick; the background sweep adds at most
-     one more batch in the window of this test. */
+     one more batch in the window of this test. Both limits are 30 s, so no
+     connection expires while a slow host opens the others, and the tick of
+     the test runs 60 s ahead on both clocks. */
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
-  cfg.idle_timeout_us = 300000;
-  cfg.read_timeout_us = 300000;
+  cfg.idle_timeout_us = 30000000;
+  cfg.read_timeout_us = 30000000;
   chttpsvr srv = _sc_server(_LC_PORT + 15, &cfg);
   int idle_fds[_RX_IDLE_N];
   int parked_fds[_RX_PARKED_N];
@@ -17258,9 +17261,8 @@ TEST(sweep, one_tick_closes_every_expired_idle_and_parked_connection) {
   opened = opened && _sc_wait_for(srv, _rx_idle, NULL, _RX_IDLE_N, 20000);
   size_t idle_after = SIZE_MAX, parked_after = SIZE_MAX;
   if (opened) {
-    _sc_nap_ms(400); /* past the idle timeout on the real clock */
     _chttpsvr_advance_slow_clock_for_tests(60000); /* past the body gap */
-    _chttpsvr_sweep_now_for_tests(srv);
+    _chttpsvr_sweep_ahead_for_tests(srv, 60000);   /* past the idle limit */
     idle_after = _chttpsvr_idle_count_for_tests(srv);
     parked_after = _chttpsvr_parked_count_for_tests(srv, 1);
   }

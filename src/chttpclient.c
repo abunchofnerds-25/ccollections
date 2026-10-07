@@ -122,7 +122,9 @@ static _Atomic int g_connect_short_delays_for_tests = 0;
 /* While this is above 0, Tier 1 takes one from it for each attempt in
  * progress that completes, and treats that completion as ECONNREFUSED: an
  * attempt that fails after the connect started, as a refusal from a remote
- * host does. */
+ * host does. A loopback connect can complete inside connect(2); while this
+ * is above 0, such an attempt also counts as in progress, so that the hook
+ * sees its completion. */
 static _Atomic int g_connect_async_failures_for_tests = 0;
 
 void _chttp_set_connect_attempt_delay_ms_for_tests(long ms) {
@@ -2718,6 +2720,10 @@ static int _addr_connect_start(const chttp_resolved_addr_t *a,
 #endif
   if (connect(fd, (const struct sockaddr *)&a->addr, a->addr_len) == 0) {
     *in_progress = false;
+#ifdef RUNNING_UNIT_TESTS
+    if (atomic_load(&g_connect_async_failures_for_tests) > 0)
+      *in_progress = true;
+#endif
     return fd;
   }
   if (errno == EINPROGRESS) {

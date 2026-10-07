@@ -17439,7 +17439,12 @@ TEST(happy_eyeballs, tier1_an_asynchronous_failure_hands_over_at_once) {
     _chttp_set_connect_short_delays_for_tests(1);
     _chttp_set_connect_async_failures_for_tests(1);
     chttpcli cli = ccol_create_chttpclient(NULL);
-    if (cli != CHTTPCLI_INVALID) chttpclient_set_connect_timeout(cli, 30000000);
+    /* The request timeout bounds a run where the wrong address wins: its
+     * listener never answers. */
+    if (cli != CHTTPCLI_INVALID) {
+      chttpclient_set_connect_timeout(cli, 30000000);
+      chttpclient_set_request_timeout(cli, 60000000);
+    }
     chttp_request_t *req =
         chttp_request_new(CHTTP_GET, "http://eyeballs.invalid/get", NULL, NULL);
     have = req && cli != CHTTPCLI_INVALID;

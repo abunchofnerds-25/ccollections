@@ -15400,17 +15400,26 @@ size_t _chttpsvr_idle_count_for_tests(chttpsvr h) {
   return n;
 }
 
-/* Runs one tick of the sweep for h at once, on the calling thread, and
- * returns how many connections that tick examined. The sweep thread keeps
- * running beside it; the claims of the lists make the two safe together. */
-size_t _chttpsvr_sweep_now_for_tests(chttpsvr h) {
+/* Runs one tick of the sweep for h at once, on the calling thread, with the
+ * real clock ahead_ms later than it is, and returns how many connections that
+ * tick examined. A test can then give the idle limits a value that no slow
+ * setup reaches, and still expire them without a sleep. The sweep thread
+ * keeps running beside it; the claims of the lists make the two safe
+ * together. */
+size_t _chttpsvr_sweep_ahead_for_tests(chttpsvr h, unsigned ahead_ms) {
   struct chttpserver *raw = _chttpsvr_resolve(h);
   if (!raw) return 0;
   struct timespec now;
   clock_gettime(CLOCK_MONOTONIC, &now);
+  _timespec_add_ms(&now, ahead_ms);
   size_t visited = _sweep_server(raw, now);
   _chttpsvr_resolve_unpin(raw);
   return visited;
+}
+
+/* Runs one tick of the sweep for h at once, on the calling thread. */
+size_t _chttpsvr_sweep_now_for_tests(chttpsvr h) {
+  return _chttpsvr_sweep_ahead_for_tests(h, 0);
 }
 #endif /* RUNNING_UNIT_TESTS */
 

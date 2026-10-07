@@ -22,7 +22,7 @@
 # everything.
 #
 # Each probe is compiled with -fsyntax-only, which is all a _Static_assert
-# needs, and under every compiler in PROBE_CCS (gcc and clang by default). A
+# needs, and under every compiler in PROBE_CCS (GCC and clang by default). A
 # compiler that is not installed is reported and skipped; zero usable
 # compilers, or zero probes actually run, is a failure rather than a silent
 # pass.
@@ -282,7 +282,19 @@ EOF_CQ
     "cvector_sort_with_comparison_proc(probe_vec, probe_cmp);"
 }
 
-for cc in ${PROBE_CCS:-gcc clang}; do
+# The GCC of the default list: gcc, or else the newest versioned gccNN in
+# PATH (FreeBSD installs GCC only under a versioned name such as gcc14).
+probe_gcc() {
+  if command -v gcc > /dev/null 2>&1; then
+    echo gcc
+    return
+  fi
+  found=$(IFS=:; for d in $PATH; do ls "$d" 2>/dev/null; done |
+    grep -E '^gcc[0-9]+$' | sed 's/^gcc//' | sort -n | tail -1)
+  if [ -n "$found" ]; then echo "gcc$found"; else echo gcc; fi
+}
+
+for cc in ${PROBE_CCS:-$(probe_gcc) clang}; do
   run_for_compiler "$cc"
 done
 

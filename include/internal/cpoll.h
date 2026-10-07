@@ -52,8 +52,18 @@ SOFTWARE.
  *   an error, and CCOL_POLL_HUP when poll(2) reports POLLHUP (both
  *   directions down); for a pipe or FIFO CCOL_POLL_HUP, with CCOL_POLL_IN
  *   only while data is still queued. A report for the write filter gives
- * CCOL_POLL_OUT, and on EV_EOF CCOL_POLL_ERR or CCOL_POLL_HUP. Two filters of
- * one fd that report in one batch arrive as two events.
+ *   CCOL_POLL_OUT, and on EV_EOF CCOL_POLL_ERR or CCOL_POLL_HUP. Two filters
+ *   of one fd that report in one batch arrive as two events.
+ * - The EOF bits of the read filter depend on what the fd is, and only an
+ *   fstat(2) and a poll(2) of the fd can tell. ccol_poll_wait() therefore
+ *   makes no system call on an fd: it marks the event, and the caller calls
+ *   ccol_poll_refine() with the fd while it can prove that the fd is not
+ *   closed. The event loop does that under the stripe lock, for an entry
+ *   that is not removed: the removal takes the same lock, and an fd is closed
+ *   only after its removal. Another thread can close an fd as soon as the
+ *   wait returns, and the number can then name a different object. An event
+ *   that nobody refines carries no readiness bit. On Linux ccol_poll_refine()
+ *   does nothing.
  * - An ADD of a regular file or a directory fails with EPERM, as epoll_ctl
  *   does. kqueue would accept them and report them ready for ever.
  * - CCOL_POLL_CTL_DEL deletes both filters and succeeds when either existed.
@@ -90,6 +100,11 @@ typedef struct epoll_event ccol_poll_event;
 #define ccol_poll_ctl(pfd, op, fd, ev) epoll_ctl((pfd), (op), (fd), (ev))
 #define ccol_poll_wait(pfd, evs, max, timeout_ms) \
   epoll_wait((pfd), (evs), (max), (timeout_ms))
+
+static inline void ccol_poll_refine(ccol_poll_event *ev, int fd) {
+  (void)ev;
+  (void)fd;
+}
 
 #elif defined(__FreeBSD__) || defined(__APPLE__) || defined(__NetBSD__) || \
     defined(__OpenBSD__) || defined(__DragonFly__)
@@ -128,6 +143,13 @@ typedef union ccol_poll_event {
 #define CCOL_POLL_HUP 0x010u
 #define CCOL_POLL_RDHUP 0x2000u
 #define CCOL_POLL_ONESHOT (1u << 30)
+
+/* The marks that ccol_poll_wait() puts on an EOF of the read filter, for
+ * ccol_poll_refine(): the EOF itself, an error that the filter reported, and
+ * data that is still queued. */
+#define _CCOL_POLL_EOF (1u << 28)
+#define _CCOL_POLL_EOF_ERR (1u << 27)
+#define _CCOL_POLL_EOF_DATA (1u << 26)
 
 #define CCOL_POLL_CTL_ADD 1
 #define CCOL_POLL_CTL_DEL 2
@@ -278,24 +300,9 @@ static inline int ccol_poll_wait(int kq, ccol_poll_event *evs, int max,
       if (!(k.flags & EV_EOF)) {
         bits |= CCOL_POLL_IN;
       } else {
-        /* EV_EOF says only that no more data comes; epoll says more, and
-         * the event loop routes on it. A socket at EOF is readable with
-         * EPOLLRDHUP, and EPOLLHUP joins them when both directions are down
-         * (a closed Unix socket, not a TCP close or half-close), which
-         * poll(2) reports as POLLHUP. A pipe or FIFO whose writer is gone is
-         * EPOLLHUP alone, with EPOLLIN only while data is still queued. */
-        struct stat est;
-        bool is_sock = fstat((int)k.ident, &est) == 0 && S_ISSOCK(est.st_mode);
-        if (is_sock) {
-          bits |= CCOL_POLL_IN | CCOL_POLL_RDHUP;
-          if (k.fflags != 0) bits |= CCOL_POLL_ERR;
-          struct pollfd pfd = {.fd = (int)k.ident, .events = 0};
-          if (poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLHUP))
-            bits |= CCOL_POLL_HUP;
-        } else {
-          bits |= CCOL_POLL_HUP;
-          if (k.data > 0) bits |= CCOL_POLL_IN;
-        }
+        bits |= _CCOL_POLL_EOF;
+        if (k.fflags != 0) bits |= _CCOL_POLL_EOF_ERR;
+        if (k.data > 0) bits |= _CCOL_POLL_EOF_DATA;
       }
     } else if (k.filter == EVFILT_WRITE) {
       bits |= CCOL_POLL_OUT;
@@ -306,6 +313,34 @@ static inline int ccol_poll_wait(int kq, ccol_poll_event *evs, int max,
     evs[i].data.u64 = (uint64_t)(uintptr_t)k.udata;
   }
   return n;
+}
+
+/* Turns the marks of an EOF of the read filter into the bits that epoll gives
+ * for the fd. The caller must prove that fd is still open and is still the fd
+ * of the registration; see the rules at the top of this file. An event
+ * without the marks stays as it is. */
+static inline void ccol_poll_refine(ccol_poll_event *ev, int fd) {
+  uint32_t m = ev->events;
+  if (!(m & _CCOL_POLL_EOF)) return;
+  uint32_t bits =
+      m & ~(_CCOL_POLL_EOF | _CCOL_POLL_EOF_ERR | _CCOL_POLL_EOF_DATA);
+  /* EV_EOF says only that no more data comes; epoll says more, and the event
+   * loop routes on it. A socket at EOF is readable with EPOLLRDHUP, and
+   * EPOLLHUP joins them when both directions are down (a closed Unix socket,
+   * not a TCP close or half-close), which poll(2) reports as POLLHUP. A pipe
+   * or FIFO whose writer is gone is EPOLLHUP alone, with EPOLLIN only while
+   * data is still queued. */
+  struct stat est;
+  if (fstat(fd, &est) == 0 && S_ISSOCK(est.st_mode)) {
+    bits |= CCOL_POLL_IN | CCOL_POLL_RDHUP;
+    if (m & _CCOL_POLL_EOF_ERR) bits |= CCOL_POLL_ERR;
+    struct pollfd pfd = {.fd = fd, .events = 0};
+    if (poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLHUP)) bits |= CCOL_POLL_HUP;
+  } else {
+    bits |= CCOL_POLL_HUP;
+    if (m & _CCOL_POLL_EOF_DATA) bits |= CCOL_POLL_IN;
+  }
+  ev->events = bits;
 }
 
 #else

@@ -17649,9 +17649,12 @@ int open(const char *path, int flags, ...) {
   return ((int (*)(const char *, int, ...))fn)(path, flags, mode);
 }
 
-/* With _FORTIFY_SOURCE, the open() of glibc under clang calls the checking
- * entry point __open64_2 (or __open_2 without 64-bit offsets) for a call
- * with no mode argument, so the watch interposes both of those too. */
+/* With _FORTIFY_SOURCE, the open() of glibc calls the checking entry point
+ * __open64_2 (or __open_2 without 64-bit offsets) for a call with no mode
+ * argument, so the watch interposes both of those too. Each one carries its
+ * symbol name in an asm label. With 64-bit offsets the fortify header of
+ * glibc gives the C name __open_2 the symbol __open64_2, so a definition
+ * under that C name defines __open64_2 a second time. */
 static int open_watch_checked(const char *name, const char *path, int flags) {
   open_watch_note(path, (flags & O_CLOEXEC) != 0);
   int (*fn)(const char *, int) =
@@ -17663,11 +17666,13 @@ static int open_watch_checked(const char *name, const char *path, int flags) {
   return fn(path, flags);
 }
 
-int __open_2(const char *path, int flags) {
+int test_open_watch_open_2(const char *path, int flags) __asm__("__open_2");
+int test_open_watch_open_2(const char *path, int flags) {
   return open_watch_checked("__open_2", path, flags);
 }
 
-int __open64_2(const char *path, int flags) {
+int test_open_watch_open64_2(const char *path, int flags) __asm__("__open64_2");
+int test_open_watch_open64_2(const char *path, int flags) {
   return open_watch_checked("__open64_2", path, flags);
 }
 #endif /* TEST_OPEN_WATCH */

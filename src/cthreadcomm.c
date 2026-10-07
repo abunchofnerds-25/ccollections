@@ -2892,6 +2892,8 @@ static _sel_epoll_outcome _sel_wait_epoll(
 
   if (ev.data.u64 & _SEL_FD_TAG) {
     int fd = (int)(ev.data.u64 & ~_SEL_FD_TAG);
+    /* The fd belongs to the caller for the whole call, so it is open. */
+    ccol_poll_refine(&ev, fd);
     deregister_all_sel_waiters(n, nodes, selectables);
 
     /* One combined registration can stand for several selectables that share
@@ -7104,6 +7106,11 @@ static void _ccol_event_loop_handle_event(struct ccol_event_loop_s *loop,
    * with no lock held yet. */
   ccol_event_loop_stripe_t *stripe = &loop->stripes[entry->stripe_idx];
   ccol_mutex_lock(stripe->lock);
+  /* Under the stripe lock an fd entry that is not removed has an open fd:
+   * the removal takes this lock, and the fd is closed only after it. That
+   * makes it safe to ask the fd what it is; see ccol_poll_refine. */
+  if (entry->is_fd && !atomic_load(&entry->removed))
+    ccol_poll_refine(ev, entry->fd);
 
   if (entry->is_fd) {
     bool is_err = (ev->events & (CCOL_POLL_ERR | CCOL_POLL_HUP)) != 0;
@@ -7309,6 +7316,11 @@ static bool _ccol_event_loop_poller_collect(struct ccol_event_loop_s *loop,
 
   ccol_event_loop_stripe_t *stripe = &loop->stripes[entry->stripe_idx];
   ccol_mutex_lock(stripe->lock);
+  /* Under the stripe lock an fd entry that is not removed has an open fd:
+   * the removal takes this lock, and the fd is closed only after it. That
+   * makes it safe to ask the fd what it is; see ccol_poll_refine. */
+  if (entry->is_fd && !atomic_load(&entry->removed))
+    ccol_poll_refine(ev, entry->fd);
 
   /* A job for this entry is already in the queue or already runs. The code
    * therefore drops this event completely. It does not submit a second,

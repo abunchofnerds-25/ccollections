@@ -2188,10 +2188,17 @@ TEST(shutdown_immediate, discarded_on_complete_can_call_back_into_its_pool) {
  * itself. Were outer forgotten while inner discards, the shutdown of outer
  * from there would wait for ever on a shutdown that this very thread owns and
  * has not finished; the callback therefore asks the self-call check first and
- * calls into outer only when the check says yes. */
+ * calls into outer only when the check says yes.
+ *
+ * A shutdown runs the discard callbacks before it joins the workers. Each
+ * callback therefore opens the gate of the blocked worker of its own pool,
+ * so the queued task of a pool cannot run before the shutdown discards it,
+ * however slow the host is. */
 typedef struct {
   ctpool outer;
   ctpool inner;
+  atomic_int *gate_outer;
+  atomic_int *gate_inner;
   struct cthread_pool *outer_raw;
   struct cthread_pool *inner_raw;
   atomic_int outer_calls;
@@ -2218,6 +2225,7 @@ static void nested_discard_inner_on_complete(void *arg, bool ran) {
     }
   }
   atomic_fetch_add(&c->inner_calls, 1);
+  atomic_store(c->gate_inner, 1);
 }
 
 static void nested_discard_outer_on_complete(void *arg, bool ran) {
@@ -2229,6 +2237,17 @@ static void nested_discard_outer_on_complete(void *arg, bool ran) {
                  _ctpool_is_self_call_for_tests(c->outer_raw) ? 1 : 0);
   }
   atomic_fetch_add(&c->outer_calls, 1);
+  atomic_store(c->gate_outer, 1);
+}
+
+/* A bound on a test whose callbacks open their own gates: when a callback
+ * does not run, this thread opens the gate after 10 s, so the test fails
+ * instead of hanging. It returns as soon as the gate is open. */
+static void *release_gate_late_fn(void *arg) {
+  atomic_int *gate = (atomic_int *)arg;
+  for (int i = 0; i < 10000 && !atomic_load(gate); i++) sleep_ms(1);
+  atomic_store(gate, 1);
+  return NULL;
 }
 
 TEST(shutdown_immediate, nested_discards_keep_the_outer_pool_a_self_call) {
@@ -2241,6 +2260,8 @@ TEST(shutdown_immediate, nested_discards_keep_the_outer_pool_a_self_call) {
   ctpool_construct(inner, 1, 0);
   nested_discard_ctx_t nc = {.outer = outer,
                              .inner = inner,
+                             .gate_outer = &gate_outer,
+                             .gate_inner = &gate_inner,
                              .outer_raw = _ctpool_resolve_for_tests(outer),
                              .inner_raw = _ctpool_resolve_for_tests(inner)};
   atomic_init(&nc.outer_calls, 0);
@@ -2264,9 +2285,9 @@ TEST(shutdown_immediate, nested_discards_keep_the_outer_pool_a_self_call) {
       ctpool_submit(inner, noop_fn, &nc, nested_discard_inner_on_complete);
 
   pthread_t rel_outer, rel_inner;
-  int c1 = pthread_create(&rel_outer, NULL, release_gate_fn, &gate_outer);
+  int c1 = pthread_create(&rel_outer, NULL, release_gate_late_fn, &gate_outer);
   if (c1 != 0) atomic_store(&gate_outer, 1);
-  int c2 = pthread_create(&rel_inner, NULL, release_gate_fn, &gate_inner);
+  int c2 = pthread_create(&rel_inner, NULL, release_gate_late_fn, &gate_inner);
   if (c2 != 0) atomic_store(&gate_inner, 1);
   ctpool_shutdown_immediate(outer);
   if (c1 == 0) pthread_join(rel_outer, NULL);

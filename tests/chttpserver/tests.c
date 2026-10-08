@@ -17228,6 +17228,26 @@ static size_t _rx_idle(chttpsvr h, void *arg) {
 
 #define _RX_IDLE_N 300
 #define _RX_PARKED_N 3
+#define _RX_BATCH 16
+
+/* Opens a POST of /len that declares 1000 bytes and sends its head and the
+ * first 10 bytes of the body in one send(2), so they arrive together and
+ * the server parks the body with nothing more on the way. Bytes that arrived
+ * after the park would wake the connection, and a resume that ran while the
+ * test ticks the sweep would take it off the parked list for that tick. */
+static int _rx_open_parked_post(int port) {
+  int fd = _sc_connect(port);
+  if (fd < 0) return -1;
+  char req[256];
+  int n = snprintf(req, sizeof(req),
+                   "POST /len HTTP/1.1\r\nHost: h\r\nContent-Length: "
+                   "1000\r\n\r\n0123456789");
+  if (n <= 0 || (size_t)n >= sizeof(req) || !_sc_send(fd, req, (size_t)n)) {
+    close(fd);
+    return -1;
+  }
+  return fd;
+}
 
 TEST(sweep, one_tick_closes_every_expired_idle_and_parked_connection) {
   /* 300 connections sit idle past the idle timeout and three bodies sit
@@ -17235,12 +17255,14 @@ TEST(sweep, one_tick_closes_every_expired_idle_and_parked_connection) {
      idle one and answer every parked one with 408. Non-vacuous: a sweep
      that takes a fixed batch per tick closes 64 of the idle ones and never
      reaches the parked list on that tick; the background sweep adds at most
-     one more batch in the window of this test. Both limits are 30 s, so no
-     connection expires while a slow host opens the others, and the tick of
-     the test runs 60 s ahead on both clocks. */
+     one more batch in the window of this test. Both limits are 30 s and the
+     rate floor is off, so no connection expires while a slow host opens the
+     others (the floor would close the parked bodies 5 s after they stop),
+     and the tick of the test runs 60 s ahead on both clocks. */
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.idle_timeout_us = 30000000;
   cfg.read_timeout_us = 30000000;
+  cfg.min_transfer_rate_bps = CHTTPSVR_NO_RATE_FLOOR;
   chttpsvr srv = _sc_server(_LC_PORT + 15, &cfg);
   int idle_fds[_RX_IDLE_N];
   int parked_fds[_RX_PARKED_N];
@@ -17248,17 +17270,21 @@ TEST(sweep, one_tick_closes_every_expired_idle_and_parked_connection) {
   for (int i = 0; i < _RX_PARKED_N; i++) parked_fds[i] = -1;
   bool opened = srv != CHTTPSVR_INVALID;
   for (int i = 0; opened && i < _RX_PARKED_N; i++) {
-    parked_fds[i] =
-        _sc_open_partial_post(_LC_PORT + 15, "/len", 1000, 10, NULL);
+    parked_fds[i] = _rx_open_parked_post(_LC_PORT + 15);
     opened = parked_fds[i] >= 0;
   }
   opened =
       opened && _sc_wait_for(srv, _sc_parked_bodies, NULL, _RX_PARKED_N, 10000);
+  /* The connections open in batches, and each batch waits until the server
+     holds it as idle. A burst of 300 overflows the accept queue of a server
+     that accepts slowly (under valgrind), and FreeBSD then drops or refuses
+     the connections that do not fit. */
   for (int i = 0; opened && i < _RX_IDLE_N; i++) {
     idle_fds[i] = _sc_connect(_LC_PORT + 15);
     opened = idle_fds[i] >= 0;
+    if (opened && ((i + 1) % _RX_BATCH == 0 || i + 1 == _RX_IDLE_N))
+      opened = _sc_wait_for(srv, _rx_idle, NULL, (size_t)(i + 1), 20000);
   }
-  opened = opened && _sc_wait_for(srv, _rx_idle, NULL, _RX_IDLE_N, 20000);
   size_t idle_after = SIZE_MAX, parked_after = SIZE_MAX;
   if (opened) {
     _chttpsvr_advance_slow_clock_for_tests(60000); /* past the body gap */

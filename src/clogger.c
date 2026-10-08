@@ -39,6 +39,7 @@ SOFTWARE.
 #include <internal/cpintable.h>
 #include <limits.h>
 #include <poll.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdatomic.h>
@@ -6610,6 +6611,26 @@ static _Atomic unsigned int _clog_test_writer_job_delay_us = 0;
 void clog_test_set_writer_job_delay_us(unsigned int delay_us) {
   atomic_store(&_clog_test_writer_job_delay_us, delay_us);
 }
+
+/* Holds the writer thread for delay_us. A test that compares a short hold
+ * with a bound needs the hold to end on time, and a sleep of a busy runner
+ * can end a hundred milliseconds or more late, so a hold of up to 50 ms
+ * waits on the clock. A longer one stands for a slow output, where lateness
+ * does no harm, and sleeps. */
+static void _clog_test_writer_job_delay(unsigned int delay_us) {
+  if (delay_us > 50000U) {
+    usleep(delay_us);
+    return;
+  }
+  struct timespec start, now;
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  do {
+    sched_yield();
+    clock_gettime(CLOCK_MONOTONIC, &now);
+  } while ((long long)(now.tv_sec - start.tv_sec) * 1000000LL +
+               (now.tv_nsec - start.tv_nsec) / 1000L <
+           (long long)delay_us);
+}
 #endif
 
 /* Waits until no CLOG_FATAL call waits for the mutex of sh. The fatal call
@@ -6754,7 +6775,7 @@ static void *_clog_writer_thread_main(void *arg) {
 #ifdef RUNNING_UNIT_TESTS
     {
       unsigned int delay = atomic_load(&_clog_test_writer_job_delay_us);
-      if (delay) usleep(delay);
+      if (delay) _clog_test_writer_job_delay(delay);
     }
 #endif
     if (sh->fd >= 0) {

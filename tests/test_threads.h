@@ -23,10 +23,11 @@ SOFTWARE.
 */
 
 /* The number of threads of the test process, on every supported system.
- * Linux lists them in /proc/self/task, and FreeBSD reports one kern.proc
- * record for each thread. Under qemu-user the Linux count also holds the
- * threads of the emulator itself, so a test compares counts with a baseline
- * that it took, and never with a constant. */
+ * Linux lists them in /proc/self/task, FreeBSD reports one kern.proc
+ * record for each thread, and macOS lists them with task_threads(). Under
+ * qemu-user the Linux count also holds the threads of the emulator itself, so a
+ * test compares counts with a baseline that it took, and never with a constant.
+ */
 
 #ifndef CCOL_TESTS_TEST_THREADS_H
 #define CCOL_TESTS_TEST_THREADS_H
@@ -38,6 +39,9 @@ SOFTWARE.
 #include <sys/sysctl.h>
 #include <sys/types.h>
 #include <sys/user.h>
+#endif
+#ifdef __APPLE__
+#include <mach/mach.h>
 #endif
 
 /* The thread count, or -1 when the system does not report it. */
@@ -56,6 +60,14 @@ static inline int test_thread_count(void) {
     n = (int)(len / sizeof(struct kinfo_proc));
   free(kp);
   return n;
+#elif defined(__APPLE__)
+  thread_act_array_t list;
+  mach_msg_type_number_t count = 0;
+  if (task_threads(mach_task_self(), &list, &count) != KERN_SUCCESS) return -1;
+  for (mach_msg_type_number_t i = 0; i < count; i++)
+    mach_port_deallocate(mach_task_self(), list[i]);
+  vm_deallocate(mach_task_self(), (vm_address_t)list, count * sizeof(list[0]));
+  return (int)count;
 #else
   DIR *d = opendir("/proc/self/task");
   if (!d) return -1;

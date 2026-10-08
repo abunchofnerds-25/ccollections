@@ -36,7 +36,9 @@ SOFTWARE.
  * runs on a thread of the engine; every such thread inherits the blocked
  * mask of the thread that started the engine, and the test reads the pending
  * set of every thread of the process: from /proc on Linux, and from the
- * kern.proc sysctl, one record for each thread, on FreeBSD.
+ * kern.proc sysctl, one record for each thread, on FreeBSD. macOS raises
+ * every SIGPIPE on the process, so there the pending set of the process is
+ * the whole answer.
  */
 
 #include <chttpclient.h>
@@ -63,6 +65,7 @@ SOFTWARE.
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #include <tau/tau.h>
 #include <test_signals.h>
+#include <test_threads.h>
 #pragma GCC diagnostic pop
 
 TAU_MAIN()
@@ -124,6 +127,17 @@ static bool _any_thread_has_sigpipe_pending(int *threads_seen) {
   if (sigpending(&pending) == 0 && sigismember(&pending, SIGPIPE) == 1)
     found = true;
   return found;
+}
+#elif defined(__APPLE__)
+/* macOS raises every SIGPIPE on the process and never on one thread, so the
+ * pending set that sigpending() gives while the signal is blocked holds it,
+ * whichever thread wrote. The thread count stands for the threads read. */
+static bool _any_thread_has_sigpipe_pending(int *threads_seen) {
+  int n = test_thread_count();
+  *threads_seen = n > 0 ? n : 0;
+  sigset_t pending;
+  sigemptyset(&pending);
+  return sigpending(&pending) == 0 && sigismember(&pending, SIGPIPE) == 1;
 }
 #else
 static bool _any_thread_has_sigpipe_pending(int *threads_seen) {

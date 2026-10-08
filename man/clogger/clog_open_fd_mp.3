@@ -166,9 +166,11 @@ more, or threads that keep logging, delay the exit by that much at
 most.  The budget bounds every lock that the drain takes too.  A
 logger whose lock another thread holds past the budget is skipped,
 and the records that it still holds can be lost.  Every write of the
-drain is bounded as well.  A socket is written with MSG_DONTWAIT, and
-a pipe or a FIFO is polled for room before each write of at most
-PIPE_BUF bytes.  A terminal is written through a second, non-blocking
+drain is bounded as well.  A socket is written with MSG_DONTWAIT.
+On macOS, whose send(2) ignores that flag, a stream socket in
+blocking mode is polled for room before each write of at most
+SO_SNDLOWAT bytes.  A pipe or a FIFO is polled for room before each
+write of at most PIPE_BUF bytes.  A terminal is written through a second, non-blocking
 open of the same device, because room on a terminal does not mean room
 for a whole write; the descriptor of the logger keeps its own mode.  A
 descriptor in blocking mode whose reader stopped reading therefore

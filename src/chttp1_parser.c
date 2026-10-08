@@ -2118,9 +2118,9 @@ ssize_t chttp1_stream_write(chttp1_stream_t *stream, const char *buf,
      * that the socket has some room, not room for len bytes, so a blocking
      * send(2) on a blocking fd would wait for the rest past the deadline.
      * The attempt therefore never blocks, and a short count goes back to the
-     * caller. */
-    ssize_t written =
-        send(stream->fd, buf, len, CCOL_MSG_NOSIGNAL | MSG_DONTWAIT);
+     * caller. macOS ignores MSG_DONTWAIT on a send, and ccol_send_nb() limits
+     * the send there instead (see csock.h). */
+    ssize_t written = ccol_send_nb(stream->fd, buf, len, CCOL_MSG_NOSIGNAL);
     if (written >= 0) return written;
     /* A signal that interrupts send(2) before it moved a byte is no error;
      * the loop waits again and retries, as chttp1_stream_writev2() does. */
@@ -2177,7 +2177,8 @@ ssize_t chttp1_stream_writev2(chttp1_stream_t *stream, const char *a,
    * writev(2), MSG_NOSIGNAL makes a write to a peer that has gone report
    * EPIPE instead of raising SIGPIPE, and MSG_DONTWAIT keeps the attempt
    * from blocking on a blocking fd, for the reason that chttp1_stream_write()
-   * gives. */
+   * gives. macOS ignores MSG_DONTWAIT on a send, so there ccol_send_room()
+   * limits the bytes that one attempt gives (see csock.h). */
   struct msghdr msg = {.msg_iov = iov, .msg_iovlen = (size_t)cnt};
   bool has_deadline = timeout_ms >= 0;
   struct timespec deadline;
@@ -2197,8 +2198,27 @@ ssize_t chttp1_stream_writev2(chttp1_stream_t *stream, const char *a,
         !wait_for_ready(stream, POLLOUT, this_timeout))
       return -1;
     first_attempt = false;
+#if defined(_CCOL_EMULATE_DARWIN_SOCK)
+    struct iovec part[2];
+    struct msghdr pmsg = msg;
+    size_t room = ccol_send_room(stream->fd, alen + blen);
+    if (room == 0) continue; /* no room now: wait again */
+    if (room < alen + blen) {
+      int n = 0;
+      for (int i = 0; i < cnt && room > 0; i++) {
+        part[n] = iov[i];
+        if (part[n].iov_len > room) part[n].iov_len = room;
+        room -= part[n].iov_len;
+        n++;
+      }
+      pmsg.msg_iov = part;
+      pmsg.msg_iovlen = n;
+    }
+    ssize_t written = sendmsg(stream->fd, &pmsg, CCOL_MSG_NOSIGNAL);
+#else
     ssize_t written =
         sendmsg(stream->fd, &msg, CCOL_MSG_NOSIGNAL | MSG_DONTWAIT);
+#endif
     if (written >= 0) return written;
     if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR) continue;
     stream->last_errno = errno;

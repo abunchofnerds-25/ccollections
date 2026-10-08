@@ -58,6 +58,7 @@ SOFTWARE.
 #include <pthread_np.h>
 #endif
 #include <internal/crandom.h>
+#include <internal/csock.h>
 #include <internal/ctlsmodel.h>
 #include <time.h>
 #include <unistd.h>
@@ -2713,9 +2714,10 @@ static int _clog_ms_until(const struct timespec *deadline) {
  * has left blocks until a reader makes room, however long that takes. So no
  * call here can block past the deadline:
  *
- *   - A socket is written with MSG_DONTWAIT, which never blocks whatever
- *     the mode of the descriptor, and a poll with the time that is left
- *     waits for room.
+ *   - A socket is written with ccol_send_nb(), which never blocks whatever
+ *     the mode of the descriptor (MSG_DONTWAIT, or on macOS a send limited
+ *     to the room that poll(2) reports), and a poll with the time that is
+ *     left waits for room.
  *   - Every other descriptor that poll(2) reports on, a pipe or a FIFO
  *     first of all, is polled for POLLOUT with the time that is left before
  *     each write, and each write gives at most PIPE_BUF bytes. A pipe that
@@ -2828,7 +2830,7 @@ static __attribute__((noinline, cold)) size_t _write_all_bounded(
     ssize_t w;
 #if CLOG_HAS_MSG_NOSIGNAL
     if (kind == CLOG_SINK_SOCKET) {
-      w = send(fd, data, len, MSG_NOSIGNAL | MSG_DONTWAIT);
+      w = ccol_send_nb(fd, data, len, MSG_NOSIGNAL);
     } else
 #endif
     {

@@ -1002,14 +1002,22 @@ ssize_t read(int fd, void *buf, size_t len) {
 #endif
 
 TEST(chttp1_stream, a_write_interrupted_by_a_signal_is_retried) {
-  /* Non-vacuous: without the EINTR retry, the write returns -1 with
-   * last_errno EINTR and the peer receives nothing. */
+  /* Non-vacuous: without the EINTR retry, the first write returns -1 with
+   * last_errno EINTR and the peer receives nothing. A write can give a short
+   * count (the macOS path of csock.h gives at most SO_SNDLOWAT bytes to a
+   * blocking socket, and Linux reports that value as 1), so the test writes
+   * until the 5 bytes are out. */
   int fds[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
   chttp1_stream_t s;
   bool prepared = chttp1_stream_prepare(&s, fds[0], NULL, 0, NULL);
   atomic_store(&_p1_send_eintr_armed, 1);
-  ssize_t w = prepared ? chttp1_stream_write(&s, "hello", 5, 1000) : -2;
+  static const char hello[] = "hello";
+  ssize_t w = prepared ? 0 : -2;
+  while (prepared && w >= 0 && w < 5) {
+    ssize_t n = chttp1_stream_write(&s, hello + w, 5 - (size_t)w, 1000);
+    w = n < 0 ? -1 : w + n;
+  }
   int still_armed = atomic_exchange(&_p1_send_eintr_armed, 0);
   char got[8] = {0};
   ssize_t r = w == 5 ? __real_read(fds[1], got, sizeof(got)) : -1;

@@ -526,7 +526,9 @@ typedef struct ccol_mp_magazine {
  * armed exists for the following reason. A pthread key destructor runs only
  * for a thread whose value for that key is non-NULL. All the real state stays
  * here, in __thread storage that the key never sees. Without a value on the
- * key, the destructor never runs and every magazine leaks. */
+ * key, the destructor never runs and every magazine leaks. Under
+ * _CCOL_EMULATE_DARWIN_TLS the state itself is the value of the key, and
+ * armed is not used. */
 typedef struct {
   ccol_mp_magazine *mags;
   /* A magazine names its own pool. The reap below clears every slot that
@@ -548,7 +550,9 @@ typedef struct {
  * into a process which already filled that block fails to load. Build with
  * -DCCOL_MEMPOOL_DYNAMIC_TLS=1 to select the general model. That is for a
  * caller who needs the dlopen() case to work. */
-#if defined(CCOL_MEMPOOL_DYNAMIC_TLS) && CCOL_MEMPOOL_DYNAMIC_TLS
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+/* No __thread object: the state is the value of the key; see _mp_tls_cur(). */
+#elif defined(CCOL_MEMPOOL_DYNAMIC_TLS) && CCOL_MEMPOOL_DYNAMIC_TLS
 static __thread mp_tls_state_t _mp_tls;
 #else
 static __thread mp_tls_state_t _mp_tls
@@ -568,7 +572,23 @@ static ccol_mutex_t _mp_registry_lock;
 static atomic_bool _mp_cache_live;
 static ccol_once_flag_t _mp_cache_once = CCOL_ONCE_INIT;
 
-static void _mp_tls_drain(void *unused);
+static void _mp_tls_drain(void *arg);
+
+/* The thread cache state of the calling thread. Under
+ * _CCOL_EMULATE_DARWIN_TLS (see ctlsmodel.h) it lives in a heap block whose
+ * pointer is the value of the key, and this gives NULL for a thread that has
+ * none yet or when the key does not exist. Everywhere else it is the __thread
+ * object, so the NULL tests of the callers fold away. */
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+static inline __attribute__((always_inline)) mp_tls_state_t *_mp_tls_cur(void) {
+  if (!atomic_load_explicit(&_mp_cache_live, memory_order_acquire)) return NULL;
+  return (mp_tls_state_t *)ccol_thread_ls_get(_mp_tls_key);
+}
+#else
+static inline __attribute__((always_inline)) mp_tls_state_t *_mp_tls_cur(void) {
+  return &_mp_tls;
+}
+#endif
 
 static void _mp_cache_init(void) {
   if (ccol_mutex_init(_mp_registry_lock) != 0) return;
@@ -789,7 +809,8 @@ mempool_tls_slot(const ccol_mempool *mp) {
 
 static inline __attribute__((always_inline)) ccol_mp_magazine *
 mempool_tls_magazine_hit(ccol_mempool *mp) {
-  mp_tls_state_t *tls = &_mp_tls;
+  mp_tls_state_t *tls = _mp_tls_cur();
+  if (!tls) return NULL;
   size_t slot = mempool_tls_slot(mp);
   ccol_mp_magazine *mag = tls->cache[slot];
   if (__builtin_expect(
@@ -804,7 +825,8 @@ mempool_tls_magazine_hit(ccol_mempool *mp) {
  * thread for mp. It returns NULL when this thread holds none. It takes no
  * lock. */
 static ccol_mp_magazine *mempool_tls_magazine_find(ccol_mempool *mp) {
-  mp_tls_state_t *tls = &_mp_tls;
+  mp_tls_state_t *tls = _mp_tls_cur();
+  if (!tls) return NULL;
   ccol_mp_magazine *mag;
 
   ccol_mp_magazine **link = &tls->mags;
@@ -843,7 +865,7 @@ static ccol_mp_magazine *mempool_tls_magazine_find(ccol_mempool *mp) {
  * with no cache does, and allocates nothing. */
 static __attribute__((noinline)) ccol_mp_magazine *mempool_tls_magazine_create(
     ccol_mempool *mp) {
-  mp_tls_state_t *tls = &_mp_tls;
+  mp_tls_state_t *tls = _mp_tls_cur();
 
   /* A thread arms the key before it builds its first magazine, and it builds
    * none while the key carries no value. A magazine that the thread held
@@ -855,6 +877,24 @@ static __attribute__((noinline)) ccol_mp_magazine *mempool_tls_magazine_create(
    * arming against the deletion of the key in _mp_cache_fini. A value set on
    * a deleted key can land on a key that another component created since,
    * and the destructor of that component then receives it. */
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+  /* Here the state itself is the value of the key, so a thread with no state
+   * makes one and sets it under the registry lock. */
+  if (!tls) {
+    tls = (mp_tls_state_t *)calloc(1, sizeof(*tls));
+    if (!tls) return NULL;
+    bool set = false;
+    ccol_mutex_lock(_mp_registry_lock);
+    if (atomic_load_explicit(&_mp_cache_live, memory_order_relaxed) &&
+        ccol_thread_ls_set(_mp_tls_key, tls) == 0)
+      set = true;
+    ccol_mutex_unlock(_mp_registry_lock);
+    if (!set) {
+      free(tls);
+      return NULL;
+    }
+  }
+#else
   if (!tls->armed) {
     ccol_mutex_lock(_mp_registry_lock);
     if (atomic_load_explicit(&_mp_cache_live, memory_order_relaxed) &&
@@ -863,6 +903,7 @@ static __attribute__((noinline)) ccol_mp_magazine *mempool_tls_magazine_create(
     ccol_mutex_unlock(_mp_registry_lock);
     if (!tls->armed) return NULL;
   }
+#endif
 
   /* This allocation runs outside the pool lock because nothing here needs the
    * lock for it, and a thread-cache miss should not lengthen the critical
@@ -925,9 +966,18 @@ static void mempool_magazine_unlink_locked(ccol_mempool *mp,
  * second step matters, because a magazine is reachable from thread-local
  * storage. Without the free, any leak checker that treats still-reachable
  * memory as an error reports it. */
-static void _mp_tls_drain(void *unused) {
+static void _mp_tls_drain(void *arg) {
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+  /* The block that arg names. The C library has already cleared the value of
+   * the key, so a magazine that a nested free builds during this drain goes
+   * into a new block, which sets the value again and gets a drain of its own
+   * in the next round of destructors. */
+  mp_tls_state_t *tls = (mp_tls_state_t *)arg;
+  if (!tls) return;
+#else
   mp_tls_state_t *tls = &_mp_tls;
-  (void)unused;
+  (void)arg;
+#endif
   /* The free of a magazine goes to the allocator of its pool, and that
    * allocator can itself be built on another pool with a thread cache. Such a
    * free runs on this thread while the drain is under way, finds no magazine
@@ -959,7 +1009,11 @@ static void _mp_tls_drain(void *unused) {
       mag = next;
     }
   }
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+  free(tls);
+#else
   tls->armed = false;
+#endif
 }
 
 /* This runs when the module unloads, on a dlclose() and at process exit. It
@@ -979,7 +1033,15 @@ static void _mp_tls_drain(void *unused) {
  * returns at once. */
 __attribute__((destructor)) static void _mp_cache_fini(void) {
   if (!atomic_load(&_mp_cache_live)) return;
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+  mp_tls_state_t *tls = _mp_tls_cur();
+  if (tls) {
+    (void)ccol_thread_ls_set(_mp_tls_key, NULL);
+    _mp_tls_drain(tls);
+  }
+#else
   _mp_tls_drain(NULL);
+#endif
   ccol_mutex_lock(_mp_registry_lock);
   atomic_store(&_mp_cache_live, false);
   ccol_thread_ls_key_delete(_mp_tls_key);
@@ -1238,7 +1300,9 @@ size_t _ccol_mempool_live_magazines_for_tests(ccol_mempool *mp) {
  * so no leak checker reports them while the memory use climbs. */
 size_t _ccol_mempool_thread_magazines_for_tests(void) {
   size_t n = 0;
-  for (ccol_mp_magazine *mag = _mp_tls.mags; mag; mag = mag->next_in_thread)
+  mp_tls_state_t *tls = _mp_tls_cur();
+  for (ccol_mp_magazine *mag = tls ? tls->mags : NULL; mag;
+       mag = mag->next_in_thread)
     n++;
   return n;
 }

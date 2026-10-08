@@ -31,6 +31,7 @@ SOFTWARE.
 #include <internal/cnumlocale.h>
 #include <internal/cprocsintern.h>
 #include <internal/cstrutil.h>
+#include <internal/ctlsmodel.h>
 #include <internal/cutf8.h>
 #include <stdarg.h>
 #include <stdatomic.h>
@@ -264,6 +265,18 @@ static inline const ccol_chmap_entry_ref *dict_first_entry(cyaml_node_t *n) {
  * nodes in its pool for the life of the process.
  */
 #define _CYAML_POOL_CAP 512U
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+/* The pool of one thread, and its error buffer. The pointer to this block is
+ * the value of the pool key, so _pool_drain receives it as its argument and
+ * reads no __thread variable; see ctlsmodel.h. A thread has a block from its
+ * first pooled node or its first stored error message, and a value on the
+ * key exactly while it has a block. */
+typedef struct {
+  cyaml_node_t *head;
+  unsigned sz;
+  char *err_buf;
+} _cyaml_tls_t;
+#else
 static __thread cyaml_node_t *_pool_head = NULL;
 static __thread unsigned _pool_sz = 0;
 /* True once this thread has set its value on the pool key. The value only
@@ -273,6 +286,7 @@ static __thread unsigned _pool_sz = 0;
  * lock once per parse on every thread, and that line can hold data that every
  * node allocation reads, such as the once flag of this subsystem. */
 static __thread bool _pool_key_armed = false;
+#endif /* _CCOL_EMULATE_DARWIN_TLS */
 #ifdef RUNNING_UNIT_TESTS
 /* How many times any thread took the pool key lock to arm the key. */
 atomic_ulong _cyaml_pool_key_lock_count_for_tests;
@@ -436,6 +450,38 @@ _CYAML_PARSE_HOT char *strdup_charged(ccol_memmgmt_procs_t *mp, const char *s) {
   return copy;
 }
 
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+/* The block of the calling thread, or NULL when the thread has none. */
+static _cyaml_tls_t *_cyaml_tls_peek(void) {
+  if (!atomic_load_explicit(&_pool_key_live, memory_order_acquire)) return NULL;
+  return (_cyaml_tls_t *)ccol_thread_ls_get(_pool_key);
+}
+
+/* The block of the calling thread. It makes the block, and sets it as the
+ * value of the pool key, when the thread has none. It gives NULL when the key
+ * does not exist or memory runs out. The caller must have run the once-guard
+ * of the key. */
+static _cyaml_tls_t *_cyaml_tls_get(void) {
+  _cyaml_tls_t *t = _cyaml_tls_peek();
+  if (t || !atomic_load(&_pool_key_live)) return t;
+  t = (_cyaml_tls_t *)calloc(1, sizeof(*t));
+  if (!t) return NULL;
+  bool set = false;
+  ccol_rw_lock_rdlock(_pool_key_rwlock);
+#ifdef RUNNING_UNIT_TESTS
+  atomic_fetch_add_explicit(&_cyaml_pool_key_lock_count_for_tests, 1,
+                            memory_order_relaxed);
+#endif /* RUNNING_UNIT_TESTS */
+  if (atomic_load(&_pool_key_live) && ccol_thread_ls_set(_pool_key, t) == 0)
+    set = true;
+  ccol_rw_lock_unlock(_pool_key_rwlock);
+  if (!set) {
+    free(t);
+    return NULL;
+  }
+  return t;
+}
+#else
 /* Sets the value of the pool key for the calling thread, once per thread, so
  * that _pool_drain runs when the thread exits. The caller must have run the
  * once-guard of the key. It is always inlined, so node_free() keeps the
@@ -457,6 +503,7 @@ static inline __attribute__((always_inline)) void _pool_key_arm(void) {
 /* The per-thread message buffer of a failed parse; see cyaml_err_storage().
  * The drain at thread exit frees it with the node pool. */
 static __thread char *cyaml_err_buf;
+#endif /* _CCOL_EMULATE_DARWIN_TLS */
 
 /* Lazy key init. It runs exactly once, on the first node_alloc call.
  * _pool_key_live gates pthread_setspecific in node_free, and it also gates
@@ -487,7 +534,15 @@ static void _do_pool_key_init(void) {
  * See the doc comment of _pool_key_rwlock. */
 __attribute__((destructor)) static void _pool_key_fini(void) {
   if (!atomic_load(&_pool_key_live)) return;
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+  _cyaml_tls_t *t = _cyaml_tls_peek();
+  if (t) {
+    (void)ccol_thread_ls_set(_pool_key, NULL);
+    _pool_drain(t);
+  }
+#else
   _pool_drain(NULL);
+#endif
   ccol_rw_lock_wrlock(_pool_key_rwlock);
   atomic_store(&_pool_key_live, false);
   ccol_thread_ls_key_delete(_pool_key);
@@ -520,12 +575,22 @@ _CYAML_PARSE_HOT cyaml_node_t *node_alloc(cyaml_node_type_t type,
     node_bytes += _CYAML_BYTES_PER_DICT_BASE;
   if (!parse_bytes_charge(node_bytes)) return NULL;
   cyaml_node_t *n;
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+  _cyaml_tls_t *t = mp == NULL ? _cyaml_tls_peek() : NULL;
+  if (t && t->head) {
+    n = t->head;
+    cyaml_node_t *next;
+    memcpy(&next, (cyaml_node_t **)n, sizeof(next));
+    t->head = next;
+    t->sz--;
+#else
   if (mp == NULL && _pool_head) {
     n = _pool_head;
     cyaml_node_t *next;
     memcpy(&next, (cyaml_node_t **)n, sizeof(next));
     _pool_head = next;
     _pool_sz--;
+#endif
     memset(n, 0, sizeof(*n));
   } else {
     n = _ccol_mem_calloc(mp, 1, sizeof(*n));
@@ -569,6 +634,16 @@ _CYAML_PARSE_HOT void node_free(cyaml_node_t *n) {
    * argument stops to hold, and reports nothing, the moment that a new call
    * path reaches this point. */
   ccol_call_once(_pool_key_once, _do_pool_key_init);
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+  _cyaml_tls_t *t = _cyaml_tls_get();
+  if (!t || t->sz >= _CYAML_POOL_CAP) {
+    free(n);
+    return;
+  }
+  memcpy((cyaml_node_t **)n, &t->head, sizeof(t->head));
+  t->head = n;
+  t->sz++;
+#else
   if (_pool_sz >= _CYAML_POOL_CAP) {
     free(n);
     return;
@@ -597,6 +672,7 @@ _CYAML_PARSE_HOT void node_free(cyaml_node_t *n) {
   memcpy((cyaml_node_t **)n, &_pool_head, sizeof(_pool_head));
   _pool_head = n;
   _pool_sz++;
+#endif /* _CCOL_EMULATE_DARWIN_TLS */
 }
 
 /* Walk the free-list of the pool and call free() on every node. The pthread
@@ -612,6 +688,25 @@ _CYAML_PARSE_HOT void node_free(cyaml_node_t *n) {
  * runs one more destructor round that drains those nodes too. With the flag
  * left true, that free skips the set, and the nodes stay in a pool that no
  * destructor drains any more. */
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+/* Under _CCOL_EMULATE_DARWIN_TLS the drain frees the block that arg names.
+ * The C library has already cleared the value of the key, so a node that a
+ * destructor of another key frees later makes a new block and sets the value
+ * again, and the C library calls this destructor once more for it. */
+static void _pool_drain(void *arg) {
+  _cyaml_tls_t *t = (_cyaml_tls_t *)arg;
+  if (!t) return;
+  cyaml_node_t *n = t->head;
+  while (n) {
+    cyaml_node_t *next;
+    memcpy(&next, (cyaml_node_t **)n, sizeof(next));
+    free(n);
+    n = next;
+  }
+  free(t->err_buf);
+  free(t);
+}
+#else
 static void _pool_drain(void *arg) {
   (void)arg;
   cyaml_node_t *n = _pool_head;
@@ -627,6 +722,7 @@ static void _pool_drain(void *arg) {
   cyaml_err_buf = NULL;
   _pool_key_armed = false;
 }
+#endif /* _CCOL_EMULATE_DARWIN_TLS */
 
 #ifdef RUNNING_UNIT_TESTS
 /* Gives the size of the node-pool free-list of the thread that calls it.
@@ -634,7 +730,14 @@ static void _pool_drain(void *arg) {
  * first is how the pool evicts a node above its cap (_CYAML_POOL_CAP). The
  * second is how the pool keeps each thread separate. It is not part of the
  * public API. */
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+size_t cyaml_debug_pool_size(void) {
+  _cyaml_tls_t *t = _cyaml_tls_peek();
+  return t ? (size_t)t->sz : 0;
+}
+#else
 size_t cyaml_debug_pool_size(void) { return (size_t)_pool_sz; }
+#endif
 #endif
 
 /* The destructor callback for chmap_destroy_with_dtor(). The teardown of the
@@ -10462,6 +10565,13 @@ static const char cyaml_err_unstored[] =
 /* The message buffer of the calling thread, allocated on its first use, or
  * NULL when the allocation fails. */
 static char *cyaml_err_storage(void) {
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+  ccol_call_once(_pool_key_once, _do_pool_key_init);
+  _cyaml_tls_t *t = _cyaml_tls_get();
+  if (!t) return NULL;
+  if (!t->err_buf) t->err_buf = malloc(CYAML_ERR_BUF_LEN);
+  return t->err_buf;
+#else
   if (!cyaml_err_buf) {
     char *buf = malloc(CYAML_ERR_BUF_LEN);
     if (!buf) return NULL;
@@ -10470,6 +10580,7 @@ static char *cyaml_err_storage(void) {
     _pool_key_arm();
   }
   return cyaml_err_buf;
+#endif /* _CCOL_EMULATE_DARWIN_TLS */
 }
 
 #ifdef RUNNING_UNIT_TESTS

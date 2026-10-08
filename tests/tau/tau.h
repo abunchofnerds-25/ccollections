@@ -1534,6 +1534,12 @@ static void tauRunTests() {
       fprintf(tauTestContext.foutput, "<testcase name=\"%s\">",
               tauTestContext.tests[i].name);
 
+    // Empty the output buffers before the test body runs. A log that goes
+    // to a pipe then names the test that runs at the moment, also when the
+    // test hangs, and a child of fork() inherits no output to print again.
+    fflush(stdout);
+    if (tauTestContext.foutput) fflush(tauTestContext.foutput);
+
     // Start the timer
     const double start = tauClock();
 

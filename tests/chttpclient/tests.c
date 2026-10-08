@@ -14704,6 +14704,31 @@ static ccol_retval_t run_in_tier(int tier, chttpcli cli,
  * response. accepts counts the connections. redirs counts the /redir
  * requests, and redirs_with_credentials those of them that carried an
  * Authorization or a Cookie header. */
+/* Wakes a thread that is blocked in accept(2) on the listening socket lfd.
+ * Linux and FreeBSD wake it on shutdown(2). macOS refuses shutdown(2) on a
+ * listening socket with ENOTCONN and leaves the thread blocked, so a
+ * connection to the listener wakes it there. Each accept loop that a stop
+ * wakes in this way checks its running flag right after accept(2) returns,
+ * so the wake connection is never served. */
+static void test_wake_listener(int lfd) {
+  (void)shutdown(lfd, SHUT_RDWR);
+  struct sockaddr_storage ss;
+  socklen_t len = sizeof(ss);
+  if (getsockname(lfd, (struct sockaddr *)&ss, &len) != 0) return;
+  if (ss.ss_family == AF_INET) {
+    struct sockaddr_in *a = (struct sockaddr_in *)&ss;
+    if (a->sin_addr.s_addr == htonl(INADDR_ANY))
+      a->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  } else if (ss.ss_family == AF_INET6) {
+    struct sockaddr_in6 *a = (struct sockaddr_in6 *)&ss;
+    if (IN6_IS_ADDR_UNSPECIFIED(&a->sin6_addr)) a->sin6_addr = in6addr_loopback;
+  }
+  int c = socket(ss.ss_family, SOCK_STREAM, 0);
+  if (c < 0) return;
+  (void)connect(c, (struct sockaddr *)&ss, len);
+  close(c);
+}
+
 typedef struct {
   int fd;
   int port;
@@ -14725,6 +14750,10 @@ static void *hs_loop(void *arg) {
     if (c < 0) {
       if (!atomic_load(&s->running)) break;
       continue;
+    }
+    if (!atomic_load(&s->running)) { /* the wake of hs_stop() */
+      close(c);
+      break;
     }
     atomic_fetch_add(&s->accepts, 1);
     for (;;) {
@@ -14821,7 +14850,7 @@ static bool hs_start(hs_srv_t *s, const char *ip) {
 static void hs_stop(hs_srv_t *s) {
   if (s->fd < 0) return;
   atomic_store(&s->running, 0);
-  shutdown(s->fd, SHUT_RDWR);
+  test_wake_listener(s->fd);
   pthread_join(s->tid, NULL);
   close(s->fd);
   s->fd = -1;
@@ -16792,6 +16821,10 @@ static void *ers_accept_loop(void *arg) {
       if (!atomic_load(&s->running)) break;
       continue;
     }
+    if (!atomic_load(&s->running)) { /* the wake of ers_stop() */
+      close(fd);
+      break;
+    }
     atomic_fetch_add(&s->accepts, 1);
     ers_conn_t *c = (ers_conn_t *)malloc(sizeof(*c));
     pthread_mutex_lock(&s->mu);
@@ -16857,7 +16890,7 @@ static void ers_stop(ers_srv_t *s) {
   if (s->fd < 0) return;
   atomic_store(&s->release, 1);
   atomic_store(&s->running, 0);
-  shutdown(s->fd, SHUT_RDWR);
+  test_wake_listener(s->fd);
   pthread_join(s->tid, NULL);
   close(s->fd);
   s->fd = -1;
@@ -18043,7 +18076,7 @@ TEST(expect_continue, a_stale_sweep_snapshot_never_ends_a_later_window) {
   if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
   wait_for_async_engine_idle();
   if (srv_started) {
-    shutdown(s.lfd, SHUT_RDWR);
+    test_wake_listener(s.lfd);
     pthread_join(s.tid, NULL);
   }
   if (s.lfd >= 0) close(s.lfd);

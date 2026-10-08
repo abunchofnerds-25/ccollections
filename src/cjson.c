@@ -31,6 +31,7 @@ SOFTWARE.
 #include <internal/cnumlocale.h>
 #include <internal/cprocsintern.h>
 #include <internal/cstrutil.h>
+#include <internal/ctlsmodel.h>
 #include <internal/cutf8.h>
 #include <locale.h>
 #include <math.h>
@@ -561,6 +562,20 @@ done:
  * aliasing.
  */
 #define _NODE_POOL_CAP 512U
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+/* The pool of one thread, and its error buffer. The pointer to this block is
+ * the value of the pool key, so _node_pool_drain receives it as its argument
+ * and reads no __thread variable; see ctlsmodel.h. A thread has a block from
+ * its first pooled node or its first stored error message, and a value on the
+ * key exactly while it has a block. */
+typedef struct {
+  cjson_node_t *head;
+  unsigned sz;
+  char *err_buf;
+} _cjson_tls_t;
+static _cjson_tls_t *_cjson_tls_peek(void);
+static _cjson_tls_t *_cjson_tls_get(void);
+#else
 static __thread cjson_node_t *_node_pool_head = NULL;
 static __thread unsigned _node_pool_sz = 0;
 /* True once this thread has set its value on the pool key. The value only
@@ -570,6 +585,7 @@ static __thread unsigned _node_pool_sz = 0;
  * lock once per parse on every thread, and that line can hold data that every
  * node allocation reads, such as the once flag of this subsystem. */
 static __thread bool _pool_key_armed = false;
+#endif /* _CCOL_EMULATE_DARWIN_TLS */
 #ifdef RUNNING_UNIT_TESTS
 /* How many times any thread took the pool key lock to arm the key. */
 atomic_ulong _cjson_pool_key_lock_count_for_tests;
@@ -581,6 +597,15 @@ atomic_long _cjson_pool_population_for_tests;
 static cjson_node_t *node_alloc(cjson_node_type_t type,
                                 ccol_memmgmt_procs_t *mp) {
   cjson_node_t *n;
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+  _cjson_tls_t *t = mp == NULL ? _cjson_tls_peek() : NULL;
+  if (t && t->head) {
+    n = t->head;
+    cjson_node_t *next;
+    memcpy(&next, (cjson_node_t **)n, sizeof(next));
+    t->head = next;
+    t->sz--;
+#else
   if (mp == NULL && _node_pool_head) {
     /* The default allocator is in use and the pool has a node. Reuse that
      * node. */
@@ -589,6 +614,7 @@ static cjson_node_t *node_alloc(cjson_node_type_t type,
     memcpy(&next, (cjson_node_t **)n, sizeof(next));
     _node_pool_head = next;
     _node_pool_sz--;
+#endif
 #ifdef RUNNING_UNIT_TESTS
     atomic_fetch_sub_explicit(&_cjson_pool_population_for_tests, 1,
                               memory_order_relaxed);
@@ -673,13 +699,54 @@ static void _do_pool_key_init(void) {
  * _pool_key_rwlock is then not validly initialized. */
 __attribute__((destructor)) static void _pool_key_fini(void) {
   if (!atomic_load(&_pool_key_live)) return;
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+  _cjson_tls_t *t = _cjson_tls_peek();
+  if (t) {
+    (void)ccol_thread_ls_set(_pool_pthread_key, NULL);
+    _node_pool_drain(t);
+  }
+#else
   _node_pool_drain(NULL);
+#endif
   ccol_rw_lock_wrlock(_pool_key_rwlock);
   atomic_store(&_pool_key_live, false);
   ccol_thread_ls_key_delete(_pool_pthread_key);
   ccol_rw_lock_unlock(_pool_key_rwlock);
 }
 
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+/* The block of the calling thread, or NULL when the thread has none. */
+static _cjson_tls_t *_cjson_tls_peek(void) {
+  if (!atomic_load_explicit(&_pool_key_live, memory_order_acquire)) return NULL;
+  return (_cjson_tls_t *)ccol_thread_ls_get(_pool_pthread_key);
+}
+
+/* The block of the calling thread. It makes the block, and sets it as the
+ * value of the pool key, when the thread has none. It gives NULL when the key
+ * does not exist or memory runs out. The caller must have run the once-guard
+ * of the key. */
+static _cjson_tls_t *_cjson_tls_get(void) {
+  _cjson_tls_t *t = _cjson_tls_peek();
+  if (t || !atomic_load(&_pool_key_live)) return t;
+  t = (_cjson_tls_t *)calloc(1, sizeof(*t));
+  if (!t) return NULL;
+  bool set = false;
+  ccol_rw_lock_rdlock(_pool_key_rwlock);
+#ifdef RUNNING_UNIT_TESTS
+  atomic_fetch_add_explicit(&_cjson_pool_key_lock_count_for_tests, 1,
+                            memory_order_relaxed);
+#endif /* RUNNING_UNIT_TESTS */
+  if (atomic_load(&_pool_key_live) &&
+      ccol_thread_ls_set(_pool_pthread_key, t) == 0)
+    set = true;
+  ccol_rw_lock_unlock(_pool_key_rwlock);
+  if (!set) {
+    free(t);
+    return NULL;
+  }
+  return t;
+}
+#else
 /* Sets the value of the pool key for the calling thread, once per thread, so
  * that _node_pool_drain runs when the thread exits. The caller must have run
  * the once-guard of the key. It is always inlined, so node_free() keeps the
@@ -701,6 +768,7 @@ static inline __attribute__((always_inline)) void _pool_key_arm(void) {
 /* The per-thread message buffer of a failed parse; see cjson_report_err().
  * The drain at thread exit frees it with the node pool. */
 static __thread char *cjson_err_buf;
+#endif /* _CCOL_EMULATE_DARWIN_TLS */
 
 /* Return a node to the thread-local pool, or free it directly through its
  * own allocator. The node goes back to the pool when m_procs == NULL and
@@ -716,6 +784,21 @@ static void node_free(cjson_node_t *n) {
   }
   /* This node has the default allocator, so m_procs == NULL. Try to return
    * the node to the pool. */
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+  ccol_call_once(_pool_key_once, _do_pool_key_init);
+  _cjson_tls_t *t = _cjson_tls_get();
+  if (!t || t->sz >= _NODE_POOL_CAP) {
+    free(n);
+    return;
+  }
+  memcpy((cjson_node_t **)n, &t->head, sizeof(t->head));
+  t->head = n;
+  t->sz++;
+#ifdef RUNNING_UNIT_TESTS
+  atomic_fetch_add_explicit(&_cjson_pool_population_for_tests, 1,
+                            memory_order_relaxed);
+#endif /* RUNNING_UNIT_TESTS */
+#else
   if (_node_pool_sz >= _NODE_POOL_CAP) {
     free(n);
     return;
@@ -754,6 +837,7 @@ static void node_free(cjson_node_t *n) {
   atomic_fetch_add_explicit(&_cjson_pool_population_for_tests, 1,
                             memory_order_relaxed);
 #endif /* RUNNING_UNIT_TESTS */
+#endif /* _CCOL_EMULATE_DARWIN_TLS */
 }
 
 /* Drain the node pool of the calling thread. By the invariant, every node
@@ -767,6 +851,29 @@ static void node_free(cjson_node_t *n) {
  * With the flag clear, that refill sets the value again, and the C library
  * calls this destructor once more in its next round over the keys. With the
  * flag left set, the refill never arms the key and every node in it leaks. */
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+/* Under _CCOL_EMULATE_DARWIN_TLS the drain frees the block that arg names.
+ * The C library has already cleared the value of the key, so a node that a
+ * destructor of another key frees later makes a new block and sets the value
+ * again, and the C library calls this destructor once more for it. */
+static void _node_pool_drain(void *arg) {
+  _cjson_tls_t *t = (_cjson_tls_t *)arg;
+  if (!t) return;
+  cjson_node_t *n = t->head;
+  while (n) {
+    cjson_node_t *next;
+    memcpy(&next, (cjson_node_t **)n, sizeof(next));
+    free(n);
+    n = next;
+  }
+#ifdef RUNNING_UNIT_TESTS
+  atomic_fetch_sub_explicit(&_cjson_pool_population_for_tests, (long)t->sz,
+                            memory_order_relaxed);
+#endif /* RUNNING_UNIT_TESTS */
+  free(t->err_buf);
+  free(t);
+}
+#else
 static void _node_pool_drain(void *arg) {
   (void)arg;
   cjson_node_t *n = _node_pool_head;
@@ -786,6 +893,7 @@ static void _node_pool_drain(void *arg) {
   cjson_err_buf = NULL;
   _pool_key_armed = false;
 }
+#endif /* _CCOL_EMULATE_DARWIN_TLS */
 
 #ifdef RUNNING_UNIT_TESTS
 /* This function gives the size of the free-list in the node pool of the
@@ -793,7 +901,14 @@ static void _node_pool_drain(void *arg) {
  * evicts a node at its cap, which is _NODE_POOL_CAP. They also check that
  * one thread does not see the pool of another thread. This function is not
  * part of the public API. */
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+size_t cjson_debug_pool_size(void) {
+  _cjson_tls_t *t = _cjson_tls_peek();
+  return t ? (size_t)t->sz : 0;
+}
+#else
 size_t cjson_debug_pool_size(void) { return (size_t)_node_pool_sz; }
+#endif
 #endif
 
 /* Deep-free the value payload of n. That payload is the bytes of a string,
@@ -2810,6 +2925,17 @@ static const char cjson_err_unstored[] =
  * no-op when the caller passed no err_str. */
 static void cjson_report_err(char **err_str, const char *msg) {
   if (!err_str) return;
+#if defined(_CCOL_EMULATE_DARWIN_TLS)
+  ccol_call_once(_pool_key_once, _do_pool_key_init);
+  _cjson_tls_t *t = _cjson_tls_get();
+  if (t && !t->err_buf) t->err_buf = malloc(CJSON_ERR_BUF_LEN);
+  if (!t || !t->err_buf) {
+    *err_str = (char *)cjson_err_unstored;
+    return;
+  }
+  snprintf(t->err_buf, CJSON_ERR_BUF_LEN, "%s", msg);
+  *err_str = t->err_buf;
+#else
   if (!cjson_err_buf) {
     char *buf = malloc(CJSON_ERR_BUF_LEN);
     if (!buf) {
@@ -2822,6 +2948,7 @@ static void cjson_report_err(char **err_str, const char *msg) {
   }
   snprintf(cjson_err_buf, CJSON_ERR_BUF_LEN, "%s", msg);
   *err_str = cjson_err_buf;
+#endif /* _CCOL_EMULATE_DARWIN_TLS */
 }
 
 static cjson parse_common(const char *src, size_t len, char **err_str,

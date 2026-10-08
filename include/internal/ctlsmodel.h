@@ -56,4 +56,17 @@ SOFTWARE.
 #endif
 #endif
 
+/* macOS releases the thread-local storage (__thread) of an exiting thread
+ * before it runs the destructors of pthread keys. A destructor that reads a
+ * __thread variable there reads a new, zeroed copy, so state that it must
+ * drain is lost. Under _CCOL_EMULATE_DARWIN_TLS, every module whose key
+ * destructor drains per-thread state keeps that state in a heap block whose
+ * pointer is the value of the key, and the destructor drains the block that
+ * it receives as its argument. Elsewhere the state stays in __thread
+ * variables. The switch is on by itself on macOS; the test suites of Linux
+ * and FreeBSD set it to run the macOS form. */
+#if defined(__APPLE__) && !defined(_CCOL_EMULATE_DARWIN_TLS)
+#define _CCOL_EMULATE_DARWIN_TLS 1
+#endif
+
 #endif /* CCOL_INTERNAL_CTLSMODEL_H */

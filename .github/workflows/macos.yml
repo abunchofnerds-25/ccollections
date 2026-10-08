@@ -42,7 +42,7 @@ jobs:
         # CPATH and LIBRARY_PATH give clang its headers and its libraries.
         # zlib is part of the macOS SDK.
         run: |
-          brew install make openssl@3
+          brew install make openssl@3 coreutils
           ssl="$(brew --prefix openssl@3)"
           echo "CPATH=$ssl/include" >> "$GITHUB_ENV"
           echo "LIBRARY_PATH=$ssl/lib" >> "$GITHUB_ENV"
@@ -52,43 +52,53 @@ jobs:
           uname -m
           cc --version
           gmake --version | head -1
-      - name: Probe the order of thread-exit work
-        # The node pools of cjson and cyaml keep their state in __thread
-        # variables and are drained by a destructor of a thread-specific key.
-        # A destructor of a later key can refill a pool and arm the key again,
-        # and the next round must find that refill. This prints what each
-        # destructor sees, in a program that uses no library code.
+      - name: Probe the precision of timed waits
+        # A test of the HTTP client waits 20 ms on a condition variable and
+        # allows 80 ms in total. On one arm64 run it took 95 ms. This prints
+        # how late a 20 ms wait wakes on this runner, in a program that uses
+        # no library code, so a late timer can be told from a deadline that
+        # the library does not keep.
         run: |
           cat > probe.c <<'EOF'
           #include <pthread.h>
           #include <stdio.h>
-          static __thread int tl;
-          static pthread_key_t pool_key, owner_key;
-          static int round_no;
-          static void pool_dtor(void *v) {
-            printf("pool dtor %d: value=%p tl=%d\n", ++round_no, v, tl);
-            tl = 0;
+          #include <stdlib.h>
+          #include <time.h>
+          static long long now_us(void) {
+            struct timespec t;
+            clock_gettime(CLOCK_MONOTONIC, &t);
+            return (long long)t.tv_sec * 1000000 + t.tv_nsec / 1000;
           }
-          static void owner_dtor(void *v) {
-            printf("owner dtor: value=%p tl=%d\n", v, tl);
-            tl = 42;
-            pthread_setspecific(pool_key, (void *)2);
-            printf("owner dtor: armed again, tl=%d\n", tl);
+          static int cmp(const void *a, const void *b) {
+            long long x = *(const long long *)a, y = *(const long long *)b;
+            return (x > y) - (x < y);
           }
-          static void *worker(void *a) {
-            (void)a;
-            tl = 7;
-            pthread_setspecific(pool_key, (void *)1);
-            pthread_setspecific(owner_key, (void *)1);
-            return NULL;
+          static void report(const char *what, long long *late, int n) {
+            qsort(late, n, sizeof(late[0]), cmp);
+            printf("%s: late by min %lld us, median %lld us, p90 %lld us, "
+                   "max %lld us\n", what, late[0], late[n / 2],
+                   late[n * 9 / 10], late[n - 1]);
           }
           int main(void) {
-            pthread_key_create(&pool_key, pool_dtor);
-            pthread_key_create(&owner_key, owner_dtor);
-            pthread_t t;
-            pthread_create(&t, NULL, worker, NULL);
-            pthread_join(t, NULL);
-            printf("pool dtor ran %d times\n", round_no);
+            enum { N = 100 };
+            long long late[N];
+            pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
+            pthread_cond_t c = PTHREAD_COND_INITIALIZER;
+            struct timespec rel = {0, 20000000};
+            pthread_mutex_lock(&m);
+            for (int i = 0; i < N; i++) {
+              long long t0 = now_us();
+              pthread_cond_timedwait_relative_np(&c, &m, &rel);
+              late[i] = now_us() - t0 - 20000;
+            }
+            pthread_mutex_unlock(&m);
+            report("cond_timedwait_relative_np 20 ms", late, N);
+            for (int i = 0; i < N; i++) {
+              long long t0 = now_us();
+              nanosleep(&rel, NULL);
+              late[i] = now_us() - t0 - 20000;
+            }
+            report("nanosleep 20 ms", late, N);
             return 0;
           }
           EOF
@@ -98,8 +108,10 @@ jobs:
       - name: Test every module
         # Every module runs, also after a module fails, so that one run shows
         # every failure. A plain `gmake test` stops at the first failing
-        # module. macOS gives a process 256 descriptors by default, and some
-        # suites open more than 300 connections at once.
+        # module. gtimeout (coreutils) stops a module that hangs after 30
+        # minutes, so one hang does not use the time of the whole job. macOS
+        # gives a process 256 descriptors by default, and some suites open
+        # more than 300 connections at once.
         run: |
           ulimit -n 4096
           failed=""
@@ -107,7 +119,7 @@ jobs:
             [ -f "$dir/Makefile" ] || continue
             m="$(basename "$dir")"
             echo "::group::$m"
-            if ! gmake -C "$dir" test; then
+            if ! gtimeout -k 30s 30m gmake -C "$dir" test; then
               failed="$failed $m"
             fi
             echo "::endgroup::"

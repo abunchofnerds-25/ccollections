@@ -8,6 +8,9 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
+#if defined(TEST_NO_LD_WRAP)
+#include <dlfcn.h>
+#endif
 #include <tau/tau.h>
 #include <time.h>
 #include <unistd.h>
@@ -5859,14 +5862,32 @@ TEST(cmempools, a_pool_with_no_magazine_to_give_does_not_allocate_per_call) {
 }
 
 // Every pthread_mutex_lock of this binary goes through this wrapper (see
-// the --wrap in the Makefile). The count is kept for each thread, so a test
+// the wrap in the Makefile). The count is kept for each thread, so a test
 // reads what the calling thread paid, and no other thread can disturb it.
+#if defined(TEST_NO_LD_WRAP)
+// The linker has no --wrap. pthread_mutex_lock below takes every call that
+// this binary makes, and the original comes from the C library through
+// dlsym(RTLD_NEXT).
+static int __real_pthread_mutex_lock(pthread_mutex_t *m) {
+  static int (*_Atomic fn)(pthread_mutex_t *);
+  if (!fn)
+    fn = (int (*)(pthread_mutex_t *))dlsym(RTLD_NEXT, "pthread_mutex_lock");
+  return fn(m);
+}
+#else
 int __real_pthread_mutex_lock(pthread_mutex_t *m);
+#endif
 static __thread unsigned long mp_test_locks_taken;
+int __wrap_pthread_mutex_lock(pthread_mutex_t *m);
 int __wrap_pthread_mutex_lock(pthread_mutex_t *m) {
   ++mp_test_locks_taken;
   return __real_pthread_mutex_lock(m);
 }
+#if defined(TEST_NO_LD_WRAP)
+int pthread_mutex_lock(pthread_mutex_t *m) {
+  return __wrap_pthread_mutex_lock(m);
+}
+#endif
 
 // A thread that the pool refuses a magazine pays what a pool with no cache
 // pays: one lock for each allocation and one for each free. The budget

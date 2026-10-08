@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <internal/cdeadline.h>
 #include <internal/cpoll.h>
+#include <internal/csock.h>
 #include <limits.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -12190,7 +12191,7 @@ static void derr_run_udp_case(size_t threads, int *refused, int *data,
   close(probe);
   if (!have_port) return;
 
-  int cli = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
+  int cli = ccol_socket_nb(AF_INET, SOCK_DGRAM, 0);
   if (cli < 0) return;
   if (connect(cli, (struct sockaddr *)&srv_addr, sizeof(srv_addr)) != 0) {
     close(cli);
@@ -12449,7 +12450,7 @@ static void ddrain_cb(ccol_event_loop l, ccol_event_reg reg, ccol_selectable *s,
 static void ddrain_run(size_t threads, ddrain_conn *c, bool *entered) {
   int sv[2];
   *entered = false;
-  if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0, sv) != 0) return;
+  if (ccol_socketpair_nb(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return;
   memset(c, 0, sizeof(*c));
   atomic_store(&c->remove_r_rv, -1000);
   atomic_store(&c->remove_w_rv, -1000);

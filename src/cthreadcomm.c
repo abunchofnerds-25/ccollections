@@ -4281,7 +4281,7 @@ static void _cthreadcomm_atfork_release_impl(bool is_child) {
      * child has exactly one thread at this point, so nothing can be waiting
      * on the lock. */
     if (is_child) {
-      if (ccol_rw_lock_init(loop->reg_slot_rwlock) != 0)
+      if (ccol_rw_lock_reinit_in_child(loop->reg_slot_rwlock) != 0)
         ccol_fatal_err(
             "ccol_event_loop atfork release: failed to reinit reg_slot_rwlock");
     } else {
@@ -4297,7 +4297,7 @@ static void _cthreadcomm_atfork_release_impl(bool is_child) {
    * _ctpool_atfork_release_impl. This is the copy of the identical hazard for
    * the process-wide loop table, and not a new one. */
   if (is_child) {
-    if (ccol_rw_lock_init(ccol_event_loop_slot_table.rwlock) != 0)
+    if (ccol_rw_lock_reinit_in_child(ccol_event_loop_slot_table.rwlock) != 0)
       ccol_fatal_err(
           "ccol_event_loop atfork release: failed to reinit "
           "ccol_event_loop_slot_table "

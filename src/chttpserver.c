@@ -12427,7 +12427,7 @@ static void _chttpsvr_atfork_release_impl(bool is_child) {
       /* This is an init again, and not an unlock. See the doc comment of
        * this function for the hazard that it avoids: the rwlock write lock
        * of glibc tracks the TID of its owner. */
-      if (ccol_rw_lock_init(srv->routes_lock) != 0)
+      if (ccol_rw_lock_reinit_in_child(srv->routes_lock) != 0)
         ccol_fatal_err("chttpsvr atfork release: failed to reinit routes_lock");
 
       /* See the doc comment of this function for the full reasoning behind

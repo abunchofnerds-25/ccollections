@@ -18,7 +18,7 @@ TSAN_CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 -fsanitize=thread -Wall -Wex
 # make through a counter in tests.c, which forwards to the real function. The
 # thread-cache tests assert on how many locks an operation takes, which is a
 # property of the code and not of the machine.
-LFLAGS = -lpthread -Wl,--wrap=pthread_mutex_lock $(CCOL_PLATFORM_LIBS)
+LFLAGS = -lpthread $(call ccol_ld_wrap,pthread_mutex_lock) $(CCOL_PLATFORM_LIBS)
 
 # tests_unload.c runs what the module runs when it unloads. That deletes the
 # thread-specific key of the thread cache for the rest of the process, so it

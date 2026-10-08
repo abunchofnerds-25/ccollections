@@ -631,7 +631,7 @@ static void _ctpool_atfork_release_impl(bool is_child) {
    * ccol_event_loop do. That is safe because the child has exactly one thread
    * at this point, so nothing can be waiting on the rwlock. */
   if (is_child) {
-    if (ccol_rw_lock_init(ctpool_slot_table.rwlock) != 0)
+    if (ccol_rw_lock_reinit_in_child(ctpool_slot_table.rwlock) != 0)
       ccol_fatal_err(
           "ctpool atfork release: failed to reinit slot table rwlock");
   } else {

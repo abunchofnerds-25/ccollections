@@ -68,6 +68,12 @@ else
   CCOL_TSAN_EXTRA_SRC :=
 endif
 
+# The link flags that route every call to each function in $(1) through
+# __wrap_<name> in a test, with __real_<name> for the original. Apple's linker
+# has no --wrap, so there the call gives TEST_NO_LD_WRAP=1 instead, and the
+# test defines the function under its own name (see the test).
+ccol_ld_wrap = $(if $(filter Darwin,$(CCOL_UNAME_S)),-DTEST_NO_LD_WRAP=1,$(foreach s,$(1),-Wl,--wrap=$(s)))
+
 # The linker hardening of every link: RELRO and immediate binding. Both are
 # options of the ELF linkers; Apple's linker has neither (a Mach-O image binds
 # its pointers read-only on its own), and rejects them.

@@ -34,6 +34,9 @@ SOFTWARE.
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+#if defined(TEST_NO_LD_WRAP)
+#include <dlfcn.h>
+#endif
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #include <tau/tau.h>
@@ -949,8 +952,25 @@ TEST(chttp1_stream, writev2_keeps_the_byte_order_across_short_writes) {
  * Makefile). Each passes straight through unless a test armed it, in which
  * case exactly one call reports EINTR without touching the socket, which is
  * what a signal that arrives before the call moves a byte produces. */
+#if defined(TEST_NO_LD_WRAP)
+/* The linker has no --wrap. send and read below take every call that this
+ * binary makes, and the original functions come from the C library through
+ * dlsym(RTLD_NEXT). */
+static ssize_t __real_send(int fd, const void *buf, size_t len, int flags) {
+  static ssize_t (*_Atomic fn)(int, const void *, size_t, int);
+  if (!fn)
+    fn = (ssize_t(*)(int, const void *, size_t, int))dlsym(RTLD_NEXT, "send");
+  return fn(fd, buf, len, flags);
+}
+static ssize_t __real_read(int fd, void *buf, size_t len) {
+  static ssize_t (*_Atomic fn)(int, void *, size_t);
+  if (!fn) fn = (ssize_t(*)(int, void *, size_t))dlsym(RTLD_NEXT, "read");
+  return fn(fd, buf, len);
+}
+#else
 ssize_t __real_send(int fd, const void *buf, size_t len, int flags);
 ssize_t __real_read(int fd, void *buf, size_t len);
+#endif
 static atomic_int _p1_send_eintr_armed;
 static atomic_int _p1_read_eintr_armed;
 
@@ -971,6 +991,15 @@ ssize_t __wrap_read(int fd, void *buf, size_t len) {
   }
   return __real_read(fd, buf, len);
 }
+
+#if defined(TEST_NO_LD_WRAP)
+ssize_t send(int fd, const void *buf, size_t len, int flags) {
+  return __wrap_send(fd, buf, len, flags);
+}
+ssize_t read(int fd, void *buf, size_t len) {
+  return __wrap_read(fd, buf, len);
+}
+#endif
 
 TEST(chttp1_stream, a_write_interrupted_by_a_signal_is_retried) {
   /* Non-vacuous: without the EINTR retry, the write returns -1 with

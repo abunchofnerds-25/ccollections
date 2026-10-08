@@ -1266,7 +1266,7 @@ static void _clog_atfork_release(bool in_child) {
                fs;
       if (!live) _clog_shareds_remove(clog_slot_table.file_shareds, fs);
     }
-    if (ccol_rw_lock_init(clog_slot_table.rwlock) != 0)
+    if (ccol_rw_lock_reinit_in_child(clog_slot_table.rwlock) != 0)
       ccol_fatal_err("clog atfork release: failed to reinit slot table rwlock");
   } else {
     ccol_rw_lock_unlock(clog_slot_table.rwlock);

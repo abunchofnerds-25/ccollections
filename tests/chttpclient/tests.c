@@ -36,6 +36,7 @@ SOFTWARE.
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <internal/csock.h>
 #if defined(__APPLE__)
 #include <malloc/malloc.h>
 /* The usable size of a block of malloc(3); macOS names it malloc_size(). */
@@ -17213,7 +17214,7 @@ static int blackhole_listener(struct sockaddr_in *out, int *filler_out) {
     close(l);
     return -1;
   }
-  int f = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+  int f = ccol_socket_nb(AF_INET, SOCK_STREAM, 0);
   if (f < 0) {
     close(l);
     return -1;
@@ -17422,7 +17423,7 @@ TEST(happy_eyeballs, tier1_an_asynchronous_failure_hands_over_at_once) {
   lst.sin_family = AF_INET;
   lst.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   socklen_t llen = sizeof(lst);
-  int lfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+  int lfd = ccol_socket_nb(AF_INET, SOCK_STREAM, 0);
   bool ready = hl >= 0 && lfd >= 0 &&
                bind(lfd, (struct sockaddr *)&lst, sizeof(lst)) == 0 &&
                listen(lfd, 8) == 0 &&
@@ -18250,8 +18251,9 @@ static int scripted_peer_start(scripted_peer *sp, scripted_peer_fn fn,
   atomic_store(&sp->body_bytes, 0);
   atomic_store(&sp->saw_eof, 0);
   atomic_store(&sp->requests, 0);
-  sp->lfd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  sp->lfd = socket(AF_INET, SOCK_STREAM, 0);
   if (sp->lfd < 0) return -1;
+  (void)fcntl(sp->lfd, F_SETFD, FD_CLOEXEC);
   if (rcvbuf > 0)
     setsockopt(sp->lfd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
   struct sockaddr_in addr;

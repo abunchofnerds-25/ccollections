@@ -14,11 +14,11 @@ CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 $(CCOL_HARDENING_CFLAGS) -Wstrict
 	$(CCOL_LD_HARDENING) \
 	-Wformat=2 -Wformat-security -Wall -Wextra -gdwarf-4 -g3 -O3 -Werror $(EXTRA_CFLAGS)
 COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
-# The two --wrap flags route every send(2) and read(2) call of the linked
-# sources through __wrap_send and __wrap_read in tests.c. Both pass straight
-# through, except where a test arms them to report one EINTR, which no real
-# socket produces on demand.
-LFLAGS = -lpthread -lssl -lcrypto -Wl,--wrap=send -Wl,--wrap=read $(CCOL_PLATFORM_LIBS)
+# The two wraps route every send(2) and read(2) call of the linked sources
+# through __wrap_send and __wrap_read in tests.c. Both pass straight through,
+# except where a test arms them to report one EINTR, which no real socket
+# produces on demand.
+LFLAGS = -lpthread -lssl -lcrypto $(call ccol_ld_wrap,send read) $(CCOL_PLATFORM_LIBS)
 
 build:
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)

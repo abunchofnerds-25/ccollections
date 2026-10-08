@@ -3492,7 +3492,11 @@ TEST(contiguous_sort, cvec_sort_orders_nan_after_every_number) {
 
 /* The Makefile links this suite with --wrap=cvector_elem_count, so every
  * call that this file makes to cvector_elem_count, including the calls that
- * a macro expands to, comes here first. */
+ * a macro expands to, comes here first. A linker with no --wrap (Apple's)
+ * cannot route the calls to a function that the same binary defines, so
+ * there the test below is skipped; what it checks is a property of the macro
+ * expansion, the same on every system. */
+#if !defined(TEST_NO_LD_WRAP)
 size_t __real_cvector_elem_count(cvec v);
 static unsigned long g_cvec_elem_count_calls = 0;
 size_t __wrap_cvector_elem_count(cvec v);
@@ -3500,8 +3504,13 @@ size_t __wrap_cvector_elem_count(cvec v) {
   g_cvec_elem_count_calls++;
   return __real_cvector_elem_count(v);
 }
+#endif
 
 TEST(cvec_at_cost, a_successful_access_does_not_read_the_element_count) {
+#if defined(TEST_NO_LD_WRAP)
+  fprintf(stderr, "SKIP: the linker cannot wrap cvector_elem_count\n");
+  return;
+#else
   cvec_construct(v, int);
   for (int i = 0; i < 64; i++) cvec_push(v, i);
   g_cvec_elem_count_calls = 0;
@@ -3511,6 +3520,7 @@ TEST(cvec_at_cost, a_successful_access_does_not_read_the_element_count) {
   cvec_destroy(v);
   REQUIRE_EQ(sum, 64L * 63L / 2L);
   REQUIRE_EQ(calls, 0UL);
+#endif
 }
 
 TEST(cvec_at_cost, the_out_of_bounds_diagnostic_still_reports_the_size) {

@@ -166,6 +166,20 @@ SOFTWARE.
 /** @brief Initialize a read-write lock with default attributes */
 #define ccol_rw_lock_init(a) pthread_rwlock_init(&(a), NULL)
 
+/**
+ * @brief Initialize again, in the child of fork(), a read-write lock that the
+ *        forking thread held
+ *
+ * The child has one thread, so nothing waits on the lock, but a plain unlock
+ * does not always release it there (glibc compares the thread ID of the
+ * writer, and the child's thread has a new one). macOS refuses to initialize
+ * an object that it still sees as a lock in use, with EBUSY. The object is
+ * therefore cleared first. On FreeBSD the lock is a pointer to a block that
+ * the init replaces in either case.
+ */
+#define ccol_rw_lock_reinit_in_child(a) \
+  (memset(&(a), 0, sizeof(a)), pthread_rwlock_init(&(a), NULL))
+
 /** @brief Take the write lock (exclusive access) */
 #define ccol_rw_lock_wrlock(a) pthread_rwlock_wrlock(&(a))
 

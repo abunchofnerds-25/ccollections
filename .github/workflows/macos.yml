@@ -52,6 +52,47 @@ jobs:
           uname -m
           cc --version
           gmake --version | head -1
+      - name: Probe the order of thread-exit work
+        # The node pools of cjson and cyaml keep their state in __thread
+        # variables and are drained by a destructor of a thread-specific key.
+        # A destructor of a later key can refill a pool and arm the key again,
+        # and the next round must find that refill. This prints what each
+        # destructor sees, in a program that uses no library code.
+        run: |
+          cat > probe.c <<'EOF'
+          #include <pthread.h>
+          #include <stdio.h>
+          static __thread int tl;
+          static pthread_key_t pool_key, owner_key;
+          static int round_no;
+          static void pool_dtor(void *v) {
+            printf("pool dtor %d: value=%p tl=%d\n", ++round_no, v, tl);
+            tl = 0;
+          }
+          static void owner_dtor(void *v) {
+            printf("owner dtor: value=%p tl=%d\n", v, tl);
+            tl = 42;
+            pthread_setspecific(pool_key, (void *)2);
+            printf("owner dtor: armed again, tl=%d\n", tl);
+          }
+          static void *worker(void *a) {
+            (void)a;
+            tl = 7;
+            pthread_setspecific(pool_key, (void *)1);
+            pthread_setspecific(owner_key, (void *)1);
+            return NULL;
+          }
+          int main(void) {
+            pthread_key_create(&pool_key, pool_dtor);
+            pthread_key_create(&owner_key, owner_dtor);
+            pthread_t t;
+            pthread_create(&t, NULL, worker, NULL);
+            pthread_join(t, NULL);
+            printf("pool dtor ran %d times\n", round_no);
+            return 0;
+          }
+          EOF
+          cc -O1 probe.c -o probe && ./probe
       - name: Build the shared library
         run: gmake
       - name: Test every module

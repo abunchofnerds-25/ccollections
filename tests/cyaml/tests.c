@@ -28,6 +28,9 @@ SOFTWARE.
 #include <langinfo.h>
 #include <limits.h>
 #include <locale.h>
+#if defined(__APPLE__)
+#include <xlocale.h> /* nl_langinfo_l */
+#endif
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>

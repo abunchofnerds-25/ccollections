@@ -2487,6 +2487,33 @@ static inline void _clog_pipe_write_prepare(void) {
     _clog_ignore_sigpipe_once();
 }
 
+#if defined(F_SETNOSIGPIPE)
+/* macOS raises the SIGPIPE of a failed write to a pipe on the whole process,
+ * not on the writing thread, so the mask of the async writer thread does not
+ * keep it from a thread that has the default disposition. There the writer
+ * thread sets F_SETNOSIGPIPE on the descriptor for the length of each write
+ * under CLOG_SIGPIPE_AUTO, and such a write fails with EPIPE and raises no
+ * signal. The begin gives the value to restore, or -1 when it changed
+ * nothing; the end puts the earlier value back, so the descriptor of the
+ * application keeps its own setting. */
+static int _clog_pipe_nosigpipe_begin(int fd) {
+  if (_clog_writer_sigpipe == CLOG_WRITER_NONE ||
+      atomic_load_explicit(&_clog_sigpipe_policy, memory_order_relaxed) !=
+          CLOG_SIGPIPE_AUTO)
+    return -1;
+  int prev = fcntl(fd, F_GETNOSIGPIPE);
+  if (prev != 0) return -1;
+  return fcntl(fd, F_SETNOSIGPIPE, 1) == 0 ? 0 : -1;
+}
+
+static void _clog_pipe_nosigpipe_end(int fd, int prev) {
+  if (prev < 0) return;
+  int saved_errno = errno;
+  (void)fcntl(fd, F_SETNOSIGPIPE, prev);
+  errno = saved_errno;
+}
+#endif
+
 /* Runs after a write to a pipe sink fails with EPIPE. That write raised
  * SIGPIPE for the calling thread. When this module blocked SIGPIPE on this
  * thread, the signal is pending on it, and every pending one is consumed
@@ -2687,7 +2714,14 @@ static __attribute__((noinline)) size_t _write_all_nonplain(clog_shared_t *sh,
                                                             size_t len) {
   if (sh->sink_kind == CLOG_SINK_PIPE) {
     _clog_pipe_write_prepare();
+#if defined(F_SETNOSIGPIPE)
+    int nosig = _clog_pipe_nosigpipe_begin(sh->fd);
+    size_t n = _write_all_body(sh->fd, CLOG_SINK_PIPE, data, len);
+    _clog_pipe_nosigpipe_end(sh->fd, nosig);
+    return n;
+#else
     return _write_all_body(sh->fd, CLOG_SINK_PIPE, data, len);
+#endif
   }
   if (__builtin_expect(sh->sink_kind != CLOG_SINK_SOCKET, 0))
     return _write_all_fatal_bound(sh, data, len);
@@ -2814,6 +2848,9 @@ static __attribute__((noinline, cold)) size_t _write_all_bounded(
   size_t forced_cap = _clog_test_consume_next_write_cap();
   if (forced_cap > 0 && forced_cap < len) len = forced_cap;
   if (kind == CLOG_SINK_PIPE) _clog_pipe_write_prepare();
+#if defined(F_SETNOSIGPIPE)
+  int nosig = kind == CLOG_SINK_PIPE ? _clog_pipe_nosigpipe_begin(wfd) : -1;
+#endif
 
   struct timespec deadline;
   clock_gettime(CLOCK_MONOTONIC, &deadline);
@@ -2891,6 +2928,9 @@ static __attribute__((noinline, cold)) size_t _write_all_bounded(
     len -= (size_t)w;
     total += (size_t)w;
   }
+#if defined(F_SETNOSIGPIPE)
+  _clog_pipe_nosigpipe_end(wfd, nosig);
+#endif
   if (own_fd >= 0) {
     int saved = errno;
     close(own_fd);

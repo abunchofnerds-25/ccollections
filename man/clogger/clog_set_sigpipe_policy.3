@@ -41,6 +41,13 @@ Pipe or FIFO, under CLOG_SIGPIPE_AUTO
     failed write left pending on it.  Nothing about the process
     changes.
 
+    macOS raises the SIGPIPE of a pipe write on the whole process,
+    not on the writing thread.  There the async writer thread also
+    sets F_SETNOSIGPIPE on the descriptor for the length of each
+    write, so the write fails with EPIPE and raises nothing.  After
+    the write, the descriptor gets back the F_SETNOSIGPIPE value that
+    it had before.
+
     Any other thread that writes to a pipe sets the disposition of
     SIGPIPE to SIG_IGN for the whole process, the first time that it
     does so.  Such a write comes from a synchronous logger, from a

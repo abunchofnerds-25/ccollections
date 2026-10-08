@@ -22,11 +22,15 @@ build: tests_locale
 
 # The number_locale tests need a locale whose decimal point is ','. They use
 # an installed one when there is one, and this private copy otherwise. The
-# step is best effort: without localedef or the de_DE locale source, the
-# directory stays empty and those tests print that they skipped.
+# step is best effort: without localedef (macOS has none) or the de_DE locale
+# source, the directory stays empty and those tests use an installed locale
+# or print that they skipped.
 tests_locale:
 	mkdir -p tests_locale
-	-localedef -c -i de_DE -f UTF-8 tests_locale/de_DE.UTF-8 >/dev/null 2>&1
+	@if command -v localedef >/dev/null 2>&1; then \
+	  localedef -c -i de_DE -f UTF-8 tests_locale/de_DE.UTF-8 >/dev/null 2>&1 \
+	    || true; \
+	fi
 
 # Standalone differential-testing helper (see differential/compare_pyyaml.py).
 # It is not part of build, test, memtest or all. Run it by hand.

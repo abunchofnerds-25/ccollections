@@ -1023,7 +1023,9 @@ static bool _uri_reg_name_is_valid(const char *s, size_t len) {
  *
  * An IPv6address is checked by inet_pton(), whose text form (RFC 4291
  * SS2.2) is the IPv6address rule of RFC 3986. A zone identifier
- * (RFC 6874) is not part of that rule, and it is refused. */
+ * (RFC 6874) is not part of that rule, and it is refused. Only hex digits,
+ * ':' and '.' reach inet_pton(): the inet_pton() of macOS accepts a zone
+ * suffix such as "%lo", and the grammar must not depend on the C library. */
 static bool _uri_ip_literal_is_valid(const char *s, size_t len) {
   if (len == 0) return false;
   if (s[0] == 'v' || s[0] == 'V') {
@@ -1040,6 +1042,10 @@ static bool _uri_ip_literal_is_valid(const char *s, size_t len) {
   }
   char text[INET6_ADDRSTRLEN];
   if (len >= sizeof(text)) return false;
+  for (size_t j = 0; j < len; j++) {
+    unsigned char c = (unsigned char)s[j];
+    if (!_uri_hexdig(c) && c != ':' && c != '.') return false;
+  }
   memcpy(text, s, len);
   text[len] = '\0';
   struct in6_addr addr;

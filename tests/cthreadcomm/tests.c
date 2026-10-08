@@ -2003,163 +2003,238 @@ TEST(channels, msg_count) {
   ccol_channel_destroy(ch);
 }
 
-void *thr_for_channels_try_send_and_try_receive(void *args) {
-  ccol_channel *ch = (ccol_channel *)args;
+/* The two channel tests below take turns through phase, and never through
+ * a fixed sleep: a sleep of a busy runner can end long after its time, and
+ * the two threads then lose their order. The worker records the line of its
+ * first failed check in failed_line, and the main thread asserts it after
+ * the join, so a failure never ends the whole binary. */
+typedef struct {
+  ccol_channel *ch;
+  atomic_int phase;
+  atomic_int failed_line;
+} chan_turns_t;
 
-  usleep(50000);  // 50 msecs
+#define CHAN_CHECK(t, cond)                                                \
+  do {                                                                     \
+    if (!(cond)) {                                                         \
+      int _zero = 0;                                                       \
+      atomic_compare_exchange_strong(&(t)->failed_line, &_zero, __LINE__); \
+    }                                                                      \
+  } while (0)
+
+/* Waits until phase reaches want, for at most 10 s. It gives false on a
+ * timeout. */
+static bool chan_wait_phase(chan_turns_t *t, int want) {
+  for (int i = 0; i < 10000; i++) {
+    if (atomic_load(&t->phase) >= want) return true;
+    struct timespec ts = {0, 1000000};
+    nanosleep(&ts, NULL);
+  }
+  return false;
+}
+
+void *thr_for_channels_try_send_and_try_receive(void *args) {
+  chan_turns_t *t = (chan_turns_t *)args;
+  if (!chan_wait_phase(t, 1)) {
+    CHAN_CHECK(t, false);
+    return NULL;
+  }
 
   c_message_t msg = {.data = NULL, .size = 0};
-  assert(ccol_chan_try_recv_zc(ch, &msg) == ccol_success);
-  assert(msg.data != NULL);
-  assert(*((char *)msg.data) == 'A');
-
-  *((char *)msg.data) = 'B';
+  CHAN_CHECK(t, ccol_chan_try_recv_zc(t->ch, &msg) == ccol_success);
+  CHAN_CHECK(t, msg.data != NULL && *((char *)msg.data) == 'A');
+  if (msg.data) *((char *)msg.data) = 'B';
 
   c_message_t m2 = {.data = NULL, .size = 0};
-  assert(ccol_chan_try_recv_zc(ch, &m2) == ccol_container_empty);
-  assert(m2.data == NULL);
+  CHAN_CHECK(t, ccol_chan_try_recv_zc(t->ch, &m2) == ccol_container_empty);
+  CHAN_CHECK(t, m2.data == NULL);
 
-  assert(ccol_chan_try_send_zc(ch, &msg) == ccol_success);
-  assert(msg.data == NULL);
+  if (msg.data) {
+    CHAN_CHECK(t, ccol_chan_try_send_zc(t->ch, &msg) == ccol_success);
+    CHAN_CHECK(t, msg.data == NULL);
+    free(msg.data);
+  }
 
   m2 = (c_message_t){.data = malloc(sizeof(char)), .size = 1};
-  assert(ccol_chan_try_send_zc(ch, &m2) == ccol_container_full);
-  assert(m2.data != NULL);
+  CHAN_CHECK(t, ccol_chan_try_send_zc(t->ch, &m2) == ccol_container_full);
+  CHAN_CHECK(t, m2.data != NULL);
   free(m2.data);
 
+  atomic_store(&t->phase, 2);
   return NULL;
 }
 
 TEST(channels, try_send_and_try_receive) {
-  ccol_channel *ch = ccol_channel_create_with_mprocs(1, NULL, NULL);
+  chan_turns_t t = {.ch = ccol_channel_create_with_mprocs(1, NULL, NULL)};
+  REQUIRE_NE((void *)t.ch, NULL);
 
   pthread_t tid;
   REQUIRE_EQ(
-      pthread_create(&tid, NULL, thr_for_channels_try_send_and_try_receive, ch),
+      pthread_create(&tid, NULL, thr_for_channels_try_send_and_try_receive, &t),
       0);
 
   c_message_t m1 = {.data = malloc(sizeof(char)), .size = 1};
   *(char *)m1.data = 'A';
-  REQUIRE_EQ(ccol_chan_try_send_zc(ch, &m1), ccol_success);
-  REQUIRE_EQ(m1.data, NULL);
+  ccol_retval_t first_send = ccol_chan_try_send_zc(t.ch, &m1);
+  bool first_taken = m1.data == NULL;
+  free(m1.data);
 
-  m1.data = malloc(sizeof(char));
-  m1.size = 1;
-  REQUIRE_EQ(ccol_chan_try_send_zc(ch, &m1), ccol_container_full);
-  REQUIRE_NE(m1.data, NULL);
+  m1 = (c_message_t){.data = malloc(sizeof(char)), .size = 1};
+  ccol_retval_t full_send = ccol_chan_try_send_zc(t.ch, &m1);
+  bool full_kept = m1.data != NULL;
   free(m1.data);
   m1.data = NULL;
 
-  usleep(100000);  // 100 msecs
+  atomic_store(&t.phase, 1);
+  bool worker_done = chan_wait_phase(&t, 2);
 
   c_message_t m2 = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_chan_try_recv_zc(ch, &m2), ccol_success);
-  REQUIRE_NE(m2.data, NULL);
-  REQUIRE_EQ(*(char *)m2.data, 'B');
-
-  REQUIRE_EQ(ccol_chan_try_recv_zc(ch, &m1), ccol_container_empty);
-  REQUIRE_EQ(m1.data, NULL);
+  ccol_retval_t got = ccol_chan_try_recv_zc(t.ch, &m2);
+  char got_char = m2.data ? *(char *)m2.data : 0;
+  ccol_retval_t empty = ccol_chan_try_recv_zc(t.ch, &m1);
+  bool empty_left_null = m1.data == NULL;
 
   free(m2.data);
+  free(m1.data);
   pthread_join(tid, NULL);
-  ccol_channel_destroy(ch);
+  ccol_channel_destroy(t.ch);
+
+  REQUIRE_EQ(first_send, ccol_success);
+  REQUIRE_TRUE(first_taken);
+  REQUIRE_EQ(full_send, ccol_container_full);
+  REQUIRE_TRUE(full_kept);
+  REQUIRE_TRUE(worker_done);
+  REQUIRE_EQ(atomic_load(&t.failed_line), 0);
+  REQUIRE_EQ(got, ccol_success);
+  REQUIRE_EQ((int)got_char, (int)'B');
+  REQUIRE_EQ(empty, ccol_container_empty);
+  REQUIRE_TRUE(empty_left_null);
 }
 
+/* A call that must time out gets CHAN_SHORT_US and must take at least that
+ * long. A call that must succeed at once gets CHAN_LONG_US and must return
+ * well before it: an implementation that waits out its timeout before it
+ * takes a message that is already there fails, and a slow runner does not
+ * fail a correct one. */
+#define CHAN_SHORT_US 10000
+#define CHAN_LONG_US 1000000
+#define CHAN_AT_ONCE_US 500000
+
 void *thr_for_channels_timed_send_and_timed_receive(void *args) {
-  ccol_channel *ch = (ccol_channel *)args;
-
-  uint64_t timeout = 10000;  // 10 msecs
-
-  usleep(40000);  // 40 msecs
+  chan_turns_t *t = (chan_turns_t *)args;
+  if (!chan_wait_phase(t, 1)) {
+    CHAN_CHECK(t, false);
+    return NULL;
+  }
 
   struct timespec before;
   struct timespec after;
 
   c_message_t msg = {.data = NULL, .size = 0};
   getWallTime(before);
-  assert(ccol_chan_timed_recv_zc(ch, &msg, timeout) == ccol_success);
+  CHAN_CHECK(
+      t, ccol_chan_timed_recv_zc(t->ch, &msg, CHAN_LONG_US) == ccol_success);
   getWallTime(after);
-  assert(diffTimeUSec(before, after) < 4000);
-  assert(msg.data != NULL);
-  assert(*((char *)msg.data) == 'A');
-
-  *((char *)msg.data) = 'B';
+  CHAN_CHECK(t, diffTimeUSec(before, after) < CHAN_AT_ONCE_US);
+  CHAN_CHECK(t, msg.data != NULL && *((char *)msg.data) == 'A');
+  if (msg.data) *((char *)msg.data) = 'B';
 
   c_message_t m2 = {.data = NULL, .size = 0};
   getWallTime(before);
-  assert(ccol_chan_timed_recv_zc(ch, &m2, timeout) == ccol_timed_out);
+  CHAN_CHECK(
+      t, ccol_chan_timed_recv_zc(t->ch, &m2, CHAN_SHORT_US) == ccol_timed_out);
   getWallTime(after);
-  assert(diffTimeUSec(before, after) >= 10000);
-  assert(m2.data == NULL);
+  CHAN_CHECK(t, diffTimeUSec(before, after) >= CHAN_SHORT_US);
+  CHAN_CHECK(t, m2.data == NULL);
 
-  getWallTime(before);
-  assert(ccol_chan_timed_send_zc(ch, &msg, timeout) == ccol_success);
-  getWallTime(after);
-  assert(diffTimeUSec(before, after) < 4000);
-  assert(msg.data == NULL);
+  if (msg.data) {
+    getWallTime(before);
+    CHAN_CHECK(
+        t, ccol_chan_timed_send_zc(t->ch, &msg, CHAN_LONG_US) == ccol_success);
+    getWallTime(after);
+    CHAN_CHECK(t, diffTimeUSec(before, after) < CHAN_AT_ONCE_US);
+    CHAN_CHECK(t, msg.data == NULL);
+    free(msg.data);
+  }
 
   m2 = (c_message_t){.data = malloc(sizeof(char)), .size = 1};
   getWallTime(before);
-  assert(ccol_chan_timed_send_zc(ch, &m2, timeout) == ccol_timed_out);
+  CHAN_CHECK(
+      t, ccol_chan_timed_send_zc(t->ch, &m2, CHAN_SHORT_US) == ccol_timed_out);
   getWallTime(after);
-  assert(diffTimeUSec(before, after) >= 10000);
-  assert(m2.data != NULL);
+  CHAN_CHECK(t, diffTimeUSec(before, after) >= CHAN_SHORT_US);
+  CHAN_CHECK(t, m2.data != NULL);
   free(m2.data);
 
+  atomic_store(&t->phase, 2);
   return NULL;
 }
 
 TEST(channels, timed_send_and_timed_receive) {
-  ccol_channel *ch = ccol_channel_create_with_mprocs(1, NULL, NULL);
+  chan_turns_t t = {.ch = ccol_channel_create_with_mprocs(1, NULL, NULL)};
+  REQUIRE_NE((void *)t.ch, NULL);
 
   pthread_t tid;
   REQUIRE_EQ(pthread_create(&tid, NULL,
-                            thr_for_channels_timed_send_and_timed_receive, ch),
+                            thr_for_channels_timed_send_and_timed_receive, &t),
              0);
-
-  c_message_t m1 = {.data = malloc(sizeof(char)), .size = 1};
-  *(char *)m1.data = 'A';
 
   struct timespec before;
   struct timespec after;
 
-  uint64_t timeout = 10000;  // 10 msecs
-
+  c_message_t m1 = {.data = malloc(sizeof(char)), .size = 1};
+  *(char *)m1.data = 'A';
   getWallTime(before);
-  REQUIRE_EQ(ccol_chan_timed_send_zc(ch, &m1, timeout), ccol_success);
+  ccol_retval_t first_send = ccol_chan_timed_send_zc(t.ch, &m1, CHAN_LONG_US);
   getWallTime(after);
-  REQUIRE_LT(diffTimeUSec(before, after), 4000);
-  REQUIRE_EQ(m1.data, NULL);
+  long first_us = diffTimeUSec(before, after);
+  bool first_taken = m1.data == NULL;
+  free(m1.data);
 
-  m1.data = malloc(sizeof(char));
-  m1.size = 1;
+  m1 = (c_message_t){.data = malloc(sizeof(char)), .size = 1};
   getWallTime(before);
-  REQUIRE_EQ(ccol_chan_timed_send_zc(ch, &m1, timeout), ccol_timed_out);
+  ccol_retval_t full_send = ccol_chan_timed_send_zc(t.ch, &m1, CHAN_SHORT_US);
   getWallTime(after);
-  REQUIRE_GE(diffTimeUSec(before, after), 10000);
-  REQUIRE_NE(m1.data, NULL);
+  long full_us = diffTimeUSec(before, after);
+  bool full_kept = m1.data != NULL;
   free(m1.data);
   m1.data = NULL;
 
-  usleep(90000);  // 90 msecs
+  atomic_store(&t.phase, 1);
+  bool worker_done = chan_wait_phase(&t, 2);
 
   c_message_t m2 = {.data = NULL, .size = 0};
   getWallTime(before);
-  REQUIRE_EQ(ccol_chan_timed_recv_zc(ch, &m2, timeout), ccol_success);
+  ccol_retval_t got = ccol_chan_timed_recv_zc(t.ch, &m2, CHAN_LONG_US);
   getWallTime(after);
-  REQUIRE_LT(diffTimeUSec(before, after), 4000);
-  REQUIRE_NE(m2.data, NULL);
-  REQUIRE_EQ(*(char *)m2.data, 'B');
+  long got_us = diffTimeUSec(before, after);
+  char got_char = m2.data ? *(char *)m2.data : 0;
 
   getWallTime(before);
-  REQUIRE_EQ(ccol_chan_timed_recv_zc(ch, &m1, timeout), ccol_timed_out);
+  ccol_retval_t empty = ccol_chan_timed_recv_zc(t.ch, &m1, CHAN_SHORT_US);
   getWallTime(after);
-  REQUIRE_GE(diffTimeUSec(before, after), 10000);
-  REQUIRE_EQ(m1.data, NULL);
+  long empty_us = diffTimeUSec(before, after);
+  bool empty_left_null = m1.data == NULL;
 
   free(m2.data);
+  free(m1.data);
   pthread_join(tid, NULL);
-  ccol_channel_destroy(ch);
+  ccol_channel_destroy(t.ch);
+
+  REQUIRE_EQ(first_send, ccol_success);
+  REQUIRE_LT(first_us, (long)CHAN_AT_ONCE_US);
+  REQUIRE_TRUE(first_taken);
+  REQUIRE_EQ(full_send, ccol_timed_out);
+  REQUIRE_GE(full_us, (long)CHAN_SHORT_US);
+  REQUIRE_TRUE(full_kept);
+  REQUIRE_TRUE(worker_done);
+  REQUIRE_EQ(atomic_load(&t.failed_line), 0);
+  REQUIRE_EQ(got, ccol_success);
+  REQUIRE_LT(got_us, (long)CHAN_AT_ONCE_US);
+  REQUIRE_EQ((int)got_char, (int)'B');
+  REQUIRE_EQ(empty, ccol_timed_out);
+  REQUIRE_GE(empty_us, (long)CHAN_SHORT_US);
+  REQUIRE_TRUE(empty_left_null);
 }
 
 void *thr_for_enable_disable_sending(void *args) {

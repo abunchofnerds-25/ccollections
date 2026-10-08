@@ -334,7 +334,12 @@ static inline void ccol_poll_refine(ccol_poll_event *ev, int fd) {
   if (fstat(fd, &est) == 0 && S_ISSOCK(est.st_mode)) {
     bits |= CCOL_POLL_IN | CCOL_POLL_RDHUP;
     if (m & _CCOL_POLL_EOF_ERR) bits |= CCOL_POLL_ERR;
-    struct pollfd pfd = {.fd = fd, .events = 0};
+    /* POLLOUT, and not an empty mask: the poll(2) of macOS reports only on
+     * the filters that the events ask for, and its POLLHUP is the EOF of
+     * those filters. For POLLOUT that is "nothing can be sent any more",
+     * which beside the EOF of the read filter is both directions down.
+     * Linux and FreeBSD report POLLHUP whatever the events ask for. */
+    struct pollfd pfd = {.fd = fd, .events = POLLOUT};
     if (poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLHUP)) bits |= CCOL_POLL_HUP;
   } else {
     bits |= CCOL_POLL_HUP;

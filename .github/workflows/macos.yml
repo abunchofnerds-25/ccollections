@@ -46,63 +46,43 @@ jobs:
           ssl="$(brew --prefix openssl@3)"
           echo "CPATH=$ssl/include" >> "$GITHUB_ENV"
           echo "LIBRARY_PATH=$ssl/lib" >> "$GITHUB_ENV"
+          # The tests make certificates with the openssl command. The one in
+          # /usr/bin is LibreSSL; this puts the OpenSSL that the library
+          # links first in PATH for every later step.
+          echo "$ssl/bin" >> "$GITHUB_PATH"
       - name: Show the toolchain
         run: |
           sw_vers
           uname -m
           cc --version
           gmake --version | head -1
-      - name: Probe the precision of timed waits
-        # A test of the HTTP client waits 20 ms on a condition variable and
-        # allows 80 ms in total. On one arm64 run it took 95 ms. This prints
-        # how late a 20 ms wait wakes on this runner, in a program that uses
-        # no library code, so a late timer can be told from a deadline that
-        # the library does not keep.
+          command -v openssl && openssl version
+      - name: Probe certificates made by LibreSSL
+        # The tests of chttpserver make a small PKI with the openssl command.
+        # On macOS /usr/bin/openssl is LibreSSL, while the library links
+        # OpenSSL 3 from Homebrew, and the chain that LibreSSL made failed
+        # verification there (error 20). This makes the same root and leaf
+        # with LibreSSL and verifies them with OpenSSL 3, in a directory of
+        # its own, and prints both certificates.
         run: |
-          cat > probe.c <<'EOF'
-          #include <pthread.h>
-          #include <stdio.h>
-          #include <stdlib.h>
-          #include <time.h>
-          static long long now_us(void) {
-            struct timespec t;
-            clock_gettime(CLOCK_MONOTONIC, &t);
-            return (long long)t.tv_sec * 1000000 + t.tv_nsec / 1000;
-          }
-          static int cmp(const void *a, const void *b) {
-            long long x = *(const long long *)a, y = *(const long long *)b;
-            return (x > y) - (x < y);
-          }
-          static void report(const char *what, long long *late, int n) {
-            qsort(late, n, sizeof(late[0]), cmp);
-            printf("%s: late by min %lld us, median %lld us, p90 %lld us, "
-                   "max %lld us\n", what, late[0], late[n / 2],
-                   late[n * 9 / 10], late[n - 1]);
-          }
-          int main(void) {
-            enum { N = 100 };
-            long long late[N];
-            pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
-            pthread_cond_t c = PTHREAD_COND_INITIALIZER;
-            struct timespec rel = {0, 20000000};
-            pthread_mutex_lock(&m);
-            for (int i = 0; i < N; i++) {
-              long long t0 = now_us();
-              pthread_cond_timedwait_relative_np(&c, &m, &rel);
-              late[i] = now_us() - t0 - 20000;
-            }
-            pthread_mutex_unlock(&m);
-            report("cond_timedwait_relative_np 20 ms", late, N);
-            for (int i = 0; i < N; i++) {
-              long long t0 = now_us();
-              nanosleep(&rel, NULL);
-              late[i] = now_us() - t0 - 20000;
-            }
-            report("nanosleep 20 ms", late, N);
-            return 0;
-          }
-          EOF
-          cc -O1 probe.c -o probe && ./probe
+          set -x
+          mkdir -p pkiprobe && cd pkiprobe
+          lssl=/usr/bin/openssl
+          ossl="$(brew --prefix openssl@3)/bin/openssl"
+          $lssl version; $ossl version
+          printf '[cli]\nextendedKeyUsage=clientAuth\n' > ext.cnf
+          $lssl req -x509 -newkey rsa:2048 -nodes -keyout root.key \
+            -out root.crt -days 2 -subj /CN=crl-root \
+            -addext basicConstraints=critical,CA:TRUE \
+            -addext keyUsage=keyCertSign,cRLSign || true
+          $lssl req -newkey rsa:2048 -nodes -keyout good.key -out good.csr \
+            -subj /CN=crl-good || true
+          $lssl x509 -req -in good.csr -CA root.crt -CAkey root.key \
+            -set_serial 2 -days 1 -extfile ext.cnf -extensions cli \
+            -out good.crt || true
+          $ossl verify -CAfile root.crt good.crt || true
+          $ossl x509 -in root.crt -noout -text || true
+          $ossl x509 -in good.crt -noout -text || true
       - name: Build the shared library
         run: gmake
       - name: Test every module

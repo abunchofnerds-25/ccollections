@@ -816,7 +816,9 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
      * CHTTP_DEADLINE_SWEEP_INTERVAL_MS (100ms). The sleep of /slow is
      * exactly 100ms. A race between those two puts the worst-case latency
      * of the sweep and the arrival of the real response too close
-     * together. The test cannot then tell them apart. */
+     * together. The test cannot then tell them apart. It signals its start
+     * as /slow does. */
+    atomic_fetch_add(&g_slow_started, 1);
     usleep(500000); /* 500 ms */
     const char *b = "{\"status\":\"ok\"}";
     srv_respond(conn_fd, 200, "OK", "application/json", NULL, b, strlen(b),
@@ -3693,20 +3695,20 @@ TEST(pool, request_timeout_counts_time_spent_waiting_for_a_pool_slot) {
    * however long that takes.
    *
    * This test uses a pool of size 1. One thread holds the only slot with a
-   * request against /slow, where the server sleeps for 100ms. The main
+   * request against /very-slow, where the server sleeps for 500ms. The main
    * thread then calls chttpclient_do against the fast /get route with a
    * request timeout of 20ms.
    *
    * This test is not vacuous. With a deadline that starts after
    * _slot_acquire, the second call blocks on the full pool for about
-   * 100ms. THEN it gets a fresh budget of 20ms, which is enough for a /get
+   * 500ms. THEN it gets a fresh budget of 20ms, which is enough for a /get
    * over the loopback, and it succeeds. With a deadline that starts at
    * entry, the 20ms already run out while the call waits for the slot. It
    * times out near the 20ms mark, long before the slot of the occupant
    * frees up. The signal is a clear success against a timeout, and it does
    * not depend on fine timing. */
   char slow_url[128], get_url[128];
-  make_url(slow_url, sizeof(slow_url), "/slow"); /* sleeps 100ms */
+  make_url(slow_url, sizeof(slow_url), "/very-slow"); /* sleeps 500ms */
   make_url(get_url, sizeof(get_url), "/get");
   atomic_store(&g_slow_started, 0);
 
@@ -3734,7 +3736,7 @@ TEST(pool, request_timeout_counts_time_spent_waiting_for_a_pool_slot) {
 
   /* Every result below goes into a local variable. Nothing asserts at
    * once. The spin above confirms that occupant_thread runs, and it does
-   * not finish until the /slow sleep of about 100ms on the server ends. A
+   * not finish until the /very-slow sleep of 500ms on the server ends. A
    * REQUIRE_* between this point and the join further down returns early.
    * The thread then still runs and still writes into the local `occupant`
    * on the stack, after the frame of this function is gone. That is a real
@@ -3770,15 +3772,16 @@ TEST(pool, request_timeout_counts_time_spent_waiting_for_a_pool_slot) {
   /* The return code alone is not enough of a signal. _slot_acquire must
    * know the deadline too. With a deadline that starts before
    * _slot_acquire, but a _slot_acquire that ignores it, this call still
-   * blocks for the full 100ms of the occupant. A plain
+   * blocks for the full 500ms of the occupant. A plain
    * ccol_cond_var_wait cannot see that the deadline already passed. A
    * later connect step or read step then finds the expired deadline. The
    * call still ends in ccol_timed_out, but only after it blocks for much
    * longer than the 20ms that the test set. That is what this test
-   * catches. The wide upper bound of 80ms separates two outcomes clearly.
-   * The first is a call that returns soon after its own 20ms. The second
-   * is a call that blocks for the 100ms of the occupant first. */
-  REQUIRE_LT(elapsed_ms, 80L);
+   * catches. The upper bound of 300ms separates two outcomes clearly. The
+   * first is a call that returns soon after its own 20ms; a timer of a busy
+   * runner can wake 150ms late, and the bound leaves room for that. The
+   * second is a call that blocks for the 500ms of the occupant first. */
+  REQUIRE_LT(elapsed_ms, 300L);
 
   REQUIRE_EQ(occupant.result_rv, ccol_success);
   REQUIRE_EQ(occupant.result_status, 200);

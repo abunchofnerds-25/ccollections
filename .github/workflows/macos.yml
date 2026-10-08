@@ -17,22 +17,32 @@ concurrency:
 
 jobs:
   macos:
-    name: macOS ${{ matrix.arch }} (Apple clang)
+    name: macOS ${{ matrix.arch }} (Apple clang${{ matrix.mode == 'asan' && ', ASan + UBSan' || '' }})
     strategy:
-      # One architecture that fails must not cancel the other: each run
-      # must give as many failures as it can.
+      # One job that fails must not cancel the others: each run must give as
+      # many failures as it can.
       fail-fast: false
       matrix:
+        runner: [macos-15, macos-15-intel]
+        mode: [plain, asan]
         include:
           - runner: macos-15
             arch: arm64
           - runner: macos-15-intel
             arch: x86_64
+          # AddressSanitizer and UndefinedBehaviorSanitizer, as the Linux
+          # sanitizer job builds them. LeakSanitizer is not part of it: Apple
+          # clang does not support it on arm64, and leaks(1) checks for
+          # leaks instead.
+          - mode: asan
+            extra_cflags: -fsanitize=address,undefined -fno-sanitize-recover=undefined
     runs-on: ${{ matrix.runner }}
+    env:
+      EXTRA_CFLAGS: ${{ matrix.extra_cflags }}
     # A test that hangs has no bound inside the process on macOS, because a
     # bounded join needs pthread_timedjoin_np(), which macOS does not have.
-    # This timeout bounds such a hang.
-    timeout-minutes: 120
+    # This timeout bounds such a hang; a sanitizer build runs slower.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
@@ -57,32 +67,55 @@ jobs:
           cc --version
           gmake --version | head -1
           command -v openssl && openssl version
-      - name: Probe certificates made by LibreSSL
-        # The tests of chttpserver make a small PKI with the openssl command.
-        # On macOS /usr/bin/openssl is LibreSSL, while the library links
-        # OpenSSL 3 from Homebrew, and the chain that LibreSSL made failed
-        # verification there (error 20). This makes the same root and leaf
-        # with LibreSSL and verifies them with OpenSSL 3, in a directory of
-        # its own, and prints both certificates.
+      - name: Probe what leaks(1) reports
+        # memtest has no valgrind on macOS, and leaks --atExit is what can
+        # take its place. Its documented exit status says only whether it
+        # found a leak, so this shows, in a program that uses no library
+        # code, what it reports for a clean exit, a leak, an exit status
+        # that is not 0 (with and without a leak), and a leak in a forked
+        # child, before memtest relies on any of it.
+        if: matrix.mode == 'plain'
         run: |
-          set -x
-          mkdir -p pkiprobe && cd pkiprobe
-          lssl=/usr/bin/openssl
-          ossl="$(brew --prefix openssl@3)/bin/openssl"
-          $lssl version; $ossl version
-          printf '[cli]\nextendedKeyUsage=clientAuth\n' > ext.cnf
-          $lssl req -x509 -newkey rsa:2048 -nodes -keyout root.key \
-            -out root.crt -days 2 -subj /CN=crl-root \
-            -addext basicConstraints=critical,CA:TRUE \
-            -addext keyUsage=keyCertSign,cRLSign || true
-          $lssl req -newkey rsa:2048 -nodes -keyout good.key -out good.csr \
-            -subj /CN=crl-good || true
-          $lssl x509 -req -in good.csr -CA root.crt -CAkey root.key \
-            -set_serial 2 -days 1 -extfile ext.cnf -extensions cli \
-            -out good.crt || true
-          $ossl verify -CAfile root.crt good.crt || true
-          $ossl x509 -in root.crt -noout -text || true
-          $ossl x509 -in good.crt -noout -text || true
+          mkdir -p leakprobe && cd leakprobe
+          cat > leakprobe.c <<'EOF'
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <sys/wait.h>
+          #include <unistd.h>
+          static void *volatile keep;
+          static __attribute__((noinline)) void lose(void) {
+            char *p = malloc(96);
+            memset(p, 1, 96);
+            keep = p;
+            keep = NULL;
+          }
+          int main(int argc, char **argv) {
+            const char *m = argc > 1 ? argv[1] : "clean";
+            if (!strcmp(m, "leak") || !strcmp(m, "leakfail")) lose();
+            if (!strcmp(m, "fork")) {
+              pid_t c = fork();
+              if (c == 0) {
+                lose();
+                _exit(0);
+              }
+              waitpid(c, NULL, 0);
+            }
+            printf("leakprobe %s done\n", m);
+            return !strcmp(m, "fail") || !strcmp(m, "leakfail") ? 3 : 0;
+          }
+          EOF
+          cc -O0 -g leakprobe.c -o leakprobe
+          for m in clean leak fail leakfail fork; do
+            echo "::group::leaks --atExit -- ./leakprobe $m"
+            leaks --atExit -- ./leakprobe "$m" > "out_$m.txt" 2>&1
+            echo "rc=$?" >> "out_$m.txt"
+            cat "out_$m.txt"
+            echo "::endgroup::"
+          done
+          for m in clean leak fail leakfail fork; do
+            echo "$m: $(tail -1 "out_$m.txt") $(grep -E 'leaks for|exited|status' "out_$m.txt" | tr '\n' ' ')"
+          done
       - name: Build the shared library
         run: gmake
       - name: Test every module

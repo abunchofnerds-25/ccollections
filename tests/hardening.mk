@@ -10,8 +10,10 @@ include $(dir $(lastword $(MAKEFILE_LIST)))../platform.mk
 # accepts and implements it on armhf, so this is a property of the pair
 # (compiler, target) and not of either one alone.
 #
-# The probe compiles an empty translation unit with the flag and with -Werror,
-# and keeps the flag only when that succeeds. The alternative is
+# The probe compiles an empty translation unit with the flag, with -Werror and
+# with EXTRA_CFLAGS, and keeps the flag only when that succeeds. Under
+# -fsanitize=address Apple clang predefines _FORTIFY_SOURCE as 0, and
+# -D_FORTIFY_SOURCE=3 then redefines it, so the probe drops it there. The alternative is
 # -Wno-error=unused-command-line-argument, which silences that diagnostic for
 # the WHOLE build, including every place where it reports a real mistake.
 #
@@ -19,7 +21,7 @@ include $(dir $(lastword $(MAKEFILE_LIST)))../platform.mk
 # in step: a suite that hardens less than the library it tests is measuring a
 # different binary from the one that ships.
 ccol-cc-option = $(shell printf 'int main(void){return 0;}' > .ccol_probe.c 2>/dev/null && \
-	if $(CC) $(1) -Werror -c .ccol_probe.c -o .ccol_probe.o >/dev/null 2>&1; \
+	if $(CC) $(EXTRA_CFLAGS) $(1) -Werror -c .ccol_probe.c -o .ccol_probe.o >/dev/null 2>&1; \
 	then printf '%s' '$(1)'; fi; rm -f .ccol_probe.c .ccol_probe.o)
 
 CCOL_HARDENING_CFLAGS := $(call ccol-cc-option,-fstack-protector-strong) \

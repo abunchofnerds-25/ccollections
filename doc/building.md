@@ -70,8 +70,11 @@ between two different configurations.
 The build compiles the library with hardening flags
 (`-fstack-protector-strong`, `-fstack-clash-protection`,
 `-D_FORTIFY_SOURCE=3`). It links the library with full RELRO. The build
-first tests each compiler flag. It does not use a flag that the compiler
-does not support for the target. To see which flags the build uses:
+first tests each compiler flag, together with `EXTRA_CFLAGS`. It does not use
+a flag that the compiler does not support for the target with those flags.
+For example, Apple clang with `-fsanitize=address` sets `_FORTIFY_SOURCE` to
+0 itself, so the build does not add `-D_FORTIFY_SOURCE=3` there. To see which
+flags the build uses:
 
 ```bash
 make hardening_report

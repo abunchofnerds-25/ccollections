@@ -216,8 +216,12 @@ EXTRA_CFLAGS ?=
 # accepts the flag on armhf and implements it, so this is a property of the
 # pair (compiler, target) and not of either one alone.
 #
-# The probe compiles an empty translation unit with the flag and with -Werror.
-# It keeps the flag only when that succeeds. This is strictly better than
+# The probe compiles an empty translation unit with the flag, with -Werror and
+# with EXTRA_CFLAGS. It keeps the flag only when that succeeds. EXTRA_CFLAGS
+# belongs in the probe because it can change the answer: with
+# -fsanitize=address, Apple clang predefines _FORTIFY_SOURCE as 0 (the
+# sanitizer checks those accesses itself), and -D_FORTIFY_SOURCE=3 then
+# redefines the macro. This is strictly better than
 # dropping the flag on a hardcoded list of targets, which goes stale as
 # compilers gain support, and better than the -Wno-error=unused-command-line-
 # argument that the alternative needs: that silences the diagnostic for the
@@ -227,7 +231,7 @@ EXTRA_CFLAGS ?=
 # below prints which flags survived for the current compiler and target. See
 # also check_hardening in ci_scripts, which reads the built artifact rather
 # than the flags, because a flag in the wrong variable disappears in silence.
-cc-option = $(shell printf 'int main(void){return 0;}' > .ccol_probe.c 2>/dev/null && 	if $(CC) $(1) -Werror -c .ccol_probe.c -o .ccol_probe.o >/dev/null 2>&1; 	then printf '%s' '$(1)'; fi; rm -f .ccol_probe.c .ccol_probe.o)
+cc-option = $(shell printf 'int main(void){return 0;}' > .ccol_probe.c 2>/dev/null && 	if $(CC) $(EXTRA_CFLAGS) $(1) -Werror -c .ccol_probe.c -o .ccol_probe.o >/dev/null 2>&1; 	then printf '%s' '$(1)'; fi; rm -f .ccol_probe.c .ccol_probe.o)
 
 HARDENING_CFLAGS := $(call cc-option,-fstack-protector-strong) \
 	$(call cc-option,-fstack-clash-protection) \
@@ -333,7 +337,7 @@ hardening_report:
 	@for f in -fstack-protector-strong -fstack-clash-protection -D_FORTIFY_SOURCE=3; do \
 		case " $(HARDENING_CFLAGS) " in \
 			*" $$f "*) echo "  ok       $$f" ;; \
-			*) echo "  DROPPED  $$f (this compiler does not implement it for this target)" ;; \
+			*) echo "  DROPPED  $$f (this compiler, with EXTRA_CFLAGS, does not take it for this target)" ;; \
 		esac; \
 	done
 

@@ -16342,12 +16342,13 @@ static void _spill_free(void *p) {
 
 /* A response whose one header line carries value_len bytes of value. */
 static char *_spill_response(size_t value_len) {
-  char *m = malloc(value_len + 128);
+  size_t cap = value_len + 128;
+  char *m = malloc(cap);
   if (!m) return NULL;
-  size_t n = (size_t)sprintf(m, "HTTP/1.1 200 OK\r\nX-Big: ");
+  size_t n = (size_t)snprintf(m, cap, "HTTP/1.1 200 OK\r\nX-Big: ");
   memset(m + n, 'v', value_len);
   n += value_len;
-  n += (size_t)sprintf(m + n, "\r\nContent-Length: 0\r\n\r\n");
+  n += (size_t)snprintf(m + n, cap - n, "\r\nContent-Length: 0\r\n\r\n");
   return m;
 }
 

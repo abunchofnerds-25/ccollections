@@ -74,7 +74,10 @@ jobs:
         # code, what it reports for a clean exit, a leak, an exit status
         # that is not 0 (with and without a leak), and a leak in a forked
         # child, before memtest relies on any of it.
+        # Each leaks call has a bound of its own, so a case that never
+        # returns prints "timed out" and the next case still runs.
         if: matrix.mode == 'plain'
+        timeout-minutes: 10
         run: |
           mkdir -p leakprobe && cd leakprobe
           cat > leakprobe.c <<'EOF'
@@ -108,8 +111,13 @@ jobs:
           cc -O0 -g leakprobe.c -o leakprobe
           for m in clean leak fail leakfail fork; do
             echo "::group::leaks --atExit -- ./leakprobe $m"
-            leaks --atExit -- ./leakprobe "$m" > "out_$m.txt" 2>&1
-            echo "rc=$?" >> "out_$m.txt"
+            rc=0
+            gtimeout -k 5s 60s leaks --atExit -- ./leakprobe "$m" \
+              > "out_$m.txt" 2>&1 || rc=$?
+            if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+              echo "timed out after 60 s" >> "out_$m.txt"
+            fi
+            echo "rc=$rc" >> "out_$m.txt"
             cat "out_$m.txt"
             echo "::endgroup::"
           done

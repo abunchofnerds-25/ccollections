@@ -402,6 +402,30 @@ jobs:
       - name: chttpserver test_engine_stop_tsan (Clang)
         run: cd tests/chttpserver && make CC=clang test_engine_stop_tsan
 
+  linux-x86_64-memtest-macos-paths:
+    name: Linux x86_64 (memtest, macOS code paths)
+    runs-on: ubuntu-latest
+    # macOS has no valgrind, and leaks(1) there drops the exit status of the
+    # test and hangs on a program that forks. The code that only macOS
+    # compiles sits behind the _CCOL_EMULATE_DARWIN_* switches, and this job
+    # turns them on, so valgrind checks those paths for leaks and memory
+    # errors on every push: the condition variable, timed locks and semaphore
+    # of common.h (SYNC), the socket setup and the bounded send of csock.h
+    # (SOCK), the portable memrchr (MEMRCHR), and the per-thread state that a
+    # key owns (TLS). The kqueue wake descriptor (WAKEFD) needs kqueue, so
+    # only FreeBSD can run it. The suites take about as long as the memtest
+    # of the GCC job.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev zlib1g-dev valgrind
+      - name: make memtest with every macOS switch
+        run: >-
+          make memtest EXTRA_CFLAGS="-D_CCOL_EMULATE_DARWIN_SYNC=1
+          -D_CCOL_EMULATE_DARWIN_SOCK=1 -D_CCOL_EMULATE_DARWIN_MEMRCHR=1
+          -D_CCOL_EMULATE_DARWIN_TLS=1"
+
   linux-i386-gcc:
     name: Linux i386 (GCC, gcc -m32)
     runs-on: ubuntu-latest

@@ -32,8 +32,9 @@ jobs:
             arch: x86_64
           # AddressSanitizer and UndefinedBehaviorSanitizer, as the Linux
           # sanitizer job builds them. LeakSanitizer is not part of it: Apple
-          # clang does not support it on arm64, and leaks(1) checks for
-          # leaks instead.
+          # clang does not support it on arm64. The CI job
+          # "Linux x86_64 (memtest, macOS code paths)" runs valgrind over the
+          # code that only macOS compiles.
           - mode: asan
             extra_cflags: -fsanitize=address,undefined -fno-sanitize-recover=undefined
     runs-on: ${{ matrix.runner }}
@@ -67,63 +68,6 @@ jobs:
           cc --version
           gmake --version | head -1
           command -v openssl && openssl version
-      - name: Probe what leaks(1) reports
-        # memtest has no valgrind on macOS, and leaks --atExit is what can
-        # take its place. Its documented exit status says only whether it
-        # found a leak, so this shows, in a program that uses no library
-        # code, what it reports for a clean exit, a leak, an exit status
-        # that is not 0 (with and without a leak), and a leak in a forked
-        # child, before memtest relies on any of it.
-        # Each leaks call has a bound of its own, so a case that never
-        # returns prints "timed out" and the next case still runs.
-        if: matrix.mode == 'plain'
-        timeout-minutes: 10
-        run: |
-          mkdir -p leakprobe && cd leakprobe
-          cat > leakprobe.c <<'EOF'
-          #include <stdio.h>
-          #include <stdlib.h>
-          #include <string.h>
-          #include <sys/wait.h>
-          #include <unistd.h>
-          static void *volatile keep;
-          static __attribute__((noinline)) void lose(void) {
-            char *p = malloc(96);
-            memset(p, 1, 96);
-            keep = p;
-            keep = NULL;
-          }
-          int main(int argc, char **argv) {
-            const char *m = argc > 1 ? argv[1] : "clean";
-            if (!strcmp(m, "leak") || !strcmp(m, "leakfail")) lose();
-            if (!strcmp(m, "fork")) {
-              pid_t c = fork();
-              if (c == 0) {
-                lose();
-                _exit(0);
-              }
-              waitpid(c, NULL, 0);
-            }
-            printf("leakprobe %s done\n", m);
-            return !strcmp(m, "fail") || !strcmp(m, "leakfail") ? 3 : 0;
-          }
-          EOF
-          cc -O0 -g leakprobe.c -o leakprobe
-          for m in clean leak fail leakfail fork; do
-            echo "::group::leaks --atExit -- ./leakprobe $m"
-            rc=0
-            gtimeout -k 5s 60s leaks --atExit -- ./leakprobe "$m" \
-              > "out_$m.txt" 2>&1 || rc=$?
-            if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
-              echo "timed out after 60 s" >> "out_$m.txt"
-            fi
-            echo "rc=$rc" >> "out_$m.txt"
-            cat "out_$m.txt"
-            echo "::endgroup::"
-          done
-          for m in clean leak fail leakfail fork; do
-            echo "$m: $(tail -1 "out_$m.txt") $(grep -E 'leaks for|exited|status' "out_$m.txt" | tr '\n' ' ')"
-          done
       - name: Build the shared library
         run: gmake
       - name: Test every module

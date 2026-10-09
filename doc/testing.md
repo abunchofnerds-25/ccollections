@@ -272,6 +272,10 @@ when it fails:
   compact mempool layout, the general thread-local storage model, a full run
   with `CCOL_FORK_SAFETY_REQUIRED=0`, and a build of the benchmarks.
 - **Linux x86-64, Clang:** `make test` and `make memtest`.
+- **Linux x86-64, macOS code paths:** `make memtest` with every
+  `_CCOL_EMULATE_DARWIN_*` switch that Linux can run. Valgrind does not run
+  on macOS, so this job checks the code that only macOS compiles for leaks
+  and memory errors.
 - **Minimal build:** all optional modules off, and a check that the library
   links only pthread and libm.
 - **Coverage threshold:** `coverage_site` and `coverage_check`.

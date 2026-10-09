@@ -4341,24 +4341,57 @@ TEST(clrucache_handle_lifecycle, concurrent_double_destroy_is_fatal) {
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-/* This test reuses slow_remote_getter, which the COALESCING GETTERS section
- * above defines. That getter sleeps 100ms before it returns. It therefore
- * holds the pin of a clrucache_get_full call open for a long time that the
- * test controls directly.
- *
- * ccol_event_loop has no slow public entry point of its own, so it carries a
- * dedicated resolve_pin_and_sleep_for_tests hook. clru_cache needs no such
- * hook. Its remote-getter mechanism already gives every caller a way to
- * block for as long as the application wants. The caller still holds the pin
- * of its resolve for that whole time. */
+/* A destroy must respect a pin that is in flight. Each test below races a
+ * thread that is inside a remote call, and so still holds the pin of its
+ * resolve, against a clru_destroy on the same handle. The remote call waits
+ * on a gate that the test opens. The destroy runs on a thread of its own, and
+ * the test checks that it has not returned while the gate is closed. A destroy
+ * that does not wait for the pin returns at once, so a slow runner only makes
+ * the check stricter; no result depends on how long a sleep lasts. */
+static atomic_int clru_gate_entered;
+static atomic_int clru_gate_open;
+
+/* Waits until flag is set, for at most 10 s. It gives false on a timeout. */
+static bool clru_wait_flag(atomic_int *flag) {
+  for (int i = 0; i < 10000; i++) {
+    if (atomic_load(flag)) return true;
+    struct timespec ts = {0, 1000000};
+    nanosleep(&ts, NULL);
+  }
+  return false;
+}
+
+/* The remote call holds until the test opens the gate, at most 10 s. */
+static void clru_gate_hold(void) {
+  atomic_store(&clru_gate_entered, 1);
+  (void)clru_wait_flag(&clru_gate_open);
+}
+
+static bool gated_remote_getter(const cmap_pair *key, cmap_pair *val) {
+  clru_gate_hold();
+  int k = *(const int *)key->ptr;
+  int *v = (int *)malloc(sizeof(int));
+  if (!v) return false;
+  *v = k + 1000;
+  val->ptr = v;
+  val->size = sizeof(int);
+  return true;
+}
+
+static bool gated_remote_setter(const cmap_pair *key, const cmap_pair *val) {
+  (void)key;
+  (void)val;
+  clru_gate_hold();
+  return true;
+}
 
 typedef struct {
   clru_cache h;
   ccol_retval_t rv;
-} clru_slow_get_arg_t;
+} clru_gated_call_arg_t;
 
-static void *clru_slow_get_thread(void *arg) {
-  clru_slow_get_arg_t *a = (clru_slow_get_arg_t *)arg;
+static void *clru_gated_get_thread(void *arg) {
+  clru_gated_call_arg_t *a = (clru_gated_call_arg_t *)arg;
   clru_cache c = a->h;
   clru_redeclare(c, int, int);
   int out = 0;
@@ -4366,66 +4399,8 @@ static void *clru_slow_get_thread(void *arg) {
   return NULL;
 }
 
-/* A destroy must respect a pin that is in flight. This test races a thread
- * that blocks inside the remote-getter call of clrucache_get_full, and still
- * holds its pin, against a clru_destroy on the same handle. The destroy must
- * block until that thread releases the pin. It must not run ahead and free
- * the cache out from under a pointer that is still resolved. */
-TEST(clrucache_handle_lifecycle, resolve_then_use_race_destroy_waits) {
-  clru_construct(cache, int, int, 8, slow_remote_getter, NULL, NULL);
-
-  clru_slow_get_arg_t get_arg = {.h = cache, .rv = ccol_success};
-  pthread_t get_thread;
-  REQUIRE_EQ(pthread_create(&get_thread, NULL, clru_slow_get_thread, &get_arg),
-             0);
-
-  /* Give the getter thread a short head start. Its resolve, and therefore
-   * its pin, then certainly happens before the destroy fires. */
-  struct timespec startup = {.tv_sec = 0, .tv_nsec = 10000000}; /* 10 ms */
-  nanosleep(&startup, NULL);
-
-  struct timespec t0, t1;
-  clock_gettime(CLOCK_MONOTONIC, &t0);
-  clru_destroy(cache); /* This must block until the 100ms remote_getter call
-                            of the getter thread ends in full. That thread
-                            still holds the pin. */
-  clock_gettime(CLOCK_MONOTONIC, &t1);
-  long elapsed_ms =
-      (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
-
-  pthread_join(get_thread, NULL);
-  REQUIRE_EQ(get_arg.rv, ccol_success);
-  /* The getter thread slept about 100ms while it held the pin. A destroy
-   * that returns well under that did NOT wait for the pin. That is, the
-   * resolve-then-use protection failed. */
-  REQUIRE_GT(elapsed_ms, 50L);
-}
-
-/* A remote setter that sleeps and then succeeds. It gives a
- * clrucache_set_full call a long window that the test controls directly.
- * The call still holds the pin of its resolve for that window. This
- * mirrors the role of slow_remote_getter in
- * resolve_then_use_race_destroy_waits above.
- *
- * The control flow of the set path around the pin differs in a real way from
- * that of the get path. The set path removes an entry from the LRU and
- * restores it, and it brackets the remote call with its own waiters++ and
- * waiters--. This is why the set path has a test of its own. The test for
- * the get side does not stand in for it. */
-static bool slow_remote_setter(const cmap_pair *key, const cmap_pair *val) {
-  (void)key;
-  (void)val;
-  usleep(100000); /* 100 ms */
-  return true;
-}
-
-typedef struct {
-  clru_cache h;
-  ccol_retval_t rv;
-} clru_slow_set_arg_t;
-
-static void *clru_slow_set_thread(void *arg) {
-  clru_slow_set_arg_t *a = (clru_slow_set_arg_t *)arg;
+static void *clru_gated_set_thread(void *arg) {
+  clru_gated_call_arg_t *a = (clru_gated_call_arg_t *)arg;
   clru_cache c = a->h;
   clru_redeclare(c, int, int);
   int k = 42, v = 100;
@@ -4433,39 +4408,84 @@ static void *clru_slow_set_thread(void *arg) {
   return NULL;
 }
 
-/* Set-side counterpart to resolve_then_use_race_destroy_waits: races a
- * thread blocked inside clrucache_set_full's remote-setter call (still
- * holding its pin) against a concurrent clru_destroy on the same handle.
- * destroy must block until the pin is released here too, not just for the
- * get path. */
+typedef struct {
+  clru_cache h;
+  atomic_int returned;
+} clru_destroy_arg_t;
+
+static void *clru_destroy_thread(void *arg) {
+  clru_destroy_arg_t *a = (clru_destroy_arg_t *)arg;
+  clru_cache c = a->h;
+  clru_redeclare(c, int, int);
+  clru_destroy(c);
+  atomic_store(&a->returned, 1);
+  return NULL;
+}
+
+/* Runs one race: call_thread enters the gated remote call, a destroy starts,
+ * and the destroy must still be waiting 200 ms later while the gate is shut.
+ * It returns through the out parameters, after every thread is joined. */
+static void clru_run_gated_destroy_race(clru_cache cache,
+                                        void *(*call_thread)(void *),
+                                        bool *entered, bool *waited,
+                                        bool *ended, ccol_retval_t *call_rv) {
+  atomic_store(&clru_gate_entered, 0);
+  atomic_store(&clru_gate_open, 0);
+  *entered = *waited = *ended = false;
+  *call_rv = ccol_unexpected_failure;
+
+  clru_gated_call_arg_t call = {.h = cache, .rv = ccol_unexpected_failure};
+  pthread_t call_tid;
+  if (pthread_create(&call_tid, NULL, call_thread, &call) != 0) return;
+  *entered = clru_wait_flag(&clru_gate_entered);
+
+  clru_destroy_arg_t d = {.h = cache};
+  atomic_init(&d.returned, 0);
+  pthread_t destroy_tid;
+  bool destroy_started =
+      *entered &&
+      pthread_create(&destroy_tid, NULL, clru_destroy_thread, &d) == 0;
+  if (destroy_started) {
+    struct timespec ts = {0, 200000000}; /* 200 ms */
+    nanosleep(&ts, NULL);
+    *waited = !atomic_load(&d.returned);
+  }
+  atomic_store(&clru_gate_open, 1);
+  pthread_join(call_tid, NULL);
+  if (destroy_started) {
+    pthread_join(destroy_tid, NULL);
+    *ended = atomic_load(&d.returned) != 0;
+  }
+  *call_rv = call.rv;
+}
+
+TEST(clrucache_handle_lifecycle, resolve_then_use_race_destroy_waits) {
+  clru_construct(cache, int, int, 8, gated_remote_getter, NULL, NULL);
+  bool entered, waited, ended;
+  ccol_retval_t rv;
+  clru_run_gated_destroy_race(cache, clru_gated_get_thread, &entered, &waited,
+                              &ended, &rv);
+  REQUIRE_TRUE(entered);
+  REQUIRE_TRUE(waited);
+  REQUIRE_TRUE(ended);
+  REQUIRE_EQ(rv, ccol_success);
+}
+
+/* The control flow of the set path around the pin differs in a real way from
+ * that of the get path. The set path removes an entry from the LRU and
+ * restores it, and it brackets the remote call with its own waiters++ and
+ * waiters--. This is why the set path has a test of its own. The test for
+ * the get side does not stand in for it. */
 TEST(clrucache_handle_lifecycle, resolve_then_use_race_destroy_waits_for_set) {
-  clru_construct(cache, int, int, 8, NULL, slow_remote_setter, NULL);
-
-  clru_slow_set_arg_t set_arg = {.h = cache, .rv = ccol_unexpected_failure};
-  pthread_t set_thread;
-  REQUIRE_EQ(pthread_create(&set_thread, NULL, clru_slow_set_thread, &set_arg),
-             0);
-
-  /* Give the setter thread a short head start. Its resolve, and therefore
-   * its pin, then certainly happens before the destroy fires. */
-  struct timespec startup = {.tv_sec = 0, .tv_nsec = 10000000}; /* 10 ms */
-  nanosleep(&startup, NULL);
-
-  struct timespec t0, t1;
-  clock_gettime(CLOCK_MONOTONIC, &t0);
-  clru_destroy(cache); /* This must block until the 100ms remote_setter call
-                            of the setter thread ends in full. That thread
-                            still holds the pin. */
-  clock_gettime(CLOCK_MONOTONIC, &t1);
-  long elapsed_ms =
-      (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
-
-  pthread_join(set_thread, NULL);
-  REQUIRE_EQ(set_arg.rv, ccol_success);
-  /* The setter thread slept about 100ms while it held the pin. A destroy
-   * that returns well under that did NOT wait for the pin. That is, the
-   * resolve-then-use protection failed for the set path. */
-  REQUIRE_GT(elapsed_ms, 50L);
+  clru_construct(cache, int, int, 8, NULL, gated_remote_setter, NULL);
+  bool entered, waited, ended;
+  ccol_retval_t rv;
+  clru_run_gated_destroy_race(cache, clru_gated_set_thread, &entered, &waited,
+                              &ended, &rv);
+  REQUIRE_TRUE(entered);
+  REQUIRE_TRUE(waited);
+  REQUIRE_TRUE(ended);
+  REQUIRE_EQ(rv, ccol_success);
 }
 
 typedef struct {

@@ -12797,15 +12797,54 @@ static void *tidr_thread(void *arg) {
   return NULL;
 }
 
+#if defined(__GLIBC__)
+/* glibc declares these two only under _GNU_SOURCE, which this file does not
+ * define. The prototypes are the ones of <pthread.h>. */
+extern int pthread_getattr_default_np(pthread_attr_t *attr);
+extern int pthread_setattr_default_np(const pthread_attr_t *attr);
+#endif
+
 /* Shuts the loop down, which joins its poller, and then starts batches of
  * threads until one of them carries the ID of that joined poller. glibc
  * hands the cached descriptor of a joined thread to a thread that starts
  * later, so this happens within the first batches. Every started thread is
- * joined before the next batch and before the function returns. */
+ * joined before the next batch and before the function returns.
+ *
+ * glibc keeps at most 40 MiB of stacks of joined threads. With the default
+ * stack of 8 MiB that is four stacks, and the shutdown joins the poller
+ * before the dispatch workers, so with four workers the stack of the poller
+ * leaves the cache and is unmapped. A later thread then gets the same ID
+ * only when a new mapping lands at the same address, which AddressSanitizer
+ * often prevents. A default stack of 1 MiB for the threads of this test
+ * keeps the stack of the poller in the cache, so a later thread always gets
+ * its ID. */
+static void tidr_run_body(size_t threads, tidr_ctx *c);
+
 static void tidr_run(size_t threads, tidr_ctx *c) {
   atomic_init(&c->matched, false);
   atomic_init(&c->shutdown_rv, -1000);
   atomic_init(&c->destroyed, false);
+#if defined(__GLIBC__)
+  pthread_attr_t saved_default;
+  bool default_saved = pthread_getattr_default_np(&saved_default) == 0;
+  bool default_changed = false;
+  if (default_saved) {
+    pthread_attr_t small;
+    if (pthread_attr_init(&small) == 0) {
+      default_changed = pthread_attr_setstacksize(&small, 1024 * 1024) == 0 &&
+                        pthread_setattr_default_np(&small) == 0;
+      pthread_attr_destroy(&small);
+    }
+  }
+#endif
+  tidr_run_body(threads, c);
+#if defined(__GLIBC__)
+  if (default_changed) pthread_setattr_default_np(&saved_default);
+  if (default_saved) pthread_attr_destroy(&saved_default);
+#endif
+}
+
+static void tidr_run_body(size_t threads, tidr_ctx *c) {
   c->loop = ccol_event_loop_create(8, 1, threads, NULL);
   c->created = c->loop != CCOL_EVENT_LOOP_INVALID;
   if (!c->created) return;

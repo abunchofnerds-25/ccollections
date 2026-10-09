@@ -57,7 +57,9 @@ make CC=clang
 ```
 
 To add compiler flags, use `EXTRA_CFLAGS`. It adds to the flags of the
-project and keeps the `-Wall -Wextra -Werror` baseline:
+project and keeps the `-Wall -Wextra -Werror` baseline. The build also gives
+these flags to the link of the shared library, so that a sanitizer links its
+runtime:
 
 ```bash
 make EXTRA_CFLAGS="-fsanitize=address,undefined"

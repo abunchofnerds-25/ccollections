@@ -587,13 +587,17 @@ $(BUILD_FLAGS_STAMP): FORCE
 
 $(LINK_FLAGS_STAMP): FORCE
 	@mkdir -p $(OBJECT_DIR)
-	@printf '%s\n' '$(CC)|$(AR)|$(SHARED_LDFLAGS)|$(STATIC_LDFLAGS)|$(OBJ_FILES_SHARED)|$(OBJ_FILES_STATIC)' > $@.tmp
+	@printf '%s\n' '$(CC)|$(AR)|$(EXTRA_CFLAGS)|$(SHARED_LDFLAGS)|$(STATIC_LDFLAGS)|$(OBJ_FILES_SHARED)|$(OBJ_FILES_STATIC)' > $@.tmp
 	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else mv $@.tmp $@; fi
 
 all: $(SHARED_LIBRARY_NAME) $(STATIC_LIBRARY_NAME) $(PKGCONFIG_FILE)
 
+# EXTRA_CFLAGS goes to the link too, so that a sanitizer that it turns on
+# links its runtime. A Linux shared object may keep the runtime symbols
+# undefined and get them from the program, but -dynamiclib on macOS refuses
+# any undefined symbol.
 $(SHARED_LIBRARY_REAL): $(OBJ_FILES_SHARED) $(LINK_FLAGS_STAMP)
-	$(CC) -o $(SHARED_LIBRARY_REAL) $(OBJ_FILES_SHARED) $(SHARED_LDFLAGS)
+	$(CC) $(EXTRA_CFLAGS) -o $(SHARED_LIBRARY_REAL) $(OBJ_FILES_SHARED) $(SHARED_LDFLAGS)
 
 $(SHARED_LIBRARY_SONAME): $(SHARED_LIBRARY_REAL)
 	ln -sf $(SHARED_LIBRARY_REAL) $(SHARED_LIBRARY_SONAME)

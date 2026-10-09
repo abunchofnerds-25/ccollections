@@ -35,6 +35,15 @@
 # CCOL_DSO_UNLOAD_ALLOW_RESIDENT=1 for a target where the loader truly cannot
 # unload the object.
 #
+# On macOS dyld never unloads a dylib that has thread-local variables (see
+# dlclose(3) of macOS), and this library has some. A dlclose() there leaves the
+# library mapped, so neither hazard above can occur, and the destructors of the
+# modules do not run until the process exits. On a Mach-O library the script
+# therefore accepts a library that stays mapped, and the probe compares the
+# count of keys only after a real unload. The probe still loads the library,
+# uses it, closes it, forks and lets a thread exit, so a crash in any of those
+# steps still fails the check.
+#
 # Run this from the root of the repository, after `make`.
 # `make check_dso_unload` and CI both use it.
 set -eu
@@ -51,19 +60,29 @@ SO="${1:-}"
 # a FreeBSD program that loads this library with dlopen() must do (the probe
 # below does; see include/internal/ctlsmodel.h). 512 bytes leaves most of the
 # glibc reserve to the other libraries of a process.
-. ci_scripts/gnu_binutils.sh
-TLS_BUDGET=512
-if ! phdrs=$("$READELF" -lW "$SO"); then
-  echo "check_dso_unload: could not read the program headers of $SO" >&2
+# dyld gives the thread-local variables of a dylib to each thread when the
+# thread first uses them, and keeps no static reserve, so a Mach-O library has
+# no such budget.
+. ci_scripts/object_format.sh
+if ! FORMAT=$(ccol_object_format "$SO"); then
+  echo "check_dso_unload: $SO is neither an ELF nor a Mach-O file" >&2
   exit 2
 fi
-tls_memsz=$(printf '%s\n' "$phdrs" | awk '$1=="TLS"{print $6}')
-if [ -n "$tls_memsz" ]; then
-  tls_bytes=$(printf '%d' "$tls_memsz")
-  if [ "$tls_bytes" -gt "$TLS_BUDGET" ]; then
-    echo "check_dso_unload: the thread-local block of $SO is $tls_bytes bytes," >&2
-    echo "                  over its budget of $TLS_BUDGET; see the comment above." >&2
-    exit 1
+if [ "$FORMAT" = elf ]; then
+  . ci_scripts/gnu_binutils.sh
+  TLS_BUDGET=512
+  if ! phdrs=$("$READELF" -lW "$SO"); then
+    echo "check_dso_unload: could not read the program headers of $SO" >&2
+    exit 2
+  fi
+  tls_memsz=$(printf '%s\n' "$phdrs" | awk '$1=="TLS"{print $6}')
+  if [ -n "$tls_memsz" ]; then
+    tls_bytes=$(printf '%d' "$tls_memsz")
+    if [ "$tls_bytes" -gt "$TLS_BUDGET" ]; then
+      echo "check_dso_unload: the thread-local block of $SO is $tls_bytes bytes," >&2
+      echo "                  over its budget of $TLS_BUDGET; see the comment above." >&2
+      exit 1
+    fi
   fi
 fi
 
@@ -74,13 +93,16 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 cat > "$tmp/probe.c" <<'PROBE'
 #define _GNU_SOURCE
 #include <dlfcn.h>
-#include <link.h>
 #include <pthread.h>
-#include <semaphore.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#else
+#include <link.h>
+#endif
 
 #include "cmempool.h"
 #include "cthreadpool.h"
@@ -111,7 +133,21 @@ static int free_key_count(void) {
 static mp_alloc_fn mp_alloc;
 static mp_free_fn mp_free;
 static ccol_mempool *mp_pool;
-static sem_t pool_used, lib_unloaded;
+/* Two pipes carry the two signals between the threads. macOS has no unnamed
+ * POSIX semaphores (sem_init fails with ENOSYS there). */
+static int pool_used[2], lib_unloaded[2];
+
+static void signal_fd(int fd) {
+  char c = 1;
+  while (write(fd, &c, 1) != 1) {
+  }
+}
+
+static void wait_fd(int fd) {
+  char c;
+  while (read(fd, &c, 1) != 1) {
+  }
+}
 
 /* This thread takes an entry from a thread-safe pool and gives it back. That
  * builds a magazine and sets the value of the key of the pool for this thread.
@@ -121,12 +157,24 @@ static void *pool_user(void *arg) {
   (void)arg;
   e = mp_alloc(mp_pool);
   if (e) mp_free(mp_pool, e);
-  sem_post(&pool_used);
-  while (sem_wait(&lib_unloaded) != 0) {
-  }
+  signal_fd(pool_used[1]);
+  wait_fd(lib_unloaded[0]);
   return NULL;
 }
 
+#if defined(__APPLE__)
+/* The images that dyld still holds. dyld unmaps an image when it drops it from
+ * this list. macOS has no /proc. */
+static int mapped_count(const char *needle) {
+  uint32_t i, count = _dyld_image_count();
+  int n = 0;
+  for (i = 0; i < count; i++) {
+    const char *name = _dyld_get_image_name(i);
+    if (name && strstr(name, needle)) n++;
+  }
+  return n;
+}
+#else
 struct loaded_query {
   const char *needle;
   int n;
@@ -157,6 +205,7 @@ static int mapped_count(const char *needle) {
   fclose(m);
   return n;
 }
+#endif
 
 int main(int argc, char **argv) {
   const char *path = argc > 1 ? argv[1] : "./libccollections.so";
@@ -222,20 +271,19 @@ int main(int argc, char **argv) {
       fprintf(stderr, "mempool creation failed: %s\n", err ? err : "(no detail)");
       return 2;
     }
-    if (sem_init(&pool_used, 0, 0) != 0 || sem_init(&lib_unloaded, 0, 0) != 0) {
-      perror("sem_init");
+    if (pipe(pool_used) != 0 || pipe(lib_unloaded) != 0) {
+      perror("pipe");
       return 2;
     }
     if (pthread_create(&t, NULL, pool_user, NULL) != 0) {
       fprintf(stderr, "pthread_create failed\n");
       return 2;
     }
-    while (sem_wait(&pool_used) != 0) {
-    }
+    wait_fd(pool_used[0]);
     mp_destroy(mp_pool);
     if (dlclose(h) != 0) {
       fprintf(stderr, "dlclose failed: %s\n", dlerror());
-      sem_post(&lib_unloaded);
+      signal_fd(lib_unloaded[1]);
       pthread_join(t, NULL);
       return 2;
     }
@@ -244,12 +292,15 @@ int main(int argc, char **argv) {
     fflush(stdout);
     /* The thread exits here, after the unload. A key of the pool that is still
      * live makes that exit call into unmapped code. */
-    sem_post(&lib_unloaded);
+    signal_fd(lib_unloaded[1]);
     pthread_join(t, NULL);
     printf("THREAD-EXIT-OK\n");
   }
 
-  {
+  /* The destructors of the modules delete their keys when the library
+   * unloads. A library that stayed mapped has not run them, so the count is
+   * compared only after a real unload. */
+  if (mapped_count(needle) == 0) {
     int keys_after = free_key_count();
     if (keys_after != keys_before) {
       fprintf(stderr, "%d thread-specific keys stayed allocated after the "
@@ -336,6 +387,12 @@ case "$out" in
 *UNLOADED*)
   if printf '%s\n' "$out" | grep -q '^NOT-UNLOADED'; then
     maps=$(printf '%s' "$out" | sed -n 's/^NOT-UNLOADED \([0-9]*\).*/\1/p')
+    if [ "$FORMAT" = macho ]; then
+      echo "check_dso_unload: accepted, dyld never unloads a dylib that has"
+      echo "                  thread-local variables (dlclose(3) of macOS). The"
+      echo "                  load, use, close, fork() and thread exit worked."
+      exit 0
+    fi
     echo "check_dso_unload: the library stayed mapped after dlclose ($maps" >&2
     echo "                  mappings), so the loader is keeping it resident." >&2
     echo "                  A fork() that works in that state proves nothing:" >&2

@@ -94,3 +94,13 @@ jobs:
             exit 1
           fi
           echo "Every module passed."
+      - name: Check the built library
+        # The gates read the dylib and the archive with the nm of the system,
+        # because GNU readelf and nm do not read Mach-O. A sanitizer build
+        # adds runtime symbols, so only the plain build runs them.
+        # check_exit_reachable needs valgrind, which does not run on macOS.
+        if: matrix.mode == 'plain'
+        run: |
+          gmake check_namespace
+          gmake check_abi
+          gmake check_dso_unload

@@ -16,6 +16,8 @@
 #      of a public header. It also catches a symbol that disappears, which
 #      breaks every application that is already linked. This layer needs only
 #      binutils, so it always runs.
+#      On macOS the same layer reads the dylib with the nm of the system,
+#      because the library there is a Mach-O file.
 #   2. The full ABI corpus. This holds the function signatures, and the layout
 #      of every public struct that those signatures reach. abidiff from
 #      libabigail does this work. This layer catches what a list of names
@@ -23,7 +25,9 @@
 #      struct that a caller passes by value, such as a config struct. This
 #      layer needs libabigail on the machine, and a baseline for the same
 #      architecture. It reports that it is not active when one of the two is
-#      missing.
+#      missing. abidiff reads only ELF, so this layer does not run on a Mach-O
+#      dylib. The public types have the same sizes and layouts on macOS as on
+#      Linux for the same architecture, and the Linux jobs check them there.
 #
 # Layer 2 works for each architecture on its own, because layout does. A change
 # can leave every structure identical byte for byte on one target and break
@@ -52,8 +56,6 @@ set -eu
 LC_ALL=C
 export LC_ALL
 
-. ci_scripts/gnu_binutils.sh
-
 SO="${1:-}"
 ABI_VERSION="${2:-}"
 MODE="${3:-check}"
@@ -66,6 +68,15 @@ MODE="${3:-check}"
 	echo "check_public_abi: $SO not built; run make first" >&2
 	exit 2
 }
+
+. ci_scripts/object_format.sh
+if ! FORMAT=$(ccol_object_format "$SO"); then
+	echo "check_public_abi: $SO is neither an ELF nor a Mach-O file" >&2
+	exit 2
+fi
+if [ "$FORMAT" = elf ]; then
+	. ci_scripts/gnu_binutils.sh
+fi
 
 ABI_DIR=abi
 SYMS_BASELINE="$ABI_DIR/libccollections.so.$ABI_VERSION.symbols"
@@ -123,7 +134,9 @@ elf_arch() {
 # CCOL_ABI_ARCH names the baseline directly. Use it for a target that this
 # mapping does not yet cover.
 ARCH="${CCOL_ABI_ARCH:-}"
-if [ -z "$ARCH" ]; then
+if [ "$FORMAT" = macho ]; then
+	ARCH=macho
+elif [ -z "$ARCH" ]; then
 	# The assignment is a separate step from the declaration. With
 	# `ARCH=$(elf_arch ...)`, the status of the assignment becomes the exit
 	# status. A failure inside the function would then leave ARCH empty, and
@@ -166,6 +179,10 @@ CORPUS_BASELINE="$ABI_DIR/libccollections.so.$ABI_VERSION.$ARCH.abi"
 ABIDW_SCOPE_FLAGS="--drop-private-types --headers-dir include"
 
 extract_symbols() {
+	if [ "$FORMAT" = macho ]; then
+		ccol_macho_defined_globals "$1"
+		return
+	fi
 	# This takes the GLOBAL and WEAK dynamic symbols that are defined, which
 	# means the ones that are not UND. It removes any @VERSION suffix. The
 	# result is exactly the set that an application can link against.
@@ -225,6 +242,15 @@ if printf '%s\n' "$current" | grep -qx '_ccol_mempool_built_with_compact_layout'
 	echo "                  written: recording from here would replace the"
 	echo "                  default build's baseline with a compact one."
 	exit 0
+fi
+
+# The baselines record the ELF build, where every layer runs. A Mach-O build
+# is compared against them and never writes them.
+if [ "$MODE" = "--update" ] && [ "$FORMAT" = macho ]; then
+	echo "check_public_abi: refused, $SO is a Mach-O dylib. Record the" >&2
+	echo "                  baselines from an ELF build on Linux, where the" >&2
+	echo "                  corpus layer runs too." >&2
+	exit 2
 fi
 
 if [ "$MODE" = "--update" ]; then
@@ -297,7 +323,11 @@ fi
 # ---------------------------------------------------------------------------
 # Layer 2: full ABI corpus
 # ---------------------------------------------------------------------------
-if ! command -v abidiff >/dev/null 2>&1; then
+if [ "$FORMAT" = macho ]; then
+	echo "check_public_abi: NOTE - $SO is a Mach-O dylib and abidiff reads only" \
+		"ELF, so signature and struct-layout checking did not run here; the" \
+		"Linux jobs check the same public types."
+elif ! command -v abidiff >/dev/null 2>&1; then
 	echo "check_public_abi: NOTE - abidiff not installed, so signature and" \
 		"struct-layout checking did not run (install abigail-tools to enable it)."
 elif [ ! -f "$CORPUS_BASELINE" ]; then

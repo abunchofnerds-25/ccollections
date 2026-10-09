@@ -159,6 +159,15 @@ make check_dso_unload      # fork() works after dlopen(), use and
 make hardening_report      # the hardening flags that this compiler accepts
 ```
 
+On macOS, use `gmake`. The checks read the dylib and the archive with the
+`nm` of the developer tools. `check_abi` then compares the exported symbols
+only, because the structural half reads DWARF from an ELF file. The ELF build
+checks the enumerators and the tags of the headers for macOS as well.
+`check_dso_unload` accepts a library that stays mapped after `dlclose()`,
+because dyld never unloads a dylib that has thread-local variables. Valgrind
+does not run on macOS, so `check_exit_reachable` runs on Linux and FreeBSD
+only.
+
 [Compatibility](compatibility.md#how-the-promise-is-checked) explains
 `check_abi` and `update_abi_baseline`. In summary: you can add a public
 function, but you must record the updated baseline and commit it with the

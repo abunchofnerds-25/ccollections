@@ -30,14 +30,29 @@
 # that you know about. The extraction must be exact, and only the compiler
 # knows exactly what an enum body declares.
 #
+# On macOS the library is a Mach-O file. Layer 1 then reads both artifacts with
+# the nm of the system, and layer 2 runs as everywhere. Layer 3 needs DWARF that
+# GNU readelf can read, which a Mach-O object does not carry, so it runs on the
+# ELF build only. There it scans the headers twice: as they are, and with
+# _CCOL_EMULATE_DARWIN_SYNC, the one switch that changes what an installed
+# header declares on macOS. The ELF run therefore checks the names that a macOS
+# build sees as well.
+#
 # Run this from the root of the repository, after `make`. `make check_namespace`
 # and CI both use it.
 set -eu
 
-. ci_scripts/gnu_binutils.sh
-
 SO="${1:-libccollections.so}"
 [ -e "$SO" ] || { echo "check_public_namespace: $SO not built; run make first" >&2; exit 2; }
+
+. ci_scripts/object_format.sh
+if ! FORMAT=$(ccol_object_format "$SO"); then
+  echo "check_public_namespace: $SO is neither an ELF nor a Mach-O file" >&2
+  exit 2
+fi
+if [ "$FORMAT" = elf ]; then
+  . ci_scripts/gnu_binutils.sh
+fi
 
 # The script reads the archive as well as the shared object. If the archive is
 # not there, the script fails and does not skip. In a green log, an artifact
@@ -70,16 +85,23 @@ fail=0
 # artifact that the script cannot read, or that is not an ELF file, gives an
 # empty symbol list. The script then reports a fully prefixed interface after
 # it examined nothing.
-if ! raw_syms=$("$READELF" --dyn-syms -W "$SO"); then
-  echo "check_public_namespace: could not read dynamic symbols from $SO" >&2
-  exit 2
+if [ "$FORMAT" = macho ]; then
+  if ! all_syms=$(ccol_macho_defined_globals "$SO"); then
+    echo "check_public_namespace: could not read the symbols of $SO" >&2
+    exit 2
+  fi
+else
+  if ! raw_syms=$("$READELF" --dyn-syms -W "$SO"); then
+    echo "check_public_namespace: could not read dynamic symbols from $SO" >&2
+    exit 2
+  fi
+  # _init and _fini come from the C runtime start files (crti.o), not from
+  # this library; FreeBSD's give them default visibility, so every FreeBSD
+  # shared object exports them. They are the only names left out.
+  all_syms=$(printf '%s\n' "$raw_syms" \
+    | awk '$7!="UND" && ($5=="GLOBAL"||$5=="WEAK") && $8!="_init" && $8!="_fini"{print $8}' \
+    | sed 's/@.*//' | sort -u)
 fi
-# _init and _fini come from the C runtime start files (crti.o), not from this
-# library; FreeBSD's give them default visibility, so every FreeBSD shared
-# object exports them. They are the only names left out.
-all_syms=$(printf '%s\n' "$raw_syms" \
-  | awk '$7!="UND" && ($5=="GLOBAL"||$5=="WEAK") && $8!="_init" && $8!="_fini"{print $8}' \
-  | sed 's/@.*//' | sort -u)
 # An empty set is never a correct answer for this library. It is exactly what a
 # stripped artifact, a truncated artifact, or an artifact in the wrong format
 # gives you.
@@ -102,13 +124,20 @@ fi
 # nothing. The header line of an archive member, such as
 # "libccollections.a[cvector.o]:", holds one field, and the field count test
 # drops it. A U entry is a reference and not a definition.
-if ! raw_ar_syms=$("$NM" --defined-only --extern-only -P "$AR_LIB"); then
-  echo "check_public_namespace: could not read symbols from $AR_LIB" >&2
-  exit 2
+if [ "$FORMAT" = macho ]; then
+  if ! ar_syms=$(ccol_macho_defined_globals "$AR_LIB"); then
+    echo "check_public_namespace: could not read symbols from $AR_LIB" >&2
+    exit 2
+  fi
+else
+  if ! raw_ar_syms=$("$NM" --defined-only --extern-only -P "$AR_LIB"); then
+    echo "check_public_namespace: could not read symbols from $AR_LIB" >&2
+    exit 2
+  fi
+  ar_syms=$(printf '%s\n' "$raw_ar_syms" \
+    | awk 'NF >= 2 && $2 != "U" { print $1 }' \
+    | sed 's/@.*//' | sort -u)
 fi
-ar_syms=$(printf '%s\n' "$raw_ar_syms" \
-  | awk 'NF >= 2 && $2 != "U" { print $1 }' \
-  | sed 's/@.*//' | sort -u)
 if [ -z "$ar_syms" ]; then
   echo "check_public_namespace: $AR_LIB defines no global symbols; refusing to" >&2
   echo "                        report on an empty archive." >&2
@@ -169,6 +198,26 @@ if [ ! -s "$dwarf_tmp/probe.c" ]; then
   exit 2
 fi
 
+# A Mach-O build has no DWARF that GNU readelf can read. The ELF build runs
+# this layer for the macOS headers too; see the top of this file.
+if [ "$FORMAT" = macho ]; then
+  echo "check_public_namespace: NOTE - enumerators, tags and typedefs are checked" \
+    "by the ELF build, for the macOS headers as well."
+  if [ "$fail" -eq 0 ]; then
+    echo "check_public_namespace: OK (symbols, macros and typedefs are fully namespaced)"
+  fi
+  exit "$fail"
+fi
+
+# Each variant compiles the same probe. "plain" gives the headers of Linux and
+# FreeBSD; "darwin" gives the headers of macOS, where common.h declares the
+# types of _CCOL_EMULATE_DARWIN_SYNC.
+for v in plain darwin; do
+case "$v" in
+plain) vflags='' ;;
+darwin) vflags='-D_CCOL_EMULATE_DARWIN_SYNC=1' ;;
+esac
+
 # -w is here because this probe exists to describe types. It does not lint the
 # headers again, because the ordinary build already does that under -Werror.
 # -std=gnu11 is here because the headers are written to that standard, and
@@ -176,16 +225,16 @@ fi
 # default is a later standard changes the meaning of bool, of static_assert,
 # and of an empty parameter list. A probe on the default of the compiler
 # therefore describes a different set of types from the set that ships.
-if ! $CC -Iinclude -std=gnu11 -g3 -gdwarf-5 -fno-eliminate-unused-debug-types -w \
-     -c "$dwarf_tmp/probe.c" -o "$dwarf_tmp/probe.o" 2>"$dwarf_tmp/cc.err"; then
-  echo "check_public_namespace: could not compile the debug-info probe, so" >&2
+if ! $CC -Iinclude -std=gnu11 -g3 -gdwarf-5 -fno-eliminate-unused-debug-types -w $vflags \
+     -c "$dwarf_tmp/probe.c" -o "$dwarf_tmp/probe_$v.o" 2>"$dwarf_tmp/cc_$v.err"; then
+  echo "check_public_namespace: could not compile the debug-info probe ($v), so" >&2
   echo "                        enumerators and tags were not checked." >&2
-  sed 's/^/  /' "$dwarf_tmp/cc.err" >&2
+  sed 's/^/  /' "$dwarf_tmp/cc_$v.err" >&2
   exit 2
 fi
 
-if ! "$READELF" --debug-dump=rawline "$dwarf_tmp/probe.o" > "$dwarf_tmp/line" 2>/dev/null ||
-   ! "$READELF" --debug-dump=info "$dwarf_tmp/probe.o" > "$dwarf_tmp/info" 2>/dev/null; then
+if ! "$READELF" --debug-dump=rawline "$dwarf_tmp/probe_$v.o" > "$dwarf_tmp/line_$v" 2>/dev/null ||
+   ! "$READELF" --debug-dump=info "$dwarf_tmp/probe_$v.o" > "$dwarf_tmp/info_$v" 2>/dev/null; then
   echo "check_public_namespace: could not read debug information back from the" >&2
   echo "                        probe object; enumerators were not checked." >&2
   exit 2
@@ -289,11 +338,13 @@ END {
   if (enumerators == 0){ print "PROBE-ERROR no enumerators were found at all" > "/dev/stderr"; exit 3 }
   if (typedefs == 0)   { print "PROBE-ERROR no typedefs were found in an installed header" > "/dev/stderr"; exit 3 }
 }
-' linefile="$dwarf_tmp/line" "$dwarf_tmp/line" "$dwarf_tmp/info" > "$dwarf_tmp/names" || {
+' linefile="$dwarf_tmp/line_$v" "$dwarf_tmp/line_$v" "$dwarf_tmp/info_$v" > "$dwarf_tmp/names_$v" || {
   echo "check_public_namespace: the debug-info scan failed; enumerators and" >&2
   echo "                        tags were not checked." >&2
   exit 2
 }
+done
+cat "$dwarf_tmp"/names_plain "$dwarf_tmp"/names_darwin > "$dwarf_tmp/names"
 
 bad_dwarf=$(awk -F'\t' -v ns="$NS" -v allow="$ALLOW" '
       $3 !~ ns && $3 !~ /^_/ && $3 !~ allow { print $2 ": " $1 " " $3 }' \

@@ -12,30 +12,28 @@ const char *chttpsvr_req_header(const chttpsvr_req *req,
 .fi
 .SH DESCRIPTION
 .nf
-Returns the value of the request header with the name name.  It
-returns NULL when that header is absent.  The lookup ignores the
-letter case.  It returns the last value when a header appears more
-than once.
+Returns the value of the request header called name, or NULL when that
+header is absent.  The lookup is case-insensitive, and when a header
+appears more than once the last value is returned.
 
-The pointer stays valid for the length of the handler call.
+The pointer stays valid for the duration of the handler call.
 .fi
 .SH NOTES
 .nf
 The trailer fields of a chunked request body (RFC 7230 4.1.2) are not
-request headers, and this function never returns one.  This function
-answers only from the header block of the request.  A trailer field of
-any name therefore reads as absent, on a buffered route and on a
-streaming route alike.
+request headers, and this function never returns one: it answers only
+from the header block of the request, so a trailer field of any name
+reads as absent, on buffered and streaming routes alike.
 
-Trailer fields arrive after the server routes the request, and after
-the middleware runs.  On a buffered route they also arrive after the
-server already read the header block.  An index over trailers next to
-headers would therefore let a client add a trailer that displaces a
-header that an upstream proxy set, on a request that the server
-already committed to.  X-Forwarded-For is one such header, and so is
-the identity header of an authentication gateway.  This server has no
-trailer accessor at all.  A deployment that needs trailer semantics
-should terminate the trailers in front of this server.
+Trailer fields arrive after the server has routed the request and
+after the middleware has run, and on a buffered route also after the
+server has read the header block.  Indexing trailers alongside headers
+would therefore let a client add a trailer that displaces a header set
+by an upstream proxy (such as X-Forwarded-For, or the identity header
+of an authentication gateway) on a request the server has already
+committed to.  This server has no trailer accessor at all; a
+deployment that needs trailer semantics should terminate the trailers
+in front of this server.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_req_method (3),

@@ -1,122 +1,121 @@
 C COLLECTIONS LIBRARY - MAN PAGE TREE
 ======================================
 
-This directory holds real troff and groff manual pages for the library. There
-is one file for each documented symbol, except for a family of related
-constants, which shares one page named after the family.
+This directory holds the real troff/groff manual pages for the library. There
+is one file per documented symbol, with one exception: a family of related
+constants shares a single page named after the family.
 
 
 What gets a page
 ----------------
 
-A symbol gets a page only when somebody needs it to USE the library. That is
-the whole test. A declaration in an installed header does not qualify a
-symbol. Neither does a ccol_ prefix, nor being exported from the shared
-object, nor being a static inline that a consumer could call.
+A symbol gets a page only if someone needs it in order to USE the library;
+that is the whole test. Being declared in an installed header does not
+qualify a symbol, and neither does a ccol_ prefix, being exported from the
+shared object, or being a static inline function that a consumer could
+technically call.
 
-Before you add a page, name the user-facing task that nobody can do without
-that symbol. When there is no such task the symbol is internal, and it gets
-no page, no section in README.md or in a guide under doc/, and no entry in
-a SEE ALSO. You can name it in the prose of another page, to tell what
-the symbol of that page does.
+Before you add a page, name the user-facing task that cannot be done without
+that symbol. If there is no such task, the symbol is internal: it gets no
+page, no section in README.md or in a guide under doc/, and no SEE ALSO
+entry. You may still mention it in the prose of another page to explain what
+that page's symbol does.
 
 A name that starts with an underscore is internal, and the underscore is
-there to say so at every call site. Such a name never gets a page. An
-internal symbol can still live in an installed header and still be exported,
-because a header cannot hide what the library itself needs across
-translation units. The underscore, not the header and not the symbol table,
-is what marks the boundary.
+there precisely to say so at every call site. Such a name never gets a page.
+An internal symbol may still live in an installed header and still be
+exported, because a header cannot hide what the library itself needs across
+translation units. It is the underscore, not the header or the symbol table,
+that marks the boundary.
 
-These are internal by that test, and none of them has a page:
+By that test, the following are internal, and none of them has a page:
 
     _csort_default_<type>_comparison_proc
         Every caller reaches these through csort_get_default_comparison_proc,
-        which selects one from the type of its argument.
+        which picks one from the type of its argument.
 
     _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE
         The size arithmetic that CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER
-        applies for the caller.
+        performs on the caller's behalf.
 
     _ccol_find_nearest_gte_power_of_two, ccol_strdup, ccol_growbuf_*
         Helpers that the containers use for their own growth and storage.
 
-A literal constant that matters only as an argument, a buffer size or a
-field value of some function never gets a page of its own, even when a
-caller types its name. Document it, with the value that it expands to, on
-the page of each function or macro that takes it. A buffer length such as
-CHTTPSVR_PEER_CERT_SHA256_LEN belongs on the page of the function that
-fills the buffer, and a sentinel such as CHTTPSVR_NO_DEADLINE belongs where
-the field that accepts it is described (chttpsvr_start(3)). A set of
-constants that many unrelated functions share, such as the HTTP status
-codes of CHTTP_STATUS(3), keeps one page of its own, so that the table is
-written once.
+A literal constant that only matters as an argument, a buffer size or a field
+value of some function never gets a page of its own, even when callers type
+its name. Document it, together with the value it expands to, on the page of
+each function or macro that takes it. A buffer length such as
+CHTTPSVR_PEER_CERT_SHA256_LEN belongs on the page of the function that fills
+the buffer, and a sentinel such as CHTTPSVR_NO_DEADLINE belongs wherever the
+field that accepts it is described (chttpsvr_start(3)). A set of constants
+that many unrelated functions share, such as the HTTP status codes of
+CHTTP_STATUS(3), keeps one page of its own so that the table is written only
+once.
 
 Layout
 ------
 
     man/
       <module>/<symbol>.3   one page per raw C function or type-inferred macro
-      <module>/<module>.7   module overview page, where present. It holds
-                            the rules of the whole module that fit on no
-                            single page
-      common/ccollections.7 the overview of the whole library. It holds
-                            the conventions that all modules share. Its
-                            name is the name of the library and not
-                            common.h. It therefore installs under a name
-                            of its own.
+      <module>/<module>.7   the module overview page, where there is one. It
+                            holds the module-wide rules that do not fit on
+                            any single page
+      common/ccollections.7 the overview of the whole library, with the
+                            conventions that all modules share. It is named
+                            after the library rather than after common.h, so
+                            it installs under a name of its own
 
-<module> is the name of the header without the .h at the end. For example:
-cvector, chashmap, cjson. The raw functions and their companion type-inferred
-macros are together in the same module directory. Their names never collide,
-so the file system needs no rule to tell them apart. The ".TH" line of each
-page still records whether that page documents a function or a macro. The
-fourth field reads "C Collections Library - Functions" or "C Collections
-Library - Macros". The SYNOPSIS of each page shows the real declaration in
-both cases. The SYNOPSIS and the EXAMPLES name each header the way an
+<module> is the name of the header without its .h suffix, for example
+cvector, chashmap or cjson. The raw functions and their companion
+type-inferred macros live together in the same module directory; their names
+never collide, so the file system needs no rule to keep them apart. The ".TH"
+line of each page still records whether it documents a function or a macro:
+its fourth field reads either "C Collections Library - Functions" or "C
+Collections Library - Macros". In both cases the SYNOPSIS shows the real
+declaration, and the SYNOPSIS and EXAMPLES name each header the way an
 application includes it from an install, as <ccollections/NAME.h>.
 
-One symbol can have more than one name. An example is cjson_parse_mp and its
-cjson_parse wrapper. Such a symbol gets one page with the content, and one or
-more small ".so" redirect pages. This is how the glibc and BSD man pages
-handle an alias.
+Some symbols have more than one name, such as cjson_parse_mp and its
+cjson_parse wrapper. Such a symbol gets one page with the content plus one or
+more small ".so" redirect pages, which is how the glibc and BSD man pages
+handle aliases.
 
-A redirect page holds exactly one line, ".so <module>/<symbol>.3", and
+A redirect page contains exactly one line, ".so <module>/<symbol>.3", and
 nothing else: no ".TH" line and no comment. man then renders the target page
-with the header and the footer of that page, and mandb records the alias as
-a link to the target. The NAME section of the target lists every alias name,
-so that whatis and apropos find each one.
+with that page's header and footer, and mandb records the alias as a link to
+the target. The NAME section of the target lists every alias, so that whatis
+and apropos can find each one.
 
-A family of related constants is different. The CHTTP_STATUS_* constants of
-chttp.h are one such family: they carry no behavior of their own, and a
-reader wants the whole table at once. They share one page, man/chttp/
-CHTTP_STATUS.3, whose NAME section lists every constant so that apropos and
-whatis find each one. There are no redirect pages for the individual names,
-so "man CHTTP_STATUS" opens the table and "man CHTTP_STATUS_OK" does not
-resolve.
+A family of related constants is handled differently. The CHTTP_STATUS_*
+constants of chttp.h are one such family: they carry no behavior of their
+own, and a reader wants to see the whole table at once. They share a single
+page, man/chttp/CHTTP_STATUS.3, whose NAME section lists every constant so
+that apropos and whatis can find each one. There are no redirect pages for
+the individual names, so "man CHTTP_STATUS" opens the table, but "man
+CHTTP_STATUS_OK" does not resolve.
 
 Viewing a page
 --------------
 
-`make install` puts every page from here into a real man3 and man7 tree. See
-the root Makefile. After that, a plain `man cvector_create` works from any
-directory, and so does every alias. A constant that shares a family page is
-the exception; reach it by the name of that page.
+`make install` copies every page from here into a real man3 and man7 tree
+(see the root Makefile). After that, a plain `man cvector_create` works from
+any directory, as does every alias. The one exception is a constant that
+shares a family page, which you reach through the name of that page.
 
-You can also read a page without an install. Run man from inside this
-directory, so that the ".so <module>/<symbol>.3" redirect of an alias page
-resolves correctly. See above for those pages. "man -l" resolves a ".so"
-target relative to the current working directory. It does not resolve it
-relative to the location of the page:
+You can also read a page without installing anything. Run man from inside
+this directory, so that the ".so <module>/<symbol>.3" redirect of an alias
+page (described above) resolves correctly: "man -l" resolves a ".so" target
+relative to the current working directory, not relative to the location of
+the page.
 
     cd man && man -l cvector/cvector_create.3
     cd man && man -l cjson/cjson_parse.3   # an alias page, .so and all
 
-Regenerating
-------------
+Maintenance
+-----------
 
-A person writes each of these pages. No tool generates them from the source
-comments. When the documented behavior of a function or a macro changes, edit
-the .3 file for that symbol directly. Keep the section order of the pages
-around it: NAME, LIBRARY, SYNOPSIS, DESCRIPTION, PARAMETERS, RETURN VALUE,
-NOTES, WARNINGS, THREAD SAFETY, EXAMPLES, SEE ALSO. Write every new page in
-ASCII only.
+When the documented behavior of a function or macro changes, edit the .3
+file for that symbol directly, and keep the section order used by the
+pages around it: NAME, LIBRARY, SYNOPSIS, DESCRIPTION, PARAMETERS, RETURN
+VALUE, NOTES, WARNINGS, THREAD SAFETY, EXAMPLES, SEE ALSO. Write every new
+page in plain ASCII.

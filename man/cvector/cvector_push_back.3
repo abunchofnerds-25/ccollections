@@ -11,10 +11,10 @@ ccol_retval_t cvector_push_back(cvec v, const void *new_elem);
 .fi
 .SH DESCRIPTION
 .nf
-Adds a new element to the end of the vector. The vector doubles its
-capacity by itself when it is full. The function copies the element into
-the vector. The copy uses an assignment that the library selects from the
-element size.
+Adds a new element to the end of the vector, which doubles its capacity
+by itself when it is full. The function copies the element into the
+vector with an assignment that the library selects from the element
+size.
 .fi
 .SH PARAMETERS
 .nf
@@ -34,8 +34,8 @@ Amortized O(1) complexity
 The function copies the element into the vector
 The capacity doubles when the vector is full (2x scaling factor)
 Asserts if v is NULL
-new_elem can safely point into the backing buffer of v. One example is
-a pointer from cvector_data_ptr(3) or from cvector_at(3). A capacity
+new_elem can safely point into the backing buffer of v, for example a
+pointer from cvector_data_ptr(3) or from cvector_at(3); a capacity
 growth that this call starts does not invalidate such a pointer
 .fi
 .SH "SEE ALSO"

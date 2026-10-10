@@ -11,12 +11,11 @@ chttpsvr_declare_scoped(name);
 .fi
 .SH DESCRIPTION
 .nf
-This macro works like chttpsvr_declare, but it also attaches a GCC
-cleanup attribute.  The compiler therefore destroys the server
-automatically when name leaves the scope.  It destroys the server in
-exactly the way that chttpsvr_destroy does.  The macro initializes the
-variable to CHTTPSVR_INVALID.  The cleanup destroys nothing when name
-still holds that value at the end of the scope.
+Works like chttpsvr_declare, but also attaches a GCC cleanup
+attribute, so the server is destroyed automatically, exactly as
+chttpsvr_destroy would destroy it, when name goes out of scope.  The
+macro initializes the variable to CHTTPSVR_INVALID, and the cleanup
+does nothing if name holds that value at the end of the scope.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_construct_scoped (3),

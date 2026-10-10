@@ -22,9 +22,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* The thread cache of a thread-safe pool after the module unloads. The unload
- * deletes the thread-specific key of the cache, and that cannot be undone in
- * one process. These tests therefore run in a binary of their own, so that no
+/* The thread cache of a thread-safe pool after the module unloads. Because
+ * the unload deletes the thread-specific key of the cache, which cannot be
+ * undone in one process, these tests run in a binary of their own, so that no
  * other test of the suite runs with the cache gone. */
 
 #include <cmempool.h>

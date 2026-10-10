@@ -15,11 +15,11 @@ CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(
 .fi
 .SH DESCRIPTION
 .nf
-Declares a uint8_t array with the correct size for a ranged memory pool
-that has the given parameters. The caller can then give the buffer to
-ccol_r_mempool_create_from_preallocated_buffer(). The macro includes the
-status byte of every element of every sub-pool in the size that it
-computes. The buffer holds every sub-pool in contiguous memory.
+Declares a uint8_t array sized correctly for a ranged memory pool with the
+given parameters, so that the caller can pass the buffer to
+ccol_r_mempool_create_from_preallocated_buffer(). The size that the macro
+computes includes the status byte of every element of every sub-pool, and
+the buffer holds all the sub-pools in contiguous memory.
 .fi
 .SH PARAMETERS
 .nf
@@ -30,29 +30,27 @@ number_of_smallest_size_elems_power_of_two  Exponent for smallest pool count
 .fi
 .SH NOTES
 .nf
-The buffer goes on the stack or into static storage, by context
-This is useful for embedded systems, and when you do not want a heap
+The buffer goes on the stack or into static storage, depending on context
+This is useful on embedded systems, and whenever you do not want a heap
   allocation
 The macro declares the buffer with the alignment that every entry the
-  pool hands out is sure to meet. That alignment is 16 bytes. You can
-  therefore give the buffer directly to
-  ccol_r_mempool_create_from_preallocated_buffer(). You do not have to
-  think about alignment. The result is that every single sub-pool
-  segment inside the buffer stays correctly aligned. The 16 is a fixed
-  constant. CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER(3) gives the
-  reason
+  pool hands out is guaranteed to meet, which is 16 bytes. You can
+  therefore pass the buffer directly to
+  ccol_r_mempool_create_from_preallocated_buffer() without having to
+  think about alignment, and every single sub-pool segment inside the
+  buffer stays correctly aligned. The 16 is a fixed constant; see
+  CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER(3) for the reason
 The macro sizes the buffer exactly as
   ccol_r_mempool_create_from_preallocated_buffer() requires for the same
   parameters
-A _Static_assert rejects three cases at compile time. The first is a set
-  of parameters that would make the required buffer size overflow
-  size_t. The second is a number_of_smallest_size_elems_power_of_two
-  below largest_size_power_of_two - smallest_size_power_of_two. The
-  third is a smallest_size_power_of_two below 4. The smallest element
-  that a ranged pool serves is 16 bytes, and a buffer declared for
-  anything smaller could only go to a constructor that refuses it.
-  Without the assert, the macro silently produces an array of the wrong
-  size
+A _Static_assert rejects three cases at compile time: a set of
+  parameters that would make the required buffer size overflow size_t,
+  a number_of_smallest_size_elems_power_of_two below
+  largest_size_power_of_two - smallest_size_power_of_two, and a
+  smallest_size_power_of_two below 4. The smallest element that a ranged
+  pool serves is 16 bytes, so a buffer declared for anything smaller
+  could only go to a constructor that refuses it. Without the assert,
+  the macro would silently produce an array of the wrong size
 .fi
 .SH EXAMPLES
 .nf

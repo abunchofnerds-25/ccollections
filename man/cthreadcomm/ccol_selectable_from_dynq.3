@@ -11,21 +11,20 @@ ccol_selectable_from_dynq(q, dir);
 .fi
 .SH DESCRIPTION
 .nf
-This macro builds a ccol_selectable value. That value is a tagged
-union, and its type here is ccol_selectable_dynq. It wraps the
-ccol_dynamic_queue pointer that you give, with the direction that you
-give.
+This macro builds a ccol_selectable value, a tagged union whose type
+here is ccol_selectable_dynq, that wraps the ccol_dynamic_queue
+pointer that you give, with the direction that you give.
 
   ccol_select_read; wait for at least one message to arrive (read-wait)
   ccol_select_write; wait until sending is enabled and the queue holds
                      fewer than ccol_max_elem_count messages, the same
                      ceiling ccol_dynmq_send_zc() itself enforces
 
-A ccol_dynamic_queue is unbounded in practice. The library therefore
-always treats it as writable, for as long as writes are turned on. You
-need ccol_select_write on a ccol_dynamic_queue in one case only. That
-case is a call to ccol_dynmq_disable_sending(), where the caller must
-know when the queue becomes writable again.
+A ccol_dynamic_queue is unbounded in practice, so the library always
+treats it as writable for as long as writes are turned on. You need
+ccol_select_write on a ccol_dynamic_queue in one case only: after a
+call to ccol_dynmq_disable_sending(), when the caller must know when
+the queue becomes writable again.
 .fi
 .SH PARAMETERS
 .nf

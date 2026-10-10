@@ -11,24 +11,24 @@ chmap_declare(hm_name, key_t, val_t);
 .fi
 .SH DESCRIPTION
 .nf
-Declares a hash map handle named hm_name. It also declares the companion
-type variables. These variables carry key_t and val_t to every later
-type-inferred macro. The macro creates nothing. The handle holds no map until
-one of the init macros runs.
+Declares a hash map handle named hm_name, together with the companion
+type variables that carry key_t and val_t to every later type-inferred
+macro. The macro creates nothing: the handle holds no map until one of
+the init macros runs.
 
-This is the declare half of a declare-then-create pair. chmap_init(3),
-chmap_init_mp(3), chmap_init_ch(3) and chmap_init_full(3) are the matching
-create half. chmap_construct(3) and its variants do both in one step. They
-are the shorter way to write the common case. Two separate steps are what
-a handle needs when the code declares it in one place and creates it in
-another. Examples are a map whose allocator a condition chooses, and a map
-that the code creates only after the enclosing function checks its
-arguments.
+This is the declare half of a declare-then-create pair, and
+chmap_init(3), chmap_init_mp(3), chmap_init_ch(3) and chmap_init_full(3)
+are the matching create half. chmap_construct(3) and its variants do
+both in one step and are the shorter way to write the common case. Two
+separate steps are what a handle needs when the code declares it in one
+place and creates it in another, for example a map whose allocator a
+condition chooses, or a map that the code creates only after the
+enclosing function checks its arguments.
 
 The macro leaves the handle and the companion type variables
-uninitialized. The handle therefore holds no usable value, not even NULL,
-before an init macro assigns one. chmap_declare_scoped(3) sets the handle
-to NULL instead, and it also destroys the map at scope exit.
+uninitialized, so the handle holds no usable value, not even NULL,
+before an init macro assigns one. chmap_declare_scoped(3) sets the
+handle to NULL instead, and also destroys the map at scope exit.
 .fi
 .SH PARAMETERS
 .nf
@@ -44,18 +44,18 @@ expression.
 .fi
 .SH NOTES
 .nf
-Expands to a sequence of declarations. Put it where a declaration is
-allowed. It takes a trailing semicolon of its own
-The companion type variables follow the scope of the handle. A function
-that gets the handle therefore needs chmap_redeclare(3) there
-Nothing is destroyed automatically. Call chmap_destroy(3) to destroy the
+Expands to a sequence of declarations, so put it where a declaration is
+allowed; it takes a trailing semicolon of its own
+The companion type variables follow the scope of the handle, so a
+function that receives the handle needs chmap_redeclare(3) there
+Nothing is destroyed automatically; call chmap_destroy(3) to destroy the
 map that an init macro creates into this handle
 .fi
 .SH WARNINGS
 .nf
-Every other type-inferred macro reads the handle. Do not call one between this
-declaration and an init macro. Such a call reads an uninitialized
-variable.
+Every other type-inferred macro reads the handle, so do not call one
+between this declaration and an init macro: such a call reads an
+uninitialized variable.
 .fi
 .SH EXAMPLES
 .nf

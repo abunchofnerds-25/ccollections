@@ -11,29 +11,30 @@ ccol_retval_t ccol_event_loop_resume(ccol_event_loop loop, ccol_event_reg reg);
 .fi
 .SH DESCRIPTION
 .nf
-This function works on an fd only. A call on a registration that comes
+This function works on an fd only: a call on a registration that comes
 from a queue selectable or a ccol_channel selectable returns
-ccol_invalid_args. ccol_event_loop_modify has the same restriction.
+ccol_invalid_args, the same restriction that ccol_event_loop_modify
+has.
 
 This function recomputes the combined epoll interest mask of the fd so
 that the mask includes reg again. This is an ordinary EPOLL_CTL_MOD
-call when the fd is still in the epoll interest set of the kernel.
-That is the case when the other direction on the same fd is live and
-not paused. It is an EPOLL_CTL_ADD call when ccol_event_loop_pause
-removed the fd from that set completely, because every direction was
-paused. The direction of reg, its generation and what it adds to
-ccol_event_loop_reg_count all stay as they were before the pause. This
+call when the fd is in the epoll interest set of the kernel, which is
+the case when the other direction on the same fd is live and not
+paused, and an EPOLL_CTL_ADD call when ccol_event_loop_pause removed
+the fd from that set completely because every direction was paused.
+The direction of reg, its generation and what it adds to
+ccol_event_loop_reg_count all stay as they were before the pause: this
 call only reverses what ccol_event_loop_pause did to the interest
 mask.
 
 The call also arms again a reg that the loop stopped watching because
-an event reached it that none of its handlers can take; see
-ccol_event_loop_add(3).
+an event reached it that none of its handlers can take (see
+ccol_event_loop_add(3)).
 
-A resume of a reg that is neither paused nor stopped in that way
-succeeds and does nothing. That covers a reg that nothing ever paused,
-and one that something already resumed. This mirrors the "already in the state that you ask
-for" behaviour of ccol_event_loop_modify. It is deliberate, and it is
+A resume of a reg that is neither paused nor stopped in that way (a
+reg that nothing ever paused, or one that something already resumed)
+succeeds and does nothing. This mirrors the "already in the state that
+you ask for" behaviour of ccol_event_loop_modify; it is deliberate and
 not an error.
 .fi
 .SH PARAMETERS
@@ -45,21 +46,21 @@ reg   Registration to resume.
 .nf
 ccol_success        The function resumed reg, or reg was not paused.
 ccol_invalid_args   loop is CCOL_EVENT_LOOP_INVALID, or a handle that
-                    is stale, or one that something already destroyed.
-                    Or reg is CCOL_EVENT_REG_INVALID, or it fails to
-                    resolve for another reason. Or reg is a
+                    is stale, or one that something already destroyed;
+                    or reg is CCOL_EVENT_REG_INVALID, or it fails to
+                    resolve for another reason; or reg is a
                     registration for a queue or for a ccol_channel. A
                     reg that fails to resolve covers a removal at the
-                    same time. For example, something closes the
-                    connection while the caller still thinks that it
-                    owns a paused registration to resume.
+                    same time, for example when something closes the
+                    connection while the caller believes that it owns
+                    a paused registration to resume.
 .fi
 .SH THREAD SAFETY
 .nf
-Safe to call at the same time as ccol_event_loop_remove(). Also safe to
-call from inside a callback that runs on one of the reactor threads.
-A caller commonly calls it from a thread other than the one that
-paused reg. See the EXAMPLES section of ccol_event_loop_pause(3).
+Safe to call at the same time as ccol_event_loop_remove(), and from
+inside a callback that runs on one of the reactor threads. A caller
+commonly calls it from a thread other than the one that paused reg;
+see the EXAMPLES section of ccol_event_loop_pause(3).
 .fi
 .SH "SEE ALSO"
 .BR ccol_event_loop_pause (3),

@@ -12,33 +12,31 @@ ccol_retval_t cyaml_list_push(cyaml seq, cyaml child);
 .SH DESCRIPTION
 .nf
 Append child to the CYAML_LIST node seq.  On success, ownership of child
-transfers to seq.  Do not free child after such a call.
+transfers to seq, so do not free child after such a call.
 
 One return code carries one rule about child.  ccol_invalid_args always
 means that the function rejected the arguments and did not touch child
-at all.  The caller still owns child and must destroy it itself.  Every
+at all: the caller still owns child and must destroy it itself.  Every
 other failure takes ownership of child and deep-frees it before the
-function returns.  The caller must not destroy child after any of those
-failures.  The caller can therefore act on the return code alone, and
-that is the only way to act on one code at all.
+function returns, so the caller must not destroy child after any of
+those failures.  The caller can therefore act on the return code alone,
+and that is the only way to act on one code at all.
 
-The function rejects these arguments with ccol_invalid_args.  They are a
-NULL child, a NULL seq, and a seq that is not a CYAML_LIST.  It also
-rejects a child that is already attached to a list parent or a
-dictionary parent.  It rejects a child that is seq itself.  A child that
-is already attached would have two
-owners if the function accepted it.  Each owner frees the node when its
-own parent is destroyed.  A node that you just created is always
-acceptable, and so is a fresh cyaml_clone().  A borrowed reference from
-cyaml_get(), cyaml_list_get() or cyaml_dictionary_get() is never
-acceptable, because each of those names a node that already has a
-parent.
+The function rejects with ccol_invalid_args a NULL child, a NULL seq, a
+seq that is not a CYAML_LIST, a child that is already attached to a
+list parent or a dictionary parent, and a child that is seq itself.  A
+child that is already attached would have two owners if the function
+accepted it, and each owner frees the node when its own parent is
+destroyed.  A node that you just created is always acceptable, and so
+is a fresh cyaml_clone().  A borrowed reference from cyaml_get(),
+cyaml_list_get() or cyaml_dictionary_get() is never acceptable, because
+each of those names a node that already has a parent.
 
-child must also not already hold seq somewhere in its own subtree.  The
-function does not check this.  A cycle that you make this way turns a
-later cyaml_destroy(), cyaml_clone() or cyaml_serialize() call on the
+child must also not already hold seq somewhere in its own subtree, and
+the function does not check this.  A cycle that you make this way turns
+a later cyaml_destroy(), cyaml_clone() or cyaml_serialize() call on the
 tree into undefined behaviour.  The attachment rule above excludes this
-case for every node that has a parent.  What stays unchecked is an
+case for every node that has a parent; what stays unchecked is an
 ancestor with no parent, which is the root of the tree that seq belongs
 to.
 .fi
@@ -52,10 +50,10 @@ child  Node to append.
 ccol_success, ccol_invalid_args, ccol_not_enough_memory, or
 ccol_container_full.
 ccol_invalid_args leaves child untouched, and the caller still owns it.
-It comes back when seq or child is NULL.  It also comes back when seq is
-not a list, when child is already attached, or when child is seq itself.
+It comes back when seq or child is NULL, when seq is not a list, when
+child is already attached, or when child is seq itself.
 ccol_container_full means that the list holds the largest element count
-that it can represent.  A real program does not reach that count.
+that it can represent, which a real program does not reach.
 Ownership of child transfers on every outcome other than
 ccol_invalid_args.
 .fi

@@ -12,74 +12,71 @@ ssize_t chttpsvr_req_read(chttpsvr_req *req, void *buf, size_t buflen);
 .SH DESCRIPTION
 .nf
 Reads up to buflen bytes of the request body into buf, batch by batch,
-as they arrive on the connection.  This call reads the socket itself.
-The streaming thread that runs the handler does that read, and the
-reactor thread never does it.  The call blocks that thread until one
-of these happens: at least one byte is available, the body ends, an
-error happens, chttpsvr_config_t.stream_read_timeout_us expires with
-no new data, chttpsvr_config_t.max_body_read_duration_us expires when
-you set that field, or the average rate of the body since the first
-call falls below chttpsvr_config_t.min_transfer_rate_bps once
+as they arrive on the connection.  The call reads the socket itself,
+on the streaming thread that runs the handler; the reactor thread
+never does this read.  It blocks that thread until at least one byte
+is available, the body ends, an error occurs,
+chttpsvr_config_t.stream_read_timeout_us expires with no new data,
+chttpsvr_config_t.max_body_read_duration_us expires (when that field
+is set), or the average rate of the body since the first call falls
+below chttpsvr_config_t.min_transfer_rate_bps once
 chttpsvr_config_t.min_transfer_rate_grace_us has passed.
 
 Return values:
-  > 0   The number of bytes that the function copied into buf.
-    0   The function reached the end of the body, or buflen is 0.  A
-        buflen of 0 is valid, and the call then does nothing.
-   -1   One of six things happened.  req is NULL.  buf is NULL while
-        buflen is above 0.  chttpsvr_register_handler registered the
-        handler as a buffered handler, instead of
-        chttpsvr_register_streaming_handler.  The connection dropped,
-        or something reset it.  stream_read_timeout_us or
+  > 0   The number of bytes copied into buf.
+    0   The end of the body was reached, or buflen is 0.  A buflen of
+        0 is valid, and the call then does nothing.
+   -1   One of six things happened: req is NULL; buf is NULL while
+        buflen is above 0; the handler was registered as a buffered
+        handler with chttpsvr_register_handler instead of with
+        chttpsvr_register_streaming_handler; the connection dropped
+        or was reset; stream_read_timeout_us or
         max_body_read_duration_us expired, or the rate floor ended
-        the read.  Or the body went above
-        max_body_size in mid-stream.  Call chttpsvr_req_stream_error
-        immediately after this call to tell the last three apart.
-        Those three are real transfer errors that depend on the data.
-        That function reports ccol_success for the case where buf is
-        NULL and for the case of the wrong handler type, and you
-        cannot tell that apart from "no error".  Both of those are
-        static programming errors.  They happen on every call to the
-        code at fault, and not only sometimes.
+        the read; or the body exceeded max_body_size mid-stream.
+        Call chttpsvr_req_stream_error immediately after this call to
+        tell the last three apart, since those are genuine,
+        data-dependent transfer errors.  That function reports
+        ccol_success for a NULL buf and for the wrong handler type,
+        which you cannot tell apart from "no error"; both of those
+        are static programming errors that happen on every call to
+        the faulty code, not only sometimes.
 
-The function returns 0 at once when buflen is 0, whatever buf holds.
-A buf of NULL with a buflen of 0 is therefore valid, and the call
-returns 0 and does nothing.  This matches the rules of POSIX read(2).
-buf must not be NULL only when buflen is above 0.
+When buflen is 0 the function returns 0 at once, whatever buf holds,
+so a NULL buf with a buflen of 0 is valid: the call returns 0 and does
+nothing, which matches the rules of POSIX read(2).  buf must not be
+NULL only when buflen is above 0.
 
 A call returns the body bytes that the connection has on hand, up to
 buflen, and waits only when it has none.  It reads the socket at most
-once for that, and one read brings at most 8 KiB of body, so a call
+once to do so, and one read brings at most 8 KiB of body, so a call
 can return far fewer bytes than buflen while more of the body is still
 on its way.  As with read(2), only a return of 0 means that the body
-ended.
+has ended.
 
-This function exists for a streaming handler that
-chttpsvr_register_streaming_handler registered.  Use
-chttpsvr_req_body for a buffered handler.
+This function is meant for a streaming handler registered with
+chttpsvr_register_streaming_handler; use chttpsvr_req_body for a
+buffered handler.
 
-Two conditions together make the first call to this function for a
-request write the interim "100 Continue" response.  The first is that
-the request carried "Expect: 100-continue".  The second is that the
-request really has a body, that is, it has a Content-Length or a
-chunked Transfer-Encoding.  That interim response goes out before the
-function tries to read anything.  It tells the client to go ahead and
-upload the body.  A streaming handler can instead reject a request
-outright, for example for bad authentication or an unacceptable
-Content-Type.  Such a handler writes a final response and never calls
-this function.  The server then skips that interim response
-completely.  The client sees the real rejection directly, exactly as
-it does when it never sends "Expect: 100-continue".  The server never
-asks it to upload a body that the server was not going to read.  A
-request that carries "Expect: 100-continue" but has no body at all
-also gets no interim response, for the same reason: there is nothing
-to invite the client to upload.
+The first call to this function for a request writes the interim
+"100 Continue" response when two conditions both hold: the request
+carried "Expect: 100-continue", and the request really has a body,
+that is, a Content-Length or a chunked Transfer-Encoding.  That interim
+response, which tells the client to go ahead and upload the body,
+goes out before the function tries to read anything.  A streaming
+handler can instead reject a request outright (for example for bad
+authentication or an unacceptable Content-Type) by writing a final
+response and never calling this function.  The server then skips the
+interim response completely, so the client sees the real rejection
+directly, exactly as when it never sends "Expect: 100-continue", and
+the server never asks it to upload a body that the server was not
+going to read.  A request that carries "Expect: 100-continue" but has
+no body at all gets no interim response either, for the same reason:
+there is nothing to invite the client to upload.
 
-The library parses and checks the trailer fields of a chunked request
-body (RFC 7230 4.1.2) as a part of the arrival at the end of the body.
-It then discards them.  They are not request headers, and
-chttpsvr_req_header never gives one back.  See that page for the
-reason.
+The trailer fields of a chunked request body (RFC 7230 4.1.2) are
+parsed and checked as part of reaching the end of the body, and then
+discarded.  They are not request headers, and chttpsvr_req_header
+never returns one; see that page for the reason.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_req_body (3),

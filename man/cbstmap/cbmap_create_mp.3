@@ -14,13 +14,13 @@ cbmap cbmap_create_mp(ccol_data_type key_type,
 .nf
 Creates a self-balancing BST map that allocates through the given memory
 management procedures. The function is a thin inline wrapper over
-cbmap_create_full(3). It gives NULL for the custom comparison procedure.
-The map therefore uses the default order for key_type, as cbmap_create(3)
+cbmap_create_full(3) that gives NULL for the custom comparison procedure,
+so the map uses the default order for key_type, as cbmap_create(3)
 describes.
 
 Every allocation that the map makes after the creation goes through these
-procedures. This includes the allocations of an iterator over the map.
-Destroy the map while these procedures are valid.
+procedures, including the allocations of an iterator over the map, so
+destroy the map while these procedures are valid.
 .fi
 .SH PARAMETERS
 .nf
@@ -33,11 +33,12 @@ err          Optional pointer that receives an error string on failure,
 .SH RETURN VALUE
 .nf
 A new map on success.
-NULL on failure. When err is not NULL, *err is set to an error string.
+NULL on failure, in which case *err is set to an error string when err is
+not NULL.
 .fi
 .SH NOTES
 .nf
-The function reports a failure and does not stop the program. The
+The function reports a failure instead of stopping the program, while the
 cbmap_construct_mp(3) and cbmap_init_mp(3) macros call ccol_fatal_err()
 on a failure
 Destroy the map with cbmap_destroy(3)

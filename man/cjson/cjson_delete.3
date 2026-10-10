@@ -11,31 +11,30 @@ ccol_retval_t cjson_delete(cjson root, const char *path);
 .fi
 .SH DESCRIPTION
 .nf
-Navigates to the parent of the node that path addresses.  It then
-removes the child and frees the whole subtree of that child.  The
-path uses the same dot-separated syntax as cjson_get and cjson_set.
+Navigates to the parent of the node that path addresses, removes the
+child and frees its whole subtree.  The path uses the same
+dot-separated syntax as cjson_get and cjson_set.
 
-For a dictionary parent, the macro uses the leaf component as the
-key to remove.  For a list parent, the leaf component must be a '#N'
-token.  For example, "#2" removes index 2.
+For a dictionary parent, the macro uses the leaf component as the key
+to remove.  For a list parent, the leaf component must be a '#N'
+token; for example, "#2" removes index 2.
 
-The macro splits the path at the LAST dot that is not escaped.  This
+The macro splits the path at the LAST dot that is not escaped, which
 is why "a.b.c" targets the key "c" inside the node at "a.b".  When
 path holds no dot, root is the parent.
 
-The escape sequences '\e.' and '\e\e' give a literal dot or a
-literal backslash in a key name.  This matches cjson_get and
-cjson_set.
+As in cjson_get and cjson_set, the escape sequences '\e.' and '\e\e'
+give a literal dot or a literal backslash in a key name.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_retval_t.  Returns ccol_success on success.
-ccol_invalid_args when root or path is NULL.  Also for an empty path
-or an empty path component, which a leading dot, a trailing dot or
-two dots together give.  Also when the leaf component is not valid
-for the type of the parent.  Also for a malformed "#N" index.
-ccol_key_not_found when the parent path is absent.  Also when the
-leaf key or index has a correct form but is absent.
+ccol_invalid_args when root or path is NULL; for an empty path or an
+empty path component, which a leading dot, a trailing dot or two dots
+together give; when the leaf component is not valid for the type of
+the parent; and for a malformed "#N" index.
+ccol_key_not_found when the parent path is absent, or when the leaf
+key or index has a correct form but is absent.
 ccol_not_enough_memory when an internal allocation fails.
 .fi
 .SH EXAMPLES

@@ -55,17 +55,17 @@ SOFTWARE.
  *   CCOL_POLL_OUT, and on EV_EOF CCOL_POLL_ERR or CCOL_POLL_HUP. Two filters
  *   of one fd that report in one batch arrive as two events.
  * - The EOF bits of the read filter depend on what the fd is, and only an
- *   fstat(2) and a poll(2) of the fd can tell. ccol_poll_wait() therefore
- *   makes no system call on an fd: it marks the event, and the caller calls
+ *   fstat(2) and a poll(2) of the fd can tell. Even so, ccol_poll_wait()
+ *   makes no system call on an fd, because another thread can close an fd
+ *   as soon as the wait returns, and the number can then name a different
+ *   object. Instead it marks the event, and the caller calls
  *   ccol_poll_refine() with the fd while it can prove that the fd is not
  *   closed. The event loop does that under the stripe lock, for an entry
- *   that is not removed: the removal takes the same lock, and an fd is closed
- *   only after its removal. Another thread can close an fd as soon as the
- *   wait returns, and the number can then name a different object. An event
- *   that nobody refines carries no readiness bit. On Linux ccol_poll_refine()
- *   does nothing.
+ *   that is not removed: the removal takes the same lock, and an fd is
+ *   closed only after its removal. An event that nobody refines carries no
+ *   readiness bit. On Linux ccol_poll_refine() does nothing.
  * - An ADD of a regular file or a directory fails with EPERM, as epoll_ctl
- *   does. kqueue would accept them and report them ready for ever.
+ *   does, while kqueue would accept them and report them ready for ever.
  * - CCOL_POLL_CTL_DEL deletes both filters and succeeds when either existed.
  *
  * The event array that ccol_poll_wait() fills is also the buffer that
@@ -161,12 +161,12 @@ typedef union ccol_poll_event {
 
 /* ThreadSanitizer intercepts epoll_ctl() and epoll_wait() and records that a
  * registration happens before every event that a wait returns for it; it
- * intercepts no kevent(). A ThreadSanitizer build therefore states the same
+ * intercepts no kevent(), so a ThreadSanitizer build states the same
  * ordering here, keyed on the kqueue as the Linux runtime keys it on the
  * epoll descriptor: a release before each change, an acquire after each wait
- * that returns events. Without it, every object that one thread registers and
- * the poller then reaches through the udata of an event reads as a race,
- * although the kernel orders the two. Any other build compiles nothing of
+ * that returns events. Without it, every object that one thread registers
+ * and the poller then reaches through the udata of an event reads as a
+ * race, although the kernel orders the two. No other build compiles any of
  * this. */
 #if defined(__has_feature)
 #if __has_feature(thread_sanitizer)

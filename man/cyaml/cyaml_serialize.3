@@ -11,34 +11,34 @@ char *cyaml_serialize(cyaml node);
 .fi
 .SH DESCRIPTION
 .nf
-Produce a block-style YAML document from the DOM subtree that node
-names.  A person can read the output.  The function writes a scalar as
-plain text when that is safe.  It is safe when the scalar makes a round
-trip with no implicit doubt about its type.  In every other case it
-writes the scalar double-quoted.  It also writes a scalar
-double-quoted when the first character of that scalar is U+FEFF.  At
-offset 0 of a document those bytes are a byte order mark and not
-content, and the parser removes them.  A scalar goes out plain only
-when a YAML 1.1 reader such as PyYAML or libyaml also reads it as the
-same string.  A string that holds a tab, a '?', or one of the YAML 1.1
-line breaks NEL (U+0085), LS (U+2028) and PS (U+2029), and the string
-"=", therefore go out double-quoted, and the writer spells those three
-line breaks as their \\N, \\L and \\P escapes, which every reader
-takes as the same code point.  A string that holds a C1 control
-character (U+0080 to U+009F, other than NEL) or one of the
-noncharacters U+FFFE and U+FFFF also goes out double-quoted.  YAML 1.2
-does not allow those code points raw, and libyaml and PyYAML refuse a
-document that holds one.  The writer spells a C1 control as \\xNN and
-the two noncharacters as \\uFFFE and \\uFFFF.  The same rules apply
-to a dictionary key.  A list uses the "- value" block
-notation.  A dictionary uses the "key: value" block notation.  A nested
-structure gets two more spaces of indentation for each level.
+Produce a human-readable, block-style YAML document from the DOM
+subtree that node names.  The function writes a scalar as plain text
+when that is safe, that is, when the scalar makes a round trip with no
+implicit doubt about its type, and writes it double-quoted in every
+other case.  It also writes a scalar double-quoted when the first
+character of that scalar is U+FEFF, because at offset 0 of a document
+those bytes are a byte order mark and not content, and the parser
+removes them.  A scalar goes out plain only when a YAML 1.1 reader such
+as PyYAML or libyaml also reads it as the same string.  A string that
+holds a tab, a '?', or one of the YAML 1.1 line breaks NEL (U+0085), LS
+(U+2028) and PS (U+2029), and the string "=", therefore go out
+double-quoted, and the writer spells those three line breaks as their
+\\N, \\L and \\P escapes, which every reader takes as the same code
+point.  A string that holds a C1 control character (U+0080 to U+009F,
+other than NEL) or one of the noncharacters U+FFFE and U+FFFF also goes
+out double-quoted, because YAML 1.2 does not allow those code points
+raw and libyaml and PyYAML refuse a document that holds one; the writer
+spells a C1 control as \\xNN and the two noncharacters as \\uFFFE and
+\\uFFFF.  The same rules apply to a dictionary key.  A list uses the
+"- value" block notation, a dictionary uses the "key: value" block
+notation, and a nested structure gets two more spaces of indentation
+for each level.
 
-The members of a dictionary go out in insertion order: the order of
-the parsed text, or the order of the cyaml_dictionary_set(3) and
-cyaml_set(3) calls that added each key.  A replacement of the value of
-a key keeps its place, and a removed key leaves the order.  A parse and
-then a serialize therefore keeps the key order of the source document,
+The members of a dictionary go out in insertion order, which is the
+order of the parsed text or the order of the cyaml_dictionary_set(3)
+and cyaml_set(3) calls that added each key.  Replacing the value of a
+key keeps its place, and a removed key leaves the order, so a parse
+followed by a serialize keeps the key order of the source document,
 the same in every run.  cyaml_dictionary_first(3) walks the same order.
 The element order of a list is always exactly the order in which the
 caller pushed the elements or the parser read them.
@@ -51,17 +51,17 @@ whose float grammar requires the '.'.  ".inf", "-.inf" and ".nan" keep
 their spelling.
 
 A dictionary key that is exactly the canonical text of an integer or
-a float key, such as "16", "3.1" or ".inf", goes out with no quotes.
-It then keeps its numeric type, and a parse of the output canonicalizes
-it back to the same key (see cyaml_parse(3)).  A key that a parse would
+a float key, such as "16", "3.1" or ".inf", goes out with no quotes, so
+it keeps its numeric type and a parse of the output canonicalizes it
+back to the same key (see cyaml_parse(3)).  A key that a parse would
 read as another type or as another text, such as "010", "3.10" or
 "true", goes out double-quoted.
 
 A key whose rendered text is longer than 1024 bytes goes out in the
-explicit form: "? key" on one line, and ": value" at the same
-indentation on the next.  YAML 1.2 limits an implicit key to 1024
-characters, and PyYAML and libyaml refuse a longer one.  cyaml_parse(3)
-reads the explicit form back as the same entry.
+explicit form, with "? key" on one line and ": value" at the same
+indentation on the next, because YAML 1.2 limits an implicit key to
+1024 characters and PyYAML and libyaml refuse a longer one.
+cyaml_parse(3) reads the explicit form back as the same entry.
 
 A float always uses '.' as its decimal point, whatever LC_NUMERIC the
 process or the calling thread uses.  For the length of the call, the
@@ -71,51 +71,49 @@ thread before it returns.
 
 The function writes a custom tag of a node (see cyaml_node_tag(3)) as a
 leading "!<...>" verbatim tag.  It never writes a core-schema tag
-(CYAML_TAG_NULL, _BOOL, _INT, _FLOAT, _STR, _SEQ or _MAP).  A node only
-ever carries the core-schema tag of its own type (see
+(CYAML_TAG_NULL, _BOOL, _INT, _FLOAT, _STR, _SEQ or _MAP), because a
+node only ever carries the core-schema tag of its own type (see
 cyaml_node_set_tag(3)), and the quoting and formatting rules around the
 value already make sure that the value makes a round trip to that same
 type without the tag.
 
-The text of a tag always survives the round trip in full.  The
-function writes every byte that the URI characters of YAML 1.2 section
-5.6 do not allow literally inside "!<...>" as a percent escape.  Those
-are the '%' that starts an escape, a '>', a line break, a space, a
-quote, a brace, every control byte, and every byte of a UTF-8 sequence,
-among others.  A '#' also goes out as %23: YAML 1.2 allows it
-literally, but libyaml and PyYAML refuse a verbatim tag that holds
-one.  Every conforming YAML reader therefore accepts the tag,
-and a second parse of the output document gives the identical tag
-string.  This holds for a tag that came
-percent-escaped in the source document.  It also holds for a tag that
-cyaml_node_set_tag(3) attached, because that function accepts any
-string.
+The text of a tag always survives the round trip in full.  The function
+writes as a percent escape every byte that the URI characters of YAML
+1.2 section 5.6 do not allow literally inside "!<...>": the '%' that
+starts an escape, a '>', a line break, a space, a quote, a brace, every
+control byte, and every byte of a UTF-8 sequence, among others.  A '#'
+also goes out as %23, because although YAML 1.2 allows it literally,
+libyaml and PyYAML refuse a verbatim tag that holds one.  Every
+conforming YAML reader therefore accepts the tag, and a second parse of
+the output document gives the identical tag string.  This holds both
+for a tag that came percent-escaped in the source document and for a
+tag that cyaml_node_set_tag(3) attached, because that function accepts
+any string.
 
-The library allocates the buffer that this function gives with the
-allocator that the root node stores.  Free that buffer with
-cyaml_serialize_free().  Use cyaml_serialize_free_mp() instead when the
-tree used a custom allocator.
+The library allocates the returned buffer with the allocator that the
+root node stores.  Free that buffer with cyaml_serialize_free(), or
+with cyaml_serialize_free_mp() instead when the tree used a custom
+allocator.
 
 node need not come from cyaml_parse*().  A tree that the caller builds
 directly with cyaml_create_list_mp(3) and cyaml_dictionary_set(3) obeys
 the same 500-level nesting limit that cyaml_parse*(3) applies at parse
 time.  This function refuses a tree that is nested deeper than the
-limit, and it returns NULL for such a tree.  It walks the tree with an
-explicit worklist, not by recursion.  The call stack that it needs is
-therefore a constant that does not grow with the nesting depth.  The
-limit bounds the work of one call, not the stack that the caller must
-give.
+limit and returns NULL for it.  Because it walks the tree with an
+explicit worklist instead of by recursion, the call stack that it needs
+is a constant that does not grow with the nesting depth: the limit
+bounds the work of one call, not the stack that the caller must give.
 
 A NULL node serializes in the same way as a CYAML_NULL node ("~\en").
-This is a successful, non-NULL return, and not a signal of failure.
-cyaml_clone(3) differs here, because it returns NULL for a NULL node.
+This is a successful, non-NULL return, not a signal of failure, which
+is where cyaml_clone(3) differs: it returns NULL for a NULL node.
 .fi
 .SH RETURN VALUE
 .nf
-A null-terminated YAML string on the heap on success.  The function
-returns NULL when it runs out of memory, and also when node is nested
-more than 500 levels deep.  The caller cannot tell the two causes
-apart, because this function has no separate error-string channel.
+A null-terminated YAML string on the heap on success, or NULL when the
+function runs out of memory or when node is nested more than 500 levels
+deep.  The caller cannot tell the two causes apart, because this
+function has no separate error-string channel.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_serialize_flow (3),

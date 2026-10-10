@@ -26,8 +26,8 @@ SOFTWARE.
  * The libFuzzer target for the URL and redirect layer of chttpclient.c.
  *
  * Every other fuzz target of this project drives a parser that reads bytes
- * off a socket. This one drives the layer ABOVE that parser, which is the
- * one that turns text into a connection target. Its input is just as
+ * off a socket, while this one drives the layer ABOVE that parser, the one
+ * that turns text into a connection target. Its input is just as
  * attacker-influenced: a Location header comes from whatever server the
  * previous hop reached, and the client resolves it against the URL of that
  * hop before it opens the next connection. A defect here is a
@@ -55,9 +55,9 @@ SOFTWARE.
 #include <string.h>
 #include <strings.h>
 
-/* The white-box hooks of chttpclient.c. They exist only under
- * RUNNING_UNIT_TESTS, which the build of this target defines. chttp_url_t is
- * a file-local type there, so each hook flattens its result. */
+/* The white-box hooks of chttpclient.c, which exist only under
+ * RUNNING_UNIT_TESTS (the build of this target defines it). chttp_url_t is a
+ * file-local type there, so each hook flattens its result. */
 ccol_retval_t _chttp_parse_url_for_tests(
     const char *url, bool *is_https_out, bool *is_ipv6_out, char **host_out,
     uint16_t *port_out, char **path_and_query_out, char **origin_key_out,
@@ -97,8 +97,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   location[loc_len] = '\0';
 
   /* 1. The URL grammar on its own. Every out-parameter is taken, so every
-   *    allocation that the parse makes is freed here. A leak shows up under
-   *    the LeakSanitizer that libFuzzer runs with. */
+   *    allocation that the parse makes is freed here, and a leak shows up
+   *    under the LeakSanitizer that libFuzzer runs with. */
   {
     bool is_https = false, is_ipv6 = false, is_unix = false;
     char *host = NULL, *pq = NULL, *origin = NULL, *auth = NULL, *sock = NULL;
@@ -106,9 +106,9 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     if (_chttp_parse_url_for_tests(base, &is_https, &is_ipv6, &host, &port, &pq,
                                    &origin, &auth, &is_unix,
                                    &sock) == ccol_success) {
-      /* A parse that succeeds always gives a path, and it always starts
-       * with '/'. _serialize_request writes it straight into the request
-       * line, so anything else would be a malformed request on the wire. */
+      /* A parse that succeeds always gives a path that starts with '/'.
+       * _serialize_request writes it straight into the request line, so
+       * anything else would be a malformed request on the wire. */
       if (pq && pq[0] != '/') abort();
       /* A unix target has a socket path and no host; a network target is
        * the other way round. Nothing may report both or neither. */

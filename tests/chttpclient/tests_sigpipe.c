@@ -27,18 +27,18 @@ SOFTWARE.
  * whole process, and an ignored SIGPIPE is discarded when it is raised, so a
  * write that raises it is invisible there.
  *
- * It checks two things. The client, the async engine included, leaves the
- * disposition of SIGPIPE as the application set it. And no write of the
- * client raises SIGPIPE when the server has gone. SIGPIPE is blocked around
- * each operation, so a raised one stays pending instead of ending the
- * process, and a failure is one failed test and not a dead binary. A Tier 1
- * write runs on the calling thread, which asks sigpending(2). An async write
- * runs on a thread of the engine; every such thread inherits the blocked
- * mask of the thread that started the engine, and the test reads the pending
- * set of every thread of the process: from /proc on Linux, and from the
- * kern.proc sysctl, one record for each thread, on FreeBSD. macOS raises
- * every SIGPIPE on the process, so there the pending set of the process is
- * the whole answer.
+ * It checks two things: that the client, the async engine included, leaves
+ * the disposition of SIGPIPE as the application set it, and that no write of
+ * the client raises SIGPIPE when the server has gone. SIGPIPE is blocked
+ * around each operation, so a raised one stays pending instead of ending the
+ * process, and a failure is one failed test instead of a dead binary. A
+ * Tier 1 write runs on the calling thread, which asks sigpending(2), while
+ * an async write runs on a thread of the engine; every such thread inherits
+ * the blocked mask of the thread that started the engine, and the test reads
+ * the pending set of every thread of the process: from /proc on Linux, and
+ * from the kern.proc sysctl, one record for each thread, on FreeBSD. macOS
+ * raises every SIGPIPE on the process, so there the pending set of the
+ * process is the whole answer.
  */
 
 #include <chttpclient.h>
@@ -220,10 +220,10 @@ static void _drain_until_eof(int c) {
 
    It reads the whole request head of a request that expects 100-continue,
    answers 100 Continue, and shuts its read side down. On a Unix domain
-   socket that makes every later write of the client fail with EPIPE, the
-   error that raises SIGPIPE, and it reports neither an error nor a hang-up
-   to a poll of the client first. The client sends no body byte before the
-   answer, so the first write of the body always meets the shut side. The
+   socket that makes every later write of the client fail with EPIPE (the
+   error that raises SIGPIPE) without first reporting an error or a hang-up
+   to a poll of the client. Because the client sends no body byte before the
+   answer, the first write of the body always meets the shut side. The
    server then waits for the client to close.
 
    With hold set it answers nothing: it keeps the request in flight until
@@ -361,7 +361,7 @@ TEST(chttpcli_sigpipe, a_sync_write_to_a_refusing_server_raises_no_sigpipe) {
 }
 
 /* The async engine stops once no request is in flight, and a thread that
-   exits takes a pending signal with it. A second request, which a holding
+   exits takes a pending signal with it, so a second request, which a holding
    server keeps unanswered, keeps the engine and its threads alive until the
    scan of the pending signals has run. */
 TEST(chttpcli_sigpipe,

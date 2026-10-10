@@ -14,9 +14,9 @@
 # across the fork(), and the parent joins that thread unconditionally, before
 # every REQUIRE_* that can return early. fork() copies only the calling
 # thread, so the holder never exists in the child, and the child never joins
-# it; ThreadSanitizer still counts the record of the thread that the child
-# inherited. Without this file the suite gives exactly this one report, with
-# GCC and with Clang.
+# it; ThreadSanitizer nevertheless counts the record of the thread that the
+# child inherited. Without this file the suite gives exactly this one report,
+# with GCC and with Clang.
 #
 # The anchor is the test function, the only frame of the "created by" stack
 # that is always resolved: a bare pthread_create has no frame of this library

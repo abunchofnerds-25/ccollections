@@ -22,33 +22,33 @@ This macro expands to an initializer for a chttp_tls_config_t with:
 .fi
 .PP
 Every field of the default is zero, so this macro and a zero-initialized
-struct name the same settings. A chttp_tls_config_t that a caller builds
+struct name the same settings.  A chttp_tls_config_t that a caller builds
 with = {0}, or with a designated initializer that names only some of the
 fields, therefore verifies the chain of the server and matches its
-hostname on a client. On a server, such a struct with a ca_bundle_path
-requires every client to present a certificate that verifies against
-it. A caller cannot reach a weaker setting by writing less than
-they meant to. Weakening a check takes an explicit assignment, and the
-name of the field says what that assignment costs.
+hostname on a client, and on a server, such a struct with a
+ca_bundle_path requires every client to present a certificate that
+verifies against it.  A caller cannot reach a weaker setting by writing
+less than they meant to: weakening a check takes an explicit assignment,
+and the name of the field says what that assignment costs.
 .PP
-insecure_skip_verify accepts any certificate from any peer. An attacker
-who can intercept the connection can then read and rewrite every byte of
-it. It also makes insecure_skip_hostname_check irrelevant, because a
-hostname matched against a certificate that nothing validated proves
-nothing. There is deliberately no way to ask for the hostname check
-without the chain check.
+insecure_skip_verify accepts any certificate from any peer, so an
+attacker who can intercept the connection can read and rewrite every
+byte of it.  It also makes insecure_skip_hostname_check irrelevant,
+because a hostname matched against a certificate that nothing validated
+proves nothing.  There is deliberately no way to ask for the hostname
+check without the chain check.
 .PP
-insecure_skip_hostname_check is the narrower relaxation. It keeps the
+insecure_skip_hostname_check is the narrower relaxation: it keeps the
 full chain verification and drops only the match of the hostname against
-the subject of the certificate. Use it to reach a host by an address or
+the subject of the certificate.  Use it to reach a host by an address or
 an internal name that its certificate does not carry, while still
 requiring that the certificate chains to a CA that you pinned with
 ca_bundle_path.
 .PP
-client_cert_optional is a setting of the server alone, and a client
-ignores it. It turns the requirement of a client certificate into a
+client_cert_optional is a setting of the server alone, which a client
+ignores.  It turns the requirement of a client certificate into a
 request: the server still refuses a certificate that does not verify,
-and also serves a client that presents none.
+but also serves a client that presents none.
 chttpsvr_req_peer_cert_verified(3) then tells a handler which kind of
 client it serves.
 .PP
@@ -57,20 +57,20 @@ at most 16 MB.  A path that names a directory, a FIFO or a device is
 refused at once as a load failure, before a byte of it is read.
 .PP
 A ca_bundle_path holds one or more CA certificates in PEM form, and may
-hold certificate revocation lists (CRLs) beside them.  A file of CRLs
+hold certificate revocation lists (CRLs) beside them; a file of CRLs
 alone names no CA and is refused.  When the bundle holds a CRL,
 revocation is checked for the whole chain that the peer presents, as
 the ssl_crl directive of nginx does: every certificate of that chain
 below its trust anchor needs a CRL of its issuer in the bundle.  The
 handshake then fails for a revoked certificate, for a certificate whose
 issuer has no CRL in the bundle, and for a CRL past its next update
-time, because a chain that cannot be checked is not accepted.  An
+time, because a chain that cannot be checked is not accepted.  So an
 operator who enables revocation for a chain of a root and an
-intermediate CA therefore puts the CRL of the root, which covers the
-intermediate, and the CRL of the intermediate, which covers the leaf,
-into the bundle, and renews both before they expire.  A bundle with no
-CRL checks no revocation.  The library reads the bundle when it applies
-the configuration, so a renewed CRL takes effect at the next
+intermediate CA puts into the bundle the CRL of the root, which covers
+the intermediate, and the CRL of the intermediate, which covers the
+leaf, and renews both before they expire.  A bundle with no CRL checks
+no revocation.  The library reads the bundle when it applies the
+configuration, so a renewed CRL takes effect at the next
 chttpsvr_start(3) of a server, or the next chttpclient_set_tls(3) of a
 client.
 .SH EXAMPLES

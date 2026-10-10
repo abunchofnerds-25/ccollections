@@ -11,8 +11,8 @@ bool cvector_append_array(cvec v, const void *arr_ptr, size_t elem_count);
 .fi
 .SH DESCRIPTION
 .nf
-This function appends an array of elements to the end of the vector. It
-reserves more capacity automatically when the vector needs space for all
+This function appends an array of elements to the end of the vector,
+reserving more capacity automatically when the vector needs space for all
 the elements.
 .fi
 .SH PARAMETERS
@@ -38,23 +38,22 @@ The function reserves more capacity automatically when this is
 necessary.
 The function copies the elements into the vector.
 The function asserts when v is NULL.
-arr_ptr can safely point into the backing buffer of v. An example is a
-pointer from cvector_data_ptr(3) or from cvector_at(3). A capacity
+arr_ptr can safely point into the backing buffer of v, for example a
+pointer from cvector_data_ptr(3) or from cvector_at(3); a capacity
 growth that this call starts does not invalidate such a pointer.
-The source range and the destination range can overlap. One example is
-an arr_ptr that aliases the buffer of v. Its elem_count then reads past
+The source range and the destination range can overlap, for example
+when an arr_ptr aliases the buffer of v and its elem_count reads past
 the current element count of the vector, into capacity that the vector
 reserved already. The copy is safe when the ranges overlap.
 A source range that aliases must stay inside the reserved capacity of v.
-The call gives false, and leaves v unchanged, in one case. That case is
-an arr_ptr that points into the backing buffer of v. Its elem_count then
-reads past the end of the reservation of that buffer. Only a source range that aliases can have
-this bound. An array of the caller has no extent that this function can
-see. This is true for every C array that a caller passes as a bare
-pointer.
-The cvec_append_array(3) macro evaluates elem_count exactly once, and it
-does this on the failure path too. An expression with a side effect is
-therefore safe to pass.
+The call gives false, and leaves v unchanged, in one case: an arr_ptr
+that points into the backing buffer of v with an elem_count that reads
+past the end of the reservation of that buffer. Only a source range that
+aliases can have this bound, because an array of the caller has no
+extent that this function can see, as is true for every C array that a
+caller passes as a bare pointer.
+The cvec_append_array(3) macro evaluates elem_count exactly once, on the
+failure path too, so an expression with a side effect is safe to pass.
 .fi
 .SH "SEE ALSO"
 .BR cvec_append_array (3),

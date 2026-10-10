@@ -11,13 +11,13 @@ value = cbmap_get(hm_name, key);
 .fi
 .SH DESCRIPTION
 .nf
-Type-inferred wrapper for cbmap_get_elem_ref(). It returns the value itself.
-It calls ccol_fatal_err() if the key is not in the map. It also calls
-ccol_fatal_err() if the two sizes do not match.
+Type-inferred wrapper for cbmap_get_elem_ref() that returns the value
+itself. It calls ccol_fatal_err() if the key is not in the map, and it also
+calls ccol_fatal_err() if the two sizes do not match.
 
 The lookup key goes through the DECLARED key type of the tree, in the
-same way as in cbmap_insert(3). A key that the tree stored through that
-conversion is only ever found again by a lookup that makes the same
+same way as in cbmap_insert(3), so a key that the tree stored through
+that conversion is only ever found again by a lookup that makes the same
 one. A literal and a computed expression are both accepted.
 .fi
 .SH PARAMETERS
@@ -31,8 +31,8 @@ Returns the value of that key
 .fi
 .SH NOTES
 .nf
-The macro returns the value, not a pointer
-For a string, the macro returns the char* itself
+The macro returns the value, not a pointer; for a string, it returns the
+char* itself
 The macro stops the program if the key is not in the map
 The macro stops the program with ccol_invalid_args if key is a NULL
 character pointer, which is not a string

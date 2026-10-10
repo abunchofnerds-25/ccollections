@@ -13,32 +13,30 @@ ccol_retval_t chttpcli_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
 .nf
 Every chttpcli instance in this process shares one ccol_event_loop
 reactor for its Tier 2 and Tier 3 work. This function sends every
-allocation of that reactor to the malloc, free, calloc and realloc in
-mp. Those allocations hold the registration table, the dispatch state
-of each connection, the worker pool for DNS and for connect, and more.
-This works in the same way as the memory management procs of every
-other module in this library. An mp of NULL puts the default allocator
-back.
+allocation of that reactor (the registration table, the dispatch state
+of each connection, the worker pool for DNS and for connect, and more)
+to the malloc, free, calloc and realloc in mp, in the same way as the
+memory management procs of every other module in this library. An mp
+of NULL puts the default allocator back.
 
 Each chttpcli instance also has an allocator for its own requests and
-connections. You set that allocator with ccol_create_chttpclient_mp,
-which follows the usual _mp convention. This function is independent
-of it. It affects only the construction of the one shared reactor.
+connections, which you set with ccol_create_chttpclient_mp, following
+the usual _mp convention. This function is independent of it, and
+affects only the construction of the one shared reactor.
 
-You can call this function only at two times. The first time is before
-the reactor ever starts in this process. That is before the first call
-to chttpclient_do_async or to chttpclient_do_async_streaming anywhere.
-The second time is after the engine stops completely. The engine stops
-after every async user of a chttpcli drops its reference and the
-automatic teardown finishes. The reactor of
-chttpsvr_set_engine_mem_mgmt_procs usually lives for the whole
-process. This engine is different, because it starts and stops on its
-own with the Tier 2 and Tier 3 traffic. The window for this call
-therefore comes back again and again. It is not one chance at the
-start of the process.
+You can call this function only at two times: before the reactor ever
+starts in this process (that is, before the first call to
+chttpclient_do_async or to chttpclient_do_async_streaming anywhere),
+or after the engine stops completely, which happens after every async
+user of a chttpcli drops its reference and the automatic teardown
+finishes. The reactor of chttpsvr_set_engine_mem_mgmt_procs usually
+lives for the whole process, but this engine starts and stops on its
+own with the Tier 2 and Tier 3 traffic, so the window for this call
+comes back again and again instead of being one chance at the start of
+the process.
 
-If mp is not NULL, all four function pointers in it must be set. Those
-pointers are malloc, free, calloc and realloc.
+If mp is not NULL, all four function pointers in it (malloc, free,
+calloc and realloc) must be set.
 .fi
 .SH RETURN VALUE
 .nf

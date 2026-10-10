@@ -28,11 +28,10 @@ SOFTWARE.
  * @file citerators.h
  * @brief Unified iteration API for all the c_collections container types.
  *
- * cbstmap.h, chashmap.h and cvector.h include this header automatically.
- * Code that includes one single container header therefore gets the whole
- * unified iterator API, and it needs no other include. ccollections.h also
- * exports this header again, for a caller that needs all three containers
- * together.
+ * cbstmap.h, chashmap.h and cvector.h include this header automatically, so
+ * code that includes any single container header gets the whole unified
+ * iterator API without another include. ccollections.h also exports this
+ * header again, for a caller that needs all three containers together.
  *
  * Public API:
  *   ccol_begin(container)              - begin iterator (dispatched on type)
@@ -48,19 +47,18 @@ SOFTWARE.
 #include "common.h"
 
 /* Everything declared from here to the end of this header is part of the
- * public Application Binary Interface (ABI) of libccollections. The shared
- * library exports all of it. The library is built with
- * -fvisibility=hidden. A function or object that is not inside one of these
- * blocks stays internal to the library. It is absent from the dynamic
- * symbol table of the library. The application that links against the
- * library cannot interpose it. A symbol with the same name in that
- * application cannot collide with it. */
+ * public Application Binary Interface (ABI) of libccollections, and the
+ * shared library exports all of it. Because the library is built with
+ * -fvisibility=hidden, a function or object that is not inside one of these
+ * blocks stays internal to the library: it is absent from the dynamic symbol
+ * table, the application that links against the library cannot interpose
+ * it, and a symbol with the same name in that application cannot collide
+ * with it. */
 #pragma GCC visibility push(default)
 
 /* Forward declarations. The _Generic type match needs only a pointer to an
- * incomplete struct. The begin_iter prototypes below need no more than
- * that either. The full struct definitions live in the header of each
- * container. */
+ * incomplete struct, and so do the begin_iter prototypes below; the full
+ * struct definitions live in the header of each container. */
 struct cvector;
 struct chashmap;
 struct cbinarymap;
@@ -74,10 +72,10 @@ cmap_iterator *cbmap_begin_iter(struct cbinarymap *v, char **err);
 /* ========================================================================== */
 
 /**
- * @brief RAII cleanup helper. All the container iterators share it.
+ * @brief RAII cleanup helper that all the container iterators share.
  *
- * This function calls the _free_fn of the iterator itself. The iterator
- * therefore uses the correct allocator, whichever container made it.
+ * This function calls the _free_fn of the iterator itself, so the iterator
+ * uses the correct allocator whichever container made it.
  */
 static inline void ___ccol_iterator_destroy(cmap_iterator **it) {
   if (it && *it) {
@@ -90,13 +88,13 @@ static inline void ___ccol_iterator_destroy(cmap_iterator **it) {
  * @brief Declare a unified, type-inferred iterator for any container.
  *
  * This macro works with cvec, chmap and cbmap. All three containers give
- * companion type variables. Their names are @c container##__ccol_key_type_var
- * and @c container##__ccol_val_type_var. This macro reads those two
- * variables. It then makes typed companion variables for the accessors of
- * the iterator @p it.
+ * companion type variables named @c container##__ccol_key_type_var and
+ * @c container##__ccol_val_type_var; this macro reads those two variables
+ * and makes typed companion variables for the accessors of the iterator
+ * @p it.
  *
- * @param container  Container variable. The caller must declare it with a
- *                   @c *_declare or @c *_construct macro first.
+ * @param container  Container variable, which the caller must first declare
+ *                   with a @c *_declare or @c *_construct macro.
  * @param it         Name for the iterator variable.
  *
  * Example:
@@ -117,23 +115,23 @@ static inline void ___ccol_iterator_destroy(cmap_iterator **it) {
  * @brief Move a unified iterator on to the next element.
  *
  * This macro calls the @c _next_fn of the iterator itself, so it needs no
- * container argument. The macro destroys the iterator automatically at the
- * end, and it sets the iterator to NULL.
+ * container argument. At the end it destroys the iterator automatically and
+ * sets it to NULL.
  *
  * @param it  Iterator variable that ccol_iter_declare() declares.
  *
- * @return The new value of the iterator. The macro gives NULL after the
- *         last element.
+ * @return The new value of the iterator, which is NULL after the last
+ *         element.
  */
 #define ccol_iter_next(it) ((it)->_next_fn(it))
 
 /**
  * @brief Get a typed const pointer to the key of the iterator.
  *
- * For a cvec iterator, the key is the index of the element (a @c size_t).
- * For a map iterator, the key is the real key of the map. A char-pointer
- * key in a map goes through @c &key_pair->ptr, because of the SSO storage.
- * Every other type uses @c key_pair->ptr directly.
+ * For a cvec iterator the key is the index of the element (a @c size_t),
+ * and for a map iterator it is the real key of the map. Because of the SSO
+ * storage, a char-pointer key in a map goes through @c &key_pair->ptr, while
+ * every other type uses @c key_pair->ptr directly.
  *
  * @param it  Iterator variable that ccol_iter_declare() declares.
  *
@@ -154,19 +152,19 @@ static inline void ___ccol_iterator_destroy(cmap_iterator **it) {
 /**
  * @brief Qualify the result of ccol_iter_val_ptr() for the value type.
  *
- * Consider a value type that is a character pointer. The iterator can then
- * name only one object: the accessor slot of the container. The companion
- * size field of that slot describes the string that the slot points at now.
- * A const qualifier on the target keeps the pointer and the size in
- * agreement. The caller can read the stored string. The caller can also
- * edit its bytes in place inside that length. A new value for the pointer
- * is a compile error. Without the const qualifier, a caller can store a
- * pointer that the container did not allocate and did not size. The size of
- * the accessor then describes a different string, and the next read of that
- * element runs past the end of the new string.
+ * When the value type is a character pointer, the iterator can name only one
+ * object: the accessor slot of the container, whose companion size field
+ * describes the string that the slot currently points at. A const qualifier
+ * on the target keeps the pointer and the size in agreement: the caller can
+ * read the stored string and edit its bytes in place within that length,
+ * while assigning a new pointer is a compile error. Without the const
+ * qualifier, a caller could store a pointer that the container neither
+ * allocated nor sized; the size of the accessor would then describe a
+ * different string, and the next read of that element would run past the
+ * end of the new string.
  *
- * Every other value type names the element itself. The macro gives such a
- * pointer back unchanged, and the caller can write through it.
+ * Every other value type names the element itself, so the macro gives such
+ * a pointer back unchanged and the caller can write through it.
  */
 #define _ccol_iter_value_ptr_result(it, p)                                     \
   _Generic(*it##__ccol_iter_val_type_var,                                      \
@@ -180,7 +178,7 @@ static inline void ___ccol_iterator_destroy(cmap_iterator **it) {
                                   const *)(p),                                 \
       default: (p))
 
-/* The address that holds a character-pointer value in a map entry: the
+/* The address that holds a character-pointer value in a map entry is the
  * accessor slot itself, &val_pair->ptr, whose type is void *const *. Only a
  * character-pointer value type selects it, and ccol_iter_val_ptr then
  * converts it to ValT const *, which keeps the const of the slot. Every
@@ -201,16 +199,16 @@ static inline void ___ccol_iterator_destroy(cmap_iterator **it) {
  * @brief Get a typed pointer to the value of the iterator, which is the
  *        current element.
  *
- * A change through this pointer also changes the container below it. For a
- * value type that is a character pointer, the target carries a const
- * qualifier. The caller therefore reads and edits the stored string in
- * place, and does not replace it. Use the insert operation or the set
- * operation of the owning container to store a different string.
+ * A change through this pointer also changes the underlying container. For
+ * a value type that is a character pointer the target carries a const
+ * qualifier, so the caller can read and edit the stored string in place but
+ * cannot replace it; use the insert or set operation of the owning container
+ * to store a different string.
  *
  * @param it  Iterator variable that ccol_iter_declare() declares.
  *
- * @return @c ValT* to the current value or element. The macro gives
- *         @c ValT @c const* when @c ValT is a character pointer.
+ * @return @c ValT* to the current value or element, or @c ValT @c const*
+ *         when @c ValT is a character pointer.
  */
 #define ccol_iter_val_ptr(it)                                               \
   ({                                                                        \
@@ -231,14 +229,14 @@ static inline void ___ccol_iterator_destroy(cmap_iterator **it) {
  * @param it  Iterator variable that ccol_iter_declare() declares.
  *
  * @note The macro evaluates it exactly once. It must be a modifiable
- * lvalue, such as a variable or an element of an array
+ * lvalue, such as a variable or an element of an array.
  */
 #define ccol_iter_destroy(it) \
   _ccol_iter_destroy_impl(it, _ccol_uniq(__ccol_iter_destroy_slot, __COUNTER__))
 
-/* Internal. The body of ccol_iter_destroy. slot is a name from _ccol_uniq(),
- * so the macro nests inside the argument of another destroy macro and stays
- * -Wshadow clean. The argument is evaluated exactly once. */
+/* Internal: the body of ccol_iter_destroy. Because slot is a name from
+ * _ccol_uniq(), the macro nests inside the argument of another destroy macro
+ * and stays -Wshadow clean. The argument is evaluated exactly once. */
 #define _ccol_iter_destroy_impl(it, slot) \
   do {                                    \
     __typeof__(it) *slot = &(it);         \
@@ -255,9 +253,9 @@ static inline void ___ccol_iterator_destroy(cmap_iterator **it) {
 /*                    GENERIC ccol_begin / ccol_for_each                      */
 /* ========================================================================== */
 
-/* All three wrappers take a void*. Every __builtin_choose_expr branch is
- * therefore compatible in type, for every container type that a caller
- * passes. Only the selected branch runs. */
+/* All three wrappers take a void*, so every __builtin_choose_expr branch is
+ * type-compatible for every container type that a caller passes. Only the
+ * selected branch runs. */
 static inline __attribute__((always_inline)) cmap_iterator *__ccol_cvec_begin(
     void *v, char **err) {
   return cvector_begin_iter((struct cvector *)v, err);
@@ -274,18 +272,18 @@ static inline __attribute__((always_inline)) cmap_iterator *__ccol_cbmap_begin(
 /**
  * @brief Begin an iteration over any supported container.
  *
- * This macro selects the correct @c begin_iter at compile time. It uses
+ * This macro selects the correct @c begin_iter at compile time, using
  * @c _Generic on the type of @p container. The supported types are
  * @c cvec, @c chmap and @c cbmap.
  *
- * The macro gives @c NULL, and no error, when the container is empty. It
+ * The macro gives @c NULL, and no error, when the container is empty, and
  * calls @c ccol_fatal_err() when an allocation fails.
  *
  * @param container  A @c cvec, @c chmap or @c cbmap variable.
  *
  * @return @c cmap_iterator* at the first element, or @c NULL.
  *
- * @note Use @c ccol_iter_declare(container, it) with this macro. That pair
+ * @note Use @c ccol_iter_declare(container, it) with this macro; that pair
  * gives you typed accessors.
  */
 /* The selection has no default association on purpose: a handle of any
@@ -307,8 +305,8 @@ static inline __attribute__((always_inline)) cmap_iterator *__ccol_cbmap_begin(
 /**
  * @brief Iterate over all the elements of any supported container.
  *
- * This macro declares a @c cmap_iterator* variable @p it with RAII cleanup.
- * It then loops from @c ccol_begin() to the end with @c ccol_iter_next().
+ * This macro declares a @c cmap_iterator* variable @p it with RAII cleanup
+ * and loops from @c ccol_begin() to the end with @c ccol_iter_next().
  * @p it gives typed access through @c ccol_iter_key_ptr(it) and
  * @c ccol_iter_val_ptr(it).
  *

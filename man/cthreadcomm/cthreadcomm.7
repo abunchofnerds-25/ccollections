@@ -7,19 +7,19 @@ cthreadcomm \- overview of the thread communication API
 .fi
 .SH DESCRIPTION
 .nf
-The module moves data between threads. It also waits until a queue or
-a file descriptor is ready. It has five parts:
+The module moves data between threads and waits until a queue or a
+file descriptor is ready. It has five parts:
 
   ccol_circular_queue   A bounded queue. A send blocks while the queue
-                        is full. This gives backpressure to a producer.
+                        is full, which gives backpressure to a producer.
   ccol_dynamic_queue    An unbounded queue. A send never waits.
-  ccol_channel          Two circular queues, one in each direction.
-                        The identity of the calling thread selects
+  ccol_channel          Two circular queues, one in each direction;
+                        the identity of the calling thread selects
                         the queue.
   ccol_select()         A one-shot wait for the first ready item among
                         several queues or file descriptors.
-  ccol_event_loop       A persistent reactor. It runs callbacks for a
-                        set of queues and file descriptors that can
+  ccol_event_loop       A persistent reactor that runs callbacks for
+                        a set of queues and file descriptors that can
                         change.
 .fi
 .SS Messages and ownership
@@ -32,75 +32,76 @@ Every queue carries c_message_t values:
   } c_message_t;
 
 The library copies no payload. A send that succeeds gives the
-ownership of data to the queue. The library then sets the data field of
-the sender to NULL. A receive gives the ownership to the receiver. The
-receiver must free data. A send that fails does not change the message.
-The caller therefore keeps the ownership of data. A message with a NULL data
-and a size of 0 is valid. It is the usual end-of-stream sentinel.
+ownership of data to the queue, and the library then sets the data
+field of the sender to NULL. A receive gives the ownership to the
+receiver, which must free data. A send that fails does not change the
+message, so the caller keeps the ownership of data. A message with a
+NULL data and a size of 0 is valid; it is the usual end-of-stream
+sentinel.
 .fi
 .SS Blocking, try and timed calls
 .nf
-A plain send or receive blocks. A try_ call never blocks. It gives
-ccol_container_full or ccol_container_empty. A timed_ call takes a
-uint64_t count of microseconds. The library measures this time on
-CLOCK_MONOTONIC. A change to the wall clock therefore does not make the
-wait longer or shorter. With a timeout of 0, the timed call operates as
-its try_ variant and gives the result of that variant. A timeout can be
-too large for a deadline, for example UINT64_MAX. The library then uses
-the largest deadline. The deadline never wraps into the past.
+A plain send or receive blocks. A try_ call never blocks; instead it
+gives ccol_container_full or ccol_container_empty. A timed_ call takes
+a uint64_t count of microseconds, which the library measures on
+CLOCK_MONOTONIC, so a change to the wall clock does not make the wait
+longer or shorter. With a timeout of 0, the timed call operates as its
+try_ variant and gives the result of that variant. When a timeout is
+too large for a deadline (for example UINT64_MAX), the library uses
+the largest deadline, so the deadline never wraps into the past.
 .fi
 .SS Readiness only
 .nf
-ccol_select() and ccol_event_loop only tell that an item is ready. They
-never receive or send. The caller then immediately makes its own call
-that does not block:
+ccol_select() and ccol_event_loop only tell that an item is ready;
+they never receive or send. The caller then immediately makes its own
+call that does not block:
   - For a queue: ccol_circq_try_recv_zc(), ccol_dynmq_try_recv_zc(),
     ccol_circq_try_send_zc() or ccol_dynmq_send_zc().
   - For a file descriptor: read(2), recv(2), write(2) or send(2).
-A different consumer or producer can get the message or the space
-before that call, as with POSIX select(2). Therefore, that call must not
-block. Always examine its result.
+As with POSIX select(2), a different consumer or producer can get the
+message or the space before that call, so that call must not block,
+and you must always examine its result.
 
-An event loop registration can watch a queue. If that registration has
-a pending wake, a send to the queue makes no system call. One dispatch
-serves all the sends that came before the dispatch started.
+An event loop registration can watch a queue. While that registration
+has a pending wake, a send to the queue makes no system call, because
+one dispatch serves all the sends that came before the dispatch
+started.
 .fi
 .SS Handles
 .nf
-Queues and channels are plain pointers. Their destroy macros set the
-pointer to NULL. ccol_event_loop and ccol_event_reg are opaque VALUE
-handles (uint64_t), and not pointers. Compare them with
-CCOL_EVENT_LOOP_INVALID and CCOL_EVENT_REG_INVALID. Both values are 0.
-Before the library uses the object of such a handle, it resolves the
-handle. The library therefore refuses a stale handle, and never
-dereferences it.
+Queues and channels are plain pointers, and their destroy macros set
+the pointer to NULL. ccol_event_loop and ccol_event_reg are opaque
+VALUE handles (uint64_t), not pointers; compare them with
+CCOL_EVENT_LOOP_INVALID and CCOL_EVENT_REG_INVALID, which are both 0.
+The library resolves such a handle before it uses the object behind
+it, so it refuses a stale handle and never dereferences it.
 .fi
 .SS Process exit
 .nf
-The dispatch of each event loop uses two thread-specific keys. The
-library creates these keys one time for each process. Queues and
-channels need no key. If the process has no free key, the creation of
-a loop fails with CCOL_EVENT_LOOP_INVALID for the rest of that process.
-Queues and channels continue to operate.
+The dispatch of each event loop uses two thread-specific keys, which
+the library creates one time for each process; queues and channels
+need no key. If the process has no free key, the creation of a loop
+fails with CCOL_EVENT_LOOP_INVALID for the rest of that process, while
+queues and channels continue to operate.
 
-The process-exit destructors of the library delete the keys. They also
-free the bookkeeping of the library for all loops and queues. If a
-queue or a loop is live at that time, its own destroy does this
-release later. Therefore, an application destructor that runs after the
-destructors of the library can destroy the objects that it owns. After
-that release, the creation of a queue, a channel or a loop fails
-cleanly.
+The process-exit destructors of the library delete the keys and free
+the bookkeeping of the library for all loops and queues. If a queue or
+a loop is live at that time, its own destroy does this release later,
+so an application destructor that runs after the destructors of the
+library can destroy the objects that it owns. After that release, the
+creation of a queue, a channel or a loop fails cleanly.
 .fi
 .SS fork(2)
 .nf
 The library supports two ways to use fork(2) with this module:
   - Call fork(2) before you create a queue, a channel or a loop.
-  - Create the object. Then call fork(2) and immediately exec(3).
+  - Create the object, then call fork(2) and immediately exec(3).
 The library does not support a child that continues with no exec(3)
-while an object from before the fork is live. A queue has no thread of
-its own. Therefore, a child never gets a locked queue from the parent. But an
-event loop from the parent has no reactor threads in the child. It
-dispatches nothing in the child.
+while an object from before the fork is live. The child never inherits a
+lock of a queue in the locked state, and a queue has no thread of its
+own, so a queue from the parent stays usable in the child. An event
+loop from the parent, however, has no reactor threads in the child, so
+it dispatches nothing there.
 .fi
 .SH "SEE ALSO"
 .BR ccol_circular_queue_create (3),

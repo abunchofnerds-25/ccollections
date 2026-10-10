@@ -12,29 +12,29 @@ ccol_event_loop_construct(name, max_events_per_wait, num_lock_stripes,
 .fi
 .SH DESCRIPTION
 .nf
-This macro declares a ccol_event_loop variable with the name name. It
-then calls ccol_event_loop_create() to initialise the variable. It
-calls ccol_fatal_err() when the create fails.
+This macro declares a ccol_event_loop variable with the name name and
+then calls ccol_event_loop_create() to initialise it. It calls
+ccol_fatal_err() when the create fails.
 .fi
 .SH PARAMETERS
 .nf
 name                  Name of the variable for the ccol_event_loop handle.
 max_events_per_wait   Size of the event batch buffer of the polling
-                      thread. The value must be from 1 to INT_MAX. It
-                      must also be small enough that max_events_per_wait
-                      times the size of one kernel event record (struct
+                      thread. The value must be from 1 to INT_MAX, and
+                      small enough that max_events_per_wait times the
+                      size of one kernel event record (struct
                       epoll_event on Linux, struct kevent on FreeBSD)
                       does not overflow size_t.
 num_lock_stripes      Number of independent lock stripes for the registry
-                      of fds and entries. The value must be >= 1. A
+                      of fds and entries. The value must be >= 1; a
                       value of 1 means one shared lock.
 num_reactor_threads   Number of background reactor threads. The value
-                      must be >= 1. A value of 1 means one thread that
+                      must be >= 1; a value of 1 means one thread that
                       polls and dispatches in line.
 .fi
 .SH NOTES
 .nf
-This macro calls ccol_fatal_err() on a failure. Call
+This macro calls ccol_fatal_err() on a failure, so call
 ccol_event_loop_create() or ccol_event_loop_create_with_mprocs()
 directly when you need to handle an error gracefully.
 .fi

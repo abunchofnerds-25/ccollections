@@ -12,9 +12,9 @@ cbmap_init(hm_name);
 .SH DESCRIPTION
 .nf
 Creates an ordered map with the default allocator and the default order for
-the declared key type. It then assigns that map to hm_name. The caller must
+the declared key type, and assigns that map to hm_name. The caller must
 declare the handle first, with cbmap_declare(3) or cbmap_declare_scoped(3).
-The key type and the value type do not come to this macro as arguments. The
+The key type and the value type do not come to this macro as arguments: the
 macro reads them from the companion type variables that the declare macro
 created.
 
@@ -27,8 +27,8 @@ cbmap_construct_scoped(3).
 .fi
 .SH PARAMETERS
 .nf
-hm_name  The map handle that the caller declared before. The macro
-         creates the map into it
+hm_name  The map handle that the caller declared before, into which
+         the macro creates the map
 .fi
 .SH RETURN VALUE
 .nf
@@ -37,26 +37,26 @@ expression.
 .fi
 .SH "ORDERING"
 .nf
-The container is an AVL tree. It therefore keeps its elements in key order,
-and the walk visits them in ascending key order. cbmap_begin_iter(3)
-describes that contract. The order comes from the declared key type. The
-signed integer types get a signed integer comparison. The unsigned types
-and pointers get an unsigned comparison. The floating-point types get a
-numeric comparison. A string key gets a lexicographic byte comparison.
-cbmap_create_full(3) gives all of these in full. That page also says where
-a NaN key sorts.
+The container is an AVL tree, so it keeps its elements in key order and
+the walk visits them in ascending key order, as cbmap_begin_iter(3)
+describes. The order comes from the declared key type: the signed integer
+types get a signed integer comparison, the unsigned types and pointers get
+an unsigned comparison, the floating-point types get a numeric comparison,
+and a string key gets a lexicographic byte comparison.
+cbmap_create_full(3) gives all of these in full, and also says where a NaN
+key sorts.
 
-The map does not recognize every key type. A struct is one such type. Such
-a key type gets a raw comparison of the representation of the key. That
-comparison reads padding bytes. It also orders a pointer member by its
-address. Use cbmap_init_cc(3) for such a key type.
+A key type that the map does not recognize, such as a struct, gets a raw
+comparison of the representation of the key, which reads padding bytes and
+orders a pointer member by its address. Use cbmap_init_cc(3) for such a
+key type.
 .fi
 .SH NOTES
 .nf
 The macro stops the program through ccol_fatal_err() if the creation fails
 The macro uses the default allocator
-Only the key type reaches the container. Only the type-inferred macros read the
-declared value type
+Only the key type reaches the container; only the type-inferred macros read
+the declared value type
 .fi
 .SH EXAMPLES
 .nf

@@ -13,12 +13,11 @@ ccol_retval_t chttpsvr_resp_write(chttpsvr_resp *resp,
 .SH DESCRIPTION
 .nf
 Appends len bytes of data to the internal buffer of the response body.
-The buffer grows automatically, and it doubles in a way that is safe
-against an overflow.  Each reallocation at least doubles the capacity,
-and a guard stops the computation from wrapping a size_t around.  The
-function returns ccol_not_enough_memory in two cases: len plus the
-current body length would overflow a size_t, or the allocator under it
-returns NULL.
+The buffer grows automatically by overflow-safe doubling: each
+reallocation at least doubles the capacity, and a guard keeps the
+computation from wrapping a size_t around.  The function returns
+ccol_not_enough_memory when len plus the current body length would
+overflow a size_t, or when the underlying allocator returns NULL.
 .fi
 .SH RETURN VALUE
 .nf
@@ -30,25 +29,25 @@ ccol_not_enough_memory when the body length would overflow a size_t,
 .fi
 .SH NOTES
 .nf
-The server reports the real collected body length in the
-Content-Length response header for a request whose method is
-CHTTP_HEAD, whenever the handler wrote a body.  That value is the one
-that a GET reports, as RFC 7231 4.3.2 needs.  A HEAD handler that
-writes no body reports only the Content-Length that it sets with
+For a request whose method is CHTTP_HEAD, whenever the handler wrote a
+body, the server reports the real collected body length in the
+Content-Length response header, which is the value a GET would
+report, as RFC 7231 4.3.2 requires.  A HEAD handler that writes no
+body reports only the Content-Length it set with
 chttpsvr_resp_set_header(3), and none otherwise.  The server never
-writes the body bytes themselves to
-the wire for such a request.  A handler that CHTTP_HEAD can reach,
-either explicitly or through a CHTTP_ANY registration, therefore needs
-no special case for the method before it calls this function.
+writes the body bytes themselves to the wire for such a request, so
+a handler that CHTTP_HEAD can reach, either explicitly or through a
+CHTTP_ANY registration, needs no special case for the method before
+it calls this function.
 
-The server drops the body in the same way, and whatever the request
-method is, when the final status code of the response is a 1xx
-(informational), a 204 or a 304.  RFC 9110 6.4.1, 15.2.1 and 15.4.5
-forbid a body on all three of them.  The server therefore silently
-holds back from the wire the bytes that you write with this function
-for those codes too.  None of the three carries an automatic
-Content-Length header.  A 304 carries the Content-Length that the
-handler set with chttpsvr_resp_set_header(3), and none otherwise.  See
+The server drops the body in the same way, whatever the request
+method, when the final status code of the response is a 1xx
+(informational), a 204 or a 304, because RFC 9110 6.4.1, 15.2.1 and
+15.4.5 forbid a body on all three; the bytes you write with this
+function for those codes are silently held back from the wire as
+well.  None of the three carries an automatic Content-Length header:
+a 304 carries the Content-Length that the handler set with
+chttpsvr_resp_set_header(3), and none otherwise.  See
 chttpsvr_resp_set_status(3).
 .fi
 .SH "SEE ALSO"

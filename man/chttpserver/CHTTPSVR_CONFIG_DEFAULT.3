@@ -50,256 +50,251 @@ with these defaults:
                                           CHTTPSVR_NO_DEADLINE = none)
 
 Every timeout and duration field is a uint64_t count of microseconds.
-The server keeps each one in whole milliseconds: it rounds a value up
+The server keeps each one in whole milliseconds, rounding a value up
 to the next millisecond, so a value above 0 never reads as 0.  A value
 longer than the server can keep saturates to the longest finite limit
 that it keeps for that field, which is never shorter than 24 days, and
 never turns into 0 or into "no limit".  CHTTPSVR_NO_DEADLINE, in the
 two fields that accept it, is the one value that means no limit.
 
-Every timeout and every resource limit above is finite.  A server that
-starts from these defaults is therefore already bounded against two
-kinds of peer.  The first opens a connection and then stalls.  The
-second sends a request body one byte at a time, or reads a response
-one byte at a time.  You can change each limit on its own.  For the
-fields up to ipv6_only, a value of 0 keeps its documented meaning for a
-caller that asks for it explicitly.  The fields from
-min_transfer_rate_bps to streaming_queue_timeout_us read 0 as "use the
-default", so that a configuration built with {0}, or with designated
-initializers that leave them out, keeps these defenses.  Each of them
-turns off only through its own named constant.
+Every timeout and every resource limit above is finite, so a server
+that starts from these defaults is already protected against two
+kinds of peer: one that opens a connection and then stalls, and one
+that sends a request body, or reads a response, one byte at a time.
+You can change each limit independently.  For the fields up to
+ipv6_only, a value of 0 keeps its documented meaning for a caller that
+asks for it explicitly.  The fields from min_transfer_rate_bps to
+streaming_queue_timeout_us read 0 as "use the default", so that a
+configuration built with {0}, or with designated initializers that
+leave them out, keeps these defenses; each of them is turned off only
+through its own named constant.
 
-host follows the rules of the listener of the Go net package.  NULL
-or "" listens on every interface with one dual-stack socket on [::],
-which also takes IPv4 clients through v4-mapped addresses, or on
-0.0.0.0 on a host without IPv6.  A literal address listens on exactly
-that address.  A host name listens on its first IPv4 address when it
-has one, and on its first IPv6 address otherwise, so "localhost"
-listens on 127.0.0.1.
+host follows the listener rules of the Go net package.  NULL or ""
+listens on every interface with one dual-stack socket on [::], which
+also accepts IPv4 clients through v4-mapped addresses, or on 0.0.0.0
+on a host without IPv6.  A literal address listens on exactly that
+address.  A host name listens on its first IPv4 address when it has
+one, and on its first IPv6 address otherwise, so "localhost" listens
+on 127.0.0.1.
 
-host may also be a "unix://path/to/socket" string.  That binds a Unix
-domain socket at that path instead of a TCP listener, and the server
-then ignores port.  A socket file at that path that no process listens
-on any more is replaced.  The start fails, and leaves the file alone,
-when the path names anything that is not a socket, or a socket that a
-live server listens on.
+host may also be a "unix://path/to/socket" string, which binds a Unix
+domain socket at that path instead of a TCP listener; port is then
+ignored.  A socket file at that path on which no process listens any
+more is replaced.  The start fails, leaving the file alone, when the
+path names anything that is not a socket, or a socket on which a live
+server listens.
 
-A sweep thread for the idle timeout applies read_timeout_us and
-idle_timeout_us.  That thread belongs to this module, there is one for
-the whole process, and every chttpsvr instance shares it.  No OS timer
-for each connection applies these two fields.  They bound how long a
+read_timeout_us and idle_timeout_us are applied by an idle-timeout
+sweep thread that belongs to this module; there is one for the whole
+process, shared by every chttpsvr instance, and no OS timer per
+connection applies them.  These two fields bound how long a
 connection can sit idle between requests, that is, while it waits for
 the headers of the next pipelined or keep-alive request.  They do not
-bound how long a request can take while a worker thread handles it.
-See max_body_read_duration_us for that case.
+bound how long a request can take while a worker thread handles it;
+see max_body_read_duration_us for that case.
 
 stream_read_timeout_us bounds the gap between one batch of body bytes
-and the *next* while the server reads a request body.  It applies to a
-buffered body and to a streaming body.  It is separate from
-read_timeout_us and idle_timeout_us.  Those two reset on any
-connection activity, so they do not protect you against a client that
-sends its bytes just fast enough to always beat them.  After
-stream_read_timeout_us expires, chttpsvr_req_read returns -1 and
-chttpsvr_req_stream_error gives ccol_timed_out.  A buffered route
-answers 408 automatically.
+and the *next* while the server reads a request body, buffered or
+streaming.  It is separate from read_timeout_us and idle_timeout_us,
+which reset on any connection activity and so do not protect you
+against a client that sends its bytes just fast enough to always beat
+them.  After stream_read_timeout_us expires, chttpsvr_req_read returns
+-1 and chttpsvr_req_stream_error reports ccol_timed_out; a buffered
+route answers 408 automatically.
 
-Note: stream_read_timeout_us itself also resets on every new byte.  A
-client that sends a byte or two just before each gap expires therefore
-defeats it, in the same way as it defeats read_timeout_us and
-idle_timeout_us.  max_body_read_duration_us closes that loophole.  It
-separately caps the *total* wall-clock time that the server spends to
-read the body of one request, whatever number of single gaps it took
-to get there.  Its default is 300000000 (5 minutes).  That default is
-large enough for an upload of max_body_size bytes over a link so slow
-that the transfer itself is the bottleneck.  After it expires, it
-reports the same ccol_timed_out result as an expiry of
-stream_read_timeout_us.
+Note: stream_read_timeout_us itself also resets on every new byte, so
+a client that sends a byte or two just before each gap expires defeats
+it, just as it defeats read_timeout_us and idle_timeout_us.
+max_body_read_duration_us closes that loophole by separately capping
+the *total* wall-clock time that the server spends reading the body of
+one request, however many individual gaps it took to get there.  Its
+default is 300000000 (5 minutes), which is large enough for an upload
+of max_body_size bytes over a link so slow that the transfer itself is
+the bottleneck.  When it expires, it reports the same ccol_timed_out
+result as an expiry of stream_read_timeout_us.
 
 A value of 0 in stream_read_timeout_us, max_body_read_duration_us,
 response_write_timeout_us or max_response_write_duration_us means
 "wait forever".  Such a value does not make an unresponsive connection
-a permanent problem.  A shutdown of the server still completes in
-bounded time, even when a streaming handler really is blocked while it
-reads such a connection.  A shutdown is a call to chttpsvr_destroy or
-a call to chttpsvr_engine_stop; a restart with chttpsvr_stop and
+a permanent problem: a shutdown of the server still completes in
+bounded time, even when a streaming handler really is blocked reading
+such a connection.  A shutdown is a call to chttpsvr_destroy or a call
+to chttpsvr_engine_stop; a restart with chttpsvr_stop and
 chttpsvr_start waits for nothing and cuts nothing off.  The server
-gets this bound by a
-forced close of that connection, after its own bounded and graceful
-wait for the in-flight requests ends.  This only happens as a part of
-that shutdown sequence.  It never affects a request that still makes
-progress.
+achieves this bound by forcibly closing that connection after its own
+bounded, graceful wait for the in-flight requests ends.  This happens
+only as part of that shutdown sequence and never affects a request
+that is still making progress.
 
 response_write_timeout_us bounds the gap between two writes that make
-progress, while the server sends one response to a client that reads
-slowly.  It is the write-side equivalent of stream_read_timeout_us.
-Progress is the client taking bytes of the response: the send queue of
-the socket shrinking, which the sweep checks about once a second,
-counts as much as a write that the kernel accepts.  A client that
-reads a large response steadily therefore never meets this limit,
-however large a send buffer the kernel gives the socket.  A client
-that stops reading is cut between one and two sweep intervals after
-the limit passes.  For a TCP client, min_transfer_rate_bps judges the
-bytes that reached the client, not the bytes that the kernel
-accepted.
+progress while the server sends one response to a client that reads
+slowly; it is the write-side equivalent of stream_read_timeout_us.
+Progress means the client taking bytes of the response: the send
+queue of the socket shrinking, which the sweep checks about once a
+second, counts as much as a write that the kernel accepts.  A client
+that reads a large response steadily therefore never hits this limit,
+however large a send buffer the kernel gives the socket, while a
+client that stops reading is cut off between one and two sweep
+intervals after the limit passes.  For a TCP client,
+min_transfer_rate_bps judges the bytes that reached the client, not
+the bytes that the kernel accepted.
 
 max_response_write_duration_us is the write-side equivalent of
 max_body_read_duration_us.  response_write_timeout_us bounds only each
-single call equivalent to write(2).  A client that reads a byte or two
-just before the timeout of each such call expires can therefore keep a
+single call equivalent to write(2), so a client that reads a byte or
+two just before the timeout of each such call expires can keep a
 response going for as long as it wants.  max_response_write_duration_us
-separately caps the *total* wall-clock time that the server spends to
-send one response, whatever number of single calls it took to get
-there.  Its default is 300000000 (5 minutes), for the same reasons as the
-default of max_body_read_duration_us.  After it expires, the send of
-the response fails and the server closes the connection.  The client
+separately caps the *total* wall-clock time that the server spends
+sending one response, however many individual calls it took to get
+there.  Its default is 300000000 (5 minutes), for the same reasons as
+the default of max_body_read_duration_us.  When it expires, the send of
+the response fails and the server closes the connection, so the client
 sees a truncated response or a reset.
 
-A small internal ceiling of 2 seconds always bounds two more writes,
-whatever value you set here, and this includes a value of 0.  The
-first write is a courtesy rejection response (400, 404, 405, 408, 413,
-500, 501, 503 or 505) that the server generates itself and not a
-handler.  The second is the interim "100 Continue" line for "Expect:
-100-continue".  Both always have a fixed, small shape, and neither has
-a legitimate reason to need longer.  Neither holds a thread while it
-waits for the peer: a write that meets a full socket parks the
-connection, and the ceiling bounds how long it stays parked.  The
-interim line of a streaming route is the exception: chttpsvr_req_read
-writes it on the thread of the handler, which waits for the client
-there as it waits for the body, and the ceiling bounds that wait.  A
-value here below that ceiling still applies in full.
+Two further writes are always bounded by a small internal ceiling of 2
+seconds, whatever value you set here, including 0: a courtesy
+rejection response (400, 404, 405, 408, 413, 500, 501, 503 or 505)
+that the server itself generates rather than a handler, and the
+interim "100 Continue" line for "Expect: 100-continue".  Both always
+have a fixed, small shape, and neither has a legitimate reason to need
+longer.  Neither holds a thread while it waits for the peer: a write
+that meets a full socket parks the connection, and the ceiling bounds
+how long it stays parked.  The interim line of a streaming route is
+the exception: chttpsvr_req_read writes it on the thread of the
+handler, which waits for the client there just as it waits for the
+body, and the ceiling bounds that wait.  A value here below that
+ceiling still applies in full.
 
 max_header_read_duration_us is the header-phase equivalent of
 max_body_read_duration_us.  read_timeout_us and idle_timeout_us
 measure the gap between one piece of activity and the next, and every
-byte that arrives resets them.  A peer that keeps sending its request
-headers, or its TLS handshake, one byte at a time, forever, and never
-completes them therefore defeats both of them.  It never comes near
+arriving byte resets them, so a peer that keeps sending its request
+headers, or its TLS handshake, one byte at a time, forever, without
+ever completing them, defeats both.  It never comes near
 max_header_bytes either, because it never finishes the header block at
 all.  max_header_read_duration_us separately caps the *total*
 wall-clock time that one connection can spend in the reactor-owned
-phase of one request.  That phase is the TLS handshake, where there is
-one, plus the read of the whole header block of that request.  After
-it expires, the server closes the connection and sends no response,
+phase of one request, which is the TLS handshake, if there is one,
+plus the read of the whole header block of that request.  When it
+expires, the server closes the connection without sending a response,
 because the header block was never complete enough to answer.
 
-The budget is for each request, and not for each connection.  It
-starts at the first TLS handshake step for a connection that has one,
-and at the first byte of the header block of the request for one that
-does not.  The next request of a keep-alive connection starts a fresh
-budget when its own first byte arrives.  Time that the connection
-spends idle between two requests is therefore never charged to either
-one.  The shared idle-timeout sweep thread notices the expiry, in the
-same way as it does for read_timeout_us and idle_timeout_us.  That
-sweep runs once a second and closes every connection that expired,
-however many there are.  A connection that is past its deadline
-therefore lives up to about a second longer than that deadline.
+The budget is per request, not per connection.  It starts at the first
+TLS handshake step for a connection that has one, and otherwise at the
+first byte of the header block of the request.  The next request of a
+keep-alive connection starts a fresh budget when its own first byte
+arrives, so time that the connection spends idle between two requests
+is never charged to either one.  The expiry is noticed by the shared
+idle-timeout sweep thread, as for read_timeout_us and idle_timeout_us;
+that sweep runs once a second and closes every expired connection,
+however many there are, so a connection that is past its deadline can
+live up to about a second longer than that deadline.
 
-The default of 30 s is generous next to any legitimate client.  Such a
-client sends its header block immediately after it connects.  Even a
-full TLS handshake plus several kilobytes of headers over a lossy link
-with high latency takes only seconds.  Raise it for a deployment whose
-clients really are slower than that.  Set it to 0 to turn the limit
+The default of 30 s is generous compared with any legitimate client,
+which sends its header block immediately after it connects: even a
+full TLS handshake plus several kilobytes of headers over a lossy,
+high-latency link takes only seconds.  Raise it for a deployment whose
+clients really are slower than that, and set it to 0 to turn the limit
 off when something else in front of this server already bounds the
 same phase.
 
 max_header_bytes bounds the combined size of the header block of one
-request.  That block is the request line plus every header line.  The
-server answers a request whose headers are above this with 400 Bad
-Request and then closes the connection.  The request parser of this
-module reports every other malformed request before the routing in the
-same way.  The answer is best effort: a peer that is still streaming
-its oversized header block when the server closes can meet a reset
-before it reads anything.  Two fixed limits apply beside it, whatever
-its value, with the same 400: the request line and each header line
-must end within 8 KiB, CRLF included, and a request holds at most 100
+request, which is the request line plus every header line.  A request
+whose headers exceed it is answered with 400 Bad Request and the
+connection is then closed, in the same way as the request parser of
+this module reports every other malformed request before routing.
+The answer is best effort: a peer that is still streaming its
+oversized header block when the server closes may hit a reset before
+it reads anything.  Two fixed limits apply alongside it, whatever its
+value, with the same 400: the request line and each header line must
+end within 8 KiB, CRLF included, and a request holds at most 100
 header lines.  See chttpsvr_start(3) for the other requests that the
-server refuses before the routing.
+server refuses before routing.
 
 max_connections bounds how many connections this listener can have
 open at the same time.  A finite value bounds how many file
-descriptors one listener can hold.  A peer that opens connections
-faster than the idle sweep frees them therefore cannot use up the
-descriptor limit of the process, and cannot take down every other
-listener with it.  Raise it for a deployment that really serves more
-connections at the same time than the default.  Raise RLIMIT_NOFILE to
-match.  At capacity, new connections stay pending in the listen
-backlog of the kernel.  The server does not accept them and then
-reject them.  It does not call accept(2) again until a connection
-closes and frees a slot.  The listener stops accepting completely
-while it is at capacity, and resumes automatically after a slot frees.
-The worst case is about one second between the free of a slot and the
-moment that the listener notices it.
+descriptors one listener can hold, so a peer that opens connections
+faster than the idle sweep frees them cannot use up the descriptor
+limit of the process and take down every other listener with it.
+Raise it for a deployment that really serves more simultaneous
+connections than the default, and raise RLIMIT_NOFILE to match.  At
+capacity, new connections stay pending in the listen backlog of the
+kernel instead of being accepted and then rejected: the server does
+not call accept(2) again until a connection closes and frees a slot.
+The listener stops accepting completely while it is at capacity and
+resumes automatically once a slot frees, with a worst case of about
+one second between a slot being freed and the listener noticing it.
 
 enable_keepalive sets SO_KEEPALIVE on every connection that the server
-accepts.  enable_reuseport sets SO_REUSEPORT on the socket that
-listens.  That lets more than one chttpsvr instance, for example one
-for each worker process, bind the same host and port, so that the
-kernel load-balances the accepts.  ipv6_only sets IPV6_V6ONLY on an
-AF_INET6 listener, so that the listener does not also accept
-IPv4-mapped connections, and it makes a host name listen on its IPv6
-address when it has one.  With ipv6_only off, a NULL or "" host is
-always dual-stack, and an IPv6 address or name keeps the default of
-the system.  The server applies enable_keepalive and enable_reuseport
-as well as it can: a setsockopt failure does not make chttpsvr_start
-fail.  All three have no effect on a Unix domain socket listener.
+accepts.  enable_reuseport sets SO_REUSEPORT on the listening socket,
+which lets more than one chttpsvr instance, for example one per worker
+process, bind the same host and port, so that the kernel load-balances
+the accepts.  ipv6_only sets IPV6_V6ONLY on an AF_INET6 listener, so
+that the listener does not also accept IPv4-mapped connections, and
+makes a host name listen on its IPv6 address when it has one.  With
+ipv6_only off, a NULL or "" host is always dual-stack, and an IPv6
+address or name keeps the system default.  The server applies
+enable_keepalive and enable_reuseport on a best-effort basis: a
+setsockopt failure does not make chttpsvr_start fail.  None of the
+three has any effect on a Unix domain socket listener.
 
-No worker thread waits out any of these read and write limits for a
-buffered route.  A body that stops arriving, or a response that meets a
-full socket, parks its connection with no thread, and a later worker
-continues it once the socket is ready.  The sweep thread applies
-the four limits above to a parked connection once a second, and the
+For a buffered route, no worker thread waits out any of these read and
+write limits.  A body that stops arriving, or a response that meets a
+full socket, parks its connection without a thread, and a later worker
+continues it once the socket is ready.  The sweep thread applies the
+four limits above to a parked connection once a second, and the
 server applies them again when the connection becomes ready.  A
-streaming handler reads its body on its own thread, and there the
-limits bound that wait directly.
+streaming handler reads its body on its own thread, where the limits
+bound that wait directly.
 
-min_transfer_rate_bps is the floor of the average rate of a body read
-and of a response write, measured from the start of each, and judged
+min_transfer_rate_bps is the floor on the average rate of a body read
+and of a response write, measured from the start of each and judged
 once min_transfer_rate_grace_us of it has passed.  It closes a client
-that stays just inside every gap limit and still moves almost nothing:
-a body below the floor gets 408 and a close, a response below it is cut
+that stays just inside every gap limit while moving almost nothing: a
+body below the floor gets 408 and a close, a response below it is cut
 off and closed, and chttpsvr_req_read() of a streaming handler fails
 with ccol_timed_out.  240 bytes a second after 5 s is the minimum data
-rate of Kestrel and of IIS.  Time that the server itself holds a
-request back, while it waits for body memory or in the streaming
+rate of Kestrel and of IIS.  Time during which the server itself holds
+a request back, while it waits for body memory or in the streaming
 queue, never counts against the client.
 
 max_partial_body_memory caps the memory that the bodies of buffered
-requests hold together on this server, from the first byte that the
+requests on this server hold together, from the first byte that the
 server reads until the handler returns.  A reservation covers the
-memory that the buffer of a body really holds, and it lasts as long as
-that buffer.  The server frees a body, and gives its reservation back,
-as soon as its handler returns, before the response goes out, so a
+memory that the buffer of a body really holds and lasts as long as
+that buffer.  The server frees a body, and returns its reservation, as
+soon as its handler returns and before the response goes out, so a
 response that waits for a slow reader holds no body; a request that is
 refused, cut off or closed frees both at once.  A body with a
 Content-Length reserves its whole length before the server reads it,
 and its buffer takes exactly that length.  A chunked body reserves its
-buffer as the buffer grows, and a growth reserves the old buffer beside
-the new one until the copy ends.  A body that does not fit waits, with
-no thread, and nothing reads it and no "100 Continue" invites it until
-memory frees.  Waiters are admitted in the order in which they began to
-wait.  When every body that holds memory is itself waiting for more,
-the oldest waiter goes ahead past the limit, one request at a time, so
-the limit is exceeded by less than twice max_body_size and the server
-never deadlocks.  A body whose handler runs is not waiting: a request
-that a handler waits for, and whose body does not fit beside the bodies
-that running handlers hold, waits until its deadline.  A waiter that
-reaches body_memory_wait_timeout_us gets 503 with "Retry-After: 5" and
-a close.
+buffer as the buffer grows, and a growth reserves the old buffer
+alongside the new one until the copy ends.  A body that does not fit
+waits, without a thread, and nothing reads it and no "100 Continue"
+invites it until memory frees.  Waiters are admitted in the order in
+which they began to wait.  When every body that holds memory is itself
+waiting for more, the oldest waiter goes ahead past the limit, one
+request at a time, so the limit is exceeded by less than twice
+max_body_size and the server never deadlocks.  A body whose handler is
+running is not waiting, so a request that a handler waits for, and
+whose body does not fit beside the bodies that running handlers hold,
+waits until its deadline.  A waiter that reaches
+body_memory_wait_timeout_us gets 503 with "Retry-After: 5" and a
+close.
 
 streaming_thread_count sizes the pool that runs streaming handlers,
 which the server creates at the first streaming request.  Slow
 streaming clients can occupy at most that pool, and never the threads
 of buffered routes.  A streaming request that finds every streaming
-thread busy waits, with no thread, in a queue of
+thread busy waits, without a thread, in a queue of
 streaming_queue_capacity entries.  A full queue answers 503 with
 "Retry-After: 5" at once, and a request that waits longer than
 streaming_queue_timeout_us gets the same answer.
 
 Use CHTTPSVR_QUEUE_UNBOUNDED for worker_queue_capacity or
-streaming_queue_capacity to create a queue with no limit on its
-capacity.
+streaming_queue_capacity to create a queue with no capacity limit.
 
-Change one field at a time after you apply the macro:
+After applying the macro, change one field at a time:
 
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.port = 9090;

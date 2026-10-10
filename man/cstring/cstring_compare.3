@@ -11,8 +11,8 @@ int cstring_compare(cstr s, const char *str);
 .fi
 .SH DESCRIPTION
 .nf
-This function compares the content of s to the null-terminated C string str.
-The semantics are the semantics of strcmp().
+This function compares the content of s to the null-terminated C string str,
+with the same semantics as strcmp().
 .fi
 .SH PARAMETERS
 .nf
@@ -24,7 +24,8 @@ str   C string to compare against
 A negative value if s < str
 Zero if s == str
 A positive value if s > str
-1 if str is NULL. The library treats a non-null string as greater than NULL
+1 if str is NULL, because the library treats a non-null string as greater
+than NULL
 .fi
 .SH NOTES
 .nf

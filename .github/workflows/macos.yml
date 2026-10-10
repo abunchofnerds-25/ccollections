@@ -22,9 +22,9 @@ jobs:
       fail-fast: false
       matrix:
         runner: [macos-15, macos-15-intel]
-        # tsan runs the test_tsan targets. The macOS build compiles the
-        # emulated locks, condition variables, semaphore and per-thread state
-        # of common.h, ctlsmodel.h and csock.h, and only this mode runs them
+        # The tsan mode runs the test_tsan targets. The macOS build compiles the
+        # emulated locks, condition variables, semaphore and per-thread state of
+        # common.h, ctlsmodel.h and csock.h, and only this mode runs that code
         # under ThreadSanitizer on the real system.
         mode: [plain, asan, tsan]
         include:
@@ -32,11 +32,11 @@ jobs:
             arch: arm64
           - runner: macos-15-intel
             arch: x86_64
-          # AddressSanitizer and UndefinedBehaviorSanitizer, as the Linux
-          # sanitizer job builds them. LeakSanitizer is not part of it: Apple
-          # clang does not support it on arm64. The CI job
-          # "Linux x86_64 (memtest, macOS code paths)" runs valgrind over the
-          # code that only macOS compiles.
+          # AddressSanitizer and UndefinedBehaviorSanitizer, built as the Linux
+          # sanitizer job builds them. LeakSanitizer is not part of it, because
+          # Apple clang does not support it on arm64; the CI job "Linux x86_64
+          # (memtest, macOS code paths)" runs valgrind over the code that only
+          # macOS compiles.
           - mode: asan
             extra_cflags: -fsanitize=address,undefined -fno-sanitize-recover=undefined
     runs-on: ${{ matrix.runner }}
@@ -49,22 +49,22 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
-        # The build needs GNU make 4; macOS ships GNU make 3.81 as make, and
-        # Homebrew installs a current one as gmake. OpenSSL comes from
-        # Homebrew, outside the paths that clang searches by default, so
-        # CPATH and LIBRARY_PATH give clang its headers and its libraries.
-        # zlib is part of the macOS SDK.
+        # The build needs GNU make 4, while macOS ships GNU make 3.81 as make;
+        # Homebrew installs a current one as gmake. OpenSSL comes from Homebrew,
+        # outside the paths that clang searches by default, so CPATH and
+        # LIBRARY_PATH give clang its headers and its libraries. zlib is part of
+        # the macOS SDK.
         run: |
           brew install make openssl@3 coreutils pkgconf
           ssl="$(brew --prefix openssl@3)"
           echo "CPATH=$ssl/include" >> "$GITHUB_ENV"
           echo "LIBRARY_PATH=$ssl/lib" >> "$GITHUB_ENV"
           # check_install links a program statically with the flags of
-          # pkg-config, which must find openssl.pc. Homebrew keeps OpenSSL
+          # pkg-config, which must find openssl.pc, and Homebrew keeps OpenSSL
           # out of the default search path of pkg-config.
           echo "PKG_CONFIG_PATH=$ssl/lib/pkgconfig" >> "$GITHUB_ENV"
-          # The tests make certificates with the openssl command. The one in
-          # /usr/bin is LibreSSL; this puts the OpenSSL that the library
+          # The tests make certificates with the openssl command, and the one in
+          # /usr/bin is LibreSSL, so this puts the OpenSSL that the library
           # links first in PATH for every later step.
           echo "$ssl/bin" >> "$GITHUB_PATH"
       - name: Show the toolchain
@@ -77,14 +77,13 @@ jobs:
       - name: Build the shared library
         run: gmake
       - name: Test every module
-        # Every module runs, also after a module fails, so that one run shows
-        # every failure. A plain `gmake test` stops at the first failing
-        # module. gtimeout (coreutils) stops a module that hangs after 30
-        # minutes, so one hang does not use the time of the whole job. macOS
-        # gives a process 256 descriptors by default, and some suites open
-        # more than 300 connections at once. The tsan mode runs the
-        # test_tsan target of each module that has one, and the engine-stop
-        # binary of chttpserver.
+        # Every module runs, even after a module fails, so that one run shows
+        # every failure; a plain `gmake test` stops at the first failing module.
+        # gtimeout (coreutils) stops a module that hangs after 30 minutes, so
+        # that one hang does not use the time of the whole job. macOS gives a
+        # process 256 descriptors by default, while some suites open more than
+        # 300 connections at once. The tsan mode runs the test_tsan target of
+        # each module that has one, and the engine-stop binary of chttpserver.
         run: |
           ulimit -n 4096
           failed=""

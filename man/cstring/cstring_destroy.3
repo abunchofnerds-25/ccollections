@@ -11,22 +11,22 @@ cstring_destroy(s);
 .fi
 .SH DESCRIPTION
 .nf
-Destroys the cstring. It frees the internal buffer and the container
-itself. It then sets the pointer variable s to NULL. A second call is
-therefore safe.
+Destroys the cstring: it frees the internal buffer and the container
+itself, and then sets the pointer variable s to NULL, so a second call is
+safe.
 .fi
 .SH PARAMETERS
 .nf
 s   cstr lvalue to destroy, such as a variable or an element of an
-    array. The macro evaluates it exactly once, and sets it to NULL
+    array; the macro evaluates it exactly once and sets it to NULL
 .fi
 .SH NOTES
 .nf
 Safe to call with a NULL pointer (a no-op)
 The function frees the internal buffer and the container with the
-allocator that created the string. That allocator is the custom
-ccol_memmgmt_procs_t that the caller gave to cstring_create_full(). It
-is free() when the caller gave none
+allocator that created the string: the custom ccol_memmgmt_procs_t that
+the caller gave to cstring_create_full(), or free() when the caller gave
+none
 .fi
 .SH EXAMPLES
 .nf

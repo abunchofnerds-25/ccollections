@@ -12,22 +12,21 @@ ccol_retval_t ccol_set_thread_name(const char *thread_name);
 .SH DESCRIPTION
 .nf
 Renames the calling thread, with prctl(PR_SET_NAME) on Linux and
-pthread_setname_np(3) on FreeBSD and macOS.  The next record
-that the thread writes, through any logger, carries the new name in
-the thread group of its proc field.
+pthread_setname_np(3) on FreeBSD and macOS.  The next record that the
+thread writes, through any logger, carries the new name in the thread
+group of its proc field.
 
 Every record names the process and the thread that wrote it.  Each
 thread reads its process ID, thread ID and thread name once, the first
-time that it logs, and keeps them for the rest of its life.  A record
-therefore costs no system call for them.  This function updates the
-name that the thread keeps.  A child that fork(2) makes reads all
-three again.
+time that it logs, and keeps them for the rest of its life, so a record
+costs no system call for them.  This function updates the name that the
+thread keeps.  A child that fork(2) makes reads all three again.
 
-The Linux kernel stores at most 15 bytes of a thread name.  The
-function keeps the first 15 bytes of thread_name on every platform, so
-the records and tools such as ps(1) and top(1) show the same name.
+The Linux kernel stores at most 15 bytes of a thread name, so the
+function keeps the first 15 bytes of thread_name on every platform; the
+records and tools such as ps(1) and top(1) then show the same name.
 
-The function needs no logger.  A thread can name itself before any
+The function needs no logger, so a thread can name itself before any
 logger exists.  It affects only the calling thread.
 .fi
 .SH PARAMETERS
@@ -47,7 +46,7 @@ ccol_not_permitted  The system refused the rename, or the platform is
 .nf
 A thread renamed by any other means after its first record, such as
 pthread_setname_np(3) or prctl(PR_SET_NAME), keeps its old name in its
-records.  Use this function to rename a thread that logs.
+records, so use this function to rename a thread that logs.
 Thread-safe.  Each thread renames only itself.
 .fi
 .SH EXAMPLES
@@ -56,7 +55,7 @@ static void *worker(void *arg) {
     clog lg = *(clog *)arg;
     if (ccol_set_thread_name("ingest-worker") != ccol_success)
         return NULL;
-    ccol_log_info(lg, "started");
+    clog_info(lg, "started");
     /* proc=myapp(1234):ingest-worker(1240) */
     return NULL;
 }

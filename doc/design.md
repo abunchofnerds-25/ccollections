@@ -1,41 +1,43 @@
 # How the library works
 
-This guide explains the ideas that all modules of c_collections share. Read
-it one time. After that, the remainder of the library will be easy to learn.
-You create, use and destroy a vector, a hash map, a thread pool and an HTTP
-server in the same way.
+This guide explains the ideas that every module of c_collections shares. Read
+it once and the rest of the library becomes easy to learn, because you create,
+use and destroy a vector, a hash map, a thread pool and an HTTP server in the
+same way.
 
-To compile your first program, the first example below is enough. Read the
-later sections when you must do one of these tasks:
+The first example below is enough to compile your first program. Come back
+to the later sections when you need to:
 
-- Give a container to another function.
-- Handle a failure in your own code.
-- Let the library do the cleanup automatically.
+- pass a container to another function;
+- handle a failure in your own code;
+- let the library clean up for you automatically.
 
 ## Generic containers in C
 
-C has no standard vector or map. Each usual alternative has a disadvantage:
+C has no standard vector or map, and each of the usual workarounds has a
+drawback:
 
-- **`void *` everywhere.** One container works for all types, but the
-  compiler cannot check the types. If you push a `double *` where an
-  `int *` must go, the program compiles and then prints incorrect data.
-- **Token pasting.** A macro makes a typed copy of the container for each
-  element type. The compiler checks the types again. But you must make each
-  combination manually, and it is difficult to debug the expanded code.
+- **`void *` everywhere.** One container works for every type, but the
+  compiler cannot check the types: if you push a `double *` where an
+  `int *` belongs, the program compiles and then prints wrong data.
+- **Token pasting.** A macro generates a typed copy of the container for each
+  element type, so the compiler checks types again, but you have to
+  instantiate each combination by hand, and the expanded code is hard to
+  debug.
 - **Code generators.** A separate tool writes the C code for you. This is
-  easy to use, but it adds a step to the build.
+  convenient, but it adds a step to the build.
 
-c_collections uses the C11 `_Generic` keyword and three GNU extensions. GCC
-and Clang both have these extensions: `__typeof__`, statement expressions and
-`__attribute__((cleanup(...)))`. At compile time, a container macro examines
-the static type of its arguments and selects the correct code path. There is
-no generator and no hidden runtime. You write `cvec_push(v, 42)`, and the
-compiler does the remainder of the work.
+c_collections uses the C11 `_Generic` keyword together with three GNU
+extensions that both GCC and Clang support: `__typeof__`, statement
+expressions and `__attribute__((cleanup(...)))`. At compile time, a container
+macro looks at the static types of its arguments and picks the right code
+path. There is no generator and no hidden runtime: you write
+`cvec_push(v, 42)`, and the compiler does the rest.
 
-The cost is a compiler mode. You must compile code that *uses* the typed
-macros with `-std=gnu11` or a later `gnu` mode. If a file only includes a
-header, a strict `-std=c11` is enough. [Platforms](platforms.md) gives the
-details.
+The price is a compiler mode. Code that *uses* the typed macros must be
+compiled with `-std=gnu11` or a later `gnu` mode, while a file that only
+includes a header compiles under a strict `-std=c11`. [Platforms](platforms.md)
+has the details.
 
 ## A first look
 
@@ -71,65 +73,63 @@ Build it with an installed library (see [Building](building.md)):
 gcc -std=gnu11 -o first first.c $(pkg-config --cflags --libs ccollections)
 ```
 
-Look at these three points:
+Three things are worth noticing:
 
-1. `cvec_construct(scores, int)` declares the variable `scores` and also
-   creates the vector. You write the element type only one time, here.
-2. `cvec_push(scores, 3.9)` stores `3`. The macro converts the value through
-   the declared element type with a usual C assignment. It never copies the
+1. `cvec_construct(scores, int)` both declares the variable `scores` and
+   creates the vector. This is the only place where you write the element
+   type.
+2. `cvec_push(scores, 3.9)` stores `3`: the macro converts the value to the
+   declared element type with an ordinary C assignment, and never copies the
    raw bytes of a `double` into an `int` slot.
-3. A `char *` key is a string. The map copies the text into its own storage.
-   Therefore, the buffer of the caller stays the property of the caller.
+3. A `char *` key is a string, and the map copies the text into its own
+   storage, so the caller's buffer stays the caller's.
 
 ## Compile-time type dispatch
 
-Each typed macro uses `_Generic` to select its code path from the declared
-types. Some containers also keep a small tag of the key type and the value
-type. Therefore, the decisions that the container makes at run time also follow
-the declaration:
+Each typed macro uses `_Generic` to pick its code path from the declared
+types. Some containers also keep a small tag for the key and value types, so
+the decisions they make at run time follow the declaration too:
 
-- `chashmap` selects its storage strategy from the key type and the value
+- `chashmap` picks its storage strategy from the key type and the value
   type.
-- `cbstmap` selects signed, unsigned, floating-point or string order for its
+- `cbstmap` picks signed, unsigned, floating-point or string ordering for its
   keys.
-- `cvec_sort` selects the default comparator for the element type. If the
-  type has no default comparator (for example, a struct), the compile fails.
+- `cvec_sort` picks the default comparator for the element type; if the type
+  has none (a struct, for example), the build fails.
 
-The result for you is this: the compiler finds type errors, and one macro
-name works for all element types.
+In practice, this means the compiler catches type errors, and one macro name
+works for every element type.
 
 ## The lifecycle macros
 
-Each container, and each module that gives you a handle, uses one name
-pattern. The example below uses `cvec`:
+Every container, and every module that hands you a handle, follows the same
+naming pattern. The table uses `cvec` as the example:
 
 | Macro | What it does |
 |---|---|
-| `cvec_declare(v, T)` | Declares the handle `v` (not initialized) and records the type `T` |
-| `cvec_init(v)` | Creates the vector for a handle that you declared before |
+| `cvec_declare(v, T)` | Declares the handle `v` (uninitialized) and records the type `T` |
+| `cvec_init(v)` | Creates the vector for a handle declared earlier |
 | `cvec_construct(v, T)` | Does `declare` and `init` in one step |
 | `cvec_construct_scoped(v, T)` | Does the same, and destroys `v` automatically at the end of the scope |
 | `cvec_declare_scoped(v, T)` | Declares a scoped handle that you `init` later |
-| `cvec_redeclare(v, T)` | Records the type again for a handle from a different scope |
+| `cvec_redeclare(v, T)` | Records the type again for a handle that comes from another scope |
 | `cvec_destroy(v)` | Destroys the vector and sets `v` to NULL |
 
 The typed containers `chmap_*`, `cbmap_*` and `clru_*` have the same set of
-macros. They use a key type and a value type in place of `T`. Some modules
-have a handle with no element type, for example `cstr_*`, `ctpool_*`,
-`ccol_event_loop_*` and `chttpsvr_*`. These modules have the declare,
-construct, scoped and destroy macros, but they do not need a redeclare
-macro. Many modules also have an `_mp` form that takes a custom allocator.
-See [Memory management](memory.md).
+macros, with a key type and a value type in place of `T`. Modules whose
+handle has no element type, such as `cstr_*`, `ctpool_*`,
+`ccol_event_loop_*` and `chttpsvr_*`, have the declare, construct, scoped
+and destroy macros but need no redeclare macro. Many modules also offer an
+`_mp` form that takes a custom allocator; see [Memory management](memory.md).
 
-A destroy macro needs a modifiable variable, because the macro sets the
-variable to NULL. If the handle is NULL, a destroy does nothing. Therefore, a
-second destroy of the same variable causes no damage. Each destroy macro
-evaluates each of its arguments exactly one time.
+A destroy macro needs a modifiable variable, because it sets that variable to
+NULL. Destroying a NULL handle does nothing, so a second destroy of the same
+variable is harmless. Every destroy macro evaluates each of its arguments
+exactly one time.
 
 ### Declare now, create later
 
-If the program possibly does not need the container, do the two steps
-separately:
+If the program might not need the container at all, split the two steps:
 
 ```c
 #include <stdio.h>
@@ -148,15 +148,15 @@ int main(int argc, char **argv) {
 }
 ```
 
-`cvec_declare` does not initialize the handle. Therefore, destroy the handle
-only on a path that ran `cvec_init`. `cvec_declare_scoped` sets the handle to
-NULL at the start. It destroys the handle at the end of the scope, if you
-created the vector or not.
+`cvec_declare` leaves the handle uninitialized, so destroy it only on a path
+that ran `cvec_init`. `cvec_declare_scoped`, by contrast, sets the handle to
+NULL at the start and destroys it at the end of the scope, whether or not you
+created the vector.
 
 ### Scoped cleanup
 
-Manual cleanup often fails in a function that has many return paths. The
-library destroys a `_scoped` handle on each path out of its scope:
+Manual cleanup is easy to get wrong in a function with many return paths, so
+the library destroys a `_scoped` handle on every path out of its scope:
 
 ```c
 #include <stdio.h>
@@ -182,24 +182,24 @@ int main(void) {
 }
 ```
 
-The scoped macros expand to declarations. Therefore, write each scoped macro
-as a separate statement.
+Because the scoped macros expand to declarations, write each one as a
+statement of its own.
 
 ## Passing a container to another function
 
 `cvec_construct(scores, int)` also creates a hidden local variable next to
-`scores`. This variable records the element type. It exists only in the scope
-where you wrote the macro. When you give `scores` to a different function,
-only the handle goes to that function. The typed macros in the called
-function do not compile until you give the type again with `*_redeclare`:
+`scores` that records the element type, and that variable exists only in the
+scope where you wrote the macro. When you pass `scores` to another function,
+only the handle travels, so the typed macros in the called function do not
+compile until you supply the type again with `*_redeclare`:
 
 ```c
 #include <stdio.h>
 #include <ccollections/chashmap.h>
 
 /* The function receives the handle as a plain chmap. chmap_redeclare
- * gives the key type and the value type to this scope. Therefore, the
- * typed macros work here. */
+ * brings the key type and the value type into this scope, so the typed
+ * macros work here. */
 static void count_word(chmap counts, const char *word) {
     chmap_redeclare(counts, char *, int);
     int *n = chmap_get_ptr(counts, word);
@@ -221,14 +221,13 @@ int main(void) {
 }
 ```
 
-The handle types are `cvec`, `chmap`, `cbmap`, `cstr` and some others. The
-most frequent first error with this library is a missing `*_redeclare` in a
-new scope. The compiler error gives the name of the missing companion
-variable.
+The handle types are `cvec`, `chmap`, `cbmap`, `cstr` and a few others. The
+most common early mistake with this library is a missing `*_redeclare` in a
+new scope; the compiler error names the missing companion variable.
 
 ## Two layers: typed macros and raw functions
 
-Each typed macro calls a raw function:
+Every typed macro calls a raw function:
 
 | Typed macro | Raw function |
 |---|---|
@@ -236,22 +235,22 @@ Each typed macro calls a raw function:
 | `chmap_get(m, k)` | `chmap_get_elem_ref(m, &key_pair, &val_pair)` |
 | `cvec_push(v, x)` | `cvector_push_back(v, &x)` |
 
-The macros are the easy layer. They take values of the declared types, and
-each failure stops the program. The raw functions take `cmap_pair` arguments
-(a pointer and a size). They give a `ccol_retval_t` that you examine. Use
-the raw layer when a failure is a result that you expect and that you want to
-handle.
+The macros are the convenient layer: they take values of the declared types,
+and any failure stops the program. The raw functions take `cmap_pair`
+arguments (a pointer and a size) and return a `ccol_retval_t` for you to
+check. Use the raw layer when a failure is an expected outcome that you want
+to handle.
 
 ## Error handling
 
-There are two types of error.
+There are two kinds of error.
 
-**Programming errors** are loud. Examples are a NULL where a handle is
-necessary, an index out of range, a stale handle, and `chmap_get` of a key
-that is not in the map. For these errors, the library writes the file, the
-line and a message to stderr. Then it calls `abort()`. This does not change
-with `NDEBUG`, because the checks are part of the contract. A typed macro
-also stops the program when an allocation fails.
+**Programming errors** are loud. A NULL where a handle is required, an index
+out of range, a stale handle, and `chmap_get` of a key that is not in the map
+are all examples. For these, the library writes the file, the line and a
+message to stderr and then calls `abort()`. Defining `NDEBUG` does not change
+this, because the checks are part of the contract. A typed macro also stops
+the program when an allocation fails.
 
 ```c
 #include <ccollections/chashmap.h>
@@ -264,7 +263,7 @@ int main(void) {
 }
 ```
 
-The program prints text similar to this:
+The program prints something like this:
 
 ```
 Key dump (8 bytes):
@@ -275,22 +274,21 @@ prog.c:5: ccol_assert failed: false
 
 Then it stops with SIGABRT.
 
-**Expected failures** are values. Examples are a key that is possibly not in
-the map, a queue that is possibly empty, and a server that is possibly not
-available. The library gives these failures as a `ccol_retval_t`. The value
-is `0` (`ccol_success`) on success. Otherwise it is a negative code, for
-example `ccol_key_not_found`, `ccol_timed_out` or
-`ccol_http_connection_failed`. The values do not change in the full `1.x`
-series. [ccollections(7)](../man/common/ccollections.7) lists all of them.
-`ccol_retval_to_str` changes a value into its name, for use in a message:
+**Expected failures** are values: a key that may be missing from the map, a
+queue that may be empty, a server that may be unavailable. The library
+reports these as a `ccol_retval_t`, which is `0` (`ccol_success`) on success
+and a negative code otherwise, such as `ccol_key_not_found`, `ccol_timed_out`
+or `ccol_http_connection_failed`. The values stay fixed for the whole `1.x`
+series, and [ccollections(7)](../man/common/ccollections.7) lists all of them.
+`ccol_retval_to_str` turns a value into its name for use in a message:
 
 ```c
 #include <stdio.h>
 #include <string.h>
 #include <ccollections/chashmap.h>
 
-/* Finds a port number by service name. Here a missing name is an
- * expected result. Therefore, the raw layer gives it as a value. */
+/* Finds a port number by service name. A missing name is an expected
+ * result here, so the raw layer reports it as a value. */
 static int port_of(chmap services, const char *name, int fallback) {
     cmap_pair key = { (void *)name, strlen(name) + 1 };
     int port;
@@ -321,21 +319,21 @@ int main(void) {
 }
 ```
 
-In a `cmap_pair`, the size of a string key includes the terminating NUL.
-That is why the example gives `strlen(name) + 1`.
+In a `cmap_pair`, the size of a string key includes the terminating NUL,
+which is why the example passes `strlen(name) + 1`.
 
-Many typed macros also have a related macro that does not stop the program.
-An example is `chmap_get_ptr` above, which gives NULL for a missing key.
-Read the module guide before you use the raw layer.
+Many typed macros also have a companion that does not stop the program, such
+as `chmap_get_ptr` above, which returns NULL for a missing key. Check the
+module guide before you reach for the raw layer.
 
 ## Scoped raw pointers
 
-The `_scoped` container macros apply only to the types of the library. For a
-usual heap block, `common.h` gives the same automatic cleanup:
+The `_scoped` container macros work only with the library's own types. For
+an ordinary heap block, `common.h` provides the same automatic cleanup:
 
 | Macro | What it does |
 |---|---|
-| `ccol_scoped_ptr(name, T)` | Declares `T *name = NULL`, and frees it with `free()` at the end of the scope |
+| `ccol_scoped_ptr(name, T)` | Declares `T *name = NULL` and frees it with `free()` at the end of the scope |
 | `ccol_scoped_ptr_mp(name, T, procs)` | Does the same, but frees with `procs->free` |
 | `ccol_scoped_ptr_release(name)` | Returns the pointer and sets `name` to NULL, which cancels the free |
 
@@ -345,8 +343,9 @@ usual heap block, `common.h` gives the same automatic cleanup:
 #include <string.h>
 #include <ccollections/common.h>
 
-/* Reads a full file into a NUL-terminated buffer. Each early return frees
- * the buffer automatically. The successful return gives it to the caller. */
+/* Reads a whole file into a NUL-terminated buffer. Every early return
+ * frees the buffer automatically, and the successful return hands it to
+ * the caller. */
 static char *slurp(const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
@@ -378,20 +377,20 @@ int main(int argc, char **argv) {
 }
 ```
 
-Two limits apply. They apply to all cleanup-attribute guards in C:
+Two limits apply, as they do to every cleanup-attribute guard in C:
 
-- The guard frees only the **last** value of the pointer. If you assign a
+- The guard frees only the **last** value of the pointer, so if you assign a
   new block to the pointer, free the old block first. The `realloc` above is
-  correct, because `realloc` itself releases the old block.
-- To give the block to a different owner, call `ccol_scoped_ptr_release`.
-  If you do not, the guard frees the block while the new owner uses it.
+  correct because `realloc` itself releases the old block.
+- To hand the block to another owner, call `ccol_scoped_ptr_release`;
+  otherwise the guard frees the block while the new owner is using it.
 
 ## Timeouts and durations
 
-Each timeout, interval and duration in the API is a `uint64_t` number of
-**microseconds**. Its name ends in `_us`. Examples are `timeout_us`,
-`flush_interval_us` and the `_us` fields of the HTTP server configuration.
-No call takes a `struct timespec` or a `time_t`.
+Every timeout, interval and duration in the API is a `uint64_t` number of
+**microseconds**, and its name ends in `_us`: `timeout_us`,
+`flush_interval_us` and the `_us` fields of the HTTP server configuration,
+for example. No call takes a `struct timespec` or a `time_t`.
 
 ```c
 #include <stdio.h>
@@ -402,7 +401,7 @@ int main(void) {
     if (!q) return 1;
     c_message_t msg;
 
-    /* 0 microseconds: do not wait. Do the same as the try_ call. */
+    /* 0 microseconds: do not wait; this behaves like the try_ call. */
     ccol_retval_t rv = ccol_circq_timed_recv_zc(q, &msg, 0);
     printf("timeout 0      -> %s\n", ccol_retval_to_str(rv));
 
@@ -420,21 +419,21 @@ timeout 0      -> ccol_container_empty
 timeout 50 ms  -> ccol_timed_out
 ```
 
-Remember these points:
+Keep these points in mind:
 
-- Waits use the monotonic clock. Therefore, a change to the system time does not
-  make a wait shorter or longer.
-- A very large value, for example `UINT64_MAX`, is safe. It means "as long
-  as the clock can count".
+- Waits use the monotonic clock, so changing the system time does not make a
+  wait shorter or longer.
+- A very large value, such as `UINT64_MAX`, is safe and means "as long as
+  the clock can count".
 - For the timed queue calls and the timed thread-pool calls, `0` means "do
-  not wait". You get the result of the `try_` call, not `ccol_timed_out`.
-  For other fields, the man page of the field tells what `0` means. Usually
-  it means "no limit" or "the default".
+  not wait": you get the result of the `try_` call, not `ccol_timed_out`.
+  For other fields, the field's man page says what `0` means; usually it is
+  "no limit" or "the default".
 
 ## Putting it together: a small grade book
 
-This program keeps records in a vector of structs. It finds a record by name
-through a map. It gives the two containers to helper functions. It uses a
+This program keeps records in a vector of structs and finds a record by name
+through a map. It passes both containers to helper functions and uses a
 scoped vector for a temporary sorted list.
 
 ```c
@@ -449,9 +448,9 @@ struct student {
     int count;
 };
 
-/* Records one grade. The roster holds the records. The index maps a name
- * to its position in the roster. The function receives both as plain
- * handles. */
+/* Records one grade. The roster holds the records, and the index maps a
+ * name to its position in the roster; the function receives both as
+ * plain handles. */
 static void record(cvec roster, chmap index, const char *name, double grade) {
     cvec_redeclare(roster, struct student);
     chmap_redeclare(index, char *, size_t);
@@ -469,9 +468,9 @@ static void record(cvec roster, chmap index, const char *name, double grade) {
     st->count++;
 }
 
-/* Gives the median of all averages. It sorts a scoped vector with the
- * default comparator for double. The library destroys the vector at the
- * return. */
+/* Gives the median of all averages by sorting a scoped vector with the
+ * default comparator for double; the library destroys the vector when the
+ * function returns. */
 static double median_average(cvec roster) {
     cvec_redeclare(roster, struct student);
     cvec_construct_scoped(avgs, double);
@@ -510,20 +509,21 @@ int main(void) {
 ```
 
 The pointer from `cvec_at_ptr` is valid only until the size of the vector
-changes. Therefore, the program gets the pointer after the push, and never
+changes, which is why the program takes the pointer after the push and never
 before it.
 
 ## Good to know
 
-- **Compile with `-std=gnu11`** (or a later `gnu` mode) each file that uses
+- **Compile with `-std=gnu11`** (or a later `gnu` mode) every file that uses
   the typed macros.
-- **Redeclare in each new scope** that uses typed macros on a handle that it
+- **Redeclare in each new scope** that uses typed macros on a handle it
   received.
-- **A destroy sets the handle to NULL.** The destroy does not clear copies
-  of the handle in other variables. Do not use these copies after the
+- **A destroy sets the handle to NULL,** but it does not clear copies of the
+  handle held in other variables, so do not use those copies after the
   destroy.
-- **Typed macros stop the program on failure.** Use the related non-fatal
-  macro or the raw function when a failure is usual for your program.
+- **Typed macros stop the program on failure.** Use the companion non-fatal
+  macro or the raw function when failure is a normal outcome for your
+  program.
 - **Times are in microseconds.** `1000` is one millisecond, not one second.
 
 ## Reference

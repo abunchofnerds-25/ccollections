@@ -12,11 +12,11 @@ void *ccol_r_mempool_alloc_entry(ccol_r_mempool *rmp, size_t size);
 .SH DESCRIPTION
 .nf
 Allocates memory of the requested size from the best sub-pool. The
-function rounds the size up to the nearest power-of-2 pool. If that pool
-is empty, the function tries larger pools. The policy
-ccol_fallback_at_first_exhaustion is different: under it, that pool
-gives the memory from the heap. The fallback behavior depends on the
-policy. See ccol_r_mempool_create(3).
+function rounds the size up to the nearest power-of-2 pool, and if that
+pool is empty it tries larger pools, except under the policy
+ccol_fallback_at_first_exhaustion, where that pool gives the memory from
+the heap instead. The fallback behavior depends on the policy; see
+ccol_r_mempool_create(3).
 .fi
 .SH PARAMETERS
 .nf
@@ -31,11 +31,11 @@ Returns NULL on failure
 .SH NOTES
 .nf
 O(1) in the common case, O(number_of_pools) in the worst case
-The memory that comes back is uninitialized. Use
+The memory that comes back is uninitialized; use
 ccol_r_mempool_calloc_entry() for zeroed memory
-The pointer that comes back is aligned for any object type. That is the
-same guarantee that malloc() makes. Any object that you can store in
-heap memory can go into a pool entry
+The pointer that comes back is aligned for any object type, the same
+guarantee that malloc() makes, so any object that you can store in heap
+memory can go into a pool entry
 The function rounds the size up to the next power-of-2 pool size
 The function tries larger and larger pools when the best pool is empty,
 unless the policy is ccol_fallback_at_first_exhaustion

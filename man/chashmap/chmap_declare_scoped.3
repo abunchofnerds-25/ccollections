@@ -11,23 +11,22 @@ chmap_declare_scoped(hm_name, key_t, val_t);
 .fi
 .SH DESCRIPTION
 .nf
-Declares a hash map handle named hm_name. It also declares the companion
-type variables. These variables carry key_t and val_t to every later
-type-inferred macro. The macro also attaches the cleanup attribute. This
-attribute destroys the map at every exit from the enclosing scope. The
-macro creates nothing. The handle holds NULL until one of the init macros
-runs.
+Declares a hash map handle named hm_name, together with the companion
+type variables that carry key_t and val_t to every later type-inferred
+macro, and attaches the cleanup attribute, which destroys the map at
+every exit from the enclosing scope. The macro creates nothing: the
+handle holds NULL until one of the init macros runs.
 
-It is different from chmap_declare(3) in exactly three ways. It sets the
-handle to NULL, and does not leave it uninitialized. It sets both
-companion type variables to NULL as well. It gives the handle a cleanup
-attribute, so an exit from the scope destroys the map that the handle
-names at that moment. The handle starts as NULL, and the library ignores
-a NULL handle. A return before an init macro runs is therefore safe, and
-nothing in the block reads an indeterminate object.
+It differs from chmap_declare(3) in exactly three ways: it sets the
+handle to NULL instead of leaving it uninitialized, it sets both
+companion type variables to NULL as well, and it gives the handle a
+cleanup attribute, so an exit from the scope destroys the map that the
+handle names at that moment. Because the handle starts as NULL and the
+library ignores a NULL handle, a return before an init macro runs is
+safe, and nothing in the block reads an indeterminate object.
 
 Use this macro with chmap_init(3) or one of its variants when the code
-decides the configuration of the map inside the scope.
+decides the configuration of the map inside the scope;
 chmap_construct_scoped(3) is the one-step form for a map whose
 configuration is known at the declaration.
 .fi
@@ -46,14 +45,14 @@ expression.
 .SH NOTES
 .nf
 Needs GCC or Clang, because it uses the cleanup attribute
-An explicit chmap_destroy(3) before the end of the scope stays correct.
-It sets the handle to NULL, and the cleanup at scope exit then does
+An explicit chmap_destroy(3) before the end of the scope stays correct:
+it sets the handle to NULL, and the cleanup at scope exit then does
 nothing
-The handle must not outlive its scope. Do not return the handle. Do not
-store it somewhere that outlives the scope. Both of these hand out a
+The handle must not outlive its scope. Do not return the handle, and do
+not store it anywhere that outlives the scope: either one hands out a
 pointer that is freed at the exit from the scope
-The companion type variables follow the scope of the handle. A function
-that gets the handle therefore needs chmap_redeclare(3) there
+The companion type variables follow the scope of the handle, so a
+function that receives the handle needs chmap_redeclare(3) there
 .fi
 .SH EXAMPLES
 .nf

@@ -14,15 +14,16 @@ chmap chmap_create_mp(size_t initial_bucket_array_size,
 .SH DESCRIPTION
 .nf
 Creates a hash map that allocates through the given memory management
-procedures. It is a thin inline wrapper over chmap_create_full(3). It
-gives NULL for the custom hashing procedure, so the map uses its own
+procedures. It is a thin inline wrapper over chmap_create_full(3) that
+passes NULL for the custom hashing procedure, so the map uses its own
 hashing for the key type.
 
 The map picks its implementation strategy from the key and value types, as
-chmap_create_full(3) describes. An allocator does not change that choice.
-Every allocation that the map makes later goes through these procedures.
-This includes the allocations that an iterator over the map makes. The
-caller must destroy the map while these procedures are still valid.
+chmap_create_full(3) describes, and an allocator does not change that
+choice. Every allocation that the map makes later goes through these
+procedures, including the allocations that an iterator over the map
+makes, so the caller must destroy the map while these procedures are
+still valid.
 .fi
 .SH PARAMETERS
 .nf
@@ -31,7 +32,7 @@ key_type                   Key type, as a ccol_data_type
 val_type                   Value type, as a ccol_data_type
 mmgmt_procs                Memory management procedures, or NULL for the
                            default allocator
-err                        Optional pointer to receive an error string on
+err                        Optional pointer that receives an error string on
                            failure, or NULL
 .fi
 .SH RETURN VALUE

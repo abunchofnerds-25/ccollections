@@ -13,8 +13,8 @@ chttpcli ccol_create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs,
 .SH DESCRIPTION
 .nf
 This function allocates and initializes a new HTTP client. It does NOT
-create the connection pool at this point. The library initializes that
-pool on the first request.
+create the connection pool yet: the library initializes that pool on
+the first request.
 
 The default configuration after the creation is:
   pool size              = the CPU count (resolved on the first

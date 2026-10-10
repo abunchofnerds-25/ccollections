@@ -11,20 +11,18 @@ cvec_append_array(v, arr_ptr, elem_count);
 .fi
 .SH DESCRIPTION
 .nf
-This macro is a wrapper for cvector_append_array(). It calls
-ccol_fatal_err() when the append fails. A caller with no useful recovery
-for an allocation failure therefore does not need to test a return value.
+This macro is a wrapper for cvector_append_array() that calls
+ccol_fatal_err() when the append fails, so a caller with no useful
+recovery for an allocation failure does not need to test a return value.
 
-The macro copies elem_count elements from arr_ptr onto the end of v. It
-does this in one bulk copy, and it grows the capacity one time at most. It
-does not grow the capacity once for each element. The append is all or
-nothing. Either every element lands in the vector, or the vector stays
-exactly as it was.
+The macro copies elem_count elements from arr_ptr onto the end of v in one
+bulk copy, growing the capacity one time at most instead of once for each
+element. The append is all or nothing: either every element lands in the
+vector, or the vector stays exactly as it was.
 
-The macro copies the elements byte for byte from arr_ptr. arr_ptr must
-therefore point at elements of the declared element type of the vector.
-This macro converts no element. cvec_push(3) does such a conversion, but
-this macro does not.
+Because the macro copies the elements byte for byte from arr_ptr, arr_ptr
+must point at elements of the declared element type of the vector. Unlike
+cvec_push(3), this macro converts no element.
 .fi
 .SH PARAMETERS
 .nf
@@ -36,28 +34,26 @@ elem_count  Number of elements to copy
 .SH NOTES
 .nf
 The macro stops the program with ccol_fatal_err() when the append fails.
-The append fails when the allocation fails. It fails when the new element
-count is more than ccol_max_elem_count. It fails when elem_count is large
-enough to overflow that count. It fails when arr_ptr is NULL and
-elem_count is not zero. It also fails when arr_ptr aliases the backing
-buffer of v and elem_count reads past the end of the reservation of that
-buffer.
-An elem_count of zero succeeds. It leaves the vector unchanged, and it
-leaves arr_ptr unchanged. The macro therefore rejects a NULL arr_ptr only
-when there is something to copy.
-The macro evaluates elem_count exactly once, on every path. This includes
-the failure path. An expression with a side effect is therefore safe to
-pass.
-arr_ptr can point into the backing store of v. An example is a pointer
-from cvec_data_ptr(3) or from cvec_at_ptr(3). A capacity growth that this
-call starts does not invalidate such a pointer. The source range and the
-destination range can also overlap. The source range must stay inside the
-reservation of that buffer.
-The capacity grows one time at most for each call. It grows to the next
-power of two at or above the new element count, with a floor of 4.
+The append fails when the allocation fails, when the new element count is
+more than ccol_max_elem_count, when elem_count is large enough to overflow
+that count, or when arr_ptr is NULL and elem_count is not zero. It also
+fails when arr_ptr aliases the backing buffer of v and elem_count reads
+past the end of the reservation of that buffer.
+An elem_count of zero succeeds and leaves both the vector and arr_ptr
+unchanged, so the macro rejects a NULL arr_ptr only when there is
+something to copy.
+The macro evaluates elem_count exactly once on every path, the failure
+path included, so an expression with a side effect is safe to pass.
+arr_ptr can point into the backing store of v, for example a pointer from
+cvec_data_ptr(3) or from cvec_at_ptr(3); a capacity growth that this call
+starts does not invalidate such a pointer. The source range and the
+destination range can also overlap, but the source range must stay inside
+the reservation of that buffer.
+The capacity grows one time at most for each call, to the next power of
+two at or above the new element count, with a floor of 4.
 The macro asserts when v is NULL.
-Use cvector_append_array(3) directly to handle a failed append yourself.
-That function does not stop the program.
+To handle a failed append yourself, use cvector_append_array(3) directly;
+that function does not stop the program.
 .fi
 .SH EXAMPLES
 .nf

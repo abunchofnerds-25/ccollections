@@ -11,30 +11,30 @@ cvec_init_mp(v, mprocs);
 .fi
 .SH DESCRIPTION
 .nf
-This macro creates a vector and stores it in v. It does this exactly as
-cvec_init(3) does. The vector takes every allocation that it makes from
-mprocs, and not from the default allocator. cvec_declare(3) or
-cvec_declare_scoped(3) must declare v first. The element size comes from
-the element type in that declaration.
+This macro creates a vector and stores it in v exactly as cvec_init(3)
+does, except that the vector takes every allocation that it makes from
+mprocs instead of from the default allocator. cvec_declare(3) or
+cvec_declare_scoped(3) must declare v first, and the element size comes
+from the element type in that declaration.
 
-The vector keeps a private copy of the procedure table. The
-ccol_memmgmt_procs_t object here therefore does not need to live longer
-than the vector. The functions in that table do need to live that long. The
-vector frees the backing buffer, the copy of the table and the container
-itself through those functions, when it is destroyed. A NULL mprocs is the
-same as a call to cvec_init(3).
+The vector keeps a private copy of the procedure table, so the
+ccol_memmgmt_procs_t object here does not need to live longer than the
+vector, although the functions in that table do. When the vector is
+destroyed, it frees the backing buffer, the copy of the table and the
+container itself through those functions. A NULL mprocs is the same as a
+call to cvec_init(3).
 
-The new vector holds no elements. It starts at the minimum capacity of 4.
-The capacity doubles when a push finds the buffer full. It halves when the
-element count falls below a quarter of it. It never falls below that
+The new vector holds no elements and starts at the minimum capacity of 4.
+The capacity doubles when a push finds the buffer full and halves when the
+element count falls below a quarter of it, but it never falls below that
 minimum of 4.
 .fi
 .SH PARAMETERS
 .nf
-v       Name of the vector variable for the new vector. It must be a
+v       Name of the vector variable for the new vector, which must be a
         plain identifier. cvec_declare(3) or cvec_declare_scoped(3) must
-        declare it first, and its companion type variables must still be
-        in scope.
+        declare it first, and its companion type variables must be in
+        scope.
 mprocs  Pointer to a ccol_memmgmt_procs_t. Its malloc, calloc, realloc
         and free members must all be set. Pass NULL for the default
         allocator.
@@ -46,16 +46,17 @@ None. The macro expands to a statement, not to an expression.
 .SH NOTES
 .nf
 The macro stops the program through ccol_fatal_err() when it cannot
-create the vector. The message names v and the error below it. Use
-cvector_create_full(3) directly to handle a failed creation yourself.
-That function does not stop the program.
+create the vector, with a message that names v and the error below it.
+To handle a failed creation yourself, use cvector_create_full(3)
+directly; that function does not stop the program.
 The macro rejects a procedure table with any of its four members left as
-NULL. That rejection is one of the failures that stops the program here.
-The macro expands to a do/while block. It needs a semicolon at the end of
+NULL, and that rejection is one of the failures that stops the program
+here.
+The macro expands to a do/while block and needs a semicolon at the end of
 the call site.
-The macro evaluates v more than once, and it pastes v into the names of
-the companion variables. v must therefore be a plain identifier, and
-never an expression. The macro evaluates mprocs one time.
+The macro evaluates v more than once and pastes v into the names of the
+companion variables, so v must be a plain identifier and never an
+expression. The macro evaluates mprocs one time.
 cvector_get_mprocs(3) reads back the table that created a vector.
 .fi
 .SH EXAMPLES

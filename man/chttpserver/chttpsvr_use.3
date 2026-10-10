@@ -12,94 +12,92 @@ ccol_retval_t chttpsvr_use(chttpsvr srv,
 .fi
 .SH DESCRIPTION
 .nf
-Appends a middleware function to the global middleware chain.  A
-global middleware runs before the middleware of each router, and
-before the route handler, for every request.
+Appends a middleware function to the global middleware chain.  For
+every request, a global middleware runs before the middleware of each
+router and before the route handler.
 
-fn gets a next callback.  A call to next continues the chain.  A
+fn receives a next callback; calling next continues the chain.  A
 middleware that never calls next stops the chain there, and the server
 sends the response as it stands.
 
 A global middleware also runs for a request that the server rejects
-before a handler can run.  Therefore, a rate limiter, a ban list for each
-peer, or an access log that you make as a middleware sees that
-traffic.  Three rejections run the chain:
+before a handler can run, so a rate limiter, a per-peer ban list or an
+access log written as a middleware sees that traffic too.  Three
+rejections run the chain:
   - A 404, when no route matched the path.
   - A 405, when no route matched the method.
   - A 413, when the declared Content-Length is above max_body_size.
 For a 404 or a 405 of a path under a mounted prefix, the chain is the
-global chain plus the chain of the sub-router that owns the path; see
-chttpsvr_subrouter(3).  For a 404 or a 405 of all other paths, the
-chain is the global chain only.  The server decides a 413 after a route
-matched.  A 413 therefore runs the full effective chain of that request,
-with the sub-router middleware.
+global chain plus the chain of the sub-router that owns the path (see
+chttpsvr_subrouter(3)); for a 404 or a 405 of any other path, it is
+the global chain only.  Because the server decides a 413 after a route
+has matched, a 413 runs the full effective chain of that request,
+including the sub-router middleware.
 
-The server reaches no handler in these cases.  A chain that runs to
-its end therefore sends the rejection response as it stands.  A
-middleware that does not call next answers the request itself, exactly
-as it does for a matched route.  The request has a method, a path,
-headers and a query string to read.  It has no path parameters,
-because no pattern captured any, and the server never reads its body.
-chttpsvr_req_param therefore returns NULL, and chttpsvr_req_read
-returns -1.  The server closes the connection after the response in
-both cases.
+No handler is reached in these cases, so a chain that runs to its end
+sends the rejection response as it stands, while a middleware that
+does not call next answers the request itself, exactly as it would
+for a matched route.  The request has a method, a path, headers and a
+query string to read, but no path parameters, because no pattern
+captured any, and the server never reads its body, so
+chttpsvr_req_param returns NULL and chttpsvr_req_read returns -1.  In
+both cases the server closes the connection after the response.
 
-The send treats a response that a middleware makes for such a request
-as an internally generated rejection.  The small unconditional ceiling
-on the write duration therefore applies to it.
-max_response_write_duration_us in CHTTPSVR_CONFIG_DEFAULT(3) describes
-that ceiling.  Keep such a response small, the way a rejection
-response is.
+A response that a middleware produces for such a request is sent as
+an internally generated rejection, so the small unconditional ceiling
+on the write duration, described under
+max_response_write_duration_us in CHTTPSVR_CONFIG_DEFAULT(3), applies
+to it.  Keep such a response small, as a rejection response would
+be.
 
 Three rejections run no middleware, by design:
-  - A 500 comes from an allocation failure of the server.  Application
-    code that allocates more memory is the wrong answer to memory
-    pressure.
-  - A 503 means that the worker pool is full.  More application work
-    must therefore not start.
-  - The server decides a 501 or a 505 before it routes the request.
-    It sends a 501 for a method token outside the seven chttp_method_t
-    names, or for a transfer coding that it does not implement.  It
-    sends a 505 for an HTTP version whose major number is not 1.  There
-    is therefore no routed request for a middleware to see.
-The server also sends a rejection with no middleware in two more
+  - A 500 comes from an allocation failure in the server, and
+    application code that allocates more memory is the wrong answer
+    to memory pressure.
+  - A 503 means that the worker pool is full, so more application
+    work must not start.
+  - The server decides a 501 or a 505 before it routes the request:
+    a 501 for a method token outside the seven chttp_method_t names
+    or for a transfer coding that it does not implement, and a 505
+    for an HTTP version whose major number is not 1.  There is
+    therefore no routed request for a middleware to see.
+The server also sends a rejection without middleware in two further
 cases:
-  - Its rejection thread pool is full or shuts down, and the server
-    must write the response inline.  This limits the quantity of
-    application code that a flood of rejected requests can start.
-  - The server cannot allocate the decoded path of the request.  The
-    reason is that the server guarantees a readable
-    chttpsvr_req_path(3) to each middleware.
+  - Its rejection thread pool is full or shutting down, and the
+    server must write the response inline; this limits how much
+    application code a flood of rejected requests can start.
+  - The server cannot allocate the decoded path of the request,
+    because the server guarantees every middleware a readable
+    chttpsvr_req_path(3).
 
-This function is thread-safe.  You can call it before the server
-starts, and after it starts.
+This function is thread-safe and can be called both before and after
+the server starts.
 .fi
 .SH NOTES
 .nf
-Each router caps its own middleware chain at 32 entries.  This applies
-to the root router, which holds the global middleware, and to each
-sub-router.  The library applies this cap at REGISTRATION time.
-chttpsvr_use and chttpsvr_router_use return ccol_not_permitted, and
-add no entry, on the call that would go above the cap of 32 entries
-for that one router.
+Each router, both the root router (which holds the global middleware)
+and each sub-router, caps its own middleware chain at 32 entries.
+This cap is applied at REGISTRATION time: chttpsvr_use and
+chttpsvr_router_use return ccol_not_permitted, and add no entry, on
+the call that would take that one router above the cap of 32 entries.
 
-Dispatch time applies a separate combined cap of 32 for the effective
-chain of one request.  That chain is the global middleware plus the
-middleware of the router that matched.  Each side of that sum can hold
-up to 32 entries on its own.  The combined count can therefore go
-above 32 while neither router reaches its own cap at registration
-time.  The server then answers the affected request with HTTP 500.
+At dispatch time a separate combined cap of 32 applies to the
+effective chain of one request, which is the global middleware plus
+the middleware of the router that matched.  Because each side of that
+sum can hold up to 32 entries on its own, the combined count can
+exceed 32 even though neither router reached its own cap at
+registration time; the server then answers the affected request with
+HTTP 500.
 
-You can register the same path and method more than once.  Each
-registration returns ccol_success.  But the server only ever calls the
-FIRST handler that you registered, under a policy where the first one
-wins.
+You can register the same path and method more than once, and each
+registration returns ccol_success, but under a first-one-wins policy
+the server only ever calls the FIRST handler that you registered.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success on success.
 ccol_invalid_args when srv is CHTTPSVR_INVALID, when srv is a stale
-                  handle that something already destroyed, or when fn
+                  handle that has already been destroyed, or when fn
                   is NULL.
 ccol_not_enough_memory when an allocation fails.
 ccol_not_permitted when the middleware chain of the root router is

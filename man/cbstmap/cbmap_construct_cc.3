@@ -11,34 +11,33 @@ cbmap_construct_cc(hm_name, key_t, val_t, custom_comparison_proc);
 .fi
 .SH DESCRIPTION
 .nf
-Declares an ordered map handle with the name hm_name. It also declares the
-companion type variables. Those variables carry key_t and val_t to every
-later type-inferred macro. The macro then creates a map. custom_comparison_proc
-orders the keys of that map, and not the default order for key_t.
+Declares an ordered map handle named hm_name, together with the companion
+type variables that carry key_t and val_t to every later type-inferred
+macro, and then creates a map whose keys custom_comparison_proc orders
+instead of the default order for key_t.
 
-The macro is cbmap_construct(3) plus a comparison procedure. It uses the
-default allocator. cbmap_construct_mp(3) replaces the allocator instead, and
-cbmap_construct_full(3) takes both. cbmap_construct_cc_scoped(3) is the same
-macro with a cleanup attribute. That attribute destroys the map at the exit
-of the scope.
+The macro is cbmap_construct(3) plus a comparison procedure, and it uses
+the default allocator. cbmap_construct_mp(3) replaces the allocator instead,
+and cbmap_construct_full(3) takes both. cbmap_construct_cc_scoped(3) is the
+same macro with a cleanup attribute, which destroys the map at the exit of
+the scope.
 
 A struct key_t needs this variant. Without a procedure, the map orders a key
-type that it does not recognize by a raw comparison of the representation.
-Such a comparison reads padding bytes. It also orders a pointer member by
-its address.
+type that it does not recognize by a raw comparison of the representation,
+which reads padding bytes and orders a pointer member by its address.
 
-cbmap_declare(3) and then cbmap_init_cc(3) is the two-step form. Use that
-form when the caller must handle a creation failure and the failure must not
-be fatal.
+cbmap_declare(3) followed by cbmap_init_cc(3) is the two-step form. Use it
+when the caller must handle a creation failure and the failure must not be
+fatal.
 .fi
 .SH PARAMETERS
 .nf
 hm_name                 Name for the map handle to declare
 key_t                   Key type. It tells every later macro how to read
-                        a key. It also tells the container which width to
+                        a key, and tells the container which width to
                         expect and which alignment to give a stored key
-val_t                   Value type. Only the type-inferred macros read it.
-                        The library never gives it to the container
+val_t                   Value type. Only the type-inferred macros read
+                        it; the library never gives it to the container
 custom_comparison_proc  A ccol_comparison_proc_t, or NULL for the
                         default order for key_t
 .fi
@@ -49,22 +48,22 @@ None. This macro declares variables and does not expand to an expression.
 .SH "CUSTOM COMPARISON"
 .nf
 The procedure gets pointers to two keys. It returns a negative value when
-the first key orders before the second key. It returns a positive value when
-the first key orders after the second key. It returns zero when the map must
-treat the two keys as the same key. A zero makes a call an update and not an
-insert. The procedure therefore defines key equality and key order.
+the first key orders before the second key, a positive value when the
+first key orders after the second key, and zero when the map must treat
+the two keys as the same key. A zero makes a call an update instead of an
+insert, so the procedure defines both key equality and key order.
 
-The procedure must give a strict weak order over key_t. That order must not
-change while the map holds elements. The same pair of keys must always
-compare in the same way. A comparison in the opposite direction must give
-the opposite sign. The order must also be transitive. An inconsistent
-procedure breaks the placement invariant of the tree. After that, the map
+The procedure must give a strict weak order over key_t, and that order must
+not change while the map holds elements: the same pair of keys must always
+compare in the same way, a comparison in the opposite direction must give
+the opposite sign, and the order must be transitive. An inconsistent
+procedure breaks the placement invariant of the tree, after which the map
 cannot find a key that it holds.
 
-The procedure gets two bare pointers and no lengths. It can only read a
-width that key_t fixes. The map therefore validates the width of an
-incoming key against key_t. The map also aligns its stored keys for key_t.
-The procedure decides the order of the keys and nothing else.
+Because the procedure gets two bare pointers and no lengths, it can only
+read a width that key_t fixes. The map therefore validates the width of an
+incoming key against key_t and aligns its stored keys for key_t; the
+procedure decides the order of the keys and nothing else.
 .fi
 .SH NOTES
 .nf
@@ -74,7 +73,7 @@ The procedure must stay callable for the whole life of the map
 The walk visits the elements in ascending key order, by the order of this
 procedure. cbmap_begin_iter(3) describes that contract
 Destroy the map with cbmap_destroy(3). The companion type variables follow
-the scope of the handle. A function that receives the handle therefore needs
+the scope of the handle, so a function that receives the handle needs
 cbmap_redeclare(3) there
 .fi
 .SH EXAMPLES

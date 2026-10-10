@@ -26,20 +26,20 @@
  * @file bench_serialization.c
  * @brief Benchmarks for cjson and cyaml.
  *
- * Each parser gets one document. The harness builds each document one time at
- * startup, and every case shares it. The comparison between the two formats
- * therefore uses the same content. Each document is a nested structure of
- * objects, arrays, strings and numbers, and not a flat list. The cost of a
- * parser is in its recursion and in the growth of its containers.
+ * Each parser gets one document, which the harness builds once at startup and
+ * every case shares, so the comparison between the two formats uses the same
+ * content. Each document is a nested structure of objects, arrays, strings and
+ * numbers instead of a flat list, because the cost of a parser is in its
+ * recursion and in the growth of its containers.
  *
- * The harness reports a time for each document, and not for each byte. The
- * figure therefore follows the document size constant in this file. Every case
- * and every third-party comparison uses that same constant.
+ * The harness reports a time for each document and not for each byte, so the
+ * figure follows the document size constant in this file, which every case and
+ * every third-party comparison uses.
  *
  * Where jansson or libyaml is on the machine, the harness measures each one on
  * exactly the same bytes. Both build a DOM of their own, so the comparison is
- * between similar amounts of work. A parser that streams, or that calls back
- * into the application, would not be.
+ * between similar amounts of work, which would not be true of a parser that
+ * streams or that calls back into the application.
  */
 
 #include <cjson.h>
@@ -59,9 +59,9 @@
 #endif
 
 /* This is the number of records in the generated document. It is large enough
- * that the cost of one call does not decide the figure. It is small enough
- * that one repetition stays in the range of milliseconds, and that the whole
- * suite finishes in an acceptable time. */
+ * that the cost of one call does not decide the figure, and small enough that
+ * one repetition stays in the range of milliseconds and the whole suite
+ * finishes in an acceptable time. */
 #define BENCH_DOC_RECORDS 200
 
 typedef struct {
@@ -78,16 +78,15 @@ typedef struct {
 /* Document generation                                                       */
 /* ------------------------------------------------------------------------ */
 
-/* snprintf reports the length that it would have written, and not the length
- * that it wrote. Do not add its return value straight onto an offset. As soon
- * as anything truncates, that offset goes past the end of the buffer. The
- * expression for the space that is left then wraps to a very large size_t,
- * which tells the next call that it may write far past the end. Every append
- * below goes through this helper instead. The helper refuses a truncation and
- * does not absorb it. This file builds these documents from a record count
- * that it chooses itself. A buffer that does not fit is therefore a sizing
- * mistake in this file, and not something that a measurement should continue
- * past. */
+/* snprintf reports the length that it would have written, not the length that
+ * it wrote, so do not add its return value straight onto an offset: as soon as
+ * anything truncates, that offset goes past the end of the buffer, and the
+ * expression for the space that is left wraps to a very large size_t, which
+ * tells the next call that it may write far past the end. Every append below
+ * goes through this helper instead, which refuses a truncation instead of
+ * absorbing it. This file builds these documents from a record count that it
+ * chooses itself, so a buffer that does not fit is a sizing mistake in this
+ * file and not something that a measurement should continue past. */
 __attribute__((format(printf, 4, 5))) static size_t doc_append(
     char *buf, size_t cap, size_t off, const char *fmt, ...) {
   if (off >= cap) bench_die("document buffer overflow");
@@ -201,10 +200,10 @@ static void cjson_parse_run(void *state, size_t n) {
     char *err = NULL;
     cjson d = cjson_parse(st->text, &err);
     if (!d) {
-      /* This stops the run, and does not return quietly. The harness divides
-       * the measured time by the full count. An early return therefore
-       * reports part of the work at the full price. A parse that fails also
-       * costs much less than a parse that works. */
+      /* This stops the run instead of returning quietly. The harness divides
+       * the measured time by the full count, so an early return reports part
+       * of the work at the full price, and a parse that fails also costs much
+       * less than a parse that works. */
       bench_die("cjson parse failed");
     }
     bench_sink(d);

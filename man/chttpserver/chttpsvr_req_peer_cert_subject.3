@@ -11,24 +11,24 @@ const char *chttpsvr_req_peer_cert_subject(const chttpsvr_req *req);
 .fi
 .SH DESCRIPTION
 .nf
-Gives the subject of the client certificate of the request as an RFC
-2253 distinguished name.  The name lists its attributes from the most
-specific to the least, for example
+Returns the subject of the client certificate of the request as an RFC
+2253 distinguished name, which lists its attributes from the most
+specific to the least specific, for example
 
     CN=alice,OU=staff,O=Example
 
 Every byte above 0x7F, every control character and every character
 that RFC 2253 reserves is escaped with a backslash, so the string is
-printable ASCII, and a name that a client crafted cannot pose as
-another one.  An organization "Example, Inc." reads as
-O=Example\e, Inc.  Compare the subject as a whole string: a substring
-of a subject can come from any of its attributes.
+printable ASCII and a name crafted by a client cannot pass for
+another one; an organization "Example, Inc." reads as
+O=Example\e, Inc.  Compare the subject as a whole string, because a
+substring of a subject can come from any of its attributes.
 
-It gives the subject only when chttpsvr_req_peer_cert_verified(3)
-reports true for req.  The subject belongs to the connection, so every
-request on one keep-alive connection gives the same text, and a
-resumed TLS session gives the subject that the handshake which
-established it verified.
+The subject is returned only when chttpsvr_req_peer_cert_verified(3)
+reports true for req.  It belongs to the connection, so every request
+on one keep-alive connection gets the same text, and a resumed TLS
+session gets the subject verified by the handshake that established
+it.
 .fi
 .SH PARAMETERS
 .nf
@@ -37,18 +37,18 @@ req  The request handle.
 .SH RETURN VALUE
 .nf
 A NUL-terminated string that stays valid for the lifetime of the
-request.  Do not free it.
+request; do not free it.
 
 NULL in every case where chttpsvr_req_peer_cert_verified(3) reports
-false: a plaintext connection, a server with no ca_bundle_path, a
-client that presented no certificate, and a NULL req.  NULL also when
-an allocation fails; call chttpsvr_req_peer_cert_verified(3) to tell
-the two apart.
+false (a plaintext connection, a server with no ca_bundle_path, a
+client that presented no certificate, and a NULL req), and also NULL
+when an allocation fails; call chttpsvr_req_peer_cert_verified(3) to
+tell the two apart.
 .fi
 .SH THREAD SAFETY
 .nf
-Call it only on the thread that runs the handler or the middleware of
-req, as every other accessor of a request.
+As with every other request accessor, call it only on the thread that
+runs the handler or the middleware of req.
 .fi
 .SH EXAMPLES
 .nf

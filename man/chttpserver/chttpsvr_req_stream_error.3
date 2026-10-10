@@ -11,41 +11,39 @@ ccol_retval_t chttpsvr_req_stream_error(const chttpsvr_req *req);
 .fi
 .SH DESCRIPTION
 .nf
-Reports why the last chttpsvr_req_read call on req returned -1.  It
-has a meaning only immediately after such a -1 return.  The result is
+Reports why the last chttpsvr_req_read call on req returned -1.  The
+result is meaningful only immediately after such a -1 return and is
 unspecified at any other time.
 
-It tells apart only the real transfer errors of chttpsvr_req_read that
-depend on the data.  See chttpsvr_req_read(3).  It reports
-ccol_success when caller misuse caused the -1 instead, and you cannot
-tell that apart from "no error".  Two cases of misuse cause it: buf
-was NULL while buflen was above 0, or
-chttpsvr_register_streaming_handler did not register the route of the
-request.  Both are static programming errors.  They happen on every
-call to the code at fault, and not only sometimes.  A caller that hits
-one is expected to find it and fix it in ordinary testing, and not to
-diagnose it at run time.
+It distinguishes only the genuine, data-dependent transfer errors of
+chttpsvr_req_read (see chttpsvr_req_read(3)).  When caller misuse
+caused the -1 instead, it reports ccol_success, which you cannot tell
+apart from "no error".  Two kinds of misuse cause this: buf was NULL
+while buflen was above 0, or the route of the request was not
+registered with chttpsvr_register_streaming_handler.  Both are static
+programming errors that happen on every call to the faulty code, not
+only sometimes, so a caller that hits one is expected to find and fix
+it in ordinary testing rather than diagnose it at run time.
 
 Return values:
   ccol_timed_out             stream_read_timeout_us expired while the
-                              handler waited for the next batch.  Or
+                              handler waited for the next batch; or
                               the total body read time of the request
-                              went above max_body_read_duration_us,
-                              when you set that field.  Or the average
-                              rate of the body fell below
+                              exceeded max_body_read_duration_us, when
+                              that field is set; or the average rate
+                              of the body fell below
                               min_transfer_rate_bps after the grace
                               period.
-  ccol_msg_too_large         The body went above max_body_size in
-                              mid-stream.  Or the declared size of one
-                              chunk of a chunked Transfer-Encoding was
-                              above max_body_size, before the server
+  ccol_msg_too_large         The body exceeded max_body_size
+                              mid-stream, or the declared size of one
+                              chunk of a chunked Transfer-Encoding
+                              exceeded max_body_size before the server
                               read any data of that chunk.
   ccol_not_enough_memory     An internal allocation failed while the
-                              server grew the body buffer.  The client
+                              server grew the body buffer; the client
                               did not cause this.
-  ccol_http_transfer_aborted The connection closed, or something reset
-                              it, or the framing of the body was
-                              malformed.
+  ccol_http_transfer_aborted The connection was closed or reset, or
+                              the framing of the body was malformed.
   ccol_success               There is no error on record for req, or
                               one of the misuse cases above caused
                               the -1.

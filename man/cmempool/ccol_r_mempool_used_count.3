@@ -12,7 +12,7 @@ size_t ccol_r_mempool_used_count(ccol_r_mempool *rmp, size_t size);
 .SH DESCRIPTION
 .nf
 Returns how many entries are allocated from the pool that would serve the
-given size. It does not count a dynamic allocation.
+given size, not counting any dynamic allocation.
 .fi
 .SH PARAMETERS
 .nf
@@ -32,11 +32,11 @@ Thread-safe if the pool was created with single_threaded=false
 The pool tracks a dynamic allocation separately
 
 The count is exact whenever the sub-pool is quiet. An entry parked in the
-cache of a thread counts as free, because nothing holds it. Consider
-concurrent allocation on a tier that keeps a cache for each thread. The
-result can then sit a few entries above ccol_r_mempool_total_capacity() for
-that size, for a short time. It never goes above the physical slot count
-that ccol_r_mempool_allocated_bytes(3) accounts for. See
+cache of a thread counts as free, because nothing holds it. Under
+concurrent allocation on a tier that keeps a cache for each thread, the
+result can sit a few entries above ccol_r_mempool_total_capacity() for
+that size for a short time, but it never goes above the physical slot
+count that ccol_r_mempool_allocated_bytes(3) accounts for. See
 ccol_mempool_total_capacity(3) for the reason.
 .fi
 .SH "SEE ALSO"

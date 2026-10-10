@@ -28,13 +28,13 @@ SOFTWARE.
 #include "common.h"
 
 /* Everything that this header declares from here to its end is part of the
- * public Application Binary Interface (ABI) of libccollections. The shared
- * library exports all of it. The library itself is built with
- * -fvisibility=hidden. One of these blocks must cover a function or an
- * object. If no block covers it, it stays internal to the library and is
- * absent from the dynamic symbol table. The application that links against
- * the library then cannot interpose it. The application also cannot collide
- * with it with a symbol of the same name. */
+ * public Application Binary Interface (ABI) of libccollections, and the shared
+ * library exports all of it. Because the library itself is built with
+ * -fvisibility=hidden, a function or an object must be covered by one of
+ * these blocks: if no block covers it, it stays internal to the library and
+ * is absent from the dynamic symbol table, so the application that links
+ * against the library cannot interpose it, and cannot collide with it through
+ * a symbol of the same name. */
 #pragma GCC visibility push(default)
 
 /**
@@ -43,20 +43,20 @@ SOFTWARE.
  *
  * Gives an ordered map that uses an AVL tree. The map has these properties:
  * - It balances its own height with rotations
- * - Every operation is iterative. There is no recursion, so the stack is safe
+ * - Every operation is iterative, with no recursion, so the stack is safe
  * - Insert, delete and search operations are O(log n)
  * - In-order iteration gives the keys in sorted order
  * - The caller can give a custom comparison function
- * - Type-inferred macros do the common operations. They work for signed,
- *   unsigned, floating-point and string key types
+ * - Type-inferred macros do the common operations, for signed, unsigned,
+ *   floating-point and string key types
  *
  * Key characteristics:
  * - The AVL tree keeps the balance factor |height(left) - height(right)| <= 1
  * - The tree uses single and double rotations to balance itself
  * - The tree keeps the keys in sorted order (ascending)
  * - The iterator walks the tree in order (left, root, right)
- * - All tree operations are iterative and use fixed-size stacks. They use no
- *   recursion. They also need no heap memory to walk or balance the tree
+ * - All tree operations are iterative and use fixed-size stacks, with no
+ *   recursion and no heap memory to walk or balance the tree
  * - The default comparison is a signed or unsigned integer comparison for
  *   integers, a numeric comparison for floating-point types, a
  *   strcmp-equivalent comparison for strings, and a raw memcmp for any other
@@ -76,8 +76,9 @@ typedef cbinarymap *cbmap;
 /**
  * @brief Create a balanced BST map with full customization
  *
- * Creates a new self-balancing binary search tree map. The caller gives the
- * key type, custom memory management and a custom comparison function.
+ * Creates a new self-balancing binary search tree map with the key type,
+ * custom memory management and custom comparison function that the caller
+ * gives.
  *
  * @param key_type Type of the keys that the map stores (it selects the
  * default comparison strategy)
@@ -89,27 +90,26 @@ typedef cbinarymap *cbmap;
  *
  * @return Pointer to the new BST map, or NULL on failure
  *
- * @note Default comparison for ccol_char: native `char` comparison. It is
- * signed or unsigned to match the `char` type of this platform
+ * @note Default comparison for ccol_char: native `char` comparison, signed
+ * or unsigned to match the `char` type of this platform
  * @note Default comparison for ccol_signed_char and for
- * short/int/long/long_long: a correct signed integer comparison. It does not
- * depend on the `char` signedness of this platform. Note that
- * ccol_signed_char is a scalar `signed char` or its typedef `int8_t`. A
- * `signed char *` string key is ccol_string instead
+ * short/int/long/long_long: a correct signed integer comparison, which does
+ * not depend on the `char` signedness of this platform. Note that
+ * ccol_signed_char is a scalar `signed char` or its typedef `int8_t`, while
+ * a `signed char *` string key is ccol_string
  * @note Default comparison for the unsigned integer types and ccol_pointer:
  * a correct unsigned integer comparison
  * @note Default comparison for ccol_float/double/long_double: a correct
- * floating-point comparison. A NaN key sorts as greater than every non-NaN
- * key, and equal to every other NaN key. This total order is well defined,
- * so the caller can still find, update and delete a NaN key. A NaN key never
- * collides with an unrelated key
+ * floating-point comparison, in which a NaN key sorts as greater than every
+ * non-NaN key and equal to every other NaN key. This total order is well
+ * defined, so the caller can find, update and delete a NaN key, and a NaN
+ * key never collides with an unrelated key
  * @note Default comparison for ccol_string: lexicographic byte comparison
  * @note For ccol_other_types (for example a struct key type) the default
- * comparison is a raw memcmp of the representation. This is the comparison
- * when the caller gives no custom_comparison_proc. The memcmp compares
- * indeterminate padding bytes. It also compares each pointer member by
- * address, not by the object that the pointer points at. Give
- * custom_comparison_proc for a struct key
+ * comparison, used when the caller gives no custom_comparison_proc, is a raw
+ * memcmp of the representation. That memcmp compares indeterminate padding
+ * bytes, and it compares each pointer member by address, not by the object
+ * that the pointer points at, so give custom_comparison_proc for a struct key
  * @note A custom comparison gets void* pointers to the key data
  * @note The map keeps the AVL balance: abs(height(left) - height(right)) <= 1
  * @note All operations are O(log n) for a balanced tree
@@ -128,7 +128,7 @@ cbmap cbmap_create_full(ccol_data_type key_type,
 /**
  * @brief Create a BST map with default settings
  *
- * Convenience wrapper for cbmap_create_full(). It uses the default memory
+ * Convenience wrapper for cbmap_create_full() that uses the default memory
  * management and the default comparison for the key type.
  *
  * @param key_type Type of the keys that the map stores
@@ -144,7 +144,7 @@ cbmap_create(ccol_data_type key_type, char **err) {
 /**
  * @brief Create a BST map with custom memory management
  *
- * Convenience wrapper for cbmap_create_full(). It uses custom memory
+ * Convenience wrapper for cbmap_create_full() that uses custom memory
  * management and the default comparison.
  *
  * @param key_type Type of the keys that the map stores
@@ -161,7 +161,7 @@ static inline __attribute__((always_inline)) cbmap cbmap_create_mp(
 /**
  * @brief Create a BST map with custom comparison function
  *
- * Convenience wrapper for cbmap_create_full(). It uses a custom comparison
+ * Convenience wrapper for cbmap_create_full() that uses a custom comparison
  * function and the default memory management.
  *
  * @param key_type Type of the keys that the map stores
@@ -170,9 +170,9 @@ static inline __attribute__((always_inline)) cbmap cbmap_create_mp(
  *
  * @return Pointer to the new BST map, or NULL on failure
  *
- * @note custom_comparison_proc sets only the order of the keys. key_type
- * sets the width that the map expects for a fixed-width key. It also sets
- * the alignment of each stored key.
+ * @note custom_comparison_proc sets only the order of the keys; key_type
+ * sets the width that the map expects for a fixed-width key and the
+ * alignment of each stored key.
  */
 static inline __attribute__((always_inline)) cbmap
 cbmap_create_ch(ccol_data_type key_type,
@@ -201,9 +201,8 @@ size_t cbmap_elem_count(cbmap cbm);
 /**
  * @brief Clear all elements from the map
  *
- * Removes all the key-value pairs from the map. It walks the tree in
- * post-order, and the walk is iterative. The map becomes empty, but the
- * caller can still use it.
+ * Removes all the key-value pairs from the map with an iterative post-order
+ * walk of the tree. The map becomes empty, but the caller can go on using it.
  *
  * @param cbm BST map to reset
  *
@@ -221,37 +220,36 @@ ccol_retval_t cbmap_reset(cbmap cbm);
 /**
  * @brief Insert or update a key-value pair
  *
- * Inserts a new key-value pair into the BST. If the key is already in the
- * map, the function updates the value instead. The function then balances
- * the tree again with AVL rotations, to keep the height balance. The insert
- * is iterative and uses an explicit stack.
+ * Inserts a new key-value pair into the BST, or updates the value if the key
+ * is already in the map, and then balances the tree again with AVL rotations
+ * to keep the height balance. The insert is iterative and uses an explicit
+ * stack.
  *
  * @param cbm BST map to insert into
  * @param key_pair Key to insert (ptr and size must be valid)
  * @param val_pair Value to insert (ptr and size must be valid)
  *
  * @return ccol_success on success
- * @return ccol_key_already_present if the key is already in the map. The
+ * @return ccol_key_already_present if the key is already in the map; the
  * function updates its value correctly and does not change the key itself
  * @return ccol_container_full if the map holds ccol_max_elem_count elements
  * @return ccol_not_enough_memory if an allocation fails
- * @return ccol_invalid_args in three cases. The first case is key_pair or
- * val_pair equal to NULL. The second case is one of the two pairs with a
- * NULL ptr and a non-zero size. The third case is a key_pair size that
- * does not match the size of a fixed-width key type (see
+ * @return ccol_invalid_args in three cases: key_pair or val_pair is NULL;
+ * one of the two pairs has a NULL ptr and a non-zero size; or the key_pair
+ * size does not match the size of a fixed-width key type (see
  * ccol_fixed_width_data_type_size)
  *
  * @note O(log n) in the average case and in the worst case, because of the
  * balance work
- * @note A size of 0 is correct for the key or the value, with a ptr or
- * without one. It stores an empty key or an empty value. Note that
+ * @note A size of 0 is correct for the key or the value, with or without a
+ * ptr, and stores an empty key or an empty value. Note that
  * chmap_insert_elem rejects a key or a value of size zero
- * @note The function copies the key data and the value data. It does not
- * point at the data of the caller
+ * @note The function copies the key data and the value data instead of
+ * pointing at the data of the caller
  * @note If the key is already in the map, the function updates only the
  * value and does not change the key
  * @note If the update changes the size of the value, the function allocates
- * the memory again
+ * new memory for it
  * @note The function balances the tree from the bottom up after the insert
  * @note The function uses single or double rotations as needed (left, right,
  * left-right, right-left)
@@ -267,8 +265,8 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
 /**
  * @brief Get a copy of the value associated with a key
  *
- * Copies the value of the given key into the buffer of the caller. The
- * function does a binary search through the tree.
+ * Copies the value of the given key into the buffer of the caller, after a
+ * binary search through the tree.
  *
  * @param cbm BST map to search
  * @param key_pair Key to look up
@@ -276,17 +274,15 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
  * @param target_buf_size Size of the target buffer
  *
  * @return ccol_success if the function finds the key and copies the value
- * @return ccol_invalid_args in five cases. The first case is key_pair equal
- * to NULL. The second case is key_pair with a NULL ptr and a non-zero size.
- * The third case is target_buf equal to NULL with a non-zero
- * target_buf_size. The fourth case is a buffer
- * size that does not match the size of the value. The fifth case is a
- * key_pair size that does not match the size of a fixed-width key type (see
+ * @return ccol_invalid_args in five cases: key_pair is NULL; key_pair has a
+ * NULL ptr and a non-zero size; target_buf is NULL with a non-zero
+ * target_buf_size; the buffer size does not match the size of the value; or
+ * the key_pair size does not match the size of a fixed-width key type (see
  * ccol_fixed_width_data_type_size)
  * @return ccol_key_not_found if the key is not in the map
  *
  * @note O(log n) complexity, because the function does a binary search
- * @note The two sizes must match exactly. Note that chmap_get_elem_copy does
+ * @note The two sizes must match exactly, while chmap_get_elem_copy does
  * not need an exact match
  * @note The function asserts if cbm is NULL
  *
@@ -299,8 +295,8 @@ ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
 /**
  * @brief Get a reference to the value associated with a key
  *
- * Gets a pointer to the value pair structure of the given key. The pointer
- * stays valid until an insert or a delete changes the map.
+ * Gets a pointer to the value pair structure of the given key, which stays
+ * valid until an insert or a delete changes the map.
  *
  * @param cbm BST map to search
  * @param key_pair Key to look up
@@ -309,23 +305,23 @@ ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
  *
  * @return ccol_success if the function finds the key
  * @return ccol_key_not_found if the key is not in the map
- * @return ccol_invalid_args in three cases. The first case is key_pair or
- * val_pair equal to NULL. The second case is key_pair with a NULL ptr and a
- * non-zero size. The third case is a key_pair size that does not match the
- * size of a fixed-width key type (see ccol_fixed_width_data_type_size)
+ * @return ccol_invalid_args in three cases: key_pair or val_pair is NULL;
+ * key_pair has a NULL ptr and a non-zero size; or the key_pair size does not
+ * match the size of a fixed-width key type (see
+ * ccol_fixed_width_data_type_size)
  *
  * @note O(log n) complexity, because the function does a binary search
  * @note An insert or a delete makes the returned pointer invalid
- * @note Do not free the returned pointer. The map owns it
- * @note The returned cmap_pair is the accessor of the map for that entry.
- * It describes the value, and it is not part of the value. Its target is
- * const-qualified. The caller can read through val_pair->ptr. The caller can
- * also write to the bytes that it points at, within val_pair->size. But an
- * assignment to val_pair->ptr or to val_pair->size is a compile error. The
- * pointer and the size describe one another. The map cannot own a pointer
- * that it did not allocate. To replace a value, call cbmap_insert_elem()
- * @note The out-parameter is a const cmap_pair **. This is why the caller
- * must declare its own variable as const cmap_pair *. The address of a plain
+ * @note Do not free the returned pointer, because the map owns it
+ * @note The returned cmap_pair is the accessor of the map for that entry: it
+ * describes the value and is not part of the value. Its target is
+ * const-qualified: the caller can read through val_pair->ptr and write to the
+ * bytes that it points at, within val_pair->size, but an assignment to
+ * val_pair->ptr or to val_pair->size is a compile error. The pointer and the
+ * size describe one another, and the map cannot own a pointer that it did not
+ * allocate. To replace a value, call cbmap_insert_elem()
+ * @note The out-parameter is a const cmap_pair **, which is why the caller
+ * must declare its own variable as const cmap_pair *: the address of a plain
  * cmap_pair * does not compile
  * @note The function asserts if cbm is NULL
  *
@@ -338,26 +334,23 @@ ccol_retval_t cbmap_get_elem_ref(cbmap cbm, const cmap_pair *key_pair,
 /**
  * @brief Delete a key-value pair from the map
  *
- * Removes the given key and its value from the BST. The function then
- * balances the tree again with AVL rotations. The delete is iterative and
- * uses an explicit stack.
+ * Removes the given key and its value from the BST and then balances the
+ * tree again with AVL rotations. The delete is iterative and uses an
+ * explicit stack.
  *
  * A node with two children gets one of these two replacements:
- * - The minimum of the right subtree. The function uses this replacement
- *   when the right side is deeper than the left side. It also uses it when
- *   the two sides have the same height
- * - The maximum of the left subtree. The function uses this replacement when
- *   the left side is deeper
+ * - The minimum of the right subtree, when the right side is deeper than the
+ *   left side or the two sides have the same height
+ * - The maximum of the left subtree, when the left side is deeper
  *
  * @param cbm BST map to delete from
  * @param key_pair Key to delete
  *
  * @return ccol_success if the function finds the key and deletes it
  * @return ccol_key_not_found if the key is not in the map
- * @return ccol_invalid_args in three cases. The first case is key_pair
- * equal to NULL. The second case is key_pair with a NULL ptr and a non-zero
- * size. The third case is a key_pair size that does not match the size of a
- * fixed-width key type (see ccol_fixed_width_data_type_size)
+ * @return ccol_invalid_args in three cases: key_pair is NULL; key_pair has a
+ * NULL ptr and a non-zero size; or the key_pair size does not match the size
+ * of a fixed-width key type (see ccol_fixed_width_data_type_size)
  *
  * @note O(log n) complexity for the search and the balance work
  * @note The function frees the memory of the key and of the value
@@ -379,25 +372,25 @@ ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair *key_pair);
  * @brief Begin in-order iteration over the BST map
  *
  * Creates an iterator at the leftmost node, which holds the smallest key.
- * The iterator walks the keys in sorted order (ascending). It walks the tree
+ * The iterator walks the keys in sorted order (ascending), walking the tree
  * in order (left, root, right).
  *
  * @param cbm BST map to iterate over
  * @param err Optional pointer that receives an error string on failure
  *
- * @return Pointer to the iterator. The function returns NULL if the map is
- * empty or if an allocation fails
+ * @return Pointer to the iterator, or NULL if the map is empty or if an
+ * allocation fails
  *
  * @note The iterator walks the keys in sorted order, in an in-order walk
  * @note The iterator uses a stack to keep the path through the tree
  * @note The caller must destroy the iterator with cbmap_iter_destroy()
  * @note A change to the map during the walk makes the iterator invalid
- * @note The function treats a NULL cbm in the same way as an empty map. It
- * returns NULL, and this is not an error. The library does this on purpose.
- * A map field can stay uninitialized because the caller put nothing into it
- * yet. The caller can iterate such a field directly. No caller needs its own
- * NULL guard first
- * @note The function returns NULL if the map is empty. This is not an error
+ * @note The function treats a NULL cbm in the same way as an empty map: it
+ * returns NULL, and this is not an error. The library does this on purpose,
+ * so that a map field that stays uninitialized because the caller has put
+ * nothing into it can be iterated directly, with no NULL guard of the
+ * caller's own first
+ * @note The function returns NULL if the map is empty; this is not an error
  *
  * @see cbmap_begin (macro wrapper)
  * @see cbmap_iter_next
@@ -423,23 +416,23 @@ void __cbmap_destroy(cbmap cbm);
 /**
  * @brief Destroy a BST map and set pointer to NULL
  *
- * Frees all the resources of the BST map. This includes all the keys, all
- * the values and all the tree nodes. The macro walks the tree in post-order,
- * and the walk is iterative.
+ * Frees all the resources of the BST map, including all the keys, all the
+ * values and all the tree nodes, with an iterative post-order walk of the
+ * tree.
  *
  * @param cbm BST map to destroy (the macro sets it to NULL)
  *
  * @note A call with NULL is safe
  * @note The macro frees all the key data and all the value data
  * @note The macro walks the tree in post-order, with no recursion
- * @note The macro evaluates cbm exactly once. It must be a modifiable
+ * @note The macro evaluates cbm exactly once, and cbm must be a modifiable
  * lvalue, such as a variable or an element of an array
  */
 #define cbmap_destroy(cbm)      \
   _ccol_cbmap_destroy_impl(cbm, \
                            _ccol_uniq(__ccol_cbmap_destroy_slot, __COUNTER__))
 
-/* Internal. The body of cbmap_destroy. slot is a name from _ccol_uniq(), so
+/* Internal: the body of cbmap_destroy. slot is a name from _ccol_uniq(), so
  * the macro nests inside the argument of another destroy macro and stays
  * -Wshadow clean. The argument is evaluated exactly once. */
 #define _ccol_cbmap_destroy_impl(cbm, slot) \
@@ -471,8 +464,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /**
  * @brief Turn on the type-inferred macros for an existing BST map
  *
- * Declares the type variables that the type-inferred macros need. Use this
- * macro for a BST map that another scope created.
+ * Declares the type variables that the type-inferred macros need, for a BST
+ * map that another scope created.
  *
  * @param hm_name BST map variable name
  * @param key_t Key type
@@ -495,7 +488,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /**
  * @brief Declare an uninitialized BST map variable
  *
- * Declares a BST map variable. It also declares the type variables that the
+ * Declares a BST map variable together with the type variables that the
  * type-inferred macros need. The caller must initialize the map before use.
  *
  * @param hm_name BST map variable name
@@ -524,8 +517,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /**
  * @brief Initialize a BST map with defaults
  *
- * Initializes a BST map that the caller declared before. It uses the default
- * settings. It gets the key type from the type variable by itself.
+ * Initializes a BST map that the caller declared before, with the default
+ * settings and with the key type taken from the type variable.
  *
  * @param hm_name BST map variable to initialize
  *
@@ -552,8 +545,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /**
  * @brief Initialize a BST map with custom memory management
  *
- * Initializes a BST map that the caller declared before. It uses custom
- * memory management.
+ * Initializes a BST map that the caller declared before, with custom memory
+ * management.
  *
  * @param hm_name BST map variable to initialize
  * @param mmgmt_procs Custom memory management procedures
@@ -577,7 +570,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /**
  * @brief Initialize a BST map with custom comparison
  *
- * Initializes a BST map that the caller declared before. It uses a custom
+ * Initializes a BST map that the caller declared before, with a custom
  * comparison function.
  *
  * @param hm_name BST map variable to initialize
@@ -601,8 +594,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /**
  * @brief Initialize a BST map with full customization
  *
- * Initializes a BST map that the caller declared before. It uses custom
- * memory management and a custom comparison.
+ * Initializes a BST map that the caller declared before, with custom memory
+ * management and a custom comparison.
  *
  * @param hm_name BST map variable to initialize
  * @param mmgmt_procs Custom memory management procedures
@@ -625,8 +618,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /**
  * @brief Declare and initialize a BST map with defaults
  *
- * Declares and initializes a BST map in one step. It uses the default
- * settings.
+ * Declares and initializes a BST map in one step, with the default settings.
  *
  * @param hm_name BST map variable name
  * @param key_t Key type
@@ -636,7 +628,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @note The macro finds the key type by itself (signedness, float, string,
  * struct)
  * @note For a struct key_t, the macro uses a raw memcmp order (see
- * cbmap_create_full). Use cbmap_construct_cc for a struct key type
+ * cbmap_create_full), so use cbmap_construct_cc for a struct key type
  *
  * Example:
  * @code
@@ -689,7 +681,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /**
  * @brief Declare and initialize a BST map with custom memory management
  *
- * Declares and initializes a BST map in one step. It uses custom memory
+ * Declares and initializes a BST map in one step, with custom memory
  * management.
  *
  * @param hm_name BST map variable name
@@ -736,8 +728,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /**
  * @brief Declare and initialize a BST map with custom comparison
  *
- * Declares and initializes a BST map in one step. It uses a custom
- * comparison function.
+ * Declares and initializes a BST map in one step, with a custom comparison
+ * function.
  *
  * @param hm_name BST map variable name
  * @param key_t Key type
@@ -784,7 +776,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /**
  * @brief Declare and initialize a BST map with full customization
  *
- * Declares and initializes a BST map in one step. It uses custom memory
+ * Declares and initializes a BST map in one step, with custom memory
  * management and a custom comparison.
  *
  * @param hm_name BST map variable name
@@ -838,17 +830,17 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /**
  * @brief Insert a key-value pair (type-inferred)
  *
- * Type-inferred wrapper for cbmap_insert_elem(). It builds the cmap_pair for
- * the key and the cmap_pair for the value from the expressions of the caller.
- * It calls ccol_fatal_err() on failure.
+ * Type-inferred wrapper for cbmap_insert_elem(), which builds the cmap_pair
+ * for the key and the cmap_pair for the value from the expressions of the
+ * caller and calls ccol_fatal_err() on failure.
  *
  * The macro converts key and val to the declared key type and the declared
- * value type of the map, in the same way as a plain C assignment, and it
- * stores the converted copies. It never reinterprets the bytes of an
- * expression of another type. An expression that has no implicit conversion
- * to the declared type is a compile error. A character-pointer key type or
- * value type keeps the pointer type of the expression instead, so a const
- * char * needs no cast.
+ * value type of the map, in the same way as a plain C assignment, and stores
+ * the converted copies; it never reinterprets the bytes of an expression of
+ * another type, and an expression that has no implicit conversion to the
+ * declared type is a compile error. A character-pointer key type or value
+ * type keeps the pointer type of the expression instead, so a const char *
+ * needs no cast.
  *
  * @param hm_name BST map to insert into
  * @param key Key to insert
@@ -859,8 +851,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @note The macro handles a value type and a string type correctly
  * @note The map balances the tree again after the insert
  *
- * @note A NULL key or value of a character-pointer type is not a string.
- * The macro stops the program with ccol_invalid_args for it
+ * @note A NULL key or value of a character-pointer type is not a string, so
+ * the macro stops the program with ccol_invalid_args for it
  *
  * @see cbmap_insert_elem
  * @see cbmap_get
@@ -950,20 +942,20 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /**
  * @brief Remove a key-value pair (type-inferred)
  *
- * Type-inferred wrapper for cbmap_delete_elem(). It returns the result code.
+ * Type-inferred wrapper for cbmap_delete_elem() that returns the result code.
  *
  * @param hm_name BST map to remove from
  * @param key Key to remove
  *
- * @return ccol_success if the macro removes the key. It returns
- * ccol_key_not_found if the key is not in the map
+ * @return ccol_success if the macro removes the key, or ccol_key_not_found
+ * if the key is not in the map
  *
  * @note The macro does not stop the program on ccol_key_not_found
  * @note The macro frees the memory of the key and of the value
  * @note The map balances the tree again after the delete
  *
- * @note A NULL key of a character-pointer type is not a string. The macro
- * returns ccol_invalid_args for it
+ * @note A NULL key of a character-pointer type is not a string, so the
+ * macro returns ccol_invalid_args for it
  *
  * @see cbmap_delete_elem
  * @see cbmap_insert
@@ -997,9 +989,9 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /**
  * @brief Get value by key (type-inferred, returns value)
  *
- * Type-inferred wrapper for cbmap_get_elem_ref(). It returns the value itself.
- * It calls ccol_fatal_err() if the key is not in the map. It also calls
- * ccol_fatal_err() if the two sizes do not match.
+ * Type-inferred wrapper for cbmap_get_elem_ref() that returns the value
+ * itself. It calls ccol_fatal_err() if the key is not in the map, and also
+ * calls ccol_fatal_err() if the two sizes do not match.
  *
  * @param hm_name BST map to search
  * @param key Key to look up
@@ -1013,8 +1005,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @note For a string, the macro returns the char* itself
  * @note The search takes O(log n) time
  *
- * @note A NULL key of a character-pointer type is not a string. The macro
- * stops the program with ccol_invalid_args for it
+ * @note A NULL key of a character-pointer type is not a string, so the
+ * macro stops the program with ccol_invalid_args for it
  *
  * @see cbmap_get_ptr
  * @see cbmap_insert
@@ -1071,27 +1063,27 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     *__ccol_cbmap_val;                                                         \
   })
 
-/* Gives p without a change for every value type but a string. For a map with
+/* Gives p without a change for every value type but a string; for a map with
  * string values, it gives a pointer whose target is const-qualified.
  *
- * A map that stores strings owns the bytes. It also keeps its own
- * {ptr, size} accessor for the node in step with those bytes. The only char*
- * object in the whole map is the ptr field of that accessor. This is why
+ * A map that stores strings owns the bytes and keeps its own {ptr, size}
+ * accessor for the node in step with those bytes. The only char* object in
+ * the whole map is the ptr field of that accessor, which is why
  * cbmap_get_ptr() can only give back the address of that field for a map
  * with string values. A store of a different char* through that address
- * replaces the pointer. The size then still describes the older string.
- * Such a store also hands the map a pointer that the map does not own and
- * whose lifetime the map cannot control. Without the const,
+ * replaces the pointer while the size goes on describing the older string,
+ * and it hands the map a pointer that the map does not own and whose
+ * lifetime the map cannot control. Without the const,
  * cbmap_get_elem_copy() and every read of an iterator value then walk the
- * new buffer for the length of the older string. The new buffer can be much
- * shorter. AddressSanitizer reports a global-buffer-overflow read of the old
- * length on the first such read.
+ * new buffer, which can be much shorter, for the length of the older string.
+ * AddressSanitizer reports a global-buffer-overflow read of the old length
+ * on the first such read.
  *
- * The const makes that store a compile error. The caller can still read the
- * stored char* through the returned pointer. The caller can also write to
- * the string bytes that it points at, within the stored length. To replace a
- * string value, call cbmap_insert(). That macro frees the old bytes. It then
- * copies the new bytes into storage that the map owns. */
+ * The const makes that store a compile error. The caller can read the
+ * stored char* through the returned pointer, and can write to the string
+ * bytes that it points at, within the stored length. To replace a string
+ * value, call cbmap_insert(), which frees the old bytes and then copies the
+ * new bytes into storage that the map owns. */
 #define _ccol_cbmap_value_ptr_result(hm_name, p)                               \
   _Generic(*hm_name##__ccol_val_type_var,                                      \
       char *: (__typeof__(*hm_name##__ccol_val_type_var) const *)(p),          \
@@ -1107,16 +1099,16 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /**
  * @brief Get pointer to value by key (type-inferred, returns pointer or NULL)
  *
- * Type-inferred wrapper for cbmap_get_elem_ref(). It returns a pointer to the
- * value. It returns NULL if the key is not in the map. Note that cbmap_get()
- * stops the program in that case, and this macro does not.
+ * Type-inferred wrapper for cbmap_get_elem_ref() that returns a pointer to
+ * the value, or NULL if the key is not in the map. Note that cbmap_get()
+ * stops the program in that case, while this macro does not.
  *
  * @param hm_name BST map to search
  * @param key Key to look up
  *
  * @return Pointer to the value, or NULL if the key is not in the map
  *
- * @note The macro returns NULL if the key is not in the map. It does not
+ * @note The macro returns NULL if the key is not in the map, and does not
  * stop the program
  * @note The macro stops the program if the size of the value does not match
  * the size of the type
@@ -1124,17 +1116,17 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * the value in place
  * @note An insert or a delete makes the pointer invalid
  * @note For a char* value type, the target of the pointer is const-qualified
- * (char *const *). The caller can read the stored string. The caller can
- * also edit the bytes of that string in place, within the stored length. But
- * a replacement of the pointer itself is a compile error. The map owns the
- * string bytes and keeps its own accessor in step with them. A replacement
- * of the pointer leaves the length of the accessor describing the older
- * string. To replace a string value, call cbmap_insert(). That macro frees
- * the old bytes and copies the new bytes into storage that the map owns
+ * (char *const *): the caller can read the stored string and edit its bytes
+ * in place, within the stored length, but a replacement of the pointer
+ * itself is a compile error. The map owns the string bytes and keeps its own
+ * accessor in step with them, so a replacement of the pointer would leave
+ * the length of the accessor describing the older string. To replace a
+ * string value, call cbmap_insert(), which frees the old bytes and copies
+ * the new bytes into storage that the map owns
  * @note The search takes O(log n) time
  *
- * @note A NULL key of a character-pointer type is not a string. The macro
- * gives NULL for it
+ * @note A NULL key of a character-pointer type is not a string, so the
+ * macro gives NULL for it
  *
  * @see cbmap_get
  * @see cbmap_get_elem_ref

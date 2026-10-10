@@ -11,7 +11,7 @@ ccol_retval_t ccol_chan_disable_sending(ccol_channel *ch, ccol_channel_direction
 .fi
 .SH DESCRIPTION
 .nf
-This function stops all new sends on the given direction. It also wakes
+This function stops all new sends on the given direction and wakes
 every thread that blocks inside a send on that direction.
 .fi
 .SH PARAMETERS
@@ -27,9 +27,9 @@ ccol_invalid_args  - ch is NULL, or d is not valid
 .fi
 .SH NOTES
 .nf
-The function wakes every blocked sender on the given direction.
-ccol_chan_enable_sending() turns sends on again.
-The function does not change the other direction.
+The function wakes every blocked sender on the given direction and
+does not change the other direction. ccol_chan_enable_sending() turns
+sends on again.
 .fi
 .SH "SEE ALSO"
 .BR ccol_chan_enable_sending (3)

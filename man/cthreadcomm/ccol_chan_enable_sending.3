@@ -12,7 +12,7 @@ ccol_retval_t ccol_chan_enable_sending(ccol_channel *ch, ccol_channel_direction 
 .SH DESCRIPTION
 .nf
 This function turns sends on the given direction on again after a call
-turned them off. It also wakes every thread that blocks and waits to send.
+turned them off, and wakes every thread that blocks and waits to send.
 .fi
 .SH PARAMETERS
 .nf
@@ -27,9 +27,9 @@ ccol_invalid_args  - ch is NULL, or d is not valid
 .fi
 .SH NOTES
 .nf
-The function wakes every blocked sender with a broadcast.
-A thread can try to send immediately if the queue has free space.
-The function does not change the other direction.
+The function wakes every blocked sender with a broadcast, so a thread
+can try to send immediately if the queue has free space. The function
+does not change the other direction.
 .fi
 .SH "SEE ALSO"
 .BR ccol_chan_disable_sending (3)

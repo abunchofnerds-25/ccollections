@@ -18,8 +18,8 @@ safe.
 .SH NOTES
 .nf
 A response carries its own copy of the allocator procs of the client
-that made it, and it does not refer to that client. You can therefore
-free a response before or after chttpclient_destroy of the client. The
+that made it and does not refer to that client, so you can free a
+response before or after chttpclient_destroy of the client. The
 functions that a custom allocator names must still be callable.
 .fi
 .SH "SEE ALSO"

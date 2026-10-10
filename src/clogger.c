@@ -83,8 +83,8 @@ SOFTWARE.
 #define CLOG_ROTATION_FMT ".%Y%m%d%H%M%S"
 #define CLOG_ROTATION_FMT_LEN 15
 /* The collision suffix of a rotated name is "_" and a decimal sequence
- * number. It is zero-padded to 4 digits. A number above 9999 takes as many
- * digits as it needs, up to CLOG_ROTATION_SEQ_MAX_DIGITS. */
+ * number, zero-padded to 4 digits; a number above 9999 takes as many digits
+ * as it needs, up to CLOG_ROTATION_SEQ_MAX_DIGITS. */
 #define CLOG_ROTATION_SEQ_MAX_DIGITS 9
 #define CLOG_ROTATION_SEQ_MAX 999999999UL
 /* Extra headroom for the collision suffix: "_" plus the widest number. */
@@ -116,34 +116,33 @@ _Static_assert(CLOG_ROTATION_TMP_LEN == CLOG_ROTATION_FMT_LEN,
  * records go out for each target in any window of this many seconds. */
 #define CLOG_IGNORED_NOTE_BURST 8U
 #define CLOG_IGNORED_NOTE_WINDOW_SECS ((time_t)60)
-/* A rotation attempt can fail. A permission error is one cause, and a file
- * path that is too long for the internal buffer of the rotated name is
- * another. After such a failure, the library backs off later attempts by
- * this many seconds. It does not try again on every single write. Without
- * this backoff, a failure that stays costs every write after it the full
- * syscall overhead of rename() and open(). That cost lasts for as long as
- * the underlying condition lasts. Size-based rotation also stays unable to
- * make progress against its own trigger, with no bound on the rate of the
- * attempts. */
+/* A rotation attempt can fail, for example because of a permission error,
+ * or because the file path is too long for the internal buffer of the
+ * rotated name. After such a failure the library backs off later attempts
+ * by this many seconds instead of trying again on every single write.
+ * Without this backoff, a failure that persists costs every later write the
+ * full syscall overhead of rename() and open() for as long as the
+ * underlying condition lasts, and size-based rotation keeps failing against
+ * its own trigger with no bound on the rate of the attempts. */
 #define CLOG_ROTATE_RETRY_BACKOFF_SECS ((time_t)1)
 
 static const char *const _LEVEL_STR[] = {"TRACE", "DEBUG", "INFO",  "WARN",
                                          "ERROR", "ALERT", "FATAL", "OFF"};
 /* A clog_level_t value indexes the array above and the array below
- * directly. Keep the size of each one tied to the number of values in the
- * enum. A future insertion of a level can forget to grow one of them. With
- * this rule, such an insertion fails to compile. Without it, the code
- * silently uses a wrong index at run time. */
+ * directly, so keep the size of each one tied to the number of values in
+ * the enum. Then a future insertion of a level that forgets to grow one of
+ * them fails to compile, instead of silently using a wrong index at run
+ * time. */
 _Static_assert(sizeof(_LEVEL_STR) / sizeof(_LEVEL_STR[0]) == CLOG_OFF + 1,
                "_LEVEL_STR must have exactly one entry per clog_level_t value");
 
 /*
- * These are the keys that clog_set_field() rejects. They are the fixed
- * output keys that _clog_write() itself always writes, in every format. A
- * user field must not reuse one of them. Such a field makes a duplicate
- * "key":.. pair in JSON. It makes a duplicate key= token in logfmt. In
- * syslog output it makes a duplicate SD-PARAM-NAME inside one SD-ELEMENT.
- * RFC 5424 needs an SD-PARAM-NAME that is unique for each SD-ELEMENT.
+ * These are the keys that clog_set_field() rejects: the fixed output keys
+ * that _clog_write() itself always writes, in every format. A user field
+ * must not reuse one of them, because it would make a duplicate "key":..
+ * pair in JSON, a duplicate key= token in logfmt, and, in syslog output, a
+ * duplicate SD-PARAM-NAME inside one SD-ELEMENT, while RFC 5424 needs an
+ * SD-PARAM-NAME that is unique for each SD-ELEMENT.
  */
 static const char *const _RESERVED_FIELD_KEYS[] = {
     "ts", "level", "proc", "src", "func", "msg", "bt", "bt_error"};
@@ -176,23 +175,23 @@ _Static_assert(
 /* ========================================================================== */
 
 /*
- * One gzip compression of a rotated file. _rotate() allocates it, and it
- * hands it to the compressor thread of the shared target (see "BACKGROUND
- * COMPRESSION" below). From then on the job owns its names and the
- * protection that retention gives to its generation. Both names are relative
- * to clog_shared_t.dir_fd. `src` is the rotated file that the compression
- * reads, and `dst` is `src` plus ".gz", which it writes.
+ * One gzip compression of a rotated file. _rotate() allocates it and hands
+ * it to the compressor thread of the shared target (see "BACKGROUND
+ * COMPRESSION" below), and from then on the job owns its names and the
+ * protection that retention gives to its generation. Both names are
+ * relative to clog_shared_t.dir_fd: `src` is the rotated file that the
+ * compression reads, and `dst` is `src` plus ".gz", which it writes.
  *
  * A job waits in the queue of the shared target until the compressor thread
- * takes it. From that moment it is clog_shared_t.compress_running until the
- * compression ends. _prune_rotated() never deletes a file of the running
- * job, because the compression may not have read all of the source, and may
- * not have written all of the destination. A deletion pass can see the
+ * takes it, and from that moment until the compression ends it is
+ * clog_shared_t.compress_running. _prune_rotated() never deletes a file of
+ * the running job, because the compression may not have read all of the
+ * source or written all of the destination yet; a deletion pass can see the
  * destination on disk from the moment that the compression creates it,
- * which is long before the write finishes. A job that still waits in the
- * queue has no such protection: nothing reads or writes its files yet, and a
- * pass that finds its generation older than the newest max_rotated_files
- * deletes it like any other. The compression of such a job then finds no
+ * long before the write finishes. A job that is still waiting in the queue
+ * has no such protection: nothing reads or writes its files yet, so a pass
+ * that finds its generation older than the newest max_rotated_files deletes
+ * it like any other, and the compression of such a job then finds no
  * source and does nothing. The library reads and changes the queue and
  * compress_running only while it holds clog_shared_t.mutex.
  */
@@ -211,42 +210,42 @@ typedef struct {
   size_t len;
   size_t cap;
   /* Hard growth ceiling for THIS buffer, in bytes. The default is
-   * CLOG_BUF_MAX, which _buf_init() sets. The library raises it above that
-   * default only for clog_shared_t.async_buf. It raises it only as far as
-   * the clog_async_cfg_t.flush_buffer_size of the caller needs (see
-   * _shared_async_init()). Every other clog_buf_t in this file keeps the
-   * CLOG_BUF_MAX default. That includes the lg->buf of each logger and every
-   * scratch buffer. The limit exists to bound one record that is too large.
-   * That concern is separate from how large a caller wants the async batch
-   * itself to grow before a flush. */
+   * CLOG_BUF_MAX, which _buf_init() sets, and the library raises it above
+   * that default only for clog_shared_t.async_buf, and only as far as the
+   * clog_async_cfg_t.flush_buffer_size of the caller needs (see
+   * _shared_async_init()). Every other clog_buf_t in this file, including
+   * the lg->buf of each logger and every scratch buffer, keeps the
+   * CLOG_BUF_MAX default. The limit exists to bound one record that is too
+   * large, which is a separate concern from how large a caller wants the
+   * async batch itself to grow before a flush. */
   size_t cap_limit;
   const ccol_memmgmt_procs_t *m_procs; /* borrowed from clog_shared_t */
   /* _buf_ensure() sets this when a growth attempt fails because the
-   * underlying allocator call itself fails. That is a real out-of-memory
-   * state. It is different from a growth attempt that only reaches the
-   * cap_limit of this buffer. That happens for a record that is legitimately
-   * too large, or when a shared batch buffer has too little room left. Both
-   * cases report the same failure to the caller of _buf_ensure(). This flag
-   * is the only place that separates them. _clog_build_record() resets it to
-   * false at the start of every attempt to build a record. It reads the flag
-   * afterwards, whatever nested append call set it. It then reports an
+   * underlying allocator call itself fails, which is a real out-of-memory
+   * state. That is different from a growth attempt that only reaches the
+   * cap_limit of this buffer, as happens for a record that is legitimately
+   * too large or when a shared batch buffer has too little room left. Both
+   * cases report the same failure to the caller of _buf_ensure(), so this
+   * flag is the only place that separates them. _clog_build_record() resets
+   * it to false at the start of every attempt to build a record and reads it
+   * afterwards, whatever nested append call set it, so that it can report an
    * accurate cause to _clog_build_fallback_record(). Without the flag, the
    * library always blames the size. */
   bool oom;
 } clog_buf_t;
 
 /*
- * The shared backing store. It holds the fd, the rotation state and the
- * mutex. It has a reference count, so the root logger and every derived
- * logger share one instance. The library closes the fd when ref_count
- * reaches zero, if the store owns that fd.
+ * The shared backing store, which holds the fd, the rotation state and the
+ * mutex. It is reference-counted, so the root logger and every derived
+ * logger share one instance, and the library closes the fd when ref_count
+ * reaches zero if the store owns that fd.
  */
 /* The values of clog_shared_t.async_partial_record. A record can span more
- * than one line: a logfmt record carries its backtrace as tab-indented
- * continuation lines after its primary line. A short write can therefore
- * split a record in the middle of a line, or exactly at the newline that
- * ends one of its lines while more of its lines are still undelivered. The
- * two need different repairs: only the first leaves a line open on disk. */
+ * than one line (a logfmt record carries its backtrace as tab-indented
+ * continuation lines after its primary line), so a short write can split a
+ * record in the middle of a line, or exactly at the newline that ends one
+ * of its lines while more of its lines are still undelivered. The two need
+ * different repairs, because only the first leaves a line open on disk. */
 enum {
   CLOG_SPLIT_NONE = 0,     /* the bytes on disk end on a record boundary */
   CLOG_SPLIT_MID_LINE = 1, /* they end inside a line of a record */
@@ -257,30 +256,29 @@ typedef struct clog_shared {
   int fd;
   bool owns_fd;
   /* This is not CLOG_SPLIT_NONE while the leading bytes of async_buf are the
-   * continuation of a record. The first half of that record is already on
-   * disk. A write that the kernel accepts only in part leaves this state
-   * behind (see _writer_flush_now()). Only a prefix that stops inside a
-   * record sets it. A prefix that stops exactly on a record boundary splits
-   * nothing, whatever amount of the batch it leaves behind. A newline that
-   * a tab-indented continuation line follows is inside a record, not on its
+   * continuation of a record whose first half is already on disk. A write
+   * that the kernel accepts only in part leaves this state behind (see
+   * _writer_flush_now()), but only when the accepted prefix stops inside a
+   * record; a prefix that stops exactly on a record boundary splits nothing,
+   * however much of the batch it leaves behind. A newline that a
+   * tab-indented continuation line follows is inside a record, not on its
    * boundary.
    *
-   * Both rotation checks refuse to rotate while this flag is set. The two
-   * halves therefore always land in the same file. Without that rule, a
-   * rotation can happen between the short write and the retry. The rotation
-   * renames away the file that holds the first half, and the continuation
-   * opens the fresh file. One record then spans two files, and no marker
-   * names the split. Every line-framed format that this module writes
-   * (logfmt, JSON lines and RFC 5424) then parses both ends wrongly. Every
-   * path that would write a DIFFERENT record straight to the fd settles this
-   * flag first (see _clog_flush_and_settle()). Nothing can therefore land
-   * between the two halves of a record. The first flush whose write the
-   * kernel accepts in full clears the flag. The repair that stands in for
-   * such a flush also clears it.
+   * Both rotation checks refuse to rotate while this flag is set, so the two
+   * halves always land in the same file. Without that rule, a rotation can
+   * happen between the short write and the retry: it renames away the file
+   * that holds the first half, the continuation opens the fresh file, and
+   * one record then spans two files with no marker that names the split.
+   * Every line-framed format that this module writes (logfmt, JSON lines
+   * and RFC 5424) then parses both ends wrongly. Every path that would write
+   * a DIFFERENT record straight to the fd settles this flag first (see
+   * _clog_flush_and_settle()), so nothing can land between the two halves
+   * of a record. The first flush whose write the kernel accepts in full
+   * clears the flag, and so does the repair that stands in for such a flush.
    *
-   * This field is here, in padding that the fields around it already leave.
-   * It is not beside the async block that it belongs to. Every write path
-   * tests it immediately after it tests fd. The two therefore share a cache
+   * This field sits here, in padding that the fields around it already
+   * leave, instead of beside the async block that it belongs to: every write
+   * path tests it immediately after it tests fd, so the two share a cache
    * line. A synchronous logger can never set this flag, and it pays nothing
    * for the test beyond a load that it already makes. */
   unsigned char async_partial_record;
@@ -293,11 +291,10 @@ typedef struct clog_shared {
   unsigned char sink_kind;
   /* True when fd is a message-oriented socket (SOCK_DGRAM, SOCK_SEQPACKET or
    * SOCK_RDM). Such a socket keeps the boundary of every write: one write is
-   * one message, and one message that exceeds the limit of the socket fails
-   * as a whole. The async writer thread therefore writes every record of
-   * such a sink with its own write and never puts two records into one
-   * batch. It is decided with sink_kind, and sits in the padding beside
-   * it. */
+   * one message, and a message that exceeds the limit of the socket fails as
+   * a whole. So the async writer thread writes every record of such a sink
+   * with its own write and never puts two records into one batch. It is
+   * decided together with sink_kind, and sits in the padding beside it. */
   bool sink_per_record;
   char *file_path; /* NULL for fd-based loggers */
 
@@ -307,7 +304,7 @@ typedef struct clog_shared {
   time_t last_rotation;
   /* The earliest time at which the library can try a rotation again after a
    * _rotate() call that failed. The value 0, which calloc gives by default,
-   * means that no backoff is in effect. See
+   * means that no backoff is in effect; see
    * CLOG_ROTATE_RETRY_BACKOFF_SECS. */
   time_t rotate_retry_after;
   /* The compression that the compressor thread runs at this moment, or NULL
@@ -325,15 +322,15 @@ typedef struct clog_shared {
       *m_procs; /* heap-allocated copy; NULL = default allocator */
 
   /* Async logging (see "ASYNC LOGGING" below). For a synchronous logger
-   * (async_enabled == false) every field in this block is zero and unused. A
-   * synchronous logger therefore pays nothing for the presence of async
-   * support. The library writes async_enabled itself exactly once. The
-   * thread that constructs this shared object writes it before any other
-   * thread can see the object. In a forked child, the downgrade in
-   * _clog_atfork_child writes it instead (see the comment on that function).
-   * Every other reader can therefore read it without a lock. That includes
-   * the dispatch check inside _clog_write(). Nothing ever changes the field
-   * at the same time as a read. */
+   * (async_enabled == false) every field in this block is zero and unused,
+   * so a synchronous logger pays nothing for the presence of async support.
+   * The library writes async_enabled itself exactly once: the thread that
+   * constructs this shared object writes it before any other thread can see
+   * the object, or, in a forked child, the downgrade in _clog_atfork_child
+   * writes it instead (see the comment on that function). Because nothing
+   * ever changes the field at the same time as a read, every other reader,
+   * including the dispatch check inside _clog_write(), can read it without
+   * a lock. */
   bool async_enabled;
   bool is_bounded_queue; /* meaningful only if async_enabled */
   union {
@@ -343,29 +340,29 @@ typedef struct clog_shared {
   clog_async_cfg_t async_cfg; /* resolved copy, defaults already applied */
   ccol_thread_id_t writer_thread;
   clog_buf_t async_buf; /* The aggregation buffer that the writer thread
-      owns. It is different from the lg->buf of one handle, because the jobs
-      from every handle that shares this shared target land in ONE buffer.
-      clog_shared_t.async_partial_record, above next to fd, says whether the
-      leading bytes of this buffer are the continuation of a record that is
+      owns. It is separate from the lg->buf of a single handle, because the
+      jobs from every handle that shares this shared target land in ONE
+      buffer. clog_shared_t.async_partial_record, above next to fd, says
+      whether the leading bytes of this buffer continue a record that is
       already half written. */
-  /* This is CLOCK_MONOTONIC. It is deliberately not gettimeofday() or
+  /* This is CLOCK_MONOTONIC, deliberately not gettimeofday() or
    * CLOCK_REALTIME. It is only an internal bookkeeping value for the time
-   * since the last flush. The main loop of the writer thread uses it to
+   * since the last flush, which the main loop of the writer thread uses to
    * compute how long to wait before its next chance to flush (see
-   * _clog_writer_thread_main() below). The library never gives this value to
-   * a caller and never puts it in a record. A measurement from the wall
-   * clock is wrong here. The system clock can step backward between two
-   * flushes. An NTP step correction, a manual date change and a clock
-   * correction after a live migration of a virtual machine all do this. The
-   * computed elapsed time then becomes negative by any amount. The next wait
-   * of the writer thread then grows far past flush_interval_us. This
-   * silently breaks the guarantee that clog_async_cfg_t.flush_interval_us
-   * documents, which is a flush at least that often. CLOCK_MONOTONIC is
-   * immune to this class of adjustment. */
+   * _clog_writer_thread_main() below); the library never gives it to a
+   * caller and never puts it in a record. A wall-clock measurement is wrong
+   * here, because the system clock can step backward between two flushes
+   * (an NTP step correction, a manual date change, or a clock correction
+   * after a live migration of a virtual machine). The computed elapsed time
+   * then becomes negative by any amount, the next wait of the writer thread
+   * grows far past flush_interval_us, and the guarantee that
+   * clog_async_cfg_t.flush_interval_us documents (a flush at least that
+   * often) silently breaks. CLOCK_MONOTONIC is immune to this class of
+   * adjustment. */
   struct timespec last_flush_monotonic;
 
-  /* The rotation state below is read only while a rotation runs. It sits at
-   * the end, so that it moves no field that each write reads. */
+  /* The rotation state below is read only while a rotation runs, and it sits
+   * at the end so that it moves no field that each write reads. */
   /* The name of the newest rotated file that this shared target made, or
    * found on disk before its first rotation: the 14 stamp digits, with no
    * NUL, and the collision sequence number, which is 0 for a name with no
@@ -397,15 +394,15 @@ typedef struct clog_shared {
   ccol_cond_var_t compress_cv;
   ccol_thread_id_t compressor_thread;
   /* The directory that holds the log file, opened once by
-   * clog_open_file_mp() when rotation is on, and -1 otherwise. A relative
-   * path therefore keeps naming the directory in which the logger opened
-   * the file, whatever the working directory of the process becomes later. */
+   * clog_open_file_mp() when rotation is on, and -1 otherwise. Through it, a
+   * relative path keeps naming the directory in which the logger opened the
+   * file, whatever the working directory of the process becomes later. */
   int dir_fd;
   bool compressor_live;
   bool compressor_stop;
-  /* A deletion pass kept an old generation only because its compression was
-   * running. The compressor thread runs the pass again once that
-   * compression ends; see _clog_compressor_main(). */
+  /* True when a deletion pass kept an old generation only because its
+   * compression was running. The compressor thread then runs the pass again
+   * once that compression ends; see _clog_compressor_main(). */
   bool compress_prune_deferred;
   /* The exit drain sets this when its time budget runs out while a
    * compression still runs. The compression then stops at its next block,
@@ -431,29 +428,28 @@ struct clogger {
   clog_shared_t *shared; /* shared output backing store              */
   /* The level filter of this logger. It is _Atomic so that _clog_write() can
    * check it cheaply before it locks shared->mutex (see the fast-path check
-   * there). Another thread can call clog_set_level() on the same handle at
-   * the same time. The _Atomic type stops that unlocked read from being a
-   * data race against such a call. */
+   * there): another thread can call clog_set_level() on the same handle at
+   * the same time, and the _Atomic type keeps that unlocked read from being
+   * a data race against such a call. */
   _Atomic clog_level_t min_level;
   /* This mutex guards `fields` only. It is separate from shared->mutex,
    * which serialises the fd writes and the rotation across a whole derive
-   * tree. The field map of each logger is otherwise fully independent of
-   * every sibling logger that shares the same `shared`. A call to
-   * clog_set_field(), clog_remove_field() or clog_clear_fields() on one
-   * derived logger must therefore not contend with an unrelated write in
-   * progress on a sibling. _clog_write() and clog_derive() take this lock
-   * only for the short window in which they read `fields`. Sometimes a
-   * function needs both this lock and shared->mutex together. _clog_write()
-   * is such a function, and it holds shared->mutex for the whole call. In
-   * that case the code always locks shared->mutex first, never the other way
-   * round. No lock-order cycle is therefore possible anywhere in this
-   * file. */
+   * tree, because the field map of each logger is otherwise fully
+   * independent of every sibling logger that shares the same `shared`: a
+   * call to clog_set_field(), clog_remove_field() or clog_clear_fields() on
+   * one derived logger must not contend with an unrelated write in progress
+   * on a sibling. _clog_write() and clog_derive() take this lock only for
+   * the short window in which they read `fields`. When a function needs both
+   * this lock and shared->mutex, as _clog_write() does while it holds
+   * shared->mutex for the whole call, the code always locks shared->mutex
+   * first and never the other way round, so no lock-order cycle is possible
+   * anywhere in this file. */
   ccol_mutex_t fields_mutex;
   chmap fields;   /* chmap(char* -> char*); per-logger fields */
   clog_buf_t buf; /* per-logger reusable write buffer          */
-  /* The handle of this logger. An unpin can therefore find the slot that
-   * holds its pin, and the caller does not have to carry one. The library
-   * writes this once, before it publishes the handle, and never again. */
+  /* The handle of this logger, so that an unpin can find the slot that
+   * holds its pin without the caller carrying one. The library writes this
+   * once, before it publishes the handle, and never again. */
   clog self_handle;
 };
 
@@ -462,35 +458,35 @@ struct clogger {
 /* ========================================================================== */
 
 /*
- * A clog is an opaque value handle of a slot index and a generation. It is
- * not a pointer. This table follows chttpsvr_slot_table and
- * chttpcli_slot_table (in src/chttpserver.c and src/chttpclient.c) closely.
- * It has one deliberate difference. The resolve step of clogger is on the
- * hot path of every single log_* call, and that includes the calls that the
- * level filter drops. It is therefore far more frequent than the resolve
- * sites of those two modules. A reader-writer lock guards this table for the
- * cold paths that change it. Those paths are an acquire, a close and the
- * fork walk. The resolve step and the pin step go through the lock-free
- * handle index in cpintable.h. They take no lock of this table at all.
+ * A clog is an opaque value handle made of a slot index and a generation,
+ * not a pointer. This table closely follows chttpsvr_slot_table and
+ * chttpcli_slot_table (in src/chttpserver.c and src/chttpclient.c), with
+ * one deliberate difference: the resolve step of clogger is on the hot path
+ * of every single log_* call, including the calls that the level filter
+ * drops, so it runs far more often than the resolve sites of those two
+ * modules. A reader-writer lock guards this table for the cold paths that
+ * change it (an acquire, a close and the fork walk), while the resolve step
+ * and the pin step go through the lock-free handle index in cpintable.h and
+ * take no lock of this table at all.
  */
 typedef struct {
   struct clogger *ptr; /* NULL when free */
   uint32_t generation; /* 0 before the first use, 1 after the first acquire */
   bool in_use;         /* false from step 2 of clog_close() onward. It gates
-      _clog_resolve only. It does NOT mean that it is safe to dereference ptr
+      _clog_resolve only and does NOT mean that it is safe to dereference ptr
       for the protection of fields_mutex; see `freed` below */
   bool freed;          /* false until _logger_free(ptr) truly runs; see
                "Fork safety" below. The fields_mutex walk of _clog_atfork_prepare
-               gates on THIS field, not on in_use. It does so because in_use goes
-               false long before the library destroys ptr->fields_mutex */
+               gates on THIS field, not on in_use, because in_use goes false
+               long before the library destroys ptr->fields_mutex */
 } clog_slot_t;
 
-/* The hot half of the table above. It maps a handle to a pointer. It also
- * holds the pin that keeps a logger alive for the duration of a call. It is
- * separate because a resolve runs on every single log call. A resolve must
- * not write anything that another thread reads. Everything else that this
- * table does is cold and stays under the rwlock. That includes the fork
- * handling, live_shareds and the reuse of a slot. */
+/* The hot half of the table above: it maps a handle to a pointer and holds
+ * the pin that keeps a logger alive for the duration of a call. It is
+ * separate because a resolve runs on every single log call and must not
+ * write anything that another thread reads. Everything else that this table
+ * does (the fork handling, live_shareds and the reuse of a slot) is cold and
+ * stays under the rwlock. */
 static ccol_pintable clog_pintable;
 
 static struct {
@@ -499,30 +495,29 @@ static struct {
   cvec slots;        /* cvector of clog_slot_t */
   cvec free_indices; /* cvector of uint32_t; LIFO */
   cvec live_shareds; /* A cvector of clog_shared_t*. It covers the whole
-      lifetime of a clog_shared_t. That lifetime starts when the library
-      acquires the first handle of the object. It ends when the library frees
-      the object. It does not depend on the in_use flag of any one handle.
-      See "Fork safety" below for the reason that this dedicated registry
-      exists. The library does not derive the set of live clog_shared_t
-      objects from the handle table. */
-  /* How many clog_close calls passed the point at which they stop being
-     visible as a live slot and are not yet finished with this table. A close
-     clears its own slot->ptr partway through. It then takes the write lock
-     again to remove its shared object from live_shareds. slot->ptr alone
-     therefore does not cover the whole window in which the table must
-     survive. Inside one thread that is harmless, because the later step
-     always follows. Across threads it is not harmless. Without this counter,
-     a second close that finishes in between destroys live_shareds, and the
-     first close then indexes it. */
+      lifetime of a clog_shared_t, from the moment the library acquires the
+      first handle of the object until the library frees the object,
+      independently of the in_use flag of any one handle. See "Fork safety"
+      below for why this dedicated registry exists instead of deriving the
+      set of live clog_shared_t objects from the handle table. */
+  /* How many clog_close calls have passed the point at which they stop being
+     visible as a live slot but are not yet finished with this table. A close
+     clears its own slot->ptr partway through and then takes the write lock
+     again to remove its shared object from live_shareds, so slot->ptr alone
+     does not cover the whole window in which the table must survive. Inside
+     one thread that is harmless, because the later step always follows, but
+     across threads it is not: without this counter, a second close that
+     finishes in between destroys live_shareds, and the first close then
+     indexes it. */
   size_t closes_in_flight;
   /* The library sets this when the destructor at process exit found a logger
-     that was still open and left this table alone. Whichever close is the
+     that was still open and left this table alone; whichever close is the
      last one out afterwards then does the release that the destructor could
-     not do. Without this flag, a logger that a destructor closes leaves the
-     table and the pin index allocated for the rest of the process. That
-     destructor is one that the linker put before this one. A leak checker
-     that treats still-reachable memory as an error reports that memory. The
-     library reads and writes this field only under the write lock. */
+     not do. Without this flag, a logger that a destructor closes (one that
+     the linker put before this one) leaves the table and the pin index
+     allocated for the rest of the process, and a leak checker that treats
+     still-reachable memory as an error reports that memory. The library
+     reads and writes this field only under the write lock. */
   bool release_deferred;
   /* A cvector of clog_shared_t*: every file-backed target whose directory
      entry is known (clog_shared_t.file_id_known). An open of a path that a
@@ -536,29 +531,29 @@ static struct {
   cvec file_shareds;
 } clog_slot_table = {0};
 
-/* These have their definitions with the teardown at process exit below. They
-   are declared here because the final locked section of clog_close does the
-   release that the destructor deferred. */
+/* These are defined with the teardown at process exit below, and declared
+   here because the final locked section of clog_close does the release
+   that the destructor deferred. */
 static bool _clog_any_slot_live_locked(void);
 static void _clog_release_slot_table_locked(void);
 static void _clog_release_slot_table_if_deferred_locked(void);
 
 #if CCOL_FORK_SAFETY_REQUIRED
 /*
- * One slot that a fork() catches in the middle of a clog_close(). Such a
- * slot has in_use == false and freed == false. _clog_atfork_prepare()
- * records these slots, and the child side of _clog_atfork_release()
- * finishes them, below. Read those two functions for the reason that this
- * needs its own tracking. The ordinary locked_fields protection that every
- * live slot already gets is not enough here.
+ * One slot that a fork() catches in the middle of a clog_close(), with
+ * in_use == false and freed == false. _clog_atfork_prepare() records these
+ * slots, and the child side of _clog_atfork_release() finishes them, below;
+ * read those two functions for why this needs its own tracking, which the
+ * ordinary locked_fields protection that every live slot gets does not
+ * provide.
  *
- * The compiler removes this type, _clog_atfork_state below, and every
- * function and registration site that touches either of them. It removes
- * them when CCOL_FORK_SAFETY_REQUIRED is 0 (see the doc comment of that
- * macro in common.h). clog_slot_table.slots, free_indices and live_shareds
- * stay compiled, and so does clog_slot_t.freed. They also serve the
- * ordinary handle lifecycle of this module, which has nothing to do with a
- * fork. They do not serve fork safety alone.
+ * When CCOL_FORK_SAFETY_REQUIRED is 0 (see the doc comment of that macro in
+ * common.h), the compiler removes this type, _clog_atfork_state below, and
+ * every function and registration site that touches either of them.
+ * clog_slot_table.slots, free_indices and live_shareds stay compiled, and
+ * so does clog_slot_t.freed, because they also serve the ordinary handle
+ * lifecycle of this module, which has nothing to do with a fork, and not
+ * fork safety alone.
  */
 typedef struct {
   uint32_t idx;
@@ -566,13 +561,13 @@ typedef struct {
 } clog_atfork_closing_t;
 
 /*
- * This records every lock that _clog_atfork_prepare takes.
- * _clog_atfork_parent and _clog_atfork_child can then unlock exactly what
- * the prepare step took. Only the thread that forks reads or writes this
- * state. It does so only between the prepare call and the matching parent
- * or child call. Nothing ever touches it concurrently, so it needs no lock
- * of its own. _clog_atfork_prepare walks clog_slot_table.live_shareds for
- * the protection of shared->mutex. That vector is not a field here.
+ * This records every lock that _clog_atfork_prepare takes, so that
+ * _clog_atfork_parent and _clog_atfork_child can unlock exactly what the
+ * prepare step took. Only the thread that forks reads or writes this state,
+ * and only between the prepare call and the matching parent or child call;
+ * since nothing touches it concurrently, it needs no lock of its own.
+ * _clog_atfork_prepare walks clog_slot_table.live_shareds for the
+ * protection of shared->mutex; that vector is not a field here.
  */
 static struct {
   cvec locked_fields; /* cvector of struct clogger* */
@@ -600,11 +595,11 @@ static void _clog_shareds_remove(cvec v, clog_shared_t *sh) {
   }
 }
 
-/* These are forward declarations. The definitions are much further down, in
- * the "CONSTRUCTOR HELPERS" section. The child-side handling of
- * _clog_atfork_release() must call all three of them. It calls them to
- * finish a clog_close() call that a fork() left in the middle of its
- * teardown. See the doc comment of that function. */
+/* Forward declarations; the definitions are much further down, in the
+ * "CONSTRUCTOR HELPERS" section. The child-side handling of
+ * _clog_atfork_release() must call all three of them to finish a
+ * clog_close() call that a fork() left in the middle of its teardown; see
+ * the doc comment of that function. */
 static void _logger_free(struct clogger *lg);
 static void _shared_close_owned_fd(clog_shared_t *sh);
 static void _shared_free_partial(clog_shared_t *sh);
@@ -612,21 +607,20 @@ static void _shared_free_partial(clog_shared_t *sh);
 #ifdef RUNNING_UNIT_TESTS
 /*
  * This lets a test force the NEXT _clog_handle_acquire() call
- * deterministically. It forces two things. First, that call grows
+ * deterministically, in two ways. First, that call grows
  * clog_slot_table.slots with a brand new slot, exactly as if free_indices
- * were empty. It does so whatever slots earlier tests in this same process
- * already left there for reuse. Second, the live_shareds registration step
- * of that same call fails. The test does not need the plain default
- * allocator of the process to fail for real. That allocator is the only one
- * that clog_slot_table.slots, free_indices and live_shareds ever use,
- * whatever the custom mprocs of a logger are (see
- * _clog_slot_table_init_globals()). Both effects together are needed to
- * reach one rollback path. That path can leave a slot behind with freed ==
- * false and ptr == NULL at the same time (see the comment on that rollback
- * in _clog_handle_acquire()). A slot that comes off free_indices for reuse
- * already has freed == true, from the clog_close() of its earlier occupant.
- * Only a fresh slot whose OWN registration step then fails can reach that
- * path. This hook disarms itself the moment that it fires. It therefore
+ * were empty, whatever slots earlier tests in this same process left there
+ * for reuse. Second, the live_shareds registration step of that same call
+ * fails, without the plain default allocator of the process having to fail
+ * for real; that allocator is the only one that clog_slot_table.slots,
+ * free_indices and live_shareds ever use, whatever the custom mprocs of a
+ * logger are (see _clog_slot_table_init_globals()). Both effects together
+ * are needed to reach one rollback path, which can leave a slot behind with
+ * freed == false and ptr == NULL at the same time (see the comment on that
+ * rollback in _clog_handle_acquire()). A slot that comes off free_indices
+ * for reuse already has freed == true from the clog_close() of its earlier
+ * occupant, so only a fresh slot whose OWN registration step then fails can
+ * reach that path. This hook disarms itself the moment that it fires, so it
  * affects only the one acquisition that a test targets.
  */
 static _Atomic bool _clog_test_force_next_fresh_slot_reg_failure = false;
@@ -640,9 +634,9 @@ void clog_test_force_next_fresh_slot_registration_failure(bool force) {
 }
 
 /* See the doc comment of clog_test_set_close_finalize_delay_us() in
- * clogger.h. This hook deliberately does NOT disarm itself, and the hook
- * just above does. A test needs this one armed across the whole clog_close()
- * call under test, not only for its first use. */
+ * clogger.h. Unlike the hook just above, this hook deliberately does NOT
+ * disarm itself, because a test needs it armed across the whole
+ * clog_close() call under test, not only for its first use. */
 static _Atomic unsigned int _clog_test_close_finalize_delay_us = 0;
 static _Atomic bool _clog_test_close_finalize_delay_entered = false;
 
@@ -712,40 +706,39 @@ static void _clog_slot_table_init_globals(void) {
 #endif
 }
 
-/* This function is not in clogger.h and is not part of the public API. It is
- * a narrow, deliberate escape hatch. It follows
+/* This function is not in clogger.h and is not part of the public API: it is
+ * a narrow, deliberate escape hatch that follows
  * _cthreadcomm_ensure_atfork_registered_before_caller() in cthreadcomm.c and
  * _ctpool_ensure_atfork_registered_before_caller() in cthreadpool.c exactly.
- * It exists for a dependent module, chttpserver.c. That module must
- * guarantee that the ccol_at_fork() triple of this module is registered
- * BEFORE its own. pthread_atfork runs the prepare handlers in the reverse
- * order of their registration. The prepare handler of the CALLER therefore
- * runs FIRST at every future fork(). That is, it runs before the prepare
- * handler of this module, _clog_atfork_prepare, can lock
- * clog_slot_table.rwlock, the mutex of a live clog_shared_t, or a
- * fields_mutex.
+ * It exists for a dependent module, chttpserver.c, which must guarantee that
+ * the ccol_at_fork() triple of this module is registered BEFORE its own.
+ * pthread_atfork runs the prepare handlers in the reverse order of their
+ * registration, so the prepare handler of the CALLER runs FIRST at every
+ * future fork(), before the prepare handler of this module,
+ * _clog_atfork_prepare, can lock clog_slot_table.rwlock, the mutex of a live
+ * clog_shared_t, or a fields_mutex.
  *
  * chttpserver.c holds its own srv_engine_bundler.mutex across a call into
- * this module twice. One is the ccol_log_info() or ccol_log_warn() call
- * inside _SRV_ENGINE_LOG. The other is the direct clog_open_fd_mp call in
+ * this module in two places: the clog_info() or clog_warn() call
+ * inside _SRV_ENGINE_LOG, and the direct clog_open_fd_mp call in
  * _engine_acquire for the fallback logger of the engine. Without this
- * function, the real lock order at fork() time is an accident. It depends on
- * which of the two modules the embedding application uses FIRST. Consider a
- * caller that resolves a chttpsvr handle before this process ever uses clog
- * for anything else. That handle can even be an invalid one. Every public
- * chttpsvr_* function that resolves a handle accepts an invalid handle and
- * reports a plain error. It does not need the caller to guarantee validity
- * first. Such a caller registers the ccol_at_fork() triple of chttpserver
- * with no forced clogger registration before it. A later, independent first
- * use of clog then registers the ccol_at_fork() triple of this module AFTER
- * the one of chttpserver. That inverts the order that the code needs. It
- * makes exactly the AB-BA fork() deadlock shape that the same forced
- * registration helpers in chttpserver, cthreadcomm and cthreadpool exist to
- * keep closed (see the doc comment of _chttpsvr_slot_table_init_globals in
- * chttpserver.c). A caller that never uses this function is not affected at
- * all. The lazy registration of this module, which ccol_call_once guards,
- * still happens whenever the library first creates a clog handle on its
- * own. */
+ * function, the real lock order at fork() time is an accident that depends
+ * on which of the two modules the embedding application uses FIRST.
+ * Consider a caller that resolves a chttpsvr handle before this process ever
+ * uses clog for anything else; that handle can even be an invalid one,
+ * because every public chttpsvr_* function that resolves a handle accepts an
+ * invalid handle and reports a plain error, without needing the caller to
+ * guarantee validity first. Such a caller registers the ccol_at_fork()
+ * triple of chttpserver with no forced clogger registration before it, and
+ * a later, independent first use of clog then registers the ccol_at_fork()
+ * triple of this module AFTER the one of chttpserver. That inverts the order
+ * that the code needs and makes exactly the AB-BA fork() deadlock shape that
+ * the same forced registration helpers in chttpserver, cthreadcomm and
+ * cthreadpool exist to keep closed (see the doc comment of
+ * _chttpsvr_slot_table_init_globals in chttpserver.c). A caller that never
+ * uses this function is not affected at all: the lazy registration of this
+ * module, which ccol_call_once guards, happens whenever the library first
+ * creates a clog handle on its own. */
 void _clog_ensure_atfork_registered_before_caller(void) {
   ccol_call_once(clog_slot_table.once, _clog_slot_table_init_globals);
 }
@@ -755,32 +748,31 @@ void _clog_ensure_atfork_registered_before_caller(void) {
  * NULL for h == 0, for an h that is out of range, and for an h that names a
  * free slot or a slot with the wrong generation. After a resolve that
  * succeeds, the caller must call _clog_resolve_unpin() exactly once on every
- * path. This function takes no lock at all. It writes nothing that another
- * thread reads. It runs on every log_* call, and that includes a call that
- * its own level check drops. Every core therefore pays for any shared write
- * here.
+ * path. This function takes no lock at all and writes nothing that another
+ * thread reads: it runs on every log_* call, including a call that its own
+ * level check drops, so every core would pay for any shared write here.
  */
 static struct clogger *_clog_resolve(clog h) {
   /* No lock, and no write to anything that another thread reads. The pin
-   * index is a static that starts at zero. A handle that arrives before the
-   * library ever opens a logger therefore finds no chunk and resolves to
-   * NULL. An empty slot table gives that same answer. */
+   * index is a static that starts at zero, so a handle that arrives before
+   * the library ever opens a logger finds no chunk and resolves to NULL,
+   * which is the same answer that an empty slot table gives. */
   return (struct clogger *)ccol_pintable_pin(&clog_pintable, h);
 }
 
 /*
- * This function is lock-free. That is deliberate and safe. It releases the
- * pin and touches nothing else. clog_close() never sleeps on a condition
- * variable to wait for this function to wake it. It polls the pin count
- * instead (see step 3 of clog_close()). There is therefore no wakeup to
- * deliver. Do NOT add a lock, a broadcast or any other use of raw here to be
- * safe. After the release of the pin, the library can free the object at any
- * instant. Anything after the release is therefore a use-after-free.
- * Anything before the release is a shared write on a path whose whole
- * purpose is to have none.
+ * This function is lock-free, deliberately and safely: it releases the pin
+ * and touches nothing else. clog_close() never sleeps on a condition
+ * variable waiting for this function to wake it; it polls the pin count
+ * instead (see step 3 of clog_close()), so there is no wakeup to deliver.
+ * Do NOT add a lock, a broadcast or any other use of raw here to be safe.
+ * After the release of the pin the library can free the object at any
+ * instant, so anything after the release is a use-after-free, and anything
+ * before the release is a shared write on a path whose whole purpose is to
+ * have none.
  *
- * A read of raw->self_handle before the release is safe. It is safe because
- * the pin is still held at that point.
+ * A read of raw->self_handle before the release is safe, because the pin is
+ * still held at that point.
  */
 static void _clog_resolve_unpin(struct clogger *raw) {
   ccol_pintable_unpin(&clog_pintable, raw->self_handle);
@@ -789,33 +781,33 @@ static void _clog_resolve_unpin(struct clogger *raw) {
 /*
  * This makes a fresh handle for an lg that is fully constructed. The library
  * calls it once from the constructor path, after lg and sh are otherwise
- * completely built. It also calls it from clog_derive(). It gives
- * CLOG_INVALID when the slot table runs out of memory, which is an ordinary
- * failure and not a fatal one. It also registers lg->shared into
- * clog_slot_table.live_shareds (see "Fork safety" below). It does not add an
- * entry that is already there. A brand new root construction and a sibling
- * handle from clog_derive() both call this same function. Only the FIRST one
- * that names a given `shared` adds it.
+ * completely built, and also from clog_derive(). It gives CLOG_INVALID when
+ * the slot table runs out of memory, which is an ordinary failure and not a
+ * fatal one. It also registers lg->shared into clog_slot_table.live_shareds
+ * (see "Fork safety" below) without adding an entry that is already there:
+ * a brand new root construction and a sibling handle from clog_derive() both
+ * call this same function, and only the FIRST one that names a given
+ * `shared` adds it.
  *
- * This function follows _chttpsvr_handle_slot_acquire (in
- * src/chttpserver.c) closely. The index and the generation encode as
- * (idx << 32) | generation. The generation wraps around and skips the value
- * 0. The value 0 is reserved. It means "never used yet" and it separates
- * CLOG_INVALID from a real handle. There is one addition to that shape.
- * Every acquire sets slot->freed = false unconditionally. A slot that comes
- * off free_indices has freed == true, from the close of its earlier
- * occupant. Without this reset, a handle born from such a slot silently
- * keeps freed == true from an unrelated predecessor that is already gone.
- * The fields_mutex walk of _clog_atfork_prepare then never protects that
- * handle at all.
+ * This function closely follows _chttpsvr_handle_slot_acquire (in
+ * src/chttpserver.c). The index and the generation encode as
+ * (idx << 32) | generation, and the generation wraps around and skips the
+ * value 0, which is reserved: it means "never used yet" and separates
+ * CLOG_INVALID from a real handle. There is one addition to that shape:
+ * every acquire sets slot->freed = false unconditionally. A slot that comes
+ * off free_indices has freed == true from the close of its earlier
+ * occupant, so without this reset a handle born from such a slot silently
+ * keeps freed == true from an unrelated predecessor that is already gone,
+ * and the fields_mutex walk of _clog_atfork_prepare then never protects
+ * that handle at all.
  */
 static clog _clog_handle_acquire(struct clogger *lg) {
   ccol_call_once(clog_slot_table.once, _clog_slot_table_init_globals);
   ccol_rw_lock_wrlock(clog_slot_table.rwlock);
 
-  /* Outside RUNNING_UNIT_TESTS the compiler removes this completely. The
-   * helper in a build that is not a test build is only `return false;`. This
-   * therefore costs nothing on the hot handle-acquisition path of a real
+  /* Outside RUNNING_UNIT_TESTS the compiler removes this completely: in a
+   * build that is not a test build, the helper is only `return false;`, so
+   * this costs nothing on the hot handle-acquisition path of a real
    * build. */
   bool force_fresh_slot_reg_failure =
       _clog_test_consume_forced_fresh_slot_reg_failure();
@@ -827,13 +819,13 @@ static clog _clog_handle_acquire(struct clogger *lg) {
     cvector_pop_back(clog_slot_table.free_indices, &idx);
     slot = (clog_slot_t *)cvector_at(clog_slot_table.slots, idx);
   } else {
-    /* The pin table can hold only so many slots. The library can never
-     * publish a slot whose index is beyond that limit. It therefore refuses
-     * such a slot here. It does not claim the slot and then roll it back. A
-     * rollback would put an index that no later publish can use onto the free
-     * list, and every acquire pops from that list. This is an ordinary
-     * failure. A caller already has to treat a table that cannot grow in the
-     * same way. */
+    /* The pin table can hold only so many slots, and the library can never
+     * publish a slot whose index is beyond that limit. So it refuses such a
+     * slot here instead of claiming the slot and rolling it back, because a
+     * rollback would put an index that no later publish can use onto the
+     * free list, and every acquire pops from that list. This is an ordinary
+     * failure, which a caller already has to treat in the same way as a
+     * table that cannot grow. */
     if (cvector_elem_count(clog_slot_table.slots) >= CCOL_PIN_MAX_SLOTS) {
       ccol_rw_lock_unlock(clog_slot_table.rwlock);
       return CLOG_INVALID;
@@ -847,16 +839,16 @@ static clog _clog_handle_acquire(struct clogger *lg) {
     slot = (clog_slot_t *)cvector_at(clog_slot_table.slots, idx);
   }
 
-  /* This registers lg->shared into live_shareds. That vector is the exact
-   * set that _clog_atfork_prepare() walks. The walk decides which
-   * shared->mutex objects to lock before a fork(). The registration happens
-   * BEFORE the library changes this slot or hands it out. A registration
-   * that fails can then roll back, because the index is still untouched. A
-   * handle whose shared object failed to register silently escapes the
-   * protection of _clog_atfork_prepare(). A fork() can race a write or a
-   * rotation in progress on that exact logger. The child then keeps a
-   * shared->mutex that stays locked for ever. That is the class of hang that
-   * the fork-safety machinery in this file exists to prevent. */
+  /* This registers lg->shared into live_shareds, which is the exact set that
+   * _clog_atfork_prepare() walks to decide which shared->mutex objects to
+   * lock before a fork(). The registration happens BEFORE the library
+   * changes this slot or hands it out, so that a registration that fails can
+   * roll back while the index is still untouched. A handle whose shared
+   * object failed to register silently escapes the protection of
+   * _clog_atfork_prepare(): a fork() can race a write or a rotation in
+   * progress on that exact logger, and the child then keeps a shared->mutex
+   * that stays locked for ever, which is the class of hang that the
+   * fork-safety machinery in this file exists to prevent. */
   bool already_registered = false;
   size_t n = cvector_elem_count(clog_slot_table.live_shareds);
   for (size_t i = 0; i < n; i++) {
@@ -867,19 +859,19 @@ static clog _clog_handle_acquire(struct clogger *lg) {
       break;
     }
   }
-  /* force_fresh_slot_reg_failure forces this outcome unconditionally. It
+  /* force_fresh_slot_reg_failure forces this outcome unconditionally and
    * ignores already_registered. For clog_open_fd_mp() and
-   * clog_open_file_mp(), lg->shared is always fresh. already_registered is
-   * therefore always false there, and this makes no difference. For
-   * clog_derive(), lg->shared is the already-registered shared object of the
-   * PARENT. That object is certain to be in live_shareds for as long as the
-   * parent itself is a live, pinned handle. already_registered is therefore
-   * always true there. Without this unconditional override, the forced
-   * failure hook can never fire for a clog_derive() call at all. It consumes
-   * itself silently, because the hook disarms itself on every call (see
-   * _clog_test_consume_forced_fresh_slot_reg_failure() above). It then still
-   * makes a valid handle. That contradicts the documented promise of this
-   * hook, which is to work the same way at all three call sites. */
+   * clog_open_file_mp(), lg->shared is always fresh, so already_registered
+   * is always false there and this makes no difference. For clog_derive(),
+   * lg->shared is the already-registered shared object of the PARENT, which
+   * is certain to be in live_shareds for as long as the parent itself is a
+   * live, pinned handle, so already_registered is always true there.
+   * Without this unconditional override, the forced failure hook can never
+   * fire for a clog_derive() call at all: it consumes itself silently,
+   * because the hook disarms itself on every call (see
+   * _clog_test_consume_forced_fresh_slot_reg_failure() above), and the call
+   * makes a valid handle anyway. That contradicts the documented promise of
+   * this hook, which is to work the same way at all three call sites. */
   bool live_shareds_registration_failed = force_fresh_slot_reg_failure;
   if (!live_shareds_registration_failed && !already_registered) {
     live_shareds_registration_failed =
@@ -887,20 +879,20 @@ static clog _clog_handle_acquire(struct clogger *lg) {
         ccol_success;
   }
   if (live_shareds_registration_failed) {
-    /* A slot that comes off free_indices is safe to leave untouched here. It
-     * already has freed == true and ptr == NULL, from the clog_close() of its
-     * earlier occupant. A slot that comes from the branch above that pushes a
-     * brand new slot is NOT safe to leave untouched. Its own fresh = {0}
-     * initialization leaves freed == false with ptr == NULL. The walk in
-     * _clog_atfork_prepare() reads that exact combination as "this slot has a
-     * live ptr, so lock its fields_mutex". That walk only ever skips a slot
-     * with `if (slot->freed) continue;`. Without a correction here, a fork()
-     * can land while this now free index sits unused in free_indices. The
-     * walk then dereferences a NULL ptr in
-     * ccol_mutex_lock(slot->ptr->fields_mutex) and crashes. The code below
-     * therefore restores both fields explicitly. It gives the slot the same
-     * "freed" shape that a slot always has after clog_close() retires it.
-     * This makes the rollback safe, whichever of the two branches above made
+    /* A slot that comes off free_indices is safe to leave untouched here,
+     * because it already has freed == true and ptr == NULL from the
+     * clog_close() of its earlier occupant. A slot that comes from the branch
+     * above that pushes a brand new slot is NOT safe to leave untouched: its
+     * own fresh = {0} initialization leaves freed == false with ptr == NULL,
+     * and the walk in _clog_atfork_prepare() reads that exact combination as
+     * "this slot has a live ptr, so lock its fields_mutex", because that walk
+     * only ever skips a slot with `if (slot->freed) continue;`. Without a
+     * correction here, a fork() can land while this free index sits unused
+     * in free_indices, and the walk then dereferences a NULL ptr in
+     * ccol_mutex_lock(slot->ptr->fields_mutex) and crashes. So the code
+     * below restores both fields explicitly, giving the slot the same
+     * "freed" shape that a slot always has after clog_close() retires it,
+     * which makes the rollback safe whichever of the two branches above made
      * `slot`. */
     slot->freed = true;
     slot->ptr = NULL;
@@ -914,36 +906,36 @@ static clog _clog_handle_acquire(struct clogger *lg) {
 
   clog h = ((clog)idx << 32) | (clog)slot->generation;
 
-  /* The library writes this before it publishes the handle. A resolver that
-   * finds this logger therefore also finds the handle that its own unpin
+  /* The library writes this before it publishes the handle, so a resolver
+   * that finds this logger also finds the handle that its own unpin
    * needs. */
   lg->self_handle = h;
 
-  /* The publish step can allocate a chunk or a stripe block on its first
-   * use. A failure leaves the slot unpublished, and the handle then resolves
-   * to nothing. Roll the slot back exactly as the live_shareds failure above
-   * does. Do not hand out a handle that no call can ever resolve. */
+  /* The publish step can allocate a chunk or a stripe block on its first use,
+   * and a failure leaves the slot unpublished, so the handle then resolves to
+   * nothing. Roll the slot back exactly as the live_shareds failure above does,
+   * instead of handing out a handle that no call can ever resolve. */
   if (!ccol_pintable_publish(&clog_pintable, idx, slot->generation, lg)) {
-    /* This is the one failure that can happen after the library already
-     * registered lg->shared. The code must therefore undo that registration
-     * here. Without that, a pointer to a shared object stays in the set that
-     * _clog_atfork_prepare walks and locks. The caller gets CLOG_INVALID and
-     * goes on to free that object. The next fork() in the process then locks
-     * a mutex inside freed memory.
+    /* This is the one failure that can happen after the library has already
+     * registered lg->shared, so the code must undo that registration here.
+     * Without that, a pointer to a shared object stays in the set that
+     * _clog_atfork_prepare walks and locks, while the caller gets
+     * CLOG_INVALID and goes on to free that object; the next fork() in the
+     * process then locks a mutex inside freed memory.
      *
-     * A pop of the tail is exactly right here, and a search is not needed.
-     * The library only ever changes live_shareds under the write lock that
-     * this function holds for its whole body. If this call pushed at all,
-     * which happens exactly when the entry was not already registered, its
+     * A pop of the tail is exactly right here, and no search is needed: the
+     * library only ever changes live_shareds under the write lock that this
+     * function holds for its whole body, so if this call pushed at all
+     * (which happens exactly when the entry was not already registered), its
      * entry is still the last one. */
     if (!already_registered) {
       clog_shared_t *rolled_back = NULL;
       cvector_pop_back(clog_slot_table.live_shareds, &rolled_back);
     }
-    /* The code clears this because the slot goes back on the free list. A
-     * handle that stays here names a slot that now belongs to another
-     * object. An unpin that carries such a handle charges the count of that
-     * object for a pin that nobody took. */
+    /* The code clears this because the slot goes back on the free list: a
+     * handle that stayed here would name a slot that belongs to another
+     * object, and an unpin that carries such a handle charges the count of
+     * that object for a pin that nobody took. */
     lg->self_handle = 0;
     slot->freed = true;
     slot->ptr = NULL;
@@ -966,45 +958,43 @@ static clog _clog_handle_acquire(struct clogger *lg) {
 
 #if CCOL_FORK_SAFETY_REQUIRED
 /*
- * fork() duplicates only the thread that calls it. Some OTHER thread can
- * hold a lock at that exact instant. That lock can be
- * clog_slot_table.rwlock, a shared->mutex or a fields_mutex. The child
- * inherits such a lock in a state that stays locked for ever, because the
- * thread that would unlock it does not exist there. The pthread_atfork idiom
- * below is the standard, correct answer. _prepare locks every such lock, so
- * fork() continues only when no thread holds one for a moment. _parent
- * unlocks them all after fork() returns in the parent. _child unlocks every
- * mutex too. The logical execution of the thread that forked continues as the
- * only thread of the child, so for a mutex this is a normal, valid unlock and
- * not a trick that resets a lock that a dead thread owns. The one exception
- * is clog_slot_table.rwlock, which the child initializes again; see the
+ * fork() duplicates only the thread that calls it, so if some OTHER thread
+ * holds a lock at that exact instant (clog_slot_table.rwlock, a
+ * shared->mutex or a fields_mutex), the child inherits that lock in a state
+ * that stays locked for ever, because the thread that would unlock it does
+ * not exist there. The pthread_atfork idiom below is the standard, correct
+ * answer. _prepare locks every such lock, so fork() continues only at a
+ * moment when no thread holds one. _parent unlocks them all after fork()
+ * returns in the parent. _child unlocks every mutex too: the logical
+ * execution of the thread that forked continues as the only thread of the
+ * child, so for a mutex this is a normal, valid unlock and not a trick that
+ * resets a lock that a dead thread owns. The one exception is
+ * clog_slot_table.rwlock, which the child initializes again; see the
  * comment above _clog_atfork_release for why.
  *
- * clog_slot_table.live_shareds is what protects shared->mutex. The library
- * does not derive that protection from a walk over the handles that have
- * in_use set. The slot of a handle can already show in_use == false while
- * clog_close() still locks or holds shared->mutex a few steps later (see the
- * numbered sequence in clog_close()). A walk that gates on in_use therefore
- * misses the mutex of that shared object inside exactly that window. The
- * freed flag protects fields_mutex instead (see the doc comment of
- * clog_slot_t.freed). The reason is the same: in_use goes false before
- * _logger_free() destroys fields_mutex. An operation on a third thread can
- * be in flight and hold a pin at that moment. clog_set_field() and the
- * related functions are such operations, and one of them can legitimately
- * still hold that mutex inside the same window.
+ * clog_slot_table.live_shareds is what protects shared->mutex, instead of a
+ * walk over the handles that have in_use set. The slot of a handle can
+ * already show in_use == false while clog_close() still locks or holds
+ * shared->mutex a few steps later (see the numbered sequence in
+ * clog_close()), so a walk that gates on in_use misses the mutex of that
+ * shared object inside exactly that window. The freed flag protects
+ * fields_mutex instead (see the doc comment of clog_slot_t.freed), for the
+ * same reason: in_use goes false before _logger_free() destroys
+ * fields_mutex, and an operation on a third thread that holds a pin at that
+ * moment (clog_set_field() and the related functions are such operations)
+ * can legitimately still hold that mutex inside the same window.
  */
 static void _clog_atfork_prepare(void) {
 #ifdef RUNNING_UNIT_TESTS
   _ccol_atfork_order_record(ccol_atfork_module_clogger);
 #endif
-  /* This file has a standing rule for the pthread wrappers. Every function
+  /* This file has a standing rule for the pthread wrappers: every function
    * that touches clog_slot_table.rwlock directly must guard it with this
    * same ccol_call_once. pthread_atfork() can call this function only after
-   * _clog_slot_table_init_globals() registers it, and that function has
-   * therefore already run. The guard does not depend on that call-graph
-   * reasoning. Such reasoning breaks silently the moment that a future
-   * change adds a new call path that nobody expected. The guard therefore
-   * stays unconditional. */
+   * _clog_slot_table_init_globals() registers it, so that function has
+   * already run, but the guard does not depend on that call-graph
+   * reasoning, which breaks silently the moment that a future change adds a
+   * call path that nobody expected. So the guard stays unconditional. */
   ccol_call_once(clog_slot_table.once, _clog_slot_table_init_globals);
   ccol_rw_lock_wrlock(clog_slot_table.rwlock);
 
@@ -1022,38 +1012,36 @@ static void _clog_atfork_prepare(void) {
     ccol_mutex_lock(slot->ptr->fields_mutex);
     if (cvector_push_back(_clog_atfork_state.locked_fields, &slot->ptr) !=
         ccol_success) {
-      /* The record of this lock failed, because memory ran out. The code
-       * unlocks it again immediately. It does not leave the lock held with
-       * nothing in locked_fields, because _clog_atfork_release() would then
-       * never unlock it again. That deadlocks the field operations of this
-       * one logger for ever, in the parent and in the child. To skip the
-       * fields_mutex protection of this single logger for this one fork() is
-       * the safe, bounded degradation. fork() only ever duplicates the
-       * thread that calls it. The window that this leaves open is therefore
-       * the same narrow race that only an out-of-memory state can reach. The
-       * code already accepts that race for a `freed` slot, which the loop
-       * skips above. It also accepts it for a shared object that never
-       * reached live_shareds at all. */
+      /* The record of this lock failed because memory ran out, so the code
+       * unlocks it again immediately instead of leaving the lock held with
+       * nothing in locked_fields; _clog_atfork_release() would then never
+       * unlock it, which deadlocks the field operations of this one logger
+       * for ever, in the parent and in the child. Skipping the fields_mutex
+       * protection of this single logger for this one fork() is the safe,
+       * bounded degradation. Because fork() only ever duplicates the thread
+       * that calls it, the window that this leaves open is the same narrow
+       * race that only an out-of-memory state can reach, which the code
+       * already accepts for a `freed` slot (which the loop skips above) and
+       * for a shared object that never reached live_shareds at all. */
       ccol_mutex_unlock(slot->ptr->fields_mutex);
     }
 
     if (!slot->in_use) {
-      /* A clog_close() on this exact handle is suspended on some OTHER
-       * thread at this moment. It sits between its own step 2, which clears
-       * in_use, and its own step 4, which retires the slot and frees the
-       * reference of sh. See the numbered steps of clog_close(). That thread
-       * does not exist in a child that a fork just made. Without this
-       * record, nothing in the child ever retires this slot or frees the
-       * share that this handle holds of sh->ref_count. The child then leaks
-       * raw for ever. It also leaks sh itself, once the library closes every
-       * other handle for sh. This record lets _clog_atfork_release() finish
-       * this close for the thread that vanished. It does this in the child
-       * only. The real thread that closes is still present in the parent and
-       * is not affected, so it needs no help. A record here can fail when
-       * memory runs out. That is a bounded degradation of the same shape as
-       * the locked_fields push failure just above. The code accepts the leak
-       * of this one slot in a future child. It does not risk anything in the
-       * parent to avoid that leak. */
+      /* A clog_close() on this exact handle is suspended on some OTHER thread
+       * at this moment, between its own step 2, which clears in_use, and its
+       * own step 4, which retires the slot and frees the reference of sh (see
+       * the numbered steps of clog_close()). That thread does not exist in a
+       * child that a fork just made, so without this record nothing in the
+       * child ever retires this slot or frees the share that this handle
+       * holds of sh->ref_count: the child leaks raw for ever, and also sh
+       * itself once the library closes every other handle for sh. This
+       * record lets _clog_atfork_release() finish this close for the thread
+       * that vanished, in the child only; the real thread that closes is
+       * present in the parent and is not affected, so it needs no help. A
+       * record here can fail when memory runs out, which is a bounded
+       * degradation of the same shape as the locked_fields push failure just
+       * above: the code accepts the leak of this one slot in a future child
+       * instead of risking anything in the parent to avoid it. */
       clog_atfork_closing_t c = {.idx = (uint32_t)i, .raw = slot->ptr};
       cvector_push_back(_clog_atfork_state.closing_slots, &c);
     }
@@ -1061,61 +1049,61 @@ static void _clog_atfork_prepare(void) {
 }
 
 /*
- * In the child, the code initializes the rwlock of the slot table again. It
- * does not unlock it. The only thread of the child can call a plain
- * pthread_rwlock_unlock() on the write lock. That call does NOT release a
- * lock that the continuation of that same thread took in the parent. The
- * rwlock write lock of glibc tracks its owner by TID internally. The thread
- * of the child after the fork has a different TID from the thread of the
- * parent that forked. The unlock therefore fails silently. Every later
+ * In the child, the code initializes the rwlock of the slot table again
+ * instead of unlocking it. The only thread of the child can call a plain
+ * pthread_rwlock_unlock() on the write lock, but that call does NOT release
+ * a lock that the continuation of that same thread took in the parent: the
+ * rwlock write lock of glibc tracks its owner by TID internally, and the
+ * thread of the child after the fork has a different TID from the thread of
+ * the parent that forked. So the unlock fails silently, and every later
  * resolve in the child then hangs for ever in ccol_rw_lock_rdlock on this
- * exact rwlock. A plain mutex of the default type does not behave this way.
- * It has no TID tracking, because this codebase uses the fast and normal
- * mutex type everywhere (see ccol_mutex_init() in common.h). Only the rwlock
- * therefore needs this treatment. sh->mutex and fields_mutex do not.
+ * exact rwlock. A plain mutex of the default type does not behave this way,
+ * because it has no TID tracking (this codebase uses the fast and normal
+ * mutex type everywhere; see ccol_mutex_init() in common.h), so only the
+ * rwlock needs this treatment, and sh->mutex and fields_mutex do not.
  *
  * A fresh initialization of the lock in the child, in place of an unlock, is
- * the standard and well-established handling for this exact scenario. The
- * malloc arena locks of glibc do the same. It is safe for one reason: the
- * child has exactly one thread, and nobody else can wait on the lock. There
- * is therefore no other party for a fresh initialization to race.
+ * the standard and well-established handling for this exact scenario; the
+ * malloc arena locks of glibc do the same. It is safe because the child has
+ * exactly one thread and nobody else can wait on the lock, so there is no
+ * other party for a fresh initialization to race.
  */
 static void _clog_atfork_release(bool in_child) {
   /* See the same guard, and its doc comment, at the top of
    * _clog_atfork_prepare(). This function also touches
-   * clog_slot_table.rwlock, further down and for every caller. It must carry
-   * the same ccol_call_once guard for the same reason. It does not depend on
-   * _clog_atfork_prepare() running the guard moments earlier for this exact
-   * fork(). */
+   * clog_slot_table.rwlock, further down and for every caller, so it must
+   * carry the same ccol_call_once guard for the same reason, without
+   * depending on _clog_atfork_prepare() having run the guard moments earlier
+   * for this exact fork(). */
   ccol_call_once(clog_slot_table.once, _clog_slot_table_init_globals);
   size_t nf = cvector_elem_count(_clog_atfork_state.locked_fields);
   for (size_t i = nf; i-- > 0;) {
     struct clogger *lg =
         *(struct clogger **)cvector_at(_clog_atfork_state.locked_fields, i);
     if (in_child) {
-      /* A pin stays held for as long as SOME thread holds a resolved
-       * pointer to this handle. Any thread inside a call to one of the log_
-       * macros holds such a pointer, and so does a thread inside one of the
-       * other public clog_ functions on that handle. clog_close() polls the
-       * count until it reaches 0, with no upper bound on the wait. fork()
-       * duplicates only the thread that calls it. A pin that any OTHER
-       * thread holds at fork() time can therefore never be released. Only
-       * the later _clog_resolve_unpin() call of that thread ever decrements
-       * the count, and that thread does not exist in this child at all. The
-       * child inherits the pin. Without this reset, the first clog_close()
-       * on that exact handle in the child hangs for ever. This is not a rare
-       * corner case. It is the ordinary result of a fork while any other
+      /* A pin stays held for as long as SOME thread holds a resolved pointer
+       * to this handle, as any thread inside a call to one of the log_
+       * macros does, and so does a thread inside one of the other public
+       * clog_ functions on that handle. clog_close() polls the count until
+       * it reaches 0, with no upper bound on the wait. Because fork()
+       * duplicates only the thread that calls it, a pin that any OTHER
+       * thread holds at fork() time can never be released: only the later
+       * _clog_resolve_unpin() call of that thread ever decrements the count,
+       * and that thread does not exist in this child at all. The child
+       * inherits the pin, so without this reset the first clog_close() on
+       * that exact handle in the child hangs for ever. This is not a rare
+       * corner case but the ordinary result of a fork while any other
        * thread is in the middle of a log call on a logger that is still
-       * open. The scenario of
+       * open; the scenario of
        * fork_safety.concurrent_fork_during_churn_does_not_hang is one
-       * example. A child that a fork just made has exactly one thread. No
-       * resolver that is truly still in flight can therefore exist here.
-       * There is one exception: a call to fork() itself from inside such a
-       * call on this same handle and on this same thread. This reset then
-       * counts that thread's own pin too low. That case is deliberately not
-       * supported. The other atfork handling in this file declines to chase
-       * the same class of reentrancy. See the handling of sh->async_enabled
-       * and of the compression state below, which also assumes that the thread
+       * example. A child that a fork just made has exactly one thread, so no
+       * resolver that is truly still in flight can exist here. There is one
+       * exception: a call to fork() itself from inside such a call on this
+       * same handle and on this same thread, where this reset counts that
+       * thread's own pin too low. That case is deliberately not supported,
+       * and the other atfork handling in this file declines to chase the
+       * same class of reentrancy: see the handling of sh->async_enabled and
+       * of the compression state below, which also assumes that the thread
        * that forks is not itself in the middle of an operation on the shared
        * target. */
       ccol_pintable_reset_for(&clog_pintable, lg->self_handle);
@@ -1130,16 +1118,16 @@ static void _clog_atfork_release(bool in_child) {
     if (in_child) {
       /* The compressor thread of this shared target does not exist in the
        * child, because fork() duplicates only the thread that calls it. The
-       * compression that it runs at fork() time, and every job still in its
-       * queue, belong to the parent: the compressor thread of the parent
-       * finishes them there, on the same files. The child therefore forgets
-       * all of them. It must not compress them a second time, and it must
-       * not treat the generation of a job that no thread of the child runs
-       * as protected from pruning for ever. The jobs and compress_cv stay
-       * allocated and untouched, for the same reason that the async queue
-       * below does. compress_cv can have the vanished thread as a waiter, so
-       * a later rotation in the child initializes it afresh when it starts a
-       * compressor thread of its own. */
+       * compression that it runs at fork() time, and every job in its queue,
+       * belong to the parent, whose compressor thread finishes them there on
+       * the same files. So the child forgets all of them: it must not
+       * compress them a second time, and it must not treat the generation of
+       * a job that no thread of the child runs as protected from pruning for
+       * ever. The jobs and compress_cv stay allocated and untouched, for the
+       * same reason as the async queue below. Since compress_cv can have the
+       * vanished thread as a waiter, a later rotation in the child
+       * initializes it afresh when it starts a compressor thread of its
+       * own. */
       sh->compress_running = NULL;
       sh->compress_head = NULL;
       sh->compress_tail = NULL;
@@ -1148,33 +1136,32 @@ static void _clog_atfork_release(bool in_child) {
       sh->compress_prune_deferred = false;
     }
     if (in_child && sh->async_enabled) {
-      /* This shared target depends on a writer thread. That thread does not
-       * exist in the child at all, because fork() duplicates only the thread
-       * that calls it. The internals of ccol_circular_queue and
-       * ccol_dynamic_queue are opaque. There is no safe way to reach into
-       * them and reset whatever lock state the child inherited. The code
-       * does not try. Every code path in this file already gates ALL access
-       * to sh->q, sh->writer_thread and sh->async_buf behind this one flag.
-       * A change of the flag here means that nothing in the child ever
-       * touches that queue, buffer and thread state again. Their locks may
+      /* This shared target depends on a writer thread, which does not exist in
+       * the child at all because fork() duplicates only the thread that
+       * calls it. The internals of ccol_circular_queue and
+       * ccol_dynamic_queue are opaque, and there is no safe way to reach
+       * into them and reset whatever lock state the child inherited, so the
+       * code does not try. Every code path in this file already gates ALL
+       * access to sh->q, sh->writer_thread and sh->async_buf behind this one
+       * flag, so changing the flag here means that nothing in the child ever
+       * touches that queue, buffer and thread state again; their locks may
        * be inconsistent, and they stay untouched for the rest of the life of
        * this process. A clog_close() on this handle in the child therefore
-       * takes the plain synchronous teardown path. Its own check,
-       * "if (sh->async_enabled) _shared_async_teardown(sh);", is now false.
-       * It never tries to join a thread that the fork never duplicated into
-       * this process. It never sends a sentinel into a queue with no reader.
-       * The child never frees the backing memory of the queue and the
-       * buffer, because no thread is left to do that job. This is an
-       * accepted, inherent leak for the rest of the life of the child
-       * process. It is the same kind of leak as any other kernel-level
-       * resource that a forked child abandons instead of reclaims. */
+       * takes the plain synchronous teardown path, because its own check,
+       * "if (sh->async_enabled) _shared_async_teardown(sh);", is false at
+       * that point. It never tries to join a thread that the fork never
+       * duplicated into this process, and never sends a sentinel into a
+       * queue with no reader. The child never frees the backing memory of
+       * the queue and the buffer, because no thread is left to do that job.
+       * This is an accepted, inherent leak for the rest of the life of the
+       * child process, of the same kind as any other kernel-level resource
+       * that a forked child abandons instead of reclaiming. */
       sh->async_enabled = false;
-      /* Nothing in this child ever delivers the contents of async_buf. The
-       * missing continuation of a record is therefore no longer on its way.
-       * This line clears the flag, which lets the synchronous writes of the
-       * child continue to rotate. A flag that stays set suppresses every
-       * rotation for the rest of the life of this process. Such a rotation
-       * waits on a flush that can no longer happen. */
+      /* Nothing in this child ever delivers the contents of async_buf, so the
+       * missing continuation of a record never arrives. This line clears the
+       * flag, which lets the synchronous writes of the child rotate; a flag
+       * that stays set suppresses every rotation for the rest of the life of
+       * this process, each one waiting on a flush that cannot happen. */
       sh->async_partial_record = CLOG_SPLIT_NONE;
     }
     ccol_mutex_unlock(sh->mutex);
@@ -1182,21 +1169,20 @@ static void _clog_atfork_release(bool in_child) {
 
   if (in_child) {
     /* This finishes every clog_close() call that a fork() suspended in the
-     * middle of its teardown. It does so for the thread that never resumes
-     * that call in this child. See the doc comment of clog_atfork_closing_t
-     * and the record of these calls in _clog_atfork_prepare(). This code
-     * follows steps 3, 4, 5 and 6 of clog_close() in order. It runs them one
-     * after another rather than concurrently. The child has exactly one
-     * thread, and nothing else can observe this state yet. It needs no lock
-     * beyond the write lock of the slot table. The caller of this function,
-     * which is the machinery of pthread_atfork, already holds that lock
-     * across the whole prepare, parent and child sequence. This code runs
-     * only after the two loops above. By the time that it can tear down a
-     * shared target, the downgrade of async_enabled and of the compression
-     * state for that target already happened. It therefore never tries to
-     * join a writer thread or a compressor thread that does not exist in
-     * this child. It never tries to drain a queue that does not exist there
-     * either. */
+     * middle of its teardown, on behalf of the thread that never resumes that
+     * call in this child (see the doc comment of clog_atfork_closing_t and
+     * the record of these calls in _clog_atfork_prepare()). This code follows
+     * steps 3, 4, 5 and 6 of clog_close() in order, running them one after
+     * another rather than concurrently. Because the child has exactly one
+     * thread and nothing else can observe this state yet, it needs no lock
+     * beyond the write lock of the slot table, which the caller of this
+     * function (the machinery of pthread_atfork) already holds across the
+     * whole prepare, parent and child sequence. This code runs only after
+     * the two loops above, so by the time that it can tear down a shared
+     * target, the downgrade of async_enabled and of the compression state
+     * for that target has already happened; it therefore never tries to join
+     * a writer thread or a compressor thread that does not exist in this
+     * child, or to drain a queue that does not exist there. */
     size_t nc = cvector_elem_count(_clog_atfork_state.closing_slots);
     for (size_t i = 0; i < nc; i++) {
       clog_atfork_closing_t *c = (clog_atfork_closing_t *)cvector_at(
@@ -1204,27 +1190,28 @@ static void _clog_atfork_release(bool in_child) {
       clog_slot_t *slot =
           (clog_slot_t *)cvector_at(clog_slot_table.slots, c->idx);
       /* Only this loop itself can have retired the slot, because the real
-       * thread that closes never resumes in this child at all. This
-       * condition can therefore never be true today. The code still guards
-       * it and does not assume it. This file has a standing discipline: do
-       * not depend on call-graph reasoning alone. */
+       * thread that closes never resumes in this child at all, so this
+       * condition can never be true with the current call graph. The code
+       * guards it anyway instead of assuming it, following the standing
+       * discipline of this file: do not depend on call-graph reasoning
+       * alone. */
       if (slot->freed) continue;
 
       struct clogger *raw = c->raw;
       clog_shared_t *sh = raw->shared;
 
-      /* This is the answer to step 3. A resolver that does not exist in this
-       * child can never release the pin of this handle. The reasoning is the
-       * same as for the reset of the pin count in the locked_fields loop
-       * above. The code does it again here, for every such slot. A slot that
-       * the prepare step records as "closing" is not certain to have reached
-       * locked_fields as well. The same out-of-memory degradation that the
+      /* This is the answer to step 3: a resolver that does not exist in this
+       * child can never release the pin of this handle, for the same reason
+       * as the reset of the pin count in the locked_fields loop above. The
+       * code does it again here for every such slot, because a slot that the
+       * prepare step records as "closing" is not certain to have reached
+       * locked_fields as well: the same out-of-memory degradation that the
        * push above documents can stop it. */
       ccol_pintable_reset_for(&clog_pintable, raw->self_handle);
 
-      /* Step 4: retire the slot. The code already unlocked fields_mutex
-       * above, before _logger_free() destroys it here. The locked_fields
-       * loop unlocks it for every slot. If the record of that lock in
+      /* Step 4: retire the slot. The code has already unlocked fields_mutex
+       * above, before _logger_free() destroys it here: the locked_fields
+       * loop unlocks it for every slot, and if the record of that lock in
        * _clog_atfork_prepare() failed, that function unlocks it inline
        * instead. */
       _logger_free(raw);
@@ -1235,12 +1222,12 @@ static void _clog_atfork_release(bool in_child) {
       cvector_push_back(clog_slot_table.free_indices, &c->idx);
 
       /* Steps 5 and 6: free the share that this handle holds of
-       * sh->ref_count, and tear sh down if this was the last share. This is
-       * exactly what the thread that vanished would have done. It leaves out
-       * the join of the async writer thread and the teardown of the queue.
-       * Those are not needed here. The loop above already forced
-       * sh->async_enabled to false for this child. After a fork there is no
-       * writer thread, and therefore no job in flight to drain. */
+       * sh->ref_count, and tear sh down if this was the last share, exactly
+       * as the thread that vanished would have done. It leaves out the join
+       * of the async writer thread and the teardown of the queue, which are
+       * not needed here: the loop above already forced sh->async_enabled to
+       * false for this child, and after a fork there is no writer thread and
+       * so no job in flight to drain. */
       if (--sh->ref_count == 0) {
         _clog_shareds_remove(clog_slot_table.live_shareds, sh);
         _clog_shareds_remove(clog_slot_table.file_shareds, sh);
@@ -1252,11 +1239,11 @@ static void _clog_atfork_release(bool in_child) {
   }
 
   if (in_child) {
-    /* A target in file_shareds that is no longer in live_shareds is in the
-     * middle of its last close on a thread of the parent, which this child
-     * does not have. Nothing in the child ever finishes that close, and its
-     * mutex can stay locked. An open of the same file in the child must not
-     * wait for it, so the child forgets it. */
+    /* A target in file_shareds that is not in live_shareds is in the middle
+     * of its last close on a thread of the parent, which this child does not
+     * have. Nothing in the child ever finishes that close, and its mutex can
+     * stay locked, so an open of the same file in the child must not wait
+     * for it, and the child forgets it. */
     size_t nfs = cvector_elem_count(clog_slot_table.file_shareds);
     for (size_t i = nfs; i-- > 0;) {
       clog_shared_t *fs =
@@ -1275,14 +1262,14 @@ static void _clog_atfork_release(bool in_child) {
   }
   cvector_reset(_clog_atfork_state.locked_fields);
   /* This runs for every caller, not only in the child. The parent branch
-   * never processes closing_slots. The real thread that closes is still
-   * present there and does its own teardown in the normal way. But prepare()
-   * fills this vector before every fork(), whether or not the entries turn
-   * out to be needed. Stale entries left here after a release on the parent
-   * side stay for the next fork(). The prepare() of that fork then appends
-   * on top of them. A later fork that truly needs this list then wrongly
-   * "finishes" slots that the library retired long ago. A different logger
-   * may already use one of those slots. */
+   * never processes closing_slots, because the real thread that closes is
+   * present there and does its own teardown in the normal way, but
+   * prepare() fills this vector before every fork() whether or not the
+   * entries turn out to be needed. Stale entries left here after a release
+   * on the parent side would stay for the next fork(), whose prepare() then
+   * appends on top of them, and a later fork that truly needs this list
+   * would wrongly "finish" slots that the library retired long ago and that
+   * a different logger may already use. */
   cvector_reset(_clog_atfork_state.closing_slots);
 }
 
@@ -1291,45 +1278,44 @@ static void _clog_atfork_child(void) { _clog_atfork_release(true); }
 #endif /* CCOL_FORK_SAFETY_REQUIRED */
 
 /*
- * This is a defensive cleanup at process exit. It follows
- * _cleanup_default_client in chttpclient.c, which is the defensive variant.
- * It does not follow the unconditional variant in chttpserver.c. A process
- * is expected to hold many clog handles, and to own each one independently.
- * There is no one obvious owner that must close everything before exit. This
- * function therefore frees the bookkeeping vectors of the slot table only
- * once nothing can still reach them. A handle can still be open, or a close
- * can still be in flight. A destructor or an atexit handler in another
- * translation unit can run later. To free the vectors under such a handler
- * risks a use-after-free. In that case the code hands the release to
- * whichever close is the last one out. It does not skip the release. A
- * program that does close its loggers therefore leaves nothing behind,
- * whatever order the destructors ran in. A program that does not close them
- * leaves them for the OS to reclaim. */
+ * This is a defensive cleanup at process exit. It follows the defensive
+ * variant, _cleanup_default_client in chttpclient.c, and not the
+ * unconditional variant in chttpserver.c, because a process is expected to
+ * hold many clog handles and to own each one independently, with no one
+ * obvious owner that must close everything before exit. So this function
+ * frees the bookkeeping vectors of the slot table only once nothing can
+ * still reach them. A handle can still be open, or a close can still be in
+ * flight, and a destructor or an atexit handler in another translation unit
+ * can run later; freeing the vectors under such a handler risks a
+ * use-after-free. In that case the code hands the release to whichever close
+ * is the last one out instead of skipping the release. A program that does
+ * close its loggers therefore leaves nothing behind, whatever order the
+ * destructors ran in, and a program that does not close them leaves them for
+ * the OS to reclaim. */
 /* This answers whether any slot still names a logger. The caller holds the
  * write lock.
  *
  * The scan reads slot->ptr, not slot->in_use. A close clears in_use as its
  * first step, so that it rejects a second close or a new resolve as early as
- * possible. The rest of the teardown runs after that step. That rest drains
- * the pins and does the final locked release of the index. A scan that
- * trusted in_use alone frees this table under a close that is still in that
- * window, and the last step of that close then indexes the table. The
- * library writes ptr only once it fully acquires a slot. It clears ptr only
- * in that final locked step.
+ * possible, and the rest of the teardown (which drains the pins and does the
+ * final locked release of the index) runs after that step. A scan that
+ * trusted in_use alone would free this table under a close that is still in
+ * that window, and the last step of that close would then index the table.
+ * The library writes ptr only once it fully acquires a slot, and clears ptr
+ * only in that final locked step.
  *
- * ptr alone still does not cover the whole window. A close clears ptr and
- * then takes the write lock again to remove its shared object from
- * live_shareds. Between those two points it is invisible here, and it still
- * needs the table. closes_in_flight covers exactly that remainder. This is
- * why every decision to release goes through
- * _clog_table_still_needed_locked() and not through a direct call to this
- * function. */
-/* This answers whether anything still needs this table. Two things can need
- * it. One is a slot that still names a logger. The other is a close that
- * already cleared its slot and is not finished with the other vectors of the
- * table. The caller holds the write lock. Both deciders use this function
- * rather than the slot scan alone. A close in its own final steps is
- * invisible to that scan by construction. */
+ * Even ptr does not cover the whole window: a close clears ptr and then
+ * takes the write lock again to remove its shared object from live_shareds,
+ * and between those two points it is invisible here while it still needs the
+ * table. closes_in_flight covers exactly that remainder, which is why every
+ * decision to release goes through _clog_table_still_needed_locked() and not
+ * through a direct call to this function. */
+/* This answers whether anything still needs this table: either a slot that
+ * still names a logger, or a close that has already cleared its slot but is
+ * not finished with the other vectors of the table. The caller holds the
+ * write lock. Both deciders use this function rather than the slot scan
+ * alone, because a close in its own final steps is invisible to that scan by
+ * construction. */
 static bool _clog_table_still_needed_locked(void);
 
 static bool _clog_any_slot_live_locked(void) {
@@ -1342,24 +1328,23 @@ static bool _clog_any_slot_live_locked(void) {
 }
 
 /* This frees the bookkeeping of the table and the pin index. The caller
- * holds the write lock. The caller also established that nothing still needs
- * this table.
+ * holds the write lock and has established that nothing still needs this
+ * table.
  *
  * The library deliberately never frees the slot storage of the pin index
- * while the process runs. A resolve indexes that storage with no lock held.
- * A leak checker that treats still-reachable memory as an error therefore
- * reports it at exit unless this function frees it here. The code sets each
- * vector to NULL as it goes. This is what makes a later call answer "already
- * released" instead of an index into a freed vector. This function does not
- * destroy the rwlock. It can run from an ordinary close that still holds
- * that lock. */
-/* The check and the release both sit behind one call that is not inlined.
- * The destroy path that must make that call therefore keeps the code shape
- * that it has without any of this. Cold code in a hot object file is not
- * free. Inlined here, the same few instructions measurably slow the push
- * path of an unrelated container. They do this because they shift what the
- * linker lays out around that path, and the instruction count does not
- * change. */
+ * while the process runs, because a resolve indexes that storage with no
+ * lock held, so a leak checker that treats still-reachable memory as an
+ * error reports it at exit unless this function frees it here. The code sets
+ * each vector to NULL as it goes, which makes a later call answer "already
+ * released" instead of indexing a freed vector. This function does not
+ * destroy the rwlock, because it can run from an ordinary close that still
+ * holds that lock. */
+/* The check and the release both sit behind one call that is not inlined,
+ * so the destroy path that must make that call keeps the code shape that it
+ * has without any of this. Cold code in a hot object file is not free:
+ * inlined here, the same few instructions measurably slow the push path of
+ * an unrelated container, because they shift what the linker lays out
+ * around that path, while the instruction count does not change. */
 static __attribute__((noinline)) void
 _clog_release_slot_table_if_deferred_locked(void) {
   if (clog_slot_table.release_deferred && !_clog_table_still_needed_locked()) {
@@ -1394,11 +1379,11 @@ __attribute__((destructor)) static void _cleanup_clog_slot_table(void) {
   if (!clog_slot_table.slots)
     return; /* never initialized, or already released */
   /* The code holds this lock across the scan and everything that the scan
-   * decides. The equivalent teardown of every other module holds its own
-   * lock in the same way. A thread can still call into this module while the
-   * process tears itself down. Without the lock, such a thread is inside an
-   * acquire and publishes a chunk into the very index that this function
-   * frees. The wait is bounded; see CLOG_TABLE_RELEASE_WAIT_MS. */
+   * decides, as the equivalent teardown of every other module holds its own
+   * lock. A thread can still call into this module while the process tears
+   * itself down, and without the lock such a thread can be inside an acquire
+   * and publish a chunk into the very index that this function frees. The
+   * wait is bounded; see CLOG_TABLE_RELEASE_WAIT_MS. */
   struct timespec until;
   clock_gettime(CLOCK_REALTIME, &until);
   until.tv_sec += CLOG_TABLE_RELEASE_WAIT_MS / 1000;
@@ -1410,8 +1395,8 @@ __attribute__((destructor)) static void _cleanup_clog_slot_table(void) {
   if (ccol_rw_lock_timedwrlock(clog_slot_table.rwlock, until) != 0) return;
   /* This runs only once nothing is left that can still resolve a handle.
    * When a logger is still open, the code hands the release to whichever
-   * close is the last one out. It does not skip the release. An application
-   * that does close its loggers therefore leaves nothing behind, whatever
+   * close is the last one out instead of skipping the release, so an
+   * application that does close its loggers leaves nothing behind, whatever
    * order the destructors ran in. */
   if (_clog_table_still_needed_locked()) {
     clog_slot_table.release_deferred = true;
@@ -1422,18 +1407,18 @@ __attribute__((destructor)) static void _cleanup_clog_slot_table(void) {
   ccol_rw_lock_unlock(clog_slot_table.rwlock);
   /* The code deliberately does not destroy the rwlock itself. It has static
      storage duration, so a lock left behind holds nothing that a leak
-     checker reports. The destructor cannot own its lifetime in any case. The
-     deferred branch above returns while the table is still live. The release
-     that happens later runs while it holds this very lock. There is
-     therefore no path on which every user is provably finished with it. A
-     destroy here leaves the entry points of the other branch taking a lock
-     on an object that no longer exists, which is undefined. Without the
+     checker reports, and the destructor cannot own its lifetime in any case:
+     the deferred branch above returns while the table is still live, and the
+     release that happens later runs while it holds this very lock, so there
+     is no path on which every user is provably finished with it. A destroy
+     here would leave the entry points of the other branch taking a lock on
+     an object that has been destroyed, which is undefined; without the
      destroy, those entry points reach a defined abort instead. A call that
      happens after the release of the table stops at an assertion inside the
-     vector that it indexes. A call on a stale handle stops at the
+     vector that it indexes, and a call on a stale handle stops at the
      ccol_fatal_err of this module. The order of the destructors across
-     translation units is not for this library to decide. Neither outcome can
-     therefore be ruled out by an arrangement of who runs first. */
+     translation units is not for this library to decide, so neither outcome
+     can be ruled out by an arrangement of who runs first. */
 }
 
 /* ========================================================================== */
@@ -1452,14 +1437,13 @@ static int _buf_init(clog_buf_t *b, const ccol_memmgmt_procs_t *m_procs) {
   return 0;
 }
 
-/* This raises the growth ceiling of b above its CLOG_BUF_MAX default. It
- * never lowers it below that default. See the doc comment of
+/* This raises the growth ceiling of b above its CLOG_BUF_MAX default, and
+ * never lowers it below that default; see the doc comment of
  * clog_buf_t.cap_limit. _shared_async_init() calls it once, immediately
- * after it initializes clog_shared_t.async_buf. A caller can configure a
- * clog_async_cfg_t.flush_buffer_size that is larger than CLOG_BUF_MAX. Such
- * a caller then truly gets that much room for the batch. The library does
- * not silently cap it at the smaller default, which is a default for one
- * record. */
+ * after it initializes clog_shared_t.async_buf, so that a caller who
+ * configures a clog_async_cfg_t.flush_buffer_size larger than CLOG_BUF_MAX
+ * truly gets that much room for the batch, instead of having it silently
+ * capped at the smaller default, which is meant for one record. */
 static void _buf_raise_cap_limit(clog_buf_t *b, size_t new_limit) {
   if (new_limit > b->cap_limit) b->cap_limit = new_limit;
 }
@@ -1475,18 +1459,17 @@ static void _buf_free(clog_buf_t *b) {
 #ifdef RUNNING_UNIT_TESTS
 /*
  * This lets a test force the NEXT _buf_append() or _buf_appendf() call to
- * report a real allocation failure. It does so deterministically, and it
- * does not matter whether the call truly needs the buffer to grow. The check
- * sits at the top of both functions. It is not inside _buf_ensure(), which
- * _buf_appendf() calls only after its own first attempt to fit in place
- * fails. The position is deliberate: this hook can then force a failure even
- * for a small append of a fixed size that never needs to grow the buffer at
- * all. The "backtrace unavailable" marker of _emit_backtrace_syslog_lines()
- * is such an append. The real CLOG_BUF_INITIAL value of this codebase
- * already fits that marker easily, with no growth at all. Without this hook,
- * a test can never observe a real allocator failure there. The hook disarms
- * itself the moment that it fires. It therefore affects only the one call
- * that a test targets.
+ * report a real allocation failure, deterministically, whether or not the
+ * call truly needs the buffer to grow. The check sits at the top of both
+ * functions, not inside _buf_ensure(), which _buf_appendf() calls only after
+ * its own first attempt to fit in place fails. The position is deliberate:
+ * it lets this hook force a failure even for a small append of a fixed size
+ * that never needs to grow the buffer at all, such as the "backtrace
+ * unavailable" marker of _emit_backtrace_syslog_lines(), which the real
+ * CLOG_BUF_INITIAL value of this codebase already fits easily with no
+ * growth at all. Without this hook, a test can never observe a real
+ * allocator failure there. The hook disarms itself the moment that it fires,
+ * so it affects only the one call that a test targets.
  */
 static _Atomic bool _clog_test_force_next_buf_ensure_failure = false;
 
@@ -1504,11 +1487,11 @@ static inline bool _clog_test_consume_forced_buf_ensure_failure(void) {
 #endif
 
 /* This makes sure that at least `need` free bytes are available. Two
- * different causes of failure both report -1 to the caller in the same way.
- * Only the second one sets b->oom. To reach b->cap_limit is an ordinary
- * rejection about size. It happens for a record that is too large, and for a
- * shared batch buffer with too little room left. It is never a sign of real
- * memory pressure. A caller further up must therefore never read it as one
+ * different causes of failure both report -1 to the caller in the same way,
+ * and only the second one sets b->oom. Reaching b->cap_limit is an ordinary
+ * rejection about size, which happens for a record that is too large and for
+ * a shared batch buffer with too little room left; it is never a sign of
+ * real memory pressure, and a caller further up must never read it as one
  * (see the doc comment of clog_buf_t.oom). */
 static int _buf_ensure(clog_buf_t *b, size_t need) {
   if (b->cap - b->len >= need) return 0;
@@ -1516,18 +1499,18 @@ static int _buf_ensure(clog_buf_t *b, size_t need) {
   while (new_cap - b->len < need) {
     if (new_cap >= b->cap_limit) return -1;
     /* b->cap_limit can be a large value that the caller configures (see
-     * _buf_raise_cap_limit()). It is not always a fixed compile-time
-     * constant. The code must therefore guard the doubling against a size_t
-     * overflow. It must not assume that new_cap*2 always fits.
-     * A clamp straight to cap_limit here must NOT skip the sufficiency check
-     * of the loop. An unconditional `break` would skip it. cap_limit can be
-     * reachable and still be smaller than what `need` asks for. A return of
-     * success then falsely reports the buffer as large enough. The caller
-     * then runs memcpy or vsnprintf past the end of the allocation. The code
-     * goes back to the `while` condition instead. The ordinary
-     * `new_cap >= b->cap_limit` check then catches a cap_limit that is still
-     * too small on the very next iteration. The ordinary doubling path, the
-     * one with no overflow, already depends on that same check. */
+     * _buf_raise_cap_limit()), not always a fixed compile-time constant, so
+     * the code must guard the doubling against a size_t overflow instead of
+     * assuming that new_cap*2 always fits.
+     * A clamp straight to cap_limit here must NOT skip the sufficiency check of
+     * the loop, as an unconditional `break` would: cap_limit can be reachable
+     * and still be smaller than what `need` asks for, a return of success would
+     * then falsely report the buffer as large enough, and the caller would run
+     * memcpy or vsnprintf past the end of the allocation. The code goes back to
+     * the `while` condition instead, where the ordinary `new_cap >=
+     * b->cap_limit` check catches a cap_limit that is too small on the very
+     * next iteration, just as the ordinary doubling path, the one with no
+     * overflow, depends on that same check. */
     if (new_cap > SIZE_MAX / 2) {
       new_cap = b->cap_limit;
     } else {
@@ -1595,14 +1578,13 @@ static int __attribute__((format(printf, 2, 3))) _buf_appendf(clog_buf_t *b,
 }
 
 /*
- * This fills esc with the backslash escape sequence for a control byte c.
- * esc is a buffer of 5 bytes or more. A control byte is one with c < 0x20 or
- * c == 0x7f. The function also sets *esc_len to the length of the sequence.
- * That length is 2 for \n, \r and \t. It is 4 for the general \xXX form.
- * Every value escaper in this file uses this function. Those escapers are
- * the ones for logfmt, for an RFC 5424 SD-PARAM-VALUE and for a syslog MSG.
- * A control byte is therefore always neutralised in the same way, whatever
- * the format is.
+ * This fills esc, a buffer of 5 bytes or more, with the backslash escape
+ * sequence for a control byte c (one with c < 0x20 or c == 0x7f), and sets
+ * *esc_len to the length of the sequence: 2 for \n, \r and \t, and 4 for the
+ * general \xXX form. Every value escaper in this file (the ones for logfmt,
+ * for an RFC 5424 SD-PARAM-VALUE and for a syslog MSG) uses this function,
+ * so a control byte is always neutralised in the same way, whatever the
+ * format is.
  */
 static void _ctrl_escape(unsigned char c, char esc[5], int *esc_len) {
   if (c == '\n') {
@@ -1624,10 +1606,10 @@ static void _ctrl_escape(unsigned char c, char esc[5], int *esc_len) {
 }
 
 /*
- * This appends a value that is safe for logfmt. A value can contain a
- * space, '=', '"', '\\' or a control character. The function puts such a
- * value in double quotes and escapes it with backslashes. It writes an empty
- * string as "".
+ * This appends a value that is safe for logfmt. When a value contains a
+ * space, '=', '"', '\\' or a control character, the function puts it in
+ * double quotes and escapes it with backslashes. It writes an empty string
+ * as "".
  */
 static int _buf_append_lv(clog_buf_t *b, const char *s) {
   if (!s) return _buf_append(b, "null", 4);
@@ -1679,19 +1661,17 @@ static int _buf_append_lv(clog_buf_t *b, const char *s) {
 /*
  * This classifies the UTF-8 multi-byte sequence that starts at the
  * non-ASCII lead byte p[0], which is in the range 0x80 to 0xff. It gives the
- * total length of the sequence, which is 2, 3 or 4, when the sequence is
- * complete and well formed. A well-formed sequence has no overlong encoding.
- * It encodes no surrogate half (U+D800 to U+DFFF). It encodes no codepoint
- * beyond U+10FFFF. Every continuation byte is present and in range. The
- * function gives 0 in two cases. The first is a p[0] that is itself an
- * invalid lead byte. Such a byte is a lone continuation byte (0x80 to 0xbf),
- * an overlong 2-byte lead (0xc0 or 0xc1), or a byte from 0xf5 to 0xff, which
- * can never encode a valid codepoint. The second case is a sequence that is
- * truncated or malformed in another way. The function never reads past the
- * NUL terminator of p. It checks each continuation byte against '\0' before
- * it examines that byte further. A sequence that the end of the string
- * truncates is therefore correctly reported as invalid, and the function
- * does not read beyond the string.
+ * total length of the sequence (2, 3 or 4) when the sequence is complete and
+ * well formed: no overlong encoding, no encoded surrogate half (U+D800 to
+ * U+DFFF), no codepoint beyond U+10FFFF, and every continuation byte present
+ * and in range. It gives 0 in two cases: when p[0] is itself an invalid lead
+ * byte (a lone continuation byte, 0x80 to 0xbf; an overlong 2-byte lead,
+ * 0xc0 or 0xc1; or a byte from 0xf5 to 0xff, which can never encode a valid
+ * codepoint), and when the sequence is truncated or malformed in another
+ * way. The function never reads past the NUL terminator of p, because it
+ * checks each continuation byte against '\0' before it examines that byte
+ * further, so a sequence that the end of the string truncates is correctly
+ * reported as invalid without a read beyond the string.
  */
 static int _utf8_valid_seq_len(const unsigned char *p) {
   unsigned char c0 = p[0];
@@ -1725,20 +1705,20 @@ static int _utf8_valid_seq_len(const unsigned char *p) {
 }
 
 /*
- * This appends the JSON-escaped content of s. It adds no quotes around that
+ * This appends the JSON-escaped content of s, with no quotes around that
  * content. The escapes are: '"' -> '\"', '\' -> '\\', '\n'->'\n',
  * '\r'->'\r', '\t'->'\t', and every other control character -> '\uXXXX'. A
- * byte or a byte sequence can fail to be well-formed UTF-8. Such a byte is a
- * lone continuation byte, a lead byte that is overlong or out of range, an
- * encoded surrogate half, or part of a truncated multi-byte sequence. The
- * function replaces one invalid byte at a time with the Unicode replacement
- * character (U+FFFD). A message or a field value built from any data,
- * binary data included, can therefore never make this function write invalid
- * Unicode inside a JSON string. RFC 8259 needs JSON text to be valid
- * Unicode. A strict parser or log aggregator downstream has the right to
- * reject a document that holds raw bytes that are not UTF-8. The function
- * otherwise passes a well-formed multi-byte sequence through with no change
- * and no escape, exactly like any other printable byte. s must not be NULL.
+ * byte or byte sequence that is not well-formed UTF-8 (a lone continuation
+ * byte, a lead byte that is overlong or out of range, an encoded surrogate
+ * half, or part of a truncated multi-byte sequence) is replaced, one invalid
+ * byte at a time, with the Unicode replacement character (U+FFFD). So a
+ * message or a field value built from any data, binary data included, can
+ * never make this function write invalid Unicode inside a JSON string; RFC
+ * 8259 needs JSON text to be valid Unicode, and a strict parser or log
+ * aggregator downstream has the right to reject a document that holds raw
+ * bytes that are not UTF-8. A well-formed multi-byte sequence otherwise
+ * passes through with no change and no escape, exactly like any other
+ * printable byte. s must not be NULL.
  */
 static int _buf_append_json_content(clog_buf_t *b, const char *s) {
   const char *run = s;
@@ -1819,20 +1799,20 @@ static int _buf_append_json_kv(clog_buf_t *b, const char *key,
 
 /*
  * This appends an RFC 5424 SD-PARAM-VALUE. The function escapes '"', '\' and
- * ']' as '\"', '\\' and '\]'. It also escapes every control character with a
- * backslash, in the same way as the logfmt and JSON output formats. That
- * includes '\n' and '\r'. The formal SD-PARAM-VALUE grammar does not
- * restrict those two. Without the escape they split one syslog record
+ * ']' as '\"', '\\' and '\]', and also escapes every control character with
+ * a backslash, in the same way as the logfmt and JSON output formats. That
+ * includes '\n' and '\r': the formal SD-PARAM-VALUE grammar does not
+ * restrict those two, but without the escape they split one syslog record
  * across more than one line. RFC 5424 section 6.3.3 requires the value to be
- * UTF-8. The function passes a well-formed UTF-8 sequence through as it is,
- * and replaces each byte that is not part of one with U+FFFD, encoded as
+ * UTF-8, so the function passes a well-formed UTF-8 sequence through as it
+ * is and replaces each byte that is not part of one with U+FFFD, encoded as
  * UTF-8, exactly where the JSON format writes the same character as an
- * escape (see _buf_append_json_content()). The function
- * writes an s of NULL as the bare word "null". _buf_append_lv() and
- * _buf_append_json_kv() each treat a NULL value the same way in their own
- * formats. The caller already puts quotes around this call. The word "null"
- * here therefore looks unquoted inside an SD-PARAM-VALUE that is otherwise
- * quoted, exactly like the unquoted bare word `null` of logfmt.
+ * escape (see _buf_append_json_content()). The function writes an s of NULL
+ * as the bare word "null", just as _buf_append_lv() and
+ * _buf_append_json_kv() each treat a NULL value in their own formats. Since
+ * the caller already puts quotes around this call, the word "null" here
+ * looks unquoted inside an SD-PARAM-VALUE that is otherwise quoted, exactly
+ * like the unquoted bare word `null` of logfmt.
  */
 static int _buf_append_sd_value(clog_buf_t *b, const char *s) {
   if (!s) return _buf_append(b, "null", 4);
@@ -1870,16 +1850,16 @@ static int _buf_append_sd_value(clog_buf_t *b, const char *s) {
 }
 
 /*
- * This fills name with an RFC 5424 SD-PARAM-NAME that it derives from key.
- * name is a buffer of 33 bytes or more. A key that already fits inside the
+ * This fills name, a buffer of 33 bytes or more, with an RFC 5424
+ * SD-PARAM-NAME that it derives from key. A key that already fits inside the
  * limit of 32 characters goes in with no change. A longer key gives the
  * first 23 characters of key, then '~', then an FNV-1a hash of the FULL key
- * as 8 hexadecimal digits. That is 32 characters in total. A plain
- * truncation of the prefix is not enough. Two different keys that share a
- * prefix of 32 characters then collide into the same SD-PARAM-NAME. RFC 5424
- * forbids that inside one SD-ELEMENT. The whole key goes into the suffix, so
- * such a collision now needs a real hash collision and not only a shared
- * prefix.
+ * as 8 hexadecimal digits, which is 32 characters in total. A plain
+ * truncation of the prefix is not enough, because two different keys that
+ * share a prefix of 32 characters would then collide into the same
+ * SD-PARAM-NAME, which RFC 5424 forbids inside one SD-ELEMENT. Since the
+ * whole key goes into the suffix, such a collision needs a real hash
+ * collision and not only a shared prefix.
  */
 static void _sd_param_name(const char *key, char name[33]) {
   size_t klen = strlen(key);
@@ -1901,20 +1881,19 @@ static void _sd_param_name(const char *key, char name[33]) {
 /*
  * This appends free-form text and escapes every control character with a
  * backslash. It also writes a backslash as '\\', as logfmt does inside a
- * quoted value. The escaped text therefore reads back unambiguously: a real
- * newline appears as '\n', and the two characters '\' and 'n' appear as
- * '\\n'. It adds no quotes and no other structure around the text. The
- * library uses it for content that has no formal escape syntax of its own.
- * Such content must still not be able to split a record across more than one
- * line. RFC 5424 MSG content is one example. The text of a backtrace frame,
- * which comes from backtrace_symbols(), is another, in the logfmt and syslog
- * formats. JSON does not use this function for a backtrace frame. It puts
- * each frame in as an ordinary JSON array element, through
- * _buf_append_json_content(), which has its own escapes. A control byte can
- * otherwise desynchronize the output stream, and '\n' and '\r' are the most
- * important two. This function neutralises every one of them in the same way
- * as the logfmt and JSON formats already do in their own message fields and
- * value fields. s must not be NULL.
+ * quoted value, so the escaped text reads back unambiguously: a real newline
+ * appears as '\n', and the two characters '\' and 'n' appear as '\\n'. It
+ * adds no quotes and no other structure around the text. The library uses it
+ * for content that has no formal escape syntax of its own but must still not
+ * be able to split a record across more than one line, such as RFC 5424 MSG
+ * content and, in the logfmt and syslog formats, the text of a backtrace
+ * frame, which comes from backtrace_symbols(). JSON does not use this
+ * function for a backtrace frame: it puts each frame in as an ordinary JSON
+ * array element, through _buf_append_json_content(), which has its own
+ * escapes. Without escaping, a control byte can desynchronize the output
+ * stream, '\n' and '\r' most of all, so this function neutralises every one
+ * of them in the same way as the logfmt and JSON formats do in their own
+ * message fields and value fields. s must not be NULL.
  */
 static int _buf_append_ctrl_escaped(clog_buf_t *b, const char *s) {
   const char *run = s;
@@ -1941,25 +1920,24 @@ static int _buf_append_ctrl_escaped(clog_buf_t *b, const char *s) {
 }
 
 /*
- * This sanitizes raw into out, a buffer of size outsz. The result is for use
- * as an RFC 5424 PRINTUSASCII field. APP-NAME and HOSTNAME share the same
+ * This sanitizes raw into out, a buffer of size outsz, for use as an RFC
+ * 5424 PRINTUSASCII field; APP-NAME and HOSTNAME share the same
  * "1*NNNPRINTUSASCII" grammar. The function keeps only the PRINTUSASCII
- * bytes, which are 0x21 to 0x7e. It drops any other byte and does not stop
- * at the first one. One byte that does not qualify, such as a space, a
- * control character or a non-ASCII byte, therefore does not discard
- * everything after it in raw. The function writes at most outsz-1 bytes of
- * output. It falls back to "-" when raw gives no PRINTUSASCII byte at all,
- * and an empty raw is one such case. That fallback needs room, which means
- * outsz >= 2.
+ * bytes (0x21 to 0x7e) and drops any other byte instead of stopping at the
+ * first one, so one byte that does not qualify, such as a space, a control
+ * character or a non-ASCII byte, does not discard everything after it in
+ * raw. The function writes at most outsz-1 bytes of output, and falls back
+ * to "-" when raw gives no PRINTUSASCII byte at all (an empty raw is one such
+ * case); that fallback needs room, which means outsz >= 2.
  *
- * An outsz of 0 is allowed and does nothing. The function never touches out,
+ * An outsz of 0 is allowed and does nothing: the function never touches out,
  * because out has no byte in which it can safely write even a NUL
  * terminator. For every outsz >= 1, out is certain to be NUL-terminated
  * inside its first outsz bytes and never beyond them. The loop bound below
- * is deliberately `i + 1 < outsz`. It is not the `i < outsz - 1` that looks
- * equivalent. outsz is a size_t, so outsz - 1 underflows to SIZE_MAX for
- * outsz == 0. That silently defeats the bound completely, and the loop below
- * then writes any distance past an out whose size is truly zero.
+ * is deliberately `i + 1 < outsz`, not the `i < outsz - 1` that looks
+ * equivalent: outsz is a size_t, so outsz - 1 underflows to SIZE_MAX for
+ * outsz == 0, which silently defeats the bound completely and lets the loop
+ * below write any distance past an out whose size is truly zero.
  */
 static void _sanitize_syslog_printusascii_field(const char *raw, char *out,
                                                 size_t outsz) {
@@ -1978,13 +1956,12 @@ static void _sanitize_syslog_printusascii_field(const char *raw, char *out,
 }
 
 /*
- * This gives the short program name that the platform reports. It gives NULL
- * when the platform has no such facility, and when the platform reports an
- * empty name. The two callers below share it. They differ only in their
- * fallback for a result of NULL. The general "proc" field, which every log
- * line carries, falls back to "unknown". The APP-NAME field of RFC 5424
- * falls back to "-". That is the sentinel for "unavailable" in its own
- * grammar.
+ * This gives the short program name that the platform reports, or NULL when
+ * the platform has no such facility or reports an empty name. The two
+ * callers below share it and differ only in their fallback for a result of
+ * NULL: the general "proc" field, which every log line carries, falls back
+ * to "unknown", and the APP-NAME field of RFC 5424 falls back to "-", which
+ * is the sentinel for "unavailable" in its own grammar.
  */
 static const char *_raw_progname(void) {
 #if defined(__GLIBC__)
@@ -1997,14 +1974,14 @@ static const char *_raw_progname(void) {
   return NULL;
 }
 
-/* Give the process name for the RFC 5424 APP-NAME field. Give "-" when that
+/* Give the process name for the RFC 5424 APP-NAME field, or "-" when that
  * name is not available. */
 static const char *_syslog_appname(void) {
   const char *p = _raw_progname();
   return p ? p : "-";
 }
 
-/* Give the basename of the executable. Give "unknown" when it is not
+/* Give the basename of the executable, or "unknown" when it is not
  * available. */
 static const char *_get_progname(void) {
   const char *p = _raw_progname();
@@ -2022,17 +1999,17 @@ static pid_t _get_tid(void) {
 #elif defined(__FreeBSD__)
   return (pid_t)pthread_getthreadid_np();
 #else
-  /* This platform has no portable way to get a real OS-level thread ID. The
-   * code falls back to the pthread handle itself. That handle is still
-   * unique for each thread. A reader can therefore still tell the log lines
-   * of different threads apart. But the branches above give a value that
-   * matches the OS-level tools, and this one does not. Those tools are
-   * ps -eLf, /proc/<pid>/task, top -H and others. */
+  /* This platform has no portable way to get a real OS-level thread ID, so
+   * the code falls back to the pthread handle itself. That handle is unique
+   * for each thread, so a reader can tell the log lines of different threads
+   * apart, but unlike the branches above it gives a value that does not
+   * match the OS-level tools (ps -eLf, /proc/<pid>/task, top -H and
+   * others). */
   return (pid_t)(uintptr_t)ccol_get_thread_id();
 #endif
 }
 
-/* Fill buf with the name of the thread that calls. Write at most bufsz-1
+/* Fill buf with the name of the thread that calls, writing at most bufsz-1
  * characters. */
 static void _get_thread_name(char *buf, size_t bufsz) {
 #if defined(__linux__)
@@ -2044,8 +2021,8 @@ static void _get_thread_name(char *buf, size_t bufsz) {
 #elif defined(__APPLE__) || defined(__FreeBSD__)
   if (ccol_get_thread_name_np(ccol_get_thread_id(), buf, bufsz) == 0 && buf[0])
     return;
-  /* A thread that nobody named has an empty name here, where Linux gives it
-   * the name of the program. ps(1) shows the program name for it too. */
+  /* A thread that nobody named has an empty name here, while Linux gives it
+   * the name of the program, which ps(1) shows for it too. */
   snprintf(buf, bufsz, "%.15s", _get_progname());
   return;
 #endif
@@ -2059,11 +2036,11 @@ static void _get_thread_name(char *buf, size_t bufsz) {
 /*
  * Every record names the process and the thread that wrote it, as
  * "<progname>(<pid>):<thread name>(<tid>)". Each of those three numbers and
- * names costs a system call to read: getpid(), gettid() and
- * prctl(PR_GET_NAME). None of them changes while a thread runs, except the
- * thread name. Each thread therefore reads them once, the first time that it
- * logs, and keeps the formatted string in thread-local storage. A record then
- * costs no system call for its identity.
+ * names costs a system call to read (getpid(), gettid() and
+ * prctl(PR_GET_NAME)), and none of them changes while a thread runs, except
+ * the thread name. So each thread reads them once, the first time that it
+ * logs, and keeps the formatted string in thread-local storage, and a record
+ * then costs no system call for its identity.
  *
  * Two events change the identity, and each one refreshes the cache:
  *
@@ -2076,13 +2053,13 @@ static void _get_thread_name(char *buf, size_t bufsz) {
  *   - ccol_set_thread_name(). It renames the thread and updates the cache.
  *
  * A rename by any other means, such as pthread_setname_np() or
- * prctl(PR_SET_NAME), after the thread first logged, is not seen. The cache
+ * prctl(PR_SET_NAME), after the thread first logged, is not seen: the cache
  * holds the name that the thread had when it first logged.
  *
  * The cache lives on the heap, and the thread holds a pointer to it. The
- * first record of the thread allocates it, and a thread-specific key frees
- * it when the thread exits; the unload of the library frees the one of the
- * thread that unloads, and deletes the key. A thread-local object of this
+ * first record of the thread allocates it, a thread-specific key frees it
+ * when the thread exits, and the unload of the library frees the one of the
+ * thread that unloads and deletes the key. A thread-local object of this
  * size would sit in the thread-local block of the library, which the loader
  * must fit into a small reserve when a process loads the library with
  * dlopen(). The pointer itself takes the initial-exec model, as the other
@@ -2147,7 +2124,7 @@ static void _clog_tident_free(void *arg) {
 
 static void _clog_tident_register_atfork(void) {
   /* A registration that fails leaves a forked child with the identity of the
-   * parent in its records. That is the only cost, and nothing else here
+   * parent in its records; that is the only cost, and nothing else here
    * depends on the handler. */
   (void)ccol_at_fork(NULL, NULL, _clog_tident_atfork_child);
   if (ccol_rw_lock_init(_clog_tident_rwlock) != 0) return;
@@ -2177,7 +2154,7 @@ static void _clog_tident_format(clog_thread_ident_t *ti) {
 }
 
 /* This reads the identity of the calling thread from the system and caches
- * it. It stays out of line, because each thread runs it once. */
+ * it. It stays out of line because each thread runs it only once. */
 static __attribute__((noinline, cold)) const clog_thread_ident_t *
 _clog_tident_fill(void) {
   ccol_call_once(_clog_tident_once, _clog_tident_register_atfork);
@@ -2216,8 +2193,8 @@ static inline const clog_thread_ident_t *_clog_tident_get(void) {
 ccol_retval_t ccol_set_thread_name(const char *thread_name) {
   if (!thread_name || thread_name[0] == '\0') return ccol_invalid_args;
 #if defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)
-  /* Linux keeps at most 15 bytes of a thread name. Every platform keeps the
-   * same 15, so a name reads back the same everywhere. */
+  /* Linux keeps at most 15 bytes of a thread name, and every platform keeps
+   * the same 15, so a name reads back the same everywhere. */
   char name[CLOG_THREAD_NAME_MAX + 1];
   size_t n = strnlen(thread_name, CLOG_THREAD_NAME_MAX);
   memcpy(name, thread_name, n);
@@ -2229,8 +2206,8 @@ ccol_retval_t ccol_set_thread_name(const char *thread_name) {
 #endif
   clog_thread_ident_t *ti = _clog_tident;
   if (!ti || !ti->valid) {
-    /* The first read of the identity takes the name that the kernel now
-     * holds, which is this one. */
+    /* The first read of the identity takes the name that the kernel holds at
+     * that point, which is this one. */
     (void)_clog_tident_fill();
   } else {
     memcpy(ti->name, name, n + 1);
@@ -2251,16 +2228,16 @@ ccol_retval_t ccol_set_thread_name(const char *thread_name) {
 #ifdef RUNNING_UNIT_TESTS
 /*
  * This is the cap on how many bytes each of the next
- * _clog_test_write_cap_uses calls of _write_all() can deliver. A test can
- * therefore reproduce a short write, in which the kernel accepts only the
- * first part of a record. A filesystem that is full with ENOSPC makes the
- * kernel do this, and so does an RLIMIT_FSIZE ceiling. The test does not
- * have to put the whole test process under a real resource limit. The writes
- * after the last capped write still succeed. This is what lets a test
- * observe the repair of the framing. A use count of 0 means that the cap is
- * not armed. Each capped write consumes one use, so the cap affects only the
- * writes that a test targets. A count above one reproduces a descriptor that
- * cannot take the remainder of a record across more than one attempt.
+ * _clog_test_write_cap_uses calls of _write_all() can deliver, so that a
+ * test can reproduce a short write, in which the kernel accepts only the
+ * first part of a record (as a filesystem that is full with ENOSPC, or an
+ * RLIMIT_FSIZE ceiling, makes it do), without putting the whole test
+ * process under a real resource limit. The writes after the last capped
+ * write succeed, which is what lets a test observe the repair of the
+ * framing. A use count of 0 means that the cap is not armed. Each capped
+ * write consumes one use, so the cap affects only the writes that a test
+ * targets, and a count above one reproduces a descriptor that cannot take
+ * the remainder of a record across more than one attempt.
  */
 static _Atomic size_t _clog_test_write_cap = 0;
 static _Atomic unsigned int _clog_test_write_cap_uses = 0;
@@ -2283,8 +2260,8 @@ void clog_test_force_short_writes(size_t accepted_bytes,
 
 /*
  * The errno that each of the next _clog_test_write_error_uses calls of
- * _write_all() fails with, before it writes a byte. A test can therefore
- * reproduce a write error of any class on a descriptor that otherwise works,
+ * _write_all() fails with, before it writes a byte, so that a test can
+ * reproduce a write error of any class on a descriptor that otherwise works
  * and observe what the logger does with the bytes that did not go out.
  */
 static _Atomic int _clog_test_write_error = 0;
@@ -2317,21 +2294,22 @@ static inline int _clog_test_consume_next_write_error(void) { return 0; }
  * A write(2) to a pipe or a socket whose reading end is gone fails with EPIPE
  * and also raises SIGPIPE for the writing thread. The default disposition of
  * SIGPIPE ends the process, which is a surprising way for a log call to stop
- * a healthy application. The library therefore arranges, by the kind of the
+ * a healthy application, so the library arranges, by the kind of the
  * descriptor, that its own writes never raise it, and it touches the signal
  * state of the process only where no cheaper means exists:
  *
  *   - A regular file, a terminal and every other descriptor that is neither
- *     a pipe nor a socket cannot raise SIGPIPE. Their writes change nothing.
+ *     a pipe nor a socket cannot raise SIGPIPE, so their writes change
+ *     nothing.
  *   - A socket is written with send(2) and MSG_NOSIGNAL, which fails with
  *     EPIPE and raises nothing. This changes no signal state, so it applies
  *     under every policy.
  *   - A pipe or a FIFO has no such flag. Under CLOG_SIGPIPE_AUTO the async
- *     writer thread keeps SIGPIPE blocked in its own mask, and consumes the
+ *     writer thread keeps SIGPIPE blocked in its own mask and consumes the
  *     SIGPIPE that its own failed write left pending on it. Any other thread
  *     that writes to a pipe sink sets the disposition of the whole process to
  *     SIG_IGN, once, the first time it does so, and only when that
- *     disposition is still SIG_DFL. A handler or an ignore that the
+ *     disposition is still SIG_DFL; a handler or an ignore that the
  *     application installed stays as it is.
  *
  * Under CLOG_SIGPIPE_UNTOUCHED the library changes no disposition and no
@@ -2389,8 +2367,9 @@ static __thread unsigned char _clog_writer_sigpipe
 #endif
 
 /* Gives the clog_sink_kind_t of fd. A descriptor that fstat() cannot
- * examine is CLOG_SINK_PLAIN: every write to it fails with EBADF, which
- * raises nothing. Without MSG_NOSIGNAL a socket takes the path of a pipe. */
+ * examine is CLOG_SINK_PLAIN, because every write to it fails with EBADF,
+ * which raises nothing. Without MSG_NOSIGNAL, a socket takes the path of a
+ * pipe. */
 static unsigned char _clog_classify_sink(int fd) {
   struct stat st;
   if (fstat(fd, &st) != 0) return CLOG_SINK_PLAIN;
@@ -2401,8 +2380,8 @@ static unsigned char _clog_classify_sink(int fd) {
 }
 
 /* Gives true when fd is a message-oriented socket, which keeps the boundary
- * of each write (see clog_shared_t.sink_per_record). Every other
- * descriptor, and one that is not a socket at all, gives false. */
+ * of each write (see clog_shared_t.sink_per_record), and false for every
+ * other descriptor, including one that is not a socket at all. */
 static bool _clog_sink_is_message(int fd) {
   int type = 0;
   socklen_t type_len = sizeof(type);
@@ -2416,7 +2395,7 @@ static bool _clog_sink_is_message(int fd) {
 
 /* Sets the disposition of SIGPIPE to SIG_IGN when it is SIG_DFL. It runs
  * once for the process, under _clog_sigpipe_once. A handler or an ignore
- * that the application installed is its own decision, and the library leaves
+ * that the application installed is its own decision, so the library leaves
  * it in place. */
 static void _clog_ignore_sigpipe(void) {
   struct sigaction cur;
@@ -2457,7 +2436,7 @@ static inline void _clog_writer_sync_sigpipe_mask(void) {
   _clog_writer_set_sigpipe_mask(want_blocked);
 }
 
-/* The first statement of an async writer thread. It marks the thread as a
+/* The first statement of an async writer thread: it marks the thread as a
  * writer thread and applies the current policy to its mask. */
 static __attribute__((noinline, cold)) void _clog_writer_sigpipe_init(void) {
   sigset_t cur;
@@ -2515,13 +2494,13 @@ static void _clog_pipe_nosigpipe_end(int fd, int prev) {
 }
 #endif
 
-/* Runs after a write to a pipe sink fails with EPIPE. That write raised
+/* Runs after a write to a pipe sink fails with EPIPE, a write that raised
  * SIGPIPE for the calling thread. When this module blocked SIGPIPE on this
  * thread, the signal is pending on it, and every pending one is consumed
- * here: Linux keeps one pending SIGPIPE, but FreeBSD queues one for each
- * failed write. An unblock after a policy change would otherwise deliver
- * one and end the process for a record that the library already dropped. The
- * SIGPIPE that the write raised is directed at this thread, and a
+ * here (Linux keeps one pending SIGPIPE, but FreeBSD queues one for each
+ * failed write); otherwise an unblock after a policy change would deliver
+ * one and end the process for a record that the library already dropped.
+ * The SIGPIPE that the write raised is directed at this thread, and a
  * thread-directed signal is taken before a process-directed one. */
 static __attribute__((noinline, cold)) void _clog_consume_own_sigpipe(void) {
   if (_clog_writer_sigpipe != CLOG_WRITER_BLOCKED) return;
@@ -2533,7 +2512,7 @@ static __attribute__((noinline, cold)) void _clog_consume_own_sigpipe(void) {
   sigemptyset(&set);
   sigaddset(&set, SIGPIPE);
 #if defined(__APPLE__)
-  /* No sigtimedwait() here. sigwait() does not block for a signal that
+  /* No sigtimedwait() here: sigwait() does not block for a signal that
    * sigpending() reports, because the thread that raised it is this one. */
   sigset_t pending;
   sigemptyset(&pending);
@@ -2560,48 +2539,47 @@ ccol_retval_t clog_set_sigpipe_policy(clog_sigpipe_policy_t policy) {
 }
 
 /*
- * This is a write() loop. It tries again after EINTR and after a partial
- * write. A plain retry loop stops there. This loop also waits for the fd to
- * become writable again, with poll(), after EAGAIN or EWOULDBLOCK. It does
- * not treat a temporary "would block" condition as a permanent failure. This
- * matters because clog_open_fd_mp() puts no restriction on the blocking mode
- * of the fd that the caller gives. The documented use of CLOG_FMT_SYSLOG in
- * the header is a UNIX datagram socket. That is exactly the kind of
- * descriptor that can legitimately give EAGAIN under load, when its send
- * buffer is full for a moment. Without this wait, a non-blocking fd
- * permanently and silently loses the remainder of a record the instant that
- * the peer cannot keep up. That is exactly when log visibility matters most.
- * The block here happens while the caller holds shared->mutex. It makes a
- * non-blocking fd behave the same way as a blocking one already behaves when
- * its peer cannot keep up. This is not a new risk. It is parity with the
- * behavior that a plain blocking descriptor already has.
+ * This is a write() loop that tries again after EINTR and after a partial
+ * write, as a plain retry loop does, and also waits with poll() for the fd
+ * to become writable again after EAGAIN or EWOULDBLOCK, instead of treating
+ * a temporary "would block" condition as a permanent failure. This matters
+ * because clog_open_fd_mp() puts no restriction on the blocking mode of the
+ * fd that the caller gives, and the documented use of CLOG_FMT_SYSLOG in the
+ * header is a UNIX datagram socket, which is exactly the kind of descriptor
+ * that can legitimately give EAGAIN under load, when its send buffer is full
+ * for a moment. Without this wait, a non-blocking fd permanently and
+ * silently loses the remainder of a record the instant that the peer cannot
+ * keep up, which is exactly when log visibility matters most. The block here
+ * happens while the caller holds shared->mutex, and it makes a non-blocking
+ * fd behave the same way as a blocking one already behaves when its peer
+ * cannot keep up: this is not a new risk, but parity with the behavior that
+ * a plain blocking descriptor has.
  *
  * poll_timeout_ms says whether the write may wait without a bound. Every
- * write of the bytes of a record gives CLOG_WRITE_WAIT_FOREVER. This logger
- * accepted that record, so it delivers it however long the descriptor takes
- * to accept it. A recovery step can run only so that a DIFFERENT record can
- * go out, or so that the process can stop. Such a step drains the
- * continuation of a record that is already half written (see
- * _clog_flush_and_settle()), settles a batch on the fatal path or at exit,
- * or writes the marker that names a loss. It gives a number of milliseconds
- * instead, and the whole write then ends within that time on every
- * descriptor whose readiness poll(2) reports; see _write_all_bounded().
- * An ordinary log call reaches that path, and so does CLOG_FATAL. Neither
+ * write of the bytes of a record gives CLOG_WRITE_WAIT_FOREVER, because this
+ * logger accepted that record and so delivers it however long the
+ * descriptor takes to accept it. A recovery step, which runs only so that a
+ * DIFFERENT record can go out or so that the process can stop, gives a
+ * number of milliseconds instead, and the whole write then ends within that
+ * time on every descriptor whose readiness poll(2) reports; see
+ * _write_all_bounded(). Such a step drains the continuation of a record that
+ * is already half written (see _clog_flush_and_settle()), settles a batch on
+ * the fatal path or at exit, or writes the marker that names a loss. An
+ * ordinary log call reaches that path, and so does CLOG_FATAL, and neither
  * of them may wait without a bound on bytes that an earlier call left
  * behind.
  *
- * The function gives the number of bytes that it truly wrote. That number
- * can be less than len. Three things can stop it partway through: an error
- * that is truly unrecoverable, a "no progress" condition (w == 0), and a
- * bound that expires. A caller that tracks bytes_written for the rotation
- * must use this return value and not len. That counter then never drifts
- * ahead of the real size of the file on disk.
+ * The function gives the number of bytes that it truly wrote, which can be
+ * less than len: an error that is truly unrecoverable, a "no progress"
+ * condition (w == 0), or a bound that expires can each stop it partway
+ * through. A caller that tracks bytes_written for the rotation must use this
+ * return value and not len, so that counter never drifts ahead of the real
+ * size of the file on disk.
  */
 #define CLOG_WRITE_WAIT_FOREVER (-1)
 /* This wait is long enough for a descriptor whose peer is only behind for a
- * moment. Such a descriptor still takes the continuation. It is also short
- * enough that a descriptor which cannot take the continuation holds up no
- * log call, fatal or otherwise. */
+ * moment to take the continuation, and short enough that a descriptor which
+ * cannot take the continuation holds up no log call, fatal or otherwise. */
 #define CLOG_SPLIT_RECORD_DRAIN_WAIT_MS 100
 
 /* Waits, after EAGAIN or EWOULDBLOCK, until fd is writable again, without a
@@ -2615,12 +2593,12 @@ static __attribute__((noinline)) bool _clog_wait_writable(int fd) {
   /* An interruption only waits again: an unbounded wait has no time to
    * keep. */
   if (pr < 0 && errno == EINTR) return true;
-  /* The kernel reports POLLERR, POLLHUP and POLLNVAL for every call. It
-   * ignores the `events` mask that the caller asks for. A pr > 0 alone
-   * therefore does not mean that the fd is writable. The write is tried again
-   * only once POLLOUT itself is set. Otherwise the loop stops, because the
-   * state is truly unrecoverable. It does not call write() again against an
-   * fd that only reported an error or a hangup. */
+  /* The kernel reports POLLERR, POLLHUP and POLLNVAL for every call,
+   * whatever `events` mask the caller asks for, so a pr > 0 alone does not
+   * mean that the fd is writable. The write is tried again only once POLLOUT
+   * itself is set; otherwise the loop stops, because the state is truly
+   * unrecoverable, instead of calling write() again against an fd that only
+   * reported an error or a hangup. */
   return pr > 0 && (pfd.revents & POLLOUT);
 }
 
@@ -2679,7 +2657,7 @@ _write_all_body(int fd, clog_sink_kind_t kind, const char *data, size_t len) {
       break; /* truly unrecoverable. Stop and report what went out */
     }
     if (w == 0)
-      break; /* no progress, from a quota or an fd limit. Do not
+      break; /* no progress, from a quota or an fd limit; do not
                 spin */
     data += (size_t)w;
     len -= (size_t)w;
@@ -2699,8 +2677,8 @@ static __attribute__((noinline)) size_t _write_all_plain(int fd,
 /* Set, and never cleared, once a CLOG_FATAL call starts; see
  * _clog_write_fatal(). _clog_fatal_deadline is written once before it, and
  * a write that CLOG_SINK_FATAL_BOUND sends to the bounded path reads the
- * deadline under the mutex of the target, which the fatal call set that flag
- * under after it fixed the deadline. */
+ * deadline under the mutex of the target, under which the fatal call set
+ * that flag after it fixed the deadline. */
 static _Atomic bool _clog_fatal_bound_armed;
 static struct timespec _clog_fatal_deadline;
 
@@ -2709,7 +2687,7 @@ _write_all_fatal_bound(clog_shared_t *sh, const char *data, size_t len);
 
 /* The path of a pipe sink and of a socket sink, and of a sink that carries
  * CLOG_SINK_FATAL_BOUND. The test of that flag sits behind the test for a
- * pipe, so a pipe pays nothing for it and a socket one compare. */
+ * pipe, so a pipe pays nothing for it and a socket pays one compare. */
 static __attribute__((noinline)) size_t _write_all_nonplain(clog_shared_t *sh,
                                                             const char *data,
                                                             size_t len) {
@@ -2742,12 +2720,12 @@ static int _clog_ms_until(const struct timespec *deadline) {
 }
 
 /*
- * The write of a recovery step: the same contract as _write_all_body(), and
- * the whole write ends within timeout_ms. poll(2) alone does not give that
- * bound. It bounds only a wait after EAGAIN, and a descriptor in blocking
- * mode never reports EAGAIN: a write(2) larger than the room that a pipe
- * has left blocks until a reader makes room, however long that takes. So no
- * call here can block past the deadline:
+ * The write of a recovery step: the same contract as _write_all_body(), with
+ * the whole write ending within timeout_ms. poll(2) alone does not give that
+ * bound, because it bounds only a wait after EAGAIN, and a descriptor in
+ * blocking mode never reports EAGAIN: a write(2) larger than the room that a
+ * pipe has left blocks until a reader makes room, however long that takes.
+ * So no call here can block past the deadline:
  *
  *   - A socket is written with ccol_send_nb(), which never blocks whatever
  *     the mode of the descriptor (MSG_DONTWAIT, or on macOS a send limited
@@ -2757,7 +2735,7 @@ static int _clog_ms_until(const struct timespec *deadline) {
  *     first of all, is polled for POLLOUT with the time that is left before
  *     each write, and each write gives at most PIPE_BUF bytes. A pipe that
  *     reports POLLOUT has room for PIPE_BUF bytes, so such a write returns
- *     at once. Only another process that writes into the same pipe between
+ *     at once; only another process that writes into the same pipe between
  *     the poll and the write can take that room first.
  *   - A terminal is written through a second open file description of the
  *     same device, opened with O_NONBLOCK (see _clog_open_tty_nonblocking()).
@@ -2767,18 +2745,18 @@ static int _clog_ms_until(const struct timespec *deadline) {
  *     remote session, keeps it for ever. A non-blocking write takes what
  *     fits and returns, and a poll with the time that is left waits for
  *     more. The flag lives on the new description alone, so no other
- *     holder of the terminal, a shell above all, sees its descriptor turn
+ *     holder of the terminal (a shell above all) sees its descriptor turn
  *     non-blocking. Where that open fails, each write gives at most
  *     CLOG_TTY_FALLBACK_CHUNK bytes after POLLOUT, which a pseudo-terminal
  *     takes at once, since it counts its room in blocks of 256 bytes.
- *   - A regular file or a block device is exempt. poll(2) reports it
+ *   - A regular file or a block device is exempt: poll(2) reports it
  *     writable at all times, and a write to a disk waits on the disk and
  *     never on a reader, so the ordinary loop writes it.
  *
  * A deadline that passes before everything went out ends the write with
  * errno set to EAGAIN, which _clog_write_error_is_transient() treats as a
- * condition that a later attempt can outlast. It is out of line and cold:
- * only recovery steps call it.
+ * condition that a later attempt can outlast. The function is out of line
+ * and cold, because only recovery steps call it.
  */
 #define CLOG_TTY_FALLBACK_CHUNK 128
 
@@ -2918,7 +2896,7 @@ static __attribute__((noinline, cold)) size_t _write_all_bounded(
 #endif
         /* A descriptor in non-blocking mode that took nothing although it
          * reported room. The poll at the top of the loop waits again, and
-         * the deadline still bounds the loop. */
+         * the deadline bounds the loop. */
         if (_clog_ms_until(&deadline) > 0) continue;
         errno = EAGAIN;
       }
@@ -2949,10 +2927,10 @@ _write_all_fatal_bound(clog_shared_t *sh, const char *data, size_t len) {
 
 /* Writes to sh->fd; see _write_all_body() above for the contract. The kind
  * of the sink decides the write call and the SIGPIPE handling (see
- * "SIGPIPE" above). The choice sits in the caller, so each sink calls its
- * own loop directly; a regular file pays one test of a byte that shares the
- * cache line of sh->fd. A bounded write goes to _write_all_bounded(); every
- * caller on the path of a record passes CLOG_WRITE_WAIT_FOREVER as a
+ * "SIGPIPE" above). The choice sits in the caller so that each sink calls its
+ * own loop directly, and a regular file pays one test of a byte that shares
+ * the cache line of sh->fd. A bounded write goes to _write_all_bounded();
+ * every caller on the path of a record passes CLOG_WRITE_WAIT_FOREVER as a
  * constant, so that test folds away there. The caller must hold
  * sh->mutex. */
 static inline __attribute__((always_inline)) size_t _write_all(
@@ -2966,25 +2944,24 @@ static inline __attribute__((always_inline)) size_t _write_all(
 
 /*
  * This writes one record that the library itself makes, at `level`, whose
- * message is `head` followed by `detail`. The markers of a loss, "log record
+ * message is `head` followed by `detail`; the markers of a loss, "log record
  * truncated: <detail>", are such records. It uses the output format that is
- * in force at that moment. The lead-in `nl` of the
- * caller goes in front of it. That lead-in is "\n" when the bytes already on
- * disk stop in the middle of a record and need the missing newline of that
- * record. Otherwise it is "". Both go out in one write(), so nothing can
- * land between them.
+ * in force at that moment, and puts the lead-in `nl` of the caller in front
+ * of it. That lead-in is "\n" when the bytes already on disk stop in the
+ * middle of a record and need the missing newline of that record, and ""
+ * otherwise. Both go out in one write(), so nothing can land between them.
  *
- * The marker is what makes every loss that this module reports consistent
- * with the rest of the module. The library reports a record that this logger
- * cannot deliver. It never drops such a record in silence (see
+ * The marker is what keeps every loss that this module reports consistent
+ * with the rest of the module: the library reports a record that this logger
+ * cannot deliver and never drops such a record in silence (see
  * _clog_write_unrepresentable_record()). The write of the marker itself is
- * best-effort, and the library never repairs it. Whatever stopped the record
- * from going out very probably stops the marker too. A marker that describes
- * a marker says nothing about the log content that was truly lost.
+ * best-effort, and the library never repairs it, because whatever stopped
+ * the record from going out very probably stops the marker too, and a marker
+ * that describes a marker says nothing about the log content that was truly
+ * lost.
  *
- * `head` and `detail` are always text from this file. They are never content
- * that a caller gives. They therefore need no escape in any of the three
- * formats.
+ * `head` and `detail` are always text from this file, never content that a
+ * caller gives, so they need no escape in any of the three formats.
  *
  * poll_timeout_ms is the bound of the step that reports the loss (see
  * _write_all()): a marker that a recovery step writes waits no longer than
@@ -3026,14 +3003,14 @@ static void _clog_note_record_loss(clog_shared_t *sh, clog_format_t fmt,
 }
 
 /*
- * This restores the record framing and reports the loss. It runs after a
- * write that the kernel accepted only in part. A filesystem that is full
- * with ENOSPC causes such a write. So does an RLIMIT_FSIZE ceiling, and a
- * peer that goes away in the middle of a record. The accepted bytes are on
- * disk without the terminating newline of the record. Without this
- * function, the next record goes straight onto them, and every consumer of
- * the file reads the two as one line. The function writes that newline only
- * when the accepted prefix does not already end on a record boundary.
+ * This restores the record framing and reports the loss after a write that
+ * the kernel accepted only in part, as happens with a filesystem that is
+ * full with ENOSPC, with an RLIMIT_FSIZE ceiling, or with a peer that goes
+ * away in the middle of a record. The accepted bytes are on disk without the
+ * terminating newline of the record, and without this function the next
+ * record goes straight onto them, so that every consumer of the file reads
+ * the two as one line. The function writes that newline only when the
+ * accepted prefix does not already end on a record boundary.
  *
  * The caller must hold sh->mutex.
  */
@@ -3050,8 +3027,8 @@ static void _clog_note_truncated_record(clog_shared_t *sh, clog_format_t fmt,
 /*
  * This reports that the library gives up on the continuation of a record
  * that is already half written. When the half on disk left a line open
- * (CLOG_SPLIT_MID_LINE), it also closes that line. The record that goes out
- * next therefore lands on a line of its own and not inside another record.
+ * (CLOG_SPLIT_MID_LINE), it also closes that line, so that the record that
+ * goes out next lands on a line of its own and not inside another record.
  * The library writes this marker only when async_partial_record is set, so
  * `split` is never CLOG_SPLIT_NONE here.
  *
@@ -3100,18 +3077,17 @@ static __attribute__((noinline, cold)) void _clog_note_dropped_batch(
 }
 
 /*
- * This writes one record that already has its framing to sh->fd. It writes
- * every byte of that record, and the terminating newline is one of them. It
- * charges what the kernel truly accepted to sh->bytes_written. Size-based
- * rotation therefore never runs ahead of the real size of the file on disk.
- * It also repairs the framing when the write stops short. Every synchronous
- * write of a whole record in this file goes through this function. No single
- * path can therefore be the one that leaves half a record behind. The caller
- * must hold sh->mutex.
+ * This writes one record that already has its framing to sh->fd: every byte of
+ * that record, including the terminating newline. It charges what the kernel
+ * truly accepted to sh->bytes_written, so size-based rotation never runs ahead
+ * of the real size of the file on disk, and it repairs the framing when the
+ * write stops short. Every synchronous write of a whole record in this file
+ * goes through this function, so that no single path can be the one that leaves
+ * half a record behind. The caller must hold sh->mutex.
  *
  * The code deliberately keeps this function out of line. There is one call
  * for each record, on a path where the write(2) beneath it dominates the
- * cost. The functions that call it build records and are large. If the
+ * cost, and the functions that call it build records and are large: if the
  * compiler folded this function into them, their code shape and their
  * register allocation would move with every edit made here.
  */
@@ -3128,10 +3104,10 @@ static __attribute__((noinline)) void _clog_write_record(clog_shared_t *sh,
 /*                         TIMESTAMP                                          */
 /* ========================================================================== */
 
-/* This renders a timestamp that the library already captured. It is a
+/* This renders a timestamp that the library has already captured. It is a
  * separate function so that the library can build a record with the
- * timestamp from the SUBMISSION time and not from the write time. The build
- * can happen much later, for example on the async writer thread. */
+ * timestamp of the SUBMISSION time instead of the write time, because the
+ * build can happen much later, for example on the async writer thread. */
 static int _buf_append_ts_at(clog_buf_t *b, const struct timeval *tv) {
   struct tm tm;
   gmtime_r(&tv->tv_sec, &tm);
@@ -3174,7 +3150,7 @@ static int _clog_open_log_dir(const char *path) {
 
 /* Opens a listing of the directory that dir_fd names. The listing gets a
  * descriptor of its own, because closedir() closes the descriptor that it
- * reads and dir_fd must stay open. It gives NULL on a failure. */
+ * reads, while dir_fd must stay open. It gives NULL on a failure. */
 static DIR *_clog_opendir_at(int dir_fd) {
   int fd = openat(dir_fd, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
   if (fd < 0) return NULL;
@@ -3220,12 +3196,12 @@ static void _clog_unlink_if_same(int dir_fd, const char *name,
  * the owner of the live file (a rotation gives every generation the owner of
  * the live file; see _clog_copy_owner_and_mode()), and its stamp is not
  * above `limit`. Naming, retention, compression and the recovery of
- * compressions act only on generations. Every other entry is never opened,
+ * compressions act only on generations; every other entry is never opened,
  * compressed, renamed or deleted, and gets a WARN record (see
- * _clog_note_ignored_entry()). Another user who can write the directory
- * therefore cannot make the logger write, read, archive or delete a file
- * through a link, block it on a FIFO, stop its naming with a stamp that
- * nothing can sort above, or take its retention slots.
+ * _clog_note_ignored_entry()). So another user who can write the directory
+ * cannot make the logger write, read, archive or delete a file through a
+ * link, block it on a FIFO, stop its naming with a stamp that nothing can
+ * sort above, or take its retention slots.
  */
 typedef struct {
   uid_t euid;
@@ -3280,15 +3256,15 @@ static void _clog_time_to_stamp(int64_t t,
 
 #ifdef RUNNING_UNIT_TESTS
 /*
- * These are synchronization hooks for a test only. Every build that is not a
- * test build removes them. They let a test widen and observe one window
- * deterministically. That window starts when _gzip_compress_file() creates
- * its destination file on disk, which is when gzopen() returns. It ends when
+ * These are synchronization hooks for a test only, which every build that is
+ * not a test build removes. They let a test widen and observe one window
+ * deterministically: the window from the moment _gzip_compress_file()
+ * creates its destination file on disk (when gzopen() returns) to the moment
  * that function finishes the write of the file. Inside that exact window,
  * the _prune_rotated() pass of a concurrent rotation must never be able to
  * delete that destination. The window is normally shorter than a
- * millisecond. A test therefore does not depend on real scheduling luck to
- * land a racing deletion inside it.
+ * millisecond, so with these hooks a test does not depend on real scheduling
+ * luck to land a racing deletion inside it.
  */
 static _Atomic unsigned int _clog_test_pending_compress_delay_us = 0;
 static _Atomic bool _clog_test_gz_dest_opened = false;
@@ -3307,7 +3283,7 @@ bool clog_test_gz_dest_opened(void) {
  * A gate for a test. While it is held, every compression pauses right after
  * it creates its destination, until the test releases the gate. The pause
  * has a safety bound of CLOG_TEST_COMPRESS_HOLD_MAX_US, so that a thread
- * that must not be the one to compress, and is, fails its test instead of
+ * that must not be the one to compress, but is, fails its test instead of
  * hanging it. _clog_test_compressions_finished counts every compression that
  * ran to its end, whatever its outcome.
  */
@@ -3348,7 +3324,7 @@ static void _clog_test_recover_gate(void) {
     usleep(1000);
 }
 
-/* Counts the timeouts of the timed wait of the async writer thread. Each one
+/* Counts the timeouts of the timed wait of the async writer thread; each one
  * is a wakeup with no job, which flushes the batch buffer. */
 static _Atomic size_t _clog_test_writer_timeout_wakeups = 0;
 
@@ -3357,11 +3333,11 @@ size_t clog_test_writer_timeout_wakeups(void) {
 }
 
 /*
- * This counts the real calls of _rotate(). That is every attempt that
- * reaches rename() and open(). It is not every write that would like to
- * rotate. A test can therefore verify the retry policy for a rotation that
- * fails again and again. The library must retry such a rotation with a
- * bounded backoff. It must not try again on every single write.
+ * This counts the real calls of _rotate(), that is, every attempt that
+ * reaches rename() and open(), not every write that would like to rotate. A
+ * test can therefore verify the retry policy for a rotation that fails again
+ * and again: the library must retry such a rotation with a bounded backoff
+ * instead of trying again on every single write.
  */
 static _Atomic size_t _clog_test_rotate_attempt_count = 0;
 
@@ -3397,12 +3373,11 @@ void clog_test_append_ctrl_escaped(const char *raw, char *out, size_t outsz) {
 }
 
 /*
- * This lets a test force _capture_backtrace() to report a capture failure.
- * It does so deterministically. The result is the same as a platform with no
- * backtrace support, and the same as a backtrace_symbols() call whose own
- * allocation fails. The test does not depend on either of those real
- * conditions. One of them belongs to the platform, and the other to a real
- * out-of-memory state.
+ * This lets a test force _capture_backtrace() to report a capture failure
+ * deterministically, with the same result as a platform with no backtrace
+ * support, or as a backtrace_symbols() call whose own allocation fails. The
+ * test then does not depend on either of those real conditions, one of which
+ * belongs to the platform and the other to a real out-of-memory state.
  */
 static _Atomic bool _clog_test_force_bt_capture_failure = false;
 
@@ -3411,18 +3386,17 @@ void clog_test_force_backtrace_capture_failure(bool force) {
 }
 
 /*
- * This lets a test force EVERY frame of a real backtrace to fail to append
- * inside _emit_backtrace_syslog_lines(). A real backtrace is one whose syms
- * is not NULL. The test does not depend on a real allocation failure that
- * lasts across every small append that the function makes for each frame.
- * The buffer-size constants of this library make that condition impractical
- * to reproduce for real. Each frame gets a scratch buffer that the code has
- * just reset and that is already large enough.
- * clog_test_force_next_buf_ensure_failure() fires once and then disarms
- * itself. This hook is different. It stays armed across every frame in one
- * call, until a caller disarms it. It has the same shape as
- * clog_test_force_backtrace_capture_failure(), which also stays armed until
- * a caller disarms it.
+ * This lets a test force EVERY frame of a real backtrace (one whose syms is
+ * not NULL) to fail to append inside _emit_backtrace_syslog_lines(), without
+ * depending on a real allocation failure that lasts across every small
+ * append that the function makes for each frame. The buffer-size constants
+ * of this library make that condition impractical to reproduce for real,
+ * because each frame gets a scratch buffer that the code has just reset and
+ * that is already large enough.
+ * Unlike clog_test_force_next_buf_ensure_failure(), which fires once and
+ * then disarms itself, this hook stays armed across every frame in one call
+ * until a caller disarms it, which is the same shape as
+ * clog_test_force_backtrace_capture_failure().
  */
 static _Atomic bool _clog_test_force_all_syslog_bt_frames_fail = false;
 
@@ -3431,14 +3405,14 @@ void clog_test_force_all_syslog_backtrace_frames_failure(bool force) {
 }
 
 /*
- * This lets a test force _capture_backtrace() to report a capture that truly
- * succeeds. It does so deterministically. syms is not NULL, and it comes
- * from a real backtrace(). The reported depth is clamped to
- * CLOG_BT_INITIAL_FRAME. This exercises one path: the capture succeeded but
- * found no frame beyond the two internal bookkeeping ones. The emitters must
- * treat that path as a real, accurate, empty backtrace and not as a capture
- * failure. The test does not depend on a real call stack that is shallow
- * enough to reach the path.
+ * This lets a test force _capture_backtrace() to report,
+ * deterministically, a capture that truly succeeds: syms is not NULL and
+ * comes from a real backtrace(), and the reported depth is clamped to
+ * CLOG_BT_INITIAL_FRAME. This exercises the path where the capture
+ * succeeded but found no frame beyond the two internal bookkeeping ones,
+ * which the emitters must treat as a real, accurate, empty backtrace and
+ * not as a capture failure. With this hook, the test does not depend on a
+ * real call stack that is shallow enough to reach the path.
  */
 static _Atomic bool _clog_test_force_shallow_bt_depth = false;
 
@@ -3540,21 +3514,21 @@ static int _clog_publish_no_replace(int dir_fd, const char *tmp,
 }
 
 /*
- * This gzip-compresses the file src into dst, which is src plus ".gz". All
- * names are relative to dir_fd. It uses zlib. The output goes to
- * dst + CLOG_GZ_TMP_SUFFIX first. Only a complete, flushed gzip stream is
- * renamed to dst. A process that stops in the middle of a compression
- * therefore leaves at most that temporary file, never a truncated dst; the
- * next open of the log removes it and compresses the source again (see
+ * This gzip-compresses the file src into dst, which is src plus ".gz", with
+ * zlib; all names are relative to dir_fd. The output goes to
+ * dst + CLOG_GZ_TMP_SUFFIX first, and only a complete, flushed gzip stream
+ * is renamed to dst, so a process that stops in the middle of a compression
+ * leaves at most that temporary file, never a truncated dst; the next open
+ * of the log removes it and compresses the source again (see
  * _clog_recover_compressions()). The output gets the permission bits, the
  * owner and the group of src, as gzip(1) gives them (see
  * _clog_copy_owner_and_mode()).
  *
- * On success it gives 0. dst is then a valid gzip file, and the function
- * unlinks src. On a failure it gives -1, removes its temporary output, and
- * leaves src untouched. It never replaces a file that already sits at dst.
- * A non-NULL abort_flag that becomes true stops the compression at its next
- * block, which is a failure.
+ * On success it gives 0, dst is a valid gzip file, and the function unlinks
+ * src. On a failure it gives -1, removes its temporary output, and leaves
+ * src untouched. It never replaces a file that already sits at dst. A
+ * non-NULL abort_flag that becomes true stops the compression at its next
+ * block, which counts as a failure.
  *
  * It reads src only when the descriptor that it opens is a regular file
  * owned by the effective user or by live_uid (see clog_gen_filter_t). The
@@ -3596,17 +3570,17 @@ static int _gzip_compress_file(int dir_fd, const char *src, const char *dst,
     goto done;
   }
 
-  /* Never overwrite something that already sits at dst. An unrelated file,
+  /* Never overwrite something that already sits at dst: an unrelated file,
    * or a stale leftover, can occupy this exact gzip destination path. The
    * publish step refuses it too; this check only saves the work. */
   if (_clog_entry_exists(dir_fd, dst)) goto done;
 
   /* The temporary name belongs to this compression alone. A regular file
    * there that the effective user or live_uid owns is the leftover of a
-   * compression that stopped part way, and it holds nothing that is not
-   * still in src. Anything else at that name is left alone, and the source
-   * stays uncompressed. O_EXCL makes the check and the creation one step,
-   * and it never follows a link. */
+   * compression that stopped part way, and it holds nothing that is not also
+   * in src. Anything else at that name is left alone, and the source stays
+   * uncompressed. O_EXCL makes the check and the creation one step, and it
+   * never follows a link. */
   out_fd = openat(dir_fd, tmp,
                   O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
   if (out_fd < 0 && errno == EEXIST) {
@@ -3621,8 +3595,8 @@ static int _gzip_compress_file(int dir_fd, const char *src, const char *dst,
   }
   if (out_fd < 0) goto done;
   if (fstat(out_fd, &tmp_st) != 0) {
-    /* The file exists and cannot be examined, so it cannot be told apart
-     * from another entry at the same name later. It is removed now. */
+    /* The file exists but cannot be examined, so it cannot be told apart from
+     * another entry at the same name later, and it is removed at once. */
     (void)unlinkat(dir_fd, tmp, 0);
     goto done;
   }
@@ -3636,11 +3610,10 @@ static int _gzip_compress_file(int dir_fd, const char *src, const char *dst,
 #ifdef RUNNING_UNIT_TESTS
   {
     /* Copy the armed delay into a local before the code announces that the
-     * output file now exists. A test can spin-wait on
-     * clog_test_gz_dest_opened(). The instant that it sees this compression,
-     * it can arm the delay again, or clear it, for a DIFFERENT and later
-     * compression. That must never race the read that this call already has
-     * in progress. */
+     * output file exists. A test can spin-wait on clog_test_gz_dest_opened()
+     * and, the instant that it sees this compression, arm the delay again or
+     * clear it for a DIFFERENT and later compression, which must never race
+     * the read that this call already has in progress. */
     unsigned int delay = atomic_load(&_clog_test_pending_compress_delay_us);
     atomic_store(&_clog_test_gz_dest_opened, true);
     if (delay) usleep(delay);
@@ -3662,8 +3635,8 @@ static int _gzip_compress_file(int dir_fd, const char *src, const char *dst,
   if (ferror(in)) goto done;
 
   /* The trailer goes out, and the data reaches the disk, before the output
-   * takes its final name. A crash after the rename therefore never finds a
-   * short dst beside a deleted src. */
+   * takes its final name, so a crash after the rename never finds a short
+   * dst beside a deleted src. */
   if (gzflush(out, Z_FINISH) != Z_OK || _clog_sync_output(out_fd) != 0)
     goto done;
   int close_rc = gzclose(out);
@@ -3707,21 +3680,21 @@ bool clog_test_gzip_compress_file_for_owner(const char *src, const char *dst,
 
 /*
  * This parses the part of a candidate rotated-file name that follows
- * "<base>.". A name that this logger made has three parts. The first is the
- * mandatory 14-digit YYYYMMDDHHMMSS stamp that CLOG_ROTATION_FMT produces.
- * The second is an optional collision suffix "_<seq>". Its number is
- * zero-padded to 4 digits, and a number above 9999 takes as many digits as
- * it needs, up to CLOG_ROTATION_SEQ_MAX_DIGITS, with no leading zero. The
- * third is an optional ".gz". A name with no suffix has sequence 0, and
- * _rotate() never writes a suffix of 0.
+ * "<base>.". A name that this logger made has three parts: the mandatory
+ * 14-digit YYYYMMDDHHMMSS stamp that CLOG_ROTATION_FMT produces; an optional
+ * collision suffix "_<seq>", whose number is zero-padded to 4 digits (a
+ * number above 9999 takes as many digits as it needs, up to
+ * CLOG_ROTATION_SEQ_MAX_DIGITS, with no leading zero); and an optional
+ * ".gz". A name with no suffix has sequence 0, and _rotate() never writes a
+ * suffix of 0.
  *
  * On a name of exactly that shape, this gives true, points *stamp at the 14
  * stamp digits and stores the sequence number in *seq. Anything else, such
  * as extra digits or an unrelated word at the end, only happens to start
- * with something that looks like <base>.<14 digits>, and this gives false.
- * The library must never treat such a name as a file that it owns. This
- * check stops _prune_rotated() from a call to unlink() on an unrelated file
- * that a user, or another tool, put in the same directory.
+ * with something that looks like <base>.<14 digits>, and this gives false,
+ * because the library must never treat such a name as a file that it owns.
+ * This check stops _prune_rotated() from calling unlink() on an unrelated
+ * file that a user, or another tool, put in the same directory.
  */
 static bool _rotated_name_parse(const char *rest, const char **stamp,
                                 unsigned long *seq) {
@@ -3768,10 +3741,10 @@ static int _rotated_key_cmp(const char *stamp_a, unsigned long seq_a,
  * Fills *f for one pass over the directory of sh. The caller holds
  * sh->mutex, or owns sh alone. The limit of a stamp is
  * CLOG_ROTATION_FUTURE_TOLERANCE_SECS above the later of the clock and the
- * newest name that sh made (rot_last_stamp). Every name that sh makes is at
- * or below rot_last_stamp, so a clock that steps back by any amount never
- * turns a generation of sh into an entry to ignore, and names keep sorting in
- * the order of the rotations.
+ * newest name that sh made (rot_last_stamp). Since every name that sh makes
+ * is at or below rot_last_stamp, a clock that steps back by any amount never
+ * turns a generation of sh into an entry to ignore, and names keep sorting
+ * in the order of the rotations.
  */
 static void _clog_gen_filter_init(const clog_shared_t *sh,
                                   clog_gen_filter_t *f) {
@@ -3790,7 +3763,7 @@ static void _clog_gen_filter_init(const clog_shared_t *sh,
 typedef enum {
   CLOG_ENTRY_GENERATION, /* a generation of the target */
   CLOG_ENTRY_IGNORED,    /* anything else that is there */
-  CLOG_ENTRY_GONE        /* nothing is there any more */
+  CLOG_ENTRY_GONE        /* the entry is gone */
 } clog_entry_kind_t;
 
 /* Classifies the entry name, relative to dir_fd, whose stamp digits are at
@@ -3811,14 +3784,14 @@ static clog_entry_kind_t _clog_entry_classify(int dir_fd, const char *name,
 
 /*
  * Writes the WARN record that names a directory entry which looks like a
- * rotated file of sh and is not one of its generations. The caller holds
+ * rotated file of sh but is not one of its generations. The caller holds
  * sh->mutex, or owns sh alone, and no record of sh is half written. At most
  * CLOG_IGNORED_NOTE_BURST such records go out in any window of
  * CLOG_IGNORED_NOTE_WINDOW_SECS, so a directory full of such entries cannot
- * flood the log. The name is a directory entry that anybody who can write the
- * directory chooses: every byte outside printable ASCII, and every quote and
- * backslash, becomes '?', and a long name is cut, so the record stays one
- * well-formed line in every format.
+ * flood the log. The name is a directory entry that anybody who can write
+ * the directory chooses, so every byte outside printable ASCII, and every
+ * quote and backslash, becomes '?', and a long name is cut, which keeps the
+ * record one well-formed line in every format.
  */
 static void _clog_note_ignored_entry(clog_shared_t *sh, const char *name) {
   time_t now = time(NULL);
@@ -3860,12 +3833,12 @@ static clog_entry_kind_t _clog_entry_check(clog_shared_t *sh, const char *name,
 
 /*
  * This finds the newest generation of sh (see clog_gen_filter_t) that is
- * already on disk. It gives true and fills stamp_out and *seq_out when there
- * is one. The caller holds sh->mutex, or owns sh alone, and
+ * already on disk, and gives true and fills stamp_out and *seq_out when
+ * there is one. The caller holds sh->mutex, or owns sh alone, and
  * sh->rot_name_known is false.
  * _rotate() calls it once, before the first rotation of a shared target, so
  * that a logger which starts in a directory that already holds rotated files
- * numbers its own rotations above them. A process that restarts inside the
+ * numbers its own rotations above them; a process that restarts inside the
  * same second is the common case. An entry that is not a generation plays
  * no part in the choice, and it gets a WARN record when may_note is true.
  */
@@ -3909,22 +3882,22 @@ typedef struct {
 } clog_rotated_file_t;
 
 /*
- * This orders the rotated files with the oldest first. It orders them by the
+ * This orders the rotated files with the oldest first, by the
  * (stamp, sequence number) pair of the name that _rotate() gave to each one.
  * _rotate() gives every rotation of a shared target a pair above every pair
  * that it gave before and every pair that was on disk before its first
- * rotation (see there). The order of the pairs is therefore the order in
- * which the rotations happened. The sequence number compares as a number, so
- * "_10000" is newer than "_9999".
+ * rotation (see there), so the order of the pairs is the order in which the
+ * rotations happened. The sequence number compares as a number, so "_10000"
+ * is newer than "_9999".
  *
  * The modification time does not order these files. The compression step
- * writes a rotated file that it compresses. The mtime of such a file is
- * therefore the time at which that compression FINISHED. It is not the age
- * of the generation inside the file. A compression runs while the shared
- * target has its mutex unlocked. A later generation whose compression
- * finishes quickly therefore carries an older mtime than an earlier
- * generation whose compression still works through a large file. An order by
- * mtime then deletes the newest generation and keeps the stalest one.
+ * writes a rotated file that it compresses, so the mtime of such a file is
+ * the time at which that compression FINISHED, not the age of the
+ * generation inside the file. A compression runs while the shared target
+ * has its mutex unlocked, so a later generation whose compression finishes
+ * quickly carries an older mtime than an earlier generation whose
+ * compression is still working through a large file, and an order by mtime
+ * then deletes the newest generation and keeps the stalest one.
  */
 static int _cmp_rotated_oldest_first(const void *a, const void *b) {
   const clog_rotated_file_t *x = (const clog_rotated_file_t *)a;
@@ -3932,7 +3905,7 @@ static int _cmp_rotated_oldest_first(const void *a, const void *b) {
   int c = _rotated_key_cmp(x->stamp, x->seq, y->stamp, y->seq);
   if (c != 0) return c;
   /* The uncompressed file and the ".gz" file of one generation are next to
-   * each other either way. This only makes the order total. */
+   * each other either way; this only makes the order total. */
   return strcmp(x->path, y->path);
 }
 
@@ -4005,38 +3978,39 @@ int clog_test_get_max_generations_beyond_old_compressions(void) {
 /*
  * This deletes the oldest rotated generations of sh beyond
  * sh->rotation.max_rotated_files. The caller holds sh->mutex. A generation
- * is one rotation. On disk it is one file, or two while its compression runs:
- * the uncompressed source and the ".gz" destination. The pass counts and
- * deletes whole generations. Every name here is relative to sh->dir_fd.
+ * is one rotation, which on disk is one file, or two while its compression
+ * runs (the uncompressed source and the ".gz" destination), and the pass
+ * counts and deletes whole generations. Every name here is relative to
+ * sh->dir_fd.
  *
  * The pass never deletes a file of sh->compress_running, the generation that
- * the compressor thread compresses at this moment. The compression may not
- * have read all of the source yet, and it may not have written all of the
- * destination yet. To delete either one loses all of the log data of that
+ * the compressor thread compresses at this moment, because the compression
+ * may not have read all of the source or written all of the destination
+ * yet, and deleting either one loses all of the log data of that
  * generation. A generation whose job still waits in the queue gets no such
  * protection; see clog_compress_job_t.
  *
  * `just_rotated` is the destination that the calling _rotate() itself just
- * created. It is NULL when there is none. The pass never deletes it, or its
- * own ".gz" form. That file holds the log content that this very rotation
- * moved aside, and nothing has read it yet.
+ * created, or NULL when there is none. The pass never deletes it, or its own
+ * ".gz" form, because that file holds the log content that this very
+ * rotation moved aside, and nothing has read it yet.
  *
  * Every generation counts against max_keep, protected or not. The pass keeps
  * the newest max_keep generations and deletes every older generation that
- * is not protected. A protected generation that is older than the newest
- * max_keep stays until a later pass. `just_rotated` is always the newest
- * generation, because _rotate() names it above every other one, so it is
- * always among the newest max_keep. Only the running compression can
- * therefore stay older than the newest max_keep. A pass leaves exactly the
- * newest max_keep generations, or all of them when there are fewer, plus at
- * most that one. A rotation never waits for a compression to finish. A pass
- * that keeps the running compression that way marks the target, and the
- * compressor thread runs the pass again as soon as that compression ends, so
- * the old generation does not outlive it.
+ * is not protected, while a protected generation that is older than the
+ * newest max_keep stays until a later pass. `just_rotated` is always the
+ * newest generation, because _rotate() names it above every other one, so
+ * it is always among the newest max_keep, and only the running compression
+ * can stay older than the newest max_keep. A pass therefore leaves exactly
+ * the newest max_keep generations, or all of them when there are fewer, plus
+ * at most that one. A rotation never waits for a compression to finish:
+ * instead, a pass that keeps the running compression in this way marks the
+ * target, and the compressor thread runs the pass again as soon as that
+ * compression ends, so the old generation does not outlive it.
  *
  * A pass that cannot list every rotated file, because an allocation fails,
- * deletes nothing. A partial list can miss the newest generations, and the
- * pass would then delete generations that the full list keeps.
+ * deletes nothing, since a partial list can miss the newest generations,
+ * and the pass would then delete generations that the full list keeps.
  *
  * Only generations count and only generations are deleted (see
  * clog_gen_filter_t). An entry that is not one gets a WARN record when
@@ -4168,16 +4142,16 @@ static void _prune_rotated(clog_shared_t *sh, const char *just_rotated,
 
 /*
  * This gives true when the library cannot use `candidate` as a fresh name
- * for a rotation destination. There are two such cases. In the first, the
- * name itself already exists on disk. In the second, its own compressed
- * ".gz" form already exists, and check_gz is true because compress_rotated
- * is on. The second check matters because _gzip_compress_file() unlinks its
- * uncompressed source the instant that the compression succeeds. A LATER
- * rotation inside the same second then runs its own collision check. A bare
- * existence check of candidate makes the candidate name of the earlier
+ * for a rotation destination, which happens in two cases: when the name
+ * itself already exists on disk, and when its own compressed ".gz" form
+ * already exists while check_gz is true because compress_rotated is on. The
+ * second check matters because _gzip_compress_file() unlinks its
+ * uncompressed source the instant that the compression succeeds. When a
+ * LATER rotation inside the same second runs its own collision check, a
+ * bare existence check of candidate makes the candidate name of the earlier
  * rotation look completely free again, because that rotation compressed and
- * deleted it. But "<candidate>.gz" still sits on disk and holds the real
- * content of that earlier rotation. Reuse of that name hands the ".gz"
+ * deleted it, while "<candidate>.gz" sits on disk and holds the real content
+ * of that earlier rotation. Reusing that name would hand the ".gz"
  * destination of the earlier rotation straight back to a second, unrelated
  * rotation.
  */
@@ -4185,11 +4159,11 @@ static bool _rotated_name_taken(int dir_fd, const char *candidate,
                                 bool check_gz) {
   if (_clog_entry_exists(dir_fd, candidate)) return true;
   if (!check_gz) return false;
-  /* This buffer has room above PATH_MAX. The code therefore does not reason
+  /* This buffer has room above PATH_MAX, so the code does not need to reason
    * exactly about how much of the CLOG_ROTATION_EXTRA slack of _rotate() is
    * left at the point that calls this function. candidate is always a
-   * NUL-terminated string that itself fit inside a buffer of PATH_MAX bytes.
-   * clen is therefore below PATH_MAX, and this buffer has plenty of room for
+   * NUL-terminated string that itself fit inside a buffer of PATH_MAX bytes,
+   * so clen is below PATH_MAX, and this buffer has plenty of room for
    * clen + strlen(".gz") + 1 in every case. */
   char gz[PATH_MAX + 8];
   size_t clen = strlen(candidate);
@@ -4204,24 +4178,24 @@ static bool _rotated_name_taken(int dir_fd, const char *candidate,
 
 /*
  * A shared target that compresses its rotated files owns one compressor
- * thread. The first rotation that needs a compression starts it, so a target
- * that never compresses never pays for it. _rotate() only queues a job and
- * returns. The gzip work therefore never runs on the thread that rotates,
- * which is a logging thread for a synchronous logger and the writer thread
- * for an async one. Neither a log call nor the async queue behind it ever
+ * thread, which the first rotation that needs a compression starts, so a
+ * target that never compresses never pays for it. _rotate() only queues a
+ * job and returns, so the gzip work never runs on the thread that rotates
+ * (a logging thread for a synchronous logger, and the writer thread for an
+ * async one), and neither a log call nor the async queue behind it ever
  * waits for a compression.
  *
- * One thread for each target runs the jobs one at a time, the oldest first.
- * At most one compression of a target is therefore in flight at any moment,
- * which is what bounds the files on disk to max_rotated_files generations
- * plus one (see _prune_rotated()). The thread shares nothing with the
- * compressor of another target, so a close or a fork only ever deals with
- * the thread of its own target, under the mutex that the fork handling
- * already locks for that target.
+ * One thread for each target runs the jobs one at a time, the oldest first,
+ * so at most one compression of a target is in flight at any moment, which
+ * is what bounds the files on disk to max_rotated_files generations plus one
+ * (see _prune_rotated()). The thread shares nothing with the compressor of
+ * another target, so a close or a fork only ever deals with the thread of
+ * its own target, under the mutex that the fork handling already locks for
+ * that target.
  *
  * The last clog_close() of the target stops the thread after the thread
  * finishes every job in the queue. The exit drain, which a CLOG_FATAL record
- * runs too, waits for the queue within its budget. See _clog_exit_drain().
+ * runs too, waits for the queue within its budget; see _clog_exit_drain().
  */
 /* The shared target whose writer thread or compressor thread the calling
  * thread is, or NULL. The exit drain skips that target: such a thread that
@@ -4261,8 +4235,8 @@ static void *_clog_compressor_main(void *arg) {
     _ccol_mem_free(sh->m_procs, job);
     /* A pass that ran during the compression kept this generation only
      * because it was running. It is older than the newest max_rotated_files,
-     * and without this pass it stays on disk, beside the newer generations,
-     * until the next rotation. */
+     * and without this pass it would stay on disk beside the newer
+     * generations until the next rotation. */
     if (sh->compress_prune_deferred) {
       sh->compress_prune_deferred = false;
       _prune_rotated(sh, NULL, false);
@@ -4301,7 +4275,7 @@ static bool _clog_compressor_start(clog_shared_t *sh) {
  * Queues the compression of the rotated file `rotated`, a name relative to
  * sh->dir_fd. The caller holds sh->mutex. The job is one allocation that
  * holds both of its names. When the allocation fails, or the compressor
- * thread cannot start, the rotated file stays uncompressed. That is the
+ * thread cannot start, the rotated file stays uncompressed, which is the
  * documented outcome of a failed compression, and no log data is lost.
  * live_uid is the owner of the live file (see clog_gen_filter_t).
  */
@@ -4335,13 +4309,13 @@ static void _clog_compress_enqueue(clog_shared_t *sh, const char *rotated,
  * Queues again every compression that a process which stopped left
  * unfinished in the directory of sh. The caller holds sh->mutex, and sh
  * rotates and compresses. A compression that stops part way leaves its
- * temporary output (see _gzip_compress_file()); this removes it. A rotated
- * file that is still uncompressed was never compressed, or its compression
- * never finished: a compression removes its source only after the finished
- * output took the ".gz" name. A ".gz" file beside such a source is
- * therefore an output that is not known to be complete, and the source
- * holds everything; this removes the ".gz" file. Every uncompressed rotated
- * file then goes to the compressor thread, the oldest first.
+ * temporary output (see _gzip_compress_file()), which this removes. A
+ * rotated file that is still uncompressed was never compressed, or its
+ * compression never finished, because a compression removes its source only
+ * after the finished output took the ".gz" name. So a ".gz" file beside such
+ * a source is an output that is not known to be complete, while the source
+ * holds everything, and this removes the ".gz" file. Every uncompressed
+ * rotated file then goes to the compressor thread, the oldest first.
  *
  * It acts only on generations of sh (see clog_gen_filter_t): a temporary
  * output, a source and a ".gz" file are each removed or compressed only
@@ -4426,8 +4400,8 @@ static void _clog_recover_compressions(clog_shared_t *sh) {
  * finishes every job in its queue, so every rotation of the target is
  * compressed by the time that this returns. The caller must not hold
  * sh->mutex, and no handle of sh may remain that could rotate: the last
- * clog_close() calls this after the writer thread, which can still rotate
- * while it drains, has stopped. A constructor rollback calls it too, where
+ * clog_close() calls this after the writer thread (which can still rotate
+ * while it drains) has stopped. A constructor rollback calls it too, where
  * it does nothing.
  */
 static void _shared_compressor_teardown(clog_shared_t *sh) {
@@ -4499,15 +4473,15 @@ static bool _clog_is_live_tmp_name(const char *name, const char *base,
  * relative to dir_fd, and writes that name to tmp (tmp_size bytes). The name
  * is "<base>" CLOG_ROTATION_TMP_TAG plus random hex digits, and O_EXCL with
  * O_NOFOLLOW creates a new regular file there or fails, so the file can
- * never be an entry that somebody else put at the name. The file gets the
- * permission bits, the owner and the group of the file that it replaces,
- * which *old describes, when old is not NULL: a log that its operator
- * restricted, such as one with mode 0600 or 0640, therefore stays restricted
- * in every later generation, and a compressed generation takes the access of
- * its source (see _gzip_compress_file()). The file is created with mode
- * 0600, and _clog_copy_owner_and_mode() gives it the rest. With old NULL it
- * is created with mode 0644, which the umask narrows. It gives the
- * descriptor and fills *st_out with the finished file, or gives -1.
+ * never be an entry that somebody else put at the name. When old is not
+ * NULL, the file gets the permission bits, the owner and the group of the
+ * file that it replaces, which *old describes, so a log that its operator
+ * restricted, such as one with mode 0600 or 0640, stays restricted in every
+ * later generation, and a compressed generation takes the access of its
+ * source (see _gzip_compress_file()). The file is created with mode 0600,
+ * and _clog_copy_owner_and_mode() gives it the rest. With old NULL it is
+ * created with mode 0644, which the umask narrows. It gives the descriptor
+ * and fills *st_out with the finished file, or gives -1.
  */
 static int _clog_create_fresh(int dir_fd, const char *base,
                               const struct stat *old, char *tmp,
@@ -4548,9 +4522,9 @@ static int _clog_create_fresh(int dir_fd, const char *base,
  * Removes the private name of a new live file that a rotation left when its
  * process stopped between the creation of the file and its rename onto the
  * live name (see _rotate()). Such a file is empty, because nothing writes it
- * before that rename. Only an empty regular file that the effective user or
- * the owner of the live file owns, at a name of exactly that shape, is
- * removed. The caller holds sh->mutex, or owns sh alone, and sh rotates.
+ * before that rename, and only an empty regular file that the effective
+ * user or the owner of the live file owns, at a name of exactly that shape,
+ * is removed. The caller holds sh->mutex, or owns sh alone, and sh rotates.
  */
 static void _clog_remove_stale_live_tmps(clog_shared_t *sh) {
   const char *base = sh->file_base;
@@ -4601,11 +4575,11 @@ void clog_test_set_rotate_window_hook(void (*hook)(int dir_fd,
  *   6. Queue the compression of the rotated file, when it is on.
  *
  * The rotation never opens the live name or a rotated name. The new live
- * file is a file that step 1 made, and step 4 puts it at the live name with a
- * rename, which replaces whatever entry sits there without following it.
- * Another user who can write the directory and puts a link, a FIFO or a file
- * at the live name between steps 3 and 4 therefore never receives a record
- * and never blocks the rotation; the live name belongs to the logger.
+ * file is a file that step 1 made, and step 4 puts it at the live name with
+ * a rename, which replaces whatever entry sits there without following it.
+ * So another user who can write the directory and puts a link, a FIFO or a
+ * file at the live name between steps 3 and 4 never receives a record and
+ * never blocks the rotation: the live name belongs to the logger.
  */
 static int _rotate(clog_shared_t *sh) {
 #ifdef RUNNING_UNIT_TESTS
@@ -4639,11 +4613,11 @@ static int _rotate(clog_shared_t *sh) {
 
   /* Choose the name. _prune_rotated() keeps the rotated files whose
    * (stamp, sequence number) pairs are the newest (see
-   * _cmp_rotated_oldest_first()). Every new name must therefore sort above
-   * every name that this shared target made before, and above every
-   * generation that was on disk before its first rotation. A name that the
-   * deletion pass freed must never come back: it sorts as the oldest, and
-   * the next pass deletes the newest log records in its place.
+   * _cmp_rotated_oldest_first()), so every new name must sort above every
+   * name that this shared target made before, and above every generation
+   * that was on disk before its first rotation. A name that the deletion
+   * pass freed must never come back, because it sorts as the oldest, and the
+   * next pass would delete the newest log records in its place.
    *
    * A clock that reads the same second as the newest name continues its
    * sequence. A clock that reads an earlier second, because it stepped
@@ -4663,8 +4637,8 @@ static int _rotate(clog_shared_t *sh) {
     seq = sh->rot_last_seq + 1;
   }
 
-  /* The fstat() describes the file that the logger writes, and the new live
-   * file takes its access from it. It reads the descriptor and never the
+  /* The fstat() describes the file that the logger writes, from which the
+   * new live file takes its access. It reads the descriptor and never the
    * name. */
   struct stat old_st;
   bool have_old_st = fstat(sh->fd, &old_st) == 0;
@@ -4675,21 +4649,21 @@ static int _rotate(clog_shared_t *sh) {
                                   sizeof(tmp), &new_st);
   if (new_fd < 0) return -1;
 
-  /* The name can still be taken by an entry that this target did not make.
-   * The sequence then moves on until the name is free. check_gz applies the
-   * same test to the compressed form of the name whenever compression is on
-   * (see the doc comment of _rotated_name_taken()). The rename never
+  /* The name can still be taken by an entry that this target did not make,
+   * and the sequence then moves on until the name is free. check_gz applies
+   * the same test to the compressed form of the name whenever compression is
+   * on (see the doc comment of _rotated_name_taken()). The rename never
    * replaces an entry at the destination, and an entry that appears there
    * between the test and the rename moves the sequence on too.
    *
-   * The rename happens while the old fd is still open. POSIX lets a program
-   * rename an open file. The code closes the old fd only once the new file
-   * holds the live name. A step that fails therefore leaves the logger
-   * alive, and the writes continue into the old file. ENOENT means that
-   * something outside this process deleted the file. The code treats that as
-   * a clean slate, and the new file takes the live name. Any other rename
-   * error is a hard failure. The logger then continues to write to the
-   * original fd, which is still open. */
+   * The rename happens while the old fd is still open, which POSIX allows
+   * for an open file, and the code closes the old fd only once the new file
+   * holds the live name. So a step that fails leaves the logger alive, and
+   * the writes continue into the old file. ENOENT means that something
+   * outside this process deleted the file; the code treats that as a clean
+   * slate, and the new file takes the live name. Any other rename error is a
+   * hard failure, and the logger then continues to write to the original fd,
+   * which is still open. */
   bool check_gz = sh->rotation.compress_rotated;
   size_t base = plen + slen;
   int rename_rv = -1;
@@ -4715,7 +4689,7 @@ static int _rotate(clog_shared_t *sh) {
     close(new_fd);
     return -1;
   }
-  /* `rotated` exists on disk only when the rename above truly succeeded. On
+  /* `rotated` exists on disk only when the rename above truly succeeded; on
    * the ENOENT clean-slate path there is nothing at that path to delete and
    * nothing there to compress. */
   bool did_rename = (rename_rv == 0);
@@ -4748,20 +4722,21 @@ static int _rotate(clog_shared_t *sh) {
   sh->rot_last_seq = seq;
   sh->rot_name_known = true;
 
-  /* The deletion pass runs only once the rotation certainly succeeded, which
-   * means that the new live file holds the live name. A deletion before this
-   * point lets a rotation that then fails permanently delete older rotated
-   * files for an attempt that the code rolls back. */
+  /* The deletion pass runs only once the rotation has certainly succeeded,
+   * which means that the new live file holds the live name. A deletion
+   * before this point would let a rotation that then fails permanently
+   * delete older rotated files for an attempt that the code rolls back. */
   if (sh->rotation.max_rotated_files > 0) {
     _prune_rotated(sh, did_rename ? rotated : NULL, true);
   }
 
-  /* did_rename gates this. On the ENOENT clean-slate path above, the code
-   * never created `rotated`, so there is nothing to compress. A compression
-   * writes "<rotated>.gz" + CLOG_GZ_TMP_SUFFIX and then "<rotated>.gz". When
-   * the directory cannot hold a name that long, no compression of this file
-   * can succeed; the file stays uncompressed, and a record in the new live
-   * file says so instead of the compression failing unseen. */
+  /* did_rename gates this, because on the ENOENT clean-slate path above the
+   * code never created `rotated`, so there is nothing to compress. A
+   * compression writes "<rotated>.gz" + CLOG_GZ_TMP_SUFFIX and then
+   * "<rotated>.gz". When the directory cannot hold a name that long, no
+   * compression of this file can succeed; the file stays uncompressed, and a
+   * record in the new live file says so instead of the compression failing
+   * unseen. */
   if (did_rename && sh->rotation.compress_rotated) {
     long name_max = fpathconf(sh->dir_fd, _PC_NAME_MAX);
     size_t gz_tmp_len = strlen(rotated) + sizeof(".gz" CLOG_GZ_TMP_SUFFIX) - 1;
@@ -4780,28 +4755,28 @@ static int _rotate(clog_shared_t *sh) {
 
 /*
  * This is the time-based rotation check that runs before a write. It rotates
- * now when time rotation is on and the interval ends. The retry backoff can
- * still stop it. Every code path that is about to write the real bytes of a
- * record to sh->fd calls this function. Time-based rotation can therefore
- * never be silently skipped by one such path while every other path still
- * runs it. The caller must hold sh->mutex.
+ * at once when time rotation is on and the interval ends, unless the retry
+ * backoff stops it. Every code path that is about to write the real bytes of
+ * a record to sh->fd calls this function, so time-based rotation can never
+ * be silently skipped by one such path while every other path runs it. The
+ * caller must hold sh->mutex.
  */
 static void _clog_time_rotate_if_due(clog_shared_t *sh) {
   if (!(sh->rotation_enabled && sh->rotation.time_rotation_enabled)) return;
   /* The code defers the rotation while the async batch buffer holds the
-   * continuation of a record. The first half of that record is already on
-   * disk. A rotation here puts the two halves in two different files. See
+   * continuation of a record whose first half is already on disk, because a
+   * rotation here puts the two halves in two different files. See
    * clog_shared_t.async_partial_record. */
   if (sh->async_partial_record) return;
   time_t now = time(NULL);
-  /* The code widens both operands to 64 bits before the subtraction.
-   * time_t is as narrow as 32 bits on some targets. The difference of two
-   * distant timestamps can overflow it there. The elapsed whole seconds are
+  /* The code widens both operands to 64 bits before the subtraction, because
+   * time_t is as narrow as 32 bits on some targets, where the difference of
+   * two distant timestamps can overflow it. The elapsed whole seconds are
    * compared in microseconds with rotation_interval_us, so an interval that
    * is not a whole number of seconds rotates at the next whole second after
    * it ends. A count of seconds too large to multiply is past every
-   * interval. A clock that stepped back makes the difference negative, and
-   * that is not yet due. */
+   * interval, and a clock that stepped back makes the difference negative,
+   * which is not yet due. */
   int64_t since = (int64_t)now - (int64_t)sh->last_rotation;
   if (since >= 0 &&
       ((uint64_t)since >= UINT64_MAX / UINT64_C(1000000) ||
@@ -4815,24 +4790,24 @@ static void _clog_time_rotate_if_due(clog_shared_t *sh) {
 
 /*
  * This is the size-based rotation check that runs after a write. It rotates
- * now when size rotation is on and bytes_written crosses max_file_size. The
- * retry backoff can still stop it. Every path shares this function for the
+ * at once when size rotation is on and bytes_written crosses max_file_size,
+ * unless the retry backoff stops it. Every path shares this function for the
  * same reason that every path shares _clog_time_rotate_if_due(). The caller
- * must hold sh->mutex. The caller must also call it only after
- * sh->bytes_written already covers the write that just happened.
+ * must hold sh->mutex, and must call it only after sh->bytes_written already
+ * covers the write that just happened.
  */
 static void _clog_size_rotate_if_due(clog_shared_t *sh) {
-  /* bytes_written is an off_t. It is the internal counter of this file.
-   * max_file_size is a fixed-width int64_t, and it is part of the layout of
-   * the public config. The code widens the counter, which keeps the
-   * comparison correct whatever width off_t has in this build. */
+  /* bytes_written, the internal counter of this file, is an off_t, while
+   * max_file_size is a fixed-width int64_t that is part of the layout of the
+   * public config. The code widens the counter, which keeps the comparison
+   * correct whatever width off_t has in this build. */
   if (!(sh->rotation_enabled && sh->rotation.size_rotation_enabled &&
         (int64_t)sh->bytes_written >= sh->rotation.max_file_size))
     return;
   /* The code defers the rotation for the same reason that
    * _clog_time_rotate_if_due() defers it. The flush that clears the flag
-   * evaluates this check again. The rotation that this line skips therefore
-   * happens as soon as the record on disk is whole again. See
+   * evaluates this check again, so the rotation that this line skips happens
+   * as soon as the record on disk is whole again. See
    * clog_shared_t.async_partial_record. */
   if (sh->async_partial_record) return;
   time_t now = time(NULL);
@@ -4846,22 +4821,22 @@ static void _clog_size_rotate_if_due(clog_shared_t *sh) {
 /*                         BACKTRACE                                          */
 /* ========================================================================== */
 
-/* Frame 0 is _capture_backtrace. Frame 1 is _clog_write. Frame 2 is the
- * caller, and it is the first frame that the user sees. Every format below
+/* Frame 0 is _capture_backtrace, frame 1 is _clog_write, and frame 2 is the
+ * caller, which is the first frame that the user sees. Every format below
  * that writes a backtrace uses this value. */
 #define CLOG_BT_INITIAL_FRAME 2
 
 /*
- * This captures the backtrace of the thread that calls. It is noinline. The
- * frame of _clog_write calls it directly on every path, which is the
- * synchronous path, the async path and the FATAL path. A helper one level
- * deeper never calls it. CLOG_BT_INITIAL_FRAME above is correct only while
- * that stays true. A capture from inside the async submission path, for
- * example, silently shows that function itself as if it were the caller.
- * This function gives false in two cases. The first is a platform with no
- * backtrace support. The second is a backtrace_symbols() call whose own
- * allocation fails. It then leaves *out_syms and *out_depth untouched. A
- * caller must treat false in exactly the same way as "no frames".
+ * This captures the backtrace of the thread that calls. It is noinline, and
+ * the frame of _clog_write calls it directly on every path (the synchronous
+ * path, the async path and the FATAL path), never from a helper one level
+ * deeper. CLOG_BT_INITIAL_FRAME above is correct only while that stays true:
+ * a capture from inside the async submission path, for example, silently
+ * shows that function itself as if it were the caller. This function gives
+ * false, and leaves *out_syms and *out_depth untouched, in two cases: on a
+ * platform with no backtrace support, and when a backtrace_symbols() call
+ * fails its own allocation. A caller must treat false in exactly the same
+ * way as "no frames".
  */
 static bool __attribute__((noinline)) _capture_backtrace(char ***out_syms,
                                                          int *out_depth) {
@@ -4875,10 +4850,10 @@ static bool __attribute__((noinline)) _capture_backtrace(char ***out_syms,
   if (!syms) return false;
 #ifdef RUNNING_UNIT_TESTS
   /* See the doc comment of clog_test_force_shallow_backtrace_depth(). syms
-   * stays a real capture and is not NULL. The code clamps only the depth
-   * that it reports. Every emitter therefore sees the same shape as for a
-   * real shallow call stack: the capture truly succeeded, and it found
-   * nothing past the first two frames. */
+   * stays a real capture and is not NULL, and the code clamps only the depth
+   * that it reports, so every emitter sees the same shape as for a real
+   * shallow call stack: the capture truly succeeded, and it found nothing
+   * past the first two frames. */
   if (atomic_load(&_clog_test_force_shallow_bt_depth) &&
       depth > CLOG_BT_INITIAL_FRAME)
     depth = CLOG_BT_INITIAL_FRAME;
@@ -4894,49 +4869,51 @@ static bool __attribute__((noinline)) _capture_backtrace(char ***out_syms,
 }
 
 /*
- * This is a fixed marker. The library writes it in place of the usual
+ * This is a fixed marker that the library writes in place of the usual
  * "\t#N ..." continuation lines whenever it could not capture the real
- * backtrace at all. That happens on a platform with no support, and when the
- * allocation inside backtrace_symbols() fails. Without this marker, a syms
- * of NULL makes the emitter do nothing and say nothing. A reader of a logfmt
- * record that asked for a backtrace then cannot tell two states apart. In
- * one the library left the backtrace out. In the other nothing ever asked
- * for a backtrace. JSON carries that same distinction with
+ * backtrace at all, which happens on a platform with no support and when
+ * the allocation inside backtrace_symbols() fails. Without this marker, a
+ * syms of NULL makes the emitter do nothing and say nothing, so a reader of
+ * a logfmt record that asked for a backtrace cannot tell apart the state in
+ * which the library left the backtrace out from the state in which nothing
+ * ever asked for a backtrace. JSON carries that same distinction with
  * _BT_JSON_ERROR_MARKER.
  */
 static const char _BT_LINE_ERROR_MARKER[] = "\t#error backtrace unavailable\n";
 
 /*
  * This appends the backtrace frames into out as tab-indented continuation
- * lines. It never writes anything to a file itself. A syms of NULL means
+ * lines; it never writes anything to a file itself. A syms of NULL means
  * that no backtrace is available, or that _capture_backtrace() itself
- * failed. The function then appends the single fixed _BT_LINE_ERROR_MARKER
- * line instead. The absence of the backtrace is therefore never silent.
+ * failed, and the function then appends the single fixed
+ * _BT_LINE_ERROR_MARKER line instead, so the absence of the backtrace is
+ * never silent.
  *
- * The function gives true when `out` is certain to show that a requested
- * backtrace is missing. There are three such cases. In the first, the
- * function appended at least one real frame line. A symbol name that is
- * longer and does not fit is silently skipped, and a later, shorter one that
- * fits goes in. The function does not give up on the whole backtrace the
- * moment that the first frame does not fit. A frame that the function skips
- * this way carries no marker of its own. That matches the contract of this
- * function, which is best-effort for each frame. In the second case, depth
- * is at most CLOG_BT_INITIAL_FRAME. The capture then truly succeeded, but it
- * found no frame beyond the first two bookkeeping ones. There is nothing to
- * append, and nothing to report as missing. _emit_backtrace_json() makes the
- * same distinction with its own array_content_is_accurate flag. A capture
- * that is real but shallow is therefore never reported as an unavailable
- * one. Without this case, it would fall through into "not a single frame
- * fit". In the third case, real frames existed, not a single one fit, and
- * the function appended the fixed-size _BT_LINE_ERROR_MARKER in their place.
+ * The function gives true when `out` gives an accurate picture of the
+ * backtrace: the frames that fit, no frame because none existed, or a marker
+ * that shows that a requested backtrace is missing. That happens in three
+ * cases. In the first, the function appended at least one real frame line: a
+ * symbol name that is longer and does not fit is silently skipped while a
+ * later, shorter one that fits goes in, instead of the function giving up on
+ * the whole backtrace the moment that the first frame does not fit. A frame
+ * skipped in this way carries no marker of its own, which matches the contract
+ * of this function, best-effort for each frame. In the second case, depth is at
+ * most CLOG_BT_INITIAL_FRAME: the capture truly succeeded but found no frame
+ * beyond the first two bookkeeping ones, so there is nothing to append and
+ * nothing to report as missing. _emit_backtrace_json() makes the same
+ * distinction with its own array_content_is_accurate flag, so a capture that is
+ * real but shallow is never reported as an unavailable one; without this case,
+ * it would fall through into "not a single frame fit". In the third case, real
+ * frames existed, not a single one fit, and the function appended the
+ * fixed-size _BT_LINE_ERROR_MARKER in their place.
  *
  * The function gives false only when `out` has almost no room left at all,
  * not even for the marker of about 30 bytes. That case is residual, and the
- * buffer-size constants of this file make it unreachable in practice. The
- * caller already has plenty of room for the primary record, and the
- * record-start position of this call sits after that record. See the call
- * site in _clog_build_record() for how the code handles this very narrow
- * case.
+ * buffer-size constants of this file make it unreachable in practice,
+ * because the caller already has plenty of room for the primary record and
+ * the record-start position of this call sits after that record. See the
+ * call site in _clog_build_record() for how the code handles this very
+ * narrow case.
  */
 static bool _emit_backtrace_lines(clog_buf_t *out, char *const *syms,
                                   int depth) {
@@ -4947,14 +4924,14 @@ static bool _emit_backtrace_lines(clog_buf_t *out, char *const *syms,
   bool any_frame_written = false;
   for (int i = CLOG_BT_INITIAL_FRAME; i < depth; i++) {
     size_t entry_start = out->len;
-    /* syms[i] comes from backtrace_symbols(). For the line-based framing of
-     * this format it is untrusted text of any shape. The code therefore
-     * routes it through the same control-character escaper that every other
-     * dynamic field of this format uses. An unusual symbol name, and an
-     * embedded newline in particular, can then never desynchronize the log
-     * stream. An unescaped name can. The build of the line for this frame
-     * can fail, when an allocation for the growth of the buffer fails. The
-     * code then rolls back to entry_start and skips the frame. Without that
+    /* syms[i] comes from backtrace_symbols(), and for the line-based framing
+     * of this format it is untrusted text of any shape. So the code routes it
+     * through the same control-character escaper that every other dynamic
+     * field of this format uses, which means that an unusual symbol name,
+     * and an embedded newline in particular, can never desynchronize the log
+     * stream, as an unescaped name can. The build of the line for this frame
+     * can fail when an allocation for the growth of the buffer fails, and the
+     * code then rolls back to entry_start and skips the frame; without that
      * rollback, a truncated fragment with no newline stays behind, and the
      * text of the next frame goes straight onto it. */
     bool ok = _buf_appendf(out, "\t#%d ", i - CLOG_BT_INITIAL_FRAME) == 0;
@@ -4967,36 +4944,35 @@ static bool _emit_backtrace_lines(clog_buf_t *out, char *const *syms,
     any_frame_written = true;
   }
   /* A depth of at most CLOG_BT_INITIAL_FRAME means that no frame beyond the
-   * first two ever existed. To write nothing here is therefore a real and
-   * accurate picture of a capture that succeeded, even though it is silent.
-   * It is not a truncation. The array_content_is_accurate check of
+   * first two ever existed, so writing nothing here is a real and accurate
+   * picture of a capture that succeeded, even though it is silent, and not a
+   * truncation. The array_content_is_accurate check of
    * _emit_backtrace_json() covers the same case in the same way. */
   if (any_frame_written || depth <= CLOG_BT_INITIAL_FRAME) return true;
 
-  /* Real frames existed, but not one single frame fit. The line of each
-   * frame, on its own, needed more room than was left. The code falls back
-   * to the same small marker of a fixed size that the branch for
-   * syms == NULL above already uses. A backtrace that is real but that the
-   * record shows nothing of is therefore never the same as one that nothing
-   * ever asked for. */
+  /* Real frames existed, but not one single frame fit, because the line of
+   * each frame on its own needed more room than was left. The code falls
+   * back to the same small marker of a fixed size that the branch for
+   * syms == NULL above uses, so a backtrace that is real but of which the
+   * record shows nothing is never the same as one that nothing ever asked
+   * for. */
   return _buf_append(out, _BT_LINE_ERROR_MARKER,
                      sizeof(_BT_LINE_ERROR_MARKER) - 1) == 0;
 }
 
 /*
- * This is a marker of a fixed size. The library writes it in place of the
- * "bt" array whenever it cannot put the real backtrace into the record. That
- * happens after a backtrace_symbols() failure. It also happens after an
- * allocation failure during the growth of the buffer, while the code appends
- * the array itself or the structure around one of its frames. The whole
- * purpose of the marker is to make the record show that a backtrace that
- * something asked for is missing, rather than leave it silent. A caller
- * reads an ERROR, ALERT or FATAL record for which with_backtrace was true.
- * That caller must be able to tell "backtrace left out" apart from
- * "backtrace never asked for". That caller must also never see the real ts,
- * level and msg content of this record replaced by the general fallback for
- * an oversized record. That replacement is needless when only the backtrace
- * text, which is usually much larger, did not fit.
+ * This is a marker of a fixed size that the library writes in place of the
+ * "bt" array whenever it cannot put the real backtrace into the record:
+ * after a backtrace_symbols() failure, and after an allocation failure
+ * during the growth of the buffer while the code appends the array itself or
+ * the structure around one of its frames. The whole purpose of the marker is
+ * to make the record show that a requested backtrace is missing, rather than
+ * leave it silent. A caller that reads an ERROR, ALERT or FATAL record for
+ * which with_backtrace was true must be able to tell "backtrace left out"
+ * apart from "backtrace never asked for", and must also never see the real
+ * ts, level and msg content of this record replaced by the general fallback
+ * for an oversized record, a replacement that is needless when only the
+ * backtrace text, which is usually much larger, did not fit.
  */
 static const char _BT_JSON_ERROR_MARKER[] = ",\"bt_error\":\"unavailable\"";
 
@@ -5008,27 +4984,26 @@ static const char _BT_JSON_ERROR_MARKER[] = ",\"bt_error\":\"unavailable\"";
  * every other backtrace emitter in this file.
  *
  * The function gives true when the code can safely close the record as it
- * is. That is so in two cases. In the first, it appended a complete "bt"
- * array, and that array can be short of some frames. In the second, it
- * appended the fixed-size _BT_JSON_ERROR_MARKER in place of the array. It
- * gives false only when it could not append even that small marker. The
- * buffer then has almost no room left at all, and the caller must fall back
- * to the general placeholder for an oversized record.
+ * is, which is so in two cases: when it appended a complete "bt" array,
+ * which can be short of some frames, and when it appended the fixed-size
+ * _BT_JSON_ERROR_MARKER in place of the array. It gives false only when it
+ * could not append even that small marker, because the buffer has almost no
+ * room left at all, and the caller must then fall back to the general
+ * placeholder for an oversized record.
  *
  * This function follows the best-effort-for-each-frame contract of
- * _emit_backtrace_lines(). It does so in two ways that a plain "append until
- * something fails" shape does not give for free. First, a frame that does
- * not fit is skipped with `continue` and not with `break`. A later frame
- * with shorter symbol text therefore still gets its own chance to fit. The
- * code does not give up the instant that an earlier frame does not fit.
- * Second, the code closes an empty array as "]" only when that emptiness is
- * real. It is real when nothing ever captured a frame beyond the first two.
- * Real frames can exist, which means depth > CLOG_BT_INITIAL_FRAME, and not
- * one of them can fit. An empty "bt":[] is then byte for byte the same as
- * the truly shallow case. That silently defeats the whole reason that this
- * function exists. The code therefore shows the omission with the same
- * _BT_JSON_ERROR_MARKER that every other zero-frames-fit case in this file
- * uses.
+ * _emit_backtrace_lines() in two ways that a plain "append until something
+ * fails" shape does not give for free. First, a frame that does not fit is
+ * skipped with `continue` and not with `break`, so a later frame with
+ * shorter symbol text still gets its own chance to fit, instead of the code
+ * giving up the instant that an earlier frame does not fit. Second, the code
+ * closes an empty array as "]" only when that emptiness is real, that is,
+ * when nothing ever captured a frame beyond the first two. When real frames
+ * exist (depth > CLOG_BT_INITIAL_FRAME) and not one of them fits, an empty
+ * "bt":[] would be byte for byte the same as the truly shallow case, which
+ * silently defeats the whole reason that this function exists, so the code
+ * shows the omission with the same _BT_JSON_ERROR_MARKER that every other
+ * zero-frames-fit case in this file uses.
  */
 static bool _emit_backtrace_json(clog_buf_t *b, char *const *syms, int depth) {
   if (!syms)
@@ -5037,8 +5012,8 @@ static bool _emit_backtrace_json(clog_buf_t *b, char *const *syms, int depth) {
 
   size_t bt_start = b->len;
   if (_buf_append(b, ",\"bt\":[", 7) != 0) {
-    /* Nothing went in, so bt_start is still equal to b->len. Show the
-     * omission. Do not silently leave the record with no "bt" key at all. */
+    /* Nothing went in, so bt_start is equal to b->len. Show the omission
+     * instead of silently leaving the record with no "bt" key at all. */
     return _buf_append(b, _BT_JSON_ERROR_MARKER,
                        sizeof(_BT_JSON_ERROR_MARKER) - 1) == 0;
   }
@@ -5055,8 +5030,8 @@ static bool _emit_backtrace_json(clog_buf_t *b, char *const *syms, int depth) {
         (pl > 0 && _buf_append(b, prefix, (size_t)pl) != 0) ||
         _buf_append_json_content(b, syms[i]) != 0 ||
         _buf_append(b, "\"", 1) != 0) {
-      b->len = entry_start; /* Roll the partial entry back. Try the next
-          frame. Do not give up on the rest of the array */
+      b->len = entry_start; /* Roll the partial entry back and try the next
+          frame instead of giving up on the rest of the array */
       continue;
     }
     first = false;
@@ -5064,22 +5039,21 @@ static bool _emit_backtrace_json(clog_buf_t *b, char *const *syms, int depth) {
   }
 
   /* A depth of at most CLOG_BT_INITIAL_FRAME means that no frame beyond the
-   * first two ever existed. An empty array here is therefore real and not a
+   * first two ever existed, so an empty array here is real and not a
    * truncation. any_frame_written covers the other case, in which real
    * frames existed and at least one of them fit. In both cases it is safe to
-   * close the array, because it shows what happened accurately. */
+   * close the array, because it shows accurately what happened. */
   bool array_content_is_accurate =
       any_frame_written || depth <= CLOG_BT_INITIAL_FRAME;
   if (array_content_is_accurate && _buf_append(b, "]", 1) == 0) return true;
 
-  /* Two things bring the code here. In the first, the append of "]" itself
-   * failed, which means that almost no room is left at all. In the second,
-   * real frames existed, not one of them fit, and a closed empty array here
-   * would look the same as a truly shallow backtrace. In both cases the code
-   * discards whatever partial content is in `b`. A "bt" key with no closing
-   * bracket corrupts the record. An empty key that misleads the reader
-   * misrepresents it. The code shows the omission with the marker
-   * instead. */
+  /* Two things bring the code here: either the append of "]" itself failed,
+   * which means that almost no room is left at all, or real frames existed,
+   * not one of them fit, and a closed empty array here would look the same
+   * as a truly shallow backtrace. In both cases the code discards whatever
+   * partial content is in `b`, because a "bt" key with no closing bracket
+   * corrupts the record and an empty key that misleads the reader
+   * misrepresents it, and shows the omission with the marker instead. */
   b->len = bt_start;
   return _buf_append(b, _BT_JSON_ERROR_MARKER,
                      sizeof(_BT_JSON_ERROR_MARKER) - 1) == 0;
@@ -5087,35 +5061,35 @@ static bool _emit_backtrace_json(clog_buf_t *b, char *const *syms, int depth) {
 
 /*
  * This writes the backtrace frames as separate RFC 5424 syslog messages, one
- * for each frame. It never batches them, whatever the async mode is. This
- * matches the contract of one write() for each UDP datagram, which
+ * for each frame, and never batches them, whatever the async mode is, which
+ * matches the contract of one write() for each UDP datagram that
  * clog_syslog_facility_t documents. The function uses out only as scratch
- * space. It resets out before each frame, and it leaves out reset after each
- * frame. out can be the buffer of one logger, on the synchronous path. It
- * can also be the shared aggregation buffer of the writer thread, on the
- * async path. Both are safe, because the code only ever touches them while
- * it holds sh->mutex. The caller must hold sh->mutex. A syms of NULL means
- * that no backtrace is available, or that _capture_backtrace() itself
- * failed. The function then writes one fixed marker record and not nothing.
- * It does this for the same reason that _emit_backtrace_lines() does for
- * logfmt. Without the marker, a reader has no way to tell "the backtrace was
- * left out" apart from "no backtrace was ever asked for". A syms that is not
- * NULL, with a depth of at most CLOG_BT_INITIAL_FRAME, writes nothing at
- * all. The capture truly succeeded there, but it found no frame beyond the
- * first two bookkeeping ones. The array_content_is_accurate check of
- * _emit_backtrace_json() already knows that same truly empty case. Only real
- * frames that all failed to go out count as an omission worth a marker.
+ * space: it resets out before each frame and leaves it reset after each
+ * frame. out can be the buffer of one logger, on the synchronous path, or
+ * the shared aggregation buffer of the writer thread, on the async path;
+ * both are safe, because the code only ever touches them while it holds
+ * sh->mutex. The caller must hold sh->mutex. A syms of NULL means that no
+ * backtrace is available, or that _capture_backtrace() itself failed, and
+ * the function then writes one fixed marker record instead of nothing, for
+ * the same reason as _emit_backtrace_lines() does for logfmt: without the
+ * marker, a reader has no way to tell "the backtrace was left out" apart
+ * from "no backtrace was ever asked for". A syms that is not NULL, with a
+ * depth of at most CLOG_BT_INITIAL_FRAME, writes nothing at all, because
+ * the capture truly succeeded but found no frame beyond the first two
+ * bookkeeping ones; the array_content_is_accurate check of
+ * _emit_backtrace_json() knows that same truly empty case. Only real frames
+ * that all failed to go out count as an omission worth a marker.
  *
  * ts is the SAME captured timestamp as the primary record that these frames
- * continue. It is the `ts` or the `job->ts` of the caller. This function
+ * continue (the `ts` or the `job->ts` of the caller), and this function
  * never derives it again. For an async logger, the writer thread may build
  * these lines much later than the time at which something submitted the
- * record. Every other piece of per-record data in this file works the same
- * way. The fields, proc_val and the symbols themselves all come from one
- * capture at submission time. The code does not read them again at write
- * time. The TIMESTAMP field of a backtrace frame must agree with the one of
- * its primary record. It must not show whatever the wall clock reads when
- * the writer thread finally processes the job.
+ * record, and every other piece of per-record data in this file works the
+ * same way: the fields, proc_val and the symbols themselves all come from
+ * one capture at submission time, and the code does not read them again at
+ * write time. The TIMESTAMP field of a backtrace frame must agree with the
+ * one of its primary record, and must not show whatever the wall clock reads
+ * when the writer thread finally processes the job.
  */
 /* The HOSTNAME field of every RFC 5424 record of sh, the header of a record
  * and each backtrace line alike: the cached name, or "-", the NILVALUE of
@@ -5126,14 +5100,14 @@ static inline const char *_clog_syslog_hostname(const clog_shared_t *sh) {
 
 /*
  * This builds and writes the one fixed "backtrace unavailable" marker
- * record. _emit_backtrace_syslog_lines() below uses it in two cases. The
- * first is a capture that failed, where syms == NULL. The second is a
- * capture that succeeded where not one single frame could go out. The append
- * of every frame failed there, for example under an allocation failure that
- * lasts. This function resets `out` first, which matches the contract that
- * each frame has for its scratch space: reset it before use. It leaves `out`
- * reset afterwards on every path. That matches the documented contract of
- * _emit_backtrace_syslog_lines(), which is to leave it reset after use.
+ * record, which _emit_backtrace_syslog_lines() below uses in two cases: for
+ * a capture that failed, where syms == NULL, and for a capture that
+ * succeeded but where not one single frame could go out, because the append
+ * of every frame failed (for example under an allocation failure that
+ * lasts). This function resets `out` first, which matches the contract that
+ * each frame has for its scratch space (reset it before use), and leaves
+ * `out` reset afterwards on every path, which matches the documented
+ * contract of _emit_backtrace_syslog_lines() (leave it reset after use).
  */
 static void _write_backtrace_unavailable_syslog_marker(
     clog_buf_t *out, clog_shared_t *sh, clog_level_t level,
@@ -5154,19 +5128,18 @@ static void _write_backtrace_unavailable_syslog_marker(
   if (ok) {
     _clog_write_record(sh, CLOG_FMT_SYSLOG, out->data, out->len);
   } else {
-    /* Not even this small marker record fit into `out`. A real allocation
+    /* Not even this small marker record fit into `out`: a real allocation
      * failure sits on top of a backtrace capture that already failed, or on
      * top of every single frame that already failed to append for the same
      * reason. The code falls back to a minimal write straight to the fd,
-     * with no allocation. This follows the last-resort pattern of
-     * _clog_write_unrepresentable_record(), which cannot itself fail. That
-     * pattern builds a stack buffer of a fixed size with snprintf. It never
-     * touches clog_buf_t and never touches the heap allocation machinery at
-     * all. This double failure is therefore never a record loss that is
-     * completely silent. The buffer is much larger than the worst case,
-     * which is a hostname and an appname of full length plus the literal
-     * text around them. This snprintf therefore cannot truncate in
-     * practice. */
+     * with no allocation, following the last-resort pattern of
+     * _clog_write_unrepresentable_record(), which cannot itself fail: it
+     * builds a stack buffer of a fixed size with snprintf and never touches
+     * clog_buf_t or the heap allocation machinery at all. So this double
+     * failure is never a record loss that is completely silent. The buffer
+     * is much larger than the worst case (a hostname and an appname of full
+     * length plus the literal text around them), so this snprintf cannot
+     * truncate in practice. */
     struct tm tm;
     gmtime_r(&ts->tv_sec, &tm);
     char fallback[512];
@@ -5182,16 +5155,16 @@ static void _write_backtrace_unavailable_syslog_marker(
       _clog_write_record(sh, CLOG_FMT_SYSLOG, fallback, len);
     }
   }
-  /* Leave `out` reset on every return path. This matches the documented
-   * contract of this function, which is to leave it reset after use. `out`
-   * can be sh->async_buf. The length of that buffer is also the signal that
-   * the async writer thread uses for "data is pending and not yet flushed"
-   * (see _writer_flush_now()). The bytes of the marker that the code just
-   * wrote must not stay in `out->len` here. The next unrelated flush then
-   * writes those same bytes to sh->fd a second time, and the library already
-   * sent them. Three things trigger such a flush: an idle
-   * flush_interval_us timeout, an explicit clog_flush(), and the final drain
-   * of clog_close(). */
+  /* Leave `out` reset on every return path, which matches the documented
+   * contract of this function (leave it reset after use). `out` can be
+   * sh->async_buf, and the length of that buffer is also the signal that the
+   * async writer thread uses for "data is pending and not yet flushed" (see
+   * _writer_flush_now()). The bytes of the marker that the code just wrote
+   * must not stay in `out->len` here, or the next unrelated flush writes
+   * those same bytes to sh->fd a second time, although the library already
+   * sent them. Three things trigger such a flush: an idle flush_interval_us
+   * timeout, an explicit clog_flush(), and the final drain of
+   * clog_close(). */
   _buf_reset(out);
 }
 
@@ -5212,18 +5185,18 @@ static void _emit_backtrace_syslog_lines(clog_buf_t *out, clog_shared_t *sh,
   bool any_frame_written = false;
   for (int i = CLOG_BT_INITIAL_FRAME; i < depth; i++) {
     _buf_reset(out);
-    /* The code builds the line of each frame from several separate appends.
-     * One of them can fail partway through, for example when the timestamp
-     * fits but the rest does not. That leaves a truncated fragment with no
-     * newline in the buffer, and _write_all() still writes it. The fragment
-     * then merges into whatever goes out next and desynchronizes the syslog
-     * stream. The code therefore tracks success across all of the appends.
-     * It skips the frame completely rather than write a partial one.
-     * syms[i] comes from backtrace_symbols(). The code routes it through the
-     * same control-character escaper that the MSG content of the primary
-     * record uses. An unusual symbol name, and an embedded newline in
-     * particular, can then never desynchronize the syslog stream. An
-     * unescaped name can. */
+    /* The code builds the line of each frame from several separate appends,
+     * and one of them can fail partway through, for example when the
+     * timestamp fits but the rest does not. That would leave a truncated
+     * fragment with no newline in the buffer, which _write_all() still
+     * writes, and the fragment would then merge into whatever goes out next
+     * and desynchronize the syslog stream. So the code tracks success across
+     * all of the appends and skips the frame completely rather than write a
+     * partial one. syms[i] comes from backtrace_symbols(), and the code
+     * routes it through the same control-character escaper that the MSG
+     * content of the primary record uses, so an unusual symbol name, and an
+     * embedded newline in particular, can never desynchronize the syslog
+     * stream, as an unescaped name can. */
     bool ok = _buf_appendf(out, "<%d>1 ", pri) == 0;
     ok = ok && _buf_append_ts_at(out, ts) == 0;
     ok = ok && _buf_appendf(out, " %s %s %d %s - \t#%d ", hostname, appname,
@@ -5239,44 +5212,44 @@ static void _emit_backtrace_syslog_lines(clog_buf_t *out, clog_shared_t *sh,
     any_frame_written = true;
   }
   /* See the same note above. Leave `out` reset after the LAST frame too, and
-   * not only before each one. The loop resets it only on the way INTO an
-   * iteration. It never resets it after the final write on the way out of
-   * the loop. */
+   * not only before each one, because the loop resets it only on the way
+   * INTO an iteration and never after the final write on the way out of the
+   * loop. */
   _buf_reset(out);
 
   /* A depth of at most CLOG_BT_INITIAL_FRAME means that no frame beyond the
-   * first two ever existed. To write no frame record here is therefore a
-   * real and accurate picture of a capture that succeeded. It is not an
-   * omission. The array_content_is_accurate check of _emit_backtrace_json()
-   * makes the same exception, and so does _emit_backtrace_lines(). Only real
-   * frames, which means depth > CLOG_BT_INITIAL_FRAME, that ALL failed to go
-   * out count as a real omission that needs a marker. */
+   * first two ever existed, so writing no frame record here is a real and
+   * accurate picture of a capture that succeeded, not an omission. The
+   * array_content_is_accurate check of _emit_backtrace_json() makes the same
+   * exception, and so does _emit_backtrace_lines(). Only real frames (depth
+   * > CLOG_BT_INITIAL_FRAME) that ALL failed to go out count as a real
+   * omission that needs a marker. */
   if (!any_frame_written && depth > CLOG_BT_INITIAL_FRAME) {
-    /* The capture succeeded, because syms is real. But the append of every
+    /* The capture succeeded, because syms is real, but the append of every
      * single frame failed. Only a real allocation failure that lasts can
-     * reach this state. Each frame gets an `out` that the code just reset.
-     * The buffer therefore cannot run out of room because of unrelated
-     * earlier content, which is what can happen to the shared batch buffer
-     * of logfmt. Without this branch, a backtrace that is real but that the
-     * record shows nothing of is the same as one that nothing ever asked
-     * for. The branch for a capture failure above, where syms == NULL,
-     * already gives that same guarantee. */
+     * reach this state: each frame gets an `out` that the code just reset,
+     * so the buffer cannot run out of room because of unrelated earlier
+     * content, as can happen to the shared batch buffer of logfmt. Without
+     * this branch, a backtrace that is real but of which the record shows
+     * nothing would look the same as one that nothing ever asked for; the
+     * branch for a capture failure above, where syms == NULL, gives that same
+     * guarantee. */
     _write_backtrace_unavailable_syslog_marker(out, sh, level, ts);
   }
 }
 
 #ifdef RUNNING_UNIT_TESTS
 /*
- * This calls the syms == NULL branch of _emit_backtrace_syslog_lines()
- * directly against the shared target of logger, for a test. That branch is
- * the one for a backtrace capture that failed.
- * clog_test_gzip_compress_file() sets the precedent for a direct call into
- * an internal helper that is hard to reach. This branch has its own
- * last-resort fallback, for when even its small marker record fails to
- * append. A test can reach that fallback only when it forces a backtrace
- * capture failure and a buffer append failure together, at exactly this
- * call. The buffer-size constants of this library otherwise give the process
- * no way to fail such a small append at all. See the doc comment of
+ * This calls the syms == NULL branch of _emit_backtrace_syslog_lines(), the
+ * one for a backtrace capture that failed, directly against the shared
+ * target of logger, for a test. clog_test_gzip_compress_file() sets the
+ * precedent for a direct call into an internal helper that is hard to
+ * reach. This branch has its own last-resort fallback for when even its
+ * small marker record fails to append, and a test can reach that fallback
+ * only when it forces a backtrace capture failure and a buffer append
+ * failure together, at exactly this call, because the buffer-size constants
+ * of this library otherwise give the process no way to fail such a small
+ * append at all. See the doc comment of
  * clog_test_force_next_buf_ensure_failure().
  */
 void clog_test_emit_backtrace_syslog_unavailable_marker(clog logger,
@@ -5300,12 +5273,12 @@ void clog_test_emit_backtrace_syslog_unavailable_marker(clog logger,
 typedef enum { CLOG_ASYNC_MSG_JOB, CLOG_ASYNC_MSG_FLUSH } clog_async_msg_kind_t;
 
 /*
- * These are offsets into the field_pool of a clog_async_job_t. They are NOT
- * raw pointers. The pool is a ccol_growbuf_t, and _snapshot_fields() builds
- * it one piece at a time. The backing store of a growbuf can move on a
- * realloc in the middle of that build. An offset that the code records
- * during that same build stays valid, whatever moves happen. A raw pointer
- * that the code captures in the middle of the build does not.
+ * These are offsets into the field_pool of a clog_async_job_t, NOT raw
+ * pointers. The pool is a ccol_growbuf_t that _snapshot_fields() builds one
+ * piece at a time, and the backing store of a growbuf can move on a realloc
+ * in the middle of that build. An offset that the code records during that
+ * same build stays valid whatever moves happen, while a raw pointer captured
+ * in the middle of the build does not.
  */
 typedef struct {
   size_t key_offset;
@@ -5314,11 +5287,11 @@ typedef struct {
 
 /*
  * This is one unit of work for the writer thread. It goes into a queue and
- * is fully self-contained. It holds every piece of information that
- * _clog_build_record() needs. The thread that submits it captures all of
- * that information at submission time. The writer thread never derives any
- * of it again. That thread can run much later, and it is a different thread
- * from the one that formatted the message.
+ * is fully self-contained: it holds every piece of information that
+ * _clog_build_record() needs, all captured by the submitting thread at
+ * submission time. The writer thread never derives any of it again, because
+ * that thread can run much later, and it is a different thread from the
+ * one that formatted the message.
  */
 typedef struct clog_async_job {
   clog_level_t level;
@@ -5327,41 +5300,41 @@ typedef struct clog_async_job {
   const char *func; /* __func__ literal, never copied */
   bool with_backtrace;
   struct timeval ts; /* captured at SUBMISSION time, not at write time */
-  /* progname(pid):tname(tid), captured at submission. The identity of the
-   * thread must come from here and not from the writer thread. */
+  /* progname(pid):tname(tid), captured at submission, because the identity
+   * of the thread must come from here and not from the writer thread. */
   char proc_val[CLOG_PROC_VAL_LEN];
 
   char msg_inline[256]; /* A stack buffer that spills to the heap and then
       moves into the job. It is smaller than the 1024-byte stack buffer of
-      the synchronous path. This is a heap cost for each queued message, not
-      a cost on the stack of a thread */
+      the synchronous path, because here it is a heap cost for each queued
+      message rather than a cost on the stack of a thread */
   char *msg_heap;       /* NULL unless the message spilled past msg_inline */
   const char *msg;      /* == msg_inline or msg_heap. It is never NULL */
 
-  clog_field_view_t *fields; /* An array of field_count views. It is NULL
-      when field_count == 0. One allocation of the exact size, from
-      chmap_elem_count(). That count is O(1) and known before the iteration,
-      so the code needs no separate pass to count */
+  clog_field_view_t *fields; /* An array of field_count views, or NULL when
+      field_count == 0. It is one allocation of the exact size from
+      chmap_elem_count(), a count that is O(1) and known before the
+      iteration, so the code needs no separate pass to count */
   size_t field_count;
   ccol_growbuf_t field_pool;   /* The key and value bytes, separated by NUL.
         See the comment of clog_field_view_t. The code builds it in one pass
         under fields_mutex */
   bool fields_snapshot_failed; /* True only when the code could not take the
-      snapshot at all. That happens from the out-of-memory latch of
-      field_pool, and when the views array itself fails to allocate. It is
-      different from a logger that truly has 0 fields */
+      snapshot at all, because of the out-of-memory latch of field_pool or
+      because the views array itself failed to allocate. That is different
+      from a logger that truly has 0 fields */
 
-  char **bt_syms; /* The result of backtrace_symbols(). The ORIGINAL thread
-      that calls captures it. A backtrace from the stack of the writer thread
-      would mean nothing */
+  char **bt_syms; /* The result of backtrace_symbols(), captured
+      by the ORIGINAL thread that calls, because a backtrace from the stack
+      of the writer thread would mean nothing */
   int bt_depth;
 } clog_async_job_t;
 
-/* This is the rendezvous that blocks for clog_flush(). The thread that asks
- * waits on ctrl.cv. The writer thread first flushes everything that sits in
- * the queue ahead of this request. It then sets ctrl.done and broadcasts.
- * This object always sits on the stack frame of the thread that asks (see
- * _clog_flush_pinned()). The writer thread never frees it. */
+/* This is the rendezvous on which clog_flush() blocks. The thread that asks
+ * waits on ctrl.cv, while the writer thread first flushes everything that
+ * sits in the queue ahead of this request and then sets ctrl.done and
+ * broadcasts. This object always sits on the stack frame of the thread that
+ * asks (see _clog_flush_pinned()), and the writer thread never frees it. */
 typedef struct {
   ccol_mutex_t mutex;
   ccol_cond_var_t cv;
@@ -5370,25 +5343,26 @@ typedef struct {
 
 /*
  * This is the envelope that truly goes through the queue. kind is an
- * explicit discriminator. It is not an implicit check on a coincidence of
- * sizeof values. The writer thread can therefore always tell a real job
- * apart from a flush request. A future field addition can make two struct
- * sizes equal by accident, and this design survives that.
+ * explicit discriminator, not an implicit check on a coincidence of sizeof
+ * values, so the writer thread can always tell a real job apart from a
+ * flush request, even if a future field addition makes two struct sizes
+ * equal by accident.
  */
 typedef struct clog_async_msg {
   clog_async_msg_kind_t kind;
   union {
     clog_async_job_t job;    /* For kind == CLOG_ASYNC_MSG_JOB. It is on the
-          heap. The writer thread owns it and frees it. The fallback in
-          _clog_write_async() for a failed enqueue frees it instead, when the
-          message never reached the queue at all. The job sits BY VALUE
-          inside this union. There is therefore no separate allocation for
-          it, only one for the whole envelope */
+          heap, and the writer thread owns it and frees it; when the message
+          never reached the queue at all, the fallback in _clog_write_async()
+          for a failed enqueue frees it instead. The job sits BY VALUE inside
+          this union, so there is no separate allocation for it, only one for
+          the whole envelope */
     clog_async_ctrl_t *ctrl; /* For kind == CLOG_ASYNC_MSG_FLUSH. It points
-        at the stack frame of the thread that ASKS. clog_flush() blocks until
-        ctrl->done, so the frame outlives the use of the pointer. The exit
-        drain, whose wait is bounded, keeps its request on the heap instead
-        (see _clog_exit_drain_async()). The writer thread never frees it */
+        at the stack frame of the thread that ASKS, and since clog_flush()
+        blocks until ctrl->done, the frame outlives the use of the pointer.
+        The exit drain, whose wait is bounded, keeps its request on the heap
+        instead (see _clog_exit_drain_async()). The writer thread never frees
+        it */
   } u;
 } clog_async_msg_t;
 
@@ -5397,17 +5371,16 @@ typedef struct clog_async_msg {
 /* ========================================================================== */
 
 /*
- * This is a source of fields for a record. It is one of two things. The
- * first is the LIVE chmap of a logger. The synchronous path and the FATAL
- * path use that. They read the fields directly under fields_mutex at the
+ * This is a source of fields for a record, which is one of two things. The
+ * first is the LIVE chmap of a logger, which the synchronous path and the
+ * FATAL path use: they read the fields directly under fields_mutex at the
  * moment that they build the record. The second is an array of {key,value}
- * offsets into a flat pool of bytes, which the code captured earlier. The
- * async path uses that. _snapshot_fields() captures those fields at
- * submission time. See the doc comment of that function for the reason that
- * the code stores offsets and not raw pointers. One shared loop,
- * _clog_emit_fields, drives both sources. The three primitives below, one
- * for each format, therefore run in exactly the same way, whichever mode
- * made the key and value pairs.
+ * offsets into a flat pool of bytes, captured earlier, which the async path
+ * uses: _snapshot_fields() captures those fields at submission time (see
+ * the doc comment of that function for why the code stores offsets and not
+ * raw pointers). One shared loop, _clog_emit_fields, drives both sources, so
+ * the three primitives below, one for each format, run in exactly the same
+ * way whichever mode made the key and value pairs.
  */
 typedef struct {
   bool is_live;
@@ -5445,14 +5418,14 @@ static int _append_field_syslog_sd(clog_buf_t *b, const char *k,
 }
 
 /*
- * Emits one field at a time from either field source above. It picks the one
+ * Emits one field at a time from either field source above, picking the one
  * of the three append primitives that matches fmt. It returns false only
- * when it cannot list or emit the fields at all. The two causes are an
- * allocation failure, and an append failure in the middle of a field that
+ * when it cannot list or emit the fields at all, for one of two causes: an
+ * allocation failure, or an append failure in the middle of a field that
  * leaves the field list incomplete. *out_alloc_failure separates "a
  * transient allocation failure" from "the content of the record is too
- * large". The diagnostic message of _clog_build_fallback_record() needs that
- * separation.
+ * large", a separation that the diagnostic message of
+ * _clog_build_fallback_record() needs.
  */
 static bool _clog_emit_fields(clog_buf_t *out, clog_format_t fmt,
                               const clog_field_source_t *src,
@@ -5466,15 +5439,15 @@ static bool _clog_emit_fields(clog_buf_t *out, clog_format_t fmt,
   if (src->is_live) {
     chmap fields = src->u.live.fields;
     /* chmap_elem_count() reads the internal element count of lg->fields and
-     * takes no lock of its own. chashmap is a container that this codebase
-     * synchronises from the outside. The empty-map check below is needed,
-     * because chashmap_begin_iter() returns NULL both for "empty" and for
-     * "the allocation of the iterator failed". That check must therefore run
-     * under the same mutex as every other access to lg->fields, and not
-     * before the code locks it. Without that, it races a concurrent call to
+     * takes no lock of its own, because chashmap is a container that this
+     * codebase synchronises from the outside. The empty-map check below is
+     * needed because chashmap_begin_iter() returns NULL both for "empty" and
+     * for "the allocation of the iterator failed", and that check must run
+     * under the same mutex as every other access to lg->fields, not before
+     * the code locks it. Otherwise it races a concurrent call to
      * clog_set_field(), clog_remove_field() or clog_clear_fields() on the
-     * same handle from another thread. This lock exists to serialise exactly
-     * that kind of access. */
+     * same handle from another thread, which is exactly the kind of access
+     * that this lock exists to serialise. */
     ccol_mutex_lock(*src->u.live.mutex);
     if (chmap_elem_count(fields) == 0) {
       ccol_mutex_unlock(*src->u.live.mutex);
@@ -5482,10 +5455,10 @@ static bool _clog_emit_fields(clog_buf_t *out, clog_format_t fmt,
     }
     cmap_iterator *it = chashmap_begin_iter(fields, NULL);
     bool ok = true;
-    /* A NULL iterator here means that its own allocation failed. It does not
-     * mean that the field map is empty, because the check above already
-     * handles that. Report it with the alloc_failure flag. The code must not
-     * drop every field without a trace. */
+    /* A NULL iterator here means that its own allocation failed, not that the
+     * field map is empty, because the check above already handles that.
+     * Report it with the alloc_failure flag instead of dropping every field
+     * without a trace. */
     if (!it) {
       *out_alloc_failure = true;
       ok = false;
@@ -5525,14 +5498,14 @@ static bool _clog_emit_fields(clog_buf_t *out, clog_format_t fmt,
 
 /*
  * Appends ts, level, proc, src and func in the shape that each format uses.
- * For JSON and for logfmt it appends exactly those five fields, and it
- * leaves nothing open. For syslog it also appends the RFC 5424 preamble,
- * which holds PRI, TIMESTAMP, HOSTNAME, APP-NAME, PROCID and MSGID. Syslog
- * also gets the opening of the "[ccol proc=... src=... func=..." structured
- * data block. That bracket stays open on purpose, because the field loop
- * appends more key="value" params into it. _clog_build_msg_and_close() below
- * closes it. This function does no I/O at all. Precondition: the caller
- * holds sh->mutex.
+ * For JSON and for logfmt it appends exactly those five fields and leaves
+ * nothing open. For syslog it also appends the RFC 5424 preamble, which
+ * holds PRI, TIMESTAMP, HOSTNAME, APP-NAME, PROCID and MSGID, and the
+ * opening of the "[ccol proc=... src=... func=..." structured data block.
+ * That bracket stays open on purpose, because the field loop appends more
+ * key="value" params into it, and _clog_build_msg_and_close() below closes
+ * it. This function does no I/O at all. Precondition: the caller holds
+ * sh->mutex.
  */
 static bool _clog_build_header(clog_buf_t *out, clog_shared_t *sh,
                                clog_format_t fmt, clog_level_t level,
@@ -5578,9 +5551,9 @@ static bool _clog_build_header(clog_buf_t *out, clog_shared_t *sh,
     ok = ok && _buf_append_lv(out, proc_val) == 0;
     ok = ok && _buf_append(out, " src=", 5) == 0;
     {
-      /* A long __FILE__ path can make "%s:%d" outgrow this stack buffer. The
-       * code then moves it to a heap buffer. It must not append the value
-       * raw and unescaped. The value therefore still goes through the logfmt
+      /* A long __FILE__ path can make "%s:%d" outgrow this stack buffer, and
+       * the code then moves it to a heap buffer instead of appending the value
+       * raw and unescaped, so the value still goes through the logfmt
        * quoting and escaping of _buf_append_lv(), like every other dynamic
        * field here. */
       char src_stack[512];
@@ -5592,11 +5565,11 @@ static bool _clog_build_header(clog_buf_t *out, clog_shared_t *sh,
       } else if ((size_t)slen >= sizeof(src_stack)) {
         src_heap = _ccol_mem_alloc(sh->m_procs, (size_t)slen + 1);
         if (!src_heap) {
-          /* This is a genuine allocator failure. It is not a size rejection
-           * of the CLOG_BUF_MAX kind. Flag it in the same way as
-           * _buf_ensure() flags one. The later out->oom check of
-           * _clog_build_record() then reports the real cause, instead of
-           * always blaming the size of the record. */
+          /* This is a genuine allocator failure, not a size rejection of the
+           * CLOG_BUF_MAX kind. Flag it in the same way as _buf_ensure() flags
+           * one, so that the later out->oom check of _clog_build_record()
+           * reports the real cause instead of always blaming the size of the
+           * record. */
           out->oom = true;
           ok = false;
         } else if (snprintf(src_heap, (size_t)slen + 1, "%s:%d", file, line) <
@@ -5617,15 +5590,15 @@ static bool _clog_build_header(clog_buf_t *out, clog_shared_t *sh,
 }
 
 /*
- * Appends msg and the punctuation that closes the record. When
- * with_backtrace is true, it then appends the inline JSON backtrace array.
- * This function does not handle the backtrace frames of logfmt and syslog.
- * The caller appends or writes those, strictly after the write of the
- * primary record. It uses _emit_backtrace_lines() for logfmt and
- * _emit_backtrace_syslog_lines() for syslog. Only JSON puts its backtrace
- * inline in the record that this function closes. The caller calls this
- * function only after it appends the fields. No write() call therefore ever
- * splits the structured data. Precondition: the caller holds sh->mutex.
+ * Appends msg and the punctuation that closes the record, and then, when
+ * with_backtrace is true, the inline JSON backtrace array. This function
+ * does not handle the backtrace frames of logfmt and syslog: the caller
+ * appends or writes those strictly after the write of the primary record,
+ * with _emit_backtrace_lines() for logfmt and _emit_backtrace_syslog_lines()
+ * for syslog. Only JSON puts its backtrace inline in the record that this
+ * function closes. The caller calls this function only after it appends the
+ * fields, so no write() call ever splits the structured data. Precondition:
+ * the caller holds sh->mutex.
  */
 static bool _clog_build_msg_and_close(clog_buf_t *out, clog_format_t fmt,
                                       const char *msg, bool with_backtrace,
@@ -5653,42 +5626,41 @@ static bool _clog_build_msg_and_close(clog_buf_t *out, clog_format_t fmt,
 
 /*
  * The caller calls this function after the ordinary sequence that builds a
- * record fails. That failure has two separate causes. The content of the
- * record can exceed the cap_limit of the target buffer. An oversized message
- * or a very large set of field values does that. Or a transient allocation
- * failure, which has nothing to do with the size, can stop the code from
- * completing the record safely. `alloc_failure` separates the two, so that
- * the note below reports the real cause and does not always blame the size.
+ * record fails, which has two separate causes: the content of the record can
+ * exceed the cap_limit of the target buffer (as an oversized message or a
+ * very large set of field values does), or a transient allocation failure,
+ * which has nothing to do with the size, can stop the code from completing
+ * the record safely. `alloc_failure` separates the two, so that the note
+ * below reports the real cause instead of always blaming the size.
  *
- * The build starts from the current value of out->len. The caller already
- * rolled that value back to the point where this record started. This
- * function does not reset out to 0 itself. out can be a batch buffer that
- * already holds several earlier records from other jobs. The async_buf of
- * the writer thread is such a buffer. A reset here destroys all of those
- * records as soon as one later job in the same batch needs the fallback.
- * The two callers that build a single record each reset their own buffer to
- * empty exactly once, before they build their one record. Those callers are
- * the synchronous and FATAL write path, and the fallback for a failed async
- * enqueue. For them this placeholder is therefore the only content of the
- * buffer.
+ * The build starts from the current value of out->len, which the caller has
+ * already rolled back to the point where this record started. This function
+ * does not reset out to 0 itself, because out can be a batch buffer that
+ * already holds several earlier records from other jobs, such as the
+ * async_buf of the writer thread, and a reset here would destroy all of
+ * those records as soon as one later job in the same batch needs the
+ * fallback. The two callers that build a single record (the synchronous and
+ * FATAL write path, and the fallback for a failed async enqueue) each reset
+ * their own buffer to empty exactly once, before they build their one
+ * record, so for them this placeholder is the only content of the buffer.
  *
  * `with_backtrace` matters only for JSON. Logfmt and syslog emit backtrace
- * frames whether or not the primary record fell back to this placeholder. A
- * backtrace that the caller asks for is therefore never lost for those two
+ * frames whether or not the primary record fell back to this placeholder,
+ * so a backtrace that the caller asks for is never lost for those two
  * formats. JSON instead puts its backtrace inline in the record that this
- * function replaces. When with_backtrace is true, this function appends the
- * same _BT_JSON_ERROR_MARKER that the rest of this file uses. A reader can
- * then still tell "backtrace omitted" apart from "backtrace never
+ * function replaces, so when with_backtrace is true, this function appends
+ * the same _BT_JSON_ERROR_MARKER that the rest of this file uses, and a
+ * reader can still tell "backtrace omitted" apart from "backtrace never
  * requested".
  *
  * It returns true when it appends this fixed-size placeholder to `out` in
- * full. It returns false when even the placeholder does not fit in the room
- * that `out` has left. That is only reachable when `out` is the shared
+ * full, and false when even the placeholder does not fit in the room that
+ * `out` has left. That is reachable only when `out` is the shared
  * aggregation buffer of the async writer thread and that buffer already sits
  * right against its own cap_limit. In that case it leaves `out` completely
- * untouched, rolled back to its length on entry. The caller can then flush
- * what is already safely in `out` and try again against an empty buffer. The
- * library never writes a truncated or malformed record.
+ * untouched, rolled back to its length on entry, so that the caller can
+ * flush what is already safely in `out` and try again against an empty
+ * buffer. The library never writes a truncated or malformed record.
  */
 static bool _clog_build_fallback_record(clog_buf_t *out, clog_shared_t *sh,
                                         clog_format_t fmt, clog_level_t level,
@@ -5699,22 +5671,21 @@ static bool _clog_build_fallback_record(clog_buf_t *out, clog_shared_t *sh,
   size_t fallback_start = out->len;
   char note[160];
   if (alloc_failure) {
-    /* This message is generic on purpose. Any genuine allocator failure
-     * during the build of this record raises alloc_failure. The header, the
-     * value of a field, the message, the field snapshot and the iterator can
-     * each raise it. It is not only a failure to list the fields. See the
-     * out->oom check of _clog_build_record(). */
+    /* This message is generic on purpose, because any genuine allocator
+     * failure during the build of this record raises alloc_failure: the
+     * header, the value of a field, the message, the field snapshot and the
+     * iterator can each raise it, not only a failure to list the fields. See
+     * the out->oom check of _clog_build_record(). */
     snprintf(note, sizeof(note),
              "log record dropped: a transient allocation failure prevented "
              "it from being fully built");
   } else {
-    /* This uses out->cap_limit and not the fixed CLOG_BUF_MAX constant. A
-     * clog_async_cfg_t.flush_buffer_size that the caller sets above
+    /* This uses out->cap_limit and not the fixed CLOG_BUF_MAX constant,
+     * because a clog_async_cfg_t.flush_buffer_size that the caller sets above
      * CLOG_BUF_MAX raises the limit of the async batch buffer above the
-     * default. See the doc comment of clog_buf_t.cap_limit. This diagnostic
-     * must report the limit that is in effect for THIS buffer. It must not
-     * report the single-record default that every other buffer in this file
-     * uses. */
+     * default (see the doc comment of clog_buf_t.cap_limit). This diagnostic
+     * must report the limit that is in effect for THIS buffer, not the
+     * single-record default that every other buffer in this file uses. */
     snprintf(note, sizeof(note),
              "log record too large to emit (%zu byte message; %zu byte "
              "limit)",
@@ -5765,49 +5736,48 @@ static bool _clog_build_fallback_record(clog_buf_t *out, clog_shared_t *sh,
 /*
  * This is the shared sequence that builds a record. It drives
  * _clog_build_header(), _clog_emit_fields() and _clog_build_msg_and_close()
- * into out. On any failure it falls back to _clog_build_fallback_record().
- * Two paths use it. The synchronous and FATAL write path passes the lg->buf
- * of a handle as out, with field_src in "live" mode. The per-job work of the
- * async writer thread passes sh->async_buf as out, with field_src in "snap"
- * mode.
+ * into out, and on any failure falls back to _clog_build_fallback_record().
+ * Two paths use it: the synchronous and FATAL write path passes the lg->buf
+ * of a handle as out, with field_src in "live" mode, and the per-job work of
+ * the async writer thread passes sh->async_buf as out, with field_src in
+ * "snap" mode.
  *
  * For logfmt, this function appends the backtrace frames that the caller
- * asks for into the same out buffer, directly after the primary record. They
- * therefore land in the same write() or flush as the record itself. JSON
+ * asks for into the same out buffer, directly after the primary record, so
+ * they land in the same write() or flush as the record itself. JSON has
  * already put its own backtrace inline through _clog_build_msg_and_close().
  * This function NEVER appends the backtrace frames of syslog, because those
- * frames are exempt from the batch. The caller must call
+ * frames are exempt from the batch; the caller must call
  * _emit_backtrace_syslog_lines() itself, strictly after it writes out.
  * Precondition: the caller holds sh->mutex.
  *
- * It returns true after it appends a full record to `out`. That record is
- * either the real one or the fallback placeholder. It returns false only in
- * the narrow case where even the fixed-size fallback placeholder does not
- * fit in the room that `out` has left. See the doc comment of
- * _clog_build_fallback_record(). It then leaves `out` completely untouched.
- * The caller must flush or empty `out` and call this function again. The
- * caller must never treat `out` as a buffer that holds a usable record.
+ * It returns true after it appends a full record to `out`, either the real
+ * one or the fallback placeholder. It returns false only in the narrow case
+ * where even the fixed-size fallback placeholder does not fit in the room
+ * that `out` has left (see the doc comment of
+ * _clog_build_fallback_record()), and it then leaves `out` completely
+ * untouched: the caller must flush or empty `out` and call this function
+ * again, and must never treat `out` as a buffer that holds a usable record.
  *
  * The code sets out_used_fallback to true whenever it substitutes the
- * fallback placeholder for the real record. It does this whether or not the
- * substitution itself succeeds. It sets the flag to false whenever it builds
- * the real record as it is. out_used_fallback can be NULL when the caller
- * does not need it.
+ * fallback placeholder for the real record, whether or not the substitution
+ * itself succeeds, and to false whenever it builds the real record as it is.
+ * out_used_fallback can be NULL when the caller does not need it.
  *
  * A caller that builds into a batch buffer needs this flag, because that
- * buffer can already hold OTHER, unrelated records. The sh->async_buf of the
- * async writer thread is such a buffer. A true here does NOT always mean
- * that the record itself is too large. The record can also be small and fail
- * to fit in the room that earlier content in the same buffer leaves. The
- * caller should then flush that earlier content and build this record again
- * from an empty buffer. The library must not silently replace a small,
+ * buffer, such as the sh->async_buf of the async writer thread, can already
+ * hold OTHER, unrelated records. A true here does NOT always mean that the
+ * record itself is too large: the record can also be small and fail to fit
+ * in the room that earlier content in the same buffer leaves. The caller
+ * should then flush that earlier content and build this record again from
+ * an empty buffer, because the library must not silently replace a small,
  * ordinary record with a "too large" note.
  *
- * The two callers that build a single record always build into a buffer that
- * they reset to empty directly before the call. Those callers are the
- * synchronous and FATAL write path, and the fallback for a failed async
- * enqueue. For them out_used_fallback can only be true for a record that is
- * genuinely oversized. Both pass NULL.
+ * The two callers that build a single record (the synchronous and FATAL
+ * write path, and the fallback for a failed async enqueue) always build into
+ * a buffer that they reset to empty directly before the call, so for them
+ * out_used_fallback can only be true for a record that is genuinely
+ * oversized. Both pass NULL.
  */
 static bool _clog_build_record(clog_buf_t *out, clog_shared_t *sh,
                                clog_format_t fmt, clog_level_t level,
@@ -5818,11 +5788,11 @@ static bool _clog_build_record(clog_buf_t *out, clog_shared_t *sh,
                                bool with_backtrace, char *const *bt_syms,
                                int bt_depth, bool *out_used_fallback) {
   size_t record_start = out->len;
-  /* The code resets this flag before this attempt. An EARLIER, unrelated
-   * build against this same buffer can flag a real allocator failure. That
-   * buffer can live for a long time and serve many builds. Without the
-   * reset, that old flag leaks into the alloc_failure verdict of this record
-   * below. */
+  /* The code resets this flag before this attempt, because an EARLIER,
+   * unrelated build against this same buffer, which can live for a long time
+   * and serve many builds, can have flagged a real allocator failure.
+   * Without the reset, that old flag leaks into the alloc_failure verdict of
+   * this record below. */
   out->oom = false;
   bool ok =
       _clog_build_header(out, sh, fmt, level, ts, proc_val, file, line, func);
@@ -5832,47 +5802,46 @@ static bool _clog_build_record(clog_buf_t *out, clog_shared_t *sh,
     ok = _clog_build_msg_and_close(out, fmt, msg, with_backtrace, bt_syms,
                                    bt_depth);
   /* _clog_emit_fields() reports alloc_failure only for a field snapshot or
-   * iterator that it cannot get at all. Two other failures go through
-   * _buf_ensure() instead. Those are a failure to build the header, and a
-   * failure of one field append in the middle of the loop. _buf_ensure()
-   * flags out->oom directly on a
-   * genuine allocator failure. It never flags it when the code only reaches
+   * iterator that it cannot get at all. Two other failures, a failure to
+   * build the header and a failure of one field append in the middle of the
+   * loop, go through _buf_ensure() instead, which flags out->oom directly on
+   * a genuine allocator failure and never when the code only reaches
    * out->cap_limit. The code folds out->oom in here, after every build step
-   * had its chance to set it. That is what keeps the diagnostic of
-   * _clog_build_fallback_record() accurate. It stays accurate whichever of
-   * the three build steps ran out of memory, and whichever append inside
-   * that step did so. */
+   * has had its chance to set it, which keeps the diagnostic of
+   * _clog_build_fallback_record() accurate whichever of the three build
+   * steps ran out of memory, and whichever append inside that step did
+   * so. */
   if (!alloc_failure) alloc_failure = out->oom;
 
   /* For LOGFMT, the code appends the backtrace frames as trailing
    * continuation lines into this SAME buffer, directly after the primary
-   * record that the step above closed. The other two formats differ. JSON
+   * record that the step above closed. The other two formats differ: JSON
    * puts its backtrace INSIDE the record that _clog_build_msg_and_close()
-   * closed, so a backtrace that is too large to embed already makes `ok`
-   * false through that call. The frames of syslog are always separate
-   * records that the caller writes on its own, and they never reach this
+   * closed, so a backtrace that is too large to embed has already made `ok`
+   * false through that call, and the frames of syslog are always separate
+   * records that the caller writes on its own, which never reach this
    * function.
    *
    * The code tries this only while the primary record is still intact, which
-   * is what `ok` reports. If the primary content already failed for its own,
-   * unrelated reasons, the generic fallback placeholder below replaces it in
-   * any case. The backtrace then gets its own, separate attempt after THAT
-   * placeholder (see below). An attempt here would run against a buffer
-   * state that the code is about to discard. */
+   * is what `ok` reports. If the primary content has already failed for its
+   * own, unrelated reasons, the generic fallback placeholder below replaces
+   * it in any case, and the backtrace then gets its own, separate attempt
+   * after THAT placeholder (see below), because an attempt here would run
+   * against a buffer state that the code is about to discard. */
   bool logfmt_bt = with_backtrace && fmt == CLOG_FMT_LOGFMT;
   if (ok && logfmt_bt && !_emit_backtrace_lines(out, bt_syms, bt_depth)) {
-    /* Not one frame fits in the room that is left after the primary record.
-     * Even the small fixed-size "unavailable" marker does not fit. See the
-     * doc comment of _emit_backtrace_lines(). This is reachable only when
-     * `out` sits within a few dozen bytes of its own cap_limit. The primary
-     * record is fine. But a record that asks for a backtrace must never end
-     * up without one and with no trace anywhere. This function already gives
-     * that guarantee for every OTHER failure mode. The code therefore forces
-     * the same fallback-record recovery that every other build failure gets.
+    /* Not one frame, not even the small fixed-size "unavailable" marker, fits
+     * in the room that is left after the primary record (see the doc comment
+     * of _emit_backtrace_lines()). This is reachable only when `out` sits
+     * within a few dozen bytes of its own cap_limit. The primary record is
+     * fine, but a record that asks for a backtrace must never end up without
+     * one and with no trace anywhere, which this function already guarantees
+     * for every OTHER failure mode, so the code forces the same
+     * fallback-record recovery that every other build failure gets.
      * `out->oom` shows whether this failure was a genuine allocator failure
-     * or only reached the capacity cap. It does so in the same way as for
-     * every other build step above. The diagnostic of the placeholder
-     * therefore stays accurate. */
+     * or only reached the capacity cap, in the same way as for every other
+     * build step above, so the diagnostic of the placeholder stays
+     * accurate. */
     ok = false;
     if (!alloc_failure) alloc_failure = out->oom;
   }
@@ -5887,13 +5856,13 @@ static bool _clog_build_record(clog_buf_t *out, clog_shared_t *sh,
     }
     if (logfmt_bt) {
       /* A primary record that is oversized, or that failed to build for
-       * another reason, must not also cost the caller its backtrace. The
-       * code therefore tries again. It now appends the backtrace directly
-       * after the small fallback placeholder that replaced the primary
-       * content. The buffer has much more room than before. One more failure
+       * another reason, must not also cost the caller its backtrace, so the
+       * code tries again, this time appending the backtrace directly after
+       * the small fallback placeholder that replaced the primary content,
+       * where the buffer has much more room than before. One more failure
        * here means that not even the marker fits after a placeholder that
-       * did fit. The library accepts that as a small gap that is not
-       * reachable in practice. The doc comment of
+       * did fit, which the library accepts as a small gap that is not
+       * reachable in practice; the doc comment of
        * _clog_write_unrepresentable_record() accepts the same class of gap
        * for the size of the fallback placeholder. */
       (void)_emit_backtrace_lines(out, bt_syms, bt_depth);
@@ -5903,46 +5872,44 @@ static bool _clog_build_record(clog_buf_t *out, clog_shared_t *sh,
 }
 
 /*
- * This is the last resort for the one case that _clog_build_record() has no
- * further fallback for. That case is a small, fixed-size placeholder that
- * the code cannot append to `out`.
+ * This is the last resort for the one case for which _clog_build_record()
+ * has no further fallback: a small, fixed-size placeholder that the code
+ * cannot append to `out`.
  *
  * For a single-record buffer this is not reachable in practice. Both callers
- * of this function below use lg->buf, which is such a buffer. The code
- * always resets lg->buf to empty directly before the build. Its capacity can
- * never drop below CLOG_BUF_INITIAL. That size is much larger than any
- * fallback record that this file builds. _clog_build_fallback_record()
- * therefore
+ * of this function below use lg->buf, which is such a buffer: the code
+ * always resets lg->buf to empty directly before the build, and its capacity
+ * can never drop below CLOG_BUF_INITIAL, which is much larger than any
+ * fallback record that this file builds, so _clog_build_fallback_record()
  * never needs to grow the buffer here, and it cannot fail.
  *
- * This function exists so that a future change cannot turn that guarantee
- * into a silent, zero-byte record loss with no trace anywhere. A smaller
- * CLOG_BUF_INITIAL, or a buffer of another size reused for this purpose,
- * would be such a change. The function writes a minimal line DIRECTLY to the
- * fd. That line is still correct for the format, and it ends with a newline.
- * It builds the line in a fixed-size stack buffer, and snprintf never
- * allocates. This skips the clog_buf_t and heap allocation machinery
- * completely, so this function cannot fail in the same way. Precondition:
- * the caller holds sh->mutex, and sh->fd >= 0.
+ * This function exists so that a future change, such as a smaller
+ * CLOG_BUF_INITIAL or a buffer of another size reused for this purpose,
+ * cannot turn that guarantee into a silent, zero-byte record loss with no
+ * trace anywhere. The function writes a minimal line DIRECTLY to the fd,
+ * which is still correct for the format and ends with a newline. It builds
+ * the line in a fixed-size stack buffer, and snprintf never allocates, so
+ * it skips the clog_buf_t and heap allocation machinery completely and
+ * cannot fail in the same way. Precondition: the caller holds sh->mutex,
+ * and sh->fd >= 0.
  *
  * with_backtrace keeps the same guarantee that _clog_build_record(),
  * _emit_backtrace_lines() and _emit_backtrace_json() give an ordinary
- * record. A caller that asks for a backtrace must never see one vanish
+ * record: a caller that asks for a backtrace must never see one vanish
  * without a trace.
  *
- * CLOG_FMT_SYSLOG needs no handling here. Every caller of this function
- * emits the backtrace lines of syslog itself, with a separate call to
- * _emit_backtrace_syslog_lines(), right next to its own call into this
- * function. It does that whatever happens here. CLOG_FMT_JSON puts its own
- * "bt_error" marker directly into the one JSON line that the code builds
- * below. That matches the with_backtrace handling of
- * _clog_build_fallback_record() for that format. CLOG_FMT_LOGFMT is the one
- * format whose backtrace lines normally go into the SAME buffer as the
- * primary record, through _emit_backtrace_lines(). That route is not
- * reachable once the code reaches this function, because reaching it means
- * that not even the small fallback placeholder fit in that buffer. Logfmt
- * therefore gets its own marker line, which needs no allocation, directly
- * after the primary line.
+ * CLOG_FMT_SYSLOG needs no handling here, because every caller of this
+ * function emits the backtrace lines of syslog itself, with a separate call
+ * to _emit_backtrace_syslog_lines() right next to its own call into this
+ * function, whatever happens here. CLOG_FMT_JSON puts its own "bt_error"
+ * marker directly into the one JSON line that the code builds below, which
+ * matches the with_backtrace handling of _clog_build_fallback_record() for
+ * that format. CLOG_FMT_LOGFMT is the one format whose backtrace lines
+ * normally go into the SAME buffer as the primary record, through
+ * _emit_backtrace_lines(), but that route is not reachable once the code
+ * reaches this function, because reaching it means that not even the small
+ * fallback placeholder fit in that buffer. So logfmt gets its own marker
+ * line, which needs no allocation, directly after the primary line.
  */
 static void _clog_write_unrepresentable_record(clog_shared_t *sh,
                                                clog_format_t fmt,
@@ -5983,15 +5950,15 @@ static void _clog_write_unrepresentable_record(clog_shared_t *sh,
 /*
  * Calls _clog_write_unrepresentable_record() directly against the shared
  * target of logger, for a test. This follows the same pattern as
- * clog_test_gzip_compress_file(). That pattern exposes an internal helper
- * that is hard to reach, instead of an attempt to build real conditions that
- * reach it. To reach this function through the ordinary log_* call path, not
- * even the small fallback placeholder of _clog_build_record() may fit in the
- * target buffer. The doc comment of that function explains why the current
- * value of CLOG_BUF_INITIAL makes that impossible. A test that wants to
- * exercise the behaviour of this function on its own therefore needs a
- * direct call like this one. Such a test does not have to break that
- * invariant for real.
+ * clog_test_gzip_compress_file(), which exposes an internal helper that is
+ * hard to reach instead of attempting to build real conditions that reach
+ * it. To reach this function through the ordinary log_* call path, not even
+ * the small fallback placeholder of _clog_build_record() may fit in the
+ * target buffer, and the doc comment of that function explains why the
+ * current value of CLOG_BUF_INITIAL makes that impossible. So a test that
+ * wants to exercise the behaviour of this function on its own needs a
+ * direct call like this one, without having to break that invariant for
+ * real.
  */
 void clog_test_write_unrepresentable_record(clog logger, clog_format_t fmt,
                                             clog_level_t level,
@@ -6020,17 +5987,16 @@ static chmap _fields_create(ccol_memmgmt_procs_t *m_procs) {
 /*
  * Frees a clog_shared_t that has no live mutex and no logger children. It is
  * safe to call at any point during the initialization inside
- * _shared_alloc(), after the code sets sh->m_procs. That happens directly
+ * _shared_alloc() after the code sets sh->m_procs, which happens directly
  * after the allocation of sh.
  *
  * This function never touches sh->fd itself, whatever the value of
- * sh->owns_fd. The early failure paths of _shared_alloc() also reach this
- * function. In that case the caller of _shared_alloc() already owns the
- * close of the fd on ITS OWN failure branch. That caller is _alloc(), and
- * above it clog_open_fd_mp() or clog_open_file_mp(). A close here as well
- * would close the fd twice. Every other caller that owns the fd and reaches
- * this function after that point must close it first, with
- * _shared_close_owned_fd() below.
+ * sh->owns_fd, because the early failure paths of _shared_alloc() also reach
+ * it, and in that case the caller of _shared_alloc() (_alloc(), and above it
+ * clog_open_fd_mp() or clog_open_file_mp()) already owns the close of the fd
+ * on ITS OWN failure branch; a close here as well would close the fd twice.
+ * Every other caller that owns the fd and reaches this function after that
+ * point must close it first, with _shared_close_owned_fd() below.
  */
 static void _shared_free_partial(clog_shared_t *sh) {
   _ccol_mem_free(sh->m_procs, sh->file_path);
@@ -6045,19 +6011,19 @@ static void _shared_free_partial(clog_shared_t *sh) {
 }
 
 /*
- * Closes sh->fd when this shared object owns it and the fd is still open. It
- * then marks the fd closed. It also closes sh->dir_fd, the directory
+ * Closes sh->fd when this shared object owns it and the fd is still open,
+ * and then marks the fd closed. It also closes sh->dir_fd, the directory
  * descriptor of a rotating logger, which the shared object always owns. A
  * file-backed logger from clog_open_file_mp() owns its fd. This function does
- * nothing for an fd that the caller owns, and nothing for an fd that is already
- * closed. clog_open_fd_mp() creates the first case, where owns_fd is false and
- * the caller alone owns the life of the fd.
+ * nothing for an fd that the caller owns, and nothing for an fd that is
+ * already closed; clog_open_fd_mp() creates the first case, where owns_fd is
+ * false and the caller alone owns the life of the fd.
  *
- * The teardown of clog_close() uses this function. Every constructor
- * rollback path uses it too. Such a path must not leak the fd that it just
- * opened when a LATER construction step fails. The setup of async logging
- * and the acquisition of a handle-table slot are such steps.
- * _shared_free_partial() itself never does this; see its own doc comment.
+ * The teardown of clog_close() uses this function, and so does every
+ * constructor rollback path, which must not leak the fd that it just opened
+ * when a LATER construction step fails (such as the setup of async logging
+ * or the acquisition of a handle-table slot). _shared_free_partial() itself
+ * never does this; see its own doc comment.
  */
 static void _shared_close_owned_fd(clog_shared_t *sh) {
   if (sh->owns_fd && sh->fd >= 0) {
@@ -6114,14 +6080,13 @@ static clog_shared_t *_shared_alloc(int fd, bool owns_fd, const char *file_path,
 
   sh->syslog_facility = CLOG_SYSLOG_USER; /* calloc zeroes to KERN; override */
 
-  /* This caches HOSTNAME for RFC 5424. The code sanitizes it in the same way
-   * as APP-NAME below. See the doc comment of
-   * _sanitize_syslog_printusascii_field(). The kernel does not guarantee
-   * that the raw value from gethostname(2) holds only PRINTUSASCII bytes.
-   * Without this step, a space, a control character or a newline inside it
-   * reaches the wire completely unescaped. Every other dynamic field in a
-   * syslog record is escaped. A hostname that is wrong or hostile then
-   * splits one record into two. */
+  /* This caches HOSTNAME for RFC 5424, sanitized in the same way as APP-NAME
+   * below (see the doc comment of _sanitize_syslog_printusascii_field()). The
+   * kernel does not guarantee that the raw value from gethostname(2) holds only
+   * PRINTUSASCII bytes. Without this step, a space, a control character or a
+   * newline inside it would reach the wire completely unescaped, although every
+   * other dynamic field in a syslog record is escaped, and a hostname that is
+   * wrong or hostile would then split one record into two. */
   char raw_hostname[256];
   if (gethostname(raw_hostname, sizeof(raw_hostname)) != 0)
     raw_hostname[0] = '\0';
@@ -6199,11 +6164,11 @@ static struct clogger *_alloc(int fd, bool owns_fd, const char *file_path,
 
 /*
  * Copies lg->fields as of this exact call into out_fields, out_count and
- * out_pool. It does this under lg->fields_mutex. A later change or removal
- * on lg can therefore never change the fields that the library already
- * recorded for a submitted job. The code sets *out_failed to true only on a
- * genuine allocation failure, and it leaves *out_fields NULL in that case. A
- * logger with zero fields succeeds with *out_count == 0.
+ * out_pool, under lg->fields_mutex, so a later change or removal on lg can
+ * never change the fields that the library has already recorded for a
+ * submitted job. The code sets *out_failed to true only on a genuine
+ * allocation failure, and leaves *out_fields NULL in that case. A logger
+ * with zero fields succeeds with *out_count == 0.
  */
 static void _snapshot_fields(struct clogger *lg, clog_field_view_t **out_fields,
                              size_t *out_count, ccol_growbuf_t *out_pool,
@@ -6216,20 +6181,20 @@ static void _snapshot_fields(struct clogger *lg, clog_field_view_t **out_fields,
   size_t n = chmap_elem_count(lg->fields);
   if (n == 0) {
     ccol_mutex_unlock(lg->fields_mutex);
-    /* ccol_growbuf_init() always allocates a 256-byte backing store. The
-     * common case is a logger with no persistent fields at all. This branch
-     * skips that allocation for it. Without the skip, every async log call
-     * pays for that allocation only to find that there is nothing to copy.
-     * The code builds the same "valid, empty, nothing appended" shape
+    /* ccol_growbuf_init() always allocates a 256-byte backing store, and the
+     * common case is a logger with no persistent fields at all, so this
+     * branch skips that allocation for it; without the skip, every async log
+     * call pays for that allocation only to find that there is nothing to
+     * copy. The code builds the same "valid, empty, nothing appended" shape
      * directly instead. _clog_async_job_release() always calls
      * ccol_growbuf_destroy() later, and that function is documented as safe
      * on exactly this shape, where b->buf can be NULL.
      *
-     * This is more than a speed-up of the success path. A call to
+     * This is more than a speed-up of the success path: a call to
      * ccol_growbuf_init() here can fail under real memory pressure and leave
-     * out_pool->oom set. This n == 0 branch returns before it can check that
-     * flag, so the failure has no way to reach *out_failed. The direct build
-     * of the empty shape has no such failure mode. */
+     * out_pool->oom set, and since this n == 0 branch returns before it can
+     * check that flag, the failure would have no way to reach *out_failed.
+     * The direct build of the empty shape has no such failure mode. */
     out_pool->buf = NULL;
     out_pool->len = 0;
     out_pool->cap = 0;
@@ -6268,31 +6233,30 @@ static void _snapshot_fields(struct clogger *lg, clog_field_view_t **out_fields,
     i++;
     it = it->_next_fn(it);
   }
-  /* This call is a defence. It carries no load in normal operation.
+  /* This call is a defence that carries no load in normal operation:
    * chmap_elem_count() and the traversal of chashmap_begin_iter() always
    * agree on the number of live entries while the code holds fields_mutex
-   * for the whole walk. `it` is therefore already NULL when i == n stops the
-   * loop above, because its own _next_fn destroys it on the last entry. This
-   * call exists so that a break of that invariant leaks nothing. Without it,
-   * such a break leaks the internal allocation of cmap_iterator on every
-   * async submission that carries fields. This function runs on the hot path
+   * for the whole walk, so `it` is already NULL when i == n stops the loop
+   * above, because its own _next_fn destroys it on the last entry. The call
+   * exists so that a break of that invariant leaks nothing; without it, such
+   * a break leaks the internal allocation of cmap_iterator on every async
+   * submission that carries fields, and this function runs on the hot path
    * of clogger. */
   if (it) ccol_iter_destroy(it);
   ccol_mutex_unlock(lg->fields_mutex);
 
   if (out_pool->oom) {
-    /* The code leaves out_pool, which is job->field_pool, alone here. It
-     * must not destroy it. The only caller of this function is
-     * _clog_write_async(). That caller always routes the job through
-     * _clog_async_job_release(), on every success path and every failure
-     * path. _clog_async_job_release() always destroys job->field_pool
-     * exactly once. A destroy here as well is a double free.
-     * ccol_growbuf_destroy() frees out_pool->buf and never sets the pointer
-     * to NULL after that. The later destroy in _clog_async_job_release()
-     * would therefore free the same block a second time. The two other early
-     * return paths above leave out_pool alone for the same reason. Those are
-     * the allocation failure of views and the allocation failure of the
-     * iterator. */
+    /* The code leaves out_pool, which is job->field_pool, alone here and must
+     * not destroy it. The only caller of this function, _clog_write_async(),
+     * always routes the job through _clog_async_job_release() on every
+     * success path and every failure path, and _clog_async_job_release()
+     * always destroys job->field_pool exactly once, so a destroy here as well
+     * is a double free: ccol_growbuf_destroy() frees out_pool->buf and never
+     * sets the pointer to NULL after that, so the later destroy in
+     * _clog_async_job_release() would free the same block a second time. The
+     * two other early return paths above (the allocation failure of views and
+     * the allocation failure of the iterator) leave out_pool alone for the
+     * same reason. */
     _ccol_mem_free(lg->shared->m_procs, views);
     *out_failed = true;
     return;
@@ -6339,67 +6303,66 @@ static unsigned char _clog_split_after(const char *data, size_t written) {
 }
 
 /*
- * Flushes sh->async_buf to disk when it holds anything. It applies the same
+ * Flushes sh->async_buf to disk when it holds anything, with the same
  * rotation checks as the synchronous write path: a time-based check before
  * the write, and a size-based check after it. The code hands
- * poll_timeout_ms straight to _write_all(). See that function for which
+ * poll_timeout_ms straight to _write_all(); see that function for which
  * callers bound it and why.
  *
- * Precondition: the caller holds sh->mutex. The caller must also call this
- * only for a target that is not syslog. A syslog job flushes itself at once
- * and never accumulates into async_buf. See _clog_writer_thread_main().
+ * Precondition: the caller holds sh->mutex, and calls this only for a
+ * target that is not syslog, because a syslog job flushes itself at once and
+ * never accumulates into async_buf; see _clog_writer_thread_main().
  *
  * This function never touches sh->last_flush_monotonic. That field belongs
- * to the flush schedule of the writer thread. That thread reads it outside
- * sh->mutex, so it is the only thread that may write it. This function runs
- * on any thread that must settle a half-written record before it writes. See
- * _clog_flush_and_settle(). _writer_flush_now() is the entry point of the
- * writer thread, and it advances the field there.
+ * to the flush schedule of the writer thread, which reads it outside
+ * sh->mutex and so is the only thread that may write it, while this
+ * function runs on any thread that must settle a half-written record before
+ * it writes (see _clog_flush_and_settle()). _writer_flush_now() is the entry
+ * point of the writer thread, and it advances the field there.
  *
- * The kernel can accept only a part of a write. A filesystem that is full
- * with ENOSPC does that, and so does an RLIMIT_FSIZE ceiling. When the error
- * that stopped the write is one that a later attempt can outlast (see
+ * The kernel can accept only a part of a write, as a filesystem that is full
+ * with ENOSPC, or an RLIMIT_FSIZE ceiling, makes it do. When the error that
+ * stopped the write is one that a later attempt can outlast (see
  * _clog_write_error_is_transient()), the bytes that the kernel did not
  * accept stay in this buffer, moved to the front, and the next flush tries
  * them again. Those bytes are the exact continuation of what landed on
- * disk. To offer them again therefore restores the framing of the record
- * that the short write cut in half. It also delivers every record behind
- * that one once the condition clears. To discard them instead loses a whole
+ * disk, so offering them again restores the framing of the record that the
+ * short write cut in half, and also delivers every record behind that one
+ * once the condition clears, whereas discarding them would lose a whole
  * batch at the moment when a visible log matters most.
  *
  * Any other error is one that no retry outlasts: a peer that is gone, a
  * descriptor that is not valid, a message that the sink can never take.
- * Offering the batch again then fails again, while every later record piles
- * up behind it until the buffer reaches its ceiling. The flush therefore
+ * Offering the batch again would then fail again, while every later record
+ * piles up behind it until the buffer reaches its ceiling, so the flush
  * drops the undelivered bytes and writes a marker that names the loss (see
  * _clog_note_dropped_batch()), which is what the synchronous path does for
  * a record that it cannot deliver.
  *
- * What the buffer keeps can never exceed its own growth ceiling, which is
- * clog_buf_t.cap_limit. The kept bytes are bytes that the buffer already
- * holds. A record that does not fit behind them takes the same path as any
- * other record that is too large for the batch buffer. That path reports
- * itself and does not let the record vanish.
+ * What the buffer keeps can never exceed its own growth ceiling,
+ * clog_buf_t.cap_limit, because the kept bytes are bytes that the buffer
+ * already holds. A record that does not fit behind them takes the same path
+ * as any other record that is too large for the batch buffer, which reports
+ * itself instead of letting the record vanish.
  *
- * The retry is what restores the framing, so a kept remainder gets no
- * truncation marker. This holds only while the two halves reach the same
- * file with nothing between them. A short write that stops inside a record
- * therefore sets clog_shared_t.async_partial_record. Both rotation checks
- * then stand down. Any path that is about to write a different record
- * straight to the fd settles the continuation first. See
- * _clog_flush_and_settle(). The flush that finally drains the buffer clears
+ * Because the retry is what restores the framing, a kept remainder gets no
+ * truncation marker. That holds only while the two halves reach the same
+ * file with nothing between them, so a short write that stops inside a
+ * record sets clog_shared_t.async_partial_record: both rotation checks then
+ * stand down, and any path that is about to write a different record
+ * straight to the fd settles the continuation first (see
+ * _clog_flush_and_settle()). The flush that finally drains the buffer clears
  * the flag again.
  *
  * In every other case the code resets the buffer whenever it holds
- * anything. It does so whether or not sh->fd was valid at that time. An
- * sh->fd below 0 is not observable here in practice, because the library
- * closes the fd only after it joins the writer thread of this shared target.
- * See the order in _shared_async_teardown() and clog_close(). That reset
- * does not test sh->fd >= 0, unlike the write and rotation check block below
- * it. If a future change ever breaks that invariant, the safe failure mode
- * is to drop what is pending. The unsafe failure mode is an unbounded amount
- * of content that the library can never flush and that stays in this buffer
- * forever.
+ * anything, whether or not sh->fd was valid at that time. An sh->fd below 0
+ * is not observable here in practice, because the library closes the fd
+ * only after it joins the writer thread of this shared target (see the
+ * order in _shared_async_teardown() and clog_close()). Unlike the write and
+ * rotation check block below it, that reset does not test sh->fd >= 0: if a
+ * future change ever breaks that invariant, the safe failure mode is to drop
+ * what is pending, and the unsafe one is an unbounded amount of content that
+ * the library can never flush and that stays in this buffer forever.
  */
 static void _writer_flush_buffer(clog_shared_t *sh, int poll_timeout_ms) {
   if (sh->async_buf.len > 0) {
@@ -6414,15 +6377,15 @@ static void _writer_flush_buffer(clog_shared_t *sh, int poll_timeout_ms) {
       if (sh->rotation_enabled) sh->bytes_written += (off_t)written;
 
       if (written < len) {
-        /* The bytes that landed decide whether anything is split at all.
-         * The code reads them here, before it moves the remainder over
-         * them. A prefix that ends on a record boundary leaves whole records
-         * behind and splits nothing. Both rotation checks are then free to
+        /* The bytes that landed decide whether anything is split at all, so
+         * the code reads them here, before it moves the remainder over them.
+         * A prefix that ends on a record boundary leaves whole records
+         * behind and splits nothing, so both rotation checks are free to
          * run. A prefix that ends anywhere else is the first part of a
-         * record whose remaining bytes are still in this buffer. Both checks
-         * must then stand down until the retry delivers them. See
+         * record whose remaining bytes are still in this buffer, so both
+         * checks must stand down until the retry delivers them; see
          * clog_shared_t.async_partial_record. A write that the kernel
-         * accepted none of moves nothing. The whole batch is still here
+         * accepted none of moves nothing: the whole batch is still here
          * exactly as it was, so the flag keeps the value that an earlier
          * short write gave it. */
         unsigned char split =
@@ -6443,10 +6406,10 @@ static void _writer_flush_buffer(clog_shared_t *sh, int poll_timeout_ms) {
       }
     }
     if (!retained) {
-      /* Nothing is left undelivered here. Either the write took all of it,
-       * or the rest can never go out and the marker above names it, or
-       * there was no usable fd to offer it to. No record therefore waits
-       * for a continuation that is still on its way. */
+      /* Nothing is left undelivered here: either the write took all of it, or
+       * the rest can never go out and the marker above names it, or there
+       * was no usable fd to offer it to. So no record waits for a
+       * continuation that is still on its way. */
       _buf_reset(&sh->async_buf);
       sh->async_partial_record = CLOG_SPLIT_NONE;
     }
@@ -6455,17 +6418,17 @@ static void _writer_flush_buffer(clog_shared_t *sh, int poll_timeout_ms) {
 }
 
 /*
- * This is the flush of the writer thread. It is _writer_flush_buffer() plus
- * the timer bookkeeping that the main loop of that thread needs. The code
- * advances the timestamp even when there was nothing to write. That loop
- * computes its next timed-receive timeout from (now -
- * last_flush_monotonic) on every iteration. Without the advance, an idle
- * logger computes a remaining time near zero forever after an empty timeout.
- * It then spins instead of a real sleep for flush_interval_us.
+ * This is the flush of the writer thread: _writer_flush_buffer() plus the
+ * timer bookkeeping that the main loop of that thread needs. The code
+ * advances the timestamp even when there was nothing to write, because that
+ * loop computes its next timed-receive timeout from (now -
+ * last_flush_monotonic) on every iteration; without the advance, an idle
+ * logger computes a remaining time near zero forever after an empty timeout
+ * and spins instead of really sleeping for flush_interval_us.
  *
  * Precondition: the caller holds sh->mutex. Only the writer thread calls
- * this. That thread is the only one that may write sh->last_flush_monotonic,
- * because it reads that field outside the mutex.
+ * this, because it is the only thread that may write
+ * sh->last_flush_monotonic, which it reads outside the mutex.
  */
 static void _writer_flush_now(clog_shared_t *sh, int poll_timeout_ms) {
   _writer_flush_buffer(sh, poll_timeout_ms);
@@ -6474,23 +6437,22 @@ static void _writer_flush_now(clog_shared_t *sh, int poll_timeout_ms) {
 
 /*
  * Gives up on the continuation of a record whose first part is already on
- * disk. It then repairs the framing that the first part left open. One
- * write carries both the missing newline, when a line is open, and a marker
- * that names the bytes that the library gave up on. A consumer that reads
- * the file line by line therefore sees the truncated record and the marker
- * as well-formed lines. Whatever the library writes next starts a line of
- * its own.
+ * disk, and repairs the framing that the first part left open. One write
+ * carries both the missing newline, when a line is open, and a marker that
+ * names the bytes that the library gave up on, so a consumer that reads the
+ * file line by line sees the truncated record and the marker as well-formed
+ * lines, and whatever the library writes next starts a line of its own.
  *
  * The library gives up on the continuation only. Whole records that sit in
- * the batch behind it stay in the buffer, and a later flush delivers them.
- * Nothing about them is malformed. What makes them unwritable right now is
- * the descriptor and not the framing.
+ * the batch behind it stay in the buffer, and a later flush delivers them:
+ * nothing about them is malformed, and what makes them unwritable right now
+ * is the descriptor, not the framing.
  *
  * Precondition: the caller holds sh->mutex, sh->fd >= 0, and
- * sh->async_partial_record is set. That flag means that the leading bytes of
- * async_buf are that continuation, and that what is on disk stops inside a
- * record. A flush with no usable descriptor leaves nothing outstanding. The
- * set flag is therefore itself the proof that the descriptor is usable.
+ * sh->async_partial_record is set, which means that the leading bytes of
+ * async_buf are that continuation and that what is on disk stops inside a
+ * record. A flush with no usable descriptor leaves nothing outstanding, so
+ * the set flag is itself the proof that the descriptor is usable.
  */
 static void _clog_repair_split_record(clog_shared_t *sh, clog_format_t fmt,
                                       int poll_timeout_ms) {
@@ -6523,11 +6485,11 @@ static void _clog_repair_split_record(clog_shared_t *sh, clog_format_t fmt,
  * Gives up on every record that async_buf still holds after the last
  * delivery attempt that this target makes, and writes a marker that names
  * the loss. A flush keeps the undelivered part of a batch after an error
- * that a later attempt can outlast (see _writer_flush_buffer()). When no
+ * that a later attempt can outlast (see _writer_flush_buffer()), but when no
  * later attempt follows, because the target closes or the process stops,
- * those records would otherwise vanish with the buffer and nothing would
- * name them. The caller has already settled any split record, so the bytes
- * on disk end on a record boundary.
+ * those records would otherwise vanish with the buffer with nothing to name
+ * them. The caller has already settled any split record, so the bytes on
+ * disk end on a record boundary.
  *
  * The caller must hold sh->mutex.
  */
@@ -6546,16 +6508,16 @@ static __attribute__((noinline, cold)) void _clog_drop_undelivered(
  * split across the write that follows. Every path that writes a record
  * STRAIGHT to sh->fd runs this after its own flush, because the buffer of
  * the async writer thread can hold the continuation of a half-written
- * record. Without it, that record lands between the two halves of another
- * record. A consumer of any of the three line-framed formats of this module
- * then reads three malformed lines where there should be two well-formed
- * ones.
+ * record; without it, that record lands between the two halves of another
+ * record, and a consumer of any of the three line-framed formats of this
+ * module then reads three malformed lines where there should be two
+ * well-formed ones.
  *
- * The flush ahead of it is the only chance that the continuation gets. A
- * descriptor that just refused the remainder of a record does not accept it
- * a moment later. Two paths reach this function: an ordinary log call, and
- * CLOG_FATAL on its way to exit(). Neither may wait on a descriptor that
- * never accepts it.
+ * The flush ahead of it is the only chance that the continuation gets,
+ * because a descriptor that just refused the remainder of a record does not
+ * accept it a moment later. Two paths reach this function, an ordinary log
+ * call and CLOG_FATAL on its way to exit(), and neither may wait on a
+ * descriptor that never accepts it.
  *
  * The caller must hold sh->mutex.
  */
@@ -6567,15 +6529,15 @@ static void _clog_settle_after_flush(clog_shared_t *sh, clog_format_t fmt,
 
 /*
  * This is _clog_settle_after_flush() plus the delivery attempt that it
- * settles after. Two write paths need it. They do not belong to the writer
- * thread, so they have no flush of their own to run first. poll_timeout_ms
- * bounds the one wait inside that attempt that can block on a descriptor
- * with a slow peer. See _write_all().
+ * settles after. Two write paths need it, because they do not belong to the
+ * writer thread and so have no flush of their own to run first.
+ * poll_timeout_ms bounds the one wait inside that attempt that can block on
+ * a descriptor with a slow peer; see _write_all().
  *
  * This function is out of line on purpose. The check that reaches it is one
- * byte of a cache line that every write path already reads. See
- * clog_shared_t.async_partial_record. The recovery itself stays out of the
- * caller, so the code shape of the ordinary log path does not change.
+ * byte of a cache line that every write path already reads (see
+ * clog_shared_t.async_partial_record), while the recovery itself stays out
+ * of the caller, so the code shape of the ordinary log path does not change.
  *
  * The caller must hold sh->mutex.
  */
@@ -6585,24 +6547,23 @@ static __attribute__((noinline)) void _clog_flush_and_settle(
   _clog_settle_after_flush(sh, fmt, poll_timeout_ms);
 }
 
-/* Frees everything that a CLOG_ASYNC_MSG_JOB envelope owns. This includes
- * the envelope itself. The ordinary per-job work of the writer thread uses
- * it. The fallback of _clog_write_async() for a failed enqueue uses it
- * too. */
+/* Frees everything that a CLOG_ASYNC_MSG_JOB envelope owns, including the
+ * envelope itself. Both the ordinary per-job work of the writer thread and
+ * the fallback of _clog_write_async() for a failed enqueue use it. */
 static void _clog_async_job_release(clog_shared_t *sh,
                                     clog_async_msg_t *envelope) {
   clog_async_job_t *job = &envelope->u.job;
   if (job->bt_syms)
     free(job->bt_syms); /* This block comes from the malloc inside
-backtrace_symbols(). It never goes through _ccol_mem_free or a custom
-allocator. Every other free of backtrace symbols in this file works the same
-way */
+backtrace_symbols() and never goes through _ccol_mem_free or a custom
+allocator, as with every other free of backtrace symbols in this
+file */
   ccol_growbuf_destroy(&job->field_pool);
   _ccol_mem_free(sh->m_procs, job->fields);
   _ccol_mem_free(sh->m_procs, job->msg_heap);
-  _ccol_mem_free(sh->m_procs, envelope); /* This frees the storage of job too.
-             The envelope holds job by value, and the library never allocates
-             job on its own */
+  _ccol_mem_free(sh->m_procs, envelope); /* This frees the storage of job too,
+             because the envelope holds job by value, and the library never
+             allocates job on its own */
 }
 
 #ifdef RUNNING_UNIT_TESTS
@@ -6635,7 +6596,7 @@ static void _clog_test_writer_job_delay(unsigned int delay_us) {
 
 /* Waits until no CLOG_FATAL call waits for the mutex of sh. The fatal call
  * lowers the count as soon as it holds the mutex or gives up on it, which
- * its own bounded wait ends in time; nothing else here signals, so the
+ * its own bounded wait ends in time; since nothing else here signals, the
  * wait polls the count, and it touches no lock while it does. */
 static __attribute__((noinline, cold)) void _clog_writer_yield_to_fatal(
     clog_shared_t *sh) {
@@ -6646,11 +6607,11 @@ static __attribute__((noinline, cold)) void _clog_writer_yield_to_fatal(
 }
 
 /* The lock of the mutex of sh for each piece of work of the writer thread.
- * A CLOG_FATAL call must get that mutex for its record, and a mutex hands
+ * A CLOG_FATAL call must get that mutex for its record, but a mutex hands
  * itself to the thread that asks again first: a writer thread with a
- * backlog unlocks and locks again at once, and a fatal call that waits
- * would see the mutex free only by chance. The writer thread therefore
- * steps aside while a fatal call waits. */
+ * backlog unlocks and locks again at once, so a fatal call that waits would
+ * see the mutex free only by chance. The writer thread therefore steps
+ * aside while a fatal call waits. */
 static inline void _clog_writer_lock(clog_shared_t *sh) {
   if (__builtin_expect(
           atomic_load_explicit(&sh->fatal_waiters, memory_order_relaxed) != 0,
@@ -6671,15 +6632,15 @@ static void *_clog_writer_thread_main(void *arg) {
         (long long)(now.tv_sec - sh->last_flush_monotonic.tv_sec) * 1000000LL +
         (now.tv_nsec - sh->last_flush_monotonic.tv_nsec) / 1000L;
     /* The arithmetic stays unsigned and never narrows the interval to a
-     * signed type. flush_interval_us is a uint64_t, and a value above
-     * LLONG_MAX, such as UINT64_MAX for "flush on size only", converts to a
-     * negative long long. That makes every wait a zero wait, and the thread
-     * spins on an idle logger. The remaining time is clamped to 0. The
-     * interval can already be over when this iteration starts, for example
-     * after a slow job that took longer than the whole interval. That case
-     * must mean "check right now". The receive call saturates the deadline
-     * that it builds from a very long remaining time, so a wait that long is
-     * a wait for ever in practice. */
+     * signed type: flush_interval_us is a uint64_t, and a value above
+     * LLONG_MAX, such as UINT64_MAX for "flush on size only", would convert
+     * to a negative long long, which makes every wait a zero wait so that the
+     * thread spins on an idle logger. The remaining time is clamped to 0,
+     * because the interval can already be over when this iteration starts
+     * (for example after a slow job that took longer than the whole
+     * interval), and that case must mean "check right now". The receive call
+     * saturates the deadline that it builds from a very long remaining time,
+     * so a wait that long is a wait for ever in practice. */
     uint64_t interval_us = sh->async_cfg.flush_interval_us;
     uint64_t remaining_us = elapsed_us <= 0 ? interval_us
                             : (uint64_t)elapsed_us >= interval_us
@@ -6693,56 +6654,56 @@ static void *_clog_writer_thread_main(void *arg) {
             : ccol_dynmq_timed_recv_zc(sh->q.dynmq, &m, remaining_us);
 
     /* A remaining time of 0 is a receive that does not wait, and an empty
-     * queue then answers ccol_container_empty. That is the same outcome as a
-     * wait that timed out: the interval is over. */
+     * queue then answers ccol_container_empty, which is the same outcome as
+     * a wait that timed out: the interval is over. */
     if (rv == ccol_timed_out || rv == ccol_container_empty) {
 #ifdef RUNNING_UNIT_TESTS
       atomic_fetch_add(&_clog_test_writer_timeout_wakeups, 1);
 #endif
       _clog_writer_lock(sh);
-      /* This is a plain flush and never a settle. It is one of the retries
-       * that the buffer keeps a continuation for. Nothing is about to be
-       * written past it. To give up on it here throws away the delivery that
-       * this wakeup exists to try. */
+      /* This is a plain flush, never a settle, because it is one of the retries
+       * for which the buffer keeps a continuation, and nothing is about to be
+       * written past it. Giving up on it here would throw away the delivery
+       * that this wakeup exists to try. */
       _writer_flush_now(sh, CLOG_WRITE_WAIT_FOREVER);
       ccol_mutex_unlock(sh->mutex);
       continue;
     }
     if (rv != ccol_success) {
-      /* This is a real, documented return value and not a theoretical one.
-       * The header doc of ccol_circq_timed_recv_zc() and
+      /* This is a real, documented return value and not a theoretical one: the
+       * header doc of ccol_circq_timed_recv_zc() and
        * ccol_dynmq_timed_recv_zc() says "ccol_unexpected_failure on system
        * error (check errno)".
        *
        * A plain loop back to the timed receive does NOT stop a tight spin on
-       * its own. Nothing on this path touches sh->last_flush_monotonic. An
-       * idle logger reaches a steady state where flush_interval_us is over
-       * since the last real flush. `remaining_us` above then clamps to 0 and
-       * stays 0 on every later iteration. Without the sleep, a system error
-       * that persists spins this thread at 100% CPU on one core forever, with
-       * no backoff.
+       * its own, because nothing on this path touches
+       * sh->last_flush_monotonic. An idle logger reaches a steady state in
+       * which flush_interval_us has passed since the last real flush, so
+       * `remaining_us` above clamps to 0 and stays 0 on every later
+       * iteration. Without the sleep, a system error that persists spins
+       * this thread at 100% CPU on one core forever, with no backoff.
        *
        * usleep() is not a pthread or sem primitive, so it needs no wrapper in
-       * common.h. The other direct usleep() calls in this file work the same
-       * way. A short, fixed sleep bounds the retry rate however long the
-       * condition under it lasts. */
+       * common.h, as with the other direct usleep() calls in this file. A
+       * short, fixed sleep bounds the retry rate however long the condition
+       * under it lasts. */
       usleep(1000);
       continue;
     }
 
     if (m.data == NULL && m.size == 0) {
       /* This is the shutdown sentinel; see _shared_async_teardown(). The
-       * thread drains everything that is already built, then it exits. The
+       * thread drains everything that is already built, then exits. The
        * library sends the sentinel only after it enqueues every earlier job
-       * and flush request. FIFO order then guarantees that the thread
-       * processes it only after everything ahead of it. */
+       * and flush request, so FIFO order guarantees that the thread processes
+       * it only after everything ahead of it. */
       _clog_writer_lock(sh);
-      /* This settles and does not only flush. It is the last delivery
-       * attempt that this target ever makes. A continuation that is still
+      /* This settles and does not only flush, because it is the last delivery
+       * attempt that this target ever makes, and a continuation that is still
        * outstanding after it has no later retry to restore its framing.
        * Without the settle, the file ends in the middle of a record, and
-       * nothing names the loss. Whole records that the flush kept for a
-       * retry have no later retry either, so a marker names them. */
+       * nothing names the loss. Whole records that the flush kept for a retry
+       * have no later retry either, so a marker names them. */
       _writer_flush_now(sh, CLOG_WRITE_WAIT_FOREVER);
       _clog_settle_after_flush(sh, sh->format, CLOG_WRITE_WAIT_FOREVER);
       _clog_drop_undelivered(sh, "the logger closed", CLOG_WRITE_WAIT_FOREVER);
@@ -6755,9 +6716,8 @@ static void *_clog_writer_thread_main(void *arg) {
     if (envelope->kind == CLOG_ASYNC_MSG_FLUSH) {
       clog_async_ctrl_t *ctrl = envelope->u.ctrl;
       _clog_writer_lock(sh);
-      /* This is a plain flush, for the same reason as the timeout branch
-       * above. An explicit flush is a delivery attempt and not a
-       * deadline. */
+      /* This is a plain flush, for the same reason as the timeout branch above:
+       * an explicit flush is a delivery attempt, not a deadline. */
       _writer_flush_now(sh, CLOG_WRITE_WAIT_FOREVER);
       ccol_mutex_unlock(sh->mutex);
       ccol_mutex_lock(ctrl->mutex);
@@ -6789,64 +6749,63 @@ static void *_clog_writer_thread_main(void *arg) {
 
       if (fmt == CLOG_FMT_SYSLOG || sh->sink_per_record) {
         /* Syslog, and every format on a message-oriented socket, is exempt
-         * from the batch. The code builds and writes this one record at
-         * once, and never puts it into async_buf. A message-oriented socket
+         * from the batch: the code builds and writes this one record at once
+         * and never puts it into async_buf. A message-oriented socket
          * delivers each write as one message, so a batch would put many
          * records into one message, which a receiver reads as one malformed
          * record, and a batch above the message limit of the socket is
          * refused as a whole. For syslog the code then writes the backtrace
-         * frames that the job carries, each with its own write() call;
+         * frames that the job carries, each with its own write() call, while
          * logfmt and JSON already carry them inside the record. This matches
-         * the synchronous write path exactly. Only the thread differs: the
-         * writer thread does the work instead of the thread that submits.
+         * the synchronous write path exactly, except that the writer thread
+         * does the work instead of the thread that submits.
          *
          * async_buf can still hold LOGFMT or JSON batch content that no
-         * flush wrote yet. That content is older than the clog_set_format()
-         * call that pointed this shared target at CLOG_FMT_SYSLOG. The code
-         * reads the format fresh for each job and does not capture it at
-         * submission time, and clog_set_format() never touches async_buf.
-         * The flush here, instead of a bare _buf_reset() that would discard
-         * that content unwritten, is what guarantees the following. A format
-         * switch can move records that are already in the batch ahead of
-         * this one, but it can never lose them.
+         * flush has written yet, content that is older than the
+         * clog_set_format() call that pointed this shared target at
+         * CLOG_FMT_SYSLOG: the code reads the format fresh for each job
+         * instead of capturing it at submission time, and clog_set_format()
+         * never touches async_buf. The flush here, instead of a bare
+         * _buf_reset() that would discard that content unwritten, guarantees
+         * that a format switch can move records that are already in the
+         * batch ahead of this one, but can never lose them.
          *
          * When async_buf is already empty, which is the common case, this
-         * call only updates last_flush_monotonic. It is safe to call here.
-         * Rotation can never be on for a shared target that reaches this
-         * branch. Rotation needs a file-backed logger with owns_fd == true.
-         * clog_set_format() allows CLOG_FMT_SYSLOG only when owns_fd ==
-         * false, and a path that the library opens is never a socket. The
-         * rotation checks inside _writer_flush_now() therefore always do
-         * nothing on this path.
+         * call only updates last_flush_monotonic. It is safe to call here,
+         * because rotation can never be on for a shared target that reaches
+         * this branch: rotation needs a file-backed logger with
+         * owns_fd == true, clog_set_format() allows CLOG_FMT_SYSLOG only when
+         * owns_fd == false, and a path that the library opens is never a
+         * socket. The rotation checks inside _writer_flush_now() therefore
+         * always do nothing on this path.
          *
          * This settles and does not only flush, because the record goes
-         * straight to the fd a few lines below. Without the settle, a
-         * continuation that the flush could not deliver gets this record
+         * straight to the fd a few lines below; without the settle, a
+         * continuation that the flush could not deliver would get this record
          * written into the middle of it. */
         _writer_flush_now(sh, CLOG_WRITE_WAIT_FOREVER);
         _clog_settle_after_flush(sh, fmt, CLOG_WRITE_WAIT_FOREVER);
 
-        /* A write that the kernel accepts only in part leaves the bytes that
-         * it did not take at the front of async_buf. The next flush offers
-         * them again; see _writer_flush_now(). Those bytes are still
-         * undelivered. The code therefore builds this record into a private
-         * scratch buffer. It must not append the record onto them and then
-         * reset over them, which discards them without a write. The code
-         * allocates the scratch buffer only on that path. The common case is
-         * an async_buf that the flush above emptied. That case builds
-         * straight into async_buf, like every other record build in this
-         * file. */
+        /* A write that the kernel accepts only in part leaves the bytes that it
+         * did not take at the front of async_buf, and the next flush offers
+         * them again (see _writer_flush_now()). Those bytes are still
+         * undelivered, so the code builds this record into a private scratch
+         * buffer instead of appending the record onto them and then resetting
+         * over them, which would discard them without a write. The code
+         * allocates the scratch buffer only on that path; the common case, an
+         * async_buf that the flush above emptied, builds straight into
+         * async_buf, like every other record build in this file. */
         clog_buf_t scratch;
         clog_buf_t *rec_buf = &sh->async_buf;
         if (sh->async_buf.len > 0)
           rec_buf = _buf_init(&scratch, sh->m_procs) == 0 ? &scratch : NULL;
 
         if (!rec_buf) {
-          /* Every buffer that the code could build into here destroys the
-           * undelivered bytes. The code therefore reports the record in the
-           * same way as an unrepresentable one, which needs no allocation.
-           * The undelivered bytes stay in async_buf, and the next flush
-           * tries them again. */
+          /* Every buffer that the code could build into here would destroy the
+           * undelivered bytes, so the code reports the record in the same
+           * way as an unrepresentable one, which needs no allocation. The
+           * undelivered bytes stay in async_buf, and the next flush tries
+           * them again. */
           _clog_write_unrepresentable_record(sh, fmt, job->level,
                                              job->with_backtrace);
         } else {
@@ -6860,8 +6819,8 @@ static void *_clog_writer_thread_main(void *arg) {
             /* Not even the small, fixed-size fallback placeholder of
              * _clog_build_record() fits in an empty buffer. See the doc
              * comment of _clog_write_unrepresentable_record() for why the
-             * library never drops the record to zero written bytes instead.
-             * Every other call site in this file that builds into a buffer
+             * library never drops the record to zero written bytes instead;
+             * every other call site in this file that builds into a buffer
              * does the same. */
             _clog_write_unrepresentable_record(sh, fmt, job->level,
                                                job->with_backtrace);
@@ -6874,9 +6833,9 @@ static void *_clog_writer_thread_main(void *arg) {
         }
       } else {
         /* For logfmt and JSON on a stream sink (a file, a pipe or a stream
-         * socket) the code appends to the batch. It never resets the batch
-         * first; see the doc comment of _clog_build_fallback_record() for
-         * the reason. It flushes once the content reaches the size
+         * socket) the code appends to the batch without resetting it first
+         * (see the doc comment of _clog_build_fallback_record() for the
+         * reason), and flushes once the content reaches the size
          * threshold. */
         size_t record_start = sh->async_buf.len;
         bool batch_had_prior_content = record_start > 0;
@@ -6886,77 +6845,78 @@ static void *_clog_writer_thread_main(void *arg) {
             job->file, job->line, job->func, job->msg, &fsrc,
             job->with_backtrace, job->bt_syms, job->bt_depth, &used_fallback);
         if (!built || (used_fallback && batch_had_prior_content)) {
-          /* One of two things happened. Either not even the small,
-           * fixed-size fallback placeholder fit in the room that async_buf
-           * had left. Or the code used the fallback only because unrelated
-           * content from an earlier job already sat in the batch buffer and
-           * left too little room for the real record of this job. In the
-           * second case the record itself need not be oversized at all. Both
-           * are reachable only when one record, or the content that the
-           * batch already holds, comes close to the cap_limit of async_buf.
+          /* One of two things happened: either not even the small, fixed-size
+           * fallback placeholder fit in the room that async_buf had left, or
+           * the code used the fallback only because unrelated content from
+           * an earlier job already sat in the batch buffer and left too
+           * little room for the real record of this job, in which case the
+           * record itself need not be oversized at all. Both are reachable
+           * only when one record, or the content that the batch already
+           * holds, comes close to the cap_limit of async_buf.
            *
-           * The code rolls back to record_start first. That discards the
-           * fallback placeholder that this call may have appended already. A
+           * The code rolls back to record_start first, which discards the
+           * fallback placeholder that this call may have appended already (a
            * `built` of true means that the placeholder is really in the
-           * buffer, and not only attempted. The code THEN flushes what it
-           * accumulated safely ahead of it, and tries again. An empty buffer
-           * always has more than enough room for an ordinary record. If the
-           * record is genuinely too large on its own, this retry produces
-           * the same "too large" fallback from record_start == 0, and that
-           * message is then accurate.
+           * buffer, not only attempted). It THEN flushes what it accumulated
+           * safely ahead of it, and tries again. An empty buffer always has
+           * more than enough room for an ordinary record, and if the record
+           * is genuinely too large on its own, this retry produces the same
+           * "too large" fallback from record_start == 0, where that message
+           * is accurate.
            *
            * Without the rollback, the flush below writes the misleading
-           * fallback placeholder to disk BEFORE the retry runs. The file
+           * fallback placeholder to disk BEFORE the retry runs, and the file
            * then keeps both it and the real record, instead of the real
            * record alone. The rollback is what keeps one guarantee true for
            * every value of flush_buffer_size: the library never substitutes
            * a misleading placeholder for a record that would have fit on its
            * own. */
           sh->async_buf.len = record_start;
-          /* This settles and does not only flush. The retry below can end
-           * with a record that goes straight to the fd. Without the settle,
-           * that record splits a continuation that the flush could not
-           * deliver. */
+          /* This settles and does not only flush, because the retry below can
+           * end with a record that goes straight to the fd, and without the
+           * settle, that record would split a continuation that the flush
+           * could not deliver. */
           _writer_flush_now(sh, CLOG_WRITE_WAIT_FOREVER);
           _clog_settle_after_flush(sh, fmt, CLOG_WRITE_WAIT_FOREVER);
-          /* This retry runs against a buffer that _writer_flush_now()
-           * emptied. The one exception is a flush whose own write was cut
-           * short, which leaves the undelivered remainder in place; see that
-           * function. The cap of async_buf stays exactly as it was, because
-           * _buf_reset() never shrinks it. That cap is always at least
-           * CLOG_BUF_INITIAL, which is much larger than the small fallback
-           * placeholder. This retry therefore always succeeds in practice.
-           * The doc comment of _clog_write_unrepresentable_record() gives
-           * the same reason for lg->buf on the synchronous path and on the
-           * enqueue-failure path. A single-record buffer that the code
-           * always resets to empty first, and whose capacity can never drop
-           * below CLOG_BUF_INITIAL, never needs to grow to fit that
-           * placeholder. This call therefore cannot fail today.
+          /* This retry runs against a buffer that _writer_flush_now() emptied,
+           * except after a flush whose own write was cut short, which leaves
+           * the undelivered remainder in place (see that function). The cap
+           * of async_buf stays exactly as it was, because _buf_reset() never
+           * shrinks it, and that cap is always at least CLOG_BUF_INITIAL,
+           * which is much larger than the small fallback placeholder, so this
+           * retry always succeeds in practice. The doc comment of
+           * _clog_write_unrepresentable_record() gives the same reason for
+           * lg->buf on the synchronous path and on the enqueue-failure path:
+           * a single-record buffer that the code always resets to empty
+           * first, and whose capacity can never drop below
+           * CLOG_BUF_INITIAL, never needs to grow to fit that placeholder. So
+           * this call cannot fail with the current constants.
            *
-           * The code checks the return value anyway. To discard it drops the
-           * record, and any backtrace with it, without a trace as soon as a
-           * future change breaks that "cannot fail" guarantee. A smaller
-           * CLOG_BUF_INITIAL, or a buffer of another size that the code
-           * shrank and then reused here, would be such a change. That is the
-           * class of failure that _clog_write_unrepresentable_record() exists
-           * to guard against at its OTHER two call sites. The check here, and
-           * the same last resort that needs no allocation and cannot fail
-           * itself, give this call site the same guarantee. */
+           * The code checks the return value anyway, because discarding it
+           * would drop the record, and any backtrace with it, without a
+           * trace as soon as a future change breaks that "cannot fail"
+           * guarantee, as a smaller CLOG_BUF_INITIAL, or a buffer of another
+           * size that the code shrank and then reused here, would do. That
+           * is the class of failure that _clog_write_unrepresentable_record()
+           * exists to guard against at its OTHER two call sites, and the
+           * check here, with the same last resort that needs no allocation
+           * and cannot fail itself, gives this call site the same
+           * guarantee. */
           if (!_clog_build_record(
                   &sh->async_buf, sh, fmt, job->level, &job->ts, job->proc_val,
                   job->file, job->line, job->func, job->msg, &fsrc,
                   job->with_backtrace, job->bt_syms, job->bt_depth, NULL)) {
             /* This writes real bytes straight to sh->fd and skips async_buf
-             * completely. The size check below never follows it, unlike
-             * every other write in this function. That check fires only off
-             * the length of async_buf, and this path never touches async_buf.
-             * The code therefore checks explicitly here. Without the check,
-             * this corner case, which is still not reachable in practice,
-             * lets size-based rotation fall behind the real size of the file
-             * on disk. Every other direct-write call site in this file does
-             * the same. Those sites are _clog_write_sync() and the
-             * enqueue-failure fallback of _clog_write_async(). Both check
-             * after their own write, whichever path produced it. */
+             * completely, so, unlike every other write in this function, the
+             * size check below never follows it: that check fires only off
+             * the length of async_buf, which this path never touches. So the
+             * code checks explicitly here; without the check, this corner
+             * case, which is not reachable in practice, lets size-based
+             * rotation fall behind the real size of the file on disk. Every
+             * other direct-write call site in this file (_clog_write_sync()
+             * and the enqueue-failure fallback of _clog_write_async()) does
+             * the same, and both check after their own write, whichever path
+             * produced it. */
             _clog_write_unrepresentable_record(sh, fmt, job->level,
                                                job->with_backtrace);
             _clog_size_rotate_if_due(sh);
@@ -6974,19 +6934,19 @@ static void *_clog_writer_thread_main(void *arg) {
 
 /*
  * Resolves the defaults of the configuration, creates the queue,
- * initializes the aggregation buffer and starts the writer thread. It rolls
- * back everything that it already built the moment that one step fails. The
- * code creates the queue first, so that there is nothing to unwind when that
- * step is the one that fails. It sets sh->async_enabled to true only after
- * every step succeeds. A state that is only part-initialized is therefore
- * never visible as "enabled".
+ * initializes the aggregation buffer and starts the writer thread, rolling
+ * back everything that it has already built the moment that one step fails.
+ * The code creates the queue first, so that there is nothing to unwind when
+ * that step is the one that fails, and it sets sh->async_enabled to true
+ * only after every step succeeds, so a state that is only part-initialized
+ * is never visible as "enabled".
  *
- * Each public constructor calls this as the very last thing that it does.
- * Every other part of the setup of that constructor is complete by then. For
- * clog_open_file_mp() that includes the block that configures rotation. That
- * thread does not exist until the rest of the construction is finished. The
- * writer thread therefore never sees the fields of sh while the thread that
- * constructs still fills them in.
+ * Each public constructor calls this as the very last thing that it does,
+ * when every other part of its setup is complete, which for
+ * clog_open_file_mp() includes the block that configures rotation. The
+ * writer thread does not exist until the rest of the construction is
+ * finished, so it never sees the fields of sh while the thread that
+ * constructs is still filling them in.
  */
 static bool _shared_async_init(clog_shared_t *sh,
                                const clog_async_cfg_t *async_cfg) {
@@ -6999,8 +6959,8 @@ static bool _shared_async_init(clog_shared_t *sh,
                                         : CLOG_DEFAULT_ASYNC_FLUSH_INTERVAL_US;
   sh->is_bounded_queue = (async_cfg->queue_size > 0);
 
-  char *err = NULL; /* The code discards this. clog_open_*_mp gives no error
-      string on any failure, which matches the convention of this file */
+  char *err = NULL; /* The code discards this, because clog_open_*_mp gives no
+      error string on any failure, which matches the convention of this file */
   if (sh->is_bounded_queue) {
     sh->q.circq = ccol_circular_queue_create_with_mprocs(async_cfg->queue_size,
                                                          sh->m_procs, &err);
@@ -7018,9 +6978,9 @@ static bool _shared_async_init(clog_shared_t *sh,
     return false;
   }
   /* The library must honour a flush_buffer_size that the caller sets above
-   * CLOG_BUF_MAX. It must not cap it at the smaller default that every other
-   * clog_buf_t in this file uses, because that default is meant for a single
-   * record. See the doc comment of clog_buf_t.cap_limit. */
+   * CLOG_BUF_MAX instead of capping it at the smaller default that every
+   * other clog_buf_t in this file uses, because that default is meant for a
+   * single record. See the doc comment of clog_buf_t.cap_limit. */
   _buf_raise_cap_limit(&sh->async_buf, sh->async_cfg.flush_buffer_size);
 
   clock_gettime(CLOCK_MONOTONIC, &sh->last_flush_monotonic);
@@ -7041,29 +7001,29 @@ static bool _shared_async_init(clog_shared_t *sh,
 }
 
 /*
- * Sends the shutdown sentinel. It tries again with a bounded backoff until
- * the queue accepts it. It never gives up after one attempt.
+ * Sends the shutdown sentinel, trying again with a bounded backoff until the
+ * queue accepts it, and never giving up after one attempt.
  *
- * One unchecked attempt is enough in practice for a BOUNDED queue.
+ * One unchecked attempt is enough in practice for a BOUNDED queue:
  * ccol_circq_send_zc() blocks until space frees, and the writer thread still
  * drains at this point, so space always appears. It is not enough for the
- * UNBOUNDED queue. ccol_dynmq_send_zc() never blocks, and it can fail with
+ * UNBOUNDED queue: ccol_dynmq_send_zc() never blocks, and it can fail with
  * ccol_not_enough_memory when its own internal node allocation fails under
- * memory pressure. That is exactly the condition that can make a caller
+ * memory pressure, which is exactly the condition that can make a caller
  * close loggers.
  *
- * To ignore that failure and go straight to ccol_thread_join() hangs
- * forever. The writer thread never receives the sentinel that it waits for,
- * and nothing else ever sends one for this function.
+ * Ignoring that failure and going straight to ccol_thread_join() hangs
+ * forever, because the writer thread never receives the sentinel that it
+ * waits for, and nothing else ever sends one for this function.
  *
- * The retry is deliberate, because to give up here has no safe fallback. The
- * library cannot abandon the writer thread without a join() first. The
- * caller of this function is about to free sh. Through _buf_free() and the
- * queue destroy it also frees the memory that the next loop iteration of the
- * writer thread still touches. To abandon the thread therefore turns a hang
- * into a use-after-free and a crash. clog_close() uses the same unbounded
- * poll-wait to wait out a concurrent resolver; see its own step 3. Both
- * exist because a give-up corrupts state that something else still uses. An
+ * The retry is deliberate, because giving up here has no safe fallback. The
+ * library cannot abandon the writer thread without a join() first: the
+ * caller of this function is about to free sh, and, through _buf_free() and
+ * the queue destroy, also the memory that the next loop iteration of the
+ * writer thread still touches, so abandoning the thread turns a hang into a
+ * use-after-free and a crash. clog_close() uses the same unbounded poll-wait
+ * to wait out a concurrent resolver (see its own step 3). Both exist because
+ * a give-up corrupts state that something else still uses, although an
  * unbounded wait is not free of cost.
  */
 static void _clog_send_shutdown_sentinel_blocking(clog_shared_t *sh) {
@@ -7074,29 +7034,29 @@ static void _clog_send_shutdown_sentinel_blocking(clog_shared_t *sh) {
                            ? ccol_circq_send_zc(sh->q.circq, &sentinel)
                            : ccol_dynmq_send_zc(sh->q.dynmq, &sentinel);
     if (rv == ccol_success) return;
-    /* Two failures reach here. The first is a transient allocation failure
-     * in the node allocation of the unbounded queue. The second is
-     * ccol_not_permitted, which _shared_async_teardown() rules out before
-     * it calls this. The code tries again. Without
-     * the retry, the writer thread waits for a sentinel that never arrives.
-     * usleep() is not a pthread or sem primitive, so it needs no wrapper in
-     * common.h. clog_close() uses it in the same way. */
+    /* Two failures reach here: a transient allocation failure in the node
+     * allocation of the unbounded queue, and ccol_not_permitted, which
+     * _shared_async_teardown() rules out before it calls this. The code tries
+     * again, because without the retry, the writer thread waits for a
+     * sentinel that never arrives. usleep() is not a pthread or sem
+     * primitive, so it needs no wrapper in common.h; clog_close() uses it in
+     * the same way. */
     usleep(delay_us);
     if (delay_us < 100000) delay_us *= 2; /* cap backoff at 100ms */
   }
 }
 
 /*
- * Joins the writer thread and destroys the queue and async_buf. Before that
- * it guarantees that the library really told the writer thread to stop. See
- * _clog_send_shutdown_sentinel_blocking() above.
+ * Joins the writer thread and destroys the queue and async_buf, after first
+ * making sure that the library really told the writer thread to stop (see
+ * _clog_send_shutdown_sentinel_blocking() above).
  *
- * Two paths use this function. The first is the teardown of the last handle
- * in clog_close(). The second is the rollback path of each constructor,
- * which runs when _clog_handle_acquire() fails after _shared_async_init()
- * already succeeded. No caller can submit a job through a handle that does
- * not exist yet. The sentinel is therefore always the only thing in the
- * queue on that path.
+ * Two paths use this function: the teardown of the last handle in
+ * clog_close(), and the rollback path of each constructor, which runs when
+ * _clog_handle_acquire() fails after _shared_async_init() has already
+ * succeeded. No caller can submit a job through a handle that does not
+ * exist yet, so on that path the sentinel is always the only thing in the
+ * queue.
  */
 static void _shared_async_teardown(clog_shared_t *sh) {
   /* The exit drain turns sends off (see _clog_exit_drain()); a close after
@@ -7132,8 +7092,8 @@ clog clog_open_fd_mp(int fd, clog_level_t min_level,
   if (!lg) return CLOG_INVALID;
 
   if (async_cfg && !_shared_async_init(lg->shared, async_cfg)) {
-    /* The code copies this pointer before _logger_free(lg) below, which
-     * frees `lg` itself. A read of lg->shared after that call is a
+    /* The code copies this pointer before _logger_free(lg) below, which frees
+     * `lg` itself, because a read of lg->shared after that call is a
      * use-after-free. */
     clog_shared_t *sh = lg->shared;
     _shared_close_owned_fd(sh);
@@ -7159,23 +7119,23 @@ clog clog_open_fd_mp(int fd, clog_level_t min_level,
 
 /*
  * Seeds sh->last_rotation for a time-rotating logger that opens a file which
- * already holds records. The interval then counts from the moment at which
- * the current file began, and not from this open, so that a process that
- * runs for less than the interval, or restarts often, still rotates. The
- * best available answer wins:
+ * already holds records, so that the interval counts from the moment at
+ * which the current file began, not from this open, and a process that runs
+ * for less than the interval, or restarts often, still rotates. The best
+ * available answer wins:
  *   1. The stamp of the newest rotated generation on disk. The rotation that
  *      made it also created the current file, at that moment.
  *   2. The birth time of the file, where the kernel and the filesystem
  *      report one.
  *   3. The last modification time of the file.
  * A seed in the future, from a clock that stepped back, starts the interval
- * now, so that the interval never runs longer than asked. The newest rotated
- * name that step 1 finds is also the one that _rotate() needs before its
- * first rotation, so this records it and saves that listing. Only a
- * generation counts (see clog_gen_filter_t); this listing writes no WARN
- * record, because the open can still join another target of the same file,
- * and the deletion pass of the first rotation names every entry that it
- * ignores.
+ * at the time of the open, so that the interval never runs longer than
+ * asked. The newest rotated name that step 1 finds is also the one that
+ * _rotate() needs before its first rotation, so this records it and saves
+ * that listing. Only a generation counts (see clog_gen_filter_t). This
+ * listing writes no WARN record, because the open can still join another
+ * target of the same file, and the deletion pass of the first rotation names
+ * every entry that it ignores.
  */
 static void _clog_seed_last_rotation(clog_shared_t *sh, int fd,
                                      const struct stat *st) {
@@ -7224,10 +7184,10 @@ clog clog_open_file_mp(const char *path, clog_level_t min_level,
   if (!ccol_verify_memmgmt_procs(mprocs, (char **)NULL)) return CLOG_INVALID;
 
   /* A rotating logger opens the directory of the file first, and then the
-   * file relative to it. It keeps that directory open for its whole life,
-   * and every rotation works relative to it. A relative path therefore
-   * names the same file for as long as the logger lives, whatever the
-   * working directory of the process becomes after this call. */
+   * file relative to it, and keeps that directory open for its whole life,
+   * with every rotation working relative to it. So a relative path names the
+   * same file for as long as the logger lives, whatever the working
+   * directory of the process becomes after this call. */
   int dir_fd = -1;
   int fd;
   if (cfg && (cfg->size_rotation_enabled || cfg->time_rotation_enabled)) {
@@ -7277,30 +7237,30 @@ clog clog_open_file_mp(const char *path, clog_level_t min_level,
           CLOG_DEFAULT_ROTATION_INTERVAL_US;
 
     /* The two substitutions above each sit behind size_rotation_enabled or
-     * time_rotation_enabled. This one does not. The prune applies to the
-     * rotated files that either mechanism produces, so it is a property of
-     * the whole rotation configuration. Most callers reach a 0 here because
-     * they leave the field at its zero-initialized default, and not by
-     * choice. Such a caller must not keep rotated files forever and fill the
-     * disk. The fallback to CLOG_DEFAULT_MAX_ROTATED_FILES here is what
+     * time_rotation_enabled, but this one does not, because the prune
+     * applies to the rotated files that either mechanism produces, so it is
+     * a property of the whole rotation configuration. Most callers reach a 0
+     * here because they leave the field at its zero-initialized default, not
+     * by choice, and such a caller must not keep rotated files forever and
+     * fill the disk; the fallback to CLOG_DEFAULT_MAX_ROTATED_FILES here
      * prevents that. It matches the <= 0 fallback of the other two rotation
      * fields exactly. */
     if (cfg->max_rotated_files <= 0)
       lg->shared->rotation.max_rotated_files = CLOG_DEFAULT_MAX_ROTATED_FILES;
 
-    /* This starts the byte counter from the current size on disk.
-     * Size-based rotation needs it, so that it counts a file that already
-     * exists and is not empty and that the library opens for append. Without
-     * it, the counter assumes that the file starts empty.
+    /* This starts the byte counter from the current size on disk, which
+     * size-based rotation needs so that it counts a file that already exists,
+     * is not empty, and is opened by the library for append; without it, the
+     * counter assumes that the file starts empty.
      *
-     * fstat() can hardly fail on an fd that this function just opened. The
-     * code still does not treat that failure as unreachable. It tries an
-     * lseek() to the end of the file as a fallback. That lseek() is harmless
-     * under O_APPEND, which always appends at the true end of the file
-     * whatever offset the fd caches. When size rotation is on and BOTH
-     * calls fail, this constructor fails. Without that, it under-counts a
-     * file that can be large and lets it grow far past the max_file_size
-     * that the caller configured before the first rotation fires. */
+     * fstat() can hardly fail on an fd that this function just opened, but
+     * the code does not treat that failure as unreachable: it tries an
+     * lseek() to the end of the file as a fallback, which is harmless under
+     * O_APPEND, because O_APPEND always appends at the true end of the file
+     * whatever offset the fd caches. When size rotation is on and BOTH calls
+     * fail, this constructor fails; otherwise it would under-count a file
+     * that can be large and let it grow far past the max_file_size that the
+     * caller configured before the first rotation fires. */
     struct stat st;
     bool have_size = false;
     if (fstat(fd, &st) == 0) {
@@ -7326,12 +7286,12 @@ clog clog_open_file_mp(const char *path, clog_level_t min_level,
   }
 
   /* The async setup runs strictly after the rotation configuration block
-   * above, and never at the same time as it. The writer thread must never
-   * see the rotation fields of sh while this constructing thread still fills
-   * them in. */
+   * above, and never at the same time as it, because the writer thread must
+   * never see the rotation fields of sh while this constructing thread is
+   * still filling them in. */
   if (async_cfg && !_shared_async_init(lg->shared, async_cfg)) {
-    /* The code copies this pointer before _logger_free(lg) below, which
-     * frees `lg` itself. A read of lg->shared after that call is a
+    /* The code copies this pointer before _logger_free(lg) below, which frees
+     * `lg` itself, because a read of lg->shared after that call is a
      * use-after-free. */
     clog_shared_t *sh = lg->shared;
     _shared_close_owned_fd(sh);
@@ -7362,36 +7322,36 @@ clog clog_open_file_mp(const char *path, clog_level_t min_level,
  */
 static void _clog_shared_finish_last(clog_shared_t *sh) {
   /* This removes sh from live_shareds under a fresh acquisition of the
-   * write lock. It runs strictly BEFORE anything else here touches
-   * sh->mutex again. See "Fork safety" for why that order matters. */
+   * write lock, strictly BEFORE anything else here touches sh->mutex again;
+   * see "Fork safety" for why that order matters. */
   ccol_rw_lock_wrlock(clog_slot_table.rwlock);
   _clog_shareds_remove(clog_slot_table.live_shareds, sh);
   ccol_rw_lock_unlock(clog_slot_table.rwlock);
 
   /* This runs while the code does NOT hold sh->mutex. The loop of the
-   * writer thread locks that same mutex itself, to process everything
-   * ahead of the shutdown sentinel and the final flush of the sentinel. To
-   * hold it here across the ccol_thread_join() inside
-   * _shared_async_teardown() is a self-deadlock. The writer thread could
-   * never lock it to reach the sentinel at all.
+   * writer thread locks that same mutex itself to process everything ahead
+   * of the shutdown sentinel and the final flush of the sentinel, so holding
+   * it here across the ccol_thread_join() inside _shared_async_teardown() is
+   * a self-deadlock: the writer thread could never lock it to reach the
+   * sentinel at all.
    *
-   * This must also run BEFORE the code closes the fd below. Other sibling
-   * handles that are already closed can still have jobs in the queue. The
-   * writer thread must drain and write those jobs at this exact
+   * This must also run BEFORE the code closes the fd below, because other
+   * sibling handles that are already closed can still have jobs in the
+   * queue, which the writer thread must drain and write at this exact
    * instant. */
   if (sh->async_enabled) _shared_async_teardown(sh);
 
-  /* This runs after the writer thread stops, because that thread can
-   * still rotate, and queue a compression, while it drains. It finishes
-   * every queued compression before it returns, and it runs before the
-   * close of dir_fd below, which those compressions use. */
+  /* This runs after the writer thread stops, because that thread can still
+   * rotate, and queue a compression, while it drains. It finishes every
+   * queued compression before it returns, and it runs before the close of
+   * dir_fd below, which those compressions use. */
   _shared_compressor_teardown(sh);
 
   _shared_close_owned_fd(sh);
-  /* The target leaves file_shareds only now that its threads are stopped
-   * and its descriptors are closed. An open of the same file until this
-   * point waits for it, and does not build a second target that writes the
-   * file while this one still rotates or compresses it. */
+  /* The target leaves file_shareds only once its threads are stopped and
+   * its descriptors are closed. Until that point, an open of the same file
+   * waits for it instead of building a second target that writes the file
+   * while this one still rotates or compresses it. */
   if (sh->file_id_known) {
     ccol_rw_lock_wrlock(clog_slot_table.rwlock);
     _clog_shareds_remove(clog_slot_table.file_shareds, sh);
@@ -7456,17 +7416,17 @@ static void _clog_shared_unref(clog_shared_t *sh) {
 
 /*
  * The last step of clog_open_file_mp(). h is the handle of lg, a new logger
- * whose new target sh writes the file. Two targets that write one file, where
- * at least one of them rotates, lose records: each renames, prunes and
- * compresses files that the other one still writes. One file therefore has
- * one target in a process whenever either open rotates.
+ * whose new target sh writes the file. Two targets that write one file,
+ * where at least one of them rotates, lose records, because each renames,
+ * prunes and compresses files that the other one still writes. So one file
+ * has one target in a process whenever either open rotates.
  *
  * When no other target writes the same directory entry, sh joins
  * file_shareds and h is the result. When a target that writes it exists and
  * either of the two rotates, the new target is closed again, and the open
  * joins the existing target with a new logger of its own level, exactly as
  * clog_derive() joins a target, when the two configurations are the same
- * (see _clog_file_targets_compatible()). It fails with CLOG_INVALID when
+ * (see _clog_file_targets_compatible()); it fails with CLOG_INVALID when
  * they differ. Two targets that both do not rotate stay independent: each
  * appends whole records to the file, and neither renames it. An existing
  * target whose last close is still running is waited for, because it can
@@ -7490,14 +7450,14 @@ static clog _clog_file_register_or_attach(clog h, clog_shared_t *sh,
         match = fs;
     }
     if (!match) {
-      /* The recovery runs before the target is published, under the table
-       * lock that another opener of the same file needs to find it. No
-       * other handle can therefore rotate this file, and no compression of
-       * this target can publish a ".gz" file, while the recovery lists the
-       * directory and removes the ".gz" file of each source that it saw.
-       * Once published, a joined handle can rotate and its compression can
-       * finish between that listing and that removal, and the removal then
-       * deletes a finished output whose source is already gone. */
+      /* The recovery runs before the target is published, under the table lock
+       * that another opener of the same file needs to find it, so no other
+       * handle can rotate this file, and no compression of this target can
+       * publish a ".gz" file, while the recovery lists the directory and
+       * removes the ".gz" file of each source that it saw. Once the target
+       * is published, a joined handle could rotate and its compression could
+       * finish between that listing and that removal, and the removal would
+       * then delete a finished output whose source is already gone. */
       if (sh->rotation_enabled) {
         ccol_mutex_lock(sh->mutex);
         _clog_remove_stale_live_tmps(sh);
@@ -7530,7 +7490,7 @@ static clog _clog_file_register_or_attach(clog h, clog_shared_t *sh,
     ccol_rw_lock_unlock(clog_slot_table.rwlock);
     if (refs == 0) {
       /* usleep() is not a pthread or sem primitive, so it needs no wrapper
-       * in common.h. clog_close() waits in the same way. */
+       * in common.h; clog_close() waits in the same way. */
       usleep(delay_us);
       if (delay_us < 100000) delay_us *= 2;
       continue;
@@ -7555,10 +7515,10 @@ void clog_close(clog h) {
   struct clogger *raw;
   clog_shared_t *sh;
 
-  /* Step 1-2: resolve+validate and mark in_use = false, both under the
-   * table's write lock (must exclude a concurrent resolve from starting
-   * once the close begins). Double-close is a fatal programming error,
-   * matching chttpsvr's own explicit design. */
+  /* Steps 1-2: resolve and validate, and mark in_use = false, both under the
+   * write lock of the table, which must keep a concurrent resolve from
+   * starting once the close begins. A double close is a fatal programming
+   * error, matching the explicit design of chttpsvr. */
   {
     ccol_call_once(clog_slot_table.once, _clog_slot_table_init_globals);
     if (h == 0)
@@ -7578,25 +7538,24 @@ void clog_close(clog h) {
     raw = slot->ptr;
     sh = raw->shared;
     slot->in_use = false;
-    /* The charge runs from here, where nothing can find this close any more,
-     * to the last statement of the function. That is the whole span over
-     * which the close still reads the vectors of the table. Every exit
-     * between the two points is a fatal abort, so the count cannot be
-     * stranded. */
+    /* The charge runs from here, where nothing can find this close, to the
+     * last statement of the function, which is the whole span over which the
+     * close still reads the vectors of the table. Every exit between the two
+     * points is a fatal abort, so the count cannot be stranded. */
     clog_slot_table.closes_in_flight++;
-    /* This is the same step, under the same lock. From here no new resolve
-     * can find this handle. That is what lets the pin count below reach zero
+    /* This is the same step, under the same lock. From here on no new resolve
+     * can find this handle, which is what lets the pin count below reach zero
      * and stay there. */
     ccol_pintable_retire(&clog_pintable, idx);
     ccol_rw_lock_unlock(clog_slot_table.rwlock);
   }
 
   /* Step 3: poll-wait until every in-flight operation that holds a pin on
-   * this exact handle finishes. That includes one that may still hold
-   * raw->fields_mutex, which step 4 below destroys. There is no upper bound.
-   * To give up here frees memory that a live resolver still points at.
-   * usleep() is not a pthread or sem primitive, so it needs no wrapper in
-   * common.h. */
+   * this exact handle finishes, including one that may still hold
+   * raw->fields_mutex, which step 4 below destroys. There is no upper bound,
+   * because giving up here would free memory that a live resolver still
+   * points at. usleep() is not a pthread or sem primitive, so it needs no
+   * wrapper in common.h. */
   {
     uint32_t idx = (uint32_t)(h >> 32);
     unsigned int delay_us = 1;
@@ -7607,10 +7566,10 @@ void clog_close(clog h) {
   }
 
 #ifdef RUNNING_UNIT_TESTS
-  /* This widens the window where in_use is false and freed is false, from
-   * here to step 4 below. It is for a test only, and it is deterministic.
-   * See the doc comment of clog_test_set_close_finalize_delay_us(). Outside
-   * a test that arms it, it reads a plain 0 and does nothing. */
+  /* This widens the window in which in_use is false and freed is false, from
+   * here to step 4 below, deterministically and for a test only; see the
+   * doc comment of clog_test_set_close_finalize_delay_us(). Outside a test
+   * that arms it, it reads a plain 0 and does nothing. */
   {
     unsigned int d = atomic_load(&_clog_test_close_finalize_delay_us);
     if (d) {
@@ -7620,14 +7579,14 @@ void clog_close(clog h) {
   }
 #endif
 
-  /* Step 4: take the write lock again. Under it the code destroys the
-   * per-handle state of raw, which includes fields_mutex, and retires its
-   * slot. This must happen under the SAME lock that _clog_atfork_prepare
-   * needs before it can even try to lock the fields_mutex of a slot with
-   * freed == false. The two operations therefore cannot interleave. See
-   * "Fork safety" for the full reasoning.
+  /* Step 4: take the write lock again, and under it destroy the per-handle
+   * state of raw, which includes fields_mutex, and retire its slot. This
+   * must happen under the SAME lock that _clog_atfork_prepare needs before it
+   * can even try to lock the fields_mutex of a slot with freed == false, so
+   * the two operations cannot interleave; see "Fork safety" for the full
+   * reasoning.
    *
-   * This step also does the final bookkeeping of the slot. It clears ptr,
+   * This step also does the final bookkeeping of the slot: it clears ptr,
    * increments the generation again, and pushes the index onto the free
    * list. There is no reason to defer that work until after the teardown of
    * the shared object below, which can be slow. */
@@ -7645,9 +7604,9 @@ void clog_close(clog h) {
   }
 
 #ifdef RUNNING_UNIT_TESTS
-  /* This widens the window in which this close already cleared its own
-   * slot->ptr but is not yet finished with the table. It is for a test only,
-   * and it is deterministic. See the doc comment of
+  /* This widens the window in which this close has already cleared its own
+   * slot->ptr but is not yet finished with the table, deterministically and
+   * for a test only; see the doc comment of
    * clog_test_set_close_release_window_us(). Outside a test that arms it, it
    * reads a plain 0 and does nothing. */
   {
@@ -7660,8 +7619,8 @@ void clog_close(clog h) {
 #endif
 
   /* Step 5: decrement the shared ref count. This never holds the write lock
-   * of the slot table and shared->mutex at the same time. Step 4 releases
-   * the write lock before this step takes shared->mutex. */
+   * of the slot table and shared->mutex at the same time, because step 4
+   * releases the write lock before this step takes shared->mutex. */
   ccol_mutex_lock(sh->mutex);
   int remaining = --sh->ref_count;
   ccol_mutex_unlock(sh->mutex);
@@ -7669,22 +7628,22 @@ void clog_close(clog h) {
   /* Step 6: only the last handle sharing sh actually frees it. */
   if (remaining == 0) _clog_shared_finish_last(sh);
 
-  /* This is last of all. The destructor that runs at process exit can find a
-   * logger that is still open. It cannot release the table in that case, so
-   * the release falls to whichever close is the last one out. That can be
-   * this call. It has to happen after everything above. A release of the
-   * table destroys live_shareds together with the slot vectors, and step 6
-   * walks live_shareds.
+  /* This comes last of all. The destructor that runs at process exit can
+   * find a logger that is still open, and it cannot release the table in
+   * that case, so the release falls to whichever close is the last one out,
+   * which can be this call. It has to happen after everything above,
+   * because a release of the table destroys live_shareds together with the
+   * slot vectors, and step 6 walks live_shareds.
    *
-   * A release in step 4 instead makes the two conditions one condition and
-   * not two independent ones. An attempt there could never fire, because
-   * this close charged itself against the table in step 1 and still counts
-   * as a user of it. The library would then never release the table.
+   * A release in step 4 instead would make the two conditions one condition
+   * rather than two independent ones, and an attempt there could never fire,
+   * because this close charged itself against the table in step 1 and still
+   * counts as a user of it, so the library would never release the table.
    *
    * Position alone is only enough for one thread. A concurrent close that
-   * already cleared its own slot is invisible to the "is any slot still
-   * live" scan while it sits between its own steps 4 and 6. This call would
-   * therefore destroy live_shareds under it. The closes_in_flight count that
+   * has already cleared its own slot is invisible to the "is any slot still
+   * live" scan while it sits between its own steps 4 and 6, so this call
+   * could destroy live_shareds under it; the closes_in_flight count that
    * this decrement belongs to is what makes the guard cover that case too. A
    * sibling handle that is still open keeps the table either way. */
   ccol_rw_lock_wrlock(clog_slot_table.rwlock);
@@ -7699,8 +7658,8 @@ clog clog_derive(clog parent_h) {
     ccol_fatal_err(
         "clog_derive: clog handle is invalid, stale, or already closed");
 
-  /* min_level is _Atomic; reading it directly here (as _clog_write()'s own
-   * fast path already does) needs no lock of its own. */
+  /* min_level is _Atomic, so reading it directly here, as the fast path of
+   * _clog_write() already does, needs no lock of its own. */
   struct clogger *child = _logger_alloc(parent->shared, parent->min_level);
   if (!child) {
     _clog_resolve_unpin(parent);
@@ -7708,11 +7667,11 @@ clog clog_derive(clog parent_h) {
   }
 
   /* This copies the fields of parent into the independent field map of the
-   * child. parent->fields_mutex alone guards it, and not shared->mutex. That
-   * is the same lock that clog_set_field(), clog_remove_field() and
-   * clog_clear_fields() take. The copy therefore synchronises against a
-   * concurrent change to the field map of parent. It does not contend with
-   * an unrelated write in progress on a sibling logger that shares the same
+   * child under parent->fields_mutex alone, not shared->mutex. That is the
+   * same lock that clog_set_field(), clog_remove_field() and
+   * clog_clear_fields() take, so the copy synchronises against a concurrent
+   * change to the field map of parent without contending with an unrelated
+   * write in progress on a sibling logger that shares the same
    * shared->mutex. */
   ccol_mutex_lock(parent->fields_mutex);
   if (chmap_elem_count(parent->fields) > 0) {
@@ -7728,10 +7687,9 @@ clog clog_derive(clog parent_h) {
       const char *v = (const char *)it->val_pair->ptr;
       cmap_pair kp = {.ptr = (void *)k, .size = strlen(k) + 1};
       cmap_pair vp = {.ptr = (void *)v, .size = strlen(v) + 1};
-      /* ccol_key_already_present is a documented success. It means that the
-       * map wrote the value in place. It is not a failure. Only a genuine
-       * failure, such as ccol_invalid_args or ccol_not_enough_memory, stops
-       * the derive. */
+      /* ccol_key_already_present is a documented success, meaning that the map
+       * wrote the value in place, not a failure. Only a genuine failure, such
+       * as ccol_invalid_args or ccol_not_enough_memory, stops the derive. */
       ccol_retval_t rv = chmap_insert_elem(child->fields, &kp, &vp);
       if (rv != ccol_success && rv != ccol_key_already_present) {
         ccol_iter_destroy(it);
@@ -7746,21 +7704,21 @@ clog clog_derive(clog parent_h) {
   ccol_mutex_unlock(parent->fields_mutex);
 
   /* The whole derive tree shares ref_count, so it still needs
-   * shared->mutex. The code holds that mutex only for this short increment.
-   * parent stays alive for the whole duration of this call, because its own
-   * pin is held throughout. parent->shared is therefore not destroyed yet.
-   * It is safe to take this lock here, without holding it from the top of
-   * the function. */
+   * shared->mutex, but the code holds that mutex only for this short
+   * increment. parent stays alive for the whole duration of this call,
+   * because its own pin is held throughout, so parent->shared is not
+   * destroyed yet, and it is safe to take this lock here without holding it
+   * from the top of the function. */
   ccol_mutex_lock(parent->shared->mutex);
   parent->shared->ref_count++;
   ccol_mutex_unlock(parent->shared->mutex);
 
   clog h = _clog_handle_acquire(child);
   if (h == CLOG_INVALID) {
-    /* child->shared == parent->shared. parent->shared is still fully alive
-     * here, because the pin of parent is held through this whole function. A
-     * read of child->shared->m_procs inside _logger_free(child) below is
-     * therefore always safe. */
+    /* child->shared == parent->shared, and parent->shared is still fully alive
+     * here, because the pin of parent is held through this whole function, so
+     * a read of child->shared->m_procs inside _logger_free(child) below is
+     * always safe. */
     ccol_mutex_lock(parent->shared->mutex);
     parent->shared->ref_count--;
     ccol_mutex_unlock(parent->shared->mutex);
@@ -7778,17 +7736,17 @@ clog clog_derive(clog parent_h) {
 /* ========================================================================== */
 
 /*
- * min_level lives on struct clogger and not on clog_shared_t. It is a
- * setting of one logger, and it is fully independent of every sibling logger
- * that shares the same target. See the comment on the field itself.
+ * min_level lives on struct clogger and not on clog_shared_t, because it is
+ * a setting of one logger, fully independent of every sibling logger that
+ * shares the same target; see the comment on the field itself.
  *
- * A read or a write of it through lg->shared->mutex would serialise
- * clog_set_level() and clog_get_level() on ONE logger. It would serialise
- * them against a write, a rotation, or a gzip compression handoff on an
- * unrelated SIBLING logger. That brings no correctness benefit. The atomicity
- * of min_level is what makes an unlocked read of it free of a race. The
- * fast-path check of _clog_write(), and the locked re-check of
- * _clog_write_sync(), both rely on that property and not on a lock.
+ * Reading or writing it through lg->shared->mutex would serialise
+ * clog_set_level() and clog_get_level() on ONE logger against a write, a
+ * rotation, or a gzip compression handoff on an unrelated SIBLING logger,
+ * with no correctness benefit. The atomicity of min_level is what makes an
+ * unlocked read of it free of a race, and the fast-path check of
+ * _clog_write() and the locked re-check of _clog_write_sync() both rely on
+ * that property, not on a lock.
  *
  * A plain read or write of an _Atomic lvalue is itself sequentially
  * consistent, so this needs no lock at all, not even a lighter one.
@@ -7895,8 +7853,8 @@ void clog_set_field(clog h, const char *key, const char *value) {
   /* This rejects a key that would corrupt logfmt output or RFC 5424 SD
    * output. An RFC 5424 SD-PARAM-NAME needs at least one character, and
    * every character must come from PRINTUSASCII (0x21 to 0x7e). The test
-   * c < 0x21 rejects both a control character and a space in one comparison.
-   * The test c > 0x7e rejects DEL and every non-ASCII byte from 0x80 to
+   * c < 0x21 rejects both a control character and a space in one comparison,
+   * and the test c > 0x7e rejects DEL and every non-ASCII byte from 0x80 to
    * 0xff, which PRINTUSASCII also excludes. */
   if (*key == '\0' || _is_reserved_field_key(key)) {
     _clog_resolve_unpin(lg);
@@ -7911,11 +7869,11 @@ void clog_set_field(clog h, const char *key, const char *value) {
     }
   }
 
-  /* The fields_mutex of this logger guards this, and not shared->mutex. The
-   * field map of this logger is fully independent of every sibling logger
-   * that shares the same backing store. A change to a field here must
-   * therefore not contend with an unrelated write in progress on a sibling.
-   * See the doc comment of fields_mutex on struct clogger. */
+  /* The fields_mutex of this logger guards this, not shared->mutex, because
+   * the field map of this logger is fully independent of every sibling
+   * logger that shares the same backing store, so a change to a field here
+   * must not contend with an unrelated write in progress on a sibling. See
+   * the doc comment of fields_mutex on struct clogger. */
   ccol_mutex_lock(lg->fields_mutex);
 
   cmap_pair kp = {.ptr = (void *)key, .size = strlen(key) + 1};
@@ -7963,48 +7921,48 @@ void clog_clear_fields(clog h) {
 /* ========================================================================== */
 
 /*
- * This is the real synchronous body. It builds and writes one record right
- * now. It walks the live fields under lg->fields_mutex, and it uses a fresh
- * (fmt, ap) pair. It makes its own internal va_copy for the vsnprintf retry
- * that goes from the stack buffer to a heap buffer.
+ * This is the real synchronous body, which builds and writes one record
+ * immediately. It walks the live fields under lg->fields_mutex and uses a
+ * fresh (fmt, ap) pair, making its own internal va_copy for the vsnprintf
+ * retry that goes from the stack buffer to a heap buffer.
  *
- * Two callers use it. The first is the FATAL branch and the non-async branch
- * of _clog_write(). The second is the fallback of _clog_write_async() for a
- * failed envelope allocation. That is the one case where nothing specific to
- * the async path happened yet, and ap is still completely fresh.
+ * Two callers use it: the FATAL branch and the non-async branch of
+ * _clog_write(), and the fallback of _clog_write_async() for a failed
+ * envelope allocation, which is the one case where nothing specific to the
+ * async path has happened yet, so ap is still completely fresh.
  *
- * bt_syms and bt_depth are inputs that the caller already captured. See the
- * doc comment of _capture_backtrace() for why this function never captures
- * them itself. This function only reads them, and it never frees bt_syms.
- * Whichever caller captured bt_syms keeps that responsibility.
+ * bt_syms and bt_depth are inputs that the caller has already captured (see
+ * the doc comment of _capture_backtrace() for why this function never
+ * captures them itself). This function only reads them and never frees
+ * bt_syms; whichever caller captured bt_syms keeps that responsibility.
  *
  * Precondition: NONE. This function takes and releases shared->mutex itself,
- * for its whole body. A caller must never wrap a call to it in its own lock.
+ * for its whole body, so a caller must never wrap a call to it in its own
+ * lock.
  *
  * The attribute __attribute__((format(printf, 9, 0))) lets the internal
  * vsnprintf(msg_stack or msg_heap, ..., fmt, ap) calls below pass fmt and ap
- * straight through. In that attribute fmt is parameter 9. The 0 means that
- * the variadic arguments already sit in the va_list ap, so there is no first
- * variadic parameter to name. Without the attribute, the
+ * straight through. In that attribute fmt is parameter 9, and the 0 means
+ * that the variadic arguments already sit in the va_list ap, so there is no
+ * first variadic parameter to name. Without the attribute, the
  * -Wformat-nonliteral warning of Clang reports that fmt is not a literal at
  * those call sites.
  *
  * fmt is indeed never a literal here, because it is a parameter of this
- * function. _clog_write() forwards it unchanged from its own variadic call.
- * The compiler already checks the format there, because clogger.h puts the
+ * function that _clog_write() forwards unchanged from its own variadic call,
+ * where the compiler already checks the format, because clogger.h puts the
  * same attribute on that function. This moves the real check of the format
- * string
- * and the argument types to the call sites of _clog_write(), where fmt is a
- * literal. The two other options are to lose the check completely, or to
- * suppress it with a pragma.
+ * string and the argument types to the call sites of _clog_write(), where
+ * fmt is a literal, instead of the two other options: losing the check
+ * completely, or suppressing it with a pragma.
  */
 static bool _clog_exit_lock_target(clog_shared_t *sh,
                                    const struct timespec *deadline);
 static bool _clog_fatal_lock_target(clog_shared_t *sh,
                                     const struct timespec *deadline);
 
-/* The write of the record of a CLOG_FATAL call; _clog_write_record() with
- * the answer whether every byte went out. The writes are bounded by then;
+/* The write of the record of a CLOG_FATAL call: _clog_write_record(), plus
+ * the answer whether every byte went out. By then the writes are bounded;
  * see _clog_write_fatal(). */
 static __attribute__((noinline, cold)) bool _clog_fatal_write_record(
     clog_shared_t *sh, clog_format_t fmt, const char *data, size_t len) {
@@ -8030,15 +7988,15 @@ _clog_write_sync_body(struct clogger *lg, clog_level_t level, const char *file,
                       va_list ap, va_list ap2, bool fatal,
                       const struct timespec *deadline) {
   bool delivered = true;
-  /* The identity of the calling thread needs no lock. It comes from the
-   * cache of this thread. */
+  /* The identity of the calling thread needs no lock, because it comes from
+   * the cache of this thread. */
   const char *proc_val = _clog_tident_get()->proc;
 
   if (fatal) {
     if (!_clog_fatal_lock_target(lg->shared, deadline)) return false;
-    /* Every write to a sink that is not a regular file now ends by the
-     * deadline: a pipe, a socket, a terminal and every other device that
-     * poll(2) reports on can take nothing more. A regular file keeps the
+    /* From this point, every write to a sink that is not a regular file ends
+     * by the deadline: a pipe, a socket, a terminal and every other device
+     * that poll(2) reports on can take nothing more. A regular file keeps the
      * ordinary path. */
     struct stat st;
     if (lg->shared->sink_kind != CLOG_SINK_PLAIN ||
@@ -8049,14 +8007,14 @@ _clog_write_sync_body(struct clogger *lg, clog_level_t level, const char *file,
     ccol_mutex_lock(lg->shared->mutex);
   }
 
-  /* CLOG_FATAL skips the level filter. The library must always record the
-   * cause of a stop, whatever min_level says.
+  /* CLOG_FATAL skips the level filter, because the library must always
+   * record the cause of a stop, whatever min_level says.
    *
    * For the common case this re-check repeats the fast, unlocked check of
    * _clog_write(). Both read the same _Atomic min_level, so neither needs
    * shared->mutex to be free of a race against a concurrent clog_set_level()
    * call. The re-check exists so that a level change which lands between the
-   * fast-path check and this point still applies to this one call. That is
+   * fast-path check and this point still applies to this one call, which is
    * the same rare boundary-line race that the fast path itself documents and
    * accepts. */
   if (level < lg->min_level && level != CLOG_FATAL) {
@@ -8103,12 +8061,12 @@ _clog_write_sync_body(struct clogger *lg, clog_level_t level, const char *file,
   /* ----------------------------------------------------------------------- */
   /* This function writes its record straight to the fd. For an async target
    * the last write to that fd can have stopped in the middle of a record,
-   * with the continuation of that record kept for a later flush. A write
-   * here without a settle first puts this record between the two halves of
-   * another one. The flag is false for every synchronous logger, and for
-   * every async one with nothing outstanding. The common case is therefore
-   * one byte of a cache line that this function already read, plus a branch
-   * that falls through. See clog_shared_t.async_partial_record. */
+   * with the continuation of that record kept for a later flush, so a write
+   * here without a settle first would put this record between the two halves
+   * of another one. The flag is false for every synchronous logger, and for
+   * every async one with nothing outstanding, so the common case costs one
+   * byte of a cache line that this function already read, plus a branch that
+   * falls through. See clog_shared_t.async_partial_record. */
   if (lg->shared->async_partial_record)
     _clog_flush_and_settle(lg->shared, log_fmt,
                            CLOG_SPLIT_RECORD_DRAIN_WAIT_MS);
@@ -8153,10 +8111,10 @@ _clog_write_sync_body(struct clogger *lg, clog_level_t level, const char *file,
   }
 
   /* The backtrace frames of syslog are exempt from the batch, and
-   * _clog_build_record() above did NOT append them. The code writes them
-   * now, strictly after the write of the primary record. JSON already put
-   * its backtrace inline. The lines of logfmt already went into lg->buf
-   * above. */
+   * _clog_build_record() above did NOT append them, so the code writes them
+   * here, strictly after the write of the primary record. JSON has already
+   * put its backtrace inline, and the lines of logfmt have already gone into
+   * lg->buf above. */
   if (with_backtrace && lg->shared->fd >= 0 && log_fmt == CLOG_FMT_SYSLOG)
     _emit_backtrace_syslog_lines(&lg->buf, lg->shared, level, &ts, bt_syms,
                                  bt_depth);
@@ -8181,50 +8139,51 @@ static void __attribute__((format(printf, 9, 0))) _clog_write_sync(
   va_end(ap2);
 }
 
-/* This is a forward declaration. The definition sits further down, because
- * it needs clog_async_ctrl_t, clog_async_msg_t and its own test hooks. This
- * file introduces all three later. _clog_write_async() below must call it;
- * see the doc comment of that function for the reason. */
+/* A forward declaration: the definition sits further down, because it needs
+ * clog_async_ctrl_t, clog_async_msg_t and its own test hooks, which this
+ * file introduces later. _clog_write_async() below must call it; see the doc
+ * comment of that function for the reason. */
 static void _clog_flush_pinned(struct clogger *lg);
 
 /*
  * Formats one job and puts it on the queue for the writer thread.
  *
  * When the allocation of the envelope fails, nothing specific to the async
- * path happened yet and ap is still fresh. The whole call then goes to
+ * path has happened yet and ap is still fresh, so the whole call goes to
  * _clog_write_sync().
  *
- * A later enqueue can also fail. The two causes are a failed node allocation
- * in the unbounded queue, and ccol_not_permitted, which every send gets once
- * the exit drain has emptied the target (see _clog_exit_drain()). By then
- * the vsnprintf call of this function already consumed ap and ap2, so the
- * code cannot reuse _clog_write_sync(). It instead builds and writes the
- * record directly from the job, which is fully populated by then. It does
- * that under lg->shared->mutex, through the lg->buf of the CALLING handle,
- * except that a record joins sh->async_buf behind whole records that a
- * transient write error left there (see below). This function never drops a
- * message, or a backtrace that the caller asked for, on any path.
+ * A later enqueue can also fail, either because of a failed node allocation
+ * in the unbounded queue, or with ccol_not_permitted, which every send gets
+ * once the exit drain has emptied the target (see _clog_exit_drain()). By
+ * then the vsnprintf call of this function has already consumed ap and ap2,
+ * so the code cannot reuse _clog_write_sync(). Instead it builds and writes
+ * the record directly from the job, which is fully populated by then, under
+ * lg->shared->mutex, through the lg->buf of the CALLING handle, except that
+ * a record joins sh->async_buf behind whole records that a transient write
+ * error left there (see below). This function never drops a message, or a
+ * backtrace that the caller asked for, on any path.
  *
  * Before that direct write, the code calls _clog_flush_pinned() to drain
  * everything that is already queued ahead of this job. Without that call,
  * the record of this job can win the race for lg->shared->mutex against the
- * writer thread. It then lands on disk BEFORE an earlier job that the queue
- * already accepted, from this same handle or from a sibling that shares the
- * same target, and that the writer thread did not reach yet. That reorders
- * the log output against the order of submission. It is also most likely
- * under the same memory pressure that made the enqueue of THIS job fail.
+ * writer thread and land on disk BEFORE an earlier job that the queue has
+ * already accepted (from this same handle or from a sibling that shares the
+ * same target) and that the writer thread has not reached yet. That
+ * reorders the log output against the order of submission, and it is most
+ * likely under the same memory pressure that made the enqueue of THIS job
+ * fail.
  *
- * The queue send inside that flush can fail under the same condition.
- * _clog_flush_pinned() then returns at once and does not hang; see its own
- * doc comment. The flush therefore stays a best effort. It is not a new way
- * for a queue that stays broken to hang a log call.
+ * The queue send inside that flush can fail under the same condition, in
+ * which case _clog_flush_pinned() returns at once instead of hanging (see
+ * its own doc comment). So the flush stays a best effort, and does not give
+ * a queue that stays broken a new way to hang a log call.
  *
  * The attribute __attribute__((format(printf, 9, 0))) matches the attribute
- * on _clog_write_sync(), for the same reason. fmt is parameter 9 and this
- * function forwards it. It is never a literal at the internal
+ * on _clog_write_sync(), for the same reason: fmt is parameter 9, which this
+ * function forwards, and it is never a literal at the internal
  * vsnprintf(job->msg_inline or job->msg_heap, ..., fmt, ap) call sites
- * below. The real check therefore belongs at the call sites of
- * _clog_write(), where the compiler already checks the format.
+ * below, so the real check belongs at the call sites of _clog_write(), where
+ * the compiler already checks the format.
  */
 static void __attribute__((format(printf, 9, 0))) _clog_write_async(
     struct clogger *lg, clog_level_t level, const char *file, int line,
@@ -8241,7 +8200,7 @@ static void __attribute__((format(printf, 9, 0))) _clog_write_async(
   envelope->kind = CLOG_ASYNC_MSG_JOB;
   clog_async_job_t *job = &envelope->u.job;
 
-  job->bt_syms = bt_syms; /* the job now owns this */
+  job->bt_syms = bt_syms; /* the job owns this from here */
   job->bt_depth = bt_depth;
   job->level = level;
   job->file = file;
@@ -8293,15 +8252,14 @@ static void __attribute__((format(printf, 9, 0))) _clog_write_async(
                          : ccol_dynmq_send_zc(lg->shared->q.dynmq, &m);
   if (rv != ccol_success) {
     /* This drains everything that is already on the queue, from this handle
-     * or from any sibling that shares lg->shared. It runs before the direct
-     * write of this job below. That write can then never land on disk ahead
-     * of an earlier job that the queue already accepted and that the writer
-     * thread did not reach yet. See the doc comment of this function.
+     * or from any sibling that shares lg->shared, before the direct write of
+     * this job below, so that write can never land on disk ahead of an
+     * earlier job that the queue has already accepted and that the writer
+     * thread has not reached yet. See the doc comment of this function.
      *
-     * The call is safe here. _clog_write() is the caller of this function,
-     * and it reaches _clog_write_async() only for a level that is not FATAL.
-     * This can therefore never nest inside the FATAL-path flush of
-     * _clog_write(). */
+     * The call is safe here: _clog_write(), the caller of this function,
+     * reaches _clog_write_async() only for a level that is not FATAL, so this
+     * can never nest inside the FATAL-path flush of _clog_write(). */
     _clog_flush_pinned(lg);
 
     ccol_mutex_lock(lg->shared->mutex);
@@ -8314,28 +8272,28 @@ static void __attribute__((format(printf, 9, 0))) _clog_write_async(
       fsrc.u.snap.pool = job->field_pool.buf;
       fsrc.u.snap.failed = job->fields_snapshot_failed;
 
-      /* The code writes this record directly to sh->fd here, like every
-       * other real write in this file. It must therefore run the same
-       * rotation checks as every other write path: the time-based check
-       * before the write, and the size-based check after it. Without them, a
-       * run of enqueue failures leaves the file far past max_file_size or
-       * rotation_interval_us, and nothing notices. One failure is enough in
-       * a logger that is otherwise idle. This record never touches
+      /* The code writes this record directly to sh->fd here, like every other
+       * real write in this file, so it must run the same rotation checks as
+       * every other write path: the time-based check before the write, and
+       * the size-based check after it. Without them, a run of enqueue
+       * failures leaves the file far past max_file_size or
+       * rotation_interval_us with nothing noticing; one failure is enough in
+       * a logger that is otherwise idle, because this record never touches
        * sh->async_buf, so no later flush can catch it.
        *
        * This record must also not land between the two halves of a record
-       * that the flush above could not finish delivering. That is the same
+       * that the flush above could not finish delivering, which is the same
        * reason why _clog_write_sync() settles before its own write.
        *
        * Nor may it land ahead of whole records that the batch still holds,
        * which a flush keeps after a transient write error. The batch gets
-       * one more bounded delivery attempt first. Records that it still
+       * one more bounded delivery attempt first, and records that it still
        * holds after that stay ahead of this one: for logfmt and JSON on a
        * stream sink, this record joins the batch behind them, where the
        * writer thread delivers it in order. A syslog record, and any record
        * for a message-oriented socket, is never batched (see
        * _clog_writer_thread_main()); such a record goes out directly, and
-       * so does a record too large to join the batch. Only those can
+       * so does a record too large to join the batch, and only those can
        * precede records that a transient error keeps. */
       clog_shared_t *wsh = lg->shared;
       if (wsh->async_buf.len > 0)
@@ -8367,8 +8325,8 @@ static void __attribute__((format(printf, 9, 0))) _clog_write_async(
         _clog_write_record(lg->shared, fmt2, lg->buf.data, lg->buf.len);
       } else {
         /* See the doc comment of _clog_write_unrepresentable_record().
-         * _clog_write_sync() handles the same condition in the same way.
-         * That condition is not reachable in practice. */
+         * _clog_write_sync() handles the same condition in the same way, and
+         * that condition is not reachable in practice. */
         _clog_write_unrepresentable_record(lg->shared, fmt2, job->level,
                                            job->with_backtrace);
       }
@@ -8387,13 +8345,12 @@ static void __attribute__((format(printf, 9, 0))) _clog_write_async(
 #ifdef RUNNING_UNIT_TESTS
 /*
  * Lets a test force the ccol_mutex_init() or ccol_cond_var_init() of the
- * NEXT _clog_flush_pinned() call to fail. Those calls run on the
- * stack-local clog_async_ctrl_t of that call. The failure is deterministic.
- * The test does not have to make pthread_mutex_init() or pthread_cond_init()
- * fail for real. With default or NULL attributes, the glibc implementation
- * of those two has no real failure path that a test can trigger portably.
- * Each hook disarms itself the moment that it fires, so it affects only the
- * one call that a test targets.
+ * NEXT _clog_flush_pinned() call, which runs on the stack-local
+ * clog_async_ctrl_t of that call, to fail deterministically, without making
+ * pthread_mutex_init() or pthread_cond_init() fail for real: with default or
+ * NULL attributes, the glibc implementation of those two has no real failure
+ * path that a test can trigger portably. Each hook disarms itself the moment
+ * that it fires, so it affects only the one call that a test targets.
  */
 static _Atomic bool _clog_test_force_flush_mutex_init_failure = false;
 static _Atomic bool _clog_test_force_flush_condvar_init_failure = false;
@@ -8421,39 +8378,39 @@ static inline bool _clog_test_consume_forced_flush_condvar_init_failure(void) {
 #endif
 
 /*
- * This is the core of clog_flush(). It is a separate function so that the
- * FATAL path of _clog_write() can also call it. That path passes an lg that
- * the caller ALREADY resolved and pinned. This function does no resolve and
- * no unpin of its own. It assumes that the caller already knows that
+ * This is the core of clog_flush(), kept as a separate function so that the
+ * FATAL path of _clog_write() can also call it with an lg that the caller
+ * has ALREADY resolved and pinned. This function does no resolve and no
+ * unpin of its own, and it assumes that the caller already knows that
  * lg->shared->async_enabled is true.
  *
- * The pin is held for this whole call, and that includes the blocking wait
- * below. _clog_write() and _clog_write_async() do the same. Each holds its
- * own pin across its own blocking ccol_circq_send_zc or ccol_dynmq_send_zc
- * call. This is what lets the poll-wait of clog_close() serialise against a
- * flush that is in flight. It already does the same for a write that is in
- * flight.
+ * The pin is held for this whole call, including the blocking wait below,
+ * just as _clog_write() and _clog_write_async() each hold their own pin
+ * across their own blocking ccol_circq_send_zc or ccol_dynmq_send_zc call.
+ * This is what lets the poll-wait of clog_close() serialise against a flush
+ * that is in flight, as it already does for a write that is in flight.
  */
 static void _clog_flush_pinned(struct clogger *lg) {
-  clog_async_ctrl_t ctrl; /* This lives on the stack, one per call.
+  clog_async_ctrl_t ctrl; /* This lives on the stack, one per call, and
               ccol_mutex_init and ccol_cond_var_init run on a fresh instance
               each time. The code never uses a static or constant initializer,
               which is the standing pthread-wrapper rule of this file */
   /* The code checks both of these. Other pthread init calls in this file are
-   * ordinary calls that hardly ever fail, and this one is different. A call
+   * ordinary calls that hardly ever fail, but this one is different: a call
    * to ccol_mutex_lock() or ccol_cond_var_wait() on a mutex or condition
-   * variable that is NOT fully initialized is undefined behaviour. It is not
-   * a graceful degradation, and "it almost certainly succeeded" is not
+   * variable that is NOT fully initialized is undefined behaviour, not a
+   * graceful degradation, and "it almost certainly succeeded" is not
    * enough.
    *
    * In that case the envelope of this function must also never reach the
-   * writer thread. There would be no correctly initialized ctrl.mutex and
-   * ctrl.cv left for that thread to lock and broadcast on at the other end.
+   * writer thread, because there would be no correctly initialized
+   * ctrl.mutex and ctrl.cv for that thread to lock and broadcast on at the
+   * other end.
    *
-   * On such a failure the code treats the call as if it enqueued nothing.
-   * The "very unlikely enqueue failure" branch below does the same. That is
-   * also what keeps the other caller of this function, the FATAL path of
-   * _clog_write(), from a hang on a call that is meant to stop the
+   * On such a failure the code treats the call as if it enqueued nothing, as
+   * the "very unlikely enqueue failure" branch below does. That is also what
+   * keeps the other caller of this function, the FATAL path of
+   * _clog_write(), from hanging on a call that is meant to stop the
    * process. */
   if (_clog_test_consume_forced_flush_mutex_init_failure() ||
       ccol_mutex_init(ctrl.mutex) != 0)
@@ -8479,14 +8436,15 @@ static void _clog_flush_pinned(struct clogger *lg) {
     ccol_mutex_unlock(ctrl.mutex);
   }
   /* The other branch is the failure path of ccol_not_permitted or
-   * ccol_not_enough_memory. Those mean that the send side is already off,
-   * after the exit drain, or that the node allocation of the unbounded queue
+   * ccol_not_enough_memory, which mean that the send side is already off
+   * (after the exit drain) or that the node allocation of the unbounded queue
    * failed. Nothing reached the queue for the writer thread to find and
-   * acknowledge, so ctrl.done can never become true. The code therefore
-   * skips the wait completely and does not hang forever. This matters beyond
-   * clog_flush() itself. This same function is also the pre-flush step of
-   * the FATAL path of _clog_write(). An unconditional wait here hangs a
-   * process forever instead of stopping it after a fatal error. */
+   * acknowledge, so ctrl.done can never become true, and the code skips the
+   * wait completely instead of hanging forever. This matters beyond
+   * clog_flush() itself, because this same function is also the pre-flush
+   * step of the FATAL path of _clog_write(), and an unconditional wait here
+   * would hang a process forever instead of stopping it after a fatal
+   * error. */
 
   ccol_mutex_destroy(ctrl.mutex);
   ccol_cond_var_destroy(ctrl.cv);
@@ -8504,12 +8462,12 @@ void clog_flush(clog h) {
 /* The last delivery attempt for the batch of an async target, on the fatal
  * path and at exit. The drain before it is a flush that keeps what a
  * transient write error left undelivered, for a retry that the process
- * never reaches. This makes one more delivery attempt with a bounded wait,
- * settles a split record, and names every record that is still undelivered
- * after it. The caller holds the mutex of sh.
+ * never reaches, so this makes one more delivery attempt with a bounded
+ * wait, settles a split record, and names every record that is still
+ * undelivered after it. The caller holds the mutex of sh.
  * timeout_ms bounds each write of the attempt and each marker (see
- * _write_all()), so a descriptor that takes nothing, a blocking pipe whose
- * reader stopped reading among them, cannot hold the process. */
+ * _write_all()), so a descriptor that takes nothing (a blocking pipe whose
+ * reader stopped reading, among others) cannot hold the process. */
 static void _clog_settle_batch_locked(clog_shared_t *sh, int timeout_ms) {
   if (sh->async_buf.len > 0) {
     _writer_flush_buffer(sh, timeout_ms);
@@ -8529,11 +8487,11 @@ static bool _clog_exit_drain_registered;
  * drain (see _clog_exit_drain()), which gives every other async logger its
  * queue and its batch and lets every queued compression finish, so that no
  * rotated file is left as a half-written ".gz" file beside its source. That
- * drain bounds each of its waits, and it takes only the mutex of a target
- * that has something to drain. A thread that holds the mutex of another
- * logger for ever, for example one whose write to a pipe that nobody reads
- * blocks, therefore never keeps a fatal error from stopping the process.
- * The drain runs here directly only when its registration failed. */
+ * drain bounds each of its waits and takes only the mutex of a target that
+ * has something to drain, so a thread that holds the mutex of another
+ * logger for ever (for example one whose write to a pipe that nobody reads
+ * blocks) never keeps a fatal error from stopping the process. The drain
+ * runs here directly only when its registration failed. */
 static __attribute__((noinline, noreturn)) void _clog_fatal_exit(void) {
   if (!_clog_exit_drain_registered) _clog_exit_drain();
   exit(EXIT_FAILURE);
@@ -8547,26 +8505,25 @@ static __attribute__((noinline, noreturn)) void _clog_fatal_exit(void) {
  * A process can end with exit(), or a return from main(), while a logger is
  * still open. Nothing then closes it, and without this drain every record
  * that still waits in the queue of an async logger, or in the batch of its
- * writer thread, is lost, and a compression that runs is cut off. An exit
- * handler that the library registers when it loads therefore runs, after
- * every exit handler that the application registers later, the same drain
- * that a fatal record runs: for every async target the queue, then the
- * batch, with a marker for what cannot be delivered; then every queued and
- * running compression.
+ * writer thread, is lost, and a running compression is cut off. So an exit
+ * handler that the library registers when it loads runs, after every exit
+ * handler that the application registers later, the same drain that a fatal
+ * record runs: for every async target the queue, then the batch, with a
+ * marker for what cannot be delivered; then every queued and running
+ * compression.
  *
- * Every wait is bounded, by one budget for the whole drain, and that
- * includes every lock that the drain takes: the lock of the table of
- * loggers, and the mutex of a target. A writer thread that cannot deliver,
- * other threads that keep logging, a thread that holds a lock of a logger
- * and never lets it go, or a compression of a large file therefore delay the
- * exit of the process by that budget at most. The drain skips a target
- * whose mutex it cannot take within the budget, and it skips the whole
- * drain when it cannot take the table lock in time; the records that such a
- * target still holds can then be lost. A compression that the budget cuts
- * off stops and removes its temporary output, and the next open of the log
- * compresses the source again. The drain skips the target whose writer
- * thread or compressor thread calls exit(), because that thread cannot
- * serve the drain that it would wait for.
+ * Every wait is bounded by one budget for the whole drain, including every
+ * lock that the drain takes (the lock of the table of loggers, and the mutex
+ * of a target), so a writer thread that cannot deliver, other threads that
+ * keep logging, a thread that holds a lock of a logger and never lets it go,
+ * or a compression of a large file delay the exit of the process by that
+ * budget at most. The drain skips a target whose mutex it cannot take within
+ * the budget, and skips the whole drain when it cannot take the table lock
+ * in time; the records that such a target still holds can then be lost. A
+ * compression that the budget cuts off stops and removes its temporary
+ * output, and the next open of the log compresses the source again. The
+ * drain skips the target whose writer thread or compressor thread calls
+ * exit(), because that thread cannot serve the drain that it would wait for.
  */
 #define CLOG_EXIT_DRAIN_BUDGET_MS 5000U
 /* How long an abandoned compression gets to stop and remove its output,
@@ -8699,15 +8656,15 @@ static bool _clog_exit_lock_target(clog_shared_t *sh,
  * the deadline of the stop has passed. The writer thread of the target
  * steps aside while the call waits (see _clog_writer_lock()), so a holder
  * that makes progress, such as a write of a batch to a regular file, hands
- * the mutex over well within it; a holder whose write blocks keeps it, and
- * the call then gives up after this long. */
+ * the mutex over well within this time, while a holder whose write blocks
+ * keeps it, and the call then gives up after this long. */
 #define CLOG_FATAL_LOCK_GRACE_MS 100U
 
 /* Takes the mutex of sh for the record of a CLOG_FATAL call, within the
  * deadline or, when that is sooner, within CLOG_FATAL_LOCK_GRACE_MS. The
- * drain before it can use the whole budget on a backlog; a wait that ended
- * at the deadline would then be a single try, which a writer thread that is
- * in the middle of its work wins, and the fatal record would be lost
+ * drain before it can use the whole budget on a backlog, and a wait that
+ * ended at the deadline would then be a single try, which a writer thread in
+ * the middle of its work wins, so the fatal record would be lost even
  * against an output that takes it at once. */
 static bool _clog_fatal_lock_target(clog_shared_t *sh,
                                     const struct timespec *deadline) {
@@ -8727,17 +8684,17 @@ static bool _clog_fatal_lock_target(clog_shared_t *sh,
 
 /* The flush request of the exit drain. It lives on the heap because a
  * request that the budget gives up on stays in the queue, and the writer
- * thread still answers it later. */
+ * thread answers it later. */
 typedef struct {
   clog_async_ctrl_t ctrl;
   clog_async_msg_t envelope;
 } clog_exit_flush_t;
 
 /* Drains the queue of the async target sh, then its batch, within the
- * deadline. It gives false when the writer thread did not answer in time;
- * that thread can then hold the mutex of sh for as long as a write of it
- * blocks. The caller keeps sh alive: the exit drain holds the write lock of
- * the slot table, and a CLOG_FATAL call holds a pin on its handle. */
+ * deadline. It gives false when the writer thread did not answer in time,
+ * in which case that thread can hold the mutex of sh for as long as a write
+ * of it blocks. The caller keeps sh alive: the exit drain holds the write
+ * lock of the slot table, and a CLOG_FATAL call holds a pin on its handle. */
 static bool _clog_exit_drain_async(clog_shared_t *sh,
                                    const struct timespec *deadline) {
   clog_exit_flush_t *req = malloc(sizeof(*req));
@@ -8783,10 +8740,10 @@ static bool _clog_exit_drain_async(clog_shared_t *sh,
     ccol_mutex_unlock(req->ctrl.mutex);
   }
   if (rv == ccol_success && !done) {
-    /* The writer thread still holds the request, in its queue or at work
-     * on the queue ahead of it. It answers the request later, so the
-     * request stays allocated. The process ends in a moment. The writer
-     * thread did not keep up, so the batch is left to it too. */
+    /* The writer thread still holds the request, in its queue or while at work
+     * on the queue ahead of it, and answers it later, so the request stays
+     * allocated; the process ends in a moment. Since the writer thread did
+     * not keep up, the batch is left to it too. */
     return false;
   }
   ccol_mutex_destroy(req->ctrl.mutex);
@@ -8796,9 +8753,9 @@ static bool _clog_exit_drain_async(clog_shared_t *sh,
    * thread that does not keep up, as above. */
   if (rv == ccol_timed_out || rv == ccol_container_full) return false;
   if (done) {
-    /* A thread that holds the mutex of sh past the deadline keeps the
-     * batch; the drain then leaves the target, as for a writer thread that
-     * did not answer. */
+    /* A thread that holds the mutex of sh past the deadline keeps the batch,
+     * and the drain then leaves the target, as for a writer thread that did
+     * not answer. */
     if (!_clog_exit_lock_target(sh, deadline)) return false;
     int left = _clog_ms_until(deadline);
     _clog_settle_batch_locked(sh, left < CLOG_SPLIT_RECORD_DRAIN_WAIT_MS
@@ -8856,19 +8813,19 @@ static void _clog_exit_drain(void) {
       atomic_load_explicit(&_clog_fatal_bound_armed, memory_order_acquire)
           ? _clog_fatal_deadline
           : _clog_ts_after_ms(&start, _clog_exit_drain_budget_ms());
-  /* The table lock keeps every target in live_shareds alive for the walk: a
-   * close removes its target under that lock before it frees it. The walk
-   * takes it for writing, because a forked child can reach it, where the
-   * fork handling has initialized that lock afresh over the write lock of
-   * the prepare step; ThreadSanitizer reports a read lock there as a read
-   * lock of a write-locked mutex. The lock order, the table lock and then a
-   * mutex of a target, is the order that the fork handling uses. The
-   * queue of a target comes before its compressions: a writer thread that
-   * drains the queue can still rotate, and a rotation queues a
-   * compression. A target whose writer thread did not answer in time is
-   * left alone after that, because the thread can hold its mutex. A thread
-   * that holds the table lock past the deadline, for example one that
-   * stopped inside clog_open, leaves nothing to drain in time. */
+  /* The table lock keeps every target in live_shareds alive for the walk,
+   * because a close removes its target under that lock before it frees it.
+   * The walk takes it for writing because a forked child can reach it, where
+   * the fork handling has initialized that lock afresh over the write lock of
+   * the prepare step, and ThreadSanitizer reports a read lock there as a read
+   * lock of a write-locked mutex. The lock order (the table lock, then a
+   * mutex of a target) is the order that the fork handling uses. The queue
+   * of a target comes before its compressions, because a writer thread that
+   * drains the queue can still rotate, and a rotation queues a compression.
+   * A target whose writer thread did not answer in time is left alone after
+   * that, because the thread can hold its mutex. A thread that holds the
+   * table lock past the deadline, for example one that stopped inside
+   * clog_open, leaves nothing to drain in time. */
   struct timespec table_at = _clog_realtime_at(&deadline);
   if (ccol_rw_lock_timedwrlock(clog_slot_table.rwlock, table_at) != 0) return;
   if (clog_slot_table.live_shareds) {
@@ -8884,10 +8841,10 @@ static void _clog_exit_drain(void) {
 #endif
           continue;
         }
-        /* The queue and the batch are empty now, and nothing drains them
-         * again: a record that reaches the queue from here on, from a
-         * destructor or from an exit handler that runs after this one,
-         * waits for a flush that the end of the process cuts off. With
+        /* The queue and the batch are empty at this point, and nothing drains
+         * them again: a record that reaches the queue from here on (from a
+         * destructor, or from an exit handler that runs after this one)
+         * would wait for a flush that the end of the process cuts off. With
          * sends turned off, _clog_write_async() writes each such record
          * itself, synchronously, exactly as after a failed enqueue. */
         if (sh->is_bounded_queue)
@@ -8895,9 +8852,9 @@ static void _clog_exit_drain(void) {
         else
           (void)ccol_dynmq_disable_sending(sh->q.dynmq);
       }
-      /* Only a target that compresses has a compressor thread. The test
-       * reads configuration that never changes after the open, so it takes
-       * no lock: the mutex of a target that does not rotate can be held
+      /* Only a target that compresses has a compressor thread. The test reads
+       * configuration that never changes after the open, so it takes no
+       * lock, because the mutex of a target that does not rotate can be held
        * by a thread whose write to a pipe blocks. */
       if (sh->rotation_enabled && sh->rotation.compress_rotated)
         _clog_exit_drain_compressions(sh, &deadline);
@@ -8953,20 +8910,20 @@ static void _clog_fatal_report_loss(clog_shared_t *sh) {
 }
 
 /*
- * The path of a CLOG_FATAL record. It never returns. One deadline, the budget
- * of the exit drain from the moment that the first fatal call starts, bounds
- * the whole stop: every write of the target to a sink that is not a regular
- * file ends by that deadline (see CLOG_SINK_FATAL_BOUND), and so does every
- * wait of this path, except that the wait for the mutex of the target may
- * run CLOG_FATAL_LOCK_GRACE_MS past it (see _clog_fatal_lock_target()). For
- * an async target it drains the queue and the batch
- * first, exactly as the exit drain does, so that a message logged moments
- * before the fatal one reaches the log. It then writes the fatal record
- * synchronously. An output that takes nothing more therefore cannot keep the
- * process from stopping: the record is then lost, a line on stderr says so
- * unless stderr is that same output, and the process stops anyway. A write
- * to a regular file waits on the disk and not on a reader, and keeps no
- * bound.
+ * The path of a CLOG_FATAL record, which never returns. One deadline, the
+ * budget of the exit drain from the moment that the first fatal call starts,
+ * bounds the whole stop: every write of the target to a sink that is not a
+ * regular file ends by that deadline (see CLOG_SINK_FATAL_BOUND), and so
+ * does every wait of this path, except that the wait for the mutex of the
+ * target may run CLOG_FATAL_LOCK_GRACE_MS past it (see
+ * _clog_fatal_lock_target()). For an async target it first drains the
+ * queue and the batch, exactly as the exit drain does, so that a message
+ * logged moments before the fatal one reaches the log, and it then writes
+ * the fatal record synchronously. So an output that takes nothing more
+ * cannot keep the process from stopping: the record is then lost, a line on
+ * stderr says so unless stderr is that same output, and the process stops
+ * anyway. A write to a regular file waits on the disk and not on a reader,
+ * and keeps no bound.
  */
 static __attribute__((noinline, cold, noreturn, format(printf, 8, 0))) void
 _clog_write_fatal(struct clogger *lg, const char *file, int line,
@@ -8996,21 +8953,21 @@ void _clog_write(clog h, clog_level_t level, const char *file, int line,
         "_clog_write: clog handle is invalid, stale, or already closed");
 
   /* This is the fast path. Most log_* call sites are at a level that the
-   * filter drops, and they get to this check on each call. For example,
-   * ccol_log_trace and ccol_log_debug do so when a logger runs at CLOG_INFO
-   * or higher. This check of min_level comes first. Therefore, such a call
-   * returns immediately. On the sync path, it never contends for
-   * shared->mutex. On the async path, it never formats or copies a message
-   * that nobody reads.
+   * filter drops (for example, clog_trace and clog_debug when a
+   * logger runs at CLOG_INFO or higher), and they reach this check on each
+   * call. Because this check of min_level comes first, such a call returns
+   * immediately: on the sync path it never contends for shared->mutex, and
+   * on the async path it never formats or copies a message that nobody
+   * reads.
    *
-   * A relaxed load is enough. This check only prevents work in the usual
-   * case. It does not make the final decision for the synchronous path (see
-   * the locked second check in _clog_write_sync()). The async path has no
-   * second check of its own. Consider a message that this path put on the
-   * queue before a concurrent clog_set_level() took effect. The library
-   * delivers that message. clog_set_level(3) documents that boundary as
-   * intentional, for this path and for the unlocked fast check of the
-   * synchronous path. CLOG_FATAL always skips the filter. */
+   * A relaxed load is enough, because this check only prevents work in the
+   * usual case and does not make the final decision for the synchronous path
+   * (see the locked second check in _clog_write_sync()). The async path has
+   * no second check of its own, so a message that this path put on the
+   * queue before a concurrent clog_set_level() took effect is delivered.
+   * clog_set_level(3) documents that boundary as intentional, for this path
+   * and for the unlocked fast check of the synchronous path. CLOG_FATAL
+   * always skips the filter. */
   if (level < atomic_load_explicit(&lg->min_level, memory_order_relaxed) &&
       level != CLOG_FATAL) {
     _clog_resolve_unpin(lg);
@@ -9020,7 +8977,7 @@ void _clog_write(clog h, clog_level_t level, const char *file, int line,
   /* The capture happens HERE, in the frame of this function, in the same way
    * for every path below. See the doc comment of _capture_backtrace() for
    * why the code must never capture one level deeper, inside
-   * _clog_write_sync() or _clog_write_async(). A deeper capture skips one
+   * _clog_write_sync() or _clog_write_async(): a deeper capture skips one
    * more frame without a trace. */
   char **bt_syms = NULL;
   int bt_depth = 0;
@@ -9035,12 +8992,12 @@ void _clog_write(clog h, clog_level_t level, const char *file, int line,
                       fmt, ap);
 
   /* The code reads lg->shared->async_enabled here without a lock. Only two
-   * places write it, and each writes it exactly once. The first is the
-   * construction, before any reader can see this shared object. The second
-   * is the downgrade inside _clog_atfork_child(). That runs on the only
-   * thread that exists in a freshly forked child, strictly before any other
-   * code in that child can read the field. Nothing changes the field while
-   * another thread can read it, so this read needs no lock. */
+   * places write it, each exactly once: the construction, before any reader
+   * can see this shared object, and the downgrade inside
+   * _clog_atfork_child(), which runs on the only thread that exists in a
+   * freshly forked child, strictly before any other code in that child can
+   * read the field. Since nothing changes the field while another thread can
+   * read it, this read needs no lock. */
   if (lg->shared->async_enabled) {
     _clog_write_async(lg, level, file, line, func, with_backtrace, bt_syms,
                       bt_depth, fmt, ap);
@@ -9049,7 +9006,7 @@ void _clog_write(clog h, clog_level_t level, const char *file, int line,
     return;
   }
 
-  /* Async is not configured. The call goes to the synchronous body, and ap
+  /* Async is not configured, so the call goes to the synchronous body, and ap
    * passes straight through. va_end(ap) must come AFTER this call and not
    * before, because ap is still live and this call uses it. */
   _clog_write_sync(lg, level, file, line, func, with_backtrace, bt_syms,
@@ -9057,7 +9014,7 @@ void _clog_write(clog h, clog_level_t level, const char *file, int line,
   va_end(ap);
   if (bt_syms)
     free(bt_syms); /* The sync path owns the free of what the code
-captured above. _clog_write_sync() only reads bt_syms, and it never
+captured above, because _clog_write_sync() only reads bt_syms and never
 frees it */
   _clog_resolve_unpin(lg);
 }

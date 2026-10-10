@@ -14,7 +14,7 @@ ccol_retval_t cyaml_node_set_tag(cyaml node, const char *tag);
 Attach a tag to node, replace the tag of node, or clear it.  The node
 makes its own copy of tag.
 
-This function sets metadata only.  It never changes the type or the
+This function sets metadata only; it never changes the type or the
 value that node already has.
 
 A core-schema tag names exactly one node type:
@@ -28,40 +28,40 @@ A core-schema tag names exactly one node type:
   CYAML_TAG_MAP    -> CYAML_DICTIONARY
 
 The function refuses a core-schema tag on a node of any other type
-with ccol_invalid_args, and leaves the node untouched.  cyaml_parse(3)
-would refuse such a pairing, or read it back as a different type.  A
-caller that wants a string node must construct one with
-cyaml_create_string(3) and then tag it.  A custom tag, which is any
-tag other than those seven, is valid on a node of any type.
+with ccol_invalid_args and leaves the node untouched, because
+cyaml_parse(3) would refuse such a pairing or read it back as a
+different type.  A caller that wants a string node must construct one
+with cyaml_create_string(3) and then tag it.  A custom tag, which is
+any tag other than those seven, is valid on a node of any type.
 
 A custom tag that you set here survives a later cyaml_set(3) call on
-the same node.  A core-schema tag survives such a call only while it
-still names the type of the node.  cyaml_set(3) drops a core-schema
+the same node, while a core-schema tag survives such a call only while
+it still names the type of the node: cyaml_set(3) drops a core-schema
 tag that the new value no longer matches.  cyaml_serialize(3) and
 cyaml_serialize_flow(3) write a custom tag in its fully resolved
-verbatim form.  They omit a core-schema tag, because implicit typing
+verbatim form and omit a core-schema tag, because implicit typing
 restores the type of its node with no help.
 
-A tag must be well-formed UTF-8.  The function refuses one that is not
+A tag must be well-formed UTF-8: the function refuses one that is not
 with ccol_invalid_args and leaves the tag that node already has
-untouched.  It accepts any other string that is not empty as a tag.
-This includes a string that holds a character which the URI characters
-of YAML 1.2 do not allow literally in the serialized output, such as a
+untouched.  It accepts any other string that is not empty as a tag,
+including a string that holds a character which the URI characters of
+YAML 1.2 do not allow literally in the serialized output, such as a
 \&'>', a line break, a '%', a space, a control character or any
 non-ASCII character.  The serializer writes each byte of such a
-character as a percent escape.  A second parse of the tag
-therefore gives exactly the string that you set here.
+character as a percent escape, so a second parse of the tag gives
+exactly the string that you set here.
 
-The empty string is not a valid tag.  The function rejects it with
+The empty string is not a valid tag: the function rejects it with
 ccol_invalid_args and leaves the tag that node already has untouched.
-The serializer writes a custom tag in its verbatim "!<...>" form, and
-cyaml_parse(3) does not accept "!<>".  An empty tag would therefore
-give a document that this library cannot parse again.  Pass NULL to
-clear a tag.
+Because the serializer writes a custom tag in its verbatim "!<...>"
+form and cyaml_parse(3) does not accept "!<>", an empty tag would give
+a document that this library cannot parse again.  Pass NULL to clear a
+tag.
 .fi
 .SH PARAMETERS
 .nf
-node  Target node of any type.  For NULL the function reports
+node  Target node of any type.  For NULL, the function reports
       ccol_invalid_args and changes nothing.
 tag   New tag string, which the node copies.  It must be well-formed
       UTF-8 and must not be the empty string.  NULL clears the tag that
@@ -71,10 +71,9 @@ tag   New tag string, which the node copies.  It must be well-formed
 .nf
 ccol_success.  The function returns ccol_invalid_args when node is
 NULL, when tag is the empty string, when tag is not well-formed UTF-8,
-and when tag is a core-schema tag that does not name the type of
-node.  It returns ccol_not_enough_memory
-on an allocation failure.  On every failure it leaves the tag that node
-already has untouched.
+or when tag is a core-schema tag that does not name the type of node,
+and ccol_not_enough_memory on an allocation failure.  On every failure
+it leaves the tag that node already has untouched.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_node_tag (3),

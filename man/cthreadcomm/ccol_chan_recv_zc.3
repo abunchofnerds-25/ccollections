@@ -11,19 +11,19 @@ ccol_retval_t ccol_chan_recv_zc(ccol_channel *ch, c_message_t *target_buf);
 .fi
 .SH DESCRIPTION
 .nf
-The function picks the correct queue itself. It uses the thread that calls
-it:
+The function picks the correct queue itself, from the thread that
+calls it:
 - The owner thread receives from the ccol_workers_to_owner queue
 - A worker thread receives from the ccol_owner_to_workers queue
 
-The function blocks until a message arrives. Then it transfers the
+The function blocks until a message arrives and then transfers the
 ownership.
 .fi
 .SH PARAMETERS
 .nf
 ch          Channel to receive from
-target_buf  Buffer that gets the message. It also gets the ownership of
-            the data.
+target_buf  Buffer that gets the message together with the ownership
+            of the data.
 .fi
 .SH RETURN VALUE
 .nf

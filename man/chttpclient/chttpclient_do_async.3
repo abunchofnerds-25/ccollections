@@ -12,96 +12,94 @@ ctpool_future *chttpclient_do_async(chttpcli cli,
 .fi
 .SH DESCRIPTION
 .nf
-This is the counterpart of chttpclient_do that does not block. It
-puts req into the queue of the shared reactor engine of chttpclient,
-and it returns at once. The library starts that engine only when it
-first needs it. The whole cycle of the request and the response runs
-on the threads of the engine. This includes every redirect hop.
+This is the counterpart of chttpclient_do that does not block. It puts
+req into the queue of the shared reactor engine of chttpclient and
+returns at once; the library starts that engine only when it first
+needs it. The whole cycle of the request and the response, every
+redirect hop included, runs on the threads of the engine.
 
 The engine holds a small pool of reactor threads and a companion
-worker pool for DNS and for connect. The library sizes both to the CPU
-count. The engine starts on the first call to chttpclient_do_async or
-to chttpclient_do_async_streaming anywhere in the process. It stops on
+worker pool for DNS and for connect, both sized to the CPU count. It
+starts on the first call to chttpclient_do_async or to
+chttpclient_do_async_streaming anywhere in the process, and stops on
 its own when no request is in flight and no connection is left in the
 async idle pool of any chttpcli. That stop runs on a thread of its
-own. The reason is that the last reference often goes away inside a
-reactor callback. The teardown joins the very threads that run such
-a callback. The process can also fail to give that thread,
-because of a ceiling on threads or on processes such as RLIMIT_NPROC
-or a cgroup pids.max. The engine then stays up, and the library tries
-the stop again every 100 ms until a thread is available. A call in the
-meantime reuses the engine.
+own, because the last reference often goes away inside a reactor
+callback, and the teardown joins the very threads that run such a
+callback. The process can also fail to give that thread, because of a
+ceiling on threads or on processes such as RLIMIT_NPROC or a cgroup
+pids.max. The engine then stays up, and the library tries the stop
+again every 100 ms until a thread is available; a call in the meantime
+reuses the engine.
 
 There are two supported ways to use fork(2) with this engine:
-  - Call fork(2) before you create a client. Each process then makes
-    its own clients and, on first use, its own engine.
-  - Call fork(2), and then call exec(3) in the child immediately, as
+  - Call fork(2) before you create a client, so that each process
+    makes its own clients and, on first use, its own engine.
+  - Call fork(2) and then call exec(3) in the child immediately, as
     popen and system do.
 A child that continues with no exec(3) while a client from before the
-fork is live is not supported. The reason is that fork(2) does not copy
-the threads of the engine.
+fork is live is not supported, because fork(2) does not copy the
+threads of the engine.
 
 A process can destroy all clients that used Tier 2 or Tier 3 before it
-forks. The child of that process can then use both tiers. The child
-starts its own engine on first use. This is also true when the stop of
-the engine of the parent was not complete at the time of the fork. See
+forks; the child of that process can then use both tiers, and starts
+its own engine on first use. This is true even when the stop of the
+engine of the parent was not complete at the time of the fork. See
 chttpclient(7).
 
-The engine is fully separate from the synchronous
-connection work of chttpclient_do. It is also independent of the
-reactor of chttpserver, which sits on ccol_event_loop. One process can
-therefore run chttpserver together with chttpclient_do_async and
-chttpclient_do_async_streaming. A stop of one engine has no effect on
-the other engine. This holds for chttpsvr_engine_stop() and for the
-automatic teardown of this engine.
+The engine is fully separate from the synchronous connection work of
+chttpclient_do. It is also independent of the reactor of chttpserver,
+which sits on ccol_event_loop, so one process can run chttpserver
+together with chttpclient_do_async and chttpclient_do_async_streaming.
+A stop of one engine, whether chttpsvr_engine_stop() or the automatic
+teardown of this engine, has no effect on the other engine.
 
-req does not need to stay valid after this call returns, and
-chttpclient_do is different in this respect. The library copies or
-serializes everything that it needs before this call returns.
+Unlike with chttpclient_do, req does not need to stay valid after this
+call returns: the library copies or serializes everything that it
+needs before this call returns.
 
-The server can send an interim informational response with a 1xx
+The server can send interim informational responses with a 1xx
 status. The client drops every such response and reads on, on the same
-connection, for the real response. The library therefore never
-fulfills the future with a 1xx status as the final answer. "103 Early
-Hints" of RFC 8297 is the most common example in the real world. "101
-Switching Protocols" is the exception: this client never asks for an
-upgrade, so a 101 fulfills the future with ccol_http_transfer_aborted,
-as in chttpclient_do. A response that arrives in the same read as a
+connection, for the real response, so the library never fulfills the
+future with a 1xx status as the final answer. "103 Early Hints" of
+RFC 8297 is the most common example in the real world. "101 Switching
+Protocols" is the exception: this client never asks for an upgrade, so
+a 101 fulfills the future with ccol_http_transfer_aborted, as in
+chttpclient_do. A response that arrives in the same read as a
 "100 Continue" is read before any byte of the body goes out, as in
 chttpclient_do(3). A
-request with req->expect_continue set sends "Expect: 100-continue".
-See the doc comment of chttp_request_t. Such a request holds the body
-back until the interim response of the server, exactly as in
-chttpclient_do. The wait is part of the dispatch of this function,
-which does not block, and not a call that blocks. The client does not
-accept an endless stream of interim responses. After it drops 64
-interim responses in a row on one hop, the library fulfills the future
-with ccol_http_transfer_aborted instead of a wait without an end. This
-cap applies to two phases on their own. The first phase is the wait
-for "100 Continue". The second phase is the read of the final response
+request with req->expect_continue set sends "Expect: 100-continue" (see
+the doc comment of chttp_request_t), and holds the body back until the
+interim response of the server, exactly as in chttpclient_do. That wait
+is part of the dispatch of this function, which does not block; it is
+not a call that blocks. The client does not accept an endless stream of
+interim responses: after it drops 64 interim responses in a row on one
+hop, the library fulfills the future with ccol_http_transfer_aborted
+instead of waiting without end. This cap applies separately to two
+phases: the wait for "100 Continue", and the read of the final response
 after it. A "100 Continue" is a real outcome, and so is the end of the
-wait with no response. Neither is a dropped response, and each one
-sets the count back to zero. A hop that uses req->expect_continue can
-therefore drop up to 64 interim responses during the wait for "100
-Continue". It can then drop up to 64 more during the read of the final
-response. The total is not 64.
+wait with no response; neither is a dropped response, and each one sets
+the count back to zero. A hop that uses req->expect_continue can
+therefore drop up to 64 interim responses during the wait for
+"100 Continue", and then up to 64 more during the read of the final
+response; the total is not 64.
 
-Two more cases are different. The first is a request header with a CR
-byte or an LF byte inside it. The same holds for body.content_type
-on a request with a body. The second is a request that carries a body
+Two more cases behave differently. The first is a request header with a
+CR byte or an LF byte inside it, and the same for body.content_type on
+a request with a body. The second is a request that carries a body
 (POST, PUT or PATCH) and whose Content-Length header from the caller
 holds a bad value. A good value is a plain unsigned string of decimal
-digits. It has no leading '+' or '-', and no whitespace inside it. It
+digits, with no leading '+' or '-' and no whitespace inside it, and it
 must also match the real length of the body. The library can find
 these two problems only when it serializes the request for the wire,
-and that happens after the future already exists. It checks a
-malformed URL and a TLS configuration that it cannot use up front
-instead. Such a request still gives a future that is not NULL. The
-result of that future holds rv == ccol_invalid_args instead of a good
-response. See chttpclient_async_result_get(3). chttpclient_do gives
-the same code synchronously for the equivalent request. See
-chttp_request_set_header(3) and chttpclient_do(3) for the reason that
-the client rejects this.
+which happens after the future already exists. It checks a malformed URL
+and a TLS configuration that it cannot use earlier, up front. So
+such a request still gives a future that is not NULL, and the result of
+that future holds rv == ccol_invalid_args instead of a good response.
+See chttpclient_async_result_get(3). chttpclient_do gives the same code
+synchronously for the equivalent request. See
+chttp_request_set_header(3) and chttpclient_do(3) for why the client
+rejects this.
 .fi
 .SH PARAMETERS
 .nf
@@ -111,34 +109,33 @@ req The request to run. It must not be NULL.
 .SH RETURN VALUE
 .nf
 A future, or NULL if the library cannot even queue the request. The
-library gives NULL for a req that is NULL. It gives NULL for a cli
-that is CHTTPCLI_INVALID, and for a stale cli of a client that is
-already destroyed. It also gives NULL for a malformed URL and for
-TLS that it cannot use. It gives NULL when it is out of memory, and
-when the engine fails to start. After a success, the caller owns the
-future. The caller must call chttpclient_async_result_get, then
-chttpclient_async_result_free, and then exactly one
-ctpool_future_free.
+library gives NULL for a req that is NULL, for a cli that is
+CHTTPCLI_INVALID, and for a stale cli of a client that is already
+destroyed. It also gives NULL for a malformed URL, for TLS that it
+cannot use, when it is out of memory, and when the engine fails to
+start. After a success, the caller owns the future and must call
+chttpclient_async_result_get, then chttpclient_async_result_free, and
+then exactly one ctpool_future_free.
 .fi
 .SH NOTES
 .nf
-The library leaves the disposition of SIGPIPE to the application.  It
-never changes it, in any tier.  No write of the client raises that
+The library leaves the disposition of SIGPIPE to the application and
+never changes it, in any tier. No write of the client raises that
 signal: every write to a socket, a TLS record and the close_notify of
-a TLS teardown included, is a send(2) with MSG_NOSIGNAL.  A server that
+a TLS teardown included, is a send(2) with MSG_NOSIGNAL. A server that
 closes or resets the connection while the client writes a request
 therefore fails that request, and never ends the process.
 
 The engine stops its threads before the process exits. A handler that
 the library registers with atexit(3), after the one of OpenSSL so that
 it runs first, waits for a stop in progress, destroys the default
-client when no call runs on it, and stops an engine that nothing holds
-any more. No thread of the engine is then left to race the cleanup of
-OpenSSL. Two cases keep the engine running at exit, and the handler
-then does nothing: a request still in flight, which includes an exit()
-from inside a write_fn, and a client that the application never
-destroyed, whose pooled connections hold the engine. Destroy every
-client before the process returns from main.
+client when no call runs on it, and stops an engine that nothing holds,
+so that no thread of the engine is left to race the cleanup of OpenSSL.
+Two cases keep the engine running at exit, and the handler then does
+nothing: a request still in flight, which includes an exit() from
+inside a write_fn, and a client that the application never destroyed,
+whose pooled connections hold the engine. Destroy every client before
+the process returns from main.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_do (3),

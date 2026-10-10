@@ -12,14 +12,14 @@ size_t ccol_mempool_allocated_bytes(ccol_mempool *mp);
 .SH DESCRIPTION
 .nf
 Returns the size in bytes of the single block that mp holds for its
-entries, and for the state of each entry.
+entries and for the state of each entry.
 
-This is what the pool costs. ccol_mempool_total_capacity(3) does not
-report that cost, and this is deliberate. A thread-safe pool large enough
-to keep a cache for each thread holds a reserve above the count that it
-was created with. Its memory therefore exceeds what its usable capacity
-accounts for. Use this call to size a pool against a memory budget. You
-then do not have to repeat the reserve arithmetic yourself.
+This is what the pool costs, which ccol_mempool_total_capacity(3)
+deliberately does not report: a thread-safe pool large enough to keep a
+cache for each thread holds a reserve above the count that it was created
+with, so its memory exceeds what its usable capacity accounts for. Use
+this call to size a pool against a memory budget, so that you do not have
+to repeat the reserve arithmetic yourself.
 .fi
 .SH PARAMETERS
 .nf
@@ -32,26 +32,25 @@ Returns the size in bytes of the entry block of the pool
 .SH NOTES
 .nf
 The call counts the entry block and nothing else. The handle itself is a
-small fixed allocation. The cache of each thread is a separate
-allocation. The library makes it when that thread first uses the pool.
-The same reserve bounds those caches. An entry that the dynamic fallback
-serves is not part of this block at all.
+small fixed allocation, and the cache of each thread is a separate
+allocation that the library makes when that thread first uses the pool;
+the same reserve bounds those caches. An entry that the dynamic fallback
+serves is not part of this block at all;
 ccol_mempool_dynamic_allocs_count(3) accounts for those.
 
-For a pool that ccol_mempool_create_from_preallocated_buffer(3) built,
-this reports the part of the buffer of the caller that the pool
-divided into entries. Such a pool never receives a cache and carries no
-reserve. The figure is therefore exactly the element count times the
-stride, plus one status byte for each element. The pool allocated none
-of it.
+For a pool built by ccol_mempool_create_from_preallocated_buffer(3), this
+reports the part of the caller's buffer that the pool divided into
+entries. Such a pool never receives a cache and carries no reserve, so
+the figure is exactly the element count times the stride, plus one
+status byte for each element, and the pool allocated none of it.
 
 The value does not change over the lifetime of the pool.
 .fi
 .SH "THREAD SAFETY"
 .nf
 Thread-safe when the pool was created with single_threaded = false.
-The call takes the lock of the pool. It is therefore a cold-path call.
-Do not use it inside a hot loop.
+The call takes the lock of the pool, which makes it a cold-path call:
+do not use it inside a hot loop.
 .fi
 .SH "SEE ALSO"
 .BR ccol_mempool_total_capacity (3),

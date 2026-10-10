@@ -12,12 +12,11 @@ const char *cyaml_str_val(cyaml node);
 .SH DESCRIPTION
 .nf
 Return a read-only pointer to the null-terminated string that node
-stores.  This function calls ccol_fatal_err() when node is NULL.  It
-also calls ccol_fatal_err() when the type of node is not CYAML_STRING.
+stores.  The function calls ccol_fatal_err() when node is NULL, and it
+calls ccol_fatal_err() as well when node is not of type CYAML_STRING.
 
-The node owns the pointer that this function gives.  That pointer
-becomes invalid when the caller destroys the node.  It also becomes
-invalid when the caller changes the value of the node with cyaml_set().
+The node owns the returned pointer, which becomes invalid when the
+caller destroys the node or changes its value with cyaml_set().
 .fi
 .SH PARAMETERS
 .nf

@@ -17,14 +17,14 @@ static inline clog clog_open_fd(int fd, clog_level_t min_level,
 .SH DESCRIPTION
 .nf
 Creates a new logger that writes to an already-open file descriptor.
-The logger does not own the file descriptor.  clog_close() does NOT
+The logger does not own the file descriptor, so clog_close() does NOT
 close it.  A logger that sits on an fd offers no log rotation.
 
-Use fd=1 for stdout, and fd=2 for stderr.  Any other open writable fd
-works too, and that includes a pipe and a connected socket.  See
-clog_set_format(3) for the CLOG_FMT_SYSLOG case.  The peer end of fd
-can go away later.  A write after that is dropped silently.  By
-default it does not stop the process either: the logger writes to a
+Use fd=1 for stdout and fd=2 for stderr.  Any other open writable fd
+works too, including a pipe and a connected socket; see
+clog_set_format(3) for the CLOG_FMT_SYSLOG case.  When the peer end of
+fd goes away later, a write after that fails and its record is lost, and
+by default it does not stop the process either: the logger writes to a
 socket with MSG_NOSIGNAL, and it keeps SIGPIPE from a pipe away from
 the process.  For a pipe, the first write from a thread other than
 the async writer thread sets SIGPIPE to SIG_IGN for the process, when
@@ -33,11 +33,11 @@ and a logger on a regular file never touches SIGPIPE.  See
 clog_set_sigpipe_policy(3) for the details, and for the policy that
 leaves SIGPIPE entirely to the application.
 
-You can open fd in blocking mode or in non-blocking mode.  A write on
-a non-blocking fd can report EAGAIN or EWOULDBLOCK.  The calling
-thread then waits for fd to become writable again, and it tries again.
-It does not drop the rest of the record.  The library drops a record
-only on a write error that it truly cannot recover from.
+You can open fd in blocking or in non-blocking mode.  When a write on a
+non-blocking fd reports EAGAIN or EWOULDBLOCK, the calling thread waits
+for fd to become writable again and tries again, instead of dropping
+the rest of the record.  The library drops a record only on a write
+error that it truly cannot recover from.
 .fi
 .SH PARAMETERS
 .nf
@@ -47,40 +47,39 @@ min_level  Messages below this level are silently dropped. Use
            is always written.
 async_cfg  The configuration for async logging, or NULL for
            synchronous logging.  When it is not NULL, a log_*() call
-           formats only its own message.  It gives the rest to a
-           dedicated writer thread.  All loggers that clog_derive()
+           formats only its own message and gives the rest to a
+           dedicated writer thread, and all loggers that clog_derive()
            makes from this logger also log asynchronously.  See
-           clog_async_cfg_t below.  A struct of all zeros also turns
-           async mode on.  This is different from a rotation config.
-           Each zero field gets its own default.  Only a literal NULL
+           clog_async_cfg_t below.  Unlike a rotation config, a
+           struct of all zeros also turns async mode on, with each
+           zero field getting its own default; only a literal NULL
            keeps the logging synchronous.
              clog_async_cfg_t fields:
                queue_size        - the capacity of the message
                                     queue.  0 means an unbounded
                                     queue that never blocks a caller
-                                    on a send.  A value above 0 means
-                                    a bounded queue of that many
-                                    messages.  A full bounded queue
-                                    BLOCKS the caller until space
-                                    frees up, and it never drops a
+                                    on a send, and a value above 0
+                                    means a bounded queue of that
+                                    many messages.  A full bounded
+                                    queue BLOCKS the caller until
+                                    space frees up; it never drops a
                                     message.
-               flush_buffer_size - a count of bytes.  The writer
+               flush_buffer_size - a count of bytes: the writer
                                     thread flushes once its
                                     aggregation buffer reaches this
                                     size.  0 gives
                                     CLOG_DEFAULT_ASYNC_FLUSH_BUFFER_SIZE.
                                     The library has an internal cap
-                                    of 16 MiB for each record.  A
+                                    of 16 MiB for each record, but a
                                     value above that cap still
                                     applies, and the growth ceiling
                                     of the aggregation buffer follows
                                     it.
                flush_interval_us - a uint64_t count of
-                                    microseconds.  The writer thread
-                                    flushes at least this often.  It
-                                    does so even when the buffer has
-                                    not reached flush_buffer_size.
-                                    0 gives
+                                    microseconds: the writer thread
+                                    flushes at least this often, even
+                                    when the buffer has not reached
+                                    flush_buffer_size.  0 gives
                                     CLOG_DEFAULT_ASYNC_FLUSH_INTERVAL_US
                                     (200 ms).  Every value of the
                                     type is valid.  UINT64_MAX, or
@@ -94,10 +93,10 @@ async_cfg  The configuration for async logging, or NULL for
 mprocs     A custom allocator, which holds function pointers for
            malloc, free, calloc and realloc.  Pass NULL to use the
            default system allocator.  All four pointers must be set
-           when mprocs is not NULL.  A struct that is only part
-           filled makes the call return CLOG_INVALID, and it creates
-           no logger.  The library copies the struct internally.  The
-           caller can free it after this call.  All loggers that
+           when mprocs is not NULL; a struct that is only part filled
+           makes the call return CLOG_INVALID and creates no logger.
+           The library copies the struct internally, so the caller
+           can free it after this call.  All loggers that
            clog_derive() makes from this logger use the same
            allocator.
 .fi
@@ -105,57 +104,56 @@ mprocs     A custom allocator, which holds function pointers for
 .nf
 Returns a new logger handle on success.
 Returns CLOG_INVALID when fd is negative, closed, read-only or
-otherwise not valid.  It also returns CLOG_INVALID when mprocs is not
-valid, and when an allocation of memory fails.
+otherwise not valid, when mprocs is not valid, or when an allocation
+of memory fails.
 .fi
 .SH NOTES
 .nf
-The library does not duplicate the fd.  The caller must keep it open
+The library does not duplicate the fd, so the caller must keep it open
 for the whole life of the logger.
-Every public function is fully thread-safe.  One lock serialises every
-write to a given target.  The root logger and every logger derived
-from it share that lock.
+Every public function is fully thread-safe.  One lock, which the root
+logger and every logger derived from it share, serialises every write
+to a given target.
 There are two supported ways to use fork(2) with clogger:
-  - Call fork(2) before you open a logger.
-  - Open a logger, call fork(2), and then call exec(3) immediately.
+  - call fork(2) before you open a logger;
+  - open a logger, call fork(2), and then call exec(3) immediately.
 A process that continues with no exec(3) while a handle from before
 the fork is live does not use a supported pattern.
 
-The library also gives a defense in depth.  A handle that is open at
-the time of such a fork is technically usable in the child.  Log,
-derive and close operations on that handle work correctly on both
-sides.  The async writer thread of a logger does not exist in a forked
-child.  In the child, an inherited handle with async mode on changes
-to synchronous logging.  This change is transparent.
+As a defense in depth, a handle that is open at the time of such a
+fork is technically usable in the child: log, derive and close
+operations on that handle work correctly on both sides.  Because the
+async writer thread of a logger does not exist in a forked child, an
+inherited handle with async mode on changes to synchronous logging in
+the child.  This change is transparent.
 
-This fallback is part of the fork protection of the library.  A build
-with -DCCOL_FORK_SAFETY_REQUIRED=0 does not include it.  Such a process
-must not fork while it holds a live async logger.
+This fallback is part of the fork protection of the library, which a
+build with -DCCOL_FORK_SAFETY_REQUIRED=0 does not include; such a
+process must not fork while it holds a live async logger.
 
 When async_cfg is not NULL, CLOG_FMT_SYSLOG output is exempt from
-batching.  That holds whatever queue_size, flush_buffer_size and
-flush_interval_us say.  Every record and every backtrace frame still
+batching, whatever queue_size, flush_buffer_size and
+flush_interval_us say: every record and every backtrace frame still
 keeps its own write() call.  Every format is exempt from batching on a
-message-oriented socket: a SOCK_DGRAM, SOCK_SEQPACKET or SOCK_RDM
-socket, such as a UDP socket or a Unix datagram socket.  The logger
-checks the kind of fd when it opens.  Such a socket delivers each
-write as one message, so every record goes out as one message of its
-own, exactly as a synchronous logger sends it.  A record larger than
-the socket can carry fails alone.  The library writes a "log record
+message-oriented socket (a SOCK_DGRAM, SOCK_SEQPACKET or SOCK_RDM
+socket, such as a UDP socket or a Unix datagram socket), whose kind
+the logger checks when it opens.  Such a socket delivers each write as
+one message, so every record goes out as one message of its own,
+exactly as a synchronous logger sends it.  A record larger than the
+socket can carry fails alone: the library writes a "log record
 truncated: 0 of <m> bytes written" record in its place, and the
 records after it are still delivered.  A socket whose receiver has no
 room makes the write wait for room, both where the system blocks the
 send and where it refuses the send with ENOBUFS, as FreeBSD does for a
 Unix datagram socket; the logger sends again until the message fits,
 and a CLOG_FATAL call or the drain at exit waits only within its time
-budget.  A CLOG_FATAL call always goes past the
-queue.  It drains everything that earlier calls already queued.  It
-then writes the fatal record itself synchronously, and only then stops
-the process.
+budget.  A CLOG_FATAL call always goes past the queue: it drains
+everything that earlier calls already queued, then writes the fatal
+record itself synchronously, and only then stops the process.
 
-A process can end with exit(3), or a return from main(), while an async
-logger is still open.  An exit handler that the library registers when
-it loads then drains every async logger of the process as a CLOG_FATAL
+When a process ends with exit(3), or a return from main(), while an
+async logger is still open, an exit handler that the library registers
+when it loads drains every async logger of the process as a CLOG_FATAL
 call does: the queue first, then the batch, with a "log record
 truncated: undelivered batch dropped (records=<n> bytes=<m>): the
 process stopped" record for what cannot be delivered.  The handler
@@ -163,77 +161,75 @@ runs after every exit handler that the application registers later,
 so a record that such a handler logs is delivered too.  A budget of 5
 seconds bounds the whole drain, so a descriptor that takes nothing
 more, or threads that keep logging, delay the exit by that much at
-most.  The budget bounds every lock that the drain takes too.  A
-logger whose lock another thread holds past the budget is skipped,
-and the records that it still holds can be lost.  Every write of the
-drain is bounded as well.  A socket is written with MSG_DONTWAIT.
-On macOS, whose send(2) ignores that flag, a stream socket in
-blocking mode is polled for room before each write of at most
-SO_SNDLOWAT bytes.  A pipe or a FIFO is polled for room before each
-write of at most PIPE_BUF bytes.  A terminal is written through a second, non-blocking
+most.  The budget also bounds every lock that the drain takes: a
+logger whose lock another thread holds past the budget is skipped, and
+the records that it still holds can be lost.  Every write of the drain
+is bounded as well.  A socket is written with MSG_DONTWAIT; on macOS,
+whose send(2) ignores that flag, a stream socket in blocking mode is
+polled for room before each write of at most SO_SNDLOWAT bytes.  A
+pipe or a FIFO is polled for room before each write of at most
+PIPE_BUF bytes.  A terminal is written through a second, non-blocking
 open of the same device, because room on a terminal does not mean room
-for a whole write; the descriptor of the logger keeps its own mode.  A
-descriptor in blocking mode whose reader stopped reading therefore
-holds up the exit no longer than the budget allows.  The drain
-takes the lock of a logger only when that logger has a queue or a
-compression to drain: a thread that blocks for ever inside a write of
-a synchronous logger delays no exit and no CLOG_FATAL call.
-exit(3) that the writer thread of a logger reaches, from inside
-a custom allocator, skips the drain of that one logger, because that
-thread cannot serve it.  A record that an async logger receives after
-its drain, from an exit handler that runs after the one of the library
-or from a destructor, is written synchronously by the thread that logs
-it, and clog_close(3) from there still works.  A logger whose drain
-the budget cut off keeps its queue, and such a record can then be
-lost.  _exit(2), a signal and abort(3) run no exit handler; call
-clog_flush(3) or clog_close(3) first where the queued records
+for a whole write; the descriptor of the logger keeps its own mode.  So
+a descriptor in blocking mode whose reader stopped reading holds up the
+exit no longer than the budget allows.  The drain takes the lock of a
+logger only when that logger has a queue or a compression to drain, so
+a thread that blocks for ever inside a write of a synchronous logger
+delays no exit and no CLOG_FATAL call.
+When the writer thread of a logger reaches exit(3), from inside a
+custom allocator, the drain of that one logger is skipped, because
+that thread cannot serve it.  A record that an async logger receives
+after its drain (from an exit handler that runs after the one of the
+library, or from a destructor) is written synchronously by the thread
+that logs it, and clog_close(3) from there still works.  A logger
+whose drain the budget cut off keeps its queue, and such a record can
+then be lost.  _exit(2), a signal and abort(3) run no exit handler;
+call clog_flush(3) or clog_close(3) first where the queued records
 matter.
 
-The kernel can accept only part of a write.  A peer that goes away in
-the middle of a record does this, and so does a filesystem that has
-just run out of space.  The bytes that it did take then go out with no
-terminating newline for that record.  A synchronous logger writes that
-newline itself.  The next record therefore starts a line of its own,
-and nothing joins it onto the fragment.  The logger then writes a "log
-record truncated: <n> of <m> bytes written" record that names the
-loss.  An async logger keeps the bytes that the write did not take in
-its batching buffer.  It offers them again on the next flush.  They
-are the exact continuation of what did get out.  Once the condition
-clears, the logger therefore completes the record and delivers every
-record behind it.
+The kernel can accept only part of a write, for example when a peer
+goes away in the middle of a record or a filesystem has just run out
+of space.  The bytes that it did take then go out with no terminating
+newline for that record.  A synchronous logger writes that newline
+itself, so the next record starts a line of its own and nothing joins
+it onto the fragment; the logger then writes a "log record truncated:
+<n> of <m> bytes written" record that names the loss.  An async logger
+keeps the bytes that the write did not take in its batching buffer and
+offers them again on the next flush.  Because they are the exact
+continuation of what did get out, the logger completes the record and
+delivers every record behind it once the condition clears.
 
 A flush keeps the undelivered bytes only after an error that a later
 attempt can outlast: ENOSPC, EDQUOT, EFBIG, ENOBUFS, ENOMEM, or EAGAIN
 or EINTR that ends a wait.  Any other write error, such as EPIPE,
-ECONNRESET or EBADF, fails the same way on every retry.  The flush
-then drops the undelivered bytes and writes a "log record truncated:
+ECONNRESET or EBADF, fails the same way on every retry, so the flush
+drops the undelivered bytes and writes a "log record truncated:
 undelivered batch dropped (records=<n> bytes=<m>): write error <errno>"
 record in their place, and the records after it go out as usual.  The
 last flush of clog_close(3) has no later retry, so what it cannot
 deliver is named the same way, with "the logger closed" as the reason.
 
-A record can have to reach the descriptor before those bytes do.  The
-library never writes such a record between the two halves of the
-record that those bytes belong to.  There are two such cases.  One is
-a CLOG_FMT_SYSLOG record, which the library never batches.  The other
-is a record that takes the synchronous write path.  Each one first
-gives the outstanding bytes one more attempt at delivery of its own.
-When the descriptor still will not take them, it gives up on them, and
-on every remaining line of the split record, backtrace lines included.
-It then writes the missing newline of the split record, when a line is
-open, and a "log record truncated: <n> undelivered bytes dropped"
-record in their place.  A logfmt record whose backtrace lines are still
+Some records have to reach the descriptor before those bytes do, and
+the library never writes such a record between the two halves of the
+record that those bytes belong to.  There are two such cases: a
+CLOG_FMT_SYSLOG record, which the library never batches, and a record
+that takes the synchronous write path.  Each one first gives the
+outstanding bytes one more attempt at delivery of its own.  When the
+descriptor still will not take them, it gives up on them and on every
+remaining line of the split record, backtrace lines included, and then
+writes the missing newline of the split record (when a line is open)
+and a "log record truncated: <n> undelivered bytes dropped" record in
+their place.  A logfmt record whose backtrace lines are still
 outstanding counts as split even when the bytes already written end
-with the newline of its first line.  The
-library keeps the records that the batch holds behind the split one.
-A later flush delivers them, so they follow the record that it had to
-write past them.
+with the newline of its first line.  The library keeps the records
+that the batch holds behind the split one, and a later flush delivers
+them, so they follow the record that it had to write past them.
 .fi
 .SH "SEE ALSO"
 .BR clog_open_file_mp (3),
 .BR clog_close (3),
 .BR clog_flush (3),
 .BR clog_set_sigpipe_policy (3),
-.BR ccol_log_info (3),
-.BR ccol_log_error (3),
+.BR clog_info (3),
+.BR clog_error (3),
 .BR clogger (7)

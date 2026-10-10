@@ -11,18 +11,18 @@ ccol_retval_t ccol_dynmq_enable_sending(ccol_dynamic_queue *dq);
 .fi
 .SH DESCRIPTION
 .nf
-This function clears the flag that ccol_dynmq_disable_sending() set. The
-queue therefore accepts a send again and does not return
-ccol_not_permitted. A new queue already has sends turned on. You need this
-call only after a call turned sends off.
+This function clears the flag that ccol_dynmq_disable_sending() set, so
+the queue accepts a send again and does not return ccol_not_permitted.
+A new queue has sends turned on from the start, so you need this call
+only after a call turned sends off.
 
-The function wakes every write-direction waiter on this queue. Such a
-waiter is a ccol_select() call, a ccol_select_timed() call, or an
-ccol_event_loop registration. A waiter that parked while sends were off
-therefore sees that the queue is writable again.
+The function wakes every write-direction waiter on this queue, which is
+a ccol_select() call, a ccol_select_timed() call, or an ccol_event_loop
+registration, so a waiter that parked while sends were off sees that
+the queue is writable again.
 
-The messages in the queue from before the change do not change. A turn off
-and a turn on never drop anything.
+The messages in the queue from before the change do not change: a turn
+off and a turn on never drop anything.
 .fi
 .SH PARAMETERS
 .nf
@@ -35,7 +35,7 @@ ccol_invalid_args  - dq is NULL
 .fi
 .SH NOTES
 .nf
-A new queue already has sends turned on.
+A new queue has sends turned on from the start.
 The function is thread-safe.
 .fi
 .SH "SEE ALSO"

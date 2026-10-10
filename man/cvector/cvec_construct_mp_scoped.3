@@ -11,27 +11,27 @@ cvec_construct_mp_scoped(v, type, mprocs);
 .fi
 .SH DESCRIPTION
 .nf
-This macro declares a vector variable with the name v. That vector holds
-elements of the given type. The macro creates the vector through mprocs. It
-also adds a cleanup handler. That handler destroys the vector when control
-leaves the scope around it. The macro is cvec_construct_mp(3) plus that
-handler, with one more difference. This macro initializes the companion
-type variables to NULL. cvec_construct_mp(3) deliberately leaves them
-indeterminate. Everything else that cvec_construct_mp(3) documents holds
-here unchanged. This includes the private copy of the procedure table that
-the vector keeps. It also includes the stop of the program through
-ccol_fatal_err() for a failed creation.
+This macro declares a vector variable named v that holds elements of the
+given type, creates the vector through mprocs, and adds a cleanup handler
+that destroys the vector when control leaves the scope around it. The
+macro is cvec_construct_mp(3) plus that handler, with one more
+difference: this macro initializes the companion type variables to NULL,
+while cvec_construct_mp(3) deliberately leaves them indeterminate.
+Everything else that cvec_construct_mp(3) documents holds here unchanged,
+including the private copy of the procedure table that the vector keeps
+and the stop of the program through ccol_fatal_err() for a failed
+creation.
 
-The macro initializes the variable to NULL before it creates the vector.
-This is what makes the handler safe on a path that leaves the block between
-the declaration and a successful creation. The destruction happens on every
-exit from the scope. Such an exit is the closing brace, a return, a break,
-a continue, or a goto out of the block. The macro sets the variable to NULL
-as it destroys the vector. An explicit call to cvec_destroy(3) earlier in
-the block therefore frees nothing twice.
+The macro initializes the variable to NULL before it creates the vector,
+which makes the handler safe on a path that leaves the block between the
+declaration and a successful creation. The destruction happens on every
+exit from the scope: the closing brace, a return, a break, a continue, or
+a goto out of the block. Because the macro sets the variable to NULL as
+it destroys the vector, an explicit call to cvec_destroy(3) earlier in
+the block frees nothing twice.
 
-The vector goes back through the same procedures that created it. Those
-functions must still be callable at the end of the scope.
+The vector goes back through the same procedures that created it, so
+those functions must be callable at the end of the scope.
 .fi
 .SH PARAMETERS
 .nf
@@ -43,30 +43,30 @@ mprocs  Pointer to a ccol_memmgmt_procs_t. Its malloc, calloc, realloc
 .fi
 .SH RETURN VALUE
 .nf
-None. The macro expands to declarations and then a statement. It does not
-expand to an expression.
+None. The macro expands to declarations and then a statement, not to an
+expression.
 .fi
 .SH NOTES
 .nf
 The macro stops the program through ccol_fatal_err() when it cannot
-create the vector. The message names v and the error below it.
+create the vector, with a message that names v and the error below it.
 The macro is built on the cleanup attribute, so it needs GCC or Clang.
-Use cvec_construct_mp(3) with an explicit cvec_destroy(3) on a toolchain
-that does not have that attribute.
-The macro expands to declarations and then a statement. It therefore
-belongs where declarations are legal. It cannot be the body of an if or
+On a toolchain that does not have that attribute, use
+cvec_construct_mp(3) with an explicit cvec_destroy(3).
+Because the macro expands to declarations and then a statement, it
+belongs where declarations are legal and cannot be the body of an if or
 a loop without braces.
-The macro pastes v into the names of the companion variables. v must
-therefore be a plain identifier.
-The macro does not free the elements one by one when the vector holds
-pointers to heap buffers. Free the element data before you leave the
+The macro pastes v into the names of the companion variables, so v must
+be a plain identifier.
+When the vector holds pointers to heap buffers, the macro does not free
+the elements one by one, so free the element data before you leave the
 scope.
 .fi
 .SH WARNINGS
 .nf
-The vector must not live longer than its scope. Do not return v. Do not
-store it anywhere that code reads after the end of the block. Use
-cvec_construct_mp(3) when the ownership must leave the block.
+The vector must not live longer than its scope: do not return v, and do
+not store it anywhere that code reads after the end of the block. When
+the ownership must leave the block, use cvec_construct_mp(3).
 .fi
 .SH EXAMPLES
 .nf

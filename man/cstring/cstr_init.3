@@ -11,19 +11,19 @@ cstr_init(s, initial);
 .fi
 .SH DESCRIPTION
 .nf
-This macro calls cstring_create() to initialise the cstr variable s, which
-you must declare first. It uses the initial content that you give. It calls
+This macro calls cstring_create() to initialise the cstr variable s with
+the initial content that you give. You must declare s first. It calls
 ccol_fatal_err() if the creation fails.
 .fi
 .SH PARAMETERS
 .nf
-s        cstr lvalue to initialise (you must declare it first). The macro
+s        cstr lvalue to initialise (you must declare it first); the macro
          assigns it once, after the string is created
 initial  Initial content (C string or NULL for empty string)
 .fi
 .SH NOTES
 .nf
-This macro calls ccol_fatal_err() when an allocation fails. Call
+This macro calls ccol_fatal_err() when an allocation fails; call
 cstring_create() directly when you want to handle an error yourself
 .fi
 .SH EXAMPLES

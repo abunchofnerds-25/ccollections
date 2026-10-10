@@ -11,7 +11,7 @@ cstr_reserve(s, cap);
 .fi
 .SH DESCRIPTION
 .nf
-This macro calls cstring_reserve(). It then calls ccol_fatal_err() if
+This macro calls cstring_reserve() and then calls ccol_fatal_err() if
 cstring_reserve() returns false.
 .fi
 .SH PARAMETERS
@@ -21,8 +21,8 @@ cap   Minimum number of bytes to reserve (with the null terminator)
 .fi
 .SH NOTES
 .nf
-The macro evaluates cap exactly once. The failure message therefore
-reports the capacity that the call used
+The macro evaluates cap exactly once, so the failure message reports the
+capacity that the call used
 Call cstring_reserve() directly when you want to handle an error yourself
 .fi
 .SH "SEE ALSO"

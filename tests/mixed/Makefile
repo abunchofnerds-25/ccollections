@@ -7,15 +7,15 @@ SRC_FILES = ../../src/cvector.c \
             ../../src/common.c \
             ../../src/csort.c
 ALL_SRC_FILES = tests.c $(SRC_FILES)
-# tests_compat pins the behavioural half of the 1.x compatibility policy. That
-# half covers ownership, the order of a callback and the thread that runs it,
-# the stability of a pointer and of an iterator, and which allocator the code
-# uses. No other check covers it. `make check_abi` reads the shape of the
-# interface. The suite of each module tests that module against its own
-# expectations, and not against the promise that the policy makes. The corpus
-# reaches across more modules than tests.c does, so it carries its own source
-# list, and does not widen that one. It needs no process isolation, and lives
-# here as a second binary in this directory.
+# tests_compat pins the behavioural half of the 1.x compatibility policy:
+# ownership, the order of a callback and the thread that runs it, the
+# stability of a pointer and of an iterator, and which allocator the code
+# uses. No other check covers it, because `make check_abi` reads the shape of
+# the interface, and the suite of each module tests that module against its
+# own expectations instead of against the promise that the policy makes. The
+# corpus reaches across more modules than tests.c does, so it carries its own
+# source list instead of widening that one. It needs no process isolation and
+# lives here as a second binary in this directory.
 COMPAT_SRC_FILES = ../../src/cvector.c \
             ../../src/chashmap.c \
             ../../src/cbstmap.c \
@@ -45,9 +45,9 @@ build:
 build_compat:
 	$(CC) $(CFLAGS) $(ALL_COMPAT_SRC_FILES) -o tests_compat $(LFLAGS)
 
-# The corpus drives a thread pool and a thread-safe cache. It pins promises
-# about the thread that runs a callback. A real race detector is the right way
-# to check those promises, and reasoning about them is not.
+# The corpus drives a thread pool and a thread-safe cache, and it pins
+# promises about the thread that runs a callback. A real race detector is the
+# right way to check those promises; reasoning about them is not.
 build_compat_tsan:
 	$(CC) $(TSAN_CFLAGS) $(ALL_COMPAT_SRC_FILES) -o tests_compat_tsan $(LFLAGS) -fsanitize=thread $(CCOL_TSAN_EXTRA_SRC)
 
@@ -67,12 +67,12 @@ memtest: build build_compat
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 ./tests
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 ./tests_compat
 
-# --ignore-errors negative: the coverage counters of gcov are plain increments
-# that are not atomic. Instrumented code that runs concurrently can race on
-# them and produce a false negative hit count. This affects more than one
-# module, and it also happens inside a glibc header. It is a limit of the
-# instrumentation of gcov, and not a defect in the logic of this library. See
-# the identical flag in tests/chttpclient/Makefile for the full reason.
+# --ignore-errors negative: the coverage counters of gcov are plain, non-atomic
+# increments, so instrumented code that runs concurrently can race on them and
+# produce a false negative hit count. This affects more than one module and
+# also happens inside a glibc header; it is a limit of the gcov
+# instrumentation, not a defect in the logic of this library. See the
+# identical flag in tests/chttpclient/Makefile for the full reason.
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \

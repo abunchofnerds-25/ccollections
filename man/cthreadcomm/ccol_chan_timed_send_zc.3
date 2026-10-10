@@ -13,16 +13,16 @@ ccol_retval_t ccol_chan_timed_send_zc(ccol_channel *ch,
 .fi
 .SH DESCRIPTION
 .nf
-This function blocks and waits for free space in the queue that the channel
-picks itself. It waits for the given timeout at most.
+This function blocks and waits, for at most the given timeout, for free
+space in the queue that the channel picks itself.
 .fi
 .SH PARAMETERS
 .nf
 ch          Channel to send through
 msg         Message to send. On success the ownership of the data moves to
             the channel.
-timeout_us  Longest time to wait, in microseconds, from the call. 0 does
-            not wait: the call is then ccol_chan_try_send_zc.
+timeout_us  Longest time to wait, in microseconds, from the call. 0
+            does not wait, which makes the call ccol_chan_try_send_zc.
 .fi
 .SH RETURN VALUE
 .nf
@@ -40,16 +40,16 @@ ccol_unexpected_failure   - The wait failed with an error other than a
 .nf
 The function blocks for the duration of the timeout at most.
 The function picks the direction itself from the ID of the thread.
-A timeout of 0 does not wait. The call then does exactly what
-ccol_chan_try_send_zc does, and returns its result: ccol_container_full,
-and not ccol_timed_out, when it cannot proceed at once.
+A timeout of 0 does not wait: the call then does exactly what
+ccol_chan_try_send_zc does and returns its result, so it gives
+ccol_container_full, not ccol_timed_out, when it cannot proceed at once.
 A timeout too large to form a deadline, such as UINT64_MAX, saturates
 to the latest deadline that the clock can hold and in practice waits
 with no end; it never wraps into the past.
-The library measures the timeout against CLOCK_MONOTONIC. A change to the
-wall clock of the system does not make the timeout longer or shorter. An
-administrator, NTP, or the resume of a virtual machine can change that
-clock. The call waits for the duration that the caller gave.
+The library measures the timeout against CLOCK_MONOTONIC, so a change
+to the wall clock of the system (by an administrator, by NTP, or by the
+resume of a virtual machine) does not make the timeout longer or
+shorter: the call waits for the duration that the caller gave.
 .fi
 .SH "SEE ALSO"
 .BR ccol_chan_send_zc (3),

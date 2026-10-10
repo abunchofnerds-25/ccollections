@@ -16,7 +16,7 @@ build:
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)
 
 # tests_c23.c compiles the value macros of this module as C23, where
-# nullptr exists and `true` has the type bool. The main suite is C11 and can
+# nullptr exists and `true` has the type bool; the main suite is C11 and can
 # observe neither. The library sources build with the same flags, so the
 # binary also shows that they compile as C23.
 C23_CFLAGS = $(subst -std=gnu11,-std=gnu2x,$(CFLAGS))
@@ -42,20 +42,19 @@ memtest: build build_c23
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 --child-silent-after-fork=yes ./tests
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 ./tests_c23
 
-# libFuzzer targets for the two hand-written parsers of cjson.c. Each one is
-# independent of the other. The first is the JSON grammar itself, which
-# fuzz_cjson_parse drives. That target also drives the serializer and
-# cjson_clone() over whatever the parser accepts. The second is the
-# dot-separated path grammar that cjson_get, cjson_set and cjson_delete read,
-# which fuzz_cjson_path drives. Both targets need clang, because libFuzzer is
-# a Clang and LLVM feature. The `fuzz` target of tests/cyaml/Makefile and the
-# `fuzz_request` and `fuzz_response` targets of tests/chttpclient/Makefile
-# have the same shape, and the same reason for .PHONY. A fuzz/corpus_parse
-# directory and a fuzz/corpus_path directory already exist on disk. Without
-# .PHONY, Make reads a bare `fuzz_parse` or `fuzz_path` target as already
-# satisfied and skips the recipe completely. Run ./fuzz_cjson_parse
-# fuzz/corpus_parse [-max_total_time=N], and the other target in the same way.
-# The libFuzzer documentation lists the flags.
+# libFuzzer targets for the two hand-written parsers of cjson.c, which are
+# independent of each other. fuzz_cjson_parse drives the JSON grammar itself,
+# and also the serializer and cjson_clone() over whatever the parser accepts.
+# fuzz_cjson_path drives the dot-separated path grammar that cjson_get,
+# cjson_set and cjson_delete read. Both targets need clang, because libFuzzer
+# is a Clang and LLVM feature. The `fuzz` target of tests/cyaml/Makefile and
+# the `fuzz_request` and `fuzz_response` targets of tests/chttpclient/Makefile
+# have the same shape and the same reason for .PHONY: a fuzz/corpus_parse
+# directory and a fuzz/corpus_path directory already exist on disk, and
+# without .PHONY, Make reads a bare `fuzz_parse` or `fuzz_path` target as
+# already satisfied and skips the recipe completely. Run ./fuzz_cjson_parse
+# fuzz/corpus_parse [-max_total_time=N], and the other target in the same way;
+# the libFuzzer documentation lists the flags.
 FUZZ_CC = clang
 FUZZ_CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 -fsanitize=fuzzer,address,undefined -g3 -O1
 FUZZ_SRC_FILES = $(SRC_FILES)
@@ -69,13 +68,12 @@ fuzz_path:
 	$(FUZZ_CC) $(FUZZ_CFLAGS) fuzz/fuzz_cjson_path.c $(FUZZ_SRC_FILES) \
 		-o fuzz_cjson_path $(LFLAGS)
 
-# --ignore-errors negative: the coverage counters of gcov are plain increments
-# and are not atomic. Instrumented code that runs on several threads can
-# therefore race on them and produce a false negative hit count. This affects
-# more than one module, and it also happens inside a glibc header. It is a
-# limit of the instrumentation of gcov, and not a defect in the logic of this
-# library. The same flag in tests/chttpclient/Makefile gives the full
-# reason.
+# --ignore-errors negative: the coverage counters of gcov are plain, non-atomic
+# increments, so instrumented code that runs on several threads can race on
+# them and produce a false negative hit count. This affects more than one
+# module and also happens inside a glibc header; it is a limit of the gcov
+# instrumentation, not a defect in the logic of this library. The same flag
+# in tests/chttpclient/Makefile gives the full reason.
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \

@@ -14,13 +14,13 @@ ccol_retval_t ctpool_try_submit_future(ctpool pool,
 .fi
 .SH DESCRIPTION
 .nf
-Allocates a future and submits it to the pool, and never blocks. The
-function returns ccol_container_full at once, and sets *out to NULL,
-when a bounded queue is at capacity. For an unbounded queue it behaves
-exactly as ctpool_submit_future does.
+Allocates a future and submits it to the pool without ever blocking:
+when a bounded queue is at capacity, the function returns
+ccol_container_full at once and sets *out to NULL. For an unbounded
+queue it behaves exactly as ctpool_submit_future does.
 
 On success the function sets *out to a new ctpool_future handle with a
-reference count of 2. The caller holds one reference, and the task in
+reference count of 2: the caller holds one reference, and the task in
 the queue holds the other. The caller must call ctpool_future_free
 exactly one time when it is done.
 .fi

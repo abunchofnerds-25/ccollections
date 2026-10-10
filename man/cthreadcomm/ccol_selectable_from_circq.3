@@ -11,24 +11,23 @@ ccol_selectable_from_circq(q, dir);
 .fi
 .SH DESCRIPTION
 .nf
-This macro builds a ccol_selectable value. That value is a tagged
-union, and its type here is ccol_selectable_circq. It wraps the
-ccol_circular_queue pointer that you give, with the direction that you
-give.
+This macro builds a ccol_selectable value, a tagged union whose type
+here is ccol_selectable_circq, that wraps the ccol_circular_queue
+pointer that you give, with the direction that you give.
 
   ccol_select_read; wait for at least one message to arrive (read-wait)
   ccol_select_write; wait until the queue has room for a send (write-wait)
 
-This macro expands to a compound literal. It costs nothing at run time
-beyond the load of the pointer.
+This macro expands to a compound literal, so it costs nothing at run
+time beyond the load of the pointer.
 
-ccol_select() only reports readiness for either direction. It never
-consumes anything itself, and it never reserves anything. The caller
-must then make the call itself. Call ccol_circq_try_recv_zc() when the
-read direction wins. Call ccol_circq_try_send_zc() when the write
-direction wins. ccol_select() claims nothing and reserves nothing.
-This is a time-of-check to time-of-use gap, the same as the one in
-POSIX select(2).
+ccol_select() only reports readiness for either direction; it never
+consumes or reserves anything itself, so the caller must then make the
+call itself: ccol_circq_try_recv_zc() when the read direction wins,
+and ccol_circq_try_send_zc() when the write direction wins. Because
+ccol_select() claims nothing and reserves nothing, there is a
+time-of-check to time-of-use gap, the same as the one in POSIX
+select(2).
 .fi
 .SH PARAMETERS
 .nf
@@ -51,7 +50,7 @@ ccol_select_va(&idx,
     ccol_selectable_from_circq(q0, ccol_select_read),
     ccol_selectable_from_circq(q1, ccol_select_read));
 /* on ccol_success, claim the message with ccol_circq_try_recv_zc() on
-   whichever of q0 and q1 that idx points at */
+   whichever of q0 and q1 idx points at */
 
 /* Mixed: wait until q0 has room to send or q1 has a message: */
 ccol_select_va(&idx,

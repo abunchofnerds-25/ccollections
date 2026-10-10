@@ -29,8 +29,8 @@ SOFTWARE.
  *
  * Each test blocks SIGPIPE on its own thread around the operation under test
  * and then asks whether one is pending. A write(2) to a socket whose peer is
- * gone raises SIGPIPE for the writing thread. With the signal blocked it stays
- * pending instead of ending the process, so a failure is reported as one
+ * gone raises SIGPIPE for the writing thread; while the signal is blocked, it
+ * stays pending instead of ending the process, so a failure is reported as one
  * failed test with the pending signal consumed, and the binary goes on. */
 
 #include <common.h>

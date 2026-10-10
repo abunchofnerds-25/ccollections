@@ -2,39 +2,39 @@
 INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
 
-# Our source files. The build compiles them with strict flags and -Werror.
+# Our source files, which the build compiles with strict flags and -Werror.
 # chttpserver.c and chttpclient.c each own a fully separate static
 # ccol_event_loop reactor.
 #
-# This shared source set builds four binaries:
+# This shared source set builds six binaries:
 #   tests            (tests.c) - the main suite.
 #   tests_tls        (tests_tls.c) - drives a real TLS handshake against a
-#                     real self-signed certificate. The `openssl` command
-#                     line tool generates that certificate as the tests
-#                     start. This is a SEPARATE BINARY only as a choice of
-#                     test layout. It keeps the cases about the handshake
-#                     together, and out of the main suite.
+#                     real self-signed certificate, which the `openssl`
+#                     command line tool generates as the tests start. It is
+#                     a SEPARATE BINARY only as a choice of test layout,
+#                     which keeps the cases about the handshake together
+#                     and out of the main suite.
 #   tests_mem_mgmt   (tests_mem_mgmt.c) - calls
 #                     chttpsvr_set_engine_mem_mgmt_procs() before the first
 #                     chttpsvr_start() in the process. That order is a rule
-#                     for the whole process, and you can only set the procs
+#                     for the whole process, and you can set the procs only
 #                     one time ever. The shared _setup() of tests.c already
-#                     calls chttpsvr_start(). The happy path of "install the
-#                     procs, then start" therefore needs a process where
-#                     nothing else started the engine first. That is why it
-#                     has its own SEPARATE BINARY.
+#                     calls chttpsvr_start(), so the happy path of "install
+#                     the procs, then start" needs a process where nothing
+#                     else started the engine first, which is why it has
+#                     its own SEPARATE BINARY.
 #   tests_engine_stop (tests_engine_stop.c) - exercises
-#                     chttpsvr_engine_stop(), which is the forced engine
-#                     shutdown path that a signal handler drives. That path
-#                     tears the one shared ccol_event_loop reactor of the
-#                     process down, under every chttpsvr instance that is
-#                     started at that moment. The g_srv, g_srv2 and other
-#                     servers of tests.c stay started for its whole run. A
-#                     forced stop of the shared engine there would pull the
-#                     reactor out from under them, and fail unrelated tests.
-#                     That is why it has its own SEPARATE BINARY. This
-#                     follows the same isolation reasoning as tests_tls and
-#                     tests_mem_mgmt above.
+#                     chttpsvr_engine_stop(), the forced engine shutdown
+#                     path that a signal handler drives. That path tears
+#                     the one shared ccol_event_loop reactor of the process
+#                     down, under every chttpsvr instance that is started
+#                     at that moment. The g_srv, g_srv2 and other servers
+#                     of tests.c stay started for its whole run, so a forced
+#                     stop of the shared engine there would pull the reactor
+#                     out from under them and fail unrelated tests. That is
+#                     why it has its own SEPARATE BINARY, following the same
+#                     isolation reasoning as tests_tls and tests_mem_mgmt
+#                     above.
 #   tests_worker_key (tests_worker_key.c) - takes every thread-specific key
 #                     that the process can have before the first
 #                     chttpsvr_start() creates the key that marks worker
@@ -62,17 +62,17 @@ COMMON_SRC_FILES = ../../src/chttpserver.c \
 
 EXTRA_CFLAGS ?=
 # The build compiles the sources of the library at the optimization level of
-# the shipped library. These tests therefore exercise the code that ships, and
-# not a debug build that nobody installs. It builds only the test files of this
-# directory at -O0. The extra debuggability is worth having there, and that
+# the shipped library, so these tests exercise the code that ships instead of
+# a debug build that nobody installs. It builds only the test files of this
+# directory at -O0, where the extra debuggability is worth having and the
 # object code is not a part of the product. Loosen SRC_OPT for a short time
 # when you must step through a failure.
 SRC_OPT = -O3
 TEST_OPT = -O0
 # -Wl,-z,relro,-z,now is a linker flag, and it stays out of CFLAGS_COMMON on
-# purpose. SRC_CFLAGS drives calls that only compile. The driver of clang
-# treats an unused linker argument there as an error under -Werror, and gcc
-# only discards it. This flag belongs on CFLAGS, which does the real link, and
+# purpose: SRC_CFLAGS drives calls that only compile, and the driver of clang
+# treats an unused linker argument there as an error under -Werror, while gcc
+# only discards it. This flag belongs on CFLAGS, which does the real link, so
 # it goes there instead.
 LD_HARDENING = $(CCOL_LD_HARDENING)
 CFLAGS_COMMON = $(INCLUDES) $(DEFINITIONS) -std=gnu11 $(CCOL_HARDENING_CFLAGS) \
@@ -82,9 +82,9 @@ include ../hardening.mk
 
 CFLAGS = $(CFLAGS_COMMON) $(LD_HARDENING) $(TEST_OPT) $(EXTRA_CFLAGS)
 SRC_CFLAGS = $(CFLAGS_COMMON) $(SRC_OPT) $(EXTRA_CFLAGS)
-# The build makes the library objects one time for this directory, and links
-# them into every binary that it produces. It does not recompile them for each
-# binary.
+# The build makes the library objects one time for this directory and links
+# them into every binary that it produces, instead of recompiling them for
+# each binary.
 SRC_OBJS = $(notdir $(COMMON_SRC_FILES:.c=.o))
 TSAN_CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 -fsanitize=thread -Wall -Wextra -Werror -g -O1 -fPIC $(EXTRA_CFLAGS)
 
@@ -96,12 +96,12 @@ LFLAGS = -lpthread -lssl -lcrypto -lm -lz -rdynamic $(CCOL_PLATFORM_LIBS)
 COVERAGE_FLAGS =
 COVERAGE_ON = -fprofile-arcs -ftest-coverage
 
-# An object file carries no record of how the build made it. Without this
-# stamp, a change of compiler or of flags relinks stale objects of the wrong
-# architecture, or objects with no instrumentation in them. A native build
+# An object file carries no record of how the build made it, so without this
+# stamp a change of compiler or of flags relinks stale objects of the wrong
+# architecture, or objects with no instrumentation in them; a native build
 # followed by `make CC="gcc -m32" test`, or by a coverage run, does that. This
-# stamp holds the current compiler and flags. The build rewrites it only when
-# they really change. The objects therefore rebuild when they must, and stay
+# stamp holds the current compiler and flags, and the build rewrites it only
+# when they really change, so the objects rebuild when they must and stay
 # cached when they need not.
 .PHONY: FORCE
 FORCE:
@@ -114,8 +114,8 @@ FORCE:
 # ordinary build, and generate_coverage_report sets it, so one rule serves
 # both. include/internal/ has its own line because a *.h wildcard cannot match
 # a subdirectory. Without the second pattern, no internal header is a
-# prerequisite. An edit to one of them then recompiles nothing here. A later
-# edit to a single .c file then gives a binary whose objects disagree about
+# prerequisite: an edit to one of them then recompiles nothing here, and a
+# later edit to a single .c file gives a binary whose objects disagree about
 # that header.
 LIB_HEADERS = $(wildcard ../../include/*.h) \
               $(wildcard ../../include/internal/*.h)
@@ -126,30 +126,29 @@ LIB_HEADERS = $(wildcard ../../include/*.h) \
 build: $(SRC_OBJS)
 	$(CC) $(CFLAGS) tests.c $(SRC_OBJS) -o tests $(LFLAGS)
 
-# A separate ThreadSanitizer build of the main suite alone. It stays out of the
-# default -Werror build. tests/cthreadcomm/Makefile has the same build_tsan and
-# test_tsan pattern.
+# A separate ThreadSanitizer build of the main suite alone, which stays out of
+# the default -Werror build. tests/cthreadcomm/Makefile has the same
+# build_tsan and test_tsan pattern.
 build_tsan:
 	$(CC) $(TSAN_CFLAGS) tests.c $(COMMON_SRC_FILES) -o tests_tsan $(LFLAGS) -fsanitize=thread $(CCOL_TSAN_EXTRA_SRC)
 
 # die_after_fork=0: tests/chttpclient/Makefile has the same comment on its own
-# test_tsan target. The same root cause applies here too, and we verified it
-# the same way. That cause is a persistent, multi-threaded ccol_event_loop
-# reactor for the whole process, alive at the moment of a fork(). It trips the
-# die_after_fork=1 default of TSan as soon as the forked child of
+# test_tsan target, and the same root cause, verified the same way, applies
+# here: a persistent, multi-threaded ccol_event_loop reactor for the whole
+# process, alive at the moment of a fork(). It trips the die_after_fork=1
+# default of TSan as soon as the forked child of
 # concurrent_double_destroy_is_fatal creates its own two racing pthreads.
 test_tsan: build_tsan
 	TSAN_OPTIONS="die_after_fork=0" ./tests_tsan
 
-# A separate ThreadSanitizer build of tests_engine_stop.c. It follows
-# build_tsan and test_tsan above exactly. This binary holds by far the most
-# races over forks and threads of the four binaries in this directory. Those
-# races are reaper against destroy, start against stop, listener against
-# dispatch, and a concurrent destroy against engine_stop. Dedicated white-box
-# hooks that arm, wait and release drive each one, and those hooks exist to
-# manufacture data races in a deterministic way. This is therefore the suite
-# that gains the most from the one tool that best catches the class of bug
-# that it reproduces.
+# A separate ThreadSanitizer build of tests_engine_stop.c, which follows
+# build_tsan and test_tsan above exactly. Of the six binaries in this
+# directory, this one holds by far the most races over forks and threads:
+# reaper against destroy, start against stop, listener against dispatch, and
+# a concurrent destroy against engine_stop. Dedicated white-box hooks that
+# arm, wait and release drive each one, and those hooks exist to manufacture
+# data races in a deterministic way, so this is the suite that gains the most
+# from the one tool that best catches the class of bug that it reproduces.
 build_engine_stop_tsan:
 	$(CC) $(TSAN_CFLAGS) tests_engine_stop.c $(COMMON_SRC_FILES) -o tests_engine_stop_tsan $(LFLAGS) -fsanitize=thread $(CCOL_TSAN_EXTRA_SRC)
 
@@ -173,8 +172,9 @@ build_sigpipe: $(SRC_OBJS)
 
 
 # Aliases for convenience, so that the name of a binary that this suite
-# produces also works as a target. Each one builds that binary. `make test`
-# builds and runs every one of them, and stays the normal entry point.
+# produces also works as a target. Each one builds that binary, while
+# `make test` builds and runs every one of them and stays the normal entry
+# point.
 .PHONY: tests_tls tests_mem_mgmt tests_engine_stop tests_worker_key tests_sigpipe
 tests_tls: build_tls
 tests_mem_mgmt: build_mem_mgmt
@@ -204,12 +204,12 @@ memtest: build build_tls build_mem_mgmt build_engine_stop build_worker_key build
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
 		--error-exitcode=1 ./tests_sigpipe
 
-# --ignore-errors negative: the coverage counters of gcov are plain increments
-# and are not atomic. They can race when instrumented code runs concurrently,
-# and they then give a false negative hit count. This affects more than one
-# module, and it also happens inside a glibc header. It is a limit of the
-# instrumentation of gcov, and not a defect in the logic of this library. See
-# the same flag in tests/chttpclient/Makefile for the full reasons.
+# --ignore-errors negative: the coverage counters of gcov are plain, non-atomic
+# increments, so they can race when instrumented code runs concurrently and
+# then give a false negative hit count. This affects more than one module and
+# also happens inside a glibc header; it is a limit of the gcov
+# instrumentation, not a defect in the logic of this library. See the same
+# flag in tests/chttpclient/Makefile for the full reasons.
 generate_coverage_report:
 	$(MAKE) clean_objs
 	$(MAKE) COVERAGE_FLAGS="$(COVERAGE_ON)" $(SRC_OBJS)

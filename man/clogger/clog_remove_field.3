@@ -11,9 +11,9 @@ void clog_remove_field(clog logger, const char *key);
 .fi
 .SH DESCRIPTION
 .nf
-Removes the field with the given key from the field list of the logger.
-That field then appears in no later log line.  The call does nothing
-when the field list holds no such key.
+Removes the field with the given key from the field list of the logger,
+so that field appears in no later log line.  The call does nothing when
+the field list holds no such key.
 .fi
 .SH PARAMETERS
 .nf
@@ -22,7 +22,7 @@ key     Field name to remove. The match is case-sensitive and exact.
 .fi
 .SH NOTES
 .nf
-Thread-safe.  The mutex of the logger protects it.
+Thread-safe: the mutex of the logger protects it.
 Asserts when logger is CLOG_INVALID, stale or already closed.
 .fi
 .SH "SEE ALSO"

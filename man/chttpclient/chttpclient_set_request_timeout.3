@@ -21,13 +21,13 @@ time.
 Every tier checks this deadline before each read of the response. Once
 it has passed, the request ends with ccol_timed_out, even when the rest
 of the response has already arrived and one more read would complete
-it. A response that the client finished reading before the deadline
-passed is a success. chttpclient_do, chttpclient_do_async and
+it, while a response that the client finished reading before the
+deadline passed is a success. chttpclient_do, chttpclient_do_async and
 chttpclient_do_pooled, and their streaming forms, give the same result
 for the same timeline.
 
 Every value other than 0 is honoured as a limit, however far away it
-lies. A value too large for the clock to reach, such as UINT64_MAX,
+lies: a value too large for the clock to reach, such as UINT64_MAX,
 saturates to the latest deadline that the clock can hold, and never
 wraps into the past.
 .fi

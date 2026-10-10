@@ -11,10 +11,10 @@ cvec_construct(vec_name, type);
 .fi
 .SH DESCRIPTION
 .nf
-This type-inferred macro creates a vector. It finds the element size from the
-type automatically. It also makes a type marker variable. That variable
-tells the other type-dispatching macros the declared element type at each
-call site.
+This type-inferred macro creates a vector, finding the element size from
+the type automatically. It also makes a type marker variable, which tells
+the other type-dispatching macros the declared element type at each call
+site.
 .fi
 .SH PARAMETERS
 .nf
@@ -29,8 +29,8 @@ type      Element type, for example int, double or struct foo
 .SH NOTES
 .nf
 The macro stops the program when an allocation fails.
-The macro makes a hidden type marker variable. The other type-dispatching
-macros read that variable. cvec_redeclare(3) makes it again in another
+The macro makes a hidden type marker variable that the other
+type-dispatching macros read; cvec_redeclare(3) makes it again in another
 scope.
 The macro is equal to cvector_create(sizeof(type), &err) with error
 handling.

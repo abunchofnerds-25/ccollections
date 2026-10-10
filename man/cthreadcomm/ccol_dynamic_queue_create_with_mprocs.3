@@ -12,17 +12,17 @@ ccol_dynamic_queue *ccol_dynamic_queue_create_with_mprocs(
 .fi
 .SH DESCRIPTION
 .nf
-This function creates a queue with no size limit. A doubly-linked list
-holds the queue. A send never waits for free space. It fails in three
-cases: an allocation fails, the queue already holds ccol_max_elem_count
-messages, or a ccol_dynmq_disable_sending(3) call turned sends off. A new
-queue starts with sends turned on.
+This function creates a queue with no size limit, held in a
+doubly-linked list. A send never waits for free space; instead it fails
+in three cases: an allocation fails, the queue already holds
+ccol_max_elem_count messages, or a ccol_dynmq_disable_sending(3) call
+turned sends off. A new queue starts with sends turned on.
 
-Every allocation of the queue goes through mmgmt_procs. This is true at
-creation time and for each list node that a later send adds. The queue
-keeps its own copy of those procedures and frees itself through them. The
-ccol_memmgmt_procs_t of the caller therefore does not need to live longer
-than this call. A NULL value selects the default malloc and free, which is
+Every allocation of the queue, at creation time and for each list node
+that a later send adds, goes through mmgmt_procs. The queue keeps its
+own copy of those procedures and frees itself through them, so the
+ccol_memmgmt_procs_t of the caller does not need to live longer than
+this call. A NULL value selects the default malloc and free, which is
 what the ccol_dynamic_queue_create() macro does.
 .fi
 .SH PARAMETERS
@@ -38,34 +38,34 @@ err_str      Optional pointer that gets an error string on failure. Pass
 On success, the function gives a pointer to the new dynamic queue. If
 err_str is not NULL, the function sets *err_str to NULL.
 
-On failure, the function gives NULL. If err_str is not NULL, *err_str then
-describes the reason. The reasons for a failure are: mmgmt_procs is
-malformed, because it sets some but not all of malloc, calloc, realloc and
-free; an allocation failed; the function could not initialize the mutex of
-the queue or its condition variable; or, in a build that has fork-safety
-protection compiled in, the function could not register the mutex of the
-queue with the fork-safety registry. That registration also fails once the
-process-exit destructors of the library have run and the last queue is
-gone, for example in an application destructor that runs after them. None of these paths leaves anything
-allocated.
+On failure, the function gives NULL, and if err_str is not NULL,
+*err_str describes the reason. The reasons for a failure are: mmgmt_procs
+is malformed, because it sets some but not all of malloc, calloc, realloc
+and free; an allocation failed; the function could not initialize the
+mutex of the queue or its condition variable; or, in a build that has
+fork-safety protection compiled in, the function could not register the
+mutex of the queue with the fork-safety registry. That registration also
+fails once the process-exit destructors of the library have run and the
+last queue is gone, for example in an application destructor that runs
+after them. None of these paths leaves anything allocated.
 .fi
 .SH NOTES
 .nf
 All operations on this queue are thread-safe.
-A send never blocks. It fails instead of a wait in three cases: the queue
-holds ccol_max_elem_count messages, the memory runs out, or sends on the
-queue are turned off.
+A send never blocks; instead of a wait, it fails in three cases: the
+queue holds ccol_max_elem_count messages, the memory runs out, or sends
+on the queue are turned off.
 You must destroy the queue with ccol_dynamic_queue_destroy() after you
 finish with it.
-There are two supported ways to combine fork(2) with this queue. The first
-way is to call fork(2) before you create the queue. The second way is to
-create the queue, then call fork(2) and immediately call exec(3). One
-pattern is not supported: a program continues to run with no exec(3) in
-between while a queue from before the fork is still live. On top of that
-rule, the library adds a defense in depth. The child never inherits a lock
-in the locked state from another thread that held it at the instant of the
-fork. Also, the queue owns no thread of its own. A queue that a child
-inherits in that way therefore stays fully usable.
+There are two supported ways to combine fork(2) with this queue: call
+fork(2) before you create the queue, or create the queue, then call
+fork(2) and immediately call exec(3). One pattern is not supported: a
+program that continues to run with no exec(3) in between while a queue
+from before the fork is live. On top of that rule, the library adds a
+defense in depth: the child never inherits a lock in the locked state
+from another thread that held it at the instant of the fork.  Because
+the queue also owns no thread of its own, a queue that a child inherits
+in that way stays fully usable.
 .fi
 .SH "SEE ALSO"
 .BR ccol_dynamic_queue_create (3),

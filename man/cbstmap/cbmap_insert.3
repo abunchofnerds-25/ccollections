@@ -11,12 +11,12 @@ cbmap_insert(hm_name, key, val);
 .fi
 .SH DESCRIPTION
 .nf
-Type-inferred wrapper for cbmap_insert_elem(). It builds the cmap_pair for
-the key and the cmap_pair for the value from the expressions of the
-caller. If the key is already in the map, the macro updates the value
-and reports nothing. The macro calls ccol_fatal_err() only on a real
-failure, that is ccol_not_enough_memory or ccol_container_full. The map
-balances the tree again after the insert.
+Type-inferred wrapper for cbmap_insert_elem() that builds the cmap_pair
+for the key and the cmap_pair for the value from the expressions of the
+caller. If the key is already in the map, the macro updates the value and
+reports nothing; it calls ccol_fatal_err() only on a real failure, that
+is ccol_not_enough_memory or ccol_container_full. The map balances the
+tree again after the insert.
 
 key and val go through the declared key type and value type of the
 map, as NOTES describes.
@@ -31,12 +31,12 @@ val      Value for that key
 .nf
 key and val go through the DECLARED key type and value type of the
 tree. The macro makes a private copy of each argument with that type,
-and the copy is a plain C assignment, so the value is CONVERTED. It
-is never reinterpreted byte for byte. A float that goes into a map of
-int becomes 1 for 1.5f, in the same way as "int x = 1.5f;". It does
-not become 1069547520. An argument whose type has no implicit
-conversion to the declared type is a compile error at the call site.
-cvec_push(3) follows the same rule.
+and the copy is a plain C assignment, so the value is CONVERTED and
+never reinterpreted byte for byte: a float that goes into a map of int
+becomes 1 for 1.5f, in the same way as "int x = 1.5f;", and not
+1069547520. An argument whose type has no implicit conversion to the
+declared type is a compile error at the call site. cvec_push(3) follows
+the same rule.
 
 Because the macro copies rather than takes an address, an lvalue, an
 rvalue, a literal and a computed expression are all accepted.
@@ -44,23 +44,23 @@ rvalue, a literal and a computed expression are all accepted.
 A declared key or value type that is a CHARACTER POINTER is the one
 exception, and it converts nothing. char *, signed char * and
 unsigned char * are one single type to this library: all three
-classify as ccol_string, a NUL-terminated string. The macro measures
-it with strlen, and the tree compares the bytes of the string and
-never the pointer type. A map keyed on unsigned char * therefore
-stays reachable through a char * that addresses the same string. An
-array key, such as a char buf[64] or a string literal, decays to a
-pointer in the same way as it does in any other assignment.
+classify as ccol_string, a NUL-terminated string, which the macro
+measures with strlen, and the tree compares the bytes of the string and
+never the pointer type. A map keyed on unsigned char * therefore stays
+reachable through a char * that addresses the same string. An array
+key, such as a char buf[64] or a string literal, decays to a pointer in
+the same way as it does in any other assignment.
 
 A macro cannot know the length of a buffer that a pointer addresses,
-so a character pointer is never a binary key. Use one of two forms
-for a binary key. A key of a fixed length, such as a digest, can be
-a struct that wraps an array, such as
+so a character pointer is never a binary key. For a binary key, use one
+of two forms. A key of a fixed length, such as a digest, can be a struct
+that wraps an array, such as
 struct { unsigned char b[32]; }; the tree orders by all of its
 bytes, zero bytes included. A key whose length is known only at run
 time goes through the raw cbmap_insert_elem(3) layer, with that
 length in cmap_pair.size.
 
-A NULL character pointer is not a string. A NULL key or value of a
+A NULL character pointer is not a string, so a NULL key or value of a
 character-pointer type stops the program with ccol_invalid_args.
 
 The macro handles a value type and a string type correctly

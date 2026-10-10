@@ -11,44 +11,45 @@ ccol_retval_t ccol_event_loop_pause(ccol_event_loop loop, ccol_event_reg reg);
 .fi
 .SH DESCRIPTION
 .nf
-This function works on an fd only. A call on a registration that comes
+This function works on an fd only: a call on a registration that comes
 from a queue selectable or a ccol_channel selectable returns
-ccol_invalid_args. ccol_event_loop_modify has the same restriction.
+ccol_invalid_args, the same restriction that ccol_event_loop_modify
+has.
 
-ccol_event_loop_remove fully unregisters reg, and it defers reg for a
-later free. ccol_event_loop_pause is different. It leaves reg fully
-intact. reg still holds its slot on the shared epoll entry of the fd
-below it. It still counts toward ccol_event_loop_reg_count. It still
-carries the same ccol_event_loop_reg_generation.
+ccol_event_loop_remove fully unregisters reg and defers it for a later
+free, while ccol_event_loop_pause leaves reg fully intact: reg keeps
+its slot on the shared epoll entry of the fd below it, keeps counting
+toward ccol_event_loop_reg_count, and keeps the same
+ccol_event_loop_reg_generation.
 
 This function recomputes the combined epoll interest mask of the fd so
-that the mask excludes reg. The fd may carry another direction. If
-that other direction is itself live and not paused, this is a single
-EPOLL_CTL_MOD call. If every direction on the fd is now paused, the
-library removes the fd from the epoll interest set of the kernel
-completely. The fd then produces no wake-up of any kind for as long as
-it stays fully paused. This covers its own error condition and its own
-hangup condition. The kernel reports those whatever interest mask you
-ask for. No on_readable, on_writable or on_error callback fires for
-reg while it is paused. The other direction on the same fd, if there
-is one, is unaffected.
+that the mask excludes reg. If the fd carries another direction that is
+itself live and not paused, this is a single EPOLL_CTL_MOD call. If,
+after the pause, every direction on the fd is paused, the library
+removes the fd from the epoll interest set of the kernel completely, so
+the fd produces no wake-up of any kind for as long as it stays fully
+paused, not even for its own error condition and its own hangup
+condition, which the kernel reports whatever interest mask you ask for.
+No on_readable, on_writable or on_error callback fires for reg while it
+is paused. The other direction on the same fd, if there is one, is
+unaffected.
 
 This call is the cheap alternative to a ccol_event_loop_remove and a
-later ccol_event_loop_add. It suits a caller pattern where the same
-logical registration comes back. One example is a connection that goes
-to a worker thread for blocking body I/O, and then comes back to the
-reactor for its next request. A fresh ccol_event_loop_add and
+later ccol_event_loop_add, for a caller pattern where the same logical
+registration comes back: for example, a connection that goes to a
+worker thread for blocking body I/O and then comes back to the reactor
+for its next request. A fresh ccol_event_loop_add and
 ccol_event_loop_remove pair costs one heap allocation and one free,
-plus churn in the chmap of the fd registry. Pause and resume avoid
+plus churn in the chmap of the fd registry, and pause and resume avoid
 both completely.
 
-With more than one reactor thread, EPOLLONESHOT is in play. That is
-the case where num_reactor_threads > 1. A dispatch worker then runs
-its own re-arm one more time after a paused callback returns. This
-causes no problem. A re-arm always calculates the epoll mask from the
-current state. The extra re-arm therefore applies the same mask, which
-does not include reg. It does not cause a race. In this case too, pause
-and resume prevent the allocation and the changes to the registry.
+With more than one reactor thread (num_reactor_threads > 1),
+EPOLLONESHOT is in play, and a dispatch worker runs its own re-arm one
+more time after a paused callback returns. This causes no problem:
+since a re-arm always calculates the epoll mask from the current
+state, the extra re-arm applies the same mask, which does not include
+reg, and it does not cause a race. In this case too, pause and resume
+prevent the allocation and the changes to the registry.
 
 A pause of a reg that is already paused succeeds and does nothing.
 .fi
@@ -62,23 +63,23 @@ reg   Registration to pause.
 ccol_success        The function paused reg, or reg was already
                     paused.
 ccol_invalid_args   loop is CCOL_EVENT_LOOP_INVALID, or a handle that
-                    is stale, or one that something already destroyed.
-                    Or reg is CCOL_EVENT_REG_INVALID, or it fails to
+                    is stale, or one that something already destroyed;
+                    or reg is CCOL_EVENT_REG_INVALID, or it fails to
                     resolve for another reason, such as a removal at
-                    the same time. Or reg is a registration for a
+                    the same time; or reg is a registration for a
                     queue or for a ccol_channel.
 .fi
 .SH THREAD SAFETY
 .nf
-Safe to call at the same time as ccol_event_loop_remove(). Also safe to
-call from inside a callback that runs on one of the reactor threads.
+Safe to call at the same time as ccol_event_loop_remove(), and from
+inside a callback that runs on one of the reactor threads.
 .fi
 .SH EXAMPLES
 .nf
-/* Inside an on_readable callback, after the parse of a full set of
-   request headers, and just before the connection goes to a worker
-   thread for its own direct, blocking body I/O. reg is the handle that
-   the callback gets: */
+/* Inside an on_readable callback, once a full set of request headers is
+   parsed and just before the connection goes to a worker thread for its
+   own direct, blocking body I/O. reg is the handle that the callback
+   receives: */
 conn->reg = reg;
 ccol_event_loop_pause(loop, reg);
 if (ctpool_submit(worker_pool, process_request, conn, NULL) != ccol_success)

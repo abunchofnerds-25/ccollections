@@ -20,13 +20,12 @@ test: build
 memtest: build
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 --child-silent-after-fork=yes ./tests
 
-# --ignore-errors negative: the coverage counters of gcov are plain increments
-# and they are not atomic. Instrumented code that runs on more than one thread
-# at a time can therefore race on them and produce a false negative hit count.
-# This affects more than one module, and it also happens inside a glibc
-# header. It is a limit of the instrumentation of gcov, and not a defect in
-# the logic of this library. The same flag in tests/chttpclient/Makefile gives
-# the full reason.
+# --ignore-errors negative: the coverage counters of gcov are plain, non-atomic
+# increments, so instrumented code that runs on more than one thread at a time
+# can race on them and produce a false negative hit count. This affects more
+# than one module and also happens inside a glibc header; it is a limit of the
+# gcov instrumentation, not a defect in the logic of this library. The same
+# flag in tests/chttpclient/Makefile gives the full reason.
 generate_coverage_report:
 	$(CC)  $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \

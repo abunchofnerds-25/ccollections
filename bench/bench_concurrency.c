@@ -27,16 +27,16 @@
  * @brief Benchmarks for cthreadpool and the cthreadcomm message primitives.
  *
  * Every queue type gets two shapes. The round trip on one thread sends and
- * receives on that thread. It therefore reports the bookkeeping and the lock
- * of the primitive itself, with no contention and no block at all. The pair of
- * a producer and a consumer reports what the same primitive costs under real
- * contention. There, a sender and a receiver must hand over through the
+ * receives on that thread, so it reports the bookkeeping and the lock of the
+ * primitive itself, with no contention and no block at all. The pair of a
+ * producer and a consumer reports what the same primitive costs under real
+ * contention, where a sender and a receiver must hand over through the
  * condition variable. That is the number that matters for a real pipeline, and
  * it is the one that a change to the scheduling moves.
  *
- * These cases reuse their messages. They do not allocate a new one each time. A
- * send gives ownership to the queue and a receive gives it back, so the same
- * buffer can go round for ever. That keeps the allocator out of a measurement
+ * These cases reuse their messages instead of allocating a new one each time.
+ * A send gives ownership to the queue and a receive gives it back, so the same
+ * buffer can go round for ever, which keeps the allocator out of a measurement
  * that is about the queue.
  */
 
@@ -57,15 +57,14 @@
 #define BENCH_QUEUE_N 200000
 
 /* The queue forms with contention use a shorter repetition, for the same
- * reason as the cache benchmarks. A pair of a send and a receive is a cost for
- * each operation, with no fixed cost around it. Many short repetitions
- * therefore describe the distribution much better than ten long ones.
+ * reason as the cache benchmarks: a pair of a send and a receive is a cost for
+ * each operation, with no fixed cost around it, so many short repetitions
+ * describe the distribution much better than ten long ones.
  *
  * The thread pool forms keep the full count. Their repetition ends with a
  * drain of the queue, which is a fixed cost for each repetition and not for
- * each task. A shorter repetition would therefore raise the figure for each
- * task, and you could no longer compare it with the case that uses one
- * thread. */
+ * each task, so a shorter repetition would raise the figure for each task and
+ * make it impossible to compare with the case that uses one thread. */
 #define BENCH_QUEUE_MT_N 20000
 #define BENCH_POOL_N 100000
 #define BENCH_QUEUE_CAPACITY 1024
@@ -79,10 +78,10 @@ typedef struct {
   atomic_size_t counter;
 } pool_state_t;
 
-/* The body of the task does almost nothing, on purpose. These cases measure
- * what it costs to get work to a worker and to record that the work is done.
- * Real work inside the task would only add something that the pool does not
- * control. */
+/* The body of the task does almost nothing, on purpose: these cases measure
+ * what it costs to get work to a worker and to record that the work is done,
+ * and real work inside the task would only add something that the pool does
+ * not control. */
 static void pool_task(void *arg) {
   pool_state_t *st = arg;
   atomic_fetch_add_explicit(&st->counter, 1, memory_order_relaxed);
@@ -123,16 +122,16 @@ static void pool_submit_run(void *state, size_t n) {
   pool_state_t *st = state;
   for (size_t i = 0; i < n; i++) {
     /* The code checks this for the same reason as every other allocation in
-     * this harness. A submit that fails costs much less than a submit that
-     * queues the task. A loop with no check therefore keeps measuring, and it
-     * reports the failure as speed. */
+     * this harness: a submit that fails costs much less than a submit that
+     * queues the task, so a loop with no check keeps measuring and reports the
+     * failure as speed. */
     if (ctpool_submit(st->pool, pool_task, st, NULL) != ccol_success)
       bench_die("ctpool_submit failed");
   }
-  /* The wait is inside the timed region, on purpose. A submit that only puts
-   * the task on the queue is half of the operation. If the clock stopped
-   * before the queue drained, the reported number would get better whenever
-   * the pool became slower at running the work. */
+  /* The wait is inside the timed region, on purpose, because a submit that
+   * only puts the task on the queue is half of the operation. If the clock
+   * stopped before the queue drained, the reported number would get better
+   * whenever the pool became slower at running the work. */
   ctpool_wait(st->pool);
   bench_sink(&st->counter);
 }
@@ -153,21 +152,21 @@ typedef struct {
 
 /* A destroy of a queue that still holds messages is a caller error, and the
  * library stops the process on it. Every message here carries a buffer that
- * the state owns, and not an allocation of its own. To drain therefore means
- * to discard the pointers, and not to free them. A case can stop early, for
- * example when a thread could not start, or when a send succeeded and its
- * receive never ran. Such a case leaves exactly those messages behind.
- * Without this drain, the harness would stop the process on the one path that
- * it was written to survive. */
+ * the state owns instead of an allocation of its own, so to drain means to
+ * discard the pointers, not to free them. A case can stop early, for example
+ * when a thread could not start or when a send succeeded and its receive never
+ * ran, and such a case leaves exactly those messages behind. Without this
+ * drain, the harness would stop the process on the one path that it was
+ * written to survive. */
 static void q_drain(q_state_t *st) {
   c_message_t out = {0};
   /* There is no arm for a channel here. A channel routes by the identity of
    * the thread, so the teardown thread cannot receive from the side that its
-   * peer sent into. No arm is needed. The one case that uses a channel sends
-   * exactly as many messages as its peer receives, and it stops the process on
-   * every other result. The channel is therefore always empty at the destroy.
-   * A case that changes this must drain the channel from the thread of the
-   * peer, before that thread exits. */
+   * peer sent into, and no arm is needed: the one case that uses a channel
+   * sends exactly as many messages as its peer receives and stops the process
+   * on every other result, so the channel is always empty at the destroy. A
+   * case that changes this must drain the channel from the thread of the peer,
+   * before that thread exits. */
   if (st->cq) {
     while (ccol_circq_try_recv_zc(st->cq, &out) == ccol_success) {
     }
@@ -256,9 +255,9 @@ static void circq_roundtrip_run(void *state, size_t n) {
       bench_die("circular queue receive failed");
     msg = out;
   }
-  /* The payload comes back out of the last receive. The code therefore sets
-   * the pointer of the state to the buffer that it owns now. The teardown then
-   * frees exactly one buffer in both cases. */
+  /* The payload comes back out of the last receive, so the code sets the
+   * pointer of the state to the buffer that it owns at this point, and the
+   * teardown frees exactly one buffer in both cases. */
   st->payload = msg.data;
   bench_sink(st->payload);
 }
@@ -278,13 +277,13 @@ static void dynq_roundtrip_run(void *state, size_t n) {
   bench_sink(st->payload);
 }
 
-/* A channel carries messages in both directions, and it routes by the identity
- * of the thread. The thread that creates a channel sends into the direction of
- * the other side and receives from it. One thread therefore cannot send a
- * message and then receive that same message. This case always needs a second
- * thread. It is a pair of a producer and a consumer by construction, and not
+/* A channel carries messages in both directions and routes by the identity of
+ * the thread: the thread that creates a channel sends into the direction of
+ * the other side and receives from it, so one thread cannot send a message and
+ * then receive that same message. This case therefore always needs a second
+ * thread, and it is a pair of a producer and a consumer by construction, not
  * by choice. The thread that creates the channel here is the thread that ran
- * the setup, and that is the same thread that runs this function. */
+ * the setup, which is the same thread that runs this function. */
 typedef struct {
   ccol_channel *ch;
   size_t n;
@@ -305,12 +304,12 @@ static void chan_pc_run(void *state, size_t n) {
   q_state_t *st = state;
   chan_arg_t arg = {.ch = st->ch, .n = n};
   pthread_t peer;
-  /* This stops the run. It does not return early. A return would give the
-   * harness the time that this function took with no work in it. The harness
-   * records that as a real sample and reports a remarkable figure for it.
-   * After this point the send loop must not stop early either. The peer waits
-   * for exactly n messages. A producer that stopped early would leave the join
-   * below waiting for ever. */
+  /* This stops the run instead of returning early. A return would give the
+   * harness the time that this function took with no work in it, which the
+   * harness records as a real sample and reports as a remarkable figure. After
+   * this point the send loop must not stop early either, because the peer
+   * waits for exactly n messages, and a producer that stopped early would
+   * leave the join below waiting for ever. */
   if (pthread_create(&peer, NULL, chan_peer_consumer, &arg) != 0)
     bench_die("channel peer thread could not be started");
   for (size_t i = 0; i < n; i++) {
@@ -329,20 +328,21 @@ typedef struct {
   void *seed_payload;
 } pc_arg_t;
 
-/* Neither side may stop early without a report. A producer that leaves its loop
- * early blocks the consumer on a receive that nothing will ever satisfy. A
- * consumer that leaves its loop early blocks the producer on a queue that
- * nothing will ever drain. In both cases the join below waits for ever.
+/* Neither side may stop early without a report. A producer that leaves its
+ * loop early blocks the consumer on a receive that nothing will ever satisfy,
+ * and a consumer that leaves its loop early blocks the producer on a queue
+ * that nothing will ever drain; in both cases the join below waits for ever.
  *
  * The only bounded receive and the only bounded send that this module offers
- * compute an absolute deadline for each call. To use them in the steady state
- * would therefore put a read of the clock inside the loop under measurement.
- * The steady state keeps the fast calls that block, and it stops the process on
- * every result that it does not expect.
+ * compute an absolute deadline for each call, so using them in the steady
+ * state would put a read of the clock inside the loop under measurement.
+ * Instead, the steady state keeps the fast calls that block and stops the
+ * process on every result that it does not expect.
  *
- * ccol_not_permitted is the one exception. It is how a deliberate
- * ccol_circq_disable_sending reaches a producer that is blocked. circq_pc_run
- * uses exactly that mechanism to unwind when the consumer never started. */
+ * ccol_not_permitted is the one exception: it is how a deliberate
+ * ccol_circq_disable_sending reaches a producer that is blocked, and
+ * circq_pc_run uses exactly that mechanism to unwind when the consumer never
+ * started. */
 static void *pc_producer(void *arg) {
   pc_arg_t *a = arg;
   /* Every message carries the same buffer, and the consumer frees nothing, so
@@ -373,22 +373,22 @@ static void circq_pc_run(void *state, size_t n) {
   pc_arg_t arg = {.cq = st->cq, .n = n, .seed_payload = st->payload};
   pthread_t prod, cons;
 
-  /* The code starts the producer first. That is what makes the failure path
+  /* The code starts the producer first, which is what makes the failure path
    * recoverable. If the producer itself cannot start, nothing runs and there is
-   * nothing to unwind. If the consumer cannot start, the producer already runs.
-   * It blocks as soon as it fills the queue, so the code must wake it
+   * nothing to unwind. If the consumer cannot start, the producer already runs
+   * and blocks as soon as it fills the queue, so the code must wake it
    * deliberately. disable_sending wakes the senders that are blocked, and only
-   * the senders. Its own documentation says so clearly. The producer then
+   * the senders, as its own documentation says clearly; the producer then
    * treats the ccol_not_permitted that it gets as a clean stop. A join without
-   * that wake-up waits for ever. It is not merely slow. */
+   * that wake-up waits for ever instead of merely being slow. */
   if (pthread_create(&prod, NULL, pc_producer, &arg) != 0)
     bench_die("producer thread could not be started");
   if (pthread_create(&cons, NULL, pc_consumer, &arg) != 0) {
     ccol_circq_disable_sending(st->cq);
     pthread_join(prod, NULL);
-    /* The code unwinds first and then stops the run. It must wake the producer
-     * and join it before anything else happens. To report the time that this
-     * took as a measurement would be worse than to stop. */
+    /* The code unwinds first and then stops the run: it must wake the producer
+     * and join it before anything else happens, and reporting the time that
+     * this took as a measurement would be worse than stopping. */
     bench_die("consumer thread could not be started");
   }
   pthread_join(prod, NULL);

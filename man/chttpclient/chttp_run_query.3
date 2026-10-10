@@ -14,57 +14,57 @@ ccol_retval_t chttp_run_query(chttp_method_t method, const char *url,
 .fi
 .SH DESCRIPTION
 .nf
-This is a short wrapper. It builds a chttp_request_t inside. It
-attaches headers to that request without a transfer of ownership. It
-then calls chttp_do and frees the request object that it built. Among
-the short functions for the default client, this is the only one that
-takes a header set of your choice in one call. With chttp_get,
-chttp_post and the others you must build a chttp_request_t by hand
-instead. That means a call to chttp_request_new and then one call to
+This is a short wrapper that builds a chttp_request_t inside, attaches
+headers to that request without a transfer of ownership, calls chttp_do
+and then frees the request object that it built. Among the short
+functions for the default client, this is the only one that takes a
+header set of your choice in one call; with chttp_get, chttp_post and
+the others you must instead build a chttp_request_t by hand, with a
+call to chttp_request_new and then one call to
 chttp_request_set_header for each header.
 
 The caller keeps the full ownership of headers. The function only
-borrows headers for the time of the call. It never frees headers and
-never changes headers.
+borrows headers for the time of the call, and never frees or changes
+headers.
 
 The keys in headers can use any case, for example "Host",
-"Content-Type" or "Accept". This module adds a default value for some
-keys of its own. Those keys are host, accept, user-agent,
-content-length, content-type, authorization and expect. The module
-matches each of them against headers without regard to case. A header
-of yours with a natural case therefore stops the matching default of
-the module. The two do not both go onto the wire.
+"Content-Type" or "Accept". This module adds its own default value for
+some keys (host, accept, user-agent, content-length, content-type,
+authorization and expect), and matches each of them against headers
+without regard to case. A header of yours with a natural case
+therefore stops the matching default of the module, and the two do not
+both go onto the wire.
 
-A chmap matches a key by its exact bytes. headers can therefore hold
-two keys that differ as bytes and that are the same header name under
-the case-insensitive rules of HTTP. "Host" and "host" together are
-such a pair. chttp_request_set_header makes every key lowercase before
-it stores that key, so it can never make this situation. A headers map
-that you build directly gives no such guarantee. Only one key of such
-a pair reaches the wire, and never both. The key that went into
-headers last wins. This matches the behaviour of an update with one
-exact key. The client drops the other key, and does not send it as a
-second header line.
+A chmap matches a key by its exact bytes, so headers can hold two keys
+that differ as bytes but are the same header name under the
+case-insensitive rules of HTTP, such as "Host" and "host" together.
+chttp_request_set_header makes every key lowercase before it stores
+that key, so it can never make this situation, but a headers map that
+you build directly gives no such guarantee. Only one key of such a pair
+reaches the wire, and never both: the key that went into headers last
+wins, which matches the behaviour of an update with one exact key. The
+client drops the other key, and does not send it as a second header
+line.
 
-You give headers to this function directly, and it does not go through
+You give headers to this function directly, so it does not go through
 the validation of chttp_request_set_header. No key and no value in it
-may hold a CR byte or an LF byte inside it. This is the same rule as
-in chttp_request_set_header, and it has the same reason. Without it,
-data with a CRLF in it can inject extra header lines. Such data can
-also cut the request into two. The function gives
+may hold a CR byte or an LF byte inside it: this is the same rule as
+in chttp_request_set_header, for the same reason, because data with a
+CRLF in it can otherwise inject extra header lines or cut the request
+into two. The function gives
 ccol_invalid_args for such a
 headers map, before it opens any connection. headers must also hold no
-"Transfer-Encoding" key, in any case. The reason is the reason that
-chttp_request_set_header rejects that name. This client never applies
-a transfer coding to a request body, so it cannot obey such a header.
-On the wire, that header sits beside the automatic Content-Length of
-this module, over a body with no transfer coding. That framing is
-ambiguous.
+"Transfer-Encoding" key, in any case, for the reason that
+chttp_request_set_header rejects that name: this client never applies
+a transfer coding to a request body, so it cannot obey such a header,
+and on the wire that header sits beside the automatic Content-Length
+of this module, over a body with no transfer coding, which is an
+ambiguous framing.
 
-The function DOES accept a "Content-Length" key in headers. But it
+The function DOES accept a "Content-Length" key in headers, but it
 checks that key on a request that carries a body (POST, PUT or PATCH).
-A good value is a plain unsigned string of decimal digits. It has no
-leading '+' or '-', and no whitespace inside it. It must also match
+A good value is a plain unsigned string of decimal digits, with no
+leading '+' or '-' and no whitespace inside it, and it must also match
 the real length of the body that the client sends. The function gives
 ccol_invalid_args for a bad value, once the request reaches the wire.
 See chttpclient_do(3) and chttp_request_set_header(3) for the same
@@ -78,21 +78,20 @@ url        The target URL. It must not be NULL.
 body       The request body, or NULL for a request with no body.
 headers    A chmap(char* -> char*) of the request headers, or NULL for
            no headers. The function borrows it for the time of the
-           call. It does not consume it and does not free it. No key
-           and no value may hold a CR byte or an LF byte. No key may
-           be "Transfer-Encoding".
-resp_out   It must not be NULL. The function sets it to NULL at once.
-           If the call succeeds, it then gets the pointer to the
+           call, and does not consume it or free it. No key and no
+           value may hold a CR byte or an LF byte, and no key may be
+           "Transfer-Encoding".
+resp_out   It must not be NULL. The function sets it to NULL at once,
+           and if the call succeeds, it then gets the pointer to the
            response.
 .fi
 .SH RETURN VALUE
 .nf
 The same codes as chttpclient_do. The function gives
 ccol_not_enough_memory if the library cannot allocate the internal
-request object. It gives ccol_invalid_args if url or resp_out is NULL.
-It also gives ccol_invalid_args if headers holds a key or a value
-with a CR byte or an LF byte in it. It gives the same code if
-headers holds a "Transfer-Encoding" key.
+request object, and ccol_invalid_args if url or resp_out is NULL, if
+headers holds a key or a value with a CR byte or an LF byte in it, or
+if headers holds a "Transfer-Encoding" key.
 .fi
 .SH "SEE ALSO"
 .BR chttp_do (3),

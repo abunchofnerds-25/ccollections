@@ -12,9 +12,8 @@ size_t ctpool_active_count(ctpool pool);
 .SH DESCRIPTION
 .nf
 Returns a snapshot of the number of tasks that the worker threads run
-now. A worker took each of these tasks out of the queue, and none of
-them finished yet. The value can change immediately after the call
-returns.
+now: tasks that a worker has taken out of the queue and that have not
+finished yet. The value can change immediately after the call returns.
 .fi
 .SH PARAMETERS
 .nf
@@ -23,8 +22,8 @@ pool   Thread pool handle. CTPOOL_INVALID, or a stale or
 .fi
 .SH RETURN VALUE
 .nf
-The number of tasks that run now. It is 0 if pool is CTPOOL_INVALID,
-or a stale or already-destroyed handle.
+The number of tasks that run now, or 0 if pool is CTPOOL_INVALID or a
+stale or already-destroyed handle.
 .fi
 .SH "SEE ALSO"
 .BR ctpool_pending_count (3)

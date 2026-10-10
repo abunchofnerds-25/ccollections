@@ -17,32 +17,32 @@ the caller must not free it.
 One return code carries one ownership rule:
 
   ccol_invalid_args always means that the call rejected its arguments
-  and touched nothing.  child is exactly as it was before the call.
-  The caller still owns it, or the container that it is already
+  and touched nothing: child is exactly as it was before the call, and
+  the caller still owns it, or the container that it is already
   attached to still owns it.  That owner must still destroy it.
 
   Every other non-success code (ccol_not_enough_memory,
   ccol_container_full) always means that ownership moved to this
-  call.  The call already deep-freed child.  A second free of child
+  call, which has already deep-freed child, so a second free of child
   is a double free.
 
-These are the ccol_invalid_args rejections.  child is NULL.  child is
-already attached to a list parent or a dictionary parent.  child is
-arr itself.  arr is NULL or is not a CJSON_LIST.  There is one more
-rejection.  arr is already reachable when you descend from child.
-To attach child would make arr a new ancestor of child.  arr would
-also stay a descendant of child.  This is a cycle.
+These are the ccol_invalid_args rejections: child is NULL; child is
+already attached to a list parent or a dictionary parent; child is
+arr itself; arr is NULL or is not a CJSON_LIST.  There is one more
+rejection: arr is already reachable when you descend from child.
+Attaching child would then make arr a new ancestor of child while arr
+stays a descendant of child, which is a cycle.
 
 The library cannot always complete that last check when memory is
-low.  It then returns ccol_not_enough_memory.  It does not take the
-risk of an undetected cycle.  This call deep-frees child, in the
+low.  Rather than take the risk of an undetected cycle, it then
+returns ccol_not_enough_memory, and this call deep-frees child in the
 same way as when the insert itself fails for lack of memory.
 .fi
 .SH PARAMETERS
 .nf
 arr    Target list node (must be CJSON_LIST).
 child  Node to append.  It must not already be attached somewhere
-       else.  Its own subtree must not already contain arr.
+       else, and its own subtree must not already contain arr.
 .fi
 .SH RETURN VALUE
 .nf
@@ -53,10 +53,10 @@ count.
 .SH NOTES
 .nf
 A node that cjson_get(), cjson_list_get() or cjson_dictionary_get()
-returns is a borrowed reference into a tree that already exists.  It
-is not a new node that the caller owns.  Never give such a node as
-child.  Use cjson_clone() first to get an independent copy.  That
-copy is safe to push.
+returns is a borrowed reference into a tree that already exists, not
+a new node that the caller owns.  Never give such a node as child;
+use cjson_clone() first to get an independent copy, which is safe to
+push.
 .fi
 .SH "SEE ALSO"
 .BR cjson_list_get (3),

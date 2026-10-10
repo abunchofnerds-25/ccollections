@@ -8,44 +8,43 @@ clogger \- overview of the structured logger
 .SH DESCRIPTION
 .nf
 The module writes structured log records.  A record is a sequence of
-key=value pairs, in this order:
-  - A fixed header that gives the time, the level, the process, the
-    thread and the source location.
-  - The persistent fields of the logger.
-  - The message.
+key=value pairs in this order:
+  - a fixed header that gives the time, the level, the process, the
+    thread and the source location;
+  - the persistent fields of the logger;
+  - the message.
 The module writes one of three formats: logfmt (the default), NDJSON
 and RFC 5424 syslog.  See clog_set_format(3).
 
 A logger writes to one of these outputs:
-  - A file descriptor that the caller owns (clog_open_fd_mp(3)).
-  - A file that the logger opens itself (clog_open_file_mp(3)).  This
-    output has optional size rotation, time rotation and gzip
-    compression of rotated files.
-Each kind of logger can log synchronously.  It can also give the write
-to its own writer thread (async mode, through a clog_async_cfg_t).
+  - a file descriptor that the caller owns (clog_open_fd_mp(3));
+  - a file that the logger opens itself (clog_open_file_mp(3)), with
+    optional size rotation, time rotation and gzip compression of
+    rotated files.
+Either kind of logger can log synchronously, or give the write to its
+own writer thread (async mode, through a clog_async_cfg_t).
 .fi
 .SS Handles
 .nf
-A clog is an opaque value handle, a uint64_t.  It is not a pointer.
-Do not cast it to void * or from void *.  CLOG_INVALID, which is 0,
-means "no logger".  The open functions and clog_derive(3) give
-CLOG_INVALID on failure.  Both if (!lg) and lg == CLOG_INVALID test
-for it.
+A clog is an opaque value handle, a uint64_t, and not a pointer, so do
+not cast it to void * or from void *.  CLOG_INVALID, which is 0, means
+"no logger"; the open functions and clog_derive(3) give CLOG_INVALID
+on failure.  Both if (!lg) and lg == CLOG_INVALID test for it.
 
-Each function that takes a handle needs a live handle.  These handles
-stop the process with a diagnostic:
-  - CLOG_INVALID.
-  - A handle whose logger is closed.
-  - A stale handle.
+Each function that takes a handle needs a live handle, and stops the
+process with a diagnostic when it gets one of these:
+  - CLOG_INVALID;
+  - a handle whose logger is closed;
+  - a stale handle.
 The library never ignores such a handle silently.
 
 clog_derive(3) makes a second handle on the same output.  A root logger
 and its derived loggers share these items:
-  - The output target, the format and the syslog facility.
-  - The rotation.
-  - The async writer thread.
-  - The allocator.
-  - The lock that serialises the writes.
+  - the output target, the format and the syslog facility;
+  - the rotation;
+  - the async writer thread;
+  - the allocator;
+  - the lock that serialises the writes.
 Each handle has its own minimum level and its own fields.
 .fi
 .SS Levels
@@ -63,73 +62,73 @@ Each handle has its own minimum level and its own fields.
                  CLOG_FATAL.
 
 The logger silently drops a record below its minimum level.  Each of
-the ccol_log_trace(3) to ccol_log_fatal(3) macros logs at one level.
+the clog_trace(3) to clog_fatal(3) macros logs at one level.
 clog_set_level(3) changes the minimum at any time.
 .fi
 .SS Record contents
 .nf
-The proc key has the form <name>(<pid>):<tname>(<tid>).  The first
-group is the basename of the executable and the process ID.  The
+The proc key has the form <name>(<pid>):<tname>(<tid>): the first
+group is the basename of the executable and the process ID, and the
 second group is the name and the ID of the thread that logged.
-ccol_set_thread_name(3) gives a new name to a thread.  The records of
-that thread then show the new name.
+ccol_set_thread_name(3) gives a new name to a thread, and the records
+of that thread then show the new name.
 
 In logfmt, the logger writes a field value or a message in double
 quotes when it holds a space, an '=', a '"', a backslash or a control
-character.  A backslash escapes those characters (\e", \e\e, \en, \er,
-\et or \exNN).  Therefore, a message or a value can never split a
-record across lines.  JSON and syslog use their own escapes; see
+character, and a backslash escapes those characters (\e", \e\e, \en,
+\er, \et or \exNN), so a message or a value can never split a record
+across lines.  JSON and syslog use their own escapes; see
 clog_set_format(3) and clog_set_field(3).
 
-A record has a hard size limit of 16 MiB.  The library never writes a
-truncated or malformed record:
-  - The library replaces a record above the limit with a well-formed
-    record in the same format.  That record keeps the header and says
-    "log record too large to emit".
-  - An allocation failure while the library makes a record gives a
+A record has a hard size limit of 16 MiB, and the library never writes
+a truncated or malformed record:
+  - a record above the limit is replaced with a well-formed record in
+    the same format, which keeps the header and says "log record too
+    large to emit";
+  - an allocation failure while the library makes a record gives a
     record that says "log record dropped".
-Therefore, a record never disappears without a trace.  A "log record
+So a record never disappears without a trace.  A "log record
 truncated: ..." record at CLOG_ERROR identifies the records that a
 write could not deliver; see clog_open_fd_mp(3).
 .fi
 .SS Backtraces
 .nf
-ccol_log_error(3), ccol_log_alert(3) and ccol_log_fatal(3) add a
+clog_error(3), clog_alert(3) and clog_fatal(3) add a
 backtrace:
-  - In logfmt: continuation lines with a tab indent.
-  - In JSON: a "bt" array.
-  - In syslog: one message for each frame.
+  - in logfmt, as continuation lines with a tab indent;
+  - in JSON, as a "bt" array;
+  - in syslog, as one message for each frame.
 For symbol names, link the program with -rdynamic.  The capture works
 on platforms with execinfo.h (glibc, FreeBSD, macOS).  When the capture
-fails, a marker replaces the frames: "#error backtrace unavailable" in
-logfmt, and a "bt_error" key in JSON.  Therefore, a missing backtrace
-is always visible.
+fails, a marker replaces the frames ("#error backtrace unavailable" in
+logfmt, and a "bt_error" key in JSON), so a missing backtrace is
+always visible.
 .fi
 .SS Memory management
 .nf
 clog_open_fd_mp(3) and clog_open_file_mp(3) take an optional
-ccol_memmgmt_procs_t.  The logger makes these allocations through it,
+ccol_memmgmt_procs_t, through which the logger makes these allocations
 for the root logger and for each logger derived from it:
-  - The shared output state.
-  - The write buffers.
-  - The message buffers.
-  - The fields.
-The one exception is the symbol text of a backtrace.
-backtrace_symbols(3) allocates that text with malloc(3).  All four
-function pointers must be set.  The library copies the struct.
-Therefore, the caller can free it after the open.
+  - the shared output state;
+  - the write buffers;
+  - the message buffers;
+  - the fields.
+The one exception is the symbol text of a backtrace, which
+backtrace_symbols(3) allocates with malloc(3).  All four function
+pointers must be set.  The library copies the struct, so the caller
+can free it after the open.
 .fi
 .SS Thread safety
 .nf
 You can call each function from many threads at the same time on
 handles that stay open.  One lock serialises the writes and the
-rotation of one output target.  Therefore, the lines of two threads
-never mix, and a backtrace always follows its own record.  The library
+rotation of one output target, so the lines of two threads never mix,
+and a backtrace always follows its own record.  The library
 synchronises the level and the fields of a logger separately from that
 lock.
 
 clog_close(3) is the exception, as for all handle types of the
-library.  While it runs, no other thread can use or close the same
+library: while it runs, no other thread can use or close the same
 handle.  You can close one handle while a sibling handle (the root or
 a different derived logger) logs.
 .fi
@@ -137,35 +136,34 @@ a different derived logger) logs.
 .nf
 The library registers an exit handler when it loads.  When the process
 ends with exit(3) or a return from main(), this handler does two
-things, within a budget of 5 seconds:
-  - It writes the records that each async logger holds.
-  - It completes the queued compressions.
-ccol_log_fatal(3) uses the same drain.  _exit(2), a signal and abort(3)
-run no exit handler.  If the queued records are important, call
+things within a budget of 5 seconds: it writes the records that each
+async logger holds, and it completes the queued compressions.
+clog_fatal(3) uses the same drain.  _exit(2), a signal and abort(3)
+run no exit handler, so if the queued records are important, call
 clog_flush(3) or clog_close(3) first.  See clog_open_fd_mp(3) for the
 details.
 .fi
 .SS fork(2)
 .nf
 There are two supported ways to use fork(2) with this module:
-  - Call fork(2) before you open a logger.
-  - Open a logger, and then call fork(2) and exec(3) immediately.
+  - call fork(2) before you open a logger;
+  - open a logger, and then call fork(2) and exec(3) immediately.
 A child that continues with no exec(3) while a logger from before the
 fork is live is not supported.
 
-As a defense in depth, an inherited handle works in such a child.  An
+As a defense in depth, an inherited handle works in such a child: an
 async logger in the child changes to synchronous writes, because its
 writer thread does not exist in the child.  This fallback is part of
-the fork protection of the library.  A build with
--DCCOL_FORK_SAFETY_REQUIRED=0 does not include it.  A process from such
-a build must not fork while it holds a live async logger.
+the fork protection of the library, which a build with
+-DCCOL_FORK_SAFETY_REQUIRED=0 does not include; a process from such a
+build must not fork while it holds a live async logger.
 .fi
 .SS SIGPIPE
 .nf
 A write to a pipe or a socket whose reader is gone causes SIGPIPE.  By
-default, the library prevents the end of the process from that signal.
-clog_set_sigpipe_policy(3) describes how.  It also describes the policy
-that leaves SIGPIPE to the application.
+default, the library prevents that signal from ending the process.
+clog_set_sigpipe_policy(3) describes how, and also describes the
+policy that leaves SIGPIPE to the application.
 .fi
 .SH "SEE ALSO"
 .BR clog_open_fd_mp (3),
@@ -182,8 +180,8 @@ that leaves SIGPIPE to the application.
 .BR clog_set_field (3),
 .BR clog_remove_field (3),
 .BR clog_clear_fields (3),
-.BR ccol_log_info (3),
-.BR ccol_log_error (3),
-.BR ccol_log_fatal (3),
+.BR clog_info (3),
+.BR clog_error (3),
+.BR clog_fatal (3),
 .BR ccol_set_thread_name (3),
 .BR clog_set_sigpipe_policy (3)

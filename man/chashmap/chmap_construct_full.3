@@ -12,20 +12,20 @@ chmap_construct_full(hm_name, key_t, val_t, mmgmt_procs,
 .fi
 .SH DESCRIPTION
 .nf
-Declares a hash map handle named hm_name. It also declares the companion
-type variables. These variables carry key_t and val_t to every later
-type-inferred macro. The macro then creates the map. It is the widest of the
-construct macros. chmap_construct(3) is this macro with the default
-allocator and the map's own hashing. chmap_construct_mp(3) gives only an
-allocator. chmap_construct_ch(3) gives only a hashing procedure.
+Declares a hash map handle named hm_name, together with the companion
+type variables that carry key_t and val_t to every later type-inferred
+macro, and then creates the map. It is the widest of the construct
+macros: chmap_construct(3) is this macro with the default allocator and
+the map's own hashing, chmap_construct_mp(3) gives only an allocator,
+and chmap_construct_ch(3) gives only a hashing procedure.
 
-Stops the program through ccol_fatal_err() if the creation fails. Use
-chmap_init_full(3) on an already declared handle when the caller must
-handle a failure instead of the failure being fatal.
+Stops the program through ccol_fatal_err() if the creation fails. When
+the caller must handle a failure instead of the failure being fatal, use
+chmap_init_full(3) on an already declared handle.
 
 The map picks its implementation strategy from the key and value types, as
 chmap_create_full(3) describes. A custom hashing procedure does not change
-that choice. A custom key equality procedure selects separate chaining.
+that choice, but a custom key equality procedure selects separate chaining.
 .fi
 .SH PARAMETERS
 .nf
@@ -42,25 +42,25 @@ custom_key_equality_proc
 .fi
 .SH "CUSTOM HASHING"
 .nf
-A custom procedure gets the key bytes and their length. It returns an
-unsigned long. It must return the same value for two keys that the map
-considers equal. For a char * key, equal means equal contents and not an
+A custom procedure receives the key bytes and their length, and returns
+an unsigned long. It must return the same value for two keys that the map
+considers equal; for a char * key, equal means equal contents, not an
 equal pointer.
 
-The return value does not need to avalanche. The map finalizes the value
-that a custom procedure returns with its own bit-mixing step. It does this
+The return value does not need to avalanche, because the map finalizes
+the value that a custom procedure returns with its own bit-mixing step
 before it reduces the value to a slot or a bucket. A procedure that puts
 all of its entropy in the low bits (a sum, a small identifier, a truncated
 checksum) therefore still distributes correctly. This is why the contract
-of the procedure is only "any function of the key that respects equality".
-There is no rule about which end of the result carries the entropy.
+of the procedure is only "any function of the key that respects equality",
+with no rule about which end of the result carries the entropy.
 .fi
 .SH "CUSTOM KEY EQUALITY"
 .nf
-custom_key_equality_proc gets both keys and both sizes, and returns true
-when the two are the same key. The map uses it in place of its built-in
-comparison. It must agree with custom_hashing_proc: two keys that it
-reports as equal must get the same hash. A key equality procedure
+custom_key_equality_proc receives both keys and both sizes, and returns
+true when the two are the same key. The map uses it in place of its
+built-in comparison. It must agree with custom_hashing_proc: two keys
+that it reports as equal must get the same hash. A key equality procedure
 without a hashing procedure makes the creation fail, and this macro then
 stops the program. A struct key with padding bytes needs both
 procedures; see chmap_create_full(3).
@@ -71,10 +71,10 @@ None. This macro declares a variable and does not expand to an expression.
 .fi
 .SH NOTES
 .nf
-chmap_destroy(3) destroys the handle. Use chmap_construct_full_scoped(3)
+chmap_destroy(3) destroys the handle; use chmap_construct_full_scoped(3)
 when scope exit must destroy it instead
-The companion type variables follow the scope of the handle. A function
-that gets the handle therefore needs chmap_redeclare(3) there
+The companion type variables follow the scope of the handle, so a
+function that receives the handle needs chmap_redeclare(3) there
 .fi
 .SH EXAMPLES
 .nf

@@ -60,11 +60,12 @@ static void reset_counters(void) {
   g_free_count = 0;
 }
 
-/* One shared instance. A function returns a pointer to it, and a caller does
- * not take the address of a local or a global variable directly. A literal
- * &some_local_var at the macro call site starts -Waddress ("the address of X
- * will always evaluate as true"). With this function, a call to
- * _ccol_mem_alloc, _ccol_mem_free or ccol_scoped_ptr_mp does not start it. */
+/* One shared instance, which a function returns a pointer to, so that a
+ * caller does not take the address of a local or a global variable
+ * directly. A literal &some_local_var at the macro call site triggers
+ * -Waddress ("the address of X will always evaluate as true"); with this
+ * function, a call to _ccol_mem_alloc, _ccol_mem_free or ccol_scoped_ptr_mp
+ * does not trigger it. */
 static ccol_memmgmt_procs_t g_counting_procs_storage = {
     .malloc = _counting_malloc,
     .calloc = _counting_calloc,
@@ -84,7 +85,7 @@ TEST(scoped_ptr, default_allocator_frees_on_scope_exit) {
     REQUIRE_NE((void *)buf, NULL);
     strcpy(buf, "hello");
   }
-  /* There is no counting hook for the default allocator. `make memtest`
+  /* There is no counting hook for the default allocator, so `make memtest`
    * confirms separately that there is no leak and no double free. This test
    * exists to check that the macro form without _mp compiles and runs
    * correctly. */
@@ -121,8 +122,8 @@ TEST(scoped_ptr, only_final_value_is_freed_on_reassignment) {
     ccol_scoped_ptr_mp(buf, int, mp);
     buf = _ccol_mem_alloc(mp, sizeof(int));
     REQUIRE_NE((void *)buf, NULL);
-    /* A new value for buf, with no free of the earlier value first, is the
-     * documented warning of the macro. The macro does not solve it. */
+    /* Assigning a new value to buf without first freeing the earlier value is
+     * the documented warning of the macro, which the macro does not solve. */
     _ccol_mem_free(mp, buf);
     buf = _ccol_mem_alloc(mp, sizeof(int) * 2);
     REQUIRE_NE((void *)buf, NULL);
@@ -216,7 +217,7 @@ TEST(scoped_ptr, early_return_from_multiple_paths_still_frees) {
 /*                  _ccol_find_nearest_gte_power_of_two */
 /* ========================================================================== */
 
-/* common.c declares this, and common.h does not. chashmap sizes every table
+/* common.c declares this, but common.h does not. chashmap sizes every table
  * that it allocates with it. */
 extern size_t _ccol_find_nearest_gte_power_of_two(size_t input);
 
@@ -228,9 +229,9 @@ TEST(power_of_two, exact_powers_return_themselves) {
 }
 
 TEST(power_of_two, values_round_up_to_the_next_power) {
-  /* One value below each power and one value above it exercise both
-   * directions of the binary search. They also exercise its early exit for
-   * "the entry before this one is smaller, so this is the answer". */
+  /* One value below and one value above each power exercise both directions
+   * of the binary search, as well as its early exit for "the entry before
+   * this one is smaller, so this is the answer". */
   for (volatile unsigned bit = 2; bit < 20; bit++) {
     size_t v = (size_t)1 << bit;
     REQUIRE_EQ(_ccol_find_nearest_gte_power_of_two(v - 1), v);
@@ -245,8 +246,8 @@ TEST(power_of_two, small_inputs_clamp_to_one) {
 }
 
 TEST(power_of_two, above_the_representable_maximum_is_invalid) {
-  /* The table stops at the largest power of two that a size_t can hold.
-   * There is no answer for a value above it. */
+  /* The table stops at the largest power of two that a size_t can hold, so
+   * there is no answer for a value above it. */
   size_t top = ((size_t)1) << (sizeof(size_t) * 8 - 1);
   REQUIRE_EQ(_ccol_find_nearest_gte_power_of_two(top), top);
   REQUIRE_EQ(_ccol_find_nearest_gte_power_of_two(top + 1), ccol_invalid_size);
@@ -257,17 +258,17 @@ TEST(power_of_two, above_the_representable_maximum_is_invalid) {
 /*                         ccol_growbuf_t */
 /* ========================================================================== */
 
-/* A reallocator that refuses after the test arms it. This drives the
- * out-of-memory latch of the buffer on purpose. The test does not wait for a
+/* A reallocator that refuses once the test arms it, which drives the
+ * out-of-memory latch of the buffer on purpose instead of waiting for a
  * real allocation failure. */
 static bool g_growbuf_refuse_realloc = false;
-/* Counts the round trips to the allocator that one operation makes. A test
- * can then assert that a refused request never reached the allocator. An
- * assertion on the count, and not on the outcome, separates two cases: "the
- * code rejected the size before the call" and "the allocator got an absurd
- * size and said no". Only the first case is safe, because an instrumented
- * allocator stops the process on a request that plain malloc only
- * refuses. */
+/* Counts the round trips to the allocator that one operation makes, so that
+ * a test can assert that a refused request never reached the allocator. An
+ * assertion on the count rather than on the outcome separates two cases:
+ * "the code rejected the size before the call" and "the allocator got an
+ * absurd size and said no". Only the first case is safe, because an
+ * instrumented allocator stops the process on a request that plain malloc
+ * only refuses. */
 static size_t g_growbuf_alloc_calls = 0;
 static void *_growbuf_malloc(size_t n) {
   g_growbuf_alloc_calls++;
@@ -341,9 +342,9 @@ TEST(growbuf, append_c_and_append_cstr_accumulate_in_order) {
 }
 
 TEST(growbuf, append_cstr_treats_null_as_an_empty_append) {
-  /* The documentation says that this is tolerated, and not undefined. A
-   * caller can therefore pass on the buf field of another buffer. The init or
-   * the append of that other buffer can fail and leave the field NULL. */
+  /* The documentation says that this is tolerated, not undefined, so a caller
+   * can pass on the buf field of another buffer, whose init or append can
+   * fail and leave the field NULL. */
   ccol_growbuf_t b;
   ccol_growbuf_init(&b, growbuf_procs());
   ccol_growbuf_append_cstr(&b, "x");
@@ -360,15 +361,14 @@ TEST(growbuf, a_failed_grow_latches_oom_and_every_later_append_is_a_no_op) {
   ccol_growbuf_append_cstr(&b, "kept");
 
   /* An append that still fits inside the first capacity succeeds before the
-   * buffer tries to grow. The length to compare against is therefore the
-   * length at the moment the latch trips, and not the length before the
-   * loop. */
+   * buffer tries to grow, so the length to compare against is the length at
+   * the moment the latch trips, not the length before the loop. */
   g_growbuf_refuse_realloc = true;
   for (int i = 0; i < 64; i++) ccol_growbuf_append_cstr(&b, "0123456789abcdef");
   bool latched = b.oom;
   size_t len_before = b.len;
-  /* After the latch, the buffer stays latched. An append after the failure
-   * must not start to write again, even when the allocator recovers. */
+  /* Once latched, the buffer stays latched: an append after the failure must
+   * not start to write again, even when the allocator recovers. */
   g_growbuf_refuse_realloc = false;
   ccol_growbuf_append_cstr(&b, "ignored");
   bool still_latched = b.oom;
@@ -394,14 +394,14 @@ TEST(growbuf, destroy_on_an_oom_buffer_is_safe) {
 
 /* The size that an append needs is len + n + 1. These tests pin that the
  * buffer decides whether that size is representable before it computes the
- * size. Only the boundary is evidence of that. A test that uses an ordinary
- * length passes whether the check is present or absent.
+ * size. Only the boundary is evidence of that, because a test with an
+ * ordinary length passes whether the check is present or absent.
  *
- * These tests are not vacuous. Code that forms the sum first makes it wrap to
- * a value at or below the current capacity. No growth happens, and the memcpy
- * runs with the enormous n of the caller. Such code stops this test under
- * _FORTIFY_SOURCE and segfaults the next test. AddressSanitizer reports it as
- * negative-size-param. */
+ * These tests are not vacuous. Code that forms the sum first makes it wrap
+ * to a value at or below the current capacity, so no growth happens and
+ * the memcpy runs with the enormous n of the caller. Such code stops this
+ * test under _FORTIFY_SOURCE and segfaults the next test, and
+ * AddressSanitizer reports it as negative-size-param. */
 TEST(growbuf, append_of_an_unrepresentable_length_latches_oom_without_copying) {
   ccol_growbuf_t b;
   ccol_growbuf_init(&b, growbuf_procs());
@@ -416,9 +416,9 @@ TEST(growbuf, append_of_an_unrepresentable_length_latches_oom_without_copying) {
 }
 
 TEST(growbuf, append_of_an_unrepresentable_length_counts_existing_content) {
-  /* After the buffer holds some content, len + n + 1 wraps for an n that is
-   * much smaller than SIZE_MAX. The check must therefore use the space that
-   * is left, and not n alone. */
+  /* Once the buffer holds some content, len + n + 1 wraps for an n that is
+   * much smaller than SIZE_MAX, so the check must use the space that is
+   * left, not n alone. */
   ccol_growbuf_t b;
   ccol_growbuf_init(&b, growbuf_procs());
   ccol_growbuf_append_cstr(&b, "ab");
@@ -433,14 +433,14 @@ TEST(growbuf, append_of_an_unrepresentable_length_counts_existing_content) {
 }
 
 TEST(growbuf, append_of_the_largest_representable_length_refuses_cleanly) {
-  /* SIZE_MAX - 1 is one below the boundary. len + n + 1 is then exactly
+  /* SIZE_MAX - 1 is one below the boundary: len + n + 1 is then exactly
    * SIZE_MAX and does not wrap. The representability check passes it, and the
-   * doubling guard of the growth step refuses it. This test pins that
-   * standing property, and not the representability check. It passes either
-   * way. It is here because the boundary has a meaning only when a test
-   * covers the value on each side of it. It does pin one thing: the allocator
-   * never sees a request of this size. Such a request stops an instrumented
-   * allocator, and does not give NULL. */
+   * doubling guard of the growth step refuses it. This test pins that standing
+   * property rather than the representability check, and it passes either way;
+   * it is here because the boundary has a meaning only when a test covers the
+   * value on each side of it. It does pin one thing: the allocator never sees a
+   * request of this size, because such a request stops an instrumented
+   * allocator instead of giving NULL. */
   ccol_growbuf_t b;
   ccol_growbuf_init(&b, growbuf_procs());
   const char src[1] = {'A'};
@@ -454,9 +454,9 @@ TEST(growbuf, append_of_the_largest_representable_length_refuses_cleanly) {
 }
 
 TEST(growbuf, init_hint_of_an_unrepresentable_size_latches_oom) {
-  /* The store that a hint asks for is hint + 1 bytes. At SIZE_MAX that size
-   * is not representable. Code that forms it wraps to 0. The 64-byte floor
-   * then wins, and the code reports success on a buffer with a size that is
+  /* The store that a hint asks for is hint + 1 bytes, which is not
+   * representable at SIZE_MAX. Code that forms it wraps to 0, the 64-byte
+   * floor then wins, and the code reports success on a buffer whose size is
    * nothing like the one that the caller asked for. */
   ccol_growbuf_t b;
   g_growbuf_alloc_calls = 0;
@@ -469,15 +469,15 @@ TEST(growbuf, init_hint_of_an_unrepresentable_size_latches_oom) {
 }
 
 TEST(growbuf, append_of_zero_bytes_leaves_the_buffer_terminated) {
-  /* An append of zero bytes is complete and never touches the copy path. A
-   * caller can therefore pass the NULL that the wrapper for a NUL-terminated
-   * string already tolerates. That NULL never reaches memcpy, whose pointers
-   * must be valid even for a length of zero.
+  /* An append of zero bytes is complete and never touches the copy path, so
+   * a caller can pass the NULL that the wrapper for a NUL-terminated string
+   * already tolerates. That NULL never reaches memcpy, whose pointers must be
+   * valid even for a length of zero.
    *
-   * This test is not vacuous under UndefinedBehaviorSanitizer, which is where
-   * it matters. Code that lets the call through reports "null pointer passed
-   * as argument 2, which is declared to never be null". A build with no
-   * instrumentation passes either way. */
+   * This test is not vacuous under UndefinedBehaviorSanitizer, which is
+   * where it matters: code that lets the call through reports "null pointer
+   * passed as argument 2, which is declared to never be null". A build with
+   * no instrumentation passes either way. */
   ccol_growbuf_t b;
   ccol_growbuf_init(&b, growbuf_procs());
   ccol_growbuf_append(&b, NULL, 0);
@@ -493,12 +493,13 @@ TEST(growbuf, append_of_zero_bytes_leaves_the_buffer_terminated) {
 /*                  ccol_retval_to_str / data type size / key dump */
 /* ========================================================================== */
 
-/* ccol_retval_t pins an explicit numeric value on every enumerator. Call
- * sites that test for ccol_success == 0 depend on that value directly. The
- * table below asserts the value and the spelling together. A new enumerator
- * anywhere except at the end renumbers every later enumerator quietly. With
- * this table, such a change fails here. Without it, the change appears as an
- * unrelated module that reports a retval that it never returns. */
+/* ccol_retval_t pins an explicit numeric value on every enumerator, and
+ * call sites that test for ccol_success == 0 depend on that value directly.
+ * The table below asserts the value and the spelling together. A new
+ * enumerator anywhere except at the end quietly renumbers every later
+ * enumerator; with this table, such a change fails here, while without it
+ * the change shows up as an unrelated module reporting a retval that it
+ * never returns. */
 static const struct {
   ccol_retval_t value;
   int expected_number;
@@ -551,8 +552,8 @@ TEST(retval, an_out_of_range_value_reports_unknown) {
 }
 
 TEST(data_type, fixed_width_sizes_match_the_underlying_types) {
-  /* The test drives this through a volatile variable. The switch then runs,
-   * and the compiler does not fold it into a constant at each call site. */
+  /* The test drives this through a volatile variable, so that the switch
+   * runs instead of being folded into a constant at each call site. */
   volatile ccol_data_type t;
   t = ccol_char;
   REQUIRE_EQ(ccol_fixed_width_data_type_size(t), sizeof(char));
@@ -595,9 +596,9 @@ TEST(data_type, variable_width_types_report_zero) {
 }
 
 /* _ccol_dump_key_to_stderr runs inside the fatal-error path that chmap and
- * cbmap take before ccol_fatal_err(). A fault in it turns a diagnostic into a
- * second crash on top of the first one. A capture of stderr is what lets a
- * test assert on it at all. */
+ * cbmap take before ccol_fatal_err(), so a fault in it turns a diagnostic
+ * into a second crash on top of the first one. Capturing stderr is what
+ * lets a test assert on it at all. */
 static bool dump_key_capture(const void *data, size_t size, char *out,
                              size_t out_size) {
   char path[] = "/tmp/ccol_dumpkeyXXXXXX";
@@ -627,8 +628,8 @@ static bool dump_key_capture(const void *data, size_t size, char *out,
 }
 
 TEST(strdup, a_string_is_copied_into_storage_the_caller_owns) {
-  /* The copy is independent of the source. A write over the source after
-   * the call must not change the copy. */
+  /* The copy is independent of the source: a write over the source after the
+   * call must not change the copy. */
   char src[16] = "hello";
   char *copy = ccol_strdup(NULL, src);
   memset(src, 'x', sizeof(src) - 1);
@@ -640,13 +641,13 @@ TEST(strdup, a_string_is_copied_into_storage_the_caller_owns) {
 }
 
 TEST(strdup, a_null_input_yields_null_rather_than_reading_through_it) {
-  /* The documentation says that this is tolerated, and not undefined. A
-   * caller can therefore pass on a string that another allocation already
-   * failed to make, and check it one time at the end.
+  /* The documentation says that this is tolerated, not undefined, so a
+   * caller can pass on a string that another allocation failed to make, and
+   * check it once at the end.
    *
-   * This test is not vacuous. Without the guard, this call reaches
-   * strlen(NULL). AddressSanitizer reports that as a SEGV on a null
-   * dereference, and an ordinary build turns it into a crash. */
+   * This test is not vacuous: without the guard, this call reaches
+   * strlen(NULL), which AddressSanitizer reports as a SEGV on a null
+   * dereference and an ordinary build turns into a crash. */
   REQUIRE_TRUE(ccol_strdup(NULL, NULL) == NULL);
 }
 
@@ -698,19 +699,19 @@ TEST(dump_key, unprintable_bytes_render_as_dots) {
 
 /* The check on the order of the fork-prepare handlers (see
  * ccol_atfork_module_t). Every module that registers a prepare handler holds
- * its own locks from that handler until after the fork. The locks of the
- * handlers therefore nest in the order in which the handlers run. One
- * consistent order across every fork is what keeps that nesting acyclic. The
- * order is a property of the registration order, and not of anything inside
- * one handler. This is why a check is better than a claim in a comment.
+ * its own locks from that handler until after the fork, so the locks of the
+ * handlers nest in the order in which the handlers run, and one consistent
+ * order across every fork is what keeps that nesting acyclic. The order is
+ * a property of the registration order rather than of anything inside one
+ * handler, which is why a check is better than a claim in a comment.
  *
- * This test runs in a forked child, because a violation is fatal on purpose.
- * A build that inverts the order must stop. It must not continue into a
- * nesting that no reader has reasoned about.
+ * This test runs in a forked child, because a violation is deliberately
+ * fatal: a build that inverts the order must stop instead of continuing
+ * into a nesting that no reader has reasoned about.
  *
- * This test is not vacuous. A record of the same pair in one order and then
- * in the other order is what makes the child abort. A build whose recorder
- * accepted both orders would exit 0 here. */
+ * This test is not vacuous: recording the same pair in one order and then
+ * in the other order is what makes the child abort, and a build whose
+ * recorder accepted both orders would exit 0 here. */
 TEST(atfork_order, an_inverted_prepare_handler_order_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
@@ -732,9 +733,9 @@ TEST(atfork_order, an_inverted_prepare_handler_order_is_fatal) {
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-/* A record of the same pair in the same order across two forks is the
- * ordinary case, and the recorder must accept it. This is why the check above
- * cannot pass if it only refuses everything. */
+/* Recording the same pair in the same order across two forks is the
+ * ordinary case, and the recorder must accept it, which is why the check
+ * above cannot pass by refusing everything. */
 TEST(atfork_order, a_repeated_consistent_order_is_accepted) {
   pid_t pid = fork();
   if (pid == 0) {
@@ -754,10 +755,10 @@ TEST(atfork_order, a_repeated_consistent_order_is_accepted) {
   REQUIRE_EQ(reaped, pid);
   /* This checks WIFEXITED only, and deliberately not WEXITSTATUS(status) ==
      0 as well. Under valgrind, --errors-for-leak-kinds=all reports the
-     inherited process image of every forked child as still reachable.
-     --error-exitcode then replaces the status of the child. The exit code
-     therefore says nothing about what the child did. WIFEXITED is the part
-     that carries the meaning here. A recorder that rejected this consistent
+     inherited process image of every forked child as still reachable, and
+     --error-exitcode then replaces the status of the child, so the exit code
+     says nothing about what the child did. WIFEXITED is the part that
+     carries the meaning here: a recorder that rejected this consistent
      order would abort, which makes WIFEXITED false. */
   REQUIRE_TRUE(WIFEXITED(status));
 }
@@ -831,9 +832,9 @@ TEST(atfork_order, a_real_fork_starts_a_new_sequence) {
 /*                       PUBLIC MACRO HYGIENE                                 */
 /* ========================================================================== */
 
-/* An allocator that always gives the same address. A test can then assert
- * the exact pointer that an allocation macro makes, and not only check that
- * the pointer is non-NULL. */
+/* An allocator that always gives the same address, so that a test can
+ * assert the exact pointer that an allocation macro makes instead of only
+ * checking that the pointer is non-NULL. */
 static char ccol_hyg_buffer[256];
 
 static void *ccol_hyg_malloc(size_t size) {
@@ -857,14 +858,14 @@ static void *ccol_hyg_realloc(void *ptr, size_t size) {
 static void ccol_hyg_free(void *ptr) { (void)ptr; }
 
 TEST(macro_hygiene, an_allocation_macro_composes_with_a_surrounding_operator) {
-  /* The conditional operator binds more loosely than a cast or an addition.
-   * An allocation macro whose body has no full parentheses therefore lets an
-   * operator outside it bind to one arm alone. The cast lands on the procs
+  /* The conditional operator binds more loosely than a cast or an addition,
+   * so an allocation macro whose body is not fully parenthesised lets an
+   * operator outside it bind to one arm alone: the cast lands on the procs
    * pointer, and the offset attaches to the arm that the code does not take.
    * Both arms have the type void *, and -Wpointer-arith is in neither -Wall
    * nor -Wextra, so nothing reports it. This test is not vacuous: without the
-   * parentheses the offset disappears quietly, and the pointer compares equal
-   * to the base. */
+   * parentheses the offset quietly disappears, and the pointer compares
+   * equal to the base. */
   ccol_memmgmt_procs_t procs = {.malloc = ccol_hyg_malloc,
                                 .calloc = ccol_hyg_calloc,
                                 .realloc = ccol_hyg_realloc,
@@ -880,7 +881,7 @@ TEST(macro_hygiene, an_allocation_macro_composes_with_a_surrounding_operator) {
   char *offset_realloc = (char *)_ccol_mem_realloc(mp, ccol_hyg_buffer, 32) + 4;
   REQUIRE_EQ((void *)offset_realloc, (void *)(ccol_hyg_buffer + 4));
 
-  /* The free of this allocator does nothing. It is called through the
+  /* The free of this allocator does nothing, and it is called through the
    * procs directly: through _ccol_mem_free, Clang sees the default free()
    * arm of the macro applied to a static buffer and rejects the call with
    * -Wfree-nonheap-object, although that arm never runs here. */
@@ -889,11 +890,11 @@ TEST(macro_hygiene, an_allocation_macro_composes_with_a_surrounding_operator) {
 
 TEST(macro_hygiene, ccol_typed_cmp_does_not_capture_caller_identifiers) {
   /* Each temporary that this macro declares is in scope from the end of its
-   * own declarator. A temporary with the name of a realistic caller variable
-   * therefore captures the argument of that caller. The argument resolves to
-   * the object that the macro just declared. This test is not vacuous: with
-   * temporaries named var1 and var2, the first comparison answers 0 and not
-   * -1, and no compiler reports it. */
+   * own declarator, so a temporary named like a realistic caller variable
+   * captures the argument of that caller: the argument resolves to the
+   * object that the macro has just declared. This test is not vacuous: with
+   * temporaries named var1 and var2, the first comparison answers 0 instead
+   * of -1, and no compiler reports it. */
   int var1 = 5, var2 = 7;
   int a = 5, b = 7;
   REQUIRE_EQ(ccol_typed_cmp(&var1, &var2, int), -1);
@@ -904,9 +905,9 @@ TEST(macro_hygiene, ccol_typed_cmp_does_not_capture_caller_identifiers) {
 
 TEST(macro_hygiene, type_introspection_does_not_capture_caller_identifiers) {
   /* The same mechanism, through the _Generic helpers that every container
-   * creation macro uses. Without this check, a caller variable that has the
-   * name of one of their temporaries selects the default arm. That arm
-   * reports an integral value as a value that is not integral. */
+   * creation macro uses. Without this check, a caller variable named like
+   * one of their temporaries selects the default arm, which reports an
+   * integral value as a value that is not integral. */
   int result = 42;
   int plain = 42;
   REQUIRE_TRUE(ccol_is_integral_type(result));
@@ -925,8 +926,8 @@ TEST(macro_hygiene, type_introspection_does_not_capture_caller_identifiers) {
 /* ========================================================================== */
 
 /* Pointers whose own object is const. The address of such an object has a
- * type like const char *const *, which is the shape that a classifier built
- * on the type of &(data) cannot recognize. */
+ * type like const char *const *, a shape that a classifier built on the
+ * type of &(data) cannot recognize. */
 static const char *const ccol_cls_const_name = "const-name";
 static const signed char *const ccol_cls_const_signed =
     (const signed char *)"signed";
@@ -970,8 +971,8 @@ TEST(char_classification, every_char_array_form_is_still_an_array) {
 
 TEST(char_classification, populate_pair_reads_the_string_of_a_const_pointer) {
   /* A pair built from a const-qualified pointer object must address the
-   * string, and not the pointer object itself. Measured with strlen, the
-   * pointer object gives a size that depends on its address bytes. */
+   * string, not the pointer object itself; measured with strlen, the pointer
+   * object gives a size that depends on its address bytes. */
   cmap_pair pair = {0};
   _populate_cmap_pair(&pair, ccol_cls_const_name);
   REQUIRE_EQ(pair.ptr, (void *)ccol_cls_const_name);
@@ -1082,8 +1083,8 @@ static void *gate_forker(void *arg) {
 }
 
 /* A fork() cannot return while a thread is inside the gate, because the
- * fork-prepare handler of the gate waits for the read side. The check after
- * the wait can therefore never see a fork that returned while the gate was
+ * fork-prepare handler of the gate waits for the read side, so the check
+ * after the wait can never see a fork that returned while the gate was
  * held, however slow the machine is.
  *
  * This test is non-vacuous: without the fork-prepare handler of the gate,

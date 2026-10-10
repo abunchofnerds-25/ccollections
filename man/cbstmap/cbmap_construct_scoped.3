@@ -11,29 +11,29 @@ cbmap_construct_scoped(hm_name, key_t, val_t);
 .fi
 .SH DESCRIPTION
 .nf
-Declares an ordered map handle with the name hm_name. It also declares the
-companion type variables. Those variables carry key_t and val_t to every
-later type-inferred macro. The macro then creates the map with the default
-allocator and the default order for key_t. The macro also attaches the
-cleanup attribute. That attribute destroys the map on every exit from the
-enclosing scope, an early return included.
+Declares an ordered map handle named hm_name, together with the companion
+type variables that carry key_t and val_t to every later type-inferred
+macro, and then creates the map with the default allocator and the default
+order for key_t. The macro also attaches the cleanup attribute, which
+destroys the map on every exit from the enclosing scope, an early return
+included.
 
-The macro is cbmap_construct(3) plus that cleanup attribute. Nothing else
-differs. Use this macro when the whole useful life of the map is one block.
-Use cbmap_construct(3) when your code returns the handle, stores it, or
+The macro is cbmap_construct(3) plus that cleanup attribute; nothing else
+differs. Use this macro when the whole useful life of the map is one block,
+and use cbmap_construct(3) when your code returns the handle, stores it, or
 destroys it in a place that the compiler cannot see.
 
-cbmap_declare_scoped(3) and then cbmap_init(3) is the two-step form. Use
-that form for a map whose configuration comes from inside the scope, and not
+cbmap_declare_scoped(3) followed by cbmap_init(3) is the two-step form. Use
+it for a map whose configuration comes from inside the scope instead of
 from the declaration.
 .fi
 .SH PARAMETERS
 .nf
 hm_name  Name for the map handle to declare
-key_t    Key type. It tells every later macro how to read a key. It also
-         tells the container which order to give the tree
-val_t    Value type. Only the type-inferred macros read it. The library never
-         gives it to the container
+key_t    Key type. It tells every later macro how to read a key, and tells
+         the container which order to give the tree
+val_t    Value type. Only the type-inferred macros read it; the library
+         never gives it to the container
 .fi
 .SH RETURN VALUE
 .nf
@@ -41,25 +41,25 @@ None. This macro declares variables and does not expand to an expression.
 .fi
 .SH NOTES
 .nf
-The macro stops the program through ccol_fatal_err() if the creation fails.
-Use cbmap_declare_scoped(3) with cbmap_init(3) when the caller must handle a
+The macro stops the program through ccol_fatal_err() if the creation fails;
+use cbmap_declare_scoped(3) with cbmap_init(3) when the caller must handle a
 failure instead
 The macro needs GCC or Clang, because it uses the cleanup attribute
 The map keeps the elements in key order, and the walk visits them in
-ascending key order. cbmap_begin_iter(3) describes that contract.
+ascending key order. cbmap_begin_iter(3) describes that contract, and
 cbmap_create_full(3) describes the order that each key type gets
 For a struct key_t, the default order is a raw comparison of the
-representation of the key. Use cbmap_construct_cc_scoped(3) for such a key
-The exit of the scope destroys the map and clears the handle. An explicit
-cbmap_destroy(3) earlier in the scope therefore stays correct
-The companion type variables follow the scope of the handle. A function
-that receives the handle therefore needs cbmap_redeclare(3) there
+representation of the key, so use cbmap_construct_cc_scoped(3) for such a key
+The exit of the scope destroys the map and clears the handle, so an
+explicit cbmap_destroy(3) earlier in the scope stays correct
+The companion type variables follow the scope of the handle, so a function
+that receives the handle needs cbmap_redeclare(3) there
 .fi
 .SH WARNINGS
 .nf
-The handle must not outlive its scope. Do not return it. Do not store it in
-a place that outlives the scope. Both actions give out a handle whose map
-the cleanup attribute frees at the exit of the scope.
+The handle must not outlive its scope. Do not return it, and do not store
+it in a place that outlives the scope: either action gives out a handle
+whose map the cleanup attribute frees at the exit of the scope.
 .fi
 .SH EXAMPLES
 .nf

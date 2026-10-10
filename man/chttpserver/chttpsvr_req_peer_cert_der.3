@@ -12,43 +12,42 @@ const void *chttpsvr_req_peer_cert_der(const chttpsvr_req *req,
 .fi
 .SH DESCRIPTION
 .nf
-Gives the DER encoding of the leaf certificate that the TLS client of
-the request presented and that verified against the ca_bundle_path of
-the server.  It gives the certificate only when
+Returns the DER encoding of the leaf certificate that the TLS client
+of the request presented and that verified against the ca_bundle_path
+of the server.  The certificate is returned only when
 chttpsvr_req_peer_cert_verified(3) reports true for req.
 
 Use it to read any field of the certificate with a library of your
-choice, for example d2i_X509() of OpenSSL, or to compare the whole
+choice, such as d2i_X509() of OpenSSL, or to compare the whole
 certificate with a pinned one.  chttpsvr_req_peer_cert_sha256(3) and
-chttpsvr_req_peer_cert_subject(3) give the two values that a handler
-most often needs without a parse of its own.
+chttpsvr_req_peer_cert_subject(3) return the two values that a
+handler most often needs, without a parse of its own.
 
 The certificate belongs to the connection, so every request on one
-keep-alive connection gives the same bytes.  A resumed TLS session
-gives the certificate that the handshake which established it
-verified.
+keep-alive connection gets the same bytes, and a resumed TLS session
+gets the certificate verified by the handshake that established it.
 .fi
 .SH PARAMETERS
 .nf
 req      The request handle.
-len_out  Optional.  It receives the byte length of the encoding, and 0
-         whenever the function gives NULL.
+len_out  Optional.  Receives the byte length of the encoding, or 0
+         whenever the function returns NULL.
 .fi
 .SH RETURN VALUE
 .nf
 A pointer to the DER bytes, which stay valid for the lifetime of the
-request.  Do not free them.
+request; do not free them.
 
 NULL in every case where chttpsvr_req_peer_cert_verified(3) reports
-false: a plaintext connection, a server with no ca_bundle_path, a
-client that presented no certificate, and a NULL req.  NULL also when
-an allocation fails; call chttpsvr_req_peer_cert_verified(3) to tell
-the two apart.
+false (a plaintext connection, a server with no ca_bundle_path, a
+client that presented no certificate, and a NULL req), and also NULL
+when an allocation fails; call chttpsvr_req_peer_cert_verified(3) to
+tell the two apart.
 .fi
 .SH THREAD SAFETY
 .nf
-Call it only on the thread that runs the handler or the middleware of
-req, as every other accessor of a request.
+As with every other request accessor, call it only on the thread that
+runs the handler or the middleware of req.
 .fi
 .SH EXAMPLES
 .nf

@@ -11,31 +11,31 @@ ccol_iter_declare(container, it);
 .fi
 .SH DESCRIPTION
 .nf
-This macro declares a cmap_iterator pointer with the name it. That pointer
-carries the type information of container. The declaration adds
+This macro declares a cmap_iterator pointer named it, which carries the
+type information of container. The declaration adds
 __attribute__((cleanup)), so the iterator is destroyed automatically at the
-end of its scope. The caller needs no explicit ccol_iter_destroy() call.
+end of its scope and the caller needs no explicit ccol_iter_destroy() call.
 
-The macro also declares two hidden companion type variables. Those
-variables let ccol_iter_key_ptr() and ccol_iter_val_ptr() give pointers
-with the correct type for container.
+The macro also declares two hidden companion type variables, which let
+ccol_iter_key_ptr() and ccol_iter_val_ptr() give pointers with the
+correct type for container.
 .fi
 .SH PARAMETERS
 .nf
-container  Container variable. The caller must declare it first with a
-           *_declare or *_construct macro. It must be a cvec, a chmap or
-           a cbmap.
+container  Container variable, which the caller must declare first with
+           a *_declare or *_construct macro. It must be a cvec, a chmap
+           or a cbmap.
 it         Name for the iterator variable.
 .fi
 .SH NOTES
 .nf
-container must be in scope. Its companion type variables must also be
+container must be in scope, and its companion type variables must also be
 visible, in the same scope or in a parent scope.
-This macro needs GCC or Clang. It uses __attribute__((cleanup)).
+This macro needs GCC or Clang, because it uses __attribute__((cleanup)).
 A loop that leaves early leaves the iterator live until the end of the
-scope. The container can be destroyed before that point: the cleanup
-frees the iterator without reading the container. Do not advance or
-dereference such an iterator once its container is gone.
+scope. The container can be destroyed before that point, because the
+cleanup frees the iterator without reading the container; but do not
+advance or dereference such an iterator once its container is gone.
 .fi
 .SH EXAMPLES
 .nf

@@ -12,15 +12,15 @@ const void *chttpsvr_req_body(const chttpsvr_req *req,
 .fi
 .SH DESCRIPTION
 .nf
-Returns a pointer to the buffered bytes of the request body.  It
-stores the body length in bytes in len_out, when len_out is not NULL.
-It returns NULL and stores 0 in two cases: the request has no body, or
-req belongs to a streaming route that
-chttpsvr_register_streaming_handler registered.  The server never
-extracts the body of a streaming route in advance.  Use
-chttpsvr_req_read for such a route.
+Returns a pointer to the buffered bytes of the request body and, when
+len_out is not NULL, stores the body length in bytes in len_out.  It
+returns NULL and stores 0 when the request has no body, and also when
+req belongs to a streaming route registered with
+chttpsvr_register_streaming_handler: the server never reads the body
+of a streaming route in advance, so use chttpsvr_req_read for such a
+route instead.
 
-The buffer stays valid for the length of the handler call.
+The buffer stays valid for the duration of the handler call.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_req_read (3)

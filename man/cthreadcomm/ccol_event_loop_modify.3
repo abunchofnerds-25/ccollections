@@ -12,44 +12,44 @@ ccol_retval_t ccol_event_loop_modify(ccol_event_loop loop, ccol_event_reg reg,
 .fi
 .SH DESCRIPTION
 .nf
-This function changes the direction of reg in place. There is no
-window where the fd below it is unregistered. The function works on an
-fd only. A call on a registration that comes from a queue selectable
-or a ccol_channel selectable returns ccol_invalid_args. The direction
-of a queue selectable is a part of its identity. Remove such a
-registration and add it again, and do not modify it.
+This function changes the direction of reg in place, with no window
+where the fd below it is unregistered. The function works on an fd
+only: a call on a registration that comes from a queue selectable or a
+ccol_channel selectable returns ccol_invalid_args, because the
+direction of a queue selectable is a part of its identity. Remove such
+a registration and add it again instead of modifying it.
 
 On success three things happen:
-  - The library updates reg->sel.dir. A callback that the loop
+  - The library updates reg->sel.dir, so a callback that the loop
     dispatches after this call returns sees the new direction in the
     sel parameter that it gets. The dispatch path copies reg->sel
     under its own internal lock at the moment that it collects each
-    dispatch. It does not keep a live pointer into reg->sel. A
-    callback that is already in flight when you call this function
-    therefore keeps the direction that was current at the moment of
-    the collect. It never races this update.
+    dispatch, and keeps no live pointer into reg->sel, so a callback
+    that is already in flight when you call this function keeps the
+    direction that was current at the moment of the collect and never
+    races this update.
   - reg moves to the other slot on the shared epoll entry of the fd
     below it.
   - The library recomputes the combined epoll interest mask of the fd,
-    fresh from the live state of both directions. Ordinarily this is a
-    single EPOLL_CTL_MOD call. reg itself may be paused now; see
-    ccol_event_loop_pause(3). If it is, and the fd has no other
-    direction that is not paused, the mask still carries no real
-    interest. The pause already put the fd outside the epoll interest
-    set of the kernel, and the fd stays that way. No epoll_ctl call is
-    needed at all. A reg that the loop stopped watching because an event
-    reached it that none of its handlers can take (see
+    fresh from the live state of both directions; ordinarily this is a
+    single EPOLL_CTL_MOD call. reg itself may be paused at the time of
+    the call (see ccol_event_loop_pause(3)). If it is, and the fd has
+    no other direction that is not paused, the mask carries no real
+    interest: the pause has put the fd outside the epoll interest set
+    of the kernel, the fd stays that way, and no epoll_ctl call is
+    needed at all. A reg that the loop stopped watching because an
+    event reached it that none of its handlers can take (see
     ccol_event_loop_add(3)) is watched again in its new direction.
 
 A call whose new_dir is the current direction of reg changes nothing
-else and returns ccol_success. It also makes a reg that the loop
+else and returns ccol_success, but it makes a reg that the loop
 stopped watching, as described above, watched again.
 
 This call is valid only when a different registration on the same fd
 does not already hold the slot of the target direction. Use it, for
-example, for a non-blocking connect. Such a connect starts with an
-interest in write, and moves to an interest in read after the connect
-finishes. It then needs no second ccol_event_loop_add() call.
+example, for a non-blocking connect, which starts with an interest in
+write and moves to an interest in read after the connect finishes; it
+then needs no second ccol_event_loop_add() call.
 .fi
 .SH PARAMETERS
 .nf
@@ -61,27 +61,26 @@ new_dir  ccol_select_read or ccol_select_write.
 .nf
 ccol_success        The function changed the direction.
 ccol_invalid_args   loop is CCOL_EVENT_LOOP_INVALID, or a handle that
-                    is stale or that something already destroyed. Or
+                    is stale or that something already destroyed; or
                     reg is CCOL_EVENT_REG_INVALID, or it fails to
-                    resolve for another reason. Or reg is a
-                    registration for a queue or for a ccol_channel. Or
+                    resolve for another reason; or reg is a
+                    registration for a queue or for a ccol_channel; or
                     new_dir is neither ccol_select_read nor
                     ccol_select_write. A reg that fails to resolve
-                    covers a handle that is plainly invalid. It also
-                    covers one that something removed between the
-                    moment that the caller got it and this call. That
-                    removal can come from another thread, or from the
-                    callback of reg that removes itself. The library
-                    finds either case through the registration table of
-                    reg, and rejects it cleanly. It never causes a
-                    use-after-free.
+                    covers a handle that is plainly invalid, and also
+                    one that something removed between the moment that
+                    the caller got it and this call, either from
+                    another thread or from the callback of reg that
+                    removes itself. The library finds either case
+                    through the registration table of reg and rejects
+                    it cleanly; it never causes a use-after-free.
 ccol_not_permitted  A different registration on the same fd already
                     holds the target direction.
 .fi
 .SH THREAD SAFETY
 .nf
-Safe to call at the same time as ccol_event_loop_remove(). Also safe to
-call from inside a callback that runs on one of the reactor threads.
+Safe to call at the same time as ccol_event_loop_remove(), and from
+inside a callback that runs on one of the reactor threads.
 .fi
 .SH EXAMPLES
 .nf

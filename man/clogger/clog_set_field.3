@@ -11,53 +11,51 @@ void clog_set_field(clog logger, const char *key, const char *value);
 .fi
 .SH DESCRIPTION
 .nf
-Attaches key with value as a persistent field.  The field then appears
-in every later log line that this logger writes.  It sits between the
-func= and msg= tokens:
+Attaches key with value as a persistent field, which then appears in
+every later log line that this logger writes, between the func= and
+msg= tokens:
 
   ts=... level=INFO proc=prog(pid):tname(tid) src=... func=... key=value msg=...
 
-The library copies both key and value internally.  The caller can free
-them or change them after this call, and the logger does not notice.
+The library copies both key and value internally, so the caller can
+free or change them after this call without the logger noticing.
 
-A key that already exists gets the new value.  Otherwise the field set
+A key that already exists gets the new value; otherwise the field set
 takes a new field.
 
 Every character of a key must be a printable US-ASCII character
-(0x21-0x7e).  The characters '=', ']', '"' and '\e\e' are not allowed.
-The library silently ignores a key that is empty.  It also ignores a
-key that holds one of those forbidden characters, whitespace, an ASCII
-control character, or any byte that is not ASCII.  Every log line
-already carries a set of fixed tokens.  They are ts, level, proc, src,
-func, msg, bt and bt_error.  The library ignores a key that names one
-of them too.  Such a key would make a duplicate key= token in logfmt,
-a duplicate JSON key, or a duplicate RFC 5424 SD-PARAM-NAME inside one
-SD-ELEMENT.
+(0x21-0x7e), and the characters '=', ']', '"' and '\e\e' are not
+allowed.  The library silently ignores a key that is empty, or that
+holds one of those forbidden characters, whitespace, an ASCII control
+character, or any byte that is not ASCII.  It also ignores a key that
+names one of the fixed tokens that every log line already carries (ts,
+level, proc, src, func, msg, bt and bt_error), because such a key would
+make a duplicate key= token in logfmt, a duplicate JSON key, or a
+duplicate RFC 5424 SD-PARAM-NAME inside one SD-ELEMENT.
 
-A value can hold a space, an '=', a '"', a '\e\e' or an ASCII control
-character.  The library then double-quotes that value in the output,
-and it escapes those characters with a backslash:
+When a value holds a space, an '=', a '"', a '\e\e' or an ASCII control
+character, the library double-quotes that value in the output and
+escapes those characters with a backslash:
   - '"' -> \e"
   - '\e\e' -> \e\e
   - control chars -> \en, \er, \et, or \exNN
 
-The exact syntax of an escape differs by output format.  See
-clog_set_format(3).  JSON uses \euNNNN Unicode escapes.  RFC 5424
-syslog escapes a '"', a '\e\e' and a ']', as well as a control
+The exact syntax of an escape differs by output format (see
+clog_set_format(3)): JSON uses \euNNNN Unicode escapes, and RFC 5424
+syslog escapes a '"', a '\e\e' and a ']' as well as a control
 character.
-When the output format is CLOG_FMT_JSON or CLOG_FMT_SYSLOG, a value can
-hold text that is not well-formed UTF-8.  The library replaces each
-invalid byte with the Unicode replacement character (U+FFFD), and it
-does not embed the byte raw.  JSON text must be valid Unicode, and RFC
+When the output format is CLOG_FMT_JSON or CLOG_FMT_SYSLOG and a value
+holds text that is not well-formed UTF-8, the library replaces each
+invalid byte with the Unicode replacement character (U+FFFD) instead of
+embedding the byte raw, because JSON text must be valid Unicode and RFC
 5424 requires an SD-PARAM-VALUE to be UTF-8.
 An RFC 5424 SD-PARAM-NAME longer than 32 characters becomes its first
 23 characters, then a '~', and then a hash of the full key in 8 hex
-digits.  A bare prefix of 32 characters would not do.  Two different
-long keys that share a prefix therefore still get different
-SD-PARAM-NAMEs.
-In every format, the library always neutralizes a control character.
-That covers a literal newline and a carriage return.  A field value can
-therefore never split one record across several lines.
+digits, instead of a bare prefix of 32 characters, so two different
+long keys that share a prefix get different SD-PARAM-NAMEs.
+In every format the library always neutralizes a control character,
+including a literal newline and a carriage return, so a field value can
+never split one record across several lines.
 .fi
 .SH PARAMETERS
 .nf

@@ -11,8 +11,8 @@ ctpool_declare(name);
 .fi
 .SH DESCRIPTION
 .nf
-Expands to `ctpool name`. The macro leaves the variable
-uninitialized. Assign it with ccol_create_cthread_pool() or
+Expands to `ctpool name` and leaves the variable uninitialized, so you
+must assign it with ccol_create_cthread_pool() or
 ccol_create_cthread_pool_mp() before you use it.
 
 This macro exists so that the naming matches the other c_collections

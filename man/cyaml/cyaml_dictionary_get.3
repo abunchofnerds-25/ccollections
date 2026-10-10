@@ -15,8 +15,8 @@ Return a non-owning reference to the value that map stores under key.
 .fi
 .SH RETURN VALUE
 .nf
-The child node.  The function returns NULL when key is absent, and also
-when map is not a CYAML_DICTIONARY.
+The child node, or NULL when key is absent or when map is not a
+CYAML_DICTIONARY.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_dictionary_set (3),

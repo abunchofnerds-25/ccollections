@@ -11,9 +11,9 @@ ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair *key_pair);
 .fi
 .SH DESCRIPTION
 .nf
-Removes the key-value pair with the given key from the BST map. The
-function frees the memory of the key and of the value. It then balances
-the tree again with AVL rotations.
+Removes the key-value pair with the given key from the BST map, frees the
+memory of the key and of the value, and then balances the tree again with
+AVL rotations.
 .fi
 .SH PARAMETERS
 .nf
@@ -31,20 +31,20 @@ ccol_invalid_args   - key_pair is NULL, key_pair carries a NULL ptr
 .fi
 .SH NOTES
 .nf
-The ptr of a key_pair needs no particular alignment. The comparison
-reads the key bytes with memcpy and never through a pointer cast to the
-key type. A caller can therefore point key_pair->ptr straight at key
-bytes that sit at an arbitrary offset inside a larger buffer, such as a
-field sliced out of a packed network frame or a memory-mapped record,
-without copying them into an aligned local first.
+The ptr of a key_pair needs no particular alignment, because the
+comparison reads the key bytes with memcpy and never through a pointer
+cast to the key type. A caller can therefore point key_pair->ptr straight
+at key bytes that sit at an arbitrary offset inside a larger buffer, such
+as a field sliced out of a packed network frame or a memory-mapped
+record, without copying them into an aligned local first.
 O(log n) complexity
 The function asserts if cbm is NULL
-The function reports a NULL key_pair as ccol_invalid_args. This matches
+The function reports a NULL key_pair as ccol_invalid_args, which matches
 chmap_delete_elem(3)
 A key_pair whose ptr is NULL and whose size is not zero promises bytes
-that it has no storage for. The function reports it as
+that it has no storage for, so the function reports it as
 ccol_invalid_args too
-A key_pair of size zero is correct, with a ptr or without one. It
+A key_pair of size zero is correct, with a ptr or without one, and
 removes the empty key
 .fi
 .SH "SEE ALSO"

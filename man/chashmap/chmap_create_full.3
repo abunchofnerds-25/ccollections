@@ -23,10 +23,10 @@ chmap chmap_create_full(size_t initial_bucket_array_size,
 .fi
 .SH DESCRIPTION
 .nf
-Creates a hash map with full control over initial size, types, memory
-management, the hash function and the key equality function. The map
-selects the implementation strategy automatically from the key and value
-types and from custom_key_equality_proc.
+Creates a hash map with full control over the initial size, the types,
+memory management, the hash function and the key equality function. The
+map selects its implementation strategy automatically from the key and
+value types and from custom_key_equality_proc.
 .fi
 .SH PARAMETERS
 .nf
@@ -36,59 +36,59 @@ val_type                   Type of values
 mmgmt_procs                Custom memory management, or NULL
 custom_hashing_proc        Custom hash function, or NULL
 custom_key_equality_proc   Custom key equality function, or NULL for the
-                           built-in comparison. It needs a
+                           built-in comparison; it needs a
                            custom_hashing_proc that agrees with it
-err                        Optional pointer to receive error string
+err                        Optional pointer that receives an error string
 .fi
 .SH RETURN VALUE
 .nf
-Returns pointer to newly created hash map on success
-Returns NULL on failure. A custom_key_equality_proc without a
-custom_hashing_proc is such a failure
+Returns a pointer to the newly created hash map on success.
+Returns NULL on failure, for example when a custom_key_equality_proc is
+given without a custom_hashing_proc.
 .fi
 .SH "CUSTOM KEY EQUALITY"
 .PP
-A key equality procedure gets both keys and both sizes, and returns true
-when the two are the same key. The map uses it for every lookup, update and
-delete, in place of its built-in comparison. It must agree with
+A key equality procedure receives both keys and both sizes, and returns true
+when the two are the same key. The map uses it in place of its built-in
+comparison for every lookup, update and delete. It must agree with
 custom_hashing_proc: two keys that it reports as equal must get the same
 hash. The map refuses the procedure without a custom hash, because the
-built-in hash reads the bytes of a key and cannot agree with an equality that
-treats two different byte images as one key. The pointers carry no
-alignment for the key type, so read a field through memcpy.
+built-in hash reads the bytes of a key and so cannot agree with an equality
+that treats two different byte images as one key. The pointers carry no
+alignment for the key type, so read each field through memcpy.
 .PP
 A map with a key equality procedure always uses separate chaining, whatever
 the key and value types are.
 .SH "KEYS WITH PADDING"
 .PP
-With no key equality procedure, a key of a type that the map does not know
-(ccol_other_types, such as a struct) is equal to another key only when every
-byte of the two is equal, and the default hash reads every byte too. That
-includes the padding bytes of a struct. Two keys with equal members but
+Without a key equality procedure, a key of a type that the map does not know
+(ccol_other_types, such as a struct) equals another key only when every
+byte of the two is equal, and the default hash also reads every byte,
+padding bytes of a struct included. Two keys with equal members but
 different padding are then two different keys, and a lookup misses.
 .PP
 Give such a key type a custom_hashing_proc and a custom_key_equality_proc
-that read the members only. Without them, the bytes of a padded key must be
+that read only the members. Without them, the bytes of a padded key must be
 fully determined. Through the raw functions, such as chmap_insert_elem(3),
 the map reads exactly the object that key_pair->ptr points at, so zero the
 whole key object with memset() before you set its members. Through the
 type-inferred macros, the map sees the macro's own copy of the key, and C
 leaves the padding of a struct copy unspecified. With GCC 11 or later the
-macros set that padding to zero. With any other compiler, a padded key
-through the macros needs the two procedures.
+macros set that padding to zero; with any other compiler, a padded key
+passed through the macros needs the two procedures.
 .SH "HASHING AND RESISTANCE TO HASH FLOODING"
 .PP
-Every map has two hash modes, and it starts in the fast mode. In the fast
+Every map has two hash modes and starts in the fast mode. In the fast
 mode, an integer, a float, a double and a pointer key get a Fibonacci
-multiply: the key times the odd 64-bit constant nearest 2^64 divided by the
-golden ratio, read from the high bits of the product. A 64-bit key is
-multiplied at 64 bits on a 32-bit target as well, so both of its halves
+multiply: the key times the odd 64-bit constant nearest to 2^64 divided by
+the golden ratio, read from the high bits of the product. A 64-bit key is
+multiplied at 64 bits on a 32-bit target as well, so that both of its halves
 reach the index. A key with no fixed width, such as a string (ccol_string)
-or a struct (ccol_other_types), gets XXH64 with a secret 64-bit seed. The
-result of a custom_hashing_proc goes through the murmur3 finalizer. A
-sequential run of integers costs one probe for each lookup in this mode,
-and integers scaled by a power of two, aligned addresses, packed pairs,
-paths, identifiers and field names spread as a random function would.
+or a struct (ccol_other_types), gets XXH64 with a secret 64-bit seed, and the
+result of a custom_hashing_proc goes through the murmur3 finalizer. In this
+mode a sequential run of integers costs one probe for each lookup, while
+integers scaled by a power of two, aligned addresses, packed pairs, paths,
+identifiers and field names spread as a random function would.
 .PP
 In the keyed mode, a fixed-width key and the result of a
 custom_hashing_proc go through a mixer of two multiplies that starts from
@@ -96,47 +96,47 @@ an exclusive or with a secret 64-bit seed, and a key with no fixed width
 gets SipHash-1-3 with a secret 128-bit key. SipHash-1-3 is a keyed
 pseudorandom function: no two inputs collide for every key, and without
 the key two inputs collide only by chance. The mixer spreads every set of
-keys as a random function would: at a load of 0.38 a lookup costs about 1.3
-probes, and at the maximum load of 0.70 about 2. A long double key gets
-SipHash-1-3 by its value in both modes. The keys that the map treats as the
-same key, -0.0 and 0.0 included, are the same in both modes.
+keys as a random function would, so a lookup costs about 1.3 probes at a
+load of 0.38 and about 2 at the maximum load of 0.70. A long double key
+gets SipHash-1-3 by its value in both modes. The keys that the map treats
+as the same key, -0.0 and 0.0 included, are the same in both modes.
 .PP
-The fast hashes are public, or keyed in a way that some sets of keys
+The fast hashes are either public or keyed in a way that some sets of keys
 defeat: XXH64 has collisions that hold for every seed. A party that
 controls the keys, for example the member names of a JSON document or the
 identifiers in a request that arrives from the network, can therefore
-choose a set that falls into one bucket or one cluster of a fast map. Every
-insert of a new key measures how far it had to go: the displacement of its
-slot from its home slot, or the number of nodes in the chain that it joins.
-A map switches to the keyed mode when:
+choose a set that falls into one bucket or one cluster of a fast map. To
+detect this, every insert of a new key measures how far it had to go: the
+displacement of its slot from its home slot, or the number of nodes in the
+chain that it joins. A map switches to the keyed mode when:
 .IP \(bu 2
-one open-addressing insert lands more than its cap from its home slot. The
+one open-addressing insert lands more than its cap from its home slot (the
 cap is 24 slots for each doubling of the table up to 4096 slots, and 288
-slots from there on;
+slots from there on);
 .IP \(bu 2
 one separate-chaining insert meets 20 nodes;
 .IP \(bu 2
 256 consecutive inserts of new keys cost more in total than 256 times
 5 * E(a) + 0.5 slots in an open-addressing table of 4096 slots or more,
 6 * E(a) + 0.5 in a smaller one, or 4.5 * lambda + 0.5 nodes under
-separate chaining. E(a) = (1 / (1 - a)^2 - 1) / 2 is the expected
+separate chaining. Here E(a) = (1 / (1 - a)^2 - 1) / 2 is the expected
 displacement of an insert at load a under a random function, and lambda is
-the number of entries for each bucket. a and lambda are the highest load
-that the 256 inserts can have reached, so a bulk delete among them does not
-lower the bound;
+the number of entries for each bucket. Both a and lambda are the highest
+load that the 256 inserts can have reached, so a bulk delete among them
+does not lower the bound;
 .IP \(bu 2
 a shrink merges clusters or chains past the first two limits.
 .PP
 A lookup never writes to the map and never switches it. Until a map
 switches, a party that controls the keys can make an open-addressing insert
-cost about 26 probes on average at a load of 0.70, about 31 in a table
-below 4096 slots, and a single insert no more than the cap; a
+cost about 26 probes on average at a load of 0.70 (about 31 in a table
+below 4096 slots), and a single insert no more than the cap; a
 separate-chaining insert meets about 7.3 nodes on average at 1.5 entries
-for each bucket, and always fewer than 20. A lookup or a delete of an
+for each bucket, and always fewer than 20. A lookup or a delete in an
 open-addressing map examines at most one slot more than the largest
 displacement of any key in the table, which the cap bounds while the map is
-fast. That also bounds a lookup inside a long run of keys whose home slots
-are consecutive, which no insert has to pay for.
+fast. This also bounds a lookup inside a long run of keys whose home slots
+are consecutive, a run that no insert has to pay for.
 .PP
 The caps sit far above what ordinary keys produce. Under a random function,
 an open-addressing insert at the highest load is displaced by more than 288
@@ -145,44 +145,45 @@ slots about once in 1.4 * 10^9 inserts, and a separate-chaining insert at
 .PP
 The switch rebuilds an open-addressing table at the same size, and the
 references that the map handed out become invalid, as they do at any
-insert. When that allocation fails, the map stays in the fast mode and
-correct, the insert that asked for the switch still succeeds, and the next
+insert. When that allocation fails, the map stays correct and in the fast
+mode, the insert that asked for the switch still succeeds, and the next
 insert that asks for it tries again. A separate-chaining map rehashes its
 nodes in place and allocates nothing, so every reference to a key or a
 value, the insertion order and every iterator stay valid. A reset and a
 shrink keep the mode.
 .PP
-A growth of a keyed map tries the fast mode on the new table: the doubled
-table of an open-addressing map, or the bucket array of a separate-chaining
-map that grows by four. The map keeps the fast mode unless that fill shows
-that the keys collide under it: an open-addressing entry that would land
-more than the cap of the new table from its home slot, a separate-chaining
-chain that would reach 20 nodes, or displacements or chain walks that add
-up to more than the count plus 64. The attempt stops at the first of these,
-and the growth fills the same new table with the keyed hash, so it
-allocates nothing more. For a map of n entries, a failed attempt inspects
-at most 2 * n + cap + 65 slots, or hashes n nodes and walks at most n + 83
-chain nodes, besides the keyed fill. Growth is geometric, so a map whose
-every growth fails pays a constant amount of extra work for each insert: in
-an open-addressing table of 4096 slots or more, at most about four slots
-and two keyed placements for each insert, and under separate chaining
-about three node operations and 1.3 keyed hashes. A map that returns to
-the fast mode is judged by its inserts again, so an attack that resumes
-switches it within two windows of 256 inserts. Integer sets that cluster
-under the multiply only at some sizes, such as multiples of 24, 32, 48 or
-96, switch at a small size and come back to the fast mode at a later growth
-whose table spreads them well; at other sizes they cluster again and the
-window switches the map back. The attempt keeps every entry, and under separate
-chaining every reference to a key or a value, the insertion order and
-every iterator, whether it succeeds or not. When the allocation of a
-growth fails, the map keeps its table and its mode, as any growth does.
+When a keyed map grows, it tries the fast mode on the new table (the
+doubled table of an open-addressing map, or the bucket array of a
+separate-chaining map that grows by four). The map keeps the fast mode
+unless that fill shows that the keys collide under it: an open-addressing
+entry that would land more than the cap of the new table from its home
+slot, a separate-chaining chain that would reach 20 nodes, or displacements
+or chain walks that add up to more than the count plus 64. The attempt
+stops at the first of these, and the growth then fills the same new table
+with the keyed hash, so it allocates nothing more. For a map of n entries,
+a failed attempt inspects at most 2 * n + cap + 65 slots, or hashes n nodes
+and walks at most n + 83 chain nodes, in addition to the keyed fill.
+Because growth is geometric, a map whose every growth fails pays a constant
+amount of extra work for each insert: in an open-addressing table of 4096
+slots or more, at most about four slots and two keyed placements for each
+insert, and under separate chaining about three node operations and 1.3
+keyed hashes. A map that returns to the fast mode is judged by its inserts
+again, so an attack that resumes switches it within two windows of 256
+inserts. Integer sets that cluster under the multiply only at some sizes,
+such as multiples of 24, 32, 48 or 96, switch at a small size and come back
+to the fast mode at a later growth whose table spreads them well; at other
+sizes they cluster again and the window switches the map back. Whether it
+succeeds or not, the attempt keeps every entry, and under separate chaining
+it keeps every reference to a key or a value, the insertion order and every
+iterator. When the allocation of a growth fails, the map keeps its table
+and its mode, as any growth does.
 .PP
 The library draws the secrets from getrandom(2) once for each process, the
 first time that the process creates a map. When the kernel cannot answer
 without blocking, the library mixes the clocks, the process id and
 randomized addresses instead. Every map of the process uses the same
 secrets for its whole life, and a child made by fork(2) keeps the secrets
-of its parent. The order of an iteration of a separate-chaining map follows
+of its parent. The iteration order of a separate-chaining map follows
 insertion and does not depend on the mode or on the secrets. An
 open-addressing map iterates in slot order, so its order depends on the
 mode, and in the keyed mode it differs from one process to the next; see
@@ -190,50 +191,48 @@ chashmap_begin_iter(3).
 .PP
 Two keys to which a custom_hashing_proc gives the same value collide in
 both modes, because no finalizer can tell them apart. A map whose keys come
-from an untrusted party through a custom hash needs a custom function that
-two such keys cannot share.
+from an untrusted party through a custom hash therefore needs a custom
+function that two such keys cannot share.
 .SH NOTES
 .PP
-A custom hash does not have to spread its own entropy. The map derives a bucket
-or slot index from the high bits of a hash, and it first passes a value that
-comes from ccol_hashing_proc_t through the finalizer of the mode of the map. A
-hash can be an identity, a counter, or a value already reduced modulo a small
-number. Such a hash still distributes well.
+A custom hash does not have to spread its own entropy. The map derives a
+bucket or slot index from the high bits of a hash, and it first passes a
+value that comes from ccol_hashing_proc_t through the finalizer of the mode
+of the map. A hash can be an identity, a counter, or a value already reduced
+modulo a small number, and it still distributes well.
 .nf
 Implementation selection:
-  - Open-addressing: Both key and value are integral types <=8 bytes,
+  - Open addressing: both key and value are integral types <=8 bytes,
     and custom_key_equality_proc is NULL
-  - Separate chaining: Either key or value is non-integral or >8 bytes,
+  - Separate chaining: either key or value is non-integral or >8 bytes,
     or custom_key_equality_proc is not NULL
 Integral types: char, short, int, long, long long (signed/unsigned),
                float, double
-Excludes long double from open-addressing (can be 10-16 bytes)
+long double is excluded from open addressing (it can be 10-16 bytes).
 Open addressing doubles the table on an insert of a new key once the
 live entries fill more than 0.70 of it, and halves it on a delete that
 leaves less than 0.25 of it live. A delete moves the later entries of
 its cluster back into the gap, so the table holds no marker for a
 deleted slot and only live entries decide a resize. A grow leaves the
-live load between 0.25 and 0.50, and a shrink leaves it below 0.50
+live load between 0.25 and 0.50, and a shrink leaves it below 0.50.
 For a float or double key_type, the map always canonicalizes a -0.0
-key to 0.0. It does this before it hashes, stores, or compares the
-key. This matches -0.0 == 0.0 in C. This is always true, also when
-custom_hashing_proc is not NULL. The custom function always gets the
-already-canonicalized bit pattern, and the map stores that
-canonicalized value.
-For a long double key_type, the map always uses separate chaining.
-Key equality and the hash use the numeric value of the key, and not
-its raw bytes. The keys -0.0L and 0.0L collide into one key, as
--0.0 and 0.0 do for float and double. Two keys that hold the same
-value stay the same key. This is also true when their
-platform-defined padding bits are different. Every NaN long double
-collapses into one key. This is different from float and double,
-where each different NaN payload is a different key.
+key to 0.0 before it hashes, stores or compares the key, which matches
+-0.0 == 0.0 in C. This is always true, also when custom_hashing_proc
+is not NULL: the custom function always gets the already-canonicalized
+bit pattern, and the map stores that canonicalized value.
+For a long double key_type, the map always uses separate chaining, and
+key equality and the hash use the numeric value of the key instead of
+its raw bytes. The keys -0.0L and 0.0L collide into one key, as -0.0
+and 0.0 do for float and double, and two keys that hold the same value
+stay the same key even when their platform-defined padding bits are
+different. Every NaN long double collapses into one key, unlike float
+and double, where each different NaN payload is a different key.
 The map does not use this value-based handling when
-custom_hashing_proc is not NULL. The custom function then gets the
-raw bytes, with the padding. This is why a custom hash function for
-a long double key type must itself use the numeric value. For
-example, it can hash the result of frexpl(3). If it does not use the
-numeric value, a lookup can miss a key that is in the map.
+custom_hashing_proc is not NULL: the custom function then gets the
+raw bytes, padding included. A custom hash function for a long double
+key type must therefore itself use the numeric value, for example by
+hashing the result of frexpl(3); otherwise a lookup can miss a key
+that is in the map.
 .fi
 .SH EXAMPLES
 .nf

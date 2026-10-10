@@ -11,38 +11,38 @@ ccol_comparison_proc_t csort_get_default_comparison_proc(dummy_var);
 .fi
 .SH DESCRIPTION
 .nf
-This macro gives the default comparison function for a given type. It uses
-C11 _Generic. The type of the dummy variable decides which comparison
+This macro gives the default comparison function for a given type through
+C11 _Generic, so the type of the dummy variable decides which comparison
 function the macro selects.
 
-The macro supports all the standard C integral types: char, signed char,
-short, int, long, long long and the unsigned variants. It supports the
-floating-point types float, double and long double. It also supports the
-string types char* and const char*, with any signed or unsigned character
-type. A pointer that is itself const or volatile, such as a
-static const char *const, is a string type too. The comparator for a string
-type puts a
-stored NULL before every string that is not NULL. That NULL is equal only to
-another NULL.
+The macro supports all the standard C integral types (char, signed char,
+short, int, long, long long and the unsigned variants), the
+floating-point types float, double and long double, and the string types
+char* and const char*, with any signed or unsigned character type. A
+pointer that is itself const or volatile, such as a
+static const char *const, is a string type too. The comparator for a
+string type puts a stored NULL before every string that is not NULL, and
+that NULL is equal only to another NULL.
 
-The macro supports an enumerated type too. C makes every enumerated type
-compatible with one of the standard integer types. The macro gives the
-comparison function of that compatible type.
+The macro supports an enumerated type too: C makes every enumerated type
+compatible with one of the standard integer types, and the macro gives
+the comparison function of that compatible type.
 
-A NULL result for an unsupported type is part of the contract of this macro.
-A caller with its own fallback depends on that result. For example, cvec_find
-compares such an element byte-wise. A caller with no fallback must refuse
-the type at compile time and not at run time. cvec_sort works in that way.
+A NULL result for an unsupported type is part of the contract of this
+macro, because a caller with its own fallback depends on that result; for
+example, cvec_find compares such an element byte-wise. A caller with no
+fallback must refuse the type at compile time rather than at run time, as
+cvec_sort does.
 
-A fixed-size char array (char[N]) is not a supported type. A char* pointer
-variable is a different thing. The macro gives NULL for such an array, as it
-does for every other unsupported type. The inline byte content of such an
-array is not a char* value. The contract of
-_csort_default_string_comparison_proc dereferences a pointer, so that
-contract does not hold for an array. Sort a collection of fixed-size string
-buffers with an explicit comparator that you write yourself. Give that
-comparator directly to cvector_sort_with_comparison_proc() or to
-csort_sort().
+A fixed-size char array (char[N]) is not a supported type, and it is a
+different thing from a char* pointer variable. The macro gives NULL for
+such an array, as it does for every other unsupported type. The inline
+byte content of such an array is not a char* value, and
+_csort_default_string_comparison_proc dereferences a pointer, so its
+contract does not hold for an array. Sort a collection of fixed-size
+string buffers with an explicit comparator that you write yourself, and
+give that comparator directly to cvector_sort_with_comparison_proc() or
+to csort_sort().
 .fi
 .SH PARAMETERS
 .nf
@@ -56,23 +56,23 @@ Gives NULL when the macro does not support the type
 .fi
 .SH NOTES
 .nf
-The macro uses the variable only to find the type. It does not evaluate
-the variable. dummy_var can be any expression of the type that you want to
-compare. An rvalue such as a cast or a literal is therefore legal. The
+The macro uses the variable only to find the type and does not evaluate
+it, so dummy_var can be any expression of the type that you want to
+compare: an rvalue such as a cast or a literal is legal, and the
 expression does not need an address.
 For a real char* or const char* pointer variable, the macro gives
 _csort_default_string_comparison_proc. That includes a pointer variable
 that is itself const or volatile
-For a fixed-size char array (char[N]), the macro gives NULL. It does not
-give _csort_default_string_comparison_proc.
+For a fixed-size char array (char[N]), the macro gives NULL, not
+_csort_default_string_comparison_proc.
 For an enumerated type, the macro gives the comparison function of the
 standard integer type that is compatible with that enumerated type
 For an integral type, the comparison is three-way: (a > b) - (a < b)
 For a floating-point type (float, double or long double), a NaN operand is
-greater than every value that is not NaN. It is equal only to another NaN.
-The result is therefore always a real total order.
-Every default comparator reads its two operands byte-wise. An operand
-address therefore needs neither the alignment nor the effective type of the
+greater than every value that is not NaN and equal only to another NaN,
+so the result is always a real total order.
+Every default comparator reads its two operands byte-wise, so an operand
+address needs neither the alignment nor the effective type of the
 element, which matters for a custom getter over a packed buffer.
 .fi
 .SH EXAMPLES

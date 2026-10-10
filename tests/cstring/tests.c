@@ -373,8 +373,8 @@ TEST(cstrings, set_null) {
 }
 
 TEST(cstrings, set_self_alias_no_realloc) {
-  // "hello" fits in the smallest capacity, which is 16. This is why
-  // set(s, c_str(s)) must not realloc. The content must not change.
+  // "hello" fits in the smallest capacity, which is 16, so
+  // set(s, c_str(s)) must not realloc, and the content must not change.
   cstr s = cstring_create("hello", NULL);
   REQUIRE_EQ(cstring_get_capacity(s), (size_t)CSTRING_MIN_CAPACITY);
   ccol_retval_t rv = cstring_set(s, cstring_c_str(s));
@@ -388,7 +388,7 @@ TEST(cstrings, set_self_alias_full_length_no_realloc) {
   // A 16-char string gets init_cap = next_pow2(17) = 32. A set of that
   // string to itself asks for a capacity of 17, which the string already
   // has, so there is no realloc. This test drives the self-alias path
-  // without a realloc. Its string is longer than the one in
+  // without a realloc, using a string longer than the one in
   // set_self_alias_no_realloc.
   cstr s = cstring_create("1234567890123456", NULL);
   REQUIRE_EQ(cstring_length(s), (size_t)16);
@@ -400,10 +400,10 @@ TEST(cstrings, set_self_alias_full_length_no_realloc) {
 }
 
 TEST(cstrings, set_suffix_alias_no_realloc) {
-  // A suffix of s->data always has str_len < s->length < s->capacity. No
+  // A suffix of s->data always has str_len < s->length < s->capacity, so no
   // realloc can happen here. This test drives the path that tracks the
-  // alias offset. On that path the code must compute the internal pointer
-  // again after grow_to, and grow_to does nothing in this case.
+  // alias offset, where the code must compute the internal pointer
+  // again after grow_to, which does nothing in this case.
   cstr s = cstring_create("1234567890123456", NULL);
   // cstring_c_str(s) + 6 points to "7890123456"
   ccol_retval_t rv = cstring_set(s, cstring_c_str(s) + 6);
@@ -447,9 +447,9 @@ TEST(cstrings, reset_then_reuse) {
   cstring_destroy(s);
 }
 
-// An allocator that counts the realloc calls. It is not the same as the
-// budget-style out-of-memory allocator further below. This one always gives
-// the work to the real allocator. Its only purpose is to let a test assert
+// An allocator that counts the realloc calls. Unlike the
+// budget-style out-of-memory allocator further below, this one always
+// delegates to the real allocator; its only purpose is to let a test assert
 // on the number of calls to realloc().
 static int g_cstr_realloc_call_count = 0;
 static void *_cstr_counting_realloc(void *ptr, size_t size) {
@@ -463,12 +463,12 @@ static ccol_memmgmt_procs_t g_cstr_counting_procs = {
     .free = free};
 
 // cstring_reset() must make no realloc() call when the string is already at
-// the smallest capacity. There is nothing to shrink in that case. This is
+// the smallest capacity, since there is nothing to shrink then. This is
 // the common case, because a new string and a string after a reset are both
 // at that capacity. A check of the resulting capacity alone cannot tell
 // "the code skipped the call" from "the code made the call and the call did
-// nothing". The tests reset_clears_content and reset_shrinks_capacity above
-// make only that check. This test asserts on the real call count instead.
+// nothing", and the tests reset_clears_content and reset_shrinks_capacity
+// above make only that check, so this test asserts on the real call count.
 TEST(cstrings, reset_at_minimum_capacity_skips_realloc) {
   cstr s = cstring_create_full(NULL, &g_cstr_counting_procs, NULL);
   REQUIRE_NE((void *)s, NULL);
@@ -484,7 +484,7 @@ TEST(cstrings, reset_at_minimum_capacity_skips_realloc) {
   cstring_destroy(s);
 }
 
-// This test is the converse of the one above. A string that grew past the
+// This test is the converse of the one above: a string that grew past the
 // smallest capacity must shrink back with exactly one realloc() call.
 TEST(cstrings, reset_above_minimum_capacity_still_reallocs_once) {
   cstr s = cstring_create_full(NULL, &g_cstr_counting_procs, NULL);
@@ -869,9 +869,9 @@ TEST(cstrings, find_empty_needle) {
 }
 
 TEST(cstrings, rfind_empty_needle) {
-  // An empty needle has no last occurrence with a clear meaning. The
-  // library returns s->length, which is the past-the-end position. This is
-  // the same behaviour as the one in C++.
+  // An empty needle has no last occurrence with a clear meaning, so the
+  // library returns s->length, the past-the-end position, which is
+  // the same behaviour as in C++.
   cstr s = cstring_create("hello", NULL);
   REQUIRE_EQ(cstring_rfind(s, ""), cstring_length(s));
   cstring_destroy(s);
@@ -945,15 +945,15 @@ TEST(cstrings, replace_entire_string) {
 
 // ------------------------------------------------------------------------
 // The tests below drive the ccol_container_full overflow guards of
-// cstring_replace(). They call cstring_replace_compute_new_length_for_tests()
-// and not cstring_replace() itself. To reach either overflow condition
-// through the real API, a test needs real strings of several gigabytes. One
-// such string is a source string of several gigabytes that holds one
-// character many times. The test also needs a replacement string of several
-// gigabytes. This is not practical for a normal test run. These tests drive
-// the same arithmetic that cstring_replace() runs. That arithmetic is in
-// compute_replace_new_length() in cstring.c. They give it invented values
-// for the length and the count, and no real memory behind them.
+// cstring_replace() through cstring_replace_compute_new_length_for_tests()
+// rather than cstring_replace() itself, because reaching either overflow
+// condition through the real API needs real strings of several gigabytes:
+// a source string of several gigabytes that holds one
+// character many times, plus a replacement string of several
+// gigabytes, which is not practical for a normal test run. These tests drive
+// the same arithmetic that cstring_replace() runs, which is in
+// compute_replace_new_length() in cstring.c, giving it invented values
+// for the length and the count, with no real memory behind them.
 // ------------------------------------------------------------------------
 
 TEST(cstrings, replace_new_length_normal_growth_case) {
@@ -988,7 +988,7 @@ TEST(cstrings, replace_new_length_multiplication_overflow_detected) {
 }
 
 TEST(cstrings, replace_new_length_addition_overflow_detected) {
-  // The value added does not overflow, because it is 1. The sum
+  // The value added does not overflow, because it is 1, but the sum
   // orig_length + added does overflow.
   size_t new_len = 12345;  // sentinel. The call must not touch it on failure
   ccol_retval_t rv =
@@ -997,11 +997,11 @@ TEST(cstrings, replace_new_length_addition_overflow_detected) {
   REQUIRE_EQ(new_len, (size_t)12345);
 }
 
-// This test is not the same as replace_new_length_addition_overflow_detected
-// above. Here orig_length + added lands on exactly SIZE_MAX, and it never
-// goes below orig_length. The wraparound check "new_len < orig_length" alone
-// therefore does NOT catch it. This is the case that
-// cstring_length_fits_with_terminator() exists to reject. The caller of
+// This test differs from replace_new_length_addition_overflow_detected
+// above: here orig_length + added lands on exactly SIZE_MAX and never
+// goes below orig_length, so the wraparound check "new_len < orig_length"
+// alone does NOT catch it. This is the case that
+// cstring_length_fits_with_terminator() exists to reject: the caller of
 // cstring_replace() still adds 1 to new_len for the null terminator before
 // it uses that value as a capacity.
 TEST(cstrings, replace_new_length_result_exactly_size_max_detected) {
@@ -1014,7 +1014,7 @@ TEST(cstrings, replace_new_length_result_exactly_size_max_detected) {
 
 // The guard below protects against a wraparound of a size_t. Every function
 // that changes a string goes through it before it asks for a buffer of
-// length + 1 bytes. Those functions are append, prepend, insert, set and
+// length + 1 bytes: append, prepend, insert, set and
 // create_full. The length arithmetic of cstring_replace() goes through the
 // same guard. This test drives the guard directly, because a test that goes
 // through the public API needs a string that fills the full address space.
@@ -1506,16 +1506,16 @@ TEST(cstrings, many_appends_correctness) {
 
 // ========================================================================
 // SELF-ALIAS TESTS (use-after-realloc and overlapping-copy hazards)
-// A string of 9 characters or more makes sure that the doubled length goes
-// past the smallest capacity of 16 bytes. This forces a realloc, so these
+// A string of 9 characters or more makes the doubled length go
+// past the smallest capacity of 16 bytes, which forces a realloc, so these
 // tests drive those hazards.
 // ========================================================================
 
 TEST(cstrings, append_self_alias_triggers_realloc) {
-  // "123456789" has len=9. An append of the string to itself gives
+  // "123456789" has len=9. Appending the string to itself gives
   // "123456789123456789" with len=18. Because 18+1 > 16, cstring_grow_to
-  // must realloc. The code must then compute str again against the new
-  // buffer. Without that step, str dangles.
+  // must realloc, and the code must then compute str again against the new
+  // buffer; without that step, str dangles.
   cstr_construct(s, "123456789");
   REQUIRE_EQ(cstring_get_capacity(s), (size_t)CSTRING_MIN_CAPACITY);
   ccol_retval_t rv = cstring_append(s, cstring_c_str(s));
@@ -1542,8 +1542,8 @@ TEST(cstrings, append_self_alias_no_realloc) {
   // "hello" has 5 chars and a capacity of 16. An append of the string to
   // itself gives "hellohello", which has 10 chars, and grow_to(11) <= 16
   // does nothing. This test drives the path with alias_off==0 and no
-  // realloc. The memcpy is safe here, because dst starts at s->length and
-  // src ends at s->length-1. The two regions do not overlap.
+  // realloc. The memcpy is safe here because dst starts at s->length and
+  // src ends at s->length-1, so the two regions do not overlap.
   cstr_construct(s, "hello");
   REQUIRE_EQ(cstring_get_capacity(s), (size_t)CSTRING_MIN_CAPACITY);
   ccol_retval_t rv = cstring_append(s, cstring_c_str(s));
@@ -1566,7 +1566,7 @@ TEST(cstrings, prepend_self_alias_triggers_realloc) {
 TEST(cstrings, prepend_suffix_alias_no_realloc) {
   // The 9-char source has a capacity of 16. A prepend of the 5-char suffix
   // "56789" gives 14 chars, which fits without a realloc. This test drives
-  // the path with alias_off > 0 and no reallocation. That path makes a
+  // the path with alias_off > 0 and no reallocation, which makes a
   // second correction of the pointer after the memmove.
   cstr_construct(s, "123456789");
   ccol_retval_t rv = cstring_prepend(s, cstring_c_str(s) + 4);
@@ -1580,8 +1580,8 @@ TEST(cstrings, prepend_self_alias_no_realloc) {
   // itself gives "hellohello", which has 10 chars, and grow_to(11) <= 16
   // does nothing. This test drives the path with alias_off==0 and no
   // realloc. The final memmove(s->data, s->data, 5) copies with one pointer
-  // for both sides, and memmove handles that safely. The memmove before it
-  // already moved the content to the right, so the positions 0..4 still
+  // for both sides, which memmove handles safely. The memmove before it
+  // has already moved the content to the right, so the positions 0..4 still
   // hold the correct prefix.
   cstr_construct(s, "hello");
   REQUIRE_EQ(cstring_get_capacity(s), (size_t)CSTRING_MIN_CAPACITY);
@@ -1607,7 +1607,7 @@ TEST(cstrings, insert_alias_after_pos_no_realloc) {
   // gives "12567893456789". The 9-char source has a capacity of 16. An
   // insert of 5 chars gives 14 chars, and grow_to(15) <= 16 does nothing.
   // Here alias_off is 4 and pos is 2, so alias_off > pos. The first memmove
-  // moves the source to the right by str_len, which is 5. The code must
+  // moves the source to the right by str_len, which is 5, so the code must
   // then compute the pointer again. This test drives that second correction
   // without a reallocation.
   cstr_construct(s, "123456789");
@@ -1619,9 +1619,9 @@ TEST(cstrings, insert_alias_after_pos_no_realloc) {
 
 TEST(cstrings, insert_alias_overlapping_dst_gt_src) {
   // The string is "abcde". The test inserts s->data+1, which is "bcde", at
-  // pos 3. Here alias_off=1 <= pos=3 and str_len=4. After the memmove, the
+  // pos 3. Here alias_off=1 <= pos=3 and str_len=4, so after the memmove the
   // source of the copy overlaps the destination with dst > src. A memcpy
-  // copies forward, so it corrupts the result. The code needs a memmove,
+  // copies forward, so it would corrupt the result; the code needs a memmove,
   // which is safe with an overlap. The expected result is
   // "abc" + "bcde" + "de" = "abcbcdede".
   cstr_construct(s, "abcde");
@@ -1647,16 +1647,16 @@ TEST(cstrings, insert_self_alias_at_nonzero_pos_no_realloc) {
 }
 
 // Every other test above that combines an alias with a realloc uses
-// alias_off == 0, where the alias covers the whole string. Every other test
-// with an alias offset that is not zero stays inside the current capacity,
-// so grow_to() makes no reallocation there. This test combines the two: an
-// alias offset that is not zero AND a real move of the buffer. That is the
-// exact case that the second computation of str after grow_to() exists for,
-// because grow_to() can move the buffer.
+// alias_off == 0, where the alias covers the whole string, and every other
+// test with an alias offset that is not zero stays inside the current
+// capacity, so grow_to() makes no reallocation there. This test combines
+// the two: an alias offset that is not zero AND a real move of the buffer.
+// That is the exact case that the second computation of str after grow_to()
+// exists for, because grow_to() can move the buffer.
 TEST(cstrings, prepend_alias_offset_nonzero_triggers_realloc) {
-  // A 20-char base gives init_cap = next_pow2(21) = 32. A prepend of its
+  // A 20-char base gives init_cap = next_pow2(21) = 32. Prepending its
   // own suffix at offset 5, which has 15 chars, grows the string to 35
-  // bytes. That forces a real realloc, and the new capacity is 64. The
+  // bytes, which forces a real realloc to a new capacity of 64. The
   // value of alias_off is 5 here, which is not zero.
   const char *base = "12345678901234567890";
   char expected[64];
@@ -1678,11 +1678,11 @@ TEST(cstrings, prepend_alias_offset_nonzero_triggers_realloc) {
 }
 
 // This test uses the same combination as
-// prepend_alias_offset_nonzero_triggers_realloc above. It uses
+// prepend_alias_offset_nonzero_triggers_realloc above, but with
 // cstring_insert() and a pos that is not zero. Here alias_off is 5 and pos
-// is 3, so alias_off > pos. This test therefore also drives the branch that
+// is 3, so alias_off > pos, and the test also drives the branch that
 // makes the second correction of the pointer after the first memmove moves
-// the source to the right. It does so together with a real reallocation.
+// the source to the right, together with a real reallocation.
 TEST(cstrings, insert_alias_offset_nonzero_triggers_realloc) {
   const char *base = "12345678901234567890";  // 20 chars, capacity 32
   const char *inserted = base + 5;            // "678901234567890", 15 chars
@@ -1710,14 +1710,14 @@ TEST(cstrings, insert_alias_offset_nonzero_triggers_realloc) {
 }
 
 // This test is the converse of insert_alias_offset_nonzero_triggers_realloc
-// above. Here alias_off is 2 and pos is 10, so alias_off < pos, and there is
+// above: here alias_off is 2 and pos is 10, so alias_off < pos, and there is
 // a real reallocation. The second correction of the pointer in
-// cstring_insert() runs only when `alias_off > pos`. The reason is that the
+// cstring_insert() runs only when `alias_off > pos`, because the
 // first memmove provably never touches the region
-// [alias_off, alias_off+str_len) when alias_off <= pos. The comment on that
+// [alias_off, alias_off+str_len) when alias_off <= pos; the comment on that
 // memmove in cstring.c gives the proof. This test pins that the path
-// without a correction is still correct when grow_to() moves the buffer. It
-// is not enough to test it when the buffer is already large enough.
+// without a correction is still correct when grow_to() moves the buffer,
+// not only when the buffer is already large enough.
 TEST(cstrings, insert_alias_offset_less_than_pos_triggers_realloc) {
   const char *base = "12345678901234567890";  // 20 chars, capacity 32
   const char *inserted = base + 2;            // "345678901234567890", 18 chars
@@ -1744,16 +1744,16 @@ TEST(cstrings, insert_alias_offset_less_than_pos_triggers_realloc) {
   cstring_destroy(s);
 }
 
-// This test covers the exact boundary between the two combinations above.
-// Here alias_off == pos, and there is a real reallocation. The second
-// correction in cstring_insert() uses the condition `> pos` and not
-// `>= pos`, so it excludes this case on purpose. The region
+// This test covers the exact boundary between the two combinations above:
+// alias_off == pos, with a real reallocation. The second
+// correction in cstring_insert() uses the condition `> pos` rather than
+// `>= pos`, so it deliberately excludes this case. The region
 // [alias_off, alias_off+str_len) == [pos, pos+str_len) sits exactly at the
-// boundary of the shift of the first memmove. That shift therefore never
-// touches the region, and this is true whether or not grow_to() moved the
+// boundary of the shift of the first memmove, so that shift never
+// touches the region, whether or not grow_to() moved the
 // buffer. The test insert_self_alias_at_nonzero_pos_no_realloc, in the
 // INSERT section above, already covers this alias_off == pos boundary for
-// an alias_off of 0. This test covers it for an alias_off that is not zero,
+// an alias_off of 0; this test covers it for an alias_off that is not zero,
 // together with a real reallocation, which that test does not drive.
 TEST(cstrings, insert_alias_offset_equal_to_pos_triggers_realloc) {
   const char *base = "12345678901234567890";  // 20 chars, capacity 32
@@ -1783,10 +1783,10 @@ TEST(cstrings, insert_alias_offset_equal_to_pos_triggers_realloc) {
 
 // The test set_self_alias_full_length_no_realloc, in the SET section above,
 // already checks that the resulting content is correct. This test checks the
-// "no realloc" half of the comment on that test. It does so with an
-// assertion on the real call count. The test
-// reset_at_minimum_capacity_skips_realloc uses the same counting allocator
-// for the same kind of claim.
+// "no realloc" half of the comment on that test with an
+// assertion on the real call count, as the test
+// reset_at_minimum_capacity_skips_realloc does, with the same counting
+// allocator, for the same kind of claim.
 TEST(cstrings, set_self_alias_no_realloc_verified_by_call_count) {
   cstr s =
       cstring_create_full("1234567890123456", &g_cstr_counting_procs, NULL);
@@ -1876,7 +1876,7 @@ TEST(cstrings, replace_needle_equals_replacement) {
 }
 
 TEST(cstrings, replace_with_self_as_replacement) {
-  // cstring_c_str(s) is a safe replacement argument here. The loop that
+  // cstring_c_str(s) is a safe replacement argument here: the loop that
   // builds the result reads the replacement bytes before the code frees the
   // old buffer.
   cstr s = cstring_create("axb", NULL);
@@ -1902,14 +1902,14 @@ TEST(cstrings, substring_macro) {
 // ========================================================================
 
 // cstr_insert must not name its internal retval plain '_r'. A caller can
-// name its own pos argument '_r'. That argument then binds to the
-// not-yet-initialized local of the macro and not to the real value of the
-// caller, and nothing reports it. The declarator-scope rule of C is the
-// reason. A ccol_retval_t also converts to a size_t on its own, and no
+// name its own pos argument '_r', and that argument then binds to the
+// not-yet-initialized local of the macro instead of the real value of the
+// caller, and nothing reports it, because of the declarator-scope rule
+// of C. A ccol_retval_t also converts to a size_t on its own, and no
 // compiler must report that. This test is non-vacuous: give the internal
-// local the plain name '_r' and the test fails. It fails either with a
-// wrong position for the insert or with a false ccol_invalid_args. Which
-// one it is depends on the garbage value in the uninitialized enum.
+// local the plain name '_r' and the test fails, either with a
+// wrong position for the insert or with a false ccol_invalid_args, depending
+// on the garbage value in the uninitialized enum.
 TEST(cstrings, insert_macro_pos_argument_named__r_is_not_shadowed) {
   cstr_construct(s, "hello");
   size_t _r = 2;
@@ -1922,22 +1922,22 @@ TEST(cstrings, insert_macro_pos_argument_named__r_is_not_shadowed) {
 // FATAL / NULL-ARGUMENT TESTS
 //
 // The documentation of this module says that a NULL cstr makes a function
-// assert. The function then aborts with ccol_assert. This holds for every
+// assert, so the function aborts with ccol_assert. This holds for every
 // function in the module that queries, changes or searches a string, and
-// for the substring function. Each test below runs in its own forked child.
-// The abort of the assert therefore does not take down the whole test
+// for the substring function. Each test below runs in its own forked child,
+// so the abort of the assert does not take down the whole test
 // binary. The parent then confirms that the child died with SIGABRT, and
-// not with a plain exit or some other crash. Without a NULL guard, the
+// not with a plain exit or some other crash; without a NULL guard, the
 // child dies with a SIGSEGV from a dereference of NULL instead. This
-// fork+SIGABRT pattern is common in this codebase. One other user of it is
+// fork+SIGABRT pattern is common in this codebase; one other user of it is
 // type_safe_at_out_of_bounds_is_fatal in tests/cvector.
 // ========================================================================
 
-/* Returns false and does not touch *out_status when fork() or waitpid()
- * fails. The caller can then tell that case apart from a real test failure,
- * where the child is WIFSIGNALED but the signal is not SIGABRT. This
- * function cannot use REQUIRE_*, because those macros end in a bare
- * `return;`. That fits a void TEST body only, and this helper returns an
+/* Returns false, without touching *out_status, when fork() or waitpid()
+ * fails, so that the caller can tell that case apart from a real test
+ * failure, where the child is WIFSIGNALED but the signal is not SIGABRT.
+ * This function cannot use REQUIRE_*, because those macros end in a bare
+ * `return;`, which fits only a void TEST body, while this helper returns an
  * int. */
 static bool run_forked(void (*fn)(void), int *out_status) {
   pid_t pid = fork();
@@ -2002,8 +2002,8 @@ DEFINE_NULL_ARG_FATAL_TEST(null_copy_is_fatal, (void)cstring_copy(NULL, NULL))
 DEFINE_NULL_ARG_FATAL_TEST(null_split_is_fatal,
                            (void)cstring_split(NULL, ",", NULL))
 // cstring_get_mprocs needs a NULL guard of its own. Without that guard it
-// segfaults, which gives WIFSIGNALED + SIGSEGV, and it does not assert,
-// which gives WIFSIGNALED + SIGABRT. That behaviour differs from the rest
+// segfaults, which gives WIFSIGNALED + SIGSEGV, instead of asserting,
+// which gives WIFSIGNALED + SIGABRT, unlike the rest
 // of this module.
 DEFINE_NULL_ARG_FATAL_TEST(null_get_mprocs_is_fatal,
                            (void)cstring_get_mprocs(NULL))
@@ -2012,16 +2012,16 @@ DEFINE_NULL_ARG_FATAL_TEST(null_get_mprocs_is_fatal,
 // OUT OF MEMORY / ALLOCATOR FAILURE TESTS
 //
 // A counting allocator with a budget. The first g_cstr_oom_budget calls to
-// malloc, calloc and realloc succeed, and they give the work to the real
-// allocator. Every call after the budget runs out returns NULL. free()
-// always gives the work to the real free(), and the budget never covers it.
-// Every cleanup path under test therefore still frees correctly whatever a
+// malloc, calloc and realloc succeed and delegate to the real
+// allocator; every call after the budget runs out returns NULL. free()
+// always delegates to the real free(), and the budget never covers it,
+// so every cleanup path under test still frees correctly whatever a
 // call did allocate.
 //
-// The budgets below are exact allocation counts and not estimates.
+// The budgets below are exact allocation counts, not estimates.
 // cstring_create_full() always costs exactly 3 calls: 1 calloc for the
 // container, then 1 malloc for the copy of the mprocs, then 1 malloc for
-// the data buffer. This holds for any first content that fits in the
+// the data buffer, for any first content that fits in the
 // smallest capacity of 16 bytes. A grow_to() that really reallocates costs
 // exactly 1 more realloc call. cvector_create_full(sizeof(cstr)) costs the
 // same 3 calls, and cstring_split uses it internally.
@@ -2280,11 +2280,11 @@ TEST(cstrings, split_oom_mid_loop_token_creation_fails) {
   cstr s = cstring_create_full("a,b,c", &g_cstr_oom_procs, &err);
   REQUIRE_NE((void *)s, NULL);
 
-  // The budget covers the vector, which is 3 calls, and the first token "a",
-  // which is 3 more calls. The container calloc of the second token "b",
+  // The budget covers the vector (3 calls) and the first token "a"
+  // (3 more calls), so the container calloc of the second token "b",
   // which is the 7th call, must fail. The split must return NULL, and
-  // destroy_cstr_vector() must already have destroyed the first token. That
-  // token must not leak. `make memtest` catches a regression there.
+  // destroy_cstr_vector() must already have destroyed the first token, which
+  // must not leak; `make memtest` catches a regression there.
   g_cstr_oom_budget = 6;
   char *split_err = NULL;
   cvec parts = cstring_split(s, ",", &split_err);
@@ -2371,9 +2371,9 @@ TEST(cstrings, split_oom_budget_exactly_sufficient_succeeds) {
 }
 
 // The documentation of cstring_reset() says what happens when the internal
-// realloc that shrinks the buffer fails. The capacity of the buffer does not
-// change, and the function still sets the length to 0. The function does not
-// lose the content and it does not crash.
+// realloc that shrinks the buffer fails: the capacity of the buffer does not
+// change, and the function still sets the length to 0, without losing
+// the content or crashing.
 TEST(cstrings, reset_realloc_failure_leaves_capacity_unchanged) {
   char *err = NULL;
   g_cstr_oom_budget = 1000000;

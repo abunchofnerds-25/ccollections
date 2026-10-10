@@ -11,13 +11,13 @@ size_t cyaml_dictionary_size(cyaml node);
 .fi
 .SH DESCRIPTION
 .nf
-Return the number of key-value pairs in the CYAML_DICTIONARY node.  This
-function calls ccol_fatal_err() when node is NULL.  It also calls
-ccol_fatal_err() when the type of node is not CYAML_DICTIONARY.
+Return the number of key-value pairs in the CYAML_DICTIONARY node.  The
+function calls ccol_fatal_err() when node is NULL, and it calls
+ccol_fatal_err() as well when node is not of type CYAML_DICTIONARY.
 .fi
 .SH RETURN VALUE
 .nf
-Key count.  It is 0 for an empty dictionary.
+The key count, which is 0 for an empty dictionary.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_dictionary_first (3),

@@ -11,24 +11,24 @@ chmap_construct_ch(hm_name, key_t, val_t, custom_hashing_proc);
 .fi
 .SH DESCRIPTION
 .nf
-Declares a hash map handle named hm_name. It also declares the companion
-type variables. These variables carry key_t and val_t to every later
-type-inferred macro. The macro then creates a map that hashes its keys with
-custom_hashing_proc, and not with the map's own hashing for key_t.
+Declares a hash map handle named hm_name, together with the companion
+type variables that carry key_t and val_t to every later type-inferred
+macro. The macro then creates a map that hashes its keys with
+custom_hashing_proc instead of with the map's own hashing for key_t.
 
-This macro is chmap_construct(3) plus a hashing procedure. It uses the
-default allocator. chmap_construct_mp(3) replaces the allocator instead,
-and chmap_construct_full(3) takes both. chmap_construct_ch_scoped(3) is
-the same macro with a cleanup attribute that destroys the map at scope
-exit.
+This macro is chmap_construct(3) plus a hashing procedure, and it uses
+the default allocator. chmap_construct_mp(3) replaces the allocator
+instead, and chmap_construct_full(3) takes both.
+chmap_construct_ch_scoped(3) is the same macro with a cleanup attribute
+that destroys the map at scope exit.
 
-A custom procedure changes only how the map turns a key into a number. It
-does not change which implementation strategy the map picks from key_t and
-val_t. It also does not change which keys the map considers equal.
+A custom procedure changes only how the map turns a key into a number.
+It changes neither the implementation strategy that the map picks from
+key_t and val_t nor which keys the map considers equal.
 
-chmap_declare(3) and then chmap_init_ch(3) is the two-step form. Use the
-two-step form when the caller must handle a creation failure instead of
-the failure being fatal.
+chmap_declare(3) followed by chmap_init_ch(3) is the two-step form; use
+it when the caller must handle a creation failure instead of the
+failure being fatal.
 .fi
 .SH PARAMETERS
 .nf
@@ -46,36 +46,36 @@ None. This macro declares variables and does not expand to an expression.
 .fi
 .SH "CUSTOM HASHING"
 .nf
-A custom procedure gets a pointer to the key bytes and their length. It
-returns an unsigned long. It must return the same value for two keys that
-the map considers equal. For a char * key, equal means equal contents and
-not an equal pointer. For a fixed-width key type, the length is the map's
-own fixed key width. For a string or other buffer-like key, the length is
-the byte length that the caller gave. The procedure can therefore always
-hash exactly that number of bytes. It needs no NUL terminator and no length
-prefix of its own.
+A custom procedure receives a pointer to the key bytes and their length,
+and returns an unsigned long. It must return the same value for two keys
+that the map considers equal; for a char * key, equal means equal
+contents, not an equal pointer. For a fixed-width key type, the length is
+the map's own fixed key width, and for a string or other buffer-like key
+it is the byte length that the caller gave. The procedure can therefore
+always hash exactly that number of bytes, and needs no NUL terminator and
+no length prefix of its own.
 
-The return value does not need to avalanche. The map finalizes the value
-that a custom procedure returns with its own bit-mixing step. It does this
+The return value does not need to avalanche, because the map finalizes
+the value that a custom procedure returns with its own bit-mixing step
 before it reduces the value to a slot or a bucket. A procedure that puts
-all of its entropy in the low bits therefore still spreads across the
-table. Examples are a sum, a small identifier and a truncated checksum.
-The contract is only
-"any function of the key that respects the map's notion of key equality".
-There is no rule about which end of the result carries the entropy.
+all of its entropy in the low bits, such as a sum, a small identifier or
+a truncated checksum, therefore still spreads across the table. The
+contract is only
+"any function of the key that respects the map's notion of key equality";
+there is no rule about which end of the result carries the entropy.
 .fi
 .SH NOTES
 .nf
 Stops the program through ccol_fatal_err() if the creation fails
 Uses the default allocator and CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16)
 buckets
-The map canonicalizes a float or double key before the procedure sees it.
-A custom procedure therefore never gets a raw -0.0
+The map canonicalizes a float or double key before the procedure sees it,
+so a custom procedure never gets a raw -0.0
 A long double key is the one case where a custom procedure changes key
-handling. chmap_create_full(3) states what such a procedure has to do
+handling; chmap_create_full(3) states what such a procedure has to do
 The procedure must stay callable for the whole life of the map
 chmap_destroy(3) destroys the map. The companion type variables follow the
-scope of the handle, so a function that gets the handle needs
+scope of the handle, so a function that receives the handle needs
 chmap_redeclare(3) there
 .fi
 .SH EXAMPLES

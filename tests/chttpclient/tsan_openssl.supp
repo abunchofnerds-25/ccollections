@@ -8,8 +8,9 @@
 # The report is always the same shape: ASN1_STRING_cmp reads a heap block
 # that ASN1_STRING_set concurrently writes, the block allocated through
 # CRYPTO_malloc, with every frame that touches it inside libcrypto.so.3.
-# Every concurrent handshake still completes and verifies correctly; what
-# the detector reports is the access pattern, not a handshake failure.
+# In spite of the report, every concurrent handshake completes and verifies
+# correctly: what the detector reports is the access pattern, not a handshake
+# failure.
 #
 # The race is libcrypto's own, not this project's. A standalone program that
 # links nothing but libssl and libcrypto, and runs eight concurrent

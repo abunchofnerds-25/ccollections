@@ -15,30 +15,30 @@ ccol_retval_t chttpsvr_router_on_stream(chttpsvr_router *router,
 .fi
 .SH DESCRIPTION
 .nf
-This function works like chttpsvr_register_streaming_handler, but it
-registers the route on a sub-router.  Every rule that
-chttpsvr_register_streaming_handler gives for a pattern applies here
-too.  pattern must start with '/'.  A {name} segment must hold only
-[A-Za-z0-9_].  The same {name} must not appear more than once.  This
-function also supports CHTTP_ANY as the method argument.  The handler
-runs on the streaming pool of the server, exactly as a handler of
-chttpsvr_register_streaming_handler does.
+Works like chttpsvr_register_streaming_handler, but registers the
+route on a sub-router.  Every pattern rule that
+chttpsvr_register_streaming_handler gives applies here as well:
+pattern must start with '/', a {name} segment must contain only
+[A-Za-z0-9_], and the same {name} must not appear more than once.
+CHTTP_ANY is also supported as the method argument.  The handler runs
+on the streaming pool of the server, exactly like a handler registered
+with chttpsvr_register_streaming_handler.
 
-This function first checks that nothing destroyed the server that owns
-router.  That check also covers a concurrent destroy from another
-thread.  A call that races a chttpsvr_destroy of the owning server
-returns ccol_invalid_args, and touches no freed memory.
+This function first checks that the server that owns router has not
+been destroyed, and the check also covers a concurrent destroy from
+another thread: a call that races a chttpsvr_destroy of the owning
+server returns ccol_invalid_args and touches no freed memory.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success on success.
 ccol_invalid_args when router, pattern or fn is NULL; when pattern
                   does not start with '/'; when pattern has two
-                  slashes together or a slash at the end; when a
-                  {name} segment has a character outside
+                  consecutive slashes or a trailing slash; when a
+                  {name} segment contains a character outside
                   [A-Za-z0-9_]; when the same {name} appears more than
-                  once; or when something destroyed the server that
-                  owns router.
+                  once; or when the server that owns router has been
+                  destroyed.
 ccol_not_enough_memory when an allocation fails.
 .fi
 .SH "SEE ALSO"

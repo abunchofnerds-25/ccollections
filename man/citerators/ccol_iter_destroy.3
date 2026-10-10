@@ -11,14 +11,14 @@ ccol_iter_destroy(it);
 .fi
 .SH DESCRIPTION
 .nf
-This macro destroys the iterator. It calls the _free_fn callback of the
-iterator, and it then sets it to NULL. Use this macro to free the iterator
-at the point where your own for loop breaks out. The iterator then does not
-stay alive until the end of the scope.
+This macro destroys the iterator: it calls the _free_fn callback of the
+iterator and then sets it to NULL. Use this macro to free the iterator at
+the point where your own for loop breaks out, so that the iterator does
+not stay alive until the end of the scope.
 
 With ccol_iter_declare(), the RAII cleanup destroys the iterator
-automatically at the end of the scope. You need ccol_iter_destroy() only
-when you must free the resources before the end of that scope. Inside
+automatically at the end of the scope, so you need ccol_iter_destroy()
+only when you must free the resources before the end of that scope. Inside
 ccol_for_each(), the macro always destroys the iterator at the exit.
 .fi
 .SH PARAMETERS
@@ -27,8 +27,8 @@ it   Iterator variable that ccol_iter_declare() declares.
 .fi
 .SH NOTES
 .nf
-A call is safe when it is NULL already. The macro then does nothing.
-After this call, it is NULL. Do not use it again.
+A call is safe when it is NULL already; the macro then does nothing.
+After this call, it is NULL, so do not use it again.
 
 The macro evaluates it exactly once. It must be a modifiable lvalue,
 such as a variable or an element of an array.

@@ -7,38 +7,39 @@
 #      archive defines. A symbol without a prefix can collide with a symbol of
 #      the same name in the application, or the application can interpose it.
 #      The script reads both shipped artifacts, because -fvisibility=hidden
-#      makes the two disagree. A helper that stays out of the dynamic symbol
-#      table of the shared object is still GLOBAL in the archive, and only
-#      HIDDEN. A static link resolves it in the same way as an exported symbol.
-#      An application that defines its own symbol of that name therefore fails
-#      to link as soon as the link pulls that member in.
+#      makes the two disagree: a helper that stays out of the dynamic symbol
+#      table of the shared object is still GLOBAL in the archive, only HIDDEN,
+#      and a static link resolves it in the same way as an exported symbol. An
+#      application that defines its own symbol of that name therefore fails to
+#      link as soon as the link pulls that member in.
 #   2. The public macros and typedefs in the installed headers. These are
-#      worse. A macro rewrites the text of any application code that uses that
-#      name. An application with its own log_info() or mutex_t therefore breaks
-#      only because it includes one of our headers.
+#      worse, because a macro rewrites the text of any application code that
+#      uses that name, so an application with its own log_info() or mutex_t
+#      breaks only because it includes one of our headers.
 #   3. The enum enumerators, the struct, union and enum tags, and the typedef
-#      names in the installed headers. These go into the ordinary identifier name space and
-#      the tag name space of the application. A program that uses one of those
-#      names for its own purpose therefore fails to COMPILE only because it
-#      includes a header. That is worse again than a clash at link time.
+#      names in the installed headers. These go into the ordinary identifier
+#      name space and the tag name space of the application, so a program that
+#      uses one of those names for its own purpose fails to COMPILE only
+#      because it includes a header, which is worse again than a clash at link
+#      time.
 #
-# Layer 3 reads the debug information of the compiler and not the header text.
-# A regular expression over an enum body cannot do this work. It reports the
-# first word of every doc comment inside the body as an enumerator, and it
+# Layer 3 reads the debug information of the compiler instead of the header
+# text. A regular expression over an enum body cannot do this work: it reports
+# the first word of every doc comment inside the body as an enumerator, and it
 # drops enumerators that are written in a shape it does not know about. A
 # namespace gate that reports a problem that is not there is worse than a gap
-# that you know about. The extraction must be exact, and only the compiler
+# that you know about, so the extraction must be exact, and only the compiler
 # knows exactly what an enum body declares.
 #
-# On macOS the library is a Mach-O file. Layer 1 then reads both artifacts with
-# the nm of the system, and layer 2 runs as everywhere. Layer 3 needs DWARF that
-# GNU readelf can read, which a Mach-O object does not carry, so it runs on the
-# ELF build only. There it scans the headers twice: as they are, and with
+# On macOS the library is a Mach-O file, so layer 1 reads both artifacts with
+# the nm of the system, while layer 2 runs as everywhere. Layer 3 needs DWARF
+# that GNU readelf can read, which a Mach-O object does not carry, so it runs on
+# the ELF build only. There it scans the headers twice: as they are, and with
 # _CCOL_EMULATE_DARWIN_SYNC, the one switch that changes what an installed
-# header declares on macOS. The ELF run therefore checks the names that a macOS
-# build sees as well.
+# header declares on macOS, so the ELF run also checks the names that a macOS
+# build sees.
 #
-# Run this from the root of the repository, after `make`. `make check_namespace`
+# Run this from the root of the repository, after `make`; `make check_namespace`
 # and CI both use it.
 set -eu
 
@@ -54,10 +55,10 @@ if [ "$FORMAT" = elf ]; then
   . ci_scripts/gnu_binutils.sh
 fi
 
-# The script reads the archive as well as the shared object. If the archive is
-# not there, the script fails and does not skip. In a green log, an artifact
-# that is missing and an artifact that is clean look the same. This artifact
-# also ships.
+# The script reads the archive as well as the shared object, and fails instead
+# of skipping when the archive is not there, because in a green log an artifact
+# that is missing and an artifact that is clean look the same, and this
+# artifact also ships.
 AR_LIB="${2:-libccollections.a}"
 [ -e "$AR_LIB" ] || {
   echo "check_public_namespace: $AR_LIB not built; run make first" >&2
@@ -66,25 +67,26 @@ AR_LIB="${2:-libccollections.a}"
 
 # A prefix is acceptable when it is ccol_ or CCOL_, the full name of the
 # library, or the name of the module that owns the symbol. ccollections_
-# appears on enum tags. Tags are the one surface that uses the full name of the
-# library and not the short form. That prefix is as clearly ours as ccol_ is.
+# appears on enum tags, which are the one surface that uses the full name of
+# the library instead of the short form, and that prefix is as clearly ours as
+# ccol_ is.
 NS='^_*(ccol_|CCOL_|ccollections_|cvec|cvector|chmap|chashmap|cbmap|cbstmap|cstr|cstring|csort|cjson|cyaml|clog|clru|cmap|cmempool|cthreadcomm|cthreadpool|ctpool|chttp|ctls|citer|CVEC|CHMAP|CBMAP|CSTR|CSORT|CJSON|CYAML|CLOG|CLRU|CMAP|CMEMPOOL|CTHREAD|CTPOOL|CHTTP|CTLS|CITER)'
 
 # Struct tags that are already c-prefixed and are not generic English words.
 ALLOW='^(cbinarymap|c_message_t|cthread_pool)$'
 
 # The headers that ship are exactly include/*.h. An internal header lives in
-# include/internal/ instead. It has no visibility block, and make install
-# leaves it out. The glob below therefore separates the two by itself, and no
-# list has to stay in step with the Makefile.
+# include/internal/ instead, has no visibility block, and is left out by make
+# install, so the glob below separates the two by itself and no list has to
+# stay in step with the Makefile.
 
 fail=0
 
-# The script checks the status of readelf on its own. It does not use the
-# status of the pipeline, which would be the status of sort. Without this, an
-# artifact that the script cannot read, or that is not an ELF file, gives an
-# empty symbol list. The script then reports a fully prefixed interface after
-# it examined nothing.
+# The script checks the status of readelf on its own instead of the status of
+# the pipeline, which would be the status of sort. Without this, an artifact
+# that the script cannot read, or that is not an ELF file, gives an empty
+# symbol list, and the script then reports a fully prefixed interface after it
+# examined nothing.
 if [ "$FORMAT" = macho ]; then
   if ! all_syms=$(ccol_macho_defined_globals "$SO"); then
     echo "check_public_namespace: could not read the symbols of $SO" >&2
@@ -102,8 +104,8 @@ else
     | awk '$7!="UND" && ($5=="GLOBAL"||$5=="WEAK") && $8!="_init" && $8!="_fini"{print $8}' \
     | sed 's/@.*//' | sort -u)
 fi
-# An empty set is never a correct answer for this library. It is exactly what a
-# stripped artifact, a truncated artifact, or an artifact in the wrong format
+# An empty set is never a correct answer for this library; it is exactly what
+# a stripped artifact, a truncated artifact, or an artifact in the wrong format
 # gives you.
 if [ -z "$all_syms" ]; then
   echo "check_public_namespace: $SO exports no dynamic symbols; refusing to" >&2
@@ -117,13 +119,12 @@ if [ -n "$bad_syms" ]; then
   fail=1
 fi
 
-# The script checks the status of nm on its own and not the status of the
-# pipeline, for the reason above. An artifact that the script cannot read, or
-# that is not an archive, gives an empty symbol list. The script then reports a
-# fully prefixed archive after it examined
-# nothing. The header line of an archive member, such as
-# "libccollections.a[cvector.o]:", holds one field, and the field count test
-# drops it. A U entry is a reference and not a definition.
+# The script checks the status of nm on its own instead of the status of the
+# pipeline, for the reason above: an artifact that the script cannot read, or
+# that is not an archive, gives an empty symbol list, and the script would then
+# report a fully prefixed archive after it examined nothing. The header line of
+# an archive member, such as "libccollections.a[cvector.o]:", holds one field,
+# so the field count test drops it. A U entry is a reference, not a definition.
 if [ "$FORMAT" = macho ]; then
   if ! ar_syms=$(ccol_macho_defined_globals "$AR_LIB"); then
     echo "check_public_namespace: could not read symbols from $AR_LIB" >&2
@@ -177,11 +178,11 @@ done
 # Layer 3: enum enumerators and struct/union/enum tags, read out of DWARF
 # ---------------------------------------------------------------------------
 # The script compiles one translation unit that includes every installed
-# header. It uses -g3 -fno-eliminate-unused-debug-types, so that the debug
-# information also describes a type that nothing references. It then reads that
-# debug information back. The debug information describes every declaration
-# that the system headers give as well. This is why the script attributes each
-# name to the file that it came from, and judges only our own names.
+# header, with -g3 -fno-eliminate-unused-debug-types so that the debug
+# information also describes a type that nothing references, and then reads
+# that debug information back. Because the debug information also describes
+# every declaration that the system headers give, the script attributes each
+# name to the file that it came from and judges only our own names.
 CC="${CC:-cc}"
 dwarf_tmp=$(mktemp -d)
 trap 'rm -rf "$dwarf_tmp"' EXIT INT TERM
@@ -198,7 +199,7 @@ if [ ! -s "$dwarf_tmp/probe.c" ]; then
   exit 2
 fi
 
-# A Mach-O build has no DWARF that GNU readelf can read. The ELF build runs
+# A Mach-O build has no DWARF that GNU readelf can read, so the ELF build runs
 # this layer for the macOS headers too; see the top of this file.
 if [ "$FORMAT" = macho ]; then
   echo "check_public_namespace: NOTE - enumerators, tags and typedefs are checked" \
@@ -218,13 +219,13 @@ plain) vflags='' ;;
 darwin) vflags='-D_CCOL_EMULATE_DARWIN_SYNC=1' ;;
 esac
 
-# -w is here because this probe exists to describe types. It does not lint the
-# headers again, because the ordinary build already does that under -Werror.
-# -std=gnu11 is here because the headers are written to that standard, and
-# because the library and every test suite build with it. A toolchain whose
-# default is a later standard changes the meaning of bool, of static_assert,
-# and of an empty parameter list. A probe on the default of the compiler
-# therefore describes a different set of types from the set that ships.
+# -w is here because this probe exists to describe types, not to lint the
+# headers again; the ordinary build already does that under -Werror.
+# -std=gnu11 is here because the headers are written to that standard and the
+# library and every test suite build with it. A toolchain whose default is a
+# later standard changes the meaning of bool, of static_assert and of an empty
+# parameter list, so a probe on the default of the compiler would describe a
+# different set of types from the set that ships.
 if ! $CC -Iinclude -std=gnu11 -g3 -gdwarf-5 -fno-eliminate-unused-debug-types -w $vflags \
      -c "$dwarf_tmp/probe.c" -o "$dwarf_tmp/probe_$v.o" 2>"$dwarf_tmp/cc_$v.err"; then
   echo "check_public_namespace: could not compile the debug-info probe ($v), so" >&2
@@ -242,7 +243,7 @@ fi
 
 # The file table and the directory table map a DW_AT_decl_file index to a real
 # path. Our own headers are the ones that the compiler reaches through the -I
-# path, and it records that path as a relative path. The directory of every
+# path, which it records as a relative path, while the directory of every
 # system header is an absolute path.
 awk -v incdir="include" -v absinc="$PWD/include" -v pubs=" $public_headers " '
 function first_token(s) {
@@ -271,9 +272,9 @@ function flush(   f, parent) {
     f = (cur_file != "") ? cur_file : filedepth[cur_depth]
     if (ours[f] && cur_name != "") print "tag\t" fname[f] "\t" cur_name
   } else if (cur_tag == "DW_TAG_typedef") {
-    # Layer 2 reads a typedef name off the end of its line, which a
-    # function-pointer typedef such as "typedef void (*fn)(void *arg);" does
-    # not have. The debug information names every typedef exactly.
+    # Layer 2 reads a typedef name off the end of its line, but a
+    # function-pointer typedef such as "typedef void (*fn)(void *arg);" has
+    # no name there, while the debug information names every typedef exactly.
     f = (cur_file != "") ? cur_file : filedepth[cur_depth]
     if (ours[f] && cur_name != "") { print "typedef\t" fname[f] "\t" cur_name; typedefs++ }
   }
@@ -292,20 +293,20 @@ FILENAME == linefile {
     if (d == incdir || d == absinc) isours_dir[idx] = 1
   } else if (mode == "file" && n >= 3) {
     # The directory is the first token of its column, and the file name is
-    # the LAST column. The shape of this table depends on the compiler. With
-    # DWARF 5 a compiler can record an MD5 of each file, and readelf prints
-    # that checksum inside the directory column. clang records it and gcc does
-    # not. Do not read the whole column, and do not assume that the name is in
-    # column three. Either form drops every one of our own headers as soon as
-    # the checksum is there. The scan then reports that it found no project
-    # file at all.
+    # the LAST column, because the shape of this table depends on the
+    # compiler: with DWARF 5 a compiler can record an MD5 of each file, which
+    # readelf prints inside the directory column, and clang records it while
+    # gcc does not. Do not read the whole column, and do not assume that the
+    # name is in column three; either form drops every one of our own headers
+    # as soon as the checksum is there, and the scan then reports that it
+    # found no project file at all.
     dir = first_token(f[2])
     base = value(f[n])
     fname[idx] = base
-    # Both halves are necessary. The directory proves that this is not a
-    # system header with the same base name. The name list proves that this is
-    # a header that we install, and not an internal header that the compiler
-    # reached through some other path.
+    # Both halves are necessary: the directory proves that this is not a
+    # system header with the same base name, and the name list proves that
+    # this is a header that we install and not an internal header that the
+    # compiler reached through some other path.
     if (isours_dir[dir] && index(pubs, " " base " ") > 0) { ours[idx] = 1; ourfiles++ }
   }
   next
@@ -332,7 +333,7 @@ END {
   flush()
   # Without these two tests, a readelf output that this scan cannot parse
   # makes the scan report a fully prefixed interface after it examined
-  # nothing. That is the one failure that you can never tell apart from a
+  # nothing, which is the one failure that you can never tell apart from a
   # green run.
   if (ourfiles == 0)   { print "PROBE-ERROR no installed header was found in the debug info" > "/dev/stderr"; exit 3 }
   if (enumerators == 0){ print "PROBE-ERROR no enumerators were found at all" > "/dev/stderr"; exit 3 }

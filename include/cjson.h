@@ -26,109 +26,104 @@ SOFTWARE.
 
 #include "common.h"
 
-/* Every declaration from here to the end of this header is part of the
- * public Application Binary Interface (ABI) of libccollections. The shared
- * library exports all of them. The build of the library uses
- * -fvisibility=hidden. A function or object that no such block covers stays
- * internal to the library. It is absent from the dynamic symbol table of
- * the library. The application that links against the library cannot
- * interpose it. A symbol with the same name in that application cannot
- * collide with it. */
+/* Every declaration from here to the end of this header is part of the public
+ * Application Binary Interface (ABI) of libccollections, and the shared library
+ * exports all of them. The library is built with -fvisibility=hidden, so a
+ * function or object that no such block covers stays internal to the library:
+ * it is absent from the dynamic symbol table of the library, the application
+ * that links against the library cannot interpose it, and a symbol with the
+ * same name in that application cannot collide with it. */
 #pragma GCC visibility push(default)
 
 /**
  * @file cjson.h
  * @brief Generic JSON parser, serializer, and mutable in-memory DOM.
  *
- * The Document Object Model (DOM) uses the library's own cvector for lists
- * and chashmap for dictionaries. Every node is a heap-allocated
- * cjson_node_t. The full struct definition is in cjson.c and is opaque to
- * the caller.
+ * The Document Object Model (DOM) uses the library's own cvector for lists and
+ * chashmap for dictionaries. Every node is a heap-allocated cjson_node_t, whose
+ * full struct definition is in cjson.c and is opaque to the caller.
  *
  * ### Custom memory management
  *
  * Every factory function and the parser take a `ccol_memmgmt_procs_t *mp`
  * parameter.  Pass NULL to use the default malloc/free/calloc/realloc.
  *
- * The library keeps its own copy of the procs struct, and the nodes point
- * at that copy and never at the struct of the caller. The caller may
- * therefore build the struct on the stack of a helper function, or release
- * it, while trees built with it are still in use. The functions that it
- * names must stay callable until the last node built with them is
- * destroyed. The copies live for the life of the process, one for each
- * distinct set of four functions, and nodes built from two structs with
- * the same four functions share one copy. A process can use at most 64
- * distinct sets; a factory function or a parse that would need a 65th
- * fails (NULL).
+ * The library keeps its own copy of the procs struct, and the nodes point at
+ * that copy and never at the struct of the caller, so the caller may build the
+ * struct on the stack of a helper function, or release it, while trees built
+ * with it are still in use. The functions that it names must stay callable
+ * until the last node built with them is destroyed. The copies live for the
+ * life of the process, one for each distinct set of four functions, and nodes
+ * built from two structs with the same four functions share one copy. A process
+ * can use at most 64 distinct sets; a factory function or a parse that would
+ * need a 65th fails (NULL).
  *
- * Each node in the DOM tree stores the allocator. All the nodes in one tree
- * must carry the same allocator. This is true when the same chain of
- * factory calls or parse calls creates all the nodes. The library uses the
- * allocator for:
+ * Each node in the DOM tree stores the allocator, and all the nodes in one tree
+ * must carry the same allocator, which is true when the same chain of factory
+ * calls or parse calls creates all the nodes. The library uses the allocator
+ * for:
  *   - The node struct itself
  *   - Owned string copies (CJSON_STRING values, dictionary keys)
  *   - The cvec of a list and the chmap of a dictionary
  *   - Temporary path copies in cjson_get / cjson_set
  *   - The buffer that cjson_serialize() returns
  *
- * **Thread-local node pool:** A thread-local free-list pool of up to 512
- * nodes makes the common case faster. The common case is the default
- * allocator, which is a NULL mp. A node with a custom allocator never uses
- * the pool. The library allocates and frees such a node directly. The
- * library drains the pool automatically when the thread exits.
+ * **Thread-local node pool:** A thread-local free-list pool of up to 512 nodes
+ * makes the common case, the default allocator (a NULL mp), faster. A node with
+ * a custom allocator never uses the pool: the library allocates and frees such
+ * a node directly. The library drains the pool automatically when the thread
+ * exits.
  *
- * **Serialization:** cjson_serialize() and cjson_serialize_pretty() return
- * a buffer that comes from the allocator of the root node. Pass the same mp
- * to cjson_serialize_free() to free the buffer correctly.
+ * **Serialization:** cjson_serialize() and cjson_serialize_pretty() return a
+ * buffer that comes from the allocator of the root node, so pass the same mp to
+ * cjson_serialize_free() to free the buffer correctly.
  *
  * ### Text encoding
  *
- * RFC 8259 section 8.1 needs JSON text to be UTF-8. Every string that a
- * tree holds is therefore well-formed UTF-8. This covers a CJSON_STRING
- * value and a dictionary key alike. You can always treat the result of
- * cjson_str_val() as UTF-8. cjson_serialize() always makes valid JSON text.
+ * RFC 8259 section 8.1 needs JSON text to be UTF-8, so every string that a tree
+ * holds, whether a CJSON_STRING value or a dictionary key, is well-formed
+ * UTF-8. You can always treat the result of cjson_str_val() as UTF-8, and
+ * cjson_serialize() always makes valid JSON text.
  *
- * Both ways for bytes to get in refuse what is not UTF-8. Neither one
- * repairs it:
+ * Both ways for bytes to get in refuse what is not UTF-8; neither one repairs
+ * it:
  *
- *   - The parser decodes text that a peer gives. A string literal or a key
- *     that holds a raw byte sequence that is not well-formed UTF-8 (a
- *     truncated sequence, a continuation byte with no lead byte, an
- *     overlong form, an encoded surrogate, a code point above U+10FFFF, or
- *     a byte from 0xF5 to 0xFF) is a parse error. So is a \uXXXX escape of a
- *     surrogate that is not one half of a high-low pair. The message names
- *     the defect, the bytes as 0xNN or the escape, and the byte offset in
- *     the input, and it is always printable ASCII. A repair would let two
- *     keys that differ only in their ill-formed bytes become one key.
+ *   - The parser decodes text that a peer gives. A string literal or a key that
+ *     holds a raw byte sequence that is not well-formed UTF-8 (a truncated
+ *     sequence, a continuation byte with no lead byte, an overlong form, an
+ *     encoded surrogate, a code point above U+10FFFF, or a byte from 0xF5 to
+ *     0xFF) is a parse error, and so is a \uXXXX escape of a surrogate that is
+ *     not one half of a high-low pair. The message names the defect, the bytes
+ *     as 0xNN or the escape, and the byte offset in the input, and it is always
+ *     printable ASCII. A repair would let two keys that differ only in their
+ *     ill-formed bytes become one key.
  *   - The calling program gives a C string to cjson_create_string(),
- *     cjson_set() and cjson_dictionary_set(). A string that is not valid
- *     UTF-8 is a defect in that program. These functions therefore report
- *     it with NULL or with ccol_invalid_args. They treat it exactly as they
- *     treat a non-finite double.
+ *     cjson_set() and cjson_dictionary_set(). A string that is not valid UTF-8
+ *     is a defect in that program, so these functions report it with NULL or
+ *     with ccol_invalid_args, exactly as they treat a non-finite double.
  *
  * ### Nesting depth
  *
- * A parse, a clone and a serialize each accept at most 500 levels of
- * nesting. Each list or dictionary is one level, in any combination, and
- * a scalar adds none: 500 containers inside one another, with anything
- * inside the innermost of them, are accepted, and a 501st container is
- * not. Each one reports a deeper document as an error. All three walk
- * the nesting with an explicit worklist on the heap. The limit is therefore
- * a policy limit on what the library accepts. It is not a bet on the stack
- * size of the calling thread. A document at the limit costs the same small,
- * fixed amount of native stack as a flat one. cjson_destroy() has no limit
- * at all.
+ * A parse, a clone and a serialize each accept at most 500 levels of nesting.
+ * Each list or dictionary is one level, in any combination, and a scalar adds
+ * none: 500 containers inside one another, with anything inside the innermost
+ * of them, are accepted, and a 501st container is not. Each one reports a
+ * deeper document as an error. All three walk the nesting with an explicit
+ * worklist on the heap, so the limit is a policy limit on what the library
+ * accepts, not a bet on the stack size of the calling thread: a document at the
+ * limit costs the same small, fixed amount of native stack as a flat one.
+ * cjson_destroy() has no limit at all.
  *
  * ### Memory of a parse
  *
- * The tree that a parse builds is linear in the length of the input, and
- * JSON has no construct that copies one part of a document into another. An
- * empty list or dictionary costs one node; its backing store is created by
- * its first member. The densest documents (deep chains of one-member
- * dictionaries, or long lists of one-member dictionaries) hold at most about
- * 65 bytes of tree for each byte of input on a 64-bit target. A program
- * that parses input from a peer it does not trust bounds the memory of a
- * parse by bounding the length of that input.
+ * The tree that a parse builds is linear in the length of the input, and JSON
+ * has no construct that copies one part of a document into another. An empty
+ * list or dictionary costs one node; its backing store is created by its first
+ * member. The densest documents (deep chains of one-member dictionaries, or
+ * long lists of one-member dictionaries) hold at most about 65 bytes of tree
+ * for each byte of input on a 64-bit target. A program that parses input from a
+ * peer it does not trust bounds the memory of a parse by bounding the length of
+ * that input.
  *
  * ### Path syntax (cjson_get / cjson_set)
  *
@@ -136,41 +131,37 @@ SOFTWARE.
  * "users.#0.address.city".
  *
  *   - A plain component addresses a dictionary key.
- *   - A component that starts with '#' and then has decimal digits
- *     addresses a list element by a zero-based index. This is only true
- *     when the current node is a list. If it is not, the library uses the
- *     whole component as a literal dictionary key, and the '#' is part of
- *     that key.
- *   - An empty path string is a no-op for cjson_get, which returns the
- *     root. It is an error for cjson_set.
+ *   - A component that starts with '#' and then has decimal digits addresses a
+ *     list element by a zero-based index, but only when the current node is a
+ *     list. If it is not, the library uses the whole component as a literal
+ *     dictionary key, and the '#' is part of that key.
+ *   - An empty path string is a no-op for cjson_get, which returns the root,
+ *     and an error for cjson_set.
  *
  * ### Ownership
  *
- * - cjson_create_*(), cjson_parse(), cjson_parse_mp(), and cjson_clone()
- *   return trees that the caller owns completely.
+ * - cjson_create_*(), cjson_parse(), cjson_parse_mp(), and cjson_clone() return
+ *   trees that the caller owns completely.
  * - On success, cjson_list_push() and cjson_dictionary_set() transfer the
- *   ownership of the child to the parent. Do not free the child after such
- *   a call. The child must not already be attached to a list parent or a
- *   dictionary parent. The child must also not already contain the target
- *   container inside its own subtree. A new node is a correct child, and so
- *   is a new cjson_clone(). Four kinds of node are not correct children.
- *   The first is a borrowed reference from cjson_get(), cjson_list_get()
- *   or cjson_dictionary_get(). The second is the target container itself.
- *   The third is an ancestor of the target container. The fourth is a node
- *   that cjson_list_remove() or cjson_dictionary_remove() removed. Both of
- *   those functions always deep-free what they remove. Read the doc
- *   comment of each function for the exact rule and for its one no-op
- *   exception.
- * - On failure those two functions split by return code. This split is what
+ *   ownership of the child to the parent, so do not free the child after such a
+ *   call. The child must not already be attached to a list parent or a
+ *   dictionary parent, and it must not already contain the target container
+ *   inside its own subtree. A new node is a correct child, and so is a new
+ *   cjson_clone(). Four kinds of node are not correct children: a borrowed
+ *   reference from cjson_get(), cjson_list_get() or cjson_dictionary_get(); the
+ *   target container itself; an ancestor of the target container; and a node
+ *   that cjson_list_remove() or cjson_dictionary_remove() removed, since both
+ *   of those functions always deep-free what they remove. Read the doc comment
+ *   of each function for the exact rule and for its one no-op exception.
+ * - On failure those two functions split by return code, and this split is what
  *   makes a failure actionable. ccol_invalid_args ALWAYS means that the
- *   function rejected the arguments. The child is untouched and still
- *   belongs to the caller. Every other non-success code ALWAYS means that
- *   ownership transferred, and that the function already destroyed the
- *   child.
- * - cjson_get() returns a NON-OWNING reference. The reference is valid
- *   until something changes the tree or destroys it.
- * - cjson_destroy() frees the whole subtree recursively and sets the handle
- *   to NULL.
+ *   function rejected the arguments: the child is untouched and still belongs
+ *   to the caller. Every other non-success code ALWAYS means that ownership
+ *   transferred and that the function already destroyed the child.
+ * - cjson_get() returns a NON-OWNING reference, which is valid until something
+ *   changes the tree or destroys it.
+ * - cjson_destroy() frees the whole subtree recursively and sets the handle to
+ *   NULL.
  */
 
 /* ========================================================================== */
@@ -180,10 +171,10 @@ SOFTWARE.
 /**
  * @brief JSON value kind tag.
  *
- * The library uses this tag and not the general-purpose ccol_data_type.
- * This set covers all seven JSON value kinds. It covers the composite types
- * list and dictionary, which ccol_data_type does not have. It also covers
- * null and boolean.
+ * The library uses this tag instead of the general-purpose ccol_data_type
+ * because this set covers all seven JSON value kinds: the composite types list
+ * and dictionary, which ccol_data_type does not have, and also null and
+ * boolean.
  */
 typedef enum cjson_node_type {
   CJSON_NULL = 0,   /**< JSON null literal                           */
@@ -260,16 +251,16 @@ static inline cjson cjson_create_double(double val) {
 /**
  * @brief Allocate and return a JSON string node.
  *
- * @p val must be valid UTF-8. JSON text is UTF-8 (RFC 8259 section 8.1).
- * Any other byte sequence has no JSON form. This function therefore refuses
- * such a sequence and does not store it. It does the same as
- * cjson_create_double_mp(), which refuses a non-finite double.
+ * @p val must be valid UTF-8. JSON text is UTF-8 (RFC 8259 section 8.1), and
+ *    any other byte sequence has no JSON form, so this function refuses such a
+ *    sequence instead of storing it, just as cjson_create_double_mp() refuses a
+ *    non-finite double.
  *
- * @param val  Null-terminated, valid UTF-8 string. The node makes an owned
- *             copy of it. NULL gives a CJSON_NULL node.
+ * @param val  Null-terminated, valid UTF-8 string. The node makes an owned copy
+ *             of it. NULL gives a CJSON_NULL node.
  * @param mp   Custom allocator, or NULL for default.
- * @return New CJSON_STRING node. Returns NULL when the allocation fails or
- *         when @p val is not valid UTF-8.
+ * @return New CJSON_STRING node, or NULL when the allocation fails or when
+ * @p val is not valid UTF-8.
  */
 cjson cjson_create_string_mp(const char *val, ccol_memmgmt_procs_t *mp);
 
@@ -309,33 +300,31 @@ static inline cjson cjson_create_dictionary(void) {
  * @brief Parse a null-terminated JSON string into a DOM tree.
  *
  * @param json_str  Input text, which must be null-terminated.
- * @param err_str   Out-parameter for the error message when the parse
- *                  fails. On success the function sets *err_str to NULL. On
- *                  failure it points *err_str at a message that the LIBRARY
- *                  owns. Never free that string, and never free it with
- *                  cjson_serialize_free_mp(): it is not an allocation. This
- *                  is the same rule that the err out-parameter of every
- *                  other module in this library follows. The text stays
- *                  valid until the next FAILING parse on the same thread,
- *                  which is the lifetime that strerror(3) and dlerror(3)
- *                  give. The storage is per-thread, so two threads that
- *                  parse at the same time never overwrite one another's
- *                  message. Copy the text if you need it past that point.
- *                  Pass NULL to ignore the error details. The message is
- *                  printable ASCII whatever the input holds: it quotes a
- *                  printable ASCII byte of the input as it is, and spells
- *                  any other byte as 0xNN.
- * @param mp        Custom allocator for all the nodes in the new tree, or
- *                  NULL for the default allocator.
- * @return The root cjson node on success. Returns NULL when the parse
- *         fails.
+ * @param err_str   Out-parameter for the error message when the parse fails. On
+ *                  success the function sets *err_str to NULL; on failure it
+ *                  points *err_str at a message that the LIBRARY owns. Never
+ *                  free that string, and never free it with
+ *                  cjson_serialize_free_mp(): it is not an allocation. This is
+ *                  the same rule that the err out-parameter of every other
+ *                  module in this library follows. The text stays valid until
+ *                  the next FAILING parse on the same thread, which is the
+ *                  lifetime that strerror(3) and dlerror(3) give, and the
+ *                  storage is per-thread, so two threads that parse at the same
+ *                  time never overwrite one another's message. Copy the text if
+ *                  you need it past that point. Pass NULL to ignore the error
+ *                  details. The message is printable ASCII whatever the input
+ *                  holds: it quotes a printable ASCII byte of the input as it
+ *                  is, and spells any other byte as 0xNN.
+ * @param mp        Custom allocator for all the nodes in the new tree, or NULL
+ *                  for the default allocator.
+ * @return The root cjson node on success, or NULL when the parse fails.
  *
- * A number always uses '.' as the decimal separator, as RFC 8259 states.
- * The LC_NUMERIC locale of the calling thread does not change this.
+ * A number always uses '.' as the decimal separator, as RFC 8259 states,
+ * whatever the LC_NUMERIC locale of the calling thread is.
  *
- * A string that is not well-formed UTF-8 is a parse error, so every string
- * in the new tree is well-formed UTF-8. A document with more than 500 levels
- * of nesting is a parse error. Read the "Text encoding" and "Nesting depth"
+ * A string that is not well-formed UTF-8 is a parse error, so every string in
+ * the new tree is well-formed UTF-8. A document with more than 500 levels of
+ * nesting is also a parse error. Read the "Text encoding" and "Nesting depth"
  * sections of this header.
  */
 cjson cjson_parse_mp(const char *json_str, char **err_str,
@@ -352,11 +341,10 @@ static inline cjson cjson_parse(const char *json_str, char **err_str) {
  *
  * @param json_str  Input buffer.
  * @param len       Number of bytes to parse.
- * @param err_str   Out-parameter for the error message. It behaves in the
- *                  same way as the one of cjson_parse_mp, and it has the
- *                  same ownership rule: the library owns the string and the
- *                  caller never frees it. Pass NULL to ignore the error
- *                  details.
+ * @param err_str   Out-parameter for the error message. It behaves in the same
+ *                  way as the one of cjson_parse_mp and has the same ownership
+ *                  rule: the library owns the string and the caller never frees
+ *                  it. Pass NULL to ignore the error details.
  * @param mp        Custom allocator, or NULL for default.
  * @return Root cjson node, or NULL on failure.
  */
@@ -376,27 +364,27 @@ static inline cjson cjson_parse_n(const char *json_str, size_t len,
 /**
  * @brief Serialize a DOM tree to a compact JSON string.
  *
- * The buffer comes from the same allocator as the root node. The way that
- * the caller built the tree therefore decides which function frees the
- * buffer. Free the buffer of a tree that uses the default allocator with
- * cjson_serialize_free(). Free the buffer of a tree that uses a custom
- * allocator with cjson_serialize_free_mp(), and pass that same allocator.
+ * The buffer comes from the same allocator as the root node, so the way that
+ * the caller built the tree decides which function frees the buffer. Free the
+ * buffer of a tree that uses the default allocator with cjson_serialize_free(),
+ * and free the buffer of a tree that uses a custom allocator with
+ * cjson_serialize_free_mp(), passing that same allocator:
  * cjson_serialize_free() gives the buffer to a plain free(), which never
  * allocated the buffer of a custom allocator.
  *
- * A float value or a double value always uses '.' as the decimal separator,
- * as RFC 8259 states. The LC_NUMERIC locale of the calling thread does not
- * change this. The output is always valid JSON text, and this includes the
- * UTF-8. Read the "Text encoding" section of this header.
+ * A float value or a double value always uses '.' as the decimal separator, as
+ * RFC 8259 states, whatever the LC_NUMERIC locale of the calling thread is. The
+ * output is always valid JSON text, UTF-8 included. Read the "Text encoding"
+ * section of this header.
  *
- * This function refuses a subtree with more than 500 levels of nesting. It
- * reports that refusal in the same way as a failure of an allocation, and
- * cjson_clone() does the same. The serialize walks the nesting with an
- * explicit worklist on the heap. A tree at the limit therefore costs the
- * same small, fixed amount of native stack as a flat one.
+ * This function refuses a subtree with more than 500 levels of nesting and
+ * reports that refusal in the same way as a failure of an allocation, as
+ * cjson_clone() does. The serialize walks the nesting with an explicit worklist
+ * on the heap, so a tree at the limit costs the same small, fixed amount of
+ * native stack as a flat one.
  *
  * @param node  Root of the tree or of the subtree.
- * @return A heap-allocated, null-terminated string. Free it with
+ * @return A heap-allocated, null-terminated string; free it with
  *         cjson_serialize_free(). Returns NULL when the allocation fails or
  *         when the tree has too many levels of nesting.
  */
@@ -406,15 +394,14 @@ char *cjson_serialize(cjson node);
  * @brief Serialize a DOM tree to an indented JSON string.
  *
  * @param node    Root of the tree or of the subtree.
- * @param indent  Spaces for each indent level. A 0 gives a default of 4
- *                spaces.
+ * @param indent  Spaces for each indent level. A 0 gives a default of 4 spaces.
  * @return A heap-allocated string that comes from the allocator of the root
- *         node. Free it with cjson_serialize_free() when the tree uses the
- *         default allocator. Free it with cjson_serialize_free_mp() when
- *         the tree uses a custom allocator. This is exactly how you free
- *         the result of cjson_serialize(). Returns NULL when the allocation
- *         fails or when the tree has too many levels of nesting. The limit
- *         is the same as the limit of cjson_serialize().
+ *         node. Free it exactly as you free the result of cjson_serialize():
+ *         with cjson_serialize_free() when the tree uses the default allocator,
+ *         and with cjson_serialize_free_mp() when the tree uses a custom
+ *         allocator. Returns NULL when the allocation fails or when the tree
+ *         has too many levels of nesting, with the same limit as
+ *         cjson_serialize().
  */
 char *cjson_serialize_pretty(cjson node, unsigned int indent);
 
@@ -423,7 +410,7 @@ char *cjson_serialize_pretty(cjson node, unsigned int indent);
  *        cjson_serialize_pretty().
  *
  * @param s   String to free. It can be NULL.
- * @param mp  The same allocator that the tree used at its creation. This is
+ * @param mp  The same allocator that the tree used at its creation, that is,
  *            the mp that the caller gave to cjson_parse_mp() or to
  *            cjson_create_*_mp(). Pass NULL for the default allocator.
  */
@@ -519,63 +506,59 @@ size_t cjson_dictionary_size(cjson node);
 /**
  * @brief Append a child node to a list.
  *
- * On success the ownership of @p child transfers to @p arr. Do not free
+ * On success the ownership of @p child transfers to @p arr, so do not free
  * @p child after such a call.
  *
- * On failure, one return code carries one rule of ownership.
- * ccol_invalid_args ALWAYS means that the call rejected its arguments and
- * touched nothing. @p child is exactly as it was before the call. The
- * caller still owns it, or the container that it was already attached to
- * still owns it. The owner must still destroy it. Every other non-success
- * code ALWAYS means that the ownership transferred and that the call
- * already destroyed @p child. A second free of @p child is then a double
- * free. Without this split no caller can act on a code at all. A free on
- * ccol_invalid_args would double-free the rejections. No free on
+ * On failure, one return code carries one rule of ownership. ccol_invalid_args
+ * ALWAYS means that the call rejected its arguments and touched nothing: @p
+ * child is exactly as it was before the call, and the caller, or the container
+ * that it was already attached to, still owns it and must still destroy it.
+ * Every other non-success code ALWAYS means that the ownership transferred and
+ * that the call already destroyed @p child, so a second free of @p child is a
+ * double free. Without this split no caller can act on a code at all: a free on
+ * ccol_invalid_args would double-free the rejections, and no free on
  * ccol_not_enough_memory would leak the transfers.
  *
  * @p child must not already be attached to a list parent or a dictionary
- * parent. It must be a new node, or a new cjson_clone(). It must never be a
- * borrowed reference that cjson_get(), cjson_list_get() or
- * cjson_dictionary_get() returned. It must never be @p arr itself. Note:
- * cjson_list_remove() and cjson_dictionary_remove() always deep-free the
- * node that they remove. They never give back a live handle to it. A
- * removed node is therefore never a valid @p child either. The function
- * rejects an already-attached node with ccol_invalid_args and leaves
- * @p child completely untouched. The container that @p child was already
- * attached to still owns it. To accept such a node would give the same node
- * two owners. Each owner would then free the node on its own when its own
- * parent is destroyed.
+ *    parent. It must be a new node, or a new cjson_clone(), and never a
+ *    borrowed reference that cjson_get(), cjson_list_get() or
+ *    cjson_dictionary_get() returned, nor @p arr itself. Note that
+ *    cjson_list_remove() and cjson_dictionary_remove() always deep-free the
+ *    node that they remove and never give back a live handle to it, so a
+ *    removed node is never a valid
+ * @p child either. The function rejects an already-attached node with
+ *    ccol_invalid_args and leaves @p child completely untouched, still owned by
+ *    the container that @p child was already attached to. Accepting such a node
+ *    would give the same node two owners, and each owner would then free the
+ *    node on its own when its own parent is destroyed.
  *
  * @p child must also not already contain @p arr somewhere inside its own
- * subtree. That is, @p child must not be an ancestor of @p arr in the tree
- * as the tree stands today. To attach @p child would make @p arr a new
- * ancestor of @p child through this call. @p arr would also stay a
- * descendant of @p child. That is a cycle in the graph. The function
- * rejects a cycle that it finds in the same way, with ccol_invalid_args and
- * with @p child untouched. The function cannot always complete the check
- * itself, because the check needs memory. When the check fails for that
- * reason, the function returns ccol_not_enough_memory instead, because to
- * continue silently could let a cycle through that nothing found. This call
- * then destroys @p child, as it does for every other outcome that transfers
- * ownership.
+ *    subtree; that is, @p child must not be an ancestor of @p arr in the tree
+ *    as the tree stands today. Attaching @p child would make @p arr a new
+ *    ancestor of @p child through this call while @p arr stays a descendant of
+ *    @p child, which is a cycle in the graph. The function rejects a cycle that
+ *    it finds in the same way, with ccol_invalid_args and with @p child
+ *    untouched. Because the check needs memory, the function cannot always
+ *    complete it; when the check fails for that reason, the function returns
+ *    ccol_not_enough_memory instead, because continuing silently could let
+ *    through a cycle that nothing found. This call then destroys @p child, as
+ *    it does for every other outcome that transfers ownership.
  *
- * These are therefore the ccol_invalid_args rejections. @p child is NULL.
- * @p child is already attached to a list or to a dictionary. @p child is
- * @p arr itself. @p arr is NULL or is not a CJSON_LIST. An attach of
- * @p child would close a cycle that the check finds. Two outcomes
- * transfer ownership instead. The cycle check runs out of memory, or the
- * insert itself fails.
+ * The ccol_invalid_args rejections are therefore: @p child is NULL;
+ * @p child is already attached to a list or to a dictionary; @p child is
+ * @p arr itself; @p arr is NULL or is not a CJSON_LIST; or an attach of
+ * @p child would close a cycle that the check finds. Two outcomes transfer
+ *    ownership instead: the cycle check runs out of memory, or the insert
+ *    itself fails.
  *
  * @param arr    Target list node, which must be a CJSON_LIST.
  * @param child  Child to append.
- * @return ccol_success. Or ccol_invalid_args, when arr or child is NULL or
- *         has the wrong type. The function also gives ccol_invalid_args
- *         when child is already attached somewhere else, and when child
- *         already contains arr. The function leaves child untouched in
- *         every one of those cases. Or
- *         ccol_not_enough_memory. Or ccol_container_full, when arr already
- *         holds its maximum element count. The function destroys child for
- *         those last two codes.
+ * @return ccol_success. Or ccol_invalid_args, when arr or child is NULL or has
+ *         the wrong type, when child is already attached somewhere else, or
+ *         when child already contains arr; the function leaves child untouched
+ *         in every one of those cases. Or ccol_not_enough_memory, or
+ *         ccol_container_full when arr already holds its maximum element count;
+ *         the function destroys child for those last two codes.
  */
 ccol_retval_t cjson_list_push(cjson arr, cjson child);
 
@@ -590,58 +573,56 @@ cjson cjson_list_get(cjson arr, size_t index);
 /**
  * @brief Set a key in a dictionary. This inserts the key or replaces it.
  *
- * On success the ownership of @p child transfers to @p obj. If the key
- * already exists, the function stores the new child first. Only then does
- * it deep-free the previous child. A failed insert therefore never leaves
- * the slot with a dangling pointer.
+ * On success the ownership of @p child transfers to @p obj. If the key already
+ * exists, the function stores the new child first and only then deep-frees the
+ * previous child, so a failed insert never leaves the slot with a dangling
+ * pointer.
  *
- * The split on failure is exactly the split of cjson_list_push().
- * ccol_invalid_args ALWAYS means that the function rejected the arguments,
- * that @p child is untouched, and that @p child still belongs to the
- * caller. Every other non-success code ALWAYS means that the ownership
- * transferred and that the function already destroyed @p child.
+ * The split on failure is exactly the split of cjson_list_push():
+ * ccol_invalid_args ALWAYS means that the function rejected the arguments, that
+ * @p child is untouched, and that @p child still belongs to the caller. Every
+ * other non-success code ALWAYS means that the ownership transferred and that
+ * the function already destroyed @p child.
  *
  * @p child must not already be attached to a list parent or a dictionary
- * parent. There is one exception. To pass back the exact node that @p key
- * already holds is a harmless no-op. An example is
- * `cjson_dictionary_set(obj, k, cjson_dictionary_get(obj, k))`. The
- * function rejects any other already-attached @p child with
- * ccol_invalid_args and leaves it completely untouched. This covers a node
- * under a different key, a node in a different container, and @p obj
- * itself. The reason is the reason that cjson_list_push() describes. That
- * description also covers cjson_list_remove() and
- * cjson_dictionary_remove(). Both always deep-free the node that they
- * remove. A removed node is therefore never a valid @p child either.
+ *    parent, with one exception: passing back the exact node that @p key
+ *    already holds, as in `cjson_dictionary_set(obj, k,
+ *    cjson_dictionary_get(obj, k))`, is a harmless no-op. The function rejects
+ *    any other already-attached
+ * @p child with ccol_invalid_args and leaves it completely untouched. This
+ *    covers a node under a different key, a node in a different container, and
+ * @p obj itself, for the reason that cjson_list_push() describes. That
+ *    description also covers cjson_list_remove() and cjson_dictionary_remove(),
+ *    which always deep-free the node that they remove, so a removed node is
+ *    never a valid @p child either.
  *
  * @p child must also not already contain @p obj somewhere inside its own
- * subtree. That is, @p child must not be an ancestor of @p obj in the tree
- * as the tree stands today. Read the doc comment of cjson_list_push(). It
- * gives the reason why the function rejects this in the same way as a
- * double attach. It also gives the reason why the check itself can fail
- * with ccol_not_enough_memory when there is not enough memory.
+ *    subtree; that is, @p child must not be an ancestor of @p obj in the tree
+ *    as the tree stands today. The doc comment of cjson_list_push() gives the
+ *    reason why the function rejects this in the same way as a double attach,
+ *    and why the check itself can fail with ccol_not_enough_memory when there
+ *    is not enough memory.
  *
- * These are therefore the ccol_invalid_args rejections. @p child is NULL.
- * @p child is already attached under a different key or in another
- * container. @p child is @p obj itself. @p obj is NULL or is not a
- * CJSON_DICTIONARY. @p key is NULL or is not valid UTF-8. An attach of
- * @p child would close a cycle that the check finds. Two outcomes
- * transfer ownership instead. The cycle check runs out of memory, or the
- * insert itself fails.
+ * The ccol_invalid_args rejections are therefore: @p child is NULL; @p child is
+ * already attached under a different key or in another container; @p child is
+ * @p obj itself; @p obj is NULL or is not a CJSON_DICTIONARY; @p key is NULL or
+ * is not valid UTF-8; or an attach of @p child would close a cycle that the
+ * check finds. Two outcomes transfer ownership instead: the cycle check runs
+ * out of memory, or the insert itself fails.
  *
- * Every key that the tree holds is valid UTF-8. This is what lets
- * cjson_serialize() emit the key without a change. The function therefore
- * refuses a @p key that is not valid UTF-8 and does not store it.
+ * Every key that the tree holds is valid UTF-8, which is what lets
+ * cjson_serialize() emit the key without a change, so the function refuses a
+ * @p key that is not valid UTF-8 instead of storing it.
  *
  * @param obj    Target dictionary node, which must be a CJSON_DICTIONARY.
  * @param key    Null-terminated key string, which must be valid UTF-8. The
  *               dictionary stores a copy of it.
  * @param child  Value node.
- * @return ccol_success. Or ccol_invalid_args, when obj, key or child is
- *         NULL or has the wrong type. The function also gives
- *         ccol_invalid_args when key is not valid UTF-8, when child is
- *         already attached somewhere else, and when child already
- *         contains obj. Or ccol_not_enough_memory. Or ccol_container_full,
- *         when obj already holds its maximum element count.
+ * @return ccol_success. Or ccol_invalid_args, when obj, key or child is NULL or
+ *         has the wrong type, when key is not valid UTF-8, when child is
+ *         already attached somewhere else, or when child already contains obj.
+ *         Or ccol_not_enough_memory. Or ccol_container_full, when obj already
+ *         holds its maximum element count.
  */
 ccol_retval_t cjson_dictionary_set(cjson obj, const char *key, cjson child);
 
@@ -655,8 +636,8 @@ cjson cjson_dictionary_get(cjson obj, const char *key);
 /**
  * @brief Remove and deep-free the element at position index from a list.
  *
- * The function moves every element after the index one position to the
- * left. It frees the removed subtree recursively.
+ * The function moves every element after the index one position to the left and
+ * frees the removed subtree recursively.
  *
  * @param arr    Target list node, which must be a CJSON_LIST.
  * @param index  Zero-based index of the element to remove.
@@ -686,43 +667,40 @@ ccol_retval_t cjson_dictionary_remove(cjson obj, const char *key);
 /**
  * @brief A cursor over the members of a dictionary, in insertion order.
  *
- * The caller owns the struct, usually on its own stack. The iteration
- * allocates nothing and cannot fail. Fill it with cjson_dictionary_first()
- * and step it with cjson_dictionary_next(). Read only @c key and @c value.
- * The fields whose names begin with an underscore are private.
+ * The caller owns the struct, usually on its own stack, and the iteration
+ * allocates nothing and cannot fail. Fill it with cjson_dictionary_first() and
+ * step it with cjson_dictionary_next(). Read only @c key and @c value; the
+ * fields whose names begin with an underscore are private.
  *
- * The order is the order in which each key first entered the dictionary:
- * the order of the members in the parsed text, or the order of the
- * cjson_dictionary_set() and cjson_set() calls that added them. A
- * replacement of the value of a key keeps its place, so a key that a
- * document repeats keeps the place of its first occurrence and the value
- * of its last. A removed key leaves the order. The
- * serializers and cjson_clone() use the same order.
+ * The order is the order in which each key first entered the dictionary: the
+ * order of the members in the parsed text, or the order of the
+ * cjson_dictionary_set() and cjson_set() calls that added them. A replacement
+ * of the value of a key keeps its place, so a key that a document repeats keeps
+ * the place of its first occurrence and the value of its last. A removed key
+ * leaves the order. The serializers and cjson_clone() use the same order.
  *
- * The cursor holds the member that the next step reads, which is the
- * successor of the member that the last successful call gave. It stays
- * valid across every change to the dictionary that leaves that successor
- * in place:
+ * The cursor holds the member that the next step reads, which is the successor
+ * of the member that the last successful call gave. It stays valid across every
+ * change to the dictionary that leaves that successor in place:
  *
  *   - a replacement of the value of any member, the current one included,
  *     through cjson_dictionary_set() or cjson_set(). The member keeps its
  *     place, so the iteration goes on in the same order;
  *   - the removal of the current member, or of any member other than the
  *     successor;
- *   - an insert of a new key. The new member goes after every other
- *     member. Whether this iteration still reaches it is unspecified.
+ *   - an insert of a new key. The new member goes after every other member, and
+ *     whether this iteration reaches it is unspecified.
  *
- * A removal of the successor, through cjson_dictionary_remove(),
- * cjson_delete() or any other call, invalidates the cursor, and so does a
- * destroy of the dictionary. Start again with cjson_dictionary_first()
- * after such a change.
+ * A removal of the successor, through cjson_dictionary_remove(), cjson_delete()
+ * or any other call, invalidates the cursor, and so does a destroy of the
+ * dictionary. Start again with cjson_dictionary_first() after such a change.
  *
- * The @c key and @c value fields describe the current member as it was
- * when the cursor stepped onto it. A replacement of the value of the
- * current member through cjson_dictionary_set() destroys the old value, so
- * @c value then names freed memory; read the new value with
- * cjson_dictionary_get() and @c key. cjson_set() updates the existing
- * node in place, so @c value stays the same node.
+ * The @c key and @c value fields describe the current member as it was when the
+ * cursor stepped onto it. A replacement of the value of the current member
+ * through cjson_dictionary_set() destroys the old value, so @c value then names
+ * freed memory; read the new value with cjson_dictionary_get() and
+ * @c key. cjson_set() updates the existing node in place, so @c value stays the
+ *    same node.
  */
 typedef struct cjson_dictionary_iter {
   /** The key of the current member. It stays valid until that member is
@@ -776,21 +754,19 @@ bool cjson_dictionary_next(cjson_dictionary_iter *it);
 /**
  * @brief Return a fully independent deep copy of a DOM subtree.
  *
- * The clone uses the same allocator as the source tree. That allocator is
- * the m_procs that the root node stores.
+ * The clone uses the same allocator as the source tree, which is the m_procs
+ * that the root node stores.
  *
- * This function refuses a subtree with more than 500 levels of nesting. It
- * reports that refusal in the same way as a failure of an allocation. The
- * limit is the same as the limit of the parser. You can therefore clone any
- * tree that parses. Only a direct call to cjson_list_push() or to
- * cjson_dictionary_set() can build a deeper tree. The clone walks the
- * nesting with an explicit worklist on the heap. A tree at the limit
- * therefore costs the same small, fixed amount of native stack as a flat
- * one.
+ * This function refuses a subtree with more than 500 levels of nesting and
+ * reports that refusal in the same way as a failure of an allocation. The limit
+ * is the same as the limit of the parser, so you can clone any tree that
+ * parses; only a direct call to cjson_list_push() or to cjson_dictionary_set()
+ * can build a deeper tree. The clone walks the nesting with an explicit
+ * worklist on the heap, so a tree at the limit costs the same small, fixed
+ * amount of native stack as a flat one.
  *
- * @return The new root node, which the caller owns. Returns NULL when the
- *         allocation fails or when the subtree has too many levels of
- *         nesting.
+ * @return The new root node, which the caller owns, or NULL when the allocation
+ *         fails or when the subtree has too many levels of nesting.
  */
 cjson cjson_clone(cjson node);
 
@@ -801,9 +777,9 @@ cjson cjson_clone(cjson node);
 /**
  * @brief Declare an uninitialized cjson variable.
  *
- * This macro is the same as `cjson var_name`. It is here to keep the same
- * convention for names as the other container modules. Assign the variable
- * before you use it.
+ * This macro is the same as `cjson var_name` and exists to keep the same naming
+ * convention as the other container modules. Assign the variable before you use
+ * it.
  *
  * @param var_name  Variable name.
  *
@@ -819,9 +795,8 @@ cjson cjson_clone(cjson node);
 /**
  * @brief Declare a cjson variable with automatic destruction on scope exit.
  *
- * The GCC cleanup attribute destroys the variable automatically at the end
- * of its scope. It also sets the variable to NULL. Initialize the variable
- * before you use it.
+ * The GCC cleanup attribute destroys the variable automatically at the end of
+ * its scope and sets it to NULL. Initialize the variable before you use it.
  *
  * @param var_name  Variable name.
  *
@@ -856,19 +831,19 @@ static inline void ___cjson_destroy(cjson *node) {
  * @brief Free a DOM tree recursively and set the handle to NULL.
  *
  * A call on NULL is safe. Each node frees its own memory with the allocator
- * that it stores, which is its m_procs. The macro needs no external
- * allocator parameter.
+ * that it stores, its m_procs, so the macro needs no external allocator
+ * parameter.
  *
- * @note The macro evaluates node exactly once. It must be a modifiable
- * lvalue, such as a variable or an element of an array
+ * @note The macro evaluates node exactly once. It must be a modifiable lvalue,
+ *       such as a variable or an element of an array.
  */
 #define cjson_destroy(node)      \
   _ccol_cjson_destroy_impl(node, \
                            _ccol_uniq(__ccol_cjson_destroy_slot, __COUNTER__))
 
-/* Internal. The body of cjson_destroy. slot is a name from _ccol_uniq(), so
- * the macro nests inside the argument of another destroy macro and stays
- * -Wshadow clean. The argument is evaluated exactly once. */
+/* Internal. The body of cjson_destroy. slot is a name from _ccol_uniq(), so the
+ * macro nests inside the argument of another destroy macro and stays -Wshadow
+ * clean. The argument is evaluated exactly once. */
 #define _ccol_cjson_destroy_impl(node, slot) \
   do {                                       \
     __typeof__(node) *slot = &(node);        \
@@ -899,70 +874,61 @@ cjson _cjson_get(cjson root, const char *path);
  *
  * Use the cjson_delete() macro.
  *
- * The function goes to the parent of the node that the path addresses. It
- * then calls cjson_dictionary_remove() or cjson_list_remove(), whichever
- * one is correct. The path uses the same dot-separated syntax as
- * _cjson_get and _cjson_set_typed. That syntax includes the escape
- * sequences.
+ * The function goes to the parent of the node that the path addresses and then
+ * calls cjson_dictionary_remove() or cjson_list_remove(), whichever one is
+ * correct. The path uses the same dot-separated syntax as _cjson_get and
+ * _cjson_set_typed, escape sequences included.
  *
  * @return ccol_success on success.
- *         ccol_invalid_args for a NULL path and for an empty path. The
- *         function also returns it for an empty path component, which a
- *         leading dot, a trailing dot or two dots together give. It
- *         returns it for a wrong parent type too, and for a malformed
- *         "#N" index.
- *         ccol_key_not_found when the parent path is absent. The function
- *         also returns it when a leaf key or index with a correct syntax is
- *         absent.
+ *         ccol_invalid_args for a NULL path, for an empty path, and for an
+ *         empty path component, which a leading dot, a trailing dot or two
+ *         dots together give. The function also returns it for a wrong
+ *         parent type and for a malformed "#N" index.
+ *         ccol_key_not_found when the parent path is absent, or when a leaf
+ *         key or index with a correct syntax is absent.
  *         ccol_not_enough_memory when an allocation fails.
  */
 ccol_retval_t _cjson_delete(cjson root, const char *path);
 
 /**
- * @brief Write a typed scalar value to the leaf that a path addresses. This
- *        is the back-end.
+ * @brief Write a typed scalar value to the leaf that a path addresses. This is
+ *        the back-end.
  *
  * Use the cjson_set() macro.
  *
- * The function creates the leaf when the leaf is absent. The parent must
- * exist. The function replaces and deep-frees any value that is already
- * there, and this includes a full subtree. A change of type is therefore
- * safe.
+ * The function creates the leaf when the leaf is absent; the parent must exist.
+ * The function replaces and deep-frees any value that is already there, a full
+ * subtree included, so a change of type is safe.
  *
  * @param root             Root of the DOM tree.
  * @param path             Dot-separated path string.
  * @param type             JSON type of the new value.
- * @param raw              Pointer to the raw C value. The value can have
- *                         any type, and the caller passes it as a void *.
+ * @param raw              Pointer to the raw C value. The value can have any
+ *                         type, and the caller passes it as a void *.
  * @param raw_size         The sizeof() of the original C expression. The
- *                         function checks it against @p type before it
- *                         reads anything through @p raw. This check is
- *                         necessary, because a direct call to this back-end
- *                         can give a payload that is narrower than the type
- *                         needs.
+ *                         function checks it against @p type before it reads
+ *                         anything through @p raw, which is necessary because a
+ *                         direct call to this back-end can give a payload that
+ *                         is narrower than the type needs.
  * @param is_signed        True when the integer source type is signed. An
- *                         unsigned 8-byte value above LLONG_MAX is stored
- *                         as a CJSON_FLOAT; read the doc comment of
- *                         cjson_set().
+ *                         unsigned 8-byte value above LLONG_MAX is stored as a
+ *                         CJSON_FLOAT; read the doc comment of cjson_set().
  * @return ccol_success on success.
- *         ccol_invalid_args for a NULL root or path, and for an empty path.
- *         The function also returns it for an empty path component, which
- *         a leading dot, a trailing dot or two dots together give. It
- *         returns it for a path component that is not valid UTF-8, for a
- *         wrong parent type, and for a malformed "#N" index. It returns it
- *         for a C type that the function does not support, and for a
- *         @p raw_size that does not match @p type. It returns it for a
- *         string value that is not valid UTF-8, and for a void * value
- *         that is not NULL. A NULL @p raw for any type
- *         other than CJSON_NULL also gives this code. For a void *, the
- *         function accepts only a bare NULL. Read the doc comment of
- *         cjson_set().
- *         ccol_key_not_found when the parent path is absent. The function
- *         also returns it for a list index that has a correct syntax but is
- *         out of range.
+ *         ccol_invalid_args for a NULL root or path, for an empty path, and
+ *         for an empty path component, which a leading dot, a trailing dot
+ *         or two dots together give. The function also returns it for a path
+ *         component that is not valid UTF-8, for a wrong parent type, for a
+ *         malformed "#N" index, for a C type that the function does not
+ *         support, for a @p raw_size that does not match @p type, for a
+ *         string value that is not valid UTF-8, and for a void * value that
+ *         is not NULL. A NULL @p raw for any type other than CJSON_NULL also
+ *         gives this code. For a void *, the function accepts only a bare
+ *         NULL; read the doc comment of cjson_set().
+ *         ccol_key_not_found when the parent path is absent, or for a list
+ *         index that has a correct syntax but is out of range.
  *         ccol_not_enough_memory when an allocation fails.
  *         ccol_container_full when the parent dictionary already holds its
- *         maximum element count. This happens only for a new key.
+ *         maximum element count, which happens only for a new key.
  */
 ccol_retval_t _cjson_set_typed(cjson root, const char *path,
                                cjson_node_type_t type, void *raw,
@@ -973,27 +939,25 @@ ccol_retval_t _cjson_set_typed(cjson root, const char *path,
 /* ========================================================================== */
 
 /**
- * @brief Sentinel that _cjson_type_of() returns for a C type that
- * cjson_set() does not accept. cjson_set() accepts bool, any integer type,
- * float, double, char *, const char *, and a bare NULL. Every other type
- * gives this sentinel. Examples are long double and a struct. The default
- * association of the _Generic below catches all of them. A bare `NULL`
- * literal has the type void *, and the _Generic below gives it its own
- * explicit association, and so does the C23 nullptr, through
- * _CCOL_NULLPTR_ASSOC. Neither falls into the default. The reason is
- * that a NULL is documented and intentional use, not a mistake of the
- * caller. The doc comment of cjson_set says so.
+ * @brief Sentinel that _cjson_type_of() returns for a C type that cjson_set()
+ *        does not accept. cjson_set() accepts bool, any integer type, float,
+ *        double, char *, const char *, and a bare NULL; every other type, such
+ *        as long double or a struct, gives this sentinel through the default
+ *        association of the _Generic below. A bare `NULL` literal has the type
+ *        void *, and the _Generic below gives it its own explicit association,
+ *        as it does for the C23 nullptr through _CCOL_NULLPTR_ASSOC, so neither
+ *        falls into the default: a NULL is documented and intentional use, not
+ *        a mistake of the caller, as the doc comment of cjson_set says.
  *
  * This sentinel is deliberately NOT a real cjson_node_type_t enumerator. No
- * node ever stores it, and cjson_type() never returns it. It only ever
- * passes through the `type` argument of _cjson_set_typed(). The switch that
- * checks the type there is node_reinit_scalar() in cjson.c. That switch
- * already rejects any value outside {CJSON_NULL, CJSON_BOOL, CJSON_INTEGER,
- * CJSON_FLOAT, CJSON_STRING}. It rejects the value with ccol_invalid_args
- * before it touches the target node. A value that differs from every real
- * enumerator is what makes that guard fire for a type that the library does
- * not support. A default of CJSON_NULL is already on the accept-list, and
- * it would pass the guard silently.
+ * node ever stores it, and cjson_type() never returns it; it only ever passes
+ * through the `type` argument of _cjson_set_typed(). The switch that checks the
+ * type there is node_reinit_scalar() in cjson.c, which rejects any value
+ * outside {CJSON_NULL, CJSON_BOOL, CJSON_INTEGER, CJSON_FLOAT, CJSON_STRING}
+ * with ccol_invalid_args before it touches the target node. A value that
+ * differs from every real enumerator is what makes that guard fire for a type
+ * that the library does not support, while a default of CJSON_NULL, which is on
+ * the accept-list, would pass the guard silently.
  */
 #define _CJSON_TYPE_UNSUPPORTED ((cjson_node_type_t)0x7f)
 
@@ -1119,40 +1083,38 @@ ccol_retval_t _cjson_set_typed(cjson root, const char *path,
 /**
  * @brief Write a C scalar to the DOM leaf addressed by a dot-separated path.
  *
- * The macro accepts these value types: bool, any integer type, float,
- * double, char *, const char *, a char array and a string literal. Passing
- * NULL, or the C23 nullptr, sets the leaf to CJSON_NULL. Before C23 the
- * macro `true` is the int 1, so cjson_set(doc, k, true) stores the
- * CJSON_INTEGER 1; write (bool)true for a CJSON_BOOL. In C23 `true` has the
- * type bool and needs no cast. The macro rejects a void * value that is
- * not NULL with ccol_invalid_args. An example is a variable of type void * that
- * does not hold NULL. The macro does not write such a value silently as
- * CJSON_NULL. It treats only a NULL as an intentional null.
+ * The macro accepts these value types: bool, any integer type, float, double,
+ * char *, const char *, a char array and a string literal. Passing NULL, or the
+ * C23 nullptr, sets the leaf to CJSON_NULL. Before C23 the macro `true` is the
+ * int 1, so cjson_set(doc, k, true) stores the CJSON_INTEGER 1; write
+ * (bool)true for a CJSON_BOOL. In C23 `true` has the type bool and needs no
+ * cast. The macro rejects a void * value that is not NULL, such as a variable
+ * of type void * that does not hold NULL, with ccol_invalid_args instead of
+ * writing it silently as CJSON_NULL: it treats only a NULL as an intentional
+ * null.
  *
- * An integer value is stored as a CJSON_INTEGER, with one exception. An
- * unsigned value above LLONG_MAX, which only a 64-bit unsigned type can
- * hold, has no CJSON_INTEGER form. The macro stores it as the CJSON_FLOAT
- * nearest to it, which is what cjson_parse() makes of the same decimal
- * literal. Such a leaf reads back through cjson_double_val(), and the
- * serializer writes it in floating-point form, so a value above 2^53 can
- * lose its low digits.
+ * An integer value is stored as a CJSON_INTEGER, with one exception: an
+ * unsigned value above LLONG_MAX, which only a 64-bit unsigned type can hold,
+ * has no CJSON_INTEGER form, so the macro stores it as the CJSON_FLOAT nearest
+ * to it, which is what cjson_parse() makes of the same decimal literal. Such a
+ * leaf reads back through cjson_double_val(), and the serializer writes it in
+ * floating-point form, so a value above 2^53 can lose its low digits.
  *
- * The macro creates the leaf when the leaf is absent. The immediate parent
- * of the leaf must already exist. If the leaf exists, the macro always
- * changes its type. It deep-frees a list subtree or a dictionary subtree
- * that is already there.
+ * The macro creates the leaf when the leaf is absent; the immediate parent of
+ * the leaf must already exist. If the leaf exists, the macro always changes its
+ * type, and it deep-frees a list subtree or a dictionary subtree that is
+ * already there.
  *
  * @param root  Root cjson handle.
  * @param path  Dot-separated path string.
- * @param val   C value. _Generic finds its type at compile time. A string
+ * @param val   C value, whose type _Generic finds at compile time. A string
  *              literal, a `char[N]` array and a pointer to char all give a
- *              CJSON_STRING, whatever their qualifiers. The macro copies
- *              val into a local whose type is the type of val after
- *              array-to-pointer conversion, with top-level qualifiers
- *              removed, so an array arrives as a pointer to its first
- *              character.
- * @return A ccol_retval_t. It is ccol_success on success, and an error code
- *         in every other case.
+ *              CJSON_STRING, whatever their qualifiers. The macro copies val
+ *              into a local whose type is the type of val after
+ *              array-to-pointer conversion, with top-level qualifiers removed,
+ *              so an array arrives as a pointer to its first character.
+ * @return A ccol_retval_t: ccol_success on success, and an error code in every
+ *         other case.
  *
  * Example:
  * @code
@@ -1176,19 +1138,18 @@ ccol_retval_t _cjson_set_typed(cjson root, const char *path,
   })
 
 /**
- * @brief Remove and deep-free the DOM node that a dot-separated path
- *        addresses.
+ * @brief Remove and deep-free the DOM node that a dot-separated path addresses.
  *
- * The macro goes to the parent of the node that the path addresses. It then
- * removes the child and frees it recursively. For a dictionary parent, the
- * path addresses the leaf by its key. For a list parent, the leaf must be a
- * '#N' component.
+ * The macro goes to the parent of the node that the path addresses, then
+ * removes the child and frees it recursively. For a dictionary parent, the path
+ * addresses the leaf by its key; for a list parent, the leaf must be a '#N'
+ * component.
  *
  * @param root  Root cjson handle.
- * @param path  Dot-separated path string. Its syntax is the syntax of
- *              cjson_get and cjson_set.
- * @return A ccol_retval_t. It is ccol_success on success, and an error code
- *         in every other case.
+ * @param path  Dot-separated path string, with the syntax of cjson_get and
+ *              cjson_set.
+ * @return A ccol_retval_t: ccol_success on success, and an error code in every
+ *         other case.
  *
  * Example:
  * @code

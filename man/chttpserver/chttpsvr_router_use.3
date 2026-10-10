@@ -12,35 +12,35 @@ ccol_retval_t chttpsvr_router_use(chttpsvr_router *router,
 .fi
 .SH DESCRIPTION
 .nf
-Appends a middleware to the chain of the sub-router that you give.
-This middleware runs after the global middleware, and before the route
-handler.  It runs only for a request that the server routes through
-this sub-router.
+Appends a middleware to the chain of the given sub-router.  The
+middleware runs after the global middleware and before the route
+handler, and only for requests that the server routes through this
+sub-router.
 
-It also runs for a request that the server routes to this sub-router
-and then rejects with 413 before its handler could run, and for the
-404 or the 405 of a path that this sub-router owns and that none of
-its routes matches.  See chttpsvr_subrouter(3) for which paths a
-sub-router owns, and chttpsvr_use(3) for the full rule and for the
-rejections that run no middleware at all.
+It also runs for a request that is routed to this sub-router and then
+rejected with 413 before its handler could run, and for the 404 or 405
+of a path that this sub-router owns but none of its routes matches.
+See chttpsvr_subrouter(3) for which paths a sub-router owns, and
+chttpsvr_use(3) for the full rule and for the rejections that run no
+middleware at all.
 
-This function is thread-safe and you can call it at any time.  You can
-also call it while another thread runs chttpsvr_destroy on the owning
-server.  A call that races such a destroy returns ccol_invalid_args,
-and touches no freed memory.
+This function is thread-safe and can be called at any time, even while
+another thread runs chttpsvr_destroy on the owning server; a call that
+races such a destroy returns ccol_invalid_args and touches no freed
+memory.
 .fi
 .SH NOTES
 .nf
-The NOTES section of chttpsvr_use describes three more things: the cap
-that each router applies at registration time, the combined limit of
-32 middleware steps for each request at dispatch time, and the policy
+The NOTES section of chttpsvr_use describes three further points: the
+cap that each router applies at registration time, the combined limit
+of 32 middleware steps per request at dispatch time, and the policy
 that the first of two duplicate routes wins.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success on success.
-ccol_invalid_args when router or fn is NULL, or when something
-                  destroyed the server that owns router.
+ccol_invalid_args when router or fn is NULL, or when the server that
+                  owns router has been destroyed.
 ccol_not_enough_memory when an allocation fails.
 ccol_not_permitted when the middleware chain of this router is already
 at the cap of 32 entries.

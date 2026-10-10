@@ -12,23 +12,23 @@ ccol_selectable ccol_selectable_from_chan(ccol_channel *ch, ccol_select_dir dir)
 .SH DESCRIPTION
 .nf
 A ccol_channel has two circular queues below it. This function reads
-the ID of the thread that calls it, and the direction that you ask
-for. It then chooses which of those two queues to wrap:
+the ID of the calling thread and the direction that you ask for, and
+from them chooses which of those two queues to wrap:
 
   ccol_select_read; owner <- workers_to_owner_cq  (same as ccol_chan_recv_zc)
                     worker <- owner_to_workers_cq
   ccol_select_write; owner -> owner_to_workers_cq  (same as ccol_chan_send_zc)
                     worker -> workers_to_owner_cq
 
-This function resolves the queue at the call site. ccol_select()
-itself therefore never needs access to the opaque ccol_channel struct.
-The function does not store the ccol_channel pointer. The
-ccol_selectable that it returns keeps only the ccol_circular_queue
-pointer that it resolved, and the dir value. It watches that one
-queue, whichever thread later waits on it or runs a callback for it.
+This function resolves the queue at the call site, so ccol_select()
+itself never needs access to the opaque ccol_channel struct. The
+function does not store the ccol_channel pointer: the ccol_selectable
+that it returns keeps only the ccol_circular_queue pointer that it
+resolved and the dir value, and it watches that one queue, whichever
+thread later waits on it or runs a callback for it.
 
 ccol_select() and ccol_event_loop only report that the queue is
-ready. The caller does the receive or the send itself.
+ready; the caller does the receive or the send itself.
 
 After ccol_select() returns on the thread that built the selectable,
 ccol_chan_try_recv_zc() and ccol_chan_try_send_zc() resolve to the
@@ -37,15 +37,15 @@ ccol_circq_try_send_zc() on sel.cq.
 
 Inside a ccol_event_loop callback, use ccol_circq_try_recv_zc() and
 ccol_circq_try_send_zc() on sel->cq, and never a ccol_chan_* call.
-The callback runs on a thread of the loop, and the channel counts
-that thread as a worker, whichever thread built the selectable. For a
-selectable that the owner built, a ccol_chan_* call there reaches the
-other queue. With a selectable that the owner built for
+The callback runs on a thread of the loop, which the channel counts as
+a worker whichever thread built the selectable, so for a selectable
+that the owner built, a ccol_chan_* call there reaches the other
+queue. For example, with a selectable that the owner built for
 ccol_select_read, which watches workers_to_owner_cq, a
 ccol_chan_try_recv_zc() inside on_readable receives from
-owner_to_workers_cq. It takes a message that the owner sent to its
-workers, and it leaves the message that made the callback run in the
-queue.
+owner_to_workers_cq: it takes a message that the owner sent to its
+workers, and leaves in the queue the message that made the callback
+run.
 .fi
 .SH PARAMETERS
 .nf
@@ -54,26 +54,26 @@ dir  ccol_select_read or ccol_select_write.
 .fi
 .SH RETURN VALUE
 .nf
-A ccol_selectable of type ccol_selectable_circq. It wraps the right
-ccol_circular_queue for the thread that calls and for the direction.
+A ccol_selectable of type ccol_selectable_circq that wraps the right
+ccol_circular_queue for the calling thread and for the direction.
 
 If ch is NULL, the function returns a ccol_selectable_circq with a
-NULL queue pointer. ccol_select() returns ccol_invalid_args for such a
-value.
+NULL queue pointer, for which ccol_select() returns
+ccol_invalid_args.
 .fi
 .SH NOTES
 .nf
 The function resolves the direction one time, at the moment of the
-call. It does not evaluate the direction again on each pass of
-ccol_select(). Build the selectable again when the role of the thread
-that calls changes between the build and the real ccol_select() call.
+call, and does not evaluate it again on each pass of ccol_select().
+Build the selectable again when the role of the calling thread changes
+between the build and the real ccol_select() call.
 .fi
 .SH THREAD SAFETY
 .nf
-This function reads ch->owner_tid and two pointer fields. The library
-writes those fields one time, when it creates the ccol_channel, and it
-never changes them after that. The function is therefore safe to call
-from any thread, at the same time as any other call.
+This function reads ch->owner_tid and two pointer fields, which the
+library writes one time, when it creates the ccol_channel, and never
+changes after that. The function is therefore safe to call from any
+thread, at the same time as any other call.
 .fi
 .SH EXAMPLES
 .nf

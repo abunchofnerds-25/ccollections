@@ -11,14 +11,14 @@ cbmap_init_mp(hm_name, mmgmt_procs);
 .fi
 .SH DESCRIPTION
 .nf
-Creates an ordered map that takes all of its memory from mmgmt_procs. The
-macro then assigns that map to hm_name. The caller must declare the handle
-first, with cbmap_declare(3) or cbmap_declare_scoped(3). The key type and
-the value type do not come to this macro as arguments. The macro reads them
-from the companion type variables that the declare macro created.
+Creates an ordered map that takes all of its memory from mmgmt_procs, and
+assigns that map to hm_name. The caller must declare the handle first, with
+cbmap_declare(3) or cbmap_declare_scoped(3). The key type and the value
+type do not come to this macro as arguments: the macro reads them from the
+companion type variables that the declare macro created.
 
-The macro is cbmap_init(3) plus an allocator. It uses the default order for
-the declared key type. cbmap_init_cc(3) replaces the order instead, and
+The macro is cbmap_init(3) plus an allocator, and it uses the default order
+for the declared key type. cbmap_init_cc(3) replaces the order instead, and
 cbmap_init_full(3) takes both.
 
 The one-step equivalents are cbmap_construct_mp(3) and
@@ -26,8 +26,8 @@ cbmap_construct_mp_scoped(3).
 .fi
 .SH PARAMETERS
 .nf
-hm_name      The map handle that the caller declared before. The macro
-             creates the map into it
+hm_name      The map handle that the caller declared before, into which
+             the macro creates the map
 mmgmt_procs  Pointer to a ccol_memmgmt_procs_t, or NULL for the default
              allocator
 .fi
@@ -40,14 +40,14 @@ expression.
 .nf
 The macro stops the program through ccol_fatal_err() if the creation fails
 All four members of ccol_memmgmt_procs_t must not be NULL
-The map copies the procedures into itself. The ccol_memmgmt_procs_t of
-the caller therefore does not have to outlive the call. But the procedures
-themselves must stay callable for the whole life of the map
-Every tree node that the map allocates later comes from these procedures.
-Everything that the map frees goes back to them
-The allocator has no effect on the order. The declared key type decides
-the order, as cbmap_create_full(3) describes. The walk goes in ascending
-key order
+The map copies the procedures into itself, so the ccol_memmgmt_procs_t of
+the caller does not have to outlive the call; the procedures themselves,
+however, must stay callable for the whole life of the map
+Every tree node that the map allocates later comes from these procedures,
+and everything that the map frees goes back to them
+The allocator has no effect on the order: the declared key type decides
+the order, as cbmap_create_full(3) describes, and the walk goes in
+ascending key order
 .fi
 .SH EXAMPLES
 .nf

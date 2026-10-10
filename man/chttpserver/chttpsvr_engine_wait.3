@@ -11,45 +11,45 @@ void chttpsvr_engine_wait(void);
 .fi
 .SH DESCRIPTION
 .nf
-Blocks the calling thread until the shared reactor of chttpserver
-stops completely.  This is true whether something started that stop
-before this call, starts it at the same time as this call, or starts
-it some time after this call.  This function blocks forever when
-nothing ever stops the reactor.  For example, an external SIGTERM
-handler may call chttpsvr_engine_stop() at a later, unknown time.
+Blocks the calling thread until the shared reactor of chttpserver has
+stopped completely, whether the stop was started before this call, at
+the same time as this call, or some time after it.  If nothing ever
+stops the reactor, this function blocks forever; for example, an
+external SIGTERM handler may call chttpsvr_engine_stop() at a later,
+unknown time.
 
-A drop of the last reference to this reactor starts an asynchronous
-teardown.  You drop that reference when you destroy the last chttpsvr
-with chttpsvr_destroy.  That teardown does not block the caller that
-started it.  This function is the explicit escape hatch for a program
-that must synchronize with that shutdown, or with a
-chttpsvr_engine_stop() call that comes from an external signal.  This
-reactor is separate from the engine of chttpclient.  This function
-therefore has no connection to the async work of chttpclient in the
-same process.
+Dropping the last reference to this reactor, which happens when you
+destroy the last chttpsvr with chttpsvr_destroy, starts an
+asynchronous teardown that does not block the caller that started it.
+This function is the explicit escape hatch for a program that must
+synchronize with that shutdown, or with a chttpsvr_engine_stop() call
+that comes from an external signal.  This reactor is separate from the
+engine of chttpclient, so this function has no connection to the
+async work of chttpclient in the same process.
 
-You can call it at the same time from more than one thread.  Each one
-blocks until the library confirms that the reactor stopped
-completely.  This does not depend on which caller started the stop,
-either with a release or with a chttpsvr_engine_stop() call.
+It can be called concurrently from more than one thread, and each
+caller blocks until the library confirms that the reactor has stopped
+completely, regardless of which caller started the stop, whether by a
+release or by a chttpsvr_engine_stop() call.
 
 Do not call this function from a request handler or a middleware that
 runs on the worker pool of ANY chttpsvr instance.  Such a call is a
-FATAL error: it calls ccol_fatal_err(), which is abort() and SIGABRT.
-The library reports it at once, and does not hang.  The drain of the
-worker pool of that server can never finish while this one in-flight
-request itself blocks here and waits for the engine to exit.  That
-deadlocks the shutdown of the whole shared engine, and not only of one
-server.  An admin or shutdown endpoint that wants a full drain before
-it answers calls chttpsvr_engine_stop() and then returns.  Call this
-function from a separate thread.
+FATAL error: it calls ccol_fatal_err(), which means abort() and
+SIGABRT, so the library reports it at once instead of hanging.  The
+drain of the worker pool of that server can never finish while this
+in-flight request itself blocks here waiting for the engine to exit,
+which would deadlock the shutdown of the whole shared engine, not just
+of one server.  An admin or shutdown endpoint that wants a full drain
+before it answers calls chttpsvr_engine_stop() and then returns; call
+this function from a separate thread.
 
 After this function returns, the fallback engine logger is closed.  A
-logger from chttpsvr_set_engine_logger stays in place, and the engine
-that a later chttpsvr_start brings up logs through it again.
+logger installed with chttpsvr_set_engine_logger stays in place, and
+the engine that a later chttpsvr_start brings up logs through it
+again.
 
-It is safe to call this function before the reactor ever starts, where
-it does nothing.
+It is safe to call this function before the reactor has ever started;
+it then does nothing.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_engine_stop (3),

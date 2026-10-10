@@ -11,23 +11,23 @@ ccol_retval_t ccol_dynmq_disable_sending(ccol_dynamic_queue *dq);
 .fi
 .SH DESCRIPTION
 .nf
-This function marks the queue as closed to new sends. Every later send
-returns ccol_not_permitted. This continues until a call to
+This function marks the queue as closed to new sends, so every later
+send returns ccol_not_permitted until a call to
 ccol_dynmq_enable_sending(). A send that the queue refuses keeps the
 ownership of its own msg->data.
 
-A dynamic queue grows on demand, so no sender parks and waits for room. A
-circular queue is different. There is therefore no broadcast to blocked
-senders here. The function does wake every write-direction waiter on this
-queue. Such a waiter is a ccol_select() call, a ccol_select_timed() call,
-or an ccol_event_loop registration. Each of them scans again and sees the
-new state. It therefore does not wait for a send that the queue no longer
-permits.
+A dynamic queue grows on demand, so, unlike in a circular queue, no
+sender parks and waits for room, and there is no broadcast to blocked
+senders here. The function does wake every write-direction waiter on
+this queue, which is a ccol_select() call, a ccol_select_timed() call,
+or an ccol_event_loop registration. Each of them scans again and sees
+the new state, so it does not wait for a send that the queue does not
+permit.
 
-A receive does not change. The messages that are already in the queue stay
-there, and a receive still gets them in the normal way. This is what makes
-this function the natural way to close a producer side and let a consumer
-drain what is left.
+A receive does not change: the messages that are already in the queue
+stay there, and a receive gets them in the normal way. This is what
+makes this function the natural way to close a producer side and let a
+consumer drain what is left.
 .fi
 .SH PARAMETERS
 .nf

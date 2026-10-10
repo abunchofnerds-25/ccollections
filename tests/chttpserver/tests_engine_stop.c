@@ -22,17 +22,17 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* pthread_timedjoin_np is a glibc extension. It is what makes the fixture
- * teardown of this file a bounded join, and not a blind pthread_join. See
- * engine_stop_fixture below. A real regression can leave a background thread
- * permanently stuck, for example with srv_engine_bundler.mutex held for
- * ever. Without the bounded join, the join itself then hangs for ever too.
- * That only moves the "the whole binary hangs instead of one test that fails
- * cleanly" problem. It moves it from "the chttpsvr_start() call of the next
- * unrelated test" to "the teardown of this exact test". It does not close
- * the problem. This macro must come before the first #include that can pull
- * in <pthread.h> indirectly. src/chttpserver.c and src/clogger.c put it in
- * the same place. */
+/* pthread_timedjoin_np is a glibc extension, and it is what makes the
+ * fixture teardown of this file a bounded join instead of a blind
+ * pthread_join (see engine_stop_fixture below). A real regression can leave
+ * a background thread permanently stuck, for example with
+ * srv_engine_bundler.mutex held for ever, and without the bounded join the
+ * join itself then hangs for ever too. That would only move the "the whole
+ * binary hangs instead of one test that fails cleanly" problem from "the
+ * chttpsvr_start() call of the next unrelated test" to "the teardown of
+ * this exact test", without closing it. This macro must come before the
+ * first #include that can pull in <pthread.h> indirectly, which is also
+ * where src/chttpserver.c and src/clogger.c put it. */
 #define _GNU_SOURCE
 
 #include <arpa/inet.h>
@@ -66,9 +66,9 @@ SOFTWARE.
 TAU_MAIN()
 
 /* The test clients of this binary write to the server with plain write(2),
- * and the server can close a connection while one of them writes. The
- * library leaves the disposition of SIGPIPE to the application, so this
- * binary ignores it itself. tests_sigpipe.c covers the library under the
+ * and the server can close a connection while one of them writes. Because
+ * the library leaves the disposition of SIGPIPE to the application, this
+ * binary ignores it itself; tests_sigpipe.c covers the library under the
  * default disposition. */
 __attribute__((constructor)) static void _ignore_sigpipe_for_test_writes(void) {
   signal(SIGPIPE, SIG_IGN);
@@ -111,29 +111,29 @@ __attribute__((constructor)) static void _ignore_sigpipe_for_test_writes(void) {
 /* the narrow internal bound of a test allows, and is not deadlocked.        */
 #define ENGINE_STOP_FIXTURE_MAX_THREADS 4
 
-/* The struct must carry its own tag, engine_stop_fixture. That tag must
- * match the typedef name exactly. TEST_F_SETUP, TEST_F_TEARDOWN and TEST_F
- * all expand FIXTURE into `struct FIXTURE`. A typedef alone, over an
- * anonymous struct, would make each such expansion declare a fresh, separate
- * and incomplete struct type. It would not refer back to this one. */
+/* The struct must carry its own tag, engine_stop_fixture, which must match
+ * the typedef name exactly, because TEST_F_SETUP, TEST_F_TEARDOWN and TEST_F
+ * all expand FIXTURE into `struct FIXTURE`. With a typedef alone, over an
+ * anonymous struct, each such expansion would declare a fresh, separate and
+ * incomplete struct type instead of referring back to this one. */
 typedef struct engine_stop_fixture {
   pthread_t threads[ENGINE_STOP_FIXTURE_MAX_THREADS];
   bool active[ENGINE_STOP_FIXTURE_MAX_THREADS]; /* true = not yet joined */
   int count;
 } engine_stop_fixture;
 
-/* This function registers tid. The teardown sweep below then joins tid with
- * a bound, if the body of the test never calls _fx_join() for it. Call this
- * function exactly one time for each thread that you create successfully.
- * Call it right after pthread_create() returns 0. A test with more
+/* This function registers tid, so that the teardown sweep below joins tid
+ * with a bound if the body of the test never calls _fx_join() for it. Call
+ * this function exactly one time for each thread that you create
+ * successfully, right after pthread_create() returns 0. A test with more
  * concurrent threads than ENGINE_STOP_FIXTURE_MAX_THREADS needs a larger
- * fixture array. No test in this file needs more than 3 today. */
+ * fixture array; no test in this file needs more than 3. */
 static void _fx_track(engine_stop_fixture *fx, pthread_t tid) {
   /* This catches a future test that tracks more threads than the
-     fixed-size arrays of this fixture hold. It catches that test before it
-     silently corrupts the memory past the end of those arrays. The doc
-     comment of this function above gives the intended fix, which is a
-     larger fixture array. Do not raise this bound casually. */
+     fixed-size arrays of this fixture hold, before it silently corrupts the
+     memory past the end of those arrays. The doc comment of this function
+     above gives the intended fix, which is a larger fixture array; do not
+     raise this bound casually. */
   assert(fx->count < ENGINE_STOP_FIXTURE_MAX_THREADS);
   fx->threads[fx->count] = tid;
   fx->active[fx->count] = true;
@@ -141,12 +141,11 @@ static void _fx_track(engine_stop_fixture *fx, pthread_t tid) {
 }
 
 /* A generous but bounded join. 30 seconds is comfortably beyond every real,
- * legitimate wait in this file. The longest such wait is a bounded
- * cond_timedwait of 10s, plus a little slack. This call therefore never
- * fires for no reason against a thread that behaves correctly. It also
- * guarantees that the call itself cannot hang the caller for ever against a
- * thread that is truly stuck. It returns true only when tid really stopped
- * and this call joined it. */
+ * legitimate wait in this file (the longest is a bounded cond_timedwait of
+ * 10s, plus a little slack), so this call never fires for no reason against
+ * a thread that behaves correctly, while it guarantees that the call itself
+ * cannot hang the caller for ever against a thread that is truly stuck. It
+ * returns true only when tid really stopped and this call joined it. */
 static bool _fx_timed_join(pthread_t tid, void **retval) {
 #if TEST_TIMEDJOIN_VISIBLE
   struct timespec deadline;
@@ -159,15 +158,15 @@ static bool _fx_timed_join(pthread_t tid, void **retval) {
 }
 
 /* This is the one join call that every test body below should use in place
- * of a bare pthread_join(). It is bounded; see _fx_timed_join above. It also
+ * of a bare pthread_join(). It is bounded (see _fx_timed_join above), and it
  * marks tid as handled, so that the teardown sweep does not try to join tid
- * a second time. A second join on a pthread_t that something already joined
- * is undefined behavior. It is safe to call this function on a tid that this
- * fixture never tracked. The search below then finds nothing, and the
- * function does nothing. That case is not expected in practice, because
- * _fx_track() should always track every thread that a test creates. This
- * code deliberately does not treat it as a fatal error in the test
- * infrastructure either. */
+ * a second time, because a second join on a pthread_t that something
+ * already joined is undefined behavior. It is safe to call this function on
+ * a tid that this fixture never tracked: the search below then finds
+ * nothing, and the function does nothing. That case is not expected in
+ * practice, because _fx_track() should always track every thread that a
+ * test creates, but this code deliberately does not treat it as a fatal
+ * error in the test infrastructure either. */
 static bool _fx_join(engine_stop_fixture *fx, pthread_t tid, void **retval) {
   bool ok = _fx_timed_join(tid, retval);
   if (ok) {
@@ -187,7 +186,7 @@ TEST_F_TEARDOWN(engine_stop_fixture) {
   for (int i = 0; i < tau->count; i++) {
     if (!tau->active[i]) continue;
     /* See the opening comment of this section for why this must be
-     * bounded, and not a blind pthread_join. A real regression here must
+     * bounded instead of a blind pthread_join: a real regression here must
      * not cascade into a hang of every later test in this binary. */
     if (!_fx_timed_join(tau->threads[i], NULL)) {
       fprintf(stderr,
@@ -270,24 +269,25 @@ static chttpsvr _start_server(const char *port_str, uint16_t port) {
 /* ========================================================================== */
 
 /* This test covers a call to chttpsvr_engine_stop() while srv is still
- * fully started. That is the forced path, which a signal handler uses.
- * Nothing calls chttpsvr_stop() or chttpsvr_destroy() on srv first. The
+ * fully started, which is the forced path that a signal handler uses, with
+ * nothing calling chttpsvr_stop() or chttpsvr_destroy() on srv first. The
  * reaper that this call starts must reset g_servers_count whenever it frees
- * the backing array of g_servers. Without that, a later chttpsvr_destroy(srv)
- * calls _servers_unregister(srv), which dereferences a NULL g_servers[0].
- * That is a deterministic SIGSEGV, and not a rare race. A clean run of this
- * test also proves that nothing leaks and that nothing is freed two times
- * along the way. The memtest target, which runs valgrind, proves that best. */
+ * the backing array of g_servers; without that, a later
+ * chttpsvr_destroy(srv) calls _servers_unregister(srv), which dereferences
+ * a NULL g_servers[0], a deterministic SIGSEGV rather than a rare race. A
+ * clean run of this test also proves that nothing leaks and that nothing is
+ * freed two times along the way, which the memtest target, running
+ * valgrind, proves best. */
 TEST_F(engine_stop_fixture, force_stop_while_started_then_destroy_is_safe) {
   (void)tau; /* this test creates no background thread of its own */
   /* _ccol_destructor is a safety net for a REQUIRE_* failure between here
-     and the explicit chttpsvr_destroy() calls below. This file has no
-     _teardown() and no atexit() to catch a leaked handle at exit. A leaked
-     handle leaves a server that is still registered and that still holds an
-     engine reference. For srv2 it also leaves a listening socket that is
-     still bound to this same port. Every later test in this binary can then
-     trip over that state. This is safe here, because nothing else destroys
-     srv or srv2, and nothing races their destruction. */
+     and the explicit chttpsvr_destroy() calls below, because this file has
+     no _teardown() and no atexit() to catch a leaked handle at exit. A
+     leaked handle leaves a server that is still registered and that still
+     holds an engine reference (and, for srv2, a listening socket that is
+     still bound to this same port), and every later test in this binary can
+     then trip over that state. This is safe here, because nothing else
+     destroys srv or srv2, and nothing races their destruction. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _start_server("18796", 18796);
 
@@ -300,13 +300,13 @@ TEST_F(engine_stop_fixture, force_stop_while_started_then_destroy_is_safe) {
   chttpsvr_engine_wait();
 
   /* The crash that this test guards against happens inside
-   * chttpsvr_destroy() itself. To reach the line after it is the real
+   * chttpsvr_destroy() itself, so reaching the line after it is the real
    * assertion. */
   chttpsvr_destroy(srv);
 
   /* Prove that the engine came back up cleanly, and that the force-stop
-   * left no global state corrupt. Start a fresh server on the same port,
-   * and drive one real request through it. */
+   * left no global state corrupt, by starting a fresh server on the same
+   * port and driving one real request through it. */
   chttpsvr srv2 _ccol_destructor(___chttpsvr_destroy) =
       _start_server("18796", 18796);
   status = 0;
@@ -317,12 +317,11 @@ TEST_F(engine_stop_fixture, force_stop_while_started_then_destroy_is_safe) {
   chttpsvr_engine_wait();
 }
 
-/* The quiesce pass of the reaper is _engine_force_stop_quiesce_all. It
- * walks every server that is still registered in g_servers, and not only
- * one. This test drives that loop with two servers that started
- * independently and that are both still live at the moment of the forced
- * stop. Each one holds a finished connection in its own idle list, and
- * each such connection is eligible for keep-alive. */
+/* The quiesce pass of the reaper, _engine_force_stop_quiesce_all, walks
+ * every server that is still registered in g_servers, not only one. This
+ * test drives that loop with two servers that started independently and
+ * that are both still live at the moment of the forced stop, each holding a
+ * finished connection, eligible for keep-alive, in its own idle list. */
 TEST_F(engine_stop_fixture, force_stop_quiesces_multiple_servers) {
   (void)tau; /* this test creates no background thread of its own */
   chttpsvr srv_a _ccol_destructor(___chttpsvr_destroy) =
@@ -378,32 +377,33 @@ static void _slow_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
 }
 
 /* chttpsvr_engine_stop() must still drain every request that is truly in
- * flight before it tears the reactor down. That is the documented contract
- * of _drain_and_close_all_connections. A graceful chttpsvr_destroy()
- * already does exactly this. The forced path must not abandon a request
- * that a worker thread already handles at the moment that the signal
- * fires, and it must not corrupt such a request. */
+ * flight before it tears the reactor down, which is the documented contract
+ * of _drain_and_close_all_connections and exactly what a graceful
+ * chttpsvr_destroy() already does. The forced path must neither abandon nor
+ * corrupt a request that a worker thread already handles at the moment
+ * that the signal fires. */
 TEST_F(engine_stop_fixture,
        force_stop_drains_in_flight_request_before_reactor_teardown) {
-  /* This shrinks the timing of _wait_in_flight_bounded. The test
+  /* This shrinks the timing of _wait_in_flight_bounded, using the same hook
+   * in the same way as the test
    * destroy_does_not_hang_when_worker_blocked_with_disabled_timeouts in
-   * tests.c uses this same hook in the same way. The REQUIRE_TRUE(
-   * g_slow_entered) below can fail while a worker thread is truly still
-   * blocked inside _slow_handler. The chttpsvr_destroy() of srv at the exit
-   * of the scope, through _ccol_destructor, then forces that connection
-   * unblocked in well under a second. Without the shrink, it falls back to
-   * the real production sizes, which are a graceful wait of 30s plus a
-   * grace period of 5s before the force-unblock. The shrink therefore turns
-   * a slow stall on a test that already fails into a fast, clean report of
-   * that failure. The stall is slow, but it is not infinite. This test puts
-   * the real defaults back before it returns, on every path. */
+   * tests.c. The REQUIRE_TRUE( g_slow_entered) below can fail while a worker
+   * thread is truly still blocked inside _slow_handler; the
+   * chttpsvr_destroy() of srv at the exit of the scope, through
+   * _ccol_destructor, then forces that connection unblocked in well under a
+   * second, while without the shrink it falls back to the real production
+   * sizes, a graceful wait of 30s plus a grace period of 5s before the
+   * force-unblock. The shrink therefore turns a slow (but not infinite)
+   * stall on a test that already fails into a fast, clean report of that
+   * failure. This test puts the real defaults back before it returns, on
+   * every path. */
   _chttpsvr_set_wait_in_flight_bounds_for_tests(300, 2000);
 
   char *err = NULL;
   /* _ccol_destructor: see the comment of
      force_stop_while_started_then_destroy_is_safe above. This is safe here,
      because the background client thread below only sends an HTTP request
-     to srv. That thread never destroys srv itself. */
+     to srv and never destroys srv itself. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       ccol_create_chttpsvr(CLOG_INVALID, &err);
   if (srv == CHTTPSVR_INVALID)
@@ -420,13 +420,14 @@ TEST_F(engine_stop_fixture,
 
   g_slow_go = false;
   g_slow_entered = false;
-  /* This is on the heap, and not a local on the stack. A real regression
-     below leaves th still running when the final, bounded _fx_join times
-     out. That must not become a later write through a pointer that dangles
-     into the stack frame of this function, which something else has reused
-     by then. _stopping_race_ctx_t, a few tests below in this same file,
-     uses the same reasoning. This code deliberately never frees ctx on a
-     bail-out path where th may still run and may still write into it. */
+  /* This is on the heap instead of a local on the stack: when a real
+     regression below leaves th still running as the final, bounded _fx_join
+     times out, that must not become a later write through a pointer that
+     dangles into the stack frame of this function, which something else
+     has reused by then. _stopping_race_ctx_t, a few tests below in this
+     same file, uses the same reasoning. This code deliberately never frees
+     ctx on a bail-out path where th may still run and may still write into
+     it. */
   _async_get_ctx *ctx = (_async_get_ctx *)calloc(1, sizeof(*ctx));
   if (!ctx) {
     _chttpsvr_set_wait_in_flight_bounds_for_tests(0, 0);
@@ -445,13 +446,13 @@ TEST_F(engine_stop_fixture,
   _fx_track(tau, th);
 
   /* Wait for proof that the request really reached the worker thread and
-   * that it blocks inside _slow_handler. That is what makes it truly in
-   * flight. Only then force-stop the engine. A fixed sleep here would be a
-   * flaky proxy for that proof on a slow or loaded machine. Under valgrind,
+   * blocks inside _slow_handler, which is what makes it truly in flight,
+   * and only then force-stop the engine. A fixed sleep here would be a
+   * flaky proxy for that proof on a slow or loaded machine (under valgrind,
    * for example, the accept, parse and dispatch path can easily take longer
-   * than a delay that looks like plenty. This code therefore waits on the
-   * entry signal of the handler instead. That wait has a generous bound,
-   * and it never blocks for ever. */
+   * than a delay that looks like plenty), so this code waits on the entry
+   * signal of the handler instead, with a generous bound, so that it never
+   * blocks for ever. */
   {
     struct timespec deadline;
     clock_gettime(CLOCK_REALTIME, &deadline);
@@ -465,14 +466,14 @@ TEST_F(engine_stop_fixture,
     pthread_mutex_unlock(&g_slow_mtx);
   }
   if (!g_slow_entered) {
-    /* Without this, th leaks on this path. It is a joinable thread that
-       nothing ever joins. Release the handler unconditionally. That does
-       nothing when the handler truly never started. It unblocks the handler
-       when the bounded wait above gave a false negative instead. Then join
-       th before the failure, and do not leave it running for the rest of
-       the life of this process. The release just above guarantees that the
-       HTTP request of th can now finish. That is what makes it safe to
-       block here on a join with no bound. */
+    /* Without this, th leaks on this path as a joinable thread that nothing
+       ever joins. Release the handler unconditionally, which does nothing
+       when the handler truly never started, and unblocks it when the
+       bounded wait above gave a false negative instead. Then join th before
+       the failure, instead of leaving it running for the rest of the life
+       of this process. Because the release just above guarantees that the
+       HTTP request of th can now finish, it is safe to block here on a join
+       with no bound. */
     pthread_mutex_lock(&g_slow_mtx);
     g_slow_go = true;
     pthread_cond_broadcast(&g_slow_cv);
@@ -485,20 +486,20 @@ TEST_F(engine_stop_fixture,
   chttpsvr_engine_stop();
 
   /* Only now let the handler finish. The forced stop must drain this
-   * in-flight request, and it must not abandon it. Without that drain, the
-   * client thread below hangs past its own request timeout, and it never
-   * sees a 200. */
+   * in-flight request instead of abandoning it; without that drain, the
+   * client thread below hangs past its own request timeout and never sees a
+   * 200. */
   pthread_mutex_lock(&g_slow_mtx);
   g_slow_go = true;
   pthread_cond_broadcast(&g_slow_cv);
   pthread_mutex_unlock(&g_slow_mtx);
 
-  /* This code checks the result. It is not a fire-and-forget call. th can
-     somehow still run 30s later. That is a real regression, because th
-     should unblock the instant that the code above sets g_slow_go. On that
-     path nothing here may read ctx or free it, because th may still write
-     into it. To leave ctx un-freed there is deliberate. See the comment on
-     the declaration of ctx above. */
+  /* This code checks the result instead of making a fire-and-forget call.
+     If th somehow still runs 30s later, that is a real regression, because
+     th should unblock the instant that the code above sets g_slow_go, and
+     on that path nothing here may read ctx or free it, because th may still
+     write into it. Leaving ctx un-freed there is deliberate; see the
+     comment on the declaration of ctx above. */
   bool th_joined = _fx_join(tau, th, NULL);
   _chttpsvr_set_wait_in_flight_bounds_for_tests(0, 0);
   REQUIRE_TRUE(th_joined);
@@ -515,10 +516,10 @@ TEST_F(engine_stop_fixture,
 static void *_release_slow_handler_after_delay(void *arg) {
   (void)arg;
   /* 150ms gives the reaper thread that chttpsvr_engine_stop() starts enough
-   * time to win the race to quiesce srv. It then blocks inside
-   * _drain_and_close_all_connections, where it waits on the /slow-race
-   * request that is still in flight below. Only after that does this code
-   * let the handler finish, and therefore let that drain finish. */
+   * time to win the race to quiesce srv and then block inside
+   * _drain_and_close_all_connections, waiting on the /slow-race request
+   * that is still in flight below. Only after that does this code let the
+   * handler finish, and with it that drain. */
   struct timespec nap = {0, 150000000L};
   nanosleep(&nap, NULL);
   pthread_mutex_lock(&g_slow_mtx);
@@ -528,53 +529,51 @@ static void *_release_slow_handler_after_delay(void *arg) {
   return NULL;
 }
 
-/* This test covers a race between two callers. The first is the background
- * reaper thread of chttpsvr_engine_stop(), which quiesces every server that
- * is still registered, and that includes srv. The second is an independent
- * chttpsvr_destroy(srv) call on this thread, at the same time. No
- * chttpsvr_engine_wait() call serializes the two. This is exactly the
- * pattern that the doc comment of chttpsvr_engine_stop() invites. That
- * comment describes the function as safe to call from a signal handler, and
- * it asks no caller to synchronize it against a concurrent
- * chttpsvr_destroy() first.
+/* This test covers a race between two callers: the background reaper
+ * thread of chttpsvr_engine_stop(), which quiesces every server that is
+ * still registered, srv included, and an independent chttpsvr_destroy(srv)
+ * call on this thread at the same time, with no chttpsvr_engine_wait() call
+ * to serialize the two. This is exactly the pattern that the doc comment of
+ * chttpsvr_engine_stop() invites, since that comment describes the
+ * function as safe to call from a signal handler and asks no caller to
+ * synchronize it against a concurrent chttpsvr_destroy() first.
  *
- * One of the two callers loses the race to quiesce srv. That loser must
- * wait for the real teardown work of the winner to finish. It must not
- * return from _quiesce_server_once() at once, and do nothing, the instant
- * that it sees that the other caller already claimed the quiesce state of
- * srv. A loser that returns early goes straight into
- * ccol_mutex_destroy(raw->mutex), ccol_mutex_destroy(raw->idle_mutex) and
- * free(raw). The reaper thread still uses those exact objects at that
- * moment, inside _drain_and_close_all_connections. This test forces that
- * function to block for a real, measurable window, with the /slow-race
- * request that is still in flight. The result is a use-after-free and a
- * mutex that something destroys while it is in use, both at once. A clean
- * run of this test is what proves that the race stays closed. The memtest
- * target, which runs valgrind, and a build with -fsanitize=thread prove
- * that best. */
+ * The caller that loses the race to quiesce srv must wait for the real
+ * teardown work of the winner to finish, instead of returning from
+ * _quiesce_server_once() at once, doing nothing, the instant that it sees
+ * that the other caller already claimed the quiesce state of srv. A loser
+ * that returns early goes straight into ccol_mutex_destroy(raw->mutex),
+ * ccol_mutex_destroy(raw->idle_mutex) and free(raw), while the reaper
+ * thread still uses those exact objects inside
+ * _drain_and_close_all_connections, which this test forces to block for a
+ * real, measurable window with the /slow-race request that is still in
+ * flight. The result is a use-after-free and a mutex that something
+ * destroys while it is in use, both at once. A clean run of this test is
+ * what proves that the race stays closed, and the memtest target, which
+ * runs valgrind, and a build with -fsanitize=thread prove that best. */
 TEST_F(engine_stop_fixture, concurrent_destroy_and_engine_stop_is_safe) {
   /* This is the same safety net that
      force_stop_drains_in_flight_request_before_reactor_teardown builds with
      the same hook. A REQUIRE_* between here and chttpsvr_engine_stop() can
      fire while a worker thread is truly still blocked inside
-     _slow_handler. Without the shrink, the chttpsvr_destroy() of srv at the
-     exit of the scope below then falls back to the real, production-sized
-     _wait_in_flight_bounded timers. This test puts the real defaults back
-     before it returns, on every path. The shrink does not affect the timing
-     of the main path of this test. _release_slow_handler_after_delay
-     normally releases the handler after its own sleep of 150ms. That is
-     well before the code reaches either the shrunk bounds or the real
-     default ones. */
+     _slow_handler, and without the shrink, the chttpsvr_destroy() of srv at
+     the exit of the scope below then falls back to the real,
+     production-sized _wait_in_flight_bounded timers. This test puts the
+     real defaults back before it returns, on every path. The shrink does
+     not affect the timing of the main path of this test, because
+     _release_slow_handler_after_delay normally releases the handler after
+     its own sleep of 150ms, well before the code reaches either the shrunk
+     bounds or the real default ones. */
   _chttpsvr_set_wait_in_flight_bounds_for_tests(300, 2000);
 
   char *err = NULL;
   /* _ccol_destructor: see the comment of
      force_stop_while_started_then_destroy_is_safe above. This is safe here
-     for one specific reason. Every REQUIRE_* that can return early sits
-     strictly before the chttpsvr_engine_stop() call below. No REQUIRE_*
+     for one specific reason: every REQUIRE_* that can return early sits
+     strictly before the chttpsvr_engine_stop() call below, and no REQUIRE_*
      sits between chttpsvr_engine_stop() and the explicit
-     chttpsvr_destroy(srv) a few lines later. This destructor can therefore
-     never fire at the same time as the destroy race that the test drives on
+     chttpsvr_destroy(srv) a few lines later, so this destructor can never
+     fire at the same time as the destroy race that the test drives on
      purpose, between the reaper and this thread. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       ccol_create_chttpsvr(CLOG_INVALID, &err);
@@ -592,10 +591,9 @@ TEST_F(engine_stop_fixture, concurrent_destroy_and_engine_stop_is_safe) {
 
   g_slow_go = false;
   g_slow_entered = false;
-  /* This is on the heap, and not a local on the stack. See the comment on
-     the same ctx declaration in
-     force_stop_drains_in_flight_request_before_reactor_teardown above for
-     the reason. */
+  /* This is on the heap instead of a local on the stack, for the reason in
+     the comment on the same ctx declaration in
+     force_stop_drains_in_flight_request_before_reactor_teardown above. */
   _async_get_ctx *ctx = (_async_get_ctx *)calloc(1, sizeof(*ctx));
   if (!ctx) {
     _chttpsvr_set_wait_in_flight_bounds_for_tests(0, 0);
@@ -627,8 +625,8 @@ TEST_F(engine_stop_fixture, concurrent_destroy_and_engine_stop_is_safe) {
   }
   if (!g_slow_entered) {
     /* Without this, req_th leaks on this path. Release the handler
-       unconditionally. That does nothing, and is harmless, when the
-       handler never started. Then join req_th before the failure. See the
+       unconditionally (which does nothing, and is harmless, when the
+       handler never started), then join req_th before the failure. See the
        same fallback in
        force_stop_drains_in_flight_request_before_reactor_teardown for the
        full reasoning. */
@@ -648,9 +646,9 @@ TEST_F(engine_stop_fixture, concurrent_destroy_and_engine_stop_is_safe) {
     _fx_track(tau, releaser_th);
   } else {
     /* Nothing created _release_slow_handler_after_delay, so it cannot
-       release the handler itself. Release the handler here instead.
-       req_th is already live, and it can then still finish before this
-       failure, and it does not leak. */
+       release the handler itself; release the handler here instead, so that
+       req_th, which is already live, can still finish before this failure
+       and does not leak. */
     pthread_mutex_lock(&g_slow_mtx);
     g_slow_go = true;
     pthread_cond_broadcast(&g_slow_cv);
@@ -660,27 +658,24 @@ TEST_F(engine_stop_fixture, concurrent_destroy_and_engine_stop_is_safe) {
   }
   REQUIRE_EQ(releaser_create_rv, 0);
 
-  /* The documentation says that chttpsvr_engine_stop() does not block. It
-   * only starts a background reaper thread. That reaper is a real
-   * ccol_thread_create(). A fixed sleep here would only guess that the
-   * reaper had enough time to win the race to quiesce srv before the
-   * chttpsvr_destroy() below runs. On a loaded CI run, or under valgrind, a
-   * guess that turns out too short silently lets the chttpsvr_destroy() of
-   * this thread win the race instead. The test then drives the OTHER
-   * interleaving, which is already safe, and it never fails. That is a
-   * silent false pass, and it never retests the regression that this test
-   * exists to catch.
-   * _chttpsvr_wait_quiesce_teardown_race_hook_entered_for_tests() proves
-   * the same thing instead, deterministically, with no guessed timing at
-   * all. It confirms that the reaper thread already claimed
-   * quiesce_state == CHTTPSVR_QS_QUIESCING for srv; see the doc comment of
-   * that hook. Only then does this thread call chttpsvr_destroy(). This
-   * call is therefore the losing side on every single run. The code
-   * releases the hook right after that, so that the reaper can go into its
-   * own real teardown work. That work then blocks on the /slow-race request
-   * that is still in flight, exactly as before, and the 150ms timer of
-   * _release_slow_handler_after_delay releases it. This mirrors the same
-   * use of this same hook in
+  /* The documentation says that chttpsvr_engine_stop() does not block: it only
+   * starts a background reaper thread, which is a real ccol_thread_create(). A
+   * fixed sleep here would only guess that the reaper had enough time to win
+   * the race to quiesce srv before the chttpsvr_destroy() below runs, and on a
+   * loaded CI run, or under valgrind, a guess that turns out too short silently
+   * lets the chttpsvr_destroy() of this thread win the race instead. The test
+   * then drives the OTHER interleaving, which is already safe, and never fails:
+   * a silent false pass that never retests the regression that this test exists
+   * to catch. _chttpsvr_wait_quiesce_teardown_race_hook_entered_for_tests()
+   * proves the same thing instead, deterministically, with no guessed timing at
+   * all, by confirming that the reaper thread already claimed quiesce_state ==
+   * CHTTPSVR_QS_QUIESCING for srv (see the doc comment of that hook). Only then
+   * does this thread call chttpsvr_destroy(), so this call is the losing side
+   * on every single run. The code releases the hook right after that, so that
+   * the reaper can go into its own real teardown work. That work then blocks on
+   * the /slow-race request that is still in flight, as described above, until
+   * the 150ms timer of _release_slow_handler_after_delay releases it. This
+   * mirrors the same use of this same hook in
    * fork_mid_quiesce_teardown_does_not_hang_child below. */
   extern void _chttpsvr_arm_quiesce_teardown_race_hook_for_tests(void);
   extern void _chttpsvr_wait_quiesce_teardown_race_hook_entered_for_tests(void);
@@ -693,8 +688,8 @@ TEST_F(engine_stop_fixture, concurrent_destroy_and_engine_stop_is_safe) {
   chttpsvr_destroy(srv);
 
   _fx_join(tau, releaser_th, NULL);
-  /* This code checks the result. It is not a fire-and-forget call. See the
-     same reasoning in
+  /* This code checks the result instead of making a fire-and-forget call.
+     See the same reasoning in
      force_stop_drains_in_flight_request_before_reactor_teardown for why
      nothing may read ctx or free it when req_th somehow still runs 30s
      later. */
@@ -742,7 +737,7 @@ TEST_F(engine_stop_fixture, concurrent_destroy_and_engine_stop_is_safe) {
 /* exact server that _chttpsvr_resolve protects. The chttpsvr_start() call   */
 /* of this test is one such call. Only after that wait does it touch any     */
 /* state of the server. __chttpsvr_destroy makes the same wait, and the      */
-/* forced path of chttpsvr_engine_stop() now makes it too. This test uses a  */
+/* forced path of chttpsvr_engine_stop() makes it too. This test uses a      */
 /* white-box hook to pause chttpsvr_start() inside that exact window,        */
 /* deterministically. It does not rely on a fixed sleep to hit a race window */
 /* a few instructions wide by chance.                                        */
@@ -754,14 +749,14 @@ extern void _chttpsvr_release_start_race_hook_for_tests(void);
 static chttpsvr g_race_srv = CHTTPSVR_INVALID;
 static ccol_retval_t g_race_start_rv = ccol_success;
 /* The thread function below sets this flag as the very last thing that it
-   does. It sets it strictly after it writes both g_race_srv and
-   g_race_start_rv in full. The test below polls this flag, with a bound,
-   before it reads either of those two plain globals, and before it joins
-   this thread. Neither of those two globals is atomic. The atomic store and
-   load pair here is therefore what really establishes a happens-before
-   relationship for them. Without the poll before it, a bare pthread_join
-   would be a real data race on both globals under the C11 memory model.
-   That holds whether or not the join itself returns quickly in practice. */
+   does, strictly after it writes both g_race_srv and g_race_start_rv in
+   full, and the test below polls this flag, with a bound, before it reads
+   either of those two plain globals and before it joins this thread.
+   Because neither of those two globals is atomic, the atomic store and load
+   pair here is what really establishes a happens-before relationship for
+   them: without the poll before it, a bare pthread_join would be a real
+   data race on both globals under the C11 memory model, whether or not the
+   join itself returns quickly in practice. */
 static _Atomic bool g_race_start_returned = false;
 
 static void *_start_racing_server_thread(void *arg) {
@@ -792,52 +787,53 @@ TEST_F(engine_stop_fixture, force_stop_racing_a_concurrent_start_is_safe) {
 
   pthread_t start_th;
   if (pthread_create(&start_th, NULL, _start_racing_server_thread, NULL) != 0) {
-    /* The code above already armed the hook, and now nothing ever enters
-       it. _start_race_hook_wait_if_armed checks its own `go` flag again
-       only after it finds that `armed` is still true. This code therefore
-       sets `go` here in advance, instead of leaving it unset. A later,
-       unrelated chttpsvr_start() call elsewhere in this binary can then
-       land on this hook and pass through at once. Without this, such a
-       call blocks for ever on a release that never comes. */
+    /* The code above already armed the hook, and nothing ever enters it.
+       Because _start_race_hook_wait_if_armed checks its own `go` flag again
+       only after it finds that `armed` is still true, this code sets `go`
+       here in advance instead of leaving it unset, so that a later,
+       unrelated chttpsvr_start() call elsewhere in this binary that lands
+       on this hook passes through at once. Without this, such a call blocks
+       for ever on a release that never comes. */
     _chttpsvr_release_start_race_hook_for_tests();
     REQUIRE_TRUE(false);
   }
   _fx_track(tau, start_th);
 
   /* Block until chttpsvr_start() confirms its engine reference, registers
-   * with servers_bundler, and pauses right there. That is the exact window
-   * that this test drives a forced engine stop into. */
+   * with servers_bundler, and pauses right there, in the exact window that
+   * this test drives a forced engine stop into. */
   _chttpsvr_wait_start_race_hook_entered_for_tests();
 
   chttpsvr_engine_stop();
 
-  /* This gives the reaper thread of chttpsvr_engine_stop() time to start,
-   * and to reach the wait inside _quiesce_server_once. That wait is for the
-   * in-flight chttpsvr_start() call of this exact server to finish. With
-   * this sleep in place, the reaper blocks there. The 150ms of
-   * _release_slow_handler_after_delay above gives a racing reaper time to
-   * win a similar race in the same way. This test is meaningful either way,
-   * and it does not need the sleep. See the comment of that call for why
-   * the block of the hook, and not this sleep, is what makes the race
+  /* This gives the reaper thread of chttpsvr_engine_stop() time to start
+   * and to reach the wait inside _quiesce_server_once, which waits for the
+   * in-flight chttpsvr_start() call of this exact server to finish, so that
+   * with this sleep in place the reaper blocks there, in the same way as
+   * the 150ms of _release_slow_handler_after_delay above gives a racing
+   * reaper time to win a similar race. This test is meaningful either way
+   * and does not need the sleep: see the comment of that call for why the
+   * block of the hook, not this sleep, is what makes the race
    * deterministic. The sleep only makes the test land on the more
    * interesting of the two safe interleavings more often. */
   struct timespec settle = {0, 150000000L};
   nanosleep(&settle, NULL);
 
-  /* Now let chttpsvr_start() finish. A reaper that reached this server
-   * blocks and waits for exactly this. Nothing can tear the shared reactor
-   * down until chttpsvr_start() releases its own resolve pin. */
+  /* Now let chttpsvr_start() finish, which is exactly what a reaper that
+   * reached this server blocks and waits for: nothing can tear the shared
+   * reactor down until chttpsvr_start() releases its own resolve pin. */
   _chttpsvr_release_start_race_hook_for_tests();
 
-  /* This is a bounded poll, and not a blind pthread_join. A regression here
-     makes start_th deadlock with itself for ever. This poll turns that hang
-     into a clean REQUIRE_TRUE(race_returned) failure that names the test.
-     Without it, the hang has no bound. This flag is also what really
-     establishes a happens-before relationship for g_race_srv and
-     g_race_start_rv below. start_th wrote both of them, and neither is
-     atomic. To read them, or to join start_th, without a check of this flag
-     first would be a real data race under the C11 memory model. That holds
-     whether or not the join itself returns quickly in practice. */
+  /* This is a bounded poll instead of a blind pthread_join: a regression
+     here makes start_th deadlock with itself for ever, and this poll turns
+     that hang, which otherwise has no bound, into a clean
+     REQUIRE_TRUE(race_returned) failure that names the test. This flag is
+     also what really establishes a happens-before relationship for
+     g_race_srv and g_race_start_rv below, which start_th wrote and neither
+     of which is atomic, so reading them, or joining start_th, without a
+     check of this flag first would be a real data race under the C11
+     memory model, whether or not the join itself returns quickly in
+     practice. */
   bool race_returned = false;
   for (int i = 0; i < 100; i++) {
     if (atomic_load(&g_race_start_returned)) {
@@ -851,15 +847,15 @@ TEST_F(engine_stop_fixture, force_stop_racing_a_concurrent_start_is_safe) {
   if (!race_returned)
     return; /* a join would hang for ever; nothing more to check safely */
   _fx_join(tau, start_th, NULL);
-  /* g_race_srv is a global. The racing background thread writes it, so it
+  /* g_race_srv is a global that the racing background thread writes, so it
      cannot carry a scope-exit _ccol_destructor the way that a local handle
-     can. This code therefore cleans it up explicitly before it asserts on
-     race_rv here. A REQUIRE_* failure at this exact point then does not
-     leak it. This file has no _teardown() and no atexit() to catch such a
-     leak. A leaked server here stays registered, and it still holds an
-     engine reference, for every later test in this binary. Every REQUIRE_*
-     below this point already sits after the final chttpsvr_destroy() call
-     for g_race_srv further down. None of them needs the same treatment. */
+     can, and this code cleans it up explicitly before it asserts on race_rv
+     here, so that a REQUIRE_* failure at this exact point does not leak it.
+     This file has no _teardown() and no atexit() to catch such a leak, and
+     a leaked server here stays registered, holding an engine reference, for
+     every later test in this binary. Every REQUIRE_* below this point
+     already sits after the final chttpsvr_destroy() call for g_race_srv
+     further down, so none of them needs the same treatment. */
   ccol_retval_t race_rv = g_race_start_rv;
   if (race_rv != ccol_success) {
     if (g_race_srv != CHTTPSVR_INVALID) chttpsvr_destroy(g_race_srv);
@@ -869,10 +865,10 @@ TEST_F(engine_stop_fixture, force_stop_racing_a_concurrent_start_is_safe) {
 
   chttpsvr_engine_wait();
 
-  /* The real assertion is that neither of these crashes and neither hangs.
-   * The early registration and the wait in the quiesce pass above are what
-   * make that true. Without them, the listen_reg of g_race_srv can point
-   * into a ccol_event_loop that something already destroyed by this point.
+  /* The real assertion is that neither of these crashes and neither hangs,
+   * which the early registration and the wait in the quiesce pass above
+   * make true. Without them, the listen_reg of g_race_srv can point into a
+   * ccol_event_loop that something already destroyed by this point, and
    * chttpsvr_destroy() is then a use-after-free. */
   chttpsvr_destroy(g_race_srv);
 
@@ -915,36 +911,36 @@ extern void _chttpsvr_arm_engine_stopping_race_hook_for_tests(void);
 extern void _chttpsvr_wait_engine_stopping_race_hook_entered_for_tests(void);
 extern void _chttpsvr_release_engine_stopping_race_hook_for_tests(void);
 
-/* This is private state for each run of the two races below. Those races
- * are a forced reap against a concurrent start, and a graceful reap against
- * a concurrent start. The tests are
+/* This is private state for each run of the two races below (a forced reap
+ * against a concurrent start, and a graceful reap against a concurrent
+ * start), which are the tests
  * start_racing_a_concurrent_forced_reap_retries_and_succeeds and
  * start_racing_a_concurrent_graceful_reap_retries_and_succeeds. The two must
  * not share one file-scope global triple of srv2, start_rv and
- * start_returned. _destroy_hang_ctx_t in tests.c documents the reason for
- * the same class of bug. The two tests run one after the other. The bounded
- * poll of each one can bail out; see the opening comment of
- * ENGINE_STOP_FIXTURE. That path deliberately leaves start_th tracked but
- * unjoined, and it does not block on a thread that looks stuck. Such a
- * thread may be only slow, and not truly hung. It can then write into a
+ * start_returned, for the reason that _destroy_hang_ctx_t in tests.c
+ * documents for the same class of bug. The two tests run one after the
+ * other, and the bounded poll of each one can bail out (see the opening
+ * comment of ENGINE_STOP_FIXTURE); that path deliberately leaves start_th
+ * tracked but unjoined instead of blocking on a thread that looks stuck but
+ * may be only slow, not truly hung. Such a thread can then write into a
  * shared global after the NEXT test already reset that global, while that
- * next test races its own fresh thread for the same globals. The later test
- * then sees a value that neither of its own two writers produced. A ctx on
- * the heap for each run of a test makes that structurally impossible. This
- * code frees a ctx only after _fx_join confirms that the thread that owns it
- * stopped. An abandoned thread from an earlier test can therefore only ever
- * write into its OWN ctx, which is still live. It can never write into the
- * ctx of a later test. */
+ * next test races its own fresh thread for the same globals, so the later
+ * test sees a value that neither of its own two writers produced. A ctx on
+ * the heap for each run of a test makes that structurally impossible:
+ * this code frees a ctx only after _fx_join confirms that the thread that
+ * owns it stopped, so an abandoned thread from an earlier test can only
+ * ever write into its OWN ctx, which is still live, and never into the ctx
+ * of a later test. */
 typedef struct {
   uint16_t port;
   chttpsvr srv;
   ccol_retval_t start_rv;
   /* The thread function below sets this flag as the very last thing that it
-     does. It sets it strictly after it writes both srv and start_rv in
-     full. Every caller polls this flag, with a bound, before it reads either
-     of those two plain fields, and before it joins this thread. Neither of
-     those two fields is atomic. Without that poll, a read of them, or a
-     join of the thread, is a real data race under the C11 memory model. */
+     does, strictly after it writes both srv and start_rv in full, and every
+     caller polls this flag, with a bound, before it reads either of those
+     two plain fields and before it joins this thread. Because neither of
+     those two fields is atomic, a read of them, or a join of the thread,
+     without that poll is a real data race under the C11 memory model. */
   _Atomic bool returned;
 } _stopping_race_ctx_t;
 
@@ -974,9 +970,9 @@ TEST_F(engine_stop_fixture,
   _stopping_race_ctx_t *ctx =
       (_stopping_race_ctx_t *)calloc(1, sizeof(_stopping_race_ctx_t));
   if (!ctx) {
-    /* srv1 is already live at this point. It is registered, and it holds an
-       engine reference. Destroy it before the failure, so that a temporary
-       lack of memory here does not leak it for the rest of the run of this
+    /* srv1 is already live at this point, registered and holding an engine
+       reference, so destroy it before the failure, so that a temporary lack
+       of memory here does not leak it for the rest of the run of this
        binary. This matches the cleanup for a pthread_create failure a few
        lines below. */
     chttpsvr_destroy(srv1);
@@ -988,13 +984,13 @@ TEST_F(engine_stop_fixture,
   pthread_t start_th;
   if (pthread_create(&start_th, NULL, _start_stopping_race_server_thread,
                      ctx) != 0) {
-    /* The code above already armed the hook, and now nothing ever enters
-       it. _engine_stopping_race_hook_wait_if_armed checks its own `go` flag
-       again only after it finds that `armed` is still true. This code
-       therefore sets `go` here in advance, instead of leaving it unset. A
-       later, unrelated chttpsvr_start() call elsewhere in this binary can
-       then land on this hook and pass through at once. Without this, such a
-       call blocks for ever on a release that never comes. */
+    /* The code above already armed the hook, and nothing ever enters it.
+       Because _engine_stopping_race_hook_wait_if_armed checks its own `go`
+       flag again only after it finds that `armed` is still true, this code
+       sets `go` here in advance instead of leaving it unset, so that a
+       later, unrelated chttpsvr_start() call elsewhere in this binary that
+       lands on this hook passes through at once. Without this, such a call
+       blocks for ever on a release that never comes. */
     _chttpsvr_release_engine_stopping_race_hook_for_tests();
     free(ctx); /* nothing created a thread, so nothing can still touch it */
     chttpsvr_destroy(srv1);
@@ -1004,41 +1000,41 @@ TEST_F(engine_stop_fixture,
 
   /* Block until the racing chttpsvr_start() call confirms its engine
    * contribution, registers with servers_bundler, and pauses right before
-   * its own _engine_acquire() call. That is the exact window that this test
+   * its own _engine_acquire() call, the exact window that this test
    * targets. */
   _chttpsvr_wait_engine_stopping_race_hook_entered_for_tests();
 
   chttpsvr_engine_stop();
 
   /* This gives the reaper thread of chttpsvr_engine_stop() time to start,
-   * to quiesce srv1, and to reach the wait inside _quiesce_server_once.
-   * srv1 is also registered, and this same call also force-stops it. That
-   * wait is for the in-flight chttpsvr_start() call of srv2 to finish. With
-   * this sleep in place, the reaper correctly does NOT block there. This
-   * test is meaningful either way, and it does not need the sleep. The
-   * sleep only makes the test land on the more interesting of the two safe
+   * to quiesce srv1 (which is also registered, so this same call also
+   * force-stops it), and to reach the wait inside _quiesce_server_once,
+   * which waits for the in-flight chttpsvr_start() call of srv2 to finish.
+   * With this sleep in place, the reaper correctly does NOT block there.
+   * This test is meaningful either way and does not need the sleep, which
+   * only makes the test land on the more interesting of the two safe
    * interleavings more often. */
   struct timespec settle = {0, 150000000L};
   nanosleep(&settle, NULL);
 
-  /* Now let the racing chttpsvr_start() call go into _engine_acquire(). It
-   * sees that stopping == true. It returns at once, and it does not block.
-   * The caller then unwinds and retries. It does not deadlock against the
-   * reaper. */
+  /* Now let the racing chttpsvr_start() call go into _engine_acquire(),
+   * where it sees that stopping == true and returns at once instead of
+   * blocking, so that the caller unwinds and retries instead of
+   * deadlocking against the reaper. */
   _chttpsvr_release_engine_stopping_race_hook_for_tests();
 
-  /* This is a bounded poll, and not a blind pthread_join. It establishes a
-     real happens-before relationship for ctx->srv and ctx->start_rv below.
-     start_th wrote both of those fields, and neither is atomic. This poll
-     runs before this thread reads them, and before it joins start_th. The
-     comment on ctx->returned above gives the same reasoning. The poll also
-     turns a real regression, where start_th deadlocks with itself, into a
-     clean REQUIRE_TRUE failure that names the test. Without it, the hang
-     has no bound. This code deliberately does NOT free ctx on the bail-out
-     branch below. start_th may still run, and it goes on to write into ctx;
-     see the comment on the type of ctx. The bounded-join sweep in the
-     teardown of the fixture is what finally joins start_th or abandons it.
-     This function never does. */
+  /* This is a bounded poll instead of a blind pthread_join. It runs before
+     this thread reads ctx->srv and ctx->start_rv below (which start_th
+     wrote and neither of which is atomic) and before it joins start_th, so
+     it establishes a real happens-before relationship for them; the comment
+     on ctx->returned above gives the same reasoning. The poll also turns a
+     real regression, where start_th deadlocks with itself, into a clean
+     REQUIRE_TRUE failure that names the test instead of a hang with no
+     bound. This code deliberately does NOT free ctx on the bail-out branch
+     below, because start_th may still run and go on to write into ctx (see
+     the comment on the type of ctx). The bounded-join sweep in the teardown
+     of the fixture, never this function, is what finally joins start_th or
+     abandons it. */
   bool stopping_race_returned = false;
   for (int i = 0; i < 100; i++) {
     if (atomic_load(&ctx->returned)) {
@@ -1049,26 +1045,25 @@ TEST_F(engine_stop_fixture,
     nanosleep(&nap, NULL);
   }
   if (!stopping_race_returned) {
-    /* srv1 has nothing to do with the stuck start_th. It is therefore
-       still safe to destroy it directly here. */
+    /* srv1 has nothing to do with the stuck start_th, so it is still safe
+       to destroy it directly here. */
     chttpsvr_destroy(srv1);
     REQUIRE_TRUE(stopping_race_returned);
     return; /* a join would hang for ever; nothing more to check */
   }
   _fx_join(tau, start_th, NULL);
 
-  /* The force-stop above already quiesced srv1. This code still destroys
-   * srv1 explicitly, to release the handle. That matches the convention of
-   * this file for a server that something force-stops while it is live. */
+  /* The force-stop above already quiesced srv1, but this code destroys srv1
+   * explicitly to release the handle, which matches the convention of this
+   * file for a server that something force-stops while it is live. */
   chttpsvr_destroy(srv1);
 
   /* The real assertion is that chttpsvr_start() on srv2 retries and
-   * succeeds, and that it does so transparently. It must not pass the
-   * temporary race against the engine stop to its own caller as a hard
-   * failure. Without that retry, nothing ever reaches this line, because
-   * the racing thread deadlocks for ever. The code above confirmed that it
-   * joined start_th. ctx is therefore safe to read and to free from here
-   * on. */
+   * succeeds transparently, instead of passing the temporary race against
+   * the engine stop to its own caller as a hard failure. Without that
+   * retry, nothing ever reaches this line, because the racing thread
+   * deadlocks for ever. Because the code above confirmed that it joined
+   * start_th, ctx is safe to read and to free from here on. */
   chttpsvr srv2 = ctx->srv;
   ccol_retval_t start_rv = ctx->start_rv;
   free(ctx);
@@ -1080,20 +1075,20 @@ TEST_F(engine_stop_fixture,
 
   /* There is no chttpsvr_engine_wait() call here. The racing server of the
    * start-race test above never contributes an engine reference before the
-   * reap catches it and tears it down with itself. This call is different.
-   * It succeeds through a transparent retry AFTER the first reap fully
-   * finishes. srv2 is therefore a correctly RUNNING server now, on a
-   * reactor that the library just created again, and nothing asks it to
+   * reap catches it and tears it down with itself, but this call is
+   * different: it succeeds through a transparent retry AFTER the first reap
+   * fully finishes, so srv2 is a correctly RUNNING server at this point, on
+   * a reactor that the library just created again, and nothing asks it to
    * stop. A wait for the engine to stop fully at this point would wait for
    * ever for a stop that never comes. */
 
-  /* Prove that srv2 really works. It is not enough that chttpsvr_start()
-   * returned success. This code captures the result into a local, and it
-   * destroys srv2 unconditionally, before either REQUIRE_* below. A real
-   * regression in this exact retry-then-serve path is what this test exists
-   * to catch. Without this order, such a regression can leave a live server
-   * behind that still holds an engine reference. Every later test in this
-   * binary could then trip over it. */
+  /* Prove that srv2 really works, because it is not enough that
+   * chttpsvr_start() returned success. This code captures the result into a
+   * local and destroys srv2 unconditionally, before either REQUIRE_* below,
+   * because a real regression in this exact retry-then-serve path, which is
+   * what this test exists to catch, could otherwise leave a live server
+   * behind that still holds an engine reference, for every later test in
+   * this binary to trip over. */
   int status = 0;
   ccol_retval_t get_rv = _get("http://127.0.0.1:18821/hello", &status);
 
@@ -1111,9 +1106,9 @@ TEST_F(engine_stop_fixture,
   _stopping_race_ctx_t *ctx =
       (_stopping_race_ctx_t *)calloc(1, sizeof(_stopping_race_ctx_t));
   if (!ctx) {
-    /* srv1 is already live at this point. It is registered, and it holds an
-       engine reference. Destroy it before the failure, so that a temporary
-       lack of memory here does not leak it for the rest of the run of this
+    /* srv1 is already live at this point, registered and holding an engine
+       reference, so destroy it before the failure, so that a temporary lack
+       of memory here does not leak it for the rest of the run of this
        binary. This matches the cleanup for a pthread_create failure a few
        lines below. */
     chttpsvr_destroy(srv1);
@@ -1125,9 +1120,9 @@ TEST_F(engine_stop_fixture,
   pthread_t start_th;
   if (pthread_create(&start_th, NULL, _start_stopping_race_server_thread,
                      ctx) != 0) {
-    /* See the same comment in the sibling forced-reap test above. It says
-       why this code releases a hook that nothing ever entered, instead of
-       only disarming it. */
+    /* See the same comment in the sibling forced-reap test above for why
+       this code releases a hook that nothing ever entered, instead of only
+       disarming it. */
     _chttpsvr_release_engine_stopping_race_hook_for_tests();
     free(ctx); /* nothing created a thread, so nothing can still touch it */
     chttpsvr_destroy(srv1);
@@ -1138,15 +1133,14 @@ TEST_F(engine_stop_fixture,
   _chttpsvr_wait_engine_stopping_race_hook_entered_for_tests();
 
   /* srv1 is the only OTHER live server that references the shared engine
-   * at this point. The racing chttpsvr_start() call of srv2 pauses before
-   * it ever calls _engine_acquire(), so it has not incremented the shared
-   * reactor_refs counter itself. A destroy of srv1 therefore drops
-   * reactor_refs to 0. That starts the graceful reap path, which is
-   * _engine_release(). The sibling test above drives the forced
+   * at this point, and the racing chttpsvr_start() call of srv2 pauses
+   * before it ever calls _engine_acquire(), so it has not incremented the
+   * shared reactor_refs counter itself. A destroy of srv1 therefore drops
+   * reactor_refs to 0, which starts the graceful reap path,
+   * _engine_release(), while the sibling test above drives the forced
    * chttpsvr_engine_stop() path instead. Both paths feed the same chain
-   * from here on, which is _engine_reaper_fn ->
-   * _engine_force_stop_quiesce_all() -> _quiesce_server_once(). The rest of
-   * this test is therefore the same. */
+   * from here on (_engine_reaper_fn -> _engine_force_stop_quiesce_all() ->
+   * _quiesce_server_once()), so the rest of this test is the same. */
   chttpsvr_destroy(srv1);
 
   struct timespec settle = {0, 150000000L};
@@ -1154,11 +1148,11 @@ TEST_F(engine_stop_fixture,
 
   _chttpsvr_release_engine_stopping_race_hook_for_tests();
 
-  /* This is a bounded poll, and not a blind pthread_join. See the same
-     comment in the sibling forced-reap test above for the reason. The code
-     above already destroyed srv1, and that is what starts the graceful reap
-     that this test drives. There is therefore nothing left to clean up on
-     the bail-out path here. */
+  /* This is a bounded poll instead of a blind pthread_join, for the reason
+     in the same comment in the sibling forced-reap test above. The code
+     above already destroyed srv1, which is what starts the graceful reap
+     that this test drives, so there is nothing left to clean up on the
+     bail-out path here. */
   bool stopping_race_returned = false;
   for (int i = 0; i < 100; i++) {
     if (atomic_load(&ctx->returned)) {
@@ -1171,11 +1165,11 @@ TEST_F(engine_stop_fixture,
   REQUIRE_TRUE(stopping_race_returned);
   if (!stopping_race_returned)
     return; /* a join would hang for ever; nothing more to check. This
-               code leaks ctx here on purpose; see its type comment. */
+               code leaks ctx here on purpose (see its type comment). */
   _fx_join(tau, start_th, NULL);
 
-  /* The code above confirmed that it joined start_th. ctx is therefore
-     safe to read and to free. */
+  /* Because the code above confirmed that it joined start_th, ctx is safe
+     to read and to free. */
   chttpsvr srv2 = ctx->srv;
   ccol_retval_t start_rv = ctx->start_rv;
   free(ctx);
@@ -1185,14 +1179,14 @@ TEST_F(engine_stop_fixture,
     REQUIRE_EQ((int)start_rv, (int)ccol_success);
   }
 
-  /* There is no chttpsvr_engine_wait() call here. See the same comment in
-   * the sibling forced-reap test above for the reason. srv2 is a correctly
-   * RUNNING server now, on a reactor that the library just created again,
-   * and nothing asks it to stop. */
+  /* There is no chttpsvr_engine_wait() call here, for the reason in the
+   * same comment in the sibling forced-reap test above: srv2 is a correctly
+   * RUNNING server at this point, on a reactor that the library just
+   * created again, and nothing asks it to stop. */
 
-  /* This code captures the result into a local, and it destroys srv2
-     unconditionally, before either REQUIRE_* below. See the same comment in
-     the sibling forced-reap test above for the reason. */
+  /* This code captures the result into a local and destroys srv2
+     unconditionally, before either REQUIRE_* below, for the reason in the
+     same comment in the sibling forced-reap test above. */
   int status = 0;
   ccol_retval_t get_rv = _get("http://127.0.0.1:18823/hello", &status);
 
@@ -1262,25 +1256,23 @@ static void *_signal_test_thread(void *arg) {
 
 TEST_F(engine_stop_fixture, engine_stop_from_signal_handler_does_not_deadlock) {
   /* A server that started guarantees that the shared engine already exists
-   * and is ready before this test provokes the race. It also guarantees the
-   * same for the signal-safe stop watcher. _engine_acquire() starts that
-   * watcher as the very first thing that it does under
-   * srv_engine_bundler.mutex. */
+   * and is ready before this test provokes the race, and so does the
+   * signal-safe stop watcher, which _engine_acquire() starts as the very
+   * first thing that it does under srv_engine_bundler.mutex. */
   /* This handle deliberately carries no _ccol_destructor scope, unlike the
      other tests in this file. The REQUIRE_TRUE(done) a few lines below can
-     legitimately fail on a real regression. In that case the thread that
-     this test starts below deadlocked with itself for ever, and it still
-     holds srv_engine_bundler.mutex. An automatic chttpsvr_destroy(srv) at
-     the exit of the scope would then fire at that exact point. It would
-     itself block for ever as it tries to take that same mutex, through
-     _engine_release() inside _quiesce_server_once(). That turns a clean,
-     reported test failure back into the whole-process hang that this file
-     exists to avoid elsewhere. This code therefore cleans srv up
-     explicitly, and only at the two earlier checkpoints below. No such
-     regression can be in progress yet at those two points, because nothing
-     has touched srv_engine_bundler.mutex on any other thread there. On the
-     done==false path this code deliberately leaves srv un-cleaned-up. The
-     documented reasoning of that path says why. */
+     legitimately fail on a real regression, in which case the thread that
+     this test starts below deadlocked with itself for ever and still holds
+     srv_engine_bundler.mutex. An automatic chttpsvr_destroy(srv) at the
+     exit of the scope would then fire at that exact point and itself block
+     for ever as it tries to take that same mutex, through _engine_release()
+     inside _quiesce_server_once(), turning a clean, reported test failure
+     back into the whole-process hang that this file exists to avoid
+     elsewhere. This code therefore cleans srv up explicitly, and only at
+     the two earlier checkpoints below, where no such regression can be in
+     progress yet, because nothing has touched srv_engine_bundler.mutex on
+     any other thread there. On the done==false path this code deliberately
+     leaves srv un-cleaned-up, for the documented reasoning of that path. */
   chttpsvr srv = _start_server("18804", 18804);
 
   struct sigaction sa, old_sa;
@@ -1306,14 +1298,14 @@ TEST_F(engine_stop_fixture, engine_stop_from_signal_handler_does_not_deadlock) {
   REQUIRE_EQ(pthread_create_rv, 0);
   _fx_track(tau, th);
 
-  /* This is a bounded wait, and not a join. A regression here makes the
-   * thread above deadlock with itself for ever, inside
-   * chttpsvr_engine_stop(). The handler of SIGUSR1 calls that function
-   * synchronously, while it still holds srv_engine_bundler.mutex. A
+  /* This is a bounded wait instead of a join. A regression here makes the
+   * thread above deadlock with itself for ever inside
+   * chttpsvr_engine_stop(), which the handler of SIGUSR1 calls
+   * synchronously while it still holds srv_engine_bundler.mutex, and a
    * REQUIRE_TRUE(done) failure below is the signal of that regression. The
    * teardown of this fixture then tries one more bounded join on th, with a
-   * limit of 30s. If that join fails, the teardown detaches th, and it does
-   * not hang the other tests of this binary. See the comment of the
+   * limit of 30s, and if that join fails, it detaches th instead of hanging
+   * the other tests of this binary. See the comment of the
    * engine_stop_fixture teardown above for why that is safe, although th
    * may hold srv_engine_bundler.mutex for ever on this path. */
   bool done = false;
@@ -1330,18 +1322,18 @@ TEST_F(engine_stop_fixture, engine_stop_from_signal_handler_does_not_deadlock) {
   if (!done) return; /* a join would hang for ever; nothing more to check */
   _fx_join(tau, th, NULL);
 
-  /* chttpsvr_engine_stop() really ran. It did not only return without a
-   * deadlock. Confirm that the engine really stops. */
+  /* Confirm that chttpsvr_engine_stop() really ran, instead of only
+   * returning without a deadlock, by checking that the engine really
+   * stops. */
   chttpsvr_engine_wait();
 
   chttpsvr_destroy(srv);
 
-  /* Prove that the engine comes back up cleanly after this. Its watcher
-   * thread survives a cycle of stop and start. Only the exit of the process
-   * tears that watcher down. A scoped handle is safe from here on. To reach
-   * this point already proves that done==true. The self-deadlock scenario,
-   * which is why srv above carries no scope, therefore cannot be in
-   * progress. */
+  /* Prove that the engine comes back up cleanly after this. Its watcher thread
+   * survives a cycle of stop and start, because only the exit of the process
+   * tears that watcher down. A scoped handle is safe from here on: reaching
+   * this point already proves that done==true, so the self-deadlock scenario,
+   * which is why srv above carries no scope, cannot be in progress. */
   chttpsvr srv2 _ccol_destructor(___chttpsvr_destroy) =
       _start_server("18805", 18805);
   int status = 0;
@@ -1390,48 +1382,48 @@ extern void _chttpsvr_arm_start_resolve_race_hook_for_tests(void);
 extern void _chttpsvr_wait_start_resolve_race_hook_entered_for_tests(void);
 extern void _chttpsvr_release_start_resolve_race_hook_for_tests(void);
 
-/* Each call site below allocates this struct on the heap with calloc().
- * It is not a shared file-scope global, and it is not a local on the stack
- * of a caller. _stopping_race_ctx_t above and _destroy_hang_ctx_t in
- * tests.c have the same reason. Both call sites below deliberately leave
+/* Each call site below allocates this struct on the heap with calloc(),
+ * instead of using a shared file-scope global or a local on the stack of a
+ * caller, for the same reason as _stopping_race_ctx_t above and
+ * _destroy_hang_ctx_t in tests.c. Both call sites below deliberately leave
  * restart_th tracked but unjoined on their own bail-out path, after their
- * bounded poll, when that thread looks stuck. They do not block on a thread
- * that may be truly deadlocked. That deadlock IS the regression that
- * start_does_not_deadlock_against_concurrent_quiesce_pass exists to catch.
+ * bounded poll, when that thread looks stuck, instead of blocking on a
+ * thread that may be truly deadlocked (that deadlock IS the regression that
+ * start_does_not_deadlock_against_concurrent_quiesce_pass exists to catch).
  * With a shared global for start_rv and returned, an abandoned thread from
- * one test could corrupt the freshly reset copy of the other test once it
- * finally finishes. Such a thread may be only slow, and not truly hung. An
+ * one test, which may be only slow rather than truly hung, could corrupt
+ * the freshly reset copy of the other test once it finally finishes. An
  * arg on the stack would be worse still, because the struct itself is gone
  * once the test function that bails out returns. A heap allocation for each
  * run, which this code frees only after _fx_join confirms that the thread
  * that owns it stopped, makes both classes of corruption structurally
  * impossible. The thread function below reads srv and port exactly one
- * time, synchronously, at its very top; see its own comment. Unlike
- * start_rv and returned, those two would therefore be safe as plain fields
- * either way. They stay in this struct anyway, because the other two fields
+ * time, synchronously, at its very top (see its own comment), so unlike
+ * start_rv and returned, those two would be safe as plain fields either
+ * way; they stay in this struct anyway, because the other two fields
  * already put it on the heap. */
 typedef struct {
   chttpsvr *srv;
   int port;
   ccol_retval_t start_rv;
   /* The thread function below sets this flag as the very last thing that it
-     does. It sets it strictly after it writes start_rv in full. Every
-     caller polls this flag, with a bound, before it reads start_rv, and
-     before it joins this thread. Without that poll, each of those two is a
-     real data race under the C11 memory model. */
+     does, strictly after it writes start_rv in full, and every caller polls
+     this flag, with a bound, before it reads start_rv and before it joins
+     this thread. Without that poll, each of those two is a real data race
+     under the C11 memory model. */
   _Atomic bool returned;
 } resolve_racing_start_arg_t;
 
-/* The caller passes port and srv in, and this code does not hardcode them.
-   This restart therefore always targets the exact port and the exact handle
-   that the srv of the calling test really started on. The two call sites
-   below start srv on different ports of their own. This function reads both
-   fields exactly one time, here. It does that before it does anything else
-   that the racing main thread can see. That main thread goes past its own
-   "hook entered" wait only after this call resolves srv and pauses. Neither
-   field therefore needs the heap allocation that start_rv and returned
-   need for a safe late write. This code writes those two at the very end,
-   and possibly much later on the path of the regression under test. See the
+/* The caller passes port and srv in instead of this code hardcoding them, so
+   this restart always targets the exact port and the exact handle that the
+   srv of the calling test really started on (the two call sites below start
+   srv on different ports of their own). This function reads both fields
+   exactly one time, here, before it does anything else that the racing main
+   thread can see, and that main thread goes past its own "hook entered"
+   wait only after this call resolves srv and pauses. Neither field
+   therefore needs the heap allocation that start_rv and returned need for a
+   safe late write, since this code writes those two at the very end, and
+   possibly much later on the path of the regression under test. See the
    comment of the struct above. */
 static void *_resolve_racing_start_thread(void *arg) {
   resolve_racing_start_arg_t *a = (resolve_racing_start_arg_t *)arg;
@@ -1448,21 +1440,21 @@ TEST_F(engine_stop_fixture,
   /* srv deliberately carries no scoped destructor, unlike most of the other
      tests in this file. The whole premise of this test is that the
      chttpsvr_start() call of restart_th on srv can become permanently
-     stuck, under the exact regression that the test guards against. That is
-     a deadlock across two condition variables, against the reaper thread.
-     __chttpsvr_destroy() would then also block for ever, as it waits for
-     the pending_resolve_count of srv to drain. A scoped destructor at the
-     exit of this function would fire on the `!returned` bail-out path. That
-     path exists exactly to avoid a hang of the whole binary when this
-     regression fires. The destructor would hang the whole binary again at
-     once, and it would defeat the whole point of the bounded wait a few
-     lines below. Three other places apply the same reasoning to their own
-     "a background thread can hold the pin of my server for ever" scenario.
-     They are engine_stop_from_signal_handler_does_not_deadlock,
+     stuck, under the exact regression that the test guards against (a
+     deadlock across two condition variables, against the reaper thread),
+     and __chttpsvr_destroy() would then also block for ever, as it waits
+     for the pending_resolve_count of srv to drain. A scoped destructor at
+     the exit of this function would fire on the `!returned` bail-out path,
+     which exists exactly to avoid a hang of the whole binary when this
+     regression fires, so the destructor would hang the whole binary again
+     at once and defeat the whole point of the bounded wait a few lines
+     below. Three other places apply the same reasoning to their own "a
+     background thread can hold the pin of my server for ever" scenario:
+     engine_stop_from_signal_handler_does_not_deadlock,
      start_racing_engine_stop_and_destroy_does_not_free_raw_too_early, and
      both fork tests in this same file. Every early-exit path below where
-     nothing races srv yet is proven safe, and it destroys srv explicitly
-     instead. The `!returned` bail-out deliberately does not. */
+     nothing races srv yet is proven safe and destroys srv explicitly
+     instead, while the `!returned` bail-out deliberately does not. */
   char *err = NULL;
   chttpsvr srv = ccol_create_chttpsvr(CLOG_INVALID, &err);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
@@ -1476,8 +1468,8 @@ TEST_F(engine_stop_fixture,
     REQUIRE_EQ((int)start_rv, (int)ccol_success);
   }
 
-  /* This is an ordinary stop. srv stays registered in servers_bundler, and
-     it keeps its engine reference, because chttpsvr_stop() only closes the
+  /* This is an ordinary stop: srv stays registered in servers_bundler and
+     keeps its engine reference, because chttpsvr_stop() only closes the
      listener. That is exactly the state that a real restart starts from,
      where a chttpsvr_stop() comes first and a chttpsvr_start() follows. */
   chttpsvr_stop(srv);
@@ -1488,11 +1480,11 @@ TEST_F(engine_stop_fixture,
       (resolve_racing_start_arg_t *)calloc(1,
                                            sizeof(resolve_racing_start_arg_t));
   if (!restart_arg) {
-    /* srv is already registered at this point, and it still holds an engine
-       reference. It is stopped, and nothing destroyed it. Nothing races it
+    /* srv is already registered at this point and still holds an engine
+       reference; it is stopped, nothing destroyed it, and nothing races it
        yet either, because nothing entered the race hook. It is therefore
        safe to destroy it explicitly here, unlike on the `!returned`
-       bail-out further below. See the opening comment of this test. */
+       bail-out further below (see the opening comment of this test). */
     chttpsvr_destroy(srv);
     REQUIRE_TRUE(false);
   }
@@ -1502,13 +1494,13 @@ TEST_F(engine_stop_fixture,
   if (pthread_create(&restart_th, NULL, _resolve_racing_start_thread,
                      restart_arg) != 0) {
     /* Nothing races srv yet, so it is still safe to destroy it directly
-       here. The code above already armed the hook, and now nothing ever
-       enters it. _start_resolve_race_hook_wait_if_armed checks its own `go`
-       flag again only after it finds that `armed` is still true. This code
-       therefore sets `go` here in advance, instead of leaving it unset. A
-       later, unrelated chttpsvr_start() call elsewhere in this binary can
-       then land on this hook and pass through at once. Without this, such a
-       call blocks for ever on a release that never comes. */
+       here. The code above already armed the hook, and nothing ever enters
+       it. Because _start_resolve_race_hook_wait_if_armed checks its own `go`
+       flag again only after it finds that `armed` is still true, this code
+       sets `go` here in advance instead of leaving it unset, so that a
+       later, unrelated chttpsvr_start() call elsewhere in this binary that
+       lands on this hook passes through at once. Without this, such a call
+       blocks for ever on a release that never comes. */
     _chttpsvr_release_start_resolve_race_hook_for_tests();
     free(restart_arg); /* nothing created a thread */
     chttpsvr_destroy(srv);
@@ -1517,43 +1509,40 @@ TEST_F(engine_stop_fixture,
   }
   _fx_track(tau, restart_th);
 
-  /* This is deterministic. It returns only after the chttpsvr_start() call
-     of restart_th resolves srv, takes its pin, and pauses at the hook. At
-     that point it has touched nothing else. No luck with the timing is
-     needed. */
+  /* This is deterministic: it returns only after the chttpsvr_start() call
+     of restart_th resolves srv, takes its pin, and pauses at the hook,
+     having touched nothing else, so no luck with the timing is needed. */
   _chttpsvr_wait_start_resolve_race_hook_entered_for_tests();
 
-  /* The documentation says that chttpsvr_engine_stop() does not block. It
+  /* The documentation says that chttpsvr_engine_stop() does not block: it
      only starts a background reaper thread. */
   chttpsvr_engine_stop();
 
   /* This gives the reaper thread time to run, to reach
      _quiesce_server_once for srv, to claim CHTTPSVR_QS_QUIESCING, and to
-     block on pending_resolve_count. The hook above guarantees that
-     pending_resolve_count is not zero at that exact moment, because
-     restart_th holds its pin. This matches the 150ms precedent that this
-     file uses elsewhere to let the other side reach its own point where it
-     blocks. */
+     block on pending_resolve_count, which the hook above guarantees is not
+     zero at that exact moment, because restart_th holds its pin. This
+     matches the 150ms precedent that this file uses elsewhere to let the
+     other side reach the point where it blocks. */
   struct timespec settle = {0, 150000000L};
   nanosleep(&settle, NULL);
 
-  /* This is the real moment under test. It releases the paused
-     chttpsvr_start() call of restart_th. That call must not wait on
-     quiesce_done_cv while it still holds the exact pin that the reactor
-     thread above waits for. Such a call deadlocks permanently against that
-     thread, across two condition variables. It must release that pin and
-     back off instead. */
+  /* This is the real moment under test: it releases the paused chttpsvr_start()
+     call of restart_th, which must not wait on quiesce_done_cv while it still
+     holds the exact pin that the reaper thread above waits for, because such a
+     call deadlocks permanently against that thread, across two condition
+     variables. It must release that pin and back off instead. */
   _chttpsvr_release_start_resolve_race_hook_for_tests();
 
-  /* This is a bounded wait, and not a blind pthread_join. A regression here
-     makes restart_th deadlock with itself for ever. The reaper thread of
-     the reactor then does the same, and so does the chttpsvr_engine_wait()
-     call below. A REQUIRE_TRUE(returned) failure is the signal of that
-     regression. The teardown of this fixture then tries one more bounded
-     join on restart_th, with a limit of 30s. If that join fails, the
-     teardown detaches restart_th, and it does not hang the other tests of
-     this binary. engine_stop_from_signal_handler_does_not_deadlock sets the
-     same precedent elsewhere in this file. */
+  /* This is a bounded wait instead of a blind pthread_join. A regression
+     here makes restart_th deadlock with itself for ever, and with it the
+     reaper thread of the reactor and the chttpsvr_engine_wait() call below;
+     a REQUIRE_TRUE(returned) failure is the signal of that regression. The
+     teardown of this fixture then tries one more bounded join on
+     restart_th, with a limit of 30s, and if that join fails, it detaches
+     restart_th instead of hanging the other tests of this binary, as
+     engine_stop_from_signal_handler_does_not_deadlock does elsewhere in
+     this file. */
   bool returned = false;
   for (int i = 0; i < 100; i++) {
     if (atomic_load(&restart_arg->returned)) {
@@ -1566,17 +1555,17 @@ TEST_F(engine_stop_fixture,
   REQUIRE_TRUE(returned);
   if (!returned)
     return; /* a join would hang for ever; nothing more to check. This
-                code leaks restart_arg on purpose; see its type comment. */
+                code leaks restart_arg on purpose (see its type comment). */
   _fx_join(tau, restart_th, NULL);
 
-  /* restart_th has now provably returned, so nothing races srv any more.
-     srv is therefore safe to destroy unconditionally from here on, and
+  /* restart_th has provably returned at this point, so nothing races srv
+     any more: srv is safe to destroy unconditionally from here on, and
      restart_arg is safe to read and to free. This code captures the result
-     into a local and cleans up before it asserts. A real regression in the
-     chttpsvr_start() call of restart_th is the real assertion of this test.
-     Without this order, such a regression can leave a live srv behind that
-     still holds an engine reference. Every later test in this binary could
-     then trip over it. */
+     into a local and cleans up before it asserts, because the
+     chttpsvr_start() call of restart_th is the real assertion of this test,
+     and without this order a real regression there can leave a live srv
+     behind that still holds an engine reference, for every later test in
+     this binary to trip over. */
   ccol_retval_t restart_rv = restart_arg->start_rv;
   free(restart_arg);
   if (restart_rv != ccol_success) {
@@ -1587,16 +1576,16 @@ TEST_F(engine_stop_fixture,
 
   /* There is deliberately no chttpsvr_engine_wait() before this next check.
      The chttpsvr_start() call of restart_th succeeded, so it necessarily
-     took a FRESH engine reference and a fresh reactor. The
-     chttpsvr_engine_stop() call above already tore the original one down,
-     and this restart raced that call. Nothing has asked the new reactor to
-     stop yet. chttpsvr_engine_wait() would simply block and wait for it.
-     That says nothing about whether the deadlock under test happened. A
+     took a FRESH engine reference and a fresh reactor, because the
+     chttpsvr_engine_stop() call above, which this restart raced, already
+     tore the original one down. Nothing has asked the new reactor to stop
+     yet, so chttpsvr_engine_wait() would simply block and wait for it,
+     which says nothing about whether the deadlock under test happened. A
      successful restart of srv, plus a real request that it serves below, is
-     itself the proof that chttpsvr_engine_stop() ran to completion. Its own
-     reaper thread had to finish the release of the old reactor before the
-     _engine_acquire of this restart could create a new one.
-     The real assertion is that srv restarted cleanly and truly. It is not
+     itself the proof that chttpsvr_engine_stop() ran to completion, since
+     its own reaper thread had to finish the release of the old reactor
+     before the _engine_acquire of this restart could create a new one.
+     The real assertion is that srv restarted cleanly and truly; it is not
      enough that chttpsvr_start returned success while the reactor is still
      wedged. */
   int status2 = 0;
@@ -1646,11 +1635,11 @@ TEST_F(engine_stop_fixture,
 /* heap-use-after-free on raw->mutex.                                        */
 /* ========================================================================== */
 extern void _chttpsvr_arm_start_quiescing_unpinned_race_hook_for_tests(void);
-/* This function is bounded inside, at 10s. It returns false instead of a
-   hang with no bound when the paused chttpsvr_start() call of restart_th
-   never reaches this hook at all. See the doc comment of this function in
-   chttpserver.c for why that can happen when the machine is loaded. Every
-   other hook in this file is different. */
+/* This function, unlike every other hook in this file, is bounded inside,
+   at 10s: it returns false instead of hanging with no bound when the paused
+   chttpsvr_start() call of restart_th never reaches this hook at all. See
+   the doc comment of this function in chttpserver.c for why that can
+   happen when the machine is loaded. */
 extern bool _chttpsvr_wait_start_quiescing_unpinned_race_hook_entered_for_tests(
     void);
 extern void _chttpsvr_release_start_quiescing_unpinned_race_hook_for_tests(
@@ -1669,13 +1658,13 @@ static void *_start_uaf_race_destroy_thread(void *arg) {
 TEST_F(engine_stop_fixture,
        start_racing_engine_stop_and_destroy_does_not_free_raw_too_early) {
   /* This test uses the same discipline as every other test in this file
-     that drives a hook. It captures each intermediate outcome into a local,
-     and it does not assert on that outcome at once. It also releases every
-     armed hook, and joins every thread that it created, unconditionally,
-     before any REQUIRE_* runs. An assertion that fails here can therefore
-     never leave a thread parked for ever inside one of the two hooks below.
-     Such a thread would wedge every later test in this binary that touches
-     the same machinery. */
+     that drives a hook: it captures each intermediate outcome into a local
+     instead of asserting on it at once, and it releases every armed hook,
+     and joins every thread that it created, unconditionally, before any
+     REQUIRE_* runs. An assertion that fails here can therefore never leave
+     a thread parked for ever inside one of the two hooks below, where it
+     would wedge every later test in this binary that touches the same
+     machinery. */
   char *err = NULL;
   chttpsvr srv = ccol_create_chttpsvr(CLOG_INVALID, &err);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
@@ -1684,26 +1673,26 @@ TEST_F(engine_stop_fixture,
   cfg.host = "127.0.0.1";
   cfg.port = 18816;
   /* srv carries no scoped destructor, unlike most of the other tests in
-     this file. srv is about to alias g_start_uaf_race_srv.
-     _start_uaf_race_destroy_thread below destroys that alias directly, on a
-     background thread. The sequential_double_destroy_is_fatal test of this
-     codebase proves that a second destroy of the same handle is fatal, even
-     when the two do not run at the same time. A scoped destructor at the
-     exit of this scope, on top of the destroy of that thread, would be
-     exactly such a second destroy. This one early window has no such
-     conflict, because nothing has assigned g_start_uaf_race_srv yet and no
-     background thread touches srv yet. A start failure here is therefore
-     cleaned up explicitly instead. */
+     this file, because srv is about to alias g_start_uaf_race_srv, which
+     _start_uaf_race_destroy_thread below destroys directly, on a background
+     thread. The sequential_double_destroy_is_fatal test of this codebase
+     proves that a second destroy of the same handle is fatal, even when the
+     two do not run at the same time, and a scoped destructor at the exit of
+     this scope, on top of the destroy of that thread, would be exactly such
+     a second destroy. This one early window has no such conflict, because
+     nothing has assigned g_start_uaf_race_srv yet and no background thread
+     touches srv yet, so a start failure here is cleaned up explicitly
+     instead. */
   ccol_retval_t start_rv = chttpsvr_start(srv, &cfg);
   if (start_rv != ccol_success) {
     chttpsvr_destroy(srv);
     REQUIRE_EQ((int)start_rv, (int)ccol_success);
   }
   /* This is the same ordinary stop-then-restart starting state as in
-     start_does_not_deadlock_against_concurrent_quiesce_pass above. srv
-     stays registered, and it keeps its engine reference. That matches a
-     real restart, where a chttpsvr_stop() comes first and a
-     chttpsvr_start() follows. */
+     start_does_not_deadlock_against_concurrent_quiesce_pass above: srv
+     stays registered and keeps its engine reference, which matches a real
+     restart, where a chttpsvr_stop() comes first and a chttpsvr_start()
+     follows. */
   chttpsvr_stop(srv);
   g_start_uaf_race_srv = srv;
 
@@ -1713,12 +1702,12 @@ TEST_F(engine_stop_fixture,
       (resolve_racing_start_arg_t *)calloc(1,
                                            sizeof(resolve_racing_start_arg_t));
   if (!restart_arg) {
-    /* g_start_uaf_race_srv aliases srv. Nothing has started a background
-       thread at this point, because that happens only a few lines below. To
-       destroy srv directly and to reset the alias is therefore safe here.
-       The `!returned` bail-out further below is different, because a
-       background thread may already race srv there. See the opening comment
-       of this test. */
+    /* g_start_uaf_race_srv aliases srv, but nothing has started a
+       background thread at this point (that happens only a few lines
+       below), so destroying srv directly and resetting the alias is safe
+       here, unlike on the `!returned` bail-out further below, where a
+       background thread may already race srv. See the opening comment of
+       this test. */
     chttpsvr_destroy(srv);
     g_start_uaf_race_srv = CHTTPSVR_INVALID;
     REQUIRE_TRUE(false);
@@ -1739,36 +1728,35 @@ TEST_F(engine_stop_fixture,
 
   /* Arm the hook for the vulnerable window before this code releases
      restart_th. After that release, restart_th sees CHTTPSVR_QS_QUIESCING,
-     which the reaper below sets. It then registers itself in
-     quiesce_waiters, releases its own resolve pin, and pauses right there.
-     It pauses before it takes raw->mutex for the first time since that pin
-     release. */
+     which the reaper below sets, registers itself in quiesce_waiters,
+     releases its own resolve pin, and pauses right there, before it takes
+     raw->mutex for the first time since that pin release. */
   _chttpsvr_arm_start_quiescing_unpinned_race_hook_for_tests();
 
   if (restart_th_created) {
     chttpsvr_engine_stop(); /* the documentation says it does not block */
     /* This gives the reaper thread time to run, to reach
        _quiesce_server_once for srv, to claim CHTTPSVR_QS_QUIESCING, and to
-       block on pending_resolve_count. That count is not zero at that exact
+       block on pending_resolve_count, which is not zero at that exact
        moment, because restart_th still holds its pin. This matches the
        150ms precedent that this file uses elsewhere to let the other side
-       reach its own point where it blocks. */
+       reach the point where it blocks. */
     struct timespec settle = {0, 150000000L};
     nanosleep(&settle, NULL);
   }
 
   _chttpsvr_release_start_resolve_race_hook_for_tests();
 
-  /* The other tests in this file that drive a hook are different.
+  /* Unlike in the other tests in this file that drive a hook,
      restart_th_created alone does not prove that the code reaches this
-     hook. It also depends on the reaper, which chttpsvr_engine_stop() above
-     starts. That reaper must set CHTTPSVR_QS_QUIESCING before the paused
-     chttpsvr_start() call of restart_th checks quiesce_state again. This
-     test enforces that order only with the fixed nanosleep of 150ms above,
-     and not with a real synchronization primitive. The wait function itself
-     is bounded inside, at 10s. It returns false instead of a hang of this
-     whole binary when a loaded machine makes the code miss that race. See
-     its own doc comment in chttpserver.c. */
+     hook: it also depends on the reaper, which chttpsvr_engine_stop() above
+     starts, setting CHTTPSVR_QS_QUIESCING before the paused
+     chttpsvr_start() call of restart_th checks quiesce_state again, and
+     this test enforces that order only with the fixed nanosleep of 150ms
+     above, not with a real synchronization primitive. The wait function
+     itself is bounded inside, at 10s, and returns false instead of hanging
+     this whole binary when a loaded machine makes the code miss that race;
+     see its own doc comment in chttpserver.c. */
   bool hook_entered = false;
   if (restart_th_created) {
     hook_entered =
@@ -1777,14 +1765,14 @@ TEST_F(engine_stop_fixture,
   bool paused_at_vulnerable_window = !restart_th_created || hook_entered;
 
   /* At this exact point, restart_th has registered itself in
-     quiesce_waiters and released its own resolve pin in full. It is paused,
-     and it has not touched raw->mutex again. That pin release unblocks the
-     reaper that engine_stop() drives. This code leaves that reaper to run
-     its own real teardown to completion. That work is nearly instant here,
-     because srv has no live connection to drain, and because the reaper
-     side deliberately carries no hook. The tail wait of that reaper for
-     quiesce_waiters == 0 must find the registration of restart_th still
-     there, and it must correctly block. That keeps raw alive, and it keeps
+     quiesce_waiters and released its own resolve pin in full, and it is
+     paused without having touched raw->mutex again. That pin release
+     unblocks the reaper that engine_stop() drives, and this code leaves
+     that reaper to run its own real teardown to completion, which is nearly
+     instant here, because srv has no live connection to drain and the
+     reaper side deliberately carries no hook. The tail wait of that reaper
+     for quiesce_waiters == 0 must find the registration of restart_th still
+     there and correctly block, which keeps raw alive and keeps
      servers_bundler_pins above zero. */
   bool destroy_th_created = false;
   pthread_t destroy_th;
@@ -1796,13 +1784,13 @@ TEST_F(engine_stop_fixture,
     if (destroy_th_created) _fx_track(tau, destroy_th);
   }
 
-  /* This is a bounded negative check. chttpsvr_destroy() must not be able
+  /* This is a bounded negative check: chttpsvr_destroy() must not be able
      to return, and to free raw, while restart_th is still parked in the
-     exact window that the guard protects. This is direct, positive proof
+     exact window that the guard protects, which is direct, positive proof
      that the guard works. Without the guard, the concurrent reaper pass
-     above finds that quiesce_waiters is still zero. It finishes its own
-     teardown, and it lets this destroy call return and free raw. That
-     happens well before restart_th gets back to raw->mutex. */
+     above finds that quiesce_waiters is still zero, finishes its own
+     teardown, and lets this destroy call return and free raw, well before
+     restart_th gets back to raw->mutex. */
   bool destroy_returned_too_early = false;
   if (destroy_th_created) {
     for (int i = 0; i < 6; i++) {
@@ -1815,12 +1803,12 @@ TEST_F(engine_stop_fixture,
     }
   }
 
-  /* Release restart_th. It then takes raw->mutex again, which is still
-     safe, per the assertion just above. It sees CHTTPSVR_QS_QUIESCED, it
-     decrements its own registration, and it resolves srv again. That
-     resolve now fails, because destroy_th already marked the slot as not in
-     use by this point. This call is safe and harmless even when restart_th
-     never reached the hook. */
+  /* Release restart_th, which then takes raw->mutex again (still safe, per
+     the assertion just above), sees CHTTPSVR_QS_QUIESCED, decrements its
+     own registration, and resolves srv again. That resolve fails, because
+     destroy_th already marked the slot as not in use by this point. This
+     call is safe and harmless even when restart_th never reached the
+     hook. */
   _chttpsvr_release_start_quiescing_unpinned_race_hook_for_tests();
 
   bool restart_returned = false;
@@ -1836,18 +1824,18 @@ TEST_F(engine_stop_fixture,
     }
     if (restart_returned) {
       _fx_join(tau, restart_th, NULL);
-      /* This code confirmed that it joined restart_th. restart_arg is
-         therefore safe to read and to free. On the !restart_returned path
-         this code deliberately leaks restart_arg and never frees it,
-         because restart_th may still run and go on to write into it. See
-         the comment on the type of the struct above. */
+      /* Because this code confirmed that it joined restart_th, restart_arg
+         is safe to read and to free. On the !restart_returned path this
+         code deliberately leaks restart_arg and never frees it, because
+         restart_th may still run and go on to write into it; see the
+         comment on the type of the struct above. */
       restart_rv = restart_arg->start_rv;
       free(restart_arg);
     }
   }
-  /* The code above already freed restart_arg when !restart_th_created. It
-     does that right after pthread_create fails. There is nothing more to do
-     for that case here. */
+  /* The code above already freed restart_arg when !restart_th_created,
+     right after pthread_create fails, so there is nothing more to do for
+     that case here. */
 
   bool destroy_returned = false;
   if (destroy_th_created) {
@@ -1861,39 +1849,39 @@ TEST_F(engine_stop_fixture,
     }
     if (destroy_returned) _fx_join(tau, destroy_th, NULL);
   } else if (restart_returned) {
-    /* Nothing created destroy_th. Either pthread_create failed, or
-       hook_entered came back false; see the hook_entered comment of this
-       test above. Nothing else in this test then releases the engine
-       reference of srv. restart_th restarted srv successfully, because
-       nothing destroyed it under that call. Without this destroy, srv
-       stays alive and registered. The unconditional chttpsvr_engine_wait()
-       below would then block for ever, and it would wait for an engine
-       reference that never goes away. The code reaches this branch only
-       after restart_th fully returns, which restart_returned records and
-       the join above confirms. This destroy therefore cannot race the
-       chttpsvr_start() call of restart_th while that call is in flight. */
+    /* Nothing created destroy_th, either because pthread_create failed or
+       because hook_entered came back false (see the hook_entered comment of
+       this test above), so nothing else in this test releases the engine
+       reference of srv, which restart_th restarted successfully, because
+       nothing destroyed it under that call. Without this destroy, srv stays
+       alive and registered, and the unconditional chttpsvr_engine_wait()
+       below would block for ever, waiting for an engine reference that
+       never goes away. The code reaches this branch only after restart_th
+       fully returns, which restart_returned records and the join above
+       confirms, so this destroy cannot race the chttpsvr_start() call of
+       restart_th while that call is in flight. */
     chttpsvr_destroy(srv);
   }
 
-  /* chttpsvr_engine_wait() has no timeout of its own; see its own doc
-     comment. It blocks until reactor_refs really reaches zero. An
+  /* chttpsvr_engine_wait() has no timeout of its own (see its own doc
+     comment): it blocks until reactor_refs really reaches zero, so an
      unconditional call here would itself be a fresh hang risk, in exactly
      the compound regression that this test exists to catch. Take the case
      where destroy_th_created is true and the chttpsvr_destroy() call of
-     destroy_th never returns. That is a hypothetical regression that brings
-     a deadlock back into the very teardown path under test. The
+     destroy_th never returns, a hypothetical regression that brings a
+     deadlock back into the very teardown path under test. The
      `if (destroy_th_created)` branch above then never joins destroy_th, and
      the code never falls through to the chttpsvr_destroy() call of the
-     `else if` branch either. Nothing has released the engine reference of
-     srv, so an unconditional wait here would block for ever. That turns a
+     `else if` branch either, so nothing has released the engine reference
+     of srv, and an unconditional wait here would block for ever, turning a
      clean, reported test failure into a hang of the whole binary. The same
      risk applies to the chttpsvr_start() call of restart_th, which also
-     takes an engine reference of its own. On every real completion path
-     that call correctly releases that reference or keeps it. Call
+     takes an engine reference of its own and, on every real completion
+     path, correctly releases that reference or keeps it. Call
      chttpsvr_engine_wait() only after both sides confirm that they really
-     returned. The start_returned gate of
+     returned, as the start_returned gate of
      stop_racing_a_concurrent_start_does_not_bind_over_open_listener below
-     does the same. */
+     also does. */
   bool engine_refs_should_settle = (!destroy_th_created || destroy_returned) &&
                                    (!restart_th_created || restart_returned);
   if (engine_refs_should_settle) chttpsvr_engine_wait();
@@ -1907,7 +1895,7 @@ TEST_F(engine_stop_fixture,
     return; /* one side is stuck for ever; nothing more to check safely */
 
   REQUIRE_FALSE(destroy_returned_too_early);
-  /* restart_th necessarily lost the race. By the time that it resolves srv
+  /* restart_th necessarily lost the race: by the time that it resolves srv
      again, destroy_th has already marked the slot as not in use. */
   REQUIRE_EQ((int)restart_rv, (int)ccol_invalid_args);
 }
@@ -1945,15 +1933,15 @@ static chttpsvr g_stop_race_srv = CHTTPSVR_INVALID;
 static ccol_retval_t g_stop_race_start_rv = ccol_success;
 static _Atomic bool g_stop_race_start_returned = false;
 /* _stop_racing_server_thread sets this flag as its last statement, after
-   chttpsvr_stop() itself really returns. The test below polls it, with a
-   bound, before it ever calls chttpsvr_destroy() or chttpsvr_engine_wait()
-   on g_stop_race_srv. A hypothetical regression can hang chttpsvr_stop()
+   chttpsvr_stop() itself really returns, and the test below polls it, with
+   a bound, before it ever calls chttpsvr_destroy() or chttpsvr_engine_wait()
+   on g_stop_race_srv. When a hypothetical regression hangs chttpsvr_stop()
    itself, for example inside its own ccol_event_loop_remove() or close()
-   call. This flag reports that as a clean, bounded test failure. Without
-   it, those two later calls risk a hang of their own. This file uses the
-   same discipline throughout: confirm that the racing thread really
-   returned before you touch shared state any further. g_race_start_returned
-   above is one such flag. */
+   call, this flag reports that as a clean, bounded test failure, while
+   without it, those two later calls risk a hang of their own. This file
+   uses the same discipline throughout (confirm that the racing thread
+   really returned before you touch shared state any further), and
+   g_race_start_returned above is one such flag. */
 static _Atomic bool g_stop_race_stop_returned = false;
 
 static void *_stop_racing_server_thread(void *arg) {
@@ -1975,22 +1963,22 @@ static void *_start_racing_stop_thread(void *arg) {
 
 TEST_F(engine_stop_fixture,
        stop_racing_a_concurrent_start_does_not_bind_over_open_listener) {
-  /* This test captures each intermediate outcome below into a local. It
-     does not assert on that outcome at once with a REQUIRE_*. It also
-     releases and joins every background thread, and it tears
-     g_stop_race_srv down, UNCONDITIONALLY, before any REQUIRE_* runs at
-     all. bounded_pool_full_returns_503 in tests.c uses the same discipline
-     for the same reason. g_stop_race_srv is a plain global. It cannot carry
-     a scope-exit _ccol_destructor the way that a local handle can, because
+  /* This test captures each intermediate outcome below into a local instead
+     of asserting on it at once with a REQUIRE_*, and it releases and joins
+     every background thread, and tears g_stop_race_srv down,
+     UNCONDITIONALLY, before any REQUIRE_* runs at all, as
+     bounded_pool_full_returns_503 in tests.c does for the same reason.
+     g_stop_race_srv is a plain global, which cannot carry a scope-exit
+     _ccol_destructor the way that a local handle can, because
      _start_racing_stop_thread writes g_stop_race_start_rv from a background
-     thread. force_stop_racing_a_concurrent_start_is_safe above sets the
+     thread; force_stop_racing_a_concurrent_start_is_safe above sets the
      same precedent. A REQUIRE_* that returns early from this function
      before the code releases the hook would leave stop_th parked for ever
-     inside the hook wait of _chttpsvr_stop_internal. Nothing else in this
-     binary ever releases it. The listener fd of g_stop_race_srv is then
-     never closed. That leaves a leaked thread that blocks for ever, and a
+     inside the hook wait of _chttpsvr_stop_internal, which nothing else in
+     this binary ever releases, so the listener fd of g_stop_race_srv would
+     never close. That leaves a leaked thread that blocks for ever, and a
      leaked server that stays registered and still holds an engine
-     reference, for the rest of the run of this binary. It is much worse
+     reference, for the rest of the run of this binary, which is much worse
      than one assertion that fails. */
   g_stop_race_srv = _start_server("18808", 18808);
 
@@ -2002,25 +1990,24 @@ TEST_F(engine_stop_fixture,
       pthread_create(&stop_th, NULL, _stop_racing_server_thread, NULL) == 0;
   if (stop_th_created) _fx_track(tau, stop_th);
 
-  /* This is deterministic once stop_th_created is true. It returns only
+  /* This is deterministic once stop_th_created is true: it returns only
      after _chttpsvr_stop_internal() enters CHTTPSVR_LC_STOPPING and pauses
-     right there. It pauses strictly before its own ccol_event_loop_remove()
-     and close() calls, so the fd of the OLD listener is still fully open
-     and still bound. No luck with the timing is needed. _start_server()
-     fails fast, with exit(1), when a chttpsvr_start call fails. That
-     already guarantees that raw->lifecycle was CHTTPSVR_LC_RUNNING by the
-     time that the code above assigned g_stop_race_srv.
-     _chttpsvr_stop_internal therefore always reaches the hook once stop_th
-     runs. This wait can never hang for a hook that stop_th never
-     reaches. */
+     right there, strictly before its own ccol_event_loop_remove() and
+     close() calls, so the fd of the OLD listener is still fully open and
+     still bound, and no luck with the timing is needed. Because
+     _start_server() fails fast, with exit(1), when a chttpsvr_start call
+     fails, raw->lifecycle was already CHTTPSVR_LC_RUNNING by the time that
+     the code above assigned g_stop_race_srv, so _chttpsvr_stop_internal
+     always reaches the hook once stop_th runs, and this wait can never hang
+     for a hook that stop_th never reaches. */
   if (stop_th_created) _chttpsvr_wait_stop_race_hook_entered_for_tests();
 
   g_stop_race_start_rv = ccol_success;
   atomic_store(&g_stop_race_start_returned, false);
-  /* This code arms the signal before it creates start_th.
+  /* This code arms the signal before it creates start_th, because
      chttpsvr_start() can reach its own CHTTPSVR_LC_STOPPING wait branch
-     very quickly. To arm after the creation of the thread would risk a
-     miss of the signal. */
+     very quickly, and arming after the creation of the thread would risk
+     missing the signal. */
   extern void _chttpsvr_arm_start_stopping_wait_signal_for_tests(void);
   extern void _chttpsvr_wait_start_stopping_wait_signal_entered_for_tests(void);
   _chttpsvr_arm_start_stopping_wait_signal_for_tests();
@@ -2032,31 +2019,31 @@ TEST_F(engine_stop_fixture,
 
   bool still_blocked = false;
   if (start_th_created) {
-    /* This is deterministic, and it is not a fixed sleep. It returns only
-       after chttpsvr_start() really reaches its own CHTTPSVR_LC_STOPPING
-       wait loop, and is about to enter it. See the doc comment of that
-       signal for why it is a plain signal that says "the code reached this
-       point", and not a park-until-release hook like g_stop_race_hook
-       above. stop_th is still parked in g_stop_race_hook, because nothing
-       released it below yet. lifecycle therefore cannot have left
-       CHTTPSVR_LC_STOPPING yet. still_blocked is guaranteed true here on
-       every single run. Nothing has to guess whether a fixed sleep was long
-       enough for the scheduler to even run start_th. On an unlucky, heavily
-       loaded run such a sleep can read true for the wrong reason, where the
-       scheduler has not run start_th yet. The right reason is that the
-       guard really blocks it. */
+    /* This is deterministic, not a fixed sleep: it returns only after
+       chttpsvr_start() really reaches its own CHTTPSVR_LC_STOPPING wait
+       loop and is about to enter it. See the doc comment of that signal for
+       why it is a plain signal that says "the code reached this point",
+       instead of a park-until-release hook like g_stop_race_hook above.
+       Because stop_th is still parked in g_stop_race_hook (nothing released
+       it below yet), lifecycle cannot have left CHTTPSVR_LC_STOPPING yet,
+       so still_blocked is guaranteed true here on every single run, and
+       nothing has to guess whether a fixed sleep was long enough for the
+       scheduler to even run start_th. On an unlucky, heavily loaded run
+       such a sleep can read true for the wrong reason, where the scheduler
+       has not run start_th yet, instead of the right reason, which is that
+       the guard really blocks it. */
     _chttpsvr_wait_start_stopping_wait_signal_entered_for_tests();
     still_blocked = !atomic_load(&g_stop_race_start_returned);
   }
 
-  /* Release the hook. That call is safe and harmless even when nothing
-     created stop_th to reach it. Then join every thread that this code
-     really created, unconditionally, before any REQUIRE_* below runs. See
+  /* Release the hook (a call that is safe and harmless even when nothing
+     created stop_th to reach it), then join every thread that this code
+     really created, unconditionally, before any REQUIRE_* below runs; see
      the opening comment of this test for why that order is load-bearing.
-     The release lets chttpsvr_stop() finish. Its ccol_event_loop_remove()
-     and close() calls for the OLD listener then really run, and lifecycle
-     leaves CHTTPSVR_LC_STOPPING. That frees the chttpsvr_start() call that
-     waits, if there is one, and it can go on. */
+     The release lets chttpsvr_stop() finish: its ccol_event_loop_remove()
+     and close() calls for the OLD listener really run, and lifecycle
+     leaves CHTTPSVR_LC_STOPPING, which frees the chttpsvr_start() call that
+     waits, if there is one, to go on. */
   _chttpsvr_release_stop_race_hook_for_tests();
   bool stop_returned = !stop_th_created;
   if (stop_th_created) {
@@ -2071,13 +2058,13 @@ TEST_F(engine_stop_fixture,
     if (stop_returned) _fx_join(tau, stop_th, NULL);
   }
 
-  /* This is a bounded wait, and not a blind pthread_join. A regression can
-     turn this race into a hang. This loop then times out, and it does not
-     hang the whole test binary. The teardown of this fixture tries one more
-     bounded join on start_th after that, with a limit of 30s. If that join
-     fails, the teardown detaches start_th, and it does not hang the other
-     tests of this binary. This file uses the same shape of bounded wait in
-     place of a pthread_join elsewhere. */
+  /* This is a bounded wait instead of a blind pthread_join: when a
+     regression turns this race into a hang, this loop times out instead of
+     hanging the whole test binary. The teardown of this fixture then tries
+     one more bounded join on start_th, with a limit of 30s, and if that
+     join fails, it detaches start_th instead of hanging the other tests of
+     this binary. This file uses the same shape of bounded wait in place of
+     a pthread_join elsewhere. */
   bool start_returned = !start_th_created;
   if (start_th_created) {
     for (int i = 0; i < 100; i++) {
@@ -2092,30 +2079,30 @@ TEST_F(engine_stop_fixture,
   }
 
   /* Try the real HTTP round trip only after the code confirms that the
-     restart finished and succeeded. A call out to a server that never
-     started again, or whose own start thread is still stuck for ever, is
-     only a second and redundant way to hang or to fail. */
+     restart finished and succeeded, because a call out to a server that
+     never started again, or whose own start thread is still stuck for ever,
+     is only a second and redundant way to hang or to fail. */
   int status = 0;
   ccol_retval_t get_rv = ccol_unexpected_failure;
   if (start_returned && g_stop_race_start_rv == ccol_success)
     get_rv = _get("http://127.0.0.1:18808/hello", &status);
 
-  /* Tear g_stop_race_srv down before any REQUIRE_* below. Do that only
-     after the code confirms that stop_th really returned. A concurrent
+  /* Tear g_stop_race_srv down before any REQUIRE_* below, but only after
+     the code confirms that stop_th really returned. A concurrent
      chttpsvr_start() that is still in flight on another thread is exactly
      the case that the resolve and pin machinery of this whole module makes
-     memory-safe. Other tests in this same file drive that machinery. A
-     start_th that is stuck for ever therefore does not gate this teardown.
-     A hypothetical regression that hangs chttpsvr_stop() ITSELF, past the
+     memory-safe (other tests in this same file drive that machinery), so a
+     start_th that is stuck for ever does not gate this teardown. A
+     hypothetical regression that hangs chttpsvr_stop() ITSELF, past the
      point where the hook above already released it, is a different and
-     unproven risk. Nothing establishes that chttpsvr_destroy() and
+     unproven risk: nothing establishes that chttpsvr_destroy() and
      chttpsvr_engine_wait() are safe to call at the same time as a
      chttpsvr_stop() call on the identical handle that is stuck somewhere in
-     its own real teardown work. A stop that is cleanly blocked on the hook
-     of this test is a different matter. This code therefore calls neither
-     of those two in that case, and it avoids a second hang on top of the
-     first. It deliberately leaks g_stop_race_srv in that branch, which only
-     a regression reaches. The start_th-stuck case below accepts the same
+     its own real teardown work, unlike a stop that is cleanly blocked on
+     the hook of this test. This code therefore calls neither of those two
+     in that case, to avoid a second hang on top of the first, and
+     deliberately leaks g_stop_race_srv in that branch, which only a
+     regression reaches. The start_th-stuck case below accepts the same
      trade-off. */
   bool stop_teardown_safe = !stop_th_created || stop_returned;
   if (stop_teardown_safe) {
@@ -2133,7 +2120,7 @@ TEST_F(engine_stop_fixture,
   if (!start_returned)
     return; /* start_th is stuck for ever; nothing more to check safely */
   /* The real assertion is that there is no spurious failure of the
-     EADDRINUSE class. The restart succeeded cleanly after the old listener
+     EADDRINUSE class: the restart succeeded cleanly after the old listener
      was really gone. */
   REQUIRE_EQ((int)g_stop_race_start_rv, (int)ccol_success);
   REQUIRE_EQ((int)get_rv, (int)ccol_success);
@@ -2196,10 +2183,10 @@ TEST_F(engine_stop_fixture,
 static chttpsvr g_qstop_race_srv = CHTTPSVR_INVALID;
 static ccol_retval_t g_qstop_race_start_rv = ccol_success;
 /* _start_racing_quiesce_stop_thread sets this flag as its last statement,
-   after chttpsvr_start() itself really returns. This test polls it, with a
-   bound, before it ever joins that thread and before it reads
-   g_qstop_race_start_rv. g_stop_race_start_returned above has the same
-   reasoning. */
+   after chttpsvr_start() itself really returns, and this test polls it,
+   with a bound, before it ever joins that thread and before it reads
+   g_qstop_race_start_rv, with the same reasoning as
+   g_stop_race_start_returned above. */
 static _Atomic bool g_qstop_race_start_returned = false;
 
 static void *_start_racing_quiesce_stop_thread(void *arg) {
@@ -2215,44 +2202,41 @@ static void *_start_racing_quiesce_stop_thread(void *arg) {
 TEST_F(
     engine_stop_fixture,
     stop_race_hook_driven_by_quiesce_pass_racing_a_concurrent_start_is_safe) {
-  /* This test captures each intermediate outcome below into a local. It
-     does not assert on that outcome at once with a REQUIRE_*. It also
-     releases and joins every background thread, and it tears
-     g_qstop_race_srv down, unconditionally, before any REQUIRE_* runs at
-     all. stop_racing_a_concurrent_start_does_not_bind_over_open_listener
-     just above uses the same discipline for the same reason. A REQUIRE_*
-     that returns early here, before the code releases the hook, would leave
-     the engine-stop reaper thread parked for ever inside the hook wait of
-     _chttpsvr_stop_internal. Nothing else in this binary ever releases it.
-     Every later test in this binary that touches the shared engine again
-     then hangs. */
+  /* This test captures each intermediate outcome below into a local instead
+     of asserting on it at once with a REQUIRE_*, and it releases and joins
+     every background thread, and tears g_qstop_race_srv down,
+     unconditionally, before any REQUIRE_* runs at all, as
+     stop_racing_a_concurrent_start_does_not_bind_over_open_listener just
+     above does for the same reason. A REQUIRE_* that returns early here,
+     before the code releases the hook, would leave the engine-stop reaper
+     thread parked for ever inside the hook wait of _chttpsvr_stop_internal,
+     which nothing else in this binary ever releases, and every later test
+     in this binary that touches the shared engine again would then hang. */
   g_qstop_race_srv = _start_server("18817", 18817);
 
   _chttpsvr_arm_stop_race_hook_for_tests();
 
-  /* chttpsvr_engine_stop() itself does not block. It only posts to the
-     semaphore of the signal-safe watcher thread, and it returns at once;
-     see its own doc comment. The real reap that it triggers runs on a
-     separate reaper thread. That thread is what reaches
-     _quiesce_server_once(), then _chttpsvr_stop_internal(), then the armed
-     hook. This test needs no background thread of its own only to make this
-     call. */
+  /* chttpsvr_engine_stop() itself does not block: it only posts to the
+     semaphore of the signal-safe watcher thread and returns at once (see
+     its own doc comment). The real reap that it triggers runs on a separate
+     reaper thread, which is what reaches _quiesce_server_once(), then
+     _chttpsvr_stop_internal(), then the armed hook, so this test needs no
+     background thread of its own only to make this call. */
   chttpsvr_engine_stop();
 
-  /* This is deterministic. It returns only after the
+  /* This is deterministic: it returns only after the
      _chttpsvr_stop_internal() call of the reaper thread enters
-     CHTTPSVR_LC_STOPPING and pauses right there. It pauses strictly before
-     its own ccol_event_loop_remove() and close() calls, so the fd of the
-     OLD listener is still fully open and still bound. quiesce_state is
-     already CHTTPSVR_QS_QUIESCING at that point, because
-     _quiesce_server_once() sets it before it ever calls
-     _chttpsvr_stop_internal(). That is exactly the interleaving that this
-     test exists to drive. */
+     CHTTPSVR_LC_STOPPING and pauses right there, strictly before its own
+     ccol_event_loop_remove() and close() calls, so the fd of the OLD
+     listener is still fully open and still bound. quiesce_state is already
+     CHTTPSVR_QS_QUIESCING at that point, because _quiesce_server_once()
+     sets it before it ever calls _chttpsvr_stop_internal(), which is
+     exactly the interleaving that this test exists to drive. */
   _chttpsvr_wait_stop_race_hook_entered_for_tests();
 
   g_qstop_race_start_rv = ccol_success;
   atomic_store(&g_qstop_race_start_returned, false);
-  /* This code arms the signal before it creates start_th. See the same use
+  /* This code arms the signal before it creates start_th; see the same use
      of this signal in
      stop_racing_a_concurrent_start_does_not_bind_over_open_listener above
      for the full reasoning. */
@@ -2267,35 +2251,34 @@ TEST_F(
 
   bool still_blocked = false;
   if (start_th_created) {
-    /* This is deterministic, and it is not a fixed sleep. The reaper thread
-       is still parked in g_stop_race_hook, because nothing released it
-       below yet. lifecycle therefore cannot have left CHTTPSVR_LC_STOPPING
-       yet. still_blocked therefore reads true here on every single run,
-       once chttpsvr_start() really reaches its own wait loop. See the doc
-       comment of that signal. */
+    /* This is deterministic, not a fixed sleep: the reaper thread is still
+       parked in g_stop_race_hook, because nothing released it below yet, so
+       lifecycle cannot have left CHTTPSVR_LC_STOPPING yet, and still_blocked
+       reads true here on every single run, once chttpsvr_start() really
+       reaches its own wait loop. See the doc comment of that signal. */
     _chttpsvr_wait_start_stopping_wait_signal_entered_for_tests();
     still_blocked = !atomic_load(&g_qstop_race_start_returned);
   }
 
   /* Release the hook, so that the _chttpsvr_stop_internal() call of the
-     reaper can finish. Its ccol_event_loop_remove() and close() calls for
-     the OLD listener then really run, and lifecycle leaves
-     CHTTPSVR_LC_STOPPING. That frees the chttpsvr_start() call that waits,
-     if there is one, and it can go on. It then falls through, sees
-     quiesce_state == CHTTPSVR_QS_QUIESCING, and waits there instead. That
-     machinery is established, and other tests already cover it. It waits
-     until the reaper finishes the drain, the release and the teardown of
-     the whole shared engine. This restart can then truly rebuild that
-     engine from the start. */
+     reaper can finish: its ccol_event_loop_remove() and close() calls for
+     the OLD listener really run, and lifecycle leaves
+     CHTTPSVR_LC_STOPPING, which frees the chttpsvr_start() call that waits,
+     if there is one, to go on. That call then falls through, sees
+     quiesce_state == CHTTPSVR_QS_QUIESCING, and waits there instead (an
+     established machinery that other tests already cover) until the reaper
+     finishes the drain, the release and the teardown of the whole shared
+     engine, so that this restart can truly rebuild that engine from the
+     start. */
   _chttpsvr_release_stop_race_hook_for_tests();
 
-  /* This is a bounded poll, and not a blind pthread_join. A regression here
-     makes start_th deadlock with itself for ever. This poll turns that hang
-     into a clean REQUIRE_TRUE(start_returned) failure that names the test.
-     Without it, the hang has no bound. This flag is also what really
-     establishes a happens-before relationship for g_qstop_race_start_rv
-     below. That is a plain global that start_th wrote, and it is not
-     atomic. */
+  /* This is a bounded poll instead of a blind pthread_join: a regression
+     here makes start_th deadlock with itself for ever, and this poll turns
+     that hang, which otherwise has no bound, into a clean
+     REQUIRE_TRUE(start_returned) failure that names the test. This flag is
+     also what really establishes a happens-before relationship for
+     g_qstop_race_start_rv below, a plain global that start_th wrote and
+     that is not atomic. */
   bool start_returned = !start_th_created;
   if (start_th_created) {
     for (int i = 0; i < 100; i++) {
@@ -2310,18 +2293,18 @@ TEST_F(
   }
 
   /* Try the real HTTP round trip only after the code confirms that the
-     restart finished and succeeded. The sibling test above uses the same
-     guard. */
+     restart finished and succeeded, with the same guard as the sibling test
+     above. */
   int status = 0;
   ccol_retval_t get_rv = ccol_unexpected_failure;
   if (start_returned && g_qstop_race_start_rv == ccol_success)
     get_rv = _get("http://127.0.0.1:18817/hello", &status);
 
-  /* g_qstop_race_srv is a global. _start_server writes it before start_th
-     ever runs, and start_th itself may restart it. It therefore cannot
-     carry a scope-exit _ccol_destructor. This code tears it down only after
-     it confirms that start_th really returned. The sibling test uses the
-     same reasoning: do not risk a second hang on top of a start_th that is
+  /* g_qstop_race_srv is a global that _start_server writes before start_th
+     ever runs, and that start_th itself may restart, so it cannot carry a
+     scope-exit _ccol_destructor. This code tears it down only after it
+     confirms that start_th really returned, with the same reasoning as the
+     sibling test: do not risk a second hang on top of a start_th that is
      truly stuck. */
   if (start_returned) {
     chttpsvr_destroy(g_qstop_race_srv);
@@ -2336,7 +2319,7 @@ TEST_F(
   /* The real assertion is that there is no spurious failure of the
      EADDRINUSE class, and no hang and no crash, when _quiesce_server_once()
      drove _chttpsvr_stop_internal() instead of a plain chttpsvr_stop()
-     call. The restart succeeded cleanly after the library really tore the
+     call: the restart succeeded cleanly after the library really tore the
      old listener down, and the whole shared engine after it, and then built
      both again from the start. */
   REQUIRE_EQ((int)g_qstop_race_start_rv, (int)ccol_success);
@@ -2386,21 +2369,21 @@ static void *_destroy_racing_reaper_thread(void *arg) {
 TEST_F(engine_stop_fixture,
        destroy_racing_the_reaper_does_not_free_srv_out_from_under_it) {
   /* This test uses the same discipline as
-     stop_racing_a_concurrent_start_does_not_bind_over_open_listener above.
-     It captures each intermediate outcome into a local. It releases the
-     hook, and it joins every thread that it created, unconditionally,
-     before any REQUIRE_* runs. An assertion that fails here can therefore
-     never leave destroy_th parked for ever inside the hook wait of the
-     reaper, which nothing else in this binary would release. It also cannot
-     leak the engine reference of g_reaper_race_srv, or its listener, for
-     the rest of the run of this binary. */
+     stop_racing_a_concurrent_start_does_not_bind_over_open_listener above:
+     it captures each intermediate outcome into a local, and it releases the
+     hook and joins every thread that it created, unconditionally, before
+     any REQUIRE_* runs. An assertion that fails here can therefore never
+     leave destroy_th parked for ever inside the hook wait of the reaper,
+     which nothing else in this binary would release, nor leak the engine
+     reference of g_reaper_race_srv, or its listener, for the rest of the
+     run of this binary. */
   g_reaper_race_srv = _start_server("18809", 18809);
 
   _chttpsvr_arm_reaper_race_hook_for_tests();
 
-  /* The documentation says that chttpsvr_engine_stop() does not block. It
-     only starts a real, separate reaper thread, and it returns at once.
-     That reaper thread is what pins g_reaper_race_srv and then blocks
+  /* The documentation says that chttpsvr_engine_stop() does not block: it
+     only starts a real, separate reaper thread and returns at once, and
+     that reaper thread is what pins g_reaper_race_srv and then blocks
      inside the armed hook. */
   chttpsvr_engine_stop();
   _chttpsvr_wait_reaper_race_hook_entered_for_tests();
@@ -2415,39 +2398,39 @@ TEST_F(engine_stop_fixture,
   bool still_blocked = false;
   if (destroy_th_created) {
     /* This gives chttpsvr_destroy() time to run, to reach its own
-       servers_bundler_pins wait, and to block inside it. This matches the
+       servers_bundler_pins wait, and to block inside it, which matches the
        150ms precedent that this file uses elsewhere to let the other side
-       reach its own point where it blocks. */
+       reach the point where it blocks. */
     struct timespec settle = {0, 150000000L};
     nanosleep(&settle, NULL);
-    /* chttpsvr_destroy() must still be blocked here, and it must wait for
-       servers_bundler_pins to reach 0. It must not have returned yet. A
-       return by now means that it already freed g_reaper_race_srv, while
-       the reaper thread is still paused and still holds a bare pointer to
-       it. */
+    /* chttpsvr_destroy() must still be blocked here, waiting for
+       servers_bundler_pins to reach 0, and must not have returned yet: a
+       return by this point means that it already freed g_reaper_race_srv
+       while the reaper thread is still paused and still holds a bare
+       pointer to it. */
     still_blocked = !atomic_load(&g_reaper_race_destroy_returned);
   }
 
-  /* Release the hook, and then join destroy_th. Do both unconditionally,
+  /* Release the hook, and then join destroy_th, both unconditionally,
      before any REQUIRE_* below runs. The release is harmless even when the
-     reaper thread never reached the hook. The real reaper thread of
-     chttpsvr_engine_stop() always reaches it, because the code above
-     confirmed that g_reaper_race_srv started. This release therefore can
-     never hang for a hook that the thread would never reach. The release
-     lets the reaper thread finish with g_reaper_race_srv. It calls
-     _quiesce_server_once() on it. chttpsvr_destroy() already won that race,
-     because this code held the destroy back until now, so that call takes
-     the loser path and returns at once. The reaper then decrements
-     servers_bundler_pins, and that frees the wait of chttpsvr_destroy() to
-     go on. */
+     reaper thread never reached the hook, and because the code above
+     confirmed that g_reaper_race_srv started, the real reaper thread of
+     chttpsvr_engine_stop() always reaches it, so this release can never
+     hang for a hook that the thread would never reach. The release lets
+     the reaper thread finish with g_reaper_race_srv by calling
+     _quiesce_server_once() on it; chttpsvr_destroy() already won that race,
+     because this code held the destroy back until this point, so that call
+     takes the loser path and returns at once. The reaper then decrements
+     servers_bundler_pins, which frees the wait of chttpsvr_destroy() to go
+     on. */
   _chttpsvr_release_reaper_race_hook_for_tests();
   if (destroy_th_created) _fx_join(tau, destroy_th, NULL);
 
   chttpsvr_engine_wait();
 
-  /* Prove that the engine came back up cleanly after this. A fresh server
-     on the same port must be able to start, and to serve a real request. It
-     is not enough that nothing crashed above. */
+  /* Prove that the engine came back up cleanly after this: a fresh server
+     on the same port must be able to start and to serve a real request,
+     because it is not enough that nothing crashed above. */
   int status = 0;
   ccol_retval_t get_rv = ccol_unexpected_failure;
   chttpsvr srv2 = CHTTPSVR_INVALID;
@@ -2495,61 +2478,59 @@ TEST_F(engine_stop_fixture,
 TEST_F(engine_stop_fixture,
        second_engine_stop_call_while_first_still_tearing_down_is_safe) {
   (void)tau; /* this test creates no background thread of its own */
-  /* This test uses the same discipline as the reaper-race test above. Every
-     intermediate step runs unconditionally, before any REQUIRE_* below.
-     Those steps release the hook and wait for the engine to settle. An
+  /* This test uses the same discipline as the reaper-race test above:
+     every intermediate step (releasing the hook and waiting for the engine
+     to settle) runs unconditionally, before any REQUIRE_* below. An
      assertion that fails here can therefore never leave the reaper race
      hook armed for ever, which would hang every later test in this binary
-     that force-stops the engine. It also cannot leave the shared engine
-     wedged in the middle of its teardown for the rest of the run of this
-     binary. */
+     that force-stops the engine, nor leave the shared engine wedged in the
+     middle of its teardown for the rest of the run of this binary. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _start_server("18810", 18810);
 
   _chttpsvr_arm_reaper_race_hook_for_tests();
 
-  /* This is the first call. It starts a real reaper thread. That thread
-     pins srv through _engine_force_stop_quiesce_all, and it then blocks
-     inside the hook that the code just armed. It blocks strictly before its
-     own _quiesce_server_once(srv) call. srv_engine_bundler.stopping is
-     already true at that point, and srv_engine_bundler.reactor is still
-     fully live. That is exactly the window that the !stopping guard exists
-     to recognize. */
+  /* This is the first call, which starts a real reaper thread that pins srv
+     through _engine_force_stop_quiesce_all and then blocks inside the hook
+     that the code just armed, strictly before its own
+     _quiesce_server_once(srv) call. srv_engine_bundler.stopping is already
+     true at that point, while srv_engine_bundler.reactor is still fully
+     live, which is exactly the window that the !stopping guard exists to
+     recognize. */
   chttpsvr_engine_stop();
   _chttpsvr_wait_reaper_race_hook_entered_for_tests();
 
-  /* This is the second call, and it lands squarely inside that window.
-     With no guard, it starts a second reaper thread. That thread goes on to
-     call ccol_event_loop_destroy() on the identical handle that the first
-     reaper is still going to use, which is fatal. The
+  /* This is the second call, which lands squarely inside that window. With
+     no guard, it starts a second reaper thread that goes on to call
+     ccol_event_loop_destroy() on the identical handle that the first reaper
+     is still going to use, which is fatal. The
      !srv_engine_bundler.stopping guard of _engine_force_stop_now makes this
-     call do nothing instead, silently, as the documentation says. It
-     dispatches nothing on the watcher thread, and it starts no second
-     reaper. */
+     call do nothing instead, silently, as the documentation says: it
+     dispatches nothing on the watcher thread and starts no second reaper. */
   chttpsvr_engine_stop();
 
-  /* This gives a second reaper thread a moment to reach its own
-     ccol_event_loop_destroy() call, if anything ever started one. It gives
-     that moment before the code releases the first reaper. This matches the
-     150ms precedent that this binary uses elsewhere to let the other side
-     reach its own point where it blocks or crashes. */
+  /* Before the code releases the first reaper, this gives a second reaper
+     thread, if anything ever started one, a moment to reach its own
+     ccol_event_loop_destroy() call. This matches the 150ms precedent that
+     this binary uses elsewhere to let the other side reach the point where
+     it blocks or crashes. */
   struct timespec settle = {0, 150000000L};
   nanosleep(&settle, NULL);
 
-  /* Release the reaper thread, of which there is truly only one. It can
-     then finish the quiesce of srv, and tear the reactor down normally. */
+  /* Release the reaper thread, of which there is truly only one, so that it
+     can finish the quiesce of srv and tear the reactor down normally. */
   _chttpsvr_release_reaper_race_hook_for_tests();
   chttpsvr_engine_wait();
 
-  /* A regression here takes the whole process down well before this point.
-     It does that synchronously above, or through the delayed
+  /* A regression here takes the whole process down well before this point,
+     either synchronously above or through the delayed
      ccol_event_loop_destroy() call of a second reaper that races the call
-     of the first one. To reach this line at all is therefore a meaningful
-     part of the assertion. Also prove that the engine came back up truly
-     clean, with no global state corrupt and no server that stays registered
-     and dangles. Start a fresh server on the same port, and drive one real
-     request through it. The other force-stop tests in this file do exactly
-     the same. */
+     of the first one, so reaching this line at all is a meaningful part of
+     the assertion. Also prove that the engine came back up truly clean,
+     with no global state corrupt and no server that stays registered and
+     dangles, by starting a fresh server on the same port and driving one
+     real request through it, exactly as the other force-stop tests in this
+     file do. */
   chttpsvr_destroy(srv);
   chttpsvr_engine_wait();
 
@@ -2604,34 +2585,35 @@ extern void _chttpsvr_release_quiesce_teardown_race_hook_for_tests(void);
 extern size_t _chttpsvr_servers_bundler_count_for_tests(void);
 
 TEST_F(engine_stop_fixture, fork_mid_quiesce_teardown_does_not_hang_child) {
-  (void)tau; /* This test creates no background thread of its own to track.
+  (void)tau; /* This test creates no background thread of its own to track:
                 chttpsvr_engine_stop() itself starts the internal reaper
-                thread of the reactor, and this test does not create it
+                thread of the reactor, instead of this test creating it
                 directly. */
   chttpsvr srv = _start_server("18811", 18811);
 
   _chttpsvr_arm_quiesce_teardown_race_hook_for_tests();
 
-  /* The documentation says that chttpsvr_engine_stop() does not block. It
-     only starts a background reaper thread. That thread is what runs
-     _quiesce_server_once against srv. It then blocks inside the hook that
-     the code just armed. It blocks right after quiesce_state becomes
-     CHTTPSVR_QS_QUIESCING, and strictly before any of its own real teardown
+  /* The documentation says that chttpsvr_engine_stop() does not block: it
+     only starts a background reaper thread, which runs
+     _quiesce_server_once against srv and then blocks inside the hook that
+     the code just armed, right after quiesce_state becomes
+     CHTTPSVR_QS_QUIESCING and strictly before any of its own real teardown
      work starts. */
   chttpsvr_engine_stop();
   _chttpsvr_wait_quiesce_teardown_race_hook_entered_for_tests();
 
-  /* srv is now truly stuck in this exact process, with quiesce_state ==
-     CHTTPSVR_QS_QUIESCING. Call fork() while that is still true. */
+  /* At this point srv is truly stuck in this exact process, with
+     quiesce_state == CHTTPSVR_QS_QUIESCING; call fork() while that is still
+     true. */
   int pipefd[2];
-  /* This code does not use REQUIRE_EQ directly. A failure of pipe() or of
-     fork() here must still release the hook that the code armed, and it
-     must destroy srv, before it returns. Without that, the real reaper
-     thread that this test paused above stays parked for ever. It then
-     wedges the shared engine of the whole process for every later test in
-     this binary that touches it, through chttpsvr_start,
-     chttpsvr_engine_stop or chttpsvr_engine_wait. That is much worse than
-     one test that fails on its own. */
+  /* This code does not use REQUIRE_EQ directly, because a failure of pipe()
+     or of fork() here must still release the hook that the code armed, and
+     destroy srv, before it returns. Without that, the real reaper thread
+     that this test paused above stays parked for ever and wedges the shared
+     engine of the whole process for every later test in this binary that
+     touches it, through chttpsvr_start, chttpsvr_engine_stop or
+     chttpsvr_engine_wait, which is much worse than one test that fails on
+     its own. */
   if (pipe(pipefd) != 0) {
     _chttpsvr_release_quiesce_teardown_race_hook_for_tests();
     chttpsvr_engine_wait();
@@ -2656,32 +2638,30 @@ TEST_F(engine_stop_fixture, fork_mid_quiesce_teardown_does_not_hang_child) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    /* This bounds the lifetime of this child, for the case where the
-       hazard that this test guards against still fires. The
+    /* This bounds the lifetime of this child for the case where the hazard
+       that this test guards against still fires, in which the
        chttpsvr_destroy() below would otherwise block for ever. The child
-       reports its own outcome through the pipe, and not through its own
-       exit code. Under make memtest, valgrind replaces the real exit code
-       of a forked child with its own --error-exitcode. It does that the
-       instant that it finds ANY allocation in the inherited image of that
-       child that is still reachable at exit. Every child that something
-       forks in the middle of a suite always has such an allocation, because
-       the rest of the suite has not quiesced yet. The exit code therefore
-       cannot carry this result reliably. See
-       wait_from_within_own_task_does_not_hang in tests/cthreadpool, and the
-       fork_safety group in tests/clogger, for the same valgrind
-       behaviour. */
+       reports its own outcome through the pipe instead of its own exit
+       code, because under make memtest, valgrind replaces the real exit
+       code of a forked child with its own --error-exitcode the instant that
+       it finds ANY allocation in the inherited image of that child that is
+       still reachable at exit. Every child that something forks in the
+       middle of a suite always has such an allocation, because the rest of
+       the suite has not quiesced yet, so the exit code cannot carry this
+       result reliably. See wait_from_within_own_task_does_not_hang in
+       tests/cthreadpool, and the fork_safety group in tests/clogger, for
+       the same valgrind behaviour. */
     alarm(3);
     char ok = 0;
     /* Half 1: srv must already be gone from servers_bundler.servers[]
-       here. That proves that the atfork fixup ran the unregister step, and
-       not only the flip to CHTTPSVR_QS_QUIESCED. Without this check, a
-       regression here shows up only indirectly, and much later. It shows up
-       as the driver loop of _engine_force_stop_quiesce_all that spins for
-       ever, the next time that this process truly drives a fresh reaper
-       pass. */
+       here, which proves that the atfork fixup ran the unregister step, not
+       only the flip to CHTTPSVR_QS_QUIESCED. Without this check, a
+       regression here shows up only indirectly and much later, as the
+       driver loop of _engine_force_stop_quiesce_all spinning for ever the
+       next time that this process truly drives a fresh reaper pass. */
     if (_chttpsvr_servers_bundler_count_for_tests() == 0) {
       /* Half 2: chttpsvr_destroy() on the exact same handle must not block
-         on the loser wait of _quiesce_server_once either. That handle is
+         on the loser wait of _quiesce_server_once either; that handle is
          still resolvable here, because this path never touched
          chttpsvr_slot_table at all. */
       chttpsvr_destroy(srv);
@@ -2699,24 +2679,24 @@ TEST_F(engine_stop_fixture, fork_mid_quiesce_teardown_does_not_hang_child) {
   close(pipefd[0]);
 
   int status = 0;
-  /* This code does not use REQUIRE_EQ directly. A spurious return from
-     waitpid() here, for example EINTR, must still release the hook and
-     clean srv up before this function returns. The pipe() and fork()
-     failure branches above do the same, for the same reason. Without that,
-     the real, paused reaper thread stays parked for ever, and it wedges the
-     shared engine for every later test. */
+  /* This code does not use REQUIRE_EQ directly, because a spurious return
+     from waitpid() here, for example EINTR, must still release the hook and
+     clean srv up before this function returns, as the pipe() and fork()
+     failure branches above do for the same reason. Without that, the real,
+     paused reaper thread stays parked for ever and wedges the shared engine
+     for every later test. */
   pid_t waited = waitpid(pid, &status, 0);
 
-  /* This is the parent side. Let the real, paused reaper thread finish its
-     own teardown work normally. Then clean srv up here too, whatever the
+  /* This is the parent side: let the real, paused reaper thread finish its
+     own teardown work normally, then clean srv up here too, whatever the
      outcome of the child was. */
   _chttpsvr_release_quiesce_teardown_race_hook_for_tests();
   chttpsvr_engine_wait();
   chttpsvr_destroy(srv);
 
   REQUIRE_EQ(waited, pid);
-  /* This code checks WIFEXITED and not WEXITSTATUS; see the comment of this
-     test above. WIFEXITED alone still catches a real regression. A
+  /* This code checks WIFEXITED and not WEXITSTATUS (see the comment of this
+     test above). WIFEXITED alone still catches a real regression, because a
      regression that hangs becomes WIFSIGNALED through the alarm above, and
      a real crash shows up the same way. */
   REQUIRE_TRUE(WIFEXITED(status));
@@ -2760,9 +2740,9 @@ TEST_F(engine_stop_fixture, fork_mid_quiesce_teardown_does_not_hang_child) {
 /* ========================================================================== */
 TEST_F(engine_stop_fixture,
        fork_mid_quiesce_teardown_does_not_hang_fresh_start_in_child) {
-  (void)tau; /* This test creates no background thread of its own to track.
+  (void)tau; /* This test creates no background thread of its own to track:
                 chttpsvr_engine_stop() itself starts the internal reaper
-                thread of the reactor, and this test does not create it
+                thread of the reactor, instead of this test creating it
                 directly. */
   chttpsvr srv = _start_server("18812", 18812);
 
@@ -2770,15 +2750,15 @@ TEST_F(engine_stop_fixture,
   chttpsvr_engine_stop();
   _chttpsvr_wait_quiesce_teardown_race_hook_entered_for_tests();
 
-  /* srv_engine_bundler.stopping is now true, and a real reaper thread is
-     alive and paused inside the hook, so reaper_joinable == true. Call
-     fork() while both of those are still true. */
+  /* At this point srv_engine_bundler.stopping is true, and a real reaper
+     thread is alive and paused inside the hook, so reaper_joinable == true;
+     call fork() while both of those are still true. */
   int pipefd[2];
-  /* This code does not use REQUIRE_EQ directly. See the same comment in the
+  /* This code does not use REQUIRE_EQ directly; see the same comment in the
      previous test for why a failure of pipe() or of fork() here must still
-     release the hook, and must destroy srv, before it returns. Without
-     that, the real reaper thread stays parked for ever, and it wedges the
-     shared engine for every later test. */
+     release the hook, and destroy srv, before it returns. Without that, the
+     real reaper thread stays parked for ever and wedges the shared engine
+     for every later test. */
   if (pipe(pipefd) != 0) {
     _chttpsvr_release_quiesce_teardown_race_hook_for_tests();
     chttpsvr_engine_wait();
@@ -2804,9 +2784,9 @@ TEST_F(engine_stop_fixture,
       close(dn);
     }
     /* See the same comment in the previous test for why this child reports
-       through the pipe, and not through the exit code of the process. */
+       through the pipe instead of the exit code of the process. */
     alarm(3);
-    /* This is deliberately a brand new handle, and not srv itself. See the
+    /* This is deliberately a brand new handle instead of srv itself; see the
        doc comment of this test above for why a restart of srv would not
        drive _engine_acquire() at all. */
     chttpsvr fresh = ccol_create_chttpsvr(CLOG_INVALID, NULL);
@@ -2815,9 +2795,9 @@ TEST_F(engine_stop_fixture,
       chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
       cfg.host = "127.0.0.1";
       cfg.port = 18813;
-      chttpsvr_start(fresh, &cfg); /* Nothing asserts on this result.
-                                       Whether the bind() of this fresh
-                                       server succeeds does not matter. Only
+      chttpsvr_start(fresh, &cfg); /* Nothing asserts on this result:
+                                       whether the bind() of this fresh
+                                       server succeeds does not matter, only
                                        whether the call returns at all is
                                        under test here. */
       ok = 1; /* the code reaches this only when the call above returned */
@@ -2835,14 +2815,13 @@ TEST_F(engine_stop_fixture,
   close(pipefd[0]);
 
   int status = 0;
-  /* This code does not use REQUIRE_EQ directly. See the same comment in the
+  /* This code does not use REQUIRE_EQ directly; see the same comment in the
      previous test for why a spurious return from waitpid() here must still
-     release the hook, and must clean srv up, before this function
-     returns. */
+     release the hook, and clean srv up, before this function returns. */
   pid_t waited = waitpid(pid, &status, 0);
 
-  /* This is the parent side. Let the real, paused reaper thread finish its
-     own teardown work normally. Then clean srv up here too, whatever the
+  /* This is the parent side: let the real, paused reaper thread finish its
+     own teardown work normally, then clean srv up here too, whatever the
      outcome of the child was. */
   _chttpsvr_release_quiesce_teardown_race_hook_for_tests();
   chttpsvr_engine_wait();

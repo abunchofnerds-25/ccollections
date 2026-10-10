@@ -12,14 +12,13 @@ CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 $(CCOL_HARDENING_CFLAGS) -Wstrict
 COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
 LFLAGS = -lssl -lcrypto -lpthread $(CCOL_PLATFORM_LIBS)
 
-# A separate ThreadSanitizer build. It stays out of the default -Werror build.
-# tests/cthreadcomm/Makefile has the same build_tsan and test_tsan pattern.
-# This suite drives one shared ctls_ctx_t from several handshake threads. At
-# the same time another thread keeps changing the configuration of that
-# context. Each change rebuilds and frees every SSL_CTX that the context owns.
-# This build checks the order between two things: the last read of a
-# connection through a shared context, and the destruction of that same
-# object.
+# A separate ThreadSanitizer build that stays out of the default -Werror
+# build; tests/cthreadcomm/Makefile has the same build_tsan and test_tsan
+# pattern. This suite drives one shared ctls_ctx_t from several handshake
+# threads while another thread keeps changing the configuration of that
+# context, and each change rebuilds and frees every SSL_CTX that the context
+# owns. This build checks the order between the last read of a connection
+# through a shared context and the destruction of that same object.
 TSAN_CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 -fsanitize=thread \
 	-Wall -Wextra -Werror -g -O1 $(EXTRA_CFLAGS)
 
@@ -37,9 +36,9 @@ build_tsan:
 	$(CC) $(TSAN_CFLAGS) $(ALL_SRC_FILES) -o tests_tsan $(LFLAGS) \
 		-fsanitize=thread $(CCOL_TSAN_EXTRA_SRC)
 
-# There is no suppression file. Every ThreadSanitizer report from this suite
-# names a frame in the code of this module. This project does not suppress a
-# finding over its own code.
+# There is no suppression file: every ThreadSanitizer report from this suite
+# names a frame in the code of this module, and this project does not
+# suppress a finding over its own code.
 test_tsan: build_tsan
 	./tests_tsan
 
@@ -49,13 +48,12 @@ memtest: build
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
 		--error-exitcode=1 --suppressions=openssl_internal.supp ./tests_sigpipe
 
-# --ignore-errors negative: the coverage counters of gcov are plain increments
-# and they are not atomic. Instrumented code that runs on more than one thread
-# at a time can therefore race on them and produce a false negative hit count.
-# This affects more than one module, and it also happens inside a glibc
-# header. It is a limit of the instrumentation of gcov, and not a defect in
-# the logic of this library. The same flag in tests/chttpclient/Makefile gives
-# the full reason.
+# --ignore-errors negative: the coverage counters of gcov are plain, non-atomic
+# increments, so instrumented code that runs on more than one thread at a time
+# can race on them and produce a false negative hit count. This affects more
+# than one module and also happens inside a glibc header; it is a limit of the
+# gcov instrumentation, not a defect in the logic of this library. The same
+# flag in tests/chttpclient/Makefile gives the full reason.
 generate_coverage_report:
 	$(CC)  $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \

@@ -35,9 +35,9 @@
 # Anchored on this module's own frame, always symbol-resolved, rather than on
 # any pthread-internal frame name, mirroring tests/chttpclient/tsan_openssl.supp's
 # own "anchor on our own code" choice. It names _clog_atfork_prepare, which is
-# where the write lock is taken: an anchor naming a function that no longer takes
+# where the write lock is taken: an anchor naming a function that does not take
 # the lock suppresses nothing, silently, and nothing fails until the reports
-# resurface somewhere else.
+# surface somewhere else.
 #
 # Know what this hides. The anchor matches every lock-order-inversion report
 # carrying that frame, including one between this module's prepare handler and
@@ -75,7 +75,7 @@ deadlock:_clog_atfork_prepare
 # Each anchor names the frame of our own code that takes the lock in the
 # report, never a pthread or ThreadSanitizer frame, and the deadlock anchor
 # names the test helper whose child produces the inversion, so that an
-# inversion anywhere else is still reported.
+# inversion anywhere else is reported.
 mutex:_clog_exit_drain
 mutex:_cleanup_event_loop_slot_table
 mutex:clog_test_lock_table_forever

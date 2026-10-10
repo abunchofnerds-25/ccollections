@@ -41,10 +41,10 @@ SOFTWARE.
 TAU_MAIN()
 
 /* The test clients of this binary write to the server with plain write(2),
- * and the server can close a connection while one of them writes. The
- * library leaves the disposition of SIGPIPE to the application, so this
- * binary ignores it itself. tests_sigpipe.c covers the library under the
- * default disposition. */
+ * and the server can close a connection while one of them writes. Since the
+ * library leaves the disposition of SIGPIPE to the application, this binary
+ * ignores it itself; tests_sigpipe.c covers the library under the default
+ * disposition. */
 __attribute__((constructor)) static void _ignore_sigpipe_for_test_writes(void) {
   signal(SIGPIPE, SIG_IGN);
 }
@@ -96,11 +96,11 @@ static int _get_over_unix(const char *path) {
 #define WORKER_KEY_TEST_MAX_KEYS 4096
 
 /* With every key of the process taken, chttpsvr_start has no key to mark its
-   worker threads with. It must refuse to start, and not run workers that
-   write the server pointer through a key that some other component owns.
-   Once keys are free again, a later chttpsvr_start creates the key and the
-   server serves normally. This test is non-vacuous: when the creation of the
-   key is not checked, the first chttpsvr_start succeeds. */
+   worker threads with, so it must refuse to start instead of running workers
+   that write the server pointer through a key that some other component
+   owns. Once keys are free again, a later chttpsvr_start creates the key and
+   the server serves normally. This test is non-vacuous: when the creation of
+   the key is not checked, the first chttpsvr_start succeeds. */
 TEST(chttpsvr_worker_key, start_fails_cleanly_when_no_thread_key_is_left) {
   chttpsvr srv = ccol_create_chttpsvr(CLOG_INVALID, NULL);
   REQUIRE_NE(srv, CHTTPSVR_INVALID);

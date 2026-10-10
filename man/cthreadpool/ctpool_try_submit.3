@@ -14,10 +14,10 @@ ccol_retval_t ctpool_try_submit(ctpool pool,
 .fi
 .SH DESCRIPTION
 .nf
-This function is the same as ctpool_submit, with one difference. For a
-bounded queue it never blocks. It returns ccol_container_full at once
-when the queue is at capacity. For an unbounded queue it behaves
-exactly as ctpool_submit does.
+Works like ctpool_submit, except that for a bounded queue it never
+blocks: it returns ccol_container_full at once when the queue is at
+capacity. For an unbounded queue it behaves exactly as ctpool_submit
+does.
 .fi
 .SH PARAMETERS
 .nf

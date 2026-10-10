@@ -31,23 +31,23 @@ SOFTWARE.
  *
  * JSON (RFC 8259 sec. 6) and YAML 1.2 (the core schema) both write the
  * decimal point of a number as the ASCII '.', whatever the locale of the host
- * process is. strtod() and the "%g" conversions of the printf family follow
- * the radix character of the active LC_NUMERIC category instead; read
- * strtod(3) and printf(3). A process that calls setlocale() or uselocale()
- * and moves to a locale with ',' as its decimal point therefore makes
- * strtod() stop at the '.' of "1.5" and report no error, and makes "%g"
- * write "0,25", which no parser of either format reads as a number.
+ * process is, while strtod() and the "%g" conversions of the printf family
+ * follow the radix character of the active LC_NUMERIC category (see strtod(3)
+ * and printf(3)). So when a process calls setlocale() or uselocale() and
+ * moves to a locale with ',' as its decimal point, strtod() stops at the '.'
+ * of "1.5" without reporting an error, and "%g" writes "0,25", which no
+ * parser of either format reads as a number.
  *
  * ccol_c_locale_enter() moves the calling thread to the "C" locale with
  * uselocale(), and ccol_c_locale_leave() puts back the locale that was
- * active immediately before. uselocale() changes the locale of one thread
- * only. Unlike setlocale(), it never changes what another thread sees. The
+ * active immediately before. Unlike setlocale(), uselocale() changes the
+ * locale of one thread only and never changes what another thread sees. The
  * scope nests: each enter saves its own predecessor, so a recursive or
  * nested scope restores correctly.
  *
  * The "C" locale_t object is created once, lazily, under a ccol_once_flag_t.
- * Every translation unit that includes this header holds its own flag and
- * its own object, because the state below has internal linkage. That keeps
+ * Because the state below has internal linkage, every translation unit that
+ * includes this header holds its own flag and its own object, which keeps
  * the helper out of the exported symbol set and out of the static archive
  * namespace. A destructor frees the object at the exit of the process. It
  * clears the published pointer first, so an enter that runs after it (from
@@ -60,8 +60,8 @@ SOFTWARE.
  * in the C library), enter reports that it switched nothing, and the
  * conversions run under whatever locale is already active.
  *
- * This header is internal. It carries no visibility block. make install does
- * not install it.
+ * This header is internal: it carries no visibility block, and make install
+ * does not install it.
  */
 
 #ifndef CCOL_CNUMLOCALE_H

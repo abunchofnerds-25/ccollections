@@ -13,55 +13,52 @@ ccol_select_timed_va(ready_index, timeout_us, ...);
 .SH DESCRIPTION
 .nf
 ccol_select_va() builds a ccol_selectable array from its variadic
-arguments. It computes the count of the elements at compile time. It
-then passes everything to ccol_select().
+arguments, computes the count of the elements at compile time, and
+passes everything to ccol_select().
 
-ccol_select_timed_va() does the same, but it calls
-ccol_select_timed() with the timeout_us that you give. That value is
-in microseconds. UINT64_MAX means an infinite wait, 0 means a poll, and
-any other value is a deadline.
+ccol_select_timed_va() does the same, but calls ccol_select_timed()
+with the timeout_us that you give, in microseconds: UINT64_MAX means an
+infinite wait, 0 means a poll, and any other value is a deadline.
 
-Each variadic argument must be a ccol_selectable value. Such a value
-usually comes from ccol_selectable_from_circq(),
-ccol_selectable_from_dynq(), ccol_selectable_from_chan() or
-ccol_selectable_from_fd(), with a dir of ccol_select_read or
-ccol_select_write. Each macro evaluates every argument exactly one
-time.
+Each variadic argument must be a ccol_selectable value, which usually
+comes from ccol_selectable_from_circq(), ccol_selectable_from_dynq(),
+ccol_selectable_from_chan() or ccol_selectable_from_fd(), with a dir of
+ccol_select_read or ccol_select_write. Each macro evaluates every
+argument exactly one time.
 
-Neither macro does the receive or the send itself. On ccol_success the
-caller must make that call at once. For a queue selectable that wins,
-call ccol_circq_try_recv_zc(), ccol_dynmq_try_recv_zc(),
-ccol_circq_try_send_zc() or ccol_dynmq_send_zc(). For an fd selectable
-that wins, call read(2), recv(2), write(2) or send(2) on its
-descriptor.
+Neither macro does the receive or the send itself, so on ccol_success
+the caller must make that call at once: ccol_circq_try_recv_zc(),
+ccol_dynmq_try_recv_zc(), ccol_circq_try_send_zc() or
+ccol_dynmq_send_zc() for a queue selectable that wins, and read(2),
+recv(2), write(2) or send(2) on its descriptor for an fd selectable
+that wins.
 
-Each macro expands to a statement expression of GCC and Clang. Each
-one gives a value of type ccol_retval_t. You can therefore use them in
-an assignment and in a condition.
+Each macro expands to a statement expression of GCC and Clang that
+gives a value of type ccol_retval_t, so you can use them in an
+assignment and in a condition.
 .fi
 .SH PARAMETERS
 .nf
 ready_index  A size_t * that gets the index of the selectable that is
-             ready. That index starts at 0. It is valid only when the
-             macro returns ccol_success.
+             ready, starting at 0. It is valid only when the macro
+             returns ccol_success.
 timeout_us   Microseconds to wait. UINT64_MAX means an infinite wait.
              This parameter belongs to ccol_select_timed_va() only.
-\&...          One or more ccol_selectable values. You must give at
+\&...          One or more ccol_selectable values; you must give at
              least one.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success            A selectable is ready, and the macro set
-                        *ready_index. The caller then does its own
+                        *ready_index; the caller then does its own
                         explicit receive or send.
 ccol_timed_out          The deadline passed and no selectable became
-                        ready. This applies to ccol_select_timed_va()
-                        only.
-ccol_invalid_args       An argument is NULL or zero. Or a selectable
+                        ready (ccol_select_timed_va() only).
+ccol_invalid_args       An argument is NULL or zero, or a selectable
                         holds a NULL queue pointer, or a type tag that
                         the library does not know.
-ccol_not_enough_memory  A waiter node failed to allocate. There is one
-                        node for each selectable.
+ccol_not_enough_memory  A waiter node failed to allocate (there is one
+                        node for each selectable).
 ccol_unexpected_failure The setup of epoll or of eventfd failed. An fd
                         selectable that names a regular file or a
                         directory always gives this code, because
@@ -69,16 +66,16 @@ ccol_unexpected_failure The setup of epoll or of eventfd failed. An fd
 .fi
 .SH NOTES
 .nf
-The array of the selectables is an ordinary local array on the stack.
-There is no heap allocation beyond the one that ccol_select_timed()
-already makes.
+The array of the selectables is an ordinary local array on the stack,
+so there is no heap allocation beyond the one that ccol_select_timed()
+makes itself.
 .fi
 .SH WARNINGS
 .nf
-Each macro uses a statement expression of GCC and Clang, which is
-__extension__({ ... }). That is not valid under strict ISO C, which is
--pedantic. It compiles clean with -Wall -Wextra -Werror on both GCC
-and Clang, when the build does not pass -pedantic.
+Each macro uses a statement expression of GCC and Clang,
+__extension__({ ... }), which is not valid under strict ISO C
+(-pedantic). It compiles clean with -Wall -Wextra -Werror on both GCC
+and Clang when the build does not pass -pedantic.
 .fi
 .SH EXAMPLES
 .nf

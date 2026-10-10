@@ -11,12 +11,12 @@ chttpcli chttp_default_client(void);
 .fi
 .SH DESCRIPTION
 .nf
-This function gives the default client of the process. The library
-initializes that client only when it first needs it. The function is
+This function gives the default client of the process, which the
+library initializes only when it first needs it. The function is
 thread-safe, and the library makes only one such client for each
 process.
 
-The default client uses the default settings. pool_size is the CPU
+The default client uses the default settings: pool_size is the CPU
 count, there are no timeouts, and TLS verification is on. You can
 configure it with the same chttpclient_set_* functions as any other
 client.
@@ -31,15 +31,16 @@ initialization fails.
 Do not give this handle to chttpclient_destroy. This module owns the
 default client and destroys it automatically at the exit of the
 process, from a handler that it registers with atexit(3) the first
-time that it builds the default client. A call of chttp_default_client
-from an exit handler that runs after that one gives CHTTPCLI_INVALID. A destroy by you does not crash that one call, because the
-module knows the handle and clears its own reference to it. But the
-library never builds the default client again. Every later call to
-chttp_default_client, chttp_do, chttp_get and the other wrappers in
-the process then fails cleanly and runs no request. This holds for the
-rest of the life of that process. Do you need a client whose life you
-control? Then make your own client with ccol_create_chttpclient or
-with ccol_create_chttpclient_mp.
+time that it builds the default client; a call of chttp_default_client
+from an exit handler that runs after that one gives CHTTPCLI_INVALID.
+If you do destroy it, that chttpclient_destroy call does not crash,
+because the module knows the handle and clears its own reference to it;
+but the library never builds the default client again. Every later call
+to chttp_default_client, chttp_do, chttp_get and the other wrappers in
+the process then fails cleanly and runs no request, for the rest of the
+life of that process. If you need a client whose life you control, make
+your own client with ccol_create_chttpclient or with
+ccol_create_chttpclient_mp.
 .fi
 .SH "SEE ALSO"
 .BR ccol_create_chttpclient (3),

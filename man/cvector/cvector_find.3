@@ -12,9 +12,9 @@ size_t cvector_find(cvec v, const void *elem,
 .fi
 .SH DESCRIPTION
 .nf
-Does a linear scan. It returns the zero-based index of the first
-element that is equal to *elem. When cmp is NULL, the function compares
-with memcmp over the element size. That is equality byte by byte.
+Does a linear scan and returns the zero-based index of the first element
+that is equal to *elem. When cmp is NULL, the function compares with
+memcmp over the element size, which is equality byte by byte.
 .fi
 .SH PARAMETERS
 .nf

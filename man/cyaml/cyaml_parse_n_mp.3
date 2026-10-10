@@ -13,11 +13,11 @@ cyaml cyaml_parse_n(const char *yaml_str, size_t len, char **err_str);
 .fi
 .SH DESCRIPTION
 .nf
-This function behaves in the same way as cyaml_parse_mp(), but it reads
-at most len bytes from yaml_str.  yaml_str need not be null-terminated.
-This is useful for a parse of one part of a larger buffer.  The rules
-for a multi-document stream are the same as the rules that
-cyaml_parse_mp() describes.
+This function behaves like cyaml_parse_mp(), but it reads at most len
+bytes from yaml_str, and yaml_str need not be null-terminated.  This is
+useful for parsing one part of a larger buffer.  The rules for a
+multi-document stream are the same as those that cyaml_parse_mp()
+describes.
 
 The character rules of cyaml_parse_mp() apply to every one of the len
 bytes: a null byte, any other character outside c-printable, or a
@@ -26,7 +26,7 @@ the line and the column.  A byte past len is never read.
 .fi
 .SH PARAMETERS
 .nf
-yaml_str   Input buffer.  It need not be null-terminated.
+yaml_str   Input buffer, which need not be null-terminated.
 len        Number of bytes to parse.
 err_str    Out-parameter for the error string, or NULL to ignore it.
            It follows the rules of cyaml_parse_mp(): the library owns
@@ -34,16 +34,16 @@ err_str    Out-parameter for the error string, or NULL to ignore it.
            len bytes hold.
 mp         Custom allocator, or NULL for default.
            The library keeps its own copy of the struct, so the caller
-           may release or reuse the struct once this call returns. The
-           functions that it names must stay callable until the last
-           node built with them is destroyed. A process can use at most
-           64 distinct sets of four functions; a call that would need a
-           65th fails and returns NULL.
+           may release or reuse the struct once this call returns, but
+           the functions that it names must stay callable until the
+           last node built with them is destroyed.  A process can use
+           at most 64 distinct sets of four functions; a call that
+           would need a 65th fails and returns NULL.
 .fi
 .SH RETURN VALUE
 .nf
-Root cyaml node on success.  See cyaml_parse_mp() for the behaviour
-with more than one document.  The function returns NULL on a failure.
+Root cyaml node on success, or NULL on a failure.  See cyaml_parse_mp()
+for the behaviour with more than one document.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_parse_mp (3),

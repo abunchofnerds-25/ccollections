@@ -11,31 +11,31 @@ char *chttp_basic_auth(const char *username, const char *password);
 .fi
 .SH DESCRIPTION
 .nf
-This is a static inline wrapper around chttp_basic_auth_mp(). It gives
-NULL for the memory management procedures, so the function uses malloc
-and free.
+This is a static inline wrapper around chttp_basic_auth_mp() that
+gives NULL for the memory management procedures, so the function uses
+malloc and free.
 
 RFC 7617 SS2 makes the colon the one delimiter of the encoded
-"user-id:password" string. A recipient cuts that string at its FIRST
-colon. A username with a colon in it is therefore not transmittable
-without ambiguity, and the function rejects it. Without that
-rejection, the username "a:b" with the password "c" encodes to the
-same bytes as the username "a" with the password "b:c". A caller that
-asks for one identity therefore sends a different one. A colon in the
-password needs no escape, and the function builds the string as the
-caller asks.
+"user-id:password" string, and a recipient cuts that string at its
+FIRST colon.  A username with a colon in it is therefore not
+transmittable without ambiguity, and the function rejects it.  Without
+that rejection, the username "a:b" with the password "c" encodes to
+the same bytes as the username "a" with the password "b:c", so a
+caller that asks for one identity sends a different one.  A colon in
+the password needs no escape, and the function builds the string as
+the caller asks.
 .fi
 .SH PARAMETERS
 .nf
-username  The username. It must not be NULL. It can be empty. It must
-          not contain a colon (':').
-password  The password. It must not be NULL. It can be empty. It can
-          contain colons.
+username  The username. It must not be NULL and must not contain a
+          colon (':'), but it can be empty.
+password  The password. It must not be NULL, but it can be empty and
+          can contain colons.
 .fi
 .SH RETURN VALUE
 .nf
-A new "Basic <base64>" string, if the call succeeds.
-NULL, if the allocation fails, if username or password is NULL, or if
+A new "Basic <base64>" string on success.
+NULL if the allocation fails, if username or password is NULL, or if
 username contains a colon.
 .fi
 .SH "SEE ALSO"

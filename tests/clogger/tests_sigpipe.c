@@ -28,8 +28,8 @@ SOFTWARE.
  * for that whole process, and an ignored SIGPIPE is invisible.
  *
  * The ignore that a pipe write installs under CLOG_SIGPIPE_AUTO is sticky
- * for the process, and so is a policy change. Every scenario that can make
- * either change therefore runs in a forked child, which reports back over a
+ * for the process, and so is a policy change, so every scenario that can
+ * make either change runs in a forked child, which reports back over a
  * pipe: 0 for a pass, a positive source line for the check that failed, and
  * a negative marker for a phase that it completed. A test in this process
  * itself changes neither, and each one first asserts that SIGPIPE still has
@@ -183,8 +183,8 @@ static void _run_child(void (*fn)(void), child_outcome_t *out) {
   }
 }
 
-/* A child passed when its last report is 0. Its exit status is not read:
- * valgrind can replace the exit status of a forked child. */
+/* A child passed when its last report is 0. Its exit status is not read,
+ * because valgrind can replace the exit status of a forked child. */
 static bool _child_passed(const child_outcome_t *o) {
   return o->forked && o->nvalues > 0 && o->values[o->nvalues - 1] == 0;
 }
@@ -213,9 +213,9 @@ TEST(sigpipe, regular_file_logger_leaves_the_disposition_alone) {
   clog lg = clog_open_file(path, CLOG_INFO, NULL, NULL);
   clog alg = clog_open_file(path, CLOG_INFO, NULL, &_async_cfg);
   bool opened = lg != CLOG_INVALID && alg != CLOG_INVALID;
-  if (lg != CLOG_INVALID) ccol_log_info(lg, "synchronous record");
+  if (lg != CLOG_INVALID) clog_info(lg, "synchronous record");
   if (alg != CLOG_INVALID) {
-    ccol_log_info(alg, "async record");
+    clog_info(alg, "async record");
     clog_flush(alg);
     clog_close(alg);
   }
@@ -248,8 +248,8 @@ TEST(sigpipe, socket_logger_with_a_gone_peer_raises_nothing) {
   sigset_t old;
   _block_sigpipe(&old);
   if (opened) {
-    ccol_log_info(lg, "first record");
-    ccol_log_info(lg, "second record");
+    clog_info(lg, "first record");
+    clog_info(lg, "second record");
   }
   bool raised = _take_pending_sigpipe_and_restore(&old);
 
@@ -285,9 +285,9 @@ static void _scenario_sync_pipe_auto(void) {
   clog lg = clog_open_fd(fd, CLOG_INFO, NULL);
   CHILD_CHECK(lg != CLOG_INVALID);
   CHILD_CHECK(_sigpipe_is(SIG_DFL)); /* not at open */
-  ccol_log_info(lg, "to a pipe whose reader is gone");
+  clog_info(lg, "to a pipe whose reader is gone");
   CHILD_CHECK(_sigpipe_is(SIG_IGN)); /* after the first write */
-  ccol_log_info(lg, "again");
+  clog_info(lg, "again");
   clog_close(lg);
   close(fd);
   _child_pass();
@@ -309,7 +309,7 @@ static void _scenario_async_pipe_auto(void) {
   clog lg = clog_open_fd(fd, CLOG_INFO, &_async_cfg);
   CHILD_CHECK(lg != CLOG_INVALID);
   for (int i = 0; i < 3; ++i) {
-    ccol_log_info(lg, "async record %d", i);
+    clog_info(lg, "async record %d", i);
     clog_flush(lg);
   }
   clog_close(lg);
@@ -339,7 +339,7 @@ static void _scenario_writer_consumes_and_follows_policy(void) {
   clog lg = clog_open_fd(fd, CLOG_INFO, &_async_cfg);
   CHILD_CHECK(lg != CLOG_INVALID);
 
-  ccol_log_info(lg, "phase 1");
+  clog_info(lg, "phase 1");
   clog_flush(lg);
   _child_mark(1);
 
@@ -348,7 +348,7 @@ static void _scenario_writer_consumes_and_follows_policy(void) {
   CHILD_CHECK(dup2(healthy[1], fd) == fd);
   close(healthy[1]);
   CHILD_CHECK(clog_set_sigpipe_policy(CLOG_SIGPIPE_UNTOUCHED) == ccol_success);
-  ccol_log_info(lg, "phase 2");
+  clog_info(lg, "phase 2");
   clog_flush(lg);
   char buf[4096];
   ssize_t n = read(healthy[0], buf, sizeof(buf) - 1);
@@ -358,7 +358,7 @@ static void _scenario_writer_consumes_and_follows_policy(void) {
   _child_mark(2);
 
   close(healthy[0]); /* the pipe under fd is broken again */
-  ccol_log_info(lg, "phase 3");
+  clog_info(lg, "phase 3");
   clog_flush(lg); /* raises SIGPIPE on the writer thread */
   _child_mark(3);
   clog_close(lg);
@@ -389,7 +389,7 @@ static void _scenario_sync_pipe_untouched(void) {
   CHILD_CHECK(lg != CLOG_INVALID);
   sigset_t old;
   _block_sigpipe(&old);
-  ccol_log_info(lg, "to a pipe whose reader is gone");
+  clog_info(lg, "to a pipe whose reader is gone");
   bool raised = _take_pending_sigpipe_and_restore(&old);
   CHILD_CHECK(raised);
   CHILD_CHECK(_sigpipe_is(SIG_DFL));
@@ -416,7 +416,7 @@ static void _scenario_async_pipe_untouched(void) {
   clog lg = clog_open_fd(fd, CLOG_INFO, &_async_cfg);
   CHILD_CHECK(lg != CLOG_INVALID);
   _child_mark(1);
-  ccol_log_info(lg, "to a pipe whose reader is gone");
+  clog_info(lg, "to a pipe whose reader is gone");
   clog_flush(lg);
   _child_mark(2);
   clog_close(lg);
@@ -444,8 +444,8 @@ static void _scenario_socket_untouched(void) {
   clog lg = clog_open_fd(sfd, CLOG_INFO, NULL);
   clog alg = clog_open_fd(afd, CLOG_INFO, &_async_cfg);
   CHILD_CHECK(lg != CLOG_INVALID && alg != CLOG_INVALID);
-  ccol_log_info(lg, "synchronous record");
-  ccol_log_info(alg, "async record");
+  clog_info(lg, "synchronous record");
+  clog_info(alg, "async record");
   clog_flush(alg);
   clog_close(alg);
   clog_close(lg);
@@ -481,7 +481,7 @@ static void _scenario_application_handler_stays(void) {
   CHILD_CHECK(fd >= 0);
   clog lg = clog_open_fd(fd, CLOG_INFO, NULL);
   CHILD_CHECK(lg != CLOG_INVALID);
-  ccol_log_info(lg, "to a pipe whose reader is gone");
+  clog_info(lg, "to a pipe whose reader is gone");
   CHILD_CHECK(_sigpipe_is(_count_sigpipe));
   /* The failed record and the loss marker behind it each raise one. */
   CHILD_CHECK(_handler_hits >= 1);
@@ -507,7 +507,7 @@ static void _scenario_invalid_policy_changes_nothing(void) {
   CHILD_CHECK(fd >= 0);
   clog lg = clog_open_fd(fd, CLOG_INFO, NULL);
   CHILD_CHECK(lg != CLOG_INVALID);
-  ccol_log_info(lg, "to a pipe whose reader is gone");
+  clog_info(lg, "to a pipe whose reader is gone");
   CHILD_CHECK(_sigpipe_is(SIG_IGN));
   clog_close(lg);
   close(fd);
@@ -530,7 +530,7 @@ static void _scenario_fatal_on_async_pipe(void) {
   clog lg = clog_open_fd(fd, CLOG_INFO, &_async_cfg);
   CHILD_CHECK(lg != CLOG_INVALID);
   _child_mark(1);
-  ccol_log_fatal(lg, "fatal record to a pipe whose reader is gone");
+  clog_fatal(lg, "fatal record to a pipe whose reader is gone");
   _child_mark(2); /* not reached: CLOG_FATAL ends the process */
   _child_pass();
 }

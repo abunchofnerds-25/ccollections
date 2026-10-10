@@ -11,25 +11,24 @@ cbmap_construct_mp_scoped(hm_name, key_t, val_t, mmgmt_procs);
 .fi
 .SH DESCRIPTION
 .nf
-Declares an ordered map handle with the name hm_name. It also declares the
-companion type variables. Those variables carry key_t and val_t to every
-later type-inferred macro. The macro then creates a map that takes all of its
-memory from mmgmt_procs. The macro also attaches the cleanup attribute. That
-attribute destroys the map on every exit from the enclosing scope, an early
-return included.
+Declares an ordered map handle named hm_name, together with the companion
+type variables that carry key_t and val_t to every later type-inferred
+macro, and then creates a map that takes all of its memory from
+mmgmt_procs. The macro also attaches the cleanup attribute, which destroys
+the map on every exit from the enclosing scope, an early return included.
 
-The macro is cbmap_construct_mp(3) plus that cleanup attribute. Nothing else
+The macro is cbmap_construct_mp(3) plus that cleanup attribute; nothing else
 differs. cbmap_construct_scoped(3) is the same macro with the default
-allocator. cbmap_construct_cc_scoped(3) takes a comparison procedure in
+allocator, cbmap_construct_cc_scoped(3) takes a comparison procedure in
 place of an allocator, and cbmap_construct_full_scoped(3) takes both.
 .fi
 .SH PARAMETERS
 .nf
 hm_name      Name for the map handle to declare
-key_t        Key type. It tells every later macro how to read a key. It
-             also tells the container which order to give the tree
-val_t        Value type. Only the type-inferred macros read it. The library
-             never gives it to the container
+key_t        Key type. It tells every later macro how to read a key, and
+             tells the container which order to give the tree
+val_t        Value type. Only the type-inferred macros read it; the
+             library never gives it to the container
 mmgmt_procs  Pointer to a ccol_memmgmt_procs_t, or NULL for the default
              allocator
 .fi
@@ -41,23 +40,23 @@ None. This macro declares variables and does not expand to an expression.
 .nf
 The macro stops the program through ccol_fatal_err() if the creation fails
 The macro needs GCC or Clang, because it uses the cleanup attribute
-All four members of ccol_memmgmt_procs_t must not be NULL. The procedures
-must stay callable for the whole life of the map. That life ends here at the
-closing brace of the enclosing scope
-Everything that the map allocates comes from these procedures. The
+All four members of ccol_memmgmt_procs_t must not be NULL, and the
+procedures must stay callable for the whole life of the map, which here
+ends at the closing brace of the enclosing scope
+Everything that the map allocates comes from these procedures, and the
 destruction at the exit of the scope returns all of it to them
 The walk visits the elements in ascending key order, by the order that key_t
-selects. cbmap_begin_iter(3) and cbmap_create_full(3) describe that
-The exit of the scope destroys the map and clears the handle. An explicit
-cbmap_destroy(3) earlier in the scope therefore stays correct
-The companion type variables follow the scope of the handle. A function
-that receives the handle therefore needs cbmap_redeclare(3) there
+selects, as cbmap_begin_iter(3) and cbmap_create_full(3) describe
+The exit of the scope destroys the map and clears the handle, so an
+explicit cbmap_destroy(3) earlier in the scope stays correct
+The companion type variables follow the scope of the handle, so a function
+that receives the handle needs cbmap_redeclare(3) there
 .fi
 .SH WARNINGS
 .nf
-The handle must not outlive its scope. Do not return it. Do not store it in
-a place that outlives the scope. Both actions give out a handle whose map
-the cleanup attribute frees at the exit of the scope.
+The handle must not outlive its scope. Do not return it, and do not store
+it in a place that outlives the scope: either action gives out a handle
+whose map the cleanup attribute frees at the exit of the scope.
 .fi
 .SH EXAMPLES
 .nf

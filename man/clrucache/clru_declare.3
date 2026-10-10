@@ -11,9 +11,9 @@ clru_declare(name, KeyT, ValT);
 .fi
 .SH DESCRIPTION
 .nf
-Declares the clru_cache handle variable name. It also declares two hidden
-companion type variables. Those two variables carry the KeyT and the ValT
-type information into the later clru_init(), clru_get() and clru_set()
+Declares the clru_cache handle variable name, together with two
+hidden companion type variables that carry the KeyT and the ValT type
+information into the later clru_init(), clru_get() and clru_set()
 macro calls.
 
 Call clru_init() on the variable before you use the cache.

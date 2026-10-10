@@ -12,8 +12,8 @@ size_t clrucache_size(clru_cache cache);
 .SH DESCRIPTION
 .nf
 Returns the number of live entries that the cache holds now. A live
-entry is one that is fully initialised, and that no eviction removed.
-The count leaves out a placeholder entry that a fetch or a set in
+entry is one that is fully initialised and that no eviction removed;
+the count leaves out a placeholder entry that a fetch or a set in
 progress created.
 .fi
 .SH PARAMETERS
@@ -27,16 +27,16 @@ and 0 when cache is a stale handle that a call already destroyed.
 .fi
 .SH NOTES
 .nf
-cache is an opaque VALUE handle. The library resolves it through a slot
-table that the library owns, before it touches the cache object behind
-the handle. A stale handle here is an ordinary error, and not a fatal
-one. Only clru_destroy() treats a stale handle as fatal.
-This function adds the sizes of the segments of the cache. It takes the
-own lock of each segment in turn. The result is a snapshot, and not a
-value at one instant. A segment can gain or lose an entry after this
-function counts it. The total therefore describes no single moment.
-The complexity is O(number of segments). That is a small fixed bound.
-It is not O(entries).
+cache is an opaque VALUE handle, which the library resolves through a
+slot table that it owns before it touches the cache object behind the
+handle. A stale handle here is an ordinary error, not a fatal one;
+only clru_destroy() treats a stale handle as fatal.
+This function adds the sizes of the segments of the cache, taking the
+own lock of each segment in turn. The result is a snapshot rather than
+a value at one instant: a segment can gain or lose an entry after this
+function counts it, so the total describes no single moment.
+The complexity is O(number of segments), a small fixed bound, not
+O(entries).
 .fi
 .SH "SEE ALSO"
 .BR clrucache_capacity (3),

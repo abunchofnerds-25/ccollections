@@ -4,20 +4,20 @@
 # exit.
 #
 # Each __attribute__((destructor)) of the library runs at exit for the full
-# shared object, whatever parts of it the program used. Consider a destructor
-# that makes new state while the process exits, for example a lazy
-# initialization or a registration in another module. That destructor
-# allocates memory that nothing frees, because the destructor of the module
-# that owns the memory can have run before it. An application that runs
-# valgrind with --errors-for-leak-kinds=all (as the test suites of this
-# project do) then gets errors that its own code did not cause.
+# shared object, whatever parts of it the program used. A destructor that
+# makes new state while the process exits (for example a lazy initialization,
+# or a registration in another module) allocates memory that nothing frees,
+# because the destructor of the module that owns that memory can have run
+# before it. An application that runs valgrind with --errors-for-leak-kinds=all
+# (as the test suites of this project do) then gets errors that its own code
+# did not cause.
 #
-# The test suites cannot see this. Each suite compiles the library sources that
-# it needs directly into its own binary. Therefore, its destructors are a
-# different set, in a different order, from those of the shared object. This
-# check links a real consumer against the built shared object.
+# The test suites cannot see this: each suite compiles the library sources that
+# it needs directly into its own binary, so its destructors are a different
+# set, in a different order, from those of the shared object. This check
+# instead links a real consumer against the built shared object.
 #
-# Run this script from the root of the repository, after `make`.
+# Run this script from the root of the repository, after `make`;
 # `make check_exit_reachable` and CI use it.
 set -eu
 
@@ -33,17 +33,17 @@ CC="${CC:-cc}"
 dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT INT TERM
 
-# The linker finds the library through its own directory, as -lccollections
-# finds an installed copy. The programs include the headers as
-# <ccollections/x.h>.
+# The linker finds the library through its own directory, in the same way as
+# -lccollections finds an installed copy, and the programs include the headers
+# as <ccollections/x.h>.
 mkdir -p "$dir/inc"
 ln -s "$(pwd)/include" "$dir/inc/ccollections"
 libdir=$(cd "$(dirname "$SO")" && pwd)
 
 # There is one consumer for each shape:
-# - A program that uses only one container. This program shows a destructor
-#   that initializes its module while the process exits.
-# - A program that uses no module. This program checks the bare link.
+# - A program that uses only one container, which shows a destructor that
+#   initializes its module while the process exits.
+# - A program that uses no module, which checks the bare link.
 cat >"$dir/vector_only.c" <<'EOF'
 #include <ccollections/cvector.h>
 int main(void) {
@@ -61,12 +61,12 @@ EOF
 failed=0
 for prog in vector_only nothing; do
   # --no-as-needed keeps the library loaded in the program that calls none
-  # of its functions. If the linker removes the library, that case checks
-  # nothing.
+  # of its functions; if the linker removed the library, that case would
+  # check nothing.
   "$CC" -std=gnu11 -I"$dir/inc" "$dir/$prog.c" -L"$libdir" \
     -Wl,--no-as-needed -lccollections -o "$dir/$prog"
-  # The check is correct only when the program loads the library. Therefore,
-  # the script makes sure that it does.
+  # The check is correct only when the program loads the library, so the
+  # script makes sure that it does.
   if ! LD_LIBRARY_PATH="$libdir" ldd "$dir/$prog" | grep -q libccollections; then
     echo "check_exit_reachable: $prog does not load the library" >&2
     exit 2

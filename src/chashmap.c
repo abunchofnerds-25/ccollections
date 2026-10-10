@@ -36,7 +36,7 @@ SOFTWARE.
 #include <unistd.h>
 
 static const size_t minimum_allowed_bucket_array_size = 16;
-// The first bucket array of a map from ccol_chmap_create_compact(). It is a
+// The first bucket array of a map from ccol_chmap_create_compact(): a
 // power of two of at least 2; see hash_index_for.
 static const size_t compact_bucket_array_size = 4;
 static const size_t scale_factor = 4;
@@ -46,24 +46,24 @@ static const size_t scale_factor = 4;
 #define INLINE_STORAGE_THRESHOLD 23  // SSO: Small String Optimization threshold
 
 // The integer mixer and the reduction of a hash to an index each have one
-// form for a 64-bit size_t and one for a 32-bit size_t.
+// form for a 64-bit size_t and another for a 32-bit size_t.
 #if SIZE_MAX != UINT64_MAX && SIZE_MAX != UINT32_MAX
 #error "Unsupported architecture: SIZE_MAX is neither UINT32_MAX nor UINT64_MAX"
 #endif
 
-/* The secret of the built-in hashes. There is one for the process, chosen
- * before the first map exists and never changed afterwards; see
- * chmap_process_hash_secret. Every map and ccol_chmap_hash_key read that one
- * copy, so a map stores none. It has three independent parts.
+/* The secret of the built-in hashes. The process has one, chosen before the
+ * first map exists and never changed afterwards (see
+ * chmap_process_hash_secret), and every map and ccol_chmap_hash_key read that
+ * one copy, so a map stores none. It has three independent parts.
  *
  * sip_v is the initial state of SipHash-1-3 for the 128-bit key (k0, k1):
  * k0 ^ "somepseu", k1 ^ "dorandom", k0 ^ "lygenera", k1 ^ "tedbytes". The map
- * keeps that state instead of the key, so a hash does not redo those four
- * exclusive ors. The keyed byte hash of a key with no fixed width uses it,
- * and so does the hash of a long double in either mode.
+ * keeps that state instead of the key, so that a hash does not redo those
+ * four exclusive ors. The keyed byte hash of a key with no fixed width uses
+ * it, and so does the hash of a long double in either mode.
  *
- * int_seed keys the mixer of every other fixed-width key and of the result of
- * a custom hashing proc in the keyed mode; see hash_word_seeded.
+ * int_seed keys the mixer of every other fixed-width key, and of the result
+ * of a custom hashing proc, in the keyed mode; see hash_word_seeded.
  *
  * byte_seed is the seed of XXH64, the byte hash of the fast mode; see
  * hash_bytes_fast. */
@@ -77,20 +77,19 @@ typedef struct chmap_hash_secret {
 /*                    OPEN ADDRESSING STRUCTURES                              */
 /* ========================================================================== */
 
-// A 16-byte slot: an 8-byte key and an 8-byte value. A parallel byte array
-// holds the status bits. They are not in this struct. See the metadata field
-// of open_addr_map, and the note that comes next, for the reason. The natural
-// alignment keeps key_data and val_data on 8-byte boundaries for every array
-// index. A strict-alignment architecture needs this for correctness. It also
+// A 16-byte slot: an 8-byte key and an 8-byte value. The status bits live in
+// a parallel byte array instead of this struct; see the metadata field
+// of open_addr_map, and the next note, for the reason. The natural
+// alignment keeps key_data and val_data on 8-byte boundaries at every array
+// index, which a strict-alignment architecture needs for correctness, and it
 // lets chmap_get_ptr give back an aligned pointer straight into the slot
-// array, so the caller can change the value in place.
-/* Exactly two words. There is no padding, and there is nothing that a probe
- * does not read. The occupied bit lives in a separate byte array. See the
- * metadata field of open_addr_map. It is not in this struct for a reason. A
- * third member of one byte pads this struct out to 24 bytes. A third of every
- * cache line that a probe pulls in would then carry nothing. The bits that a
- * probe tests first would also be one for each 24 bytes instead of packed
- * together. */
+// array, so that the caller can change the value in place.
+/* Exactly two words, with no padding and nothing that a probe does not read.
+ * The occupied bit lives in a separate byte array (see the metadata field of
+ * open_addr_map) for a reason: a third member of one byte would pad this
+ * struct out to 24 bytes, so a third of every cache line that a probe pulls in
+ * would carry nothing, and the bits that a probe tests first would sit one
+ * per 24 bytes instead of packed together. */
 typedef struct {
   uint64_t key_data;
   uint64_t val_data;
@@ -100,51 +99,51 @@ typedef struct {
 
 typedef struct {
   oa_slot* slots;
-  // One byte for each slot, with the same indices as slots[]. Each byte holds
-  // the occupied bit of that slot. This array is the tail of the slots
-  // allocation. It is not an allocation of its own; see
-  // oa_alloc_block. The arrays of the block can therefore never disagree
+  // One byte for each slot, with the same indices as slots[], holding the
+  // occupied bit of that slot. This array is the tail of the slots
+  // allocation rather than an allocation of its own; see
+  // oa_alloc_block. The arrays of the block therefore never disagree
   // about their length, and a resize frees one block instead of several.
   //
-  // It is separate from oa_slot so that a probe reads its bits densely. One
-  // 64-byte line covers the bits of 64 slots. A byte inside each slot would
-  // need sixteen lines to test the same number of slots. All but one byte of
-  // each of those lines would be key bytes and value bytes. The probe needs
-  // those bytes only for the one slot where it stops.
+  // It is separate from oa_slot so that a probe reads its bits densely: one
+  // 64-byte line covers the bits of 64 slots, while a byte inside each slot
+  // would need sixteen lines to test the same number of slots, and all but one
+  // byte of each of those lines would be key bytes and value bytes, which
+  // the probe needs only for the one slot where it stops.
   uint8_t* metadata;
-  // A parallel array with one entry for each slot. Its indices always match
-  // slots[]. Each entry holds a stable {ptr, size} accessor for the value of
-  // that slot. This array is separate from oa_slot and not inside it. The hot
-  // insert loop, probe loop and delete loop touch only key_data, val_data and
-  // metadata. They therefore keep the scan over the compact 16-byte oa_slot
-  // array. They do not drag 16 more bytes for each slot through the cache on
+  // A parallel array with one entry for each slot, whose indices always match
+  // slots[], and each entry holds a stable {ptr, size} accessor for the value
+  // of that slot. It is kept separate from oa_slot so that the hot insert
+  // loop, probe loop and delete loop, which touch only key_data, val_data
+  // and metadata, keep the scan over the compact 16-byte oa_slot array
+  // instead of dragging 16 more bytes for each slot through the cache on
   // every probe. Only the final lookup of chmap_get_elem_ref reads this array,
   // and that path is comparatively cold. The ptr of val_accessors[index] is
-  // always &slots[index].val_data. Its size is always the val_size of the map.
-  // The array therefore holds nothing that the slot it describes cannot give
+  // always &slots[index].val_data and its size is always the val_size of the
+  // map, so the array holds nothing that the slot it describes cannot give
   // again.
   //
-  // The library writes each entry wherever it writes its slot, which is
+  // The library writes each entry wherever it writes its slot, which is in
   // oa_insert and oa_rehash. The backward shift of oa_delete moves an entry
   // only into a slot that held one a moment ago, whose accessor is already
-  // correct; see oa_backward_shift_walk. oa_get only takes the address of one
-  // entry. The write belongs on the paths that write a slot, not on the path
-  // that hands an entry out. A write where the entry is read spares the insert
-  // path one write into a second array the size of the table. It charges every
-  // lookup that write instead. This costs more than it saves wherever lookups
-  // are more frequent than inserts. Exactly one path must write the entry,
-  // whichever path that is. An entry that the map hands out before anything
-  // fills it in is {NULL, 0}. A caller that asks for an element reference then
-  // gets a null pointer for every key.
+  // correct (see oa_backward_shift_walk), and oa_get only takes the address of
+  // one entry. The write belongs on the paths that write a slot, not on the
+  // path that hands an entry out: a write where the entry is read spares the
+  // insert path one write into a second array the size of the table, but it
+  // charges every lookup that write instead, which costs more than it saves
+  // wherever lookups are more frequent than inserts. Exactly one path must
+  // write the entry, whichever path that is. An entry that the map hands out
+  // before anything fills it in is {NULL, 0}, so a caller that asks for an
+  // element reference would then get a null pointer for every key.
   //
   // The array sits between slots[] and metadata[] in the block of the slots;
   // see oa_alloc_block.
   //
-  // The array gives one entry for each slot. Two chmap_get_elem_ref results
-  // that the caller holds at the same time for different keys therefore never
-  // alias one another. A single shared accessor field would make them alias.
-  // Each result stays valid until the library rewrites the slot itself, or
-  // until the table rehashes.
+  // Because the array gives one entry for each slot, two chmap_get_elem_ref
+  // results that the caller holds at the same time for different keys never
+  // alias one another, which they would do with a single shared accessor
+  // field. Each result stays valid until the library rewrites the slot
+  // itself, or until the table rehashes.
   cmap_pair* val_accessors;
   size_t capacity;
   // One more than the largest displacement of any key that the table holds,
@@ -162,7 +161,7 @@ typedef struct {
   size_t count;
   // The fields above, the hash mode and the insert window in the header of
   // the map, and the two below, are what an insert, a lookup and a delete
-  // read. The fields after them are read on colder paths only.
+  // read; the fields after them are read on colder paths only.
   ccol_hashing_proc_t custom_hashing_proc;
   ccol_data_type key_type;
   ccol_data_type val_type;
@@ -175,18 +174,18 @@ typedef struct {
 /*                 SEPARATE CHAINING STRUCTURES                               */
 /* ========================================================================== */
 
-// This struct is not packed. A packed struct gives no size benefit here,
+// This struct is not packed. Packing would give no size benefit here,
 // because two pointer fields of the same size need no internal padding in
-// either case. A packed struct could also sit at an offset inside llist_node
-// that is not aligned to 8 bytes, and that brings no gain.
+// either case, and a packed struct could sit at an offset inside llist_node
+// that is not aligned to 8 bytes, for no gain.
 typedef struct dllist_ref_node {
   struct dllist_ref_node* prev;
   struct dllist_ref_node* next;
 } dllist_ref_node;
 
-// The two ends of the list of every live entry. head is the newest entry and
-// tail the oldest one. The public iterator walks from head through next, so
-// it visits the newest entry first. The internal ordered cursor of
+// The two ends of the list of every live entry: head is the newest entry and
+// tail the oldest. The public iterator walks from head through next, so
+// it visits the newest entry first, while the internal ordered cursor of
 // chashinsert.h walks from tail through prev, so it visits the entries in
 // insertion order.
 typedef struct dllist_root {
@@ -198,24 +197,24 @@ typedef struct dllist_root {
 //
 // key_storage and val_storage hold a key or a value of up to
 // INLINE_STORAGE_THRESHOLD bytes inline (SSO), and a pointer to a heap buffer
-// for anything larger. Which one a union holds follows from the size in its
-// accessor: a key or a value is inline exactly when its size is at most
-// INLINE_STORAGE_THRESHOLD. Every path that stores a value keeps that true;
+// for anything larger. Which of the two a union holds follows from the size in
+// its accessor: a key or a value is inline exactly when its size is at most
+// INLINE_STORAGE_THRESHOLD, and every path that stores a value keeps that true;
 // see sc_create_llist_node and sc_reset_val_of_llist_node.
 //
 // Each union carries an explicit _Alignas(max_align_t), and the struct is
-// deliberately NOT packed. inline_data must land at an offset that is
-// correctly aligned for ANY type that a caller can store there. chmap_get,
+// deliberately NOT packed, because inline_data must land at an offset that is
+// correctly aligned for ANY type that a caller can store there: chmap_get,
 // chmap_get_ptr and the iterator accessor macros cast a pointer into this
-// storage directly to the value type of the caller, and then dereference it.
-// They do this for a change in place too. A read through memcpy is not a safe
+// storage directly to the value type of the caller and then dereference it,
+// for a change in place too, and a read through memcpy is not a safe
 // substitute for that.
 //
 // max_align_t is the correct bound here, and 8 alone is not enough. A plain
 // malloc() gives the same guarantee to the heap buffer that holds anything
-// larger than INLINE_STORAGE_THRESHOLD, and the inline storage is a drop-in
-// substitute for that buffer, so it must meet the same alignment contract for
-// whatever type-erased bytes a caller stores there. `long double` needs 16
+// larger than INLINE_STORAGE_THRESHOLD, and since the inline storage is a
+// drop-in substitute for that buffer, it must meet the same alignment contract
+// for whatever type-erased bytes a caller stores there. `long double` needs 16
 // bytes on x86-64, and it is one of the built-in value types that always goes
 // inline through this path. UndefinedBehaviorSanitizer reports a storage that
 // is less aligned directly on chmap_get_ptr of a `char* -> long double` map
@@ -224,7 +223,7 @@ typedef struct dllist_root {
 // clrucache.c, cthreadcomm.c and chttpclient.c document, arriving through a
 // union that under-declares its own alignment requirement.
 //
-// The order of the members fills every byte on LP64. Each union is 24 bytes
+// The order of the members fills every byte on LP64: each union is 24 bytes
 // at a multiple of 16, and the 8-byte member after each one fills the rest of
 // its 32 bytes, so the struct is 112 bytes with no padding. It also puts the
 // two fields that a chain walk reads at every node, hash_val and next, in the
@@ -232,7 +231,7 @@ typedef struct dllist_root {
 // and the links of the insertion-order list come last, because only an
 // insert, a delete and an iteration read them.
 //
-// The node keeps no allocator of its own. Every path that frees or resizes a
+// The node keeps no allocator of its own: every path that frees or resizes a
 // buffer of a node gets the procs of its map as an argument.
 typedef struct llist_node {
   _Alignas(max_align_t) union {
@@ -247,7 +246,7 @@ typedef struct llist_node {
     char inline_data[INLINE_STORAGE_THRESHOLD + 1];
   } val_storage;
   struct llist_node* next;
-  // The stable {ptr, size} of the stored key and of the stored value, which
+  // The stable {ptr, size} of the stored key and of the stored value that
   // the map hands out. ptr addresses the inline_data of the union when the
   // size is at most INLINE_STORAGE_THRESHOLD, and the heap buffer otherwise.
   cmap_pair key_pair_accessor;
@@ -255,7 +254,7 @@ typedef struct llist_node {
   dllist_ref_node dllist_refs;
 } llist_node;
 
-// The layout above on LP64 with a 16-byte max_align_t, which x86-64 and
+// The layout above on LP64 with a 16-byte max_align_t, as x86-64 and
 // aarch64 have. A member that is added or moved makes this fail to compile
 // instead of quietly adding padding to every entry.
 _Static_assert(SIZE_MAX != UINT64_MAX || _Alignof(max_align_t) != 16 ||
@@ -276,13 +275,13 @@ typedef struct sep_chain_map {
   ccol_hashing_proc_t custom_hashing_proc;
   // NULL selects the built-in key comparison of sc_compare_keys.
   ccol_key_equality_proc_t custom_key_equality_proc;
-  // A ccol_data_type each. They are one byte wide so that the three bytes
+  // One ccol_data_type each, one byte wide so that the three bytes
   // share the last word of the struct.
   uint8_t key_type;
   uint8_t val_type;
   // The number of bucket pointers that the block of the map holds right
-  // after struct chashmap, or 0 when it holds none; see
-  // sc_inline_bucket_arr. It is never more than
+  // after struct chashmap, or 0 when it holds none (see
+  // sc_inline_bucket_arr); it is never more than
   // minimum_allowed_bucket_array_size.
   uint8_t inline_buckets;
 } sep_chain_map;
@@ -294,21 +293,21 @@ typedef struct sep_chain_map {
 typedef enum { IMPL_OPEN_ADDRESSING, IMPL_SEPARATE_CHAINING } hashmap_impl_type;
 
 /* A map is one allocation. The block holds this struct, with the state of
- * its backend in state, then the bucket array that a separate-chaining map
- * starts with when that array is small (see sc_inline_bucket_arr), then the
- * map's own copy of the allocator procs when it needs one (see
- * chmap_create_impl).
+ * its backend in state, followed by the bucket array that a
+ * separate-chaining map starts with when that array is small (see
+ * sc_inline_bucket_arr), and then the map's own copy of the allocator procs
+ * when it needs one (see chmap_create_impl).
  *
- * impl points at state. An operation reaches the backend through that
- * pointer, exactly as it would reach a backend in an allocation of its own.
- * Addressing state at its fixed offset instead saves the load and 8 bytes,
- * and it costs the insert and the delete of an open-addressing map two
+ * impl points at state, and an operation reaches the backend through that
+ * pointer exactly as it would reach a backend in an allocation of its own.
+ * Addressing state at its fixed offset instead would save the load and 8
+ * bytes, but it costs the insert and the delete of an open-addressing map two
  * instructions each, because the compiler then allocates the registers of
  * those paths differently.
  *
  * The first eight bytes hold the backend, the hash mode and the insert
- * window. Both backends reach the mode and the window at a constant offset
- * back from their state; see chmap_of_oa and chmap_of_sc. */
+ * window, and both backends reach the mode and the window at a constant
+ * offset back from their state; see chmap_of_oa and chmap_of_sc. */
 struct chashmap {
   // A hashmap_impl_type.
   uint8_t impl_type;
@@ -335,22 +334,23 @@ struct chashmap {
 /*                         ADAPTIVE HASHING                                   */
 /* ========================================================================== */
 
-/* Every map starts in the fast mode and can switch to the keyed mode; each
- * growth of a keyed map tries the fast mode again (see below).
+/* Every map starts in the fast mode and can switch to the keyed mode, while
+ * each growth of a keyed map tries the fast mode again (see below).
  * The keyed mode is the hash that ccol_chmap_hash_key gives: SipHash-1-3 for
- * a byte key and the seeded mixer for a fixed-width key and for the result of
- * a custom hashing proc. The fast mode is a Fibonacci multiply for a
+ * a byte key, and the seeded mixer for a fixed-width key and for the result
+ * of a custom hashing proc. The fast mode is a Fibonacci multiply for a
  * fixed-width key, XXH64 with a secret seed for a byte key, and the murmur3
  * finalizer for the result of a custom hashing proc. A long double key is
  * hashed by value with SipHash-1-3 in both modes. Key identity does not
- * depend on the mode: -0.0 and 0.0 are one key, and so are two long doubles
- * of one value, in either.
+ * depend on the mode: in either one, -0.0 and 0.0 are one key, and so are
+ * two long doubles of one value.
  *
- * The fast hashes spread every ordinary key set as well as the keyed ones do,
- * or better, and cost less, but a party that controls the keys can choose a
- * set that collides under them: the Fibonacci multiply and the finalizer are
- * public bijections, and XXH64 has collisions that hold for every seed. Only
- * the writers of a map watch for that, so a lookup never writes:
+ * The fast hashes spread every ordinary key set as well as the keyed ones
+ * do, or better, and cost less, but a party that controls the keys can
+ * choose a set that collides under them, because the Fibonacci multiply and
+ * the finalizer are public bijections, and XXH64 has collisions that hold
+ * for every seed. Only the writers of a map watch for that, so a lookup
+ * never writes:
  *
  * - The insert window. Every insert of a new key adds 2^23 plus its walk (the
  *   displacement of an open-addressing slot, or the nodes of the chain that
@@ -361,12 +361,12 @@ struct chashmap {
  *   sc_window_bound, which is several times what a random function costs at
  *   the highest load that the window can have reached. A rebuild, a reset and
  *   the switch restart the window. A keyed map keeps adding to the window
- *   and is never judged, which spares the insert path a test of the mode.
+ *   but is never judged, which spares the insert path a test of the mode.
  * - A cap on one insert. An open-addressing insert whose displacement is
  *   above oa_insert_cap, and a separate-chaining insert that meets
- *   SC_CHAIN_CAP nodes, switch at once. A rebuild of an open-addressing
- *   table, and a shrink of a separate-chaining one, measure the same things
- *   on the table that they build.
+ *   SC_CHAIN_CAP nodes, switch at once, and a rebuild of an open-addressing
+ *   table, or a shrink of a separate-chaining one, measures the same things
+ *   on the table that it builds.
  *
  * The switch rebuilds an open-addressing table into a new block with the
  * keyed hash, and rehashes the nodes of a separate-chaining map in place.
@@ -374,21 +374,22 @@ struct chashmap {
  * A growth of a keyed map makes a fast attempt: it fills the new table with
  * the fast hash and keeps the fast mode unless the fill shows that the keys
  * collide under it; see oa_place_all_fast_attempt and
- * sc_relink_fast_attempt. A failed attempt stops early and the growth fills
- * the same new table with the keyed hash, so it allocates nothing more. Its
- * work is linear in the count: for a map of n entries at most
+ * sc_relink_fast_attempt. A failed attempt stops early, and the growth then
+ * fills the same new table with the keyed hash, so it allocates nothing
+ * more. Its work is linear in the count: for a map of n entries, at most
  * 2 * n + cap + 65 slots, where cap is oa_insert_cap of the new table, or
- * n hashes and n + SC_ATTEMPT_SLACK + SC_CHAIN_CAP - 1 chain nodes. Growth is
- * geometric, so even a map whose every growth fails pays O(1) amortized for
- * each insert: in an open-addressing table of 4096 slots or more, a growth
- * at count 0.7 * c follows 0.35 * c inserts, so at most about four slots and
- * two keyed placements for each insert; a separate-chaining growth at
- * count 1.5 * b follows 1.125 * b inserts, so at most about three node
- * operations and 1.3 keyed hashes for each insert. A map that the attempt
- * returns to the fast mode restarts its window like any rebuild, so an
- * attack that resumes switches it again within two windows. A reset and a
- * shrink keep the mode: a shrink follows deletes, which say nothing new about
- * how the keys spread, and the next growth of the map makes the attempt. */
+ * n hashes and n + SC_ATTEMPT_SLACK + SC_CHAIN_CAP - 1 chain nodes. Because
+ * growth is geometric, even a map whose every growth fails pays O(1)
+ * amortized for each insert. In an open-addressing table of 4096 slots or
+ * more, a growth at count 0.7 * c follows 0.35 * c inserts, which gives at
+ * most about four slots and two keyed placements for each insert; a
+ * separate-chaining growth at count 1.5 * b follows 1.125 * b inserts, which
+ * gives at most about three node operations and 1.3 keyed hashes for each
+ * insert. A map that the attempt returns to the fast mode restarts its
+ * window like any rebuild, so an attack that resumes switches it again
+ * within two windows. A reset and a shrink keep the mode: a shrink follows
+ * deletes, which say nothing new about how the keys spread, and the next
+ * growth of the map makes the attempt. */
 enum { CHMAP_HASH_FAST = 0, CHMAP_HASH_KEYED = 1 };
 
 /* The insert window starts at 2^31 and each insert of a new key adds 2^23
@@ -403,7 +404,7 @@ enum { CHMAP_HASH_FAST = 0, CHMAP_HASH_KEYED = 1 };
 #define SC_CHAIN_CAP 20u
 
 /* An open-addressing insert with a displacement of at least this many slots
- * takes oa_note_deep_insert, which widens probe_span and checks the cap. It
+ * takes oa_note_deep_insert, which widens probe_span and checks the cap. This
  * is also the smallest probe_span of a table of at least this many slots. */
 #define OA_DEEP_INSERT 32u
 
@@ -426,8 +427,8 @@ static inline bool sc_keyed(sep_chain_map* map) {
 }
 
 /* Adds one insert of a new key with the given walk to the window, and gives
- * true when that ends the window. It is a lea, an add to memory and a jump on
- * the carry. */
+ * true when that ends the window. It compiles to a lea, an add to memory and
+ * a jump on the carry. */
 static inline bool chmap_window_add(struct chashmap* chm, size_t walk) {
   uint32_t sum;
   bool ended = __builtin_add_overflow(chm->insert_window,
@@ -456,8 +457,8 @@ static inline uint64_t chmap_load_q16(size_t count, size_t capacity) {
 /* ========================================================================== */
 
 /* Gives true for every ccol_data_type value that fits in 8 bytes or less and
- * that the integer mixer hashes. These are the integers, the floats and the
- * pointers. The library uses this function at creation time to select the map
+ * that the integer mixer hashes: the integers, the floats and the pointers.
+ * The library uses this function at creation time to select the map
  * backend. */
 static inline bool is_type_integral(ccol_data_type type) {
   switch (type) {
@@ -482,9 +483,9 @@ static inline bool is_type_integral(ccol_data_type type) {
 }
 
 /* Gives the byte size of the C type that belongs to a ccol_data_type enum
- * value. For a type that this function does not know, it gives 8. An
- * open-addressing slot is then always large enough for a value of the size of
- * a pointer. */
+ * value, or 8 for a type that this function does not know, so that an
+ * open-addressing slot is always large enough for a value of the size of a
+ * pointer. */
 static inline size_t get_type_size(ccol_data_type type) {
   switch (type) {
     case ccol_char:
@@ -517,10 +518,10 @@ static inline size_t get_type_size(ccol_data_type type) {
 }
 
 /* Gives true when the key type and the value type are both integral and both
- * 8 bytes or less. The library selects the compact open-addressing backend on
- * this condition. In every other case it selects the separate-chaining
- * backend. That backend holds a key and a value of any size, which includes a
- * string and a struct that the caller defines. */
+ * 8 bytes or less, which is the condition on which the library selects the
+ * compact open-addressing backend. In every other case it selects the
+ * separate-chaining backend, which holds a key and a value of any size,
+ * including a string and a struct that the caller defines. */
 static inline bool should_use_open_addressing(ccol_data_type key_type,
                                               ccol_data_type val_type) {
   return is_type_integral(key_type) && is_type_integral(val_type) &&
@@ -564,10 +565,10 @@ static inline bool should_use_open_addressing(ccol_data_type key_type,
  * depend on the seed.
  *
  * The price is regularity. A bare Fibonacci multiply spreads a run of
- * sequential keys perfectly, one probe for each lookup. This mixer spreads
- * every key set, sequential runs included, as a random function would, which
- * at a load of 0.38 is about 1.3 probes for each lookup, and about 2 at the
- * maximum load of 0.70.
+ * sequential keys perfectly, at one probe for each lookup, while this mixer
+ * spreads every key set, sequential runs included, as a random function
+ * would, which at a load of 0.38 is about 1.3 probes for each lookup, and
+ * about 2 at the maximum load of 0.70.
  *
  * A 32-bit size_t uses a 32-bit form of the same steps, with the constants of
  * the lowbias32 finalizer, for every key of 32 bits or less. */
@@ -588,8 +589,8 @@ static inline size_t hash_word_seeded(size_t x, uint64_t seed) {
  * target a size_t cannot hold the key, so the 64-bit steps run at the width
  * of the key and the upper word of the result is the hash, because
  * hash_index_for reads the index from the top. Folding the two halves of the
- * key together first (low ^ high) would give every key with the same
- * exclusive or of its halves the same hash, and a key packed from two 32-bit
+ * key together first (low ^ high) would give the same hash to every key with
+ * the same exclusive or of its halves, and a key packed from two 32-bit
  * fields, such as (a << 32) | b, is the ordinary shape of a 64-bit key. */
 static inline size_t hash_u64_seeded(uint64_t x, uint64_t seed) {
 #if SIZE_MAX == UINT64_MAX
@@ -602,13 +603,13 @@ static inline size_t hash_u64_seeded(uint64_t x, uint64_t seed) {
 }
 
 /* The fast hash of a fixed-width key of at most the width of size_t: a
- * Fibonacci multiply, read from its top bits by hash_index_for. The multiply
- * is a bijection, so the top bits of the product are a permutation of a run
- * of sequential keys, and such a run costs one probe for each lookup. Keys
- * scaled by a power of two and aligned addresses spread the same way. The
- * multiplier is public and nothing keys it, so a party that controls the keys
- * can make any number of them share a home slot; the insert window and the
- * insert cap see that and switch the map to hash_word_seeded. */
+ * Fibonacci multiply, which hash_index_for reads from its top bits. Since the
+ * multiply is a bijection, the top bits of the product are a permutation of a
+ * run of sequential keys, so such a run costs one probe for each lookup, and
+ * keys scaled by a power of two and aligned addresses spread the same way.
+ * The multiplier is public and nothing keys it, so a party that controls the
+ * keys can make any number of them share a home slot; the insert window and
+ * the insert cap see that and switch the map to hash_word_seeded. */
 static inline size_t hash_word_fast(size_t x) {
 #if SIZE_MAX == UINT64_MAX
   return x * (size_t)0x9E3779B97F4A7C15ULL;
@@ -629,11 +630,11 @@ static inline size_t hash_u64_fast(uint64_t x) {
 }
 
 /* The fast finalizer of the result of a custom hashing proc: the murmur3
- * finalizer, which makes every output bit depend on every input bit. A custom
- * hash may put its entropy anywhere, for example in the low bits of an
- * identity or a counter, and hash_index_for reads the top bits. The finalizer
- * is public and unseeded; see hash_word_fast for what that leaves to the
- * detection. */
+ * finalizer, which makes every output bit depend on every input bit. It is
+ * needed because a custom hash may put its entropy anywhere, for example in
+ * the low bits of an identity or a counter, while hash_index_for reads the
+ * top bits. The finalizer is public and unseeded; see hash_word_fast for what
+ * that leaves to the detection. */
 static inline size_t hash_custom_fast(size_t h) {
 #if SIZE_MAX == UINT64_MAX
   uint64_t x = (uint64_t)h;
@@ -656,16 +657,16 @@ static inline size_t hash_custom_fast(size_t h) {
 
 /* SipHash-1-3, the keyed byte hash of every key with no fixed width: a
  * string, a struct and any other buffer. SipHash is a pseudorandom function
- * of its 128-bit key. A party that does not know the key cannot compute two
- * inputs whose hashes collide, in full or in their top bits, any better than
- * by chance, and no pair of inputs collides for every key. A byte hash that is
- * only seeded, and not keyed in this sense, can have pairs of inputs that
- * collide whatever the seed is, and those pairs are enough to put any number
- * of keys into one bucket. The variant with one compression round and three
- * finalization rounds is the one that the hash tables of Rust and Python use
- * for the same purpose. The input is read as little-endian 64-bit words,
- * which is the definition of the algorithm, through memcpy, so the address of
- * a key needs no alignment. */
+ * of its 128-bit key, so a party that does not know the key cannot compute
+ * two inputs whose hashes collide, in full or in their top bits, any better
+ * than by chance, and no pair of inputs collides for every key. A byte hash
+ * that is only seeded, and not keyed in this sense, can have pairs of inputs
+ * that collide whatever the seed is, and those pairs are enough to put any
+ * number of keys into one bucket. The variant with one compression round and
+ * three finalization rounds is the one that the hash tables of Rust and
+ * Python use for the same purpose. The input is read as little-endian 64-bit
+ * words, as the algorithm defines it, through memcpy, so the address of a key
+ * needs no alignment. */
 static inline uint64_t sip_rotl(uint64_t x, unsigned b) {
   return (x << b) | (x >> (64u - b));
 }
@@ -707,7 +708,7 @@ static inline uint64_t sip_load32(const unsigned char* p) {
 }
 
 /* The last 0 to 7 bytes as a little-endian word. Four to seven bytes take two
- * 4-byte reads that overlap; one to three bytes take the first, the middle
+ * 4-byte reads that overlap, and one to three bytes take the first, the middle
  * and the last byte. The bytes that two reads share are equal, so the or of
  * the two never disturbs them. */
 static inline uint64_t sip_load_tail(const unsigned char* p, size_t left) {
@@ -746,7 +747,7 @@ siphash13(const uint64_t sip_v[4], const void* input, size_t len) {
   return v0 ^ v1 ^ v2 ^ v3;
 }
 
-/* SipHash-1-3 of a buffer, as a size_t. A 32-bit size_t keeps both halves of
+/* SipHash-1-3 of a buffer, as a size_t; a 32-bit size_t keeps both halves of
  * the output. */
 static inline size_t hash_bytes_keyed(const uint64_t sip_v[4],
                                       const void* input, size_t len) {
@@ -759,15 +760,15 @@ static inline size_t hash_bytes_keyed(const uint64_t sip_v[4],
 }
 
 /* XXH64, the byte hash of the fast mode, exactly as its specification
- * defines it, with the input read as little-endian words through memcpy. It
- * is seeded with a secret, so a party that does not know the seed cannot
- * compute keys that collide under it by trying keys offline. XXH64 is not a
- * pseudorandom function of its seed, though: some sets of keys collide under
- * every seed. A round over one lane, acc = rotl(acc + w * P2, 31) * P1,
- * turns a change of 2^63 in acc + w * P2 into a change of plus or minus 2^30
- * after the rotation, and the next word of the same lane can cancel either
- * sign. The insert window and the chain cap see such a set and switch the map
- * to SipHash-1-3. */
+ * defines it, with the input read as little-endian words through memcpy.
+ * Because it is seeded with a secret, a party that does not know the seed
+ * cannot compute keys that collide under it by trying keys offline. XXH64 is
+ * not a pseudorandom function of its seed, though, and some sets of keys
+ * collide under every seed: a round over one lane, acc = rotl(acc + w * P2,
+ * 31) * P1, turns a change of 2^63 in acc + w * P2 into a change of plus or
+ * minus 2^30 after the rotation, and the next word of the same lane can
+ * cancel either sign. The insert window and the chain cap see such a set and
+ * switch the map to SipHash-1-3. */
 #define XXH_P1 0x9E3779B185EBCA87ULL
 #define XXH_P2 0xC2B2AE3D27D4EB4FULL
 #define XXH_P3 0x165667B19E3779F9ULL
@@ -834,32 +835,32 @@ static inline uint64_t xxh64(const void* input, size_t len, uint64_t seed) {
   return h;
 }
 
-/* Reduces a hash to an index into a table whose size is a power of two. It
- * takes the HIGH bits of the hash. Every reduction in this file goes through
- * here, so the code makes this choice one time only. Every hash of this file
- * mixes its top bits best: the multiplies of hash_word_fast and of
+/* Reduces a hash to an index into a table whose size is a power of two, by
+ * taking the HIGH bits of the hash. Every reduction in this file goes through
+ * here, so the code makes this choice in one place only. Every hash of this
+ * file mixes its top bits best: the multiplies of hash_word_fast and of
  * hash_word_seeded carry each bit upward, and SipHash and XXH64 mix every
  * bit. A custom hash reaches this function only through hash_custom_fast or
  * hash_word_seeded.
  *
- * capacity is always a power of two. It is also never below
- * compact_bucket_array_size, which is at least 2. The shift is therefore at
- * most one less than the width of the type. It can never be a shift of the
- * full width, which would be undefined.
+ * capacity is always a power of two, and never below
+ * compact_bucket_array_size, which is at least 2, so the shift is at most
+ * one less than the width of the type and can never be a shift of the full
+ * width, which would be undefined.
  *
- * Read that precondition before you add a new reduction site. A capacity of 1
- * makes the shift as wide as the type. A capacity of 0 reaches __builtin_clz
- * with zero. Both of those are undefined. */
+ * Read that precondition before you add a new reduction site: a capacity of
+ * 1 makes the shift as wide as the type, and a capacity of 0 reaches
+ * __builtin_clz with zero, both of which are undefined. */
 static inline size_t hash_index_for(size_t hash_val, size_t capacity) {
-  /* The shift is the leading-zero count plus one. A log2(capacity) kept as an
-     intermediate value would mean that the code writes the width of the type
-     two times: one time to derive the width and one time to subtract it. Those
-     two must then agree with each other AND with the operand width of the
-     builtin. The count itself removes both of those restatements, so only the
-     builtin has to match size_t. An error here makes an unsigned intermediate
-     value underflow into a shift that is wider than the type. Such a shift is
-     undefined, and compilers fold it to a constant zero. Every key then goes
-     into slot 0, while every answer stays correct. */
+  /* The shift is the leading-zero count plus one. Keeping a log2(capacity) as
+     an intermediate value would mean writing the width of the type twice, once
+     to derive the width and once to subtract it, and those two would then have
+     to agree with each other AND with the operand width of the builtin. Using
+     the count itself removes both restatements, so only the builtin has to
+     match size_t. An error here makes an unsigned intermediate value underflow
+     into a shift that is wider than the type; such a shift is undefined, and
+     compilers fold it to a constant zero, so every key goes into slot 0 while
+     every answer stays correct. */
 #if SIZE_MAX == UINT64_MAX
   return hash_val >>
          ((unsigned)__builtin_clzll((unsigned long long)capacity) + 1u);
@@ -869,23 +870,23 @@ static inline size_t hash_index_for(size_t hash_val, size_t capacity) {
 }
 
 /* Hashes a long double key by its numeric VALUE and not by its raw bytes. A
- * float is exactly 4 bytes and a double is exactly 8 bytes, and neither has
- * padding. The representation of a long double in memory is different on most
- * platforms. One example is 80-bit x87 extended precision stored in a 16-byte
- * slot. That representation contains padding bits, and the C standard leaves
- * them completely unspecified. Two variables that hold exactly the same
- * mathematical value can differ in those padding bits. The difference depends
- * on how the program computed and stored each one. The padding of a long
- * double with automatic storage duration is not reliably the same across two
- * separate constructions of the same value. This stays true after an explicit
- * memset, once the compiler treats the whole-object assignment as something
- * that makes that memset dead. A raw byte hash would put two long double keys
- * with identical numbers into different buckets. It would then silently
- * defeat every lookup that does not reuse the exact original bytes. frexpl
- * takes the VALUE apart and avoids this. frexpl works on the loaded
- * floating-point value and never on the bytes below it. The mantissa and the
- * exponent that it gives are a deterministic function of the number itself.
- * They do not depend on the padding bits that came with it.
+ * float is exactly 4 bytes and a double exactly 8 bytes, and neither has
+ * padding, but the in-memory representation of a long double differs on most
+ * platforms: 80-bit x87 extended precision stored in a 16-byte slot, for
+ * example, contains padding bits that the C standard leaves completely
+ * unspecified. Two variables that hold exactly the same mathematical value
+ * can differ in those padding bits, depending on how the program computed
+ * and stored each one, and the padding of a long double with automatic
+ * storage duration is not reliably the same across two separate
+ * constructions of the same value. This stays true after an explicit memset,
+ * once the compiler treats the whole-object assignment as something that
+ * makes that memset dead. A raw byte hash would therefore put two long double
+ * keys with identical numbers into different buckets, and silently defeat
+ * every lookup that does not reuse the exact original bytes. frexpl avoids
+ * this by taking the VALUE apart: it works on the loaded floating-point value
+ * and never on the bytes below it, so the mantissa and the exponent that it
+ * gives are a deterministic function of the number itself, independent of
+ * the padding bits that came with it.
  *
  * The function hashes the pair {scaled mantissa, exponent} as 16 bytes with
  * SipHash-1-3. Both parts reach the hash through the keyed function, so no
@@ -897,32 +898,31 @@ static inline size_t hash_index_for(size_t hash_val, size_t capacity) {
  * Three values get their own handling and never reach frexpl:
  * - NaN: frexpl and a relational comparison have no useful meaning for NaN.
  *   The full representation of a float and of a double is always meaningful,
- *   so a raw-byte comparison of a NaN payload is well defined for them. The
- *   padding bytes beside a NaN long double are different. In practice they
- *   are often genuinely uninitialized memory, and not merely content that is
- *   unspecified but stable. A plain `long double n = NAN;` writes only the
- *   significant NaN bits and never the padding. A read of those padding bytes
- *   is therefore a real use of uninitialized memory. This is true even for a
- *   read that only hashes them or gives them to memcmp. valgrind and
- *   MemorySanitizer both report it. Every NaN long double therefore hashes as
- *   one fixed class, and this touches no padding byte at all. This
- *   necessarily means that every NaN long double collapses into a single
- *   key. See the matching NaN branch of long_double_keys_equal below. A float
- *   and a double keep their own policy of a distinct NaN payload. This is a
- *   deliberate and narrower difference that the padding of a long double
- *   forces, and it is not an oversight. This codebase has precedent for it.
- *   The long double comparator of cbstmap collapses every NaN into one
- *   equivalence class for the identical reason. The total-order requirement
- *   of a BST leaves it no other sound choice, and it also never reads a
- *   padding byte to do this.
- * - +-0.0: the function unifies these into one class up front. It does not
- *   trust this to come out of frexpl. The C standard only promises that frexp
- *   returns "zero" for a zero input. It does not guarantee that every libm
- *   implementation keeps the sign of that zero in the same way.
+ *   so a raw-byte comparison of a NaN payload is well defined for them, but
+ *   the padding bytes beside a NaN long double are different: in practice
+ *   they are often genuinely uninitialized memory, not merely content that
+ *   is unspecified but stable. A plain `long double n = NAN;` writes only the
+ *   significant NaN bits and never the padding, so a read of those padding
+ *   bytes is a real use of uninitialized memory, even a read that only hashes
+ *   them or gives them to memcmp, and valgrind and MemorySanitizer both
+ *   report it. Every NaN long double therefore hashes as one fixed class,
+ *   which touches no padding byte at all and necessarily collapses every NaN
+ *   long double into a single key; see the matching NaN branch of
+ *   long_double_keys_equal below. A float and a double keep their own policy
+ *   of a distinct NaN payload. This is a deliberate, narrower difference
+ *   that the padding of a long double forces, not an oversight, and this
+ *   codebase has precedent for it: the long double comparator of cbstmap
+ *   collapses every NaN into one equivalence class for the identical
+ *   reason, because the total-order requirement of a BST leaves it no other
+ *   sound choice, and it also never reads a padding byte to do this.
+ * - +-0.0: the function unifies these into one class up front instead of
+ *   trusting this to come out of frexpl, because the C standard only promises
+ *   that frexp returns "zero" for a zero input and does not guarantee that
+ *   every libm implementation keeps the sign of that zero in the same way.
  * - +-Infinity: the exponent output of frexpl is unspecified for an infinite
- *   input. A conversion of an infinite floating value to an integer type is
- *   undefined behavior. Each sign of infinity is therefore a class of its
- *   own, with no call to frexpl and no cast of the value to an integer. */
+ *   input, and a conversion of an infinite floating value to an integer type
+ *   is undefined behavior, so each sign of infinity is a class of its own,
+ *   with no call to frexpl and no cast of the value to an integer. */
 static __attribute__((noinline)) size_t
 hash_long_double_value(long double v, const uint64_t sip_v[4]) {
   uint64_t parts[2] = {0, 0};
@@ -935,10 +935,10 @@ hash_long_double_value(long double v, const uint64_t sip_v[4]) {
   } else {
     int exp = 0;
     long double mantissa = frexpl(v, &exp);
-    // |mantissa| is in [0.5, 1). The scaled value below therefore always fits
-    // safely in an int64_t. Its magnitude is in [2^61, 2^62), so it is never
-    // 0. The scale puts the significant bits at the TOP of the 64-bit value,
-    // and all 64 bits are hashed.
+    // |mantissa| is in [0.5, 1), so the scaled value below always fits
+    // safely in an int64_t, and its magnitude is in [2^61, 2^62), so it is
+    // never 0. The scale puts the significant bits at the TOP of the 64-bit
+    // value, and all 64 bits are hashed.
     int64_t scaled_mantissa = (int64_t)(mantissa * 4611686018427387904.0L);
     parts[0] = (uint64_t)scaled_mantissa;
     parts[1] = (uint64_t)(int64_t)exp;
@@ -948,24 +948,23 @@ hash_long_double_value(long double v, const uint64_t sip_v[4]) {
 
 /* The secret of the process; see chmap_hash_secret. It is chosen once, on
  * the first call of chmap_process_hash_secret, which every map creation and
- * every ccol_chmap_hash_key call makes before it hashes anything. It is never
- * chosen in a constructor. A map that the constructor of another object
- * creates before any constructor of this library runs therefore still hashes
- * with the final secret, in a shared build and in a static one. The value
- * never changes once chosen, so every map and ccol_chmap_hash_key agree on
- * it.
+ * every ccol_chmap_hash_key call makes before it hashes anything, and never
+ * in a constructor, so a map that the constructor of another object creates
+ * before any constructor of this library runs also hashes with the final
+ * secret, in a shared build and in a static one. The value never changes once
+ * chosen, so every map and ccol_chmap_hash_key agree on it.
  *
  * The operations of a map read this object directly and keep no copy. Its
  * address is a constant of the library, so a read costs what a read from the
  * map struct costs. A thread that uses a map without having created it reads
- * the chosen value too: the creation of the map called
+ * the chosen value too, because the creation of the map called
  * chmap_process_hash_secret first, and whatever handed the map to that thread
  * orders the creation before the use. */
 static chmap_hash_secret g_chmap_hash_secret;
 static ccol_once_flag_t g_chmap_hash_secret_once = CCOL_ONCE_INIT;
 
-/* One step of the splitmix64 finalizer. It spreads every input bit over
- * every output bit, so it can mix entropy sources of uneven quality. */
+/* One step of the splitmix64 finalizer, which spreads every input bit over
+ * every output bit and so can mix entropy sources of uneven quality. */
 static uint64_t chmap_seed_mix(uint64_t x) {
   x += 0x9E3779B97F4A7C15ULL;
   x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
@@ -973,13 +972,13 @@ static uint64_t chmap_seed_mix(uint64_t x) {
   return x ^ (x >> 31);
 }
 
-/* The key words when the kernel cannot give random bytes without blocking: a
- * kernel with no getrandom(2), a seccomp policy that refuses it, or an
- * entropy pool that is not initialized yet early in boot. It mixes both
+/* The key words for when the kernel cannot give random bytes without
+ * blocking: a kernel with no getrandom(2), a seccomp policy that refuses it,
+ * or an entropy pool that is not initialized yet early in boot. It mixes both
  * clocks, the process id and three addresses that address space layout
- * randomization places, and derives the four words from that mix. It is
- * weaker than the kernel generator and far stronger than a constant, and it
- * never fails. */
+ * randomization places, and derives the four words from that mix. The result
+ * is weaker than the kernel generator but far stronger than a constant, and
+ * this function never fails. */
 static void chmap_fallback_hash_key(uint64_t out[4]) {
   struct timespec rt = {0, 0};
   struct timespec mt = {0, 0};
@@ -1020,15 +1019,15 @@ static void chmap_init_process_hash_secret(void) {
 }
 
 /* Gives the secret of the process, choosing it first when no call has chosen
- * it yet. It is on the creation path of a map and on ccol_chmap_hash_key,
- * never on the path of an insert or a lookup of a map. */
+ * it yet. It is called on the creation path of a map and from
+ * ccol_chmap_hash_key, never on the path of an insert or a lookup of a map. */
 static const chmap_hash_secret* chmap_process_hash_secret(void) {
   ccol_call_once(g_chmap_hash_secret_once, chmap_init_process_hash_secret);
   return &g_chmap_hash_secret;
 }
 
-/* The byte hash of the fast mode, XXH64 seeded with byte_seed, as a size_t.
- * A 32-bit size_t keeps both halves of the output. */
+/* The byte hash of the fast mode, XXH64 seeded with byte_seed, as a size_t;
+ * a 32-bit size_t keeps both halves of the output. */
 static inline size_t hash_bytes_fast(const void* input, size_t len) {
   uint64_t h = xxh64(input, len, g_chmap_hash_secret.byte_seed);
 #if SIZE_MAX == UINT64_MAX
@@ -1038,7 +1037,7 @@ static inline size_t hash_bytes_fast(const void* input, size_t len) {
 #endif
 }
 
-/* The byte hash of the keyed mode. It is out of line, so that the fast byte
+/* The byte hash of the keyed mode. It is out of line so that the fast byte
  * hash stays inline in the functions that hash both ways. */
 static __attribute__((noinline)) size_t hash_bytes_keyed_ool(const void* input,
                                                              size_t len) {
@@ -1062,23 +1061,23 @@ hash_u64_mode(uint64_t x, bool keyed, uint64_t int_seed) {
  * mode that keyed names; see the section on adaptive hashing. Every integral
  * type, float, double and a pointer go through hash_word_mode or
  * hash_u64_mode. A long double goes through hash_long_double_value in both
- * modes, and every other type through hash_bytes_fast or
- * hash_bytes_keyed_ool. That covers a string and a struct. The result of a
- * custom hashing proc goes through hash_custom_fast or hash_word_seeded.
+ * modes, and every other type, which covers a string and a struct, through
+ * hash_bytes_fast or hash_bytes_keyed_ool. The result of a custom hashing
+ * proc goes through hash_custom_fast or hash_word_seeded.
  *
  * Only the separate-chaining backend reaches the long double and byte-hash
- * cases. The open-addressing backend holds only the fixed-width types of the
- * first group.
+ * cases, because the open-addressing backend holds only the fixed-width
+ * types of the first group.
  *
- * A custom proc hashes with its own function, which the map finalizes. That
- * keeps a custom hash whose good bits are at the low end, such as an
- * identity or a counter, from putting every key in one slot. Keys whose
- * custom hashes are equal still collide in both modes, because no finalizer
- * can tell them apart.
+ * A custom proc hashes with its own function, which the map finalizes, so
+ * that a custom hash whose good bits are at the low end, such as an identity
+ * or a counter, does not put every key in one slot. Keys whose custom hashes
+ * are equal collide in both modes regardless, because no finalizer can tell
+ * them apart.
  *
- * int_seed is the int_seed of the secret. The callers pass it, so that a
- * loop that writes through a byte pointer, which may alias the secret, keeps
- * it in a register. */
+ * int_seed is the int_seed of the secret. The callers pass it so that a loop
+ * that writes through a byte pointer, which may alias the secret, keeps it in
+ * a register. */
 static inline __attribute__((always_inline)) size_t
 hash_key_data(const void* key_ptr, size_t key_size, ccol_data_type key_type,
               ccol_hashing_proc_t custom_proc, bool keyed, uint64_t int_seed) {
@@ -1087,15 +1086,15 @@ hash_key_data(const void* key_ptr, size_t key_size, ccol_data_type key_type,
     return keyed ? hash_word_seeded(h, int_seed) : hash_custom_fast(h);
   }
 
-  // The sizes here are compile-time constants, and the compiler turns each
-  // one into a single unaligned load. Every multi-byte read below goes
-  // through memcpy. None of them dereferences a cast pointer directly.
-  // key_ptr can come straight from a cmap_pair that the caller built. That is
+  // The sizes here are compile-time constants, so the compiler turns each
+  // copy into a single unaligned load, and every multi-byte read below goes
+  // through memcpy instead of dereferencing a cast pointer directly, because
+  // key_ptr can come straight from a cmap_pair that the caller built (through
   // the raw function layer of chmap_insert_elem, chmap_get_elem_ref and
-  // chmap_delete_elem. Such a pointer carries no alignment guarantee. The
-  // address of the local variable of a type-inferred macro does carry one. A
+  // chmap_delete_elem), and such a pointer carries no alignment guarantee,
+  // while the address of the local variable of a type-inferred macro does. A
   // direct read in the style of `*(uint32_t*)key_ptr` from a misaligned
-  // pointer is undefined behavior. It can also fault on a strict-alignment
+  // pointer is undefined behavior and can fault on a strict-alignment
   // architecture. See the _Alignas(max_align_t) comment on llist_node in
   // this file for the same class of hazard elsewhere in this module.
   switch (key_type) {
@@ -1160,12 +1159,11 @@ hash_key_data(const void* key_ptr, size_t key_size, ccol_data_type key_type,
 }
 
 /* Gives true when the byte range [a, a+a_size) and the byte range
- * [b, b+b_size) overlap. Both backends use this function. It finds the case
- * where a value pointer from the caller aliases the exact storage that an
- * insert or an update is about to change. The two users are the existing-key
- * update path of oa_insert, below in this section, and
- * sc_reset_val_of_llist_node, in the separate-chaining section further
- * down. */
+ * [b, b+b_size) overlap. Both backends use it to find the case where a value
+ * pointer from the caller aliases the exact storage that an insert or an
+ * update is about to change: the existing-key update path of oa_insert,
+ * below in this section, and sc_reset_val_of_llist_node, in the
+ * separate-chaining section further down. */
 static inline bool ranges_overlap(const void* a, size_t a_size, const void* b,
                                   size_t b_size) {
   if (a_size == 0 || b_size == 0) return false;
@@ -1182,21 +1180,21 @@ static inline bool ranges_overlap(const void* a, size_t a_size, const void* b,
 
 #ifdef RUNNING_UNIT_TESTS
 /* A white-box regression guard for the quality of the hash. It counts the
- * slots that open-addressing probes examine. That count is the real cost of a
- * hash that does not spread the keys. The map stays correct even with very
- * bad clusters, so a correctness test cannot see the difference. A timing test
- * would measure the machine instead. Take a key set whose low bits are
+ * slots that open-addressing probes examine, which is the real cost of a hash
+ * that does not spread the keys. The map stays correct even with very bad
+ * clusters, so a correctness test cannot see the difference, and a timing
+ * test would measure the machine instead. A key set whose low bits are
  * constant, such as aligned addresses or identifiers scaled by a power of
- * two. That set drives this count quadratic when the index reads bits that
- * the hash did not mix. It leaves the count near one probe for each operation
- * when the index reads mixed bits. */
-/* The counter is atomic, with relaxed ordering. It sits in the probe loop of
- * a map that many threads can read at the same time. A plain increment here
- * is therefore a data race. ThreadSanitizer reports such a race against every
- * caller that shares a map. This instrumentation would then be a source of
- * findings instead of a guard against them. A count needs no more than
- * relaxed ordering. The accessor also reads the counter only after the test
- * joins the threads under test. */
+ * two, drives this count quadratic when the index reads bits that the hash
+ * did not mix, and leaves it near one probe for each operation when the index
+ * reads mixed bits. */
+/* The counter is atomic, with relaxed ordering, because it sits in the probe
+ * loop of a map that many threads can read at the same time, where a plain
+ * increment is a data race. ThreadSanitizer would report such a race against
+ * every caller that shares a map, and this instrumentation would then be a
+ * source of findings instead of a guard against them. A count needs no more
+ * than relaxed ordering, and the accessor reads the counter only after the
+ * test joins the threads under test. */
 static _Atomic unsigned long long g_oa_probe_steps_for_tests = 0;
 unsigned long long chashmap_oa_probe_steps_for_tests(void) {
   return atomic_load_explicit(&g_oa_probe_steps_for_tests,
@@ -1210,8 +1208,8 @@ void chashmap_reset_oa_probe_steps_for_tests(void) {
                              memory_order_relaxed))
 /* The number of successful open-addressing rehashes, across the process. A
  * rehash at an unchanged capacity counts too, which the capacity alone
- * cannot show. The counter is relaxed and atomic for the reason that the
- * probe counter above gives. */
+ * cannot show. The counter is relaxed and atomic for the same reason as the
+ * probe counter above. */
 static _Atomic unsigned long long g_oa_rehashes_for_tests = 0;
 unsigned long long chashmap_oa_rehashes_for_tests(void) {
   return atomic_load_explicit(&g_oa_rehashes_for_tests, memory_order_relaxed);
@@ -1240,8 +1238,8 @@ unsigned long long chashmap_oa_shift_steps_for_tests(void) {
   (atomic_fetch_add_explicit(&g_oa_shift_steps_for_tests, 1ull, \
                              memory_order_relaxed))
 /* The number of chain nodes that the searches of the separate-chaining
- * backend visited, across the process. It is the counterpart of the probe
- * counter above for that backend. */
+ * backend visited, across the process: the counterpart of the probe counter
+ * above for that backend. */
 static _Atomic unsigned long long g_sc_node_visits_for_tests = 0;
 unsigned long long chashmap_sc_node_visits_for_tests(void) {
   return atomic_load_explicit(&g_sc_node_visits_for_tests,
@@ -1256,10 +1254,10 @@ void chashmap_reset_sc_node_visits_for_tests(void) {
 /* The fast attempts that the growth of a keyed map makes, across the
  * process: how many began, how many failed, and the work, the count and the
  * capacity of the last one that failed. The work of an open-addressing
- * attempt is the slots that its fill inspected; the work of a
+ * attempt is the slots that its fill inspected, and the work of a
  * separate-chaining attempt is the nodes that it hashed plus the chain nodes
- * that it walked. The counters are relaxed and atomic for the reason that
- * the probe counter above gives. */
+ * that it walked. The counters are relaxed and atomic for the same reason as
+ * the probe counter above. */
 static _Atomic unsigned long long g_retries_for_tests = 0;
 static _Atomic unsigned long long g_retry_failures_for_tests = 0;
 static _Atomic unsigned long long g_retry_failed_work_for_tests = 0;
@@ -1314,27 +1312,28 @@ static void chmap_note_retry(bool failed, size_t work, size_t count,
 #define SC_COUNT_NODE_VISIT() ((void)0)
 #endif /* RUNNING_UNIT_TESTS */
 
-/* Widens the key of a caller to the same 64-bit form that a slot stores. A
- * probe can then compare two integers. It does not call memcmp for each step.
- * Every write of key_data sets all 8 bytes to zero before it copies key_size
- * bytes in; see oa_insert. A key that this function widens in the same way
- * therefore compares equal exactly when the bytes are equal. This is true for
- * any byte order, because both sides put the bytes of the key at the start of
- * the object and set the rest to zero.
+/* Widens the key of a caller to the same 64-bit form that a slot stores, so
+ * that a probe can compare two integers instead of calling memcmp at each
+ * step. Every write of key_data sets all 8 bytes to zero before it copies
+ * key_size bytes in (see oa_insert), so a key that this function widens in
+ * the same way compares equal exactly when the bytes are equal. This holds
+ * for any byte order, because both sides put the bytes of the key at the
+ * start of the object and set the rest to zero.
  *
- * The switch gives each copy a size that is a compile-time constant. The
- * compiler turns such a copy into a single unaligned load. A memcpy whose
+ * The switch gives each copy a size that is a compile-time constant, which
+ * the compiler turns into a single unaligned load, whereas a memcpy whose
  * size is known only at run time is a call.
  *
- * The listed cases are every width that an integral key can have. Every entry
- * point also checks a key from the caller against the width of its declared
- * type before the key reaches this function. No current path therefore
- * reaches the default case. The default case still clamps the size instead of
- * a copy of key_size bytes. The destination is one 8-byte object. A size that
- * did arrive unchecked would be a stack buffer overflow. A comparison that
- * only read the bytes would be no more than an over-READ. A key that is wider
- * than the slot cannot compare equal to a stored key anyway. The clamp
- * therefore loses no answer that the wider copy would have given. */
+ * The listed cases are every width that an integral key can have, and every
+ * entry point checks a key from the caller against the width of its
+ * declared type before the key reaches this function, so no current path
+ * reaches the default case. Even so, the default case clamps the size
+ * instead of copying key_size bytes. The destination is one 8-byte object,
+ * so a size that did arrive unchecked would be a stack buffer overflow,
+ * whereas a comparison that only read the bytes would be no more than an
+ * over-READ. A key that is wider than the slot cannot compare equal to a
+ * stored key anyway, so the clamp loses no answer that the wider copy would
+ * have given. */
 static inline uint64_t oa_widen_key(const void* key_ptr, size_t key_size) {
   uint64_t k = 0;
   switch (key_size) {
@@ -1358,9 +1357,9 @@ static inline uint64_t oa_widen_key(const void* key_ptr, size_t key_size) {
 }
 
 /* Compares the key that a slot stores against a key that oa_widen_key already
- * widened. Move that call to oa_widen_key out of the probe loop. The key of
- * the caller does not change while the probe walks. The repeat of that work
- * for each step is the whole cost that this arrangement avoids. */
+ * widened. Keep that call to oa_widen_key out of the probe loop: the key of
+ * the caller does not change while the probe walks, and repeating that work
+ * at each step is the whole cost that this arrangement avoids. */
 static inline bool oa_keys_equal(const oa_slot* slot, uint64_t probe_key) {
   return slot->key_data == probe_key;
 }
@@ -1376,11 +1375,11 @@ static inline bool oa_keys_equal(const oa_slot* slot, uint64_t probe_key) {
  * block is zeroed, so every slot starts without SLOT_OCCUPIED, which is the
  * empty sentinel, and every accessor starts as {NULL, 0}.
  *
- * This function forms the byte count itself. It does not hand calloc a count
- * and a size. It must therefore make the overflow check that calloc would
- * have made. Without that check, a product that wraps becomes a small
- * allocation that succeeds. A probe loop then walks capacity entries through
- * that small allocation. */
+ * Because this function forms the byte count itself instead of handing
+ * calloc a count and a size, it must make the overflow check that calloc
+ * would have made. Without that check, a product that wraps becomes a small
+ * allocation that succeeds, and a probe loop then walks capacity entries
+ * through that small allocation. */
 static oa_slot* oa_alloc_block(ccol_memmgmt_procs_t* m_procs, size_t capacity,
                                cmap_pair** val_accessors_out,
                                uint8_t** metadata_out) {
@@ -1437,9 +1436,9 @@ static bool oa_init(open_addr_map* map, size_t capacity,
  * highest load, 0.70, a random function displaces about one insert in 5e5 by
  * more than 160 slots, one in 2e8 by more than 256 and one in 1.4e9 by more
  * than 288. A small table cannot hold a long cluster, which lowers that tail
- * well below these figures, and the cap there is lower in proportion. A
- * smaller cap, such as 8 slots for each doubling, which is about the largest
- * displacement that a random function produces in a fill, switches an
+ * well below these figures, so the cap there is lower in proportion. A
+ * smaller cap, such as 8 slots for each doubling (about the largest
+ * displacement that a random function produces in a fill), would switch an
  * ordinary map that churns at its highest load once in every few thousand
  * inserts. */
 #define OA_CAP_PER_DOUBLING 24u
@@ -1507,7 +1506,7 @@ static inline void oa_window_restart(open_addr_map* map) {
 
 /* Places every live entry of the old table into the zeroed table that
  * new_slots heads, with the hash of the mode that keyed names, and gives the
- * largest displacement that it made. The table does not store a hash, so
+ * largest displacement that it made. Since the table does not store a hash,
  * this computes each one again. new_capacity is always a power of two, so a
  * probe advances with & (new_capacity - 1) instead of the far more costly
  * % new_capacity. */
@@ -1537,10 +1536,10 @@ static size_t oa_place_all(const open_addr_map* map, oa_slot* new_slots,
 
     new_slots[index] = old_slots[i];
     new_metadata[index] = SLOT_OCCUPIED;
-    // The .ptr of the accessor refers back into its own slot: it must point
-    // at the val_data of this slot. A copy from the old array, like the copy
-    // of the other bytes of the slot, is therefore never correct. The code
-    // must compute it again against the address of the new array for this
+    // The .ptr of the accessor refers back into its own slot and must point
+    // at the val_data of this slot, so a copy from the old array, like the
+    // copy of the other bytes of the slot, is never correct: the code must
+    // compute it again against the address of the new array for this
     // index.
     new_val_accessors[index].ptr = &new_slots[index].val_data;
     new_val_accessors[index].size = map->val_size;
@@ -1626,10 +1625,10 @@ out:
  * restarts below judges it as it judges any fast table.
  *
  * The function gives ccol_not_enough_memory when the allocation fails, and
- * it leaves the map completely unchanged. A caller whose own operation then
- * fails only because this opportunistic rehash could not happen can report
- * that honestly. It does not have to name some other condition instead. See
- * the use of this return value in oa_insert_impl. */
+ * leaves the map completely unchanged, so that a caller whose own operation
+ * then fails only because this opportunistic rehash could not happen can
+ * report that honestly instead of naming some other condition; see the use
+ * of this return value in oa_insert_impl. */
 static ccol_retval_t oa_rebuild(open_addr_map* map, size_t new_capacity,
                                 bool keyed) {
   cmap_pair* new_val_accessors = NULL;
@@ -1671,19 +1670,19 @@ static ccol_retval_t oa_rebuild(open_addr_map* map, size_t new_capacity,
 }
 
 /* The capacity that the insert path rehashes to, for a table that is about
- * to hold live_after_insert entries. It is the smallest power of two at or
- * above twice that count, so the live load after the rehash is at most one
- * half. It is never less than minimum_allowed_bucket_array_size.
+ * to hold live_after_insert entries: the smallest power of two at or above
+ * twice that count, so that the live load after the rehash is at most one
+ * half, and never less than minimum_allowed_bucket_array_size.
  *
  * The insert path rehashes only when the live entries fill more than
  * OPEN_ADDR_MAX_LOAD_FACTOR of the table, so this is always twice the
  * capacity. Sizing from the live count keeps that true by construction, and
- * keeps the result above OPEN_ADDR_MIN_LOAD_FACTOR, which is one quarter:
- * half of the SMALLEST power of two at or above twice the live count is below
- * twice that count. A delete therefore cannot shrink it straight back, and a
- * shrink leaves a live load below one half, which needs a fifth of the
- * capacity in inserts before the next grow. Growth and shrink cannot
- * alternate. */
+ * keeps the result above OPEN_ADDR_MIN_LOAD_FACTOR, which is one quarter,
+ * because half of the SMALLEST power of two at or above twice the live count
+ * is below twice that count. A delete therefore cannot shrink it straight
+ * back, and a shrink leaves a live load below one half, which needs a fifth
+ * of the capacity in inserts before the next grow, so growth and shrink
+ * cannot alternate. */
 static size_t oa_rehash_capacity_for(size_t live_after_insert) {
   if (live_after_insert > ccol_max_power_of_two_size_t / 2) {
     return ccol_max_power_of_two_size_t;
@@ -1707,13 +1706,13 @@ static inline bool oa_above_grow_load(size_t count, size_t capacity) {
   return count > (capacity / 10) * 7 + ((capacity % 10) * 7) / 10;
 }
 
-/* Probes for the first empty slot. It probes in probe order, and it starts at
- * the home slot of hash_val. It gives map->capacity when the table has no
- * empty slot. This function locates an insertion point against the *current*
- * capacity and mask of the map. The caller must already know that the key is
- * not present anywhere in the table. This is exactly what oa_insert needs
- * after a rehash. The rehash makes the index and the capacity of an earlier
- * probe stale. */
+/* Probes, in probe order from the home slot of hash_val, for the first empty
+ * slot, and gives map->capacity when the table has no empty slot. This
+ * function locates an insertion point against the *current* capacity and
+ * mask of the map, and the caller must already know that the key is not
+ * present anywhere in the table. This is exactly what oa_insert needs after
+ * a rehash, which makes the index and the capacity of an earlier probe
+ * stale. */
 static size_t oa_find_insertion_slot(const open_addr_map* map,
                                      size_t hash_val) {
   size_t index = hash_index_for(hash_val, map->capacity);
@@ -1736,9 +1735,9 @@ static size_t oa_find_insertion_slot(const open_addr_map* map,
 }
 
 /* Gives the slot of the stored key whose widened bytes are key. The key must
- * be present. It lies within probe_span slots of its home slot. The key is
- * hashed from a buffer as wide as any key type, because the compiler cannot
- * see that an open-addressing map never has a long double key. */
+ * be present, within probe_span slots of its home slot. It is hashed from a
+ * buffer as wide as any key type, because the compiler cannot see that an
+ * open-addressing map never has a long double key. */
 static size_t oa_find_stored_key(open_addr_map* map, uint64_t key) {
   union {
     uint64_t word;
@@ -1762,9 +1761,9 @@ static size_t oa_find_stored_key(open_addr_map* map, uint64_t key) {
   return index;
 }
 
-/* Switches a fast table to the keyed hash, at the same capacity, and gives
- * the new slot of the key that slot index held. The rebuild allocates a new
- * block. When that fails the table stays fast and correct, the key stays
+/* Switches a fast table to the keyed hash at the same capacity, and gives the
+ * new slot of the key that slot index held. The rebuild allocates a new
+ * block; when that fails, the table stays fast and correct, the key stays
  * where it is, and the next window end or deep insert tries again. */
 static size_t oa_switch_keeping(open_addr_map* map, size_t index) {
   uint64_t key = map->slots[index].key_data;
@@ -1775,9 +1774,9 @@ static size_t oa_switch_keeping(open_addr_map* map, size_t index) {
 }
 
 /* The cold path of an insert whose displacement is at least OA_DEEP_INSERT.
- * It widens probe_span to cover the new key, and a fast table whose new key
- * sits further from its home slot than the cap allows switches. Gives the
- * slot of the new key, which the switch moves. */
+ * It widens probe_span to cover the new key, and switches a fast table whose
+ * new key sits further from its home slot than the cap allows. Gives the slot
+ * of the new key, which the switch moves. */
 static __attribute__((noinline)) size_t
 oa_note_deep_insert(open_addr_map* map, size_t index, size_t displacement) {
   if (displacement >= map->probe_span) {
@@ -1789,9 +1788,9 @@ oa_note_deep_insert(open_addr_map* map, size_t index, size_t displacement) {
   return index;
 }
 
-/* The cold path of the insert that ends a window. A fast table whose window
- * sum is above its bound switches. Gives the slot of the new key, which the
- * switch moves. */
+/* The cold path of the insert that ends a window, which switches a fast table
+ * whose window sum is above its bound. Gives the slot of the new key, which
+ * the switch moves. */
 static __attribute__((noinline)) size_t oa_window_end(open_addr_map* map,
                                                       size_t index) {
   struct chashmap* chm = chmap_of_oa(map);
@@ -1807,7 +1806,7 @@ static __attribute__((noinline)) size_t oa_window_end(open_addr_map* map,
 /* The cold path of an insert of a new key into a table above its growth
  * load. It grows the table and gives the empty slot for the key in the grown
  * table, with its home slot in *home. A growth asks for the fast hash in
- * either mode: a fast table can still switch, and a keyed table makes its
+ * either mode, because a fast table may switch and a keyed table makes its
  * fast attempt; see oa_rebuild. Gives SIZE_MAX, with the map unchanged, when
  * the allocation fails. */
 static __attribute__((noinline)) size_t oa_grow_for_insert(
@@ -1827,47 +1826,47 @@ static __attribute__((noinline)) size_t oa_grow_for_insert(
  * holds no tombstone (see oa_delete), so the first empty slot of the probe
  * both proves that the key is absent and is where it goes.
  *
- * The function probes for an existing entry FIRST. That probe does not
- * consider growth at all. A pure value update for a key that is already
- * present never changes elem_count. Such an update therefore can never start
- * a rehash. It also can never make the chmap_get_elem_ref pointer of ANY
- * OTHER key invalid. Without this order, it could do so only because earlier,
- * unrelated inserts left the map above its growth threshold. The function
- * considers the load factor count / capacity only after it confirms that the
- * key is genuinely absent. The table holds no tombstone, so count is the
- * whole load. A load above OPEN_ADDR_MAX_LOAD_FACTOR then starts a rehash to
- * the capacity that oa_rehash_capacity_for() picks from the live count. A
- * fresh probe with oa_find_insertion_slot then locates the insertion point
- * against the rebuilt table. The rehash makes the index and the capacity of the
- * first probe invalid. The absence of the key needs no second check: a rehash
- * only moves entries that are already live, and it cannot introduce this key.
- * The common case is a plain update, or a plain insert of a new key that does
- * not cross the growth threshold. That case costs exactly one probe pass. A
- * design that checks growth up front for every call costs the same.
+ * The function probes for an existing entry FIRST, without considering
+ * growth at all. A pure value update for a key that is already present never
+ * changes elem_count, so such an update can never start a rehash, and it can
+ * never make the chmap_get_elem_ref pointer of ANY OTHER key invalid; without
+ * this order, it could do so merely because earlier, unrelated inserts left
+ * the map above its growth threshold. The function considers the load factor
+ * count / capacity only after it confirms that the key is genuinely absent.
+ * Since the table holds no tombstone, count is the whole load, and a load
+ * above OPEN_ADDR_MAX_LOAD_FACTOR then starts a rehash to the capacity that
+ * oa_rehash_capacity_for() picks from the live count. Because the rehash
+ * makes the index and the capacity of the first probe invalid, a fresh probe
+ * with oa_find_insertion_slot then locates the insertion point against the
+ * rebuilt table. The absence of the key needs no second check: a rehash only
+ * moves entries that are already live, and it cannot introduce this key.
+ * The common case, a plain update or a plain insert of a new key that does
+ * not cross the growth threshold, costs exactly one probe pass, the same as
+ * a design that checks growth up front for every call.
  *
  * An insert of a new key then reports its displacement to the detection of
- * the adaptive hash; see the section on adaptive hashing. A displacement of
+ * the adaptive hash (see the section on adaptive hashing): a displacement of
  * OA_DEEP_INSERT or more takes oa_note_deep_insert, and every insert adds to
  * the window, which costs a lea, an add and a jump on the carry. Either can
  * switch the table, which moves the new key, so both give back its slot.
  *
- * The function can need a growth that it cannot get. oa_rebuild() can fail on
- * an allocation, or the function can skip it because the table is already at
- * its architectural maximum capacity. The insert then still runs against the
- * current size of the table. If that finds no room at all, the two cases get
- * distinct, honest return codes. See the final lines of the function. They do
- * not both collapse into ccol_container_full.
+ * The function can need a growth that it cannot get: oa_rebuild() can fail
+ * on an allocation, or the function can skip it because the table is already
+ * at its architectural maximum capacity. The insert then
+ * runs against the current size of the table, and if that finds no room at
+ * all, the two cases get distinct, honest return codes (see the final lines
+ * of the function) instead of both collapsing into ccol_container_full.
  *
- * The caller is chmap_insert_elem. It already rejects any key_pair or
- * val_pair whose size does not match map->key_size or map->val_size exactly.
- * Both memcpy calls below are therefore always inside the 8-byte key_data
- * field and val_data field that they target. Nothing here can spill into a
+ * The caller, chmap_insert_elem, already rejects any key_pair or val_pair
+ * whose size does not match map->key_size or map->val_size exactly, so both
+ * memcpy calls below always stay inside the 8-byte key_data field and
+ * val_data field that they target, and nothing here can spill into a
  * neighbouring slot. */
 /* slot_out selects what a key that is already present does. NULL overwrites
  * its value, which is chmap_insert_elem(). Not NULL leaves such an entry
- * untouched, and reports through *slot_out the value accessor of the entry
- * that the key names once the call succeeds, whether it was present or has
- * just been inserted. That is ccol_chmap_insert_or_get_elem(). Every caller
+ * untouched and, once the call succeeds, reports through *slot_out the value
+ * accessor of the entry that the key names, whether it was present or has
+ * just been inserted, which is ccol_chmap_insert_or_get_elem(). Every caller
  * passes a constant, so each instantiation keeps only its own arm. */
 static inline __attribute__((always_inline)) ccol_retval_t
 oa_insert_impl(open_addr_map* map, const cmap_pair* key_pair,
@@ -1898,13 +1897,13 @@ oa_insert_impl(open_addr_map* map, const cmap_pair* key_pair,
         *slot_out = &map->val_accessors[index];
         return ccol_key_already_present;
       }
-      // val_pair->ptr can alias the val_data of this slot. One example is a
-      // caller that inserts a value again through the raw chmap_insert_elem
-      // function layer. That value comes from a pointer that
-      // chmap_get_elem_ref or chmap_get_ptr gave for this exact key. memcpy
-      // needs its source and its destination to never overlap. This code
-      // therefore copies the value into a small stack buffer first when they
-      // do overlap. val_pair->size is always 8 bytes or less for this
+      // val_pair->ptr can alias the val_data of this slot, for example when a
+      // caller inserts a value again through the raw chmap_insert_elem
+      // function layer, from a pointer that
+      // chmap_get_elem_ref or chmap_get_ptr gave for this exact key. Because
+      // memcpy needs its source and its destination never to overlap, this
+      // code copies the value into a small stack buffer first when they do
+      // overlap; val_pair->size is always 8 bytes or less for this
       // backend. sc_reset_val_of_llist_node has the identical protection
       // against aliasing for the separate-chaining backend.
       const void* src = val_pair->ptr;
@@ -1922,21 +1921,21 @@ oa_insert_impl(open_addr_map* map, const cmap_pair* key_pair,
   } while (index != start_index);
 
   // The key genuinely does not exist. The ccol_max_elem_count check of
-  // sc_insert sits at the same point; see its own comment for the reason why
-  // the lookup for an existing key must run first. The check is explicit here
-  // for the same reason. It does not merely fall out of the physical cap on
+  // sc_insert sits at the same point (see its own comment for why the lookup
+  // for an existing key must run first), and the check is explicit here for
+  // the same reason, instead of merely falling out of the physical cap on
   // capacity at ccol_max_power_of_two_size_t (== ccol_max_elem_count).
-  // Without the explicit check, a table that is already at that architectural
-  // limit and full reaches the same
-  // ccol_container_full outcome some lines further down. But it reaches that
-  // outcome only after it computes a load factor and confirms that growth is
-  // impossible, and both of those steps are needless.
+  // Without the explicit check, a table that is already at that
+  // architectural limit and full reaches the same
+  // ccol_container_full outcome some lines further down, but only after it
+  // computes a load factor and confirms that growth is impossible, both of
+  // which are needless steps.
   if (map->count == ccol_max_elem_count) {
     return ccol_container_full;
   }
 
-  // Only now is it safe to consider an opportunistic rehash. This call
-  // really is going to add a new entry.
+  // Only now, when this call really is going to add a new entry, is it safe
+  // to consider an opportunistic rehash.
   bool rehash_oom_failed = false;
   if (oa_above_grow_load(map->count, map->capacity) &&
       map->capacity < ccol_max_power_of_two_size_t) {
@@ -1973,11 +1972,11 @@ oa_insert_impl(open_addr_map* map, const cmap_pair* key_pair,
     return ccol_success;
   }
 
-  // There is no room anywhere in the table. The code separates two cases. The
-  // first is a genuine architectural capacity limit: the table was already at
-  // ccol_max_power_of_two_size_t, so the code never even tried to grow it. The
-  // second is a growth that the code needed but that an allocation failure
-  // stopped. That second case is a lack of resources. It does not mean that
+  // There is no room anywhere in the table, and the code separates two cases.
+  // The first is a genuine architectural capacity limit: the table was at
+  // ccol_max_power_of_two_size_t, so the code never even tried to grow it.
+  // The second is a growth that the code needed but that an allocation
+  // failure stopped, which is a lack of resources and does not mean that
   // this map reached its real element cap.
   return rehash_oom_failed ? ccol_not_enough_memory : ccol_container_full;
 }
@@ -1995,17 +1994,17 @@ static ccol_retval_t oa_insert_or_get(open_addr_map* map,
 }
 
 /* Looks up key_pair with a linear probe. An empty slot stops the search at
- * once. This is safe, because neither an insert nor a delete ever leaves a
- * gap between a key and its home slot; see oa_delete. The search also stops
- * after probe_span slots, because no key sits further from its home slot.
- * The function gives a pointer to the entry of this slot in
- * map->val_accessors. That cmap_pair is distinct from the one of every other
- * slot. The code fills it wherever it writes the slot itself, so this path
- * only takes its address. A single shared scratch field would behave
- * differently. Two or more chmap_get_elem_ref results that the caller holds
- * at the same time for different keys therefore never alias one another. Each
- * one stays valid until something really changes the map, which is an insert,
- * a delete or a resize. It does not become invalid at the next get. This is
+ * once, which is safe because neither an insert nor a delete ever leaves a
+ * gap between a key and its home slot (see oa_delete), and the search also
+ * stops after probe_span slots, because no key sits further from its home
+ * slot. The function gives a pointer to the entry of this slot in
+ * map->val_accessors, a cmap_pair distinct from the one of every other slot,
+ * which the code fills wherever it writes the slot itself, so this path only
+ * takes its address. Because each slot has its own cmap_pair, unlike a
+ * single shared scratch field, two or more chmap_get_elem_ref results that
+ * the caller holds at the same time for different keys never alias one
+ * another, and each one stays valid until something really changes the map
+ * (an insert, a delete or a resize), not merely until the next get. This is
  * the documented contract of this function. */
 static ccol_retval_t oa_get(open_addr_map* map, const cmap_pair* key_pair,
                             const cmap_pair** val_pair) {
@@ -2039,19 +2038,19 @@ static ccol_retval_t oa_get(open_addr_map* map, const cmap_pair* key_pair,
   return ccol_key_not_found;
 }
 
-/* Closes the gap that an emptied slot hole leaves in its cluster, by
- * backward-shift deletion. The table therefore never holds a tombstone.
+/* Closes the gap that an emptied slot hole leaves in its cluster by
+ * backward-shift deletion, so the table never holds a tombstone.
  *
  * Linear probing places every entry at or after its home slot, with no empty
- * slot in between. Emptying a slot breaks that for every later entry of the
- * cluster whose home slot lies at or before the hole. The walk visits the
+ * slot in between, and emptying a slot breaks that for every later entry of
+ * the cluster whose home slot lies at or before the hole. The walk visits the
  * rest of the cluster in probe order. An entry at slot j with home slot h may
  * move into the hole exactly when h is not in the cyclic range (hole, j],
- * that is when the distance from h to j is at least the distance from the
- * hole to j. Such an entry moves, and its old slot becomes the hole. Every
- * other entry stays, because moving it would put it before its home slot. The
- * masked differences make the test correct for a cluster that wraps past the
- * last slot.
+ * that is, when the distance from h to j is at least the distance from the
+ * hole to j; such an entry moves, and its old slot becomes the hole. Every
+ * other entry stays, because moving it would put it before its home slot.
+ * The masked differences make the test correct for a cluster that wraps past
+ * the last slot.
  *
  * The walk stops at the first empty slot, or once the slot it visits is
  * span slots past the hole: no entry sits span or more slots from its home
@@ -2059,17 +2058,17 @@ static ccol_retval_t oa_get(open_addr_map* map, const cmap_pair* key_pair,
  * That bounds a delete inside a long run of keys whose home slots are
  * consecutive, which no entry of the run may leave.
  *
- * The hole itself is always empty, so the walk meets an empty slot within
+ * Since the hole itself is always empty, the walk meets an empty slot within
  * one pass even in a table with no other free slot.
  *
  * A move writes no accessor. The accessor of a slot describes that slot and
- * nothing else, and it is written when an entry is first stored there. The
+ * nothing else, and it is written when an entry is first stored there; the
  * destination of a move always held an entry a moment ago (the deleted one,
  * or the source of the previous move), so its accessor is already correct.
  *
  * oa_delete empties the slot and calls oa_backward_shift_close_gap only
- * when the next slot is occupied. Each walk is an out-of-line instance of
- * this body, so the delete whose next slot is empty costs one store and one
+ * when the next slot is occupied, and each walk is an out-of-line instance
+ * of this body, so a delete whose next slot is empty costs one store and one
  * test. */
 static inline __attribute__((always_inline)) void oa_backward_shift_walk(
     oa_slot* const slots, uint8_t* const metadata, const size_t capacity,
@@ -2141,7 +2140,7 @@ static __attribute__((noinline)) void oa_shift_walk_generic(open_addr_map* map,
 
 /* Selects the walk for the key type and the mode of map. The walk writes
  * through a byte pointer, which may alias anything, so every walk receives
- * the fields that it reads as arguments. Without that, every step reloads
+ * the fields that it reads as arguments; otherwise every step would reload
  * them from the map. Each call below is in tail position, so this function
  * adds no frame. */
 static __attribute__((noinline)) void oa_backward_shift_close_gap(
@@ -2230,11 +2229,11 @@ static __attribute__((noinline)) void oa_backward_shift_close_gap(
 }
 
 /* Deletes the matching entry with backward-shift deletion; see
- * oa_backward_shift_close_gap. The search stops after probe_span slots, as
- * the one of oa_get does. An entry of the same cluster can move one or more
+ * oa_backward_shift_close_gap. Like the search of oa_get, the search stops
+ * after probe_span slots. An entry of the same cluster can move one or more
  * slots toward its home slot, so every reference that the map handed out
- * becomes invalid, which the contract of chmap_get_elem_ref already states.
- * The function halves the table when the load factor after the delete falls
+ * becomes invalid, as the contract of chmap_get_elem_ref already states. The
+ * function halves the table when the load factor after the delete falls
  * below OPEN_ADDR_MIN_LOAD_FACTOR. */
 static ccol_retval_t oa_delete(open_addr_map* map, const cmap_pair* key_pair) {
   size_t hash_val = hash_key_data(key_pair->ptr, key_pair->size, map->key_type,
@@ -2259,7 +2258,7 @@ static ccol_retval_t oa_delete(open_addr_map* map, const cmap_pair* key_pair) {
 
       // count < capacity / 4 is exactly count / capacity <
       // OPEN_ADDR_MIN_LOAD_FACTOR, because capacity is a power of two of at
-      // least 16. The integer form spares a division on every delete.
+      // least 16, and the integer form spares a division on every delete.
       if (map->count < (map->capacity >> 2) &&
           map->capacity > minimum_allowed_bucket_array_size) {
         oa_rebuild(map, map->capacity / 2, oa_keyed(map));
@@ -2280,16 +2279,16 @@ static void oa_destroy(open_addr_map* map) {
   _ccol_mem_free(map->m_procs, map->slots);
 }
 
-/* Sets the metadata byte of every slot, and every accessor entry, to zero. It
- * does this in place, at the current capacity of the map, and it allocates
- * nothing. The open-addressing backend never allocates heap memory for a key
- * or a value. Every key and every value lives inline in the slot array
- * itself. A clear of the metadata, which drops SLOT_OCCUPIED on every slot,
- * is therefore a complete and correct "destroy
- * every element" for this backend. There is nothing else to free. oa_reset()
- * uses this function. A failure to allocate the new capacity that the caller
- * asked for then still destroys every element that exists. It does not leave
- * the old table, and all of its data, completely unchanged. */
+/* Sets the metadata byte of every slot, and every accessor entry, to zero,
+ * in place at the current capacity of the map, without allocating anything.
+ * The open-addressing backend never allocates heap memory for a key or a
+ * value, since every key and every value lives inline in the slot array
+ * itself, so a clear of the metadata, which drops SLOT_OCCUPIED on every
+ * slot, is a complete and correct "destroy
+ * every element" for this backend, with nothing else to free. oa_reset()
+ * uses this function so that a failure to allocate the new capacity that the
+ * caller asked for destroys every element that exists all the same, instead
+ * of leaving the old table, and all of its data, completely unchanged. */
 static void oa_clear_in_place(open_addr_map* map) {
   memset(map->slots, 0, map->capacity * OA_BLOCK_BYTES_PER_SLOT);
   map->count = 0;
@@ -2298,18 +2297,17 @@ static void oa_clear_in_place(open_addr_map* map) {
 }
 
 /* Clears every entry. When new_capacity differs from the current capacity, it
- * also replaces the slot array with a new zeroed array of that size. When
+ * also replaces the slot array with a new zeroed array of that size; when
  * new_capacity is 0, or equal to the current capacity of the map, it clears
- * the existing slots array and val_accessors array in place. It then
- * allocates nothing at all. sc_reset() has the same behaviour: it skips the
- * realloc when the size does not change. The hash mode stays as it is, and
- * the insert window restarts.
+ * the existing slots array and val_accessors array in place and allocates
+ * nothing at all, just as sc_reset() skips the realloc when the size does
+ * not change. The hash mode stays as it is, and the insert window restarts.
  *
- * The function destroys every element whatever the return value is. This
- * matches the documented contract of chmap_reset. The allocation for
- * new_capacity can fail. The function then falls back to oa_clear_in_place()
- * against the current, unchanged capacity of the map. It does not return with
- * the old table, and every element still inside it, completely intact. */
+ * The function destroys every element whatever the return value is, which
+ * matches the documented contract of chmap_reset. When the allocation for
+ * new_capacity fails, the function falls back to oa_clear_in_place() against
+ * the current, unchanged capacity of the map, instead of returning with the
+ * old table, and every element inside it, completely intact. */
 static ccol_retval_t oa_reset(open_addr_map* map, size_t new_capacity) {
   if (new_capacity == 0 || new_capacity == map->capacity) {
     oa_clear_in_place(map);
@@ -2345,12 +2343,12 @@ static ccol_retval_t oa_reset(open_addr_map* map, size_t new_capacity) {
 #define dllistRefNodePtr2LlistNodePtr(tracker) \
   (llist_node*)((uint8_t*)tracker - offsetof(llist_node, dllist_refs))
 
-/* Puts node at the front of the doubly-linked list that root describes. The
- * list therefore keeps the element that the caller inserted last at the head,
+/* Puts node at the front of the doubly-linked list that root describes, so
+ * that the list keeps the element that the caller inserted last at the head,
  * and the element that the caller inserted first at the tail. An iteration
  * through the next pointers visits the nodes in the reverse insertion order,
- * with the newest node first. An iteration from the tail through the prev
- * pointers visits them in insertion order. */
+ * newest first, and an iteration from the tail through the prev pointers
+ * visits them in insertion order. */
 static void attach_node_to_dllist(dllist_root* root, dllist_ref_node* node) {
   node->prev = NULL;
   if (!root->head) {
@@ -2364,9 +2362,9 @@ static void attach_node_to_dllist(dllist_root* root, dllist_ref_node* node) {
   }
 }
 
-/* Removes node from the doubly-linked list. It does not free the node. The
- * update of the neighbours and of both ends covers every case: the head node,
- * the tail node, a node in the middle and the only node. */
+/* Removes node from the doubly-linked list without freeing it. The update of
+ * the neighbours and of both ends covers every case: the head node, the tail
+ * node, a node in the middle and the only node. */
 static void detach_node_from_dllist(dllist_root* root, dllist_ref_node* node) {
   if (node->next) {
     node->next->prev = node->prev;
@@ -2381,18 +2379,18 @@ static void detach_node_from_dllist(dllist_root* root, dllist_ref_node* node) {
 }
 
 /* Frees the key buffer and the value buffer of an entry, when those buffers
- * are on the heap and not inline, with m_procs, the procs of the map. It then
- * removes the node from the insertion-order dllist, and frees the node struct
- * itself. A NULL all_elems skips the removal from the dllist. Only the
+ * are on the heap and not inline, with m_procs, the procs of the map, then
+ * removes the node from the insertion-order dllist and frees the node struct
+ * itself. A NULL all_elems skips the removal from the dllist; only the
  * failure paths of sc_create_llist_node() pass NULL, because the node they
- * free is not on the list yet. Every other caller, a delete, a reset and the
- * teardown of a whole map, passes the list of the map, so the list never
+ * free is not on the list yet. Every other caller (a delete, a reset and the
+ * teardown of a whole map) passes the list of the map, so the list never
  * names a freed node.
  *
  * A buffer is on the heap exactly when the size in its accessor exceeds
  * INLINE_STORAGE_THRESHOLD. A node that sc_create_llist_node() abandons part
- * way has the size of a buffer that it did not allocate still at 0 from
- * calloc, so the function frees only what was allocated. */
+ * way keeps the size of a buffer that it did not allocate at 0 from calloc,
+ * so the function frees only what was allocated. */
 static void sc_destroy_llist_node(dllist_root* all_elems, llist_node* elem,
                                   ccol_memmgmt_procs_t* m_procs) {
   if (elem) {
@@ -2412,16 +2410,15 @@ static void sc_destroy_llist_node(dllist_root* all_elems, llist_node* elem,
 }
 
 /* Allocates a new llist_node and copies the key data and the value data into
- * it. The function stores a key and a value inline when it is 23 bytes or
- * less, which is SSO. It stores anything larger in a separate heap buffer.
- * The accessor cmap_pair structs then point into the storage that the
- * function chose, so a caller always goes through a stable pointer. On
- * success, the function puts the node at the front of the insertion-order
- * dllist. */
+ * it. The function stores a key or a value inline (SSO) when it is 23 bytes
+ * or less, and anything larger in a separate heap buffer; the accessor
+ * cmap_pair structs then point into the storage that the function chose, so
+ * a caller always goes through a stable pointer. On success, the function
+ * puts the node at the front of the insertion-order dllist. */
 /* Forced inline: it has two callers, the insert and the insert-or-get
  * instantiations of sc_insert_impl, and as a real call it costs the insert
  * path about 57 more instructions for each new key than inlined, because the
- * sizes and the storage choice no longer fold into the caller. */
+ * sizes and the storage choice then do not fold into the caller. */
 static inline __attribute__((always_inline)) llist_node* sc_create_llist_node(
     dllist_root* all_elems, ccol_memmgmt_procs_t* m_procs, size_t hash_val,
     const void* key_ptr, size_t key_size, const void* val_ptr,
@@ -2468,21 +2465,21 @@ static inline __attribute__((always_inline)) llist_node* sc_create_llist_node(
   return new_elem;
 }
 
-/* Compares two long double keys by VALUE. It matches the special cases of
- * hash_long_double_value exactly. The hash and the equality therefore never
+/* Compares two long double keys by VALUE, matching the special cases of
+ * hash_long_double_value exactly, so that the hash and the equality never
  * disagree with each other for the same pair of keys.
- * - When one operand is NaN, the pair is equal only when BOTH are NaN. Every
- *   NaN long double collapses into one key. The function reads no padding
- *   byte to decide this. See the comment on hash_long_double_value for the
- *   reason. The padding of a NaN long double is often genuinely uninitialized
- *   memory. It is not merely content that is unspecified but stable. Any
- *   comparison of it, even one through memcmp, is therefore a real hazard. It
- *   is not only a source of results that differ from run to run.
- * - In every other case the function uses the native `==`. That operator
- *   works on the value, so unspecified padding bits never affect the result.
- *   A raw memcmp over the full representation behaves differently. -0.0L and
- *   0.0L also compare equal here, exactly as -0.0 and 0.0 already do for the
- *   float key type and the double key type. */
+ * - When one operand is NaN, the pair is equal only when BOTH are NaN, so
+ *   every NaN long double collapses into one key, and the function reads no
+ *   padding byte to decide this. See the comment on hash_long_double_value
+ *   for the reason: the padding of a NaN long double is often genuinely
+ *   uninitialized memory, not merely content that is unspecified but stable,
+ *   so any comparison of it, even one through memcmp, is a real hazard and
+ *   not only a source of results that differ from run to run.
+ * - In every other case the function uses the native `==`, which works on
+ *   the value, so unspecified padding bits never affect the result, unlike a
+ *   raw memcmp over the full representation. -0.0L and 0.0L also compare
+ *   equal here, exactly as -0.0 and 0.0 already do for the float key type
+ *   and the double key type. */
 static inline bool long_double_keys_equal(const void* a_ptr,
                                           const void* b_ptr) {
   long double a, b;
@@ -2499,14 +2496,14 @@ static inline bool long_double_keys_equal(const void* a_ptr,
 }
 
 /* Compares the key of a node against key_ptr. The size check is a fast
- * reject. For a key of 4 bytes and for a key of 8 bytes, the function
- * compares integers instead of a call to memcmp. The compiler can then emit a
- * single load and compare instruction. The function reads key_type for one
- * purpose only: to send a long double key to long_double_keys_equal instead
- * of the generic byte-exact paths below. That test must run before the
- * dispatch on the size. sizeof(long double) is the same as sizeof(double) on
- * some platforms and ABIs. A long double key must never fall into the plain
- * 8-byte integer-compare branch on those platforms. */
+ * reject, and for a key of 4 bytes or of 8 bytes the function compares
+ * integers instead of calling memcmp, so that the compiler can emit a single
+ * load and compare instruction. The function reads key_type for one purpose
+ * only: to send a long double key to long_double_keys_equal instead of the
+ * generic byte-exact paths below. That test must run before the dispatch on
+ * the size, because sizeof(long double) is the same as sizeof(double) on
+ * some platforms and ABIs, and a long double key must never fall into the
+ * plain 8-byte integer-compare branch on those platforms. */
 static inline bool sc_compare_keys(const llist_node* node, const void* key_ptr,
                                    size_t key_size, ccol_data_type key_type) {
   if (node->key_pair_accessor.size != key_size) return false;
@@ -2532,10 +2529,10 @@ static inline bool sc_compare_keys(const llist_node* node, const void* key_ptr,
   }
 }
 
-/* sc_find_in_llist for a map with a custom key equality procedure. The stored
- * hash still rejects most nodes with one comparison, because the procedure
- * must agree with the hash. The procedure gets both sizes and decides on its
- * own whether keys of different sizes can be equal. It is a separate
+/* sc_find_in_llist for a map with a custom key equality procedure. Because
+ * the procedure must agree with the hash, the stored hash rejects most nodes
+ * with one comparison here too. The procedure gets both sizes and decides on
+ * its own whether keys of different sizes can be equal. It is a separate
  * function so that a map without the procedure keeps its search loop
  * unchanged. */
 static __attribute__((noinline)) llist_node* sc_find_in_llist_custom_eq(
@@ -2561,15 +2558,15 @@ sc_chain_length(const llist_node* head) {
 }
 
 /* A linear search through the singly-linked chain of a bucket. hash_val is
- * the full hash of key_ptr from the caller, before any reduction. The
- * function compares it against the stored hash_val of each node first. Most
- * rejections are therefore one size_t comparison. The function reaches the
- * memcmp/strcmp comparison inside sc_compare_keys only when two hashes really
- * collide. It gives the matching node, or NULL. The bucket scaling strategy
- * keeps the chains short, which is O(1) on average.
+ * the full hash of key_ptr from the caller, before any reduction, and the
+ * function compares it against the stored hash_val of each node first, so
+ * most rejections are one size_t comparison and the memcmp/strcmp comparison
+ * inside sc_compare_keys runs only when two hashes really collide. It gives
+ * the matching node, or NULL. The bucket scaling strategy keeps the chains
+ * short, which is O(1) on average.
  *
  * walk is NULL, or receives the number of nodes that the search met when it
- * finds no match, which is the length of the chain. The insert of a new key
+ * finds no match, which is the length of the chain; the insert of a new key
  * reports that number to the detection of the adaptive hash. Every caller
  * passes a constant NULL or a pointer, so a lookup keeps no count. */
 static inline __attribute__((always_inline)) llist_node* sc_find_in_llist(
@@ -2596,27 +2593,27 @@ static inline __attribute__((always_inline)) llist_node* sc_find_in_llist(
   return NULL;
 }
 
-/* Updates the value that an existing node stores. It covers three cases. The
- * cases come from the new value size against the stored size. The first case
- * is the same size, where the function overwrites the value in place. The
- * second case is a smaller value that fits inline, where the function moves
- * to inline storage and frees the old heap buffer. The third case is a larger
- * value, where the function reallocs the heap buffer or allocates a new one.
+/* Updates the value that an existing node stores. It covers three cases,
+ * depending on the new value size against the stored size: the same size,
+ * where the function overwrites the value in place; a smaller value that
+ * fits inline, where it moves to inline storage and frees the old heap
+ * buffer; and a larger value, where it reallocs the heap buffer or allocates
+ * a new one.
  *
- * val_ptr can alias the current value storage of this entry. A caller is free
- * to insert a value again from a pointer that chmap_get_elem_ref,
- * chmap_get_ptr or chmap_get gave it for this exact key. For a char* value
- * type, chmap_get and chmap_get_ptr give a pointer straight into the stored
- * bytes of a separate-chaining entry. That is their own documented contract:
- * "for a string, the macro gives the char* itself" and "pointer to the char*
- * itself". Every branch below changes the existing storage of the entry
- * before it would otherwise read the bytes of val_ptr. It frees the heap
- * buffer, or it overwrites the val_storage union in place, or it reallocs the
- * heap buffer. An aliased val_ptr would then see freed, corrupted or moved
- * memory instead of the value that the caller wanted. The overlap check below
- * runs one time for each call and is cheap. The snapshot copy itself runs
- * only on the rare path where the two alias. The common case, where they do
- * not alias, pays only the comparison. */
+ * val_ptr can alias the current value storage of this entry, because a
+ * caller is free to insert a value again from a pointer that
+ * chmap_get_elem_ref, chmap_get_ptr or chmap_get gave it for this exact key.
+ * For a char* value type, chmap_get and chmap_get_ptr give a pointer straight
+ * into the stored bytes of a separate-chaining entry, which is their own
+ * documented contract: "for a string, the macro gives the char* itself" and
+ * "pointer to the char* itself". Every branch below changes the existing
+ * storage of the entry (it frees the heap buffer, overwrites the val_storage
+ * union in place, or reallocs the heap buffer) before it would otherwise read
+ * the bytes of val_ptr, so an aliased val_ptr would see freed, corrupted or
+ * moved memory instead of the value that the caller wanted. The overlap
+ * check below is cheap and runs once per call, while the snapshot copy runs
+ * only on the rare path where the two alias, so the common case pays only
+ * the comparison. */
 static bool sc_reset_val_of_llist_node(llist_node* elem, const void* val_ptr,
                                        size_t val_size,
                                        ccol_memmgmt_procs_t* m_procs) {
@@ -2682,11 +2679,11 @@ static bool sc_reset_val_of_llist_node(llist_node* elem, const void* val_ptr,
   return ok;
 }
 
-/* Removes the node that matches key_ptr from the chain of a bucket. It sets
- * *found, and it gives the new head of the chain. hash_val lets the search
- * reject a node that does not match with one size_t comparison, before it
- * falls back to sc_compare_keys. sc_find_in_llist does the same. The pointer
- * to the previous node gives an O(n) delete with no doubly-linked bucket
+/* Removes the node that matches key_ptr from the chain of a bucket, sets
+ * *found, and gives the new head of the chain. As in sc_find_in_llist,
+ * hash_val lets the search reject a node that does not match with one size_t
+ * comparison before it falls back to sc_compare_keys. The pointer to the
+ * previous node gives an O(n) delete with no doubly-linked bucket
  * list. */
 /* Unlinks node from the chain whose head is head, destroys it, and gives
  * the new head of the chain. previous is the node before it, or NULL. */
@@ -2768,21 +2765,21 @@ static llist_node* sc_destroy_the_whole_llist(llist_node* head,
   return NULL;
 }
 
-/* Computes the scale-up threshold and the scale-down threshold again, from
+/* Computes the scale-up threshold and the scale-down threshold again from
  * the current bucket array size. Call this function after every resize of the
- * bucket array. It keeps the thresholds in step with the new capacity.
+ * bucket array, to keep the thresholds in step with the new capacity.
  *
- * The result matches the formulas that chashmap.h documents exactly, which
- * are "(bucket_count + 1) * 1.5" and "(bucket_count + 1) / 8". It never
+ * The result matches exactly the formulas that chashmap.h documents,
+ * "(bucket_count + 1) * 1.5" and "(bucket_count + 1) / 8", and it never
  * overflows size_t. The scale-up threshold is floor(3 * bucket_arr_size / 2),
- * which is the bucket_arr_size + bucket_arr_size / 2 expression below. That
- * expression cannot overflow, because bucket_arr_size has a cap at
+ * the bucket_arr_size + bucket_arr_size / 2 expression below, which cannot
+ * overflow because bucket_arr_size has a cap at
  * ccol_max_power_of_two_size_t. The code then adds a correction that depends
- * on parity: +1 for an even bucket_arr_size and +2 for an odd one. That
- * correction comes from floor((n+1)*3/2) written in terms of floor(3n/2). A
- * direct (bucket_arr_size + 1) * 3 would overflow size_t at that same upper
- * bound. The scale-down threshold has no such risk, because
- * bucket_arr_size + 1 on its own never overflows. */
+ * on parity, +1 for an even bucket_arr_size and +2 for an odd one, which
+ * comes from writing floor((n+1)*3/2) in terms of floor(3n/2); a direct
+ * (bucket_arr_size + 1) * 3 would overflow size_t at that same upper bound.
+ * The scale-down threshold has no such risk, because bucket_arr_size + 1 on
+ * its own never overflows. */
 static void sc_set_scaling_limits(sep_chain_map* map) {
   size_t base_up = map->bucket_arr_size + map->bucket_arr_size / 2;
   map->elem_count_to_scale_up =
@@ -2792,16 +2789,16 @@ static void sc_set_scaling_limits(sep_chain_map* map) {
 
 /* The bucket array that the block of the map holds right after struct
  * chashmap, and its length in *count. A map whose first bucket array is
- * small starts with this one, so creating it takes a single allocation. The
- * map uses it while its size is that length, and never frees it, because it
- * is part of the block.
+ * small starts with this one, so that creating it takes a single
+ * allocation; the map uses it while its size is that length, and never frees
+ * it, because it is part of the block.
  *
  * A block that holds no such array gives NULL and a count of 0. The address
  * right after the struct is then the end of the block, or its copy of the
  * procs, and an allocator that hands out adjacent blocks with no header can
- * place the separate bucket array of the map exactly there. A comparison of
- * that array with the address would then take it for part of the block,
- * and the map would never free it. */
+ * place the separate bucket array of the map exactly there, so a comparison
+ * of that array with the address would take it for part of the block, and
+ * the map would never free it. */
 static inline llist_node** sc_inline_bucket_arr(sep_chain_map* map,
                                                 size_t* count) {
   *count = map->inline_buckets;
@@ -2810,16 +2807,17 @@ static inline llist_node** sc_inline_bucket_arr(sep_chain_map* map,
 
 /* The bound on the number of nodes that the 256 inserts of a window met,
  * above which a fast map switches: 256 * (4.5 * lambda + 0.5), where lambda
- * is the number of entries for each bucket. A new key under a random function
- * meets lambda nodes on average. lambda is the highest load that the window
- * can have reached: the count when the window started plus its 256 inserts,
- * and never more than the count at which the bucket array grows; see
- * oa_window_bound for why the load at the end of the window does not do.
+ * is the number of entries for each bucket, which is the number of nodes
+ * that a new key under a random function meets on average. lambda is the
+ * highest load that the window can have reached: the count when the window
+ * started plus its 256 inserts, and never more than the count at which the
+ * bucket array grows; see oa_window_bound for why the load at the end of the
+ * window does not do.
  *
- * The arithmetic is in integers: lambda in 16.16 fixed point, so the bound
- * is 1152 * lambda / 65536 + 128, within two counts, and within one percent,
- * of the real-valued bound. start_count is the count when the window starts
- * and scale_up the count at which the bucket array grows. */
+ * The arithmetic is in integers, with lambda in 16.16 fixed point, so the
+ * bound is 1152 * lambda / 65536 + 128, within two counts, and within one
+ * percent, of the real-valued bound. start_count is the count when the
+ * window starts and scale_up the count at which the bucket array grows. */
 static uint16_t sc_window_bound(size_t start_count, size_t scale_up,
                                 size_t bucket_count) {
   size_t judged =
@@ -2852,10 +2850,10 @@ static inline size_t sc_hash_of_node(const sep_chain_map* map,
       map->custom_hashing_proc, keyed, g_chmap_hash_secret.int_seed);
 }
 
-/* Switches a fast map to the keyed hash. Every node gets its keyed hash, and
- * the nodes are linked into the same bucket array again. Nothing moves and
- * nothing is allocated, so the switch cannot fail, and every accessor, every
- * entry reference, the insertion order and every iterator stay valid. */
+/* Switches a fast map to the keyed hash: every node gets its keyed hash and
+ * is linked into the same bucket array again. Since nothing moves and nothing
+ * is allocated, the switch cannot fail, and every accessor, every entry
+ * reference, the insertion order and every iterator stay valid. */
 static __attribute__((noinline)) void sc_switch_to_keyed(sep_chain_map* map) {
   chmap_of_sc(map)->hash_mode = CHMAP_HASH_KEYED;
   llist_node** const buckets = map->bucket_arr;
@@ -2872,15 +2870,15 @@ static __attribute__((noinline)) void sc_switch_to_keyed(sep_chain_map* map) {
 }
 
 /* The cold path of an insert of a new key that met SC_CHAIN_CAP nodes or
- * more. A fast map switches. */
+ * more, which switches a fast map. */
 static __attribute__((noinline)) void sc_note_long_chain(sep_chain_map* map) {
   if (!sc_keyed(map)) {
     sc_switch_to_keyed(map);
   }
 }
 
-/* The cold path of the insert that ends a window. A fast map whose window
- * sum is above its bound switches. */
+/* The cold path of the insert that ends a window, which switches a fast map
+ * whose window sum is above its bound. */
 static __attribute__((noinline)) void sc_window_end(sep_chain_map* map) {
   struct chashmap* chm = chmap_of_sc(map);
   bool switch_now = chm->hash_mode == CHMAP_HASH_FAST &&
@@ -2899,8 +2897,8 @@ static __attribute__((noinline)) void sc_window_end(sep_chain_map* map) {
  * zeroed bucket array new_arr of new_size buckets with the fast hash, which
  * it stores in the node, and gives true. A node goes to the front of its
  * chain after a walk of the nodes already there, so the attempt knows the
- * length of every chain. It stops as soon as it shows that the fast hash is
- * bad for these keys: when a chain would reach SC_CHAIN_CAP nodes, or when
+ * length of every chain, and it stops as soon as it shows that the fast hash
+ * is bad for these keys: when a chain would reach SC_CHAIN_CAP nodes, or when
  * the walks so far sum to more than the budget elem_count +
  * SC_ATTEMPT_SLACK. A random function at the load after a growth, at most
  * three eighths of an entry for each bucket, walks about a fifth of the
@@ -2908,12 +2906,12 @@ static __attribute__((noinline)) void sc_window_end(sep_chain_map* map) {
  *
  * A failed attempt then links every node again with the keyed hash into the
  * same array, and gives false. The nodes that the attempt reached hold the
- * fast hash and get the keyed one again; the rest still hold the keyed one.
- * Nothing moves and nothing is allocated, so every accessor, every entry
- * reference, the insertion order and every iterator stay valid either way.
- * A failed attempt hashes at most elem_count nodes with the fast hash and
- * walks at most elem_count + SC_ATTEMPT_SLACK + SC_CHAIN_CAP - 1 chain nodes,
- * which is linear in the count whatever the keys are. */
+ * fast hash and get the keyed one again, while the rest hold the keyed one
+ * already. Nothing moves and nothing is allocated, so every accessor, every
+ * entry reference, the insertion order and every iterator stay valid either
+ * way. A failed attempt hashes at most elem_count nodes with the fast hash
+ * and walks at most elem_count + SC_ATTEMPT_SLACK + SC_CHAIN_CAP - 1 chain
+ * nodes, which is linear in the count whatever the keys are. */
 static __attribute__((noinline)) bool sc_relink_fast_attempt(
     sep_chain_map* map, llist_node** new_arr, size_t new_size) {
   const size_t budget = map->elem_count + SC_ATTEMPT_SLACK;
@@ -2954,14 +2952,14 @@ static __attribute__((noinline)) bool sc_relink_fast_attempt(
 }
 
 /* Resizes the bucket array by scale_factor, up or down, and links every node
- * into its new bucket, which hash_index_for picks from the stored hash. A
+ * into its new bucket, which hash_index_for picks from the stored hash; a
  * size that is a power of two is what makes that shift well defined. A
  * resize restarts the insert window. A shrink merges
  * the chains of neighbouring buckets, since the new index is the old one
- * shifted right, and the relink below visits every node anyway, so it
+ * shifted right, and because the relink below visits every node anyway, it
  * measures the merged chains: a fast map with a merged chain of SC_CHAIN_CAP
  * nodes or more switches. A growth of a keyed map makes its fast attempt
- * instead of the relink; see sc_relink_fast_attempt. A shrink keeps the
+ * instead of the relink (see sc_relink_fast_attempt), and a shrink keeps the
  * mode. */
 static void sc_scale(sep_chain_map* map, bool up) {
   if (up &&
@@ -2974,16 +2972,16 @@ static void sc_scale(sep_chain_map* map, bool up) {
                        : map->bucket_arr_size / scale_factor;
 
   // A division by scale_factor (4x) can go below the minimum bucket array
-  // size. This happens for any bucket_arr_size that is not on the
-  // "minimum_allowed_bucket_array_size * 4^k" line. One example is 32.
+  // size for any bucket_arr_size that is not on the
+  // "minimum_allowed_bucket_array_size * 4^k" line, for example 32:
   // chmap_create_full and chmap_reset reach 32 directly for any requested
   // size between minimum_allowed_bucket_array_size and
-  // minimum_allowed_bucket_array_size * scale_factor. 32 / 4 == 8, which is
-  // below the floor. The caller of sc_delete only guarantees that
-  // bucket_arr_size > minimum_allowed_bucket_array_size before this call. It
-  // does not guarantee that the size divides down cleanly. The code therefore
-  // clamps here. Without the clamp, a table that is off that line goes below
-  // the floor.
+  // minimum_allowed_bucket_array_size * scale_factor, and 32 / 4 == 8 is
+  // below the floor. Before this call, the caller of sc_delete guarantees
+  // only that bucket_arr_size > minimum_allowed_bucket_array_size, not
+  // that the size divides down cleanly, so the code clamps here;
+  // without the clamp, a table that is off that line goes below the
+  // floor.
   if (!up && new_size < minimum_allowed_bucket_array_size) {
     new_size = minimum_allowed_bucket_array_size;
   }
@@ -3076,16 +3074,16 @@ static bool sc_init(sep_chain_map* map, size_t bucket_arr_size,
 
 /* Inserts a key-value pair into the separate-chaining map, or updates it. For
  * a key that is already present, sc_reset_val_of_llist_node updates the value
- * in place. For a new key, the function makes a node and puts it at the front
- * of the chain of the bucket. After the insert, the function scales the
- * bucket array up when elem_count reaches elem_count_to_scale_up.
+ * in place; for a new key, the function makes a node and puts it at the front
+ * of the chain of the bucket, and after the insert it scales the bucket array
+ * up when elem_count reaches elem_count_to_scale_up.
  *
  * The lookup for an existing key runs before the ccol_max_elem_count check,
- * and not after it. The check on fullness only makes sense for an insert of a
- * genuinely new key. An update of a key that is already present never changes
- * elem_count at all. With the fullness check first, a map that reaches
- * ccol_max_elem_count rejects a plain value update for a key that it already
- * holds. It answers ccol_container_full instead of an update.
+ * not after it, because the check on fullness only makes sense for an insert
+ * of a genuinely new key, and an update of a key that is already present
+ * never changes elem_count at all. With the fullness check first, a map that
+ * reaches ccol_max_elem_count would reject a plain value update for a key
+ * that it already holds, answering ccol_container_full instead of updating.
  */
 /* slot_out has the meaning that it has for oa_insert_impl(). key_slot_out,
  * when not NULL, receives the accessor of the stored key of the same entry
@@ -3223,11 +3221,11 @@ static ccol_retval_t sc_delete(sep_chain_map* map, const cmap_pair* key_pair) {
 }
 
 /* Destroys every bucket chain and frees the bucket array unless it is the
- * one in the block of the map. The state itself lives in that block, which
+ * one in the block of the map; the state itself lives in that block, which
  * __chmap_destroy frees. The function passes the root of the insertion-order
  * dllist (&map->all_elems) to the teardown of each chain, which detaches each
- * node from that list before it frees the node. The root therefore never
- * names a freed node. */
+ * node from that list before it frees the node, so the root never names a
+ * freed node. */
 static void sc_destroy(sep_chain_map* map) {
   // Locals, because each free is an opaque call after which the compiler
   // would otherwise load these from the map again for every bucket.
@@ -3243,7 +3241,7 @@ static void sc_destroy(sep_chain_map* map) {
   }
 }
 
-/* Clears every entry. It can also resize the bucket array to
+/* Clears every entry, and can also resize the bucket array to
  * new_bucket_array_size. Pass 0 to keep the current size. */
 static ccol_retval_t sc_reset(sep_chain_map* map,
                               size_t new_bucket_array_size) {
@@ -3260,16 +3258,16 @@ static ccol_retval_t sc_reset(sep_chain_map* map,
 
   if (new_bucket_array_size > 0 &&
       new_bucket_array_size != map->bucket_arr_size) {
-    /* The code forms the byte count here. It does not leave that to the
+    /* The code forms the byte count here instead of leaving that to the
        allocator, which cannot check a product that arrives already
        multiplied. chmap_reset accepts any power of two up to
-       ccol_max_elem_count. That many pointers overflow size_t on every
-       supported target. A product that wraps to zero is the dangerous one.
-       realloc is then free to release the block and to return NULL. The
+       ccol_max_elem_count, and that many pointers overflow size_t on every
+       supported target. A product that wraps to zero is the dangerous one:
+       realloc is then free to release the block and to return NULL, and the
        recovery path below would then write through a pointer that the
        allocator already reclaimed. The code reports a failed allocation,
-       which is what this is. Every element above is still destroyed, which
-       matches what chmap_reset documents. */
+       which is what this is, and every element above is destroyed all the
+       same, which matches what chmap_reset documents. */
     if (new_bucket_array_size > SIZE_MAX / sizeof(llist_node*)) {
       memset(map->bucket_arr, 0, map->bucket_arr_size * sizeof(llist_node*));
       map->elem_count = 0;
@@ -3323,8 +3321,8 @@ typedef struct chmap_cmap_iterator {
   /* The free function of the allocator that made this iterator, or NULL for
    * the default one. The scope-exit cleanup of ccol_iter_declare can free an
    * iterator that a loop left early after the caller has already destroyed
-   * the map, and with it the procs struct that the map owns. Freeing the
-   * iterator must therefore never read the map. */
+   * the map, and with it the procs struct that the map owns, so freeing the
+   * iterator must never read the map. */
   ccol_free_t free_fn;
   union {
     dllist_ref_node* sc_tracker;
@@ -3343,20 +3341,20 @@ typedef struct chmap_cmap_iterator {
 /*                         UNIFIED API IMPLEMENTATION                         */
 /* ========================================================================== */
 
-/* Creates a new hash map. The function chooses the implementation at creation
- * time, from the key type and the value type. The implementation is
- * open-addressing or separate chaining.
+/* Creates a new hash map, choosing the implementation (open addressing or
+ * separate chaining) at creation time from the key type and the value
+ * type.
  *
  * The map is one block; see struct chashmap. A separate-chaining map whose
  * first bucket array has at most minimum_allowed_bucket_array_size buckets
- * keeps that array in the block too, so creating it takes one allocation. An
- * open-addressing map allocates its table on its own, because every resize
- * replaces it.
+ * keeps that array in the block too, so creating it takes one allocation,
+ * while an open-addressing map allocates its table on its own, because every
+ * resize replaces it.
  *
  * When the caller gives a custom allocator, the map keeps a pointer to a
  * procs struct that lives as long as the map. A pointer that
  * ccol_procs_intern() gave lives for the whole process, so the map keeps that
- * pointer itself. Any other procs struct is copied into the block, so the
+ * pointer itself; any other procs struct is copied into the block, so the
  * caller can free its own copy at once.
  *
  * sc_min_buckets is the smallest first bucket array of a separate-chaining
@@ -3375,9 +3373,9 @@ static chmap chmap_create_impl(
 
   if (custom_key_equality_proc && !custom_hashing_proc) {
     // The built-in hash reads the bytes of a key, or its value for a
-    // floating type. A custom equality that treats two different byte images
-    // as one key therefore disagrees with it, and a lookup misses a key that
-    // is present. Such a map is refused here rather than at the first miss.
+    // floating type, so a custom equality that treats two different byte
+    // images as one key disagrees with it, and a lookup misses a key that is
+    // present. Such a map is refused here instead of at the first miss.
     if (err) {
       *err = CCOL_ERR_STR(
           "custom_key_equality_proc needs a custom_hashing_proc that agrees "
@@ -3391,9 +3389,9 @@ static chmap chmap_create_impl(
   }
 
   // A custom key equality selects separate chaining. The open-addressing
-  // probe compares a key as one 64-bit integer, and it keeps that loop free
-  // of an indirect call that a map without the procedure would still pay a
-  // branch for.
+  // probe compares a key as one 64-bit integer, which keeps that loop free
+  // of an indirect call that a map without the procedure would otherwise pay
+  // a branch for.
   bool open_addressing = !custom_key_equality_proc &&
                          should_use_open_addressing(key_type, val_type);
   size_t floor =
@@ -3491,35 +3489,35 @@ chmap ccol_chmap_create_compact(ccol_data_type key_type,
                            err);
 }
 
-/* Gives the key type that the caller made this map with. The backend does not
- * matter. */
+/* Gives the key type that the caller made this map with, whatever the
+ * backend. */
 static inline ccol_data_type chmap_key_type(chmap chm) {
   return chm->impl_type == IMPL_OPEN_ADDRESSING ? chm->impl.oa->key_type
                                                 : chm->impl.sc->key_type;
 }
 
-/* Gives the value type that the caller made this map with. The backend does
- * not matter. */
+/* Gives the value type that the caller made this map with, whatever the
+ * backend. */
 static inline ccol_data_type chmap_val_type(chmap chm) {
   return chm->impl_type == IMPL_OPEN_ADDRESSING ? chm->impl.oa->val_type
                                                 : chm->impl.sc->val_type;
 }
 
-/* Without this function, the key equality of the map is bitwise; see
- * oa_keys_equal and sc_compare_keys. +0.0 and -0.0 would then hash to
- * different buckets and compare unequal, although `0.0 == -0.0` in C. That is
+/* Without this function, the key equality of the map is bitwise (see
+ * oa_keys_equal and sc_compare_keys), so +0.0 and -0.0 would hash to
+ * different buckets and compare unequal, although `0.0 == -0.0` in C, which is
  * surprising for a float key type and a double key type. For every other
  * numeric key type, the bitwise equality already agrees with the C equality.
  * When key_type is ccol_float or ccol_double, this function copies key_pair
- * into out_canon_pair and out_canon_buf. It changes a negative-zero bit
- * pattern to a positive zero, and it gives out_canon_pair. In every other
- * case it gives key_pair unchanged. It leaves every other bit pattern
- * unchanged. That includes each of the NaN payloads, which are never equal to
- * anything under `==`, not even to themselves. The key equality of this map
- * for a floating-point key is therefore bitwise equality with the signed zero
- * collapsed. It is not IEEE-754 equality. out_canon_buf must hold at least
- * key_pair->size bytes. ccol_float and ccol_double are always 8 bytes or
- * less, so a uint64_t is enough for every key that this function changes. */
+ * into out_canon_pair and out_canon_buf, changes a negative-zero bit pattern
+ * to a positive zero, and gives out_canon_pair; in every other case it gives
+ * key_pair unchanged. It leaves every other bit pattern unchanged, including
+ * each of the NaN payloads, which are never equal to anything under `==`,
+ * not even to themselves. The key equality of this map for a floating-point
+ * key is therefore bitwise equality with the signed zero collapsed, not
+ * IEEE-754 equality. out_canon_buf must hold at least key_pair->size bytes;
+ * ccol_float and ccol_double are always 8 bytes or less, so a uint64_t is
+ * enough for every key that this function changes. */
 static inline const cmap_pair* canonicalize_key_pair_if_needed(
     const cmap_pair* key_pair, ccol_data_type key_type, uint64_t* out_canon_buf,
     cmap_pair* out_canon_pair) {
@@ -3546,13 +3544,13 @@ static inline const cmap_pair* canonicalize_key_pair_if_needed(
   return out_canon_pair;
 }
 
-/* The idea of key identity of the map. It is available to a module that
- * must agree with the map on which keys are the same key. It is the hash of
- * the keyed mode, whatever the mode of any map is, because key identity does
- * not depend on the mode. The change to a
- * canonical form runs first. That is what makes the answer an identity and
- * not a representation. -0.0 and 0.0 are one key for a float and for a
- * double. The function also takes a long double apart by value, so it never
+/* The idea of key identity of the map, available to a module that must
+ * agree with the map on which keys are the same key. It is the hash of the
+ * keyed mode, whatever the mode of any map is, because key identity does not
+ * depend on the mode. The change to a
+ * canonical form runs first, which is what makes the answer an identity and
+ * not a representation: -0.0 and 0.0 are one key for a float and for a
+ * double, and a long double is taken apart by value, so the function never
  * reads the padding bytes of that value. See chashkey.h. */
 size_t ccol_chmap_hash_key(const void* key_ptr, size_t key_size,
                            ccol_data_type key_type) {
@@ -3567,69 +3565,69 @@ size_t ccol_chmap_hash_key(const void* key_ptr, size_t key_size,
 }
 
 /* The open-addressing backend stores a key-value pair inline, in the fixed
- * 8-byte key_data field and val_data field of a slot; see oa_slot. The memcpy
- * calls of oa_insert trust key_pair->size and val_pair->size completely. They
- * have no bounds check of their own. map->key_size and map->val_size are
- * fixed from key_type and val_type at creation. They are 8 bytes or less only
- * for the open-addressing backend. A size from the caller that does not match
- * them would silently overwrite the key bytes and value bytes of the
- * neighbouring slot. It would corrupt or lose an unrelated entry that is
- * already stored. It would also overflow the slot array outright when the
- * target slot sits near the end of that array. The rejection of a size that
- * does not match, up front, is what makes all of that structurally
- * unreachable and not merely unlikely. */
+ * 8-byte key_data field and val_data field of a slot (see oa_slot), and the
+ * memcpy calls of oa_insert trust key_pair->size and val_pair->size
+ * completely, with no bounds check of their own. map->key_size and
+ * map->val_size are fixed from key_type and val_type at creation, and are 8
+ * bytes or less only for the open-addressing backend. A size from the caller
+ * that does not match them would silently overwrite the key bytes and value
+ * bytes of the neighbouring slot, corrupting or losing an unrelated entry
+ * that is already stored, and would overflow the slot array outright when the
+ * target slot sits near the end of that array. Rejecting a size that does
+ * not match, up front, is what makes all of that structurally unreachable
+ * and not merely unlikely. */
 static inline bool oa_val_size_matches(const open_addr_map* map,
                                        size_t val_size) {
   return val_size == map->val_size;
 }
 
-/* Answers whether key_size is safe to give to hash_key_data(). For a float
- * key_type, a double key_type or a long double key_type, it also answers
- * whether key_size is safe for canonicalize_key_pair_if_needed(),
+/* Answers whether key_size is safe to give to hash_key_data(), and, for a
+ * float key_type, a double key_type or a long double key_type, also whether
+ * it is safe for canonicalize_key_pair_if_needed(),
  * hash_long_double_value() and long_double_keys_equal(). All of those
- * functions dispatch on key_type. Each one then reads a FIXED number of bytes
- * straight out of the pointer of the caller. That number is the sizeof() of
- * the C type. This holds for every type that is_type_integral() knows: char,
- * short, int, long, long long, their unsigned equivalents, float, double and
- * a pointer. It also holds for ccol_long_double, which this function checks
- * deliberately. is_type_integral() itself excludes long double, but only for
- * the choice of the backend; see should_use_open_addressing. A long double
- * key always goes to separate chaining, and the code still hashes it and
- * compares it with a fixed-size read of sizeof(long double). That is the same
- * class of hazard as every other fixed-width type here. The key_size
- * parameter itself matters only for a key type that genuinely has no fixed
- * width, such as ccol_string and ccol_other_types. SipHash-1-3 always
- * hashes such a key with exactly the key_size of the caller.
+ * functions dispatch on key_type and then read a FIXED number of bytes, the
+ * sizeof() of the C type, straight out of the pointer of the caller. This
+ * holds for every type that is_type_integral() knows (char, short, int, long,
+ * long long, their unsigned equivalents, float, double and a pointer). It
+ * also holds for ccol_long_double, which this function checks deliberately:
+ * is_type_integral() itself excludes long double, but only for the choice of
+ * the backend (see should_use_open_addressing). A long double key always
+ * goes to separate chaining, yet it is hashed and compared with a fixed-size
+ * read of sizeof(long double), which is the same class of hazard as every
+ * other fixed-width type here. The key_size parameter itself matters
+ * only for a key type that genuinely has no fixed width, such as ccol_string
+ * and ccol_other_types, which SipHash-1-3 always hashes with exactly the
+ * key_size of the caller.
  *
  * This check must therefore run for BOTH backends whenever key_type has a
- * fixed width. It is not only for open-addressing. A caller can give a
- * cmap_pair through the raw chmap_insert_elem, chmap_get_elem_ref or
+ * fixed width, not only for open-addressing. A caller can give a cmap_pair
+ * through the raw chmap_insert_elem, chmap_get_elem_ref or
  * chmap_delete_elem layer with a key_size smaller than the true size of the
- * type. Without this check, hash_key_data(),
+ * type, and without this check, hash_key_data(),
  * canonicalize_key_pair_if_needed(), hash_long_double_value() and
  * long_double_keys_equal() then read past the end of the buffer of that
  * caller. This is reachable on the separate-chaining backend whenever a
  * fixed-width key type goes together with a value type that is not integral
- * or that is larger than 8 bytes. Such a value type forces separate chaining
- * whatever the key type is; two examples are int->char* and double->char*.
- * For long double it is reachable always, because a long double forces
- * separate chaining on its own. It is not a concern only for
- * open-addressing, and it is not theoretical. The open-addressing backend
- * always has a key_type that is_type_integral() accepts, by construction; see
- * should_use_open_addressing. This one check therefore also covers the own
- * hazard of that backend, which is a size that does not match and that
- * corrupts a neighbouring slot. No separate check for open-addressing alone
- * is necessary beside it.
+ * or that is larger than 8 bytes, since such a value type forces separate
+ * chaining whatever the key type is (two examples are int->char* and
+ * double->char*), and for long double it is always reachable, because a long
+ * double forces separate chaining on its own. It is neither a concern only
+ * for open-addressing nor theoretical. The open-addressing backend always
+ * has a key_type that is_type_integral() accepts, by construction (see
+ * should_use_open_addressing), so this one check also covers the own hazard
+ * of that backend, a size that does not match and that corrupts a
+ * neighbouring slot, and no separate check for open-addressing alone is
+ * necessary beside it.
  *
  * The set of fixed-width key types, and the expected size of each one, comes
- * from ccol_fixed_width_data_type_size() in common.h. It does not come from
- * is_type_integral() or get_type_size() above. cbstmap enforces the identical
- * rule on its own key_pairs, and the two modules must agree on exactly which
- * types the rule covers. The local get_type_size() is not a substitute. It
- * answers a different question, which is how wide an open-addressing slot
- * must be. It also reports 8 deliberately for a type with no fixed width at
- * all. That would turn every ccol_string key that is not 8 bytes long into a
- * false rejection. */
+ * from ccol_fixed_width_data_type_size() in common.h, not from
+ * is_type_integral() or get_type_size() above, because cbstmap enforces the
+ * identical rule on its own key_pairs, and the two modules must agree on
+ * exactly which types the rule covers. The local get_type_size() is not a
+ * substitute: it answers a different question, which is how wide an
+ * open-addressing slot must be, and it deliberately reports 8 for a type
+ * with no fixed width at all, which would turn every ccol_string key that is
+ * not 8 bytes long into a false rejection. */
 static inline bool key_size_matches_type_if_fixed_width(ccol_data_type key_type,
                                                         size_t key_size) {
   size_t fixed_width = ccol_fixed_width_data_type_size(key_type);
@@ -3640,29 +3638,30 @@ static inline bool key_size_matches_type_if_fixed_width(ccol_data_type key_type,
  * for a value type that has one fixed width.
  *
  * oa_val_size_matches() above answers the same question for the
- * open-addressing backend, against the exact field that its memcpy targets.
- * That check is a memory-safety requirement of that backend, and it stays.
+ * open-addressing backend, against the exact field that its memcpy targets;
+ * that check is a memory-safety requirement of that backend, and it stays.
  * This one covers the SEPARATE-CHAINING backend, which has no such
  * requirement: it allocates exactly val_pair->size bytes for whatever it
  * gets, so a value of the wrong width can never run past its own storage.
  *
- * It is still wrong, and the failure lands on the wrong call site without
- * this check. A node that holds two bytes for a map whose declared value
- * type is four bytes accepts the insert and reports success. The value-size
- * guard of chmap_get() then stops the process on the first READ of that key,
- * at a call site that did nothing wrong, with a message that names
- * chmap_get() and suggests a missing chmap_redeclare(). This check moves the
- * rejection to the call that actually built the bad pair.
+ * Such a value is wrong nonetheless, and without this check the failure
+ * lands on the wrong call site. A node that holds two bytes for a map whose
+ * declared value type is four bytes accepts the insert and reports success,
+ * and the value-size guard of chmap_get() then stops the process on the
+ * first READ of that key, at a call site that did nothing wrong, with a
+ * message that names chmap_get() and suggests a missing chmap_redeclare().
+ * This check moves the rejection to the call that actually built the bad
+ * pair.
  *
- * Only the raw chmap_insert_elem() layer can reach it. The type-inferred
- * chmap_insert() macro converts the value through the declared value type of
- * the map first, so every pair that it builds is exactly sizeof(ValT) bytes
- * wide by construction.
+ * Only the raw chmap_insert_elem() layer can reach it, because the
+ * type-inferred chmap_insert() macro converts the value through the declared
+ * value type of the map first, so every pair that it builds is exactly
+ * sizeof(ValT) bytes wide by construction.
  *
  * A value type with no fixed width returns 0 from
- * ccol_fixed_width_data_type_size() and is never checked. ccol_string is such
- * a type, and so is ccol_other_types, which covers a struct of the caller.
- * Both legitimately carry a different size for every entry. */
+ * ccol_fixed_width_data_type_size() and is never checked: ccol_string is
+ * such a type, and so is ccol_other_types, which covers a struct of the
+ * caller, and both legitimately carry a different size for every entry. */
 static inline bool val_size_matches_type_if_fixed_width(ccol_data_type val_type,
                                                         size_t val_size) {
   size_t fixed_width = ccol_fixed_width_data_type_size(val_type);
@@ -3721,8 +3720,8 @@ chmap_insert_elem_impl(chmap chm, const cmap_pair* key_pair,
   }
 }
 
-/* The public dispatch for an insert and for an update. It checks the inputs,
- * then it calls the insert function of the backend. */
+/* The public dispatch for an insert and for an update: it checks the inputs,
+ * then calls the insert function of the backend. */
 ccol_retval_t chmap_insert_elem(chmap chm, const cmap_pair* key_pair,
                                 const cmap_pair* val_pair) {
   return chmap_insert_elem_impl(chm, key_pair, val_pair, NULL, NULL);
@@ -3780,12 +3779,12 @@ ccol_retval_t ccol_chmap_insert_or_get_entry(chmap chm,
   return chmap_insert_elem_impl(chm, key_pair, val_pair, val_slot, key_slot);
 }
 
-/* Gives the {ptr, size} accessor of the map for the entry of key_pair.
- * The accessor stays valid until the next operation that changes this key.
- * Its target is const. A caller can therefore read the accessor and edit the
- * bytes that it describes. An assignment to either field is a compile error.
- * The two fields describe one another, and the map cannot own a pointer that
- * it did not allocate. */
+/* Gives the {ptr, size} accessor of the map for the entry of key_pair, which
+ * stays valid until the next operation that changes this key. Its target is
+ * const, so a caller can read the accessor and edit the bytes that it
+ * describes, but an assignment to either field is a compile error: the two
+ * fields describe one another, and the map cannot own a pointer that it did
+ * not allocate. */
 ccol_retval_t chmap_get_elem_ref(chmap chm, const cmap_pair* key_pair,
                                  const cmap_pair** val_pair) {
   if (!chm || !key_pair || !key_pair->ptr || key_pair->size == 0 || !val_pair) {
@@ -3831,7 +3830,7 @@ ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair* key_pair,
   return ret;
 }
 
-/* The public dispatch for a delete. It checks the inputs, then it calls the
+/* The public dispatch for a delete: it checks the inputs, then calls the
  * backend. */
 ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair* key_pair) {
   if (!chm || !key_pair || !key_pair->ptr || key_pair->size == 0) {
@@ -3868,9 +3867,9 @@ size_t chmap_elem_count(chmap chm) {
   }
 }
 
-/* Clears every entry. It can also resize the internal bucket array. The
- * function rounds the size up to the nearest power of two, and it clamps the
- * size to minimum_allowed_bucket_array_size. Pass 0 to keep the current
+/* Clears every entry, and can also resize the internal bucket array, rounding
+ * the size up to the nearest power of two and clamping it to
+ * minimum_allowed_bucket_array_size. Pass 0 to keep the current
  * size. */
 ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size) {
   if (!chm) {
@@ -3885,11 +3884,11 @@ ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size) {
     new_bucket_array_size =
         _ccol_find_nearest_gte_power_of_two(new_bucket_array_size);
     if (new_bucket_array_size > ccol_max_elem_count) {
-      // The size that the caller asked for is too big. The code falls back
-      // to 0, which keeps the current capacity. It does not skip the reset.
-      // This failure path therefore still obeys the documented contract:
-      // the reset destroys every element whatever the return value is. The
-      // code does not silently leave every element in place.
+      // The size that the caller asked for is too big, so the code falls back
+      // to 0, which keeps the current capacity, instead of skipping the reset.
+      // This failure path therefore obeys the documented contract as well:
+      // the reset destroys every element whatever the return value is, and
+      // the code does not silently leave every element in place.
       new_bucket_array_size = 0;
       requested_size_too_big = true;
     }
@@ -3908,32 +3907,32 @@ ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size) {
   return r;
 }
 
-/* Makes an iterator that points at the first element. A separate-chaining map
- * iterates through the insertion-order dllist. An open-addressing map finds
- * the first occupied slot that is not deleted with a linear scan. The
- * function gives NULL for an empty map. The iterator allocates
+/* Makes an iterator that points at the first element, or gives NULL for an
+ * empty map. A separate-chaining map iterates through the insertion-order
+ * dllist, while an open-addressing map finds the first occupied slot that is
+ * not deleted with a linear scan. The iterator allocates
  * chmap_cmap_iterator on the heap. */
 static cmap_iterator* chmap_iter_next(cmap_iterator* iter);
 
 #ifdef RUNNING_UNIT_TESTS
-/* A white-box regression guard. It tracks the NET count of
+/* A white-box regression guard that tracks the NET count of
  * chmap_cmap_iterator allocations that chashmap_begin_iter() makes and that
- * __chmap_iterator_destroy() does not free yet. The count covers every chmap
- * in the process.
+ * __chmap_iterator_destroy() has not yet freed, across every chmap in the
+ * process.
  *
- * valgrind on its own is not a dependable guard for this balance.
+ * valgrind on its own is not a dependable guard for this balance, because
  * chashmap_begin_iter() gives back a pointer to a field inside the iterator
- * struct. It does not give the base address of the struct itself. valgrind
- * therefore reports a live and perfectly valid iterator as "possibly lost",
- * which is its classification for a live reference through an interior
- * pointer. That report is also noisy under concurrent load, and it is absent
- * on most runs.
+ * struct instead of the base address of the struct itself, so valgrind
+ * reports a live and perfectly valid iterator as "possibly lost", its
+ * classification for a live reference through an interior pointer. That
+ * report is also noisy under concurrent load, and absent on most runs.
  *
- * This counter is the always-on and deterministic alternative. Any regression
- * in the allocate and free balance of ANY chashmap iterator, anywhere in the
- * process, gives a loud and immediate abort() the moment it happens. See
- * _check_chmap_iter_balance_at_exit in tests/ctls/tests.c. A valgrind report
- * for the same problem is rare and hard to reproduce. */
+ * This counter is the always-on and deterministic alternative: any
+ * regression in the allocate and free balance of ANY chashmap iterator,
+ * anywhere in the process, gives a loud and immediate abort() the moment it
+ * happens (see _check_chmap_iter_balance_at_exit in tests/ctls/tests.c),
+ * whereas a valgrind report for the same problem is rare and hard to
+ * reproduce. */
 static long g_chmap_iter_outstanding_for_tests = 0;
 long chashmap_iter_outstanding_count_for_tests(void) {
   return __atomic_load_n(&g_chmap_iter_outstanding_for_tests, __ATOMIC_SEQ_CST);
@@ -4045,10 +4044,10 @@ void __chmap_iterator_destroy(cmap_iterator* iter) {
   }
 }
 
-/* Moves the iterator to the next element. For separate chaining, the function
- * follows the next pointer of the dllist. For open-addressing, it scans the
- * slot array linearly for the next occupied slot that is not deleted. At the
- * end, it destroys the iterator and gives NULL. */
+/* Moves the iterator to the next element: for separate chaining, the
+ * function follows the next pointer of the dllist, and for open-addressing,
+ * it scans the slot array linearly for the next occupied slot that is not
+ * deleted. At the end, it destroys the iterator and gives NULL. */
 static cmap_iterator* chmap_iter_next(cmap_iterator* iter) {
   chmap_cmap_iterator* real_iter = cmapIter2ChmapIter(iter);
 
@@ -4093,12 +4092,12 @@ static cmap_iterator* chmap_iter_next(cmap_iterator* iter) {
   return iter;
 }
 
-/* Destroys the backend map below and the copy of m_procs that the map owns.
- * It then frees the top-level chashmap struct. When the caller gave a custom
+/* Destroys the backend map below and the copy of m_procs that the map owns,
+ * then frees the top-level chashmap struct. When the caller gave a custom
  * allocator, that allocator made chm, so the function frees chm with the same
- * free function. The code copies that function into the free_func local
- * before it frees procs. The function pointer therefore stays valid after the
- * procs struct itself is gone. */
+ * free function, which the code copies into the free_func local before it
+ * frees procs, so that the function pointer stays valid after the procs
+ * struct itself is gone. */
 void __chmap_destroy(chmap chm) {
   if (chm) {
     ccol_memmgmt_procs_t* procs;
@@ -4121,21 +4120,21 @@ void __chmap_destroy(chmap chm) {
 }
 
 /* See the doc comment of this function in chashmap.h. The function is
- * identical to __chmap_destroy() above, with one difference. It threads a
- * destructor callback into the same walk below. oa_destroy() and sc_destroy()
- * already make that walk silently for their own backend, and that walk
- * allocates nothing. The two walks below are deliberately NOT moved into
- * oa_destroy() and sc_destroy() themselves. The loop here is a duplicate on
- * purpose. This function exists only when val_dtor is not NULL. The
- * duplicate keeps its cost away from the hot path with no destructor, which
- * every other user of the map takes.
+ * identical to __chmap_destroy() above, except that it threads a destructor
+ * callback into the same walk below, which oa_destroy() and sc_destroy()
+ * already make silently for their own backend, and which allocates nothing.
+ * The two walks below are deliberately NOT moved into oa_destroy() and
+ * sc_destroy() themselves, and the loop here is a duplicate on purpose:
+ * this function exists only when val_dtor is not NULL, and the duplicate
+ * keeps its cost away from the hot path with no destructor, which every
+ * other user of the map takes.
  *
- * The destructor gets the accessor of the entry through a const cmap_pair*.
- * chmap_get_elem_ref() reports one in the same shape. The accessor describes
- * storage that the map is about to free. A destructor therefore reads it and
- * frees what the value itself owns. An assignment to either field is a
- * compile error. On the separate-chaining side, the accessor is the live one
- * of the node. The rule is therefore not only about the stack of this
+ * The destructor gets the accessor of the entry through a const cmap_pair*,
+ * the same shape in which chmap_get_elem_ref() reports one. The accessor
+ * describes storage that the map is about to free, so a destructor reads it
+ * and frees what the value itself owns, while an assignment to either field
+ * is a compile error. On the separate-chaining side, the accessor is the
+ * live one of the node, so the rule is not only about the stack of this
  * function. */
 void chmap_destroy_with_dtor(chmap chm,
                              void (*val_dtor)(const cmap_pair* val_pair,
@@ -4169,9 +4168,9 @@ void chmap_destroy_with_dtor(chmap chm,
 }
 
 #ifdef RUNNING_UNIT_TESTS
-/* Gives the current size of the bucket array or the slot array. White-box
- * unit tests use it to check the resize thresholds of both backends. It is
- * not part of the public API. */
+/* Gives the current size of the bucket array or the slot array, which
+ * white-box unit tests use to check the resize thresholds of both backends.
+ * It is not part of the public API. */
 size_t chmap_get_bucket_arr_size(chmap chm) {
   if (!chm) return 0;
 
@@ -4210,15 +4209,15 @@ void chashmap_sip_state_for_tests(uint64_t k0, uint64_t k1, uint64_t sip_v[4]) {
   chmap_sip_state_from_key(k0, k1, sip_v);
 }
 
-/* SipHash-1-3 of a buffer from an explicit state. A test compares it with an
- * independent byte-wise implementation of the algorithm. */
+/* SipHash-1-3 of a buffer from an explicit state, which a test compares with
+ * an independent byte-wise implementation of the algorithm. */
 uint64_t chashmap_siphash13_for_tests(const uint64_t sip_v[4],
                                       const void* key_ptr, size_t key_size) {
   return siphash13(sip_v, key_ptr, key_size);
 }
 
-/* The byte hash of the map from an explicit state. A test uses the state of
- * a key that anybody can know to build keys that collide for that key. */
+/* The byte hash of the map from an explicit state, which a test uses with the
+ * state of a key that anybody can know to build keys that collide for it. */
 size_t chashmap_byte_hash_for_tests(const uint64_t sip_v[4],
                                     const void* key_ptr, size_t key_size) {
   return hash_bytes_keyed(sip_v, key_ptr, key_size);
@@ -4244,7 +4243,7 @@ void chashmap_fallback_hash_key_for_tests(uint64_t out[4]) {
   chmap_fallback_hash_key(out);
 }
 
-/* XXH64 of a buffer with an explicit seed. A test compares it with the
+/* XXH64 of a buffer with an explicit seed, which a test compares with the
  * published vectors and with an independent byte-wise implementation. */
 uint64_t chashmap_xxh64_for_tests(const void* key_ptr, size_t key_size,
                                   uint64_t seed) {
@@ -4257,8 +4256,8 @@ bool chashmap_is_keyed_for_tests(chmap chm) {
 }
 
 /* Switches the map to the keyed mode through the same function that the
- * detection calls. Gives ccol_not_enough_memory when the rebuild of an
- * open-addressing table cannot allocate, with the map still fast. */
+ * detection calls. Gives ccol_not_enough_memory, leaving the map fast, when
+ * the rebuild of an open-addressing table cannot allocate. */
 ccol_retval_t chashmap_switch_to_keyed_for_tests(chmap chm) {
   if (!chm) return ccol_invalid_args;
   if (chm->hash_mode == CHMAP_HASH_KEYED) return ccol_success;
@@ -4312,8 +4311,8 @@ uint32_t chashmap_insert_window_for_tests(chmap chm) {
   return chm ? chm->insert_window : 0;
 }
 
-/* The length of the longest bucket chain of a separate-chaining map, or 0
- * for a map of the other backend. It is the cost of the worst lookup. */
+/* The length of the longest bucket chain of a separate-chaining map, which is
+ * the cost of the worst lookup, or 0 for a map of the other backend. */
 size_t chashmap_sc_longest_chain_for_tests(chmap chm) {
   if (!chm || chm->impl_type != IMPL_SEPARATE_CHAINING) return 0;
   sep_chain_map* map = chm->impl.sc;

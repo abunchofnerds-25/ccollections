@@ -15,19 +15,19 @@ ccol_retval_t ctpool_timed_submit(ctpool pool,
 .fi
 .SH DESCRIPTION
 .nf
-This function is the same as ctpool_submit, with one difference. For a
-bounded queue it waits at most timeout_us microseconds for a free slot,
-measured from the call. The library converts the timeout to an absolute
-deadline with CLOCK_MONOTONIC. A change to the wall clock of the system,
-by an administrator, NTP, or the resume of a virtual machine, therefore
-does not make the wait longer or shorter.
+Works like ctpool_submit, except that for a bounded queue it waits at
+most timeout_us microseconds for a free slot, measured from the call.
+The library converts the timeout to an absolute deadline with
+CLOCK_MONOTONIC, so a change to the wall clock of the system (by an
+administrator, NTP, or the resume of a virtual machine) does not make
+the wait longer or shorter.
 
 A timeout_us of 0 makes this call the same as ctpool_try_submit, which
 does not wait.
 
-A timeout too large to form a deadline, such as UINT64_MAX, is a wait
-for as long as the queue stays full. The deadline saturates at the
-latest representable time, and never wraps into the past.
+A timeout too large to form a deadline, such as UINT64_MAX, waits for as
+long as the queue stays full: the deadline saturates at the latest
+representable time and never wraps into the past.
 .fi
 .SH PARAMETERS
 .nf

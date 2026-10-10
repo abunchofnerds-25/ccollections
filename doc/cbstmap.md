@@ -1,25 +1,25 @@
 # cbstmap: an ordered map
 
-`cbstmap` maps keys to values, as [chashmap](chashmap.md) does. It also
-keeps the keys **in sorted order**. When you iterate over the map, you get
-the entries from the smallest key to the largest key. The concept is the
-same as `std::map` in C++ or `TreeMap` in Java.
+`cbstmap` maps keys to values, as [chashmap](chashmap.md) does, but it also
+keeps the keys **in sorted order**: when you iterate over the map, you get
+the entries from the smallest key to the largest. The idea is the same as
+`std::map` in C++ or `TreeMap` in Java.
 
-The map is a self-balancing (AVL) tree. Thus an insert, a lookup and a
-delete each take O(log n) time in the worst case, for all orders of keys.
-Sorted input changes a simple binary tree into a linked list. Sorted input
-does not make this map slow.
+The map is a self-balancing (AVL) tree, so an insert, a lookup and a delete
+each take O(log n) time in the worst case, whatever the order of the keys.
+Sorted input, which turns a simple binary tree into a linked list, does not
+make this map slow.
 
 Use an ordered map when:
 
-- you print, export or process entries in key order.
-- you frequently need the smallest key (or the largest key). A scheduler or
-  a leaderboard does this.
-- you want a stable order that is the same for each run, and you do not
-  want to sort after.
+- you print, export or process entries in key order;
+- you often need the smallest (or the largest) key, as a scheduler or a
+  leaderboard does;
+- you want a stable order that is the same on every run, without sorting
+  afterwards.
 
-When the order is not important, use [chashmap](chashmap.md). On average,
-its lookups take constant time, and they are faster.
+When the order does not matter, use [chashmap](chashmap.md) instead: its
+lookups take constant time on average and are faster.
 
 ```c
 #include <ccollections/cbstmap.h>
@@ -53,7 +53,7 @@ int main(void) {
 }
 ```
 
-Compile the program with `-std=gnu11`. Link it with `-lccollections`:
+Compile the program with `-std=gnu11` and link it with `-lccollections`:
 
 ```sh
 gcc -std=gnu11 scores.c -lccollections -o scores
@@ -72,7 +72,7 @@ who scored 95? Alice
 
 ## The basic operations
 
-The API is the same as the API of the hash map, with `cbmap_` in place of
+The API is the same as that of the hash map, with `cbmap_` in place of
 `chmap_`:
 
 | You want to | Use |
@@ -86,20 +86,20 @@ The API is the same as the API of the hash map, with `cbmap_` in place of
 | empty the map and keep using it | `cbmap_reset(m)` |
 | free the map | `cbmap_destroy(m)` |
 
-`cbmap_get` stops the program when the key is missing. For a missing key,
-`cbmap_get_ptr` gives `NULL`. `cbmap_remove` gives `ccol_success` or
-`ccol_key_not_found`. The macros convert keys and values to the declared
-types in the same way as a C assignment. Thus you can give literals.
+`cbmap_get` stops the program when the key is missing, while
+`cbmap_get_ptr` returns `NULL` for a missing key. `cbmap_remove` returns
+`ccol_success` or `ccol_key_not_found`. The macros convert keys and values
+to the declared types just as a C assignment does, so you can pass literals.
 
 `cbmap_construct_scoped` destroys the map automatically at the end of the
-block. A function that gets a `cbmap` must state its types again with
-`cbmap_redeclare(m, KeyType, ValueType)`. These two macros work in the same
-way as for the hash map and all other containers. The
+block, and a function that receives a `cbmap` must state its types again with
+`cbmap_redeclare(m, KeyType, ValueType)`. Both macros work the same way as
+for the hash map and every other container; the
 [design guide](design.md) explains them.
 
 ## The order of the keys
 
-For the usual key types, you do not have to do anything:
+For the usual key types, there is nothing to do:
 
 | Key type | Order |
 |---|---|
@@ -117,21 +117,21 @@ cbmap_insert(env, "EDITOR", "vi");
 /* an iteration gives EDITOR, HOME, PATH */
 ```
 
-For all other key types, for example a struct, the map compares the raw
-bytes, unless you give a comparison function. That byte order is almost
-never the order that you want:
+For any other key type, such as a struct, the map compares the raw bytes
+unless you give it a comparison function. That byte order is almost never
+the order you want, because:
 
-- It compares the padding bytes.
-- It compares pointer members by address.
-- On a little-endian machine, it puts `{1, 256}` before `{1, 2}`.
+- it compares the padding bytes;
+- it compares pointer members by address;
+- on a little-endian machine, it puts `{1, 256}` before `{1, 2}`.
 
 **Give a comparison function for each struct key.**
 
 ## A custom order
 
-A comparison function gets pointers to two keys. It gives a negative
-number, zero or a positive number, as the function that you give to `qsort`
-does. Give it to the map with `cbmap_construct_cc`:
+A comparison function receives pointers to two keys and returns a
+negative number, zero or a positive number, just like the function you pass
+to `qsort`. Give it to the map with `cbmap_construct_cc`:
 
 ```c
 #include <stdio.h>
@@ -164,39 +164,39 @@ int main(void) {
 }
 ```
 
-The program prints `0.9.1`, `1.2.3` and `1.10.0`, in that order. There are
-three rules for a comparison function:
+The program prints `0.9.1`, `1.2.3` and `1.10.0`, in that order. A
+comparison function must follow three rules:
 
-- **Zero identifies "the same key".** When you insert a key that is equal
-  to a stored key, the map replaces the value of that entry. If the map must
-  keep two different items, the function must not give zero for them. The
-  leaderboard below compares the names when two scores are equal.
-- **It must be consistent** for the full life of the map. It must be
-  transitive. It must always give the same result for the same two keys.
-- **Read keys with `memcpy`.** A key that comes through the raw functions
-  can be at any address.
+- **Zero means "the same key".** When you insert a key that compares equal
+  to a stored key, the map replaces the value of that entry, so if the map
+  must keep two different items, the function must not return zero for
+  them. The leaderboard below compares the names when two scores are equal.
+- **It must be consistent** for the whole life of the map: transitive, and
+  always returning the same result for the same two keys.
+- **Read keys with `memcpy`,** because a key that comes through the raw
+  functions can be at any address.
 
-When you give a struct literal to a macro, put it in its own parentheses, as
-in the example above. If you do not, its commas divide the macro
+When you pass a struct literal to a macro, wrap it in its own parentheses,
+as the example above does; otherwise its commas split the macro
 arguments.
 
 ## Strings and other pointers
 
-The map copies a `char *` key or value into its storage. You can use your
-buffer again, or free it, immediately after `cbmap_insert`. A string that the
-map gives you points into the storage of the map. Never free it. Do not keep
-it after the next insert, remove or reset. The map keeps a pointer value of
-a different type as the pointer. The map never frees the memory that this
-pointer points to. [cbstmap(7)](../man/cbstmap/cbstmap.7) gives all of these
+The map copies a `char *` key or value into its own storage, so you can
+reuse or free your buffer as soon as `cbmap_insert` returns. A string that
+the map gives you points into the map's storage: never free it, and do not
+keep it after the next insert, remove or reset. A pointer value of any other
+type is stored as the pointer itself, and the map never frees the memory it
+points to. [cbstmap(7)](../man/cbstmap/cbstmap.7) lists all of these
 rules.
 
 ## Example: a leaderboard
 
-The program ranks the players by their best score, with the highest score
-first. When two scores are equal, it uses the name. The rank key is a struct
-with a custom order. Thus two players with the same score are two different
-entries. A hash map goes from a name to the current best score. With this
-map, an update can find and remove the old rank key of the player.
+This program ranks players by their best score, highest first, and uses
+the name to break a tie. The rank key is a struct with a custom order, so two
+players with the same score are two different entries. A hash map from each
+name to the current best score lets an update find and remove the player's
+old rank key.
 
 ```c
 #include <stdio.h>
@@ -204,9 +204,9 @@ map, an update can find and remove the old rank key of the player.
 #include <ccollections/cbstmap.h>
 #include <ccollections/chashmap.h>
 
-/* A rank key: higher scores first. For equal scores, the name sets the
-   order. Two players with the same score are two different keys. Thus the
-   map keeps both players. */
+/* A rank key: higher scores come first, and the name breaks a tie. Two
+   players with the same score are two different keys, so the map keeps
+   both of them. */
 typedef struct {
     int score;
     char name[24];
@@ -229,8 +229,9 @@ static rank_key make_key(const char *name, int score) {
     return k;
 }
 
-/* "board" puts the players in order. "current" finds the current score
-   of a player. Thus an update can first remove the old rank key. */
+/* "board" keeps the players in rank order, and "current" maps each player
+   to their current score, so that an update can remove the old rank key
+   first. */
 static void record_score(cbmap board, chmap current, const char *name, int score) {
     cbmap_redeclare(board, rank_key, int);
     chmap_redeclare(current, char *, int);
@@ -285,17 +286,17 @@ Output:
 
 ## Example: a timer queue
 
-When you iterate over an ordered map, the smallest key is always the first
-entry. Thus the map is a simple priority queue. In this example, the key of
-each event is the millisecond at which the event must run. The program does
+Because iteration over an ordered map always starts at the smallest key,
+the map works as a simple priority queue. In this example, the key of each
+event is the millisecond at which the event must run, and the program takes
 these steps:
 
 1. It reads the first entry.
 2. It stops the iteration.
 3. It removes the entry.
 
-The program removes the entry only after the iteration, because the map
-must not change during an iteration.
+It removes the entry only after the iteration, because the map must not
+change while an iteration is in progress.
 
 ```c
 #include <inttypes.h>
@@ -305,8 +306,8 @@ must not change during an iteration.
 #include <string.h>
 #include <ccollections/cbstmap.h>
 
-/* A small scheduler. The key of each event is the millisecond at which
-   the event must run. The smallest key is always the next event. */
+/* A small scheduler: each event is keyed by the millisecond at which it
+   must run, so the smallest key is always the next event. */
 
 static void schedule(cbmap timers, uint64_t due_ms, const char *what) {
     cbmap_redeclare(timers, uint64_t, char *);
@@ -363,38 +364,37 @@ t=1000  ran "rotate keys" (due 900)
 0 timers left
 ```
 
-The program copies out the event text before the remove. The map frees the
-string that it gave together with its entry.
+The program copies out the event text before the remove, because the map
+frees the string it handed out together with its entry.
 
 ## When an error must not stop the program
 
-The macros stop the program on a hard error, as the hash map macros do.
-The raw functions report the error and do not stop the program:
+Like the hash map macros, the macros stop the program on a hard error. The
+raw functions report the error instead:
 
-- When `cbmap_create`, `cbmap_create_mp`, `cbmap_create_ch` and
-  `cbmap_create_full` fail, they give `NULL` and an error string.
+- `cbmap_create`, `cbmap_create_mp`, `cbmap_create_ch` and
+  `cbmap_create_full` return `NULL` and an error string when they fail.
 - `cbmap_insert_elem`, `cbmap_get_elem_ref`, `cbmap_get_elem_copy` and
-  `cbmap_delete_elem` take each key and value as a `cmap_pair`. They give a
+  `cbmap_delete_elem` take each key and value as a `cmap_pair` and return a
   `ccol_retval_t`.
 
-The [chashmap guide](chashmap.md) shows a full program that uses the raw
-layer. The calls are the same, with `cbmap_` names.
+The [chashmap guide](chashmap.md) shows a complete program that uses the raw
+layer; the calls are the same here, with `cbmap_` names.
 
 ## Good to know
 
-- **Do not change the map during an iteration.** First complete the loop,
-  or go out of it with `break`. Then insert or remove, as the timer example
-  does.
-- **When the comparison gives zero, the map keeps one key only.** Make sure
-  that your comparison does not give zero for keys that you must keep
-  separately.
-- **Struct keys need a comparison function.** The default byte order is
-  almost never the order that you want.
-- **Pointers into the map are valid for a short time only.** A pointer from
-  `cbmap_get_ptr`, or a string that the map gives, is valid only until the
-  next insert, remove or reset.
-- **No locking.** If more than one thread uses a map, and one of the threads
-  changes it, protect each call with your own lock. See
+- **Do not change the map during an iteration.** Finish the loop, or leave
+  it with `break`, and then insert or remove, as the timer example does.
+- **When the comparison returns zero, the map keeps only one key.** Make
+  sure that your comparison does not return zero for keys that you must
+  keep apart.
+- **Struct keys need a comparison function,** because the default byte order
+  is almost never the order you want.
+- **Pointers into the map are short-lived.** A pointer from `cbmap_get_ptr`,
+  or a string that the map gives you, is valid only until the next insert,
+  remove or reset.
+- **No locking.** If more than one thread uses a map and any of them changes
+  it, protect every call with your own lock. See
   [Concurrency](concurrency.md).
 
 ## Reference

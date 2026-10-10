@@ -11,33 +11,33 @@ void ctpool_future_free(ctpool_future *f);
 .fi
 .SH DESCRIPTION
 .nf
-Takes one off the reference count of the future. The library frees the
-future object with the standard free() when that count reaches zero.
+Drops one reference to the future. When the reference count reaches
+zero, the library frees the future object with the standard free().
 Three kinds of holder release a reference: the caller, the worker, and
 every ctpool_future_get call that is still in progress. For a detached
 future the producer holds one in place of the worker.
 
-This never touches the void* result value of the task function. This
-module never allocates, copies or frees that value. See
-ctpool_future_get(3) for who owns the result.
+This never touches the void* result value of the task function, which
+this module never allocates, copies or frees. See ctpool_future_get(3)
+for who owns the result.
 
-Call this exactly one time for each ctpool_submit_future,
+Call this exactly one time for each successful ctpool_submit_future,
 ctpool_try_submit_future, ctpool_timed_submit_future or
-ctpool_future_create_detached call that succeeds. Do so whether or not
-anything called ctpool_future_get.
+ctpool_future_create_detached call, whether or not anything called
+ctpool_future_get.
 
-A call with no ctpool_future_get at all gives fire-and-forget behavior.
-The task still runs. The library frees the future by itself when the
-worker finishes, and it discards the result.
+Calling it with no ctpool_future_get at all gives fire-and-forget
+behavior: the task still runs, and the library frees the future by
+itself when the worker finishes, discarding the result.
 
 You can call this while other threads are inside ctpool_future_get on
-the same future. Each of them holds a reference of its own. The library
-therefore destroys the future only after the last of them leaves.
+the same future. Each of them holds a reference of its own, so the
+library destroys the future only after the last of them leaves.
 
-This call ends the claim of the caller on f, in the same way as when a
-thread gives up its last reference. The caller must not use f again
-after this call. The caller must also not hand f to a thread that is
-not yet inside ctpool_future_get.
+This call ends the caller's claim on f, in the same way as when a thread
+gives up its last reference. The caller must not use f again after this
+call, and must not hand f to a thread that is not yet inside
+ctpool_future_get.
 
 A call to ctpool_future_free with a NULL pointer does nothing.
 .fi

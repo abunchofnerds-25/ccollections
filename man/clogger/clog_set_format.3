@@ -11,11 +11,10 @@ void clog_set_format(clog logger, clog_format_t fmt);
 .fi
 .SH DESCRIPTION
 .nf
-Updates the output format of the shared backing store.  The shared
-store holds the format, and not the struct of each logger.  The change
-is therefore at once visible to every logger handle that writes to the
-same file descriptor.  That covers the root logger and every derived
-logger.
+Updates the output format of the shared backing store.  Because the
+shared store holds the format, and not the struct of each logger, the
+change is at once visible to every logger handle that writes to the
+same file descriptor: the root logger and every derived logger.
 
 There are three formats.
 
@@ -23,35 +22,35 @@ There are three formats.
     The default.  The library writes every record as one logfmt line:
       ts=<ISO-8601-UTC> level=<L> proc=<name>(<pid>):<tname>(<tid>)
       src=<file>:<line> func=<fn> [fields] msg=<text>
-    ccol_log_error, ccol_log_alert and ccol_log_fatal append backtrace
-    continuation lines after the main record.  A tab indents each one.
+    clog_error, clog_alert and clog_fatal append backtrace
+    continuation lines, each indented by a tab, after the main record.
     In proc, <tname> and <tid> are the name and the ID of the thread
-    that wrote the record.  Each thread reads them once, the first
-    time that it logs.  ccol_set_thread_name(3) renames a thread and
+    that wrote the record; each thread reads them once, the first time
+    that it logs, and ccol_set_thread_name(3) renames a thread and
     updates that name.
 
   CLOG_FMT_JSON (1)
-    The library writes every record as one NDJSON object, and then a
-    newline:
+    The library writes every record as one NDJSON object followed by
+    a newline:
       {"ts":"...","level":"...","proc":"name(pid):tname(tid)",
        "src":"file:N","func":"...", [fields,] "msg":"..."}
     A structured field becomes a top-level JSON key.  For
-    ccol_log_error, ccol_log_alert and ccol_log_fatal, the library
+    clog_error, clog_alert and clog_fatal, the library
     embeds the backtrace as a "bt" array of strings inside the same
-    JSON object.  It checks every string value as UTF-8 before it
-    embeds that value.  Those values are the message, and the key and
-    the value of every field.  It replaces a byte or a sequence of
-    bytes that is not well-formed UTF-8, one invalid byte at a time,
-    with the Unicode replacement character (U+FFFD).  A message or a
-    field value built from arbitrary or binary data can therefore
-    never make a record with invalid Unicode content.
+    JSON object.  Before it embeds a string value (the message, and
+    the key and the value of every field), it checks that value as
+    UTF-8 and replaces a byte or a sequence of bytes that is not
+    well-formed UTF-8, one invalid byte at a time, with the Unicode
+    replacement character (U+FFFD).  So a message or a field value
+    built from arbitrary or binary data can never make a record with
+    invalid Unicode content.
 
   CLOG_FMT_SYSLOG (2)
-    The RFC 5424 syslog format.  Only a logger that sits on an fd
-    offers it, which is one from clog_open_fd or clog_open_fd_mp.  A
-    call to clog_set_format() with CLOG_FMT_SYSLOG on a logger that
-    sits on a file does nothing, and it reports nothing.  The format
-    stays as it was.
+    The RFC 5424 syslog format, offered only by a logger that sits on
+    an fd (one from clog_open_fd or clog_open_fd_mp).  A call to
+    clog_set_format() with CLOG_FMT_SYSLOG on a logger that sits on a
+    file does nothing and reports nothing; the format stays as it
+    was.
 
     The library writes each record as one line:
       <PRI>1 TIMESTAMP HOSTNAME APP-NAME PID MSGID [ccol ...] MSG\en
@@ -60,17 +59,17 @@ There are three formats.
                    clog_level_t: TRACE=7, DEBUG=7, INFO=6, WARN=4,
                    ERROR=3, ALERT=1, FATAL=0)
       TIMESTAMP  = ISO 8601 UTC (same format as logfmt/JSON)
-      HOSTNAME   = the result of gethostname(2).  The library keeps a
-                   byte only when it is RFC 5424 PRINTUSASCII
-                   (0x21-0x7e).  It drops every other byte, and that
-                   covers a space and a control character.  It does
-                   not truncate the value at that point.  It writes
-                   "-" when this leaves no byte at all, and when
+      HOSTNAME   = the result of gethostname(2).  The library keeps
+                   only the bytes that are RFC 5424 PRINTUSASCII
+                   (0x21-0x7e) and drops every other byte, a space
+                   and a control character included, without
+                   truncating the value at that point.  It writes
+                   "-" when this leaves no byte at all, or when
                    gethostname(2) itself fails.
-      APP-NAME   = the name of the executable, which is the basename
-                   of argv[0].  The library filters it to
-                   PRINTUSASCII in the same way.  It writes "-" when
-                   this leaves no byte at all.
+      APP-NAME   = the name of the executable (the basename of
+                   argv[0]), filtered to PRINTUSASCII in the same
+                   way.  The library writes "-" when this leaves no
+                   byte at all.
       PID        = getpid(2)
       MSGID      = level string ("INFO", "ERROR", etc.)
       [ccol ...]  = RFC 5424 SD-ELEMENT with SD-ID "ccol" carrying
@@ -79,37 +78,36 @@ There are three formats.
                    that clog_set_field() attached
       MSG        = the formatted message text
 
-    The library escapes a control character with a backslash, as
-    \en, \er, \et or \exNN.  That covers a literal newline and a
-    carriage return.  It writes a backslash itself as \e\e, so the
-    escaped text reads back unambiguously: a real newline appears as
-    \en, and the two characters '\e' and 'n' appear as \e\en.  It
-    does this in MSG, and in every value of proc, src, func and a
-    field.  logfmt uses the same scheme for its own values.  A value
-    of proc, src, func or a field is an SD-PARAM-VALUE, which RFC 5424
-    requires to be UTF-8.  The library passes a well-formed UTF-8
-    sequence through unchanged, and replaces each byte that is not
-    part of one with U+FFFD, as the JSON format does.  MSG carries no
-    byte order mark, so it is the MSG-ANY form of RFC 5424: a
-    receiver must not assume that its bytes are UTF-8, and the
-    library passes them through apart from the escapes above.  HOSTNAME and
-    APP-NAME can hold no byte that needs
-    this escape, because the filter above takes both down to
-    PRINTUSASCII.  Together this guarantees one thing.  The content of
-    a record can never split that record across several lines.
+    In MSG, and in every value of proc, src, func and a field, the
+    library escapes a control character (a literal newline and a
+    carriage return included) with a backslash, as \en, \er, \et or
+    \exNN.  It writes a backslash itself as \e\e, so the escaped text
+    reads back unambiguously: a real newline appears as \en, and the
+    two characters '\e' and 'n' appear as \e\en.  logfmt uses the same
+    scheme for its own values.  A value of proc, src, func or a field
+    is an SD-PARAM-VALUE, which RFC 5424 requires to be UTF-8, so the
+    library passes a well-formed UTF-8 sequence through unchanged and
+    replaces each byte that is not part of one with U+FFFD, as the
+    JSON format does.  MSG carries no byte order mark, so it is the
+    MSG-ANY form of RFC 5424: a receiver must not assume that its
+    bytes are UTF-8, and the library passes them through apart from
+    the escapes above.  HOSTNAME and APP-NAME can hold no byte that
+    needs this escape, because the filter above takes both down to
+    PRINTUSASCII.  Together this guarantees that the content of a
+    record can never split that record across several lines.
 
-    clog_set_facility() controls the facility.  It defaults to
-    CLOG_SYSLOG_USER.  The library writes a backtrace as separate
-    syslog messages, one for each frame.  ccol_log_error,
-    ccol_log_alert and ccol_log_fatal produce one.  Each message
+    clog_set_facility() controls the facility, which defaults to
+    CLOG_SYSLOG_USER.  The library writes a backtrace (which
+    clog_error, clog_alert and clog_fatal produce) as
+    separate syslog messages, one for each frame, and each message
     carries the same PRI, TIMESTAMP and MSGID as the original record.
-    The library escapes the text of a frame with a backslash, in the
+    The library escapes the text of a frame with a backslash in the
     same way as MSG.  Every frame shares the TIMESTAMP of the original
-    record, and does not carry its own write time.  That is what lets
+    record instead of carrying its own write time, which is what lets
     a reader match a record with its own backtrace frames.
 
     Connect the fd to a syslog daemon before you call
-    clog_set_format().  On Linux that is usually a SOCK_DGRAM Unix
+    clog_set_format(); on Linux that is usually a SOCK_DGRAM Unix
     socket at /dev/log.  Keep each message under 2 KiB, to stay inside
     the usual datagram limits of syslogd.
 .fi
@@ -120,8 +118,8 @@ fmt     CLOG_FMT_LOGFMT, CLOG_FMT_JSON, or CLOG_FMT_SYSLOG.
 .fi
 .SH NOTES
 .nf
-Thread-safe.  The mutex of the shared backing store protects it.
-CLOG_FMT_SYSLOG on a logger that sits on a file does nothing, and it
+Thread-safe: the mutex of the shared backing store protects it.
+CLOG_FMT_SYSLOG on a logger that sits on a file does nothing and
 reports nothing.
 Asserts when logger is CLOG_INVALID, stale or already closed.
 .fi

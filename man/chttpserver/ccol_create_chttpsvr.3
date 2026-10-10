@@ -11,15 +11,15 @@ chttpsvr ccol_create_chttpsvr(clog cl, char **err_str);
 .fi
 .SH DESCRIPTION
 .nf
-This is an inline wrapper for ccol_create_chttpsvr_mp with mprocs set
+An inline wrapper that calls ccol_create_chttpsvr_mp with mprocs set
 to NULL.
 
-cl may be CLOG_INVALID.  See ccol_create_chttpsvr_mp for the rules
-that govern the logger.
+cl may be CLOG_INVALID; see ccol_create_chttpsvr_mp for the rules that
+govern the logger.
 .fi
 .SH RETURN VALUE
 .nf
-A valid chttpsvr handle on success, or CHTTPSVR_INVALID on a failure.
+A valid chttpsvr handle on success, or CHTTPSVR_INVALID on failure.
 .fi
 .SH "SEE ALSO"
 .BR ccol_create_chttpsvr_mp (3)

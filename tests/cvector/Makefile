@@ -11,22 +11,21 @@ CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 $(CCOL_HARDENING_CFLAGS) -Wstrict
 	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O3 -Werror $(EXTRA_CFLAGS)
 COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage 
 # The wrap of cvector_elem_count lets a test count the calls that the inline
-# expansion of a macro makes to cvector_elem_count. The wrapper in tests.c
-# forwards every call to the real function.
+# expansion of a macro makes to cvector_elem_count, while the wrapper in
+# tests.c forwards every call to the real function.
 LFLAGS = -lpthread $(call ccol_ld_wrap,cvector_elem_count) $(CCOL_PLATFORM_LIBS)
 
 build:
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)
 
-# cvec_sort refuses an element type that has no default comparison procedure.
-# It refuses it with a _Static_assert, so the check for it happens at build
-# time. compile_probes.sh asserts two things, under every compiler that is
-# available. Each such type fails to compile with a useful message. Every
-# supported type still compiles. The script also pins the array element
-# forms of the value macros and the -Wcast-qual cleanliness of the iterator
-# accessors. ./tests cannot reach a message that the
-# compiler issues, because ./tests must compile before it can run
-# anything.
+# cvec_sort refuses an element type that has no default comparison procedure
+# with a _Static_assert, so the check happens at build time. Under every
+# compiler that is available, compile_probes.sh asserts that each such type
+# fails to compile with a useful message while every supported type compiles.
+# The script also pins the array element forms of the value macros and the
+# -Wcast-qual cleanliness of the iterator accessors. ./tests cannot reach a
+# message that the compiler issues, because ./tests must compile before it
+# can run anything.
 compile_probes:
 	sh ./compile_probes.sh
 
@@ -44,13 +43,12 @@ test: build compile_probes nesting_probe
 memtest: build
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 --child-silent-after-fork=yes ./tests
 
-# --ignore-errors negative: the coverage counters of gcov are plain increments
-# and they are not atomic. Instrumented code that runs on more than one thread
-# at a time can therefore race on them and produce a false negative hit count.
-# This affects more than one module, and it also happens inside a glibc
-# header. It is a limit of the instrumentation of gcov, and not a defect in
-# the logic of this library. The same flag in tests/chttpclient/Makefile gives
-# the full reason.
+# --ignore-errors negative: the coverage counters of gcov are plain, non-atomic
+# increments, so instrumented code that runs on more than one thread at a time
+# can race on them and produce a false negative hit count. This affects more
+# than one module and also happens inside a glibc header; it is a limit of the
+# gcov instrumentation, not a defect in the logic of this library. The same
+# flag in tests/chttpclient/Makefile gives the full reason.
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \

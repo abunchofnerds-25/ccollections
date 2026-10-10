@@ -11,13 +11,13 @@ size_t cyaml_list_len(cyaml node);
 .fi
 .SH DESCRIPTION
 .nf
-Return the number of child nodes in the CYAML_LIST node.  This function
-calls ccol_fatal_err() when node is NULL.  It also calls
-ccol_fatal_err() when the type of node is not CYAML_LIST.
+Return the number of child nodes in the CYAML_LIST node.  The function
+calls ccol_fatal_err() when node is NULL, and it calls ccol_fatal_err()
+as well when node is not of type CYAML_LIST.
 .fi
 .SH RETURN VALUE
 .nf
-Element count.  It is 0 for an empty list.
+The element count, which is 0 for an empty list.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_list_get (3),

@@ -12,7 +12,7 @@ size_t clrucache_capacity(clru_cache cache);
 .SH DESCRIPTION
 .nf
 Returns the maximum number of live entries that the cache can hold
-before eviction starts. This is the value that the caller gives as
+before eviction starts, which is the value that the caller gives as
 capacity to clrucache_create_full() at construction time.
 .fi
 .SH PARAMETERS
@@ -27,13 +27,13 @@ call already destroyed.
 .fi
 .SH NOTES
 .nf
-cache is an opaque VALUE handle. The library resolves it through a slot
-table that the library owns, before it touches the cache object behind
-the handle. A stale handle here is an ordinary error, and not a fatal
-one. Only clru_destroy() treats a stale handle as fatal.
-This function takes no lock. The creation of the cache fixes the
-capacity, and nothing writes it again. The capacity is the total across
-the segments of the cache. That total is exactly the value that the
+cache is an opaque VALUE handle, which the library resolves through a
+slot table that it owns before it touches the cache object behind the
+handle. A stale handle here is an ordinary error, not a fatal one;
+only clru_destroy() treats a stale handle as fatal.
+This function takes no lock, because the creation of the cache fixes
+the capacity and nothing writes it again. The capacity is the total
+across the segments of the cache, which is exactly the value that the
 caller gives to the constructor.
 The complexity is O(1).
 .fi

@@ -11,26 +11,26 @@ chttpclient_destroy(cli)
 .fi
 .SH DESCRIPTION
 .nf
-This macro waits for every request that is in flight to finish. It
-then frees every resource and sets cli to CHTTPCLI_INVALID.
+This macro waits for every request that is in flight to finish, then
+frees every resource and sets cli to CHTTPCLI_INVALID.
 
-"Every request that is in flight" covers all three tiers. It covers a
-synchronous chttpclient_do or chttpclient_do_streaming call that still
-runs on another thread. It also covers a request from
-chttpclient_do_async, chttpclient_do_async_streaming,
-chttpclient_do_pooled or chttpclient_do_pooled_streaming. Such a
-request counts while the shared reactor engine still works on it. A
-connection that sits idle in the pool does not count. This macro is
-safe even when nothing waited yet on a ctpool_future from
-chttpclient_do_async or from chttpclient_do_async_streaming.
+"Every request that is in flight" covers all three tiers: a synchronous
+chttpclient_do or chttpclient_do_streaming call that still runs on
+another thread, and a request from chttpclient_do_async,
+chttpclient_do_async_streaming, chttpclient_do_pooled or
+chttpclient_do_pooled_streaming, which counts while the shared reactor
+engine still works on it. A connection that sits idle in the pool does
+not count. This macro is safe even when nothing has waited yet on a
+ctpool_future from chttpclient_do_async or from
+chttpclient_do_async_streaming.
 
 cli must be a handle that is live now, or CHTTPCLI_INVALID, which is a
-silent no-op. Three other kinds of value are a FATAL ERROR, and the
-macro calls abort() and raises SIGABRT for them. This is safer than
-the risk of a silent double free or of a use-after-free. The first is
-a stale handle that an earlier call already destroyed. The second is a
-stale handle that another thread destroys at this same moment. The
-third is a forged value or garbage.
+silent no-op. Three other kinds of value are a FATAL ERROR: a stale
+handle that an earlier call already destroyed, a stale handle that
+another thread destroys at this same moment, and a forged value or
+garbage. For each of them the macro calls abort() and raises SIGABRT,
+because that is safer than the risk of a silent double free or of a
+use-after-free.
 .fi
 .SH PARAMETERS
 .nf

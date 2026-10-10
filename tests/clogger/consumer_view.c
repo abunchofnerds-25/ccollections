@@ -23,10 +23,10 @@ SOFTWARE.
 */
 
 /*
- * The build makes this file WITHOUT -D_FILE_OFFSET_BITS=64. See the Makefile
- * of this directory. Every other translation unit in this suite uses that
- * flag, and so does the library itself. This file therefore sees
- * <clogger.h> the way an application with ordinary default flags sees it.
+ * The build makes this file WITHOUT -D_FILE_OFFSET_BITS=64 (see the Makefile
+ * of this directory), while every other translation unit in this suite and
+ * the library itself use that flag. This file therefore sees <clogger.h> the
+ * way an application with ordinary default flags sees it.
  */
 
 #include "consumer_view.h"

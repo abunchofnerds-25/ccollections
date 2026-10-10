@@ -25,13 +25,13 @@ extern void _ccol_r_mempool_corrupt_entry_status_for_tests(ccol_r_mempool *rmp,
                                                            unsigned char value);
 TAU_MAIN()
 
-/* Tau's REQUIRE_* macros return from the test function at the moment when one
- * fails. A test that destroys a pool only with a ccol_mempool_destroy() call at
- * the end therefore leaks that pool on exactly the runs that matter. memtest
- * then reports that leak on top of the assertion that caused it. A cleanup
+/* Tau's REQUIRE_* macros return from the test function the moment one fails,
+ * so a test that destroys a pool only with a ccol_mempool_destroy() call at
+ * the end leaks that pool on exactly the runs that matter, and memtest then
+ * reports that leak on top of the assertion that caused it. A cleanup
  * attribute on the handle destroys the pool on every path out. Each test also
- * destroys the pool explicitly. destroy sets the handle to NULL, so the cleanup
- * call then finds nothing to do. */
+ * destroys the pool explicitly; since destroy sets the handle to NULL, the
+ * cleanup call then finds nothing to do. */
 static void mp_scoped_release(ccol_mempool **mp) {
   if (*mp) ccol_mempool_destroy(*mp);
 }
@@ -65,11 +65,11 @@ TEST(cmempools, create_fails) {
   REQUIRE_NE((void *)err, NULL);
 }
 
-// The third case in create_fails above also passes elem_size=0. The
-// elem_size==0 check of ccol_mempool_create therefore rejects the call before
-// it reaches ccol_verify_memmgmt_procs. That case cannot exercise the
+// The third case in create_fails above also passes elem_size=0, so the
+// elem_size==0 check of ccol_mempool_create rejects the call before
+// it reaches ccol_verify_memmgmt_procs, and that case cannot exercise the
 // incomplete-procs validation path. The call below uses size parameters that
-// are valid, so only the memmgmt-procs check can cause a rejection.
+// are valid, so that only the memmgmt-procs check can cause a rejection.
 TEST(cmempools, create_rejects_incomplete_procs_with_valid_size_params) {
   ccol_memmgmt_procs_t m_procs = {
       .malloc = malloc, .calloc = calloc, .realloc = realloc, .free = NULL};
@@ -96,9 +96,9 @@ TEST(cmempools, create_rejects_elem_size_whose_stride_overflows) {
   // The stride is elem_size rounded up to _ccol_mempool_entry_align and then
   // rounded up to a power of two. An elem_size close enough to SIZE_MAX has no
   // stride at all, because the rounding wraps to a value smaller than elem_size
-  // itself. The library must reject such an elem_size. Without that rejection,
-  // the wrapped, tiny stride gives the pool its size and also gives every entry
-  // its index. The result is a heap buffer overflow that repeats on every run.
+  // itself, so the library must reject such an elem_size. Without that
+  // rejection, the wrapped, tiny stride gives the pool its size and every
+  // entry its index, and the result is a heap buffer overflow on every run.
   char *err = NULL;
   ccol_mempool *mp =
       ccol_mempool_create(2, SIZE_MAX - 8, false, true, NULL, &err);
@@ -111,22 +111,22 @@ TEST(cmempools, create_rejects_elem_size_whose_stride_overflows) {
   REQUIRE_NE((void *)err, NULL);
 }
 
-// Neither elem_count nor elem_size is out of range on its own here. The block
-// that the two ask for together is out of range. That block holds one stride
-// for each entry, followed by one status byte for each entry. The library
-// multiplies out the size of that block before the allocator sees it. The
-// allocator therefore cannot catch this overflow. It can only catch an overflow
+// Neither elem_count nor elem_size is out of range on its own here; the block
+// that the two ask for together is. That block holds one stride
+// for each entry, followed by one status byte for each entry, and the library
+// multiplies out the size of that block before the allocator sees it, so the
+// allocator cannot catch this overflow: it can only catch an overflow
 // in its own count * size arguments.
 //
-// The count below makes the wrapped product tiny, and not merely too large to
-// allocate. elem_count * (16 + 1) is 2^64 + 16. A build without the check asks
-// for 16 bytes, gets them, and then walks about 2^60 entries through the block.
-// It writes status bytes and free-list links as it goes. The pool is
-// single_threaded, so the library adds no reserve. The arithmetic is exactly
-// the arithmetic of the caller.
+// The count below makes the wrapped product tiny, not merely too large to
+// allocate: elem_count * (16 + 1) is 2^64 + 16. A build without the check asks
+// for 16 bytes, gets them, and then walks about 2^60 entries through the block,
+// writing status bytes and free-list links as it goes. The pool is
+// single_threaded, so the library adds no reserve, and the arithmetic is
+// exactly the arithmetic of the caller.
 //
 // This test is not vacuous: without the check, ccol_mempool_create does not
-// return NULL here. It corrupts the heap and dies in the layout loop.
+// return NULL here, but corrupts the heap and dies in the layout loop.
 TEST(cmempools, create_rejects_a_count_and_size_whose_block_overflows) {
 #if SIZE_MAX > 0xFFFFFFFFu
   const size_t wrapping_count =
@@ -140,7 +140,7 @@ TEST(cmempools, create_rejects_a_count_and_size_whose_block_overflows) {
   REQUIRE_EQ((void *)mp, NULL);
   REQUIRE_NE((void *)err, NULL);
 
-  // And a count that does fit is still accepted, so the guard rejects the
+  // And a count that does fit is accepted, so the guard rejects the
   // overflow rather than the size.
   err = NULL;
   SCOPED_MEMPOOL(ok) = ccol_mempool_create(64, 16, false, true, NULL, &err);
@@ -152,12 +152,12 @@ TEST(cmempools, create_rejects_a_count_and_size_whose_block_overflows) {
 TEST(cmempools,
      create_from_preallocated_rejects_elem_size_whose_stride_overflows) {
   // This is the same overflow as in
-  // create_rejects_elem_size_whose_stride_overflows. Here the
-  // preallocated-buffer constructor reaches it with an ordinary, small stack
+  // create_rejects_elem_size_whose_stride_overflows, reached here by the
+  // preallocated-buffer constructor with an ordinary, small stack
   // buffer. Without a rejection, the wrapped stride makes the derived element
-  // count come out non-zero. The loop that builds the free list then writes far
-  // past the end of this 256-byte stack array. AddressSanitizer reports that as
-  // a stack-buffer-overflow.
+  // count come out non-zero, and the loop that builds the free list then writes
+  // far past the end of this 256-byte stack array, which AddressSanitizer
+  // reports as a stack-buffer-overflow.
   _Alignas(_ccol_mempool_entry_align) uint8_t buf[256];
   memset(buf, 0, sizeof(buf));
   char *err = NULL;
@@ -167,31 +167,31 @@ TEST(cmempools,
   REQUIRE_NE((void *)err, NULL);
 }
 
-// The library must round the stride. It must never keep the raw elem_size of
-// the caller. Every entry must meet one alignment. Some element sizes are not a
-// multiple of that alignment. One example is elem_size=9 below. It is at or
-// above sizeof(uintptr_t), so the separate rounding that lifts a small size up
-// to sizeof(uintptr_t) does not apply to it. It is also not a multiple of the
-// alignment. Another example is a plain struct that holds only members narrower
-// than a word, for example "struct { float x, y, z; }". That struct is 12 bytes
-// on a typical 64-bit build.
+// The library must round the stride and never keep the raw elem_size of
+// the caller, because every entry must meet one alignment, and some element
+// sizes are not a multiple of that alignment. One example is elem_size=9 below:
+// it is at or above sizeof(uintptr_t), so the separate rounding that lifts a
+// small size up to sizeof(uintptr_t) does not apply to it, and it is not a
+// multiple of the alignment either. Another example is a plain struct with
+// members narrower than a word, such as "struct { float x, y, z; }" (12 bytes
+// on a typical 64-bit build).
 //
 // For such a size, an unrounded stride moves every entry after index 0 in the
-// contiguous backing buffer of the pool. Each entry drifts one more stride away
-// from a correct address. A store of any object whose alignment the entry no
-// longer meets is then undefined behavior in the C standard. The load and store
+// contiguous backing buffer of the pool, each one drifting one more stride away
+// from a correct address. A store of any object whose alignment the entry does
+// not meet is then undefined behavior in the C standard. The load and store
 // instructions of x86 and x86_64 tolerate a misaligned address, so an ordinary
-// run on such a machine shows nothing. On an architecture with stricter
-// alignment it is a real fault risk. It is also the exact class of defect that
+// run on such a machine shows nothing, but on an architecture with stricter
+// alignment it is a real fault risk, and it is the exact class of defect that
 // -fsanitize=alignment finds. A rounded stride keeps every entry correctly
-// aligned for any elem_size, and not only the first entry.
+// aligned for any elem_size, not only the first entry.
 TEST(cmempools, pool_entries_beyond_first_are_properly_aligned) {
   SCOPED_MEMPOOL(mp) = ccol_mempool_create(8, 9, false, true, NULL, NULL);
   REQUIRE_NE((void *)mp, NULL);
 
-  /* The loop counts the outcomes and does not assert inside the loop. An
-     assertion that fires there returns while the pool and every entry taken
-     from it are still outstanding. The leak checker then reports that on top of
+  /* The loop counts the outcomes instead of asserting inside the loop, because
+     an assertion that fires there returns while the pool and every entry taken
+     from it are outstanding, and the leak checker then reports that on top of
      the real failure. */
   void *ptrs[8];
   size_t obtained = 0;
@@ -200,10 +200,10 @@ TEST(cmempools, pool_entries_beyond_first_are_properly_aligned) {
     ptrs[i] = ccol_mempool_alloc_entry(mp);
     if (!ptrs[i]) continue;
     ++obtained;
-    // The check uses max_align_t directly, and never the alignment macro of
-    // the library. An assertion against the same knob that the implementation
-    // uses makes the two move together. The test then passes for any value of
-    // that knob.
+    // The check uses max_align_t directly, never the alignment macro of
+    // the library: an assertion against the same knob that the implementation
+    // uses makes the two move together, and the test then passes for any value
+    // of that knob.
     if ((uintptr_t)ptrs[i] % _Alignof(max_align_t) != 0) ++misaligned_entries;
   }
 
@@ -220,12 +220,12 @@ TEST(cmempools, pool_entries_beyond_first_are_properly_aligned) {
 
 // _ccol_mempool_buffer_params_fit is the internal guard of
 // CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER. It must reject elem_count == 0
-// outright, because that is an invalid configuration for a preallocated pool. A
-// guard that tolerates elem_count == 0 lets the macro produce a zero-length
-// array without a word. A zero-length array is a GNU extension and not standard
+// outright, because that is an invalid configuration for a preallocated pool; a
+// guard that tolerates elem_count == 0 lets the macro silently produce a
+// zero-length array, which is a GNU extension and not standard
 // ISO C. A rejected elem_count cannot go into
 // CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER itself, because this whole test
-// binary then fails to compile. This test therefore exercises the boolean logic
+// binary would then fail to compile, so this test exercises the boolean logic
 // of the guard directly. It mirrors the
 // r_mempools.buffer_params_fit_matches_known_outcomes test for
 // _ccol_rmempool_buffer_params_fit.
@@ -233,10 +233,10 @@ TEST(cmempools, buffer_params_fit_rejects_zero_elem_count) {
   REQUIRE_FALSE(_ccol_mempool_buffer_params_fit(0, 64));
 
   // The guard must accept every (elem_count, elem_size) pair that a real
-  // CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER call site in this file uses. If
+  // CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER call site in this file uses; if
   // the guard rejected one, this whole binary would fail to compile. These
-  // assertions repeat that here directly. A change that narrows the guard then
-  // shows up as an ordinary test failure. It does not show up only as a build
+  // assertions repeat that here directly, so that a change that narrows the
+  // guard shows up as an ordinary test failure instead of only as a build
   // break that somebody has to bisect.
   REQUIRE_TRUE(_ccol_mempool_buffer_params_fit(100, 1));
   REQUIRE_TRUE(_ccol_mempool_buffer_params_fit(1, 1));
@@ -245,37 +245,37 @@ TEST(cmempools, buffer_params_fit_rejects_zero_elem_count) {
 }
 
 // _ccol_mempool_buffer_params_fit must reject every elem_size that has no
-// stride. The rounding to _ccol_mempool_entry_align wraps for an elem_size
-// within that alignment of SIZE_MAX. The rounding to a power of two gives
-// nothing at all above 2^40. A macro without this guard therefore treats such
-// an elem_size as one that fits. The buffer declaration does the same, because
+// stride: the rounding to _ccol_mempool_entry_align wraps for an elem_size
+// within that alignment of SIZE_MAX, and the rounding to a power of two gives
+// nothing at all above 2^40. A macro without this guard would treat such
+// an elem_size as one that fits, and so would the buffer declaration, because
 // the array-size expression of CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER repeats
 // the identical arithmetic. The runtime check inside ccol_mempool_create()
 // already rejects the same elem_size range. The guard must reject every
-// elem_size in this window for any elem_count. It must still accept the
-// boundary value exactly one byte below the window.
+// elem_size in this window for any elem_count, and it must still accept
+// the boundary value exactly one byte below the window.
 TEST(cmempools, buffer_params_fit_rejects_elem_size_near_size_max) {
-  // An entry carries no header, so the guard protects the stride itself. The
-  // library rounds an element size up to a power of two. It then sizes
-  // elem_count of them, plus one status byte for each. That arithmetic must not
-  // wrap size_t.
+  // An entry carries no header, so the guard protects the stride itself: the
+  // library rounds an element size up to a power of two and then sizes
+  // elem_count of them, plus one status byte for each, and that arithmetic must
+  // not wrap size_t.
   //
-  // A size at the very top of the range has no stride that size_t can hold. The
-  // guard must reject such a size for any count.
+  // A size at the very top of the range has no stride that size_t can hold, so
+  // the guard must reject such a size for any count.
   for (size_t back_off = 0; back_off < 8; ++back_off) {
     size_t elem_size = SIZE_MAX - back_off;
     REQUIRE_FALSE(_ccol_mempool_buffer_params_fit(1, elem_size));
     REQUIRE_FALSE(_ccol_mempool_buffer_params_fit(100, elem_size));
   }
 
-  // The guard must also not reject too much. It accepts the largest stride that
-  // the rounding supports for a single element. It rejects an element size one
-  // byte past that stride. The position of that ceiling depends on the layout.
-  // For the default layout it also depends on the width of size_t. The chain of
-  // powers of two runs out at its own top entry. A 32-bit size_t reaches that
-  // top entry long before a 64-bit size_t does. One exponent for both widths
+  // The guard must also not reject too much: it accepts the largest stride that
+  // the rounding supports for a single element, and rejects an element size one
+  // byte past that stride. Where that ceiling sits depends on the layout, and
+  // for the default layout also on the width of size_t, because the chain of
+  // powers of two runs out at its own top entry, which a 32-bit size_t reaches
+  // long before a 64-bit size_t does. One exponent for both widths
   // would shift past the width of size_t on the narrower one, which is
-  // undefined and not merely wrong. The compact stride has no such chain. Its
+  // undefined and not merely wrong. The compact stride has no such chain; its
   // ceiling is where the rounding up to the entry alignment would overflow.
 #if CCOL_MEMPOOL_COMPACT_LAYOUT
   const size_t largest = SIZE_MAX - (_ccol_mempool_entry_align - 1);
@@ -297,34 +297,34 @@ TEST(cmempools, buffer_params_fit_rejects_elem_size_near_size_max) {
   REQUIRE_FALSE(_ccol_mempool_buffer_params_fit(SIZE_MAX / 2, 64));
 }
 
-// Every entry that a pool hands out must be aligned for any object type. It is
-// not enough to align it for the per-entry bookkeeping of the pool. A stride
-// rounded to a weaker alignment keeps entry 0 correct, and every later entry
-// drifts. An element size that is an odd multiple of the alignment of the
-// header therefore gives entries that alternate between aligned and misaligned.
-// A store of a long double or a vector type into one of those is undefined
-// behavior. It is a fault on an architecture with strict alignment.
+// Every entry that a pool hands out must be aligned for any object type, not
+// only for the per-entry bookkeeping of the pool. A stride rounded to a weaker
+// alignment keeps entry 0 correct while every later entry drifts, so an
+// element size that is an odd multiple of the alignment of the header gives
+// entries that alternate between aligned and misaligned. A store of a long
+// double or a vector type into one of those is undefined behavior, and a fault
+// on an architecture with strict alignment.
 //
-// This test is not vacuous. Without the rounding of the stride to
+// This test is not vacuous: without the rounding of the stride to
 // _ccol_mempool_entry_align, it fails with 4 misaligned entries of the 72 that
-// it checks. That happens at elem_size 8, where the stride falls to 8 and every
+// it checks, at elem_size 8, where the stride falls to 8 and every
 // second entry lands off a 16-byte boundary.
 //
 // An element size that is not a power of two is the only case where the two
-// layouts differ. It is also where the index arithmetic of the compact layout
-// must earn its keep. That arithmetic recovers the position of an entry with a
-// multiply against a reciprocal, and not with a shift. A reciprocal that is off
-// by one anywhere in the range gives a neighbouring position. Two entries then
-// share one status byte, and the pool loses one of them or serves it twice.
+// layouts differ, and it is where the index arithmetic of the compact layout
+// must earn its keep: that arithmetic recovers the position of an entry with a
+// multiply against a reciprocal instead of a shift, and a reciprocal that is
+// off by one anywhere in the range gives a neighbouring position, so two
+// entries share one status byte and the pool loses one or serves it twice.
 //
-// The test takes every entry, frees it, and takes it again. Every position in
-// the pool therefore goes through the arithmetic twice. The test checks that
-// the addresses are correctly spaced and all distinct. The second pass aborts
-// on a double free if two positions collide.
+// The test takes every entry, frees it, and takes it again, so every position
+// in the pool goes through the arithmetic twice. It checks that the addresses
+// are correctly spaced and all distinct, and the second pass aborts on a
+// double free if two positions collide.
 //
-// This test is not vacuous under the compact layout. Add one to the shift of
+// This test is not vacuous under the compact layout: add one to the shift of
 // the verified reciprocal, and the suite aborts here. Add one to the multiplier
-// instead, and it does not. That is not a weakness of the test. It is a
+// instead, and it does not. That is not a weakness of the test but a
 // property of the reciprocal, which the library builds with exactly that much
 // slack on purpose.
 TEST(cmempools, every_entry_position_round_trips_for_an_awkward_elem_size) {
@@ -376,11 +376,11 @@ TEST(cmempools, every_entry_position_round_trips_for_an_awkward_elem_size) {
 }
 
 // An address can be inside the buffer of the pool and partway into an entry.
-// The pool must reject such an address. It must not round the address down to
-// the entry that holds it. With a round down, a caller can free the same entry
+// The pool must reject such an address instead of rounding the address down to
+// the entry that holds it: with a round down, a caller can free the same entry
 // twice, because two different addresses then name it. Under the compact layout
-// the check that catches this multiplies the reciprocal back out instead of a
-// mask, so the case deserves its own test.
+// the check that catches this multiplies the reciprocal back out instead of
+// using a mask, so the case deserves its own test.
 TEST(cmempools, freeing_an_interior_pointer_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
@@ -402,23 +402,23 @@ TEST(cmempools, freeing_an_interior_pointer_is_fatal) {
   REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   /* The signal must be SIGABRT. A NULL dereference, or any other crash, also
-   * satisfies WIFSIGNALED. Such a crash is not the deliberate abort that this
-   * test pins. */
+   * satisfies WIFSIGNALED, but such a crash is not the deliberate abort that
+   * this test pins. */
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-// ccol_mempool_total_capacity reports the count that the caller asked for, and
-// not the number of slots that the pool holds. A pool with a thread cache
-// carries a reserve beyond that count, so its capacity understates its memory.
-// ccol_mempool_allocated_bytes exists for this reason. A caller that sizes a
-// pool against a memory budget needs the other number, and this is the only way
-// to get it.
+// ccol_mempool_total_capacity reports the count that the caller asked for, not
+// the number of slots that the pool holds. A pool with a thread cache
+// carries a reserve beyond that count, so its capacity understates its memory,
+// which is why ccol_mempool_allocated_bytes exists: a caller that sizes a
+// pool against a memory budget needs the other number, and this is the only
+// way to get it.
 //
 // The two cases below separate the two numbers. A pool that gets a cache must
-// report strictly more than its capacity accounts for. A pool that gets no
-// cache must report exactly that, and not one byte more. A report of the
+// report strictly more than its capacity accounts for, and a pool that gets no
+// cache must report exactly that, not one byte more. A report of the
 // advertised count instead of the physical one would make the first case an
-// equality, and the test would fail here. That is what keeps this test from a
+// equality, and the test would fail here, which keeps this test from a
 // vacuous pass.
 TEST(cmempools, allocated_bytes_reports_the_reserve_that_capacity_hides) {
   const size_t elem_size = 64;
@@ -433,8 +433,8 @@ TEST(cmempools, allocated_bytes_reports_the_reserve_that_capacity_hides) {
   ccol_mempool *uncached =
       ccol_mempool_create(count, elem_size, false, true, NULL, NULL);
   /* The test captures both outcomes and destroys both pools before it asserts
-     anything. An assertion that fires returns from here at once. An assertion
-     between the two creations would leak whichever pool already exists. */
+     anything, because an assertion that fires returns from here at once, and
+     one between the two creations would leak whichever pool already exists. */
   const bool both_created = (cached != NULL && uncached != NULL);
 
   size_t cached_bytes = 0, uncached_bytes = 0;
@@ -457,8 +457,8 @@ TEST(cmempools, allocated_bytes_reports_the_reserve_that_capacity_hides) {
   REQUIRE_EQ(uncached_bytes, exactly_capacity);
 }
 
-// The footprint of a ranged pool is the sum over its tiers. This is the case
-// where a figure computed by hand is least practical. Every tier has its own
+// The footprint of a ranged pool is the sum over its tiers, which is the case
+// where a figure computed by hand is least practical: every tier has its own
 // element size, its own count and its own reserve.
 TEST(r_mempools, allocated_bytes_sums_every_tier) {
   ccol_r_mempool *rmp =
@@ -473,9 +473,9 @@ TEST(r_mempools, allocated_bytes_sums_every_tier) {
 
   ccol_r_mempool_destroy(rmp);
 
-  /* The report is strictly more than the capacities of the tiers account for.
-     Every tier that gets a cache carries a reserve. Every entry also carries a
-     status byte. */
+  /* The report is strictly more than the capacities of the tiers account for,
+     because every tier that gets a cache carries a reserve, and every entry
+     also carries a status byte. */
   REQUIRE_GT(reported, at_least);
   REQUIRE_GT(at_least, (size_t)0);
 }
@@ -497,9 +497,9 @@ TEST(cmempools, every_entry_is_aligned_for_any_object_type) {
       entries[i] = ccol_mempool_alloc_entry(mp);
       if (entries[i]) {
         ++checked;
-        // The check uses max_align_t directly, and never the alignment macro
-        // of the library. An assertion against the same knob that the
-        // implementation uses makes the two move together. The test then
+        // The check uses max_align_t directly, never the alignment macro
+        // of the library: an assertion against the same knob that the
+        // implementation uses makes the two move together, and the test then
         // passes for any value of that knob.
         if ((uintptr_t)entries[i] % _Alignof(max_align_t) != 0) ++misaligned;
       }
@@ -510,7 +510,7 @@ TEST(cmempools, every_entry_is_aligned_for_any_object_type) {
     ccol_mempool_destroy(mp);
   }
 
-  // The code above frees everything. An assertion that fails here therefore
+  // The code above frees everything, so an assertion that fails here
   // leaves nothing behind for the leak checker to report on top of the real
   // failure.
   REQUIRE_TRUE(all_created);
@@ -518,17 +518,17 @@ TEST(cmempools, every_entry_is_aligned_for_any_object_type) {
   REQUIRE_EQ(misaligned, (size_t)0);
 }
 
-// The alignment guarantee must hold for every way to build a pool, and not only
+// The alignment guarantee must hold for every way to build a pool, not only
 // for the pool on the heap. The macro that declares a preallocated buffer
-// aligns that buffer, and not the allocator. A ranged pool cuts its buffer into
-// one sub-pool for each tier. Each path can therefore lose the property on its
-// own.
+// aligns that buffer instead of the allocator, and a ranged pool cuts its
+// buffer into one sub-pool for each tier, so each path can lose the property
+// on its own.
 //
 // This test is not vacuous, in two separate ways. Without the rounding of the
 // prefix of a dynamic entry, the fallback section fails with 4 misaligned
 // entries. The library also rounds each preallocated ranged segment to a whole
-// number of alignment units. Without that rounding, the last section fails
-// outright. The sub-pool whose segment then starts at a misaligned address
+// number of alignment units, and without that rounding, the last section fails
+// outright: the sub-pool whose segment then starts at a misaligned address
 // refuses to be constructed at all, and hands out no misaligned entries.
 TEST(cmempools, every_creation_path_yields_aligned_entries) {
   size_t misaligned = 0;
@@ -555,10 +555,10 @@ TEST(cmempools, every_creation_path_yields_aligned_entries) {
     ccol_mempool_destroy(pmp);
   }
 
-  /* A dynamic fallback entry comes from the allocator, and not from the buffer
-     of the pool. It reaches the caller at a fixed offset past a prefix of its
-     own. It can therefore lose the alignment that a pool-owned entry keeps.
-     Exhaust a tiny pool to force such entries. */
+  /* A dynamic fallback entry comes from the allocator instead of the buffer
+     of the pool, and reaches the caller at a fixed offset past a prefix of its
+     own, so it can lose the alignment that a pool-owned entry keeps. Exhaust a
+     tiny pool to force such entries. */
   SCOPED_MEMPOOL(fmp) = ccol_mempool_create(2, 9, true, true, NULL, NULL);
   size_t fallback_entries = 0;
   if (!fmp) {
@@ -573,7 +573,7 @@ TEST(cmempools, every_creation_path_yields_aligned_entries) {
       }
     }
     /* The count happens before the entries go back, and the assertion is
-       below. Without this count the section is vacuous. A fallback that gives
+       below. Without this count the section is vacuous: a fallback that gives
        nothing leaves misaligned at zero, and the section passes while it tests
        nothing. */
     fallback_entries = ccol_mempool_dynamic_allocs_count(fmp);
@@ -599,15 +599,15 @@ TEST(cmempools, every_creation_path_yields_aligned_entries) {
     ccol_r_mempool_destroy(rmp);
   }
 
-  /* A preallocated ranged pool cuts one buffer into one segment for each tier.
-     Each segment holds its entries, followed by its own status bytes. A segment
-     whose length is not a multiple of the alignment therefore moves the first
-     entry of every later tier. It moves that entry by the amount that the
-     segment falls short. The last tiers are where this hurts. There are 13
-     tiers. The first one holds 4096 elements of the smallest size, and the
-     counts halve down to 8, 4, 2 and 1. A status region of that size is smaller
-     than the alignment itself. The buffer is static, so it lives in the data
-     segment of the binary and not on the stack. */
+  /* A preallocated ranged pool cuts one buffer into one segment for each
+     tier, and each segment holds its entries followed by its own status
+     bytes, so a segment whose length is not a multiple of the alignment moves
+     the first entry of every later tier by the amount that the segment falls
+     short. The last tiers are where this hurts: there are 13 tiers, the first
+     one holds 4096 elements of the smallest size, and the counts halve down to
+     8, 4, 2 and 1, so the status region of such a tier is smaller than the
+     alignment itself. The buffer is static, so it lives in the data segment of
+     the binary instead of on the stack. */
   static CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(prbuf, 4, 16, 12);
   SCOPED_R_MEMPOOL(prmp) = ccol_r_mempool_create_from_preallocated_buffer(
       prbuf, sizeof(prbuf), 4, 16, 12, ccol_fallback_disabled, true, NULL,
@@ -628,14 +628,14 @@ TEST(cmempools, every_creation_path_yields_aligned_entries) {
     ccol_r_mempool_destroy(prmp);
   }
 
-  // The code above destroys both pools. An assertion that fails here therefore
+  // The code above destroys both pools, so an assertion that fails here
   // leaves nothing for the leak checker to report on top of the real failure.
   REQUIRE_TRUE(all_created);
   REQUIRE_GT(checked, (size_t)10);
   REQUIRE_GT(fallback_entries, (size_t)0);
   /* The test reaches every one of the 13 tiers. A configuration that serves
-     fewer leaves misaligned at zero, and the test then checks less than it
-     claims. */
+     fewer leaves misaligned at zero, and the test would then check less than
+     it claims. */
   REQUIRE_EQ(tiers_checked, (size_t)13);
   REQUIRE_EQ(misaligned, (size_t)0);
 }
@@ -1113,8 +1113,8 @@ TEST(cmempools, free_null_is_noop) {
   REQUIRE_TRUE(p_still_null);
 }
 
-// The pool tolerates a NULL entry, but it does not tolerate a NULL pool. A NULL
-// pool has no meaning like the one that free() gives to a NULL pointer. To go
+// The pool tolerates a NULL entry but not a NULL pool: a NULL pool has no
+// meaning like the one that free() gives to a NULL pointer, and to go
 // on, the library would have to guess which pool the caller meant. This test
 // runs in a forked child, because ccol_assert() aborts the whole process.
 TEST(cmempools, free_with_null_pool_is_fatal) {
@@ -1137,19 +1137,19 @@ TEST(cmempools, free_with_null_pool_is_fatal) {
   REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   /* The signal must be SIGABRT. A NULL dereference, or any other crash, also
-   * satisfies WIFSIGNALED. Such a crash is not the deliberate abort that this
-   * test pins. */
+   * satisfies WIFSIGNALED, but such a crash is not the deliberate abort that
+   * this test pins. */
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-// ccol_mempool_free_entry documents that assertions detect a double free. This
-// test is the direct coverage for that contract on a plain ccol_mempool entry.
-// Every other test in this file that forks and asserts on SIGABRT drives
-// ccol_r_mempool_realloc_entry, and not ccol_mempool_free_entry itself. This
-// test calls the raw function _ccol_mempool_free_entry directly. The
-// ccol_mempool_free_entry macro sets its own argument to NULL after the free. A
-// second call on the same variable is therefore a harmless no-op, and not a
-// real double free.
+// ccol_mempool_free_entry documents that assertions detect a double free, and
+// this test is the direct coverage for that contract on a plain ccol_mempool
+// entry, since every other test in this file that forks and asserts on SIGABRT
+// drives ccol_r_mempool_realloc_entry instead of ccol_mempool_free_entry. This
+// test calls the raw function _ccol_mempool_free_entry directly, because the
+// ccol_mempool_free_entry macro sets its own argument to NULL after the
+// free, so a second call on the same variable is a harmless no-op instead
+// of a real double free.
 TEST(cmempools, double_free_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
@@ -1173,19 +1173,19 @@ TEST(cmempools, double_free_is_fatal) {
   REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   /* The signal must be SIGABRT. A NULL dereference, or any other crash, also
-   * satisfies WIFSIGNALED. Such a crash is not the deliberate abort that this
-   * test pins. */
+   * satisfies WIFSIGNALED, but such a crash is not the deliberate abort that
+   * this test pins. */
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
 // This test is the direct coverage for the other half of the contract of
 // ccol_mempool_free_entry: assertions detect a corrupted entry. The test
-// simulates memory corruption from an unrelated bug elsewhere in the caller. It
-// overwrites what the pool records about one entry with a value that is neither
-// of the two valid ones. An entry carries no header, so that record lives in
-// the status array of the pool. Only code inside the module can reach it. The
-// test therefore reaches in through a test-only accessor, and does not compute
-// the address itself.
+// simulates memory corruption from an unrelated bug elsewhere in the caller by
+// overwriting what the pool records about one entry with a value that is
+// neither of the two valid ones. Since an entry carries no header, that record
+// lives in the status array of the pool, which only code inside the module can
+// reach, so the test reaches in through a test-only accessor instead of
+// computing the address itself.
 TEST(cmempools, free_entry_with_corrupted_status_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
@@ -1208,36 +1208,36 @@ TEST(cmempools, free_entry_with_corrupted_status_is_fatal) {
   REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   /* The signal must be SIGABRT. A NULL dereference, or any other crash, also
-   * satisfies WIFSIGNALED. Such a crash is not the deliberate abort that this
-   * test pins. */
+   * satisfies WIFSIGNALED, but such a crash is not the deliberate abort that
+   * this test pins. */
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
 // ccol_mempool_free_entry must detect a double free of a dynamic (fallback)
-// entry by the address of that entry. A check of the count of outstanding
-// dynamic entries alone is not enough. That count-only guard catches the
-// double-freed entry only while it is the one outstanding dynamic entry. With a
-// second dynamic entry still live, the check also passes on the second free,
+// entry by the address of that entry; a check of the count of outstanding
+// dynamic entries alone is not enough, because that count-only guard catches
+// the double-freed entry only while it is the one outstanding dynamic entry.
+// With a second dynamic entry live, the check also passes on the second free,
 // which is not a valid one. The pool must forget the address of the entry on
-// its first free. Without that, the call reaches the free() of the allocator a
-// second time on the same block. It also under-counts the outstanding dynamic
+// its first free; otherwise the call reaches the free() of the allocator a
+// second time on the same block, and under-counts the outstanding dynamic
 // entries, which defeats the leak detector of ccol_mempool_destroy for the
-// entry that is still outstanding.
+// entry that is outstanding.
 //
 // This test uses a custom allocator whose free() does not clobber the payload
-// of the freed block. That is a valid shape for an allocator. Nothing in the
+// of the freed block, which is a valid shape for an allocator: nothing in the
 // documented contract of this module asks free() to poison freed memory. The
-// tcache and fastbin machinery of glibc does poison it, and that is what hides
-// the second free under a plain glibc build. The custom allocator therefore
-// makes the scenario deterministic, and independent of the internals of the
+// tcache and fastbin machinery of glibc does poison it, which hides
+// the second free under a plain glibc build, so the custom allocator
+// makes the scenario deterministic and independent of the internals of the
 // libc of the platform.
 static void *no_clobber_malloc(size_t s) { return malloc(s); }
 static void *no_clobber_calloc(size_t n, size_t s) { return calloc(n, s); }
 static void *no_clobber_realloc(void *p, size_t s) { return realloc(p, s); }
 static void no_clobber_free(void *p) {
-  (void)p; /* This free never touches p on purpose. Nothing overwrites the
-              freed payload before the second free reads it back, so nothing
-              can mask a double free. */
+  (void)p; /* This free deliberately never touches p, so nothing overwrites
+              the freed payload before the second free reads it back, and
+              nothing can mask a double free. */
 }
 
 TEST(cmempools, double_free_of_dynamic_entry_with_another_still_live_is_fatal) {
@@ -1272,17 +1272,17 @@ TEST(cmempools, double_free_of_dynamic_entry_with_another_still_live_is_fatal) {
   REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   /* The signal must be SIGABRT. A NULL dereference, or any other crash, also
-   * satisfies WIFSIGNALED. Such a crash is not the deliberate abort that this
-   * test pins. */
+   * satisfies WIFSIGNALED, but such a crash is not the deliberate abort that
+   * this test pins. */
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
 // An allocator that places every block at the start of a page, right behind a
-// page that the process cannot read. An entry of a pool built on it at the
-// start of the buffer of that pool therefore has nothing readable in front of
-// it. Any read in front of such an entry dies on SIGSEGV at once, in any build.
-// Only the forked children below use it, and each child is single-threaded,
-// so its bookkeeping needs no lock.
+// page that the process cannot read, so an entry of a pool built on it at the
+// start of the buffer of that pool has nothing readable in front of
+// it, and any read in front of such an entry dies on SIGSEGV at once, in any
+// build. Only the forked children below use it, and each child is
+// single-threaded, so its bookkeeping needs no lock.
 #define MP_GUARD_MAX_BLOCKS 32
 static struct {
   void *user;
@@ -1488,11 +1488,11 @@ TEST(cmempools, many_dynamic_entries_free_in_any_order) {
 }
 
 // ccol_mempool_destroy documents that it asserts when the dynamic fallback
-// still holds pointers that nobody freed. This test is the direct coverage for
-// that contract. The rest of this suite does not notice a change that weakens
+// holds pointers that nobody freed, and this test is the direct coverage for
+// that contract: the rest of this suite does not notice a change that weakens
 // or removes the ccol_mempool_dynamic_allocs_count(mp) > 0 check inside
-// _ccol_mempool_destroy. Every other test frees every dynamic entry that it
-// allocates before it destroys its pool.
+// _ccol_mempool_destroy, because every other test frees every dynamic entry
+// that it allocates before it destroys its pool.
 TEST(cmempools, destroy_with_leaked_dynamic_entry_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
@@ -1517,8 +1517,8 @@ TEST(cmempools, destroy_with_leaked_dynamic_entry_is_fatal) {
   REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   /* The signal must be SIGABRT. A NULL dereference, or any other crash, also
-   * satisfies WIFSIGNALED. Such a crash is not the deliberate abort that this
-   * test pins. */
+   * satisfies WIFSIGNALED, but such a crash is not the deliberate abort that
+   * this test pins. */
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
@@ -1627,7 +1627,7 @@ TEST(cmempools, create_from_preallocated_fails_null_buffer) {
 // ccol_mempool_create_from_preallocated_buffer must not reject an
 // elem_size < sizeof(uintptr_t) outright, which would be inconsistent
 // with ccol_mempool_create's own silent-round-up behavior for the identical
-// condition (see create_small_elem_size_is_bumped_to_min above). Both
+// condition (see create_small_elem_size_is_bumped_to_min above): both
 // constructors round a small-but-nonzero elem_size up to sizeof(uintptr_t)
 // identically.
 TEST(cmempools, create_from_preallocated_small_elem_size_is_bumped_to_min) {
@@ -1647,8 +1647,8 @@ TEST(cmempools, create_from_preallocated_small_elem_size_is_bumped_to_min) {
   REQUIRE_EQ((void *)mp, NULL);
 }
 
-// A real elem_size of zero stays a separate, hard error. It matches the
-// "elem_count or elem_size is zero" rejection of ccol_mempool_create. The
+// A real elem_size of zero stays a separate, hard error, which matches the
+// "elem_count or elem_size is zero" rejection of ccol_mempool_create, and the
 // library does not fold it into the rounding path for a small elem_size above.
 TEST(cmempools, create_from_preallocated_fails_elem_size_zero) {
   _Alignas(_ccol_mempool_entry_align) uint8_t buf[256];
@@ -1660,10 +1660,10 @@ TEST(cmempools, create_from_preallocated_fails_elem_size_zero) {
 }
 
 TEST(cmempools, create_from_preallocated_fails_elem_count_zero) {
-  // One element of size 64 needs a 64-byte stride plus its own status byte. A
-  // 64-byte buffer is therefore one byte short of a single entry. The function
-  // must return NULL with the "calculated elem_count is zero" error. It must
-  // not build a pool with no elements in it.
+  // One element of size 64 needs a 64-byte stride plus its own status byte, so
+  // a 64-byte buffer is one byte short of a single entry, and the function
+  // must return NULL with the "calculated elem_count is zero" error instead
+  // of building a pool with no elements in it.
   _Alignas(_ccol_mempool_entry_align) uint8_t buf[64];
   char *err;
   SCOPED_MEMPOOL(mp) = ccol_mempool_create_from_preallocated_buffer(
@@ -1673,16 +1673,16 @@ TEST(cmempools, create_from_preallocated_fails_elem_count_zero) {
 }
 
 // Both preallocated-buffer constructors must check that the buffer of the
-// caller meets _ccol_mempool_entry_align. They must do this before they read
-// its bytes as entries. Entry 0 sits at the address of the buffer itself. A
-// weaker buffer therefore hands back an entry that cannot hold every object
-// type. It also misaligns the reads and writes that the pool makes through its
-// own entries. The list link of a free entry lives in the first bytes of that
-// entry. This happens on any platform or compiler that does not
-// over-align a plain uint8_t[] by chance. The test offsets the pointer by one
-// byte on purpose. Such a pointer is misaligned against a correctly aligned
-// backing array, whatever alignment the compiler chose for the array itself.
-// The constructor must reject it outright, and must not accept it.
+// caller meets _ccol_mempool_entry_align before they read
+// its bytes as entries. Entry 0 sits at the address of the buffer itself, so a
+// weaker buffer hands back an entry that cannot hold every object type, and
+// it also misaligns the reads and writes that the pool makes through its
+// own entries, since the list link of a free entry lives in the first bytes of
+// that entry. This happens on any platform or compiler that does not
+// over-align a plain uint8_t[] by chance. The test deliberately offsets the
+// pointer by one byte, which misaligns it against a correctly aligned
+// backing array, whatever alignment the compiler chose for the array itself,
+// and the constructor must reject it outright instead of accepting it.
 TEST(cmempools, create_from_preallocated_fails_misaligned_buffer) {
   _Alignas(_ccol_mempool_entry_align) uint8_t buf[257];
   char *err = NULL;
@@ -1696,11 +1696,11 @@ TEST(cmempools, create_from_preallocated_fails_misaligned_buffer) {
 // raw elem_size of the caller. The macro feeds
 // ccol_mempool_create_from_preallocated_buffer, and that constructor rounds
 // elem_size up to sizeof(uintptr_t) before it divides the buffer into
-// elem_count elements. Take a buffer declared for an elem_size smaller than
-// sizeof(uintptr_t). Without the rounding in the macro, that buffer has the
-// size for the smaller, unrounded elem_size. The constructor then divides it up
-// with the larger, rounded one. The pool then holds fewer elements than
-// elem_count promised. The macro applies the identical rounding before it
+// elem_count elements. For a buffer declared for an elem_size smaller than
+// sizeof(uintptr_t), without the rounding in the macro, the buffer would have
+// the size for the smaller, unrounded elem_size, while the constructor divides
+// it up with the larger, rounded one, so the pool would hold fewer elements
+// than elem_count promised. The macro applies the identical rounding before it
 // computes the size of the buffer, so the two always agree.
 CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER(preallocated_mp_small_elem_buffer, 100,
                                          1);
@@ -1733,13 +1733,13 @@ TEST(cmempools,
 }
 
 // This is the smallest case that fails creation outright without that rounding.
-// The buffer is declared for exactly 1 element of elem_size 1. Without the
+// The buffer is declared for exactly 1 element of elem_size 1, so without the
 // rounding it has the size for the unrounded elem_size, which is 1 byte plus
 // its status byte. The constructor rounds elem_size up to sizeof(uintptr_t),
-// and the buffer is then too small even for a single element.
-// ccol_mempool_create_from_preallocated_buffer therefore returns NULL with
-// "calculated elem_count is zero". The caller followed the documented usage
-// pattern of the macro exactly.
+// so the buffer is then too small even for a single element, and
+// ccol_mempool_create_from_preallocated_buffer returns NULL with
+// "calculated elem_count is zero", although the caller followed the
+// documented usage pattern of the macro exactly.
 CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER(
     preallocated_mp_single_small_elem_buffer, 1, 1);
 
@@ -1764,15 +1764,15 @@ TEST(cmempools, declare_preallocated_buffer_single_small_elem_size_succeeds) {
 // elem_size plus its status byte with no rounding to _ccol_mempool_entry_align.
 // The macro feeds ccol_mempool_create_from_preallocated_buffer, and that
 // constructor rounds the same sum up to that alignment before it divides the
-// buffer into elem_count elements. See
+// buffer into elem_count elements; see
 // pool_entries_beyond_first_are_properly_aligned above for the hazard behind
-// this. The test uses an elem_size of 9 on purpose. It is not a multiple of
-// sizeof(uintptr_t), so neither the rounding for a small elem_size nor an
+// this. The test deliberately uses an elem_size of 9, which is not a multiple
+// of sizeof(uintptr_t), so neither the rounding for a small elem_size nor an
 // already aligned size can hide the mismatch. Without the rounding in the
 // macro, the buffer has the size for a smaller stride than the one that the
-// constructor divides it up with. The pool then holds fewer usable elements
+// constructor divides it up with, so the pool holds fewer usable elements
 // than elem_count promised. The macro applies the identical rounding, so the
-// two always agree. Every entry that the pool hands out is then correctly
+// two always agree, and every entry that the pool hands out is correctly
 // aligned.
 CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER(preallocated_mp_odd_elem_buffer, 50,
                                          9);
@@ -2174,18 +2174,18 @@ TEST(r_mempools, simple_allocations) {
   ccol_r_mempool_destroy(rmp);
 }
 
-// The ccol_r_mempool_pool_index_for_size formula is O(1) and needs no table. It
-// is a shift plus a bit-scan. It is not a lookup table of
+// The ccol_r_mempool_pool_index_for_size formula is O(1) and needs no table:
+// it is a shift plus a bit-scan, not a lookup table of
 // O(largest_size/smallest_size) entries, which is exponential in the number of
 // tiers. This test checks that formula against every size boundary across a
-// 7-tier pool. The other tests touch only a few individual sizes.
+// 7-tier pool, while the other tests touch only a few individual sizes.
 //
 // ccol_r_mempool_total_capacity is the probe that this test can observe from
-// outside. Every tier has its own fixed capacity, and the test knows that
-// capacity on its own. ccol_r_mempool_create halves the element count for each
-// doubling of the size. That capacity must stay constant across a size range.
-// It must jump to the capacity of the next tier at exactly the next boundary,
-// which is the next power of two times smallest_size. It must never jump one
+// outside: every tier has its own fixed capacity, which the test knows
+// on its own, because ccol_r_mempool_create halves the element count for each
+// doubling of the size. That capacity must stay constant across a size range
+// and jump to the capacity of the next tier at exactly the next boundary,
+// which is the next power of two times smallest_size, never one
 // byte early or one byte late.
 TEST(r_mempools, pool_index_boundaries_exhaustive) {
   // SS=4, LS=10, SC=6: tiers of 16/32/64/128/256/512/1024 bytes holding
@@ -2210,8 +2210,8 @@ TEST(r_mempools, pool_index_boundaries_exhaustive) {
     prev_boundary = tier_sizes[t];
   }
 
-  // The formula must also route a real allocation to the tier that it names. It
-  // is not enough to report the right capacity for that tier.
+  // The formula must also route a real allocation to the tier that it names;
+  // reporting the right capacity for that tier is not enough.
   for (size_t t = 0; t < num_tiers; ++t) {
     size_t just_over_prev = (t == 0) ? 1 : tier_sizes[t - 1] + 1;
     void *p = ccol_r_mempool_alloc_entry(rmp, just_over_prev);
@@ -2233,17 +2233,17 @@ TEST(r_mempools, pool_index_boundaries_exhaustive) {
 
 // This test pins that the constructor allocates no reverse-size lookup table of
 // O(2^(largest_pow - smallest_pow)) entries. The element storage of a
-// preallocated-buffer pool is the buffer of the caller, and not heap memory.
-// Such a table would therefore be the only heap allocation that this
-// constructor makes for the library itself. The whole point of the
-// preallocated-buffer API is a caller that wants no heap allocation at all.
-// Such a caller would need one table of exponential size.
+// preallocated-buffer pool is the buffer of the caller, not heap memory,
+// so such a table would be the only heap allocation that this
+// constructor makes for the library itself, while the whole point of the
+// preallocated-buffer API is a caller that wants no heap allocation at all;
+// such a caller would need one table of exponential size.
 //
-// A custom allocator proves that there is no such table. That allocator fails
-// any single allocation request above 4096 bytes. A table for this
+// A custom allocator proves that there is no such table: it fails any single
+// allocation request above 4096 bytes. A table for this
 // configuration is 2^12 * sizeof(size_t) = 32768 bytes, and it fails outright
-// under this allocator. Every allocation that the constructor really makes
-// stays far under that cap. Those allocations are the ccol_r_mempool struct
+// under this allocator, while every allocation that the constructor really
+// makes stays far under that cap: the ccol_r_mempool struct
 // itself, the mem_pools array, and one small ccol_mempool struct for each tier.
 static void *no_huge_alloc_malloc(size_t size) {
   return size > 4096 ? NULL : malloc(size);
@@ -2257,11 +2257,11 @@ static void *no_huge_alloc_realloc(void *ptr, size_t size) {
 static void no_huge_alloc_free(void *ptr) { free(ptr); }
 
 TEST(preallocated_r_mempools, create_needs_no_exponential_heap_allocation) {
-  // SS=4, LS=16, SC=12, which is the minimum allowed value of LS-SS. That gives
+  // SS=4, LS=16, SC=12, which is the minimum allowed value of LS-SS, gives
   // 13 tiers. The linear _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE
-  // formula sizes the buffer, and it stays well under 1 MiB. The buffer is
-  // static, so it lives in the data segment of the binary. A buffer on the
-  // stack would risk a stack overflow.
+  // formula sizes the buffer, which stays well under 1 MiB. The buffer is
+  // static, so it lives in the data segment of the binary, because a buffer
+  // on the stack would risk a stack overflow.
   static CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(buf, 4, 16, 12);
 
   ccol_memmgmt_procs_t m_procs = {.malloc = no_huge_alloc_malloc,
@@ -2291,56 +2291,56 @@ TEST(preallocated_r_mempools, create_needs_no_exponential_heap_allocation) {
 }
 
 // ccol_r_mempool_create_from_preallocated_buffer validates the size of the
-// buffer. It must compute the expected total size with an explicit check for
-// overflow. It must never use a plain loop that multiplies and accumulates. The
+// buffer, and it must compute the expected total size with an explicit check
+// for overflow, never with a plain loop that multiplies and accumulates. The
 // closed-form _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE macro must
 // agree with that same total, and the macro itself avoids an intermediate
 // overflow of size_t.
 //
 // Some parameter combinations need a true buffer size above SIZE_MAX. No real
 // machine can hold such a buffer, but no range check in
-// assess_r_mempool_create_inputs rejects the combination. A running sum with no
-// check wraps there without a word.
+// assess_r_mempool_create_inputs rejects the combination, so a running sum
+// with no check silently wraps there.
 //
-// Take SS=4, LS=63, which is the maximum allowed, and SC=62. SC is at least
+// Take SS=4, LS=63, which is the maximum allowed, and SC=62; SC is at least
 // LS-SS=59, so it meets the minimum-count constraint. The term of the first and
 // smallest tier alone is 2^62 elements of 32 extended bytes each, which is
-// 2^67. That is well past SIZE_MAX on a 64-bit size_t. It wraps to
-// 0xffffffffffffff80, which is huge but not SIZE_MAX. By chance that value
-// still differs from the small buf_size of this test. The call therefore
+// 2^67, well past SIZE_MAX on a 64-bit size_t, and it wraps to
+// 0xffffffffffffff80, which is huge but not SIZE_MAX. That value
+// happens to differ from the small buf_size of this test too, so the call
 // returns NULL either way, and a plain NULL check cannot tell a guarded
-// implementation from an unguarded one. Both fail, for different reasons.
+// implementation from an unguarded one: both fail, for different reasons.
 //
 // The reason is what separates them. A loop with no guard wraps all the way
-// through its arithmetic. It then reports only the generic, unrelated "buffer
+// through its arithmetic and then reports only the generic, unrelated "buffer
 // sizes differ" message, which is the same message that an ordinary buf_size
-// mismatch produces. The guard finds the overflow directly, before any
-// comparison against buf_size. It reports a specific message that names the
-// real cause. An assertion on that message is what pins the guard. A plain NULL
+// mismatch produces, while the guard finds the overflow directly, before any
+// comparison against buf_size, and reports a specific message that names the
+// real cause. An assertion on that message pins the guard; a plain NULL
 // check only pins a coincidence of these numbers.
 TEST(preallocated_r_mempools,
      create_rejects_configuration_whose_true_buffer_size_overflows) {
 #if SIZE_MAX > 0xFFFFFFFFu
   /* largest_size_power_of_two=63 is a valid input only on a platform where
    * size_t is wider than 32 bits. assess_r_mempool_create_inputs holds a
-   * "power of two exceeds size_t width" guard, and it runs before the
-   * arithmetic for the true buffer size of this scenario. That guard rejects
-   * every power-of-two exponent at or above sizeof(size_t)*CHAR_BIT. On a
+   * "power of two exceeds size_t width" guard, which runs before the
+   * arithmetic for the true buffer size of this scenario and rejects every
+   * power-of-two exponent at or above sizeof(size_t)*CHAR_BIT, so on a
    * 32-bit size_t, for example on i386, it rejects 63 at once, for a
-   * different and unrelated reason. The loop inside
-   * init_preallocated_r_mempool_internal_pools that detects the overflow is
-   * the code that this test pins, and the call never reaches it there.
+   * different and unrelated reason, and the call never reaches the loop
+   * inside init_preallocated_r_mempool_internal_pools that detects the
+   * overflow, which is the code that this test pins.
    *
    * No (SS, LS, SC) triple reaches that overflow branch on both word widths
-   * at once. The magnitude that overflows size_t grows with the word width of
-   * the platform. The guard above caps LS strictly below that same word
-   * width. An LS that is safe on 32 bits therefore never carries enough
-   * magnitude to overflow a 32-bit size_t through this loop.
+   * at once: the magnitude that overflows size_t grows with the word width of
+   * the platform, while the guard above caps LS strictly below that same word
+   * width, so an LS that is safe on 32 bits never carries enough magnitude to
+   * overflow a 32-bit size_t through this loop.
    *
-   * The guard here is a compile-time #if, and not a runtime check. On a
-   * 32-bit platform, SS=4, LS=63, SC=62 mean something different. They give a
-   * different rejection reason, which does not apply here. The difference is
-   * not only one of timing. */
+   * The guard here is a compile-time #if instead of a runtime check, because
+   * on a 32-bit platform SS=4, LS=63, SC=62 mean something different: they
+   * give a different rejection reason, which does not apply here, so the
+   * difference is not only one of timing. */
   _Alignas(_ccol_mempool_entry_align) uint8_t buf[256];
   char *err = NULL;
   SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create_from_preallocated_buffer(
@@ -2378,7 +2378,7 @@ TEST(r_mempools, simple_reallocations) {
   ptr = ccol_r_mempool_realloc_entry(rmp, ptr, 6);
   REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 16), 1);
   REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 32), 0);
-  // Since the block size is still 16 no real "reallocation" happened
+  // Since the block size stays 16, no real "reallocation" happened
   REQUIRE_EQ((void *)orig, (void *)ptr);
   for (int i = 0; i < 6; ++i) {
     if (i < 3) {
@@ -2552,16 +2552,16 @@ TEST(r_mempools, c_exhaust_all_fallback_disabled) {
 
 TEST(r_mempools, exhaust_last_subpool_returns_null_fallback_disabled) {
   // The escalation loop of ccol_r_mempool_alloc_entry must stop at
-  // `pool_index < number_of_mempools`. It must never stop at `pool_index <=
+  // `pool_index < number_of_mempools`, never at `pool_index <=
   // number_of_mempools`. With the off-by-one condition, a full last sub-pool
   // at index number_of_mempools-1 lets the loop raise pool_index to
-  // number_of_mempools. The loop then dereferences
+  // number_of_mempools, and the loop then dereferences
   // mem_pools[number_of_mempools], which is NULL, because the array is valid
-  // only up to index number_of_mempools-1. The call then crashes on an
-  // assertion, and does not return NULL.
+  // only up to index number_of_mempools-1, so the call crashes on an
+  // assertion instead of returning NULL.
   //
   // This test targets pool 2 directly, which holds 32 entries of 64-byte
-  // slots. The cascade therefore starts at the last valid pool index, and the
+  // slots, so the cascade starts at the last valid pool index, and the
   // loop reaches an increment past the limit at once.
   ccol_r_mempool *rmp =
       ccol_r_mempool_create(4, 6, 7, ccol_fallback_disabled, false, NULL, NULL);
@@ -2619,10 +2619,10 @@ TEST(r_mempools, try_exhausting_with_fallback_at_first_exhaustion) {
                ccol_r_mempool_total_capacity(rmp, size));
   }
 
-  // The preallocated buffers can be exhausted. The fallback is on, so the pool
-  // then allocates more memory from the heap to answer the request. Those
-  // allocations come from separate internal memory pools. The function
-  // ccol_r_mempool_alloc_entry therefore returns distinct values for different
+  // The preallocated buffers can be exhausted, and since the fallback is on,
+  // the pool then allocates more memory from the heap to answer the request.
+  // Those allocations come from separate internal memory pools, so the
+  // function ccol_r_mempool_alloc_entry returns distinct values for different
   // sizes.
   void *tmp_ptr_16 = ccol_r_mempool_alloc_entry(rmp, 16);
   REQUIRE_NE((void *)tmp_ptr_16, NULL);
@@ -2684,10 +2684,10 @@ TEST(r_mempools, c_try_exhausting_with_fallback_at_first_exhaustion) {
                ccol_r_mempool_total_capacity(rmp, size));
   }
 
-  // The preallocated buffers can be exhausted. The fallback is on, so the pool
-  // then allocates more memory from the heap to answer the request. Those
-  // allocations come from separate internal memory pools. The function
-  // ccol_r_mempool_calloc_entry therefore returns distinct values for different
+  // The preallocated buffers can be exhausted, and since the fallback is on,
+  // the pool then allocates more memory from the heap to answer the request.
+  // Those allocations come from separate internal memory pools, so the
+  // function ccol_r_mempool_calloc_entry returns distinct values for different
   // sizes.
   void *tmp_ptr_16 = ccol_r_mempool_calloc_entry(rmp, 16);
   REQUIRE_NE((void *)tmp_ptr_16, NULL);
@@ -2749,10 +2749,10 @@ TEST(r_mempools, c_try_exhausting_with_fallback_at_first_exhaustion_no_locks) {
                ccol_r_mempool_total_capacity(rmp, size));
   }
 
-  // The preallocated buffers can be exhausted. The fallback is on, so the pool
-  // then allocates more memory from the heap to answer the request. Those
-  // allocations come from separate internal memory pools. The function
-  // ccol_r_mempool_calloc_entry therefore returns distinct values for different
+  // The preallocated buffers can be exhausted, and since the fallback is on,
+  // the pool then allocates more memory from the heap to answer the request.
+  // Those allocations come from separate internal memory pools, so the
+  // function ccol_r_mempool_calloc_entry returns distinct values for different
   // sizes.
   void *tmp_ptr_16 = ccol_r_mempool_calloc_entry(rmp, 16);
   REQUIRE_NE((void *)tmp_ptr_16, NULL);
@@ -2814,11 +2814,11 @@ TEST(r_mempools, try_exhausting_with_fallback_at_last_exhaustion) {
                ccol_r_mempool_total_capacity(rmp, size));
   }
 
-  // Even if the pre-allocated buffers have been exhausted, as the
-  // fallback is enabled, it will allocate more memory from heap
-  // to fulfill the ask.
-  // Please notice that the ccol_r_mempool_dynamic_allocs_count will
-  // climb up regardless of the size.
+  // Even when the pre-allocated buffers have been exhausted, the fallback is
+  // enabled, so the pool allocates more memory from heap
+  // to fulfill the request. Note that the
+  // ccol_r_mempool_dynamic_allocs_count keeps climbing
+  // regardless of the size.
   REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
   REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
   REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 0);
@@ -2848,8 +2848,8 @@ TEST(r_mempools, try_exhausting_with_fallback_at_last_exhaustion) {
     REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size), 0);
   }
 
-  // The ccol_r_mempool_dynamic_allocs_count still holds the cumulative
-  // dynamic allocation number regardless of the size
+  // The ccol_r_mempool_dynamic_allocs_count keeps holding the cumulative
+  // dynamic allocation number, regardless of the size.
   ccol_r_mempool_free_entry(rmp, tmp_ptr_16);
   REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 2);
   REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 2);
@@ -2892,11 +2892,11 @@ TEST(r_mempools, c_try_exhausting_with_fallback_at_last_exhaustion) {
                ccol_r_mempool_total_capacity(rmp, size));
   }
 
-  // Even if the pre-allocated buffers have been exhausted, as the
-  // fallback is enabled, it will allocate more memory from the heap
-  // to fulfill the ask.
-  // Please notice that the ccol_r_mempool_dynamic_allocs_count will
-  // climb up regardless of the size.
+  // Even when the pre-allocated buffers have been exhausted, the fallback is
+  // enabled, so the pool allocates more memory from the heap
+  // to fulfill the request. Note that the
+  // ccol_r_mempool_dynamic_allocs_count keeps climbing
+  // regardless of the size.
   REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
   REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
   REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 0);
@@ -2926,8 +2926,8 @@ TEST(r_mempools, c_try_exhausting_with_fallback_at_last_exhaustion) {
     REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size), 0);
   }
 
-  // The ccol_r_mempool_dynamic_allocs_count still holds the cumulative
-  // dynamic allocation number regardless of the size
+  // The ccol_r_mempool_dynamic_allocs_count keeps holding the cumulative
+  // dynamic allocation number, regardless of the size.
   ccol_r_mempool_free_entry(rmp, tmp_ptr_16);
   REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 2);
   REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 2);
@@ -2970,11 +2970,11 @@ TEST(r_mempools, c_try_exhausting_with_fallback_at_last_exhaustion_no_locks) {
                ccol_r_mempool_total_capacity(rmp, size));
   }
 
-  // Even if the pre-allocated buffers have been exhausted, as the
-  // fallback is enabled, it will allocate more memory from the heap
-  // to fulfill the ask.
-  // Please notice that the ccol_r_mempool_dynamic_allocs_count will
-  // climb up regardless of the size.
+  // Even when the pre-allocated buffers have been exhausted, the fallback is
+  // enabled, so the pool allocates more memory from the heap
+  // to fulfill the request. Note that the
+  // ccol_r_mempool_dynamic_allocs_count keeps climbing
+  // regardless of the size.
   REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 0);
   REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 0);
   REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 64), 0);
@@ -3004,8 +3004,8 @@ TEST(r_mempools, c_try_exhausting_with_fallback_at_last_exhaustion_no_locks) {
     REQUIRE_EQ(ccol_r_mempool_used_count(rmp, size), 0);
   }
 
-  // The ccol_r_mempool_dynamic_allocs_count still holds the cumulative
-  // dynamic allocation number regardless of the size
+  // The ccol_r_mempool_dynamic_allocs_count keeps holding the cumulative
+  // dynamic allocation number, regardless of the size.
   ccol_r_mempool_free_entry(rmp, tmp_ptr_16);
   REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 16), 2);
   REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 32), 2);
@@ -3047,19 +3047,19 @@ TEST(r_mempools, create_fails_power_exceeds_size_t_width) {
 
 // These are the helpers for
 // largest_size_power_of_two_at_true_maximum_passes_validation below.
-// .malloc, .realloc and .free forward to the real allocator. The test needs
-// them only for the small, fixed-size copy of ccol_memmgmt_procs_t. Every
-// constructor makes that copy. .calloc always reports a failure, and never
-// calls the real calloc(). That is on purpose.
+// .malloc, .realloc and .free forward to the real allocator, which the test
+// needs only for the small, fixed-size copy of ccol_memmgmt_procs_t that every
+// constructor makes. .calloc always reports a failure and never
+// calls the real calloc(), on purpose.
 //
-// The configuration of this test needs one real sub-pool allocation. That
-// allocation is a calloc() call whose count*size overflows size_t. Plain glibc
+// The configuration of this test needs one real sub-pool allocation, a
+// calloc() call whose count*size overflows size_t. Plain glibc
 // answers such a call with NULL, which is the documented "ran out of memory"
-// outcome that this test wants to observe. The calloc interceptor of
+// outcome that this test wants to observe, but the calloc interceptor of
 // AddressSanitizer instead reports a hard "calloc-overflow" error and aborts
 // the process. That is a real difference between the two environments, and it
-// has nothing to do with what this test checks. The stub for calloc avoids the
-// difference under a plain build and under a sanitized build.
+// has nothing to do with what this test checks, so the stub for calloc avoids
+// the difference under a plain build and under a sanitized build alike.
 static void *max_size_test_malloc(size_t size) { return malloc(size); }
 static void *max_size_test_calloc(size_t count, size_t size) {
   (void)count;
@@ -3072,21 +3072,21 @@ static void *max_size_test_realloc(void *ptr, size_t size) {
 static void max_size_test_free(void *ptr) { free(ptr); }
 
 TEST(r_mempools, largest_size_power_of_two_at_true_maximum_passes_validation) {
-  // The library must not compute max_allowed_largest_size as SIZE_MAX / 2. On a
-  // 64-bit size_t that is 2^63 - 1. It is one less than the highest power of
-  // two that size_t can hold, which is 2^63. It is also one less than the
+  // The library must not compute max_allowed_largest_size as SIZE_MAX / 2: on
+  // a 64-bit size_t that is 2^63 - 1, one less than the highest power of
+  // two that size_t can hold, which is 2^63, and also one less than the
   // documented ceiling of this module, which says that the largest size must be
   // <= 2^63 bytes. With that formula, the "sizes beyond limits" check always
-  // rejects largest_size_power_of_two = 63, and the documentation promises that
-  // this value is valid.
+  // rejects largest_size_power_of_two = 63, which the documentation promises
+  // is a valid value.
   //
-  // No real machine can back a working pool at this scale. The smallest
+  // No real machine can back a working pool at this scale: the smallest
   // sub-pool alone would need 2^63 bytes. This test therefore asserts only that
   // the validation stage does not reject a create call at the true ceiling. The
-  // call still fails soon after, for a separate reason that nothing can avoid:
-  // the real allocation cannot succeed. The allocator stubs above explain why
-  // the test simulates that failure, and does not leave it to the overflow
-  // handling of the real allocator.
+  // call fails soon after all the same, for a separate reason that nothing can
+  // avoid: the real allocation cannot succeed. The allocator stubs above
+  // explain why the test simulates that failure instead of leaving it to the
+  // overflow handling of the real allocator.
   ccol_memmgmt_procs_t m_procs = {.malloc = max_size_test_malloc,
                                   .calloc = max_size_test_calloc,
                                   .realloc = max_size_test_realloc,
@@ -3101,18 +3101,18 @@ TEST(r_mempools, largest_size_power_of_two_at_true_maximum_passes_validation) {
 
 // _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE must not compute its second
 // term as the full, un-reduced product 2 * 2^SC * (2^N - 1), with the division
-// by 2^N only at the very end. For a large enough pair of SC and N, that
-// intermediate product overflows size_t. It wraps before the division can bring
-// it back into range, and it corrupts the final result. The true, fully reduced
-// value fits in a size_t without trouble.
+// by 2^N only at the very end: for a large enough pair of SC and N, that
+// intermediate product overflows size_t, wrapping before the division can bring
+// it back into range and corrupting the final result, while the true, fully
+// reduced value fits in a size_t without trouble.
 //
 // Which pair does that depends on the width of size_t, so each width gets its
-// own pair. The window has a lower bound, which is the point where the
-// un-reduced product overflows. It has an upper bound, which is the point where
-// the true total no longer fits. Those two bounds sit 32 powers of two apart
+// own pair. The window has a lower bound, the point where the
+// un-reduced product overflows, and an upper bound, the point beyond which
+// the true total does not fit, and those two bounds sit 32 powers of two apart
 // between LP64 and ILP32. One hardcoded pair would either shift past the width
 // of size_t on the other width, which is undefined, or never reach the
-// overflow. In the second case the test would pass and prove nothing.
+// overflow, in which case the test would pass and prove nothing.
 #if SIZE_MAX > 0xFFFFFFFFu
 #define CCOL_TEST_PREMATURE_OVERFLOW_SC 56
 #else
@@ -3121,11 +3121,11 @@ TEST(r_mempools, largest_size_power_of_two_at_true_maximum_passes_validation) {
 TEST(r_mempools, calculate_preallocated_buffer_size_no_premature_overflow) {
   const uint8_t ss = 4, ls = 11, sc = CCOL_TEST_PREMATURE_OVERFLOW_SC;
 
-  // This is the ground truth. It is the same sum over the tiers that
+  // This is the ground truth: the same sum over the tiers that
   // init_preallocated_r_mempool_internal_pools computes at run time. It is a
   // completely different algorithm from the closed form of the macro, and it
-  // forms no large intermediate product. It is therefore a real, independent
-  // cross-check, and not a restatement of the formula.
+  // forms no large intermediate product, so it is a real, independent
+  // cross-check, not a restatement of the formula.
   size_t expected = 0;
   size_t esize = (size_t)1 << ss;
   size_t ecount = (size_t)1 << sc;
@@ -3138,10 +3138,10 @@ TEST(r_mempools, calculate_preallocated_buffer_size_no_premature_overflow) {
   REQUIRE_EQ(_CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE(ss, ls, sc),
              expected);
 
-  // This confirms that these parameters really reach the overflow that the test
-  // guards against. The code below computes the same formula with the multiply
-  // before the divide, in the same size_t arithmetic. It gives a wrapped, wrong
-  // result, which differs from the ground truth above.
+  // This confirms that these parameters really reach the overflow that the
+  // test guards against: the code below computes the same formula with the
+  // multiply before the divide, in the same size_t arithmetic, and gets a
+  // wrapped, wrong result, which differs from the ground truth above.
   size_t unreduced_second_term =
       (2 * ((size_t)1 << sc) * (((size_t)1 << (ls - ss + 1)) - 1)) /
       ((size_t)1 << (ls - ss + 1));
@@ -3156,9 +3156,9 @@ TEST(r_mempools, realloc_first_exhaustion_entry_grows) {
   // A ccol_fallback_at_first_exhaustion dynamic entry belongs to a tier with a
   // nonzero element size. When
   // the library reallocates such an entry to a larger pool, the user size of
-  // the old slot must bound min_user_size. The new requested size must not
-  // bound it. A copy of new_size bytes out of a smaller allocation is a heap
-  // over-read. Valgrind and AddressSanitizer report it.
+  // the old slot must bound min_user_size, not the new requested size,
+  // because a copy of new_size bytes out of a smaller allocation is a heap
+  // over-read, which Valgrind and AddressSanitizer report.
   SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
       4, 6, 7, ccol_fallback_at_first_exhaustion, false, NULL, NULL);
   REQUIRE_NE((void *)rmp, NULL);
@@ -3205,10 +3205,10 @@ TEST(r_mempools, realloc_first_exhaustion_entry_grows) {
 TEST(r_mempools, realloc_last_exhaustion_pseudo_pool_entry_shrinks) {
   // A ccol_fallback_at_last_exhaustion pseudo_pool entry belongs to no tier,
   // and has no element size of its own. ccol_r_mempool_realloc_entry must
-  // identify such an entry correctly. It must recover the true user-visible
-  // size of that entry from the size prefix of the dynamic entry. It must not
-  // read past the original allocation. Data in a pseudo_pool entry must survive
-  // a realloc that shrinks it, up to the new and smaller capacity.
+  // identify such an entry correctly and recover the true user-visible
+  // size of that entry from the size prefix of the dynamic entry, without
+  // reading past the original allocation. Data in a pseudo_pool entry must
+  // survive a realloc that shrinks it, up to the new and smaller capacity.
   SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
       4, 6, 7, ccol_fallback_at_last_exhaustion, false, NULL, NULL);
   REQUIRE_NE((void *)rmp, NULL);
@@ -3253,10 +3253,10 @@ TEST(r_mempools, realloc_last_exhaustion_pseudo_pool_entry_shrinks) {
 
 TEST(r_mempools, realloc_last_exhaustion_pseudo_pool_entry_grows) {
   // A growth of a pseudo_pool entry must not over-read the original
-  // allocation. It must keep the data that fits. The size prefix of the dynamic
-  // entry records the real size of the original entry, which is 16. A growth to
-  // 32 therefore copies exactly those 16 bytes forward. The rest of the new,
-  // larger buffer stays as newly allocated memory, and it holds no known
+  // allocation, and it must keep the data that fits. The size prefix of the
+  // dynamic entry records the real size of the original entry, which is 16, so
+  // a growth to 32 copies exactly those 16 bytes forward, and the rest of the
+  // new, larger buffer stays as newly allocated memory, with no known
   // values.
   SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
       4, 6, 7, ccol_fallback_at_last_exhaustion, false, NULL, NULL);
@@ -3302,22 +3302,22 @@ TEST(r_mempools, realloc_last_exhaustion_pseudo_pool_entry_grows) {
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
-// ccol_r_mempool_realloc_entry has a fast path for the same size class. That
-// path returns the original pointer unchanged. It must also run for a
+// ccol_r_mempool_realloc_entry has a fast path for the same size class that
+// returns the original pointer unchanged, and it must also run for a
 // pseudo_pool entry, which is the ccol_fallback_at_last_exhaustion case.
 // pseudo_pool.extended_elem_size is always 0, because the pseudo_pool has no
-// fixed size for each tier, and a real sub-pool does have one. A fast path that
-// compares against the nonzero extended_elem_size of a real sub-pool therefore
-// never matches such an entry. Every realloc of a pseudo_pool entry then pays
-// an allocate, copy and free cycle that it does not need. It pays that cycle
-// even for the exact size that the entry already holds, and it does not return
+// fixed size for each tier, unlike a real sub-pool, so a fast path that
+// compares against the nonzero extended_elem_size of a real sub-pool would
+// never match such an entry, and every realloc of a pseudo_pool entry would
+// pay an allocate, copy and free cycle that it does not need, even for the
+// exact size that the entry already holds, instead of returning
 // addr unchanged.
 //
-// This test pins two things. The pointer and its contents survive a request for
-// the exact same size. A request for a different size still moves the entry to
-// the right size. That matches a real sub-pool entry. Such an entry also moves
-// when it shrinks far enough to cross into a smaller tier. It does not keep its
-// oversized block.
+// This test pins two things: the pointer and its contents survive a request
+// for the exact same size, and a request for a different size moves the entry
+// to the right size. That matches a real sub-pool entry, which also moves
+// when it shrinks far enough to cross into a smaller tier instead of keeping
+// its oversized block.
 TEST(r_mempools,
      realloc_last_exhaustion_pseudo_pool_entry_same_size_is_a_noop) {
   SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
@@ -3351,7 +3351,7 @@ TEST(r_mempools,
     REQUIRE_EQ(same[i], (char)(i + 1));
   }
 
-  // A genuinely different size must still move.
+  // A genuinely different size must move.
   char *moved = ccol_r_mempool_realloc_entry(rmp, same, 10);
   REQUIRE_NE((void *)moved, (void *)same);
   REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 10), 1);
@@ -3370,23 +3370,23 @@ TEST(r_mempools,
 
 // ccol_mempool_pseudo_alloc_entry must not round elem_size up to
 // sizeof(addr_t) before it records that size in the dynamic-size prefix of the
-// entry. With a rounded prefix, entry_user_size() reports the rounded capacity,
-// and not the size that the caller asked for.
+// entry, because with a rounded prefix, entry_user_size() reports the rounded
+// capacity instead of the size that the caller asked for.
 //
-// The pseudo_pool same-size fast path of ccol_r_mempool_realloc_entry is in the
-// test right above this one. It compares the raw requested size of the caller
-// directly against that recorded value. With a rounded prefix, a repeated
-// request for the identical size below sizeof(uintptr_t) does not match. One
-// example is 3 bytes, on every mainstream platform, where 3 is not 8. The call
-// then takes the slow allocate, copy and free path. It does not return the
-// original pointer unchanged. That contradicts the documented contract of
+// The pseudo_pool same-size fast path of ccol_r_mempool_realloc_entry, in the
+// test right above this one, compares the raw requested size of the caller
+// directly against that recorded value, so with a rounded prefix, a repeated
+// request for the identical size below sizeof(uintptr_t) does not match: for
+// example 3 bytes, on every mainstream platform, where 3 is not 8. The call
+// then takes the slow allocate, copy and free path instead of returning the
+// original pointer unchanged, which contradicts the documented contract of
 // ccol_r_mempool_realloc_entry, which says that it needs no allocation of a
-// different size. It contradicts that contract on every such call.
+// different size, and it does so on every such call.
 //
-// The raw size is safe to record. A pseudo_pool entry is a single heap
-// allocation, and nothing links it into a free list. It therefore has no
-// minimum size. A pool-owned entry does have one, because the free user area of
-// such an entry also serves as a free-list node.
+// The raw size is safe to record, because a pseudo_pool entry is a single
+// heap allocation that nothing links into a free list, so it has no
+// minimum size. A pool-owned entry does have one, because the free user area
+// of such an entry also serves as a free-list node.
 TEST(
     r_mempools,
     realloc_last_exhaustion_pseudo_pool_entry_below_word_size_same_size_is_a_noop) {
@@ -3422,7 +3422,7 @@ TEST(
     REQUIRE_EQ(same[i], (char)(i + 1));
   }
 
-  // A different size, still below one word, must still move the entry.
+  // A different size, also below one word, must move the entry.
   char *moved = ccol_r_mempool_realloc_entry(rmp, same, 5);
   REQUIRE_NE((void *)moved, (void *)same);
   REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 5), 1);
@@ -3440,7 +3440,7 @@ TEST(
 }
 
 /* This is the counting allocator for the two tests below. A realloc that needs
- * no move must reach the allocator zero times. That is a property of the code
+ * no move must reach the allocator zero times, which is a property of the code
  * and not of the machine, so the test asserts on it directly and times
  * nothing. */
 static atomic_size_t mp_rc_allocs;
@@ -3462,18 +3462,18 @@ static void mp_rc_free(void *p) {
   free(p);
 }
 
-// ccol_r_mempool_realloc_entry decides whether an entry must move. It decides
-// that from the number of bytes that the entry holds. It never decides it from
+// ccol_r_mempool_realloc_entry decides whether an entry must move from the
+// number of bytes that the entry holds, never from
 // which of the two representations the entry has. A tier hands out a dynamic
-// fallback entry on the ccol_fallback_at_first_exhaustion path. Such an entry
-// holds the whole stride of that tier, exactly as a pool-owned entry of that
-// tier does. Every request that the tier would serve is therefore already
-// satisfied where the entry sits. The call is a pure no-op. The pointer and the
-// contents stay the same, and there is no allocator traffic.
+// fallback entry on the ccol_fallback_at_first_exhaustion path, and such an
+// entry holds the whole stride of that tier, exactly as a pool-owned entry of
+// that tier does, so every request that the tier would serve is already
+// satisfied where the entry sits, and the call is a pure no-op: the pointer and
+// the contents stay the same, and there is no allocator traffic.
 //
-// This test is not vacuous. Limit the no-move answer for a dynamic entry to
-// "the request equals the recorded size". The 32-byte request below then
-// allocates a replacement, copies into it and frees the original. Both the
+// This test is not vacuous: limit the no-move answer for a dynamic entry to
+// "the request equals the recorded size", and the 32-byte request below then
+// allocates a replacement, copies into it and frees the original, so both the
 // assertion on pointer identity and the assertion on zero allocator traffic
 // fail.
 TEST(r_mempools,
@@ -3515,9 +3515,9 @@ TEST(r_mempools,
   char *same = dyn ? (char *)ccol_r_mempool_realloc_entry(rmp, dyn, 20) : NULL;
   char *still =
       same ? (char *)ccol_r_mempool_realloc_entry(rmp, same, 32) : NULL;
-  /* This is whichever of the three the caller still owns. A failed
-   * reallocation leaves addr in the hands of the caller. The free below must
-   * therefore find it there. It must not leave a dynamic entry outstanding for
+  /* This is whichever of the three the caller owns at this point. A failed
+   * reallocation leaves addr in the hands of the caller, so the free below
+   * must find it there instead of leaving a dynamic entry outstanding for
    * the destroy to report. */
   char *owned = still ? still : (same ? same : dyn);
   size_t allocs_after = atomic_load(&mp_rc_allocs);
@@ -3544,8 +3544,8 @@ TEST(r_mempools,
   bool first_is_noop = (same == dyn);
   bool second_is_noop = (still == dyn);
 
-  /* The test frees everything before the first assertion. A failure then
-   * reports only itself, and does not also leak the pool that it checked. */
+  /* The test frees everything before the first assertion, so a failure
+   * reports only itself, without also leaking the pool that it checked. */
   if (pool_same) ccol_r_mempool_free_entry(rmp, pool_same);
   if (owned) ccol_r_mempool_free_entry(rmp, owned);
   for (size_t i = 1; i < 4; ++i) {
@@ -3563,8 +3563,8 @@ TEST(r_mempools,
   REQUIRE_TRUE(pool_is_noop);
 }
 
-/* This allocator refuses every allocation while it is armed. A realloc that
- * must need no allocation can then be held to that. */
+/* This allocator refuses every allocation while it is armed, so that a
+ * realloc that must need no allocation can be held to that. */
 static atomic_bool mp_rd_deny;
 static void *mp_rd_malloc(size_t n) {
   return atomic_load(&mp_rd_deny) ? NULL : malloc(n);
@@ -3577,16 +3577,16 @@ static void *mp_rd_realloc(void *p, size_t n) {
 }
 static void mp_rd_free(void *p) { free(p); }
 
-// The library cannot always serve a reallocation. Such a call leaves addr with
-// the caller, and addr stays usable. This is true for both representations of
-// addr. The request can already fit in the bytes that the entry holds. The call
-// then returns the entry unmoved, and does not report a failure, because it
-// needed no allocation at all. A shrink must not fail for want of memory that
+// The library cannot always serve a reallocation, and such a call leaves addr
+// with the caller, usable, for both representations of
+// addr. When the request already fits in the bytes that the entry holds, the
+// call returns the entry unmoved instead of reporting a failure, because it
+// needed no allocation at all: a shrink must not fail for want of memory that
 // it does not need.
 //
-// This test is not vacuous. Take a dynamic fallback entry out of that rule. The
-// shrink below then returns NULL while the entry still holds four times the
-// bytes that the caller asked for. The assertion on pointer identity then
+// This test is not vacuous: take a dynamic fallback entry out of that rule, and
+// the shrink below returns NULL while the entry holds four times the
+// bytes that the caller asked for, so the assertion on pointer identity
 // fails.
 TEST(r_mempools, realloc_that_already_fits_survives_an_allocation_failure) {
   ccol_memmgmt_procs_t procs = {.malloc = mp_rd_malloc,
@@ -3631,9 +3631,9 @@ TEST(r_mempools, realloc_that_already_fits_survives_an_allocation_failure) {
    * at all. A pool-owned entry that holds more than the request answers in the
    * same way, which the code below checks. */
   char *shrunk = dyn ? (char *)ccol_r_mempool_realloc_entry(rmp, dyn, 8) : NULL;
-  /* A failed reallocation leaves addr in the hands of the caller. The free
-   * below must therefore find it there. It must not leave a dynamic entry
-   * outstanding for the destroy to report. */
+  /* A failed reallocation leaves addr in the hands of the caller, so the free
+   * below must find it there instead of leaving a dynamic entry outstanding
+   * for the destroy to report. */
   char *owned = shrunk ? shrunk : dyn;
   char *pool_shrunk = (char *)ccol_r_mempool_realloc_entry(rmp, f64[0], 8);
   atomic_store(&mp_rd_deny, false);
@@ -3642,9 +3642,9 @@ TEST(r_mempools, realloc_that_already_fits_survives_an_allocation_failure) {
   for (int i = 0; shrunk && i < 32; ++i) {
     if (shrunk[i] != (char)(i + 1)) contents_kept = false;
   }
-  /* The entry still belongs to the caller and still belongs to this pool. A
-   * free of it is therefore clean. An entry that had moved out would instead
-   * produce the fatal report for a foreign pointer. */
+  /* The entry belongs to the caller and to this pool, so a free of it is
+   * clean, whereas an entry that had moved out would produce the fatal report
+   * for a foreign pointer. */
   bool still_countable = (ccol_r_mempool_dynamic_allocs_count(rmp, 32) == 1);
   /* The test records these before the frees below, which set to NULL every
    * handle that they get. */
@@ -3672,9 +3672,9 @@ TEST(r_mempools, realloc_that_already_fits_survives_an_allocation_failure) {
 
 TEST(r_mempools, custom_allocator_propagated_to_pseudo_pool) {
   // init_r_mempool_pseudo_pool must copy rmp->m_procs into
-  // pseudo_pool.m_procs.  Without that copy, ccol_fallback_at_last_exhaustion
+  // pseudo_pool.m_procs. Without that copy, ccol_fallback_at_last_exhaustion
   // pseudo_pool entries are allocated with NULL m_procs (plain malloc) but
-  // freed with the custom allocator; an allocator mismatch Valgrind
+  // freed with the custom allocator, an allocator mismatch that Valgrind
   // detects.
   ccol_memmgmt_procs_t m_procs = {
       .malloc = malloc, .calloc = calloc, .realloc = realloc, .free = free};
@@ -3711,9 +3711,9 @@ TEST(r_mempools, custom_allocator_propagated_to_pseudo_pool) {
 
 TEST(r_mempools, custom_allocator_with_fallback_at_first_exhaustion) {
   // Verifies that ccol_r_mempool correctly propagates a custom allocator to
-  // each sub-pool under the ccol_fallback_at_first_exhaustion policy. Alloc and
-  // free must go through the same custom functions, which Valgrind/ASan would
-  // catch if the allocators were mismatched.
+  // each sub-pool under the ccol_fallback_at_first_exhaustion policy: alloc and
+  // free must go through the same custom functions, and Valgrind/ASan would
+  // catch it if the allocators were mismatched.
   ccol_memmgmt_procs_t m_procs = {
       .malloc = malloc, .calloc = calloc, .realloc = realloc, .free = free};
 
@@ -3888,14 +3888,14 @@ TEST(r_mempools, realloc_returns_null_for_invalid_size) {
 }
 
 // realloc_returns_null_for_invalid_size above exercises an invalid size only
-// with a NULL addr. It pins nothing about a live, non-NULL addr in that same
-// situation. ccol_r_mempool_realloc_entry leaves such an addr completely
-// untouched on purpose. It neither frees it nor moves it. It treats an invalid
+// with a NULL addr, so it pins nothing about a live, non-NULL addr in that same
+// situation. ccol_r_mempool_realloc_entry deliberately leaves such an addr
+// completely untouched, neither freeing nor moving it: it treats an invalid
 // size exactly like any other failed reallocation, so the original entry stays
-// valid and still belongs to the caller. It never treats an invalid size as an
+// valid and belongs to the caller, and it never treats an invalid size as an
 // implicit free, which is how some implementations of realloc(ptr, 0) behave.
-// This test pins that contract directly. Without it, the contract is only an
-// untested side effect of the early return for "size == 0 || size >
+// This test pins that contract directly; without it, the contract would be
+// only an untested side effect of the early return for "size == 0 || size >
 // largest_size".
 TEST(r_mempools,
      realloc_invalid_size_with_non_null_addr_leaves_addr_untouched) {
@@ -3960,17 +3960,17 @@ TEST(r_mempools,
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
-// A shrink that cannot move must keep the entry, and must not report a failure.
+// A shrink that cannot move must keep the entry instead of reporting a failure.
 // An entry sits in a tier at least as large as the size that it was created
-// for. A request smaller than the size that the entry already holds is
-// therefore answerable where the entry is. That stays true when the tier that
-// the new size would choose is full and there is no fallback. Without this, a
-// caller that shrinks an entry under memory pressure hears that the pool is out
-// of memory. That caller already holds an entry that is big enough.
+// for, so a request smaller than the size that the entry already holds is
+// answerable where the entry is, even when the tier that the new size would
+// choose is full and there is no fallback. Without this, a caller that shrinks
+// an entry under memory pressure hears that the pool is out of memory, although
+// the caller already holds an entry that is big enough.
 //
-// This test is not vacuous. It exercises a shrink. The neighbouring full-pool
-// test exercises a growth from 16 to 32, so that test cannot tell the two
-// behaviours apart.
+// This test is not vacuous: it exercises a shrink, while the neighbouring
+// full-pool test exercises a growth from 16 to 32, so that test cannot tell
+// the two behaviours apart.
 TEST(r_mempools, realloc_shrink_with_no_room_keeps_the_entry_it_already_fits) {
   // SS=4, LS=5, SC=4: pool[0] = 16x16-byte, pool[1] = 8x32-byte.
   ccol_r_mempool *rmp =
@@ -3980,9 +3980,9 @@ TEST(r_mempools, realloc_shrink_with_no_room_keeps_the_entry_it_already_fits) {
   size_t cap16 = ccol_r_mempool_total_capacity(rmp, 16);
   size_t cap32 = ccol_r_mempool_total_capacity(rmp, 32);
 
-  /* The arrays bound the loops, and not the capacities that the arrays should
-     equal. A capacity that stops matching would otherwise write past these
-     frames, and it would not fail the check below. */
+  /* The arrays bound the loops, not the capacities that the arrays should
+     equal; otherwise a capacity that stops matching would write past these
+     frames without failing the check below. */
   enum { FILL16 = 16, FILL32 = 8 };
   void *fill16[FILL16];
   void *fill32[FILL32];
@@ -3998,35 +3998,35 @@ TEST(r_mempools, realloc_shrink_with_no_room_keeps_the_entry_it_already_fits) {
     if (!fill32[i]) alloc_ok = false;
   }
 
-  // Every tier is now exhausted. The 16-byte tier that this request would
-  // choose has nothing to give, and the fallback is off.
+  // Every tier is exhausted at this point: the 16-byte tier that this request
+  // would choose has nothing to give, and the fallback is off.
   //
-  // Both reallocs below run only when the fill produced an entry. A realloc of
-  // NULL is an allocation. The cleanup loops free only what the fill produced.
-  // On a run where the fill already failed, such a realloc would add a leak on
-  // top of the real failure. That leak would hide the failure.
+  // Both reallocs below run only when the fill produced an entry, because a
+  // realloc of NULL is an allocation and the cleanup loops free only what the
+  // fill produced, so on a run where the fill already failed, such a realloc
+  // would add a leak on top of the real failure, and that leak would hide it.
   void *orig = alloc_ok ? fill32[0] : NULL;
   void *result = orig ? ccol_r_mempool_realloc_entry(rmp, orig, 16) : NULL;
   // The array must keep naming the live entry. A realloc that MOVES frees the
-  // old entry. The old pointer here would then make the cleanup loop free that
-  // entry a second time. That would happen on exactly the wrong library
-  // behaviour that this test catches. A clean assertion failure would become a
-  // process abort, and it would take every other test in the binary with it. A
-  // refusal returns NULL and leaves the original live. The slot therefore moves
+  // old entry, so the old pointer here would make the cleanup loop free that
+  // entry a second time, on exactly the wrong library
+  // behaviour that this test catches, turning a clean assertion failure into a
+  // process abort that takes every other test in the binary with it. A
+  // refusal returns NULL and leaves the original live, so the slot moves
   // only when there is something new to name.
   if (result) fill32[0] = result;
 
-  // The entry stays exactly where it was. The bytes that the caller asked for
-  // are usable.
+  // The entry stays exactly where it was, and the bytes that the caller asked
+  // for are usable.
   bool kept = (orig != NULL && result == orig);
   if (kept) memset(result, 0x5a, 16);
 
-  // A request larger than the tier of the entry must still fail. The branch
+  // A request larger than the tier of the entry must still fail: the branch
   // must not return the original entry for everything. The size must stay
-  // within largest_size, which is 32 here. A larger size meets the size guard
-  // of the function before the branch, and this check then proves nothing. A
-  // 16-byte entry that grows to 32 is the shape that does reach the branch. The
-  // 32-byte tier is exhausted, so the move cannot happen.
+  // within largest_size, which is 32 here, because a larger size meets the size
+  // guard of the function before the branch, and this check would then prove
+  // nothing. A 16-byte entry that grows to 32 reaches the branch, and since the
+  // 32-byte tier is exhausted, the move cannot happen.
   void *grow =
       alloc_ok ? ccol_r_mempool_realloc_entry(rmp, fill16[0], 32) : NULL;
   bool grow_refused = (alloc_ok && grow == NULL);
@@ -4069,16 +4069,16 @@ TEST(r_mempools, realloc_foreign_pointer_is_fatal) {
   REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   /* The signal must be SIGABRT. A NULL dereference, or any other crash, also
-   * satisfies WIFSIGNALED. Such a crash is not the deliberate abort that this
-   * test pins. */
+   * satisfies WIFSIGNALED, but such a crash is not the deliberate abort that
+   * this test pins. */
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-// A pointer can be a valid, live entry and still not belong to THIS
-// ccol_r_mempool. ccol_r_mempool_realloc_entry must reject such a pointer. A
-// check that the pointer is a live entry of SOME pool is not enough: a pointer
-// from a different ccol_r_mempool passes it with no trouble. The call then
-// succeeds without a word, and does not assert. That contradicts the
+// A pointer can be a valid, live entry and yet not belong to THIS
+// ccol_r_mempool, and ccol_r_mempool_realloc_entry must reject such a pointer.
+// A check that the pointer is a live entry of SOME pool is not enough: a
+// pointer from a different ccol_r_mempool passes it with no trouble, and the
+// call then silently succeeds instead of asserting, which contradicts the
 // documented contract, which says that the caller must not pass an address
 // that came from another ccol_r_mempool.
 TEST(r_mempools, realloc_pointer_from_a_different_r_mempool_is_fatal) {
@@ -4103,19 +4103,19 @@ TEST(r_mempools, realloc_pointer_from_a_different_r_mempool_is_fatal) {
   REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   /* The signal must be SIGABRT. A NULL dereference, or any other crash, also
-   * satisfies WIFSIGNALED. Such a crash is not the deliberate abort that this
-   * test pins. */
+   * satisfies WIFSIGNALED, but such a crash is not the deliberate abort that
+   * this test pins. */
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-// ccol_r_mempool_realloc_entry must reject an addr that is already free. This
-// stays true when the requested size maps to the same sub-pool tier that the
+// ccol_r_mempool_realloc_entry must reject an addr that is already free, even
+// when the requested size maps to the same sub-pool tier that the
 // entry came from. That case must not take a fast "return addr unchanged" path
-// with no check of the state of the entry. Such a path hands the caller back a
-// node that is still linked into the free list of the pool. A write through
-// that node corrupts the free list itself. The pool then crashes with SIGSEGV
-// on a later, unrelated allocation, and not with a controlled assert. This test
-// exercises only the entry point, which must refuse the call outright.
+// with no check of the state of the entry, because such a path hands the
+// caller back a node that is linked into the free list of the pool, and a
+// write through it corrupts the free list, so the pool crashes with SIGSEGV
+// on a later, unrelated allocation instead of with a controlled assert.
+// This test exercises only the entry point, which must refuse it outright.
 TEST(r_mempools, realloc_already_freed_pointer_same_tier_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
@@ -4140,23 +4140,23 @@ TEST(r_mempools, realloc_already_freed_pointer_same_tier_is_fatal) {
   REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   /* The signal must be SIGABRT. A NULL dereference, or any other crash, also
-   * satisfies WIFSIGNALED. Such a crash is not the deliberate abort that this
-   * test pins. */
+   * satisfies WIFSIGNALED, but such a crash is not the deliberate abort that
+   * this test pins. */
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
 // The doc comment of ccol_r_mempool_realloc_entry promises an assert on a
 // foreign or corrupted addr, in the same way as ccol_mempool_free_entry. The
-// address decides ownership. An address that lands in none of the tiers of the
+// address decides ownership: an address that lands in none of the tiers of the
 // pool belongs to the pool only when the pool holds dynamic fallback entries.
-// The pool here holds none, so the address is foreign. The call must therefore
-// abort, and must read nothing at all through the pointer of the caller.
+// The pool here holds none, so the address is foreign, and the call must
+// abort, reading nothing at all through the pointer of the caller.
 //
-// The stack block below is zeroed on purpose. The library asks whether this
-// pool holds any dynamic entries. Without that question, it would read the
-// bytes before the address as the bookkeeping of a dynamic entry. Zeroes there
-// make that read observable as a NULL pool pointer, and not as whatever the
-// stack held.
+// The stack block below is deliberately zeroed. The library asks whether this
+// pool holds any dynamic entries; without that question, it would read the
+// bytes before the address as the bookkeeping of a dynamic entry, and zeroes
+// there make that read observable as a NULL pool pointer instead of as
+// whatever the stack held.
 TEST(r_mempools, realloc_address_outside_every_tier_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
@@ -4169,8 +4169,8 @@ TEST(r_mempools, realloc_address_outside_every_tier_is_fatal) {
     SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
         4, 6, 7, ccol_fallback_disabled, true, NULL, NULL);
     void *real = ccol_r_mempool_alloc_entry(rmp, 16);
-    /* This is not a REQUIRE_* macro. That macro returns from the test
-       function. A return here drops this child back into the loop of the
+    /* This is not a REQUIRE_* macro, because that macro returns from the test
+       function, and a return here drops this child back into the loop of the
        harness, where it runs every remaining test in the binary beside its
        parent. A distinct exit code fails the WTERMSIG check of the parent
        instead. */
@@ -4187,17 +4187,17 @@ TEST(r_mempools, realloc_address_outside_every_tier_is_fatal) {
   REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   /* The signal must be SIGABRT. A NULL dereference, or any other crash, also
-   * satisfies WIFSIGNALED. Such a crash is not the deliberate abort that this
-   * test pins. */
+   * satisfies WIFSIGNALED, but such a crash is not the deliberate abort that
+   * this test pins. */
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-// This is the mirror image of the case above. The entry here is pool-owned and
-// sits correctly inside the buffer of its tier. Corruption sets its recorded
-// state to a value that is neither of the two valid ones. The address resolves
-// to a real sub-pool, so the tier check alone reports nothing wrong.
-// ccol_r_mempool_realloc_entry must then also confirm that the entry is taken,
-// before it reallocates the entry. Without that confirmation, the library
+// This is the mirror image of the case above: the entry here is pool-owned
+// and sits correctly inside the buffer of its tier, but corruption sets its
+// recorded state to a value that is neither of the two valid ones. The
+// address resolves to a real sub-pool, so the tier check alone sees nothing
+// wrong, and ccol_r_mempool_realloc_entry must also confirm that the entry
+// is taken before it reallocates it. Without that confirmation, the library
 // copies out of an entry that is already free, and frees it a second time.
 TEST(r_mempools, realloc_pool_owned_entry_with_corrupted_status_is_fatal) {
   pid_t pid = fork();
@@ -4225,24 +4225,24 @@ TEST(r_mempools, realloc_pool_owned_entry_with_corrupted_status_is_fatal) {
   REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   /* The signal must be SIGABRT. A NULL dereference, or any other crash, also
-   * satisfies WIFSIGNALED. Such a crash is not the deliberate abort that this
-   * test pins. */
+   * satisfies WIFSIGNALED, but such a crash is not the deliberate abort that
+   * this test pins. */
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
 TEST(r_mempools, realloc_escalated_to_pseudo_pool_does_not_overflow_buffer) {
   // ccol_r_mempool_realloc_entry must compute how many bytes to copy from the
-  // *actual* new entry that ccol_r_mempool_alloc_entry gave. It must never
-  // compute that count from the *ideal* target tier for the requested size.
-  // That tier rounds the size up to its own capacity, and that capacity is
+  // *actual* new entry that ccol_r_mempool_alloc_entry gave, never
+  // from the *ideal* target tier for the requested size, because
+  // that tier rounds the size up to its own capacity, which is
   // usually larger.
   //
   // Under ccol_fallback_at_last_exhaustion, the ideal tier and every larger
-  // real tier can be exhausted. The pseudo_pool then serves the new entry with
-  // exactly `size` real bytes, which is fewer than the capacity of the ideal
-  // tier. A copy of the capacity of the ideal tier therefore writes past the
-  // end of that smaller, real allocation. That is a heap buffer overflow, and
-  // AddressSanitizer reports it. SS=4, LS=6, SC=7 give pool0=128x16B,
+  // real tier can be exhausted, and the pseudo_pool then serves the new entry
+  // with exactly `size` real bytes, which is fewer than the capacity of the
+  // ideal tier, so a copy of the capacity of the ideal tier writes past the
+  // end of that smaller, real allocation: a heap buffer overflow, which
+  // AddressSanitizer reports. SS=4, LS=6, SC=7 give pool0=128x16B,
   // pool1=64x32B and pool2=32x64B.
   SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
       4, 6, 7, ccol_fallback_at_last_exhaustion, false, NULL, NULL);
@@ -4263,19 +4263,19 @@ TEST(r_mempools, realloc_escalated_to_pseudo_pool_does_not_overflow_buffer) {
   REQUIRE_EQ(ccol_r_mempool_used_count(rmp, 64),
              ccol_r_mempool_total_capacity(rmp, 64));
 
-  // Shrink to 17 bytes. The ideal tier is pool1 at 32B, and it is full. The
-  // escalation target is pool2 at 64B, and it is also full, because old_entry
-  // itself still counts as taken. The new entry must therefore land in the
+  // Shrink to 17 bytes. The ideal tier is pool1 at 32B, and it is full; the
+  // escalation target is pool2 at 64B, full as well, because old_entry
+  // itself counts as taken, so the new entry must land in the
   // pseudo_pool with exactly 17 real bytes.
   char *shrunk = ccol_r_mempool_realloc_entry(rmp, old_entry, 17);
   REQUIRE_NE((void *)shrunk, NULL);
   REQUIRE_EQ(ccol_r_mempool_dynamic_allocs_count(rmp, 17), 1);
 
-  // A write of the full, real 17-byte capacity must corrupt nothing next to it.
-  // make memtest and AddressSanitizer check this directly. The assignment
-  // itself also covers a plain run with no sanitizer. A copy sized by the ideal
-  // tier produces a 15-byte overflow, and that corrupts heap bookkeeping which
-  // malloc and free notice later.
+  // A write of the full, real 17-byte capacity must corrupt nothing next to
+  // it. make memtest and AddressSanitizer check this directly, and the
+  // assignment itself also covers a plain run with no sanitizer: a copy sized
+  // by the ideal tier produces a 15-byte overflow, which corrupts heap
+  // bookkeeping that malloc and free notice later.
   memset(shrunk, 0x5a, 17);
   for (int i = 0; i < 17; ++i) {
     REQUIRE_EQ(shrunk[i], (char)0x5a);
@@ -4291,11 +4291,11 @@ TEST(r_mempools, realloc_escalated_to_pseudo_pool_does_not_overflow_buffer) {
 
 // This is the ccol_r_mempool counterpart of
 // cmempools.double_free_of_dynamic_entry_with_another_still_live_is_fatal. A
-// pseudo_pool entry belongs to the ccol_fallback_at_last_exhaustion policy. The
-// library frees it through the same __ccol_mempool_free_entry function that it
-// uses for the dynamic fallback entries of a plain ccol_mempool. It must
-// therefore get the identical protection. This test uses the same no-clobber
-// allocator, so the assertion runs deterministically. It does not depend on the
+// pseudo_pool entry belongs to the ccol_fallback_at_last_exhaustion policy, and
+// the library frees it through the same __ccol_mempool_free_entry function that
+// it uses for the dynamic fallback entries of a plain ccol_mempool, so it must
+// get the identical protection. This test uses the same no-clobber
+// allocator, so that the assertion runs deterministically, independent of the
 // free-list poisoning of one particular libc.
 TEST(r_mempools,
      double_free_of_pseudo_pool_entry_with_another_still_live_is_fatal) {
@@ -4314,10 +4314,10 @@ TEST(r_mempools,
     SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
         4, 6, 7, ccol_fallback_at_last_exhaustion, true, &procs, NULL);
 
-    // Exhaust all three sub-pools, so further allocations route through the
-    // shared pseudo_pool. This test never frees the filled entries, on
-    // purpose. The process aborts before it reaches any cleanup code below.
-    // Nothing therefore needs their pointers after this loop.
+    // Exhaust all three sub-pools, so that further allocations route through
+    // the shared pseudo_pool. This test deliberately never frees the filled
+    // entries: the process aborts before it reaches any cleanup code below, so
+    // nothing needs their pointers after this loop.
     for (size_t i = 0; i < 128; ++i) ccol_r_mempool_alloc_entry(rmp, 16);
     for (size_t i = 0; i < 64; ++i) ccol_r_mempool_alloc_entry(rmp, 32);
     for (size_t i = 0; i < 32; ++i) ccol_r_mempool_alloc_entry(rmp, 64);
@@ -4338,19 +4338,19 @@ TEST(r_mempools,
   REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   /* The signal must be SIGABRT. A NULL dereference, or any other crash, also
-   * satisfies WIFSIGNALED. Such a crash is not the deliberate abort that this
-   * test pins. */
+   * satisfies WIFSIGNALED, but such a crash is not the deliberate abort that
+   * this test pins. */
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
 // This test covers the documented leak-detection contract of
 // ccol_r_mempool_destroy under the ccol_fallback_at_first_exhaustion policy.
-// Under that policy the leak check happens once for each sub-pool. The
+// Under that policy the leak check happens once for each sub-pool: the
 // ccol_mempool_destroy() call of each sub-pool makes it, inside the teardown
-// loop of _ccol_r_mempool_destroy. There is no separate check at the
-// ccol_r_mempool level for this policy. The pseudo_pool of
-// ccol_fallback_at_last_exhaustion does have such a check. The rest of this
-// suite would not notice a change that broke the check in each sub-pool.
+// loop of _ccol_r_mempool_destroy, and there is no separate check at the
+// ccol_r_mempool level for this policy, unlike the pseudo_pool of
+// ccol_fallback_at_last_exhaustion, which does have such a check. The rest of
+// this suite would not notice a change that broke the check in each sub-pool.
 TEST(r_mempools, destroy_with_leaked_first_exhaustion_entry_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
@@ -4374,8 +4374,8 @@ TEST(r_mempools, destroy_with_leaked_first_exhaustion_entry_is_fatal) {
   REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   /* The signal must be SIGABRT. A NULL dereference, or any other crash, also
-   * satisfies WIFSIGNALED. Such a crash is not the deliberate abort that this
-   * test pins. */
+   * satisfies WIFSIGNALED, but such a crash is not the deliberate abort that
+   * this test pins. */
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
@@ -4410,8 +4410,8 @@ TEST(r_mempools,
   REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   /* The signal must be SIGABRT. A NULL dereference, or any other crash, also
-   * satisfies WIFSIGNALED. Such a crash is not the deliberate abort that this
-   * test pins. */
+   * satisfies WIFSIGNALED, but such a crash is not the deliberate abort that
+   * this test pins. */
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
@@ -4460,9 +4460,9 @@ TEST(r_mempools, create_preallocated_buffer_fails) {
 }
 
 // ccol_r_mempool_create_from_preallocated_buffer must reject a misaligned
-// top-level buffer at once. It mirrors the equivalent check in
-// ccol_mempool_create_from_preallocated_buffer. It must not let the problem
-// appear later, deep inside the construction of one sub-pool, or not appear at
+// top-level buffer at once, mirroring the equivalent check in
+// ccol_mempool_create_from_preallocated_buffer, instead of letting the problem
+// appear later, deep inside the construction of one sub-pool, or not at
 // all.
 TEST(r_mempools, create_preallocated_buffer_fails_misaligned) {
   _Alignas(_ccol_mempool_entry_align) uint8_t buf[897];  // 896 + 1
@@ -4824,7 +4824,7 @@ TEST(r_mempools, try_exhausting_with_fallback_at_last_exhaustion_no_locks) {
 TEST(preallocated_r_mempools, custom_allocator_propagated) {
   // This test verifies that ccol_r_mempool_create_from_preallocated_buffer
   // passes a custom allocator on to the sub-pool structs and to the reverse
-  // lookup array. Every heap allocation and free then goes through the same
+  // lookup array, so that every heap allocation and free goes through the same
   // functions.
   ccol_memmgmt_procs_t m_procs = {
       .malloc = malloc, .calloc = calloc, .realloc = realloc, .free = free};
@@ -4863,9 +4863,9 @@ TEST(r_mempools,
      fallback_at_last_exhaustion_escalation_not_counted_as_fallback) {
   // SS=4, LS=6, SC=7: pool[0]=128x16-byte, pool[1]=64x32-byte.
   // Under ccol_fallback_at_last_exhaustion, an escalation from pool[0] to
-  // pool[1] must NOT increment the pseudo_pool counter. Such an escalation is
-  // only a reallocation inside the preallocated budget. It is not a heap
-  // fallback.
+  // pool[1] must NOT increment the pseudo_pool counter, because such an
+  // escalation is only a reallocation inside the preallocated budget, not a
+  // heap fallback.
   SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
       4, 6, 7, ccol_fallback_at_last_exhaustion, false, NULL, NULL);
   REQUIRE_NE((void *)rmp, NULL);
@@ -4899,51 +4899,51 @@ TEST(r_mempools,
 // CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER rejects some combinations at
 // compile time, with the internal _ccol_rmempool_buffer_params_fit guard. The
 // combination is (smallest_size_power_of_two, largest_size_power_of_two,
-// number_of_smallest_size_elems_power_of_two). The guard rejects a combination
+// number_of_smallest_size_elems_power_of_two), and the guard rejects one
 // that makes the arithmetic of
-// _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE overflow size_t. It also
-// rejects one that breaks the "SC >= LS - SS" precondition, which the division
+// _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE overflow size_t, as well
+// as one that breaks the "SC >= LS - SS" precondition, which the division
 // inside that macro needs to stay exact. The _Static_assert of the sibling
 // macro CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER gives the same coverage for a
 // plain pool.
 //
 // A rejected combination cannot go into
 // CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER itself, because this whole test
-// binary then fails to compile. This test therefore exercises the boolean logic
-// of the guard directly. It cross-checks the guard against cases that this file
+// binary would then fail to compile, so this test exercises the boolean logic
+// of the guard directly, and cross-checks it against cases that this file
 // already knows the runtime accepts or rejects for the identical reason.
 TEST(preallocated_r_mempools, buffer_params_fit_matches_known_outcomes) {
   // create_rejects_configuration_whose_true_buffer_size_overflows proves that
   // the runtime rejects the exact overflow case SS=4, LS=63, SC=62. The #if
-  // below guards on the width of size_t, for the same reason that the other
-  // test does. Where size_t is 32 bits, the exponents 63 and 62 are not valid
-  // inputs at all. The shifts by them inside the guard are then as wide as the
-  // type. A build that instruments shift widths rejects the expression
-  // outright, and does not short-circuit past it. That is a compile failure for
-  // this whole binary, and not a test failure.
+  // below guards on the width of size_t for the same reason as the other
+  // test: where size_t is 32 bits, the exponents 63 and 62 are not valid
+  // inputs at all, so the shifts by them inside the guard are as wide as the
+  // type, and a build that instruments shift widths rejects the expression
+  // outright instead of short-circuiting past it, which is a compile failure
+  // for this whole binary, not a test failure.
 #if SIZE_MAX > 0xFFFFFFFFu
   REQUIRE_FALSE(_ccol_rmempool_buffer_params_fit(4, 63, 62));
 #else
-  // This is the equivalent shape for a 32-bit size_t. It uses the largest
-  // exponent that the guard accepts, with a count that still overruns what the
-  // type can hold.
+  // This is the equivalent shape for a 32-bit size_t: it uses the largest
+  // exponent that the guard accepts, with a count that overruns what the
+  // type can hold all the same.
   REQUIRE_FALSE(_ccol_rmempool_buffer_params_fit(4, 31, 30));
 #endif
 
-  // SC < LS - SS breaks the precondition for the exact division. No single term
-  // overflows on its own.
+  // SC < LS - SS breaks the precondition for the exact division, although no
+  // single term overflows on its own.
   REQUIRE_FALSE(_ccol_rmempool_buffer_params_fit(4, 6, 1));
 
-  // LS <= SS is not a valid pool shape at all. It leaves no room for even one
-  // tier above the smallest one.
+  // LS <= SS is not a valid pool shape at all, because it leaves no room for
+  // even one tier above the smallest one.
   REQUIRE_FALSE(_ccol_rmempool_buffer_params_fit(8, 4, 10));
   REQUIRE_FALSE(_ccol_rmempool_buffer_params_fit(6, 6, 10));
 
   // The guard must accept every (SS, LS, SC) triple that a real
-  // CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER call site in this file uses. If
+  // CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER call site in this file uses; if
   // the guard rejected one, this whole binary would fail to compile. These
-  // assertions repeat that here directly. A change that narrows the guard then
-  // shows up as an ordinary test failure. It does not show up only as a build
+  // assertions repeat that here directly, so that a change that narrows the
+  // guard shows up as an ordinary test failure instead of only as a build
   // break that somebody has to bisect.
   REQUIRE_TRUE(_ccol_rmempool_buffer_params_fit(4, 6, 7));
   REQUIRE_TRUE(_ccol_rmempool_buffer_params_fit(4, 16, 12));
@@ -4951,8 +4951,8 @@ TEST(preallocated_r_mempools, buffer_params_fit_matches_known_outcomes) {
 
   // This is the exact triple that
   // calculate_preallocated_buffer_size_no_premature_overflow runs through
-  // _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE. The guard and the size
-  // macro must therefore agree on the one case that is large enough to matter.
+  // _CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE, so the guard and the
+  // size macro must agree on the one case that is large enough to matter.
   // The element count differs by width, for the same reason as in that test.
 #if SIZE_MAX > 0xFFFFFFFFu
   REQUIRE_TRUE(_ccol_rmempool_buffer_params_fit(4, 11, 56));
@@ -4961,10 +4961,10 @@ TEST(preallocated_r_mempools, buffer_params_fit_matches_known_outcomes) {
 #endif
 
   // The guard rejects a largest_size_power_of_two at or above the width of
-  // size_t on its own, whatever the counts. The first sub-condition of the
-  // macro is `(size_t)(LS) < sizeof(size_t) * CHAR_BIT`. LS=33 therefore fits
-  // on LP64. On a 32-bit platform the guard correctly refuses it, and does not
-  // accept it. That is not a defect in the guard. It is a real difference in
+  // size_t on its own, whatever the counts, since the first sub-condition of
+  // the macro is `(size_t)(LS) < sizeof(size_t) * CHAR_BIT`. LS=33 therefore
+  // fits on LP64, while on a 32-bit platform the guard correctly refuses it.
+  // That is not a defect in the guard but a real difference in
   // what "fits" means there.
 #if SIZE_MAX > 0xFFFFFFFFu
   REQUIRE_TRUE(_ccol_rmempool_buffer_params_fit(4, 33, 30));
@@ -4972,21 +4972,21 @@ TEST(preallocated_r_mempools, buffer_params_fit_matches_known_outcomes) {
   REQUIRE_FALSE(_ccol_rmempool_buffer_params_fit(4, 33, 30));
 #endif
 
-  // This is the tightest valid shape, where SC == LS - SS exactly. It mirrors
+  // This is the tightest valid shape, where SC == LS - SS exactly, mirroring
   // the boundary in create_succeeds_with_minimum_sc.
   REQUIRE_TRUE(_ccol_rmempool_buffer_params_fit(4, 6, 2));
 }
 
 // Every other CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER call site in this file
-// puts a `static` storage-class prefix in front of the macro at function scope.
-// The buffer then has static storage duration, and not stack storage duration.
-// The _Static_assert of the guard must not break that usage. Put that
-// _Static_assert ahead of the array declaration, and the `static` binds to the
-// assertion statement instead of the array declaration. That is a hard compile
-// error at every one of those call sites. This test compiles and passes at the
-// exact minimum-SC boundary, and that is what pins the placement. The test of
-// _ccol_rmempool_buffer_params_fit above checks that boundary only in the
-// abstract.
+// puts a `static` storage-class prefix in front of the macro at function scope,
+// so that the buffer has static storage duration instead of stack storage
+// duration, and the _Static_assert of the guard must not break that usage: put
+// that _Static_assert ahead of the array declaration, and the `static` binds to
+// the assertion statement instead of the array declaration, which is a hard
+// compile error at every one of those call sites. This test compiles and passes
+// at the exact minimum-SC boundary, which is what pins the placement, while the
+// test of _ccol_rmempool_buffer_params_fit above checks that boundary only in
+// the abstract.
 TEST(preallocated_r_mempools,
      declare_with_static_prefix_at_minimum_sc_boundary) {
   static CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(min_sc_buf, 4, 6, 2);
@@ -5007,11 +5007,11 @@ TEST(preallocated_r_mempools,
 // C_MEMPOOL / C_R_MEMPOOL CONCURRENCY STRESS TESTS
 //
 // These tests exercise real concurrent access to ccol_mempool and
-// ccol_r_mempool. Both are documented as thread-safe when the caller creates
-// them with single_threaded=false. Each thread records a failure into its own
-// argument struct. The main thread checks those structs after every worker
-// joins. No thread other than the main thread calls a tau REQUIRE_* macro. This
-// matches the pattern of the concurrency suite in tests/clrucache/tests.c.
+// ccol_r_mempool, which are both documented as thread-safe when the caller
+// creates them with single_threaded=false. Each thread records a failure into
+// its own argument struct, which the main thread checks after every worker
+// joins, so no thread other than the main thread calls a tau REQUIRE_* macro.
+// This matches the pattern of the concurrency suite in tests/clrucache/tests.c.
 
 #define MP_STRESS_THREADS 8
 #define MP_STRESS_ITERS 2000
@@ -5028,16 +5028,16 @@ static void *mp_stress_worker(void *arg) {
   for (int i = 0; i < MP_STRESS_ITERS; ++i) {
     int64_t *slot = (int64_t *)ccol_mempool_alloc_entry(a->mp);
     if (!slot) {
-      /* fallback_to_dynamic_memory is on below. A NULL here can therefore
-       * only mean a real system out-of-memory, or a corrupted pool. */
+      /* fallback_to_dynamic_memory is on below, so a NULL here can only mean
+       * a real system out-of-memory, or a corrupted pool. */
       a->ok = false;
       break;
     }
     int64_t marker = (int64_t)a->thread_idx * 1000000 + i;
     *slot = marker;
     /* The read back happens at once. A concurrent alloc on another thread can
-     * hand out this exact same slot by mistake. The write of that thread then
-     * clobbers this one before this point. */
+     * hand out this exact same slot by mistake, and the write of that thread
+     * then clobbers this one before this point. */
     if (*slot != marker) {
       a->ok = false;
       ccol_mempool_free_entry(a->mp, slot);
@@ -5049,10 +5049,10 @@ static void *mp_stress_worker(void *arg) {
 }
 
 TEST(cmempools, concurrent_alloc_free_stress) {
-  // The pool is small on purpose. It has 64 real slots against
-  // MP_STRESS_THREADS of 8, each running MP_STRESS_ITERS of 2000. There is
-  // therefore real contention between threads on the free list, and the dynamic
-  // fallback path runs too. This is not churn on one thread with no contention.
+  // The pool is deliberately small: 64 real slots against
+  // MP_STRESS_THREADS of 8, each running MP_STRESS_ITERS of 2000, so
+  // there is real contention between threads on the free list, and the dynamic
+  // fallback path runs too, instead of churn on one thread with no contention.
   ccol_mempool *mp =
       ccol_mempool_create(64, sizeof(int64_t), true, false, NULL, NULL);
   REQUIRE_NE((void *)mp, NULL);
@@ -5064,11 +5064,11 @@ TEST(cmempools, concurrent_alloc_free_stress) {
     args[i].mp = mp;
     args[i].thread_idx = i;
     args[i].ok = false;
-    /* This loop counts and does not assert. A REQUIRE_* here returns from the
-     * test while the threads of earlier iterations still run. Those threads
-     * still use tids[] and args[], which live on this frame. The test joins
-     * only the threads that really started. It checks the count once every one
-     * of them is back. */
+    /* This loop counts instead of asserting, because a REQUIRE_* here would
+     * return from the test while the threads of earlier iterations run on,
+     * using tids[] and args[], which live on this frame. The test joins
+     * only the threads that really started, and checks the count once every
+     * one of them is back. */
     if (pthread_create(&tids[i], NULL, mp_stress_worker, &args[i]) != 0) break;
     started++;
   }
@@ -5123,10 +5123,10 @@ static void *rmp_stress_worker(void *arg) {
 }
 
 TEST(r_mempools, concurrent_alloc_free_stress) {
-  // SS=4, LS=6, SC=4 give pool0=16x16B, pool1=8x32B and pool2=4x64B. That is
-  // small against RMP_STRESS_THREADS. Three things therefore run for real:
+  // SS=4, LS=6, SC=4 give pool0=16x16B, pool1=8x32B and pool2=4x64B, which is
+  // small against RMP_STRESS_THREADS, so three things run for real:
   // contention between threads, tier escalation, and the pseudo_pool fallback
-  // of ccol_fallback_at_last_exhaustion. This is not free-list churn on one
+  // of ccol_fallback_at_last_exhaustion, instead of free-list churn on one
   // thread.
   SCOPED_R_MEMPOOL(rmp) = ccol_r_mempool_create(
       4, 6, 4, ccol_fallback_at_last_exhaustion, false, NULL, NULL);
@@ -5139,11 +5139,11 @@ TEST(r_mempools, concurrent_alloc_free_stress) {
     args[i].rmp = rmp;
     args[i].thread_idx = i;
     args[i].ok = false;
-    /* This loop counts and does not assert. A REQUIRE_* here returns from the
-     * test while the threads of earlier iterations still run. Those threads
-     * still use tids[] and args[], which live on this frame. The test joins
-     * only the threads that really started. It checks the count once every one
-     * of them is back. */
+    /* This loop counts instead of asserting, because a REQUIRE_* here would
+     * return from the test while the threads of earlier iterations run on,
+     * using tids[] and args[], which live on this frame. The test joins
+     * only the threads that really started, and checks the count once every
+     * one of them is back. */
     if (pthread_create(&tids[i], NULL, rmp_stress_worker, &args[i]) != 0) break;
     started++;
   }
@@ -5181,9 +5181,9 @@ static void *rmp_realloc_stress_worker(void *arg) {
   for (int i = 0; i < RMP_REALLOC_STRESS_ITERS; ++i) {
     // Each thread only touches its own pointer, which it alone owns. Two
     // threads that free or reallocate the SAME pointer at the same time are
-    // not a supported usage pattern. No allocator based on pointers supports
-    // it, and this one does not either. This test therefore does not exercise
-    // that scenario, on purpose.
+    // not a supported usage pattern, which no allocator based on pointers
+    // supports, this one included, so this test deliberately does not exercise
+    // that scenario.
     size_t size = 8 + (size_t)(i % 3) * 16; /* 8, 24, 40 -> 16/32/64 tiers */
     char *p = (char *)ccol_r_mempool_alloc_entry(a->rmp, size);
     if (!p) {
@@ -5220,11 +5220,11 @@ TEST(r_mempools, concurrent_realloc_stress) {
     args[i].rmp = rmp;
     args[i].thread_idx = i;
     args[i].ok = false;
-    /* This loop counts and does not assert. A REQUIRE_* here returns from the
-     * test while the threads of earlier iterations still run. Those threads
-     * still use tids[] and args[], which live on this frame. The test joins
-     * only the threads that really started. It checks the count once every one
-     * of them is back. */
+    /* This loop counts instead of asserting, because a REQUIRE_* here would
+     * return from the test while the threads of earlier iterations run on,
+     * using tids[] and args[], which live on this frame. The test joins
+     * only the threads that really started, and checks the count once every
+     * one of them is back. */
     if (pthread_create(&tids[i], NULL, rmp_realloc_stress_worker, &args[i]) !=
         0)
       break;
@@ -5251,16 +5251,16 @@ TEST(r_mempools, concurrent_realloc_stress) {
 /* ========================================================================== */
 /* Allocation-failure sweep over pool construction                            */
 /*                                                                            */
-/* Both kinds of pool build several objects before they return. Those objects */
-/* are the pool struct, its backing buffer, the per-entry bookkeeping, and, */
-/* for a ranged pool, one inner pool for each size class. Each failure point */
-/* must unwind exactly what the constructor built so far. Nothing else here */
-/* runs those branches. Without this sweep, the documented "returns NULL with */
+/* Both kinds of pool build several objects before they return: the pool */
+/* struct, its backing buffer, the per-entry bookkeeping, and, for a */
+/* ranged pool, one inner pool for each size class. Each failure point must */
+/* unwind exactly what the constructor built so far, and nothing else here */
+/* runs those branches; without this sweep, the documented "returns NULL with */
 /* err set" contract and the frees that go with it stay unverified. */
 /*                                                                            */
-/* One counter covers all four procs. The pool struct and several of the */
-/* inner tables come from calloc. A sweep that failed only malloc would */
-/* therefore never reach the unwinding of those. */
+/* One counter covers all four procs, because the pool struct and several */
+/* of the inner tables come from calloc, so a sweep that failed only malloc */
+/* would never reach the unwinding of those. */
 /* ========================================================================== */
 
 static _Atomic int g_mp_alloc_seen = 0;
@@ -5351,9 +5351,9 @@ TEST(cmempool_oom, preallocated_buffer_pool_unwinds_at_every_allocation) {
 }
 
 TEST(cmempool_oom, ranged_pool_construction_unwinds_at_every_allocation) {
-  /* A ranged pool builds one inner pool for each size class. The interesting
-   * failures are the ones that land partway through that loop. Such a failure
-   * must tear down the inner pools that the loop already built. */
+  /* A ranged pool builds one inner pool for each size class, and the
+   * interesting failures are the ones that land partway through that loop,
+   * which must tear down the inner pools that the loop already built. */
   bool all_handled = true;
   for (int n = 1; n <= 40; n++) {
     _mp_arm(n);
@@ -5412,9 +5412,9 @@ TEST(cmempool_oom, a_pool_built_under_a_late_failure_still_serves_entries) {
 //
 // The properties below share an awkward feature: when they break, nothing
 // visible goes wrong. The pool keeps serving correct entries, every functional
-// assertion still passes, and the only symptom is memory climbing or the cache
-// quietly refusing to work. They are therefore asserted against the library's
-// own counters rather than inferred from behaviour or from timing.
+// assertion passes, and the only symptom is memory climbing or the cache
+// quietly refusing to work, so they are asserted against the library's
+// own counters instead of being inferred from behaviour or from timing.
 
 extern size_t _ccol_mempool_live_magazines_for_tests(ccol_mempool *mp);
 extern size_t _ccol_mempool_thread_magazines_for_tests(void);
@@ -5422,31 +5422,31 @@ extern size_t _ccol_mempool_reserve_for_tests(ccol_mempool *mp);
 
 #define MP_CACHE_POOL_ELEMS 512
 
-// Every wait loop in the threaded tests of this file parks with this function.
-// None of them spins on sched_yield. Under valgrind only one thread runs at a
-// time, and sched_yield does not reliably hand the scheduler over. A spin on
-// sched_yield therefore waits out whole quanta while the thread that it depends
-// on cannot run. A real sleep releases that thread at once.
+// Every wait loop in the threaded tests of this file parks with this function
+// instead of spinning on sched_yield: under valgrind only one thread runs at a
+// time, and sched_yield does not reliably hand the scheduler over, so a spin on
+// sched_yield waits out whole quanta while the thread that it depends
+// on cannot run, whereas a real sleep releases that thread at once.
 static void mp_test_short_sleep(void) {
   struct timespec ts = {.tv_sec = 0, .tv_nsec = 1000};
   nanosleep(&ts, NULL);
 }
 
-// The library resolves which sub-pool owns an address. That work reads the
-// counter of outstanding dynamic entries in every sub-pool, and it holds the
-// lock of no such pool. To take every one of those locks for one question is a
-// lock-order hazard. It is also far too expensive for the path that it sits on.
-// Those counters are therefore atomic. A writer stores one with release, under
-// the lock of its own pool. This reader loads it with acquire.
+// The library resolves which sub-pool owns an address by reading the counter
+// of outstanding dynamic entries in every sub-pool while it holds the lock of
+// no such pool, because taking every one of those locks for one question is a
+// lock-order hazard and far too expensive for the path that it sits on.
+// Those counters are therefore atomic: a writer stores one with release, under
+// the lock of its own pool, and this reader loads it with acquire.
 //
 // This stress makes that read run at the same time as those writes. The tiers
 // are small enough that the dynamic fallback serves every thread most of the
-// time. Each free and each realloc therefore resolves an address that matches
+// time, so each free and each realloc resolves an address that matches
 // no tier, and must consult the counters.
 //
-// ThreadSanitizer reports the version without that synchronisation at once. An
-// ordinary run does not. The test_tsan target of this suite is therefore where
-// this test earns its place.
+// ThreadSanitizer reports the version without that synchronisation at once,
+// while an ordinary run does not, so the test_tsan target of this suite is
+// where this test earns its place.
 #define RMP_DYN_STRESS_THREADS 6
 #define RMP_DYN_STRESS_ITERS 400
 
@@ -5481,7 +5481,7 @@ static void *rmp_dyn_stress_worker(void *arg) {
     size_t next = 8 + (size_t)((i + 1) % 3) * 16;
     char *q = (char *)ccol_r_mempool_realloc_entry(a->rmp, p, next);
     if (!q) {
-      /* addr is still the caller's on a failed reallocation. */
+      /* addr stays the caller's on a failed reallocation. */
       ccol_r_mempool_free_entry(a->rmp, p);
       a->ok = false;
       break;
@@ -5549,12 +5549,12 @@ TEST(r_mempools, concurrent_dynamic_fallback_churn) {
   REQUIRE_EQ(used_16, 0);
 }
 
-// filled and release form a counted handshake, and not a pthread_barrier. That
-// is on purpose. A barrier fixes its participant count when somebody creates
-// it. A pthread_create that fails part way then parks every thread that DID
-// start on a barrier that nothing can satisfy. The join after it waits for
-// ever. That turns an ordinary, occasional shortage of resources into a test
-// binary that hangs without a word. A count of only the threads that really
+// filled and release form a counted handshake instead of a pthread_barrier, on
+// purpose: a barrier fixes its participant count when somebody creates
+// it, so a pthread_create that fails part way parks every thread that DID
+// start on a barrier that nothing can satisfy, and the join after it waits for
+// ever, turning an ordinary, occasional shortage of resources into a test
+// binary that silently hangs. A count of only the threads that really
 // started keeps it an ordinary failure.
 typedef struct {
   ccol_mempool *mp;
@@ -5564,9 +5564,9 @@ typedef struct {
   _Atomic bool *release; /* main sets it when it is done with the caches  */
 } mp_cache_arg_t;
 
-// This function allocates count entries, frees them again and exits. The
-// entries stay in the cache of this thread. They must come back to the pool
-// when the thread exits.
+// This function allocates count entries, frees them again and exits, so the
+// entries stay in the cache of this thread, and they must come back to the
+// pool when the thread exits.
 static void *mp_cache_fill_and_exit(void *arg) {
   mp_cache_arg_t *a = arg;
   void **p = calloc(a->count, sizeof(void *));
@@ -5594,12 +5594,12 @@ TEST(cmempools, thread_cache_is_returned_when_its_thread_exits) {
   int create_rv = pthread_create(&th, NULL, mp_cache_fill_and_exit, &arg);
   int join_rv = (create_rv == 0) ? pthread_join(th, NULL) : 0;
 
-  // POSIX runs the cleanup of a thread before pthread_join returns. The cache
-  // that the thread held is therefore already drained back into the pool.
+  // POSIX runs the cleanup of a thread before pthread_join returns, so the
+  // cache that the thread held is already drained back into the pool.
   size_t used_after_exit = ccol_mempool_used_count(mp);
   size_t live_mags_after_exit = _ccol_mempool_live_magazines_for_tests(mp);
 
-  // The pool can also still serve its full advertised capacity after that. A
+  // The pool can also serve its full advertised capacity after that, and a
   // drain that lost the entries fails this check.
   void **all = calloc(MP_CACHE_POOL_ELEMS, sizeof(void *));
   bool all_ok = (all != NULL);
@@ -5618,9 +5618,9 @@ TEST(cmempools, thread_cache_is_returned_when_its_thread_exits) {
   ccol_mempool_destroy(mp);
 
   // The code above captures every outcome and frees every resource before the
-  // first assertion. A REQUIRE_* that fires returns from this function at once.
-  // A pool or a buffer still held here would then be reported as a leak on top
-  // of the real failure. That report would bury the failure.
+  // first assertion, because a REQUIRE_* that fires returns from this function
+  // at once, and a pool or a buffer held here would then be reported as a leak
+  // on top of the real failure, burying it.
   REQUIRE_EQ(create_rv, 0);
   REQUIRE_EQ(join_rv, 0);
   REQUIRE_TRUE(arg.ok);
@@ -5630,8 +5630,8 @@ TEST(cmempools, thread_cache_is_returned_when_its_thread_exits) {
   REQUIRE_EQ(got, (size_t)MP_CACHE_POOL_ELEMS);
 }
 
-// This function holds a full cache and waits. The main thread must therefore
-// get its entries while the magazine of this thread is occupied.
+// This function holds a full cache and waits, so the main thread must get its
+// entries while the magazine of this thread is occupied.
 static void *mp_cache_hold(void *arg) {
   mp_cache_arg_t *a = arg;
   void **p = calloc(a->count, sizeof(void *));
@@ -5644,25 +5644,25 @@ static void *mp_cache_hold(void *arg) {
     }
   }
   /* This arrival happens on every path, including the path where the scratch
-   * array could not be allocated. The main thread waits for a fixed number of
-   * arrivals. A path out of here that skips this arrival hangs the whole
-   * binary, and does not fail a test. */
+   * array could not be allocated, because the main thread waits for a fixed
+   * number of arrivals, and a path out of here that skips this arrival would
+   * hang the whole binary instead of failing a test. */
   atomic_fetch_add_explicit(a->filled, 1, memory_order_release);
-  // This thread holds the cache until the main thread is done with it. It uses
-  // a short sleep, and not sched_yield. Under valgrind only one thread runs at
-  // a time, and sched_yield does not reliably hand the scheduler over. Four
-  // threads that spin on sched_yield here would starve the allocation loop that
-  // they wait for. This is the same shape that the drain loops of the library
-  // use.
+  // This thread holds the cache until the main thread is done with it, waiting
+  // with a short sleep instead of sched_yield: under valgrind only one thread
+  // runs at a time, and sched_yield does not reliably hand the scheduler over,
+  // so four threads that spin on sched_yield here would starve the allocation
+  // loop that they wait for. This is the same shape that the drain loops of the
+  // library use.
   while (!atomic_load_explicit(a->release, memory_order_acquire))
     mp_test_short_sleep();
   free(p);
   return NULL;
 }
 
-// This is the reason that the reserve exists. Entries parked in the caches of
-// other threads must never make the pool refuse a caller that is still inside
-// its advertised capacity.
+// This is the reason that the reserve exists: entries parked in the caches of
+// other threads must never make the pool refuse a caller that is within its
+// advertised capacity.
 TEST(cmempools, advertised_capacity_is_reachable_despite_other_thread_caches) {
   SCOPED_MEMPOOL(mp) = ccol_mempool_create(MP_CACHE_POOL_ELEMS, sizeof(int),
                                            false, false, NULL, NULL);
@@ -5688,8 +5688,8 @@ TEST(cmempools, advertised_capacity_is_reachable_despite_other_thread_caches) {
   size_t got = 0;
   void **all = calloc(MP_CACHE_POOL_ELEMS, sizeof(void *));
   if (started == HOLDERS && all) {
-    // The wait covers only the threads that really started. A short start is
-    // therefore a failed assertion below, and not a wait that nothing can
+    // The wait covers only the threads that really started, so a short start
+    // is a failed assertion below instead of a wait that nothing can
     // satisfy.
     while (atomic_load_explicit(&filled, memory_order_acquire) < started)
       mp_test_short_sleep();
@@ -5698,14 +5698,14 @@ TEST(cmempools, advertised_capacity_is_reachable_despite_other_thread_caches) {
       if (all[i]) got++;
     }
   }
-  // This release happens on every path out of the block above. A holder parked
-  // here with nothing to release it is exactly the hang that this handshake
-  // avoids.
+  // This release happens on every path out of the block above, because a
+  // holder parked here with nothing to release it is exactly the hang that
+  // this handshake avoids.
   atomic_store_explicit(&release, true, memory_order_release);
 
-  // The cleanup runs before any assertion. A REQUIRE_* that fails returns from
-  // this function at once, and it would otherwise leave threads that nobody
-  // joins.
+  // The cleanup runs before any assertion, because a REQUIRE_* that fails
+  // returns from this function at once, and would otherwise leave threads that
+  // nobody joins.
   for (int i = 0; i < started; ++i) pthread_join(th[i], NULL);
   if (all) {
     for (size_t i = 0; i < MP_CACHE_POOL_ELEMS; ++i) {
@@ -5721,8 +5721,8 @@ TEST(cmempools, advertised_capacity_is_reachable_despite_other_thread_caches) {
 
 // A magazine slot must come back when its thread exits. Without that release,
 // ordinary thread churn fills the budget of the pool with magazines that belong
-// to threads which are long gone. The pool then refuses one to every later
-// thread. It falls back to a lock on every operation, and it still behaves
+// to threads which are long gone, and the pool then refuses one to every later
+// thread, falling back to a lock on every operation while it behaves
 // correctly.
 TEST(cmempools, magazine_slots_are_reclaimed_across_thread_churn) {
   SCOPED_MEMPOOL(mp) = ccol_mempool_create(MP_CACHE_POOL_ELEMS, sizeof(int),
@@ -5747,26 +5747,26 @@ TEST(cmempools, magazine_slots_are_reclaimed_across_thread_churn) {
   ccol_mempool_destroy(mp);
 
   REQUIRE_TRUE(all_ok);
-  // Far more threads than the magazine budget of the pool have come and gone. A
-  // budget that nothing releases would therefore sit at its ceiling by now.
+  // Far more threads than the magazine budget of the pool have come and gone,
+  // so a budget that nothing releases would sit at its ceiling by this point.
   REQUIRE_EQ(peak, (size_t)0);
 }
 
-// A magazine belongs to the thread that created it. A destroy of its pool can
-// therefore only orphan it, and cannot free it. The owning thread must reap an
+// A magazine belongs to the thread that created it, so a destroy of its pool
+// can only orphan it, not free it, and the owning thread must reap an
 // orphan as it goes about its business. An orphan stays reachable from
 // thread-local storage, so no leak checker reports it while memory climbs.
-/* A pool grants a bounded number of magazines. A pool shared by more threads
- * than that leaves the surplus threads on the locked path for good. Those
- * threads must not pay the allocator of the caller for that refusal. This
- * module is documented as usable as the allocator of another container. To
- * drive such an allocator from the path that exists to avoid allocation is
- * exactly backwards.
+/* A pool grants a bounded number of magazines, so a pool shared by more
+ * threads than that leaves the surplus threads on the locked path for good,
+ * and those threads must not pay the allocator of the caller for that refusal.
+ * This module is documented as usable as the allocator of another container,
+ * and driving such an allocator from the path that exists to avoid allocation
+ * is exactly backwards.
  *
- * The test counts and does not time, so the result is a property of the code
- * and not of the machine. This test is not vacuous. Build the magazine before
- * the question whether the pool has one to give. The refused thread then
- * allocates and frees one on every single operation, and the allocation count
+ * The test counts instead of timing, so the result is a property of the code
+ * and not of the machine. This test is not vacuous: build the magazine before
+ * the question whether the pool has one to give, and the refused thread then
+ * allocates and frees one on every single operation, so the allocation count
  * climbs to OPS. */
 static atomic_size_t mp_deny_allocs;
 
@@ -5795,7 +5795,7 @@ typedef struct {
 } mp_deny_arg_t;
 
 /* Takes the only magazine of the pool and holds it until the main thread is
- * done. The pool therefore refuses every attempt that the main thread
+ * done, so that the pool refuses every attempt that the main thread
  * makes. */
 static void *mp_deny_hold(void *arg) {
   mp_deny_arg_t *a = (mp_deny_arg_t *)arg;
@@ -5865,7 +5865,7 @@ TEST(cmempools, a_pool_with_no_magazine_to_give_does_not_allocate_per_call) {
 // the wrap in the Makefile). The count is kept for each thread, so a test
 // reads what the calling thread paid, and no other thread can disturb it.
 #if defined(TEST_NO_LD_WRAP)
-// The linker has no --wrap. pthread_mutex_lock below takes every call that
+// The linker has no --wrap, so pthread_mutex_lock below takes every call that
 // this binary makes, and the original comes from the C library through
 // dlsym(RTLD_NEXT).
 static int __real_pthread_mutex_lock(pthread_mutex_t *m) {
@@ -5890,8 +5890,8 @@ int pthread_mutex_lock(pthread_mutex_t *m) {
 #endif
 
 // A thread that the pool refuses a magazine pays what a pool with no cache
-// pays: one lock for each allocation and one for each free. The budget
-// question and the service share one critical section. Asking it in a
+// pays: one lock for each allocation and one for each free, because the
+// budget question and the service share one critical section. Asking it in a
 // critical section of its own, and then taking the lock again to serve the
 // request, costs a refused thread two locks for each operation, which is worse
 // than having no cache at all, and it happens exactly at high thread counts.
@@ -5989,8 +5989,8 @@ static void *mp_park_batch(void *arg) {
 
 // Once the entries that have left the shared list reach the advertised count,
 // a refill yields nothing, although fewer entries than that are in use: the
-// rest sit in the cache of another thread. The pool still serves such a
-// thread up to the advertised count. It serves it inside the critical section
+// rest sit in the cache of another thread. The pool serves such a
+// thread up to the advertised count all the same, inside the critical section
 // that ran the empty refill, so each of those allocations costs one lock, as
 // it does for a pool with no cache.
 TEST(cmempools, an_empty_refill_serves_the_request_in_the_same_lock) {
@@ -6050,8 +6050,8 @@ TEST(cmempools, an_empty_refill_serves_the_request_in_the_same_lock) {
 TEST(cmempools, orphaned_magazines_do_not_accumulate) {
   size_t before = _ccol_mempool_thread_magazines_for_tests();
 
-  // Failures are recorded rather than asserted inside the loop: a REQUIRE_*
-  // firing there would return with the pool of that iteration still alive.
+  // Failures are recorded instead of asserted inside the loop: a REQUIRE_*
+  // firing there would return with the pool of that iteration alive.
   bool all_ok = true;
   for (int i = 0; i < 256; ++i) {
     SCOPED_MEMPOOL(mp) = ccol_mempool_create(MP_CACHE_POOL_ELEMS, sizeof(int),
@@ -6175,7 +6175,7 @@ TEST(cmempools, exit_drain_takes_magazines_that_a_nested_free_builds) {
   if (create_rv == 0) pthread_join(th, &served);
   size_t allocs_in_thread =
       atomic_load(&mp_nested_backing_allocs) - allocs_before;
-  // The worker has exited, so neither pool may still count a magazine of it.
+  // The worker has exited, so neither pool may count a magazine of it.
   size_t backing_mags =
       _ccol_mempool_live_magazines_for_tests(mp_nested_backing);
   size_t front_mags = _ccol_mempool_live_magazines_for_tests(front);
@@ -6343,50 +6343,50 @@ TEST(cmempools, a_reap_that_reenters_the_lookup_restarts_the_walk) {
   REQUIRE_EQ(arg.m_mags, (size_t)1);
 }
 
-// A thread takes an entry out of its cache with no lock held. The decision to
-// put entries there therefore happens ahead of time, and it cannot be exact. A
+// A thread takes an entry out of its cache with no lock held, so the decision
+// to put entries there happens ahead of time and cannot be exact, and a
 // pool with caches can hand out more than the count that it was created with,
-// for a short time. What must hold is that the excess stays small. A refill
-// therefore charges everything that is already off the shared free list. That
-// includes what other threads have cached. The batches that several magazines
-// get can then not overshoot the advertised count by anything like the reserve.
+// for a short time. What must hold is that the excess stays small, so a refill
+// charges everything that is already off the shared free list, including
+// what other threads have cached, and the batches that several magazines
+// get then cannot overshoot the advertised count by anything like the reserve.
 //
 // The test aggregates the measurement over several rounds and compares it
-// against a budget. It does not assert a maximum for any single round. The
-// worst cases of the two formulas overlap in the tail. A charge of only the
-// holdings of the refilling magazine is much worse on a typical interleaving.
-// On an unlucky one it is not unboundedly worse. A per-round maximum
-// therefore separates the two only most of the time. The totals do separate
-// them. A charge of everything gives a per-round overshoot in the single
-// digits. A charge of only the holdings of the refilling magazine gives tens.
+// against a budget instead of asserting a maximum for any single round,
+// because the worst cases of the two formulas overlap in the tail: a charge of
+// only the holdings of the refilling magazine is much worse on a typical
+// interleaving, but not unboundedly worse on an unlucky one, so a per-round
+// maximum separates the two only most of the time, while the totals do. A
+// charge of everything gives a per-round overshoot in the single digits, and
+// a charge of only the holdings of the refilling magazine gives tens.
 //
 // The test REPORTS the overshoot total on every run, and asserts it only on
-// request. That total is a property of the machine as much as of the code. No
-// threshold separates the two formulas reliably on a machine that does anything
-// else. Measured on this workload, the two move in OPPOSITE directions as the
-// available concurrency falls. The total of the correct formula CLIMBS, because
-// more threads sit in the middle of a refill at once. The total of a wrong
-// formula FALLS, because the concurrency that it over-grants against
-// disappears. The gap therefore closes exactly where a shared or loaded machine
-// puts you.
+// request, because that total is a property of the machine as much as of the
+// code, and no threshold separates the two formulas reliably on a machine that
+// does anything else. Measured on this workload, the two move in OPPOSITE
+// directions as available concurrency falls: the correct total CLIMBS,
+// because more threads sit in the middle of a refill at once, and the total
+// of a wrong formula FALLS, because the concurrency that it over-grants
+// against disappears, so the gap closes exactly where a shared or loaded
+// machine puts you.
 //
 // These are the measured figures, all against a budget of 384. The correct
 // formula gives 36-114 on twenty-two idle CPUs, 19-143 on twelve, and 121-424
-// on eight. It gives 393-551 on sixteen once ten competing processes are added,
+// on eight, and 393-551 on sixteen once ten competing processes are added,
 // which is over the budget. A wrong formula sits above 1400 on sixteen CPUs or
-// more, and above 550 on eight. The bands therefore overlap as soon as the
-// machine is busy. An affinity mask cannot tell the difference, because a
-// machine can grant every CPU and still deliver none of them.
+// more, and above 550 on eight, so the bands overlap as soon as the machine is
+// busy. An affinity mask cannot tell the difference, because a machine can
+// grant every CPU and deliver none of them.
 //
-// Set CCOL_MP_BOUND_GATE=1 to assert the budget. Do that only on a machine that
-// you have measured and quiesced. The test asserts the capacity guarantee below
-// always. That guarantee is structural, and it holds whatever the scheduler
-// does. For the overshoot property this test is a measurement, and not a gate.
+// Set CCOL_MP_BOUND_GATE=1 to assert the budget, but only on a machine that
+// you have measured and quiesced. The test always asserts the capacity
+// guarantee below, which is structural and holds whatever the scheduler
+// does; for the overshoot property this test is a measurement, not a gate.
 //
 // The reported figure means nothing where the threads do not really run at the
-// same time. Under valgrind, or on a machine that serialises them, the library
-// refills and drains magazines one at a time. Neither formula overshoots at
-// all, so the total reads zero for both.
+// same time: under valgrind, or on a machine that serialises them, the library
+// refills and drains magazines one at a time, so neither formula overshoots at
+// all and the total reads zero for both.
 #define MP_BOUND_THREADS 16
 #define MP_BOUND_ELEMS 1024
 #define MP_BOUND_PER_THREAD 4096
@@ -6397,12 +6397,12 @@ typedef struct {
   size_t taken;
 } mp_bound_arg_t;
 
-// This is a ready count plus a release flag, and not a pthread_barrier. The
-// comment on mp_cache_arg_t gives the reason. A barrier fixes its participant
-// count up front, so a pthread_create that fails parks the threads that did
-// start on it for ever. Here the main thread waits for exactly the threads that
-// it managed to create. It then releases them together, and every worker starts
-// to allocate at the same instant.
+// This is a ready count plus a release flag instead of a pthread_barrier, for
+// the reason that the comment on mp_cache_arg_t gives: a barrier fixes its
+// participant count up front, so a pthread_create that fails parks the threads
+// that did start on it for ever. Here the main thread waits for exactly the
+// threads that it managed to create, then releases them together, so every
+// worker starts to allocate at the same instant.
 static _Atomic int mp_bound_ready;
 static _Atomic bool mp_bound_go;
 
@@ -6477,23 +6477,23 @@ TEST(cmempools, concurrent_hand_out_stays_near_the_advertised_count) {
     ccol_mempool_destroy(mp);
   }
 
-  // The code above frees every resource, in the round that allocated it. A
-  // REQUIRE_* that fires here therefore leaves nothing behind.
+  // The code above frees every resource in the round that allocated it, so a
+  // REQUIRE_* that fires here leaves nothing behind.
   REQUIRE_TRUE(pools_ok);
   REQUIRE_TRUE(fixtures_ok);
   REQUIRE_EQ(short_started, 0);
   REQUIRE_GT(reserve, (size_t)0);
-  // The test REPORTS the overshoot total, and does not assert it. No threshold
-  // both catches the wrong formula and stays quiet on the right one. The
-  // comment above this test gives the reason. The total of the correct formula
-  // climbs with contention. That is a property of the machine that the test
-  // runs on, and not of the code. The affinity mask cannot see it either,
-  // because a machine can grant every CPU and still deliver none of them.
+  // The test REPORTS the overshoot total instead of asserting it, because no
+  // threshold both catches the wrong formula and stays quiet on the right one,
+  // as the comment above this test explains: the total of the correct formula
+  // climbs with contention, which is a property of the machine that the test
+  // runs on, not of the code, and the affinity mask cannot see it either,
+  // because a machine can grant every CPU and deliver none of them.
   //
-  // The separation is therefore available on demand, and not on every run. Set
-  // CCOL_MP_BOUND_GATE=1 to assert it. Do that on a machine that you have
+  // The separation is therefore available on demand instead of on every run:
+  // set CCOL_MP_BOUND_GATE=1 to assert it, on a machine that you have
   // measured, while nothing else runs. The figure below is what you measure.
-  // The capacity guarantee stays asserted always. It is structural, and it
+  // The capacity guarantee is always asserted, because it is structural and
   // holds whatever the scheduler does.
   printf("[overshoot] total=%zu over %d rounds, reserve=%zu, least=%zu\n",
          total_overshoot, ROUNDS, reserve, least);
@@ -6502,21 +6502,21 @@ TEST(cmempools, concurrent_hand_out_stays_near_the_advertised_count) {
     REQUIRE_LT(total_overshoot,
                (size_t)ROUNDS * ((size_t)MP_BOUND_THREADS / 2));
   }
-  // The pool also delivers everything that it promised, in every round. This
-  // check is structural, and not statistical. A thread stops only after an
-  // allocation fails. That needs one of two things: the advertised count is
+  // The pool also delivers everything that it promised, in every round, and
+  // this check is structural, not statistical. A thread stops only after an
+  // allocation fails, which needs one of two things: the advertised count is
   // reached, or the shared free list is empty. An empty free list means that
-  // the pool handed out everything that is not cached. That is at least the
+  // the pool handed out everything that is not cached, which is at least the
   // advertised count, because what is cached can never exceed the reserve.
   REQUIRE_GE(least, (size_t)MP_BOUND_ELEMS);
 }
 
 // None of this must touch a pool with no thread cache. Such a pool has no
-// reserve. It therefore uses no extra memory, and its capacity behaviour does
-// not change.
+// reserve, so it uses no extra memory, and its capacity behaviour does not
+// change.
 TEST(cmempools, pools_without_a_thread_cache_carry_no_reserve) {
   // The test creates, measures and destroys both pools before the first
-  // assertion. A REQUIRE_* that fires therefore leaves neither of them alive.
+  // assertion, so a REQUIRE_* that fires leaves neither of them alive.
   ccol_mempool *tiny =
       ccol_mempool_create(4, sizeof(int), false, false, NULL, NULL);
   bool tiny_ok = (tiny != NULL);
@@ -6545,8 +6545,8 @@ TEST(cmempools, pools_without_a_thread_cache_carry_no_reserve) {
   REQUIRE_EQ(st_cap, (size_t)MP_CACHE_POOL_ELEMS);
 }
 
-// The cache must not weaken the detection of a double free. An entry that sits
-// in a magazine is still marked free, and that is what keeps this fatal.
+// The cache must not weaken the detection of a double free: an entry that
+// sits in a magazine stays marked free, which is what keeps this fatal.
 TEST(cmempools, double_free_of_a_cached_entry_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
@@ -6572,22 +6572,22 @@ TEST(cmempools, double_free_of_a_cached_entry_is_fatal) {
   REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   /* The signal must be SIGABRT. A NULL dereference, or any other crash, also
-   * satisfies WIFSIGNALED. Such a crash is not the deliberate abort that this
-   * test pins. */
+   * satisfies WIFSIGNALED, but such a crash is not the deliberate abort that
+   * this test pins. */
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-// The library finds the cache of a thread by the address of the pool. The
+// The library finds the cache of a thread by the address of the pool, and the
 // allocator can hand the address of a destroyed pool straight back for a new
-// pool. That is the classic ABA setup. Without a guard, a stale cache entry
+// pool, which is the classic ABA setup: without a guard, a stale cache entry
 // matches the new pool and serves entries that belong to the dead one. The
-// allocator below guarantees that reuse. malloc would produce it only by luck.
+// allocator below guarantees that reuse; malloc would produce it only by luck.
 //
 // ccol_mempool is opaque, so the test cannot pick the block to recycle by its
-// type. The allocator therefore remembers the size that it handed out for each
-// pointer. It recycles the block that it freed most recently whenever a request
-// for that same size arrives. That reproduces the address reuse, and it needs
-// to know nothing about what the block is for.
+// type. Instead, the allocator remembers the size that it handed out for each
+// pointer, and recycles the block that it freed most recently whenever a
+// request for that same size arrives, which reproduces the address reuse
+// without knowing anything about what the block is for.
 #define MP_ABA_TRACKED 64
 static void *mp_aba_ptrs[MP_ABA_TRACKED];
 static size_t mp_aba_sizes[MP_ABA_TRACKED];
@@ -6595,12 +6595,12 @@ static void *mp_aba_block;
 static size_t mp_aba_block_size;
 static int mp_aba_reuses;
 // The recycling stays inside the test body. A pool destroy orphans the magazine
-// of this thread, and does not free it on the spot. The magazine of the last
-// iteration therefore comes back to this allocator at process exit, long after
-// the test returns. A block kept then parks in mp_aba_block with nothing left
-// to drain it. A block still reachable from a file-scope variable at exit is an
-// error under the --errors-for-leak-kinds=all that every memtest of a suite
-// runs with.
+// of this thread instead of freeing it on the spot, so the magazine of the last
+// iteration comes back to this allocator at process exit, long after
+// the test returns, and a block kept then would park in mp_aba_block with
+// nothing left to drain it. A block that is reachable from a file-scope
+// variable at exit is an error under the --errors-for-leak-kinds=all that
+// every memtest of a suite runs with.
 static bool mp_aba_recycling;
 
 static void mp_aba_record(void *p, size_t n) {
@@ -6681,8 +6681,8 @@ TEST(cmempools, pool_address_reuse_does_not_resurrect_a_stale_cache) {
       if (p[k]) ccol_mempool_free_entry(mp, p[k]);
     }
     // Every entry must belong to the pool in hand. A stale cache from an
-    // earlier pool at this same address could match. used_count would then not
-    // settle back to zero, and the entries would belong to that earlier pool.
+    // earlier pool at this same address could match, and used_count would then
+    // not settle back to zero, with the entries belonging to that earlier pool.
     if (ccol_mempool_used_count(mp) != 0) ok = false;
     if (ccol_mempool_total_capacity(mp) != MP_CACHE_POOL_ELEMS) ok = false;
     void *fresh = ccol_mempool_alloc_entry(mp);
@@ -6700,12 +6700,12 @@ TEST(cmempools, pool_address_reuse_does_not_resurrect_a_stale_cache) {
 }
 
 /* The predicate for a ranged preallocated buffer carries the floor that the
- * runtime puts on the smallest element size. A shape that the constructor would
- * refuse is therefore a rejection at compile time. It is not a buffer that
+ * runtime puts on the smallest element size, so a shape that the constructor
+ * would refuse is a rejection at compile time instead of a buffer that
  * nothing can ever use.
  *
- * This test is not vacuous. Without that clause, the first expectation below
- * flips. The predicate then accepts the shape, and the macro sizes a buffer for
+ * This test is not vacuous: without that clause, the first expectation below
+ * flips, the predicate accepts the shape, and the macro sizes a buffer for
  * a pool that ccol_r_mempool_create_from_preallocated_buffer refuses. */
 TEST(cmempools, ranged_buffer_params_reject_an_element_size_below_the_floor) {
   /* Below the floor: refused, whatever the other two parameters say. */
@@ -6713,7 +6713,7 @@ TEST(cmempools, ranged_buffer_params_reject_an_element_size_below_the_floor) {
   REQUIRE_FALSE(_ccol_rmempool_buffer_params_fit(0, 4, 4));
   REQUIRE_FALSE(_ccol_rmempool_buffer_params_fit(3, 4, 1));
 
-  /* At and above the floor: accepted exactly as before. */
+  /* At and above the floor: accepted, exactly as without the floor clause. */
   REQUIRE_TRUE(_ccol_rmempool_buffer_params_fit(4, 6, 2));
   REQUIRE_TRUE(_ccol_rmempool_buffer_params_fit(4, 8, 10));
   REQUIRE_TRUE(_ccol_rmempool_buffer_params_fit(5, 10, 12));

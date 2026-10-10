@@ -20,11 +20,11 @@ cyaml_create_bool() passes NULL for mp.
 val  C boolean value.
 mp   Custom allocator, or NULL for default.
      The library keeps its own copy of the struct, so the caller may
-     release or reuse the struct once this call returns. The functions
-     that it names must stay callable until the last node built with
-     them is destroyed. A process can use at most 64 distinct sets of
-     four functions; a call that would need a 65th fails and returns
-     NULL.
+     release or reuse the struct once this call returns, but the
+     functions that it names must stay callable until the last node
+     built with them is destroyed.  A process can use at most 64
+     distinct sets of four functions; a call that would need a 65th
+     fails and returns NULL.
 .fi
 .SH RETURN VALUE
 .nf

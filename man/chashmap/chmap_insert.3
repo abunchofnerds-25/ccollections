@@ -11,44 +11,45 @@ chmap_insert(hm_name, key, val);
 .fi
 .SH DESCRIPTION
 .nf
-Type-inferred wrapper for chmap_insert_elem(). It builds the cmap_pair for
-the key and the cmap_pair for the value from the given expressions. The
-macro updates the value silently when the map already holds the key. It
-calls ccol_fatal_err() only on a true failure. The true failures are
-ccol_not_enough_memory, ccol_container_full and ccol_invalid_args.
+Type-inferred wrapper for chmap_insert_elem() that builds the cmap_pair
+for the key and the cmap_pair for the value from the given expressions.
+When the map already holds the key, the macro updates the value silently;
+it calls ccol_fatal_err() only on a true failure, which is
+ccol_not_enough_memory, ccol_container_full or ccol_invalid_args.
 
 key and val go through the DECLARED key type and value type of the
-map. The macro makes a private copy of each argument with that type,
-and the copy is a plain C assignment, so the value is CONVERTED. It
-is never reinterpreted byte for byte. A float that goes into a map of
-int becomes 1 for 1.5f, in the same way as "int x = 1.5f;". It does
-not become 1069547520. An argument whose type has no implicit
-conversion to the declared type is a compile error at the call site.
-cvec_push(3) follows the same rule.
+map: the macro makes a private copy of each argument with that type by
+a plain C assignment, so the value is CONVERTED and is never
+reinterpreted byte for byte. A float that goes into a map of int
+becomes 1 for 1.5f, just as in "int x = 1.5f;", and does not become
+1069547520. An argument whose type has no implicit conversion to the
+declared type is a compile error at the call site. cvec_push(3)
+follows the same rule.
 
-Because the macro copies rather than takes an address, an lvalue, an
-rvalue, a literal and a computed expression are all accepted.
+Because the macro copies the argument rather than taking its address,
+an lvalue, an rvalue, a literal and a computed expression are all
+accepted.
 
 A declared key or value type that is a CHARACTER POINTER is the one
 exception, and it converts nothing. char *, signed char * and
 unsigned char * are one single type to this library: all three
-classify as ccol_string, a NUL-terminated string. The macro measures
-it with strlen, and the map compares the bytes of the string and
-never the pointer type. A map keyed on unsigned char * therefore
-stays reachable through a char * that addresses the same string. An
-array key, such as a char buf[64] or a string literal, decays to a
-pointer in the same way as it does in any other assignment.
+classify as ccol_string, a NUL-terminated string, which the macro
+measures with strlen. The map compares the bytes of the string and
+never the pointer type, so a map keyed on unsigned char * stays
+reachable through a char * that addresses the same string. An array
+key, such as a char buf[64] or a string literal, decays to a pointer
+just as it does in any other assignment.
 
 A macro cannot know the length of a buffer that a pointer addresses,
-so a character pointer is never a binary key. Use one of two forms
-for a binary key. A key of a fixed length, such as a digest, can be
-a struct that wraps an array, such as
+so a character pointer is never a binary key. For a binary key, use one
+of two forms. A key of a fixed length, such as a digest, can be a
+struct that wraps an array, such as
 struct { unsigned char b[32]; }; the map hashes and compares all of its
 bytes, zero bytes included. A key whose length is known only at run
 time goes through the raw chmap_insert_elem(3) layer, with that
 length in cmap_pair.size.
 
-A NULL character pointer is not a string. A NULL key or value of a
+A NULL character pointer is not a string, so a NULL key or value of a
 character-pointer type stops the program with ccol_invalid_args.
 .fi
 .SH PARAMETERS
@@ -59,17 +60,16 @@ val      Value to associate with key
 .fi
 .SH NOTES
 .nf
-Stops the program only on a true failure. An update of an existing key
+Stops the program only on a true failure; an update of an existing key
 is not a failure
-Copies the key and the value. Therefore, the key and the value do not have
-to be addressable
+Copies the key and the value, so neither has to be addressable
 Handles both value types and string types correctly
-For a float or double key, equality is bitwise. There is one
-exception: the map canonicalizes -0.0 and 0.0 to the same key. A NaN
-key obeys bitwise equality, and not IEEE 754 equality (see
+For a float or double key, equality is bitwise, with one exception:
+the map canonicalizes -0.0 and 0.0 to the same key. A NaN key obeys
+bitwise equality rather than IEEE 754 equality (see
 chmap_construct(3))
-For a long double key, equality uses the value (native ==) and not
-the bytes. Every other key type uses the bytes. Every NaN long double
+For a long double key, equality uses the value (native ==) rather than
+the bytes, which every other key type uses. Every NaN long double
 collapses into one key (see chmap_construct(3))
 .fi
 .SH EXAMPLES

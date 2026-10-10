@@ -11,13 +11,13 @@ value_ptr = cbmap_get_ptr(hm_name, key);
 .fi
 .SH DESCRIPTION
 .nf
-Type-inferred wrapper for cbmap_get_elem_ref(). It returns a pointer to the
-value. It returns NULL if the key is not in the map. Note that
-cbmap_get() stops the program in that case, and this macro does not.
+Type-inferred wrapper for cbmap_get_elem_ref() that returns a pointer to
+the value, or NULL if the key is not in the map. Note that cbmap_get()
+stops the program in that case, while this macro does not.
 
 The lookup key goes through the DECLARED key type of the tree, in the
-same way as in cbmap_insert(3). A key that the tree stored through that
-conversion is only ever found again by a lookup that makes the same
+same way as in cbmap_insert(3), so a key that the tree stored through
+that conversion is only ever found again by a lookup that makes the same
 one. A literal and a computed expression are both accepted.
 .fi
 .SH PARAMETERS
@@ -39,14 +39,13 @@ The macro returns a pointer to the value, so the caller can change the
 value in place
 An insert or a delete makes the pointer invalid
 For a char* value type, the target of the pointer is const-qualified
-(char *const *). The caller can read the stored string. The caller can
-also edit the bytes of that string in place, within the stored length.
-But a replacement of the pointer itself is a compile error. The map
-owns the string bytes and keeps its own accessor in step with them. A
-replacement of the pointer leaves the length of the accessor describing
-the older string. To replace a string value, use cbmap_insert(3). That
-macro frees the old bytes and copies the new bytes into storage that
-the map owns.
+(char *const *): the caller can read the stored string and edit the bytes
+of that string in place, within the stored length, but a replacement of
+the pointer itself is a compile error. The map owns the string bytes and
+keeps its own accessor in step with them, and a replacement of the
+pointer would leave the length of the accessor describing the older
+string. To replace a string value, use cbmap_insert(3), which frees the
+old bytes and copies the new bytes into storage that the map owns.
 The search takes O(log n) time
 .fi
 .SH EXAMPLES
@@ -65,7 +64,7 @@ char *const *sptr = cbmap_get_ptr(names, key);
 if (sptr) {
   printf("%s\en", *sptr);  // Read the stored string
   (*sptr)[0] = 'j';         // Edit its bytes in place: "jello"
-  cbmap_insert(names, key, "a longer replacement");  // Replace string
+  cbmap_insert(names, key, "a longer replacement");  // Replace the string
 }
 cbmap_destroy(map);
 cbmap_destroy(names);

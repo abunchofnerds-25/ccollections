@@ -11,8 +11,8 @@ void clog_clear_fields(clog logger);
 .fi
 .SH DESCRIPTION
 .nf
-Removes and frees every field that the logger holds.  A later log line
-then carries no key=value pair between func= and msg=.
+Removes and frees every field that the logger holds, so a later log
+line carries no key=value pair between func= and msg=.
 .fi
 .SH PARAMETERS
 .nf
@@ -20,7 +20,7 @@ logger  Logger handle.
 .fi
 .SH NOTES
 .nf
-Thread-safe.  The mutex of the logger protects it.
+Thread-safe: the mutex of the logger protects it.
 Asserts when logger is CLOG_INVALID, stale or already closed.
 .fi
 .SH "SEE ALSO"

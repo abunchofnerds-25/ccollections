@@ -17,19 +17,18 @@ All writes from parent and every derived logger are therefore serialised
 by that same lock and land in the same destination.
 
 At the moment of the call, the derived logger gets a snapshot of the
-structured fields and the minimum log level of parent.  After that, the
-two loggers keep fully independent field maps and level settings.  To
-add, to remove or to change a field or the level on one logger has no
-effect on the other.
+structured fields and the minimum log level of parent.  From then on
+the two loggers keep fully independent field maps and level settings,
+so adding, removing or changing a field or the level on one logger has
+no effect on the other.
 
-The root logger keeps control of the log rotation, when the original
-logger on a file has one configured.  A derived logger gets the benefit
+When the original logger on a file has log rotation configured, the
+root logger keeps control of it, and a derived logger gets the benefit
 of it transparently.
 
-Release a derived logger with clog_close() when you no longer need it.
-The file below stays open until every handle is closed.  That covers
-the root and every derived logger.  The shared backing store uses a
-refcount.
+Release a derived logger with clog_close() once you do not need it.
+Because the shared backing store uses a refcount, the file below stays
+open until every handle, the root and every derived logger, is closed.
 .fi
 .SH PARAMETERS
 .nf
@@ -51,8 +50,8 @@ through any handle, is immediately visible to all handles that write
 to the same fd.
 Thread-safe.  The library synchronises the snapshot of the fields
 against a concurrent clog_set_field(3), clog_remove_field(3) or
-clog_clear_fields(3) call on parent.  It does so whatever write is in
-progress on a sibling logger.
+clog_clear_fields(3) call on parent, whatever write is in progress on
+a sibling logger.
 Asserts when parent is CLOG_INVALID, stale or already closed.
 .fi
 .SH "SEE ALSO"

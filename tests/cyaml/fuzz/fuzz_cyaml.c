@@ -25,10 +25,10 @@ SOFTWARE.
 /* libFuzzer harness for cyaml_parse_n, its three serializers and
  * cyaml_clone.
  *
- * The parse uses the entry point that takes an explicit length, and not
- * cyaml_parse. The parser then reads the raw buffer from the fuzzer exactly
- * as it is. There is no copy step that adds a NUL terminator, and no
- * truncation at a NUL byte inside the buffer. That matters beyond coverage:
+ * The parse uses the entry point that takes an explicit length instead of
+ * cyaml_parse, so the parser reads the raw buffer from the fuzzer exactly as
+ * it is, with no copy step that adds a NUL terminator and no truncation at a
+ * NUL byte inside the buffer. That matters beyond coverage:
  * a token that a NUL would cut short is only reachable through this entry
  * point, and the tag and anchor lexers refuse such a byte precisely because
  * they store a token as a plain NUL-terminated string.
@@ -36,14 +36,13 @@ SOFTWARE.
  * The harness then asserts the ROUND TRIP: text that cyaml_serialize(),
  * cyaml_serialize_flow() or cyaml_serialize_stream() produced must parse
  * again, and a stream of two or more documents must parse back to the same
- * documents. A parse-only harness
- * cannot see a serializer that emits something its own parser rejects,
- * because nothing ever feeds the output back in. That failure is silent in
- * production too: a caller stores the serialized form, reads it back, and
- * gets a parse error for a document the library itself wrote. It also
- * asserts that the message of every refused input is printable ASCII.
- * abort() is the right answer here, because it is what libFuzzer records as
- * a finding. */
+ * documents. A parse-only harness cannot see a serializer that emits
+ * something its own parser rejects, because nothing ever feeds the output
+ * back in, and that failure is silent in production too: a caller stores the
+ * serialized form, reads it back, and gets a parse error for a document the
+ * library itself wrote. The harness also asserts that the message of every
+ * refused input is printable ASCII. abort() is the right answer here,
+ * because it is what libFuzzer records as a finding. */
 
 #include <cyaml.h>
 #include <stddef.h>
@@ -69,8 +68,8 @@ static void assert_reparses(const char *style, const char *text) {
   cyaml_destroy(again);
 }
 
-/* Every parse error message is printable ASCII, whatever the input holds.
- * A failure here is a defect in the library. */
+/* Every parse error message is printable ASCII, whatever the input holds,
+ * so a failure here is a defect in the library. */
 static void assert_printable_error(const char *err) {
   if (!err) return;
   for (const unsigned char *p = (const unsigned char *)err; *p; p++) {

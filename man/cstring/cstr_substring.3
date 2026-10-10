@@ -11,10 +11,10 @@ cstr result = cstr_substring(s, start, len);
 .fi
 .SH DESCRIPTION
 .nf
-This macro is a GNU C statement expression. It calls cstring_substring(). It
-then calls ccol_fatal_err() if the result is NULL, which means that an
-allocation failed. The macro gives the new cstring as a value. You can
-therefore use the macro directly inside an expression.
+This macro is a GNU C statement expression that calls cstring_substring()
+and then calls ccol_fatal_err() if the result is NULL, which means that an
+allocation failed. Because the macro gives the new cstring as a value, you
+can use it directly inside an expression.
 .fi
 .SH PARAMETERS
 .nf
@@ -30,11 +30,11 @@ A new cstr that holds the sub-range that you asked for
 .nf
 This macro uses a GNU C statement expression ({...}), so it needs GCC or
 Clang
-The macro clamps the range at the end of the string, and it does not reject
+The macro clamps the range at the end of the string instead of rejecting
 the range
 The caller must destroy the cstring that this macro returns
-The macro evaluates each of s, start and len exactly once. The failure
-message therefore reports the start and the length that the call used
+The macro evaluates each of s, start and len exactly once, so the failure
+message reports the start and the length that the call used
 Call cstring_substring() directly when you want to handle an error
 yourself
 .fi

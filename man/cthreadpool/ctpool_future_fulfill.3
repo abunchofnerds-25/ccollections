@@ -11,17 +11,17 @@ ccol_retval_t ctpool_future_fulfill(ctpool_future *f, void *result);
 .fi
 .SH DESCRIPTION
 .nf
-Delivers result to a future that ctpool_future_create_detached made. It
-wakes every caller that blocks in ctpool_future_get. It then releases
+Delivers result to a future that ctpool_future_create_detached made,
+wakes every caller that blocks in ctpool_future_get, and then releases
 the reference of the producer.
 
-This call frees the future when that is the last reference left. It is
-the last one after the caller already released its own with
-ctpool_future_free, and no ctpool_future_get call is still in progress.
+This call frees the future when that is the last reference left, which
+is the case when the caller has already released its own with
+ctpool_future_free and no ctpool_future_get call is still in progress.
 
 Call this exactly one time for each detached future. Do not call it on
 a future that ctpool_submit_future, ctpool_try_submit_future or
-ctpool_timed_submit_future returned. The worker thread that runs the
+ctpool_timed_submit_future returned: the worker thread that runs the
 task of such a future fulfills it inside the library.
 .fi
 .SH PARAMETERS

@@ -11,10 +11,9 @@ cyaml_declare(var_name);
 .fi
 .SH DESCRIPTION
 .nf
-Declare a cyaml handle variable with the name var_name.  This macro does
-not initialize the variable.  It exists so that the naming convention
-matches the other c_collections modules.  Each of those modules has its
-own _declare macro.
+Declare a cyaml handle variable named var_name, without initializing
+it.  The macro exists so that the naming convention matches the other
+c_collections modules, each of which has its own _declare macro.
 
 This macro expands to "cyaml var_name".
 .fi

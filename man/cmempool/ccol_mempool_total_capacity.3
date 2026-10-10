@@ -11,9 +11,9 @@ size_t ccol_mempool_total_capacity(ccol_mempool *mp);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the total number of pool-owned elements that mp holds. The count
-covers the elements in use and the free ones. It does not count a dynamic
-fallback entry. See ccol_mempool_dynamic_allocs_count(3) for those.
+Returns the total number of pool-owned elements that mp holds, counting
+both the elements in use and the free ones. It does not count a dynamic
+fallback entry; see ccol_mempool_dynamic_allocs_count(3) for those.
 .fi
 .SH PARAMETERS
 .nf
@@ -25,31 +25,31 @@ Returns the number of elements that the pool holds
 .fi
 .SH NOTES
 .nf
-This is the elem_count that you gave to ccol_mempool_create(). For a
-pool from ccol_mempool_create_from_preallocated_buffer(), it is the
-element count that the library derived from the buffer. It does not
-change over the lifetime of the pool.
+This is the elem_count that you gave to ccol_mempool_create(), or, for a
+pool from ccol_mempool_create_from_preallocated_buffer(), the element
+count that the library derived from the buffer. It does not change over
+the lifetime of the pool.
 
 A thread-safe pool large enough to keep a cache for each thread
-allocates more elements above this count. Those extra elements are a
-reserve. The reserve keeps the advertised count available to any thread,
-no matter how many entries other threads hold in their caches. This call
-does not report the reserve. The reserve also does not change the memory
-use of the pool at run time. ccol_mempool_allocated_bytes(3) reports the
-whole block, the reserve included, and the library allocates that block
-once, when it creates the pool.
+allocates extra elements above this count as a reserve, which keeps the
+advertised count available to any thread no matter how many entries
+other threads hold in their caches. This call does not report the
+reserve, and the reserve does not change the memory use of the pool at
+run time: ccol_mempool_allocated_bytes(3) reports the whole block, the
+reserve included, and the library allocates that block once, when it
+creates the pool.
 
 The two ends of the count are not equally exact for such a pool. A
 thread takes an entry from its own cache with no lock held, and so with
-no count to consult. Entries therefore go into a cache before anybody
+no count to consult, which means entries go into a cache before anybody
 knows whether they are needed. That decision favours the guarantee
-above. The pool never refuses a caller while the cache of another thread
+above: the pool never refuses a caller while the cache of another thread
 holds entries that the first caller was entitled to. In exchange,
 concurrent callers can hold a few entries more than this count at one
-time, for a short time. They never hold more than the physical slot
-count. A pool with no cache is exact in both directions. Every pool
-created with single_threaded = true is such a pool, and so is every pool
-that ccol_mempool_create_from_preallocated_buffer(3) built. There an
+time, for a short time, but never more than the physical slot count. A
+pool with no cache is exact in both directions; every pool created with
+single_threaded = true is such a pool, and so is every pool that
+ccol_mempool_create_from_preallocated_buffer(3) built. There an
 allocation past this count fails, or falls back to the system allocator.
 
 See ccol_mempool_create(3) for how the pool size affects performance.
@@ -57,8 +57,8 @@ See ccol_mempool_create(3) for how the pool size affects performance.
 .SH "THREAD SAFETY"
 .nf
 Thread-safe when the pool was created with single_threaded = false.
-The call takes the lock of the pool. It is therefore a cold-path call.
-Do not use it inside a hot loop.
+The call takes the lock of the pool, which makes it a cold-path call:
+do not use it inside a hot loop.
 .fi
 .SH "SEE ALSO"
 .BR ccol_mempool_used_count (3),

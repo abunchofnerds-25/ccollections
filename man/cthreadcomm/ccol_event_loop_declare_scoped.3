@@ -12,14 +12,14 @@ ccol_event_loop_declare_scoped(name);
 .SH DESCRIPTION
 .nf
 This macro declares a ccol_event_loop variable with the initial value
-CCOL_EVENT_LOOP_INVALID. It also tags the variable with a cleanup
-attribute. The library therefore destroys the loop automatically when
-the variable leaves its scope, exactly as ccol_event_loop_destroy()
-does. You must still assign the variable before you use it. Use
-ccol_event_loop_construct(), or a ccol_event_loop_create*() call.
+CCOL_EVENT_LOOP_INVALID and tags it with a cleanup attribute, so the
+library destroys the loop automatically when the variable leaves its
+scope, exactly as ccol_event_loop_destroy() does. You must assign the
+variable before you use it, with ccol_event_loop_construct() or a
+ccol_event_loop_create*() call.
 
 Prefer ccol_event_loop_construct_scoped() when the declaration and the
-initialisation can happen together. That is the common case.
+initialisation can happen together, which is the common case.
 .fi
 .SH PARAMETERS
 .nf
@@ -30,7 +30,7 @@ name  Variable name to declare.
 This macro needs GCC or Clang, because it uses
 __attribute__((cleanup)).
 It is safe to leave the variable at CCOL_EVENT_LOOP_INVALID for the
-whole scope. The cleanup does nothing for that value.
+whole scope, because the cleanup does nothing for that value.
 .fi
 .SH EXAMPLES
 .nf

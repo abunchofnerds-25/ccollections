@@ -3,7 +3,7 @@
 #
 # Every entry matches still-reachable blocks only. Definitely, indirectly and
 # possibly lost blocks are never suppressed, so an object that the library or
-# a test loses is still reported, together with any lock inside it.
+# a test loses is reported, together with any lock inside it.
 #
 # FreeBSD's libthr keeps each pthread object on the heap behind a pointer
 # (a pthread_rwlock_t is one pointer wide), where glibc

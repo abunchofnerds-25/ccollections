@@ -11,30 +11,30 @@ cvec_destroy(v);
 .fi
 .SH DESCRIPTION
 .nf
-This macro frees the backing buffer of the vector and the container itself.
-It then sets v to NULL. It leaves a handle that is NULL already alone, and
-it frees nothing for such a handle. A second cvec_destroy() of the same
-variable therefore does nothing and is safe.
+This macro frees the backing buffer of the vector and the container
+itself, and then sets v to NULL. It leaves a handle that is already NULL
+alone and frees nothing for it, so a second cvec_destroy() of the same
+variable does nothing and is safe.
 
-The macro frees everything through the memory management procedures that
-created the vector. It frees the private copy of that procedure table in
-the same way. This macro therefore needs no allocator argument. This is the
-name that the type-inferred macro layer uses. The macro is cvector_destroy(3)
-under another name, and it behaves in the same way.
+The macro frees everything, including the private copy of the procedure
+table, through the memory management procedures that created the vector,
+so it needs no allocator argument. This is the name that the
+type-inferred macro layer uses; the macro is cvector_destroy(3) under
+another name and behaves in the same way.
 
-The macro clears the handle and nothing else. cvec_declare(3) and the
-construct macros declare the companion type variables. Those variables stay
-in scope and stay valid. cvec_init(3) or cvec_init_mp(3) can therefore give
-the same variable a new vector later.
+The macro clears the handle and nothing else. The companion type
+variables that cvec_declare(3) and the construct macros declare stay in
+scope and stay valid, so cvec_init(3) or cvec_init_mp(3) can give the
+same variable a new vector later.
 .fi
 .SH PARAMETERS
 .nf
 v  A cvec lvalue that names the vector to destroy, such as a variable or
-   an element of an array. The macro must be able to assign to it. The
-   macro evaluates it exactly once, so an expression with a side effect,
-   such as vs[i++], destroys and clears one element. The macro sets it to
-   NULL before it returns. An lvalue that holds NULL makes the macro do
-   nothing.
+   an element of an array, and that the macro must be able to assign to.
+   The macro evaluates it exactly once, so an expression with a side
+   effect, such as vs[i++], destroys and clears one element. The macro
+   sets it to NULL before it returns, and does nothing for an lvalue that
+   holds NULL.
 .fi
 .SH RETURN VALUE
 .nf
@@ -42,20 +42,20 @@ None. The macro expands to a statement, not to an expression.
 .fi
 .SH NOTES
 .nf
-The macro does not free the elements one by one when the vector holds
-pointers to heap buffers. The caller must free the element data first.
+When the vector holds pointers to heap buffers, the macro does not free
+the elements one by one, so the caller must free the element data first.
 This call invalidates every pointer from an earlier cvec_data_ptr(3) or
 cvec_at_ptr(3).
 cvec_declare_scoped(3), cvec_construct_scoped(3) and
 cvec_construct_mp_scoped(3) destroy their vector at the end of the scope
-already. They also clear the handle as they do this. An explicit call
-inside such a block is legal, but it is not necessary.
+by themselves, clearing the handle as they do it, so an explicit call
+inside such a block is legal but not necessary.
 .fi
 .SH WARNINGS
 .nf
 Destroy a vector one time, through one handle. A cvec that you copy into
-a second variable leaves that copy dangling. A destruction through that
-copy afterwards is a double free.
+a second variable leaves that copy dangling, and a later destruction
+through that copy is a double free.
 .fi
 .SH EXAMPLES
 .nf

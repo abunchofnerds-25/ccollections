@@ -11,17 +11,17 @@ chttpsvr_construct(name, cl);
 .fi
 .SH DESCRIPTION
 .nf
-Declares a chttpsvr variable with the name name.  It then calls
-ccol_create_chttpsvr(cl) and assigns the result to that variable.  On
-a failure it calls ccol_fatal_err() and does not return.
+Declares a chttpsvr variable called name and assigns it the result of
+ccol_create_chttpsvr(cl).  On failure it calls ccol_fatal_err() and
+does not return.
 .fi
 .SH PARAMETERS
 .nf
 name     The identifier for the new handle variable.
-cl       The parent logger to derive the logger of this server from.
-         Pass CLOG_INVALID to use an internal logger that writes only
-         FATAL messages to stderr.  See ccol_create_chttpsvr_mp for
-         the details.
+cl       The parent logger from which the logger of this server is
+         derived.  Pass CLOG_INVALID to use an internal logger that
+         writes only FATAL messages to stderr; see
+         ccol_create_chttpsvr_mp for details.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_construct_scoped (3),

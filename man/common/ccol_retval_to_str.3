@@ -11,10 +11,10 @@ static inline const char *ccol_retval_to_str(ccol_retval_t r);
 .fi
 .SH DESCRIPTION
 .nf
-Gives the name of the enumerator r as a string literal. For example,
+Gives the name of the enumerator r as a string literal: for example,
 it gives "ccol_key_not_found" for ccol_key_not_found. Use it in a
-diagnostic message or in a log record. ccollections(7) gives a list of
-all the codes and their values.
+diagnostic message or in a log record. ccollections(7) lists all the
+codes and their values.
 .fi
 .SH PARAMETERS
 .nf
@@ -24,11 +24,11 @@ r  The code to name
 .nf
 A pointer to a string literal with static storage duration. For a value
 that is not an enumerator of ccol_retval_t, the function gives
-"unknown". The function never gives NULL.
+"unknown"; it never gives NULL.
 .fi
 .SH THREAD SAFETY
 .nf
-Thread-safe. The function reads no state.
+Thread-safe, because the function reads no state.
 .fi
 .SH EXAMPLES
 .nf

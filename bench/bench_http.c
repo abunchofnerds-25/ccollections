@@ -27,22 +27,22 @@
  * @brief End-to-end benchmarks for chttpserver and chttpclient.
  *
  * These cases start a server on the loopback interface and drive it with the
- * client of this library. One case therefore measures the whole path. That
- * path holds the serialization of the request, the loopback round trip through
- * the kernel, the readiness dispatch of the reactor, the routing, the handler
- * on a worker thread, the serialization of the response, and the parse by the
- * client. That is the number that a user of this library sees, and it is the
- * one worth watching for a regression. On its own it cannot say which of the
+ * client of this library, so one case measures the whole path: the
+ * serialization of the request, the loopback round trip through the kernel,
+ * the readiness dispatch of the reactor, the routing, the handler on a worker
+ * thread, the serialization of the response, and the parse by the client.
+ * That is the number that a user of this library sees, and it is the one worth
+ * watching for a regression, although on its own it cannot say which of the
  * two sides a change belongs to.
  *
- * Loopback is not the internet. Do not read these figures as throughput over a
- * real network. What they measure well is the cost of this library for each
- * request. A change to the routing, to the connection lifecycle, or to the
- * parser moves exactly that number.
+ * Loopback is not the internet, so do not read these figures as throughput
+ * over a real network. What they measure well is the cost of this library for
+ * each request, and a change to the routing, to the connection lifecycle, or
+ * to the parser moves exactly that number.
  *
- * These cases take a port by trying a range of numbers, and not one fixed
- * number. A benchmark run therefore does not fail only because something else
- * on the machine already listens on that port.
+ * These cases take a port by trying a range of numbers instead of one fixed
+ * number, so a benchmark run does not fail only because something else on the
+ * machine already listens on that port.
  */
 
 #include <chttpclient.h>
@@ -61,11 +61,11 @@
 #define BENCH_HTTP_CONCURRENCY 4
 
 /* This is the number of requests for each client thread in the forms that run
- * several clients together. The form with 4 threads therefore sends the same
- * total as the case that runs one request at a time. The wider forms raise the
- * offered load with the number of clients. They do not divide one fixed total
- * into smaller parts. This is what makes the figures for each request
- * comparable across all of them. */
+ * several clients together, so the form with 4 threads sends the same total as
+ * the case that runs one request at a time. The wider forms raise the offered
+ * load with the number of clients instead of dividing one fixed total into
+ * smaller parts, which is what makes the figures for each request comparable
+ * across all of them. */
 #define BENCH_HTTP_MT_N 5000
 
 /* Request and response bodies for the cases that move a body. The small one
@@ -89,8 +89,8 @@ typedef struct {
 } http_state_t;
 
 /* The response states the length that the server received, so the client can
- * check that the whole body arrived. A body that arrived in part would
- * otherwise measure less work at the full price. */
+ * check that the whole body arrived; otherwise a body that arrived in part
+ * would measure less work at the full price. */
 static void bench_echo_len_handler(chttpsvr_req *req, chttpsvr_resp *resp,
                                    void *ctx) {
   (void)ctx;
@@ -143,10 +143,10 @@ static void *http_setup(size_t n) {
   /* CLOG_INVALID means no logger. A logger here would put the cost of
    * formatting and writing one line for each request inside a measurement
    * that is about the request path. */
-  /* Nothing frees this, and nothing must. These two constructors report
-   * through CCOL_ERR_STR, which is a static string that the macro builds from
-   * __FILE__ and __LINE__. A free() on it is undefined behavior, and not only
-   * a waste. The parse error strings of the serializers are library-owned in
+  /* Nothing frees this, and nothing must: these two constructors report
+   * through CCOL_ERR_STR, a static string that the macro builds from __FILE__
+   * and __LINE__, so a free() on it is undefined behavior and not only a
+   * waste. The parse error strings of the serializers are library-owned in
    * the same way: each thread has its own, and the next parse reuses it. */
   char *err = NULL;
   st->srv = ccol_create_chttpsvr(CLOG_INVALID, &err);
@@ -206,12 +206,12 @@ static void *http_setup(size_t n) {
   return st;
 }
 
-/* Every failure stops the run. The code does not count a failure and continue.
- * A request that fails costs much less than a request that succeeds. A server
- * that stopped answering would therefore turn this into a loop that measures
- * nothing and reports a remarkable figure for it. The harness also divides the
- * measured time by the full count in both cases, so an early stop would report
- * part of the work at the full price. */
+/* Every failure stops the run; the code does not count a failure and continue.
+ * A request that fails costs much less than one that succeeds, so a server that
+ * stopped answering would turn this into a loop that measures nothing and
+ * reports a remarkable figure for it. The harness also divides the measured
+ * time by the full count in both cases, so an early stop would report part of
+ * the work at the full price. */
 static void http_do_requests(http_state_t *st, size_t count) {
   for (size_t i = 0; i < count; i++) {
     chttp_request_t *req = chttp_request_new(CHTTP_GET, st->url, NULL, NULL);
@@ -228,9 +228,8 @@ static void http_do_requests(http_state_t *st, size_t count) {
   }
 }
 
-/* This sends one request at a time on a connection that stays open. It
- * therefore separates the cost of one request from every effect of
- * concurrency. */
+/* This sends one request at a time on a connection that stays open, so it
+ * separates the cost of one request from every effect of concurrency. */
 static void http_sequential_run(void *state, size_t n) {
   http_state_t *st = state;
   http_do_requests(st, n);

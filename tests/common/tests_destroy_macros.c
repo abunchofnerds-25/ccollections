@@ -30,9 +30,10 @@ SOFTWARE.
  *
  * Each case walks an array backwards with `while (k) F(a[--k])`. A macro that
  * evaluates its argument twice decrements k twice per call, so it destroys
- * the wrong elements and skips others. The array sits at the end of a larger
- * one, so the index that such a macro reaches below 0 still names storage of
- * the test and the failure is an assertion, not undefined behaviour.
+ * the wrong elements and skips others. Because the array sits at the end of
+ * a larger one, an index that such a macro takes below 0 still names storage
+ * of the test, and the failure is an assertion instead of undefined
+ * behaviour.
  *
  * The binary is built with -Wshadow, and each case also nests one call inside
  * the argument of another, so a temporary of a destroy macro that hides

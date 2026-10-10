@@ -24,10 +24,10 @@ Current minimum level.
 .SH NOTES
 .nf
 Thread-safe.  The minimum level is an atomic value that belongs to each
-logger.  It is separate from the lock that serialises the writes and
-the rotation for the shared output target.  A read of the level of one
-logger therefore never contends with a write in progress on a sibling
-logger that shares the same target.
+logger and is separate from the lock that serialises the writes and
+the rotation for the shared output target, so a read of the level of
+one logger never contends with a write in progress on a sibling logger
+that shares the same target.
 Asserts when logger is CLOG_INVALID, stale or already closed.
 .fi
 .SH "SEE ALSO"

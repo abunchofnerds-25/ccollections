@@ -13,9 +13,9 @@ chmap chmap_create_ch(size_t initial_bucket_array_size,
 .fi
 .SH DESCRIPTION
 .nf
-Creates a hash map that hashes keys with the supplied procedure. It is a
-thin inline wrapper over chmap_create_full(3), passing NULL for the memory
-management procedures so the map uses the default allocator.
+Creates a hash map that hashes its keys with the supplied procedure. It is
+a thin inline wrapper over chmap_create_full(3) that passes NULL for the
+memory management procedures, so the map uses the default allocator.
 
 The map picks its implementation strategy from the key and value types, as
 chmap_create_full(3) describes; supplying a hashing procedure does not
@@ -23,10 +23,10 @@ change that choice.
 .fi
 .SH "CUSTOM HASHING"
 .nf
-The procedure gets the key bytes and their length. It returns an unsigned
-long. It must return the same value for two keys that the map considers
-equal. For a char * key, equal means equal contents and not an equal
-pointer.
+The procedure receives the key bytes and their length, and returns an
+unsigned long. It must return the same value for two keys that the map
+considers equal; for a char * key, equal means equal contents, not an
+equal pointer.
 
 The length is the size that the map stores for that key:
   - For a char * key: strlen + 1.
@@ -35,15 +35,15 @@ The length is the size that the map stores for that key:
   - For a key that goes through the raw layer, for example
     chmap_insert_elem(3): cmap_pair.size.
 The procedure therefore needs no terminator and no rule of its own to
-find the end of a key. It can hash a binary key whose length is known
-only at run time.
+find the end of a key, and it can hash a binary key whose length is
+known only at run time.
 
-The return value does not need to avalanche. The map finalizes the value
-that the procedure returns with its own bit-mixing step. It does this
-before it reduces the value to a bucket or a slot. A procedure that puts
-all of its entropy in the low bits (a sum, a small identifier, a truncated
-checksum) therefore still distributes correctly. The contract is therefore
-any function of the key that respects equality.
+The return value does not need to avalanche, because the map finalizes
+the value that the procedure returns with its own bit-mixing step before
+it reduces the value to a bucket or a slot. A procedure that puts all of
+its entropy in the low bits (a sum, a small identifier, a truncated
+checksum) therefore still distributes correctly, and the contract is
+simply any function of the key that respects equality.
 .fi
 .SH PARAMETERS
 .nf
@@ -52,7 +52,7 @@ key_type                   Key type, as a ccol_data_type
 val_type                   Value type, as a ccol_data_type
 custom_hashing_proc        Hashing procedure, or NULL to use the map's own
                            hashing for the key type
-err                        Optional pointer to receive an error string on
+err                        Optional pointer that receives an error string on
                            failure, or NULL
 .fi
 .SH RETURN VALUE

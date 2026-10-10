@@ -1,23 +1,23 @@
 #!/bin/sh
 # This script checks the library as an application meets it after
-# `make install`. It installs into a temporary prefix, builds the example of
-# README.md with the flags that pkg-config gives, and runs it. It links the
-# example two times: against the shared library, and against the static
-# archive. It then runs `make uninstall` and checks that no file of the
-# library stays in the prefix.
+# `make install`. It installs into a temporary prefix, then builds the example
+# of README.md with the flags that pkg-config gives and runs it, linked two
+# times: once against the shared library and once against the static archive.
+# Finally it runs `make uninstall` and checks that no file of the library stays
+# in the prefix.
 #
-# The install uses PREFIX and not DESTDIR. On macOS the shared library records
-# its install directory in its install name, and a program finds the library
-# through that name. Only a real prefix lets the check prove that this works.
-# On the ELF systems, a program finds a library in a prefix that is not
-# standard through an rpath, as doc/building.md says, so the dynamic link adds
-# one.
+# The install uses PREFIX instead of DESTDIR. On macOS the shared library
+# records its install directory in its install name, and a program finds the
+# library through that name, so only a real prefix lets the check prove that
+# this works. On the ELF systems, a program finds a library in a prefix that
+# is not standard through an rpath, as doc/building.md says, so the dynamic
+# link adds one.
 #
 # The test suites compile the sources into each test binary, so no suite can
 # see a defect of the install: a header that the install leaves out, a wrong
 # pkg-config file, or a wrong install name.
 #
-# Run this from the root of the repository. `make check_install` and CI both
+# Run this from the root of the repository; `make check_install` and CI both
 # use it. MAKE names the make program (gmake on the BSDs and on macOS).
 set -eu
 
@@ -40,9 +40,9 @@ if ! "$MAKE" -s install PREFIX="$prefix" SUDO= >"$log" 2>&1; then
 	fail "make install into $prefix failed"
 fi
 
-# The compiler also searches the standard directories, and a machine can hold
-# an earlier install there. A build that succeeds therefore proves nothing
-# about the headers in the prefix, so the set of installed headers must be
+# The compiler also searches the standard directories, where a machine can
+# hold an earlier install, so a build that succeeds proves nothing about the
+# headers in the prefix. The set of installed headers must therefore be
 # exactly the set of public headers.
 want=$(cd include && ls -- *.h | sort)
 have=$(cd "$prefix/include/ccollections" 2>/dev/null && ls -- *.h | sort) || have=""
@@ -55,9 +55,9 @@ libdir=$(PKG_CONFIG_PATH="$(dirname "$pc")" pkg-config --variable=libdir ccollec
 	fail "pkg-config cannot read $pc"
 [ "$libdir" = "$prefix/lib" ] ||
 	fail "ccollections.pc names libdir $libdir, not $prefix/lib"
-# The installed pkg-config directory goes first, and an existing
-# PKG_CONFIG_PATH stays after it, so that the static link finds the
-# pkg-config files of OpenSSL and zlib where the system keeps them.
+# The installed pkg-config directory goes first, with any existing
+# PKG_CONFIG_PATH after it, so that the static link finds the pkg-config
+# files of OpenSSL and zlib where the system keeps them.
 PKG_CONFIG_PATH="$(dirname "$pc")${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 export PKG_CONFIG_PATH
 
@@ -86,7 +86,7 @@ out=$(env -u LD_LIBRARY_PATH -u DYLD_LIBRARY_PATH "$tmp/hello_shared") ||
 	fail "the example, linked against the shared library, did not run"
 [ "$out" = "$expected" ] ||
 	fail "the shared example printed '$out', not '$expected'"
-# The program must load the installed library, and not one that an earlier
+# The program must load the installed library instead of one that an earlier
 # install left in a standard directory. On macOS it records the library by its
 # install name; elsewhere the loader resolves it through the rpath.
 if [ "$os" = Darwin ]; then
@@ -97,9 +97,9 @@ else
 		fail "the example does not load the library from $libdir"
 fi
 
-# The static link names the archive by its path. With both a shared library
-# and an archive in one directory, every linker of these systems takes the
-# shared library for -lccollections.
+# The static link names the archive by its path, because when a shared
+# library and an archive sit in one directory, every linker of these systems
+# takes the shared library for -lccollections.
 static_libs=$(pkg-config --static --libs ccollections) ||
 	fail "pkg-config --static --libs failed"
 static_libs=$(printf '%s\n' "$static_libs" | sed 's/-lccollections//')

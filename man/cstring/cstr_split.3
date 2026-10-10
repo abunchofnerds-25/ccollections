@@ -12,7 +12,7 @@ cstr_split(s, delim, err);
 .SH DESCRIPTION
 .nf
 This macro is a pass-through wrapper for cstring_split(). It returns a cvec
-of cstr tokens. Each token is its own allocation on the heap.
+of cstr tokens, each of which is its own allocation on the heap.
 .fi
 .SH PARAMETERS
 .nf
@@ -26,8 +26,8 @@ cvec of cstr tokens on success, NULL on failure
 .fi
 .SH NOTES
 .nf
-The caller must destroy every cstr in the vector. The caller must then
-destroy the vector
+The caller must destroy every cstr in the vector and then destroy the
+vector itself
 .fi
 .SH "SEE ALSO"
 .BR cstring_split (3),

@@ -28,19 +28,18 @@
  *        identity.
  *
  * chashmap does not treat a key as an opaque run of bytes for every type that
- * it accepts. It hashes and compares a long double by value. On an Application
- * Binary Interface (ABI) where that type carries padding, those bytes are
- * often not initialized. The map also changes -0.0 to 0.0 for a float and for
- * a double. Another module can have to agree with the map on which keys are
- * the same key. This is why such a module cannot hash the bytes of the key
- * itself. That module must ask the map.
+ * it accepts. It hashes and compares a long double by value, because on an
+ * Application Binary Interface (ABI) where that type carries padding, those
+ * bytes are often not initialized, and it changes -0.0 to 0.0 for a float and
+ * for a double. A module that has to agree with the map on which keys are the
+ * same key therefore cannot hash the bytes of the key itself; it must ask the
+ * map.
  *
- * clrucache is such a module. A segmented cache picks a segment from the key,
+ * clrucache is such a module: a segmented cache picks a segment from the key,
  * and each segment is its own map. Two keys that the map treats as one key
- * must go to the same segment. If they do not, the cache holds two entries for
- * one key.
+ * must go to the same segment, or the cache holds two entries for one key.
  *
- * This header is internal. It carries no visibility block. make install
+ * This header is internal and carries no visibility block: make install
  * excludes it, and its symbol is absent from the dynamic symbol table of the
  * shared library.
  */
@@ -54,22 +53,22 @@
 /**
  * @brief Hash a key exactly as chashmap hashes it with no custom hashing proc.
  *
- * Two keys that the map treats as equal get equal hashes here. This is also
- * true when the two keys have different representations that the map ignores
- * on purpose. The hash is the one of the keyed mode of a map, keyed with the
- * secrets of the process, whatever the mode of any map is: a map that has
- * switched to the keyed mode stores this value for the key, a map in the fast
- * mode stores a different one, and the value differs from one process to the
- * next. Key identity does not depend on the mode, so the answer to which keys
- * are the same key is the same in both. For a fixed-width type, this function
- * reads only as many bytes as the width of key_type. This is why the caller
- * must first check key_size against ccol_fixed_width_data_type_size().
+ * Two keys that the map treats as equal get equal hashes here, also when
+ * their representations differ in ways that the map ignores on purpose. The
+ * hash is the one of the keyed mode of a map, keyed with the secrets of the
+ * process, whatever the mode of any map is: a map that has switched to the
+ * keyed mode stores this value for the key, a map in the fast mode stores a
+ * different one, and the value differs from one process to the next. Key
+ * identity does not depend on the mode, so the answer to which keys are the
+ * same key is the same in both. For a fixed-width type, this function reads
+ * only as many bytes as the width of key_type, so the caller must first check
+ * key_size against ccol_fixed_width_data_type_size().
  *
  * @param key_ptr  Key bytes.
  * @param key_size Size of the key. The function never reads the bytes that
- *                 come after the width of the key type. But it uses this value
- *                 for a float key, for a double key, and for a key that has no
- *                 fixed width. This is why the value must match the type.
+ *                 come after the width of the key type, but it uses this value
+ *                 for a float key, for a double key and for a key that has no
+ *                 fixed width, so the value must match the type.
  * @param key_type The declared key type that the caller made the map with.
  */
 size_t ccol_chmap_hash_key(const void *key_ptr, size_t key_size,

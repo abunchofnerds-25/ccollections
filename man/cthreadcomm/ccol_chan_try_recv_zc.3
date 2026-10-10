@@ -11,9 +11,9 @@ ccol_retval_t ccol_chan_try_recv_zc(ccol_channel *ch, c_message_t *target_buf);
 .fi
 .SH DESCRIPTION
 .nf
-This function tries to receive a message immediately. It uses the queue
-that the channel picks itself. If that queue is empty, the function returns
-immediately.
+This function tries to receive a message immediately from the queue
+that the channel picks itself, and returns immediately if that queue is
+empty.
 .fi
 .SH PARAMETERS
 .nf

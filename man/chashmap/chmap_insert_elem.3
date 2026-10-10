@@ -14,8 +14,8 @@ ccol_retval_t chmap_insert_elem(chmap chm,
 .SH DESCRIPTION
 .nf
 Inserts a key-value pair into the hash map. If the key already exists,
-the old value is replaced with the new value. Automatically resizes the
-map when load factor thresholds are exceeded.
+the new value replaces the old one. The map resizes automatically when
+its load factor crosses a threshold.
 .fi
 .SH PARAMETERS
 .nf
@@ -39,35 +39,35 @@ ccol_invalid_args          - chm, key_pair, or val_pair is NULL or size is 0;
                              size of the value type the map was created
                              with, for any fixed-width value type, and
                              regardless of which backend the map uses. A
-                             value type with no fixed width, which is
-                             ccol_string and ccol_other_types, is never
-                             checked: every entry of such a map
+                             value type with no fixed width (ccol_string
+                             and ccol_other_types) is never checked,
+                             because every entry of such a map
                              legitimately carries its own size
 ccol_container_full        - Map has reached ccol_max_elem_count
 ccol_not_enough_memory     - Memory allocation failed
 .fi
 .SH NOTES
 .nf
-The ptr of a key_pair needs no specified alignment. The map hashes and
-compares the key bytes through memcpy. It does not use a pointer cast to
-the key type. key_pair->ptr can therefore point directly at key bytes at
-any offset in a larger buffer. Examples are a field in a packed network
-frame and a memory-mapped record. You do not have to copy the key bytes
-into an aligned local variable first
+The ptr of a key_pair needs no specified alignment, because the map
+hashes and compares the key bytes through memcpy instead of through a
+pointer cast to the key type. key_pair->ptr can therefore point directly
+at key bytes at any offset in a larger buffer, such as a field in a
+packed network frame or a memory-mapped record, and you do not have to
+copy the key bytes into an aligned local variable first
 Average O(1) complexity
 The map copies the key data and the value data into itself
 The map frees and replaces the old value when the key is already there
 The map resizes itself when the load factor goes above its threshold.
-On open addressing, an insert of a new key doubles the table once the
-live entries fill more than 0.70 of it. A delete leaves no marker for
+With open addressing, an insert of a new key doubles the table once the
+live entries fill more than 0.70 of it; a delete leaves no marker for
 a deleted slot, so only live entries count
-The rejection of a value of the wrong width happens at the INSERT, and
-not at a later read. Without it the insert reports success, and the
-value-size guard of chmap_get(3) stops the process on the first read
-of that key, at a call site that did nothing wrong
-The type-inferred chmap_insert(3) macro cannot reach that rejection.
-It converts the value through the declared value type of the map
-first, so every pair that it builds is exactly the right width
+A value of the wrong width is rejected at the INSERT rather than at a
+later read. Without that check the insert would report success, and the
+value-size guard of chmap_get(3) would stop the process on the first
+read of that key, at a call site that did nothing wrong
+The type-inferred chmap_insert(3) macro cannot reach that rejection,
+because it first converts the value through the declared value type of
+the map, so every pair that it builds is exactly the right width
 For a float or double key, see chmap_construct(3) for the map's
 key equality contract (bitwise, except -0.0 canonicalized to 0.0)
 For a long double key, see chmap_construct(3) for the map's key

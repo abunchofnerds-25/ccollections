@@ -31,7 +31,7 @@ side effect, such as handles[i++], destroys and clears one element.
 .SH WARNINGS
 .nf
 A pointer from the dynamic fallback that nobody freed causes an
-assertion failure. Free every allocated entry before you destroy the
+assertion failure, so free every allocated entry before you destroy the
 pool.
 .fi
 .SH "SEE ALSO"

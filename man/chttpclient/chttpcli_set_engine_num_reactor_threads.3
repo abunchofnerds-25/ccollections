@@ -12,32 +12,31 @@ ccol_retval_t chttpcli_set_engine_num_reactor_threads(size_t num_threads);
 .SH DESCRIPTION
 .nf
 This function configures how many OS threads the shared
-ccol_event_loop reactor of the async engine gives to its poll and its
-dispatch. That engine serves Tier 2 and Tier 3. The rules for the
+ccol_event_loop reactor of the async engine, which serves Tier 2 and
+Tier 3, gives to its poll and its dispatch. The rules for the
 num_reactor_threads parameter of ccol_event_loop_create_with_mprocs
-apply here too (see cthreadcomm.h). A value of 1 means one thread that
-both polls and dispatches inline. A larger value means one dedicated
-poller thread and (num_threads - 1) dispatch worker threads.
+apply here too (see cthreadcomm.h): a value of 1 means one thread that
+both polls and dispatches inline, and a larger value means one
+dedicated poller thread and (num_threads - 1) dispatch worker threads.
 
-By default the reactor sizes itself to
-sysconf(_SC_NPROCESSORS_ONLN). It falls back to 1 if that query fails.
-You get that default if you never call this function, and also if you
-call it with num_threads == 0. A positive num_threads overrides that
-automatic size. It pins the reactor to exactly that number of threads.
-A num_threads of 0 puts the automatic size back. This function
-configures only the construction of the shared reactor. It is
-independent of the settings of one chttpcli instance.
+By default the reactor sizes itself to sysconf(_SC_NPROCESSORS_ONLN),
+and falls back to 1 if that query fails. You get that default if you
+never call this function, and also if you call it with
+num_threads == 0. A positive num_threads overrides that automatic size
+and pins the reactor to exactly that number of threads; a num_threads
+of 0 puts the automatic size back. This function configures only the
+construction of the shared reactor, independently of the settings of
+any one chttpcli instance.
 
-You can call this function only at two times. The first time is before
-the reactor ever starts in this process. That is before the first call
-to chttpclient_do_async or to chttpclient_do_async_streaming anywhere.
-The second time is after the engine stops completely. The engine stops
-after every async user of a chttpcli drops its reference and the
-automatic teardown finishes. The reactor of
-chttpsvr_set_engine_num_reactor_threads usually lives for the whole
-process. This engine is different, because it starts and stops on its
-own with the Tier 2 and Tier 3 traffic. The window for this call
-therefore comes back again and again. It is not one chance at the
+You can call this function only at two times: before the reactor ever
+starts in this process (that is, before the first call to
+chttpclient_do_async or to chttpclient_do_async_streaming anywhere),
+or after the engine stops completely, which happens after every async
+user of a chttpcli drops its reference and the automatic teardown
+finishes. The reactor of chttpsvr_set_engine_num_reactor_threads
+usually lives for the whole process, but this engine starts and stops
+on its own with the Tier 2 and Tier 3 traffic, so the window for this
+call comes back again and again instead of being one chance at the
 start of the process.
 .fi
 .SH RETURN VALUE

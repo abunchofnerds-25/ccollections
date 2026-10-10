@@ -30,29 +30,29 @@ SOFTWARE.
 #include "common.h"
 
 /* Every declaration from here to the end of this header is part of the public
- * ABI of libccollections. The shared library exports all of them. The build
- * of the library uses -fvisibility=hidden. A function or object that no such
- * block covers therefore stays internal to the library. It is absent from the
- * dynamic symbol table of the library. A symbol of the same name in the
- * application that links against the library cannot interpose it and cannot
+ * ABI of libccollections, and the shared library exports all of them. The
+ * library is built with -fvisibility=hidden, so a function or object that no
+ * such block covers stays internal to the library: it is absent from the
+ * dynamic symbol table of the library, and a symbol of the same name in the
+ * application that links against the library can neither interpose it nor
  * collide with it. */
 #pragma GCC visibility push(default)
 
 /**
  * @file chashmap.h
- * @brief Hash map (dictionary). It resizes itself and has two implementation
- * strategies.
+ * @brief Hash map (dictionary) that resizes itself and has two
+ * implementation strategies.
  *
- * This module gives you a hash map. The map selects one of two strategies by
+ * This module gives you a hash map, which selects one of two strategies by
  * itself:
  *
  * **Open-addressing** (the map uses this when the key and the value are both
  * integral types of 8 bytes or less):
- * - Compact 16-byte slots. A slot holds an 8-byte key beside an 8-byte value
+ * - Compact 16-byte slots: a slot holds an 8-byte key beside an 8-byte value
  * and nothing else. The occupied bit of each slot lives in a parallel byte
- * array. The map allocates that array as the tail of the same block. The
- * storage for the key and the value therefore keeps its natural alignment.
- * This lets you read it and write it in place, for example with chmap_get_ptr
+ * array, which the map allocates as the tail of the same block, so the
+ * storage for the key and the value keeps its natural alignment and you can
+ * read it and write it in place, for example with chmap_get_ptr
  * - Linear probing, with a multiplicative hash of an integer that the map
  *   reads from its high bits; see the two hash modes below
  * - Backward-shift deletion: a delete moves the later entries of its cluster
@@ -78,16 +78,16 @@ SOFTWARE.
  *
  * Common features:
  * - The map selects its implementation from the key type and the value type
- * - Support for a custom hash function. The map passes its result through a
+ * - Support for a custom hash function, whose result the map passes through a
  * finalizer before it derives an index from it
  * - Two hash modes. Every map starts in the fast mode: a Fibonacci multiply
  * for an integral, float, double or pointer key, XXH64 with a secret seed
  * for a string or any other buffer, and the murmur3 finalizer for the result
  * of a custom hash. These spread ordinary keys well and cost little, but a
  * party that controls the keys can choose a set that collides under them.
- * Every insert of a new key therefore measures how far it had to go, and a
- * map whose keys collide more than a random function lets them switches to
- * the keyed mode: a mixer of two multiplies keyed with a secret seed for a
+ * So every insert of a new key measures how far it had to go, and a map
+ * whose keys collide more than a random function lets them switches to the
+ * keyed mode: a mixer of two multiplies keyed with a secret seed for a
  * fixed-width key and for the result of a custom hash, and SipHash-1-3 with
  * a secret key for a buffer. Each growth of a keyed map tries the fast mode
  * again on the new table and keeps it when the keys spread under it. A
@@ -95,8 +95,8 @@ SOFTWARE.
  * SipHash-1-3 in both modes. The secrets are drawn once for each process. See
  * chmap_create_full() for the thresholds and for what a party that controls
  * the keys can still force
- * - The order of an iteration of a separate-chaining map follows insertion.
- * The order of an open-addressing map follows its slots, so it depends on
+ * - The order of an iteration of a separate-chaining map follows insertion,
+ * while the order of an open-addressing map follows its slots: it depends on
  * the mode, and in the keyed mode it differs from one process to the next
  * - Type-inferred macros for the common operations
  * - Average complexity: O(1) for insert, for get and for delete
@@ -126,13 +126,12 @@ typedef chashmap *chmap;
  * This function makes a new hash map. The caller gives the first bucket
  * count, the key type, the value type, custom memory management, a custom
  * hash function and a custom key equality function. The map selects its
- * implementation strategy by itself. It selects the strategy from the key
- * type and the value type. The strategy is open-addressing or separate
- * chaining.
+ * implementation strategy (open-addressing or separate chaining) by itself,
+ * from the key type and the value type.
  *
  * @param initial_bucket_array_size First number of buckets (minimum 16)
- * @param key_type Type of the keys. This selects the implementation strategy
- * @param val_type Type of the values. This selects the implementation
+ * @param key_type Type of the keys, which selects the implementation strategy
+ * @param val_type Type of the values, which selects the implementation
  * strategy
  * @param mmgmt_procs Custom memory management procedures, or NULL for the
  * default malloc/free
@@ -154,42 +153,42 @@ typedef chashmap *chmap;
  *         more than 8 bytes, or custom_key_equality_proc is not NULL
  * @note With no custom_key_equality_proc, a key of a type that the map does
  * not know, such as a struct, is equal to another key only when every byte of
- * the two is equal, and the default hash reads every byte too. That includes
- * the padding bytes of a struct. Such a key must therefore be built from a
- * fully zeroed object, for example with memset() or `= {0}` before the fields
- * are assigned. A key whose padding holds whatever was on the stack misses on
+ * the two is equal, and the default hash reads every byte too, including the
+ * padding bytes of a struct. So such a key must be built from a fully zeroed
+ * object, for example with memset() or `= {0}` before the fields are
+ * assigned; a key whose padding holds whatever was on the stack misses on
  * lookup. A custom_hashing_proc and a custom_key_equality_proc that read only
  * the fields remove that requirement.
  * @note The integral types are: char, short, int, long, long long (signed and
  * unsigned), float and double
  * @note long double is not available for open-addressing, because it can be
  * 10 to 16 bytes
- * @note The key type and the hash mode select the default hash. The backend
- * does not select it. In the fast mode, which every map starts in, an
- * integral key, a float key, a double key and a pointer key get a Fibonacci
- * multiply that the map reads from its high bits, a string key and any other
- * key that is like a buffer get XXH64 with a secret 64-bit seed, and the
- * result of a custom_hashing_proc goes through the murmur3 finalizer. In the
- * keyed mode they get a mixer of two multiplies that starts from an exclusive
- * or with a secret 64-bit seed, SipHash-1-3 with a secret 128-bit key, and
- * that same mixer. A long double key gets SipHash-1-3 by value in both
- * modes. A separate-chaining map with an integral key type gets the integer
- * hash for that key, exactly as an open-addressing map does; one example is a
- * double key together with a value that is not integral.
+ * @note The key type and the hash mode select the default hash; the backend
+ * does not. In the fast mode, which every map starts in, an integral key, a
+ * float key, a double key and a pointer key get a Fibonacci multiply that the
+ * map reads from its high bits, a string key and any other key that is like a
+ * buffer get XXH64 with a secret 64-bit seed, and the result of a
+ * custom_hashing_proc goes through the murmur3 finalizer. In the keyed mode
+ * they get, in the same order, a mixer of two multiplies that starts from an
+ * exclusive or with a secret 64-bit seed, SipHash-1-3 with a secret 128-bit
+ * key, and that same mixer. A long double key gets SipHash-1-3 by value in
+ * both modes. A separate-chaining map with an integral key type gets the
+ * integer hash for that key, exactly as an open-addressing map does; one
+ * example is a double key together with a value that is not integral.
  * @note The map watches every insert of a new key and switches itself to the
  * keyed mode when its keys collide more than a random function lets them. An
- * open-addressing map switches when one insert lands more than its cap from its
- * home slot: 24 slots for each doubling of the table up to 4096 slots, and 288
- * slots from there on. A separate-chaining map switches when a new key meets 20
- * nodes in its chain. Both switch when 256 consecutive inserts of new keys cost
- * more in total than 256 times 5 * E(a) + 0.5 probes for an open-addressing
- * table of 4096 slots or more, 6 * E(a) + 0.5 for a smaller one, and 4.5 *
- * lambda + 0.5 nodes for separate chaining. E(a) = (1 / (1 - a)^2 - 1) / 2 is
- * the expected displacement of an insert at load a under a random function, and
- * lambda is the number of entries for each bucket; a and lambda are the highest
- * load that those 256 inserts can have reached. A shrink that merges clusters
- * or chains is held to the same caps. A lookup never writes to the map and
- * never switches it.
+ * open-addressing map switches when one insert lands more than its cap from
+ * its home slot: 24 slots for each doubling of the table up to 4096 slots,
+ * and 288 slots from there on. A separate-chaining map switches when a new
+ * key meets 20 nodes in its chain. Both switch when 256 consecutive inserts
+ * of new keys cost more in total than 256 times 5 * E(a) + 0.5 probes for an
+ * open-addressing table of 4096 slots or more, 6 * E(a) + 0.5 for a smaller
+ * one, and 4.5 * lambda + 0.5 nodes for separate chaining. Here
+ * E(a) = (1 / (1 - a)^2 - 1) / 2 is the expected displacement of an insert
+ * at load a under a random function, lambda is the number of entries for
+ * each bucket, and a and lambda are the highest load that those 256 inserts
+ * can have reached. A shrink that merges clusters or chains is held to the
+ * same caps. A lookup never writes to the map and never switches it.
  * @note Until it switches, a party that controls the keys can make an
  * open-addressing insert cost about 26 probes on average at a load of 0.70
  * (about 31 in a table below 4096 slots), and one insert no more than the
@@ -197,7 +196,7 @@ typedef chashmap *chmap;
  * entries for each bucket, and never 20. A lookup or a delete of an
  * open-addressing map examines at most one slot more than the largest
  * displacement of any key in the table, which the cap bounds in the fast
- * mode, so a long run of keys whose home slots are consecutive, which no
+ * mode. So a long run of keys whose home slots are consecutive, which no
  * insert pays for, costs a lookup no more than that either.
  * @note The switch rebuilds an open-addressing table at the same size; when
  * that allocation fails, the map stays fast and correct, the insert that
@@ -223,10 +222,10 @@ typedef chashmap *chmap;
  * under the multiply only at some sizes, such as multiples of 24, 32, 48 or
  * 96, switch at a small size and come back to the fast mode at a later
  * growth whose table spreads them well; at other sizes they cluster again
- * and the window switches the map back. The attempt keeps every entry, and
- * under separate chaining every reference to a key or a value, the insertion
- * order and every iterator, whether it succeeds or not. The keys that the map
- * treats as the same key are the same in both modes.
+ * and the window switches the map back. Whether it succeeds or not, the
+ * attempt keeps every entry, and under separate chaining every reference to
+ * a key or a value, the insertion order and every iterator. The keys that
+ * the map treats as the same key are the same in both modes.
  * @note The secrets are random. The library draws them from getrandom(2)
  * once for each process, the first time that the process creates a map, and
  * mixes the clocks, the process id and randomized addresses when the kernel
@@ -234,37 +233,36 @@ typedef chashmap *chmap;
  * the same value makes them collide in both modes, because no finalizer can
  * tell them apart.
  * @note For a float key_type or a double key_type, the map always changes a
- * -0.0 key to 0.0. It does this before it hashes the key, stores it or
- * compares it. The two values therefore collide into one single key, exactly
- * as `-0.0 == 0.0` does in C. This is always true. It is also true when
- * custom_hashing_proc is not NULL. The custom function always gets the bit
- * pattern that the map already changed, never a raw -0.0. The map stores that
- * changed value, and an iteration later reads that same value. The map does
- * not store the exact bit pattern that the caller gave to chmap_insert.
- * @note A long double key_type always uses separate chaining. See the note
- * above about long double and open-addressing. For this key type, key
- * equality and the hash come from the numeric VALUE of the key. They do not
- * come from the raw bytes of the key. Every other key type behaves
- * differently. `-0.0L` and `0.0L` collide into one single key, exactly as
- * `-0.0` and `0.0` do for a float and for a double. Two keys that hold the
- * identical value stay the same key even when their padding bits differ. The
- * platform defines those padding bits. They really can differ for a long
- * double, because the representation of a long double in memory is not fully
- * significant on most platforms. Every NaN long double collapses into one
- * single key. This is a deliberate difference from the policy for a float and
- * for a double, which keep a distinct NaN payload. The same padding forces
- * this difference. The map never reads a padding byte of a NaN long double,
- * because that byte is often genuinely uninitialized memory and not merely
- * unspecified content. The map does not use this value-based handling when
- * custom_hashing_proc is not NULL. The custom function then gets the raw
- * bytes of a long double key, padding included, in the same way as for any
- * other type. A custom hash function for a long double key type must
- * therefore be value-based itself. It must ignore the padding. For example,
- * it can hash the result of frexpl(). Without this, the bucket that the hash
- * selects does not agree with the always-value-based key equality of this
- * map. Two representations of the same numeric value can then select
- * different buckets. A lookup can then report the key as absent while the
- * key is present.
+ * -0.0 key to 0.0 before it hashes the key, stores it or compares it, so the
+ * two values collide into one single key, exactly as `-0.0 == 0.0` does in
+ * C. This is always true, also when custom_hashing_proc is not NULL: the
+ * custom function always gets the bit pattern that the map already changed,
+ * never a raw -0.0. The map stores that changed value, and an iteration later
+ * reads that same value; it does not store the exact bit pattern that the
+ * caller gave to chmap_insert.
+ * @note A long double key_type always uses separate chaining (see the note
+ * above about long double and open-addressing). For this key type, unlike
+ * every other key type, key equality and the hash come from the numeric
+ * VALUE of the key and not from its raw bytes. `-0.0L` and `0.0L` collide
+ * into one single key, exactly as `-0.0` and `0.0` do for a float and for a
+ * double. Two keys that hold the identical value stay the same key even when
+ * their padding bits differ; the platform defines those padding bits, and
+ * they really can differ for a long double, because the representation of a
+ * long double in memory is not fully significant on most platforms. Every
+ * NaN long double collapses into one single key. This is a deliberate
+ * difference from the policy for a float and for a double, which keep a
+ * distinct NaN payload, and the same padding forces it: the map never reads
+ * a padding byte of a NaN long double, because that byte is often genuinely
+ * uninitialized memory and not merely unspecified content. The map does not
+ * use this value-based handling when custom_hashing_proc is not NULL; the
+ * custom function then gets the raw bytes of a long double key, padding
+ * included, in the same way as for any other type. So a custom hash function
+ * for a long double key type must itself be value-based and must ignore the
+ * padding; for example, it can hash the result of frexpl(). Without this,
+ * the bucket that the hash selects does not agree with the always-value-based
+ * key equality of this map: two representations of the same numeric value
+ * can select different buckets, and a lookup can then report the key as
+ * absent while the key is present.
  * @note Destroy the map with chmap_destroy() after you finish with it
  *
  * @see chmap_create
@@ -377,8 +375,8 @@ size_t chmap_elem_count(chmap chm);
 /**
  * @brief Remove every element, and resize the map if the caller asks for it
  *
- * This function removes every key-value pair from the map. It also destroys
- * every internal data structure. It can resize the array of buckets or slots
+ * This function removes every key-value pair from the map and destroys every
+ * internal data structure. It can also resize the array of buckets or slots
  * to a new size.
  *
  * @param chm The hash map to reset
@@ -392,9 +390,9 @@ size_t chmap_elem_count(chmap chm);
  * @note The array size stays the same when new_bucket_array_size is 0
  * @note The function sets the size to 16 when new_bucket_array_size is less
  * than 16
- * @note In every other case the function rounds the size UP. It rounds to the
- * nearest power of two that is >= new_bucket_array_size. This is a ceiling.
- * The function never rounds down.
+ * @note In every other case the function rounds the size UP, to the nearest
+ * power of two that is >= new_bucket_array_size. This is a ceiling: the
+ * function never rounds down.
  * @note The function asserts when chm is NULL
  *
  * @see chmap_destroy
@@ -404,10 +402,10 @@ ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size);
 /**
  * @brief Insert a key-value pair, or update it (upsert)
  *
- * This function inserts a new key-value pair into the map. If the key is
- * already present, the function updates the value instead. The map resizes
- * itself when the load factor goes above the threshold. The map copies the
- * key and the value into its own storage.
+ * This function inserts a new key-value pair into the map, or updates the
+ * value instead when the key is already present. The map resizes itself when
+ * the load factor goes above the threshold, and it copies the key and the
+ * value into its own storage.
  *
  * @param chm The hash map to insert into
  * @param key_pair The key to insert. ptr and size must both be valid
@@ -416,18 +414,17 @@ ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size);
  * @return ccol_success when the function inserts a genuinely new key
  * @return ccol_key_already_present when the key is already present and the
  * function updates its value in place. This is a successful upsert, not an
- * error. The caller must treat this value and ccol_success as success
+ * error, so the caller must treat this value and ccol_success as success
  * @return ccol_invalid_args when a pointer is NULL or a size is 0. The
- * function also gives this value when key_pair->size does not match the byte
- * size of the key type exactly. That check applies when the key type is a
- * fixed-width numeric type, and it applies to every backend. The fixed-width
- * numeric types are char, short, int, long, long long, their unsigned
- * equivalents, float, double, long double and a pointer type. The function
- * also gives this value when the value type that the caller made the map
- * with is a fixed-width type and val_pair->size does not match its byte size
- * exactly. That check, too, applies to every backend. A value type with no
- * fixed width, which is ccol_string and ccol_other_types, is never checked,
- * because every entry of such a map carries its own size
+ * function also gives this value when the key type is a fixed-width numeric
+ * type and key_pair->size does not match its byte size exactly, on every
+ * backend. The fixed-width numeric types are char, short, int, long, long
+ * long, their unsigned equivalents, float, double, long double and a pointer
+ * type. The function also gives this value when the value type that the
+ * caller made the map with is a fixed-width type and val_pair->size does not
+ * match its byte size exactly, again on every backend. A value type with no
+ * fixed width (ccol_string and ccol_other_types) is never checked, because
+ * every entry of such a map carries its own size
  * @return ccol_container_full when the map reaches ccol_max_elem_count
  * @return ccol_not_enough_memory when an allocation fails
  *
@@ -435,11 +432,11 @@ ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size);
  * @note Open-addressing: O(n) worst case for the linear probe
  * @note Separate chaining: O(n) worst case for each bucket, where n is the
  * chain length
- * @note The map copies the key data and the value data. It does not point at
- * them
- * @note When the key is present, the function updates only the value. The key
- * stays unchanged. This path reports ccol_key_already_present and not
- * ccol_success. See above
+ * @note The map copies the key data and the value data instead of pointing
+ * at them
+ * @note When the key is present, the function updates only the value and
+ * the key stays unchanged. This path reports ccol_key_already_present and
+ * not ccol_success; see above
  * @note Open-addressing: starts a resize at a load factor of 0.70
  * @note Separate chaining: starts a resize when elem_count >=
  * (bucket_count + 1) * 1.5
@@ -456,8 +453,8 @@ ccol_retval_t chmap_insert_elem(chmap chm, const cmap_pair *key_pair,
  * @brief Get a copy of the value that belongs to a key
  *
  * This function copies the value for the given key into the buffer that the
- * caller gives. It copies min(value_size, target_buf_size) bytes. This lets
- * the two sizes differ.
+ * caller gives. It copies min(value_size, target_buf_size) bytes, so the two
+ * sizes can differ.
  *
  * @param chm The hash map to search
  * @param key_pair The key to look up
@@ -466,11 +463,11 @@ ccol_retval_t chmap_insert_elem(chmap chm, const cmap_pair *key_pair,
  *
  * @return ccol_success when the function finds the key and copies the value
  * @return ccol_invalid_args when a pointer is NULL or a size is 0. The
- * function also gives this value when key_pair->size does not match the byte
- * size of the key type exactly. That check applies when the key type is a
- * fixed-width numeric type, and it applies to every backend. The fixed-width
- * numeric types are char, short, int, long, long long, their unsigned
- * equivalents, float, double, long double and a pointer type
+ * function also gives this value when the key type is a fixed-width numeric
+ * type and key_pair->size does not match its byte size exactly, on every
+ * backend. The fixed-width numeric types are char, short, int, long, long
+ * long, their unsigned equivalents, float, double, long double and a pointer
+ * type
  * @return ccol_key_not_found when the key is not present
  *
  * @note O(1) average complexity
@@ -478,10 +475,10 @@ ccol_retval_t chmap_insert_elem(chmap chm, const cmap_pair *key_pair,
  * @note Separate chaining: O(n) worst case for each bucket, where n is the
  * chain length
  * @note The function copies min(actual_value_size, target_buf_size) bytes
- * @note A buffer that is too small is safe. The function then makes a partial
- * copy
+ * @note A buffer that is too small is safe: the function then makes a
+ * partial copy
  * @note When target_buf_size is larger than the stored value, the function
- * sets the remaining bytes of target_buf to zero. It does not leave them
+ * sets the remaining bytes of target_buf to zero instead of leaving them
  * unchanged
  *
  * @see chmap_get_elem_ref
@@ -494,8 +491,8 @@ ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair *key_pair,
  * @brief Get a pointer to the value that belongs to a key
  *
  * This function gives a pointer to the value pair struct for the given key.
- * The pointer stays valid until something changes the map. An insert, a
- * delete or a resize changes the map.
+ * The pointer stays valid until something (an insert, a delete or a resize)
+ * changes the map.
  *
  * @param chm The hash map to search
  * @param key_pair The key to look up
@@ -503,32 +500,31 @@ ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair *key_pair,
  *
  * @return ccol_success when the function finds the key
  * @return ccol_invalid_args when a pointer is NULL or the key size is 0. The
- * function also gives this value when key_pair->size does not match the byte
- * size of the key type exactly. That check applies when the key type is a
- * fixed-width numeric type, and it applies to every backend. The fixed-width
- * numeric types are char, short, int, long, long long, their unsigned
- * equivalents, float, double, long double and a pointer type
+ * function also gives this value when the key type is a fixed-width numeric
+ * type and key_pair->size does not match its byte size exactly, on every
+ * backend. The fixed-width numeric types are char, short, int, long, long
+ * long, their unsigned equivalents, float, double, long double and a pointer
+ * type
  * @return ccol_key_not_found when the key is not present
  *
  * @note O(1) average complexity
  * @note Open-addressing: O(n) worst case for the linear probe
  * @note Separate chaining: O(n) worst case for each bucket, where n is the
  * chain length
- * @note An insert, a delete or a resize makes the returned pointer invalid. A
- * call to chmap_get_elem_ref, chmap_get or chmap_get_ptr for a different key
- * never does. The caller can hold two or more pointers for different keys at
- * the same time. Each one stays valid on its own
- * @note Do not free the returned pointer. The map owns it
+ * @note An insert, a delete or a resize makes the returned pointer invalid,
+ * but a call to chmap_get_elem_ref, chmap_get or chmap_get_ptr for a
+ * different key never does. So the caller can hold two or more pointers for
+ * different keys at the same time, and each one stays valid on its own
+ * @note Do not free the returned pointer: the map owns it
  * @note The cmap_pair that the function gives back is the accessor of the map
- * for that entry. It describes the value. It is not part of the value. Its
- * target is const-qualified. The caller can read through val_pair->ptr. The
- * caller can also write to the bytes that it points at, inside
- * val_pair->size. But an assignment to val_pair->ptr or to val_pair->size is
- * a compile error. The two fields describe one another. The map cannot own a
- * pointer that it did not allocate. Use chmap_insert_elem() to replace a
- * value.
- * @note The out parameter is a const cmap_pair **. The caller must therefore
- * declare its own variable as const cmap_pair *. The address of a plain
+ * for that entry: it describes the value and is not part of the value. Its
+ * target is const-qualified: the caller can read through val_pair->ptr and
+ * write to the bytes that it points at, inside val_pair->size, but an
+ * assignment to val_pair->ptr or to val_pair->size is a compile error. The
+ * two fields describe one another, and the map cannot own a pointer that it
+ * did not allocate. Use chmap_insert_elem() to replace a value.
+ * @note The out parameter is a const cmap_pair **, so the caller must
+ * declare its own variable as const cmap_pair *; the address of a plain
  * cmap_pair * does not compile.
  *
  * @see chmap_get_elem_copy
@@ -548,11 +544,11 @@ ccol_retval_t chmap_get_elem_ref(chmap chm, const cmap_pair *key_pair,
  *
  * @return ccol_success when the function finds the key and deletes it
  * @return ccol_invalid_args when a pointer is NULL or the key size is 0. The
- * function also gives this value when key_pair->size does not match the byte
- * size of the key type exactly. That check applies when the key type is a
- * fixed-width numeric type, and it applies to every backend. The fixed-width
- * numeric types are char, short, int, long, long long, their unsigned
- * equivalents, float, double, long double and a pointer type
+ * function also gives this value when the key type is a fixed-width numeric
+ * type and key_pair->size does not match its byte size exactly, on every
+ * backend. The fixed-width numeric types are char, short, int, long, long
+ * long, their unsigned equivalents, float, double, long double and a pointer
+ * type
  * @return ccol_key_not_found when the key is not present
  *
  * @note O(1) average complexity
@@ -582,7 +578,7 @@ ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair *key_pair);
  *
  * This function makes an iterator that points at the first element. A
  * separate-chaining map iterates in the reverse insertion order, through the
- * doubly-linked list. An open-addressing map iterates in the slot order.
+ * doubly-linked list, and an open-addressing map iterates in the slot order.
  *
  * @param chm The hash map to iterate over
  * @param err Optional pointer that gets an error string when the call fails
@@ -590,19 +586,19 @@ ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair *key_pair);
  * @return Pointer to the iterator. The function returns NULL when the map is
  * empty or when an allocation fails
  *
- * @note Separate chaining: the iteration goes in the reverse insertion order.
- *       The element that the caller inserted last comes first. The iteration
- *       uses the doubly-linked list
+ * @note Separate chaining: the iteration goes in the reverse insertion order,
+ *       so the element that the caller inserted last comes first. The
+ *       iteration uses the doubly-linked list
  * @note Open-addressing: the iteration goes in the slot order, not the
  * insertion order
  * @note Destroy the iterator with chmap_iter_destroy(). The iterator also
  * destroys itself at the end of the iteration
  * @note A change to the map during the iteration makes the iterator invalid
- * @note The function treats a NULL chm in the same way as an empty map. It
- * returns NULL, and this is not an error. This behaviour is deliberate. A map
+ * @note The function treats a NULL chm in the same way as an empty map: it
+ * returns NULL, and this is not an error. This behaviour is deliberate: a map
  * field that the program makes only when it needs it can stay uninitialized
- * while nothing goes into it. The caller can iterate such a field directly,
- * and no caller needs its own NULL guard first
+ * while nothing goes into it, and the caller can iterate such a field
+ * directly, with no NULL guard of its own first
  * @note The function returns NULL when the map is empty. This is not an error
  *
  * @see chmap_begin (macro wrapper)
@@ -627,26 +623,26 @@ void __chmap_iterator_destroy(cmap_iterator *iter);
 void __chmap_destroy(chmap chm);
 
 /**
- * @brief Destroy a hash map. Call a destructor on every value first, and
+ * @brief Destroy a hash map, call a destructor on every value first, and
  * allocate no memory to do it
  *
- * This function behaves like __chmap_destroy(), with one difference. When
- * val_dtor is not NULL, the function calls it one time for each live entry.
- * It gives the value of that entry to the destructor as a cmap_pair. It makes
- * this call immediately before it frees the entry. This function allocates
- * nothing at all. It walks the internal bucket storage and slot storage of
- * the map directly, in the same way as __chmap_destroy() does. The call to
- * the destructor is part of that same walk.
+ * This function behaves like __chmap_destroy(), with one difference: when
+ * val_dtor is not NULL, the function calls it one time for each live entry,
+ * with the value of that entry as a cmap_pair, immediately before it frees
+ * the entry. This function allocates nothing at all. It walks the internal
+ * bucket storage and slot storage of the map directly, in the same way as
+ * __chmap_destroy() does, and the call to the destructor is part of that
+ * same walk.
  *
- * This function is for a map whose values are owned pointers. Each such
- * pointer names a larger structure that needs its own recursive teardown. One
- * example is a dictionary of dictionaries. There is another way to destroy
- * such a map. The caller can walk it with chashmap_begin_iter(), run a value
- * destructor for each entry, and destroy the empty map at the end. That way
- * has a real gap under memory pressure. The small internal allocation of
- * chashmap_begin_iter() can fail. That way then has no route left to reach
- * and free the values that it still owns. This function has no such gap. It
- * always reaches every value, because it allocates nothing of its own.
+ * This function is for a map whose values are owned pointers, each of which
+ * names a larger structure that needs its own recursive teardown; one example
+ * is a dictionary of dictionaries. The caller could instead walk such a map
+ * with chashmap_begin_iter(), run a value destructor for each entry, and
+ * destroy the empty map at the end. That way has a real gap under memory
+ * pressure: the small internal allocation of chashmap_begin_iter() can fail,
+ * and that way then has no route left to reach and free the values that it
+ * still owns. This function has no such gap, because it allocates nothing of
+ * its own and so always reaches every value.
  *
  * @param chm The hash map to destroy
  * @param val_dtor Destructor that the function calls one time for each live
@@ -655,18 +651,18 @@ void __chmap_destroy(chmap chm);
  * @param dtor_ctx Opaque pointer that the function passes unchanged to every
  *   val_dtor call
  *
- * @note A call with a NULL chm is safe. It does nothing
- * @note The function does not set the chm handle to NULL. This matches the
+ * @note A call with a NULL chm is safe and does nothing
+ * @note The function does not set the chm handle to NULL, which matches the
  *   raw internal convention of __chmap_destroy()
- * @note val_dtor must not change chm. The map is in the middle of its
+ * @note val_dtor must not change chm, because the map is in the middle of its
  *   teardown for the whole duration of this call
- * @note val_pair is the accessor of the map for that entry. Its target is
+ * @note val_pair is the accessor of the map for that entry, and its target is
  *   const, in the same way as for chmap_get_elem_ref(). A destructor reads
- *   val_pair->ptr and val_pair->size. It then frees whatever the value itself
- *   owns. That is usually a pointer that the destructor copies out of those
- *   bytes. An assignment to val_pair->ptr or to val_pair->size is a compile
- *   error. The accessor describes storage that the map is about to free. The
- *   map also cannot own a pointer that it did not allocate
+ *   val_pair->ptr and val_pair->size and then frees whatever the value itself
+ *   owns, usually a pointer that the destructor copies out of those bytes.
+ *   An assignment to val_pair->ptr or to val_pair->size is a compile error:
+ *   the accessor describes storage that the map is about to free, and the
+ *   map cannot own a pointer that it did not allocate
  *
  * @see __chmap_destroy
  * @see chashmap_begin_iter
@@ -694,22 +690,22 @@ static inline void ___chmap_destroy(chmap *chm) {
 /**
  * @brief Destroy a hash map and set the pointer to NULL
  *
- * This macro frees every resource of the hash map. This includes every key,
- * every value, every bucket and every internal structure.
+ * This macro frees every resource of the hash map: every key, every value,
+ * every bucket and every internal structure.
  *
  * @param chm The hash map to destroy. The macro sets it to NULL
  *
  * @note A call with NULL is safe
  * @note The macro frees every key and every value
  * @note The macro destroys every collision chain of every bucket
- * @note The macro evaluates chm exactly once. It must be a modifiable
+ * @note The macro evaluates chm exactly once, and chm must be a modifiable
  * lvalue, such as a variable or an element of an array
  */
 #define chmap_destroy(chm)      \
   _ccol_chmap_destroy_impl(chm, \
                            _ccol_uniq(__ccol_chmap_destroy_slot, __COUNTER__))
 
-/* Internal. The body of chmap_destroy. slot is a name from _ccol_uniq(), so
+/* Internal: the body of chmap_destroy. slot is a name from _ccol_uniq(), so
  * the macro nests inside the argument of another destroy macro and stays
  * -Wshadow clean. The argument is evaluated exactly once. */
 #define _ccol_chmap_destroy_impl(chm, slot) \
@@ -726,8 +722,8 @@ static inline void ___chmap_destroy(chmap *chm) {
 /**
  * @brief Turn on the type-inferred macros for a hash map that already exists
  *
- * This macro declares the type variables that the type-inferred macros need.
- * Use it for a hash map that another scope made.
+ * This macro declares the type variables that the type-inferred macros need,
+ * for a hash map that another scope made.
  *
  * @param hm_name Name of the hash map variable
  * @param key_t Key type
@@ -750,9 +746,8 @@ static inline void ___chmap_destroy(chmap *chm) {
 /**
  * @brief Declare a hash map variable that is not initialized
  *
- * This macro declares a hash map variable. It also declares the type
- * variables that the type-inferred macros need. Initialize the map before you
- * use it.
+ * This macro declares a hash map variable together with the type variables
+ * that the type-inferred macros need. Initialize the map before you use it.
  *
  * @param hm_name Name of the hash map variable
  * @param key_t Key type
@@ -780,10 +775,10 @@ static inline void ___chmap_destroy(chmap *chm) {
 /**
  * @brief Initialize a hash map and set every option
  *
- * This macro initializes a hash map that the caller declared before. It uses
- * custom memory management, a custom hash and a custom key equality. It calls
- * ccol_fatal_err() when the initialization fails. It reads the key type and
- * the value type from the type variables that chmap_declare makes.
+ * This macro initializes a hash map that the caller declared before, with
+ * custom memory management, a custom hash and a custom key equality, and
+ * calls ccol_fatal_err() when the initialization fails. It reads the key type
+ * and the value type from the type variables that chmap_declare makes.
  *
  * @param hm_name Hash map variable to initialize. It must be declared
  * @param mmgmt_procs Custom memory management procedures, or NULL
@@ -818,8 +813,8 @@ static inline void ___chmap_destroy(chmap *chm) {
 /**
  * @brief Declare a hash map, initialize it, and set every option
  *
- * This macro joins the declaration and the initialization. It uses custom
- * memory management, a custom hash and a custom key equality. It calls
+ * This macro joins the declaration and the initialization, with custom
+ * memory management, a custom hash and a custom key equality, and calls
  * ccol_fatal_err() when the initialization fails. The caller names the key
  * type and the value type, and those two types select the implementation
  * strategy.
@@ -884,15 +879,15 @@ static inline void ___chmap_destroy(chmap *chm) {
 /**
  * @brief Initialize a hash map with the default settings
  *
- * This macro initializes a hash map that the caller declared before. It uses
+ * This macro initializes a hash map that the caller declared before, with
  * the default settings. It reads the key type and the value type from the
  * type variables.
  *
  * @param hm_name Hash map variable to initialize
  *
  * @note The macro stops the program when the initialization fails
- * @note The macro uses the default memory management. It also selects the
- * hash by itself
+ * @note The macro uses the default memory management and selects the hash
+ * by itself
  * @note The macro selects the implementation by itself, from the types that
  * it reads
  */
@@ -913,9 +908,9 @@ static inline void ___chmap_destroy(chmap *chm) {
 /**
  * @brief Declare a hash map and initialize it with the default settings
  *
- * This macro joins the declaration and the initialization. It uses the
- * default settings. The macro selects the implementation strategy by itself,
- * from the key type and the value type.
+ * This macro joins the declaration and the initialization, with the default
+ * settings. It selects the implementation strategy by itself, from the key
+ * type and the value type.
  *
  * @param hm_name Name of the hash map variable
  * @param key_t Key type
@@ -985,16 +980,16 @@ static inline void ___chmap_destroy(chmap *chm) {
 /**
  * @brief Initialize a hash map with custom memory management
  *
- * This macro initializes a hash map that the caller declared before. It uses
- * custom memory management. It reads the key type and the value type from the
- * type variables.
+ * This macro initializes a hash map that the caller declared before, with
+ * custom memory management. It reads the key type and the value type from
+ * the type variables.
  *
  * @param hm_name Hash map variable to initialize
  * @param mmgmt_procs Custom memory management procedures
  *
  * @note The macro stops the program when the initialization fails
- * @note The macro uses the default hash. It selects that hash by itself, from
- * the types
+ * @note The macro uses the default hash, which it selects by itself from the
+ * types
  */
 #define chmap_init_mp(hm_name, mmgmt_procs)                                  \
   do {                                                                       \
@@ -1013,7 +1008,7 @@ static inline void ___chmap_destroy(chmap *chm) {
 /**
  * @brief Declare a hash map and initialize it with custom memory management
  *
- * This macro joins the declaration and the initialization. It uses custom
+ * This macro joins the declaration and the initialization, with custom
  * memory management.
  *
  * @param hm_name Name of the hash map variable
@@ -1064,8 +1059,8 @@ static inline void ___chmap_destroy(chmap *chm) {
 /**
  * @brief Initialize a hash map with a custom hash
  *
- * This macro initializes a hash map that the caller declared before. It uses
- * a custom hash function.
+ * This macro initializes a hash map that the caller declared before, with a
+ * custom hash function.
  *
  * @param hm_name Hash map variable to initialize
  * @param custom_hashing_proc Custom hash function
@@ -1090,7 +1085,7 @@ static inline void ___chmap_destroy(chmap *chm) {
 /**
  * @brief Declare a hash map and initialize it with a custom hash
  *
- * This macro joins the declaration and the initialization. It uses a custom
+ * This macro joins the declaration and the initialization, with a custom
  * hash function.
  *
  * @param hm_name Name of the hash map variable
@@ -1147,15 +1142,15 @@ static inline void ___chmap_destroy(chmap *chm) {
  *
  * This is a type-inferred wrapper for chmap_insert_elem(). It builds the
  * cmap_pair for the key and the cmap_pair for the value from the expressions
- * that the caller gives. It calls ccol_fatal_err() when the insert fails.
+ * that the caller gives, and calls ccol_fatal_err() when the insert fails.
  *
  * The macro converts key and val to the declared key type and the declared
- * value type of the map, in the same way as a plain C assignment, and it
- * stores the converted copies. It never reinterprets the bytes of an
- * expression of another type. An expression that has no implicit conversion
- * to the declared type is a compile error. A character-pointer key type or
- * value type keeps the pointer type of the expression instead, so a const
- * char * needs no cast.
+ * value type of the map, in the same way as a plain C assignment, and stores
+ * the converted copies; it never reinterprets the bytes of an expression of
+ * another type. An expression that has no implicit conversion to the
+ * declared type is a compile error. A character-pointer key type or value
+ * type keeps the pointer type of the expression instead, so a const char *
+ * needs no cast.
  *
  * @param hm_name The hash map to insert into
  * @param key The key to insert
@@ -1165,8 +1160,8 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @note The macro takes the address of the key and of the value by itself
  * @note The macro is correct for a value type and for a string type
  *
- * @note A NULL key or value of a character-pointer type is not a string.
- * The macro stops the program with ccol_invalid_args for it
+ * @note A NULL key or value of a character-pointer type is not a string, and
+ * the macro stops the program with ccol_invalid_args for it
  *
  * @see chmap_insert_elem
  * @see chmap_get
@@ -1255,20 +1250,20 @@ static inline void ___chmap_destroy(chmap *chm) {
 /**
  * @brief Remove a key-value pair (type-inferred)
  *
- * This is a type-inferred wrapper for chmap_delete_elem(). It gives the result
- * code back to the caller.
+ * This is a type-inferred wrapper for chmap_delete_elem() that gives the
+ * result code back to the caller.
  *
  * @param hm_name The hash map to remove from
  * @param key The key to remove
  *
- * @return ccol_success when the macro removes the pair. ccol_key_not_found
+ * @return ccol_success when the macro removes the pair, or ccol_key_not_found
  * when the key is not present
  *
  * @note The macro does not stop the program for ccol_key_not_found
  * @note The macro frees the memory of the key and of the value
  *
- * @note A NULL key of a character-pointer type is not a string. The macro
- * returns ccol_invalid_args for it
+ * @note A NULL key of a character-pointer type is not a string, and the
+ * macro returns ccol_invalid_args for it
  *
  * @see chmap_delete_elem
  * @see chmap_insert
@@ -1310,9 +1305,9 @@ static inline void ___chmap_destroy(chmap *chm) {
 /**
  * @brief Get a value by its key (type-inferred, gives the value)
  *
- * This is a type-inferred wrapper for chmap_get_elem_ref(). It gives the value
- * itself. It calls ccol_fatal_err() when the key is not present. It also
- * calls ccol_fatal_err() when the two sizes do not match.
+ * This is a type-inferred wrapper for chmap_get_elem_ref() that gives the
+ * value itself. It calls ccol_fatal_err() when the key is not present, and
+ * also when the two sizes do not match.
  *
  * @param hm_name The hash map to search
  * @param key The key to look up
@@ -1325,8 +1320,8 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @note The macro gives the value, not a pointer
  * @note For a string, the macro gives the char* itself
  *
- * @note A NULL key of a character-pointer type is not a string. The macro
- * stops the program with ccol_invalid_args for it
+ * @note A NULL key of a character-pointer type is not a string, and the
+ * macro stops the program with ccol_invalid_args for it
  *
  * @see chmap_get_ptr
  * @see chmap_insert
@@ -1389,28 +1384,28 @@ static inline void ___chmap_destroy(chmap *chm) {
     *__ccol_chmap_val;                                                         \
   })
 
-/* This macro gives p unchanged for every value type except a string. For a
+/* This macro gives p unchanged for every value type except a string; for a
  * map whose value is a string, it gives a pointer whose target is
  * const-qualified.
  *
- * A map that stores strings owns the bytes. It also keeps its own
- * {ptr, size} accessor for the entry in step with those bytes. The only
- * char* object anywhere in the map is the ptr field of that accessor. The
- * chmap_get_ptr() of a map whose value is a string can therefore only give
- * back the address of that field. A store of a different char* through that
- * address replaces the pointer. The size then still describes the previous
- * string. Such a store also hands the map a pointer that the map does not own
- * and whose lifetime it cannot control. Without the const,
- * chmap_get_elem_copy() and every read of an iterator value then walk the new
- * buffer for the length of the previous string. That new buffer can be much
- * shorter. AddressSanitizer reports a global-buffer-overflow read of the old
- * length on the first such read.
+ * A map that stores strings owns the bytes and keeps its own {ptr, size}
+ * accessor for the entry in step with those bytes. The only char* object
+ * anywhere in the map is the ptr field of that accessor, so the
+ * chmap_get_ptr() of a map whose value is a string can only give back the
+ * address of that field. A store of a different char* through that address
+ * replaces the pointer while the size still describes the previous string,
+ * and it hands the map a pointer that the map does not own and whose
+ * lifetime it cannot control. Without the const, chmap_get_elem_copy() and
+ * every read of an iterator value then walk the new buffer, which can be
+ * much shorter, for the length of the previous string: AddressSanitizer
+ * reports a global-buffer-overflow read of the old length on the first such
+ * read.
  *
  * The const makes that store a compile error instead. The caller can still
- * read the stored char* through the returned pointer. The caller can still
- * write to the string bytes that it points at, inside the stored length. Use
- * chmap_insert() to replace a string value. It frees the old bytes and copies
- * the new bytes into storage that the map owns. */
+ * read the stored char* through the returned pointer, and write to the
+ * string bytes that it points at, inside the stored length. Use
+ * chmap_insert() to replace a string value: it frees the old bytes and
+ * copies the new bytes into storage that the map owns. */
 #define _ccol_chmap_value_ptr_result(hm_name, p)                               \
   _Generic(*hm_name##__ccol_val_type_var,                                      \
       char *: (__typeof__(*hm_name##__ccol_val_type_var) const *)(p),          \
@@ -1427,9 +1422,9 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @brief Get a pointer to a value by its key (type-inferred, gives a pointer or
  * NULL)
  *
- * This is a type-inferred wrapper for chmap_get_elem_ref(). It gives a pointer
- * to the value. It gives NULL when the key is not present. chmap_get() behaves
- * differently: this macro does not stop the program for a key that is not
+ * This is a type-inferred wrapper for chmap_get_elem_ref() that gives a
+ * pointer to the value, or NULL when the key is not present. Unlike
+ * chmap_get(), this macro does not stop the program for a key that is not
  * present.
  *
  * @param hm_name The hash map to search
@@ -1437,7 +1432,7 @@ static inline void ___chmap_destroy(chmap *chm) {
  *
  * @return Pointer to the value, or NULL when the key is not present
  *
- * @note The macro gives NULL when the key is not present. It does not stop
+ * @note The macro gives NULL when the key is not present, and does not stop
  * the program
  * @note The macro stops the program when the size of the value does not match
  * the size of the type
@@ -1445,16 +1440,16 @@ static inline void ___chmap_destroy(chmap *chm) {
  * value in place
  * @note A later insert, delete or resize makes the pointer invalid
  * @note For a char* value type, the target of the pointer is const-qualified
- * (char *const *). The caller can read the stored string. The caller can also
- * edit its bytes in place, inside the stored length. But a replacement of the
- * pointer itself is a compile error. The map owns the string bytes and keeps
- * its own accessor in step with them. A replacement of the pointer would
- * leave the length of the accessor describing the previous string. Use
- * chmap_insert() to replace a string value. It frees the old bytes and copies
- * the new bytes into storage that the map owns.
+ * (char *const *). The caller can read the stored string and edit its bytes
+ * in place, inside the stored length, but a replacement of the pointer
+ * itself is a compile error. The map owns the string bytes and keeps its own
+ * accessor in step with them, so a replacement of the pointer would leave
+ * the length of the accessor describing the previous string. Use
+ * chmap_insert() to replace a string value: it frees the old bytes and
+ * copies the new bytes into storage that the map owns.
  *
- * @note A NULL key of a character-pointer type is not a string. The macro
- * gives NULL for it
+ * @note A NULL key of a character-pointer type is not a string, and the
+ * macro gives NULL for it
  *
  * @see chmap_get
  * @see chmap_get_elem_ref

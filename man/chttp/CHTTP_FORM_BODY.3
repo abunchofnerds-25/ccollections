@@ -11,11 +11,11 @@ CHTTP_FORM_BODY(d, n)
 .fi
 .SH DESCRIPTION
 .nf
-This macro expands to an initializer for a chttp_request_body_t. It
-sets Content-Type to "application/x-www-form-urlencoded". It sets the
-data pointer to d and the byte length to n. The caller must apply the
-percent encoding to the pairs of a key and a value. The caller does
-this before it gives them to this macro.
+This macro expands to an initializer for a chttp_request_body_t that
+sets Content-Type to "application/x-www-form-urlencoded", the data
+pointer to d and the byte length to n.  The caller must apply the
+percent encoding to the pairs of a key and a value before it gives
+them to this macro.
 .fi
 .SH "SEE ALSO"
 .BR CHTTP_JSON_BODY (3),

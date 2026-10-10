@@ -1,12 +1,12 @@
 #!/bin/sh
 # Compile-time probes for the cvector macros.
 #
-# The probes cover properties that only the compiler can show. The first is
-# the element-type rejection of cvec_sort. The second is that the value
-# macros and cvector_append_array() accept const data under -Werror: a const
-# source array, a const-qualified element type and an array element type,
-# whose value may be a named array but not a pointer. The third is that the
-# iterator accessors compile under -Wcast-qual.
+# The probes cover three properties that only the compiler can show: the
+# element-type rejection of cvec_sort; that the value macros and
+# cvector_append_array() accept const data under -Werror (a const source
+# array, a const-qualified element type and an array element type, whose
+# value may be a named array but not a pointer); and that the iterator
+# accessors compile under -Wcast-qual.
 #
 # cvec_sort carries a _Static_assert that refuses an element type with no
 # default comparison procedure. That is a diagnostic the compiler issues, so
@@ -17,7 +17,7 @@
 # Two properties are pinned, and both are needed: every element type that has
 # no default comparison procedure must FAIL to compile with a diagnostic
 # naming cvector_sort_with_comparison_proc (so the message is actionable),
-# and every element type that does have one must still compile. A check that
+# and every element type that does have one must compile. A check that
 # only asserted the first half would pass against a cvec_sort that rejects
 # everything.
 #
@@ -177,8 +177,8 @@ run_for_compiler() {
     "cvec_append_array(probe_vec, probe_table, 3);"
 
   # The value macros clear the padding of a temporary that must therefore be
-  # modifiable. A const-qualified element type and an array element type
-  # both still push and find.
+  # modifiable, and a const-qualified element type and an array element type
+  # must both push and find in spite of that.
   expect_accept "$cc" "cvec_push and cvec_find on a const struct" \
     "$AGG_PRELUDE" "const struct probe_struct" \
     "struct probe_struct e = {1, 2.0}; cvec_push(probe_vec, e);
@@ -213,7 +213,7 @@ run_for_compiler() {
 
   # ccol_begin accepts exactly the three container handles. Any other
   # pointer is a compile error, never a call into another container's begin
-  # function; a top-level qualified handle still selects its own container.
+  # function, and a top-level qualified handle selects its own container.
   expect_reject_body "$cc" "ccol_begin on an int pointer" "" "int" \
     "int x = 0; int *p = &x; cmap_iterator *it = ccol_begin(p); (void)it;" \
     "compatible"
@@ -274,7 +274,7 @@ EOF_CQ
     failures=$((failures + 1))
   fi
 
-  # An unsupported element type is still fully sortable with an explicit
+  # An unsupported element type is fully sortable with an explicit
   # comparison procedure, which is exactly what the diagnostic tells the
   # caller to do.
   expect_accept "$cc" "cvector_sort_with_comparison_proc on bool" \

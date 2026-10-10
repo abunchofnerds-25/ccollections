@@ -11,61 +11,60 @@ chttpsvr_destroy(name);
 .fi
 .SH DESCRIPTION
 .nf
-Destroys the server that name holds, and then sets name to
+Destroys the server that name holds and then sets name to
 CHTTPSVR_INVALID.
 
-It drains every in-flight request and closes every idle connection
-that remains.  A connection that waits with no thread is ended too: a
-parked body or response is closed, a request that waits for body
+It drains every in-flight request and closes every remaining idle
+connection.  Connections that wait without a thread are ended as well:
+a parked body or response is closed, a request that waits for body
 memory is closed, and a streaming request that waits in the streaming
-queue gets 503 Service Unavailable.  It also stops the shared engine
-when this is the last active server.  It closes the listener socket as a part
-of this, so a
-call to chttpsvr_stop first is optional.
+queue gets 503 Service Unavailable.  When this is the last active
+server, it also stops the shared engine.  The listener socket is
+closed as part of this, so calling chttpsvr_stop first is optional.
 
 A second call on a separate copy of the same handle value is a FATAL
-ERROR, and so is a call from inside a request handler or a middleware
-of this server.  The second call is fatal both when it is concurrent
-and when it comes later, after the first call completes.  The library
-reports the error at once with abort() and SIGABRT.  It does this
-instead of a silent double-free or a hang.  To shut a server down from
-inside one of its own handlers, destroy it from a different thread, or
-call chttpsvr_engine_stop().
+ERROR, whether it is concurrent or comes later, after the first call
+has completed, and so is a call from inside a request handler or a
+middleware of this server.  The library reports the error at once with
+abort() and SIGABRT, instead of a silent double-free or a hang.  To
+shut a server down from inside one of its own handlers, destroy it
+from a different thread, or call chttpsvr_engine_stop().
 
-It is safe to call this macro whether or not the shared engine still
-runs.  It frees the engine reference of name, and that can start an
-asynchronous engine stop when it was the last reference.  It is also
-safe when chttpsvr_engine_stop() already force-stopped the engine
-while name was still started.  In that case the engine stop already
-quiesced this server.  This call therefore finds the teardown of the
-server done, and frees the resources of the server that remain.  This
-call waits for that teardown to complete when such a force-stop still
-tears this same server down on its own background thread.  It does not
-race it.
+It is safe to call this macro whether or not the shared engine is
+still running.  It frees the engine reference of name, which can start
+an asynchronous engine stop when it was the last reference.  It is
+also safe when chttpsvr_engine_stop() has already force-stopped the
+engine while name was still started: the engine stop has then already
+quiesced this server, so this call finds the teardown of the server
+done and frees the remaining resources of the server.  When such a
+force-stop is still tearing this same server down on its own
+background thread, this call waits for that teardown to complete
+instead of racing it.
 
 This macro only STARTS that asynchronous engine stop.  The destroy of
-the reactor, the stop of the idle sweep and the close of the
-fallback engine logger all run on a separate reaper thread, after this
-call returns.  Every guarantee of this call covers name alone: its
-listener is closed, its connections are closed, and its worker pool is
-drained.  Call chttpsvr_engine_wait() after it whenever that final
-teardown must finish before the next step.  Call it before you return
-from main().  Call it before you unload this library from an image
-that dlopen() loaded.  Call it before you tear
-down a custom allocator that chttpsvr_set_engine_mem_mgmt_procs()
-installed.  The reaper still frees the memory of the reactor and of
-the fallback engine logger through that allocator.
+the reactor, the stop of the idle sweep and the close of the fallback
+engine logger all run on a separate reaper thread after this call
+returns, and every guarantee of this call covers name alone: its
+listener is closed, its connections are closed, and its worker pool
+is drained.  Call chttpsvr_engine_wait() after it whenever that final
+teardown must finish before the next step.  Always call it before you
+return from main() and before you unload this library from an image that
+dlopen() loaded.  Also call it before you tear down a custom allocator
+installed with chttpsvr_set_engine_mem_mgmt_procs(), because
+the reaper frees the memory of the reactor and of the fallback engine
+logger through that allocator.
 
-The reaper thread itself needs no such call.  An application can
-destroy its last server and then call neither chttpsvr_engine_wait()
-nor a later chttpsvr_start().  It still leaves no unjoined thread
-behind, and no thread stack mapping.
+The reaper thread itself needs no such call: an application that
+destroys its last server and then calls neither chttpsvr_engine_wait()
+nor a later chttpsvr_start() leaves no unjoined thread behind, and no
+thread stack mapping.
 .fi
 .SH NOTES
 .nf
-The macro evaluates name exactly once. It must be a modifiable lvalue,
-such as a variable or an element of an array, so an expression with a
-side effect, such as handles[i++], destroys and clears one element.
+The macro evaluates name exactly once.  name must be a modifiable
+lvalue, such as a variable or an array element, and an expression
+with a side effect, such as handles[i++], destroys and clears exactly
+one element.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_stop (3),

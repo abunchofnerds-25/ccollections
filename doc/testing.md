@@ -1,16 +1,16 @@
 # Testing, fuzzing and benchmarks
 
-This guide is for contributors. It shows how to run these checks:
+This guide is for contributors. It shows how to run:
 
 - the test suites
-- the sanitizer builds and the Valgrind builds
+- the sanitizer and Valgrind builds
 - coverage
 - the interface checks
 - the fuzzers
 - the benchmarks
 
-It also lists the jobs that CI runs on each push. Run each command on this
-page from the root of the repository, unless the text gives a different
+It also lists the jobs that CI runs on every push. Run every command on this
+page from the root of the repository unless the text names another
 directory.
 
 ## Before you start
@@ -23,14 +23,14 @@ sudo apt-get install build-essential clang libssl-dev zlib1g-dev \
     valgrind lcov abigail-tools
 ```
 
-`make test` needs only the compiler, OpenSSL and zlib. `make memtest` needs
-Valgrind. Coverage needs lcov. The fuzzers need Clang. The structural half
-of `make check_abi` needs `abigail-tools`. `make check_install` needs
-`pkg-config`. On FreeBSD and macOS, use `gmake` in all locations where this
-page says `make`. On FreeBSD, also install `binutils` for the interface
-checks, because they need GNU `readelf` and GNU `nm`. On macOS, Homebrew
-gives `gmake`, OpenSSL and `pkg-config` (see [Building](building.md)).
-Valgrind does not run on macOS, so `make memtest` does not run there.
+`make test` needs only the compiler, OpenSSL and zlib. `make memtest` also
+needs Valgrind, coverage needs lcov, the fuzzers need Clang, the structural
+half of `make check_abi` needs `abigail-tools`, and `make check_install`
+needs `pkg-config`. On FreeBSD and macOS, use `gmake` wherever this page says
+`make`. On FreeBSD, also install `binutils` for the interface checks, which
+need GNU `readelf` and GNU `nm`. On macOS, Homebrew provides `gmake`, OpenSSL
+and `pkg-config` (see [Building](building.md)); Valgrind does not run there,
+so neither does `make memtest`.
 
 ## Running the tests
 
@@ -39,14 +39,14 @@ make test       # build and run all suites
 make memtest    # all suites under Valgrind; a leak causes a failure
 ```
 
-Each module has its own suite under `tests/<module>/`. Some directories
+Each module has its own suite under `tests/<module>/`, and some directories
 build more than one binary (for example, a TLS suite next to the main
-suite). The two targets run each binary of each directory, and they stop at
-the first failure. `tests/mixed/` contains tests that use more than one
-module. This includes the compatibility corpus that
-[Compatibility](compatibility.md) describes.
+suite). Both targets run every binary in every directory and stop at the
+first failure. `tests/mixed/` holds the tests that span several modules,
+including the compatibility corpus described in
+[Compatibility](compatibility.md).
 
-To work on one module, run only its suite:
+To work on one module, run just its suite:
 
 ```bash
 make -C tests/chashmap test
@@ -54,8 +54,8 @@ make -C tests/chashmap memtest
 ```
 
 The suites use the single-header framework in `tests/tau/`. A test binary
-accepts a filter. The filter compares from the start of `suite.test`. First,
-list the names. Then use a prefix that is shorter than the full name:
+accepts a filter that matches from the start of `suite.test`, so list the
+names first and then use a prefix that is shorter than the full name:
 
 ```bash
 cd tests/chashmap && make build
@@ -63,34 +63,34 @@ cd tests/chashmap && make build
 ./tests --filter='chash_maps.insert*'
 ```
 
-Read the count on the `SUCCESS` line of a filtered run. A filter that finds
-no test also reports success, with 0 test suites passed.
+Check the count on the `SUCCESS` line of a filtered run: a filter that
+matches no test also reports success, with 0 test suites passed.
 
-The suites compile the library sources directly into each test binary. They
-use the same `-O3` as the shipped library. Therefore, they test the code
-that ships. `-DRUNNING_UNIT_TESTS` enables some white-box helpers that only
-the suites use.
+The suites compile the library sources directly into each test binary, with
+the same `-O3` as the shipped library, so they test the code that ships.
+`-DRUNNING_UNIT_TESTS` enables a few white-box helpers that only the suites
+use.
 
 **Run only one full suite at a time.** `tests/chttpserver` binds a fixed
-port. Therefore, two `make test` or `make memtest` runs on the same machine
-use the same port, and they fail with
-`listen socket setup failed ... port=18765`. You can run the suite of one
-module together with a full run, if that module is not `chttpserver`.
+port, so two `make test` or `make memtest` runs on the same machine collide on
+it and fail with `listen socket setup failed ... port=18765`. Running a single
+module's suite alongside a full run is fine, as long as that module is not
+`chttpserver`.
 
 ## Sanitizers
 
-Give AddressSanitizer and UndefinedBehaviorSanitizer through
-`EXTRA_CFLAGS`. All suites use this variable:
+Pass AddressSanitizer and UndefinedBehaviorSanitizer through
+`EXTRA_CFLAGS`, which every suite honours:
 
 ```bash
 make CC=clang EXTRA_CFLAGS="-fsanitize=address,undefined -fno-sanitize-recover=undefined" test
 ```
 
-ThreadSanitizer has its own target in the modules that run threads. These
-modules are `cpintable`, `cmempool`, `clrucache`, `mixed`, `clogger`,
-`cthreadpool`, `cthreadcomm`, `ctls`, `chttpclient` and `chttpserver`. Run
-each target with GCC and with Clang. The reason is that the ThreadSanitizer
-of GCC does not find all the races that the ThreadSanitizer of Clang finds:
+ThreadSanitizer has its own target in the modules that run threads:
+`cpintable`, `cmempool`, `clrucache`, `mixed`, `clogger`, `cthreadpool`,
+`cthreadcomm`, `ctls`, `chttpclient` and `chttpserver`. Run each target with
+both GCC and Clang, because GCC's ThreadSanitizer does not find every race
+that Clang's finds:
 
 ```bash
 make -C tests/cthreadpool test_tsan
@@ -109,7 +109,7 @@ make CC="clang -m32" test
 
 Three compile-time switches select code that a default build never compiles
 (see [Building](building.md#compile-time-configuration)). When you change
-the code of one of these switches, run the suites that test it:
+code behind one of these switches, run the suites that exercise it:
 
 ```bash
 make -C tests/cmempool clean
@@ -119,7 +119,7 @@ make clean
 make EXTRA_CFLAGS="-DCCOL_FORK_SAFETY_REQUIRED=0" test
 ```
 
-A build without the optional modules is also a variant:
+A build without the optional modules is a variant too:
 
 ```bash
 make WITH_CJSON=0 WITH_CYAML=0 WITH_CLOGGER=0 \
@@ -133,20 +133,18 @@ make coverage_site    # build all suites again with coverage, merge one report
 make coverage_check   # fail if a file has less than 80 percent of its lines
 ```
 
-`coverage_site` writes a report that you can read in a browser to
-`coverage_site/html`. It writes a summary to `coverage_site/summary.txt`. It
-merges the runs of all suites, because many suites test a file such as
-`src/common.c`. The figures include only `src/` and `include/`.
-`coverage_check` reads the merged data. Therefore, run `coverage_site`
-first. `ci_scripts/check_test_coverages.sh` contains the threshold, and the
-short list of files that have no tests of their own.
+`coverage_site` writes a browsable report to `coverage_site/html` and a
+summary to `coverage_site/summary.txt`. It merges the runs of all suites,
+because many suites exercise a file such as `src/common.c`, and the figures
+cover only `src/` and `include/`. `coverage_check` reads the merged data, so
+run `coverage_site` first. The threshold, and the short list of files that
+have no tests of their own, live in `ci_scripts/check_test_coverages.sh`.
 
 ## Checks on the built library
 
-The suites link the library sources directly. Therefore, they never see the
-symbols that the shared library exports. They also never see what occurs
-when a program loads and unloads the library. These targets check the built
-artefacts:
+Because the suites link the library sources directly, they never see which
+symbols the shared library exports, or what happens when a program loads and
+unloads it. These targets check the built artefacts instead:
 
 ```bash
 make check_namespace       # each exported symbol, public macro, typedef,
@@ -166,26 +164,25 @@ make check_install         # install into a temporary prefix, build the
 make hardening_report      # the hardening flags that this compiler accepts
 ```
 
-On macOS, the checks read the dylib and the archive with the `nm` of the
-developer tools. `check_abi` then compares the exported symbols
-only, because the structural half reads DWARF from an ELF file. The ELF build
-checks the enumerators and the tags of the headers for macOS as well.
-`check_dso_unload` accepts a library that stays mapped after `dlclose()`,
-because dyld never unloads a dylib that has thread-local variables. Valgrind
-does not run on macOS, so `check_exit_reachable` runs on Linux and FreeBSD
-only.
+On macOS, the checks read the dylib and the archive with the `nm` from the
+developer tools. `check_abi` then compares only the exported symbols, because
+its structural half reads DWARF from an ELF file; the ELF build checks the
+macOS enumerators and header tags as well. `check_dso_unload` accepts a
+library that stays mapped after `dlclose()`, because dyld never unloads a
+dylib that has thread-local variables. Since Valgrind does not run on macOS,
+`check_exit_reachable` runs on Linux and FreeBSD only.
 
 [Compatibility](compatibility.md#how-the-promise-is-checked) explains
-`check_abi` and `update_abi_baseline`. In summary: you can add a public
+`check_abi` and `update_abi_baseline`. In short, you may add a public
 function, but you must record the updated baseline and commit it with the
-change. Each other difference is a failure that you must explain.
+change; any other difference is a failure that you must explain.
 
 ## Fuzzing
 
-Seven libFuzzer targets test the parsers and the URL layer of the HTTP
-client. They need Clang, and they are not part of `make test`. CI runs them
-on each push and each pull request. Therefore, you need them only when you
-work on one of those parsers.
+Seven libFuzzer targets exercise the parsers and the URL layer of the HTTP
+client. They need Clang and are not part of `make test`. CI runs them on
+every push and pull request, so you need them only when you work on one of
+those parsers.
 
 ```bash
 # YAML: the document target also serializes the parsed document. Then it
@@ -211,11 +208,11 @@ make fuzz_request fuzz_response fuzz_url
 ./fuzz_chttp_url       fuzz/corpus_url      -max_total_time=900
 ```
 
-If you do not give `-max_total_time`, the fuzzer runs until you push
-Ctrl-C. The fuzzer adds each input that it finds to the corpus directory.
-Therefore, `git status` shows these inputs after the run. The fuzzer writes
-each finding to a `crash-*`, `timeout-*` or `oom-*` file. To run a finding
-again in the same way, give that file as the only argument:
+Without `-max_total_time`, a fuzzer runs until you press Ctrl-C. It adds
+every new input it finds to the corpus directory, so `git status` shows those
+inputs after a run. Each finding is written to a `crash-*`, `timeout-*` or
+`oom-*` file, and you can replay it exactly by passing that file as the only
+argument:
 
 ```bash
 ./fuzz_cyaml crash-<hash>
@@ -223,7 +220,7 @@ again in the same way, give that file as the only argument:
 
 ## Benchmarks
 
-`bench/` measures the modules whose speed is important:
+`bench/` measures the modules whose speed matters:
 
 - the containers, the strings and the sort
 - the memory pools and the LRU cache
@@ -231,10 +228,10 @@ again in the same way, give that file as the only argument:
 - the logger and the two serializers
 - an HTTP round trip
 
-It links with the shared library that the root `make` builds. Therefore, it
+It links against the shared library that the root `make` builds, so it
 measures the shipped code with the shipped flags. macOS cannot bind a thread
-to a core, so there the harness runs unpinned, and its figures vary more
-between runs.
+to a core, so there the harness runs unpinned and its figures vary more from
+run to run.
 
 ```bash
 make bench_update      # record a baseline for this machine
@@ -245,7 +242,7 @@ make bench_gate        # the same as bench, but exit non-zero on a flagged case
 make bench_list        # list the cases
 ```
 
-Give options through `BENCH_ARGS`:
+Pass options through `BENCH_ARGS`:
 
 ```bash
 make bench BENCH_ARGS="--filter=chashmap --reps=15"
@@ -253,68 +250,66 @@ make bench BENCH_ARGS="--threshold=10"
 make bench_calibrate BENCH_ARGS="--calibrate=7"
 ```
 
-Remember these points when you read the numbers:
+Keep these points in mind when you read the numbers:
 
-- **The baseline is for one machine.** The project does not commit it.
-  Compare the same machine before and after a change. A figure from
-  different hardware tells you nothing about the library.
-- **`make bench` reports. It does not fail.** `bench_calibrate` measures how
-  much each case changes alone. `bench_gate` changes a flagged case into a
-  failure. Use the gate only where the calibration shows stable figures.
-- **Each figure is a median** of nanoseconds for each operation, over the
-  repetitions. The clock does not include the setup and the teardown.
-- **Cases with a name that ends in `_4t`, `_8t` or `_12t`** run the same
-  work on that number of threads. They report the wall time divided by all
-  operations. Therefore, you can compare them directly with the
-  single-threaded case. Thread-safe modules share one instance between the
-  threads. For the unguarded containers, each thread has its own instance.
+- **The baseline belongs to one machine** and is not committed. Compare the
+  same machine before and after a change; a figure from different hardware
+  tells you nothing about the library.
+- **`make bench` reports; it does not fail.** `bench_calibrate` measures how
+  much each case varies on its own, and `bench_gate` turns a flagged case into
+  a failure. Use the gate only where the calibration shows stable figures.
+- **Each figure is a median** of nanoseconds per operation across the
+  repetitions. Setup and teardown are not timed.
+- **Cases whose names end in `_4t`, `_8t` or `_12t`** run the same work on
+  that many threads and report the wall time divided by all operations, so you
+  can compare them directly with the single-threaded case. Thread-safe modules
+  share one instance between the threads, while each thread gets its own
+  instance of an unguarded container.
 - **Cases with a library name in brackets** (`[malloc]`, `[glib]`,
   `[uthash]`, `[jansson]`, `[libyaml]`) run the same workload through that
-  library, if it is installed. Compare the ratios in one run, not the raw
+  library when it is installed. Compare the ratios within one run, not the raw
   times.
 
-[bench/README.md](../bench/README.md) is the full guide. It tells you what
-each column means, how to get a run that you can trust, and how to add a
-case. [bench/RESULTS.md](../bench/RESULTS.md) records example runs and the
-machines that made them. CI builds the benchmarks and lists their cases, but
-it never measures their times. The reason is that a shared virtual runner
-has much more noise than the changes that the benchmarks must find.
+[bench/README.md](../bench/README.md) is the full guide: what each column
+means, how to get a run you can trust, and how to add a case.
+[bench/RESULTS.md](../bench/RESULTS.md) records example runs and the machines
+that produced them. CI builds the benchmarks and lists their cases but never
+times them, because a shared virtual runner is far noisier than the changes
+the benchmarks are meant to detect.
 
 ## What CI runs
 
-Each push and each pull request runs these jobs. Each job blocks a merge
-when it fails:
+Every push and every pull request runs the following jobs, and any failing
+job blocks a merge:
 
 - **Linux x86-64, GCC:** `make test`, `make memtest`, `check_namespace`,
   `check_headers`, `check_abi`, `check_filenames`, `check_dso_unload`,
-  `check_exit_reachable`, `check_install`, the
-  compact mempool layout, the general thread-local storage model, a full run
-  with `CCOL_FORK_SAFETY_REQUIRED=0`, and a build of the benchmarks.
+  `check_exit_reachable`, `check_install`, the compact mempool layout, the
+  general thread-local storage model, a full run with
+  `CCOL_FORK_SAFETY_REQUIRED=0`, and a build of the benchmarks.
 - **Linux x86-64, Clang:** `make test` and `make memtest`.
 - **Linux x86-64, macOS code paths:** `make memtest` with every
-  `_CCOL_EMULATE_DARWIN_*` switch that Linux can run. Valgrind does not run
-  on macOS, so this job checks the code that only macOS compiles for leaks
-  and memory errors.
-- **Minimal build:** all optional modules off, and a check that the library
-  links only pthread and libm.
+  `_CCOL_EMULATE_DARWIN_*` switch that Linux can run. Because Valgrind does
+  not run on macOS, this job is what checks the macOS-only code for leaks and
+  memory errors.
+- **Minimal build:** all optional modules turned off, plus a check that the
+  library links only pthread and libm.
 - **Coverage threshold:** `coverage_site` and `coverage_check`.
 - **AddressSanitizer with UndefinedBehaviorSanitizer** (Clang).
-- **ThreadSanitizer:** each `test_tsan` target, one time with GCC and one
-  time with Clang, and one more time with Clang and the
-  `_CCOL_EMULATE_DARWIN_*` switches.
-- **i386:** GCC and Clang builds of each suite, `check_abi` for i386, and an
-  UndefinedBehaviorSanitizer run with the two compilers.
-- **AArch64 and ARM32:** cross builds with GCC and with Clang, each test
+- **ThreadSanitizer:** every `test_tsan` target, once with GCC, once with
+  Clang, and once more with Clang and the `_CCOL_EMULATE_DARWIN_*` switches.
+- **i386:** GCC and Clang builds of every suite, `check_abi` for i386, and an
+  UndefinedBehaviorSanitizer run with both compilers.
+- **AArch64 and ARM32:** cross builds with GCC and with Clang, every test
   binary run under QEMU, and `check_abi` for each architecture.
-- **FreeBSD 14 x86-64:** each suite with the base Clang and with GCC 14,
+- **FreeBSD 14 x86-64:** every suite with the base Clang and with GCC 14,
   `memtest`, `check_abi`, `check_dso_unload`, `check_exit_reachable`,
   `check_install`, and the ThreadSanitizer targets.
-- **macOS 15, arm64 and x86-64:** each suite with Apple clang, one time as
-  is and one time with AddressSanitizer and UndefinedBehaviorSanitizer, and
-  each `test_tsan` target. Also `check_headers`, `check_namespace`,
-  `check_abi`, `check_dso_unload` and `check_install`, and a build of the
-  benchmarks.
-- **Fuzzing:** each target above, for a limited time.
+- **macOS 15, arm64 and x86-64:** every suite with Apple clang, once as is and
+  once with AddressSanitizer and UndefinedBehaviorSanitizer, plus every
+  `test_tsan` target, `check_headers`, `check_namespace`, `check_abi`,
+  `check_dso_unload`, `check_install`, and a build of the benchmarks.
+- **Fuzzing:** every target listed above, for a limited time.
 
 On a push to `main`, a separate workflow builds the merged coverage report
 and publishes it.

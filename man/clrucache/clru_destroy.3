@@ -11,11 +11,11 @@ clru_destroy(name);
 .fi
 .SH DESCRIPTION
 .nf
-Waits until every in-flight resolved use of the handle stops. It then
-evicts all the entries that remain. It calls the eviction callback for
-each one, and it holds the lock of the owning segment during that call.
-It then destroys the map of every segment and frees all the memory.
-Then it sets name to CLRU_CACHE_INVALID.
+Waits until every in-flight resolved use of the handle stops, then
+evicts all the entries that remain, calling the eviction callback for
+each one while it holds the lock of the owning segment. It then
+destroys the map of every segment, frees all the memory, and sets
+name to CLRU_CACHE_INVALID.
 .fi
 .SH PARAMETERS
 .nf
@@ -25,16 +25,16 @@ name  The cache variable to destroy. The macro sets it to
 .SH NOTES
 .nf
 A call is safe when name is CLRU_CACHE_INVALID, and it does nothing.
-A call on a stale handle is a FATAL ERROR. It calls abort() and raises
-SIGABRT. It is never a silent double-free. A handle is stale when an
+A call on a stale handle is a FATAL ERROR: it calls abort() and raises
+SIGABRT, and is never a silent double-free. A handle is stale when an
 earlier, sequential call destroyed it, or when another thread destroys
-it at the same time. A forged value and garbage are fatal errors too.
-The handle carries a generation tag, and the library checks that tag
-before it touches the cache behind the handle. The library therefore
-always detects such a value, and it never dereferences it.
+it at the same time. A forged value and garbage are fatal errors too:
+the handle carries a generation tag, which the library checks before
+it touches the cache behind the handle, so the library always detects
+such a value and never dereferences it.
 A concurrent, ordinary call to clrucache_get_full(),
 clrucache_set_full(), clrucache_size() or clrucache_capacity() on the
-same handle is not misuse. This call waits for that call to finish
+same handle is not misuse; this call waits for that call to finish
 before it frees anything.
 
 The macro evaluates name exactly once. It must be a modifiable lvalue,

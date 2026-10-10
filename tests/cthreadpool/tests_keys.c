@@ -25,8 +25,8 @@ SOFTWARE.
 /* Pool creation in a process that has no thread-specific key left to give.
  * The workers of a pool record themselves on a key of this module, and that
  * key is what lets a task that destroys its own pool fail loudly instead of
- * freeing the pool under its own worker. A pool that cannot have the key must
- * therefore not be created. The key is created once for each process, so this
+ * freeing the pool under its own worker, so a pool that cannot have the key
+ * must not be created. The key is created once for each process, so this
  * runs in a binary of its own: no other ctpool call may come first. */
 
 #include <cthreadpool.h>
@@ -70,7 +70,7 @@ TEST(ctpool_worker_key, create_fails_cleanly_when_no_key_is_left) {
     ctpool_destroy(p);
   }
 
-  /* The keys come back, and the failure stays: the module does not retry
+  /* The keys come back, but the failure stays: the module does not retry
    * the creation of its key in this process. */
   for (int i = 0; i < n; i++) pthread_key_delete(exhausted[i]);
   char *err_again = NULL;

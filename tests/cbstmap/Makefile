@@ -14,11 +14,11 @@ LFLAGS = $(CCOL_PLATFORM_LIBS)
 build:
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)
 
-# compile_probe.sh asserts a guarantee that the type system makes. No run-time
-# test can see that guarantee. The guarantee is that nobody can assign through
-# the accessor that cbmap_get_elem_ref() or chmap_get_elem_ref() gives back.
-# The probe runs under gcc and under clang, because a diagnostic is a property
-# of the compiler.
+# compile_probe.sh asserts a guarantee that the type system makes and that no
+# run-time test can see: nobody can assign through the accessor that
+# cbmap_get_elem_ref() or chmap_get_elem_ref() gives back. The probe runs
+# under gcc and under clang, because a diagnostic is a property of the
+# compiler.
 compile_probe:
 	sh ./compile_probe.sh
 
@@ -36,12 +36,12 @@ test: build compile_probe nesting_probe
 memtest: build
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 --child-silent-after-fork=yes ./tests
 
-# --ignore-errors negative: the coverage counters of gcov are plain increments
-# and are not atomic. Instrumented code that runs concurrently can therefore
-# race on them and produce a false negative hit count. This affects more than
-# one module, and it also happens inside a glibc header. It is a limitation of
-# the instrumentation of gcov, and not a defect in the logic of this library.
-# See the identical flag in tests/chttpclient/Makefile for the full reason.
+# --ignore-errors negative: the coverage counters of gcov are plain, non-atomic
+# increments, so instrumented code that runs concurrently can race on them and
+# produce a false negative hit count. This affects more than one module and
+# also happens inside a glibc header; it is a limitation of the gcov
+# instrumentation, not a defect in the logic of this library. See the
+# identical flag in tests/chttpclient/Makefile for the full reason.
 generate_coverage_report:
 	$(CC)  $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \

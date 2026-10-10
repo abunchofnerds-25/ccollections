@@ -11,15 +11,15 @@ chmap_init_mp(hm_name, mmgmt_procs);
 .fi
 .SH DESCRIPTION
 .nf
-Creates a hash map that takes all of its memory from mmgmt_procs. It
-assigns the map to hm_name. The caller must declare the handle first, with
+Creates a hash map that takes all of its memory from mmgmt_procs, and
+assigns it to hm_name. The caller must declare the handle first, with
 chmap_declare(3) or chmap_declare_scoped(3). The key and value types are
-not arguments here. The macro reads them from the companion type variables
+not arguments here: the macro reads them from the companion type variables
 that the declare macro created.
 
-This macro is chmap_init(3) plus an allocator. The map uses its own hashing
-for the declared key type. chmap_init_ch(3) replaces the hashing instead,
-and chmap_init_full(3) takes both.
+This macro is chmap_init(3) plus an allocator, and the map uses its own
+hashing for the declared key type. chmap_init_ch(3) replaces the hashing
+instead, and chmap_init_full(3) takes both.
 
 The one-step equivalents are chmap_construct_mp(3) and
 chmap_construct_mp_scoped(3).
@@ -39,11 +39,12 @@ expression.
 .nf
 Stops the program through ccol_fatal_err() if the creation fails
 All four members of ccol_memmgmt_procs_t must be non-NULL
-The macro copies the procedures into the map. The caller's own
-ccol_memmgmt_procs_t therefore need not outlive the call. The procedures
+The macro copies the procedures into the map, so the caller's own
+ccol_memmgmt_procs_t need not outlive the call; the procedures
 themselves must stay callable for the whole life of the map
-Everything that the map allocates later comes from these procedures, its
-bucket array included. Everything that the map frees goes back to them
+Everything that the map allocates later, its bucket array included,
+comes from these procedures, and everything that the map frees goes
+back to them
 Uses CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets
 .fi
 .SH EXAMPLES

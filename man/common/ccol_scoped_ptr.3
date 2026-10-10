@@ -11,20 +11,19 @@ ccol_scoped_ptr(name, type);
 .fi
 .SH DESCRIPTION
 .nf
-Declares "type *name" and sets it to NULL. It also registers an
-automatic cleanup with __attribute__((cleanup(...))). Assign to name in
-the normal way, for example with a plain malloc(). The macro frees the
-value that name holds at the end of the enclosing scope. It frees that
-value with the default allocator, which is ccol_mem_free(), a plain
-free().
+Declares "type *name", sets it to NULL, and registers an automatic
+cleanup with __attribute__((cleanup(...))). Assign to name in the
+normal way, for example with a plain malloc(). At the end of the
+enclosing scope, the macro frees the value that name holds with the
+default allocator, which is ccol_mem_free(), a plain free().
 
 This is the same as ccol_scoped_ptr_mp(name, type, NULL). Use
-ccol_scoped_ptr_mp() when a custom allocator for the whole library must
-free the pointer, and not the default allocator.
+ccol_scoped_ptr_mp() when a custom allocator for the whole library,
+and not the default allocator, must free the pointer.
 
 The other containers in this library give you a *_construct_scoped
-macro. This macro is different, because no container type is attached to
-it. It exists for a plain block on the heap that is not a chmap, a
+macro. This macro is different because no container type is attached
+to it: it exists for a plain block on the heap that is not a chmap, a
 cbmap, a cvec, or another container.
 .fi
 .SH PARAMETERS
@@ -36,24 +35,24 @@ type  The type that the pointer points to (for example char, struct foo)
 .nf
 Needs GCC or Clang, because it uses __attribute__((cleanup))
 
-The macro expands to two declarations, and not to one expression. Use it
+The macro expands to two declarations, not to one expression, so use it
 as its own statement. Every *_construct_scoped macro in this library
 already has the same constraint.
 
 Do not lose an earlier value when you give name a new value inside the
-scope. The macro frees only the last value. You must free an earlier
+scope: the macro frees only the last value, so you must free an earlier
 value yourself before you assign the new one. Every other guard that
 uses the cleanup attribute works in the same way.
 
 Use ccol_scoped_ptr_release() to give the ownership of the pointer to
 code outside the enclosing scope, for example as the return value of a
-function. The macro then does not free the pointer at the end of the
+function; the macro then does not free the pointer at the end of the
 scope.
 .fi
 .SH THREAD SAFETY
 .nf
-The pointer has no synchronisation. It is a plain local variable. It
-obeys the ordinary C rules for scope and for thread-local storage.
+The pointer has no synchronisation: it is a plain local variable, and
+it obeys the ordinary C rules for scope and for thread-local storage.
 .fi
 .SH EXAMPLES
 .nf

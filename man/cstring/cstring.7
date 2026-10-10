@@ -9,16 +9,16 @@ C Collections (libccollections, \-lccollections)
 .fi
 .SH DESCRIPTION
 .nf
-A cstr is a string on the heap. It grows when an operation needs more
-space. Its buffer always holds a NUL-terminated C string. You can therefore
-give the pointer from cstr_c_str(3) directly to any function that takes
-a const char *. A cstr holds text. Its content stops at the first NUL
+A cstr is a string on the heap that grows when an operation needs more
+space. Its buffer always holds a NUL-terminated C string, so you can give
+the pointer from cstr_c_str(3) directly to any function that takes a
+const char *. A cstr holds text: its content stops at the first NUL
 byte.
 
-The capacity of the buffer is always a power of two. It is never less
+The capacity of the buffer is always a power of two, and it is never less
 than 16 bytes. When an operation needs more space, it grows the buffer
 to the smallest power of two that holds the result. cstr_reserve(3)
-grows the buffer before you need the space. cstr_reset(3) makes the
+grows the buffer before you need the space, and cstr_reset(3) makes the
 buffer smaller again, to 16 bytes.
 
 The API has two layers:
@@ -26,43 +26,42 @@ The API has two layers:
     cstr_append(3) and cstr_replace(3). When an operation fails, these
     macros stop the program through ccol_fatal_err().
   - The raw functions, for example cstring_create_full(3),
-    cstring_append(3) and cstring_replace(3). These functions give a
-    failure in their return value.
-cstr_copy(3) and cstr_split(3) are different from the other macros.
-They call their functions directly, and they give NULL on failure.
+    cstring_append(3) and cstring_replace(3), which report a failure in
+    their return value.
+cstr_copy(3) and cstr_split(3) differ from the other macros: they call
+their functions directly, and they give NULL on failure.
 
-Each argument that gives text to add is a plain C string. Some calls
-change a string, and their str argument can point into the buffer of
-that string. These calls are cstr_append(3), cstr_prepend(3),
-cstr_insert(3), cstr_set(3) and their cstring_ functions. An example is
-cstr_append(s, cstr_c_str(s)). The call reads str correctly, also when
+Each argument that gives text to add is a plain C string. The calls that
+change a string (cstr_append(3), cstr_prepend(3), cstr_insert(3),
+cstr_set(3) and their cstring_ functions) accept a str argument that
+points into the buffer of that same string, as in
+cstr_append(s, cstr_c_str(s)). The call reads str correctly even when
 it reallocates the buffer.
 .fi
 .SH "OWNERSHIP"
 .nf
 The pointer from cstr_c_str(3) points into the buffer of the string.
-The string owns the buffer. The caller never frees it. Each operation
-that changes the string can move the buffer. The pointer is therefore
-valid only until the next such operation.
+The string owns the buffer, and the caller never frees it. Each operation
+that changes the string can move the buffer, so the pointer is valid
+only until the next such operation.
 
-cstr_substring(3), cstr_copy(3) and cstr_split(3) give new strings.
-The caller owns these strings and must destroy them. cstr_split(3)
-gives a cvec of cstr. The caller destroys each element, and then the
-vector.
+cstr_substring(3), cstr_copy(3) and cstr_split(3) give new strings,
+which the caller owns and must destroy. cstr_split(3) gives a cvec of
+cstr: the caller destroys each element, and then the vector.
 .fi
 .SH "USE WITH THE MAPS"
 .nf
-chashmap and cbstmap do not accept cstr as a key type or a value type.
-They accept char *. They hash and compare such a key by its content.
+chashmap and cbstmap do not accept cstr as a key type or a value type;
+they accept char *, and they hash and compare such a key by its content.
 Give the result of cstr_c_str(3), cast to char *, as the key or the
-value. During the insert, the map copies the characters into its own
-storage. After the insert, you can change or destroy the cstr. This has
-no effect on the map.
+value. The map copies the characters into its own storage during the
+insert, so after the insert you can change or destroy the cstr without
+any effect on the map.
 .fi
 .SH "THREAD SAFETY"
 .nf
 A string has no internal lock. A caller can share one string between
-threads. That caller must serialize each call that changes the string
+threads, but must then serialize each call that changes the string
 against all the other calls on that string.
 .fi
 .SH EXAMPLES

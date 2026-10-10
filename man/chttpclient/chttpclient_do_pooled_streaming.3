@@ -15,15 +15,14 @@ ccol_retval_t chttpclient_do_pooled_streaming(chttpcli cli,
 .fi
 .SH DESCRIPTION
 .nf
-This is a thin wrapper over chttpclient_do_async_streaming. It has the
+This is a thin wrapper over chttpclient_do_async_streaming, with the
 same call shape as chttpclient_do_streaming. write_fn runs on one of
-the reactor threads of the engine, and not on the thread of the
-caller. See the documentation of chttpclient_do_async_streaming for
-the two rules that follow from this. write_fn must not block, and it
-must not call back into the engine. The thread that runs write_fn is
-the only difference between this function and
-chttpclient_do_streaming, whose callback runs on the thread of the
-caller.
+the reactor threads of the engine, not on the thread of the caller; see
+the documentation of chttpclient_do_async_streaming for the two rules
+that follow from this: write_fn must not block, and it must not call
+back into the engine. The thread that runs write_fn is the only
+difference between this function and chttpclient_do_streaming, whose
+callback runs on the thread of the caller.
 .fi
 .SH PARAMETERS
 .nf
@@ -38,7 +37,7 @@ status_code_out It gets the HTTP status code after a call that
 .fi
 .SH RETURN VALUE
 .nf
-The same codes as chttpclient_do_pooled, with one difference. The
+The same codes as chttpclient_do_pooled, with one difference: the
 function never gives ccol_msg_too_large, because
 chttpclient_set_max_response_body_size has no effect on this streaming
 path.

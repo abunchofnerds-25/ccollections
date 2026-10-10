@@ -20,11 +20,11 @@ ccol_r_mempool *ccol_r_mempool_create_from_preallocated_buffer(
 .fi
 .SH DESCRIPTION
 .nf
-Creates a ranged memory pool from a buffer that the caller gives. It takes
-no storage for a sub-pool from the heap. The library divides the buffer into
-contiguous segments, one for each size tier. It uses the same progression of
-sizes and counts as ccol_r_mempool_create(). This is useful for embedded
-systems.
+Creates a ranged memory pool on top of a buffer that the caller gives, so
+no storage for a sub-pool comes from the heap. The library divides the
+buffer into contiguous segments, one for each size tier, with the same
+progression of sizes and counts as ccol_r_mempool_create(). This is
+useful on embedded systems.
 .fi
 .SH PARAMETERS
 .nf
@@ -50,8 +50,8 @@ Returns NULL on failure
 The buffer size must match exactly what
   CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER produces for the same
   parameters
-ccol_r_mempool_destroy() does not free the buffer. The caller owns the life
-  of that buffer
+ccol_r_mempool_destroy() does not free the buffer; the caller owns the
+  life of that buffer
 The pool structs still come from mmgmt_procs
 Each sub-pool calls the functions of mmgmt_procs for its dynamic
 fallback entries, and for its own bookkeeping of them, in the middle of
@@ -60,10 +60,10 @@ functions must therefore not call back into this same ranged pool: with
 a lock the call can deadlock, and without one it corrupts that state. An
 allocator built on a pool must draw from a different pool
 The buffer holds every sub-pool in segments that sit next to each other
-The function returns NULL with an error if the buffer is not aligned to at
-  least 16 bytes. That is the alignment that every entry the pool hands out
-  is sure to meet. Entry 0 sits at the address of the buffer itself, so the
-  buffer has to meet it too. A buffer that
+The function returns NULL with an error if the buffer is not aligned to
+  at least 16 bytes, which is the alignment that every entry the pool
+  hands out is guaranteed to meet. Entry 0 sits at the address of the
+  buffer itself, so the buffer has to meet it too; a buffer that
   CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER declares already does
 The same power-of-two limits on size and count as ccol_r_mempool_create()
   apply here

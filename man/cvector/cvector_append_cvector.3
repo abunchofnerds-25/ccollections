@@ -11,8 +11,8 @@ bool cvector_append_cvector(cvec v_to, cvec v_from);
 .fi
 .SH DESCRIPTION
 .nf
-This function appends all the elements of one vector to another vector.
-Both vectors must have the same element size.
+This function appends all the elements of one vector to another vector;
+both vectors must have the same element size.
 .fi
 .SH PARAMETERS
 .nf
@@ -28,7 +28,7 @@ Gives false when the memory allocation fails
 .fi
 .SH NOTES
 .nf
-The two element sizes must be the same. The function asserts when they
+The two element sizes must be the same; the function asserts when they
 are different.
 The function appends all the elements or none of them.
 The function reserves more capacity automatically when this is

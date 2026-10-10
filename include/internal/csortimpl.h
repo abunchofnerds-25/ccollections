@@ -29,13 +29,13 @@ SOFTWARE.
  * @brief INTERNAL ONLY. The contiguous-array mergesort that cvector uses for
  *        its own sort.
  *
- * No program uses this library through this function. A user reaches it
- * through cvec_sort and cvector_sort_with_comparison_proc, and never through
- * this name.
+ * No program uses this library through this function: a user reaches it
+ * through cvec_sort and cvector_sort_with_comparison_proc, never through this
+ * name.
  *
- * This header is internal. It carries no visibility block. make install does
- * not install it. Its symbol is absent from the dynamic symbol table of the
- * shared library.
+ * This header is internal, so it carries no visibility block, make install
+ * does not install it, and its symbol is absent from the dynamic symbol table
+ * of the shared library.
  */
 
 #include <common.h>
@@ -57,7 +57,7 @@ SOFTWARE.
  *             true and do nothing.
  * @param length Number of elements
  * @param elem_size Size of each element in bytes
- * @param comparison_proc Comparator. The function asserts when it is NULL
+ * @param comparison_proc Comparator; the function asserts when it is NULL
  *                        and there is something to sort.
  * @param mprocs Allocator of the temporary buffer, or NULL for the default
  *

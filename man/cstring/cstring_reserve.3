@@ -12,9 +12,9 @@ bool cstring_reserve(cstr s, size_t min_capacity);
 .SH DESCRIPTION
 .nf
 Makes sure that the internal buffer has room for min_capacity bytes or
-more. That count includes the null terminator. The function rounds the
-requested size up to the nearest power of two (minimum 16). It does
-nothing when the current capacity is already large enough.
+more, counting the null terminator. The function rounds the requested
+size up to the nearest power of two (minimum 16), and it does nothing
+when the current capacity is already large enough.
 .fi
 .SH PARAMETERS
 .nf

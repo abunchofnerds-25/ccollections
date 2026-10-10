@@ -1,26 +1,26 @@
 # Building, installing and linking
 
-This guide starts with a new clone and ends with a program that links with
-c_collections. It also tells you about the build switches. Some switches are
-compile-time options that change the behavior of the library. Other switches
-leave optional modules out.
+This guide takes you from a fresh clone to a program that links with
+c_collections. Along the way it covers the build switches: some are
+compile-time options that change how the library behaves, and others leave
+optional modules out.
 
 For the supported systems and compilers, see [Platforms](platforms.md). To
 run the test suites, see [Testing](testing.md).
 
 ## Requirements
 
-- **GNU make** 4 or later. On FreeBSD, its name is `gmake`. The system
-  `make` on FreeBSD only prints a message that tells you this. The `make`
-  of macOS is GNU make 3.81, which is too old. Homebrew installs a current
-  one as `gmake`.
+- **GNU make** 4 or later. On FreeBSD it is called `gmake`; the system
+  `make` there only prints a message telling you so. The `make` that ships
+  with macOS is GNU make 3.81, which is too old, so install a current one
+  with Homebrew, which names it `gmake`.
 - **GCC or Clang** with C11 and the GNU extensions (see
   [Platforms](platforms.md)).
 - **OpenSSL** (`libssl`, `libcrypto`) and **zlib**, with their development
-  headers. Only the HTTP client and the HTTP server use OpenSSL. Only the
-  logger uses zlib. You can build without them. See
-  [Leaving modules out](#leaving-modules-out).
-- The thread library and the math library of the system. On the BSDs, also
+  headers. Only the HTTP client and the HTTP server use OpenSSL, and only the
+  logger uses zlib, so you can build without them (see
+  [Leaving modules out](#leaving-modules-out)).
+- The system thread library and math library. On the BSDs you also need
   `libexecinfo`, which is part of the base system.
 
 On Debian or Ubuntu:
@@ -49,7 +49,7 @@ export LIBRARY_PATH="$(brew --prefix openssl@3)/lib"
 make            # gmake on FreeBSD and macOS
 ```
 
-The build makes these files in the top directory:
+The build produces these files in the top directory:
 
 | File | What it is |
 |---|---|
@@ -59,38 +59,37 @@ The build makes these files in the top directory:
 | `libccollections.a` | the static archive |
 | `ccollections.pc` | the `pkg-config` metadata |
 
-On macOS, the three shared library files are `libccollections.1.0.0.dylib`,
-`libccollections.1.dylib` and `libccollections.dylib`. The install name of
-the library, which programs record, is `$(LIBDIR)/libccollections.1.dylib`.
+On macOS the three shared library files are `libccollections.1.0.0.dylib`,
+`libccollections.1.dylib` and `libccollections.dylib`, and the install name
+that programs record is `$(LIBDIR)/libccollections.1.dylib`.
 
-The compiler is `gcc` on Linux and the system `cc` on other systems. To use
-a different compiler, give it on the command line or in the environment:
+The compiler is `gcc` on Linux and the system `cc` elsewhere. To use a
+different one, set it on the command line or in the environment:
 
 ```bash
 make CC=clang
 ```
 
-To add compiler flags, use `EXTRA_CFLAGS`. It adds to the flags of the
-project and keeps the `-Wall -Wextra -Werror` baseline. The build also gives
-these flags to the link of the shared library, so that a sanitizer links its
+To add compiler flags, use `EXTRA_CFLAGS`. It adds to the project's own flags
+and keeps the `-Wall -Wextra -Werror` baseline. The build also passes these
+flags to the link of the shared library, so that a sanitizer can link its
 runtime:
 
 ```bash
 make EXTRA_CFLAGS="-fsanitize=address,undefined"
 ```
 
-The build records the compiler and the flags of the last build. When they
-change, the build compiles again. Therefore, you do not need a `make clean`
-between two different configurations.
+The build remembers the compiler and flags of the last build and compiles
+again when they change, so you do not need a `make clean` when you switch
+between configurations.
 
-The build compiles the library with hardening flags
-(`-fstack-protector-strong`, `-fstack-clash-protection`,
-`-D_FORTIFY_SOURCE=3`). It links the library with full RELRO. The build
-first tests each compiler flag, together with `EXTRA_CFLAGS`. It does not use
-a flag that the compiler does not support for the target with those flags.
-For example, Apple clang with `-fsanitize=address` sets `_FORTIFY_SOURCE` to
-0 itself, so the build does not add `-D_FORTIFY_SOURCE=3` there. To see which
-flags the build uses:
+The library is compiled with hardening flags (`-fstack-protector-strong`,
+`-fstack-clash-protection`, `-D_FORTIFY_SOURCE=3`) and linked with full
+RELRO. The build first tests each of these flags, together with
+`EXTRA_CFLAGS`, and leaves out any flag that the compiler does not support for
+that target with those flags. For example, Apple clang with
+`-fsanitize=address` sets `_FORTIFY_SOURCE` to 0 itself, so the build does
+not add `-D_FORTIFY_SOURCE=3` there. To see which flags the build uses:
 
 ```bash
 make hardening_report
@@ -115,24 +114,25 @@ sudo make uninstall
 ```
 
 The install asks for `sudo` only when it cannot write to a destination
-directory. Therefore, an install into a prefix that you own never asks for a
-password. `SUDO=` disables `sudo`. `SUDO=doas` uses a different tool.
+directory, so an install into a prefix that you own never asks for a
+password. `SUDO=` disables `sudo`, and `SUDO=doas` uses a different tool.
 
-`make uninstall` removes exactly the files that `make install` installed.
-It also removes the header directory when that directory is empty.
+`make uninstall` removes exactly the files that `make install` installed,
+and also removes the header directory if it is left empty.
 
 ### Choosing where things go
 
-`PREFIX` moves the full install. `DESTDIR` puts the install into a staging
-directory and does not change the live system. A package build needs this:
+`PREFIX` moves the whole install. `DESTDIR` puts the install into a staging
+directory without touching the live system, which is what a package build
+needs:
 
 ```bash
 make install PREFIX="$HOME/.local"           # your own prefix
 make install DESTDIR=/tmp/stage PREFIX=/usr  # a staged package build
 ```
 
-Four more variables each move one part of the install. Their defaults follow
-`PREFIX`:
+Four more variables each move one part of the install, and their defaults
+follow `PREFIX`:
 
 | Variable | Default | Holds |
 |---|---|---|
@@ -141,17 +141,16 @@ Four more variables each move one part of the install. Their defaults follow
 | `MANDIR` | `$(PREFIX)/share/man` | `man3/` and `man7/` |
 | `PKGCONFIGDIR` | `$(LIBDIR)/pkgconfig`; `$(PREFIX)/libdata/pkgconfig` on FreeBSD | `ccollections.pc` |
 
-A distribution gives its own library directory:
+A distribution can set its own library directory:
 
 ```bash
 make install DESTDIR=/tmp/stage PREFIX=/usr LIBDIR=/usr/lib64
 make install DESTDIR=/tmp/stage PREFIX=/usr LIBDIR=/usr/lib/x86_64-linux-gnu
 ```
 
-`ccollections.pc` records `LIBDIR` and `INCLUDEDIR`. Therefore, `pkg-config`
-finds the locations that the install used. The install refuses a value of one
-of these variables, or of `PREFIX` or `DESTDIR`, that contains a space or a
-tab.
+`ccollections.pc` records `LIBDIR` and `INCLUDEDIR`, so `pkg-config` finds
+the locations that the install used. The install refuses a value of any of
+these variables, or of `PREFIX` or `DESTDIR`, that contains a space or a tab.
 
 After an install into the live system (no `DESTDIR`), the build updates two
 indexes:
@@ -159,15 +158,14 @@ indexes:
 - the cache of the dynamic linker (`ldconfig`, or `ldconfig -R` on FreeBSD)
 - the man page index (`mandb`, or `makewhatis` on FreeBSD)
 
-On macOS, the install updates neither. The dynamic linker of macOS keeps
-no cache to update, and `man` finds the installed pages without an index.
+On macOS the install updates neither, because the macOS dynamic linker keeps
+no cache to update and `man` finds the installed pages without an index.
 
-If one of these updates fails, the install does not fail.
+A failure of either update does not make the install fail.
 
 ## Including the headers
 
-The headers install into their own directory, `INCLUDEDIR/ccollections/`.
-Always include them through this directory name:
+The headers install into a directory of their own, `INCLUDEDIR/ccollections/`. Always include them through that directory name:
 
 ```c
 #include <ccollections/cvector.h>
@@ -175,11 +173,11 @@ Always include them through this directory name:
 #include <ccollections/chttpserver.h>
 ```
 
-Some headers have generic names (`common.h`, `cstring.h`). Your `-I` flags
-give `INCLUDEDIR`, and never the `ccollections/` directory itself. Therefore, a
-header of yours with the same name, for example the `common.h` of your
-project, never hides a header of the library. Also, a header of the library
-never hides it. The order of your `-I` flags has no effect on this.
+Some headers have generic names (`common.h`, `cstring.h`). Because your `-I`
+flags name `INCLUDEDIR` and never the `ccollections/` directory itself, a
+header of yours with the same name, such as your project's own `common.h`,
+never hides a header of the library, and a header of the library never hides
+yours. This holds whatever the order of your `-I` flags.
 
 Include only the headers that you use. `cvector.h`, `chashmap.h` and
 `cbstmap.h` automatically include the shared iteration API
@@ -193,19 +191,19 @@ Include only the headers that you use. `cvector.h`, `chashmap.h` and
 gcc -std=gnu11 -o myapp myapp.c $(pkg-config --cflags --libs ccollections)
 ```
 
-With the default `/usr/local` prefix, you can also write the flags yourself.
-The shared library records its own dependencies. Therefore, `-lccollections` is
+With the default `/usr/local` prefix you can also write the flags yourself.
+The shared library records its own dependencies, so `-lccollections` is
 enough:
 
 ```bash
 gcc -std=gnu11 -o myapp myapp.c -lccollections
 ```
 
-You possibly installed into a prefix that is not standard. If the program
-then cannot find `libccollections.so.1` at run time, add that `lib`
-directory to the search path of the loader. Use `LD_LIBRARY_PATH`, or an
-rpath such as `-Wl,-rpath,$HOME/.local/lib`. On macOS, a program finds the
-library through its install name, which is the `LIBDIR` of the install.
+If you installed into a non-standard prefix and the program cannot find
+`libccollections.so.1` at run time, add that `lib` directory to the loader's
+search path, either with `LD_LIBRARY_PATH` or with an rpath such as
+`-Wl,-rpath,$HOME/.local/lib`. On macOS a program finds the library through
+its install name, which is the `LIBDIR` of the install.
 
 ### In your own Makefile
 
@@ -223,31 +221,31 @@ clean:
 
 ### Static linking
 
-An archive records no dependencies. Therefore, your link line must contain each
+An archive records no dependencies, so your link line must name every
 library that the archive needs. `pkg-config --static` prints the full list,
-including the dependencies of OpenSSL on your system. When you install the
-shared library and the archive, the linker uses the shared library. Therefore,
-give the name of the archive explicitly:
+including the dependencies of OpenSSL on your system. When both the shared
+library and the archive are installed, the linker prefers the shared
+library, so name the archive explicitly:
 
 ```bash
 gcc -std=gnu11 -o myapp myapp.c $(pkg-config --cflags ccollections) \
     -l:libccollections.a $(pkg-config --libs --static ccollections | sed 's/-lccollections//')
 ```
 
-Or, build a fully static program:
+Or build a fully static program:
 
 ```bash
 gcc -std=gnu11 -static -o myapp myapp.c $(pkg-config --cflags --libs --static ccollections)
 ```
 
-The build compiles the archive with `-fPIC`. Therefore, you can also link it
-into your own shared library.
+The archive is compiled with `-fPIC`, so you can also link it into a shared
+library of your own.
 
 ## Module layering
 
-All modules are in one library. Therefore, you never select modules at link
-time. But the layers are important when you decide how much of the library to
-use, or when you think about the size of a static link:
+All modules live in one library, so you never select modules at link time.
+The layers do matter when you decide how much of the library to use, or
+when you think about the size of a static link:
 
 ```
 Core                    nothing outside Core
@@ -280,17 +278,17 @@ Networking              builds on all of the above, plus OpenSSL
                         cthreadpool, clogger
 ```
 
-The direction of the dependencies never changes. Only the logger uses zlib
-(to compress rotated files). Only the HTTP modules use OpenSSL. A program
-that uses only the containers also links with these two libraries, but it
-calls neither of them. To remove them fully, leave those modules out.
+Dependencies only ever point in this direction. Only the logger uses zlib
+(to compress rotated files), and only the HTTP modules use OpenSSL. A program
+that uses only the containers links with both libraries anyway but never
+calls either of them; to remove them completely, leave those modules out.
 
 The shared library exports exactly the symbols that the installed headers
-declare. You cannot link with an internal helper accidentally.
+declare, so you cannot link with an internal helper by accident.
 
 ## Compile-time configuration
 
-Three switches change the library itself. Give them through `EXTRA_CFLAGS`
+Three switches change the library itself. Pass them through `EXTRA_CFLAGS`
 when you build the library.
 
 ### CCOL_FORK_SAFETY_REQUIRED
@@ -302,29 +300,30 @@ The default is `1`. Some modules register `pthread_atfork()` handlers:
 - the logger
 - the HTTP client and the HTTP server
 
-These handlers make sure that a `fork()` never gives the child one of their
-internal locks in a locked state. This adds some work to each `fork()` in
-the process. Your program possibly never forks. Or it possibly forks only in
-the two supported patterns that
-[Concurrency](concurrency.md#fork) describes. In these two cases, you can
-remove the handlers at compile time:
+These handlers make sure that a `fork()` never hands the child one of their
+internal locks in a locked state, at the cost of some extra work on every
+`fork()` in the process. If your program never forks, or forks only in the
+two supported patterns that [Concurrency](concurrency.md#fork) describes,
+you can remove the handlers at compile time:
 
 ```bash
 make EXTRA_CFLAGS="-DCCOL_FORK_SAFETY_REQUIRED=0"
 ```
 
-This changes nothing else about thread safety. The library keeps all locks.
-On macOS, a `fork()` also waits while the library makes a new socket closed
-on exec. That wait stays, because it protects a child that calls `exec()`
-(see [Concurrency](concurrency.md#descriptors-and-exec)).
+This changes nothing else about thread safety: the library keeps all its
+locks. On macOS a `fork()` also waits while the library makes a new socket
+close-on-exec. That wait is kept even with the switch off, because it
+protects a child that calls `exec()` (see
+[Concurrency](concurrency.md#descriptors-and-exec)).
 
 ### CCOL_MEMPOOL_COMPACT_LAYOUT
 
 The default is `0`. This switch sets the distance between the entries of a
-`cmempool` pool. By default, the distance is the next power of two. This
-makes each allocation and each release a little faster. The compact layout
-uses the aligned element size as the distance. This saves memory when your
-element sizes are a little larger than a power of two:
+`cmempool` pool. By default the distance is rounded up to the next power of
+two, which makes each allocation and each release a little faster. The
+compact layout uses the aligned element size as the distance instead, which
+saves memory when your element sizes are a little larger than a power of
+two:
 
 | element size | default distance | compact distance |
 |---|---|---|
@@ -337,36 +336,35 @@ element sizes are a little larger than a power of two:
 make EXTRA_CFLAGS="-DCCOL_MEMPOOL_COMPACT_LAYOUT=1"
 ```
 
-The setting applies to the full build. This is intentional. A choice for
-each pool would make each allocation slower, also in the pools where the two
-layouts are the same.
+The setting applies to the whole build on purpose: a per-pool choice would
+make every allocation slower, even in pools where the two layouts are the
+same.
 
-This setting changes no function and no type. It changes one macro:
-`CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER`. This macro sets the size of an
-array in your code. Therefore, compile a file that uses the macro with the same
-setting as the library. A mismatch does not give a pool of incorrect size.
-Instead, the link fails with an undefined reference. The reference gives the
-name of the layout that your code expected, for example:
+The setting changes no function and no type, only one macro,
+`CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER`, which sizes an array in your
+code. A file that uses this macro must therefore be compiled with the same
+setting as the library. A mismatch does not give you a pool of the wrong
+size; the link fails instead, with an undefined reference that names the
+layout your code expected, for example:
 
 ```
 undefined reference to `_ccol_mempool_built_with_compact_layout'
 ```
 
-Build the incorrect side again. A file that declares no such buffer needs
-nothing. This setting has no effect on
+Rebuild whichever side is wrong. A file that declares no such buffer needs
+nothing, and the setting has no effect on
 `CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER`.
 
-A compact build has an ABI that is different from the default ABI. Therefore,
-`make check_abi` skips a compact build, and `make update_abi_baseline`
-refuses to record it.
+A compact build has a different ABI from the default build, so
+`make check_abi` skips it and `make update_abi_baseline` refuses to record
+it.
 
 ### CCOL_MEMPOOL_DYNAMIC_TLS
 
-This switch selects the thread-local storage model of the fast paths that
-the library uses for each thread. If you do not set it, its value is `0`
-(initial-exec, the fast model) with glibc and on FreeBSD. On other systems,
-its value is `1` (the general model). Set it to `1` only if both of these
-conditions are true:
+This switch selects the thread-local storage model of the library's
+per-thread fast paths. If you do not set it, its value is `0` (initial-exec,
+the fast model) with glibc and on FreeBSD, and `1` (the general model) on
+other systems. Set it to `1` only if both of these are true:
 
 - Your program loads the library with `dlopen()`.
 - Your program cannot give the loader the space that the fast model needs.
@@ -380,8 +378,8 @@ this applies and what it costs.
 
 ## Leaving modules out
 
-Five modules are optional. By default, the build includes each of them. To
-leave a module out, set its switch to `0`:
+Five modules are optional and included by default. To leave one out, set
+its switch to `0`:
 
 | Switch | Module | Also removes |
 |---|---|---|
@@ -400,26 +398,26 @@ make WITH_CJSON=0 WITH_CYAML=0 WITH_CLOGGER=0 \
      WITH_CHTTPCLIENT=0 WITH_CHTTPSERVER=0
 ```
 
-The purpose is to remove dependencies, not to make the library smaller. When
-both HTTP modules are off, the build does not use OpenSSL. When the logger is
-also off, the build does not use zlib. The generated `ccollections.pc` follows
-the build. Therefore, `pkg-config --libs --static` gives only the libraries
-that the build uses.
+The purpose is to remove dependencies, not to make the library smaller.
+With both HTTP modules off the build does not use OpenSSL, and with the
+logger also off it does not use zlib. The generated `ccollections.pc`
+follows the build, so `pkg-config --libs --static` lists only the libraries
+that the build actually uses.
 
-Both HTTP modules write logs through `clogger`. When one of them is on, the
-build ignores `WITH_CLOGGER=0` and prints a warning.
+Both HTTP modules write their logs through `clogger`, so while either of them
+is on, the build ignores `WITH_CLOGGER=0` and prints a warning.
 
-The install does not install the header and the man pages of a module that you
-left out. Therefore, `#include <ccollections/cyaml.h>` fails at compile time,
-not at link time. `make test` skips the tests of that module. `make check_abi`
-also skips.
+The install leaves out the header and the man pages of every module that you
+left out, so `#include <ccollections/cyaml.h>` fails at compile time rather
+than at link time. `make test` skips the tests of that module, and
+`make check_abi` skips as well.
 
 **A reduced build cannot replace a full build.** It has the same SONAME
-(`libccollections.so.1`), but it exports fewer symbols. Therefore, a program
-that you linked with a full build does not start with a reduced build. Reduced
-builds are for a library that you build and embed yourself. Therefore, `make
-install` refuses a reduced build, unless you tell it that the destination is
-correct for a reduced build:
+(`libccollections.so.1`) but exports fewer symbols, so a program that you
+linked with a full build does not start with a reduced one. Reduced builds
+are meant for a library that you build and embed yourself, which is why `make
+install` refuses a reduced build unless you confirm that the
+destination is meant for one:
 
 ```bash
 make WITH_CJSON=0 install                          # refused

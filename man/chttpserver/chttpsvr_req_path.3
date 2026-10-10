@@ -11,30 +11,27 @@ const char *chttpsvr_req_path(const chttpsvr_req *req);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the URL path of the request, without the query string.  That
-string ends with a NUL byte.  It stays valid for the length of the
-handler call.
+Returns the NUL-terminated URL path of the request, without the query
+string.  The string stays valid for the duration of the handler call.
 
-The path always begins with "/".  The server answers a request whose
-target is neither an origin-form path nor an absolute-form http or
-https URL with 400 Bad Request, before any middleware runs.  The one
-exception is "OPTIONS *", which the server answers itself, with no
-middleware and no handler; see chttpsvr_start(3).  For an
-absolute-form target the path is the path of that URL, and an empty
-one is "/".
+The path always begins with "/": a request whose target is neither an
+origin-form path nor an absolute-form http or https URL is answered
+with 400 Bad Request before any middleware runs.  The one exception is
+"OPTIONS *", which the server answers itself, with no middleware and
+no handler; see chttpsvr_start(3).  For an absolute-form target the
+path is the path of that URL, and an empty one becomes "/".
 
-The library decodes the percent-encoded sequences under the path rules
-of RFC 3986.  The string is therefore the path that the library
-matched a route pattern against.  A middleware that runs for a
-rejected request can reach a path whose percent-encoding is malformed.
-See chttpsvr_use(3).  That malformed encoding is itself one of the
-reasons why no route could match the path.  Such a path has no decoded
-form, so this function gives it back exactly as it arrived, in its
-encoded form.
+Percent-encoded sequences are decoded by the path rules of RFC 3986,
+so the string is the path that was matched against the route
+patterns.  A middleware that runs for a rejected request (see
+chttpsvr_use(3)) can see a path whose percent-encoding is malformed,
+which is itself one of the reasons why no route could match it.  Such
+a path has no decoded form, so this function returns it exactly as it
+arrived, in its encoded form.
 
-The decoded path can hold a '/' that arrived as %2F, and "." and ".."
-segments, which the server neither merges nor removes.  Never use it
-as a file name without checking it.
+The decoded path can contain a '/' that arrived as %2F, as well as "."
+and ".." segments, which the server neither merges nor removes.  Never
+use it as a file name without checking it first.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_req_raw_query (3),

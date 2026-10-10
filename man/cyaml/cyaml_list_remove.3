@@ -11,10 +11,10 @@ ccol_retval_t cyaml_list_remove(cyaml seq, size_t index);
 .fi
 .SH DESCRIPTION
 .nf
-Remove the element at the position index from the list node seq.  The
-function frees that element and all of its descendants recursively.  It
-then shifts every element after index left by one position.  That shift
-is O(n) in the number of elements after index.
+Remove the element at position index from the list node seq, freeing
+that element and all of its descendants recursively.  Every element after
+index then shifts left by one position, which is O(n) in the number of
+elements after index.
 .fi
 .SH RETURN VALUE
 .nf

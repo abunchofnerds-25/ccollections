@@ -11,15 +11,15 @@ ctpool_destroy(pool);
 .fi
 .SH DESCRIPTION
 .nf
-Drains or cancels every task that is still pending. It then joins every
-worker thread. It waits for every resolved use of the handle that is
-still in flight to stop, and frees every resource of the pool. The macro
-then sets the pool handle to CTPOOL_INVALID.
+Drains or cancels every task that is still pending, then joins every
+worker thread, waits for every resolved use of the handle that is still
+in flight to stop, and frees every resource of the pool. The macro then
+sets the pool handle to CTPOOL_INVALID.
 
-The macro runs a drain shutdown by itself when the caller called neither
-ctpool_shutdown_drain() nor ctpool_shutdown_immediate() beforehand.
-Every task in the queue therefore finishes before the library frees the
-pool.
+When the caller called neither ctpool_shutdown_drain() nor
+ctpool_shutdown_immediate() beforehand, the macro runs a drain shutdown
+by itself, so every task in the queue finishes before the library frees
+the pool.
 .fi
 .SH PARAMETERS
 .nf
@@ -28,23 +28,23 @@ pool  Thread pool variable to destroy (set to CTPOOL_INVALID after
 .fi
 .SH NOTES
 .nf
-It is safe to call when pool is CTPOOL_INVALID. The macro then does
+It is safe to call when pool is CTPOOL_INVALID; the macro then does
 nothing.
 
-A call on a stale handle is a FATAL ERROR, which is abort() and
-SIGABRT. A stale handle is one that an earlier call already destroyed,
-or that another thread destroys at the same time. This is never a
-silent double free. The handle carries a generation tag, and the
-library checks that tag before it touches the pool. It therefore always
-detects such a value, and never dereferences it.
+A call on a stale handle (one that an earlier call already destroyed,
+or that another thread destroys at the same time) is a FATAL ERROR,
+which is abort() and SIGABRT. This is never a silent double free: the
+handle carries a generation tag that the library checks before it
+touches the pool, so it always detects such a value and never
+dereferences it.
 
-A call on pool from inside a task is a FATAL ERROR as well. That holds
-when the task runs on one of the worker threads of pool. A call from the
-on_complete callback of that task is the same. The reason is related.
-That worker is still on its way back through its own dispatch loop. It
-would touch the mutex, the condition variables and the struct of the
-pool again, immediately after this call freed them. Leave the destroy
-to another thread instead, or run it after the task returns.
+A call on pool from inside a task that runs on one of the worker threads
+of pool, or from the on_complete callback of that task, is a FATAL ERROR
+as well, for a related reason: that worker is still on its way back
+through its own dispatch loop, and would touch the mutex, the condition
+variables and the struct of the pool again immediately after this call
+freed them. Leave the destroy to another thread instead, or run it after
+the task returns.
 
 The macro evaluates pool exactly once. It must be a modifiable lvalue,
 such as a variable or an element of an array, so an expression with a

@@ -11,12 +11,12 @@ ccol_event_loop_declare(name);
 .fi
 .SH DESCRIPTION
 .nf
-This macro expands to `ccol_event_loop name`. It does not initialise
-the variable. You must assign the variable before you use it. Use
-ccol_event_loop_construct(), or a ccol_event_loop_create*() call.
+This macro expands to `ccol_event_loop name` and does not initialise
+the variable, so you must assign the variable before you use it, with
+ccol_event_loop_construct() or a ccol_event_loop_create*() call.
 
 This macro exists so that the names match those of the other
-c_collections modules. Compare it with ctpool_declare().
+c_collections modules; compare it with ctpool_declare().
 .fi
 .SH PARAMETERS
 .nf

@@ -96,14 +96,13 @@ TEST(base64_encode, null_data_with_nonzero_len_fails) {
 TEST(base64_encode, length_large_enough_to_overflow_is_rejected) {
   /* enc_len = ((len+2)/3)*4 needs an overflow check before the code
    * allocates enc_len+1 bytes. Without that check, a len from the caller
-   * that is large enough to wrap size_t goes through. The allocation is then
-   * tiny, because it wrapped, and the code writes far past it.
+   * that is large enough to wrap size_t goes through: the allocation is
+   * tiny because it wrapped, and the code writes far past it.
    *
-   * len is close to SIZE_MAX here on purpose. That is well above anything
-   * that a real caller asks this function to encode. This test passes a real
-   * pointer, which is not NULL and which nothing dereferences. The rejection
-   * must happen before anything touches *data*, and not only before the
-   * allocation. */
+   * len is deliberately close to SIZE_MAX, well above anything that a real
+   * caller asks this function to encode. This test passes a real pointer,
+   * not NULL, which nothing dereferences, because the rejection must happen
+   * before anything touches *data*, not only before the allocation. */
   char dummy = 0;
   REQUIRE_EQ((void *)chttp_base64_encode(&dummy, SIZE_MAX - 1, NULL), NULL);
 }
@@ -302,11 +301,11 @@ TEST(basic_auth, null_username_or_password_fails) {
 
 TEST(basic_auth, username_containing_a_colon_is_rejected) {
   /* RFC 7617 SS2 makes the colon the only delimiter of the encoded
-   * "user-id:password" string. A recipient splits at the FIRST colon. A
-   * user-id that holds one therefore cannot travel as itself. Without this
+   * "user-id:password" string, and a recipient splits at the FIRST colon,
+   * so a user-id that holds one cannot travel as itself. Without this
    * rejection, the pair "user:with:colons" and "pw" encodes a credential
-   * that decodes to the user-id "user" and the password "with:colons:pw".
-   * That is a different identity from the one that the caller asked
+   * that decodes to the user-id "user" and the password "with:colons:pw",
+   * which is a different identity from the one that the caller asked
    * for. */
   REQUIRE_EQ((void *)chttp_basic_auth("user:with:colons", "pw"), NULL);
   REQUIRE_EQ((void *)chttp_basic_auth(":", ""), NULL);
@@ -315,11 +314,11 @@ TEST(basic_auth, username_containing_a_colon_is_rejected) {
 }
 
 TEST(basic_auth, two_distinct_credentials_cannot_encode_identically) {
-  /* A colon joins the two parts. The pair "admin:x" and "" then gives the
-   * same byte string as the pair "admin" and "x:". To accept the first pair
-   * would make one header value stand for two different credentials that
-   * callers meant. The code therefore refuses the username that holds a
-   * colon. It builds the password that holds a colon as the caller asked. */
+  /* A colon joins the two parts, so the pair "admin:x" and "" gives the same
+   * byte string as the pair "admin" and "x:". Accepting the first pair would
+   * make one header value stand for two different credentials that callers
+   * meant, so the code refuses the username that holds a colon, while it
+   * builds the password that holds a colon as the caller asked. */
   REQUIRE_EQ((void *)chttp_basic_auth("admin:x", ""), NULL);
 
   char *auth = chttp_basic_auth("admin", "x:");
@@ -334,8 +333,8 @@ TEST(basic_auth, two_distinct_credentials_cannot_encode_identically) {
 }
 
 TEST(basic_auth, password_containing_colons_round_trips) {
-  /* Everything after the first colon is the password. A password full of
-   * colons therefore needs no escaping, and it must keep working. */
+  /* Everything after the first colon is the password, so a password full of
+   * colons needs no escaping, and it must keep working. */
   char *auth = chttp_basic_auth("user", "pa:ss:word");
   REQUIRE_NE((void *)auth, NULL);
 
@@ -357,23 +356,23 @@ extern bool _chttp_basic_auth_overflow_guard_for_tests(ccol_memmgmt_procs_t *mp,
 TEST(basic_auth, length_sum_large_enough_to_overflow_is_rejected) {
   /* combined_len = user_len + 1 + pass_len needs an overflow check before
    * the code allocates combined_len+1 bytes. Without that check, two
-   * separate lengths from the caller that sum to near SIZE_MAX go through.
-   * The allocation then wraps, and the code writes far past it.
+   * separate lengths from the caller that sum to near SIZE_MAX go through,
+   * the allocation wraps, and the code writes far past it.
    *
-   * Both fake lengths are huge on purpose, and not only one of them. That
-   * follows the pattern of
+   * Both fake lengths are deliberately huge, not only one of them, following
+   * the pattern of
    * base64_encode.length_large_enough_to_overflow_is_rejected. This test
-   * passes real, short strings that are not NULL. The rejection must happen
-   * before any call to snprintf, and not only before the allocation. */
+   * passes real, short strings that are not NULL, because the rejection must
+   * happen before any call to snprintf, not only before the allocation. */
   bool rejected = _chttp_basic_auth_overflow_guard_for_tests(
       NULL, "user", SIZE_MAX / 2, "pass", SIZE_MAX / 2);
   REQUIRE_TRUE(rejected);
 }
 
 TEST(basic_auth, ordinary_small_lengths_still_work) {
-  /* The same helper, with real strings that are nowhere near an overflow,
-   * and with their own real lengths. This confirms that the guard above
-   * reports no problem for a username and a password of a real length. */
+  /* The same helper, with real strings that are nowhere near an overflow and
+   * with their own real lengths. This confirms that the guard above reports
+   * no problem for a username and a password of a real length. */
   bool rejected = _chttp_basic_auth_overflow_guard_for_tests(
       NULL, "user", strlen("user"), "pass", strlen("pass"));
   REQUIRE_FALSE(rejected);
@@ -470,11 +469,10 @@ TEST(oom, base64_decode_empty_string_alloc_failure) {
 }
 
 TEST(oom, basic_auth_fails_at_every_allocation_site) {
-  /* chttp_basic_auth_mp makes exactly 3 allocations. The first is the
-   * combined "user:pass" buffer. The second is the output buffer of
-   * chttp_base64_encode_mp. The third is the final "Basic <b64>" buffer.
-   * This test fails each one in turn. It confirms a clean NULL return, and,
-   * under the memtest target, no leak. */
+  /* chttp_basic_auth_mp makes exactly 3 allocations: the combined
+   * "user:pass" buffer, the output buffer of chttp_base64_encode_mp, and the
+   * final "Basic <b64>" buffer. This test fails each one in turn and
+   * confirms a clean NULL return and, under the memtest target, no leak. */
   for (int fail_idx = 0; fail_idx < 3; fail_idx++) {
     atomic_store(&g_call_index, 0);
     g_fail_at_call = fail_idx;
@@ -489,8 +487,8 @@ TEST(oom, basic_auth_fails_at_every_allocation_site) {
 /* ========================================================================== */
 
 /* Every method name that the library puts on the wire, or into a log line,
- * comes from here. An index at run time drives this test, so the switch
- * really runs. */
+ * comes from here. An index at run time drives this test, so that the
+ * switch really runs. */
 TEST(chttp_method_str, every_method_maps_to_its_own_spelling) {
   static const struct {
     chttp_method_t m;
@@ -539,7 +537,7 @@ static int _p1_on_body(chttp1_parser_t *p, const char *at, size_t len) {
   return 0;
 }
 
-/* Runs msg through a fresh parser of the given mode. Reports the first
+/* Runs msg through a fresh parser of the given mode and reports the first
  * result that is not CHTTP1_OK, or CHTTP1_OK when the input ran out first.
  * *consumed_out receives how many bytes of msg the parser used up to that
  * result. */
@@ -907,7 +905,7 @@ TEST(chttp1_stream, a_nonblocking_write_reports_a_full_socket_as_a_timeout) {
 
 TEST(chttp1_stream, writev2_keeps_the_byte_order_across_short_writes) {
   /* The two parts go out as one stream of bytes. A short write can end
-   * inside either part, and a caller that resumes from the count it got
+   * inside either part, and a caller that resumes from the count that it got
    * back must reproduce the original bytes exactly. */
   int fds[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);

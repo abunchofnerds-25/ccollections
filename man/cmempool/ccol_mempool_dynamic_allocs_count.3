@@ -13,8 +13,8 @@ size_t ccol_mempool_dynamic_allocs_count(ccol_mempool *mp);
 .nf
 Returns the number of outstanding allocations that came from the system
 allocator instead of the storage of the pool. These happen only in a
-pool created with fallback_to_dynamic_memory = true. They happen only
-after the elements of the pool run out.
+pool created with fallback_to_dynamic_memory = true, and only after the
+elements of the pool run out.
 .fi
 .SH PARAMETERS
 .nf
@@ -22,28 +22,28 @@ mp                        Memory pool to query (must not be NULL)
 .fi
 .SH RETURN VALUE
 .nf
-Returns the number of outstanding fallback allocations. It returns 0 for
+Returns the number of outstanding fallback allocations, which is 0 for
 a pool created without a fallback
 .fi
 .SH NOTES
 .nf
 A non-zero result means that the pool was too small for its workload at
-some point. It is the signal to raise elem_count. Every fallback
-allocation is one round trip to the system allocator, and that is the
-cost which the pool exists to avoid.
+some point, and is the signal to raise elem_count: every fallback
+allocation is one round trip to the system allocator, which is the cost
+that the pool exists to avoid.
 
-An entry in the cache of a thread is pool-owned. This call never counts
-such an entry.
+An entry in the cache of a thread is pool-owned, so this call never
+counts such an entry.
 
 ccol_mempool_destroy() treats an outstanding fallback allocation as a
-leak and stops the process. Free every fallback entry of a pool with a
-fallback before you destroy that pool.
+leak and stops the process, so free every fallback entry of a pool with
+a fallback before you destroy that pool.
 .fi
 .SH "THREAD SAFETY"
 .nf
 Thread-safe when the pool was created with single_threaded = false.
-The call takes the lock of the pool. It is therefore a cold-path call.
-Do not use it inside a hot loop.
+The call takes the lock of the pool, which makes it a cold-path call:
+do not use it inside a hot loop.
 .fi
 .SH "SEE ALSO"
 .BR ccol_mempool_total_capacity (3),

@@ -23,12 +23,12 @@ SOFTWARE.
 */
 
 /* An application destructor that runs AFTER the process-exit destructors of
- * cthreadcomm, and that still owns live queues and a live ccol_event_loop.
+ * cthreadcomm, while it still owns live queues and a live ccol_event_loop.
  *
  * The library frees its process-wide bookkeeping (the queue mutex registry
- * and the event-loop slot table) at exit. While anything is still live it
- * defers that release to the destroy that removes the last live object. This
- * binary checks four things from such a late destructor:
+ * and the event-loop slot table) at exit, but while anything is still live
+ * it defers that release to the destroy that removes the last live object.
+ * This binary checks four things from such a late destructor:
  *
  *   1. Destroying the queues and the loop that were live at exit is safe.
  *      Without the deferred release of the queue registry, the destroy of a
@@ -43,12 +43,12 @@ SOFTWARE.
  *   4. A fork() after the release runs the fork handlers of the module over
  *      the released tables without an assertion.
  *
- * The check runs in a process of its own, because it needs the exit-time
+ * The check runs in a process of its own because it needs the exit-time
  * destructor order of a whole process. The destructor carries priority 101,
  * which places it after every destructor with no priority, and this file is
  * also first on the link line; either one alone puts it last in the
- * .fini_array walk. A failure writes a line to stderr and ends the process
- * with _exit(1), because the run is already past main. */
+ * .fini_array walk. Since the run is already past main, a failure writes a
+ * line to stderr and ends the process with _exit(1). */
 
 #include <cthreadcomm.h>
 #include <stdbool.h>
@@ -149,7 +149,7 @@ int main(void) {
     return 1;
   }
   g_main_ran = true;
-  /* Everything stays live on purpose. The destructor above tears it down
-   * after the library destructors ran. */
+  /* Everything stays live on purpose, so that the destructor above tears it
+   * down after the library destructors have run. */
   return 0;
 }

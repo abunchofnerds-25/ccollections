@@ -30,16 +30,16 @@
  * differently under each one. A stream of hits alone touches the recency list
  * on every access and evicts nothing. A working set larger than the capacity
  * misses most of the time and then fills what it missed, so it evicts on
- * almost every access. That is the expensive path. A stream of set calls
+ * almost every access, which is the expensive path. A stream of set calls
  * measures an insert together with an eviction.
  *
- * These cases configure no remote getter and no remote setter. They therefore
- * measure the bookkeeping of the cache itself, and not a fetch that this
+ * These cases configure no remote getter and no remote setter, so they
+ * measure the bookkeeping of the cache itself instead of a fetch that this
  * repository does not control. This is also why the working-set case fills the
- * cache itself on a miss. With no getter, a miss returns at once and stores
- * nothing. A stream of get calls alone, over a working set of this size, would
- * therefore never evict, and it would report the cost of a failed lookup under
- * the name of the eviction path.
+ * cache itself on a miss: with no getter, a miss returns at once and stores
+ * nothing, so a stream of get calls alone over a working set of this size would
+ * never evict, and it would report the cost of a failed lookup under the name
+ * of the eviction path.
  */
 
 #include <clrucache.h>
@@ -53,17 +53,16 @@
 
 /* The forms with contention do fewer operations in each repetition. These
  * cases are a plain loop over the operations, with no fixed cost to spread
- * out. A shorter repetition therefore measures the same thing. What it gives
- * you is many repetitions inside the budget of the sampler, instead of a few
- * very long ones. */
+ * out, so a shorter repetition measures the same thing; what it gives you is
+ * many repetitions inside the budget of the sampler instead of a few very long
+ * ones. */
 #define BENCH_LRU_MT_N 20000
 
 typedef struct {
   clru_cache cache;
   int *keys;
   /* This is the total that lru_get_run reaches when every lookup hits. The
-     setup computes it one time, so the timed loop needs no counter of its
-     own. */
+     setup computes it once, so the timed loop needs no counter of its own. */
   long long expected_acc;
 } lru_state_t;
 
@@ -78,8 +77,8 @@ static void lru_teardown(void *state) {
 }
 
 /* @param key_span  The number of distinct keys that the access stream draws
- *                  from. At the capacity, or below it, every access hits.
- *                  Above it, the cache evicts all the time. */
+ *                  from. At or below the capacity, every access hits; above
+ *                  it, the cache evicts all the time. */
 static lru_state_t *lru_make(size_t n, size_t key_span, bool prefill) {
   lru_state_t *st = calloc(1, sizeof(*st));
   if (!st) return NULL;
@@ -107,15 +106,15 @@ static lru_state_t *lru_make(size_t n, size_t key_span, bool prefill) {
   return st;
 }
 
-/* This uses half the capacity and not all of it, so that this case really does
-   hit every time. A cache with segments does not keep every key when you fill
-   it to exactly its capacity. The keys spread across segments, and each
-   segment has its own bound. A segment that draws more than its share
-   therefore evicts while the whole cache is still below its capacity. Measured
-   with a span equal to the capacity: 4009 of 4096 keys stay, and 2.16 percent
-   of the lookups miss. That is not the hit path that this case is named for,
-   and it is not a steady mixture either. At half the capacity every key stays,
-   and the check inside lru_get_run holds the case to that. */
+/* This uses half the capacity instead of all of it, so that this case really
+   does hit every time. A cache with segments does not keep every key when you
+   fill it to exactly its capacity: the keys spread across segments, each
+   segment has its own bound, and a segment that draws more than its share
+   evicts while the whole cache is still below its capacity. Measured with a
+   span equal to the capacity, 4009 of 4096 keys stay and 2.16 percent of the
+   lookups miss, which is neither the hit path that this case is named for nor
+   a steady mixture. At half the capacity every key stays, and the check inside
+   lru_get_run holds the case to that. */
 static void *lru_hit_setup(size_t n) {
   return lru_make(n, BENCH_LRU_CAPACITY / 2, true);
 }
@@ -138,21 +137,21 @@ static void lru_get_run(void *state, size_t n) {
     if (clru_get(c, st->keys[i], &out) == ccol_success) acc += out;
   }
   /* Every key here comes from below the capacity, and the setup put every one
-     of them into the cache. A miss is therefore impossible, and this case
-     really does measure hits. The code checks this instead of assuming it,
-     because a miss costs much less than a hit. A defect that stopped the cache
-     from finding a key would report a large improvement, under a name that
-     promises the opposite. Nobody questions a result of that shape. */
-  /* Checked from the sum the loop already accumulates, so the timed body
-     carries no counter of its own: every value equals its key, so a complete
-     run reaches exactly the total computed in setup, and any miss falls
-     short. */
+     of them into the cache, so a miss is impossible and this case really does
+     measure hits. The code checks this instead of assuming it, because a miss
+     costs much less than a hit: a defect that stopped the cache from finding a
+     key would report a large improvement under a name that promises the
+     opposite, and nobody questions a result of that shape. */
+  /* The check reads the sum that the loop already accumulates, so the timed
+     body carries no counter of its own. Every value equals its key, so a
+     complete run reaches exactly the total computed in setup, and any miss
+     falls short. */
   if (acc != st->expected_acc)
     bench_die("clrucache get_all_hits: a lookup missed");
   bench_sink_value((long long)acc);
 }
 
-/* This gets a key, and on a miss it puts that key in. That is how a caller
+/* This gets a key and, on a miss, puts that key in, which is how a caller
  * drives a cache that has no remote getter. The working set is eight times the
  * capacity, so most passes miss, insert and evict. */
 static void lru_get_or_fill_run(void *state, size_t n) {
@@ -179,11 +178,11 @@ static void lru_set_run(void *state, size_t n) {
   bench_sink(&c);
 }
 
-/* clrucache holds its own lock, so the threads here share one cache. The
+/* clrucache holds its own lock, so the threads here share one cache, and the
  * figure that these cases report is what that lock costs under real
  * contention. Nothing writes to the key stream after the setup builds it, so
- * the threads can share it. That adds no cost that the cache does not already
- * pay. */
+ * the threads can share it without adding a cost that the cache does not
+ * already pay. */
 BENCH_MT_SETUP(lru_hit_setup)
 BENCH_MT_SETUP(lru_set_setup)
 

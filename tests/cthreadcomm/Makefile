@@ -1,13 +1,13 @@
 INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
 SRC_FILE_PREFIX = cthreadcomm
-# chashmap.c is a transitive dependency. The internal fd registry of
+# chashmap.c is a transitive dependency, because the internal fd registry of
 # ccol_event_loop (int fd -> event_entry*) uses a chmap. cthreadpool.c is a
-# transitive dependency too. The dispatch_pool of ccol_event_loop
+# transitive dependency too, because the dispatch_pool of ccol_event_loop
 # (num_reactor_threads > 1) is a ctpool. cvector.c is also necessary, because
-# ccol_event_loop has its own generation-tagged handle slot table. That table
-# is a cvec of slots plus a cvec free-index stack. csort.c comes in through
-# cvector.c, whose sort runs on the mergesort of csort.
+# ccol_event_loop has its own generation-tagged handle slot table: a cvec of
+# slots plus a cvec free-index stack. csort.c comes in through cvector.c,
+# whose sort runs on the mergesort of csort.
 SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c \
             ../../src/chashmap.c ../../src/cthreadpool.c \
             ../../src/cvector.c ../../src/csort.c ../../src/common.c \
@@ -27,8 +27,8 @@ LFLAGS = -lpthread $(CCOL_PLATFORM_LIBS)
 # first ccol_event_loop call, so it needs a process of its own too.
 # tests_exit_order runs in a process of its own, because it checks the
 # exit-time destructor order of a whole process: an application destructor
-# that runs after the destructors of cthreadcomm and still owns live queues
-# and a live loop. Its source comes first on the link line, which puts its
+# that runs after the destructors of cthreadcomm and that, at that point,
+# owns live queues and a live loop. Its source comes first on the link line, which puts its
 # destructor last in the .fini_array walk.
 build: build_main build_exit_order build_keys
 
@@ -41,9 +41,9 @@ build_exit_order:
 build_keys:
 	$(CC) $(CFLAGS) tests_keys.c $(SRC_FILES) -o tests_keys $(LFLAGS)
 
-# This is a separate ThreadSanitizer build. It stays out of the default
-# -Werror build. TSan instrumentation and -O3 do not work well together.
-# This build is also a different verification mode, and it runs separately.
+# This is a separate ThreadSanitizer build that stays out of the default
+# -Werror build. TSan instrumentation and -O3 do not work well together, and
+# this build is also a different verification mode that runs separately.
 build_tsan:
 	$(CC) $(TSAN_CFLAGS) $(ALL_SRC_FILES) -o tests_tsan $(LFLAGS) -fsanitize=thread $(CCOL_TSAN_EXTRA_SRC)
 
@@ -53,14 +53,14 @@ test: build
 	./tests_keys
 
 # die_after_fork=0: the ccol_event_loop_handle_lifecycle tests of this suite
-# fork and create new pthreads in the child. The test_tsan target of
+# fork and create new pthreads in the child; the test_tsan target of
 # tests/chttpclient/Makefile has a longer comment on the exact TSan mechanism.
-# This module destroys its ccol_event_loop instances between tests. The parent
-# is therefore single-threaded at fork() time. The option is not load-bearing
-# here. It is load-bearing for the persistent, process-wide reactors of
+# This module destroys its ccol_event_loop instances between tests, so the
+# parent is single-threaded at fork() time and the option is not load-bearing
+# here, while it is load-bearing for the persistent, process-wide reactors of
 # chttpclient and chttpserver. The option is set for consistency across all
-# three suites that fork and then start new threads. It also protects against
-# a future test that makes this parent multi-threaded at fork time.
+# three suites that fork and then start new threads, and it also protects
+# against a future test that makes this parent multi-threaded at fork time.
 # suppressions=tsan_rwlock_reinit.supp: one "thread leak" that
 # ThreadSanitizer reports in the child of one fork test, for a thread that the
 # parent joins. The comment in that file gives the reason and the independent
@@ -73,11 +73,11 @@ memtest: build
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 --child-silent-after-fork=yes ./tests_exit_order
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 ./tests_keys
 
-# --ignore-errors negative: the coverage counters of gcov are plain increments
-# and are not atomic. They can race when instrumented code runs concurrently.
-# They then produce a false negative hit count. This affects more than one
-# module, and it also happens inside a glibc header. It is a limitation of the
-# instrumentation of gcov. It is not a defect in the logic of this library.
+# --ignore-errors negative: the coverage counters of gcov are plain, non-atomic
+# increments, so they can race when instrumented code runs concurrently and
+# then produce a false negative hit count. This affects more than one module
+# and also happens inside a glibc header; it is a limitation of the gcov
+# instrumentation, not a defect in the logic of this library.
 # tests/chttpclient/Makefile uses the same flag and gives the full reason.
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \

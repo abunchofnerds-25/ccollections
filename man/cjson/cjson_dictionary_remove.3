@@ -17,9 +17,9 @@ keep their order.
 
 A walk with cjson_dictionary_first(3) and cjson_dictionary_next(3)
 may remove the member that its cursor stands on, for example with
-cjson_dictionary_remove(obj, it.key), and then continue.  The removal
-of the member after it, which the cursor reads next, invalidates the
-cursor; the removal of any other member does not.
+cjson_dictionary_remove(obj, it.key), and then continue.  Removing the
+member after it, which the cursor reads next, invalidates the cursor;
+removing any other member does not.
 .fi
 .SH RETURN VALUE
 .nf

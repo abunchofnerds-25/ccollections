@@ -11,7 +11,7 @@ cstr_prepend(s, str);
 .fi
 .SH DESCRIPTION
 .nf
-This macro calls cstring_prepend(). It then calls ccol_fatal_err() if the
+This macro calls cstring_prepend() and then calls ccol_fatal_err() if the
 return value is not ccol_success.
 .fi
 .SH PARAMETERS

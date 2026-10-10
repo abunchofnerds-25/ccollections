@@ -11,8 +11,8 @@ char *cyaml_serialize_flow(cyaml node);
 .fi
 .SH DESCRIPTION
 .nf
-Produce a compact, flow-style YAML text of the DOM subtree.  A list
-becomes [a, b, c].  A dictionary becomes {key: value, ...}.  A scalar
+Produce a compact, flow-style YAML text of the DOM subtree: a list
+becomes [a, b, c], a dictionary becomes {key: value, ...}, and a scalar
 obeys the same quoting rules as in cyaml_serialize().  The output is
 normally one line.
 
@@ -21,11 +21,12 @@ goes out with a '.' in its mantissa, exactly as cyaml_serialize(3)
 describes.
 
 The rule for a tag is the same as in cyaml_serialize().  The function
-writes a custom tag verbatim as "!<...>".  It never writes a
-core-schema tag, because a node only ever carries the core-schema tag
-of its own type.  A byte that the URI characters of YAML 1.2 do not
-allow literally inside "!<...>" becomes a percent escape here too.  A second parse of the tag therefore gives
-the identical string.  See cyaml_serialize(3).
+writes a custom tag verbatim as "!<...>" and never writes a core-schema
+tag, because a node only ever carries the core-schema tag of its own
+type.  A byte that the URI characters of YAML 1.2 do not allow
+literally inside "!<...>" becomes a percent escape here too, so a
+second parse of the tag gives the identical string.  See
+cyaml_serialize(3).
 
 The rule for a dictionary key is also the same.  A key that is exactly
 the canonical text of an integer or a float key goes out with no
@@ -36,26 +37,26 @@ the flow mapping, for the reason that cyaml_serialize(3) gives.  The
 rule for the decimal point of a float and the locale is the same as
 there too.
 
-The string that this function gives comes from the allocator of the
-node.  Free it with cyaml_serialize_free() when the tree used the
-default allocator.  Free it with cyaml_serialize_free_mp() when the
-tree used a custom allocator, and give that same allocator.
-cyaml_serialize_free() hands the buffer to plain free(), and plain
-free() never allocated a buffer that a custom allocator gave.
+The returned string comes from the allocator of the node.  Free it with
+cyaml_serialize_free() when the tree used the default allocator, and
+with cyaml_serialize_free_mp() and that same allocator when the tree
+used a custom allocator: cyaml_serialize_free() hands the buffer to
+plain free(), and plain free() never allocated a buffer that a custom
+allocator gave.
 
-node obeys the same 500-level nesting limit as in cyaml_serialize(3).
-This function also walks the tree with an explicit worklist, not by
-recursion, for the same reason.  See the DESCRIPTION of that page.
+node obeys the same 500-level nesting limit as in cyaml_serialize(3),
+and this function also walks the tree with an explicit worklist instead
+of by recursion, for the same reason; see the DESCRIPTION of that page.
 
 A NULL node serializes in the same way as a CYAML_NULL node ("~").
-This is a successful, non-NULL return, and not a signal of failure.
-cyaml_clone(3) differs here, because it returns NULL for a NULL node.
+This is a successful, non-NULL return, not a signal of failure, which
+is where cyaml_clone(3) differs: it returns NULL for a NULL node.
 .fi
 .SH RETURN VALUE
 .nf
-A null-terminated string on the heap on success.  The function returns
-NULL when it runs out of memory, and also when node is nested more than
-500 levels deep.
+A null-terminated string on the heap on success, or NULL when the
+function runs out of memory or when node is nested more than 500 levels
+deep.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_dictionary_first (3),

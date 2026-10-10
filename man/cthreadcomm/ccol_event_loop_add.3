@@ -13,43 +13,43 @@ ccol_event_reg ccol_event_loop_add(ccol_event_loop loop, ccol_selectable sel,
 .fi
 .SH DESCRIPTION
 .nf
-This function registers sel with loop. The loop then dispatches the
-readiness of sel through handlers. It does this for all the life of the
-registration, or until a call to ccol_event_loop_remove().
+This function registers sel with loop, which then dispatches the
+readiness of sel through handlers for all the life of the registration,
+or until a call to ccol_event_loop_remove().
 
-You build sel exactly as ccol_select() builds one. You can use
+You build sel exactly as ccol_select() builds one, and you can use
 ccol_selectable_from_fd, ccol_selectable_from_circq,
 ccol_selectable_from_dynq, and ccol_selectable_from_chan directly.
 
 One registration covers exactly one direction, which is sel.dir. A caller
-can want both directions live on one fd at the same time. One example is a
-full-duplex pipe that a program reads and writes together. Such a caller
-calls ccol_event_loop_add() two times and gets two independent handles. A
-caller can also want to change the direction of one registration over time.
-One example is a socket that connects: it wants write interest until the
-connect finishes, and read interest after that. Such a caller uses one
-registration and ccol_event_loop_modify(3). The function refuses a second
-selectable for a direction that is already in use on the same fd. Two read
-registrations on one fd is one such case. The call then returns
-CCOL_EVENT_REG_INVALID, and err_str names that cause; see RETURN VALUE.
+that wants both directions live on one fd at the same time (for example a
+full-duplex pipe that a program reads and writes together) calls
+ccol_event_loop_add() two times and gets two independent handles. A
+caller that wants to change the direction of one registration over time
+(for example a socket that connects, which wants write interest until the
+connect finishes and read interest after that) uses one registration and
+ccol_event_loop_modify(3). The function refuses a second selectable for a
+direction that is already in use on the same fd, such as two read
+registrations on one fd; the call then returns CCOL_EVENT_REG_INVALID,
+and err_str names that cause (see RETURN VALUE).
 
 A queue selectable and a ccol_channel selectable have no such restriction.
 You can make any number of ccol_event_loop_add() calls for the same queue
-and the same direction, in one ccol_event_loop or in several. You can also
-mix those with a ccol_select() call that runs at the same time on the same
+and the same direction, in one ccol_event_loop or in several, and mix
+them with a ccol_select() call that runs at the same time on the same
 queue and the same direction. All of them are live together, and each one
 gets a turn. This is the same guarantee that ccol_select() gives: any
 number of threads can watch one queue at the same time.
 
-A message can arrive while more than one such listener is registered. For
-each producer call and each consumer call, the library wakes exactly one
-listener. After the callback of the woken listener returns, that listener
-checks whether the queue is still ready for its direction. If it is, the
-listener passes the wake to the next listener in the line. No live listener
-is therefore passed over for ever. A ccol_select() caller that wakes and
-then leaves without an action on the queue passes the wake in the same way,
-and so does a registration that is removed, or whose loop is destroyed,
-before it acted on its wake. No wake is therefore lost.
+When a message arrives while more than one such listener is registered,
+the library wakes exactly one listener for each producer call and each
+consumer call. After the callback of the woken listener returns, that
+listener checks whether the queue is still ready for its direction, and
+if it is, passes the wake to the next listener in the line, so no live
+listener is passed over for ever. A ccol_select() caller that wakes and
+then leaves without an action on the queue passes the wake in the same
+way, and so does a registration that is removed, or whose loop is
+destroyed, before it acted on its wake, so no wake is lost.
 
 A registration whose callback moved at least one message is dispatched
 again for as long as the queue stays ready for its direction: for a read
@@ -68,18 +68,17 @@ has nothing to send.
 
 A queue that you register this way must live longer than its registration.
 ccol_circular_queue_destroy(3), ccol_dynamic_queue_destroy(3), and
-ccol_channel_destroy(3) assert if a live registration still watches the
-queue. They also assert if a ccol_select() call or a ccol_select_timed()
-call still watches it. Without those asserts, the waiter is still linked
-and points to the mutex of the queue, which the destroy is about to free.
-Call ccol_event_loop_remove() before you destroy the queue. A destroy of
-the loop first is fine, because ccol_event_loop_destroy() and
-ccol_event_loop_remove() always unlink the waiter of a queue before
-anything touches it again. ccol_event_loop_remove() returns without a wait
-for a callback that it already gave to a reactor thread. The destroy that
-comes after it therefore blocks until any such callback finishes with the
-queue. The page of that destroy names the two things that a caller must not
-do while it waits.
+ccol_channel_destroy(3) assert if a live registration, a ccol_select()
+call or a ccol_select_timed() call watches the queue; without those
+asserts, the waiter would stay linked and point to the mutex of the
+queue, which the destroy is about to free. Call ccol_event_loop_remove()
+before you destroy the queue. Destroying the loop first is fine, because
+ccol_event_loop_destroy() and ccol_event_loop_remove() always unlink the
+waiter of a queue before anything touches it again. Since
+ccol_event_loop_remove() does not wait for a callback that it already
+gave to a reactor thread, the destroy that comes after it blocks until
+any such callback finishes with the queue. The page of that destroy names
+the two things that a caller must not do while it waits.
 
 on_readable, on_writable and on_error share one prototype:
 
@@ -88,18 +87,20 @@ on_readable, on_writable and on_error share one prototype:
 
 loop is the loop that owns the registration, sel is its selectable, and
 arg is the arg of this call. reg is the handle of the registration itself,
-exactly the value that ccol_event_loop_add() returns for it. A callback can
-pass reg to ccol_event_loop_remove(3), ccol_event_loop_pause(3),
-ccol_event_loop_resume(3), ccol_event_loop_modify(3) and
-ccol_event_loop_reg_generation(3). The registration is live, and a callback
-of it can run, before ccol_event_loop_add() returns. With
-num_reactor_threads > 1 a callback can run on a dispatch worker while the
-calling thread is still inside this function, for example when the fd is
-already ready. reg is valid in that callback too, so a callback never needs
-to read the handle from storage that the calling thread writes after this
-call returns.
+exactly the value that ccol_event_loop_add() returns for it, and a
+callback can pass it to ccol_event_loop_remove(3),
+ccol_event_loop_pause(3), ccol_event_loop_resume(3),
+ccol_event_loop_modify(3) and ccol_event_loop_reg_generation(3). The
+registration is live, and a callback of it can run, before
+ccol_event_loop_add() returns: with num_reactor_threads > 1 a callback
+can run on a dispatch worker while the calling thread is inside this
+function, for example when the fd is already ready at the time of the
+call.
+reg is valid in that callback too, so a callback never needs to read
+the handle from storage that the calling thread writes after this call
+returns.
 
-handlers.on_readable reports readiness only, for every type of selectable.
+handlers.on_readable reports readiness only, for every type of selectable;
 ccol_event_loop never does the receive itself. For an fd selectable, the
 callback makes its own read(2) or recv(2) call on sel->fd. For a queue
 selectable or a ccol_channel selectable, the callback makes its own
@@ -107,77 +108,75 @@ ccol_circq_try_recv_zc() or ccol_dynmq_try_recv_zc() call on sel->cq or
 sel->dq. For a ccol_channel selectable that is ccol_circq_try_recv_zc() on
 sel->cq, and never ccol_chan_try_recv_zc(): the callback runs on a thread
 of the loop, which the channel counts as a worker, so a ccol_chan_* call
-there can reach the other queue of the channel. See
-ccol_selectable_from_chan(3). In both cases another consumer can already
-hold the data. That
-TOCTOU race is part of the design, and it is the same contract as the write
-direction of ccol_select(). The receive call of the callback can therefore
-find nothing, and the callback must handle that well.
+there can reach the other queue of the channel (see
+ccol_selectable_from_chan(3)). In both cases another consumer can hold
+the data first. That TOCTOU race is part of the design, and it is the
+same contract as the write direction of ccol_select(): the receive call
+of the callback can find nothing, and the callback must handle that well.
 
 For a queue selectable, one notification does not always mean exactly one
-message. Several sends can run faster than the dispatch, and the callback
-then sees them as one notification. A callback that receives one message
-for each call still drains a burst, because the loop dispatches the
-listeners again while the queue stays ready after a callback that moved a
-message; see above. A callback can also receive in a loop until the call
-returns ccol_container_empty, which drains a burst in fewer dispatches.
+message, because several sends can run faster than the dispatch and the
+callback then sees them as one notification. A callback that receives one
+message for each call drains a burst all the same, because the loop
+dispatches the listeners again while the queue stays ready after a
+callback that moved a message (see above). A callback can also receive in
+a loop until the call returns ccol_container_empty, which drains a burst
+in fewer dispatches.
 
 handlers.on_writable runs with no payload, for both kinds of selectable.
-The caller makes its own write(2) or send(2) call. For a queue, it makes
-its own try-send call, which does not block: ccol_circq_try_send_zc() on
+The caller makes its own write(2) or send(2) call, or, for a queue, its
+own try-send call, which does not block: ccol_circq_try_send_zc() on
 sel->cq for a circular queue or a ccol_channel selectable, and
 ccol_dynmq_send_zc() on sel->dq for a dynamic queue.
 
-handlers.on_error runs only for an fd selectable. It runs for each
-condition that the direction of the registration has no other handler for.
-EPOLLERR and EPOLLHUP go here whenever the direction is not also ready.
-For a read registration with
-on_readable set to NULL, the close or the shutdown of the end of the peer
-also goes here. That is EPOLLRDHUP, which an ordinary TCP close(2) raises
-without EPOLLHUP.
+handlers.on_error runs only for an fd selectable, for each condition that
+the direction of the registration has no other handler for. EPOLLERR and
+EPOLLHUP go here whenever the direction is not also ready. For a read
+registration with on_readable set to NULL, the close or the shutdown of
+the end of the peer also goes here; that is EPOLLRDHUP, which an
+ordinary TCP close(2) raises without EPOLLHUP.
 
 If the direction does have its own handler, that handler wins the same
-event whenever the direction is also ready. Data can arrive together with
-the error. A read registration with
-on_readable set then gets on_readable, and not on_error. EPOLLIN and
-EPOLLRDHUP are not mutually exclusive with EPOLLERR and EPOLLHUP, and the
-loop still delivers the bytes that arrived before the peer went away. For
-the same reason, a write registration with on_writable set gets
-on_writable. EPOLLOUT is also not mutually exclusive with EPOLLERR and
-EPOLLHUP. A socket in an error state is writable too, because a write(2)
-call on it returns an error immediately and does not block. A queue
-selectable never makes an error condition.
+event whenever the direction is also ready. When data arrives together
+with the error, a read registration with on_readable set gets
+on_readable, not on_error: EPOLLIN and EPOLLRDHUP are not mutually
+exclusive with EPOLLERR and EPOLLHUP, and the loop delivers the bytes
+that arrived before the peer went away. For the same reason, a write
+registration with on_writable set gets on_writable, since EPOLLOUT is
+also not mutually exclusive with EPOLLERR and EPOLLHUP: a socket in an
+error state is writable too, because a write(2) call on it returns an
+error immediately and does not block. A queue selectable never makes an
+error condition.
 
 A registration with on_error set to NULL gets EPOLLERR and EPOLLHUP through
 the handler of its own direction instead, as libevent and libuv deliver
 them: on_readable for a read registration, on_writable for a write
 registration. The read(2), recv(2), write(2) or send(2) call of that
 handler then reports the condition: -1 with the error in errno, or 0 for an
-end of file. A read or a write of a socket also clears a pending socket
-error. A transient error, such as the ICMP port unreachable that a
-connected UDP socket reports as ECONNREFUSED, therefore costs one failed
-receive, and the datagrams that arrive after it still reach on_readable.
-When both directions of one fd have such a handler, one event reaches both:
-on_readable first, then on_writable, one after the other on one thread, and
-each sees whatever the other left of the condition.
+end of file. Because a read or a write of a socket also clears a pending
+socket error, a transient error (such as the ICMP port unreachable that a
+connected UDP socket reports as ECONNREFUSED) costs one failed receive,
+and the datagrams that arrive after it reach on_readable as usual. When
+both directions of one fd have such a handler, one event reaches both:
+on_readable first, then on_writable, one after the other on one thread,
+and each sees whatever the other left of the condition.
 
 Each of on_readable, on_writable, and on_error can be NULL. For an fd
 selectable, the loop does not arm a direction that has no handler of its
-own. A registration can carry on_error alone and leave the handler
-of its own direction NULL. Such an error-only registration costs no
-dispatch until something goes wrong. This is true in both directions. It
-includes an error-only registration on the write direction of a healthy
-socket, which is writable from the moment of its registration.
+own, so a registration can carry on_error alone and leave the handler of
+its own direction NULL. Such an error-only registration costs no
+dispatch until something goes wrong, in both directions; this includes
+an error-only registration on the write direction of a healthy socket,
+which is writable from the moment of its registration.
 
-Every condition here is level-triggered, and an error is one of them. The
-loop reports it again and again, and it calls the handler again and again.
-This continues until a call removes or pauses the registration, or until
-the condition clears. A hang-up stays true: a pipe whose writer
-closed, or a socket whose peer is gone, keeps reporting it, and a read(2)
-of it keeps returning 0. A handler that reads an end of file must remove
-the registration (or pause it), exactly as it must for any other
-readiness that it leaves in place. Remove it before you close the fd; see
-ccol_event_loop_remove(3).
+Every condition here, an error included, is level-triggered: the loop
+reports it, and calls the handler, again and again until a call removes
+or pauses the registration or the condition clears. A hang-up stays
+true: a pipe whose writer closed, or a socket whose peer is gone, keeps
+reporting it, and a read(2) of it keeps returning 0. A handler that reads
+an end of file must therefore remove the registration (or pause it),
+exactly as it must for any other readiness that it leaves in place.
+Remove it before you close the fd; see ccol_event_loop_remove(3).
 
 An fd event that no handler of the registration can take is dropped, and
 the loop also stops watching that registration, because the hang-up behind
@@ -185,36 +184,35 @@ it can stay true and would otherwise be reported on every wait. Only a
 registration with neither the handler of its direction nor on_error gets
 there, for example a read registration with both on_readable and on_error
 set to NULL whose peer hangs up. The registration stays registered, and a
-registration for the other direction
-of the same fd stays watched. ccol_event_loop_resume(3) and a successful
-ccol_event_loop_modify(3) arm it again, whether the modify changes the
-direction or keeps it.
+registration for the other direction of the same fd stays watched.
+ccol_event_loop_resume(3) and a successful ccol_event_loop_modify(3) arm
+it again, whether the modify changes the direction or keeps it.
 
-handlers.on_removed is not tied to a readiness event, which makes it
-different from the other three. It runs exactly once, at the moment when
-the library can prove that the caller can free arg. After
-ccol_event_loop_remove() it runs asynchronously, never from inside that
-call. ccol_event_loop_destroy(3) runs every on_removed that is still due
-from inside the call, on the destroying thread, before it returns. The
-NOTES of ccol_event_loop_remove(3) give the exact guarantee. They also
-explain why ccol_event_loop_remove() itself cannot always give it
-synchronously. You can leave on_removed NULL for a registration whose arg
-needs no notice before a free. A call of ccol_event_loop_destroy(3) on the
-owning loop from on_removed is fatal: on an ordinary removal on_removed
-runs on the reactor thread, where a destroy of its own loop is refused, and
-during a destroy the handle is already destroyed.
+Unlike the other three, handlers.on_removed is not tied to a readiness
+event. It runs exactly once, at the moment when the library can prove
+that the caller can free arg. After ccol_event_loop_remove() it runs
+asynchronously, never from inside that call, while
+ccol_event_loop_destroy(3) runs every on_removed that is due from inside
+the call, on the destroying thread, before it returns. The NOTES of
+ccol_event_loop_remove(3) give the exact guarantee and explain why
+ccol_event_loop_remove() itself cannot always give it synchronously. You
+can leave on_removed NULL for a registration whose arg needs no notice
+before a free. A call of ccol_event_loop_destroy(3) on the owning loop
+from on_removed is fatal: on an ordinary removal on_removed runs on the
+reactor thread, where a destroy of its own loop is refused, and during a
+destroy the handle is already destroyed.
 
-A callback runs on one of the background reactor threads of loop. It never
-runs on the thread that calls this function. The time that a callback can
-take depends on the configuration of the loop. With the default of one
-reactor thread, that one thread polls and runs the callbacks. A callback
-that blocks therefore stalls every other registration on the loop for all
-that time. Keep such a callback short and give slow work to a thread of
-your own. With more than one reactor thread, there is one dedicated poller
-and the callbacks run on a separate dispatch pool. That is the purpose of
-that configuration, so a callback can take real time and the polling does
-not starve. A callback holds no internal lock of the loop while it runs. It
-can therefore take an application lock of its own. It can also call
+A callback runs on one of the background reactor threads of loop, never
+on the thread that calls this function, and how long a callback can take
+depends on the configuration of the loop. With the default of one reactor
+thread, that one thread polls and runs the callbacks, so a callback that
+blocks stalls every other registration on the loop for all that time;
+keep such a callback short and give slow work to a thread of your own.
+With more than one reactor thread, there is one dedicated poller and the
+callbacks run on a separate dispatch pool. That is the purpose of that
+configuration, so a callback can take real time without starving the
+polling. A callback holds no internal lock of the loop while it runs, so
+it can take an application lock of its own, and it can call
 ccol_event_loop_modify(3), ccol_event_loop_pause(3) and
 ccol_event_loop_remove(3). Those calls keep working while
 ccol_event_loop_shutdown(3) or ccol_event_loop_destroy(3) drains the
@@ -223,15 +221,15 @@ that removes every registration of its fd and then frees arg is
 therefore safe during a destroy on another thread: no callback of those
 registrations runs after the removals return.
 
-With more than one reactor thread, the loop still never runs the callback
-of one registration at the same time as itself. See num_reactor_threads in
-ccol_event_loop_create_with_mprocs(3). A read registration and a write
+With more than one reactor thread, the loop never runs the callback of one
+registration at the same time as itself (see num_reactor_threads in
+ccol_event_loop_create_with_mprocs(3)). A read registration and a write
 registration that share one fd also never run at the same time as each
-other. A pair of callbacks that shares state across both directions of one
-fd therefore needs no lock of its own for that reason. One TLS connection
-object is such a pair. This rule does not reach two different fds. The
-callbacks of different registrations can run at the same time on different
-reactor threads.
+other, so a pair of callbacks that shares state across both directions of
+one fd (such as one TLS connection object) needs no lock of its own for
+that reason. This rule does not reach two different fds: the callbacks of
+different registrations can run at the same time on different reactor
+threads.
 .fi
 .SH PARAMETERS
 .nf
@@ -246,35 +244,35 @@ err_str   Optional pointer that gets an error string on failure, and
 .SH RETURN VALUE
 .nf
 On success, the function gives a new registration handle.
-On failure, it gives CCOL_EVENT_REG_INVALID. The call fails in these
-cases. loop is CCOL_EVENT_LOOP_INVALID, or loop is a stale handle or a
-handle that a call already destroyed. Or sel is malformed, because its
-type or its dir is not valid, its queue pointer is NULL, or its fd is
-negative. Or the direction is already in use on that fd. Or an
-allocation, or a system call (epoll_ctl or kevent, eventfd, or the
-initialisation of a mutex), failed. An fd that names a regular file or
-a directory is always refused this way, because epoll(7) cannot watch
-such a file (epoll_ctl(2) fails with EPERM); the FreeBSD build refuses
-it the same way, although kqueue(2) could watch it, so that one program
-behaves alike on both systems.
+On failure, it gives CCOL_EVENT_REG_INVALID. The call fails when loop
+is CCOL_EVENT_LOOP_INVALID, a stale handle or a handle that a call
+already destroyed; when sel is malformed, because its type or its dir
+is not valid, its queue pointer is NULL, or its fd is negative; when
+the direction is already in use on that fd; or when an allocation, or
+a system call (epoll_ctl or kevent, eventfd, or the initialisation of a
+mutex), failed. An fd that names a regular file or a directory is
+always refused this way, because epoll(7) cannot watch such a file
+(epoll_ctl(2) fails with EPERM); the FreeBSD build refuses it the same
+way, although kqueue(2) could watch it, so that one program behaves
+alike on both systems.
 
-When err_str is not NULL, *err_str names the cause, one message for each
-class. A direction already in use gives a message that contains
-"direction already in use"; no retry can succeed there. A failed
+When err_str is not NULL, *err_str names the cause, with one message for
+each class. A direction already in use gives a message that contains
+"direction already in use", and no retry can succeed there. A failed
 allocation gives one that contains "failed to allocate", and a failed
 system call gives one that contains "a system call failed".
 .fi
 .SH NOTES
 .nf
-ccol_event_reg is an opaque VALUE handle, as ccol_event_loop itself is. It
-is not a pointer. Never cast it to void* or from void*. Never compare it
-through a pointer cast. Never treat it as an address. Compare it against
-CCOL_EVENT_REG_INVALID. You can also use it in a truthiness check, because
+ccol_event_reg is an opaque VALUE handle, as ccol_event_loop itself is,
+and not a pointer. Never cast it to void* or from void*, never compare it
+through a pointer cast, and never treat it as an address. Compare it
+against CCOL_EVENT_REG_INVALID, or use it in a truthiness check, because
 CCOL_EVENT_REG_INVALID is 0. The library resolves every use of a
 ccol_event_reg against the registration table of its own loop before it
-dereferences anything. It therefore always finds a stale handle, or a
-handle that a call already removed, and it refuses it cleanly. It is never
-a use-after-free. This is also true while another thread races a
+dereferences anything, so it always finds a stale handle, or a handle
+that a call already removed, and refuses it cleanly; it is never a
+use-after-free. This is also true while another thread races a
 ccol_event_loop_modify, ccol_event_loop_pause, ccol_event_loop_resume,
 ccol_event_loop_remove, or ccol_event_loop_reg_generation call on the very
 same registration.
@@ -282,8 +280,8 @@ same registration.
 .SH THREAD SAFETY
 .nf
 You can call this function at the same time as ccol_event_loop_remove()
-and ccol_event_loop_modify(). You can also call it from inside a callback
-that runs on the reactor thread.
+and ccol_event_loop_modify(), and from inside a callback that runs on the
+reactor thread.
 .fi
 .SH EXAMPLES
 .nf

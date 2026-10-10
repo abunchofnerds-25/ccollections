@@ -11,13 +11,13 @@ ccol_retval_t ccol_chan_send_zc(ccol_channel *ch, c_message_t *msg);
 .fi
 .SH DESCRIPTION
 .nf
-The function picks the correct queue itself. It uses the thread that calls
-it:
+The function picks the correct queue itself, from the thread that
+calls it:
 - The owner thread sends to the ccol_owner_to_workers queue
 - A worker thread sends to the ccol_workers_to_owner queue
 
-The function blocks until the queue has free space. Then it transfers the
-ownership.
+The function blocks until the queue has free space and then transfers
+the ownership.
 .fi
 .SH PARAMETERS
 .nf

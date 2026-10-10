@@ -15,53 +15,52 @@ ccol_retval_t chttp_request_set_header(chttp_request_t *req,
 .nf
 This function puts the header with the name that you give into the
 request, or replaces it. The request stores each header name in
-lowercase. Every later lookup therefore ignores the case of the name.
-If a header with the same name is already there, the function writes
-the new value over the old one. The match of the name ignores the
-case.
+lowercase, so every later lookup ignores the case of the name. If a
+header with the same name is already there (the match of the name
+ignores the case), the function writes the new value over the old one.
 
 The library makes the map of the headers on the first call.
 
-name must be a token that is not empty, and that holds only tchar
-bytes of RFC 7230 SS3.2.6. Every byte must be an ASCII letter, an
-ASCII digit, or one of "!#$%&'*+-.^_`|~". A name of zero length has no
-valid form on the wire. A name with any other byte in it, such as a
-space or a literal ':', is not a way to inject a CRLF. But it still
-makes a line on the wire with a broken structure. A strict server or
-proxy further down can read such a line in the wrong way.
+name must be a token that is not empty and that holds only tchar bytes
+of RFC 7230 SS3.2.6: every byte must be an ASCII letter, an ASCII
+digit, or one of "!#$%&'*+-.^_`|~". A name of zero length has no valid
+form on the wire. A name with any other byte in it, such as a space or
+a literal ':', is not a way to inject a CRLF, but it still makes a line
+on the wire with a broken structure, which a strict server or proxy
+further down can read in the wrong way.
 
 value must not hold a CR byte or an LF byte inside it. The serializer
-writes "name: value\er\en" onto the wire with no escape. A caller can
-reflect untrusted data into a header, such as a token that it forwards
-or a header from a proxy. Without this check, a CR or an LF in value
-lets that caller inject any number of extra header lines. It also lets
-the caller cut the request into two, which is HTTP request splitting.
-The function therefore gives ccol_invalid_args for such a name or
-value, and stores nothing.
+writes "name: value\er\en" onto the wire with no escape, and a caller
+can reflect untrusted data into a header, such as a token that it
+forwards or a header from a proxy. Without this check, a CR or an LF in
+value lets that caller inject any number of extra header lines, or cut
+the request into two, which is HTTP request splitting. The function
+therefore gives ccol_invalid_args for such a name or value, and stores
+nothing.
 
-The function also rejects a name of "Transfer-Encoding", and the match
-of that name ignores the case. chttpclient never applies a transfer
-coding to a request body. It always sends a request with a body whole,
+The function also rejects a name of "Transfer-Encoding" (the match of
+that name ignores the case). chttpclient never applies a transfer
+coding to a request body: it always sends a request with a body whole,
 and frames it with Content-Length. Without this rejection, the
 automatic Content-Length of chttpclient_do puts a Content-Length
-header beside the Transfer-Encoding header on the wire. The body
-then carries no transfer coding. That framing is ambiguous, and the
-request and response parser of this library rejects such a framing in
-a message that it parses (RFC 7230 SS3.3.3).
+header beside the Transfer-Encoding header on the wire, while the body
+carries no transfer coding. That framing is ambiguous, and the request
+and response parser of this library rejects such a framing in a
+message that it parses (RFC 7230 SS3.3.3).
 
-The function DOES accept a "Content-Length" header. It has no body
-length to check the value against. A check here also needs a copy of
-the method and of the redirect context of the request, which come
-later. The client validates the header later, when the request reaches
-the wire. A request that carries a body uses the method POST, PUT or
-PATCH. On such a request, chttpclient_do and every other function
-that runs a request reject a bad Content-Length from the caller. A
-good value is a plain unsigned string
-of decimal digits. It has no leading '+' or '-', and no whitespace
-inside it. It must also match the body that the client sends exactly.
-The reason is the same reason that the client rejects
-Transfer-Encoding above: the declared framing and the wire must not
-disagree. See chttpclient_do(3).
+The function DOES accept a "Content-Length" header, because it has no
+body length to check the value against, and a check here would also
+need a copy of the method and of the redirect context of the request,
+which come later. The client validates the header later, when the
+request reaches the wire. On a request that carries a body (one that
+uses the method POST, PUT or PATCH), chttpclient_do and every other
+function that runs a request reject a bad Content-Length from the
+caller. A good value is a plain unsigned string
+of decimal digits, with no leading '+' or '-' and no whitespace
+inside it, and it must also match the body that the client sends
+exactly. The reason is the same as for rejecting Transfer-Encoding
+above: the declared framing and the wire must not disagree. See
+chttpclient_do(3).
 
 A header that you set here follows every redirect, with two
 exceptions. A hop whose scheme, host or port differs from the original
@@ -75,14 +74,13 @@ chttpclient_do(3).
 The client writes a default value for Host, Accept, User-Agent,
 Content-Length, Content-Type, Authorization and Expect when it needs
 one. When you set a header with one of these names here, the client
-does not write the default. The client sends your value exactly as you
-gave it. This is also true for Host.
+does not write the default, and sends your value exactly as you gave
+it; this is also true for Host.
 
 Only POST, PUT and PATCH have a body. For all other methods, the client
 does not send a Content-Length, Content-Type or Expect header that you
-set. This is also true on a hop that a 301, 302 or 303 redirect changed
-into a GET. The reason is that there is no body for the header to
-describe.
+set, because there is no body for the header to describe. This is also
+true on a hop that a 301, 302 or 303 redirect changed into a GET.
 .fi
 .SH PARAMETERS
 .nf
@@ -96,10 +94,10 @@ value   The header value. It must not be NULL. It must not hold a CR
 .SH RETURN VALUE
 .nf
 ccol_success            The request has the header.
-ccol_invalid_args       req, name or value is NULL. Or name is empty,
+ccol_invalid_args       req, name or value is NULL; or name is empty,
                         or holds a byte outside the tchar set of RFC
-                        7230. Or value holds a CR byte or an LF byte
-                        inside it. Or name is "Transfer-Encoding".
+                        7230; or value holds a CR byte or an LF byte
+                        inside it; or name is "Transfer-Encoding".
 ccol_not_enough_memory  The allocation of the map failed.
 .fi
 .SH "SEE ALSO"

@@ -33,29 +33,29 @@ tests_locale:
 	fi
 
 # Standalone differential-testing helper (see differential/compare_pyyaml.py).
-# It is not part of build, test, memtest or all. Run it by hand.
+# It is not part of build, test, memtest or all; run it by hand.
 build_differential:
 	$(CC) $(CFLAGS) differential/cyaml_to_json.c $(SRC_FILES) \
 		-o differential/cyaml_to_json $(LFLAGS) -lm
 
-# Separate binary that checks the accept and reject behavior of
+# A separate binary that checks the accept and reject behavior of
 # cyaml_parse_n against the vendored YAML Test Suite snapshot
-# (yaml-test-suite/). It follows the "additional tests_<suffix>.c binary in
+# (yaml-test-suite/), following the "additional tests_<suffix>.c binary in
 # an existing directory" convention of this project. It stays separate from
-# tests.c, because it needs that vendored corpus on disk at a relative path.
-# No other case in this directory needs such a corpus.
+# tests.c because it needs that vendored corpus on disk at a relative path,
+# which no other case in this directory needs.
 build_spec_suite:
 	$(CC) $(CFLAGS) tests_spec_suite.c $(SRC_FILES) -o tests_spec_suite $(LFLAGS)
 
 
 # Convenience aliases, so that the name of a binary that this suite produces
-# also works as a target. Each alias builds that binary. `make test` builds
-# and runs every one of them, and it stays the normal entry point.
+# also works as a target. Each alias builds that binary, while `make test`
+# builds and runs every one of them and stays the normal entry point.
 .PHONY: tests_spec_suite
 tests_spec_suite: build_spec_suite
 
 # tests_c23.c compiles the value macros of this module as C23, where
-# nullptr exists and `true` has the type bool. The main suite is C11 and can
+# nullptr exists and `true` has the type bool; the main suite is C11 and can
 # observe neither. The library sources build with the same flags, so the
 # binary also shows that they compile as C23.
 C23_CFLAGS = $(subst -std=gnu11,-std=gnu2x,$(CFLAGS))
@@ -80,22 +80,22 @@ test: build build_spec_suite build_c23 nesting_probe
 
 # libFuzzer harness for cyaml_parse_n. It needs clang, because libFuzzer is
 # a Clang and LLVM feature that GCC does not have. Run
-# ./fuzz_cyaml [corpus_dir] [-max_total_time=N] and the other flags that the
-# libFuzzer docs list. A bare `./fuzz_cyaml fuzz/corpus` mutates and grows
+# ./fuzz_cyaml [corpus_dir] [-max_total_time=N] with the other flags that the
+# libFuzzer docs list; a bare `./fuzz_cyaml fuzz/corpus` mutates and grows
 # the seed corpus that this repository holds.
 # This target is .PHONY because a fuzz/ directory (the seed corpus) already
-# exists on disk. Without .PHONY, Make treats a bare `fuzz` target as
+# exists on disk, and without .PHONY, Make treats a bare `fuzz` target as
 # already satisfied and skips the recipe.
 .PHONY: fuzz fuzz_path
 fuzz:
 	$(FUZZ_CC) $(FUZZ_CFLAGS) $(FUZZ_SRC_FILES) -o fuzz_cyaml $(LFLAGS)
 
 # The dot-separated path grammar that cyaml_get, cyaml_set and cyaml_delete
-# read is a second parser, and it MUTATES the DOM that the first one built.
-# fuzz_cyaml never reaches it. This is the counterpart of the fuzz_path target
-# of tests/cjson/Makefile, and it is .PHONY for the same reason as `fuzz`
-# above: fuzz/corpus_path already exists on disk, so Make would otherwise read
-# a bare `fuzz_path` as already satisfied. Run
+# read is a second parser, which MUTATES the DOM that the first one built and
+# which fuzz_cyaml never reaches. This is the counterpart of the fuzz_path
+# target of tests/cjson/Makefile, and it is .PHONY for the same reason as
+# `fuzz` above: fuzz/corpus_path already exists on disk, so Make would
+# otherwise read a bare `fuzz_path` as already satisfied. Run
 # ./fuzz_cyaml_path fuzz/corpus_path [-max_total_time=N].
 fuzz_path:
 	$(FUZZ_CC) $(FUZZ_CFLAGS) fuzz/fuzz_cyaml_path.c $(SRC_FILES) \
@@ -106,13 +106,13 @@ memtest: build build_spec_suite build_c23
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 ./tests_spec_suite
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 ./tests_c23
 
-# --ignore-errors negative: the coverage counters of gcov are plain
-# increments that are not atomic. They can race when instrumented code runs
-# concurrently, and they then give a negative hit count that is not real.
-# This affects more than one module, and also code inside a glibc header. It
-# is a limitation of the instrumentation of gcov, not a defect in the logic
-# of this library. See the identical flag in tests/chttpclient/Makefile for
-# the full rationale.
+# --ignore-errors negative: the coverage counters of gcov are plain,
+# non-atomic increments, so they can race when instrumented code runs
+# concurrently and then give a negative hit count that is not real. This
+# affects more than one module and also code inside a glibc header; it is a
+# limitation of the gcov instrumentation, not a defect in the logic of this
+# library. See the identical flag in tests/chttpclient/Makefile for the full
+# rationale.
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \

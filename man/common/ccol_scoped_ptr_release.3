@@ -11,16 +11,15 @@ released = ccol_scoped_ptr_release(name);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the current value of name and sets name to NULL.
-ccol_scoped_ptr() or ccol_scoped_ptr_mp() registered a cleanup for name.
-That cleanup then becomes a no-op at the end of the scope. Use this
-macro to give the ownership of the pointer to code outside the enclosing
-scope, for example as the return value of a function. The pointer is
-then not freed in that scope.
+Returns the current value of name and sets name to NULL, so the cleanup
+that ccol_scoped_ptr() or ccol_scoped_ptr_mp() registered for name
+becomes a no-op at the end of the scope. Use this macro to give the
+ownership of the pointer to code outside the enclosing scope, for
+example as the return value of a function; the pointer is then not
+freed in that scope.
 
-The caller that receives the released value becomes responsible for the
-free of that value. It must free the value with the allocator that
-allocated it.
+The caller that receives the released value becomes responsible for
+freeing it, and must free it with the allocator that allocated it.
 .fi
 .SH PARAMETERS
 .nf
@@ -37,12 +36,12 @@ name never received a value).
 Needs GCC or Clang (ccol_scoped_ptr() and ccol_scoped_ptr_mp() already
 have the same requirement)
 
-A call on a scoped pointer that never received a value is safe. The
+A call on a scoped pointer that never received a value is safe: the
 macro returns NULL and leaves name at NULL.
 
 More than one call on the same name is safe. A call after the first one
-has no use, because name is already NULL. Each later call returns NULL
-again.
+has no use because name is already NULL, and each later call returns
+NULL again.
 .fi
 .SH EXAMPLES
 .nf

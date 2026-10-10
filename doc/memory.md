@@ -1,12 +1,12 @@
 # Memory management
 
-Each allocation that c_collections makes goes through a table of four
-functions. You can replace these functions. This guide shows how to use your
-own allocator. It tells you what that allocator must promise, and how long
-it must stay available. At the end, it gives two realistic allocators: an
-arena for each request and a memory pool.
+Every allocation that c_collections makes goes through a table of four
+functions, and you can replace those functions with your own. This guide
+shows how to plug in your own allocator, what that allocator must promise
+and how long it must stay available. It ends with two realistic allocators:
+a per-request arena and a memory pool.
 
-You do not need this guide to use the library. If you give nothing (or
+You do not need this guide to use the library. If you pass nothing (or
 `NULL`), each module uses the standard `malloc`, `calloc`, `realloc` and
 `free`.
 
@@ -21,7 +21,7 @@ typedef struct ccol_memmgmt_procs_t {
 } ccol_memmgmt_procs_t;
 ```
 
-Each module that allocates memory takes a pointer to such a table when it
+Every module that allocates memory accepts a pointer to such a table when it
 creates an object:
 
 | Module | Form that takes a table |
@@ -32,17 +32,17 @@ creates an object:
 | `cmempool` | an argument of `ccol_mempool_create` and `ccol_r_mempool_create` |
 | `clrucache`, `clogger`, `cthreadpool`, `chttpclient`, `chttpserver` | `clrucache_create_full`, `clog_open_file_mp`, `ccol_create_cthread_pool_mp`, `ccol_create_chttpclient_mp`, `ccol_create_chttpsvr_mp` |
 
-`NULL` always means the standard functions. A form without `_mp` is the same
-call with `NULL`.
+`NULL` always means the standard functions, and a form without `_mp` is the
+same call with `NULL`.
 
-An object frees all of its memory through the table that it got at
-creation. Therefore, destroy calls never take an allocator argument.
+An object frees all of its memory through the table that it received at
+creation, which is why destroy calls never take an allocator argument.
 
 ## A first custom allocator
 
-This allocator sends each call to the standard functions and counts the
-calls. You can use it to make sure that your program gives back all the
-memory that it takes:
+This allocator forwards each call to the standard functions and counts the
+calls, which lets you check that your program gives back all the memory it
+takes:
 
 ```c
 #include <stdatomic.h>
@@ -51,9 +51,8 @@ memory that it takes:
 #include <ccollections/chashmap.h>
 #include <ccollections/cvector.h>
 
-/* A counting allocator: the standard functions and two counters. The
- * counters are atomic. Therefore, thread-safe objects can also use the
- * table. */
+/* A counting allocator: the standard functions plus two counters. The
+ * counters are atomic, so thread-safe objects can use the table too. */
 static atomic_size_t live_blocks, total_calls;
 
 static void *count_malloc(size_t n) {
@@ -107,70 +106,70 @@ while alive: 5 blocks, 13 calls
 after destroy: 0 blocks
 ```
 
-(The exact counts can change with the version of the library. But the count
-of blocks always goes back to zero.)
+(The exact counts can change between versions of the library, but the block
+count always returns to zero.)
 
 ## What your functions must promise
 
-**Do exactly the same as the standard functions.** All four pointers must be
-non-NULL. These cases must work as they do in the C library:
+**Behave exactly like the standard functions.** All four pointers must be
+non-NULL, and these cases must work as they do in the C library:
 
 - `malloc(0)`
 - `realloc(NULL, n)`
 - `free(NULL)`
 - a failed allocation, which gives NULL
 
-**This includes the alignment.** Each block from `malloc`, `calloc` and
-`realloc` must have the alignment for all object types. That is,
-`_Alignof(max_align_t)` (16 bytes on x86-64 and aarch64). The containers put
-entries that need this alignment at the start of a block. If an arena or a
-pool gives smaller pieces, it must round each piece up.
+**This includes the alignment.** Every block from `malloc`, `calloc` and
+`realloc` must be aligned for any object type, that is, to
+`_Alignof(max_align_t)` (16 bytes on x86-64 and aarch64), because the
+containers place entries that need this alignment at the start of a block.
+An arena or a pool that hands out smaller pieces must round each piece up.
 
 **Be thread-safe when the object is thread-safe.** A queue, a thread pool, a
-logger or a cache calls your functions from the thread that does the work.
-Give such an object only a table whose functions are safe for concurrent
+logger or a cache calls your functions from whichever thread does the work,
+so give such an object only a table whose functions are safe for concurrent
 calls.
 
 ## How long the allocator must live
 
-For each module except `cmempool`, the last call to your functions occurs
-before the destroy of the object returns. Therefore:
+For every module except `cmempool`, the last call to your functions happens
+before the object's destroy returns. This means that:
 
-- The **functions** must continue to work until you destroy all objects that
-  use them.
-- The **table itself** (the `ccol_memmgmt_procs_t` struct) must also stay
-  valid for that time, unless the module keeps its own copy. `clrucache`,
-  `cjson` and `cyaml` keep a copy. For them, you can release the struct
-  immediately after the call that creates the object returns. A `static`
-  table, as in the examples here, is the easy solution.
+- The **functions** must keep working until you have destroyed every object
+  that uses them.
+- The **table itself** (the `ccol_memmgmt_procs_t` struct) must stay valid
+  for that same time, unless the module keeps its own copy. `clrucache`,
+  `cjson` and `cyaml` do keep a copy, so for them you can release the struct
+  as soon as the call that creates the object returns. A `static` table, as
+  in the examples here, is the easy solution.
 
 **The exception: a `cmempool` pool that threads share.** Such a pool keeps a
-small cache for each thread that uses it. When you destroy the pool, the
-pool marks these caches as dead. But it cannot free them while their threads
-can use them. The library frees each cache at a later time:
+small cache for each thread that uses it. When you destroy the pool, it
+marks these caches as dead, but it cannot free them while their threads can
+use them, so the library frees each cache later:
 
 - when its thread next needs a cache for a different pool
 - when that thread exits
 - when the process exits
 
-A thread that does none of these things can keep a dead cache for all of
-the process life. Therefore, the allocator of the pool can run after
-`ccol_mempool_destroy` returns, and also after `main` returns. This is
-important only for an allocator that stops at a known point, for example an
-arena that you free at the end of `main`. For such a pool, do one of these
-things:
+A thread that does none of these things can keep a dead cache for the whole
+life of the process. As a result, the pool's allocator can run after
+`ccol_mempool_destroy` returns, and even after `main` returns. This matters
+only for an allocator that stops working at a known point, such as an arena
+that you free at the end of `main`. For such a pool, do one of the
+following:
 
-- Give the pool an allocator that lives for the full process.
-- Create the pool with `single_threaded` set. Such a pool keeps no
-  per-thread caches.
+- Give the pool an allocator that lives as long as the process.
+- Create the pool with `single_threaded` set, so that it keeps no per-thread
+  caches.
 - Join the threads that used the pool.
 
 ## A per-request arena
 
-An arena makes each allocation a pointer increment. It frees all the memory
-of a batch of work in one step. This loop is similar to a server. It gives
-each "request" a map that lives in the arena. It destroys the map, and then
-it resets the arena:
+An arena turns each allocation into a pointer increment and frees all the
+memory of a batch of work in one step. This loop works like a simple server:
+it gives each "request" a map that lives in the arena, destroys the map, and
+then resets the arena:
 
 ```c
 #include <stddef.h>
@@ -181,10 +180,9 @@ it resets the arena:
 #include <ccollections/chashmap.h>
 
 /* A bump arena: an allocation is a pointer increment, free does nothing,
- * and one step releases the full arena. Each block has a header with its
- * size (for realloc). The header is exactly one max_align_t wide.
- * Therefore, each block that the arena returns has the alignment for all
- * object types. */
+ * and one step releases the whole arena. Each block has a header that holds
+ * its size (for realloc). The header is exactly one max_align_t wide, so
+ * every block that the arena returns is aligned for any object type. */
 typedef union { max_align_t align; size_t size; } arena_hdr;
 
 static struct { char *base; size_t cap, used; } arena;
@@ -255,24 +253,24 @@ int main(void) {
 
 Notes on this design:
 
-- The header in front of each block is one `max_align_t` wide. Therefore, each
-  block has the alignment for all object types. Without this header, the
-  containers would read memory that is not correctly aligned.
-- `free` does nothing. The memory comes back when you reset the arena.
-  Destroy all containers that use the arena **before** you reset or release
-  it.
-- The table has no context argument. Therefore, the arena is a global
-  variable. If many threads do this at the same time, use one arena for each
-  thread (and `_Thread_local`).
-- Do not use an arena of this type for a `cmempool` pool that threads share.
-  The reason is in the section above.
+- The header in front of each block is one `max_align_t` wide, so every
+  block is aligned for any object type. Without this header, the containers
+  would read memory that is not correctly aligned.
+- `free` does nothing; the memory comes back when you reset the arena.
+  Destroy every container that uses the arena **before** you reset or
+  release it.
+- The table has no context argument, so the arena is a global variable. If
+  many threads do this at the same time, use one arena per thread (with
+  `_Thread_local`).
+- Do not use an arena of this kind for a `cmempool` pool that threads share,
+  for the reason given in the section above.
 
 ## Driving a container from a memory pool
 
-`cmempool` itself can be the allocator of a different container. A ranged
-pool has tiers with sizes that are powers of two. It selects the correct
-tier for each request. This is a good match for an ordered map, which stores
-one small node for each entry:
+`cmempool` itself can serve as the allocator of another container. A ranged
+pool has tiers whose sizes are powers of two and picks the right tier for
+each request, which makes it a good match for an ordered map, which stores
+one small node per entry:
 
 ```c
 #include <stdint.h>
@@ -280,10 +278,10 @@ one small node for each entry:
 #include <ccollections/cbstmap.h>
 #include <ccollections/cmempool.h>
 
-/* An ordered map allocates one small node for each entry. A pool is best
- * for this pattern. The pool has tiers from 2^4 = 16 to 2^12 = 4096 bytes,
- * and 2^10 entries in its smallest tier. It uses the heap only when all
- * tiers are empty. It is thread-safe (single_threaded false). */
+/* An ordered map allocates one small node per entry, which is the pattern
+ * that a pool suits best. This pool has tiers from 2^4 = 16 to 2^12 = 4096
+ * bytes and 2^10 entries in its smallest tier, uses the heap only when
+ * every tier is empty, and is thread-safe (single_threaded false). */
 static ccol_r_mempool *node_pool;
 
 static void *pool_malloc(size_t size) {
@@ -326,36 +324,36 @@ int main(void) {
 Points to watch:
 
 - A ranged pool supplies only sizes up to its largest tier (here 4096
-  bytes). A container with arrays that grow larger than this size, for
-  example a large hash map or a long vector, needs a larger top tier or a
-  different allocator.
-- The fallback policy sets what occurs when a tier has no more entries.
+  bytes). A container whose arrays grow beyond that size, such as a large
+  hash map or a long vector, needs a larger top tier or a different
+  allocator.
+- The fallback policy decides what happens when a tier runs out of entries.
   With `ccol_fallback_at_last_exhaustion`, the pool borrows from the heap
-  only when all tiers are empty. The pool frees such blocks in the same way
-  as all other entries.
+  only when all tiers are empty, and it frees such blocks just like any
+  other entry.
 - Destroy the container first and the pool last.
 
-The [cmempool guide](cmempool.md) tells you how to select tier sizes and
+The [cmempool guide](cmempool.md) explains how to choose tier sizes and
 fallback policies.
 
 ## Pitfalls
 
-- **Blocks without the correct alignment.** A home-made allocator that
-  gives blocks with an 8-byte alignment on a 64-bit machine causes
-  undefined behavior. Round to `_Alignof(max_align_t)`.
-- **Release of the allocator too early.** First, destroy all objects that use
-  it. Shared `cmempool` pools can call it at a later time.
-- **Mixed allocators.** A container can give you memory to free, for example a
-  serialized string. Release this memory with the related function of the
-  module, for example `cjson_serialize_free_mp`. Therefore, the memory goes
-  back to the correct allocator.
+- **Misaligned blocks.** A home-made allocator that returns blocks with only
+  8-byte alignment on a 64-bit machine causes undefined behavior. Round to
+  `_Alignof(max_align_t)`.
+- **Releasing the allocator too early.** Destroy every object that uses it
+  first, and remember that shared `cmempool` pools can call it later.
+- **Mixed allocators.** When a container hands you memory to free, such as a
+  serialized string, release it with the matching function of the module
+  (for example `cjson_serialize_free_mp`), so that the memory goes back to
+  the right allocator.
 - **Functions that are not thread-safe behind a thread-safe object.** A
   queue, a thread pool, a logger or an HTTP object calls your functions from
-  many threads. Therefore, they must be safe for concurrent calls.
+  many threads, so they must be safe for concurrent calls.
 - **An allocator that calls into its own pool.** A `cmempool` pool can call
-  its allocator while it holds its own lock. Therefore, that allocator must
-  never allocate from the same pool or free into it (for a ranged pool, this
-  includes all tiers). If it does, a deadlock or a corrupted pool occurs.
+  its allocator while it holds its own lock, so that allocator must never
+  allocate from the same pool or free into it (for a ranged pool, this
+  includes every tier). Doing so causes a deadlock or a corrupted pool.
 
 ## Reference
 

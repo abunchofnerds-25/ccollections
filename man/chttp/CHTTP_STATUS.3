@@ -41,16 +41,15 @@ CHTTP_STATUS_HTTP_VERSION_NOT_SUPPORTED 505
 .fi
 .SH DESCRIPTION
 .nf
-These are integer constants for the common HTTP status codes. Use
-these names instead of bare integer literals. Your code is then easier
+These are integer constants for the common HTTP status codes.  Use
+these names instead of bare integer literals to make your code easier
 to read.
 
-This list does not hold every status code of the HTTP specifications.
-It holds only the codes that the code and the test suites of this
-library name. You can still use any other status code as a plain
-integer literal with chttpsvr_resp_set_status(). You can also compare
-any other status code directly against
-chttpcli_response.status_code.
+This list does not hold every status code of the HTTP specifications,
+only the codes that the code and the test suites of this library name.
+You can use any other status code as a plain integer literal with
+chttpsvr_resp_set_status(), and compare any other status code
+directly against chttpcli_response.status_code.
 .fi
 .SH EXAMPLES
 .nf

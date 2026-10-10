@@ -14,68 +14,68 @@ ccol_retval_t chttpsvr_register_streaming_handler(chttpsvr srv,
 .fi
 .SH DESCRIPTION
 .nf
-This function works like chttpsvr_register_handler, but it marks the
-route as a streaming route.  chttpsvr_req_read is therefore available
-to the handler, and the handler reads the body one piece at a time.
-chttpsvr_req_read returns -1 on a route that is not a streaming route.
+Works like chttpsvr_register_handler, but marks the route as a
+streaming route, so chttpsvr_req_read is available to the handler,
+which reads the body one piece at a time.  chttpsvr_req_read returns
+-1 on a route that is not a streaming route.
 
-A streaming handler reads its body at the pace of the client, so it can
-hold its thread for as long as the client takes.  It therefore runs on
-a pool of its own, of chttpsvr_config_t.streaming_thread_count
-threads, and never on the reactor thread or on the worker pool that
-serves buffered routes.  Slow streaming clients can occupy at most that
-pool.  The server creates the pool at the first streaming request that
-it receives.  The thread counts as a worker of its server: a call that
-a handler must not make on its own server, such as chttpsvr_destroy()
+A streaming handler reads its body at the pace of the client and can
+hold its thread for as long as the client takes, so it runs on a pool
+of its own, of chttpsvr_config_t.streaming_thread_count threads, and
+never on the reactor thread or on the worker pool that serves
+buffered routes; slow streaming clients can occupy at most that pool.
+The server creates the pool when it receives its first streaming
+request.  The thread counts as a worker of its server: a call that a
+handler must not make on its own server, such as chttpsvr_destroy()
 or a restart, is refused or fatal there exactly as it is in a buffered
-handler.  chttpsvr_config_t.streaming_thread_count set to
+handler.  Setting chttpsvr_config_t.streaming_thread_count to
 CHTTPSVR_STREAMING_POOL_OFF runs streaming handlers on the worker pool
 instead; chttpsvr_start(3) describes what that changes.
 
-You can use CHTTP_ANY for method to match every HTTP method on the
-pattern.  See chttpsvr_register_handler for the full rules of
+You can use CHTTP_ANY as method to match every HTTP method on the
+pattern; see chttpsvr_register_handler for the full rules of
 CHTTP_ANY.
 
-The server routes the request as soon as it parses the headers, and
-before it reads any body byte.  The worker therefore reads the body
-itself, batch by batch, directly off the socket.  The reactor thread
-never reads it.  chttpsvr_req_read gives each batch to the handler as
-it arrives.  It returns 0 after the body ends, and every later call
-also returns 0, so the EOF is idempotent.  It returns -1 for a
-connection that dropped, for a body above max_body_size, and for a
-client that stalled.  chttpsvr_config_t.stream_read_timeout_us bounds
-each gap, and chttpsvr_config_t.max_body_read_duration_us bounds the
-whole read when you set it.  Call chttpsvr_req_stream_error to tell
-these causes apart.  chttpsvr_config_t.min_transfer_rate_bps also ends
-the read of a client whose average rate falls below that floor, with
-ccol_timed_out.
+The server routes the request as soon as it has parsed the headers,
+before it reads any body byte, so the worker reads the body itself,
+batch by batch, directly off the socket; the reactor thread never
+reads it.  chttpsvr_req_read hands each batch to the handler as it
+arrives.  It returns 0 once the body has ended, and every later call
+also returns 0, so the EOF is idempotent.  It returns -1 for a dropped
+connection, for a body above max_body_size, and for a client that
+stalled.  chttpsvr_config_t.stream_read_timeout_us bounds each gap,
+and chttpsvr_config_t.max_body_read_duration_us, when set, bounds the
+whole read; call chttpsvr_req_stream_error to tell these causes apart.
+chttpsvr_config_t.min_transfer_rate_bps also ends, with
+ccol_timed_out, the read of a client whose average rate falls below
+that floor.
 
-A streaming request that finds every streaming thread busy waits, with
-no thread, in a queue of chttpsvr_config_t.streaming_queue_capacity
-entries.  The server answers with 503 Service Unavailable and
-"Retry-After: 5" immediately when that queue is full, and when a
-request waits there longer than
-chttpsvr_config_t.streaming_queue_timeout_us.  The handler never runs
-for such a request.  None of this blocks the reactor thread.
+A streaming request that finds every streaming thread busy waits,
+without a thread, in a queue of
+chttpsvr_config_t.streaming_queue_capacity entries.  When that queue
+is full, and when a request waits there longer than
+chttpsvr_config_t.streaming_queue_timeout_us, the server answers at
+once with 503 Service Unavailable and "Retry-After: 5", and the
+handler never runs for such a request.  None of this blocks the
+reactor thread.
 
-The pattern rules of chttpsvr_register_handler apply here too.
-pattern must start with '/'.  The library rejects a pattern with two
-slashes together, and one with a slash at the end.  A {name} segment
-must hold only [A-Za-z0-9_].  The same {name} must not appear more
-than once in one pattern.  See chttpsvr_register_handler for the full
-details of the pattern checks, and for the rules of the decoding of a
-path segment.
+The pattern rules of chttpsvr_register_handler apply here as well:
+pattern must start with '/', a pattern with two consecutive slashes or
+a trailing slash is rejected, a {name} segment must contain only
+[A-Za-z0-9_], and the same {name} must not appear more than once in
+one pattern.  See chttpsvr_register_handler for the full details of
+the pattern checks and for how a path segment is decoded.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success on success.
-ccol_invalid_args when srv is CHTTPSVR_INVALID, or a stale handle that
-                  something already destroyed; when pattern or fn is
+ccol_invalid_args when srv is CHTTPSVR_INVALID or a stale handle that
+                  has already been destroyed; when pattern or fn is
                   NULL; when pattern does not start with '/'; when
-                  pattern has two slashes together or a slash at the
-                  end; when a {name} segment has a character outside
-                  [A-Za-z0-9_]; or when the same {name} appears more
-                  than once.
+                  pattern has two consecutive slashes or a trailing
+                  slash; when a {name} segment contains a character
+                  outside [A-Za-z0-9_]; or when the same {name}
+                  appears more than once.
 ccol_not_enough_memory when an allocation fails.
 .fi
 .SH "SEE ALSO"

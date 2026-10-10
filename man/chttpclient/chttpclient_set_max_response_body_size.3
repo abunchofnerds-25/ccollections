@@ -13,50 +13,48 @@ ccol_retval_t chttpclient_set_max_response_body_size(chttpcli cli,
 .SH DESCRIPTION
 .nf
 This function caps the size of a response body in the buffer. The cap
-works in all three tiers. It covers chttpclient_do,
+works in all three tiers: it covers chttpclient_do,
 chttpclient_do_async, the pooled-sync wrappers on top of
 chttpclient_do_async such as chttpclient_do_pooled, chttp_get,
 chttp_post, chttp_put, chttp_delete, chttp_patch and chttp_run_query.
-Give 0, which is the default, to put the buffering with no limit
-back.
+Give 0, which is the default, to go back to buffering with no limit.
 
 The cap has no effect on chttpclient_do_streaming,
 chttpclient_do_async_streaming or chttpclient_do_pooled_streaming. A
 caller that streams already controls its own memory with the value
-that chttpcli_write_fn gives back. A value less than len aborts the
-transfer. This cap therefore has nothing to bound on that path.
+that chttpcli_write_fn gives back (a value less than len aborts the
+transfer), so this cap has nothing to bound on that path.
 
 The client applies the cap in two ways. A response whose
 Content-Length header alone declares more than max_bytes fails at
 once, before the client reads one byte of the body off the wire. A
 chunked body, or a body that ends with the close of the connection,
-declares no length up front. The client checks such a body as it
-arrives. It fails the request at the moment the total body so far goes
-past max_bytes. Both cases give ccol_msg_too_large. chttpclient_do
+declares no length up front, so the client checks such a body as it
+arrives and fails the request at the moment the total body so far goes
+past max_bytes. Both cases give ccol_msg_too_large: chttpclient_do
 gives it, the rv of the async result holds it, and
 chttpclient_do_pooled gives it. The client does not reuse that
-connection afterwards. It treats it like the connection of any other
+connection afterwards, and treats it like the connection of any other
 malformed response.
 
-This cap does not apply to a redirect hop. The declared size and the
-real size of the body of such a hop make no difference. The client
-always drops the body of an intermediate hop and never buffers it.
-Only the body of the final response that the caller gets counts
-against max_bytes.
+This cap does not apply to a redirect hop, whatever the declared size
+and the real size of the body of such a hop: the client always drops
+the body of an intermediate hop and never buffers it. Only the body of
+the final response that the caller gets counts against max_bytes.
 
 The check of the declared length up front applies only to a message
 that will really deliver the body to the caller. The declared
-Content-Length of a 1xx informational response is exempt. RFC 7230
+Content-Length of a 1xx informational response is exempt: RFC 7230
 3.3.2 says that a server that obeys the standard never sends one on a
-1xx response. But a server that misbehaves, or an attacker, can send
-one. The client always drops such a response and never gives it to the
-caller. The declared Content-Length of a response to HEAD is exempt
-too. It describes what a GET gives back (RFC 7231 4.3.2), and no real
-body bytes come after it.
+1xx response, but a server that misbehaves, or an attacker, can send
+one, and the client always drops such a response and never gives it to
+the caller. The declared Content-Length of a response to HEAD is exempt
+too, because it describes what a GET gives back (RFC 7231 4.3.2), and
+no real body bytes come after it.
 
-You can call this function before the first request or after it. It
-takes effect at once for every request that follows. It does not
-change a request that is already in flight.
+You can call this function before or after the first request. It takes
+effect at once for every request that follows, and does not change a
+request that is already in flight.
 .fi
 .SH PARAMETERS
 .nf

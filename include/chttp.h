@@ -32,13 +32,13 @@ SOFTWARE.
 #include "chashmap.h"
 
 /* Everything that this header declares from here to the end is part of the
- * public Application Binary Interface (ABI) of libccollections. The shared
- * library exports all of it. The library build uses -fvisibility=hidden.
- * Because of this, a function or an object that is not inside one of these
- * blocks stays internal to the library. Its name is not in the dynamic
- * symbol table of the library. The application that links against the
- * library cannot interpose it. A symbol with the same name in that
- * application cannot collide with it. */
+ * public Application Binary Interface (ABI) of libccollections, and the shared
+ * library exports all of it. Because the library build uses
+ * -fvisibility=hidden, a function or an object that is not inside one of these
+ * blocks stays internal to the library: its name is not in the dynamic symbol
+ * table of the library, the application that links against the library cannot
+ * interpose it, and a symbol with the same name in that application cannot
+ * collide with it. */
 #pragma GCC visibility push(default)
 
 /**
@@ -63,20 +63,19 @@ typedef enum chttp_method {
   CHTTP_HEAD,
   CHTTP_OPTIONS,
   /**
-   * A wildcard for the server side. It matches any of the seven concrete
+   * A wildcard for the server side: it matches any of the seven concrete
    * methods above when it is the method argument to
    * chttpsvr_register_handler, chttpsvr_register_streaming_handler,
    * chttpsvr_router_on, or chttpsvr_router_on_stream. It is not a valid
-   * method for a client request. If you give it to chttp_request_new or to
+   * method for a client request; if you give it to chttp_request_new or to
    * chttp_run_query, the behaviour is undefined. It is only a placeholder
-   * that you use when you register a handler. It is never the method of a
-   * real incoming request. chttpsvr_req_method never gives CHTTP_ANY back,
+   * that you use when you register a handler, and never the method of a
+   * real incoming request: chttpsvr_req_method never gives CHTTP_ANY back,
    * and it never gives back a value outside the seven concrete constants
-   * above. chttpserver does not recognize some methods at all (a WebDAV
-   * verb, TRACE, CONNECT, a custom verb, and others). Such a request never
-   * reaches a handler. This is also true for a handler that you register
-   * with CHTTP_ANY. chttpserver rejects the request with 501 Not
-   * Implemented before the route match runs.
+   * above. A request whose method chttpserver does not recognize at all (a
+   * WebDAV verb, TRACE, CONNECT, a custom verb, and others) never reaches a
+   * handler, even one that you register with CHTTP_ANY, because chttpserver
+   * rejects it with 501 Not Implemented before the route match runs.
    */
   CHTTP_ANY
 } chttp_method_t;
@@ -84,8 +83,8 @@ typedef enum chttp_method {
 /**
  * @brief Give the canonical uppercase method string for a chttp_method_t.
  *
- * For CHTTP_ANY it gives "ANY". CHTTP_ANY is a sentinel for a route on the
- * server side, and not a real HTTP method.
+ * For CHTTP_ANY it gives "ANY", although CHTTP_ANY is a sentinel for a route
+ * on the server side and not a real HTTP method.
  */
 static inline const char *chttp_method_str(chttp_method_t m) {
   switch (m) {
@@ -170,7 +169,7 @@ static inline const char *chttp_method_str(chttp_method_t m) {
  *
  * A struct with every byte zero is the SAFE configuration. That is deliberate,
  * and it is why each of the three verification fields is named for what
- * turning it ON gives up rather than for what it asks for. The idiomatic ways
+ * turning it ON gives up rather than for what it asks for: the idiomatic ways
  * to build a struct in C all leave a field that the caller did not name as
  * zero:
  *
@@ -179,11 +178,11 @@ static inline const char *chttp_method_str(chttp_method_t m) {
  *     chttp_tls_config_t c = {.cert_path = crt, .key_path = key};
  *
  * On a client, all three verify the certificate chain of the server AND
- * match its hostname. On a server, a ca_bundle_path requires every client to
- * present a certificate that verifies against it. A caller can therefore
- * never end up with no verification by writing less than they meant to.
- * Weakening a check takes an explicit assignment, and the name of the field
- * says what it costs where it is read.
+ * match its hostname; on a server, a ca_bundle_path requires every client to
+ * present a certificate that verifies against it. So a caller can never end
+ * up with no verification by writing less than they meant to: weakening a
+ * check takes an explicit assignment, and the name of the field says what it
+ * costs where it is read.
  *
  * cert_path, key_path and ca_bundle_path must each name a regular file of at
  * most 16 MB. A path that names a directory, a FIFO or a device is refused at
@@ -210,10 +209,10 @@ typedef struct chttp_tls_config {
    * verifies the certificate chain of the server, against ca_bundle_path when
    * one is set and against the system trust store otherwise.
    *
-   * True accepts ANY certificate from ANY peer. An attacker who can intercept
-   * the connection can then read and rewrite every byte of it. Set it only
-   * where that is genuinely acceptable, such as a test against a throwaway
-   * self-signed server. It is never right in production.
+   * True accepts ANY certificate from ANY peer, so an attacker who can
+   * intercept the connection can read and rewrite every byte of it. Set it
+   * only where that is genuinely acceptable, such as a test against a
+   * throwaway self-signed server; it is never right in production.
    *
    * True also makes insecure_skip_hostname_check irrelevant: a hostname
    * matched against a certificate that nothing validated proves nothing,
@@ -246,9 +245,9 @@ typedef struct chttp_tls_config {
    * and so does the handshake of a client whose certificate does not verify
    * against ca_bundle_path.
    *
-   * True only asks each client for a certificate. A client that presents one
-   * must still pass the verification, and a client that presents none is
-   * accepted as well. A handler then tells the two apart with
+   * True only asks each client for a certificate: a client that presents one
+   * must pass the verification, and a client that presents none is accepted
+   * as well. A handler then tells the two apart with
    * chttpsvr_req_peer_cert_verified() and decides for itself what an
    * anonymous client may do.
    *
@@ -263,7 +262,7 @@ typedef struct chttp_tls_config {
  * It is the same as: chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
  *
  * It is also the same as a zero-initialised struct, because the default of
- * every field IS zero. It stays as a name that a caller can write to say
+ * every field IS zero; it exists as a name that a caller can write to say
  * "the defaults, on purpose".
  */
 #define CHTTP_TLS_DEFAULT \
@@ -276,15 +275,15 @@ typedef struct chttp_tls_config {
 /**
  * @brief This struct describes an HTTP request body. The client API uses it.
  *
- * This struct does NOT own data. The rules for ownership depend on the
- * context. chttp_request_new_mp() copies data into its own buffer. The
- * caller can therefore free the source after that call returns.
+ * This struct does NOT own data, and the rules for ownership depend on the
+ * context. chttp_request_new_mp() copies data into its own buffer, so the
+ * caller can free the source after that call returns.
  */
 typedef struct chttp_request_body {
   const void *data;         /* body bytes; NULL = no body */
   size_t len;               /* byte length of data */
-  const char *content_type; /* the caller owns this. If it is not NULL, it
-                             * sets Content-Type. */
+  const char *content_type; /* the caller owns this; when it is not NULL,
+                             * it sets Content-Type. */
 } chttp_request_body_t;
 
 /** @brief Shorthand for a request with no body. */
@@ -310,20 +309,19 @@ typedef struct chttp_request_body {
 /**
  * @brief Encode a buffer as base64 (custom allocator).
  *
- * This is the standard RFC 4648 base64. It uses the '+' and '/' alphabet
- * with '=' padding. RFC 7617 Basic auth needs this variant, and HTTP uses
- * it everywhere.
+ * This is the standard RFC 4648 base64, with the '+' and '/' alphabet and
+ * '=' padding: the variant that RFC 7617 Basic auth needs and that HTTP uses
+ * everywhere.
  *
  * @param mp       A custom allocator, or NULL for malloc/free.
  * @param data     The buffer to encode. It can be NULL only if len == 0.
  * @param len      The number of bytes in data.
  * @param out_len  Optional: it gets the length of the string that this
- *                 function gives back. This length does not count the
- *                 terminating NUL. It can be NULL.
+ *                 function gives back, not counting the terminating NUL.
+ *                 It can be NULL.
  * @return A new base64 string that ends with a NUL, or NULL. The function
- *         gives NULL if the allocation fails. It also gives NULL if data
- *         is NULL and len > 0. It gives NULL too if len is so large that
- *         the encoded size overflows size_t.
+ *         gives NULL if the allocation fails, if data is NULL and len > 0,
+ *         or if len is so large that the encoded size overflows size_t.
  */
 char *chttp_base64_encode_mp(ccol_memmgmt_procs_t *mp, const void *data,
                              size_t len, size_t *out_len);
@@ -341,17 +339,17 @@ static inline __attribute__((always_inline)) char *chttp_base64_encode(
  *
  * The function accepts the standard RFC 4648 base64 (the '+' and '/'
  * alphabet) with '=' padding. It takes the input length from
- * strlen(b64_input). That length must be a multiple of 4 bytes. Any '='
+ * strlen(b64_input), and that length must be a multiple of 4 bytes. Any '='
  * padding must be the last character or the last two characters. In a
  * padded final group, the bits that no decoded byte holds must be zero
  * (RFC 4648 SS3.5), so that every byte string has exactly one encoding:
  * "QQ==" decodes to "A", and "QR==" is malformed. The function rejects
- * every malformed input. A malformed input has an invalid character,
- * padding in the wrong place, nonzero padding bits, or the wrong length.
+ * every malformed input, that is, one with an invalid character, padding in
+ * the wrong place, nonzero padding bits, or the wrong length.
  *
- * The buffer that the function gives back ends with a NUL. This helps you
- * when you decode text. But the decoded data can also contain NUL bytes
- * inside it. Always use out_len to get the real size, and never strlen().
+ * The buffer that the function gives back ends with a NUL, which helps when
+ * you decode text, but the decoded data can also contain NUL bytes inside
+ * it. Always use out_len to get the real size, and never strlen().
  *
  * @param mp         A custom allocator, or NULL for malloc/free.
  * @param b64_input  The base64 string to decode. It ends with a NUL. It
@@ -376,22 +374,22 @@ static inline __attribute__((always_inline)) void *chttp_base64_decode(
  * @brief Build a "Basic <base64(username:password)>" header value (custom
  * allocator).
  *
- * The function makes only the header VALUE (RFC 7617). It does not make the
+ * The function makes only the header VALUE (RFC 7617), not the
  * "Authorization: " key part. You can give the result directly to
  * chttp_request_set_header(req, "authorization", ...) or to the equivalent
  * function of chttpsvr.
  *
  * @param mp        A custom allocator, or NULL for malloc/free.
- * @param username  The username. It must not be NULL. It can be empty. It
- *                  must not contain a colon (':'). RFC 7617 SS2 makes the
+ * @param username  The username. It must not be NULL, it can be empty, and
+ *                  it must not contain a colon (':'). RFC 7617 SS2 makes the
  *                  colon the one delimiter of the encoded
- *                  "user-id:password" string. A recipient cuts that string
- *                  at its FIRST colon. A user-id with a colon in it is
- *                  therefore not transmittable without ambiguity. The
- *                  function rejects such a user-id. It does not cut it
- *                  silently into a different identity.
- * @param password  The password. It must not be NULL. It can be empty. It
- *                  can contain colons, and they need no escape (the
+ *                  "user-id:password" string, and a recipient cuts that
+ *                  string at its FIRST colon, so a user-id with a colon in
+ *                  it is not transmittable without ambiguity. The function
+ *                  rejects such a user-id instead of cutting it silently
+ *                  into a different identity.
+ * @param password  The password. It must not be NULL and it can be empty.
+ *                  It can contain colons, and they need no escape (the
  *                  password is everything after the first colon).
  * @return A new "Basic <base64>" string, or NULL. The function gives NULL
  *         if the allocation fails, if username or password is NULL, or if

@@ -15,12 +15,12 @@ ccol_retval_t chttpclient_do_streaming(chttpcli cli,
 .fi
 .SH DESCRIPTION
 .nf
-This function works like chttpclient_do. But it gives the response
-body to write_fn in chunks while the data arrives, and it does not
-buffer that body. It allocates no chttpcli_response struct. This path
-gives you no access to the response headers.
+This function works like chttpclient_do, but it gives the response body
+to write_fn in chunks as the data arrives instead of buffering that
+body. It allocates no chttpcli_response struct, and this path gives you
+no access to the response headers.
 
-write_fn must give back the number of bytes that it consumes. A value
+write_fn must give back the number of bytes that it consumes; a value
 other than len aborts the transfer with a failure.
 .fi
 .SH PARAMETERS
@@ -39,10 +39,10 @@ status_code_out It gets the HTTP status code after a call that
 The same codes as chttpclient_do, with two differences. The function
 never gives ccol_msg_too_large, because
 chttpclient_set_max_response_body_size has no effect on this streaming
-path. The write_fn of the caller already controls the use of memory
+path: the write_fn of the caller already controls the use of memory
 there. The function also gives ccol_http_transfer_aborted when write_fn
-gives back a value other than len. Such a value aborts the transfer,
-and it covers a value above len as well as a value below len.
+gives back a value other than len; such a value, whether above len or
+below len, aborts the transfer.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_do (3),

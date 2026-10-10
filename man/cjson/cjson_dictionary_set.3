@@ -12,56 +12,56 @@ ccol_retval_t cjson_dictionary_set(cjson obj, const char *key, cjson child);
 .SH DESCRIPTION
 .nf
 Sets or replaces the value for key in obj.  If a previous child is
-already under key, the library stores the new child first.  It
+already under key, the library stores the new child first and
 deep-frees the previous child only after the new child is safely in
-place.  This is why a failed insert never leaves the slot dangling.
-On success the object owns child and the caller must not free it.
+place, so a failed insert never leaves the slot dangling.  On success
+the object owns child and the caller must not free it.
 
-The object keeps its members in insertion order.  A new key goes after
-every other member.  A replacement keeps the place of the key.  See
+The object keeps its members in insertion order: a new key goes after
+every other member, and a replacement keeps the place of the key.  See
 cjson_dictionary_first(3).
 
-One return code carries one ownership rule.  This is the same rule
-as for cjson_list_push:
+One return code carries one ownership rule, the same rule as for
+cjson_list_push:
 
   ccol_invalid_args always means that the call rejected its arguments
-  and touched nothing.  child is exactly as it was before the call.
-  The caller still owns it, or the container that it is already
+  and touched nothing: child is exactly as it was before the call, and
+  the caller still owns it, or the container that it is already
   attached to still owns it.  That owner must still destroy it.
 
   Every other non-success code (ccol_not_enough_memory,
   ccol_container_full) always means that ownership moved to this
-  call.  The call already deep-freed child.  A second free of child
+  call, which has already deep-freed child, so a second free of child
   is a double free.
 
 child must not already be attached to a list parent or to a
-dictionary parent.  There is one exception.  The caller can pass
-back the exact node that is already stored under key, for example
-cjson_dictionary_set(obj, k, cjson_dictionary_get(obj, k)).  This is
-a harmless no-op.  It returns ccol_success and does not change obj.
+dictionary parent, with one exception: the caller can pass back the
+exact node that is already stored under key, for example
+cjson_dictionary_set(obj, k, cjson_dictionary_get(obj, k)).  This is a
+harmless no-op that returns ccol_success and does not change obj.
 
-These are the ccol_invalid_args rejections.  child is NULL.  child is
+These are the ccol_invalid_args rejections: child is NULL; child is
 already attached somewhere else, under a different key or in another
-container.  child is obj itself.  obj is NULL or is not a
-CJSON_DICTIONARY.  key is NULL or is not valid UTF-8.  There is one
-more rejection.  obj is already reachable when you descend from
-child.  To attach child would make obj a new ancestor of child.  obj
-would also stay a descendant of child.  This is a cycle.
+container; child is obj itself; obj is NULL or is not a
+CJSON_DICTIONARY; key is NULL or is not valid UTF-8.  There is one
+more rejection: obj is already reachable when you descend from child.
+Attaching child would then make obj a new ancestor of child while obj
+stays a descendant of child, which is a cycle.
 
 The library cannot always complete that last check when memory is
-low.  It then returns ccol_not_enough_memory.  It does not take the
-risk of an undetected cycle.  This call deep-frees child, in the
+low.  Rather than take the risk of an undetected cycle, it then
+returns ccol_not_enough_memory, and this call deep-frees child in the
 same way as when the insert itself fails for lack of memory.
 
-The expected time of a set, a get and a remove is constant.  This is
-also true when an untrusted peer chooses the keys.  The object hashes
-its keys with a secret seed that the library chooses one time for each
-process.  If the keys collide, the object changes to a hash keyed with
+The expected time of a set, a get and a remove is constant, also when
+an untrusted peer chooses the keys.  The object hashes its keys with a
+secret seed that the library chooses one time for each process, and if
+the keys collide, it changes to a hash keyed with
 a secret 128-bit key; see cjson_parse(3).
 
-Every key that the tree holds is valid UTF-8.  This is what lets
-cjson_serialize() write the key out unchanged.  The library refuses
-a key that is not valid UTF-8 instead of storing it.  See
+Every key that the tree holds is valid UTF-8, which is what lets
+cjson_serialize() write the key out unchanged.  The library refuses a
+key that is not valid UTF-8 instead of storing it; see
 cjson_create_string(3) for the same rule on string values.
 .fi
 .SH PARAMETERS
@@ -81,11 +81,11 @@ count.
 .SH NOTES
 .nf
 A node that cjson_get(), cjson_list_get() or cjson_dictionary_get()
-returns is a borrowed reference into a tree that already exists.  It
-is not a new node that the caller owns.  Never give such a node as
-child, unless it is the value that is already stored under key (see
-above).  Use cjson_clone() first to get an independent copy.  That
-copy is safe to store somewhere else.
+returns is a borrowed reference into a tree that already exists, not
+a new node that the caller owns.  Never give such a node as child,
+unless it is the value that is already stored under key (see above).
+Use cjson_clone() first to get an independent copy, which is safe to
+store somewhere else.
 .fi
 .SH "SEE ALSO"
 .BR cjson_dictionary_get (3),

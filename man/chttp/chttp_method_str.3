@@ -12,14 +12,14 @@ const char *chttp_method_str(chttp_method_t m);
 .SH DESCRIPTION
 .nf
 This function gives the uppercase ASCII method string for the enum
-value that you give it, for example "GET" or "POST". For CHTTP_ANY it
-gives "ANY". CHTTP_ANY is a sentinel for a route on the server side,
-and not a real HTTP method. For an invalid value the function falls
-back to "UNKNOWN".
+value that you give it, for example "GET" or "POST".  For CHTTP_ANY it
+gives "ANY"; CHTTP_ANY is a sentinel for a route on the server
+side and not a real HTTP method.  For an invalid value the function
+falls back to "UNKNOWN".
 .fi
 .SH RETURN VALUE
 .nf
-A pointer to a static string literal. You must not free it.
+A pointer to a static string literal, which you must not free.
 .fi
 .SH "SEE ALSO"
 .BR chttp_request_new (3),

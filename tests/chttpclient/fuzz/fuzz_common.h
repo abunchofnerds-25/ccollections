@@ -23,19 +23,19 @@ SOFTWARE.
 */
 
 /*
- * The shared driver for the two libFuzzer harnesses of chttp1_parser. Those
- * are fuzz_chttp1_request.c and fuzz_chttp1_response.c. This is not a public
- * header of this library. It lives only under this fuzz/ directory.
+ * The shared driver for the two libFuzzer harnesses of chttp1_parser,
+ * fuzz_chttp1_request.c and fuzz_chttp1_response.c. This is not a public
+ * header of this library; it lives only under this fuzz/ directory.
  *
- * It feeds a fuzz input to a parser that is already initialized. It feeds it
- * in chunks of random size. That exercises the class of fragmentation at a
- * byte boundary. The tests_parser.c suite of this parser already treats that
+ * It feeds a fuzz input to a parser that is already initialized, in chunks
+ * of random size, which exercises the class of fragmentation at a byte
+ * boundary. The tests_parser.c suite of this parser already treats that
  * class as valuable; see its assert_fragmented_matches_oneshot helper.
  *
  * The chunk boundaries come from the bytes of the input itself, through a
- * small PRNG in the style of splitmix64. They are the same every time. They
- * never come from real randomness, and never from the clock. libFuzzer needs
- * two runs of the same input to reach the same code path. A crash must be
+ * small PRNG in the style of splitmix64, so they are the same every time and
+ * never come from real randomness or from the clock. libFuzzer needs two
+ * runs of the same input to reach the same code path, and a crash must be
  * reproducible from its saved input file alone.
  */
 
@@ -60,9 +60,9 @@ static void fuzz_rng_seed(const uint8_t *data, size_t size) {
   size_t n = size < sizeof(seed) ? size : sizeof(seed);
   for (size_t i = 0; i < n; i++) seed = (seed << 8) | data[i];
   /* A seed of zero makes every later fuzz_rng_next() call return 0 for
-   * ever. That is the degenerate fixed point of splitmix64. This code
-   * therefore falls back to a fixed seed that is not zero. The derived seed
-   * is really zero only for a rare, short input. */
+   * ever, which is the degenerate fixed point of splitmix64, so this code
+   * falls back to a fixed seed that is not zero. The derived seed is really
+   * zero only for a rare, short input. */
   fuzz_rng_state = seed ? seed : 0x9E3779B97F4A7C15ULL;
 }
 
@@ -71,11 +71,11 @@ static void fuzz_rng_seed(const uint8_t *data, size_t size) {
  * size.
  *
  * It obeys the contract of CHTTP1_HEADERS_ONLY, which belongs to request
- * mode alone. chttp1_parser_consumed() reports how much of the chunk that
- * the code JUST FED went to the header block. Whatever is left over is real,
- * valid body bytes, and the code must still feed them. It must not discard
- * them. The bytes left over after a pause in response mode, which
- * CHTTP1_PAUSED reports, are different.
+ * mode alone: chttp1_parser_consumed() reports how much of the chunk that
+ * the code JUST FED went to the header block, and whatever is left over is
+ * real, valid body bytes that the code must feed instead of discarding them.
+ * The bytes left over after a pause in response mode, which CHTTP1_PAUSED
+ * reports, are different.
  */
 static void fuzz_feed_fragmented(chttp1_parser_t *parser, const uint8_t *data,
                                  size_t size) {
@@ -97,10 +97,10 @@ static void fuzz_feed_fragmented(chttp1_parser_t *parser, const uint8_t *data,
       pos = chunk_start + chttp1_parser_consumed(parser);
       continue;
     }
-    /* The code reaches here for CHTTP1_PAUSED, which means that the
-     * message is complete, for CHTTP1_ERROR, or for CHTTP1_USER. For all
-     * three, no more feeding is valid on this parser. The documented
-     * contract of chttp1_parser_execute says so. */
+    /* The code reaches here for CHTTP1_PAUSED (the message is complete),
+     * for CHTTP1_ERROR, or for CHTTP1_USER. For all three, the documented
+     * contract of chttp1_parser_execute says that no more feeding is valid
+     * on this parser. */
     break;
   }
 }

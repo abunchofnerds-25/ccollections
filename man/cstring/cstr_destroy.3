@@ -17,11 +17,11 @@ string and sets the pointer to NULL.
 .SH PARAMETERS
 .nf
 s   cstr lvalue to destroy, such as a variable or an element of an
-    array. The macro evaluates it exactly once, and sets it to NULL
+    array; the macro evaluates it exactly once and sets it to NULL
 .fi
 .SH NOTES
 .nf
-A call with a NULL pointer is safe, and it does nothing
+A call with a NULL pointer is safe and does nothing
 .fi
 .SH "SEE ALSO"
 .BR cstring_destroy (3)

@@ -11,13 +11,13 @@ ccol_retval_t chmap_remove(hm_name, key);
 .fi
 .SH DESCRIPTION
 .nf
-Type-inferred wrapper for chmap_delete_elem(). It returns the result code.
-It does not stop the program for key_not_found.
+Type-inferred wrapper for chmap_delete_elem() that returns the result code
+and does not stop the program for key_not_found.
 
 The lookup key goes through the DECLARED key type of the map, in the
-same way as in chmap_insert(3). A key that the map stored through that
-conversion is only ever found again by a lookup that makes the same
-one. A literal and a computed expression are both accepted.
+same way as in chmap_insert(3), so a key that the map stored through
+that conversion is only ever found again by a lookup that makes the
+same conversion. Both a literal and a computed expression are accepted.
 .fi
 .SH PARAMETERS
 .nf

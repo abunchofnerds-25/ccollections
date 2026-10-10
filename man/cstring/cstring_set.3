@@ -11,9 +11,9 @@ ccol_retval_t cstring_set(cstr s, const char *str);
 .fi
 .SH DESCRIPTION
 .nf
-Removes the current content of s. It then puts a copy of str there. The
-function grows the buffer when this is necessary. It never shrinks the
-buffer.
+Removes the current content of s and puts a copy of str in its place. The
+function grows the buffer when this is necessary, but it never shrinks
+the buffer.
 .fi
 .SH PARAMETERS
 .nf
@@ -25,8 +25,8 @@ str   New content (must not be NULL)
 ccol_success              - Set succeeded
 ccol_invalid_args         - str is NULL
 ccol_container_full       - str is too large to represent. No real
-                            program reaches this code. Such a str needs
-                            the whole address space
+                            program reaches this code, because such a
+                            str needs the whole address space
 ccol_not_enough_memory    - Reallocation failed
 .fi
 .SH NOTES

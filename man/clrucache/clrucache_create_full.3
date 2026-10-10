@@ -18,19 +18,19 @@ clru_cache clrucache_create_full(size_t capacity,
 .fi
 .SH DESCRIPTION
 .nf
-Creates a thread-safe Least Recently Used (LRU) cache. A hash map gives
-it O(1) lookup, and a doubly-linked list gives it O(1) eviction. The
-cache holds up to capacity live entries. An insert past that limit
-first evicts the least recently used entry.
+Creates a thread-safe Least Recently Used (LRU) cache, with O(1)
+lookup through a hash map and O(1) eviction through a doubly-linked
+list. The cache holds up to capacity live entries; an insert past that
+limit first evicts the least recently used entry.
 
-The library divides the cache into segments. Each segment has its own
-lock, and a key belongs to exactly one segment. Threads that work on
-keys in different segments do not wait for one another, so the
-throughput holds up as you add threads. Each segment evicts on its own.
-See NOTES.
+The library divides the cache into segments, each with its own lock,
+and a key belongs to exactly one segment. Threads that work on keys in
+different segments do not wait for one another, so the throughput
+holds up as you add threads. Each segment evicts on its own; see
+NOTES.
 
-This is the low-level constructor. Use the clru_construct() macro family
-in application code instead.
+This is the low-level constructor; use the clru_construct() macro
+family in application code instead.
 .fi
 .SH PARAMETERS
 .nf
@@ -42,18 +42,18 @@ val_type     The ccol_data_type of the values. It serves only for type
              tracking, because the internal map always stores heap
              pointers.
 getter       Remote getter callback, or NULL. The library calls it on
-             a cache miss, to fetch the value from an external source.
+             a cache miss to fetch the value from an external source.
              On success it must allocate the value data on the heap,
              assign that pointer to val->ptr, set val->size to the byte
              length, and return true. The cache takes ownership of
-             val->ptr and frees it with its own allocator. That
-             allocator is mprocs if the caller gives one, and
-             malloc()/free() if not. The allocation of the getter must
-             use that same allocator. Without this, the later free by
-             the cache corrupts the heap. On failure the getter must
-             leave val->ptr as NULL and return false.
+             val->ptr and frees it with its own allocator, which is
+             mprocs if the caller gives one and malloc()/free() if
+             not. The allocation of the getter must use that same
+             allocator, or the later free by the cache corrupts the
+             heap. On failure the getter must leave val->ptr as NULL
+             and return false.
 setter       Remote setter callback, or NULL. The library calls it
-             synchronously before each update of the cache. It gets the
+             synchronously before each update of the cache, with the
              key and the value as const cmap_pair* pointers. When it
              returns false, the library does not update the cache.
              The library calls the getter and the setter with no lock
@@ -64,29 +64,29 @@ setter       Remote setter callback, or NULL. The library calls it
              thread deadlocks against itself. Neither must destroy the
              cache, because the destroy waits for that same call.
 eviction_cb  Eviction callback, or NULL. The library calls it when it
-             evicts an entry to make room. It also calls it for each
-             entry that is in the cache when clru_destroy() runs. The
-             library holds the lock of the owning segment during that
-             call. The callback gets the
-             evicted key and value as const cmap_pair* pointers. It
-             must not call back into the cache. The library does not
-             serialise it against itself. See NOTES.
+             evicts an entry to make room, and also for each entry that
+             is in the cache when clru_destroy() runs. In both cases it
+             holds the lock of the owning segment during the call. The
+             callback gets the evicted key and value as const cmap_pair*
+             pointers.
+             It must not call back into the cache, and the library
+             does not serialise it against itself; see NOTES.
 mprocs       Custom memory management procedures, or NULL for the
              default malloc and free. The cache keeps a copy of the
              struct, so the caller may release or reuse the struct
-             once this call returns. The functions that it names must
-             stay callable until the cache is destroyed.
+             once this call returns, but the functions that it names
+             must stay callable until the cache is destroyed.
 err          An optional pointer that gets an error string on failure.
 .fi
 .SH RETURN VALUE
 .nf
 Returns a new cache handle on success.
-Returns CLRU_CACHE_INVALID on failure. The function sets *err when err
-is not NULL.
-CLRU_CACHE_INVALID is ((clru_cache)0). It has the same function for a
-clru_cache as NULL has for a pointer. Compare a handle directly against
-it. Alternatively, use the handle as a condition: if (!cache) is a
-correct test for an invalid handle.
+Returns CLRU_CACHE_INVALID on failure, and sets *err when err is not
+NULL.
+CLRU_CACHE_INVALID is ((clru_cache)0), and plays the same role for a
+clru_cache as NULL does for a pointer. Compare a handle directly
+against it, or use the handle as a condition: if (!cache) is a correct
+test for an invalid handle.
 .fi
 .SH "KEYS WITH PADDING"
 .PP
@@ -108,51 +108,53 @@ padding to zero. With any other compiler, use the raw functions for a
 padded key.
 .SH NOTES
 .nf
-The handle that the function gives back is an opaque VALUE, and not a
-pointer. Do not cast it to void*. Do not cast a void* to it. Do not
-use it as an address.
-The cache is thread-safe. Per-segment locks and per-entry condition
-variables protect every operation on the handle. Operations on the same
-key still serialise against each other. The coalescence of concurrent
-misses for one key rests on that.
+The handle that the function gives back is an opaque VALUE, not a
+pointer. Do not cast it to void*, do not cast a void* to it, and do
+not use it as an address.
+The cache is thread-safe: per-segment locks and per-entry condition
+variables protect every operation on the handle. Operations on the
+same key still serialise against each other, and the coalescence of
+concurrent misses for one key rests on that.
 
-The division starts at a capacity of 128. That is the first capacity
-that gives two segments 64 entries each. Below 128 a cache is a single
+The division starts at a capacity of 128, the first capacity that
+gives two segments 64 entries each. Below 128 a cache is a single
 segment, and it evicts in one exact global least-recently-used order.
 
 At 128 and above, each segment evicts on its own. The library divides
-capacity across the segments. Each segment evicts its own least recently
-used entry when its own share is full. The cache therefore has the
-capacity that the caller requested, and clrucache_capacity() reports
-exactly that number. But the entry that the library selects to make room
-is the oldest inside one segment, and not the oldest of the whole cache.
-A hash spreads the keys, so some segments run fuller than others at any
-instant. A cache that is full to exactly its capacity therefore holds a
-little less than that number. The shortfall is a few percent. It is up
-to about ten below roughly a thousand entries, and around two at eight
-thousand entries and above. It falls further as the cache grows. It does
-not depend on the key type, and it does not depend on the width of the
+capacity across the segments, and each segment evicts its own least
+recently used entry when its own share is full. The cache therefore
+has the capacity that the caller requested, and clrucache_capacity()
+reports exactly that number, but the entry that the library selects
+to make room is the oldest inside one segment, not the oldest of the
+whole cache. Because a hash spreads the keys, some segments run fuller
+than others at any instant, so a cache that is full to exactly its
+capacity holds a little less than that number. The shortfall is a few
+percent: up to about ten below roughly a thousand entries, and around
+two at eight thousand entries and above, falling further as the cache
+grows. It depends neither on the key type nor on the width of the
 build. The segment of a key comes from the keyed hash of chashmap,
-which a secret of the process keys whatever the hash mode of the map of
-each segment is, so the shortfall for one set of keys differs from one
-process to the next. The map of each segment starts in the fast hash mode
-and switches to the keyed mode on its own when the keys that reach it
-collide; see chmap_create_full(3). Benchmark your configuration against the access pattern that you
-intend. Do not assume either behaviour.
+which a secret of the process keys whatever the hash mode of the map
+of each segment is, so the shortfall for one set of keys differs from
+one process to the next. The map of each segment starts in the fast
+hash mode and switches to the keyed mode on its own when the keys
+that reach it collide; see chmap_create_full(3). Benchmark your
+configuration against the access pattern that you intend instead of
+assuming either behaviour.
 
 The library calls the eviction callback while it holds the lock of the
-owning segment. The callback must not enter the cache again. The library
-holds the lock of that one segment only. Two evictions in different
-segments therefore run the callback at the same time on two threads. Any
-state that the callback keeps of its own needs its own protection.
+owning segment, so the callback must not enter the cache again.
+Because the library holds the lock of that one segment only, two
+evictions in different segments run the callback at the same time on
+two threads, and any state that the callback keeps of its own needs
+its own protection.
 clru_destroy() waits until every in-flight resolved use of the handle
-stops, before it frees anything. Such a use is a concurrent
+stops before it frees anything. Such a use is a concurrent
 clrucache_get_full(), clrucache_set_full(), clrucache_size() or
-clrucache_capacity() call. The caller therefore does not need to prove
-on its own that no other thread still uses the cache. A destroy of a
-handle that a call already destroyed is a FATAL ERROR. It calls abort()
-and raises SIGABRT. It is never a silent double-free. This is true for
-an earlier call and for another thread that races this one.
+clrucache_capacity() call, so the caller does not need to prove on its
+own that no other thread still uses the cache. A destroy of a handle
+that a call already destroyed, whether in an earlier call or on
+another thread that races this one, is a FATAL ERROR: it calls abort()
+and raises SIGABRT, and is never a silent double-free.
 .fi
 .SH "SEE ALSO"
 .BR clru_construct (3),

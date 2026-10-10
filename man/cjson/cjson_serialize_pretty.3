@@ -11,19 +11,19 @@ char *cjson_serialize_pretty(cjson node, unsigned int indent);
 .fi
 .SH DESCRIPTION
 .nf
-Works like cjson_serialize(), but it adds newlines.  It also adds
-indent spaces for each nesting level.  An indent of 0 gives the
-default indent of 4 spaces.  Use cjson_serialize() for compact
-output with no indent.  The members of each object come in the
-same insertion order as in cjson_serialize(3).
+Works like cjson_serialize(), but adds newlines and indent spaces for
+each nesting level.  An indent of 0 gives the default indent of 4
+spaces; use cjson_serialize() for compact output with no indent.  The
+members of each object come in the same insertion order as in
+cjson_serialize(3).
 .fi
 .SH RETURN VALUE
 .nf
 A null-terminated string on the heap, from the allocator of the root
-node.  Free it with cjson_serialize_free() for a tree that uses the
-default allocator.  Free it with cjson_serialize_free_mp() for a
-tree that uses a custom allocator.  This is the same rule as for the
-result of cjson_serialize(3).
+node.  As with the result of cjson_serialize(3), free it with
+cjson_serialize_free() for a tree that uses the default allocator,
+and with cjson_serialize_free_mp() for a tree that uses a custom
+allocator.
 .fi
 .SH "SEE ALSO"
 .BR cjson_dictionary_first (3),

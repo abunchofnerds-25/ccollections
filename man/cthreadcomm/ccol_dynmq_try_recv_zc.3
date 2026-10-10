@@ -14,48 +14,48 @@ ccol_retval_t ccol_dynmq_try_recv_zc(ccol_dynamic_queue *dq,
 .nf
 This function tries to remove the message at the head of the dynamic queue
 and to give it back in target_buf. If the queue is empty, the call returns
-ccol_container_empty immediately. It never waits for a message.
+ccol_container_empty immediately; it never waits for a message.
 
 On success, the ownership of the data pointer of the message moves to the
-caller. target_buf->data is the pointer that the sender gave, and
-target_buf->size is its size in bytes. The caller is the one that frees the
-data after it finishes with it. The library copies no bytes. Only the
-pointer and its size move. A sender can put a message into the queue with a
-NULL data pointer and a size of zero. Such a message arrives in the same
-way. target_buf->data can therefore legitimately be NULL with
-target_buf->size at 0. Check it before you dereference it.
+caller: target_buf->data is the pointer that the sender gave, and
+target_buf->size is its size in bytes. The caller is the one that frees
+the data after it finishes with it. The library copies no bytes; only
+the pointer and its size move. Because a sender can put a message into
+the queue with a NULL data pointer and a size of zero, and such a
+message arrives in the same way, target_buf->data can legitimately be
+NULL with target_buf->size at 0, so check it before you dereference it.
 
 On every failure, the function does not change target_buf, and the queue
 keeps everything that it held.
 
-Use this receive call immediately after a callback reports that a dynamic
-queue selectable is ready. That callback comes from ccol_select(),
-ccol_select_timed(), or an ccol_event_loop. Those report readiness only,
-and they never take the message themselves. Another consumer can take the
-message first. ccol_container_empty covers exactly that case.
+Use this receive call immediately after a callback from ccol_select(),
+ccol_select_timed(), or an ccol_event_loop reports that a dynamic queue
+selectable is ready. Those report readiness only and never take the
+message themselves, so another consumer can take the message first;
+ccol_container_empty covers exactly that case.
 .fi
 .SH PARAMETERS
 .nf
 dq          Dynamic queue to receive from
-target_buf  Buffer that gets the message. It also gets the ownership of
-            the data.
+target_buf  Buffer that gets the message together with the ownership
+            of the data.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success         - The function received a message. The caller owns
                        target_buf->data and must free it.
 ccol_invalid_args    - dq or target_buf is NULL
-ccol_container_empty - The queue is empty. The function does not change
+ccol_container_empty - The queue is empty; the function does not change
                        target_buf.
 .fi
 .SH NOTES
 .nf
 The function never blocks.
-The function succeeds while sends on the queue are off. A turn off of
-sends only stops new messages from entering the queue. A receive still
+The function succeeds while sends on the queue are off, because turning
+sends off only stops new messages from entering the queue; a receive
 gets the messages that the queue already holds.
-A receive that succeeds wakes one write-direction waiter on this queue.
-Such a waiter is a ccol_select() call, a ccol_select_timed() call, or an
+A receive that succeeds wakes one write-direction waiter on this queue,
+which is a ccol_select() call, a ccol_select_timed() call, or an
 ccol_event_loop registration.
 The function is thread-safe.
 .fi

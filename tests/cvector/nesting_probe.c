@@ -24,11 +24,11 @@ SOFTWARE.
 
 /* Compile-time probe: every public macro of this header nests inside the
  * argument of another public macro, and inside its own argument, under
- * -Wshadow -Werror. The value macros name their temporaries uniquely for each
- * expansion, so no nested expansion declares a local that hides one of the
- * enclosing expansion. Without that, each nesting below is a -Wshadow error
- * in the build of a caller. The Makefile compiles this file with
- * -fsyntax-only; nothing here runs. */
+ * -Wshadow -Werror. The value macros give their temporaries a unique name in
+ * each expansion, so a nested expansion never declares a local that hides one
+ * of the enclosing expansion; without that, each nesting below is a -Wshadow
+ * error in the build of a caller. The Makefile compiles this file with
+ * -fsyntax-only, so nothing here runs. */
 
 #include <chashmap.h>
 #include <cvector.h>

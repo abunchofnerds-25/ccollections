@@ -13,13 +13,13 @@ const char *chttp_request_get_header(const chttp_request_t *req,
 .SH DESCRIPTION
 .nf
 This function gives the stored value of the header with the name that
-you give. It gives NULL if that header is not there. The lookup
-ignores the case of the name. The function makes your name lowercase
-before the lookup.
+you give, or NULL if that header is not there. The lookup ignores the
+case of the name: the function makes your name lowercase before the
+lookup.
 
 The pointer that the function gives back stays valid until the next
-call to chttp_request_set_header on this request. It also stops being
-valid when somebody frees the request.
+call to chttp_request_set_header on this request, or until somebody
+frees the request.
 .fi
 .SH PARAMETERS
 .nf

@@ -12,7 +12,7 @@ char cstring_at(cstr s, size_t idx);
 .SH DESCRIPTION
 .nf
 This function returns the character at the zero-based index that you give.
-It returns '\e0' when idx is out of the bounds, and it does not assert.
+It returns '\e0' instead of asserting when idx is out of bounds.
 .fi
 .SH PARAMETERS
 .nf

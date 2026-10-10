@@ -1,21 +1,21 @@
 # cstring: a growable string
 
-`cstring` is a string on the heap. The string grows when you add text to
-it. The module does these tasks for you:
+`cstring` is a heap-allocated string that grows as you add text to it. The
+module takes care of the details for you:
 
-- It sets the size of the buffer.
-- It adds text without `strcat`. Thus no call writes into a buffer that is
-  too small.
-- It adds the terminating NUL. Thus you cannot forget it.
+- It manages the size of the buffer.
+- It adds text without `strcat`, so no call ever writes into a buffer that
+  is too small.
+- It adds the terminating NUL, so you cannot forget it.
 
-The content is always a normal C string with a terminating NUL. Thus you can
-give it to `printf`, `fopen`, `strtol` or any other function that takes a
+The content is always an ordinary NUL-terminated C string, so you can pass
+it to `printf`, `fopen`, `strtol` or any other function that takes a
 `const char *`.
 
-Use a `cstr` when you make text in small parts, for example messages, paths,
-reports or protocol lines. Also use it when you edit text. For example, you
-can trim, replace or split the text, or change its case. For a short string
-that you only read, a plain `const char *` is the simplest solution.
+Use a `cstr` when you build text in small pieces, such as messages, paths,
+reports or protocol lines, and when you edit text: trimming, replacing,
+splitting or changing its case. For a short string that you only read, a
+plain `const char *` is the simplest choice.
 
 ```c
 #include <ccollections/cstring.h>
@@ -42,8 +42,8 @@ int main(void) {
 }
 ```
 
-Compile the program with `-std=gnu11`. Link it with `-lccollections`. The
-program prints `>> Hello, world! (16 characters)`.
+Compile the program with `-std=gnu11` and link it with `-lccollections`. It
+prints `>> Hello, world! (16 characters)`.
 
 ## Create and destroy a string
 
@@ -55,13 +55,13 @@ program prints `>> Hello, world! (16 characters)`.
 | Destroy it automatically at the end of the scope | `cstr_construct_scoped(s, "text")` |
 | Use your own allocator | `cstr_construct_mp(s, "text", &procs)` |
 
-`cstr_destroy(s)` frees the string and sets `s` to `NULL`. `cstr_reset(s)`
-removes all the text and keeps the string ready for more use.
+`cstr_destroy(s)` frees the string and sets `s` to `NULL`, while
+`cstr_reset(s)` removes all the text and keeps the string ready for reuse.
 
-The scoped form is useful in loops and in functions that can return early.
-The string is freed on each path out of the block. See
-[the design guide](design.md) for the lifecycle macros that all the modules
-share. See [Memory management](memory.md) for custom allocators.
+The scoped form is useful in loops and in functions that can return early,
+because the string is freed on every path out of the block. See [the design
+guide](design.md) for the lifecycle macros that all the modules share, and
+[Memory management](memory.md) for custom allocators.
 
 ## Read a string
 
@@ -72,9 +72,9 @@ cstr_is_empty(s)   /* true when the length is 0 */
 cstr_at(s, i)      /* the character at i, or '\0' when i is out of range */
 ```
 
-`cstr_c_str` gives a pointer into the buffer of the string. The pointer is
+`cstr_c_str` returns a pointer into the string's buffer. That pointer is
 valid only until the next call that changes the string, because that call
-can move the buffer. Get the pointer again after each change.
+can move the buffer, so fetch it again after every change.
 
 ## Change a string
 
@@ -88,11 +88,11 @@ can move the buffer. Get the pointer again after each change.
 | Strip leading and trailing whitespace | `cstr_trim(s)` |
 | Change case | `cstr_to_upper(s)`, `cstr_to_lower(s)` |
 
-The arguments are plain C strings. Thus you can give a literal, a `char`
-array or the `cstr_c_str` of a different `cstr`.
+The arguments are plain C strings, so you can pass a literal, a `char` array
+or the `cstr_c_str` of another `cstr`.
 
-When you know the final size before you start, use `cstr_reserve(s, bytes)`.
-It makes the buffer larger one time. The appends after it then do not
+When you know the final size in advance, call `cstr_reserve(s, bytes)`: it
+grows the buffer once, and the appends that follow do not need to
 reallocate.
 
 ## Search and compare
@@ -106,23 +106,22 @@ cstr_find(s, "=")              /* index of the first match */
 cstr_rfind(s, "/")             /* index of the last match */
 ```
 
-`cstr_find` and `cstr_rfind` give `ccol_invalid_size` when they find no
-match. Thus always compare the result with `ccol_invalid_size` before you
-use it as an index.
+`cstr_find` and `cstr_rfind` return `ccol_invalid_size` when there is no
+match, so always compare the result with `ccol_invalid_size` before you use
+it as an index.
 
 ## Make new strings from a string
 
-Three operations give you new strings. You own these strings, and you must
-destroy them:
+Three operations give you new strings, which you own and must destroy:
 
-- `cstr_substring(s, start, len)` copies a range. When the range goes past
-  the end of the string, the macro stops the range at the end.
-- `cstr_copy(s, NULL)` copies the full string.
-- `cstr_split(s, ",", NULL)` cuts the string at each delimiter. It gives a
+- `cstr_substring(s, start, len)` copies a range. If the range runs past the
+  end of the string, the macro cuts it off at the end.
+- `cstr_copy(s, NULL)` copies the whole string.
+- `cstr_split(s, ",", NULL)` cuts the string at each delimiter and returns a
   vector of new strings.
 
-`cstr_split` gives a [cvector](cvector.md). Each element is a separate
-`cstr`. Thus destroy each element, and then destroy the vector:
+`cstr_split` returns a [cvector](cvector.md) in which each element is a
+separate `cstr`, so destroy each element first and then the vector:
 
 ```c
 #include <stdio.h>
@@ -146,19 +145,18 @@ int main(void) {
 }
 ```
 
-The macro keeps empty fields. Thus this program prints four tokens, and
-the third token is empty.
+The macro keeps empty fields, so this program prints four tokens, the third
+of which is empty.
 
-`cstr_copy` and `cstr_split` give `NULL` when they fail. When
-`cstr_substring` fails, it stops the program, as the other macros do.
+`cstr_copy` and `cstr_split` return `NULL` when they fail, whereas
+`cstr_substring`, like the other macros, stops the program on failure.
 
 ## Use a cstr with a map
 
 The maps ([chashmap](chashmap.md), [cbstmap](cbstmap.md)) accept `char *`
-keys and values. They do not accept `cstr`. Give the content with
-`cstr_c_str`. The map immediately copies the characters into its own
-storage. Thus you can change or destroy the `cstr` after the insert, and the
-map does not change:
+keys and values, not `cstr`, so pass the content with `cstr_c_str`. The map
+copies the characters into its own storage at once, which means you can
+change or destroy the `cstr` after the insert without affecting the map:
 
 ```c
 char *k = (char *)cstr_c_str(key);
@@ -170,9 +168,9 @@ The settings example below does the same thing.
 
 ## When an error must not stop the program
 
-When an allocation fails, the `cstr_*` macros that can fail stop the
-program through `ccol_fatal_err()`. When you must recover from the failure,
-call the functions below the macros. These functions give a status code:
+When an allocation fails, the `cstr_*` macros that can fail stop the program
+through `ccol_fatal_err()`. If you need to recover from the failure instead,
+call the functions underneath the macros, which return a status code:
 
 ```c
 if (cstring_append(s, piece) != ccol_success) {
@@ -180,24 +178,22 @@ if (cstring_append(s, piece) != ccol_success) {
 }
 ```
 
-`cstring_create` and `cstring_create_full` create a string. They give
-`NULL` when they fail. `cstring_new(text)` is the shortest way to create a
-string in this layer. The Reference section below lists all these
-functions.
+`cstring_create` and `cstring_create_full` create a string and return `NULL`
+when they fail; `cstring_new(text)` is the shortest way to create a string
+in this layer. The Reference section below lists all these functions.
 
 ## Example: a settings file reader
 
-Many programs keep settings as `key = value` lines, with `#` comments. This
-program does these steps:
+Many programs keep their settings as `key = value` lines with `#` comments.
+This program:
 
-1. It trims each line.
-2. It ignores empty lines and comments.
-3. It cuts each line at the first `=`.
-4. It puts the pair in a hash map.
+1. Trims each line.
+2. Skips empty lines and comments.
+3. Cuts each line at the first `=`.
+4. Stores the pair in a hash map.
 
-A value can contain `=`. Thus the program uses `cstr_find` and
-`cstr_substring` to get the key and the value. It does not use
-`cstr_split`.
+Because a value can itself contain `=`, the program extracts the key and the
+value with `cstr_find` and `cstr_substring` instead of `cstr_split`.
 
 ```c
 #include <stdio.h>
@@ -258,10 +254,10 @@ int main(void) {
 
 ## Example: a mail-merge template
 
-A message template contains placeholders such as `{name}`. The program
-replaces them with values from a table. It also escapes the values for
-HTML. The escape replaces `&` first. Thus the `&` in the other entities that
-it adds does not get a second escape.
+A message template contains placeholders such as `{name}`, and the program
+replaces them with values from a table, escaping each value for HTML. The
+escape replaces `&` first, so that the `&` inside the other entities it adds
+is not escaped a second time.
 
 ```c
 #include <stdio.h>
@@ -299,12 +295,12 @@ int main(void) {
 
 ## Example: normalise file paths
 
-The program changes paths that a user typed into a canonical form:
+The program turns paths that a user typed into a canonical form:
 
 - Each backslash becomes a slash.
-- Two or more adjacent slashes become one slash.
-- The program removes a slash at the end.
-- The program shows the file extension in lower case.
+- Two or more adjacent slashes become a single slash.
+- A trailing slash is removed.
+- The file extension is shown in lower case.
 
 ```c
 #include <stdio.h>
@@ -348,20 +344,20 @@ int main(void) {
 
 ## Good to know
 
-- **`cstr_c_str` gives a borrowed pointer.** It points into the buffer of
-  the string. It becomes invalid after each change to the string. Never
-  free it. Do not keep it across an append, an insert, a replace or a set.
-- **You own the strings that you make from a string.** Destroy each `cstr`
-  that you get from `cstr_substring`, `cstr_copy` or `cstr_split`. Also
+- **`cstr_c_str` returns a borrowed pointer.** It points into the string's
+  buffer and becomes invalid after any change to the string. Never free it,
+  and do not keep it across an append, an insert, a replace or a set.
+- **You own the strings that you make from a string.** Destroy every `cstr`
+  that you get from `cstr_substring`, `cstr_copy` or `cstr_split`, and also
   destroy the vector from `cstr_split`.
-- **Each handle has one owner.** `cstr_destroy(s)` sets `s` to `NULL`. Thus
-  it is safe to call it two times on one variable. A copy of the handle in a
-  different variable does not change to `NULL`. A destroy through that copy
-  frees the memory two times.
-- **The content is a C string.** A `cstr` contains the text up to its first
-  NUL byte. It is not a container for binary data.
-- **Thread safety.** A `cstr` has no internal lock. This is intentional. When
-  more than one thread uses a string, protect it with your own lock. See
+- **Each handle has one owner.** `cstr_destroy(s)` sets `s` to `NULL`, so
+  calling it twice on the same variable is safe. A copy of the handle in
+  another variable is not set to `NULL`, however, and a destroy through that
+  copy frees the memory a second time.
+- **The content is a C string.** A `cstr` holds the text up to its first NUL
+  byte; it is not a container for binary data.
+- **Thread safety.** A `cstr` deliberately has no internal lock. When more
+  than one thread uses a string, protect it with your own lock. See
   [Concurrency](concurrency.md).
 
 ## Reference

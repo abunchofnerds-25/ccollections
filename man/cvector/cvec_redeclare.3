@@ -11,24 +11,24 @@ cvec_redeclare(v, type);
 .fi
 .SH DESCRIPTION
 .nf
-This macro declares the two companion type variables for v. The
-type-dispatching macros read those variables. The macro does not declare v
-itself, and it does not touch the vector that v names. Use this macro
-wherever a cvec comes from somewhere else. A function parameter is the
-usual case. A struct member that you copy into a local is another case. You
-can then use cvec_at(3), cvec_push(3) and the other macros on that handle.
+This macro declares the two companion type variables for v that the
+type-dispatching macros read. It does not declare v itself, and it does
+not touch the vector that v names. Use this macro wherever a cvec comes
+from somewhere else: usually a function parameter, but also, for
+example, a struct member that you copy into a local. You can then use
+cvec_at(3), cvec_push(3) and the other macros on that handle.
 
-The companion variables carry only type information. Nothing reads them at
-run time, they are marked unused, and they cost nothing. The value
-companion carries the element type. The type-dispatching macros use it to
-type their result, and to size what they copy. The key companion carries
-size_t. That is the type of the index which a vector iterator reports
-through ccol_iter_key_ptr(3).
+The companion variables carry only type information: nothing reads them
+at run time, they are marked unused, and they cost nothing. The value
+companion carries the element type, which the type-dispatching macros use
+to type their result and to size what they copy. The key companion
+carries size_t, which is the type of the index that a vector iterator
+reports through ccol_iter_key_ptr(3).
 
-The type here is a statement about the vector. It is not a request to
-change the vector. Nothing compares it against the element size that
-created the vector. A different type therefore reinterprets the stored
-bytes through that type.
+The type here is a statement about the vector, not a request to change
+it. Nothing compares it against the element size that created the
+vector, so a different type reinterprets the stored bytes through that
+type.
 .fi
 .SH PARAMETERS
 .nf
@@ -46,21 +46,22 @@ None. The macro expands to declarations, not to an expression.
 .fi
 .SH NOTES
 .nf
-The macro expands to a pair of declarations. It needs a semicolon at the
-end of the call site. It therefore belongs where declarations are legal.
-It cannot be the body of an if or a loop without braces.
-The macro pastes v into the names of the companion variables. v must
-therefore be a plain identifier.
-The macro declares nothing with the name v. You cannot use it on a handle
-that is not in scope already. It creates no vector and destroys none.
+The macro expands to a pair of declarations and needs a semicolon at the
+end of the call site, so it belongs where declarations are legal and
+cannot be the body of an if or a loop without braces.
+The macro pastes v into the names of the companion variables, so v must
+be a plain identifier.
+The macro declares nothing with the name v, so you cannot use it on a
+handle that is not in scope already. It creates no vector and destroys
+none.
 A second use for the same v in the same scope declares the same names
 again, and the code does not compile.
 .fi
 .SH WARNINGS
 .nf
 The type here must be the real element type of the vector. The compiler
-reports no diagnostic for a wrong type. The type-dispatching macros then
-read and write the bytes of the vector as that type. For a type of a
+reports no diagnostic for a wrong type, and the type-dispatching macros
+then read and write the bytes of the vector as that type; for a type of a
 different size, they also compute element offsets that do not match the
 offsets of the vector itself.
 .fi

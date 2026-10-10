@@ -11,14 +11,14 @@ cstr_init_mp(s, initial, mprocs);
 .fi
 .SH DESCRIPTION
 .nf
-This macro calls cstring_create_full() to initialise the cstr variable s,
-which you must declare first. It uses the initial content and the memory
-management procedures that you give. It calls ccol_fatal_err() if the
+This macro calls cstring_create_full() to initialise the cstr variable s
+with the initial content and the memory management procedures that you
+give. You must declare s first. It calls ccol_fatal_err() if the
 creation fails.
 .fi
 .SH PARAMETERS
 .nf
-s        cstr lvalue to initialise (you must declare it first). The macro
+s        cstr lvalue to initialise (you must declare it first); the macro
          assigns it once, after the string is created
 initial  Initial content (C string or NULL for empty string)
 mprocs   Custom memory management procedures (ccol_memmgmt_procs_t *)

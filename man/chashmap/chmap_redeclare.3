@@ -12,22 +12,22 @@ chmap_redeclare(hm_name, key_t, val_t);
 .SH DESCRIPTION
 .nf
 Declares the companion type variables that carry key_t and val_t for a hash
-map handle that already exists. It declares no handle. It creates no map
-and destroys none. It declares again only the type information that the
-type-inferred macros need.
+map handle that already exists. It declares no handle, and it neither
+creates nor destroys a map: it declares again only the type information
+that the type-inferred macros need.
 
 Every type-inferred macro learns the key and value types of a map from two
-ordinary local variables named after the handle. chmap_construct(3) and
-chmap_declare(3) create these variables next to the handle. The variables
-are local declarations. They therefore do not travel with the handle to
-another function. Inside that function, chmap_insert(hm_name, ...) and the
-other macros name variables that are not declared there, and the
-translation unit does not compile. This macro declares them again. Every
-caller that passes a chmap across a function boundary needs this macro.
+ordinary local variables named after the handle, which chmap_construct(3)
+and chmap_declare(3) create next to the handle. Because the variables are
+local declarations, they do not travel with the handle to another
+function. Inside that function, chmap_insert(hm_name, ...) and the other
+macros name variables that are not declared there, and the translation
+unit does not compile. This macro declares them again, and every caller
+that passes a chmap across a function boundary needs it.
 
 The types here must be the types that the map was created with. The macros
-use them to read a key and to size a value. They also use them to decide
-whether a value is a char * that the map stores by contents.
+use them to read a key, to size a value, and to decide whether a value is
+a char * that the map stores by contents.
 .fi
 .SH PARAMETERS
 .nf
@@ -42,30 +42,30 @@ expression.
 .fi
 .SH NOTES
 .nf
-Expands to a sequence of declarations. Put it where a declaration is
-allowed. It takes a trailing semicolon of its own
-The declared variables are pointers. Nothing dereferences them at run
+Expands to a sequence of declarations, so put it where a declaration is
+allowed; it takes a trailing semicolon of its own
+The declared variables are pointers that nothing dereferences at run
 time. They exist so that typeof and the type-introspection macros can
-read the types from them. They cost nothing in the generated code
-It declares variables only. It is therefore also the way to widen the
-reach of a handle held in a struct field or in a global. Name it in each
+read the types from them, and they cost nothing in the generated code
+Because it declares variables only, it is also the way to widen the
+reach of a handle held in a struct field or in a global: name it in each
 function that works on that handle
 .fi
 .SH WARNINGS
 .nf
 Do not declare a value type whose width is different from the stored one.
-chmap_get(3) and chmap_get_ptr(3) report such a width at run time. They
+chmap_get(3) and chmap_get_ptr(3) report such a width at run time: they
 describe the size mismatch and stop the program through ccol_fatal_err().
-A mismatch between two types of the same width is not found at all. The
-types here are therefore a promise that the caller keeps, and not one
-that the compiler checks.
-The library reports a key of the wrong width, and does not accept it. The
-raw entry points return ccol_invalid_args for it. The hash of a key, and
-its equality test, have a meaning only at the width that the map was
-created for. chmap_get(3) and chmap_insert(3) raise that error to
-ccol_fatal_err(). chmap_get_ptr(3) and chmap_remove(3) report it without
-a stop: chmap_get_ptr(3) gives a NULL result, and chmap_remove(3) gives
-the return code.
+A mismatch between two types of the same width is not found at all, so
+the types here are a promise that the caller keeps, not one that the
+compiler checks.
+The library reports a key of the wrong width instead of accepting it,
+and the raw entry points return ccol_invalid_args for it, because the
+hash of a key and its equality test have a meaning only at the width
+that the map was created for. chmap_get(3) and chmap_insert(3) raise
+that error to ccol_fatal_err(). chmap_get_ptr(3) and chmap_remove(3)
+report it without a stop: chmap_get_ptr(3) gives a NULL result, and
+chmap_remove(3) gives the return code.
 .fi
 .SH EXAMPLES
 .nf

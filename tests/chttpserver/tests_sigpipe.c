@@ -27,13 +27,13 @@ SOFTWARE.
  * directory ignore SIGPIPE for the whole process, and an ignored SIGPIPE is
  * discarded when it is raised, so a write that raises it is invisible there.
  *
- * It checks two things. The server leaves the disposition of SIGPIPE as the
- * application set it. And no write of the server raises SIGPIPE when the peer
- * is gone. Each write test blocks SIGPIPE around the operation and then asks
- * whether one is pending, so a failure is one failed test and not a dead
- * binary. A write(2) or writev(2) to a socket whose peer has closed raises
- * SIGPIPE for the writing thread; send(2) and sendmsg(2) with MSG_NOSIGNAL
- * do not.
+ * It checks two things: that the server leaves the disposition of SIGPIPE
+ * as the application set it, and that no write of the server raises SIGPIPE
+ * when the peer is gone. Each write test blocks SIGPIPE around the operation
+ * and then asks whether one is pending, so a failure is one failed test
+ * instead of a dead binary. A write(2) or writev(2) to a socket whose peer has
+ * closed raises SIGPIPE for the writing thread; send(2) and sendmsg(2) with
+ * MSG_NOSIGNAL do not.
  */
 
 #include <chttpserver.h>
@@ -177,8 +177,8 @@ static void _slow_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
 }
 
 /* The server runs one worker thread, so this handler runs on the thread that
-   wrote the response of _slow_handler, and after that write. The worker
-   inherits the blocked SIGPIPE of the thread that started the server, so a
+   wrote the response of _slow_handler, after that write. Because the worker
+   inherits the blocked SIGPIPE of the thread that started the server, a
    SIGPIPE that the write raised is still pending here. */
 static void _probe_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
   (void)req;

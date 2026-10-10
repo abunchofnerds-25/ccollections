@@ -11,21 +11,21 @@ cvec_push(v, new_elem);
 .fi
 .SH DESCRIPTION
 .nf
-This macro is a type-inferred wrapper for cvector_push_back(). The macro
-converts new_elem to the declared element type of v. It converts the value
-with an ordinary C assignment, exactly as "T tmp = new_elem;" does. It then
-copies that converted value into the vector. The pushed value is therefore
-the result of a plain C assignment, and not the raw byte representation of
-new_elem. The macro calls ccol_fatal_err() when cvector_push_back() fails.
+This macro is a type-inferred wrapper for cvector_push_back(). It converts
+new_elem to the declared element type of v with an ordinary C assignment,
+exactly as "T tmp = new_elem;" does, and then copies that converted value
+into the vector, so the pushed value is the result of a plain C
+assignment and not the raw byte representation of new_elem. The macro
+calls ccol_fatal_err() when cvector_push_back() fails.
 For an element type that is an array, such as char[64], new_elem is an
-array or a string literal. The macro zero-fills the element and copies the
-bytes of new_elem into it, up to the smaller of the two sizes. A pointer as
-new_elem for such a type is a compile error, because the macro cannot see
-the size of what it points at.
-The macro never takes the address of new_elem. It first copies the value
-into a temporary of the element type. You can therefore give a literal,
-a calculated expression, or a struct value that a function returns. Each
-of these is as correct as a variable.
+array or a string literal: the macro zero-fills the element and copies the
+bytes of new_elem into it, up to the smaller of the two sizes. A pointer
+as new_elem for such a type is a compile error, because the macro cannot
+see the size of what it points at.
+The macro never takes the address of new_elem; it first copies the value
+into a temporary of the element type. A literal, a calculated expression
+or a struct value that a function returns is therefore as correct as a
+variable.
 .fi
 .SH PARAMETERS
 .nf
@@ -38,22 +38,22 @@ new_elem  The element. It can be a variable, a literal or any
 .nf
 The macro stops the program on failure.
 The macro converts the value of new_elem to the declared element type of
-v. It converts the value in the same way as a plain C assignment. For
-example, an int literal that goes into a cvec_construct(v, long) becomes
-a long value. A float that goes into a cvec_construct(v, int) truncates
-to an int, in the same way as "int x = some_float;". The macro never
-copies the raw bit pattern of new_elem into an element of a different
-type. This is also true when the two types have the same size.
+v in the same way as a plain C assignment. For example, an int literal
+that goes into a cvec_construct(v, long) becomes a long value, and a
+float that goes into a cvec_construct(v, int) truncates to an int, in the
+same way as "int x = some_float;". The macro never copies the raw bit
+pattern of new_elem into an element of a different type, even when the
+two types have the same size.
 A new_elem of a type that has no implicit conversion to the declared
-element type of v is a compile error at this point. The macro never
+element type of v is a compile error at this point; the macro never
 reinterprets such a value silently.
-new_elem can safely alias into the backing buffer of v. An example is
-cvec_at(v, i). The macro reads the value into a private temporary that
-does not alias, before it touches v. A capacity growth that this call
-starts can therefore never invalidate the value.
+new_elem can safely alias into the backing buffer of v, for example when
+it is cvec_at(v, i). The macro reads the value into a private
+temporary that does not alias before it touches v, so a capacity growth
+that this call starts can never invalidate the value.
 With GCC 11 or later, the macro sets every padding byte of its temporary
 to zero before it pushes it, so a struct element is stored with zero
-padding. cvec_find(3) relies on that. With a compiler that offers no
+padding, which cvec_find(3) relies on. With a compiler that offers no
 __builtin_clear_padding, such as Clang, the padding bytes of the stored
 element are unspecified.
 .fi

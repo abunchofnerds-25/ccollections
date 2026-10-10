@@ -12,20 +12,20 @@ cyaml cyaml_create_int(long long val);
 .fi
 .SH DESCRIPTION
 .nf
-Allocate a DOM node of type CYAML_INTEGER.  The node stores the value as
-a long long.  cyaml_create_int() passes NULL for mp.
+Allocate a DOM node of type CYAML_INTEGER, which stores the value as a
+long long.  cyaml_create_int() passes NULL for mp.
 .fi
 .SH PARAMETERS
 .nf
-val  Integer value.  The caller converts any integer type to long long
-     implicitly.
+val  Integer value.  Any integer type that the caller passes converts
+     implicitly to long long.
 mp   Custom allocator, or NULL for default.
      The library keeps its own copy of the struct, so the caller may
-     release or reuse the struct once this call returns. The functions
-     that it names must stay callable until the last node built with
-     them is destroyed. A process can use at most 64 distinct sets of
-     four functions; a call that would need a 65th fails and returns
-     NULL.
+     release or reuse the struct once this call returns, but the
+     functions that it names must stay callable until the last node
+     built with them is destroyed.  A process can use at most 64
+     distinct sets of four functions; a call that would need a 65th
+     fails and returns NULL.
 .fi
 .SH RETURN VALUE
 .nf

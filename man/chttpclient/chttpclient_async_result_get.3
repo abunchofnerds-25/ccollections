@@ -11,21 +11,21 @@ chttpcli_async_result_t *chttpclient_async_result_get(ctpool_future *f);
 .fi
 .SH DESCRIPTION
 .nf
-This is a thin wrapper over ctpool_future_get. It casts the void*
-result of that function to chttpcli_async_result_t*. More than one
-call on the same future is safe, and this matches the contract of
-ctpool_future_get. Every call after the first gives the same result
-pointer. The future still owns that pointer until somebody frees it.
+This is a thin wrapper over ctpool_future_get that casts the void*
+result of that function to chttpcli_async_result_t*. As with
+ctpool_future_get, more than one call on the same future is safe: every
+call after the first gives the same result pointer, which the future
+owns until somebody frees it.
 
 The result has two public fields:
   - rv holds the code that chttpclient_do gives for the same request.
   - resp is not NULL only when rv == ccol_success. The caller then owns
-    resp. Free resp with chttpclient_resp_free before
+    resp; free it with chttpclient_resp_free before
     chttpclient_async_result_free.
 For a request from chttpclient_do_async_streaming, a success also fills
-resp. status_code therefore has the same meaning. But resp->body is NULL,
-resp->body_len is 0 and resp->headers is NULL. The reason is that the
-write callback got the body, and the client does not keep the headers.
+resp, so status_code has the same meaning. But resp->body is NULL,
+resp->body_len is 0 and resp->headers is NULL, because the write
+callback got the body and the client does not keep the headers.
 .fi
 .SH PARAMETERS
 .nf
@@ -34,9 +34,8 @@ f The future from chttpclient_do_async or from
 .fi
 .SH RETURN VALUE
 .nf
-The result, or NULL. The function gives NULL if f is NULL. It also
-gives NULL if something cancelled the future before it was
-fulfilled.
+The result, or NULL if f is NULL or if something cancelled the future
+before it was fulfilled.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_do_async (3),

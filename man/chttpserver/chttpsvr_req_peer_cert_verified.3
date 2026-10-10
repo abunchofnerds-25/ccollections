@@ -11,25 +11,25 @@ bool chttpsvr_req_peer_cert_verified(const chttpsvr_req *req);
 .fi
 .SH DESCRIPTION
 .nf
-Returns true only when the connection of the request is TLS, the
-client presented a certificate during the handshake, and that
-certificate verified against the ca_bundle_path of the server.
+Returns true only when the request arrived over TLS, the client
+presented a certificate during the handshake, and that certificate
+verified against the ca_bundle_path of the server.
 
 It returns false for a plaintext connection, for a server with no
 ca_bundle_path, for a client that presented no certificate, and when
 req is NULL.
 
-With the default configuration a server that has a ca_bundle_path
+With the default configuration, a server that has a ca_bundle_path
 accepts no client without such a certificate, so every request there
-reports true.  With client_cert_optional set in chttp_tls_config_t a
-client that presents nothing is accepted too, and this function is how
-a handler or a middleware tells it apart from a verified one.  A
-client whose certificate does not verify never reaches a handler in
-either mode.
+reports true.  When client_cert_optional is set in chttp_tls_config_t,
+a client that presents nothing is accepted as well, and this function
+is how a handler or a middleware tells such a client apart from a
+verified one.  In either mode, a client whose certificate does not
+verify never reaches a handler.
 
 The answer belongs to the connection, so every request on one
-keep-alive connection reports the same value.  A resumed TLS session
-reports the answer of the handshake that established it.
+keep-alive connection reports the same value, and a resumed TLS
+session reports the answer of the handshake that established it.
 .fi
 .SH RETURN VALUE
 .nf

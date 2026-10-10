@@ -16,12 +16,13 @@
 # The source tree: -Iinclude and #include <NAME.h>, the way the library and
 # its test suites include the headers.
 #
-# The installed layout: the headers in STAGE/include/ccollections/, as `make install` lays them out, reached the way
-# an application reaches them: -ISTAGE/include and #include
-# <ccollections/NAME.h>. Beside it sits an application directory that holds a
-# header of its own for every public name (common.h, cstring.h, ...). Each
-# probe compiles twice, with that directory first and last on the command line,
-# and in each order the probe must get the library copy through
+# The installed layout: the headers in STAGE/include/ccollections/, as
+# `make install` lays them out, reached the way an application reaches them:
+# -ISTAGE/include and #include <ccollections/NAME.h>. Beside it sits an
+# application directory that holds a header of its own for every public name
+# (common.h, cstring.h, ...). Each probe compiles twice, with that directory
+# first and last on the command line, and in each order the probe must get the
+# library copy through
 # <ccollections/NAME.h> and its own copy through <NAME.h>:
 #   - an application header that a library header reaches fails with #error,
 #     because only the probe itself sets the macro that the application

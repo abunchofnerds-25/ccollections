@@ -16,46 +16,45 @@ ccol_retval_t ctpool_submit(ctpool pool,
 .nf
 Allocates a task struct and adds it to the task queue of the pool. For
 an unbounded queue the call returns as soon as the task is in the
-queue, and it never blocks on capacity. For a bounded queue the call
-blocks until the queue has a free slot.
+queue and never blocks on capacity; for a bounded queue it blocks until
+the queue has a free slot.
 
-The worker thread that picks the task up calls fn(arg). The worker
-calls on_complete(arg, true) immediately after fn returns, when
-on_complete is not NULL. The pool never frees arg. The caller keeps
-that ownership.
+The worker thread that picks the task up calls fn(arg), and, when
+on_complete is not NULL, calls on_complete(arg, true) immediately after
+fn returns. The pool never frees arg; the caller keeps that ownership.
 
-on_complete runs exactly once for every task that a submit accepts,
-and ran says whether fn ran. A task that the pool discards before a
-worker takes it gets on_complete(arg, false), and fn never runs.
+on_complete runs exactly once for every task that a submit accepts, and
+ran says whether fn ran. A task that the pool discards before a worker
+takes it gets on_complete(arg, false), and fn never runs.
 ctpool_shutdown_immediate(3) discards every task that is still queued,
-also when it escalates a ctpool_shutdown_drain(3) that is under way,
-and so does a ctpool_destroy(3) of a pool that this process inherited
-across fork(2). Those on_complete(arg, false) calls run on the thread
-that makes that call, before the call returns, with no lock of the pool
-held. on_complete can therefore release arg in both cases. A submit
-that fails accepts nothing and never calls on_complete.
+including when it escalates a ctpool_shutdown_drain(3) that is under
+way, and so does a ctpool_destroy(3) of a pool that this process
+inherited across fork(2). Those on_complete(arg, false) calls run on
+the thread that makes that call, before the call returns, with no lock
+of the pool held, so on_complete can release arg in both cases. A
+submit that fails accepts nothing and never calls on_complete.
 
 An on_complete(arg, false) call counts as a call from the on_complete
-callback of a task of the pool, as a call on a worker does. From there,
-ctpool_wait(3), ctpool_shutdown_drain(3) and
+callback of a task of the pool, just as a call on a worker does. From
+there, ctpool_wait(3), ctpool_shutdown_drain(3) and
 ctpool_shutdown_immediate(3) on the same pool are no-ops that return at
 once, ctpool_destroy(3) on the same pool is a fatal error, and a submit
 to the same pool returns ccol_not_permitted, because the pool is in
 shutdown (from the ctpool_destroy(3) of a pool inherited across
 fork(2) the handle is already retired, so a submit returns
-ccol_invalid_args there). This holds for every pool whose discarded callbacks the
-thread is running, also when such a callback shuts down a second pool
-and the callbacks of that second pool run nested inside it.
+ccol_invalid_args there). This holds for every pool whose discarded
+callbacks the thread is running, including when such a callback shuts
+down a second pool and the callbacks of that second pool run nested
+inside it.
 
-The call returns ccol_container_full, and does not wait, in one case.
-That case is a call from a task that runs on this same pool, while a
-bounded queue is already at capacity. A call from the on_complete
-callback of that task is the same case. Only the workers of this pool
-can free a slot, and the caller is one of them. Nothing could therefore
+A call from a task that runs on this same pool, or from the on_complete
+callback of that task, while a bounded queue is already at capacity,
+returns ccol_container_full instead of waiting. Only the workers of this
+pool can free a slot, and the caller is one of them, so nothing could
 ever satisfy the wait.
 
 Use ctpool_try_submit(3) or ctpool_timed_submit(3) when the caller
-wants to handle a full queue itself. Use an unbounded queue when the
+wants to handle a full queue itself, and an unbounded queue when the
 caller must never get a refusal.
 .fi
 .SH PARAMETERS

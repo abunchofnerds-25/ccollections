@@ -11,32 +11,32 @@ cbmap_declare_scoped(hm_name, key_t, val_t);
 .fi
 .SH DESCRIPTION
 .nf
-Declares an ordered map handle with the name hm_name. It also declares the
-companion type variables. Those variables carry key_t and val_t to every
-later type-inferred macro. The macro also attaches the cleanup attribute. That
-attribute destroys the map on every exit from the enclosing scope. The macro
-creates nothing. The handle holds NULL until one of the init macros runs.
+Declares an ordered map handle named hm_name, together with the companion
+type variables that carry key_t and val_t to every later type-inferred
+macro, and attaches the cleanup attribute, which destroys the map on every
+exit from the enclosing scope. The macro creates nothing, and the handle
+holds NULL until one of the init macros runs.
 
-The macro differs from cbmap_declare(3) in exactly three ways. It
-initializes the handle to NULL and does not leave it uninitialized. It also
-initializes both companion type variables to NULL. And the handle carries
+The macro differs from cbmap_declare(3) in exactly three ways: it
+initializes the handle to NULL instead of leaving it uninitialized, it
+initializes both companion type variables to NULL, and the handle carries
 the cleanup attribute, so an exit from the scope destroys the map that the
-handle names at that moment. The handle starts as NULL, and the library
-ignores a NULL handle. A return before an init macro runs is therefore safe,
+handle names at that moment. Because the handle starts as NULL and the
+library ignores a NULL handle, a return before an init macro runs is safe,
 and nothing in the block reads an indeterminate object.
 
 Use this macro with cbmap_init(3) or one of its variants when the
 configuration of the map comes from inside the scope.
-cbmap_construct_scoped(3) is the one-step form. Use that form for a map
-whose configuration is known at the declaration.
+cbmap_construct_scoped(3) is the one-step form, for a map whose
+configuration is known at the declaration.
 .fi
 .SH PARAMETERS
 .nf
 hm_name  Name for the map handle to declare
-key_t    Key type. It tells every later macro how to read a key. It also
-         tells the init macro which order to give the tree
-val_t    Value type. Only the type-inferred macros read it. The library never
-         gives it to the container
+key_t    Key type. It tells every later macro how to read a key, and tells
+         the init macro which order to give the tree
+val_t    Value type. Only the type-inferred macros read it; the library
+         never gives it to the container
 .fi
 .SH RETURN VALUE
 .nf
@@ -46,23 +46,23 @@ expression.
 .SH NOTES
 .nf
 The macro needs GCC or Clang, because it uses the cleanup attribute
-An explicit cbmap_destroy(3) before the end of the scope stays correct. It
+An explicit cbmap_destroy(3) before the end of the scope stays correct: it
 sets the handle to NULL, and the cleanup at the exit of the scope then does
 nothing
-The companion type variables follow the scope of the handle. A function
-that receives the handle therefore needs cbmap_redeclare(3) there
+The companion type variables follow the scope of the handle, so a function
+that receives the handle needs cbmap_redeclare(3) there
 .fi
 .SH WARNINGS
 .nf
-The handle must not outlive its scope. Do not return it. Do not store it in
-a place that outlives the scope. Both actions give out a handle whose map
-the cleanup attribute frees at the exit of the scope.
+The handle must not outlive its scope. Do not return it, and do not store
+it in a place that outlives the scope: either action gives out a handle
+whose map the cleanup attribute frees at the exit of the scope.
 .fi
 .SH EXAMPLES
 .nf
 cbmap_declare_scoped(sorted, int, char *);
 if (!load_config()) {
-    return -1;             /* Nothing exists yet. Cleanup does nothing */
+    return -1;             /* Nothing exists yet, so cleanup does nothing */
 }
 cbmap_init(sorted);
 int k = 42;

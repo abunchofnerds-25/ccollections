@@ -15,7 +15,7 @@ static inline cjson cjson_parse_n(const char *json_str, size_t len,
 .fi
 .SH DESCRIPTION
 .nf
-Like cjson_parse_mp() but operates on len bytes instead of a
+Like cjson_parse_mp(), but operates on len bytes instead of a
 null-terminated string.  cjson_parse_n() is a static inline wrapper
 that calls cjson_parse_n_mp(json_str, len, err_str, NULL).
 .fi
@@ -27,11 +27,11 @@ err_str   Out-parameter for the parse error message (same semantics
           as cjson_parse_mp).  Pass NULL to discard.
 mp        Custom allocator for all nodes, or NULL for default.
           The library keeps its own copy of the struct, so the caller
-          may release or reuse the struct once this call returns. The
-          functions that it names must stay callable until the last node
-          built with them is destroyed. A process can use at most 64
-          distinct sets of four functions; a call that would need a 65th
-          fails and returns NULL.
+          may release or reuse the struct once this call returns, but
+          the functions that it names must stay callable until the
+          last node built with them is destroyed.  A process can use
+          at most 64 distinct sets of four functions; a call that
+          would need a 65th fails and returns NULL.
 .fi
 .SH RETURN VALUE
 .nf

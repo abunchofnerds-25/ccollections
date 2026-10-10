@@ -12,11 +12,11 @@ C Collections (libccollections, \-lccollections)
 .SH DESCRIPTION
 .nf
 citerators is one iteration API for cvec, chmap and cbmap. cvector.h,
-chashmap.h and cbstmap.h each include it. A translation unit that
-includes one of those container headers therefore has the full API. It needs
-no other #include.
+chashmap.h and cbstmap.h each include it, so a translation unit that
+includes one of those container headers has the full API and needs no
+other #include.
 
-ccol_for_each(3) is the usual form. It declares the iterator, walks the
+ccol_for_each(3) is the usual form: it declares the iterator, walks the
 container and destroys the iterator when the loop ends. You can also
 write your own loop:
   - Declare the iterator with ccol_iter_declare(3).
@@ -26,7 +26,7 @@ ccol_iter_key_ptr(3) and ccol_iter_val_ptr(3) give typed pointers to
 the current key and the current value.
 
 ccol_begin(3) selects the begin function of the container from its type
-at compile time. A container of a different type is a compile error. A
+at compile time, and a container of any other type is a compile error. A
 container handle that is NULL iterates as an empty container.
 .fi
 .SH "KEYS AND VALUES"
@@ -40,25 +40,25 @@ cbmap of K, V    const K *                   V *, or V const * when V
 .fi
 .SH "ORDER"
 .nf
-The iteration walks a cvec by index, from 0 up. It walks a cbmap in
-ascending key order. A chmap has no defined order;
-chashmap_begin_iter(3) describes it.
+The iteration walks a cvec by index, from 0 up, and a cbmap in ascending
+key order. A chmap has no defined order; chashmap_begin_iter(3)
+describes it.
 .fi
 .SH "LIFETIME"
 .nf
 When ccol_iter_next(3) moves past the last element, it destroys the
-iterator and gives NULL. A loop can stop before the last element. The
-iterator is then live until ccol_iter_destroy(3) or until the end of
+iterator and gives NULL. A loop can stop before the last element, and
+the iterator is then live until ccol_iter_destroy(3) or until the end of
 the scope of ccol_iter_declare(3). The key pointer and the value pointer
 are valid only while the iterator is on that element and the container
 does not change. An insert into the container or a removal from it
-during an iteration makes the iterator invalid. The behavior is then
-undefined.
+during an iteration makes the iterator invalid, and the behavior is
+then undefined.
 .fi
 .SH NOTES
 .nf
-The macros use GNU C statement expressions and the cleanup attribute.
-They need GCC or Clang.
+The macros use GNU C statement expressions and the cleanup attribute,
+so they need GCC or Clang.
 .fi
 .SH "SEE ALSO"
 .BR ccol_for_each (3),

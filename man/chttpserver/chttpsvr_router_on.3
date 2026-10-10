@@ -14,29 +14,28 @@ ccol_retval_t chttpsvr_router_on(chttpsvr_router *router,
 .fi
 .SH DESCRIPTION
 .nf
-This function works like chttpsvr_register_handler, but it registers
-the route on a sub-router.  Every rule that chttpsvr_register_handler
-describes applies here too.  Those rules cover the routing, the slash
-at the start, the slash at the end, two slashes together, the
-characters of a parameter name, a parameter name that appears twice,
-and the thread safety.  This function also supports CHTTP_ANY as the
-method argument.
+Works like chttpsvr_register_handler, but registers the route on a
+sub-router.  Every rule that chttpsvr_register_handler describes
+applies here as well: the rules for routing, for the leading slash,
+for a trailing slash, for two consecutive slashes, for the characters
+of a parameter name, for a parameter name that appears twice, and for
+thread safety.  CHTTP_ANY is also supported as the method argument.
 
-This function first checks that nothing destroyed the server that owns
-router.  That check also covers a concurrent destroy from another
-thread.  A call that races a chttpsvr_destroy of the owning server
-returns ccol_invalid_args, and touches no freed memory.
+This function first checks that the server that owns router has not
+been destroyed, and the check also covers a concurrent destroy from
+another thread: a call that races a chttpsvr_destroy of the owning
+server returns ccol_invalid_args and touches no freed memory.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success on success.
 ccol_invalid_args when router, pattern or fn is NULL; when pattern
                   does not start with '/'; when pattern has two
-                  slashes together or a slash at the end; when a
-                  {name} segment has a character outside
+                  consecutive slashes or a trailing slash; when a
+                  {name} segment contains a character outside
                   [A-Za-z0-9_]; when the same {name} appears more than
-                  once; or when something destroyed the server that
-                  owns router.
+                  once; or when the server that owns router has been
+                  destroyed.
 ccol_not_enough_memory when an allocation fails.
 .fi
 .SH "SEE ALSO"

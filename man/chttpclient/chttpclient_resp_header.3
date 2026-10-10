@@ -13,18 +13,19 @@ const char *chttpclient_resp_header(const chttpcli_response *resp,
 .SH DESCRIPTION
 .nf
 This function gives the value of the response header with the name
-that you give. It gives NULL if that header is not there. The lookup
-ignores the case of the name. The response stores each header name in
-lowercase. The function makes your name lowercase before the lookup.
+that you give, or NULL if that header is not there. The lookup ignores
+the case of the name: the response stores each header name in
+lowercase, and the function makes your name lowercase before the
+lookup.
 
 A server can send one header name on several lines. For such a name
 the function gives the combined value that RFC 9110 section 5.3
 defines: every value in the order of the wire, joined with ", ".
 Set-Cookie is the one exception, because RFC 9110 section 5.3 and RFC
 6265 section 3 forbid that combination for it (a cookie value can
-itself hold a comma). For "set-cookie" the function gives the first
+itself hold a comma), so for "set-cookie" the function gives the first
 occurrence. chttpclient_resp_header_count and
-chttpclient_resp_header_at give every occurrence on its own. The
+chttpclient_resp_header_at give every occurrence separately. The
 headers map of the response holds the same value for each name.
 
 The pointer that the function gives back stays valid until a call to
@@ -46,10 +47,10 @@ does not find that header.
 .nf
 The map behind this function comes from the header block of the
 response alone. A chunked response body can carry trailer fields (RFC
-7230 4.1.2). The client parses those fields and validates them, but
-they are not response headers. A trailer field with any name therefore
-reads as absent here. Such a field cannot replace a header that the
-server really sent.
+7230 4.1.2), which the client parses and validates, but they are not
+response headers. A trailer field with any name therefore reads as
+absent here, and such a field cannot replace a header that the server
+really sent.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_resp_header_count (3),

@@ -11,15 +11,15 @@ const KeyT *ccol_iter_key_ptr(it);
 .fi
 .SH DESCRIPTION
 .nf
-This macro gives a typed const pointer to the key of the element that it
-points at now.
+This macro gives a typed const pointer to the key of the element that the
+iterator is currently on.
 
 For a cvec iterator, the key is the index of the element, a size_t.
 For a chmap iterator and a cbmap iterator, the key is the real map key.
-For a char-pointer key, the macro gives a (char *const *). That pointer
-points into the internal storage of the map. The map owns the string
-that the key points to. The macro gives all other key types as a direct
-typed pointer.
+For a char-pointer key, the macro gives a (char *const *) that points
+into the internal storage of the map, and the map owns the string that
+the key points to. All other key types come back as a direct typed
+pointer.
 .fi
 .SH PARAMETERS
 .nf
@@ -35,7 +35,7 @@ pointer, and do not change the value through it.
 .nf
 The pointer stays valid only while the iterator is alive and the
 container stays unchanged.
-This macro uses a GNU C statement expression. It needs GCC or Clang.
+This macro uses a GNU C statement expression, so it needs GCC or Clang.
 .fi
 .SH "SEE ALSO"
 .BR ccol_iter_val_ptr (3),

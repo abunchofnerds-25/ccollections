@@ -12,11 +12,11 @@ cbmap_construct(hm_name, key_type, val_type);
 .SH DESCRIPTION
 .nf
 Type-inferred macro that creates a BST map with the default settings.
-The macro finds the key type by itself. The key type is a signed
-integer, an unsigned integer, a floating-point type, a string or
-another type. The macro also creates type marker variables. These
-variables give the declared key type and the declared value type to
-the other type-dispatching macros, at each place that calls them.
+The macro finds the key type by itself: a signed integer, an unsigned
+integer, a floating-point type, a string or another type. It also
+creates type marker variables, which give the declared key type and the
+declared value type to the other type-dispatching macros at each place
+that calls them.
 .fi
 .SH PARAMETERS
 .nf
@@ -30,10 +30,9 @@ The macro stops the program if an allocation fails
 The macro uses the default memory management and the default
 comparison
 For a struct key_type, the macro uses a raw memcmp order. See
-cbmap_create_full(3) for the rules of the default comparison. That
-page also shows how to give a custom_comparison_proc instead. The
-cbmap_construct_cc macro is the type-inferred equivalent for a struct
-key_type
+cbmap_create_full(3) for the rules of the default comparison and for
+how to give a custom_comparison_proc instead. The cbmap_construct_cc
+macro is the type-inferred equivalent for a struct key_type
 .fi
 .SH EXAMPLES
 .nf

@@ -11,10 +11,10 @@ static inline const char *cjson_type_str(cjson node);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the spelling of the type tag of node as a string. It is for
-diagnostics, such as a message that tells the reader that a value
-did not have the type which a caller expected. Use cjson_type(3) to
-read the tag itself. This function only makes the text for it.
+Returns the spelling of the type tag of node as a string, for
+diagnostics such as a message that tells the reader that a value did
+not have the type which a caller expected. Use cjson_type(3) to read
+the tag itself; this function only makes the text for it.
 
 The returned text is the enumerator's own name, one of:
 
@@ -28,7 +28,7 @@ The returned text is the enumerator's own name, one of:
 
 A NULL node gives "CJSON_NULL", because cjson_type(3) reports
 CJSON_NULL for it. A tag that is not in cjson_node_type_t gives
-"CJSON_UNKNOWN". A valid node never carries such a tag.
+"CJSON_UNKNOWN", which a valid node never carries.
 .fi
 .SH PARAMETERS
 .nf
@@ -41,11 +41,11 @@ A pointer to a string literal naming the node's type. Never NULL.
 .SH NOTES
 .nf
 The result has static storage duration and lives for the whole
-program. The caller can therefore store it and print it later. The
-caller must not change it and must not free it.
+program, so the caller can store it and print it later. The caller
+must not change it and must not free it.
 
 This result alone does not tell a NULL node apart from a true JSON
-null node. Compare the handle against NULL first when the caller
+null node, so compare the handle against NULL first when the caller
 needs that difference.
 .fi
 .SH EXAMPLES

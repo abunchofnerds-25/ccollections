@@ -1,9 +1,9 @@
 name: Fuzz
 
-# These jobs are mandatory and they block a merge. They run on every push and
-# on every pull request, and their triggers are the same as the triggers in
-# ci.yml. Fuzzing is part of ordinary CI here. It is not a check that runs only
-# after a merge, and it is not a check that you turn on yourself.
+# These jobs are mandatory and they block a merge. They run on every push and on
+# every pull request, with the same triggers as ci.yml. Fuzzing is part of
+# ordinary CI here: it is not a check that runs only after a merge, and it is
+# not a check that you turn on yourself.
 on:
   push:
   pull_request:
@@ -26,8 +26,8 @@ jobs:
       - name: Run the document target for a bounded duration
         run: cd tests/cyaml && ./fuzz_cyaml fuzz/corpus -max_total_time=600
       # The path grammar is a second parser, and unlike the document target it
-      # MUTATES the tree it walks. See fuzz/fuzz_cyaml_path.c. cjson has had
-      # the same pair of targets from the start.
+      # MUTATES the tree that it walks; see fuzz/fuzz_cyaml_path.c. cjson has
+      # the same pair of targets.
       - name: Run the path target for a bounded duration
         run: cd tests/cyaml && ./fuzz_cyaml_path fuzz/corpus_path -max_total_time=300
       - name: Upload crash artifact
@@ -78,10 +78,10 @@ jobs:
         run: cd tests/chttpclient && ./fuzz_chttp1_request fuzz/corpus_request -max_total_time=300
       - name: Run response-mode target for a bounded duration
         run: cd tests/chttpclient && ./fuzz_chttp1_response fuzz/corpus_response -max_total_time=300
-      # The URL and redirect layer sits ABOVE the parser. Its input is just as
-      # attacker-influenced: a Location header comes from whatever server the
+      # The URL and redirect layer sits ABOVE the parser, and its input is just
+      # as attacker-influenced: a Location header comes from whatever server the
       # previous hop reached, and the client resolves it before it opens the
-      # next connection. The target also asserts, on every input, that a base
+      # next connection. On every input, the target also asserts that a base
       # which is not a unix-socket target can never resolve to one that is.
       - name: Run URL and redirect target for a bounded duration
         run: cd tests/chttpclient && ./fuzz_chttp_url fuzz/corpus_url -max_total_time=300

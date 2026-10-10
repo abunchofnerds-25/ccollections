@@ -13,9 +13,9 @@ bool cjson_dictionary_next(cjson_dictionary_iter *it);
 .nf
 Steps the cursor it, which cjson_dictionary_first(3) filled, onto the
 member that follows the current one in insertion order.  After a call
-that returns true, it->key and it->value describe that member.
-cjson_dictionary_first(3) describes the order, the lifetime of
-it->key and the changes that the cursor survives.
+that returns true, it->key and it->value describe that member.  The
+order, the lifetime of it->key and the changes that the cursor
+survives are described in cjson_dictionary_first(3).
 .fi
 .SH PARAMETERS
 .nf
@@ -26,14 +26,14 @@ it  A cursor that cjson_dictionary_first(3) filled.
 true when it now stands on the next member.
 
 false when the previous call gave the last member, and on every call
-after that.  The function then sets it->key and it->value to NULL.
+after that; the function then sets it->key and it->value to NULL.
 false also when it is NULL.
 .fi
 .SH NOTES
 .nf
-The cursor survives the replacement of any value, an insert, and
-the removal of any member other than the one that this call is
-about to read.  cjson_dictionary_first(3) states the exact rule.
+The cursor survives the replacement of any value, an insert, and the
+removal of any member other than the one that this call is about to
+read; cjson_dictionary_first(3) states the exact rule.
 .fi
 .SH "SEE ALSO"
 .BR cjson_dictionary_first (3),

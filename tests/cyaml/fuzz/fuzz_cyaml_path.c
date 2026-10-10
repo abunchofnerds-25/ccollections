@@ -23,8 +23,8 @@ SOFTWARE.
 */
 
 /*
- * libFuzzer harness for the dot-separated path grammar of cyaml. That grammar
- * is what _cyaml_get(), cyaml_set() and _cyaml_delete() read. It is the
+ * libFuzzer harness for the dot-separated path grammar of cyaml, which is
+ * what _cyaml_get(), cyaml_set() and _cyaml_delete() read. It is the
  * counterpart of fuzz_cjson_path.c, which drives the identical grammar in
  * cjson, and it exists for the same reason: the path is a second parser in
  * its own right, it walks a DOM that the first parser built, and it MUTATES
@@ -37,10 +37,11 @@ SOFTWARE.
  *
  * The target splits the fuzz input on the first NUL byte. It parses
  * everything before that byte as YAML, with the bounded entry point, so the
- * document half draws on the same seed material as the corpus of fuzz_cyaml.
- * It uses everything after that byte as the path string, byte for byte. It
- * skips an input with no NUL byte, and an input with an empty path. Such an
- * input adds nothing beyond what fuzz_cyaml already covers.
+ * document half draws on the same seed material as the corpus of fuzz_cyaml,
+ * and it uses everything after that byte as the path string, byte for byte.
+ * It skips an input with no NUL byte and an input with an empty path,
+ * because such an input adds nothing beyond what fuzz_cyaml already
+ * covers.
  */
 
 #include <cyaml.h>
@@ -72,8 +73,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   cyaml got = cyaml_get(root, path);
   (void)got;
 
-  /* Drive every C type that cyaml_set() accepts, and not only one of them.
-   * The last byte of the fuzz input selects the type. That choice is
+  /* Drive every C type that cyaml_set() accepts, not only one of them. The
+   * last byte of the fuzz input selects the type, and that choice is
    * deterministic, so a saved crash takes the identical branch on a
    * replay. */
   switch (path_bytes[path_len - 1] % 5) {

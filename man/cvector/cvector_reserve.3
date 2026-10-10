@@ -11,10 +11,9 @@ bool cvector_reserve(cvec v, size_t new_capacity_count);
 .fi
 .SH DESCRIPTION
 .nf
-Allocates capacity for new_capacity_count elements or more. It rounds
-the capacity up to the nearest power of two (minimum 4). This helps you
-to prevent many reallocations when you know the expected size in
-advance.
+Allocates capacity for new_capacity_count elements or more, rounding the
+capacity up to the nearest power of two (minimum 4). Reserving the
+expected size in advance helps you avoid many reallocations.
 .fi
 .SH PARAMETERS
 .nf
@@ -23,12 +22,11 @@ new_capacity_count   Minimum number of elements to reserve
 .fi
 .SH RETURN VALUE
 .nf
-Returns true when the reservation succeeds. It also returns true when
-the capacity is already large enough
-Returns false in three cases. The first case is a failed allocation.
-The second case is a capacity above ccol_max_elem_count. The third case
-is a capacity that overflows a size_t after the multiplication by the
-element size
+Returns true when the reservation succeeds, and also when the capacity
+is already large enough
+Returns false in three cases: a failed allocation, a capacity above
+ccol_max_elem_count, and a capacity that overflows a size_t after the
+multiplication by the element size
 .fi
 .SH NOTES
 .nf
@@ -36,18 +34,16 @@ Does nothing when the requested capacity <= the current capacity
 The real capacity can be larger, because of the rounding to a power
 of 2
 The function tests both limits in RETURN VALUE against the rounded-up
-capacity. It does not test them against new_capacity_count itself. A
-request that is inside a limit can therefore still fail after the
-rounding
-A vector of wide elements reaches the size_t overflow limit first.
-That limit bounds the capacity at SIZE_MAX divided by the element
-size. For an element wider than one byte, that limit is the lower of
-the two
+capacity rather than against new_capacity_count itself, so a request
+that is inside a limit can still fail after the rounding
+A vector of wide elements reaches the size_t overflow limit first: that
+limit bounds the capacity at SIZE_MAX divided by the element size, which
+for an element wider than one byte is the lower of the two
 Does not change the element count
 Asserts if v is NULL
-The cvec_reserve(3) macro evaluates new_capacity_count exactly once.
-This is also true on the failure path. An expression with a side
-effect is therefore safe to give
+The cvec_reserve(3) macro evaluates new_capacity_count exactly once,
+on the failure path too, so an expression with a side effect is safe
+to give
 .fi
 .SH "SEE ALSO"
 .BR cvec_reserve (3)

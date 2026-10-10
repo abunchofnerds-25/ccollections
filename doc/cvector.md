@@ -1,20 +1,20 @@
 # cvector: a growable array
 
-`cvector` is a dynamic array. You push elements onto the end of the vector.
-The vector grows automatically. You can read each element by its index in
-constant time. This module replaces code such as
-`realloc(arr, ++n * sizeof(*arr))` that you write yourself.
+`cvector` is a dynamic array: you push elements onto its end, it grows
+automatically, and you can read any element by its index in constant time.
+It replaces the hand-written `realloc(arr, ++n * sizeof(*arr))` kind of
+code.
 
 Use a vector when:
 
-- you do not know how many elements you will have.
-- you want the elements next to each other in memory. For example, you can
-  then give them to a C function that takes a plain array, or sort them.
+- you do not know in advance how many elements you will have;
+- you want the elements next to each other in memory, for example so that
+  you can pass them to a C function that takes a plain array, or sort them;
 - you add and remove elements mostly at the end.
 
-Use a different module when you find elements by a key. For this, use
-[chashmap](chashmap.md) or [cbstmap](cbstmap.md). Also use a different
-module when you frequently insert and remove elements in the middle.
+Choose a different module when you look elements up by a key
+([chashmap](chashmap.md) or [cbstmap](cbstmap.md)), or when you often insert
+and remove elements in the middle.
 
 ```c
 #include <ccollections/cvector.h>
@@ -46,7 +46,7 @@ int main(void) {
 ```
 
 Compile the program with `-std=gnu11`, because the macros use GNU C
-extensions. Link it with `-lccollections`:
+extensions, and link it with `-lccollections`:
 
 ```sh
 gcc -std=gnu11 scores.c -lccollections -o scores
@@ -56,17 +56,17 @@ The program prints `78`, `82` and `100`.
 
 ## How the macros know the element type
 
-`cvec_construct(scores, int)` does two things. It creates the vector. It
-also declares a hidden companion variable that records the element type
-`int`. All the other `cvec_*` macros read that companion. Thus `cvec_at`
-gives an `int` that you can assign to. Thus also `cvec_push` can convert its
-argument for you.
+`cvec_construct(scores, int)` does two things: it creates the vector, and it
+declares a hidden companion variable that records the element type `int`.
+All the other `cvec_*` macros read that companion, which is how `cvec_at`
+gives you an `int` that you can assign to and how `cvec_push` can convert
+its argument for you.
 
-The element type can be any type. It can be a number, a pointer or a struct.
-It can be a function pointer type such as `void (*)(int)`. It can also be an
-array type such as `char[32]`.
+The element type can be any type: a number, a pointer, a struct, a function
+pointer type such as `void (*)(int)`, or even an array type such as
+`char[32]`.
 
-You can create a vector in different ways:
+There are several ways to create a vector:
 
 | You want | Use |
 |---|---|
@@ -75,20 +75,19 @@ You can create a vector in different ways:
 | Destroy it automatically at the end of the scope | `cvec_construct_scoped(v, T)` |
 | Use your own allocator | `cvec_construct_mp(v, T, &procs)` |
 
-The scoped forms are useful in a function that has more than one `return`
-path. The vector is destroyed on each path out of the function. See
-[the design guide](design.md) for how the lifecycle macros of the full
-library work together. See [Memory management](memory.md) for custom
-allocators.
+The scoped forms are useful in a function with more than one `return` path,
+because the vector is destroyed on every path out of the function. See [the
+design guide](design.md) for how the lifecycle macros work together across
+the library, and [Memory management](memory.md) for custom allocators.
 
 ## Add and remove elements
 
 `cvec_push` adds a value to the end of the vector. The value can be a
-variable, a literal or any expression. The macro converts the value to the
-element type in the same way as a C assignment. For example, an `int` that
-you push into a `double` vector becomes a `double`. A `float` that you push
-into an `int` vector is truncated. The macro never reads the bytes as a
-different type.
+variable, a literal or any expression, and the macro converts it to the
+element type exactly as a C assignment would: an `int` pushed into a
+`double` vector becomes a `double`, and a `float` pushed into an `int`
+vector is truncated. The macro never reinterprets the bytes as a different
+type.
 
 ```c
 cvec_construct(ratios, double);
@@ -97,24 +96,24 @@ cvec_push(ratios, whole);              /* stored as 3.0 */
 cvec_push(ratios, whole / 2.0);        /* stored as 1.5 */
 ```
 
-You can push a struct in the same way. This includes the return value of a
+You can push a struct in the same way, including the return value of a
 function:
 
 ```c
 cvec_push(points, make_point(3, 4));
 ```
 
-`cvec_pop(v)` removes the last element and gives it back by value.
+`cvec_pop(v)` removes the last element and returns it by value.
 
-To add many elements in one step, use `cvec_append_array(v, arr, n)`. It
-copies `n` elements from a plain array. `cvec_append_cvec(dst, src)` adds all
-the elements of a different vector. Both macros copy bytes. Thus the source
-must contain elements of the element type of the vector.
+To add many elements in one step, `cvec_append_array(v, arr, n)` copies `n`
+elements from a plain array, and `cvec_append_cvec(dst, src)` adds all the
+elements of another vector. Both macros copy bytes, so the source must hold
+elements of the vector's element type.
 
-When you know approximately how many elements you will add, use
-`cvec_reserve(v, n)`. It makes the storage larger one time, before the
-pushes. The pushes after it then do not reallocate. `cvec_reset(v)` removes
-all the elements and keeps the vector ready for more use.
+When you know roughly how many elements you will add, call
+`cvec_reserve(v, n)` first: it grows the storage once, and the pushes that
+follow do not need to reallocate. `cvec_reset(v)` removes all the elements
+and keeps the vector ready for reuse.
 
 ## Read elements
 
@@ -126,18 +125,17 @@ all the elements and keeps the vector ready for more use.
 | The index of the first element equal to a value | `cvec_find(v, value)` |
 | A plain pointer to the whole array | `cvec_data_ptr(v)` |
 
-`cvec_at` stops the program when the index is out of range. For the same
-index, `cvec_at_ptr` gives `NULL`. Use `cvec_at_ptr` when the index comes
-from input that you do not trust.
+`cvec_at` stops the program when the index is out of range, whereas
+`cvec_at_ptr` returns `NULL` for the same index. Use `cvec_at_ptr` when the
+index comes from input that you do not trust.
 
-`cvec_find` gives `ccol_invalid_size` when no element is equal to the value.
-It compares numbers by value. It compares `char *` elements as strings. For a
-struct, it compares the bytes. See the
-[cvec_find(3)](../man/cvector/cvec_find.3) page for the details. You can
-also use `cvector_find(v, &value, cmp)` with your own comparator.
+`cvec_find` returns `ccol_invalid_size` when no element equals the value. It
+compares numbers by value, `char *` elements as strings, and structs byte by
+byte; the [cvec_find(3)](../man/cvector/cvec_find.3) page has the details.
+You can also call `cvector_find(v, &value, cmp)` with your own comparator.
 
-You can also go through a vector with the common iterator of the library.
-The iterator gives the index and a pointer to the element:
+You can also walk a vector with the library's common iterator, which gives
+you the index and a pointer to each element:
 
 ```c
 ccol_for_each(scores, it, {
@@ -149,16 +147,14 @@ The [iterators guide](citerators.md) describes that API.
 
 ## Sort a vector
 
-`cvec_sort(v)` sorts in ascending order. It uses the default comparison
-for the element type. This comparison works for all integer and
-floating-point types and for enums. It also works for `char *` strings, in
-`strcmp` order. The sort is stable. Elements that are equal keep their
-initial order.
+`cvec_sort(v)` sorts in ascending order using the default comparison for the
+element type, which works for all integer and floating-point types, for
+enums, and for `char *` strings (in `strcmp` order). The sort is stable, so
+equal elements keep their initial relative order.
 
-For all other types, for example a struct, write a comparator. Then call
-`cvector_sort_with_comparison_proc`. A comparator gives a negative number,
-zero or a positive number. This is the same as the comparator that `qsort`
-takes:
+For any other type, such as a struct, write a comparator and call
+`cvector_sort_with_comparison_proc`. The comparator returns a negative
+number, zero or a positive number, just like the one that `qsort` takes:
 
 ```c
 int by_age_desc(const void *a, const void *b) {
@@ -169,16 +165,16 @@ int by_age_desc(const void *a, const void *b) {
 cvector_sort_with_comparison_proc(people, by_age_desc);
 ```
 
-`cvec_sort` on a vector of structs does not compile. This is intentional.
-The compiler error tells you to use `cvector_sort_with_comparison_proc`. The
-[csort guide](csort.md) gives more data about the default comparators.
+`cvec_sort` on a vector of structs deliberately does not compile, and the
+compiler error tells you to use `cvector_sort_with_comparison_proc` instead.
+The [csort guide](csort.md) has more about the default comparators.
 
 ## Give a vector to a function
 
-A `cvec` is a handle, that is, a pointer. Thus it costs little to give it
-to a function, and the function works on the same vector. But the function
-cannot see the hidden type companion. Thus the function must start with
-`cvec_redeclare`, which states the element type again:
+A `cvec` is a handle, that is, a pointer, so passing it to a function is
+cheap and the function works on the same vector. The function cannot see the
+hidden type companion, however, so it must start with `cvec_redeclare`,
+which states the element type again:
 
 ```c
 double average(cvec values) {
@@ -190,15 +186,15 @@ double average(cvec values) {
 }
 ```
 
-The type that you give must be the real element type. The compiler cannot
-do this check for you.
+The type you give must be the real element type; the compiler cannot check
+this for you.
 
 ## When an error must not stop the program
 
 When an allocation fails, the `cvec_*` macros stop the program through
-`ccol_fatal_err()`. Thus ordinary code does not need error checks. When you
-must recover from the failure, call the raw functions below the macros. They
-take a pointer to the element and give a status code:
+`ccol_fatal_err()`, so ordinary code needs no error checks. If you need to
+recover from the failure instead, call the raw functions underneath the
+macros, which take a pointer to the element and return a status code:
 
 ```c
 int value = 42;
@@ -208,18 +204,17 @@ if (cvector_push_back(v, &value) != ccol_success) {
 ```
 
 The raw layer contains `cvector_push_back`, `cvector_pop_back`,
-`cvector_reserve`, `cvector_append_array` and the other functions in the
-Reference section below. `cvector_create` and `cvector_create_full` create a
-vector. They give `NULL` when they fail. A vector that you create with them
-has no type companion. Give it one with `cvec_redeclare` before you use the
-macros on it.
+`cvector_reserve`, `cvector_append_array` and the other functions listed in
+the Reference section below. `cvector_create` and `cvector_create_full`
+create a vector and return `NULL` when they fail. A vector created this way
+has no type companion, so give it one with `cvec_redeclare` before you use
+the macros on it.
 
 ## Example: a paged leaderboard
 
-The program sorts a list of students by score, with the highest score
-first. The sort is stable. Thus students with the same score keep the order
-in which you added them. The program then prints the result one page at a
-time.
+The program sorts a list of students by score, highest first, and then
+prints the result one page at a time. Because the sort is stable, students
+with the same score keep the order in which they were added.
 
 ```c
 #include <stdio.h>
@@ -264,22 +259,23 @@ int main(void) {
 }
 ```
 
-Ada comes before Chen, and Dana comes before Fay. This is the order in
-which the program added them.
+Ada comes before Chen and Dana comes before Fay, which is the order in which
+the program added them.
 
 ## Example: statistics over a stream of numbers
 
-The program reads numbers until the end of its input. In this example, a
-fixed string replaces the standard input. The program then shows the mean,
-the median and the 95th percentile. A vector is the correct container here.
-The count is not known, and the median needs the values in sorted order.
+The program reads numbers until the end of its input (in this example, a
+fixed string takes the place of standard input) and then shows the mean, the
+median and the 95th percentile. A vector is the right container here,
+because the count is not known in advance and the median needs the values in
+sorted order.
 
 ```c
 #include <stdio.h>
 #include <stdlib.h>
 #include <ccollections/cvector.h>
 
-/* Linear interpolation between the two nearest ranks. Thus the median of
+/* Linear interpolation between the two nearest ranks, so the median of
    an even count is the mean of the two middle values. */
 static double percentile(cvec sorted, double p) {
     cvec_redeclare(sorted, double);
@@ -324,11 +320,10 @@ It prints `n=10 mean=22.02 median=12.75 p95=65.86`.
 
 ## Example: a list of owned strings
 
-A vector of `char *` contains pointers. It does not contain the strings.
-In this example, the vector owns copies of the names that it keeps. Thus the
-program frees each copy before it destroys the vector. `cvec_find` and
-`cvec_sort` use `char *` elements as strings. Thus it is easy to remove
-duplicates.
+A vector of `char *` holds pointers, not the strings themselves. In this
+example the vector owns copies of the names it keeps, so the program frees
+each copy before it destroys the vector. Because `cvec_find` and `cvec_sort`
+treat `char *` elements as strings, removing duplicates is easy.
 
 ```c
 #include <stdio.h>
@@ -368,22 +363,22 @@ int main(void) {
 ## Good to know
 
 - **Pointers into a vector can move.** `cvec_data_ptr`, `cvec_at_ptr` and
-  `&cvec_at(v, i)` point into the storage of the vector. A push, an append,
-  a reserve, a pop or a reset can move that storage. Thus get the pointer
-  again after such a call. It is safe to push a value that you read from
-  the same vector, as in `cvec_push(v, cvec_at(v, 0))`.
+  `&cvec_at(v, i)` point into the vector's storage, which a push, an append,
+  a reserve, a pop or a reset can move, so fetch the pointer again after
+  such a call. Pushing a value read from the same vector, as in
+  `cvec_push(v, cvec_at(v, 0))`, is safe.
 - **The vector does not free the memory that its elements point to.** For a
   vector of pointers to heap memory, free each element before
   `cvec_destroy`.
 - **Destroy the vector through one handle only.** `cvec_destroy(v)` sets `v`
-  to `NULL`. Thus a second call on the same variable does nothing. A copy of
-  the handle in a different variable does not change to `NULL`. A destroy
-  through that copy frees the memory two times.
-- **Do not change a vector while you iterate over it** with the iterator API.
-  You can change it in an index loop that you control.
-- **Thread safety.** A vector has no internal lock. This is intentional. When
-  more than one thread uses the same vector, protect it with your own lock.
-  See [Concurrency](concurrency.md).
+  to `NULL`, so a second call on the same variable does nothing. A copy of
+  the handle in another variable is not set to `NULL`, however, and a
+  destroy through that copy frees the memory a second time.
+- **Do not change a vector while you iterate over it** with the iterator
+  API; changing it inside an index loop that you control is fine.
+- **Thread safety.** A vector deliberately has no internal lock. When more
+  than one thread uses the same vector, protect it with your own lock. See
+  [Concurrency](concurrency.md).
 
 ## Reference
 

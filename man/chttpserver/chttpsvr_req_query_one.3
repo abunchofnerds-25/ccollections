@@ -13,24 +13,22 @@ ccol_retval_t chttpsvr_req_query_one(chttpsvr_req *req,
 .fi
 .SH DESCRIPTION
 .nf
-Looks up a query parameter that must appear exactly once.  It matches
-key against the URL-decoded keys of the query string, exactly as
-chttpsvr_req_query does.  This
-function tells an out-of-memory failure apart from a key that is
-absent, and chttpsvr_req_query cannot do that.  It also allocates no
-scratch array for the result.
+Looks up a query parameter that must appear exactly once, matching
+key against the URL-decoded keys of the query string exactly as
+chttpsvr_req_query does.  Unlike chttpsvr_req_query, this function
+distinguishes an out-of-memory failure from an absent key, and it
+allocates no scratch array for the result.
 
-On any failure return it sets *val_out to NULL, when val_out itself is
-not NULL.
+On any failure it sets *val_out to NULL, provided that val_out itself
+is not NULL.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success; the function found exactly one value and stored it in
-*val_out.
+ccol_success; exactly one value was found and stored in *val_out.
 ccol_key_not_found; the key is absent.
 ccol_not_permitted; the key appears more than once.
-ccol_not_enough_memory; the library could not allocate the parse
-buffer for the query string.
+ccol_not_enough_memory; the parse buffer for the query string could
+not be allocated.
 ccol_invalid_args; req or key is NULL.
 .fi
 .SH "SEE ALSO"

@@ -11,14 +11,14 @@ cvec_append_cvec(v_to, v_from);
 .fi
 .SH DESCRIPTION
 .nf
-This macro is a wrapper for cvector_append_cvector(). It calls
-ccol_fatal_err() when the append fails. A caller with no useful recovery
-for an allocation failure therefore does not need to test a return value.
+This macro is a wrapper for cvector_append_cvector() that calls
+ccol_fatal_err() when the append fails, so a caller with no useful
+recovery for an allocation failure does not need to test a return value.
 
-The macro copies every element of v_from onto the end of v_to, in one bulk
-copy. It leaves v_from unchanged. The two vectors then hold independent
-copies of the appended elements. The append is all or nothing. Either every
-element lands in v_to, or v_to stays exactly as it was.
+The macro copies every element of v_from onto the end of v_to in one bulk
+copy and leaves v_from unchanged, so the two vectors then hold independent
+copies of the appended elements. The append is all or nothing: either
+every element lands in v_to, or v_to stays exactly as it was.
 .fi
 .SH PARAMETERS
 .nf
@@ -27,21 +27,21 @@ v_from  Source vector. The macro reads it and leaves it unchanged.
 .fi
 .SH NOTES
 .nf
-The macro stops the program with ccol_fatal_err() when the append fails.
-The append fails when the allocation fails. It also fails when the new
-element count is more than ccol_max_elem_count.
+The macro stops the program with ccol_fatal_err() when the append fails,
+which happens when the allocation fails or when the new element count is
+more than ccol_max_elem_count.
 Both vectors must have the same element size. Two different sizes make
-the macro assert. The macro does not report a failure for them.
+the macro assert instead of reporting a failure.
 The macro asserts when one of the vectors is NULL.
 An empty v_from succeeds and leaves v_to unchanged.
-The macro supports an append of a vector to itself. The content of that
-vector then doubles.
-The macro copies the elements. It does not move them. A later destruction
-of v_from therefore does not disturb v_to. For a vector of pointers, both
-vectors then hold the same pointer values, and only one of them can own
-the buffers behind those pointers.
-Use cvector_append_cvector(3) directly to handle a failed append
-yourself. That function does not stop the program.
+The macro supports an append of a vector to itself, which doubles the
+content of that vector.
+The macro copies the elements rather than moving them, so a later
+destruction of v_from does not disturb v_to. For a vector of pointers,
+both vectors then hold the same pointer values, and only one of them can
+own the buffers behind those pointers.
+To handle a failed append yourself, use cvector_append_cvector(3)
+directly; that function does not stop the program.
 .fi
 .SH EXAMPLES
 .nf

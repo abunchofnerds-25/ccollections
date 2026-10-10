@@ -1,30 +1,29 @@
 # cjson: read, change and write JSON
 
-`cjson` changes JSON text into a tree of nodes in memory. You can read and
-change each part of that tree. Then `cjson` writes the tree back as JSON. The
-module gives you three things:
+`cjson` turns JSON text into a tree of nodes in memory. You can read and
+change any part of that tree, and `cjson` writes it back as JSON when you are
+done. The module gives you three things:
 
-- A strict parser. It refuses all input that RFC 8259 does not permit.
-- A document object model (DOM). You can change it in place.
-- Two serializers. One gives compact text, and one gives indented text.
+- a strict parser that refuses all input that RFC 8259 does not allow,
+- a document object model (DOM) that you can change in place, and
+- two serializers, one for compact text and one for indented text.
 
-Use `cjson` when a full document fits easily in memory. Examples are a
-configuration file, the body of an HTTP request or response, a message on a
-queue, and a test fixture. Two short path macros, `cjson_get` and `cjson_set`,
-go deep into a document in one call. Therefore, most programs do not walk the
-tree manually.
+Use `cjson` when a whole document fits easily in memory: a configuration
+file, the body of an HTTP request or response, a message on a queue, or a
+test fixture. Two short path macros, `cjson_get` and `cjson_set`, reach deep
+into a document in one call, so most programs do not need to walk the tree by hand.
 
 Use a different tool in two cases:
 
-- You must process a JSON stream that is much larger than memory, while the
-  stream arrives.
-- You need integers that are larger than 64 bits, with no loss of precision.
+- You must process a JSON stream that is much larger than memory while it
+  arrives.
+- You need integers larger than 64 bits with no loss of precision.
 
 ```c
 #include <ccollections/cjson.h>
 ```
 
-If your data is YAML, [cyaml](cyaml.md) gives the same API with a `cyaml_`
+If your data is YAML, [cyaml](cyaml.md) offers the same API with a `cyaml_`
 prefix.
 
 ## A first example
@@ -50,7 +49,7 @@ int main(void) {
     printf("age:  %lld\n", cjson_int_val(cjson_get(doc, "age")));
     printf("tag0: %s\n", cjson_str_val(cjson_get(doc, "tags.#0")));
 
-    /* Write: cjson_set makes a missing key or replaces a key that exists. */
+    /* Write: cjson_set creates a missing key or replaces an existing one. */
     cjson_set(doc, "age", 31);
     cjson_set(doc, "active", (bool)true);
 
@@ -65,13 +64,13 @@ int main(void) {
 ```
 
 Build the example with `-std=gnu11`, because the path macros use GNU C
-extensions. Link it with `-lccollections`:
+extensions, and link it with `-lccollections`:
 
 ```sh
 gcc -std=gnu11 first.c -lccollections -o first
 ```
 
-The program prints this text:
+The program prints:
 
 ```
 name: Alice
@@ -80,35 +79,33 @@ tag0: admin
 {"name":"Alice","age":31,"tags":["admin","ops"],"active":true}
 ```
 
-Three rules from this example apply to the full module:
+Three rules from this example apply to the whole module:
 
-- `cjson_parse` gives `NULL` when the input is bad, and it sets `err` to
-  point to a message. The library owns that message. Print it or copy it. Do
-  not free it.
-- Destroy the root with `cjson_destroy`. This call frees all the nodes below
-  the root.
-- A string from a serializer is yours. Give it back with
+- `cjson_parse` returns `NULL` when the input is bad and sets `err` to point
+  to a message. The library owns that message, so print it or copy it, but
+  do not free it.
+- Destroy the root with `cjson_destroy`, which frees every node below it.
+- A string from a serializer belongs to you; release it with
   `cjson_serialize_free`.
 
 ## The node types
 
-Each JSON value is a `cjson` handle. `cjson_type()` tells you the type of the
-value:
+Each JSON value is a `cjson` handle, and `cjson_type()` tells you its type:
 
 | Type | JSON | Read it with |
 |---|---|---|
 | `CJSON_NULL` | `null` | (no value to read) |
 | `CJSON_BOOL` | `true`, `false` | `cjson_bool_val` |
-| `CJSON_INTEGER` | a number with no `.` and no exponent, that fits a `long long` | `cjson_int_val` |
-| `CJSON_FLOAT` | all other numbers, as a `double` | `cjson_double_val` |
+| `CJSON_INTEGER` | a number with no `.` and no exponent that fits in a `long long` | `cjson_int_val` |
+| `CJSON_FLOAT` | any other number, as a `double` | `cjson_double_val` |
 | `CJSON_STRING` | a string, always valid UTF-8 | `cjson_str_val` |
 | `CJSON_LIST` | an array | `cjson_list_len`, `cjson_list_get` |
 | `CJSON_DICTIONARY` | an object | `cjson_dictionary_size`, `cjson_dictionary_get` |
 
-The value readers are strict. For example, `cjson_int_val` on a string, or on
-`NULL`, stops the program. This is correct when the type is part of the logic
-of your program. It is not correct when the input sets the type. For data that
-comes from outside your program, examine the type first:
+The value readers are strict: `cjson_int_val` on a string, or on `NULL`,
+stops the program. That is the right behavior when the type is part of your
+program's logic, but not when the input decides the type. For data that comes
+from outside your program, check the type first:
 
 ```c
 cjson port = cjson_get(doc, "server.port");
@@ -120,35 +117,34 @@ if (cjson_type(port) != CJSON_INTEGER) {   /* NULL reads as CJSON_NULL */
 long long p = cjson_int_val(port);
 ```
 
-`cjson_type_str()` gives the name of the type for a message such as this one.
+`cjson_type_str()` returns the name of the type for a message like this one.
 
-A number becomes a `CJSON_INTEGER` when it has no `.`, has no exponent, and
-fits in 64 bits. Therefore, `5.0` and `1e3` are floats. If your program accepts
-"any number", accept the two types. The configuration loader below shows how
-to do this.
+A number becomes a `CJSON_INTEGER` only when it has no `.`, has no exponent
+and fits in 64 bits, so `5.0` and `1e3` are floats. If your program accepts
+"any number", accept both types; the configuration loader below shows how.
 
 ## Paths
 
-A path is a list of components, with a dot between each two components:
+A path is a list of components separated by dots:
 
 - On an object, a component is a key: `"server.port"`.
 - On an array, `#N` is the element at index `N`: `"users.#0.name"`.
-- Write a dot in a key as `\.`, and write a backslash as `\\`. In C source,
-  you must double the backslash. For example, `cjson_get(doc, "a\\.b")` reads
-  the key `a.b`.
+- Write a dot in a key as `\.` and a backslash as `\\`. In C source the
+  backslash must be doubled, so `cjson_get(doc, "a\\.b")` reads the key
+  `a.b`.
 
-`cjson_get` gives `NULL` when a part of the path is missing. Therefore, you
-can look for optional fields, and you do not have to examine each level. An
-empty path gives the root.
+`cjson_get` returns `NULL` when any part of the path is missing, so you can
+look up optional fields without checking each level. An empty path gives the
+root.
 
-The node that `cjson_get` gives is **borrowed**. The tree continues to own
-it. The node stays valid until you change or destroy the tree. Do not free the
-node.
+The node that `cjson_get` returns is **borrowed**: the tree keeps ownership
+of it, and it stays valid until you change or destroy the tree. Do not free
+it.
 
 ## Change a document
 
-`cjson_set(root, path, value)` writes a C value to a path. The C type of the
-value sets the JSON type:
+`cjson_set(root, path, value)` writes a C value to a path, and the C type of
+the value decides the JSON type:
 
 ```c
 cjson_set(doc, "server.port", 9090);           /* CJSON_INTEGER */
@@ -158,19 +154,19 @@ cjson_set(doc, "server.tls", (bool)true);      /* CJSON_BOOL    */
 cjson_set(doc, "server.proxy", NULL);          /* CJSON_NULL    */
 ```
 
-Know these rules before you start:
+Keep these rules in mind:
 
-- **Write `(bool)true`.** Before C23, the macro `true` is the integer 1.
-  Therefore, `cjson_set(doc, "k", true)` stores the number 1.
-- `cjson_set` makes a missing key at the end of the path. But the parent must
-  exist. To make a missing parent object, call `cjson_create_dictionary` and
-  `cjson_dictionary_set` first.
-- An array index must exist. `cjson_set` does not make an array longer. To add
-  an element at the end, use `cjson_list_push`.
-- `cjson_set` replaces a value that exists, of any type. This includes a full
-  object or array. `cjson_set` frees the old value.
-- `cjson_set` gives a `ccol_retval_t`. It refuses these values with
-  `ccol_invalid_args`, and the document stays the same:
+- **Write `(bool)true`.** Before C23 the macro `true` is the integer 1, so
+  `cjson_set(doc, "k", true)` stores the number 1.
+- `cjson_set` creates a missing key at the end of the path, but the parent
+  must already exist. To create a missing parent object, call
+  `cjson_create_dictionary` and `cjson_dictionary_set` first.
+- An array index must exist, because `cjson_set` never makes an array longer.
+  To add an element at the end, use `cjson_list_push`.
+- `cjson_set` replaces an existing value of any type, including a whole
+  object or array; `cjson_set` frees the old value.
+- `cjson_set` returns a `ccol_retval_t`. It refuses the following values with
+  `ccol_invalid_args` and leaves the document unchanged:
   - a string that is not valid UTF-8,
   - a `double` that is not finite,
   - a C type that `cjson_set` does not support (a struct, a `long double`,
@@ -183,12 +179,13 @@ cjson_delete(doc, "config.debug");   /* an object member */
 cjson_delete(doc, "items.#2");       /* an array element; the elements after it move down */
 ```
 
-When you have the parent, `cjson_dictionary_remove(obj, key)` and
-`cjson_list_remove(arr, index)` do the same work without a path.
+When you already hold the parent, `cjson_dictionary_remove(obj, key)` and
+`cjson_list_remove(arr, index)` do the same job without a path.
 
 ## Build a tree in code
 
-The `cjson_create_*` functions make one node each. Two calls attach the nodes:
+Each `cjson_create_*` function makes one node, and two calls attach nodes to
+a container:
 
 ```c
 cjson user = cjson_create_dictionary();
@@ -201,39 +198,38 @@ cjson_dictionary_set(user, "roles", roles);
 ```
 
 `cjson_list_push` and `cjson_dictionary_set` **take ownership** of the child.
-The rule for a failure is also simple. The return code alone tells you what
+The failure rule is simple too, because the return code alone tells you what
 to do:
 
-- `ccol_success`: The container owns the child.
-- `ccol_invalid_args`: The call did nothing. The child is yours, or it
-  belongs to the container that held it before. This code is for these
-  cases:
+- `ccol_success`: the container owns the child.
+- `ccol_invalid_args`: the call did nothing, and the child stays yours (or
+  belongs to the container that held it before). This code covers:
   - a `NULL` child,
   - a child that is in a different container,
   - an incorrect container,
   - a bad key,
   - an attachment that would make a cycle.
-- All other codes (not enough memory, the container is full): The library
-  freed the child. Do not free it again.
+- Any other code (not enough memory, the container is full): the library
+  has freed the child, so do not free it again.
 
-Therefore, the only cleanup that you write is "free the child on
-`ccol_invalid_args`". The word counter below puts this rule in two small
+So the only cleanup you ever write is "free the child on
+`ccol_invalid_args`". The word counter below wraps this rule in two small
 helper functions.
 
-Do not attach a borrowed node. A borrowed node comes from `cjson_get`,
-`cjson_list_get`, `cjson_dictionary_get` or a dictionary cursor. It has a
-parent, and the call refuses it. To copy data from one location to a
-different location, attach a `cjson_clone()` of the data.
+Do not attach a borrowed node, that is, one that comes from `cjson_get`,
+`cjson_list_get`, `cjson_dictionary_get` or a dictionary cursor. Such a node
+already has a parent, so the call refuses it. To copy data from one place to
+another, attach a `cjson_clone()` of it.
 
 ## Walk through an object
 
-An object keeps its members in **insertion order**. For a parsed document,
-this is the order of the text. For a document that you build, this is the
-order of your calls. When you replace a value, the member keeps its position.
-The serializers use the same order. Therefore, a parse and a serialize keep the
-member order of the source, and the order is the same in each run.
+An object keeps its members in **insertion order**: the order of the text
+for a parsed document, and the order of your calls for a document you build.
+Replacing a value keeps the member in its position. The serializers use the
+same order, so a parse followed by a serialize keeps the member order of the
+source, and the order is the same on every run.
 
-To visit all the members, use the cursor:
+To visit every member, use the cursor:
 
 ```c
 cjson_dictionary_iter it;
@@ -243,16 +239,15 @@ for (bool ok = cjson_dictionary_first(obj, &it); ok;
 }
 ```
 
-The cursor is on your stack. It allocates no memory, and it needs no cleanup.
-During the walk, you can remove the current member
-(`cjson_dictionary_remove(obj, it.key)`), and you can replace values. If you
-remove the member *after* the current member, the cursor becomes invalid. An
-array needs no cursor. Use a loop from 0 to `cjson_list_len()`, and call
-`cjson_list_get()`.
+The cursor lives on your stack, allocates no memory and needs no cleanup.
+During the walk you may remove the current member
+(`cjson_dictionary_remove(obj, it.key)`) and replace values, but removing the
+member *after* the current one makes the cursor invalid. An array needs no
+cursor: loop from 0 to `cjson_list_len()` and call `cjson_list_get()`.
 
-When a parsed object has the same key two times, the last value is the one
-that the tree keeps. The key keeps its first position. For example,
-`{"a":1,"b":2,"a":3}` becomes `a = 3`, `b = 2`.
+When a parsed object has the same key two times, the tree keeps the last
+value at the key's first position, so `{"a":1,"b":2,"a":3}` becomes
+`a = 3`, `b = 2`.
 
 ## Write JSON text
 
@@ -263,49 +258,48 @@ cjson_serialize_free(compact);
 cjson_serialize_free(pretty);
 ```
 
-The two functions return `NULL` when there is not enough memory. The output is
-always valid JSON, for these reasons:
+Both functions return `NULL` when there is not enough memory. The output is
+always valid JSON, because:
 
-- Each string in a tree is valid UTF-8.
-- Numbers always use `.`, whatever the locale.
-- A float has the smallest number of digits that read back as the same
+- every string in a tree is valid UTF-8,
+- numbers always use `.`, whatever the locale, and
+- a float is written with the fewest digits that read back as the same
   `double`.
 
 ## Strict input
 
-`cjson` refuses input that is not correct. It does not guess what the input
-means. A parse fails for each of these conditions. The message tells the
-problem and its byte offset.
+`cjson` refuses incorrect input instead of guessing what it means. A parse
+fails, with a message that names the problem and its byte offset, on any of
+these:
 
-- A syntax error, for example a comma at the end of a list or a string in
-  single quotes.
-- A string or key that is not well-formed UTF-8, or a single UTF-16 surrogate
-  escape such as `\uD800`.
-- The escape `\u0000`. A C string cannot hold a null byte.
-- More than 500 levels of arrays and objects, one in the other.
-- A number that is too large for a `double`.
+- a syntax error, for example a comma at the end of a list or a string in
+  single quotes;
+- a string or key that is not well-formed UTF-8, or a lone UTF-16 surrogate
+  escape such as `\uD800`;
+- the escape `\u0000`, because a C string cannot hold a null byte;
+- arrays and objects nested more than 500 levels deep;
+- a number too large for a `double`.
 
-The message is always printable ASCII. Therefore, you can safely log it, also
-when the input comes from an attacker. Some functions take strings from your
-program: `cjson_create_string`, `cjson_set` and `cjson_dictionary_set`. These
-functions also refuse UTF-8 that is not valid.
+The message is always printable ASCII, so it is safe to log even when the
+input comes from an attacker. The functions that take strings from your
+program (`cjson_create_string`, `cjson_set` and `cjson_dictionary_set`) also
+refuse invalid UTF-8.
 
-The memory of a parsed tree is proportional to the length of its input. On a
-64-bit machine, the maximum is approximately 65 bytes for each byte of input.
-An object stays fast also when a peer selects keys that are intended to
-collide. To limit the memory that a hostile peer can make you use, limit the
-length of the input that you accept.
+The memory of a parsed tree is proportional to the length of its input; on a
+64-bit machine it is at most about 65 bytes per byte of input. An object
+stays fast even when a peer chooses keys that are meant to collide. To limit
+the memory that a hostile peer can make you use, limit the length of the
+input you accept.
 
 ## Example: a configuration loader
 
-The loader sets the default values first. Then the document replaces the
-values that it names. A field with an incorrect type causes an error that
-names the field. It does not cause a crash, and it does not cause a silent
-default.
+The loader sets the default values first and then lets the document replace
+the values it names. A field with the wrong type produces an error that names
+the field, instead of a crash or a silent default.
 
 ```c
-/* A small configuration loader. It reads typed values with defaults, and it
- * gives a clear message when a field has an incorrect type. */
+/* A small configuration loader: it reads typed values with defaults and
+ * gives a clear message when a field has the wrong type. */
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -319,8 +313,8 @@ typedef struct {
     size_t backend_count;
 } server_config;
 
-/* Returns false and prints a message when the field exists but has an
- * incorrect type. When the field is missing, *out keeps the default. */
+/* Returns false and prints a message when the field exists but has the
+ * wrong type. If the field is missing, *out keeps the default. */
 static bool read_int(cjson doc, const char *path, long long *out) {
     cjson n = cjson_get(doc, path);
     if (!n) return true;
@@ -374,7 +368,7 @@ static bool read_string(cjson doc, const char *path, char *buf, size_t cap) {
 }
 
 static bool load_config(const char *text, server_config *cfg) {
-    /* Set the defaults first. The document replaces the values that it names. */
+    /* Set the defaults first; the document overrides each value it names. */
     snprintf(cfg->host, sizeof(cfg->host), "0.0.0.0");
     cfg->port = 8080;
     cfg->timeout_s = 2.5;
@@ -426,7 +420,7 @@ int main(void) {
         printf("%s:%lld timeout=%.1fs verbose=%d backends=%zu\n", cfg.host,
                cfg.port, cfg.timeout_s, cfg.verbose, cfg.backend_count);
 
-    /* The loader reports an incorrect type. It does not accept it silently. */
+    /* The loader reports a wrong type instead of accepting it silently. */
     if (!load_config("{\"server\": {\"port\": \"9000\"}}", &cfg))
         printf("rejected a bad config\n");
 
@@ -439,22 +433,22 @@ int main(void) {
 
 ## Example: a word counter that reports in JSON
 
-This example builds a full document in code. The `put` and `push` helpers
-contain the ownership rule from above. Therefore, the remainder of the program
-does not have to think about that rule.
+This example builds a whole document in code. The `put` and `push` helpers
+hold the ownership rule from above, so the rest of the program does not have
+to think about it.
 
 ```c
-/* Count the words of a text. Report the result as a JSON document that
- * comes from a tree that the code builds. */
+/* Count the words of a text and report the result as a JSON document
+ * that the code builds as a tree. */
 #include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 #include <ccollections/cjson.h>
 
 /* Attach a child that the caller has just made. cjson_dictionary_set takes
- * the child on success and on each failure other than ccol_invalid_args.
- * Therefore, only that code gives us a child to free. A failed create (a NULL
- * child) gives us nothing to free. */
+ * the child on success and on every failure except ccol_invalid_args, so
+ * only that code leaves us a child to free. A failed create (a NULL child)
+ * leaves nothing to free. */
 static ccol_retval_t put(cjson obj, const char *key, cjson child) {
     if (!child) return ccol_not_enough_memory;
     ccol_retval_t r = cjson_dictionary_set(obj, key, child);
@@ -496,14 +490,14 @@ int main(void) {
             total++;
             cjson seen = cjson_dictionary_get(words, word);
             long long count = seen ? cjson_int_val(seen) : 0;
-            /* When you replace a value, the key keeps its first position. */
+            /* Replacing a value keeps the key in its original position. */
             if (put(words, word, cjson_create_int(count + 1)) != ccol_success)
                 break;
         }
         if (*p == '\0') break;
     }
 
-    /* The words that occur more than one time, in the order of their first
+    /* The words that occur more than once, in the order of their first
      * occurrence. */
     cjson repeated = cjson_create_list();
     cjson_dictionary_iter it;
@@ -515,7 +509,7 @@ int main(void) {
 
     put(report, "total", cjson_create_int(total));
     put(report, "distinct", cjson_create_int((long long)cjson_dictionary_size(words)));
-    put(report, "repeated", repeated);  /* after these two calls, the report owns the two nodes */
+    put(report, "repeated", repeated);  /* from here on, the report owns both nodes */
     put(report, "counts", words);
 
     char *out = cjson_serialize_pretty(report, 2);
@@ -528,7 +522,7 @@ int main(void) {
 }
 ```
 
-This is a part of the output:
+Part of the output:
 
 ```
 {
@@ -546,17 +540,17 @@ This is a part of the output:
 
 ## Example: clean an event before you log it
 
-This example walks a parsed document whose shape is not known. It does these
-steps:
+This example walks a parsed document whose shape is not known in advance.
+It:
 
-- It removes the null members.
-- It masks secrets at all levels.
-- It copies a sub-object with `cjson_clone`.
-- It deletes an array element by path.
+- removes the null members,
+- masks secrets at every level,
+- copies a sub-object with `cjson_clone`, and
+- deletes an array element by path.
 
 ```c
-/* Clean an event before you log it. Remove the null members, mask the
- * secrets at all levels, and copy one sub-object to the top level. */
+/* Clean up an event before logging it: remove the null members, mask the
+ * secrets at every level, and copy one sub-object to the top level. */
 #include <stdio.h>
 #include <string.h>
 #include <ccollections/cjson.h>
@@ -581,11 +575,11 @@ static void scrub(cjson node) {
             cjson_dictionary_remove(node, it.key);
         } else if (is_secret(it.key)) {
             /* A replacement keeps the member in its position. it.value is
-             * the old node, and this call frees it. Do not use it below.
-             * A secret must not go into the log. When the call cannot store
+             * the old node, which this call frees, so do not use it below.
+             * A secret must not reach the log: if the call cannot store
              * the mask, remove the member. The call refuses a NULL child
-             * with ccol_invalid_args, and there is nothing to free. After
-             * all other failures, the call has freed the child. */
+             * with ccol_invalid_args, which leaves nothing to free; after
+             * any other failure, the call has freed the child. */
             if (cjson_dictionary_set(node, it.key,
                                      cjson_create_string("***")) != ccol_success)
                 cjson_dictionary_remove(node, it.key);
@@ -610,8 +604,8 @@ int main(void) {
 
     scrub(doc);
 
-    /* cjson_get gives a borrowed node. The tree continues to own it. To put
-     * the same data in a different location, attach a clone of it. */
+    /* cjson_get returns a borrowed node that the tree keeps owning. To put
+     * the same data somewhere else, attach a clone of it. */
     cjson user = cjson_get(doc, "user");
     cjson copy = cjson_clone(user);
     if (copy && cjson_dictionary_set(doc, "actor", copy) == ccol_invalid_args)
@@ -637,11 +631,11 @@ The output is:
 
 ## Custom allocators
 
-Each function that makes nodes has an `_mp` variant that takes a
-`ccol_memmgmt_procs_t *`. Each node keeps a record of its allocator. Therefore,
-`cjson_destroy` needs no other argument. Remember one rule: a serialized string
-comes from the allocator of the root node. Therefore, give it back through
-`cjson_serialize_free_mp` with the same procs.
+Every function that makes nodes has an `_mp` variant that takes a
+`ccol_memmgmt_procs_t *`. Each node remembers its allocator, so
+`cjson_destroy` needs no extra argument. There is one rule to remember: a
+serialized string comes from the allocator of the root node, so release it
+through `cjson_serialize_free_mp` with the same procs.
 
 ```c
 #include <stdio.h>
@@ -679,8 +673,8 @@ int main(void) {
     /* The new nodes for this tree come from the same allocator. */
     cjson_dictionary_set(doc, "c", cjson_create_int_mp(7, &procs));
 
-    /* The output buffer comes from the allocator of the root node. Therefore,
-     * give it back through the _mp free function with the same procs. */
+    /* The output buffer comes from the allocator of the root node, so give
+     * it back through the _mp free function with the same procs. */
     char *out = cjson_serialize(doc);
     if (out)
         printf("%s (live blocks: %zu)\n", out, live_blocks);
@@ -692,32 +686,32 @@ int main(void) {
 }
 ```
 
-The library keeps its own copy of the procs struct. Therefore, your struct can
-be on the stack. See [Memory management](memory.md) for the full contract.
+The library keeps its own copy of the procs struct, so your struct can live
+on the stack. See [Memory management](memory.md) for the full contract.
 
 ## Good to know
 
 - **Borrowed and owned nodes.** `cjson_get`, `cjson_list_get`,
-  `cjson_dictionary_get` and the cursor give borrowed nodes. Do not destroy
-  them. Do not attach them to a different container. Attach a clone.
+  `cjson_dictionary_get` and the cursor return borrowed nodes. Do not destroy
+  them or attach them to another container; attach a clone instead.
 - **After a failed attach, free the child only on `ccol_invalid_args`.**
-  When `cjson_list_push` or `cjson_dictionary_set` gives a different error,
-  the library has freed the child. Do not free it again.
-- **Examine the types of data from outside your program.** `cjson_int_val`
-  and the other value readers stop the program when the type is incorrect or
-  the node is `NULL`.
+  When `cjson_list_push` or `cjson_dictionary_set` returns any other error,
+  the library has already freed the child, so do not free it again.
+- **Check the types of data from outside your program.** `cjson_int_val`
+  and the other value readers stop the program when the type is wrong or the
+  node is `NULL`.
 - **Before C23, write `(bool)true`, not `true`,** with `cjson_set`.
 - **`cjson_dictionary_set` on the current key during a walk** frees
-  `it.value`. To read the new value, call
-  `cjson_dictionary_get(obj, it.key)`. `cjson_set` changes the value in place,
-  and `it.value` stays valid.
-- **Large integers.** An integer that is larger than a `long long` becomes a
-  `double`. A `double` is exact only up to 2^53.
-- **One tree, one writer.** A tree is not thread safe. Many threads can read
-  the same tree while no thread changes it. Separate trees are independent.
-  See [Concurrency](concurrency.md).
-- **Scoped handles.** `cjson_declare_scoped(doc)` declares a handle. The
-  handle is destroyed at the end of its block (GCC and Clang).
+  `it.value`, so read the new value with
+  `cjson_dictionary_get(obj, it.key)`. `cjson_set`, by contrast, changes the
+  value in place, and `it.value` stays valid.
+- **Large integers.** An integer larger than a `long long` becomes a
+  `double`, and a `double` is exact only up to 2^53.
+- **One tree, one writer.** A tree is not thread safe: many threads can read
+  the same tree as long as no thread changes it, and separate trees are
+  independent. See [Concurrency](concurrency.md).
+- **Scoped handles.** `cjson_declare_scoped(doc)` declares a handle that is
+  destroyed at the end of its block (GCC and Clang).
 
 ## Reference
 

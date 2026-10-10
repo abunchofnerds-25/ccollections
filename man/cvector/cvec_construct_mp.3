@@ -11,27 +11,27 @@ cvec_construct_mp(v, type, mprocs);
 .fi
 .SH DESCRIPTION
 .nf
-This macro declares a vector variable with the name v. That vector holds
-elements of the given type. The macro also creates the vector in the same
-step. The vector takes every allocation that it makes from mprocs. The
-macro is cvec_declare(3) and then cvec_init_mp(3). Everything that those
-two macros document holds here unchanged. The macro declares the companion
-type variables in the same way, and the other type-dispatching macros read
-them. A failed creation stops the program through ccol_fatal_err().
+This macro declares a vector variable named v that holds elements of the
+given type, and creates the vector in the same step. The vector takes
+every allocation that it makes from mprocs. The macro is cvec_declare(3)
+followed by cvec_init_mp(3), and everything that those two macros document
+holds here unchanged: it declares the companion type variables in the same
+way, the other type-dispatching macros read them, and a failed creation
+stops the program through ccol_fatal_err().
 
-The vector keeps a private copy of the procedure table. The
-ccol_memmgmt_procs_t object here therefore does not need to live longer
-than the vector. The functions in that table do need to live that long.
-The vector frees the backing buffer, the copy of the table and the
-container itself through those functions, when it is destroyed. A NULL
-mprocs is the same as a call to cvec_construct(3).
+The vector keeps a private copy of the procedure table, so the
+ccol_memmgmt_procs_t object here does not need to live longer than the
+vector, although the functions in that table do. When the vector is
+destroyed, it frees the backing buffer, the copy of the table and the
+container itself through those functions. A NULL mprocs is the same as a
+call to cvec_construct(3).
 
-The new vector holds no elements. It starts at the minimum capacity of 4.
-The capacity doubles when a push finds the buffer full. It halves when the
-element count falls below a quarter of it. It never falls below that
+The new vector holds no elements and starts at the minimum capacity of 4.
+The capacity doubles when a push finds the buffer full and halves when the
+element count falls below a quarter of it, but it never falls below that
 minimum of 4.
 
-Destroy the vector with cvec_destroy(3). You can also use
+Destroy the vector with cvec_destroy(3), or use
 cvec_construct_mp_scoped(3), which destroys the vector automatically at the
 end of the scope.
 .fi
@@ -45,25 +45,26 @@ mprocs  Pointer to a ccol_memmgmt_procs_t. Its malloc, calloc, realloc
 .fi
 .SH RETURN VALUE
 .nf
-None. The macro expands to declarations and then a statement. It does not
-expand to an expression.
+None. The macro expands to declarations and then a statement, not to an
+expression.
 .fi
 .SH NOTES
 .nf
 The macro stops the program through ccol_fatal_err() when it cannot
-create the vector. The message names v and the error below it. Use
-cvector_create_full(3) directly to handle a failed creation yourself.
-That function does not stop the program.
+create the vector, with a message that names v and the error below it.
+To handle a failed creation yourself, use cvector_create_full(3)
+directly; that function does not stop the program.
 The macro rejects a procedure table with any of its four members left as
-NULL. That rejection is one of the failures that stops the program here.
-The macro expands to declarations and then a statement. It therefore
-belongs where declarations are legal. It cannot be the body of an if or
+NULL, and that rejection is one of the failures that stops the program
+here.
+Because the macro expands to declarations and then a statement, it
+belongs where declarations are legal and cannot be the body of an if or
 a loop without braces.
-The macro pastes v into the names of the companion variables. v must
-therefore be a plain identifier.
+The macro pastes v into the names of the companion variables, so v must
+be a plain identifier.
 The companion type variables must stay in scope everywhere that you use a
-type-dispatching macro on v. cvec_redeclare(3) makes them again for a
-handle that comes from another scope.
+type-dispatching macro on v. For a handle that comes from another scope,
+cvec_redeclare(3) makes them again.
 .fi
 .SH EXAMPLES
 .nf

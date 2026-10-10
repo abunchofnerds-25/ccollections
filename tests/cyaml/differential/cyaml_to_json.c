@@ -25,20 +25,19 @@ SOFTWARE.
 /*
  * Standalone differential-testing helper. It is not part of the public
  * library surface, and it stays out of `make test` and `make memtest`
- * deliberately. Its only caller is
+ * deliberately; its only caller is
  * tests/cyaml/differential/compare_pyyaml.py.
  *
- * This program reads a YAML document or stream from stdin. It then dumps
- * the DOM as JSON on stdout. A reader can therefore diff the output of an
- * independent YAML implementation against it at the value level. That
- * implementation is PyYAML, which compare_pyyaml.py drives.
- * tests_spec_suite.c already covers the accept and reject level, and this
- * program goes below that level.
+ * This program reads a YAML document or stream from stdin and dumps the DOM
+ * as JSON on stdout, so that a reader can diff the output of an independent
+ * YAML implementation (PyYAML, which compare_pyyaml.py drives) against it at
+ * the value level. tests_spec_suite.c already covers the accept and reject
+ * level, and this program goes below that level.
  *
- * Exit codes: 0 after a successful parse and dump. 1 on a real parse error,
+ * Exit codes: 0 after a successful parse and dump; 1 on a real parse error,
  * where this program writes nothing to stdout and sends the message to
- * stderr instead. 2 on a usage error or an environment error, which is out
- * of memory or bad output.
+ * stderr instead; 2 on a usage error or an environment error (out of memory
+ * or bad output).
  */
 
 #include <cyaml.h>
@@ -91,10 +90,10 @@ static void dump_node(cyaml node) {
       double d = cyaml_double_val(node);
       /* JSON has no literal for NaN or Infinity. An encoding of these as
        * ordinary strings would look the same as a real CYAML_STRING node
-       * on the comparison side. That would hide a real type mismatch
-       * silently. This code encodes them as a value that no string from a
-       * real parse can ever equal. compare_pyyaml.py can then handle them
-       * as a special case. */
+       * on the comparison side, which would hide a real type mismatch
+       * silently. So this code encodes them as a value that no string from
+       * a real parse can ever equal, and compare_pyyaml.py handles them as
+       * a special case. */
       if (isnan(d)) {
         fputs("\"__cyaml_nan__\"", stdout);
       } else if (isinf(d)) {
@@ -172,14 +171,13 @@ int main(void) {
   putchar('\n');
   cyaml_destroy(root);
 
-  /* dump_node and putchar above write through buffered stdio, which is
-   * putchar, fputs and printf. This function checks none of their
-   * individual return values. One fflush() and ferror() check here catches
-   * a failure in any of them. The most likely such failure is a full disk
-   * when stdout goes to a file. This check delivers one part of the exit
-   * code contract of this file. That part reads "2 on a usage error or an
-   * environment error, which is out of memory or bad output". Nothing else in
-   * this function delivers it. */
+  /* dump_node and putchar above write through buffered stdio (putchar,
+   * fputs and printf), and this function checks none of their individual
+   * return values. One fflush() and ferror() check here catches a failure in
+   * any of them, most likely a full disk when stdout goes to a file. This
+   * check delivers the part of the exit code contract of this file that
+   * reads "2 on a usage error or an environment error (out of memory or bad
+   * output)"; nothing else in this function delivers it. */
   if (fflush(stdout) != 0 || ferror(stdout)) {
     fprintf(stderr, "cyaml_to_json: error writing output\n");
     return 2;

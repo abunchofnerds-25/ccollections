@@ -12,13 +12,12 @@ const char *chttpsvr_req_param(const chttpsvr_req *req,
 .fi
 .SH DESCRIPTION
 .nf
-Returns the URL-decoded value of the named path parameter.  It returns
-NULL when that parameter is not a part of the route pattern that
-matched.
+Returns the URL-decoded value of the named path parameter, or NULL
+when the route pattern that matched has no parameter of that name.
 
-The parameter captures one raw segment of the path, decoded on its
-own.  The value can therefore hold a '/' that arrived as %2F, and it
-can be "." or "..".  Never use it as a file name without checking it.
+A parameter captures one raw path segment, which is decoded on its
+own, so the value can contain a '/' that arrived as %2F, and it can be
+"." or "..".  Never use it as a file name without checking it first.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_req_path (3),

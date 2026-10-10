@@ -11,15 +11,15 @@ ccol_retval_t ccol_circq_recv_zc(ccol_circular_queue *cq, c_message_t *target_bu
 .fi
 .SH DESCRIPTION
 .nf
-This function blocks until a message arrives. Then it transfers the
-ownership of the message data to the caller in target_buf. The caller must
-free target_buf->data after it finishes with the data.
+This function blocks until a message arrives and then transfers the
+ownership of the message data to the caller in target_buf. The caller
+must free target_buf->data after it finishes with the data.
 .fi
 .SH PARAMETERS
 .nf
 cq          Circular queue to receive from
-target_buf  Buffer that gets the message. It also gets the ownership of
-            the data.
+target_buf  Buffer that gets the message together with the ownership
+            of the data.
 .fi
 .SH RETURN VALUE
 .nf
@@ -29,9 +29,9 @@ ccol_invalid_args   - cq or target_buf is NULL
 .fi
 .SH NOTES
 .nf
-The function blocks with no time limit. It waits for a message.
-The function stays blocked while sends on the queue are off. It unblocks
-  after a call turns sends on again and a message arrives.
+The function blocks with no time limit while it waits for a message.
+The function stays blocked while sends on the queue are off, and it
+  unblocks after a call turns sends on again and a message arrives.
 The caller gets the ownership of target_buf->data and must free it.
 The function is thread-safe.
 .fi

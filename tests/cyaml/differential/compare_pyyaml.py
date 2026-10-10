@@ -128,12 +128,12 @@ def run_cyaml(data: bytes):
                            capture_output=True)
     if proc.returncode != 0:
         return False, proc.stderr.decode("utf-8", "replace").strip()
-    # cyaml treats input as an opaque byte string and does not validate
-    # UTF-8 well-formedness (see cyaml.h), so a non-UTF-8 input byte
-    # sequence can make cyaml_to_json emit non-UTF-8 bytes in what is
-    # otherwise meant to be UTF-8-encoded JSON; decode explicitly and
-    # report that distinctly rather than letting UnicodeDecodeError
-    # propagate uncaught and abort the whole comparison run.
+    # cyaml refuses input that is not well-formed UTF-8 (see cyaml.h), so
+    # cyaml_to_json is not expected to emit non-UTF-8 bytes in output that
+    # is meant to be UTF-8-encoded JSON. The output is decoded explicitly
+    # all the same, and that case is reported on its own, instead of letting
+    # UnicodeDecodeError propagate uncaught and abort the whole comparison
+    # run.
     try:
         stdout_text = proc.stdout.decode("utf-8")
     except UnicodeDecodeError as e:
@@ -159,18 +159,18 @@ def run_pyyaml(data: bytes):
     except yaml.YAMLError as e:
         return False, str(e)
     except Exception as e:
-        # A malformed input can hit a genuine PyYAML-internal bug rather
-        # than a normal, cleanly-reported yaml.YAMLError - e.g. a \U escape
-        # naming a codepoint >= 0x110000 makes PyYAML's own scanner call
-        # chr() on an out-of-range value (ValueError), or its regex-based
-        # scalar resolver can match a value as boolean-looking while its
-        # own construct_yaml_bool value-lookup table then rejects it
-        # (KeyError); a larger fuzz corpus keeps finding further internal
+        # A malformed input can hit a genuine PyYAML-internal bug instead
+        # of a normal, cleanly-reported yaml.YAMLError. For example, a \U
+        # escape naming a codepoint >= 0x110000 makes PyYAML's own scanner
+        # call chr() on an out-of-range value (ValueError), and its
+        # regex-based scalar resolver can match a value as boolean-looking
+        # while its own construct_yaml_bool value-lookup table then rejects
+        # it (KeyError); a larger fuzz corpus keeps finding further internal
         # PyYAML failure modes of this shape. Every one is reported the
-        # same way as an ordinary pyyaml-side rejection, naming the actual
-        # exception type for diagnostic purposes, rather than letting it
-        # abort the whole comparison run; catching Exception rather than a
-        # specific, growing list of exception types still lets
+        # same way as an ordinary pyyaml-side rejection, with the actual
+        # exception type named for diagnostic purposes, instead of letting
+        # it abort the whole comparison run. Catching Exception, instead of
+        # a specific, growing list of exception types, lets
         # KeyboardInterrupt/SystemExit/GeneratorExit (none of which
         # subclass Exception) propagate normally.
         return False, f"pyyaml raised {type(e).__name__}: {e}"
@@ -186,15 +186,14 @@ def run_pyyaml(data: bytes):
         return False, str(e)
 
 
-# Value-level mismatches individually investigated (checked against a
-# second reference parser, Ruby's Psych, before being accepted) and judged
+# Value-level mismatches that were investigated one by one (checked against
+# a second reference parser, Ruby's Psych, before being accepted) and judged
 # NOT to be cyaml bugs; see this project's own internal history notes for
-# the full reasoning behind each one. Keyed by case_id() below. Unlike
-# tests_spec_suite.c's own KNOWN_DEVIATIONS (which only covers
-# accept/reject-level disagreement
-# against the vendored suite itself), this dict is specifically about
-# VALUE-level disagreement against PyYAML, so the two lists are not
-# expected to overlap.
+# the full reasoning behind each one. The dict is keyed by case_id() below.
+# tests_spec_suite.c's own KNOWN_DEVIATIONS covers only
+# accept/reject-level disagreement against the vendored suite itself, while
+# this dict is specifically about VALUE-level disagreement against PyYAML,
+# so the two lists are not expected to overlap.
 KNOWN_VALUE_DEVIATIONS = {
     "652Z": "reference-parser leniency: cyaml correctly treats a bare '?' "
             "glued to non-whitespace content as a plain scalar, not an "

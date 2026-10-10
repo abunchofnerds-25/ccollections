@@ -19,28 +19,28 @@ with mmgmt_procs = NULL, which selects the standard malloc and free.
 .nf
 max_events_per_wait  Size of the epoll_wait batch buffer that the
                       poller thread uses. It must be between 1 and
-                      INT_MAX, and both ends count. It must also be
-                      small enough that max_events_per_wait *
+                      INT_MAX, both ends included, and small enough
+                      that max_events_per_wait *
                       sizeof(struct epoll_event) does not overflow
                       size_t. It bounds how many ready events one
-                      epoll_wait call drains. It does not bound how
-                      many registrations the loop can hold.
+                      epoll_wait call drains, not how many
+                      registrations the loop can hold.
 num_lock_stripes     Number of independent lock stripes for the
                       registry of the fds and the entries. It must be
-                      >= 1. A value of 1 means a single shared lock.
+                      >= 1; a value of 1 means a single shared lock.
                       Pass a larger value to lower the contention
                       between ccol_event_loop_add,
                       ccol_event_loop_remove and
-                      ccol_event_loop_modify. That contention grows
-                      across many different fds and registrations that
-                      threads use at the same time.
+                      ccol_event_loop_modify. That contention grows when
+                      threads use many different fds and registrations
+                      at the same time.
 num_reactor_threads  Total number of OS threads that this loop uses
                       for its own poll work and dispatch work. It must
-                      be >= 1. Exactly one dedicated thread ever calls
-                      epoll_wait on the shared epoll instance,
-                      whatever this value is. A value of 1 means that
+                      be >= 1. Whatever this value is, exactly one
+                      dedicated thread ever calls epoll_wait on the
+                      shared epoll instance. A value of 1 means that
                       the same thread also dispatches every callback
-                      inline. A larger value adds
+                      inline, while a larger value adds
                       (num_reactor_threads - 1) separate dispatch
                       worker threads.
 err_str               Optional pointer that gets an error string on a
@@ -49,8 +49,8 @@ err_str               Optional pointer that gets an error string on a
 .SH RETURN VALUE
 .nf
 Returns a new ccol_event_loop handle on success.
-Returns CCOL_EVENT_LOOP_INVALID on a failure. The reasons for a
-failure are: an argument is invalid; an allocation failed;
+Returns CCOL_EVENT_LOOP_INVALID on a failure, which has one of these
+causes: an argument is invalid; an allocation failed;
 epoll_create1, eventfd or pthread_create failed; the process had no
 thread-specific key left for the dispatch of a loop; the process-exit
 destructors of the library have run and the last loop is gone; or the
@@ -60,7 +60,7 @@ ccol_event_loop_create_with_mprocs(3).
 .SH NOTES
 .nf
 Every background reactor thread of the ccol_event_loop that this macro
-returns already runs by the time that the call returns. Destroy the
+returns is running by the time that the call returns. Destroy the
 loop with ccol_event_loop_destroy() after you finish with it.
 .fi
 .SH "SEE ALSO"

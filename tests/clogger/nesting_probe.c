@@ -40,29 +40,29 @@ SOFTWARE.
 #endif
 
 static int clog_probe_side(clog l) {
-  ccol_log_debug(l, "side");
+  clog_debug(l, "side");
   return 1;
 }
 
 void clog_nesting_probe(clog l, int x, const char *s);
 void clog_nesting_probe(clog l, int x, const char *s) {
-  ccol_log_trace(l, "trace");
-  ccol_log_debug(l, "debug");
-  ccol_log_info(l, "info");
-  ccol_log_warn(l, "warn");
-  ccol_log_error(l, "error");
-  ccol_log_alert(l, "alert");
-  ccol_log_info(l, "%d %s", x, s);
-  ccol_log_info(l, "%d", clog_probe_side(l));
-  if (x == 42) ccol_log_fatal(l, "fatal");
+  clog_trace(l, "trace");
+  clog_debug(l, "debug");
+  clog_info(l, "info");
+  clog_warn(l, "warn");
+  clog_error(l, "error");
+  clog_alert(l, "alert");
+  clog_info(l, "%d %s", x, s);
+  clog_info(l, "%d", clog_probe_side(l));
+  if (x == 42) clog_fatal(l, "fatal");
 #ifndef CLOGGER_PROBE_STRICT
-  ccol_log_info(l, "%d", ({
-                  ccol_log_warn(l, "inner %d", x);
-                  x;
-                }));
+  clog_info(l, "%d", ({
+              clog_warn(l, "inner %d", x);
+              x;
+            }));
   chmap_construct(m, int, int);
   chmap_insert(m, 1, ({
-                 ccol_log_info(l, "in a value macro %d", x);
+                 clog_info(l, "in a value macro %d", x);
                  2;
                }));
   chmap_destroy(m);

@@ -1,23 +1,23 @@
 # Changelog
 
-This file records every important change to this project. The format obeys
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The version numbers
-obey the compatibility rules in `doc/compatibility.md`.
+This file records every important change to this project. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the version
+numbers follow the compatibility rules in `doc/compatibility.md`.
 
-Each entry belongs to a group for its kind of change. The groups come in this
-order: `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`. A
-`Changed` entry or a `Removed` entry that changes the Application Binary
-Interface (ABI) names the ABI version that it needed.
+Entries are grouped by the kind of change, in this order: `Added`, `Changed`,
+`Deprecated`, `Removed`, `Fixed`, `Security`. A `Changed` or `Removed` entry
+that changes the Application Binary Interface (ABI) names the ABI version
+that it required.
 
 ## 1.0.0 - unreleased
 
-This is the first release with a stable, supported interface. The text below
-describes what `1.0.0` holds. It does not describe a difference from an earlier
-release, because there is no earlier release.
+This is the first release with a stable, supported interface. Because there
+is no earlier release, the text below describes what `1.0.0` contains rather
+than what changed.
 
 The SONAME of the shared library is `libccollections.so.1`. Every later `1.x`
-release keeps that SONAME. Each one stays compatible with this release, both at
-the source level and at the binary level.
+release keeps that SONAME and stays compatible with this release at both the
+source level and the binary level.
 
 ### Added
 
@@ -55,11 +55,11 @@ the source level and at the binary level.
 - Strings and algorithms: `cstring`, a dynamic string; and `csort`, an
   iterative bottom-up mergesort. Its floating-point comparators put NaN
   above each other value, and make NaN equal only to NaN.
-- Memory: `cmempool`, which gives you a fixed-size pool and a ranged pool. You
-  can build each one from a heap allocation, or from a preallocated buffer
-  that you supply. A pool can fall back to dynamic allocation when it is
-  empty. It also detects corruption and a double free. Every entry is aligned
-  for any object type, which is the same guarantee that `malloc()` makes.
+- Memory: `cmempool`, which gives you a fixed-size pool and a ranged pool,
+  each built either from a heap allocation or from a preallocated buffer that
+  you supply. A pool can fall back to dynamic allocation when it is empty,
+  and it detects corruption and double frees. Every entry is aligned for any
+  object type, the same guarantee that `malloc()` makes.
 - Concurrency: `cthreadcomm`, which gives you circular queues, dynamic queues,
   channels, and a persistent `epoll(7)` reactor; `cthreadpool`, which gives
   you a bounded or an unbounded task queue, completion callbacks, and futures;
@@ -87,8 +87,8 @@ the source level and at the binary level.
   - A `ctpool` keeps the task nodes of its recent traffic for reuse, at most
     32768 idle nodes per pool (more only for a pool with over 8192 workers),
     and halves what the traffic does not need at every 256th idle point.
-- Serialization: `cjson` and `cyaml`. Each one is a parser, a serializer, and
-  a mutable DOM with path-based get and set macros. `cyaml` also covers YAML
+- Serialization: `cjson` and `cyaml`, each a parser, a serializer and a
+  mutable DOM with path-based get and set macros. `cyaml` also covers YAML
   1.2 tags, merge keys, and multi-document streams.
   - `cjson_set()` and `cyaml_set()` accept a `char` array, such as a buffer
     that `snprintf` filled, and a pointer that is itself `const`, such as
@@ -138,8 +138,8 @@ the source level and at the binary level.
   - Nesting depth counts containers: 500 nested containers are accepted and
     a 501st is refused, the same in parse, serialize and clone. A `cjson`
     parse error message is always printable ASCII.
-- Logging: `clogger`. It writes logfmt, JSON, and RFC 5424 syslog output. It
-  also gives you log rotation, derived loggers, and optional asynchronous
+- Logging: `clogger`, which writes logfmt, JSON or RFC 5424 syslog output and
+  also gives you log rotation, derived loggers and optional asynchronous
   batching. Rotation retention always keeps the newest generations, and at
   most `max_rotated_files + 1` generations stay on disk. Compression runs on
   a background thread of each logger, so neither a logging call nor the
@@ -151,10 +151,9 @@ the source level and at the binary level.
   the same log still rotates on schedule. An asynchronous logger on a
   datagram or a seqpacket socket sends one record per message. A write error
   that no retry can fix drops the pending batch and writes a record that
-  names what was lost, so a destination that fails for good never makes
-  the batch grow without bound. Each
-  thread reads its process ID, thread ID and thread name once, so a record
-  costs no system call for them.
+  names what was lost, so a destination that fails permanently never makes
+  the batch grow without bound. Each thread reads its process ID, thread ID
+  and thread name once, so a record costs no system call for them.
 - `ccol_set_thread_name()`, which renames the calling thread and makes its
   next `clogger` record carry the new name.
 - Every module accepts allocation functions that the caller supplies.
@@ -164,16 +163,15 @@ the source level and at the binary level.
   path parameters, middleware chains, sub-routers, streaming handlers, and
   optional TLS. Every final response of the server carries a `Date` header
   in UTC, as Go's `net/http` server does, unless the handler sets its own.
-  The TLS server resumes sessions for TLS 1.2 and TLS 1.3, with
-  and without the verification of client certificates, and it answers every
-  request of a pipeline that arrives in one TLS record. The client tries every
-  address of a host name, under one connect timeout, in all three tiers (see
-  the Happy Eyeballs entry below). Therefore, `http://localhost` gets to a
-  server that listens only on `127.0.0.1`. Each tier reads a TLS response
-  that the peer sends in records larger than one read, and does not wait for
-  the socket. No TLS
-  write of either module raises SIGPIPE, whatever the signal disposition of
-  the application. A client response and an asynchronous result can be freed
+  The TLS server resumes sessions for TLS 1.2 and TLS 1.3, with and without
+  verification of client certificates, and it answers every request of a
+  pipeline that arrives in one TLS record. In all three tiers the client tries
+  every address of a host name under one connect timeout (see the Happy
+  Eyeballs entry below), so `http://localhost` reaches a server that listens
+  only on `127.0.0.1`. Each tier reads a TLS response that the peer sends in
+  records larger than one read without waiting on the socket. No TLS write of
+  either module raises SIGPIPE, whatever the signal disposition of the
+  application. A client response and an asynchronous result can be freed
   after their client is destroyed. A `405` of the server carries an `Allow`
   header, and accepted TCP connections keep the kernel's buffer autotuning.
   - `chttpclient_resp_header()` returns a field that a response repeats as
@@ -249,41 +247,41 @@ the source level and at the binary level.
 - Packaging: a shared library with a version and a SONAME, a static archive,
   `pkg-config` metadata that the build generates, support for `PREFIX`,
   `DESTDIR`, `LIBDIR`, `INCLUDEDIR`, `MANDIR` and `PKGCONFIGDIR` in
-  `make install`, and 521 manual pages. 510 pages are in section 3, and 11
-  pages are in section 7. The public headers install into `include/ccollections/`
-  and include each other by relative name, and an application writes
+  `make install`, and 521 manual pages (510 in section 3 and 11 in section 7).
+  The public headers install into `include/ccollections/` and include each
+  other by relative name, and an application writes
   `#include <ccollections/NAME.h>`, so a header of the same name in the
   application never collides with one of the library's.
-- `make check_namespace`. It stops the build when one of these items has no
-  namespace prefix: an exported symbol, a public macro, a public typedef, an
+- `make check_namespace`, which stops the build when any of these items has
+  no namespace prefix: an exported symbol, a public macro, a public typedef, an
   enumerator, or a struct, union or enum tag of an installed header.
-- `make check_abi`. It compares the exported ABI against the committed
-  baseline under `abi/`. It fails on an addition that nobody recorded, and on
+- `make check_abi`, which compares the exported ABI against the committed
+  baseline under `abi/` and fails on an addition that nobody recorded and on
   any removal.
-- `make check_filenames`. It refuses a name under `include/` or `man/` that
-  `make install` and `make uninstall` would paste onto the installation
-  directory as a shell pattern rather than as one literal path. Such a name
-  makes those recipes reach files that belong to other packages.
-- `make bench`, a benchmark suite. It covers the modules whose run-time cost is
-  worth watching. It keeps a baseline for each machine and finds a regression
-  against it. Where uthash, GLib, jansson and libyaml are installed, it can
-  also compare against them.
+- `make check_filenames`, which refuses a name under `include/` or `man/`
+  that `make install` and `make uninstall` would paste onto the installation
+  directory as a shell pattern rather than as one literal path, because such
+  a name makes those recipes reach files that belong to other packages.
+- `make bench`, a benchmark suite for the modules whose run-time cost is worth
+  watching. It keeps a baseline for each machine and detects regressions
+  against it, and where uthash, GLib, jansson and libyaml are installed, it
+  can also compare against them.
 - `CCOL_FORK_SAFETY_REQUIRED`, a compile-time switch for the fork protection
   that `cthreadpool`, `cthreadcomm`, `clogger` and `chttpserver` build on
   `pthread_atfork()`.
-- `CCOL_MEMPOOL_COMPACT_LAYOUT`, a compile-time switch. It gives you a stride
-  that the library does not round up to a power of two, and it costs a little
-  speed on every `cmempool` allocation and release. It is part of the
-  interface between an application and the library. When the two sides
-  disagree, you get a link error and not a pool of the wrong size.
-- `CCOL_MEMPOOL_DYNAMIC_TLS`, a compile-time switch. It selects the general
-  thread-local storage model instead of initial-exec for the thread-local fast
-  paths of the library. Use it for a library that you must `dlopen()` into a
+- `CCOL_MEMPOOL_COMPACT_LAYOUT`, a compile-time switch that gives you a stride
+  the library does not round up to a power of two, at the cost of a little
+  speed on every `cmempool` allocation and release. Because it is part of the
+  interface between an application and the library, a disagreement between
+  the two sides gives a link error, not a pool of the wrong size.
+- `CCOL_MEMPOOL_DYNAMIC_TLS`, a compile-time switch that selects the general
+  thread-local storage model instead of initial-exec for the library's
+  thread-local fast paths. Use it when you must `dlopen()` the library into a
   process whose static thread-local block is already full.
 - `WITH_CJSON`, `WITH_CYAML`, `WITH_CLOGGER`, `WITH_CHTTPCLIENT` and
   `WITH_CHTTPSERVER`, build switches that leave a module out of the library.
-  Turn off both HTTP modules and the library no longer needs OpenSSL. Turn off
-  `clogger` and it no longer needs zlib. A reduced build is not interchangeable
+  With both HTTP modules off, the library does not need OpenSSL; with
+  `clogger` also off, it does not need zlib. A reduced build is not interchangeable
   with a full build at the ABI level.
 - `chttpclient` connects to a host with several addresses by racing them
   (Happy Eyeballs, RFC 8305) in every tier: the families alternate, the next
@@ -310,13 +308,14 @@ the source level and at the binary level.
 - The build uses `-fstack-protector-strong`, `-fstack-clash-protection`,
   `-D_FORTIFY_SOURCE=3`, and RELRO with BIND_NOW. It also uses
   `-fvisibility=hidden`, so that the set of exported symbols equals the
-  declared public API and holds nothing else. The build probes each hardening
-  flag against the compiler and the target, and passes the ones that this pair
-  really implements. `make hardening_report` prints the result, so a flag that
-  a toolchain cannot give is visible and not silent.
+  declared public API and nothing else. The build probes each hardening flag
+  against the compiler and the target and passes only the flags that this
+  pair really implements; `make hardening_report` prints the result, so a
+  flag that a toolchain cannot provide is visible instead of silently
+  missing.
 - The `cjson` parser, the `cyaml` parser, the HTTP/1.1 parser and the URL and
-  redirect layer of `chttpclient` are fuzzed continuously. That work runs as a
-  blocking job on every push and on every pull request. The URL target also
+  redirect layer of `chttpclient` are fuzzed continuously, as a blocking job
+  on every push and every pull request. The URL target also
   asserts, on every input, that a redirect can never move a request from a
   network transport onto an AF_UNIX socket.
 - The HTTP server never lets a slow client hold a worker thread of a buffered
@@ -413,9 +412,8 @@ the source level and at the binary level.
   work linear in the count, so an attack pays a constant amount for each
   insert even when every growth fails, and a map that returns to the fast
   mode switches again within two windows of 256 inserts if the attack
-  resumes. A lookup
-  or a delete never examines more slots than the largest displacement in
-  the table. A JSON object or a YAML mapping from an untrusted peer
+  resumes. A lookup or a delete never examines more slots than the largest
+  displacement in the table. A JSON object or a YAML mapping from an untrusted peer
   therefore cannot make `cjson_parse()` or `cyaml_parse()` take quadratic
   time, and neither can integer keys that a map or a cache takes from a
   request.
@@ -469,4 +467,4 @@ the source level and at the binary level.
   on the socket while the server holds a partial record, and never spins.
 - `chttp_base64_decode_mp()` refuses a final group whose unused bits are not
   zero, so each decoded value has exactly one encoding.
-- See `SECURITY.md` for the steps to report a vulnerability.
+- See `SECURITY.md` for how to report a vulnerability.

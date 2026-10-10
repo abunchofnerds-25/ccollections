@@ -11,13 +11,12 @@ ctpool_declare_scoped(name);
 .fi
 .SH DESCRIPTION
 .nf
-This macro is like ctpool_declare(), and it also attaches a cleanup
-attribute. The pool therefore destroys itself when the variable leaves
-scope, exactly as ctpool_destroy() destroys it.
+Works like ctpool_declare(), but also attaches a cleanup attribute, so
+the pool destroys itself when the variable leaves scope, exactly as
+ctpool_destroy() destroys it.
 
-You must still assign the variable before you use it. The cleanup does
-nothing when the variable is still CTPOOL_INVALID at the end of
-scope.
+You must still assign the variable before you use it. If the variable is
+still CTPOOL_INVALID at the end of scope, the cleanup does nothing.
 .fi
 .SH PARAMETERS
 .nf
@@ -27,8 +26,8 @@ name  Variable name to declare.
 .nf
 It needs GCC or Clang, because it uses __attribute__((cleanup)).
 Run a shutdown yourself before the end of scope when the drain behavior
-matters. The shutdown that the destroy runs by itself drains the queue.
-That drain has no bound on its duration when the tasks are long.
+matters: the shutdown that the destroy runs by itself drains the queue,
+and that drain has no bound on its duration when the tasks are long.
 .fi
 .SH EXAMPLES
 .nf

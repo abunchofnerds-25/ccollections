@@ -11,9 +11,10 @@ clru_init(name, capacity, getter, setter, evict_cb);
 .fi
 .SH DESCRIPTION
 .nf
-Calls clrucache_create_full() and assigns the result to name. It takes the
-key type and the value type from the companion variables that
-clru_declare() creates. It calls ccol_fatal_err() when the creation fails.
+Calls clrucache_create_full() and assigns the result to name, taking
+the key type and the value type from the companion variables that
+clru_declare() creates. It calls ccol_fatal_err() when the creation
+fails.
 .fi
 .SH PARAMETERS
 .nf
@@ -26,8 +27,8 @@ evict_cb   Eviction callback, or NULL
 .fi
 .SH NOTES
 .nf
-This macro calls ccol_fatal_err() when an allocation fails.
-Call clrucache_create_full() directly when you must handle an error
+This macro calls ccol_fatal_err() when an allocation fails, so call
+clrucache_create_full() directly when you must handle an error
 yourself.
 .fi
 .SH EXAMPLES

@@ -3,23 +3,24 @@
 # command line as a pathname.
 #
 # `make install` and `make uninstall` build their argument lists from the
-# basenames of the files in man/ and include/. They prefix each basename with
-# the installation directory. The shell that runs the recipe then expands that
-# argument list. A basename that holds a shell pathname-expansion character
-# therefore stops naming one file of this project and starts naming a PATTERN
-# that matches inside the installation directory. `rm -f` then deletes, and
-# `sed -i` then rewrites, files that belong to some other package.
+# basenames of the files in man/ and include/. They put the installation
+# directory in front of each basename, and the shell that runs the recipe then
+# expands that argument list. A basename that holds a shell pathname-expansion
+# character therefore stops naming one file of this project and starts naming
+# a PATTERN that matches inside the installation directory, so `rm -f` deletes,
+# and `sed -i` rewrites, files that belong to some other package.
 #
 # The recipes already run under `set -f`, which turns that expansion off. This
-# script is the second half of the same guard. It keeps such a name out of the
+# script is the second half of the same guard: it keeps such a name out of the
 # tree in the first place, so that the property does not depend on one `set -f`
 # surviving a future edit of the Makefile. A name with a space or a tab is
-# refused for the same reason: the shell splits the argument list on it.
+# refused for the same reason, because the shell splits the argument list on
+# it.
 #
 # The script also checks the shape of every man alias page; see the comment at
 # that check.
 #
-# Run this from the root of the repository. `make check_filenames` and CI both
+# Run this from the root of the repository; `make check_filenames` and CI both
 # use it.
 set -eu
 
@@ -48,7 +49,7 @@ done
 # MANPATH, so the line must have exactly that shape. A ".TH" line in front of
 # it makes man print a header and a footer of its own around the target page,
 # and makes mandb record the alias as a page of its own instead of as a link.
-# The target must exist, or the installed alias points at nothing.
+# The target must also exist, or the installed alias points at nothing.
 if [ -d man ]; then
   for page in $(grep -l '^\.so' man/*/*.3 man/*/*.7 2>/dev/null || true); do
     lines=$(wc -l < "$page")

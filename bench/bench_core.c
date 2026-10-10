@@ -64,8 +64,8 @@ static void *vec_empty_setup(size_t n) {
 }
 
 /* Growth from the minimum capacity is part of what this case measures. A push
- * that causes a reallocation is the expensive case. To spread that cost over
- * the whole run is the honest way to report what it costs to build a
+ * that causes a reallocation is the expensive case, and spreading that cost
+ * over the whole run is the honest way to report what it costs to build a
  * vector. */
 static void vec_push_run(void *state, size_t n) {
   vec_state_t *st = state;
@@ -75,9 +75,9 @@ static void vec_push_run(void *state, size_t n) {
   bench_sink(v);
 }
 
-/* This is the same work, with the final capacity reserved at the start. It
- * therefore separates the cost for each element from the reallocation and the
- * copying that the case above it includes. */
+/* The same work, with the final capacity reserved at the start, so that it
+ * separates the cost for each element from the reallocation and the copying
+ * that the case above it includes. */
 static void *vec_reserved_setup(size_t n) {
   vec_state_t *st = vec_empty_setup(n);
   if (!st) return NULL;
@@ -104,9 +104,9 @@ static void *vec_filled_setup(size_t n) {
   return st;
 }
 
-/* This case computes the indices first and then mixes them. It therefore
- * measures how the container itself indexes. It does not measure a sweep in
- * order, which the prefetcher helps. */
+/* This case computes the indices first and then mixes them, so it measures
+ * how the container itself indexes instead of a sweep in order, which the
+ * prefetcher helps. */
 static void vec_random_access_run(void *state, size_t n) {
   vec_state_t *st = state;
   cvec v = st->v;
@@ -125,8 +125,8 @@ static void vec_sequential_access_run(void *state, size_t n) {
   bench_sink_value((long long)acc);
 }
 
-/* The harness reports this for each element, and not for each sort. The figure
- * therefore stays comparable when the number of elements changes. */
+/* The harness reports this for each element and not for each sort, so the
+ * figure stays comparable when the number of elements changes. */
 static void vec_sort_run(void *state, size_t n) {
   (void)n;
   vec_state_t *st = state;
@@ -171,8 +171,8 @@ static void *str_haystack_setup(size_t n) {
   str_state_t *st = str_empty_setup(n);
   if (!st) return NULL;
   cstr s = st->s;
-  /* This haystack holds no match near its start. find() therefore scans all of
-   * it every time. It does not return after the first few bytes. */
+  /* This haystack holds no match near its start, so find() scans all of it
+   * every time instead of returning after the first few bytes. */
   for (size_t i = 0; i < 512; i++) cstr_append(s, "abcdefgh");
   cstr_append(s, "needle");
   return st;
@@ -203,15 +203,14 @@ typedef struct {
 #define BENCH_POOL_ELEM_SIZE 64
 #define BENCH_POOL_LIVE 1024
 
-/* A read buffer for one connection, a protocol frame, and a database page all
-   have about this size. These are the sizes that people reach for a pool for
-   most often. In this range the system allocator also stops serving from its
-   cache for each thread. It starts to join and split chunks on every
-   release. */
+/* A read buffer for one connection, a protocol frame and a database page all
+   have about this size, which is the size that people most often want a pool
+   for. In this range the system allocator also stops serving from its cache
+   for each thread and starts to join and split chunks on every release. */
 #define BENCH_POOL_BUFFER_SIZE 4096
 
-/* These objects do not have lifetimes that nest inside each other. A set of
-   connections, of sessions, or of graph nodes frees its objects in an order
+/* These objects do not have lifetimes that nest inside each other: a set of
+   connections, of sessions or of graph nodes frees its objects in an order
    that has nothing to do with the order of allocation. A rolling replacement
    never exercises that case, because there the entry that the code just
    released is always the next one that the pool gives back. */
@@ -244,9 +243,9 @@ static void *pool_setup_generic(bool single_threaded) {
     pool_teardown(st);
     return NULL;
   }
-  /* This pool has no dynamic fallback. The working set fits inside the pool. A
-   * fallback allocation would therefore mean that the benchmark had started to
-   * measure malloc instead of the pool, with no report. */
+  /* This pool has no dynamic fallback, and the working set fits inside it. A
+   * fallback allocation would mean that the benchmark had started to measure
+   * malloc instead of the pool, with no report. */
   st->pool = ccol_mempool_create(st->count, BENCH_POOL_ELEM_SIZE,
                                  /*fallback_to_dynamic_memory=*/false,
                                  single_threaded, NULL, NULL);
@@ -262,34 +261,31 @@ static void *pool_setup(size_t n) {
   return pool_setup_generic(false);
 }
 
-/* This is the same pool, with its lock left out of the path. That separates
- * the cost of the allocator itself from the cost of the synchronization around
- * it. */
+/* The same pool with its lock left out of the path, which separates the cost
+ * of the allocator itself from the cost of the synchronization around it. */
 static void *pool_st_setup(size_t n) {
   (void)n;
   return pool_setup_generic(true);
 }
 
-/* This case uses a rolling working set. It does not allocate everything and
- * then free everything. The code frees a slot immediately before it allocates
- * that slot again. This is the shape in which people use a pool, and the shape
- * that keeps its free list hot.
+/* This case uses a rolling working set instead of allocating everything and
+ * then freeing everything: the code frees a slot immediately before it
+ * allocates that slot again. This is the shape in which people use a pool,
+ * and the shape that keeps its free list hot.
  *
  * The live set has the size of the capacity of the pool, and the pool has no
- * dynamic fallback. A NULL return therefore means that the pool no longer
- * honours the capacity that you gave it. The abort on that return is not a
- * defensive habit. A NULL return is cheaper than an allocation. Without this
- * check, a pool that had begun to fail would report a *better* figure than a
- * pool that works. The times would then become meaningless, and they would do
- * so in the flattering direction.
+ * dynamic fallback, so a NULL return means that the pool does not honour the
+ * capacity that you gave it. The abort on that return is not a defensive
+ * habit. A NULL return is cheaper than an allocation, so without this check a
+ * pool that had begun to fail would report a *better* figure than a pool that
+ * works, and the times would become meaningless in the flattering direction.
  *
- * This function does NOT free the entries that are still out, on purpose.
+ * This function does NOT free the entries that are out, on purpose.
  * pool_teardown destroys the pool, which releases the whole backing buffer at
- * one time. The matching malloc case also cleans up in its own teardown. A
- * free here would put st->count more frees inside the timed region, and the
- * malloc case does not pay those. That would bias the very comparison that
- * this case exists to make, and it would also make the reported ns/op depend
- * on n. */
+ * one time, and the matching malloc case also cleans up in its own teardown. A
+ * free here would put st->count more frees inside the timed region, which the
+ * malloc case does not pay. That would bias the very comparison that this case
+ * exists to make, and it would also make the reported ns/op depend on n. */
 static void pool_alloc_free_run(void *state, size_t n) {
   pool_state_t *st = state;
   for (size_t i = 0; i < n; i++) {
@@ -301,18 +297,19 @@ static void pool_alloc_free_run(void *state, size_t n) {
   }
 }
 
-/* This case allocates a whole batch and then frees the whole batch. It does not
- * roll one slot at a time. The two shapes exercise different code. A caller
- * that alternates moves a thread cache by one entry. After its first refill it
- * may never reach the shared free list again, so it reports the fast path and
- * almost nothing else. A batch much larger than one magazine forces the refill
- * path and the flush path on every burst. That is where a cache for each
- * thread either pays for itself or does not.
+/* This case allocates a whole batch and then frees the whole batch, instead
+ * of rolling one slot at a time, because the two shapes exercise different
+ * code. A caller that alternates moves a thread cache by one entry; after its
+ * first refill it may never reach the shared free list again, so it reports
+ * the fast path and almost nothing else. A batch much larger than one magazine
+ * forces the refill path and the flush path on every burst, which is where a
+ * cache for each thread either pays for itself or does not.
  *
- * The batch is the whole live set. The unit stays one pair of an allocation and
- * a free. You can therefore compare this figure directly with the alternating
- * case above, and with the malloc case beside it. The code allocates and frees
- * a last, partial batch in full, so no entry stays out between two batches. */
+ * The batch is the whole live set, while the unit stays one pair of an
+ * allocation and a free, so you can compare this figure directly with the
+ * alternating case above and with the malloc case beside it. The code
+ * allocates and frees a last, partial batch in full, so no entry stays out
+ * between two batches. */
 static void pool_burst_run(void *state, size_t n) {
   pool_state_t *st = state;
   for (size_t done = 0; done < n;) {
@@ -331,8 +328,8 @@ static void pool_burst_run(void *state, size_t n) {
   }
 }
 
-/* These are the 4 KiB forms. They use the same rolling replacement as the
-   64-byte cases. The element size is the only difference between them. */
+/* The 4 KiB forms, which use the same rolling replacement as the 64-byte
+   cases; the element size is the only difference between them. */
 static void *pool_buffer_setup(size_t n) {
   (void)n;
   pool_state_t *st = calloc(1, sizeof(*st));
@@ -461,10 +458,9 @@ static void malloc_alloc_free_run(void *state, size_t n) {
     size_t slot = i % st->count;
     free(st->slots[slot]);
     st->slots[slot] = malloc(BENCH_POOL_ELEM_SIZE);
-    /* The code checks this for the same reason as the pool arm. An allocator
-     * that fails costs much less than one that works. A malloc arm with no
-     * check therefore keeps measuring, and it wins the comparison that it
-     * belongs to. */
+    /* The code checks this for the same reason as the pool arm: an allocator
+     * that fails costs much less than one that works, so a malloc arm with no
+     * check keeps measuring and wins the comparison that it belongs to. */
     if (!st->slots[slot]) bench_die("malloc returned NULL");
     bench_sink(st->slots[slot]);
   }
@@ -491,16 +487,16 @@ static void malloc_burst_run(void *state, size_t n) {
   }
 }
 
-/* This is the same workload with several threads. There is one pool and one
- * malloc heap, and every thread shares them. Each thread rolls its own part of
- * the live set, and those parts do not overlap. The threads must share the
- * subject under test, because that is the point. They must not share the
- * scratch array around it. Each thread therefore keeps its own slots, and what
- * is left is the contention inside the allocator.
+/* The same workload with several threads: every thread shares one pool and
+ * one malloc heap, and each thread rolls its own part of the live set, which
+ * does not overlap the parts of the others. The threads must share the
+ * subject under test, because that is the point, but not the scratch array
+ * around it, so each thread keeps its own slots and what is left is the
+ * contention inside the allocator.
  *
- * The pool keeps the same total capacity that it has on one thread. The figure
- * that changes between the run with one thread and the run with several is
- * therefore the contention, and not the shape of the pool. */
+ * The pool keeps the same total capacity that it has on one thread, so the
+ * figure that changes between the run with one thread and the run with
+ * several is the contention and not the shape of the pool. */
 typedef struct {
   ccol_mempool *pool;
   void **slots;
@@ -602,11 +598,11 @@ void bench_register_core(void) {
                             .run = vec_push_run,
                             .teardown = vec_teardown,
                             .n = BENCH_DEFAULT_N});
-  /* Two million ints are 8 MB of payload and a 16 MB index array. That size
-   * sits past a usual L2 cache, and at or past L3. The random case therefore
-   * really does pay for its cache misses. At BENCH_DEFAULT_N the whole working
-   * set fits in the cache. The two cases then measure the loop alone, and
-   * random access reports the same speed as access in order. */
+  /* Two million ints are 8 MB of payload and a 16 MB index array, which sits
+   * past a usual L2 cache and at or past L3, so the random case really does
+   * pay for its cache misses. At BENCH_DEFAULT_N the whole working set fits in
+   * the cache; the two cases then measure the loop alone, and random access
+   * reports the same speed as access in order. */
   bench_add(&(bench_case_t){.group = "cvector",
                             .name = "access_sequential",
                             .setup = vec_filled_setup,

@@ -32,7 +32,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # The in-tree headers by default. CCOL_PROBE_INCLUDE_DIR points the probe at
 # another header tree instead, which is how its own non-vacuity is checked:
 # the guarantee lives in the headers, so the way to confirm a case can fail is
-# to run it against a copy of them with the qualifier taken back out.
+# to run it against a copy of them with the qualifier removed.
 INCLUDE_DIR=${CCOL_PROBE_INCLUDE_DIR:-"$SCRIPT_DIR/../../include"}
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT

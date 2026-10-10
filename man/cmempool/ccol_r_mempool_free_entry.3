@@ -11,14 +11,14 @@ ccol_r_mempool_free_entry(rmp, entry);
 .fi
 .SH DESCRIPTION
 .nf
-Returns an allocated entry to the sub-pool that owns it. It then sets the
-pointer of the caller to NULL.
+Returns an allocated entry to the sub-pool that owns it, then sets the
+caller's pointer to NULL.
 
-The caller names the ranged pool. The macro does not derive it from the
-entry. The macro resolves which sub-pool owns the entry from the address of
-that entry. The caller therefore never has to track that. Free an entry to
-the ranged pool that it came from. To pass a different pool is a caller
-error, and it is fatal.
+The caller names the ranged pool; the macro does not derive it from the
+entry. The macro does, however, resolve which sub-pool owns the entry
+from the address of that entry, so the caller never has to track that.
+Free an entry to the ranged pool that it came from: passing a different
+pool is a caller error, and it is fatal.
 .fi
 .SH PARAMETERS
 .nf
@@ -38,9 +38,9 @@ It detects corruption with assertions
 The macro resolves which sub-pool owns the entry from the address of that
 entry, and it reads nothing through an address that no sub-pool owns. An
 entry of the dynamic fallback is found in the record of fallback entries
-that its sub-pool keeps. An entry of another pool, and a fallback entry
-that is already free, end in the assert. See ccol_mempool_free_entry(3)
-and ccol_r_mempool_create(3).
+that its sub-pool keeps, while an entry of another pool, or a fallback
+entry that is already free, ends in the assert. See
+ccol_mempool_free_entry(3) and ccol_r_mempool_create(3).
 
 The macro evaluates each argument exactly once. entry must be a
 modifiable lvalue, such as a variable or an element of an array, so an
@@ -50,10 +50,10 @@ one element.
 .SH "THREAD SAFETY"
 .nf
 Thread-safe if the pool was created with single_threaded = false.
-Each sub-pool has its own lock. Frees of different size classes therefore
-never contend with one another. Inside a tier that keeps a cache for each
-thread, the common path takes no lock at all. An entry that one thread frees
-can go to another thread.
+Each sub-pool has its own lock, so frees of different size classes never
+contend with one another, and inside a tier that keeps a cache for each
+thread the common path takes no lock at all. An entry that one thread
+frees can go to another thread.
 .fi
 .SH "SEE ALSO"
 .BR ccol_mempool_free_entry (3),

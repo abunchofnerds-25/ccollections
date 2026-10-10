@@ -16,92 +16,90 @@ ccol_retval_t ccol_select_timed(size_t *ready_index, size_t n,
 .SH DESCRIPTION
 .nf
 The call blocks the thread of the caller until at least one of the n
-selectables becomes ready.  It then writes the 0-based index of that
+selectables becomes ready, then writes the 0-based index of that
 selectable into *ready_index and returns.
 
 ccol_select() never does the receive or the send itself, for any type of
-selectable.  It only reports readiness.  The caller must then make its own
-non-blocking receive or send call on the selectable that won.  It must do
-that at once.  For a queue selectable the call is
+selectable; it only reports readiness.  The caller must then at once make
+its own non-blocking receive or send call on the selectable that won:
 ccol_circq_try_recv_zc(), ccol_dynmq_try_recv_zc(),
-ccol_circq_try_send_zc() or ccol_dynmq_send_zc().  For an fd selectable it
-is read(2), recv(2), write(2) or send(2) on
-selectables[*ready_index].fd.  A concurrent consumer or producer can win
-the race between the return of ccol_select() and that call.  This is the
-same time-of-check to time-of-use contract that POSIX select(2) has.  The
-call must therefore be non-blocking, and the caller must check its result.
+ccol_circq_try_send_zc() or ccol_dynmq_send_zc() for a queue selectable,
+and read(2), recv(2), write(2) or send(2) on selectables[*ready_index].fd
+for an fd selectable.  A concurrent consumer or producer can win the race
+between the return of ccol_select() and that call, which is the same
+time-of-check to time-of-use contract that POSIX select(2) has, so the
+call must be non-blocking and the caller must check its result.
 
 ccol_select_timed() takes one more argument, timeout_us.  A value of
-UINT64_MAX behaves in the same way as ccol_select(), which waits forever.
-A value of 0 makes a poll that does not block.  Any other value is the
+UINT64_MAX behaves in the same way as ccol_select(), which waits forever,
+and a value of 0 makes a poll that does not block.  Any other value is the
 maximum number of microseconds to wait before the call returns
 ccol_timed_out.  A value too large to form a deadline saturates to the
 latest deadline that the clock can hold, and never wraps into the past.
 The library computes the deadline once, before the loop, from
-CLOCK_MONOTONIC.  A change of the system time can therefore not extend
-the timeout.
+CLOCK_MONOTONIC, so a change of the system time cannot extend the
+timeout.
 
 ccol_select() is the same as ccol_select_timed(ready_index, n,
 selectables, UINT64_MAX).
 
 A ccol_selectable holds a ccol_circular_queue, a ccol_dynamic_queue, or a
-raw file descriptor.  Build one with ccol_selectable_from_circq(),
+raw file descriptor; build one with ccol_selectable_from_circq(),
 ccol_selectable_from_dynq(), ccol_selectable_from_chan(), or
 ccol_selectable_from_fd().  A channel resolves to the circular queue below
-it before it comes here.  ccol_select() therefore treats a channel exactly
-as a plain circular queue.
+it before it comes here, so ccol_select() treats a channel exactly as a
+plain circular queue.
 
 When there is at least one fd selectable, the call watches the file
-descriptors.  It uses an epoll(7) instance on Linux, or a kqueue(2) on
-the BSDs.  The call creates that instance with close-on-exec, and closes
-it before it returns.  The call watches each fd for the full call, in
-level-triggered mode, in the direction of its selectable.  The call never
-changes or closes the fd itself.  A call that has only queue selectables
-creates no file descriptor.
+descriptors with an epoll(7) instance on Linux, or a kqueue(2) on the
+BSDs, which it creates with close-on-exec and closes before it returns.
+The call watches each fd for the full call, in level-triggered mode, in
+the direction of its selectable, and never changes or closes the fd
+itself.  A call that has only queue selectables creates no file
+descriptor.
 
-The call allocates a small quantity of memory for each selectable.  It
-frees all of that memory on every return path.  Any number of threads can
-call ccol_select() on the same queue at the same time.
+The call allocates a small quantity of memory for each selectable and
+frees all of it on every return path.  Any number of threads can call
+ccol_select() on the same queue at the same time.
 
 A producer wakes exactly one waiter for each message that it sends or each
-slot that it frees.  It never wakes all of them at once.  A caller can stop
-watching a queue while that queue is still ready for its direction.  That
-caller then forwards the wake to the next waiter.  The notification that it
-got is therefore never absorbed.  This holds for every way of leaving the
-call: another selectable becomes ready, the deadline elapses, an fd fires,
-or the call returns an error.  No waiter stays parked on a queue that has
-something for it.
+slot that it frees, never all of them at once.  A caller that stops
+watching a queue while that queue is still ready for its direction
+forwards the wake to the next waiter, so the notification that it got is
+never absorbed.  This holds for every way of leaving the call: another
+selectable becomes ready, the deadline elapses, an fd fires, or the call
+returns an error.  No waiter stays parked on a queue that has something
+for it.
 
-The call checks each selectable at least one time before it waits.  The
-call therefore reports a selectable that is ready at the start, also with
-a timeout_us of 0.  The call loses no wakeup.  A send or a free between
-that check and the wait also stops the wait.  A spurious wakeup does not
-stop the wait early, and it does not make the deadline later.  A signal
-does not do these things either.  On the fd path, the call rounds the
-remaining time up to whole milliseconds.  The wait therefore never stops
-before the deadline.  After the deadline, the call checks the file
-descriptors one last time.  Then it gives ccol_timed_out.  When the wait
+The call checks each selectable at least one time before it waits, so it
+reports a selectable that is ready at the start, also with a timeout_us of
+0.  The call loses no wakeup: a send or a free between that check and the
+wait also stops the wait.  A spurious wakeup or a signal does not stop the
+wait early, and does not make the deadline later.  On the fd path, the
+call rounds the remaining time up to whole milliseconds, so the wait never
+stops before the deadline; after the deadline, the call checks the file
+descriptors one last time and then gives ccol_timed_out.  When the wait
 itself fails, the call gives ccol_unexpected_failure.
 
-The call takes its locks in one fixed order.  It therefore cannot
-deadlock with a producer, with a consumer, or with a different
-ccol_select() on the same queues.
+The call takes its locks in one fixed order, so it cannot deadlock with a
+producer, with a consumer, or with a different ccol_select() on the same
+queues.
 .fi
 .SH PARAMETERS
 .nf
-ready_index   Pointer to a size_t.  It gets the 0-based index of the
+ready_index   Pointer to a size_t that gets the 0-based index of the
               selectable that became ready.  It is valid only when the
               call returns ccol_success.
 n             Number of elements in the selectables array.  It must be
-              >= 1 and no larger than INT_MAX.  The call rejects any
+              >= 1 and no larger than INT_MAX, and the call rejects any
               other value with ccol_invalid_args (see RETURN VALUE).  It
               must also be no larger than SIZE_MAX / sizeof(internal
-              waiter node).  No realistic caller can reach either
+              waiter node); no realistic caller can reach either
               ceiling.
 selectables   Array of n ccol_selectable values to watch.
 timeout_us    For ccol_select_timed only.  Maximum microseconds to wait.
               UINT64_MAX waits forever, the same as ccol_select.  0
-              makes a poll that does not block, and still reports every
+              makes a poll that does not block but reports every
               selectable that is ready at the moment of the call.  Any
               other value waits at least that many microseconds before
               it reports a timeout.
@@ -116,99 +114,98 @@ ccol_timed_out          For ccol_select_timed only.  timeout_us elapsed
                         before any selectable became ready.
                         *ready_index does not change.
 
-ccol_invalid_args       One of these holds.  ready_index or selectables
-                        is NULL.  n is 0.  n is larger than INT_MAX,
+ccol_invalid_args       One of these holds: ready_index or selectables
+                        is NULL; n is 0; n is larger than INT_MAX,
                         because the library narrows the index of a
-                        matched selectable through a plain int.  n is
+                        matched selectable through a plain int; n is
                         larger than SIZE_MAX / sizeof(internal waiter
                         node), because the internal waiter-node array,
                         which has one node for each selectable, would
-                        overflow size_t.  No n that a caller can
+                        overflow size_t (no n that a caller can
                         realistically build reaches either of those two
-                        ceilings.  A queue selectable holds a NULL queue
-                        pointer.  An fd selectable holds a negative fd.
-                        Or a type tag is present that the library does
+                        ceilings); a queue selectable holds a NULL queue
+                        pointer; an fd selectable holds a negative fd;
+                        or a type tag is present that the library does
                         not know.
 ccol_not_enough_memory  malloc failed to allocate the internal waiter
-                        node array.  That array has one node for each
+                        node array, which has one node for each
                         selectable.
 ccol_unexpected_failure epoll_create1(2), eventfd(2), or epoll_ctl(2)
                         failed with an errno that the library does not
                         expect.  Both functions can return this, but
                         only when at least one fd selectable is present.
                         ccol_select_timed() also returns it in one more
-                        case.  That case needs no fd selectable and a
-                        timeout_us other than UINT64_MAX.  The internal
-                        timed wait on a condition variable then fails
-                        with an error that is not a timeout.  Treat this
-                        as a fatal error in the configuration.  For
-                        example, the fd table is full, or the memory is
-                        under pressure.  An fd selectable that names a
-                        file that epoll(7) cannot watch also gives this
-                        code, on every call.  A regular file and a
-                        directory are such files: epoll_ctl(2) refuses
-                        them with EPERM, where poll(2) and select(2)
-                        report them as always ready.  The FreeBSD build
-                        also refuses them, although kqueue(2) can watch
-                        them.  Therefore, one program operates in the same
-                        way on the two systems.
+                        case, which needs no fd selectable and a
+                        timeout_us other than UINT64_MAX: the internal
+                        timed wait on a condition variable fails with an
+                        error that is not a timeout.  Treat this as a
+                        fatal error in the configuration, for example a
+                        full fd table or memory under pressure.  An fd
+                        selectable that names a file that epoll(7)
+                        cannot watch also gives this code, on every
+                        call.  A regular file and a directory are such
+                        files: epoll_ctl(2) refuses them with EPERM,
+                        where poll(2) and select(2) report them as
+                        always ready.  The FreeBSD build also refuses
+                        them, although kqueue(2) can watch them, so that
+                        one program operates in the same way on the two
+                        systems.
 .fi
 .SH NOTES
 .nf
 The library allocates the waiter nodes on the heap, one for each
-selectable, for as long as the call lasts.  It frees them on every return
-path, and an error path is one of those.  A large n therefore never
-causes an overflow of the stack.
+selectable, for as long as the call lasts, and frees them on every return
+path, error paths included, so a large n never causes an overflow of the
+stack.
 
 Any number of threads can call ccol_select() on the same queue at the same
-time.  The waiter list is a linked list that grows as needed.  It has no
-fixed capacity.
+time, because the waiter list is a linked list that grows as needed and
+has no fixed capacity.
 
-Several ccol_select() threads can watch a queue that becomes ready.  The
-producer then wakes only the head waiter, which is a single wake.  The
-waiter that wakes forwards the notify to the next waiter in line before it
-returns.  It always does that.  It does not depend on whether its own
-receive or send call succeeds.  Every waiter that is interested therefore
-gets a chance to observe the same readiness.  That is a cascade of wakes.
-This stops a thundering herd.  It also stops a gap in liveness.  Such a gap
-happens when several messages arrive, or several slots become free, one
-after the other in a short time.
+When several ccol_select() threads watch a queue that becomes ready, the
+producer wakes only the head waiter, which is a single wake.  The waiter
+that wakes always forwards the notify to the next waiter in line before it
+returns, whether or not its own receive or send call succeeds, so every
+waiter that is interested gets a chance to observe the same readiness.
+This cascade of wakes stops a thundering herd, and also stops the gap in
+liveness that would otherwise happen when several messages arrive, or
+several slots become free, one after the other in a short time.
 
-A caller can turn writing off on a queue.  ccol_circq_disable_sending() or
-ccol_dynmq_disable_sending() does that.  Read-direction waiters on that
-queue stay registered and keep waiting.  ccol_select() unblocks once
-sending is on again and a message arrives.  The library wakes
-write-direction waiters at once, so they can observe the new state.
+A caller can turn writing off on a queue with ccol_circq_disable_sending()
+or ccol_dynmq_disable_sending().  Read-direction waiters on that queue
+stay registered and keep waiting, and ccol_select() unblocks once sending
+is on again and a message arrives.  The library wakes write-direction
+waiters at once, so they can observe the new state.
 
-Every file descriptor must stay open for the whole ccol_select() call.  A
-close of an fd that ccol_select() watches now is undefined behaviour.
+Every file descriptor must stay open for the whole ccol_select() call;
+closing an fd that a running ccol_select() watches is undefined
+behaviour.
 
-A queue or a ccol_channel that goes to ccol_selectable_from_circq(),
-ccol_selectable_from_dynq() or ccol_selectable_from_chan() has the same
-rule.  Nothing may destroy it while a ccol_select() or ccol_select_timed()
-call still watches it.  ccol_circular_queue_destroy(),
+The same rule applies to a queue or a ccol_channel that goes to
+ccol_selectable_from_circq(), ccol_selectable_from_dynq() or
+ccol_selectable_from_chan(): nothing may destroy it while a ccol_select()
+or ccol_select_timed() call watches it.  ccol_circular_queue_destroy(),
 ccol_dynamic_queue_destroy() and ccol_channel_destroy() assert when the
-queue still has a linked waiter.  That waiter comes from a
-ccol_select() or ccol_select_timed() call that is in progress, or from a
-live ccol_event_loop registration.  Without that assert, the waiter node
-that is still linked points to the mutex of the queue, which the destroy is
-about to free.
+queue has a linked waiter, from a ccol_select() or ccol_select_timed()
+call that is in progress or from a live ccol_event_loop registration.
+Without that assert, the waiter node would stay linked and point to the
+mutex of the queue, which the destroy is about to free.
 
-The same fd can appear in more than one selectable inside one call.  The
-directions can be mixed in any way, and an exact duplicate of the same
-direction twice is allowed too.  One example is a watch on one connected
-socket for readability and writability at once.  The library combines
-selectables that share an fd into one registration below.  When that
-registration fires, ccol_select() resolves the index that it gives back.
-It walks the selectables that share the fd in the order that the caller
-gave them.  It picks the first one whose own direction is really satisfied
-by what became ready.
+The same fd can appear in more than one selectable inside one call, with
+the directions mixed in any way; an exact duplicate of the same direction
+twice is allowed too.  One example is a watch on one connected socket for
+readability and writability at once.  The library combines selectables
+that share an fd into one registration below.  When that registration
+fires, ccol_select() resolves the index that it gives back by walking the
+selectables that share the fd in the order that the caller gave them, and
+picks the first one whose own direction is really satisfied by what
+became ready.
 
-The library uses POSIX mutexes and condition variables inside.  It uses
-epoll(7) and eventfd(2) on Linux when there is an fd selectable.  It uses
-kqueue(2) and eventfd(2) on FreeBSD in the same condition.  This page gives
-the names of the epoll(7) calls of the Linux build.  The FreeBSD build
-operates in the same way.
+The library uses POSIX mutexes and condition variables inside, plus
+epoll(7) and eventfd(2) on Linux, or kqueue(2) and eventfd(2) on FreeBSD,
+when there is an fd selectable.  This page gives the names of the
+epoll(7) calls of the Linux build; the FreeBSD build operates in the same
+way.
 .fi
 .SH EXAMPLES
 .nf

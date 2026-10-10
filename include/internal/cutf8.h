@@ -34,9 +34,9 @@ SOFTWARE.
  * this one definition, so that the two can never disagree about which byte
  * sequence is UTF-8.
  *
- * This header is internal. It carries no visibility block. make install does
- * not install it. Every function is static inline, so nothing here reaches
- * the dynamic symbol table of the shared library.
+ * This header is internal, so it carries no visibility block and make
+ * install does not install it. Every function is static inline, so nothing
+ * here reaches the dynamic symbol table of the shared library.
  */
 
 #ifndef CCOL_CUTF8_H
@@ -51,23 +51,22 @@ SOFTWARE.
 /*
  * Step over one UTF-8 sequence at s. The caller can read n > 0 bytes there.
  *
- * For a well-formed sequence, the function returns its length, which is 1
- * to 4, and sets *ok. For an ill-formed one, it clears *ok and returns the
- * length of the maximal subpart, which is at least 1. That subpart is the
- * longest prefix of s that could still start a well-formed sequence. It is
- * the unit that "U+FFFD Substitution of Maximal Subparts" in Unicode 15.0
- * sec. 3.9 replaces with one U+FFFD. Any other count of the bytes is wrong.
- * It merges several independent errors into one replacement character, or
- * it splits one error into several.
+ * For a well-formed sequence, the function returns its length (1 to 4) and
+ * sets *ok. For an ill-formed one, it clears *ok and returns the length of
+ * the maximal subpart, which is at least 1: the longest prefix of s that
+ * could still start a well-formed sequence. That is the unit that "U+FFFD
+ * Substitution of Maximal Subparts" in Unicode 15.0 sec. 3.9 replaces with
+ * one U+FFFD. Any other count of the bytes is wrong, because it merges
+ * several independent errors into one replacement character, or splits one
+ * error into several.
  *
- * The table of lead bytes rejects the following by its own shape. It needs
- * no arithmetic on the decoded value. It rejects a continuation byte with
- * no lead (0x80 to 0xBF). It rejects the two overlong two-byte leads (0xC0
- * and 0xC1). It rejects a lead outside the range of Unicode (0xF5 to 0xFF).
- * It rejects the overlong three-byte and four-byte forms, through the
- * narrow range for the first continuation byte under 0xE0 and under 0xF0.
- * It rejects the surrogate range of UTF-16, through the narrow range under
- * 0xED. It rejects anything past U+10FFFF, through the narrow range under
+ * The table of lead bytes rejects the following by its own shape, with no
+ * arithmetic on the decoded value: a continuation byte with no lead (0x80 to
+ * 0xBF); the two overlong two-byte leads (0xC0 and 0xC1); a lead outside the
+ * range of Unicode (0xF5 to 0xFF); the overlong three-byte and four-byte
+ * forms, through the narrow range for the first continuation byte under 0xE0
+ * and under 0xF0; the surrogate range of UTF-16, through the narrow range
+ * under 0xED; and anything past U+10FFFF, through the narrow range under
  * 0xF4.
  */
 static inline size_t ccol_utf8_step(const unsigned char *s, size_t n,
@@ -147,12 +146,12 @@ static inline size_t ccol_utf8_first_ill_formed(const char *s, size_t n) {
 }
 
 /*
- * Names the defect of the ill-formed sequence that starts at p[at], where
- * ccol_utf8_step() reports one, for a diagnostic. The caller can read len
- * bytes at p, and at < len. The function returns a static phrase for what is
- * wrong, and writes into detail the bytes that show it, each as 0xNN. Every
- * byte of both is printable ASCII, whatever the input holds, so a message
- * built from them stays valid UTF-8 and cannot be truncated by a NUL.
+ * Names, for a diagnostic, the defect of the ill-formed sequence that starts
+ * at p[at], where ccol_utf8_step() reports one. The caller can read len bytes
+ * at p, and at < len. The function returns a static phrase for what is wrong
+ * and writes into detail the bytes that show it, each as 0xNN. Every byte of
+ * both is printable ASCII whatever the input holds, so a message built from
+ * them stays valid UTF-8 and cannot be truncated by a NUL.
  */
 static inline const char *ccol_utf8_describe_ill_formed(const unsigned char *p,
                                                         size_t len, size_t at,

@@ -11,9 +11,9 @@ ccol_retval_t ccol_circq_send_zc(ccol_circular_queue *cq, c_message_t *msg);
 .fi
 .SH DESCRIPTION
 .nf
-This function blocks until the queue has free space. Then it transfers the
-ownership of the message data to the queue. On success it sets the
-msg->data pointer to NULL. This is the zero-copy behaviour.
+This function blocks until the queue has free space and then transfers
+the ownership of the message data to the queue. On success it sets the
+msg->data pointer to NULL; this is the zero-copy behaviour.
 .fi
 .SH PARAMETERS
 .nf
@@ -29,9 +29,9 @@ ccol_not_permitted - Sends on the queue are turned off
 .fi
 .SH NOTES
 .nf
-The function blocks with no time limit. It waits for free space, or for
-  sends on the queue to go off.
-After the function wakes up, it checks again whether sends are still on.
+The function blocks with no time limit while it waits for free space,
+  or for sends on the queue to go off.
+After the function wakes up, it checks again whether sends are on.
 On failure, the caller keeps the ownership of msg->data.
 msg->data == NULL with msg->size == 0 is valid (a sentinel message).
 msg->data == NULL with msg->size > 0 is not valid.

@@ -12,9 +12,9 @@ chmap_construct(hm_name, key_type, val_type);
 .SH DESCRIPTION
 .nf
 Type-inferred macro that creates a hash map with the default settings.
-It determines the key and value types automatically. It also creates
-type marker variables. These variables tell the other type-dispatching
-macros the declared key and value types at each call site.
+It determines the key and value types automatically and also creates
+type marker variables, which tell the other type-dispatching macros the
+declared key and value types at each call site.
 .fi
 .SH PARAMETERS
 .nf
@@ -26,43 +26,41 @@ val_type  Type of values
 .nf
 Stops the program if the allocation fails
 Creates hidden type marker variables that the other type-dispatching
-macros read. chmap_redeclare(3) creates them again in another scope
+macros read; chmap_redeclare(3) creates them again in another scope
 Uses CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets
 Uses the default memory management and the default hashing
 .fi
 .SH "FLOAT AND DOUBLE KEY EQUALITY"
 .nf
-For a float or double key_type, key equality is bitwise equality.
-It is not IEEE 754 == equality. There is one exception: the map
-canonicalizes -0.0 and 0.0 to the same key. This matches
--0.0 == 0.0 in C.
-Every other bit pattern obeys bitwise equality, NaN included. The
-map therefore always finds a NaN key again by the exact bit pattern
-that the caller inserted it with. (In C, NaN == NaN is always
-false.) Two different NaN payloads are two different keys.
+For a float or double key_type, key equality is bitwise equality, not
+IEEE 754 == equality, with one exception: the map canonicalizes -0.0
+and 0.0 to the same key, which matches -0.0 == 0.0 in C.
+Every other bit pattern obeys bitwise equality, NaN included, so the
+map always finds a NaN key again by the exact bit pattern that the
+caller inserted it with (in C, NaN == NaN is always false). Two
+different NaN payloads are two different keys.
 .fi
 .SH "LONG DOUBLE KEY EQUALITY"
 .nf
 For a long double key_type, key equality uses the numeric value
-(native ==). It does not use bitwise equality. The keys -0.0L and
-0.0L are the same key. Two keys that hold the same value stay the
-same key. This is also true when their platform-defined padding
-bits are different. Every NaN long double collapses into one key.
-This is different from float and double, where each different NaN
-payload is a different key.
+(native ==) instead of bitwise equality. The keys -0.0L and 0.0L are
+the same key, and two keys that hold the same value stay the same key
+even when their platform-defined padding bits are different. Every NaN
+long double collapses into one key, unlike float and double, where
+each different NaN payload is a different key.
 The map does not use this value-based handling when the caller
-gives a custom hashing function at creation time. See
+gives a custom hashing function at creation time; see
 chmap_create_full(3).
 .fi
 .SH "STRUCT KEY EQUALITY"
 .nf
 For a key type that the map does not know, such as a struct, key
 equality compares every byte of the key, padding included, and the
-default hash reads every byte too. The macros set the padding of
-their own copy of a key to zero with GCC 11 or later. With any other
-compiler that padding is unspecified, and a padded struct key then
-needs a custom hashing function and a custom key equality function,
-given through chmap_construct_full(3). See chmap_create_full(3).
+default hash reads every byte too. With GCC 11 or later the macros set
+the padding of their own copy of a key to zero. With any other
+compiler that padding is unspecified, so a padded struct key needs a
+custom hashing function and a custom key equality function, given
+through chmap_construct_full(3). See chmap_create_full(3).
 .fi
 .SH EXAMPLES
 .nf

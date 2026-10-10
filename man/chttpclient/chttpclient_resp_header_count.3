@@ -13,7 +13,7 @@ size_t chttpclient_resp_header_count(const chttpcli_response *resp,
 .SH DESCRIPTION
 .nf
 This function gives the number of lines of the response header block
-that carry the name that you give. The lookup ignores the case of the
+that carry the name that you give; the lookup ignores the case of the
 name. Every such line counts once, whatever its value, and an empty
 value counts too.
 
@@ -28,9 +28,9 @@ name  The header name. It can be NULL, and the function then gives 0.
 .fi
 .SH RETURN VALUE
 .nf
-The number of lines with that name, or 0 if the response has none.
-The function also gives 0 for a response from a streaming request,
-which keeps no headers.
+The number of lines with that name, or 0 if the response has none. The
+function also gives 0 for a response from a streaming request, which
+keeps no headers.
 .fi
 .SH NOTES
 .nf

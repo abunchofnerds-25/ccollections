@@ -11,10 +11,9 @@ chttpcli_construct(name)
 .fi
 .SH DESCRIPTION
 .nf
-This macro declares a chttpcli variable with the name name. It then
-calls ccol_create_chttpclient at once to initialize that variable. If
-the creation fails, the macro calls ccol_fatal_err() and does not
-return.
+This macro declares a chttpcli variable called name and initializes it
+at once with a call to ccol_create_chttpclient. If the creation fails,
+the macro calls ccol_fatal_err() and does not return.
 .fi
 .SH PARAMETERS
 .nf

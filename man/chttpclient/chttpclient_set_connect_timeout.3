@@ -12,9 +12,9 @@ ccol_retval_t chttpclient_set_connect_timeout(chttpcli cli, uint64_t us);
 .SH DESCRIPTION
 .nf
 This function sets the maximum time for the phase of the TCP
-connection. For HTTPS this time also covers the TLS handshake. Give 0
-to turn the timeout off, which is the default. Every other value is
-honoured as a limit, however far away it lies. A value too large for
+connection, which for HTTPS also covers the TLS handshake. Give 0 to
+turn the timeout off, which is the default. Every other value is
+honoured as a limit, however far away it lies: a value too large for
 the clock to reach, such as UINT64_MAX, saturates to the latest
 deadline that the clock can hold, and never wraps into the past.
 .fi

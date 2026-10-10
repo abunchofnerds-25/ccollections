@@ -2,16 +2,16 @@ INCLUDES = -I.. -I../../include
 # CDEBUGLOG_ENABLED opts this suite into the diagnostic log buffer of
 # src/cdebuglog.c. See the doc comment in include/internal/cdebuglog.h for
 # why RUNNING_UNIT_TESTS alone does not turn it on. It backs the
-# [DEBUG_TEST] checkpoints of resolve_then_use_race_destroy_waits. That test
-# has an open hang that appears only in CI and only under qemu. The
+# [DEBUG_TEST] checkpoints of resolve_then_use_race_destroy_waits, a test
+# with an open hang that appears only in CI and only under qemu, and those
 # checkpoints are what make another such hang diagnosable.
 DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64 -DCDEBUGLOG_ENABLED
 SRC_FILE_PREFIX = cthreadpool
-# ctpool needs cvector.c for its generation-tagged handle slot table. That
-# is the same mechanism that chttpcli, chttpsvr, ccol_event_loop and
-# clru_cache each use. cdebuglog.c is a diagnostic log buffer that you opt
-# into, and that only a RUNNING_UNIT_TESTS build holds. The default library
-# build of the root Makefile leaves it out. See its doc comment in
+# ctpool needs cvector.c for its generation-tagged handle slot table, the
+# same mechanism that chttpcli, chttpsvr, ccol_event_loop and clru_cache
+# each use. cdebuglog.c is an opt-in diagnostic log buffer that only a
+# RUNNING_UNIT_TESTS build holds, and the default library build of the root
+# Makefile leaves it out; see its doc comment in
 # include/internal/cdebuglog.h. csort.c comes in through cvector.c, whose
 # sort runs on the mergesort of csort.
 SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/cdebuglog.c \
@@ -20,15 +20,15 @@ SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/cdebuglog.c \
 ALL_SRC_FILES = tests.c $(SRC_FILES)
 EXTRA_CFLAGS ?=
 # The build compiles the sources of the library at the optimization level
-# that the shipped library uses. These tests therefore exercise the code that
-# ships, and not a debug build that nobody installs. Only the test file of
-# this directory builds at -O0. The ability to debug is worth having there,
-# and that object code is not part of the product. Loosen SRC_OPT for a time
-# when you must step through a failure.
+# that the shipped library uses, so these tests exercise the code that ships
+# instead of a debug build that nobody installs. Only the test file of this
+# directory builds at -O0, where the ability to debug is worth having and the
+# object code is not part of the product. Loosen SRC_OPT for a time when you
+# must step through a failure.
 SRC_OPT = -O3
 TEST_OPT = -O0
 # -Wl,-z,relro,-z,now is a linker flag, and it stays out of CFLAGS_COMMON on
-# purpose. SRC_CFLAGS drives invocations that only compile. The driver of
+# purpose: SRC_CFLAGS drives invocations that only compile, and the driver of
 # clang treats an unused linker argument there as an error under -Werror,
 # where gcc discards it in silence. This flag belongs on CFLAGS, which drives
 # the real link, so the build applies it there.
@@ -48,12 +48,12 @@ COVERAGE_FLAGS =
 COVERAGE_ON = -fprofile-arcs -ftest-coverage
 LFLAGS = -lpthread $(CCOL_PLATFORM_LIBS)
 
-# An object file carries no record of how the build made it. A change of
-# compiler or of flags would therefore link stale objects of the wrong
-# architecture, or objects with no instrumentation. A native build followed
-# by `make CC="gcc -m32" test`, or by a coverage run, is such a change. This
-# stamp holds the current compiler and flags. The build rewrites it only when
-# they really change. The objects therefore rebuild when they must, and stay
+# An object file carries no record of how the build made it, so a change of
+# compiler or of flags would link stale objects of the wrong architecture, or
+# objects with no instrumentation; a native build followed by
+# `make CC="gcc -m32" test`, or by a coverage run, is such a change. This
+# stamp holds the current compiler and flags, and the build rewrites it only
+# when they really change, so the objects rebuild when they must and stay
 # cached when they need not.
 .PHONY: FORCE
 FORCE:
@@ -66,9 +66,9 @@ FORCE:
 # ordinary build and set by generate_coverage_report, so one rule serves both.
 # include/internal/ has a line of its own, because a *.h wildcard cannot
 # match a subdirectory. Without the second pattern, no internal header is a
-# prerequisite. An edit to one of them then recompiles nothing here. A later
-# edit to a single .c file gives a binary whose objects disagree about that
-# header.
+# prerequisite: an edit to one of them then recompiles nothing here, and a
+# later edit to a single .c file gives a binary whose objects disagree about
+# that header.
 LIB_HEADERS = $(wildcard ../../include/*.h) \
               $(wildcard ../../include/internal/*.h)
 
@@ -81,7 +81,7 @@ build: $(SRC_OBJS)
 	$(CC) $(CFLAGS) tests.c $(SRC_OBJS) -o tests $(LFLAGS)
 	$(CC) $(CFLAGS) tests_keys.c $(SRC_OBJS) -o tests_keys $(LFLAGS)
 
-# This is a separate ThreadSanitizer build. It stays out of the default
+# This is a separate ThreadSanitizer build that stays out of the default
 # -Werror build. The instrumentation of ThreadSanitizer and -O3 do not mix
 # well, and this is a distinct verification mode that runs on its own. It
 # mirrors the build_tsan target of tests/cthreadcomm/Makefile exactly.
@@ -93,19 +93,19 @@ test: build
 	./tests
 	./tests_keys
 
-# die_after_fork=0 is needed because several ctpool_handle_lifecycle tests
+# die_after_fork=0 is set because several ctpool_handle_lifecycle tests
 # in this suite fork and then create new pthreads in the child. One of them,
 # destroy_from_within_own_task_is_fatal_even_after_forking_first, forks again
-# from inside the worker thread of the pool. That is, it forks from a process
-# with several threads at that inner fork() call. See the test_tsan target of
+# from inside the worker thread of the pool, so it forks from a process with
+# several threads at that inner fork() call. See the test_tsan target of
 # tests/chttpclient/Makefile for the exact ThreadSanitizer mechanism that
 # this works around.
 #
 # The tests of this suite give identical, clean results with the option and
 # without it, so it carries nothing here. The build sets it to stay
-# consistent with the other suites that fork and then start new threads.
-# Those are cthreadcomm, chttpclient and chttpserver. It also guards against
-# a test that somebody adds later and that really needs it.
+# consistent with the other suites that fork and then start new threads
+# (cthreadcomm, chttpclient and chttpserver), and it also guards against a
+# test that somebody adds later and that really needs it.
 test_tsan: build_tsan
 	TSAN_OPTIONS="die_after_fork=0" ./tests_tsan
 	./tests_keys_tsan
@@ -115,17 +115,17 @@ memtest: build
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 ./tests_keys
 
 # --ignore-errors negative is needed because the coverage counters of gcov
-# are plain increments that are not atomic. They can race when instrumented
-# code runs on several threads, and then report a negative hit count that is
-# not real. This affects more than one module, and it also happens inside a
-# glibc header. It is a limit of the instrumentation of gcov, and not a
-# defect in the logic of this library. See the identical flag in
-# tests/chttpclient/Makefile for the full reason.
+# are plain, non-atomic increments: they can race when instrumented code runs
+# on several threads, and then report a negative hit count that is not real.
+# This affects more than one module and also happens inside a glibc header;
+# it is a limit of the gcov instrumentation, not a defect in the logic of
+# this library. See the identical flag in tests/chttpclient/Makefile for the
+# full reason.
 #
 # This target recurses with COVERAGE_FLAGS set, so that the pattern rule
 # above instruments the library objects too. The build rebuilds those objects
-# because the flags differ from an ordinary build. You therefore do not have
-# to run `make clean` first.
+# because the flags differ from an ordinary build, so you do not have to run
+# `make clean` first.
 generate_coverage_report:
 	$(MAKE) clean_objs
 	$(MAKE) COVERAGE_FLAGS="$(COVERAGE_ON)" $(SRC_OBJS)

@@ -12,10 +12,10 @@ clru_redeclare(name, KeyT, ValT);
 .SH DESCRIPTION
 .nf
 The type-dispatching macros clru_get() and clru_set() need hidden
-companion variables. clru_declare() and clru_construct() create those
-variables. When you pass a clru_cache handle to another function, those
-companion variables are absent there. clru_redeclare() creates them
-again. Every type-inferred macro then works correctly in the new scope.
+companion variables, which clru_declare() and clru_construct() create.
+When you pass a clru_cache handle to another function, those companion
+variables are absent there; clru_redeclare() creates them again, so
+that every type-inferred macro works correctly in the new scope.
 .fi
 .SH PARAMETERS
 .nf
@@ -26,12 +26,12 @@ ValT  Value type. It must match the type of the construction
 .SH NOTES
 .nf
 Always call clru_redeclare() before you call clru_get() or clru_set() in
-a new scope. A missing call is the most common error when a cache
+a new scope; a missing call is the most common error when a cache
 crosses a function boundary.
-The name argument must be a simple identifier. The macro pastes it into
-the names of the companion variables. It cannot be a different
-expression, such as the struct member ga->cache. Copy such a handle into
-a local variable. Then redeclare that local variable:
+The name argument must be a simple identifier, because the macro pastes
+it into the names of the companion variables. It cannot be a different
+expression, such as the struct member ga->cache: copy such a handle
+into a local variable, then redeclare that local variable:
 
     clru_cache c = ga->cache;
     clru_redeclare(c, int, double);

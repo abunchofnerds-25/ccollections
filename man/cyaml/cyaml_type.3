@@ -11,15 +11,15 @@ cyaml_node_type_t cyaml_type(cyaml node);
 .fi
 .SH DESCRIPTION
 .nf
-Return the cyaml_node_type_t tag of node.  The function returns
-CYAML_NULL when node is NULL.
+Return the cyaml_node_type_t tag of node, or CYAML_NULL when node is
+NULL.
 
-The enum values are: CYAML_NULL, CYAML_BOOL, CYAML_INTEGER,
+The enum values are CYAML_NULL, CYAML_BOOL, CYAML_INTEGER,
 CYAML_FLOAT, CYAML_STRING, CYAML_LIST, CYAML_DICTIONARY.
 .fi
 .SH PARAMETERS
 .nf
-node  DOM node handle.  It can be NULL.
+node  DOM node handle, which can be NULL.
 .fi
 .SH RETURN VALUE
 .nf

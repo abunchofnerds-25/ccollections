@@ -28,17 +28,17 @@
  *        a key that is already present, in one hash and one probe.
  *
  * chmap_insert_elem() overwrites the value of a key that is already present.
- * A module that stores an owning pointer as the value must read the old
- * pointer before it is overwritten, so that it can free what the pointer
- * owns. Without this entry point that takes a lookup and then an insert,
- * which is two hashes and two probes of the same key. The JSON and YAML
- * object parsers are such modules.
+ * A module that stores an owning pointer as the value, such as the JSON and
+ * YAML object parsers, must read the old pointer before it is overwritten so
+ * that it can free what the pointer owns. Without this entry point, that
+ * takes a lookup followed by an insert, which costs two hashes and two probes
+ * of the same key.
  *
  * The header also gives the ordered cursor of a map, and a constructor of a
  * map that starts with fewer buckets than the public minimum, for a module
  * that makes many maps that usually stay small.
  *
- * This header is internal. It carries no visibility block. make install
+ * This header is internal: it carries no visibility block, make install
  * excludes it, and its symbol is absent from the dynamic symbol table of the
  * shared library.
  */
@@ -63,22 +63,22 @@
  * the bytes that ptr addresses within size, for example to store a pointer
  * that it builds after the call, or to replace an owning pointer after it
  * frees what the old one owned. The accessor stays valid until the next
- * operation that changes the map. The return value alone tells the two
- * cases apart.
+ * operation that changes the map. Only the return value tells the two cases
+ * apart.
  *
  * @param chm      The map.
  * @param key_pair The key. The same rules as chmap_insert_elem() apply.
  * @param val_pair The value to store when the key is absent. The map does
  *                 not read it when the key is present.
- * @param val_slot Out parameter. It must not be NULL. The function sets it
- *                 to NULL on entry.
+ * @param val_slot Out parameter, which must not be NULL. The function sets
+ *                 it to NULL on entry.
  *
  * @return ccol_success when the key was absent and the map now holds it with
- *         val_pair. *val_slot names the new entry.
+ *         val_pair; *val_slot names the new entry.
  * @return ccol_key_already_present when the key was present. The map is
  *         unchanged, and *val_slot names the entry that was already there.
- * @return Any other code of chmap_insert_elem() when the insert fails:
- *         ccol_invalid_args, ccol_not_enough_memory or ccol_container_full.
+ * @return Any other code of chmap_insert_elem() when the insert fails
+ *         (ccol_invalid_args, ccol_not_enough_memory or ccol_container_full);
  *         *val_slot stays NULL and the map is unchanged. A val_slot of NULL
  *         gives ccol_invalid_args.
  */
@@ -98,23 +98,23 @@ ccol_retval_t ccol_chmap_insert_or_get_elem(chmap chm,
  * and size is its size. The caller must not write through ptr, because the
  * map hashes and compares those bytes.
  * A separate-chaining map stores each entry in a node of its own, and a
- * resize only relinks those nodes. Neither the accessor nor the key bytes
- * that it addresses therefore move until the key is deleted, the map is
- * reset or the map is destroyed. A replacement of the value of the key keeps
- * both. A caller may keep key_slot->ptr for that long, for example as the key
- * of an order list that it maintains beside the map.
+ * resize only relinks those nodes, so neither the accessor nor the key bytes
+ * that it addresses move until the key is deleted, the map is reset or the
+ * map is destroyed. A replacement of the value of the key keeps both. A
+ * caller may keep key_slot->ptr for that long, for example as the key of an
+ * order list that it maintains beside the map.
  * An open-addressing map keeps its keys inline in slots that move on every
- * resize and on a delete, and it keeps no accessor for a key. The function
- * therefore refuses such a map.
+ * resize and on a delete, and it keeps no accessor for a key, so the
+ * function refuses such a map.
  * @param chm      The map. It must use separate chaining, which every map
  *                 with a key or a value that is not integral does.
  * @param key_pair The key. The same rules as chmap_insert_elem() apply.
  * @param val_pair The value to store when the key is absent. The map does
  *                 not read it when the key is present.
- * @param key_slot Out parameter. It must not be NULL. The function sets it
- *                 to NULL on entry.
- * @param val_slot Out parameter. It must not be NULL. The function sets it
- *                 to NULL on entry.
+ * @param key_slot Out parameter, which must not be NULL. The function sets
+ *                 it to NULL on entry.
+ * @param val_slot Out parameter, which must not be NULL. The function sets
+ *                 it to NULL on entry.
  * @return ccol_success or ccol_key_already_present, with the meaning that
  *         they have for ccol_chmap_insert_or_get_elem(). Both out parameters
  *         name the entry of the key.
@@ -130,11 +130,11 @@ ccol_retval_t ccol_chmap_insert_or_get_entry(chmap chm,
                                              const cmap_pair **val_slot);
 
 /**
- * @brief An opaque reference to one entry of a separate-chaining map. It is
- *        the cursor of an iteration in insertion order.
+ * @brief An opaque reference to one entry of a separate-chaining map, which
+ *        serves as the cursor of an iteration in insertion order.
  * A reference stays valid until its key is deleted, the map is reset or the
- * map is destroyed. An insert, a resize and a replacement of the value of any
- * key leave it valid. It names the same node as the key accessor that
+ * map is destroyed; an insert, a resize and a replacement of the value of
+ * any key leave it valid. It names the same node as the key accessor that
  * ccol_chmap_insert_or_get_entry() gives, so the key bytes that it reaches
  * have the stability that that function documents.
  */
@@ -143,7 +143,7 @@ typedef struct ccol_chmap_entry_ref ccol_chmap_entry_ref;
 /**
  * @brief Give the entry that was inserted first and is still live.
  * A separate-chaining map keeps every live entry on one list in insertion
- * order. A replacement of the value of a key keeps the place of its entry,
+ * order: a replacement of the value of a key keeps the place of its entry,
  * and a delete takes the entry out. The function allocates nothing and
  * cannot fail.
  * @param chm The map.
@@ -157,10 +157,10 @@ const ccol_chmap_entry_ref *ccol_chmap_oldest_entry(chmap chm);
  *        that was inserted after it.
  * The accessors have the contract of the key slot and the value slot of
  * ccol_chmap_insert_or_get_entry(). The function reads the successor at the
- * time of the call. A caller that keeps that successor may therefore delete
- * the key of entry and still continue from the successor. A delete of any
- * other key can free the successor.
- * @param entry A live entry. It must not be NULL.
+ * time of the call, so a caller that keeps that successor may delete the key
+ * of entry and still continue from the successor. A delete of any other key
+ * can free the successor.
+ * @param entry A live entry, which must not be NULL.
  * @param key   Out parameter for the accessor of the stored key. It must not
  *              be NULL.
  * @param val   Out parameter for the accessor of the stored value. It must

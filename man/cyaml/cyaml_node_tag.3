@@ -11,26 +11,26 @@ const char *cyaml_node_tag(cyaml node);
 .fi
 .SH DESCRIPTION
 .nf
-Return the YAML tag of node.  Return NULL when node carries no tag.
+Return the YAML tag of node, or NULL when node carries no tag.
 
 A node that the parser reads from a document with an explicit tag
-carries the fully resolved tag string here.  Such a tag is "!!str", a
-custom "!foo", a shorthand that %TAG resolves, or a verbatim tag.  The
-tag is one of the seven CYAML_TAG_* constants (CYAML_TAG_NULL, _BOOL,
-_INT, _FLOAT, _STR, _SEQ, _MAP), or a custom tag string.  A node with
-no tag returns NULL.  This includes a node whose type comes only from
-implicit core-schema resolution.
+carries the fully resolved tag string here, whether the document wrote
+it as "!!str", a custom "!foo", a shorthand that %TAG resolves, or a
+verbatim tag.  The tag is one of the seven CYAML_TAG_* constants
+(CYAML_TAG_NULL, _BOOL, _INT, _FLOAT, _STR, _SEQ, _MAP) or a custom tag
+string.  A node with no tag returns NULL, and this includes a node
+whose type comes only from implicit core-schema resolution.
 
-A dictionary key can never carry a tag.  The keys of this DOM are plain
-strings, not nodes (see cyaml_dictionary_get(3)).  A tag on a key in
-the document types that key, exactly as it types a value, and the
-dictionary stores the canonical text of the typed key.  There is no
+A dictionary key can never carry a tag, because the keys of this DOM
+are plain strings, not nodes (see cyaml_dictionary_get(3)).  A tag on a
+key in the document types that key exactly as it types a value, and the
+dictionary stores the canonical text of the typed key; there is no
 place to store the tag itself.
 .fi
 .SH PARAMETERS
 .nf
-node  DOM node handle.  It can be NULL, and the function then returns
-      NULL.
+node  DOM node handle.  It can be NULL, in which case the function
+      returns NULL.
 .fi
 .SH RETURN VALUE
 .nf

@@ -1,7 +1,7 @@
 # The compiler default shared by the root Makefile, bench/Makefile and every
 # test suite Makefile (through tests/hardening.mk).
 #
-# The build needs GNU make. FreeBSD calls it gmake, and its own make reads
+# The build needs GNU make, which FreeBSD calls gmake; FreeBSD's own make reads
 # BSDmakefile, which only says so.
 #
 # make predefines CC as `cc`, so `CC ?= gcc` never takes effect; the origin
@@ -22,9 +22,9 @@ ifeq ($(origin CC),default)
 endif
 
 # The libraries that POSIX puts outside libc. glibc keeps the thread and math
-# functions in libc itself, so a Linux link that forgets them still works and
-# the same link fails on FreeBSD. backtrace(3) lives in libexecinfo on the
-# BSDs and in libc on glibc and macOS.
+# functions in libc itself, so a Linux link that forgets them still works,
+# while the same link fails on FreeBSD. backtrace(3) lives in libexecinfo on
+# the BSDs and in libc on glibc and macOS.
 CCOL_PLATFORM_LIBS := -lpthread -lm
 ifneq ($(filter FreeBSD NetBSD OpenBSD DragonFly,$(CCOL_UNAME_S)),)
   CCOL_PLATFORM_LIBS += -lexecinfo
@@ -41,9 +41,9 @@ endif
 # The defaults of `make install` that differ by system. FreeBSD's pkgconf
 # searches $(PREFIX)/libdata/pkgconfig and not $(LIBDIR)/pkgconfig. Linux
 # ldconfig rebuilds the cache of the dynamic linker from its configured
-# directories; FreeBSD's ldconfig with no argument would replace its hints with
-# the built-in directories alone, and -R is the rescan of the configured ones.
-# FreeBSD indexes man pages with makewhatis(1) and has no mandb.
+# directories, while FreeBSD's ldconfig with no argument would replace its
+# hints with the built-in directories alone; -R is the rescan of the configured
+# ones. FreeBSD indexes man pages with makewhatis(1) and has no mandb.
 ifeq ($(CCOL_UNAME_S),FreeBSD)
   CCOL_DEFAULT_PKGCONFIGDIR = $(PREFIX)/libdata/pkgconfig
   CCOL_LDCONFIG = ldconfig -R

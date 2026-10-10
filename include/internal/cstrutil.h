@@ -29,9 +29,9 @@
  * @brief INTERNAL ONLY. Allocator-aware string helpers that this library's
  *        own modules share.
  *
- * Nothing here is part of the public interface. No program uses
+ * Nothing here is part of the public interface, because no program uses
  * libccollections through these helpers. This is why the library never
- * installs this header. The header also carries no visibility block.
+ * installs this header, which also carries no visibility block.
  */
 
 #include <common.h>
@@ -41,13 +41,13 @@
  * @brief A strdup variant that uses the custom memory management procs
  *
  * This function copies the input string with the custom memory allocation
- * function. It returns the copy.
+ * function and returns the copy.
  *
  * @param mp Pointer to the custom memory management procs
- * @param input The input string. A NULL input gives a NULL result. The
+ * @param input The input string. A NULL input gives a NULL result, and the
  * function does not call strlen(NULL), which is undefined behavior. This lets
- * a caller pass on a string that another allocation already failed to make.
- * The caller then makes one check at the end, and not a check at each step.
+ * a caller pass on a string that another allocation already failed to make,
+ * so the caller makes one check at the end instead of a check at each step.
  * @return The pointer to the new buffer that holds the copy of input. The
  * result is NULL if input is NULL, or if the memory allocation fails.
  *

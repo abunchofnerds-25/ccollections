@@ -11,23 +11,23 @@ ccol_retval_t ccol_event_loop_shutdown(ccol_event_loop loop);
 .fi
 .SH DESCRIPTION
 .nf
-This function signals the poller thread of loop to stop. It then
-blocks until it joins that thread. With num_reactor_threads > 1, it
-then also drains and joins every dispatch worker thread gracefully. A
-graceful drain finishes any job that already waits in the queue or
-runs, and it cancels nothing. No dispatch can be in flight after this
-call returns, in either shape.
+This function signals the poller thread of loop to stop and blocks
+until it joins that thread. With num_reactor_threads > 1, it then also
+drains and joins every dispatch worker thread gracefully; a graceful
+drain finishes any job that already waits in the queue or runs, and
+cancels nothing. In either shape, no dispatch can be in flight after
+this call returns.
 
-This function is idempotent. It is safe to call more than one time,
-and safe to call from more than one thread at the same time. Exactly
-one caller does the joins. Every other caller blocks until those joins
-finish, and only then returns. The "blocks until joined" contract of
-each caller therefore holds, whichever caller started the shutdown.
+This function is idempotent: it is safe to call more than one time,
+and from more than one thread at the same time. Exactly one caller does
+the joins, and every other caller blocks until those joins finish and
+only then returns, so the "blocks until joined" contract of each caller
+holds, whichever caller started the shutdown.
 
 ccol_event_loop_destroy() calls this function itself when the caller
-never called it. A direct call first is therefore optional. Make that
-direct call when the "the threads stopped" step and the "the library
-freed the resources" step must happen at different times.
+never called it, so a direct call first is optional. Make that direct
+call when the "the threads stopped" step and the "the library freed the
+resources" step must happen at different times.
 .fi
 .SH PARAMETERS
 .nf
@@ -40,27 +40,26 @@ ccol_success        The function shut the loop down, or the loop was
 ccol_invalid_args   loop is CCOL_EVENT_LOOP_INVALID, or a handle that
                     is stale or that something already destroyed.
 ccol_not_permitted  The call comes from inside a callback that runs on
-                    one of the threads of loop. That thread is the
-                    poller, or a dispatch worker. See WARNINGS.
+                    one of the threads of loop (the poller, or a
+                    dispatch worker). See WARNINGS.
 .fi
 .SH WARNINGS
 .nf
 Do not call this function from inside a callback that runs on one of
-the threads of loop. Such a call joins that thread from itself, which
+the threads of loop: such a call joins that thread from itself, which
 is undefined behavior and gives EDEADLK. This function joins the
-poller thread itself. For num_reactor_threads > 1, it also drains and
-joins every dispatch worker thread. In that shape the callbacks run on
-a dispatch worker, and not on the poller. The library finds this case
-and rejects it with ccol_not_permitted. It does not leave undefined
+poller thread itself and, for num_reactor_threads > 1, also drains and
+joins every dispatch worker thread; in that shape the callbacks run on
+a dispatch worker, not on the poller. The library finds this case and
+rejects it with ccol_not_permitted instead of leaving undefined
 behavior that a caller can trigger. Give the shutdown to another
 thread instead, or do it after the callback returns.
 .fi
 .SH THREAD SAFETY
 .nf
-Safe to call from more than one thread at the same time. Each such
-thread must not be one of the threads of loop. Those threads are the
-poller thread, and, for num_reactor_threads > 1, the dispatch worker
-threads.
+Safe to call from more than one thread at the same time, as long as
+no such thread is one of the threads of loop: the poller thread and,
+for num_reactor_threads > 1, the dispatch worker threads.
 .fi
 .SH "SEE ALSO"
 .BR ccol_event_loop_destroy (3),

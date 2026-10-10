@@ -1,32 +1,30 @@
 # HTTP client (`chttpclient`)
 
-`chttpclient` lets a C program communicate through HTTP/1.1. For example, a
-program can get a page, call a JSON API, upload a file or download a large
-file. The client supports plain HTTP, HTTPS (through OpenSSL) and HTTP
-through a Unix domain socket. It has these features:
+`chttpclient` lets a C program talk HTTP/1.1: fetch a page, call a JSON API,
+upload a file or download a large one. It supports plain HTTP, HTTPS
+(through OpenSSL) and HTTP over a Unix domain socket, and it:
 
-- It keeps connections open and uses them again.
-- It follows redirects.
-- It verifies certificates by default.
-- It gives you three ways to run a request: blocking, asynchronous with
+- keeps connections open and reuses them,
+- follows redirects,
+- verifies certificates by default,
+- gives you three ways to run a request: blocking, asynchronous with
   futures, or blocking on a shared event loop.
 
-Use the client when your program must call web services and you want a small
-C API. Its defaults are safe and secure. It needs no dependency other than
-the dependencies that the library links.
+Use it when your program needs to call web services through a small C API.
+Its defaults are safe and secure, and it needs no dependencies beyond the
+ones the library already links.
 
-The client is not correct for all tasks:
+It is not the right tool for every task:
 
-- It supports only HTTP/1.1. It does not support HTTP/2, HTTP/3 or
-  WebSockets.
-- It does not support proxies. It does not keep cookies. It does not
-  decompress `gzip` bodies.
-- If you need one of these features, libcurl is the usual tool.
+- It speaks only HTTP/1.1; there is no HTTP/2, HTTP/3 or WebSocket
+  support.
+- It does not support proxies, keep cookies or decompress `gzip` bodies.
+- If you need any of these features, libcurl is the usual choice.
 
-This guide also describes the small shared header `chttp.h`. This header
-gives status codes, request bodies, TLS settings, and helpers for base64 and
-Basic auth. You usually use it first through the client. The server side,
-[`chttpserver`](chttpserver.md), uses the same types.
+This guide also covers the small shared header `chttp.h`, which provides
+status codes, request bodies, TLS settings, and helpers for base64 and
+Basic auth. You usually meet it first through the client, and the server
+side, [`chttpserver`](chttpserver.md), uses the same types.
 
 ## Your first request
 
@@ -61,17 +59,17 @@ cc -std=gnu11 first.c -o first $(pkg-config --cflags --libs ccollections)
 ./first https://example.com/
 ```
 
-The example shows these rules:
+The example shows the basic rules:
 
 - `#include <ccollections/chttpclient.h>` also gives you `chttp.h`.
-- Each request gives a `ccol_retval_t`. `ccol_success` is 0.
-  `ccol_retval_to_str()` changes each code into a name that you can read.
-- `chttp_get()` runs on a *default client* for the full process. The library
-  makes this client when you use it the first time. You do not create or
-  destroy it.
-- The response is yours. Free it with `chttpclient_resp_free()`.
+- Every request returns a `ccol_retval_t`, where `ccol_success` is 0, and
+  `ccol_retval_to_str()` turns any code into a readable name.
+- `chttp_get()` runs on a process-wide *default client*, which the library
+  creates the first time you use it; you never create or destroy it
+  yourself.
+- The response belongs to you; free it with `chttpclient_resp_free()`.
 
-To link against the shared library, `-lccollections` is enough. The
+To link against the shared library, `-lccollections` is enough, because the
 library itself links OpenSSL. A static link needs
 `pkg-config --static --libs ccollections`. See [Building](building.md).
 
@@ -81,28 +79,28 @@ A `chttpcli_response` has four fields that you read directly:
 
 | Field | Contents |
 |---|---|
-| `status_code` | The HTTP status of the final response, for example 200 or 404. |
-| `body` | The body in a heap buffer that ends with a NUL, or `NULL`. |
-| `body_len` | The number of bytes in the body. Use it for binary data. |
-| `headers` | A map from the lower-case header name to the value. |
+| `status_code` | The HTTP status of the final response, such as 200 or 404. |
+| `body` | The body in a NUL-terminated heap buffer, or `NULL`. |
+| `body_len` | The number of bytes in the body; use it for binary data. |
+| `headers` | A map from the lower-case header name to its value. |
 
-Obey these two rules to prevent crashes:
+Two rules keep you clear of crashes:
 
 1. `body` is `NULL` when the body is empty, for example after a 204, a
-   `HEAD` or a `Content-Length: 0`. Examine `body` before you print it.
-2. After a failure, the call sets your response pointer to `NULL`.
-   `chttpclient_resp_free(NULL)` does nothing. Therefore, it is always correct
-   to call `chttpclient_resp_free(resp)` after each request.
+   `HEAD` or a `Content-Length: 0`, so check `body` before you print it.
+2. After a failure the call sets your response pointer to `NULL`, and
+   `chttpclient_resp_free(NULL)` does nothing, so it is always correct to
+   call `chttpclient_resp_free(resp)` after every request.
 
-A status that is not 2xx is **not** an error. A 404 is a successful HTTP
-exchange, and its answer is "not found". The call gives `ccol_success`, and
-you examine `status_code`. Compare it with the named constants of `chttp.h`,
-for example `CHTTP_STATUS_OK`, `CHTTP_STATUS_CREATED` or
+A status outside 2xx is **not** an error. A 404 is a successful HTTP
+exchange whose answer happens to be "not found": the call returns
+`ccol_success` and you check `status_code`, ideally against the named
+constants of `chttp.h` such as `CHTTP_STATUS_OK`, `CHTTP_STATUS_CREATED` or
 `CHTTP_STATUS_NOT_FOUND`.
 
-The header lookups ignore case. A server can send a header, for example
-`Set-Cookie`, on more than one line. You can read such a header one line at
-a time (a part of a program):
+Header lookups ignore case. Because a server can send some headers, such as
+`Set-Cookie`, on more than one line, you can also read them one line at a
+time (a fragment):
 
 ```c
 const char *type = chttpclient_resp_header(resp, "content-type");
@@ -117,16 +115,15 @@ ccol_for_each(resp->headers, it, {
 });
 ```
 
-For a name that occurs more than one time, `chttpclient_resp_header()` gives
-all the values with `", "` between them. For `Set-Cookie`, it gives only the
-first value.
+For a name that occurs more than once, `chttpclient_resp_header()` returns
+all the values joined with `", "`, except for `Set-Cookie`, where it returns
+only the first value.
 
 ## Send data, set headers and use your own client
 
-For a request that is more than a simple GET, build a request and set
-headers on it. Then run it on a client that you own. On your own client, you
-can set timeouts, a limit on the size of the response, and TLS settings. These
-settings apply only to that client.
+For anything beyond a simple GET, build a request, set headers on it and run
+it on a client that you own. Your own client can have timeouts, a limit on
+the response size and TLS settings, all of which apply only to that client.
 
 ```c
 #include <ccollections/chttpclient.h>
@@ -176,35 +173,35 @@ int main(int argc, char **argv) {
 }
 ```
 
-The example does these steps:
+Step by step:
 
-- `chttpcli_construct(cli)` declares and creates a client. If this fails, it
-  stops the program. To handle the failure yourself, use
-  `ccol_create_chttpclient()`. `chttpcli_construct_scoped(cli)` destroys the
-  client at the end of the scope.
+- `chttpcli_construct(cli)` declares and creates a client and stops the
+  program if that fails. To handle the failure yourself, use
+  `ccol_create_chttpclient()` instead. `chttpcli_construct_scoped(cli)`
+  destroys the client at the end of the scope.
 - `CHTTP_JSON_BODY(data, len)` describes a body and sets `Content-Type` to
-  `application/json`. Other macros are `CHTTP_TEXT_BODY`, `CHTTP_FORM_BODY`,
-  the general `CHTTP_BODY(data, len, content_type)` and `CHTTP_NO_BODY`.
-  `chttp_request_new()` copies the body. Therefore, you can free your buffer
-  immediately.
+  `application/json`. The other body macros are `CHTTP_TEXT_BODY`,
+  `CHTTP_FORM_BODY`, the general `CHTTP_BODY(data, len, content_type)` and
+  `CHTTP_NO_BODY`. `chttp_request_new()` copies the body, so you can free
+  your buffer immediately.
 - Only `POST`, `PUT` and `PATCH` send a body. The client adds `Host`,
-  `Accept`, `User-Agent`, `Content-Length` and `Content-Type` if you do not
-  set them.
+  `Accept`, `User-Agent`, `Content-Length` and `Content-Type` unless you set
+  them yourself.
 - `chttp_request_set_header()` refuses a header value that contains a CR or
-  LF byte. Therefore, data that you forward from a different source cannot add
-  header lines. The call can also fail when there is not enough memory.
-  Examine its return value.
-- Timeouts and sizes are plain numbers. Timeouts are in microseconds, and
-  the body limit is in bytes. The value 0 means "no limit". This is the
-  default for all three settings.
-- The request must stay valid while `chttpclient_do()` runs. Free the
-  request after the call.
-- `chttpclient_destroy()` waits for the requests that run on other threads.
-  Then it frees the client and sets `cli` to `CHTTPCLI_INVALID`.
+  LF byte, so data that you forward from another source cannot inject
+  header lines. The call can also fail when memory runs out, so check its
+  return value.
+- Timeouts and sizes are plain numbers: timeouts in microseconds, the body
+  limit in bytes. The value 0 means "no limit", which is the default for
+  all three settings.
+- The request must stay valid while `chttpclient_do()` runs; free it after
+  the call.
+- `chttpclient_destroy()` waits for requests that are running on other
+  threads, then frees the client and sets `cli` to `CHTTPCLI_INVALID`.
 
-The client of the full process also runs requests: `chttp_do(req, &resp)`.
-`chttp_run_query(method, url, body, headers, &resp)` runs a single request
-with a header map in one call (a part of a program):
+The process-wide client runs requests too, through `chttp_do(req, &resp)`,
+and `chttp_run_query(method, url, body, headers, &resp)` runs a single
+request with a header map in one call (a fragment):
 
 ```c
 chmap_construct(headers, char *, char *);
@@ -216,39 +213,39 @@ chmap_destroy(headers);          /* the call only borrowed the map */
 chttpclient_resp_free(resp);
 ```
 
-A `chttpcli` is a *value handle* (a 64-bit number). It is not a pointer.
-Compare it with `CHTTPCLI_INVALID`. `CHTTPCLI_INVALID` is 0. Therefore,
-`if (!cli)` also operates correctly. Do not cast the handle to a pointer.
+A `chttpcli` is a *value handle* (a 64-bit number), not a pointer. Compare
+it with `CHTTPCLI_INVALID`; because `CHTTPCLI_INVALID` is 0, `if (!cli)`
+works as well. Never cast the handle to a pointer.
 
 ## Errors
 
-This table shows the usual codes and their usual causes:
+The most common codes and their usual causes:
 
 | Code | Usual cause |
 |---|---|
-| `ccol_http_invalid_url` | A typing error, a space in the host, or a scheme that the client does not support. |
+| `ccol_http_invalid_url` | A typo, a space in the host, or a scheme that the client does not support. |
 | `ccol_http_host_resolution_failed` | DNS cannot find the host. |
-| `ccol_http_connection_failed` | No server listens at that address, or all the addresses refused the connection. |
+| `ccol_http_connection_failed` | No server listens at that address, or every address refused the connection. |
 | `ccol_timed_out` | Your connect timeout or request timeout expired. |
 | `ccol_http_tls_cert_verification_failed` | The client does not trust the server certificate, or the certificate names a different host. |
-| `ccol_http_tls_cert_load_failed` | The client cannot read a CA bundle, certificate or key file that you set. |
-| `ccol_http_transfer_aborted` | The connection broke during the transfer, or the server sent HTTP that is not correct. |
-| `ccol_msg_too_large` | The body is larger than the limit of `chttpclient_set_max_response_body_size()`. |
+| `ccol_http_tls_cert_load_failed` | The client cannot read a CA bundle, certificate or key file that you configured. |
+| `ccol_http_transfer_aborted` | The connection broke during the transfer, or the server sent malformed HTTP. |
+| `ccol_msg_too_large` | The body exceeds the limit set by `chttpclient_set_max_response_body_size()`. |
 | `ccol_http_too_many_redirects` | More than 50 redirects. |
 
 [chttpclient_do(3)](../man/chttpclient/chttpclient_do.3) gives the full list,
-with all the causes of each code.
+with every cause of each code.
 
 ## Large downloads: stream the body
 
-A buffered response keeps the full body in memory. For a large file, tell
-the client to give you the body in parts. Your callback gets each part when
-it arrives. The callback gives the number of bytes that it used. All other
-return values stop the transfer.
+A buffered response holds the whole body in memory. For a large file, ask
+the client to hand you the body in pieces instead: your callback receives
+each piece as it arrives and returns the number of bytes it consumed, and
+any other return value stops the transfer.
 
 ```c
-/* download.c: write the body of a URL into a file. Do not keep the full
- * body in memory. */
+/* download.c: write the body of a URL into a file without keeping the
+ * whole body in memory. */
 #include <ccollections/chttpclient.h>
 #include <stdio.h>
 
@@ -299,29 +296,29 @@ int main(int argc, char **argv) {
 ```
 
 Run the program as `./download https://example.com/big.iso big.iso`. The
-streaming calls give you the status code. They do not give you the response
-headers. The limit on the body size does not apply to them. Your callback
-controls the transfer.
+streaming calls give you the status code but not the response headers, and
+the body size limit does not apply to them, because your callback controls
+the transfer.
 
 ## Redirects
 
-The client follows a maximum of 50 redirects automatically. Then it gives you
-the final response. These rules apply:
+The client follows up to 50 redirects automatically and then gives you the
+final response. The rules are:
 
-- A 301, 302 or 303 changes the request into a GET with no body. A `HEAD`
-  stays a `HEAD`.
+- A 301, 302 or 303 turns the request into a GET with no body, although a
+  `HEAD` stays a `HEAD`.
 - A 307 or 308 sends the same method and the same body again.
-- The client gives you a redirect that has no `Location` as the response.
+- A redirect without a `Location` is returned to you as the response.
 
-The client does not send credentials to a different site. A redirect can
-go to a scheme, host or port that is different from the original request.
-Then the client stops the transmission of `Authorization`, `Cookie` and
-similar headers. If the chain goes back to the original scheme, host and port, the
-client sends these headers again.
+The client never sends credentials to another site. When a redirect goes to
+a scheme, host or port that differs from the original request, the client
+stops sending `Authorization`, `Cookie` and similar headers, and if the
+chain later returns to the original scheme, host and port, it sends them
+again.
 
-By default, the client follows a redirect from `https` to `http`. curl and
-Go do the same. If a downgrade must not occur, refuse it for each request
-(a part of a program):
+By default the client follows a redirect from `https` to `http`, as curl
+and Go do. If a downgrade must never happen, refuse it per request (a
+fragment):
 
 ```c
 req->prevent_tls_downgrade_on_redirect = true;  /* a downgrade: ccol_http_invalid_url */
@@ -329,21 +326,21 @@ req->prevent_tls_downgrade_on_redirect = true;  /* a downgrade: ccol_http_invali
 
 ## HTTPS and certificates
 
-By default, the client verifies the certificate chain of the server against
-the CA store of the system. It also makes sure that the certificate names the
-host that you requested. To change this behavior, use
-`chttpclient_set_tls()` and a `chttp_tls_config_t`.
+By default the client verifies the server's certificate chain against the
+system CA store and checks that the certificate names the host you
+requested. To change this, pass a `chttp_tls_config_t` to
+`chttpclient_set_tls()`.
 
-In this struct, **zero is the safe value**. Each field that you do not set
-keeps verification on. Each field that makes the security weaker says so in
-its name (a part of a program):
+In this struct **zero is the safe value**: any field that you leave unset
+keeps verification on, and every field that weakens security says so in its
+name (a fragment):
 
 ```c
 /* Trust a private CA, not the system store. The client verifies fully. */
 chttp_tls_config_t tls = {.ca_bundle_path = "/etc/myapp/ca.pem"};
 chttpclient_set_tls(cli, &tls);
 
-/* Send a client certificate (mutual TLS). Set the two paths together. */
+/* Send a client certificate (mutual TLS); set both paths together. */
 chttp_tls_config_t mtls = {
     .ca_bundle_path = "/etc/myapp/ca.pem",
     .cert_path      = "/etc/myapp/client.pem",
@@ -351,50 +348,47 @@ chttp_tls_config_t mtls = {
 };
 chttpclient_set_tls(cli, &mtls);
 
-/* Keep the chain check, but do not check the host name. Use this for a
-   server that you connect to by an IP address that its certificate does
-   not contain. */
+/* Keep the chain check but skip the host name check. This suits a server
+   that you reach by an IP address that its certificate does not
+   contain. */
 chttp_tls_config_t by_ip = {
     .ca_bundle_path = "/etc/myapp/ca.pem",
     .insecure_skip_hostname_check = true,
 };
 chttpclient_set_tls(cli, &by_ip);
 
-/* Accept all certificates. Use this only for temporary test servers. */
+/* Accept any certificate; use this only for temporary test servers. */
 chttp_tls_config_t insecure = {.insecure_skip_verify = true};
 chttpclient_set_tls(cli, &insecure);
 
-chttpclient_set_tls(cli, NULL);   /* set the defaults again */
+chttpclient_set_tls(cli, NULL);   /* back to the defaults */
 ```
 
-The client reads the files when a request needs them for the first time.
-Therefore, an incorrect path causes `ccol_http_tls_cert_load_failed` from the
-request, not from `chttpclient_set_tls()`. A CA bundle can also contain
-certificate revocation lists. See
+The client reads the files the first time a request needs them, so a wrong
+path shows up as `ccol_http_tls_cert_load_failed` from the request, not
+from `chttpclient_set_tls()`. A CA bundle can also contain certificate
+revocation lists. See
 [chttpclient_set_tls(3)](../man/chttpclient/chttpclient_set_tls.3).
 
 ## Many requests at the same time
 
-There are three ways to run a request. All three obey the same rules for
-URLs, redirects, TLS and errors. They are different in which thread waits.
+There are three ways to run a request. All three follow the same rules for URLs, redirects, TLS and errors; the main difference between them is which thread waits.
 
 | Tier | Functions | Which thread waits |
 |---|---|---|
 | 1. Blocking | `chttpclient_do`, `chttpclient_do_streaming` | Your thread, for the full request. |
-| 2. Asynchronous | `chttpclient_do_async`, `chttpclient_do_async_streaming` | No thread. You get a future and you get the result from it later. |
-| 3. Pooled blocking | `chttpclient_do_pooled`, `chttpclient_do_pooled_streaming` | Your thread, but the work runs on a small shared event loop. |
+| 2. Asynchronous | `chttpclient_do_async`, `chttpclient_do_async_streaming` | No thread. You get a future and collect the result from it later. |
+| 3. Pooled blocking | `chttpclient_do_pooled`, `chttpclient_do_pooled_streaming` | Your thread, while the work runs on a small shared event loop. |
 
-Tiers 2 and 3 run on one engine for each process. All the clients share this
-engine. The engine starts when you use it the first time. It stops
-automatically when it has no work.
+Tiers 2 and 3 run on a single per-process engine that all clients share. It
+starts the first time you use it and stops by itself when it has no work.
 
 ### More than one thread, one client (Tier 1)
 
-A client is thread-safe. Many threads can run requests on it at the same
-time. `chttpclient_set_pool_size()` sets the maximum number of blocking
-requests that run at the same time. Other callers wait until a request
-completes. This program examines many URLs in parallel and tells if each
-server operates:
+A client is thread-safe, so many threads can run requests on it at once.
+`chttpclient_set_pool_size()` caps the number of blocking requests that run
+at the same time; further callers wait until one completes. This program
+checks many URLs in parallel and reports whether each server is up:
 
 ```c
 /* updown.c: examine many URLs in parallel and print the answer of each. */
@@ -438,7 +432,7 @@ int main(int argc, char **argv) {
     int n = argc - 1;
 
     chttpcli_construct(cli);
-    chttpclient_set_pool_size(cli, 4);               /* a maximum of 4 at the same time */
+    chttpclient_set_pool_size(cli, 4);               /* at most 4 at once */
     chttpclient_set_connect_timeout(cli, 3000000);   /* 3 s */
     chttpclient_set_request_timeout(cli, 5000000);   /* 5 s */
 
@@ -480,20 +474,20 @@ DOWN  http://127.0.0.1:1/  (ccol_http_connection_failed)
 DOWN  http://no-such-host.invalid/  (ccol_http_host_resolution_failed)
 ```
 
-With hundreds of threads, use `chttpclient_do_pooled` in place of
-`chttpclient_do`. The arguments and the result are the same. But the network
-work runs on the few threads of the engine. It does not keep one thread busy
-for each request.
+With hundreds of threads, use `chttpclient_do_pooled` instead of
+`chttpclient_do`. The arguments and the result are the same, but the
+network work runs on the engine's few threads instead of keeping one thread
+busy per request.
 
 ### Start now, get the result later (Tier 2)
 
 With `chttpclient_do_async()`, one thread can start many requests, do other
-work, and get the answers later. Each call immediately gives a
-`ctpool_future`. `chttpclient_async_result_get()` waits for the future.
+work and collect the answers later. Each call returns a `ctpool_future`
+immediately, and `chttpclient_async_result_get()` waits for it.
 
 ```c
-/* fanout.c: start many requests at the same time from one thread. Then
- * get the results. */
+/* fanout.c: start many requests at once from one thread, then collect
+ * the results. */
 #include <ccollections/chttpclient.h>
 #include <stdio.h>
 
@@ -516,7 +510,7 @@ int main(int argc, char **argv) {
         chttp_request_free(req);   /* the engine keeps its own copy */
     }
 
-    /* The requests run now. This thread can do other work. */
+    /* The requests are running; this thread is free to do other work. */
 
     for (int i = 0; i < N; i++) {
         if (!futures[i]) {
@@ -541,32 +535,29 @@ int main(int argc, char **argv) {
 }
 ```
 
-Free a result in this fixed order:
+Free a result in this order:
 
-1. Free `r->resp`. It is there only when `r->rv == ccol_success`.
+1. Free `r->resp`, which is present only when `r->rv == ccol_success`.
 2. Free the result.
 3. Free the future.
 
-You can free the request immediately after `chttpclient_do_async()`
-returns.
+You can free the request as soon as `chttpclient_do_async()` returns.
 
 With `chttpclient_do_async_streaming()`, your write callback runs on one of
-the threads of the engine. The callback must be fast, and it must not block.
-It must not start a different asynchronous request, and it must not wait
-for one.
+the engine's threads, so it must be fast and must not block. It must also
+neither start another asynchronous request nor wait for one.
 
 ## A realistic API client
 
-This program communicates with a small JSON API. It does these steps:
+This program talks to a small JSON API:
 
 1. It authenticates with HTTP Basic auth.
 2. It reads the current user.
 3. It creates an item from a document that it builds with
    [`cjson`](cjson.md).
 
-Most programs have a function similar to the `call_api()` helper. This
-helper is the one location that sends a request, examines the answer and
-parses it.
+Most programs end up with something like the `call_api()` helper: a single
+place that sends a request, checks the answer and parses it.
 
 ```c
 /* inventory.c: communicate with a small JSON API with Basic auth. */
@@ -576,8 +567,8 @@ parses it.
 #include <stdlib.h>
 #include <string.h>
 
-/* Send one request and parse a JSON answer. Return the parsed document
-   (NULL after all failures), and store the HTTP status in *status. */
+/* Send one request and parse the JSON answer. Return the parsed document
+   (NULL on any failure) and store the HTTP status in *status. */
 static cjson call_api(chttpcli cli, chttp_method_t method, const char *url,
                       const char *auth, const char *json_body, int *status) {
     *status = 0;   /* 0 means "no HTTP answer" */
@@ -631,7 +622,7 @@ int main(int argc, char **argv) {
     /* 1. Get the current user. */
     snprintf(url, sizeof(url), "%s/me", base);
     cjson me = call_api(cli, CHTTP_GET, url, auth, NULL, &status);
-    /* The server sets the document. Examine each type before you read it. */
+    /* The server controls the document: check each type before reading. */
     cjson user = me ? cjson_get(me, "user") : NULL;   /* borrowed */
     if (status == CHTTP_STATUS_OK && cjson_type(user) == CJSON_STRING)
         printf("logged in as %s\n", cjson_str_val(user));
@@ -667,25 +658,25 @@ int main(int argc, char **argv) {
 }
 ```
 
-`chttp_basic_auth()` gives a complete `Basic ...` header value. Free it
-with `free()`. The function refuses a user name that contains a colon,
-because the receiver cannot find the end of the name. You can also put the
-credentials in the URL (`https://alice:s3cret@api.example.com/`). Then the
-client makes the same header.
+`chttp_basic_auth()` returns a complete `Basic ...` header value that you
+free with `free()`. It refuses a user name that contains a colon, because
+the receiver could not tell where the name ends. You can also put the
+credentials in the URL (`https://alice:s3cret@api.example.com/`), and the
+client then builds the same header.
 
 ## Unix domain sockets
 
 Many local services (Docker, systemd, your own daemons) listen on a Unix
-socket, not on a TCP port. Put the socket path, with percent-encoding, in the
-position of the host (a part of a program):
+socket instead of a TCP port. Put the percent-encoded socket path where the
+host would go (a fragment):
 
 ```c
 /* Server socket: /run/app.sock */
 chttp_get("http+unix://%2Frun%2Fapp.sock/api/status", &resp);
 ```
 
-All the tiers support Unix sockets, and they use connections again. These
-rules apply:
+Every tier supports Unix sockets and reuses their connections, with these
+rules:
 
 - The default `Host` header is `localhost`.
 - There is no TLS through a Unix socket.
@@ -694,11 +685,11 @@ rules apply:
 
 ## Upload only when the server agrees
 
-A server can refuse an upload before it reads the upload. For example, the
-upload is too large, or the user is not logged in. Set `expect_continue`.
-Then the client first sends only the headers. It sends the body when the
-server answers `100 Continue`. If the server does not answer, the client
-sends the body after one second (a part of a program):
+A server may want to refuse an upload before reading it, for example
+because it is too large or the user is not logged in. If you set
+`expect_continue`, the client first sends only the headers and sends the
+body once the server answers `100 Continue`; if the server does not answer,
+the client sends the body after one second (a fragment):
 
 ```c
 chttp_request_t *req = chttp_request_new(CHTTP_PUT, url,
@@ -710,9 +701,9 @@ if (req) {
 }
 ```
 
-If you do not set `expect_continue`, the client also monitors the
-connection for an early answer during the upload. It gives that answer,
-not a broken-pipe error.
+Even without `expect_continue`, the client watches the connection for an
+early answer during the upload and returns that answer instead of a
+broken-pipe error.
 
 ## The shared helpers of chttp.h
 
@@ -731,7 +722,7 @@ int main(void) {
     printf("%s\n", auth);   /* Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ== */
     free(auth);
 
-    /* A user name with a colon is not clear to the receiver: NULL. */
+    /* A colon in the user name is ambiguous to the receiver: NULL. */
     printf("%s\n", chttp_basic_auth("a:b", "c") ? "built" : "refused");
 
     /* Base64 of binary data, and back. */
@@ -753,30 +744,30 @@ int main(void) {
 ```
 
 Each helper has an `_mp` form that takes a custom allocator. The decoded
-buffer ends with a NUL to make it easier to use. But binary data can contain
-zero bytes. Therefore, use `out_len`, not `strlen()`.
-`chttp_method_str(CHTTP_PATCH)` gives `"PATCH"`.
+buffer is NUL-terminated for convenience, but binary data can contain zero
+bytes, so use `out_len` rather than `strlen()`.
+`chttp_method_str(CHTTP_PATCH)` returns `"PATCH"`.
 
 ## Good to know
 
 - **Do not destroy the default client.** `chttp_default_client()` and the
-  `chttp_get` family belong to the library. The library cleans them at exit.
-  If you destroy the default client, all the later convenience calls fail.
-- **Destroy your clients before `main` returns.** If a client exists at
-  exit, the engine of Tiers 2 and 3 continues to run.
+  `chttp_get` family belong to the library, which cleans them up at exit.
+  If you destroy the default client, every later convenience call fails.
+- **Destroy your clients before `main` returns.** If a client still exists
+  at exit, the engine of Tiers 2 and 3 keeps running.
 - **An empty body is `NULL`.** `resp->body` is `NULL` for an empty body.
-- **Only POST, PUT and PATCH send a body.** The client does not send a body
-  that you give to a GET.
+- **Only POST, PUT and PATCH send a body.** A body that you give to a GET
+  is not sent.
 - **Requests and responses are not shared objects.** A client is
-  thread-safe. A single `chttp_request_t` or `chttpcli_response` is not
-  thread-safe. Do not change one from two threads at the same time.
+  thread-safe, but a single `chttp_request_t` or `chttpcli_response` is
+  not, so never modify one from two threads at once.
 - **Asynchronous callbacks run on the engine.** Keep the streaming
-  callbacks of Tiers 2 and 3 short, and do not let them block.
+  callbacks of Tiers 2 and 3 short, and never let them block.
 - **`fork()`:** Create clients after `fork()`, or call `exec()` immediately
-  after `fork()`. The library does not support a child that continues to
-  run with a client from before the fork. See [Concurrency](concurrency.md).
-- **SIGPIPE is safe.** The client does not raise it, and it does not change
-  your signal settings.
+  after `fork()`. A child that keeps running with a client created before
+  the fork is not supported. See [Concurrency](concurrency.md).
+- **SIGPIPE is safe.** The client never raises it and never changes your
+  signal settings.
 
 ## Reference
 

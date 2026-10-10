@@ -11,37 +11,35 @@ ccol_retval_t cyaml_delete(cyaml root, const char *path);
 .fi
 .SH DESCRIPTION
 .nf
-The macro navigates to the parent of the node that the path addresses.
-It removes the child and frees the whole subtree of that child
+The macro navigates to the parent of the node that the path addresses,
+removes the child, and frees the whole subtree of that child
 recursively.  The path uses the same dot-separated syntax as cyaml_get
 and cyaml_set.
 
 For a dictionary parent, the leaf component is the key to remove.  For
-a list parent, the leaf component must be a '#N' token.  For example,
+a list parent, the leaf component must be a '#N' token; for example,
 "#0" removes the first element.
 
-The macro splits the path at the LAST dot that carries no escape.  The
-path "a.b.c" therefore targets the key "c" inside the node at "a.b".
-When the path holds no dot, root is the parent.
+The macro splits the path at the LAST dot that carries no escape, so
+the path "a.b.c" targets the key "c" inside the node at "a.b".  When
+the path holds no dot, root is the parent.
 
-The escape sequences '\e.' and '\e\e' give a literal dot or a literal
-backslash in a key name.  This matches cyaml_get and cyaml_set.
+As in cyaml_get and cyaml_set, the escape sequences '\e.' and '\e\e'
+give a literal dot or a literal backslash in a key name.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_retval_t.  The macro returns ccol_success on success.
-ccol_invalid_args comes back in six cases.  They are a NULL root, a
-NULL path, and an empty path.  A component that is not valid for the
-node that it addresses is the fourth case.  Bad '#N' index syntax is
-the fifth, and an empty component is the sixth.  A
-component that is not '#N' on a list is one invalid case.  Any
-component that the macro finds under a scalar is another.  An empty
-component is nothing between two dots, a leading dot, or a trailing
-dot.  Any position in the path can give this code, not only the leaf.
-ccol_key_not_found comes back when a component with correct syntax is
-absent.  Such a component is a dictionary key or a '#N' index.  Any
-position can give this code.  A list index with correct syntax that is
-out of range gives it too.
+ccol_invalid_args comes back in six cases: a NULL root, a NULL path, an
+empty path, a component that is not valid for the node that it
+addresses, bad '#N' index syntax, and an empty component.  A component
+that is not '#N' on a list is one invalid case, and any component that
+the macro finds under a scalar is another.  An empty component is
+nothing between two dots, a leading dot, or a trailing dot.  Any
+position in the path can give this code, not only the leaf.
+ccol_key_not_found comes back when a component with correct syntax (a
+dictionary key or a '#N' index) is absent, at any position, and also
+when a list index with correct syntax is out of range.
 ccol_not_enough_memory comes back on an internal allocation failure.
 .fi
 .SH EXAMPLES

@@ -12,19 +12,19 @@ ccol_channel_create(max_size, err_str);
 .SH DESCRIPTION
 .nf
 This macro creates a two-way ccol_channel. Inside, the channel holds two
-circular queues. They give communication between an owner thread and the
-worker threads. Both directions have the same capacity. The macro uses the
-standard malloc and free for memory management.
+circular queues that carry messages between an owner thread and the
+worker threads, and both directions have the same capacity. The macro
+uses the standard malloc and free for memory management.
 
 This macro is the short form of ccol_channel_create_with_mprocs() with NULL
 memory management procedures.
 .fi
 .SH PARAMETERS
 .nf
-max_size   Maximum number of messages that each direction can hold. One
-           circular queue holds each direction. The same
-           SIZE_MAX / sizeof(c_message_t) bound therefore applies here.
-           ccol_circular_queue_create(3) documents that bound.
+max_size   Maximum number of messages that each direction can hold.
+           Because one circular queue holds each direction, the same
+           SIZE_MAX / sizeof(c_message_t) bound that
+           ccol_circular_queue_create(3) documents applies here.
 err_str    Optional pointer for an error string
 .fi
 .SH RETURN VALUE
@@ -39,22 +39,22 @@ You must destroy the channel with ccol_channel_destroy() after you finish
 with it.
 The channel picks the direction itself from the ID of the thread that
 calls it.
-The owner thread is the thread that called ccol_channel_create(). It must
-stay alive for all the time that the ccol_channel is in use. To route a
-message, the channel compares the ID of the thread that calls it against
-the ID that it took at creation time. After the first owner exits, the OS
-can give the same ID to a new, unrelated thread. The channel then routes
-that thread as the owner too, and it reports nothing.
-There are two supported ways to combine fork(2) with a ccol_channel. The
-first way is to call fork(2) before you create the ccol_channel. The second
-way is to create the ccol_channel, then call fork(2) and immediately call
-exec(3). One pattern is not supported: a program continues to run with no
-exec(3) in between while a ccol_channel from before the fork is still live.
-On top of that rule, the library adds a defense in depth. The child never
-inherits a lock in the locked state from another thread that held it at the
-instant of the fork. Also, neither queue below the channel owns a thread of
-its own. A ccol_channel that a child inherits in that way therefore stays
-fully usable.
+The owner thread is the thread that called ccol_channel_create(), and it
+must stay alive for all the time that the ccol_channel is in use. To
+route a message, the channel compares the ID of the calling thread with
+the ID that it took at creation time. After the first owner exits, the
+OS can give the same ID to a new, unrelated thread; the channel then
+routes that thread as the owner too, and it reports nothing.
+There are two supported ways to combine fork(2) with a ccol_channel:
+call fork(2) before you create the ccol_channel, or create the
+ccol_channel, then call fork(2) and immediately call exec(3). One
+pattern is not supported: a program that continues to run with no
+exec(3) in between while a ccol_channel from before the fork is live.
+On top of that rule, the library adds a defense in depth: the child
+never inherits a lock in the locked state from another thread that
+held it at the instant of the fork.  Because neither queue below the
+channel owns a thread of its own, a ccol_channel that a child inherits
+in that way stays fully usable.
 .fi
 .SH "SEE ALSO"
 .BR ccol_channel_create_with_mprocs (3),

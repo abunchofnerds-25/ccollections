@@ -30,7 +30,7 @@ SOFTWARE.
  * load relative to the thread pointer. It also marks the whole library as
  * needing static thread-local storage, so a dlopen() of it must fit the
  * library's thread-local block into the reserve that the loader keeps for
- * late loads. glibc keeps about 1.6 KiB there, which this library fits.
+ * late loads. glibc keeps about 1.6 KiB there, which this library fits, while
  * FreeBSD keeps 128 bytes unless the environment of the program sets
  * LD_STATIC_TLS_EXTRA, and this library needs 384 or more there. The general
  * model is resolved through __tls_get_addr on each access, and a dlopen()
@@ -42,8 +42,8 @@ SOFTWARE.
  * CCOL_MEMPOOL_DYNAMIC_TLS selects the general model when it is 1 and
  * initial-exec when it is 0. A build that does not set it gets initial-exec
  * with glibc and on FreeBSD, and the general model everywhere else. This file
- * must be included after a header of the C library, which is what defines
- * __GLIBC__. */
+ * must be included after a header of the C library, because that header is
+ * what defines __GLIBC__. */
 
 #ifndef CCOL_INTERNAL_CTLSMODEL_H
 #define CCOL_INTERNAL_CTLSMODEL_H

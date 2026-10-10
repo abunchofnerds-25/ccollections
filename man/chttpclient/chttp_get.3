@@ -12,14 +12,14 @@ ccol_retval_t chttp_get(const char *url,
 .fi
 .SH DESCRIPTION
 .nf
-This is a short wrapper. It makes a CHTTP_GET request for url. It runs
-that request with the default client. It then frees the request.
+This is a short wrapper that makes a CHTTP_GET request for url, runs
+that request with the default client, and then frees the request.
 .fi
 .SH PARAMETERS
 .nf
 url       The target URL. It must not be NULL.
-resp_out  It must not be NULL. The function sets it to NULL at once.
-          If the call succeeds, it then gets the pointer to the
+resp_out  It must not be NULL. The function sets it to NULL at once,
+          and if the call succeeds, it then gets the pointer to the
           response.
 .fi
 .SH RETURN VALUE

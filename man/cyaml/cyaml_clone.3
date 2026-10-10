@@ -12,34 +12,34 @@ cyaml cyaml_clone(cyaml node);
 .SH DESCRIPTION
 .nf
 Copy node and all of its descendants.  The clone uses the same allocator
-as the source tree.  It also carries over the tag of each node unchanged,
-when the node has one (see cyaml_node_tag(3)), and every dictionary of the
-clone keeps the member order of its source (see cyaml_dictionary_first(3)).
-A change to the clone does
-not affect the original.  A change to the original does not affect the
-clone.
+as the source tree and carries over unchanged the tag of each node that
+has one (see cyaml_node_tag(3)), and every dictionary of the clone
+keeps the member order of its source (see cyaml_dictionary_first(3)).
+A change to the clone does not affect the original, and a change to the
+original does not affect the clone.
 
 node need not come from cyaml_parse*().  A tree that the caller builds
-directly with cyaml_create_list_mp(3) and cyaml_dictionary_set(3) obeys the
-same 500-level nesting limit that cyaml_parse*(3) applies at parse time.
-cyaml_serialize(3) and cyaml_serialize_flow(3) apply that same limit on
-their own.  This function refuses a tree that is nested deeper than the
-limit, and it returns NULL for such a tree.  It walks the source with an
-explicit worklist, not by recursion.  The call stack that it needs is
-therefore a constant that does not grow with the nesting depth.  The limit
-bounds the work of one call, not the stack that the caller must give.
+directly with cyaml_create_list_mp(3) and cyaml_dictionary_set(3) obeys
+the same 500-level nesting limit that cyaml_parse*(3) applies at parse
+time, and cyaml_serialize(3) and cyaml_serialize_flow(3) apply that same
+limit on their own.  This function refuses a tree that is nested deeper
+than the limit and returns NULL for it.  Because it walks the source
+with an explicit worklist instead of by recursion, the call stack that
+it needs is a constant that does not grow with the nesting depth: the
+limit bounds the work of one call, not the stack that the caller must
+give.
 .fi
 .SH PARAMETERS
 .nf
-node  Root of the subtree to copy.  The function accepts NULL and then
-      returns NULL.
+node  Root of the subtree to copy.  The function accepts NULL, in which
+      case it returns NULL.
 .fi
 .SH RETURN VALUE
 .nf
-Root of the new tree, which the caller owns.  The function returns NULL
-when it runs out of memory, and also when node is nested more than 500
-levels deep.  The caller cannot tell the two causes apart, because this
-function has no separate error-string channel.
+Root of the new tree, which the caller owns, or NULL when the function
+runs out of memory or when node is nested more than 500 levels deep.
+The caller cannot tell the two causes apart, because this function has
+no separate error-string channel.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_destroy (3),

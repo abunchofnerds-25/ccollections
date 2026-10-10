@@ -11,14 +11,14 @@ cvec_reset(v);
 .fi
 .SH DESCRIPTION
 .nf
-This macro is a wrapper for cvector_reset(). It removes every element. It
+This macro is a wrapper for cvector_reset() that removes every element and
 then tries to shrink the backing buffer back to the minimum capacity of 4
-elements. The element count becomes 0, whether the shrink succeeds or
-fails. A failed reallocation leaves the larger buffer in place. That is not
-an error, and the macro does not report it.
+elements. The element count becomes 0 whether the shrink succeeds or
+fails. A failed reallocation leaves the larger buffer in place; that is
+not an error, and the macro does not report it.
 
-The vector stays usable after this call, and it keeps its element type. You
-therefore need no new declaration before you push into it again.
+The vector stays usable after this call and keeps its element type, so
+you need no new declaration before you push into it again.
 .fi
 .SH PARAMETERS
 .nf
@@ -28,9 +28,9 @@ v    Vector to reset
 .nf
 The element count becomes 0.
 The capacity goes back to the minimum of 4 when the reallocation
-succeeds. It stays the same in every other case.
-The macro does not free the elements one by one when the vector holds
-pointers to heap buffers. The caller must free the element data first
+succeeds, and stays the same in every other case.
+When the vector holds pointers to heap buffers, the macro does not free
+the elements one by one, so the caller must free the element data first
 when this is necessary.
 This call invalidates every pointer from an earlier cvec_data_ptr(3) or
 cvec_at_ptr(3).

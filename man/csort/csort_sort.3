@@ -12,10 +12,9 @@ bool sorted = csort_sort(collection, length, elem_size, getter_proc,
 .fi
 .SH DESCRIPTION
 .nf
-This generic sort macro sorts any collection with an iterative mergesort
-algorithm. It works with any type of collection: an array, a vector or a
-custom container. The caller must give a getter function and a comparison
-function.
+This generic sort macro sorts any collection, whether an array, a vector
+or a custom container, with an iterative mergesort algorithm. The caller
+must give a getter function and a comparison function.
 
 .fi
 .SH PARAMETERS
@@ -23,45 +22,43 @@ function.
 collection      Pointer to the collection to sort
 length          Number of elements in the collection
 elem_size       Size of each element in bytes
-getter_proc     Function that gets the element at an index. Its type
-                is void *(*)(void *collection, size_t index). It
-                gives a pointer to the storage of the element. The
-                sort reads and writes each element through such a
-                pointer. The elements therefore do not have to be
-                contiguous. A ring buffer, or any other storage with
+getter_proc     Function of type
+                void *(*)(void *collection, size_t index) that gives
+                a pointer to the storage of the element at an index.
+                The sort reads and writes each element through such
+                a pointer, so the elements do not have to be
+                contiguous: a ring buffer, or any other storage with
                 an index, is correct. Each pointer must stay valid
                 for the full sort.
-comparison_proc Function that compares two elements. Its type is
-                int (*)(const void *, const void *). It gives a value
-                less than 0, 0, or more than 0, as for qsort(3).
+comparison_proc Function of type int (*)(const void *, const void *)
+                that compares two elements and gives a value less
+                than 0, 0, or more than 0, as for qsort(3).
 mprocs          Memory management procedures, or NULL for the default
                 ones. An mprocs that is not NULL must hold all four of
                 malloc, free, calloc and realloc.
 .fi
 .SH RETURN VALUE
 .nf
-Gives true on success. The trivial cases are also a success: a NULL
-collection, a length of 0 or 1, and an elem_size of 0. None of them have
-anything to do.
+Gives true on success, including the trivial cases that have nothing to
+do: a NULL collection, a length of 0 or 1, and an elem_size of 0.
 Gives false when length is more than the maximum element count of the
-library. Gives false when mprocs is not NULL and does not hold all four
-of malloc, free, calloc and realloc. Gives false when the internal
-temporary merge buffer cannot be allocated. Gives false when
-length * elem_size overflows size_t. The collection stays completely
-unchanged in each of these cases.
+library, when mprocs is not NULL and does not hold all four of malloc,
+free, calloc and realloc, when the internal temporary merge buffer
+cannot be allocated, or when length * elem_size overflows size_t. The
+collection stays completely unchanged in each of these cases.
 .fi
 .SH NOTES
 .nf
-A stable sort. It keeps the relative order of equal elements.
+A stable sort, which keeps the relative order of equal elements
 O(n log n) time complexity in every case
 O(n) space complexity for the temporary merge buffer
 An iterative algorithm, with no recursion
 
-getter_proc and comparison_proc must both not be NULL when collection is
+Neither getter_proc nor comparison_proc may be NULL when collection is
 not NULL and length is 2 or more. This holds even when elem_size is 0,
-although the macro then calls neither of them. Only a NULL collection, or
+although the macro then calls neither of them; only a NULL collection, or
 a length of 0 or 1, lets a call give no real procedures. A call that
-breaks this rule asserts and aborts the process. It does not give false.
+breaks this rule asserts and aborts the process instead of giving false.
 .fi
 .SH EXAMPLES
 .nf

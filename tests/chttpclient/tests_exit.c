@@ -26,23 +26,23 @@ SOFTWARE.
  *
  * The engine of Tier 2 and Tier 3 stops on a reaper thread once its last
  * reference goes. A process that returns from main at that moment must not
- * run the cleanup of OpenSSL while a thread of the engine still exists: such
- * a thread frees per-thread state of OpenSSL as it exits, and the cleanup
- * frees the same state. The exit hook of the client therefore stops every
+ * run the cleanup of OpenSSL while a thread of the engine still exists,
+ * because such a thread frees per-thread state of OpenSSL as it exits and the
+ * cleanup frees the same state. So the exit hook of the client stops every
  * thread of the engine, and joins the reaper, before that cleanup runs.
  *
  * Each case runs its scenario in a child of fork(), because the scenario
- * ends with exit(). This binary is a binary of its own because the parent
- * must fork while it has exactly one thread and has never touched the
- * library, so that each child starts the engine afresh. The TLS server runs
- * in a separate process that serves each connection in a process of its
- * own, so that the children never share a thread with it.
+ * ends with exit(). This is a binary of its own because the parent must fork
+ * while it has exactly one thread and has never touched the library, so that
+ * each child starts the engine afresh. The TLS server runs in a separate
+ * process that serves each connection in a process of its own, so the
+ * children never share a thread with it.
  *
- * A child registers a check with atexit() before it uses the library. The
- * atexit list runs in the reverse of the order of registration, so the
- * check runs last, after the hook of the client and after the cleanup of
- * OpenSSL. It asserts that the process has one thread left, that the engine
- * is down, and that every reaper that the library created was joined.
+ * A child registers a check with atexit() before it uses the library. Since
+ * the atexit list runs in the reverse of the order of registration, the check
+ * runs last, after the hook of the client and after the cleanup of OpenSSL.
+ * It asserts that the process has one thread left, that the engine is down,
+ * and that every reaper that the library created was joined.
  */
 
 #define _GNU_SOURCE
@@ -109,7 +109,7 @@ static bool g_ready = false;
 static bool g_setup_failed = false;
 
 /* This answers every request of one connection until the peer closes it.
- * GET /hang is never answered. Every other GET gets a small 200 that keeps
+ * GET /hang is never answered; every other GET gets a small 200 that keeps
  * the connection open. */
 static void _serve_connection(SSL_CTX *ctx, int fd) {
   SSL *ssl = SSL_new(ctx);
@@ -132,7 +132,7 @@ static void _serve_connection(SSL_CTX *ctx, int fd) {
     }
     size_t used = (size_t)(end + 4 - buf);
     if (have >= 9 && memcmp(buf, "GET /hang", 9) == 0) {
-      /* The client abandons this request. The connection ends when the
+      /* The client abandons this request, and the connection ends when the
        * client process exits. */
       while (SSL_read(ssl, buf, (int)sizeof(buf)) > 0) {
       }
@@ -217,7 +217,7 @@ static void _setup(void) {
   g_setup_failed = false;
 }
 
-/* A child of a test runs this destructor too when it exits. Only the
+/* A child of a test also runs this destructor when it exits, but only the
  * process that started the server stops it. */
 static void __attribute__((destructor)) _teardown(void) {
   if (getpid() != g_parent_pid) return;
@@ -242,9 +242,9 @@ static int _thread_count(void) { return test_thread_count(); }
  * means that the child died before its last exit handler. */
 static int g_report_fd = -1;
 /* The thread count of the child right after fork(), before it touches the
- * library. Natively that is 1. Under qemu-user, /proc/self/task also lists the
- * host threads of the emulator itself, so the count at exit is compared with
- * this baseline and not with the constant 1. */
+ * library. Natively that is 1, but under qemu-user /proc/self/task also lists
+ * the host threads of the emulator itself, so the count at exit is compared
+ * with this baseline instead of with the constant 1. */
 static int g_thread_baseline = 1;
 static int g_scenario_code = CHILD_OK;
 
@@ -252,8 +252,8 @@ static int g_scenario_code = CHILD_OK;
  * joined has gone. pthread_join() returns when the kernel clears the ID of
  * the thread, and the kernel removes the thread from /proc/self/task a moment
  * later, so a thread joined just before this check can still be listed. Such
- * a thread goes within microseconds; a thread that nobody joined stays. The
- * count is therefore read until it reaches the baseline, for at most 2 s. */
+ * a thread goes within microseconds, while a thread that nobody joined stays,
+ * so the count is read until it reaches the baseline, for at most 2 s. */
 static int _settled_thread_count(void) {
   int threads = _thread_count();
   for (int i = 0; i < 2000 && threads != g_thread_baseline; i++) {
@@ -379,15 +379,15 @@ static void _child_exit_in_flight(void) {
 /* The prefork pattern: a process uses the async engine, destroys its last
  * client, and forks with no handle left. The engine has stopped, and the
  * handle of the reaper that stopped it stays unjoined until the next
- * acquire. glibc gives the descriptor of that reaper, which the forked child
- * does not inherit as a thread, to a thread that the child starts. The child
- * therefore starts threads until one carries the ID of that reaper, keeps
- * them all blocked, and only then makes a Tier 2 and a Tier 3 request. A
- * join of the inherited reaper handle joins that blocked thread and never
- * returns, and the process that waits for the child reports that as a
- * hang. The FreeBSD thread library rebuilds its list of threads in a fork
- * child and never gives an inherited ID to a new thread, so there the case
- * checks only that the child's requests succeed. */
+ * acquire. glibc gives the descriptor of that reaper (which the forked child
+ * does not inherit as a thread) to a thread that the child starts. So the
+ * child starts threads until one carries the ID of that reaper, keeps them
+ * all blocked, and only then makes a Tier 2 and a Tier 3 request. A join of
+ * the inherited reaper handle joins that blocked thread and never returns,
+ * and the process that waits for the child reports that as a hang. The
+ * FreeBSD thread library rebuilds its list of threads in a fork child and
+ * never gives an inherited ID to a new thread, so there the case checks only
+ * that the child's requests succeed. */
 static int g_blocker_fd = -1;
 
 static void *_blocker(void *arg) {
@@ -474,8 +474,8 @@ static void _child_prefork_after_engine_stop(void) {
     if (p < 0) {
       code = CHILD_FORK_FAILED;
     } else {
-      /* The wait is bounded, so that a child that hangs fails this case
-       * and does not hang the binary. */
+      /* The wait is bounded, so a child that hangs fails this case instead
+       * of hanging the binary. */
       struct pollfd pr = {.fd = rfd[0], .events = POLLIN, .revents = 0};
       int rc;
       do {
@@ -499,9 +499,9 @@ static void _child_prefork_after_engine_stop(void) {
 #if CCOL_FORK_SAFETY_REQUIRED
 /* A fork while the reaper of the engine holds the mutex of the engine, in
  * the final critical section of its teardown. The reaper is held there on
- * purpose, for a bounded time, and the fork happens once it is. A child that
+ * purpose for a bounded time, and the fork happens once it is. A child that
  * inherits the mutex in its held state can never take it, so its first Tier
- * 2 request hangs. The fork must instead wait for the teardown to end. */
+ * 2 request hangs; the fork must instead wait for the teardown to end. */
 static void _forked_child_requests(int report_fd) {
   unsigned char code = CHILD_OK;
   char url[96];
@@ -585,7 +585,7 @@ static void _child_fork_during_reap(void) {
 /*                         THE PARENT                                         */
 /* ========================================================================== */
 
-/* valgrind maps its preload object into the process, and also names it in
+/* valgrind maps its preload object into the process and also names it in
  * LD_PRELOAD, which is the sign that a system without /proc keeps. */
 static bool _under_valgrind(void) {
   const char *pre = getenv("LD_PRELOAD");
@@ -655,8 +655,8 @@ TEST(exit_hook, no_engine_thread_survives_into_the_exit_of_openssl) {
   for (int i = 0; i < rounds; i++) {
     int report = -1;
     int st = _run_child(_child_full, timeout_s, &report);
-    /* Natively a clean exit status is required too. A crash in a later
-     * exit handler, such as the cleanup of OpenSSL, shows there. */
+    /* Natively a clean exit status is required too: a crash in a later exit
+     * handler, such as the cleanup of OpenSSL, shows there. */
     bool status_ok = vg || (st >= 0 && WIFEXITED(st) && WEXITSTATUS(st) == 0);
     if (report != CHILD_OK || !status_ok) {
       bad_report = report;
@@ -673,9 +673,9 @@ TEST(exit_hook, no_engine_thread_survives_into_the_exit_of_openssl) {
 
 TEST(exit_hook, exit_from_a_write_fn_does_not_hang) {
   /* The hook does nothing while a request is in flight, and the request
-   * whose write_fn calls exit() is in flight. Waiting for the engine there
+   * whose write_fn calls exit() is in flight: waiting for the engine there
    * would wait for the very thread that runs the hook. The child may end by
-   * a signal, since it abandons a request that OpenSSL still serves; it
+   * a signal, since it abandons a request that OpenSSL still serves, but it
    * must end. */
   _setup();
   REQUIRE_TRUE(g_ready);
@@ -697,7 +697,7 @@ TEST(prefork,
   /* This test is non-vacuous: a child that joins the reaper handle that it
    * inherited joins its own blocked thread, and the case reports
    * CHILD_FORKED_CHILD_HUNG. On glibc the case also refuses to pass without
-   * the precondition that makes the join hang: it reports
+   * the precondition that makes the join hang, and reports
    * CHILD_NO_THREAD_TOOK_THE_REAPER_ID when no thread of the child carries
    * the ID of the reaper. */
   _setup();

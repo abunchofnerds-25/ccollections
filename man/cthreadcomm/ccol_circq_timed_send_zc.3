@@ -13,18 +13,18 @@ ccol_retval_t ccol_circq_timed_send_zc(ccol_circular_queue *cq,
 .fi
 .SH DESCRIPTION
 .nf
-This function blocks and waits for free space. It waits for the given
-timeout at most. If free space arrives, the function sends the message and
-transfers the ownership. If the timeout ends, or if sends go off, the
-function returns the correct error code.
+This function blocks and waits for free space for at most the given
+timeout. If free space arrives, the function sends the message and
+transfers the ownership; if the timeout ends, or if sends go off, the
+function returns the matching error code.
 .fi
 .SH PARAMETERS
 .nf
 cq          Circular queue to send to
 msg         Message to send. On success the ownership of the data moves to
             the queue.
-timeout_us  Longest time to wait, in microseconds, from the call. 0 does
-            not wait: the call is then ccol_circq_try_send_zc.
+timeout_us  Longest time to wait, in microseconds, from the call. 0
+            does not wait, which makes the call ccol_circq_try_send_zc.
 .fi
 .SH RETURN VALUE
 .nf
@@ -40,19 +40,19 @@ ccol_unexpected_failure   - The wait failed with an error other than a
 .SH NOTES
 .nf
 The function blocks for the duration of the timeout at most.
-After the function wakes up, it checks again whether sends are still on.
+After the function wakes up, it checks again whether sends are on.
 On failure, the caller keeps the ownership of msg->data.
-A timeout of 0 does not wait. The call then does exactly what
-ccol_circq_try_send_zc does, and returns its result:
-ccol_container_full, and not ccol_timed_out, when it cannot proceed at
+A timeout of 0 does not wait: the call then does exactly what
+ccol_circq_try_send_zc does and returns its result, so it gives
+ccol_container_full, not ccol_timed_out, when it cannot proceed at
 once.
 A timeout too large to form a deadline, such as UINT64_MAX, saturates
 to the latest deadline that the clock can hold and in practice waits
 with no end; it never wraps into the past.
-The library measures the timeout against CLOCK_MONOTONIC. A change to the
-wall clock of the system does not make the timeout longer or shorter. An
-administrator, NTP, or the resume of a virtual machine can change that
-clock. The call waits for the duration that the caller gave.
+The library measures the timeout against CLOCK_MONOTONIC, so a change
+to the wall clock of the system (by an administrator, by NTP, or by the
+resume of a virtual machine) does not make the timeout longer or
+shorter: the call waits for the duration that the caller gave.
 .fi
 .SH "SEE ALSO"
 .BR ccol_circq_send_zc (3),

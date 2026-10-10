@@ -20,33 +20,32 @@ Sets, for the whole process, what the library may do about SIGPIPE
 when a logger writes to a descriptor whose reader is gone.
 
 A write(2) to a pipe or a socket whose reading end is closed fails
-with EPIPE, and it also raises SIGPIPE, whose default disposition
-ends the process.  A logger decides the kind of its descriptor once,
-with fstat(2), when it opens.  A rotation keeps a regular file.  What
+with EPIPE and also raises SIGPIPE, whose default disposition ends the
+process.  A logger decides the kind of its descriptor once, with
+fstat(2), when it opens (a rotation keeps a regular file), and what
 happens then depends on that kind:
 
 Regular file, terminal, or any descriptor that is neither a pipe nor
 a socket
-    The write cannot raise SIGPIPE.  The library does nothing about
+    The write cannot raise SIGPIPE, so the library does nothing about
     it under either policy.
 
 Socket
-    The library writes with send(2) and MSG_NOSIGNAL, under either
-    policy.  The write fails with EPIPE and raises nothing.  No
-    signal state changes.
+    Under either policy the library writes with send(2) and
+    MSG_NOSIGNAL, so the write fails with EPIPE and raises nothing.
+    No signal state changes.
 
 Pipe or FIFO, under CLOG_SIGPIPE_AUTO
     The async writer thread of a logger keeps SIGPIPE blocked in its
-    own signal mask, and it takes back the SIGPIPE that its own
-    failed write left pending on it.  Nothing about the process
-    changes.
+    own signal mask and takes back the SIGPIPE that its own failed
+    write left pending on it, so nothing about the process changes.
 
     macOS raises the SIGPIPE of a pipe write on the whole process,
-    not on the writing thread.  There the async writer thread also
-    sets F_SETNOSIGPIPE on the descriptor for the length of each
-    write, so the write fails with EPIPE and raises nothing.  After
-    the write, the descriptor gets back the F_SETNOSIGPIPE value that
-    it had before.
+    not on the writing thread, so there the async writer thread also
+    sets F_SETNOSIGPIPE on the descriptor for the length of each write,
+    so that the write fails with EPIPE and raises nothing.  After the
+    write, the descriptor gets back the F_SETNOSIGPIPE value that it
+    had before.
 
     Any other thread that writes to a pipe sets the disposition of
     SIGPIPE to SIG_IGN for the whole process, the first time that it
@@ -54,7 +53,7 @@ Pipe or FIFO, under CLOG_SIGPIPE_AUTO
     CLOG_FATAL record, or from a record that an async logger writes
     on the calling thread because its queue refused it.  The library
     makes this change at most once, and only when the disposition is
-    SIG_DFL at that moment.  A handler or an ignore that the
+    SIG_DFL at that moment, so a handler or an ignore that the
     application installed stays in place.  Opening a logger changes
     nothing; only the first such write does.
 
@@ -81,22 +80,22 @@ ccol_invalid_args  policy is not one of the two values above.
 .nf
 You may call this at any time, from any thread, before or after any
 logger exists.  The policy governs every write that starts after the
-call.  That includes the async writer threads that already run: under
-CLOG_SIGPIPE_UNTOUCHED such a thread unblocks SIGPIPE again before its
-next write to a pipe, and under CLOG_SIGPIPE_AUTO it blocks it again.
-A writer thread that its creator started with SIGPIPE already blocked
-keeps that mask under both policies.
+call, including those of the async writer threads that already run:
+under CLOG_SIGPIPE_UNTOUCHED such a thread unblocks SIGPIPE again
+before its next write to a pipe, and under CLOG_SIGPIPE_AUTO it blocks
+it again.  A writer thread that its creator started with SIGPIPE
+already blocked keeps that mask under both policies.
 
 A disposition of SIG_IGN that the library already set under
 CLOG_SIGPIPE_AUTO stays in place when the policy changes to
-CLOG_SIGPIPE_UNTOUCHED.  The library cannot tell whether that
-disposition is still its own, and the application may already rely
-on it.  To keep the disposition untouched from the start, call this
+CLOG_SIGPIPE_UNTOUCHED, because the library cannot tell whether that
+disposition is still its own, and the application may already rely on
+it.  To keep the disposition untouched from the start, call this
 before the first write to a pipe.
 
-A disposition of SIG_IGN holds for the whole process, and a child
-that fork(2) and exec(3) start inherits it, as for any ignored
-signal.  An application that starts children which expect the default
+A disposition of SIG_IGN holds for the whole process, and, as for any
+ignored signal, a child that fork(2) and exec(3) start inherits it.
+An application that starts children which expect the default
 disposition of SIGPIPE either restores it in the child before exec(3),
 or chooses CLOG_SIGPIPE_UNTOUCHED and handles SIGPIPE itself.
 .fi
@@ -114,11 +113,11 @@ if (clog_set_sigpipe_policy(CLOG_SIGPIPE_UNTOUCHED) != ccol_success)
 clog lg = clog_open_fd(STDOUT_FILENO, CLOG_INFO, NULL);
 if (lg == CLOG_INVALID)
     abort();
-ccol_log_info(lg, "stdout may be a pipe");
+clog_info(lg, "stdout may be a pipe");
 clog_close(lg);
 .fi
 .SH "SEE ALSO"
 .BR clog_open_fd_mp (3),
 .BR clog_open_file_mp (3),
-.BR ccol_log_fatal (3),
+.BR clog_fatal (3),
 .BR signal (7)

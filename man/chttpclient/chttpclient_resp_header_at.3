@@ -13,14 +13,14 @@ const char *chttpclient_resp_header_at(const chttpcli_response *resp,
 .SH DESCRIPTION
 .nf
 This function gives the value of one line of the response header
-block with the name that you give. The lookup ignores the case of the
-name. index counts the lines with that name in the order in which the
-server sent them, from 0. Each value is the value of one line exactly
-as the server sent it. It is never a combined value.
+block with the name that you give; the lookup ignores the case of the
+name. index counts the lines with that name, from 0, in the order in
+which the server sent them. Each value is the value of one line exactly
+as the server sent it, never a combined value.
 
-chttpclient_resp_header_count gives the number of lines with a name.
-chttpclient_resp_header gives the combined value of a repeated name,
-and the first value of a repeated Set-Cookie.
+chttpclient_resp_header_count gives the number of lines with a name,
+and chttpclient_resp_header gives the combined value of a repeated
+name, or the first value of a repeated Set-Cookie.
 
 The pointer that the function gives back stays valid until a call to
 chttpclient_resp_free.

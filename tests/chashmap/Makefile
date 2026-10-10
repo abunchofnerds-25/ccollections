@@ -14,11 +14,10 @@ LFLAGS = $(CCOL_PLATFORM_LIBS)
 build:
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)
 
-# compile_probe.sh checks a guarantee that the type system makes. No run-time
-# test can see this guarantee. The guarantee is that you cannot assign through
-# the accessor that cbmap_get_elem_ref()/chmap_get_elem_ref() gives back. The
-# probe runs under both gcc and clang, because a diagnostic is a property of
-# the compiler.
+# compile_probe.sh checks a guarantee that the type system makes and that no
+# run-time test can see: you cannot assign through the accessor that
+# cbmap_get_elem_ref()/chmap_get_elem_ref() gives back. The probe runs under
+# both gcc and clang, because a diagnostic is a property of the compiler.
 compile_probe:
 	sh ./compile_probe.sh
 
@@ -36,13 +35,12 @@ test: build compile_probe nesting_probe
 memtest: build
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 --child-silent-after-fork=yes ./tests
 
-# --ignore-errors negative: the coverage counters of gcov are plain increments
-# and they are not atomic. They can race when instrumented code runs on more
-# than one thread. The race can then give a false negative hit count. This
-# affects more than one module, and it also happens inside a glibc header. It
-# is a limit of the instrumentation of gcov, not a defect in the logic of this
-# library. See the identical flag in tests/chttpclient/Makefile for the full
-# reason.
+# --ignore-errors negative: the coverage counters of gcov are plain, non-atomic
+# increments, so they can race when instrumented code runs on more than one
+# thread, and the race can then give a false negative hit count. This affects
+# more than one module and also happens inside a glibc header; it is a limit
+# of the gcov instrumentation, not a defect in the logic of this library. See
+# the identical flag in tests/chttpclient/Makefile for the full reason.
 generate_coverage_report:
 	$(CC)  $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \

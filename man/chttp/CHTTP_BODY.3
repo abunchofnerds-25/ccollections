@@ -11,9 +11,9 @@ CHTTP_BODY(data_ptr, data_len, content_type_str)
 .fi
 .SH DESCRIPTION
 .nf
-This macro expands to an initializer for a chttp_request_body_t. It
-uses the raw data pointer, the length and the Content-Type string that
-you give it.
+This macro expands to an initializer for a chttp_request_body_t from
+the raw data pointer, the length and the Content-Type string that you
+give it.
 
 data_ptr       A pointer to the body bytes. The macro does not copy
                them.

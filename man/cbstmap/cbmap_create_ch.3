@@ -16,15 +16,15 @@ cbmap cbmap_create_ch(ccol_data_type key_type,
 .fi
 .SH DESCRIPTION
 .nf
-Creates a self-balancing BST map. custom_comparison_proc sets the order
-of the keys in the map. The function is a thin inline wrapper over
-cbmap_create_full(3). It gives NULL for the memory management procedures.
-The map therefore uses the default allocator. The type-inferred
+Creates a self-balancing BST map in which custom_comparison_proc sets the
+order of the keys. The function is a thin inline wrapper over
+cbmap_create_full(3) that gives NULL for the memory management
+procedures, so the map uses the default allocator. The type-inferred
 equivalents are cbmap_construct_cc(3) and cbmap_init_cc(3).
 
-The procedure decides the order of the keys and nothing else. key_type
+The procedure decides the order of the keys and nothing else: key_type
 sets the width that the map expects of every key_pair of a fixed-width
-key type. key_type also sets the alignment of every stored key.
+key type, and key_type also sets the alignment of every stored key.
 
 cbmap_construct_cc(3) gives the contract of the procedure:
   - It returns a negative value, zero or a positive value.
@@ -43,16 +43,16 @@ err                     Optional pointer that receives an error string on
 .SH RETURN VALUE
 .nf
 A new map on success.
-NULL on failure. When err is not NULL, *err is set to an error string.
+NULL on failure, in which case *err is set to an error string when err is
+not NULL.
 .fi
 .SH NOTES
 .nf
-The procedure gets two bare pointers to key bytes. A key that comes in
-through the raw layer can be at any address. Read a key that is wider
-than one byte through memcpy. Do not read it through a pointer cast to
-the key type
+The procedure gets two bare pointers to key bytes, and a key that comes
+in through the raw layer can be at any address. Read a key that is wider
+than one byte through memcpy, not through a pointer cast to the key type
 The procedure must stay callable for the whole life of the map
-The function reports a failure and does not stop the program. The
+The function reports a failure instead of stopping the program, while the
 cbmap_construct_cc(3) and cbmap_init_cc(3) macros call ccol_fatal_err()
 on a failure
 Destroy the map with cbmap_destroy(3)

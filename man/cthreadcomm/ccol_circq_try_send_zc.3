@@ -11,9 +11,9 @@ ccol_retval_t ccol_circq_try_send_zc(ccol_circular_queue *cq, c_message_t *msg);
 .fi
 .SH DESCRIPTION
 .nf
-This function tries to send the message immediately. If the queue is full,
-it returns ccol_container_full immediately. On success it transfers the
-ownership of msg->data.
+This function tries to send the message immediately. If the queue is
+full, it returns ccol_container_full immediately; on success it
+transfers the ownership of msg->data.
 .fi
 .SH PARAMETERS
 .nf

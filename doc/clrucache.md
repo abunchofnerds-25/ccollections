@@ -1,36 +1,35 @@
 # LRU cache: `clrucache`
 
-A cache keeps the results of work that costs much time. Therefore, the next
-request for the same input gets its result immediately. An LRU (least recently
-used) cache has a fixed capacity. When it is full and needs space, it removes
-the entry that nobody read for the longest time. Results that callers ask for
-frequently stay in memory. Old results go out of the cache automatically.
+A cache keeps the results of expensive work so that the next request for the
+same input gets its answer immediately. An LRU (least recently used) cache has
+a fixed capacity: when it is full and needs space, it removes the entry that
+nobody has read for the longest time. Results that callers ask for often stay
+in memory, while old results leave the cache on their own.
 
 `clrucache` is a thread-safe LRU cache with O(1) lookup and O(1) eviction. It
-can also operate in front of a slower store:
+can also sit in front of a slower store:
 
-- a **remote getter** puts a value into the cache on a miss (read-through).
-  Many threads that miss on the same key share one fetch;
+- a **remote getter** fills the cache on a miss (read-through), and many
+  threads that miss on the same key share one fetch;
 - a **remote setter** writes each update to the store first (write-through);
-- an **eviction callback** tells you about each entry that goes out of the
-  cache.
+- an **eviction callback** tells you about each entry that leaves the cache.
 
-**Use it when** these three conditions are true:
+**Use it when** all three of these are true:
 
-- you look for the same keys many times;
-- the lookup costs much time (a database query, a file scan, a computation,
+- you look up the same keys many times;
+- each lookup is expensive (a database query, a file scan, a computation,
   a network call);
-- the memory must have a limit.
+- memory use must have a limit.
 
-**Do not** use it when each entry must stay until you remove it. For that, use a
-map. See [chashmap](chashmap.md).
+**Do not** use it when each entry must stay until you remove it; use a map
+for that. See [chashmap](chashmap.md).
 
 ```c
 #include <ccollections/clrucache.h>
 ```
 
 Link with `-lccollections -lpthread`. The typed macros use GNU C statement
-expressions. Therefore, build with GCC or Clang (`-std=gnu11` or later).
+expressions, so build with GCC or Clang (`-std=gnu11` or later).
 
 ## A first cache
 
@@ -46,7 +45,7 @@ int main(void) {
         clru_set(cache, k, k * 1.5);
 
     double out = 0.0;
-    clru_get(cache, 1, &out);          /* a read of key 1 makes it recent */
+    clru_get(cache, 1, &out);          /* reading key 1 makes it recent */
     clru_set(cache, 4, 6.0);           /* full: removes key 2, the oldest */
 
     for (int k = 1; k <= 4; k++) {
@@ -74,75 +73,74 @@ size 3 of 3
 ```
 
 `clru_construct(name, KeyT, ValT, capacity, getter, setter, evict_cb)` declares
-the handle and creates the cache in one statement. It records `KeyT` and `ValT`,
-as the other typed macros of the library do. Therefore, `clru_get` and
-`clru_set` can convert your arguments for you. For the method, see [How the
-library is designed](design.md).
+the handle and creates the cache in one statement. Like the other typed macros
+of the library, it records `KeyT` and `ValT`, which lets `clru_get` and
+`clru_set` convert your arguments for you. [How the library is
+designed](design.md) explains the method.
 
 ## The handle
 
 A `clru_cache` is an opaque **value**, not a pointer. Compare it with
-`CLRU_CACHE_INVALID`, or test it directly. `CLRU_CACHE_INVALID` is 0. Therefore,
-`if (!cache)` means "no cache". Do not cast it to a pointer or from a pointer.
+`CLRU_CACHE_INVALID` or test it directly: `CLRU_CACHE_INVALID` is 0, so
+`if (!cache)` means "no cache". Never cast it to or from a pointer.
 
-The library examines each handle before it uses it. A call on a destroyed
-handle fails safely with `ccol_invalid_args`. The size queries return 0 in
-this case. When you destroy a handle two times, the program stops with
-`abort()`, and the library does not free memory two times. `clru_destroy`
-waits for calls that other threads are running. Therefore, you do not have to
-prove that no other call is in progress.
+The library checks each handle before it uses it. A call on a destroyed
+handle fails safely with `ccol_invalid_args`, and the size queries return 0
+in that case. Destroying a handle twice stops the program with `abort()`
+instead of freeing memory twice. `clru_destroy` waits for calls that other
+threads are running, so you do not have to prove that no other call is in
+progress.
 
 ## Getting values out
 
-The result of `clru_get(cache, key, &out)` depends on the value type:
+What `clru_get(cache, key, &out)` gives you depends on the value type:
 
 - **All value types except `char *`**: the cache converts the stored value
-  into `out`, as a plain C assignment does. The cache allocates nothing, and
-  you have nothing to free. When the call fails, `out` does not change.
-- **`char *` values**: `out` gets a new heap copy of the string, and you own it.
-  Free it with `free()`, or with the free function of your custom allocator.
-  Each call makes its own copy. Therefore, two gets of the same key give two
-  pointers to free.
+  into `out`, as a plain C assignment would. It allocates nothing, so you have
+  nothing to free. When the call fails, `out` is left unchanged.
+- **`char *` values**: `out` receives a new heap copy of the string, which you
+  own; free it with `free()`, or with the free function of your custom
+  allocator. Each call makes its own copy, so two gets of the same key give
+  two pointers to free.
 
-The cache does not give out a pointer into its own storage. Therefore, an
-eviction on a different thread cannot remove a value that you use.
+The cache never hands out a pointer into its own storage, so an eviction on
+another thread cannot remove a value while you are using it.
 
-The return value is `ccol_success`, `ccol_key_not_found`, or a different
-error code that [clru_get(3)](../man/clrucache/clru_get.3) lists.
-`ccol_key_not_found` means that the key is not in the cache, and that there
-is no getter or the getter failed.
+The return value is `ccol_success`, `ccol_key_not_found`, or another error
+code listed in [clru_get(3)](../man/clrucache/clru_get.3).
+`ccol_key_not_found` means that the key is not in the cache and that either
+there is no getter or the getter failed.
 
 ### Keys
 
-All scalar types are permitted as a key. `char *` is also permitted, and the
-cache compares it as a string. A `char *` cache accepts a `const char *` key
-or a string literal without a cast.
+Any scalar type can be a key. `char *` is allowed too, and the cache compares
+it as a string; a `char *` cache accepts a `const char *` key or a string
+literal without a cast.
 
-The cache compares a struct key byte by byte, with the padding. With GCC 11
-or later, `clru_get` and `clru_set` clear the padding for you. With a
-different compiler, or with the raw functions, set all bytes of the key to
-zero with `memset` before you set its fields. For the details, see "KEYS WITH
-PADDING" on
+The cache compares a struct key byte by byte, padding included. With GCC 11
+or later, `clru_get` and `clru_set` clear the padding for you. With another
+compiler, or with the raw functions, zero every byte of the key with `memset`
+before you set its fields. For the details, see "KEYS WITH PADDING" on
 [clrucache_create_full(3)](../man/clrucache/clrucache_create_full.3).
 
 ## Read-through: filling the cache on a miss
 
-Give the cache a remote getter. Then a miss calls the getter to fetch the
-value. The getter gets the key as a `cmap_pair` (`ptr` and `size`). It must
-do one of these two things:
+When you give the cache a remote getter, a miss calls the getter to fetch the
+value. The getter receives the key as a `cmap_pair` (`ptr` and `size`) and
+must do one of two things:
 
-- Allocate the value on the heap, set `val->ptr` and `val->size`, and return
-  `true`.
-- Return `false` when there is no value. The get then reports
+- allocate the value on the heap, set `val->ptr` and `val->size`, and return
+  `true`;
+- return `false` when there is no value, in which case the get reports
   `ccol_key_not_found`.
 
-The cache becomes the owner of the memory that the getter allocates. Later,
-the cache frees it with its own allocator. That allocator is `free()` by
-default, or the free function of the allocator that you gave at creation.
-The getter must allocate with the function that agrees with it.
+The cache takes ownership of the memory that the getter allocates and later
+frees it with its own allocator: `free()` by default, or the free function of
+the allocator you gave at creation. The getter must therefore allocate with
+the matching function.
 
-Several threads can miss on the same key at the same time. Then only one of
-them runs the getter. The other threads wait and get the same result.
+When several threads miss on the same key at the same time, only one of them
+runs the getter; the others wait and receive the same result.
 
 ```c
 #include <ccollections/clrucache.h>
@@ -153,7 +151,7 @@ them runs the getter. The other threads wait and get the same result.
 #include <string.h>
 #include <time.h>
 
-/* A simulated database: user id -> display name, 50 ms for each query. */
+/* A simulated database: user id -> display name, 50 ms per query. */
 static atomic_int queries;
 
 static bool load_user(const cmap_pair *key, cmap_pair *val) {
@@ -199,7 +197,7 @@ static void *request_handler(void *arg) {
 int main(void) {
     clru_construct(users, int, char *, 256, load_user, NULL, NULL);
 
-    /* Eight threads ask at the same time for one user that is not cached. */
+    /* Eight threads ask at once for the same user, which is not cached. */
     request req = { users, 42 };
     pthread_t t[8];
     int started = 0;
@@ -218,26 +216,26 @@ int main(void) {
 }
 ```
 
-Nine requests cause one query. The eight misses at the same time share one
+Nine requests cause a single query: the eight simultaneous misses share one
 fetch, and the ninth request is a hit.
 
 ## Write-through and eviction callbacks
 
-A remote setter runs before each update. When it returns `false`, `clru_set`
-gives `ccol_unexpected_failure`. The cache then does not change for that
-key: the value and the position in the eviction order stay the same. When
-the setter returns `true`, the cache stores the new value, and the key
-becomes the most recently used key.
+A remote setter runs before each update. If it returns `false`, `clru_set`
+returns `ccol_unexpected_failure` and the cache leaves that key alone: both
+its value and its position in the eviction order stay the same. If the setter
+returns `true`, the cache stores the new value and the key becomes the most
+recently used one.
 
-The eviction callback gets the key and the value of each entry that the
-cache removes to make space. It also gets each entry that is in the cache
-when you destroy the cache.
+The eviction callback receives the key and the value of each entry that the
+cache removes to make space, and also of each entry that remains in the cache
+when you destroy it.
 
 ```c
 #include <ccollections/clrucache.h>
 #include <stdio.h>
 
-/* The store accepts only limits that are not negative. */
+/* The store accepts only non-negative limits. */
 static bool save_limit(const cmap_pair *key, const cmap_pair *val) {
     const char *name = key->ptr;
     long limit = *(const long *)val->ptr;
@@ -268,7 +266,7 @@ int main(void) {
     clru_get(limits, "max_connections", &v);
     printf("max_connections = %ld\n", v);
 
-    /* Capacity 2: a third key removes the least recently used key. */
+    /* Capacity 2: a third key evicts the least recently used one. */
     clru_set(limits, "idle_timeout_s", 30L);
 
     clru_destroy(limits);   /* also reports each entry in the cache */
@@ -292,28 +290,28 @@ max_connections = 100
 
 The rules for the three callbacks:
 
-- **The getter and the setter** run while the cache holds no lock. Therefore,
-  they can use the same cache for *other* keys. They must not get or set the key
-  that they serve, because the thread would then wait for itself. They must not
+- **The getter and the setter** run while the cache holds no lock, so they
+  can use the same cache for *other* keys. They must not get or set the key
+  they serve, because the thread would then wait for itself, and they must not
   destroy the cache.
-- **The eviction callback** runs while the cache holds a lock. It must not
-  call the cache at all. Two evictions on different threads can run it at
-  the same time. Therefore, the state that it keeps needs its own protection.
+- **The eviction callback** runs while the cache holds a lock, so it must not
+  call the cache at all. Evictions on two different threads can run it at the
+  same time, which means any state it keeps needs its own protection.
 
-Another thread can remove a key while the setter of that key runs.
-[clrucache_set_full(3)](../man/clrucache/clrucache_set_full.3) gives the
-full description of this case. In summary, the result is always the same as
-when the two operations run one after the other.
+Another thread can remove a key while that key's setter is running.
+[clrucache_set_full(3)](../man/clrucache/clrucache_set_full.3) describes
+this case in full; in short, the result is always the same as if the two
+operations had run one after the other.
 
 ## Passing a cache to other functions
 
-`clru_get` and `clru_set` need the key type and the value type that
-`clru_construct` recorded. In a different function, call `clru_redeclare` to
-record them again before the first get or set. It needs a plain variable
-name. Therefore, copy a cache that is in a struct into a local variable first.
+`clru_get` and `clru_set` need the key and value types that `clru_construct`
+recorded. In another function, call `clru_redeclare` to record them again
+before the first get or set. Because it needs a plain variable name, copy a
+cache that lives in a struct into a local variable first.
 
-This small dictionary keeps its cache in an application struct. It gives
-string values, and the caller frees them:
+This small dictionary keeps its cache in an application struct and returns
+string values that the caller frees:
 
 ```c
 #include <ccollections/clrucache.h>
@@ -362,7 +360,7 @@ static void lookup_word(dictionary_app *app, const char *word) {
         return;
     }
     printf("%-7s %s\n", word, definition);
-    free(definition);                     /* each clru_get gives a new copy */
+    free(definition);                     /* each clru_get returns a new copy */
 }
 
 int main(void) {
@@ -381,20 +379,20 @@ int main(void) {
 }
 ```
 
-Seven lookups cause four slow scans: one for each different word, and also one
-for the unknown word. A failed fetch puts nothing into the cache. Therefore, a
-second request for the unknown word causes one more scan.
+Seven lookups cause four slow scans: one for each distinct word, including
+the unknown one. A failed fetch puts nothing into the cache, so a second
+request for the unknown word causes another scan.
 
 ## Other ways to create a cache
 
-- `clru_declare` and `clru_init` do the declaration and the creation in two
-  steps. For example, you can create the cache later in a function.
+- `clru_declare` and `clru_init` split the declaration and the creation into
+  two steps, for example so that you can create the cache later in a
+  function.
 - `clru_construct_scoped` and `clru_declare_scoped` destroy the cache
-  automatically when the variable goes out of its scope.
-- The macros stop the program through `ccol_fatal_err()` if the creation
-  fails. To manage that failure yourself, or to give the cache a custom
-  allocator, call `clrucache_create_full()`. Then call `clru_redeclare` on
-  the handle:
+  automatically when the variable goes out of scope.
+- The macros stop the program through `ccol_fatal_err()` if creation fails.
+  To handle that failure yourself, or to give the cache a custom allocator,
+  call `clrucache_create_full()` and then `clru_redeclare` on the handle:
 
 ```c
 #include <ccollections/clrucache.h>
@@ -425,61 +423,61 @@ int main(void) {
 }
 ```
 
-The cache copies the allocator struct that you give. Therefore, the struct
-itself can stop existing after the call. The functions that it names must stay
-valid until you destroy the cache. [Memory management](memory.md) describes
-custom allocators, and also an allocator that uses a memory pool.
+The cache copies the allocator struct you pass, so the struct itself may go
+away after the call, but the functions it names must stay valid until you
+destroy the cache. [Memory management](memory.md) describes custom
+allocators, including one backed by a memory pool.
 
 The raw functions `clrucache_get_full()` and `clrucache_set_full()` take and
-return `cmap_pair` values directly. A get through them always gives a heap
-copy that you must free, for all value types.
+return `cmap_pair` values directly. A get through them always returns a heap
+copy that you must free, whatever the value type.
 
 ## Concurrency and eviction order
 
-All operations are thread-safe. A cache with a capacity of 128 or more has
-segments, so that threads do not wait on one lock. Each segment has its own
-lock and its own part of the capacity. A key is always in the same segment.
-Operations on the same key run one at a time. This makes the shared fetch
-and the consistent reads possible. For example, a get of a key waits for a
-set that changes that key.
+All operations are thread-safe. A cache with a capacity of 128 or more is
+split into segments so that threads do not all wait on one lock; each segment
+has its own lock and its own share of the capacity, and a key always lives in
+the same segment. Operations on the same key run one at a time, which is what
+makes the shared fetch and consistent reads possible: for example, a get of a
+key waits for a set that is changing that key.
 
-The segments have two effects that you must know:
+Segmentation has two effects that you need to know about:
 
-- **Below a capacity of 128**, the cache has one segment. It removes entries
-  in the exact least-recently-used order across all keys.
-- **At a capacity of 128 or more**, each segment removes its own oldest entry
-  when its own part is full. The removed entry is the oldest entry of its
-  segment, but possibly not of the full cache. Also, a "full" cache holds a few
-  percent fewer entries than its capacity. The cause is that the keys do not go
-  into the segments in exactly equal numbers. `clrucache_capacity()` gives
-  exactly the value that you set.
+- **Below a capacity of 128**, the cache has a single segment and evicts in
+  exact least-recently-used order across all keys.
+- **At a capacity of 128 or more**, each segment evicts its own oldest entry
+  when its share is full. The evicted entry is the oldest in its segment, but
+  not necessarily in the whole cache. A "full" cache also holds a few percent
+  fewer entries than its capacity, because keys do not spread across the
+  segments in exactly equal numbers. `clrucache_capacity()`, however, returns
+  exactly the value you set.
 
-`clrucache_size()` adds the sizes of the segments one by one. Therefore, when
-many threads use the cache, the result is approximately correct, not exact for
-one instant.
+`clrucache_size()` adds up the segment sizes one at a time, so while many
+threads use the cache the result is approximate rather than an exact snapshot
+of one instant.
 
 The `fork()` policy of the library applies. See [Concurrency](concurrency.md).
 
 ## Pitfalls
 
-- **Free each `char *` value that `clru_get` gives you.** Each successful get
-  of a string value gives you a new copy on the heap. Free it with the free
-  function of the cache allocator, or with `free()` when the cache uses the
-  default allocator.
-- **Do not free a value that is not a string.** `out` is a plain variable, and
+- **Free each `char *` value that `clru_get` gives you.** Every successful get
+  of a string value returns a new heap copy. Free it with the free function of
+  the cache's allocator, or with `free()` when the cache uses the default
+  allocator.
+- **Do not free a value that is not a string.** `out` is a plain variable, so
   there is nothing to free.
-- **Allocate in the getter with the allocator of the cache.** The cache frees
-  the memory that the getter gives with the allocator of the cache.
-- **Do not call the cache from the eviction callback.** Also, do not get or
-  set the key that the getter or the setter serves. Both cause a deadlock.
-- **Use `clru_redeclare` in each function that gets the handle.** Without it,
-  the typed macros do not compile.
+- **Allocate in the getter with the cache's allocator,** because that is the
+  allocator the cache uses to free what the getter returns.
+- **Do not call the cache from the eviction callback,** and do not get or set
+  the key that the getter or the setter is serving; both cause a deadlock.
+- **Use `clru_redeclare` in each function that receives the handle.** Without
+  it, the typed macros do not compile.
 - **Use the raw functions for a struct key with padding** when the compiler is
-  not GCC 11 or later. Give them a key whose bytes are all zero.
-- **Do not destroy a copy of a handle after a destroy.** `clru_destroy` sets
-  your variable to `CLRU_CACHE_INVALID`, and a second destroy of that variable
-  does nothing. A destroy of a different copy of the same handle stops the
-  program.
+  not GCC 11 or later, and give them a key whose bytes are all zero.
+- **Do not destroy another copy of a handle after a destroy.** `clru_destroy`
+  sets your variable to `CLRU_CACHE_INVALID`, so a second destroy of that
+  variable does nothing, but destroying a different copy of the same handle
+  stops the program.
 
 ## Reference
 

@@ -1,12 +1,12 @@
 #!/bin/sh
 # This script compares the exported ABI of the built shared library against a
-# committed baseline. An export that nobody intended, and a removal that nobody
-# intended, therefore cannot reach a release without notice.
+# committed baseline, so that an export or a removal that nobody intended
+# cannot reach a release without notice.
 #
 # The test suites cannot check this. Every suite compiles the .c files straight
-# into its own binary. A static link there resolves a hidden symbol in the same
-# way as an exported one. A library that exports nothing at all therefore still
-# passes the whole suite. Only the built .so holds the evidence.
+# into its own binary, where a static link resolves a hidden symbol in the same
+# way as an exported one, so a library that exports nothing at all still passes
+# the whole suite. Only the built .so holds the evidence.
 #
 # Two layers run, and each one catches a different mistake:
 #
@@ -18,24 +18,24 @@
 #      binutils, so it always runs.
 #      On macOS the same layer reads the dylib with the nm of the system,
 #      because the library there is a Mach-O file.
-#   2. The full ABI corpus. This holds the function signatures, and the layout
-#      of every public struct that those signatures reach. abidiff from
-#      libabigail does this work. This layer catches what a list of names
-#      cannot: a parameter type that changes, or a new field in a public
-#      struct that a caller passes by value, such as a config struct. This
-#      layer needs libabigail on the machine, and a baseline for the same
-#      architecture. It reports that it is not active when one of the two is
-#      missing. abidiff reads only ELF, so this layer does not run on a Mach-O
-#      dylib. The public types have the same sizes and layouts on macOS as on
-#      Linux for the same architecture, and the Linux jobs check them there.
+#   2. The full ABI corpus: the function signatures, and the layout of every
+#      public struct that those signatures reach, which abidiff from
+#      libabigail compares. This layer catches what a list of names cannot: a
+#      parameter type that changes, or a new field in a public struct that a
+#      caller passes by value, such as a config struct. It needs libabigail on
+#      the machine and a baseline for the same architecture, and it reports
+#      that it is not active when one of the two is missing. abidiff reads only
+#      ELF, so this layer does not run on a Mach-O dylib; the public types have
+#      the same sizes and layouts on macOS as on Linux for the same
+#      architecture, and the Linux jobs check them there.
 #
 # Layer 2 works for each architecture on its own, because layout does. A change
 # can leave every structure identical byte for byte on one target and break
-# another. If you widen a member from size_t to unsigned long long, nothing
-# changes on LP64, where the two types have the same width. On ILP32 the same
-# change moves every later field. Only the baseline for the architecture that
-# you build can see this. This is why the architecture comes from the ELF
-# header of the library itself.
+# another: if you widen a member from size_t to unsigned long long, nothing
+# changes on LP64, where the two types have the same width, while on ILP32 the
+# same change moves every later field. Only the baseline for the architecture
+# that you build can see this, which is why the architecture comes from the
+# ELF header of the library itself.
 #
 # Usage:
 #   check_public_abi.sh <shared-object> <abi-version> [--update]
@@ -43,16 +43,17 @@
 # CCOL_ABI_ARCH replaces the architecture name that comes from the ELF header.
 # Use it for a target that this script does not yet know.
 #
-# --update writes the baselines again from the library that you give it. It
-# does not compare against them. A new symbol is an ordinary change that keeps
-# the ABI, so the correct steps for one are to run `make update_abi_baseline`
-# and to commit the result together with the new API. The check exists to make
-# each addition a deliberate line in a diff that a reviewer can see. It does
-# not exist to forbid one.
+# --update writes the baselines again from the library that you give it,
+# instead of comparing against them. A new symbol is an ordinary change that
+# keeps the ABI, so the correct steps for one are to run
+# `make update_abi_baseline` and to commit the result together with the new
+# API. The check exists to make each addition a deliberate line in a diff that
+# a reviewer can see, not to forbid one.
 set -eu
 
 # The baseline of the symbols is a sorted list, and the order of sort(1)
-# follows the locale. The C locale makes the file the same whoever records it.
+# follows the locale, so the C locale makes the file the same whoever records
+# it.
 LC_ALL=C
 export LC_ALL
 
@@ -81,20 +82,19 @@ fi
 ABI_DIR=abi
 SYMS_BASELINE="$ABI_DIR/libccollections.so.$ABI_VERSION.symbols"
 
-# The corpus baseline records real struct layouts and real parameter sizes.
-# Both differ between ILP32 and LP64, and both differ between the calling
-# convention of one machine and that of another. Each architecture therefore
-# has its own baseline. A build for an architecture with no baseline of its own
-# skips layer 2. It does not compare against a baseline that describes some
-# other architecture.
+# The corpus baseline records real struct layouts and real parameter sizes,
+# which differ between ILP32 and LP64 and between the calling conventions of
+# different machines, so each architecture has its own baseline. A build for an
+# architecture with no baseline of its own skips layer 2 instead of comparing
+# against a baseline that describes some other architecture.
 #
-# The architecture comes out of the ELF header of the library itself. It never
-# comes from the machine that runs this script. A cross-build makes a library
-# for one architecture on a host of another. A name that came from the host
-# would therefore compare every cross-built library against the baseline of the
-# host, and --update would write over that baseline. Both failures are silent.
-# The comparison is against a real baseline for the wrong architecture, so it
-# reports struct differences that look correct, and not an error.
+# The architecture comes out of the ELF header of the library itself, never
+# from the machine that runs this script. A cross-build makes a library for one
+# architecture on a host of another, so a name that came from the host would
+# compare every cross-built library against the baseline of the host, and
+# --update would write over that baseline. Both failures are silent: the
+# comparison is against a real baseline for the wrong architecture, so it
+# reports struct differences that look correct instead of an error.
 elf_arch() {
 	_hdr=$("$READELF" -h -W "$1") || return 1
 	_class=$(printf '%s\n' "$_hdr" | sed -n 's/^[[:space:]]*Class:[[:space:]]*//p')
@@ -105,9 +105,10 @@ elf_arch() {
 	# interface names, and its headers spell them differently: FreeBSD's
 	# size_t is the typedef __size_t where glibc's is unsigned long, so
 	# abidiff reports every such parameter as a change even where the size
-	# and the layout are the same. A FreeBSD library therefore gets baselines
-	# of its own, named with a "freebsd-" prefix. A Linux library carries the
-	# System V or the GNU OS/ABI, and keeps the plain architecture name.
+	# and the layout are the same. A FreeBSD library therefore gets
+	# baselines of its own, named with a "freebsd-" prefix, while a Linux
+	# library carries the System V or the GNU OS/ABI and keeps the plain
+	# architecture name.
 	_prefix=
 	case "$_osabi" in
 	*FreeBSD*) _prefix=freebsd- ;;
@@ -117,10 +118,10 @@ elf_arch() {
 	"Advanced Micro Devices X86-64:ELF64") echo x86_64 ;;
 	"Intel 80386:ELF32") echo i386 ;;
 	"AArch64:ELF64") echo aarch64 ;;
-	# On 32-bit ARM, the ABI chooses the calling convention for a
-	# floating-point argument, and the machine does not. The hard-float ABI
-	# and the soft-float ABI are therefore two different ABIs, and each one
-	# gets its own baseline.
+	# On 32-bit ARM, the ABI, not the machine, chooses the calling
+	# convention for a floating-point argument, so the hard-float ABI and
+	# the soft-float ABI are two different ABIs, and each one gets its own
+	# baseline.
 	"ARM:ELF32")
 		case "$_flags" in
 		*hard-float*) echo armhf ;;
@@ -131,7 +132,7 @@ elf_arch() {
 	esac
 }
 
-# CCOL_ABI_ARCH names the baseline directly. Use it for a target that this
+# CCOL_ABI_ARCH names the baseline directly; use it for a target that this
 # mapping does not yet cover.
 ARCH="${CCOL_ABI_ARCH:-}"
 if [ "$FORMAT" = macho ]; then
@@ -139,7 +140,7 @@ if [ "$FORMAT" = macho ]; then
 elif [ -z "$ARCH" ]; then
 	# The assignment is a separate step from the declaration. With
 	# `ARCH=$(elf_arch ...)`, the status of the assignment becomes the exit
-	# status. A failure inside the function would then leave ARCH empty, and
+	# status, so a failure inside the function would leave ARCH empty where
 	# `set -e` could not see it.
 	if ! ARCH=$(elf_arch "$SO") || [ -z "$ARCH" ]; then
 		echo "check_public_abi: could not identify the architecture of $SO from" >&2
@@ -151,31 +152,31 @@ elif [ -z "$ARCH" ]; then
 fi
 CORPUS_BASELINE="$ABI_DIR/libccollections.so.$ABI_VERSION.$ARCH.abi"
 
-# The corpus records the PUBLIC interface, and not every type that the debug
+# The corpus records the PUBLIC interface, not every type that the debug
 # information of the library happens to reach.
 #
 # --headers-dir names the installed headers, so a type counts as public when
-# one of those headers declares it. --drop-private-types then leaves every
+# one of those headers declares it, and --drop-private-types then leaves every
 # other type out. Without the pair, abidw descends into the DEFINITION of each
 # opaque struct, which lives in a .c file, and records whatever that definition
-# contains. For this library that pulls in glibc's pthread_mutex_t and
+# contains; for this library that pulls in glibc's pthread_mutex_t and
 # pthread_cond_t, because the queue and loop structs embed them.
 #
-# Those types are not part of the contract with a consumer. No installed
+# Those types are not part of the contract with a consumer: no installed
 # header names one, and a consumer only ever holds a pointer to the opaque
-# struct around them. Recording them made the corpus a property of the
-# TOOLCHAIN rather than of the interface: GCC emits the array-subrange index
+# struct around them. Recording them would make the corpus a property of the
+# TOOLCHAIN rather than of the interface. GCC emits the array-subrange index
 # type of their internal char arrays as `unsigned int` and Clang emits
-# `__ARRAY_SIZE_TYPE__`, so a baseline recorded with one compiler failed
+# `__ARRAY_SIZE_TYPE__`, so a baseline recorded with one compiler would fail
 # against a build from the other with "type size hasn't changed" on every
-# line. That is a difference in the debug information of a third party and not
-# an ABI difference, and it made the gate unusable with Clang on i386.
+# line. That is a difference in the debug information of a third party, not an
+# ABI difference, and it would make the gate unusable with Clang on i386.
 #
 # Dropping them loses no coverage that this gate is for. Every type that a
 # consumer can name, size or lay out is declared in an installed header, so
-# --headers-dir keeps all of them. That includes the structs that a public
-# MACRO computes a size or an offset from, which are the ones the gate exists
-# to watch.
+# --headers-dir keeps all of them, including the structs that a public MACRO
+# computes a size or an offset from, which are the ones the gate exists to
+# watch.
 ABIDW_SCOPE_FLAGS="--drop-private-types --headers-dir include"
 
 extract_symbols() {
@@ -183,23 +184,23 @@ extract_symbols() {
 		ccol_macho_defined_globals "$1"
 		return
 	fi
-	# This takes the GLOBAL and WEAK dynamic symbols that are defined, which
-	# means the ones that are not UND. It removes any @VERSION suffix. The
-	# result is exactly the set that an application can link against.
+	# This takes the GLOBAL and WEAK dynamic symbols that are defined (the
+	# ones that are not UND) and removes any @VERSION suffix, which gives
+	# exactly the set that an application can link against.
 	#
-	# The script checks the status of readelf and not the status of the
+	# The script checks the status of readelf instead of the status of the
 	# pipeline, which would be the status of sort. readelf can fail to read
 	# its input when the file is not an ELF file, when it is truncated, or
-	# when it is for another architecture. Without this check, such a failure
-	# gives an empty set and a success status. An empty set is exactly what
-	# --update would then write over the committed baseline. /bin/sh here does
-	# not always have pipefail, so the read and the filter are separate
-	# steps.
+	# when it is for another architecture, and without this check such a
+	# failure gives an empty set and a success status; an empty set is
+	# exactly what --update would then write over the committed baseline.
+	# /bin/sh here does not always have pipefail, so the read and the filter
+	# are separate steps.
 	#
-	# _init and _fini are left out. They are the entry points of the
-	# initialisation and termination sections, and the C runtime start files
-	# (crti.o) define them, not this library. FreeBSD's start files give them
-	# default visibility, so every FreeBSD shared object exports them;
+	# _init and _fini are left out: they are the entry points of the
+	# initialisation and termination sections, which the C runtime start
+	# files (crti.o) define, not this library. FreeBSD's start files give
+	# them default visibility, so every FreeBSD shared object exports them;
 	# glibc's keep them hidden.
 	_raw=$("$READELF" --dyn-syms -W "$1") || return 1
 	printf '%s\n' "$_raw" \
@@ -213,25 +214,26 @@ if ! current=$(extract_symbols "$SO"); then
 	exit 1
 fi
 # An empty set is never a correct answer for this library, and both of the
-# failures above give one. The script therefore refuses an empty set before it
-# compares anything and before it writes anything.
+# failures above give one, so the script refuses an empty set before it
+# compares or writes anything.
 if [ -z "$current" ]; then
 	echo "check_public_abi: $SO exports no dynamic symbols; refusing to" >&2
 	echo "                  compare or record an empty baseline." >&2
 	exit 1
 fi
 
-# CCOL_MEMPOOL_COMPACT_LAYOUT changes the entry stride of cmempool. It
-# therefore changes the layout of a struct that the corpus baseline records. A
-# compact build really does differ from the recorded one. It is a supported
-# build configuration and not a defect, and the baseline describes the default
-# build. This script therefore reports the situation and stops. It does not
-# print a page of struct layout differences under an "ABI BREAK" heading.
+# CCOL_MEMPOOL_COMPACT_LAYOUT changes the entry stride of cmempool, and with it
+# the layout of a struct that the corpus baseline records, so a compact build
+# really does differ from the recorded one. It is a supported build
+# configuration and not a defect, while the baseline describes the default
+# build, so this script reports the situation and stops instead of printing a
+# page of struct layout differences under an "ABI BREAK" heading.
 #
-# The script reads this setting off the built library and not from a make
-# variable. The setting can come in through EXTRA_CFLAGS, through a CFLAGS
-# override, or from an edit to the header. The library names the setting that
-# it was built with, so that you can answer this question from the artifact.
+# The script reads this setting off the built library instead of from a make
+# variable, because the setting can come in through EXTRA_CFLAGS, through a
+# CFLAGS override, or from an edit to the header. The library names the
+# setting that it was built with, so that you can answer this question from
+# the artifact.
 if printf '%s\n' "$current" | grep -qx '_ccol_mempool_built_with_compact_layout'; then
 	echo "check_public_abi: skipped, this library was built with"
 	echo "                  CCOL_MEMPOOL_COMPACT_LAYOUT=1. That setting changes"
@@ -244,7 +246,7 @@ if printf '%s\n' "$current" | grep -qx '_ccol_mempool_built_with_compact_layout'
 	exit 0
 fi
 
-# The baselines record the ELF build, where every layer runs. A Mach-O build
+# The baselines record the ELF build, where every layer runs; a Mach-O build
 # is compared against them and never writes them.
 if [ "$MODE" = "--update" ] && [ "$FORMAT" = macho ]; then
 	echo "check_public_abi: refused, $SO is a Mach-O dylib. Record the" >&2
@@ -291,9 +293,9 @@ if [ ! -f "$SYMS_BASELINE" ]; then
 	exit 2
 fi
 
-# This uses real temporary files and not process substitution. The script runs
-# under /bin/sh. On Debian and Ubuntu that shell is dash, where <(...) is a
-# syntax error and not a supported construct.
+# This uses real temporary files instead of process substitution, because the
+# script runs under /bin/sh. On Debian and Ubuntu that shell is dash, where
+# <(...) is a syntax error and not a supported construct.
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT INT TERM
 grep -v '^#' "$SYMS_BASELINE" | grep -v '^[[:space:]]*$' | sort -u > "$tmpdir/baseline"
@@ -335,11 +337,10 @@ elif [ ! -f "$CORPUS_BASELINE" ]; then
 		"so signature and struct-layout checking did not run" \
 		"(run \`make update_abi_baseline\` on this architecture to create it)."
 else
-	# The exit status of abidiff is a BIT MASK and not a true or false value.
-	# `if ! abidiff` is therefore wrong. Bit 0 and bit 1, with the values 1
-	# and 2, are the error and usage failures of abidiff itself. They say
-	# nothing about the ABI, and this script must not report them as if they
-	# did.
+	# The exit status of abidiff is a BIT MASK, not a true or false value,
+	# so `if ! abidiff` is wrong. Bit 0 and bit 1, with the values 1 and 2,
+	# are the error and usage failures of abidiff itself; they say nothing
+	# about the ABI, and this script must not report them as if they did.
 	#
 	# Bit 3, with the value 8 and the name ABIDIFF_ABI_INCOMPATIBLE_CHANGE,
 	# is only for a change that abidiff can PROVE is incompatible. That set
@@ -347,23 +348,23 @@ else
 	# application, so it cannot be the only case that fails. A public struct
 	# that grows reports bit 2 alone, with the value 4 and the name
 	# ABIDIFF_ABI_CHANGE. For example, one more size_t in cmap_pair takes it
-	# from 16 to 24 bytes. It moves every later field of every public struct
-	# that holds a cmap_pair, and so it breaks every application that was
-	# built against the old header. abidiff exits 4 for that change. Bit 2 is
-	# therefore also fatal here.
+	# from 16 to 24 bytes, which moves every later field of every public
+	# struct that holds a cmap_pair and so breaks every application that was
+	# built against the old header, yet abidiff exits 4 for that change. Bit
+	# 2 is therefore also fatal here.
 	#
 	# This makes this layer behave in the same way as the symbol name layer
-	# above. You must record any change to the ABI again with `make
+	# above: you must record any change to the ABI again with `make
 	# update_abi_baseline`, whether the change is compatible or not, and it
 	# must appear as a line in the diff that a reviewer sees. A new symbol
-	# stays an ordinary, permitted change. What is not permitted is a change
-	# that arrives without notice.
-	# The comparison runs abidw on the library with the SAME scope flags that
-	# recorded the baseline, and then diffs corpus against corpus. It does not
-	# hand the raw .so to abidiff as the second operand. abidiff has no
-	# --headers-dir of its own, so a raw .so there is a corpus of a different
-	# shape from the baseline, and every type that the baseline deliberately
-	# leaves out comes back as a difference.
+	# stays an ordinary, permitted change; what is not permitted is a change
+	# that arrives without notice. The comparison runs abidw on the library
+	# with the SAME scope flags that recorded the baseline and then diffs
+	# corpus against corpus, instead of handing the raw .so to abidiff as
+	# the second operand. abidiff has no --headers-dir of its own, so a raw
+	# .so there is a corpus of a different shape from the baseline, and
+	# every type that the baseline deliberately leaves out comes back as a
+	# difference.
 	abidiff_current=$(mktemp) || exit 1
 	# shellcheck disable=SC2064
 	trap "rm -f '$abidiff_current'" EXIT

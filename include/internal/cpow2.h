@@ -29,15 +29,15 @@ SOFTWARE.
  * @brief INTERNAL ONLY. The power-of-two rounding that the containers use to
  *        size their own storage.
  *
- * No program uses this library through this function. Every caller is a
- * container of this library, growing or reserving its own backing store:
- * cvector, cstring and chashmap. A user of the library reaches the behavior
- * through cvector_reserve, cstring_reserve, chmap_create and chmap_reset, and
+ * No program uses this library through this function: every caller is a
+ * container of this library (cvector, cstring and chashmap) that grows or
+ * reserves its own backing store. A user of the library reaches the behavior
+ * through cvector_reserve, cstring_reserve, chmap_create and chmap_reset,
  * never through this name.
  *
- * This header is internal. It carries no visibility block. make install does
- * not install it. Its symbol is absent from the dynamic symbol table of the
- * shared library.
+ * This header is internal, so it carries no visibility block, make install
+ * does not install it, and its symbol is absent from the dynamic symbol table
+ * of the shared library.
  */
 
 #ifndef CCOL_CPOW2_H
@@ -50,9 +50,9 @@ SOFTWARE.
  * @brief Find the nearest power of two that is greater than or equal to input
  *
  * It returns the smallest power of two that is >= input, computed from one
- * count of the leading zeros of input - 1. If input is larger than the largest
- * power of two that a size_t on this architecture can hold, it returns
- * ccol_invalid_size to show an error.
+ * count of the leading zeros of input - 1. When input is larger than the
+ * largest power of two that a size_t on this architecture can hold, it returns
+ * ccol_invalid_size to report the error.
  *
  * @param input The value to round up to a power of two
  * @return The nearest power of two >= input, or ccol_invalid_size if input is

@@ -24,18 +24,17 @@ SOFTWARE.
 
 /*
  * White-box tests for chttp1_parser, at the level of a byte sequence. They
- * drive the parser directly, with no TLS and no chttpclient.c at all. The
- * input is built by hand, and some of it is malformed or hostile. The
- * suite in tests.c sits on a real socket, and its shape cannot reach such
- * input. Its mock server only ever sends a response that is well formed.
- * See tests.c and tests_tls.c for the end-to-end coverage of "does
- * real traffic still work". This file is only about the correctness of the
- * parser on its own.
+ * drive the parser directly, with no TLS and no chttpclient.c at all, on
+ * input that is built by hand, some of it malformed or hostile. The suite in
+ * tests.c sits on a real socket, and its shape cannot reach such input,
+ * because its mock server only ever sends a well-formed response. See
+ * tests.c and tests_tls.c for the end-to-end coverage of "does real traffic
+ * still work"; this file is only about the correctness of the parser on its
+ * own.
  *
  * The "stream" test group, which covers chttp1_stream_t, does use local
- * AF_UNIX socketpairs. It uses them only to drive its own logic for read,
- * write and poll. It uses no chttpclient.c, no TLS and no real network
- * traffic.
+ * AF_UNIX socketpairs, but only to drive its own logic for read, write and
+ * poll. It uses no chttpclient.c, no TLS and no real network traffic.
  */
 
 #include <fcntl.h>
@@ -161,10 +160,10 @@ static int t_on_message_complete(chttp1_parser_t *p) {
   return 0;
 }
 
-/* This object has static storage duration. chttp1_parser_init only borrows
- * the settings pointer, and it does not copy it. Its documented contract
- * says that the settings must outlive the parser. A local on the stack here
- * would therefore leave the ->settings of every parser dangling the moment
+/* This object has static storage duration because chttp1_parser_init only
+ * borrows the settings pointer instead of copying it, and its documented
+ * contract says that the settings must outlive the parser. A local on the
+ * stack here would leave the ->settings of every parser dangling the moment
  * init_test() returns. */
 static const chttp1_settings_t g_test_settings = {
     .on_header = t_on_header,
@@ -237,8 +236,8 @@ TEST(status_line, basic_with_reason) {
 }
 
 TEST(status_line, missing_reason_and_trailing_space_accepted) {
-  /* This is for compatibility with the real world. The ABNF of RFC 7230
-   * asks for a trailing SP, even for an empty reason phrase. But real
+  /* This is for compatibility with the real world: the ABNF of RFC 7230
+   * asks for a trailing SP, even for an empty reason phrase, but real
    * servers leave it out, as in "HTTP/1.1 304\r\n". */
   chttp1_parser_t parser;
   test_ctx_t ctx;
@@ -258,10 +257,10 @@ TEST(status_line, any_major_minor_digit_accepted) {
 }
 
 TEST(status_line, nonstandard_but_wellformed_code_accepted) {
-  /* There is no restriction on the size of the number. Real nonstandard
-   * status codes are in use up to 599. One example is 599 Network Connect
-   * Timeout Error, which some load balancers and proxies use. The parser
-   * therefore accepts any code of 3 digits. */
+  /* There is no restriction on the size of the number, because real
+   * nonstandard status codes are in use up to 599, for example 599 Network
+   * Connect Timeout Error, which some load balancers and proxies use. The
+   * parser therefore accepts any code of 3 digits. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -384,13 +383,13 @@ TEST(keep_alive, http_1_0_connection_keep_alive_overrides_default) {
 
 TEST(keep_alive, version_greater_than_1_with_zero_minor_defaults_keep_alive) {
   /* A regression test. chttp1_should_keep_alive must not decide "HTTP/1.1
-   * or later" with the test "http_major > 0 && http_minor > 0". That test
-   * reads any version with a zero minor part as HTTP/1.0 or earlier. A
-   * literal "HTTP/2.0" status line is one such version, and the grammar of
-   * this parser accepts it; see status_line.any_major_minor_digit_accepted.
-   * The parser would then need an explicit "Connection: keep-alive" token.
-   * No real server of that age sends one, and connection reuse quietly
-   * stops. The correct test is "major > 1, or major == 1 with minor >=
+   * or later" with the test "http_major > 0 && http_minor > 0", which reads
+   * any version with a zero minor part as HTTP/1.0 or earlier. A literal
+   * "HTTP/2.0" status line is one such version, and the grammar of this
+   * parser accepts it; see status_line.any_major_minor_digit_accepted. The
+   * parser would then need an explicit "Connection: keep-alive" token, which
+   * no real server of that age sends, so connection reuse quietly stops.
+   * The correct test is "major > 1, or major == 1 with minor >=
    * 1". */
   chttp1_parser_t parser;
   test_ctx_t ctx;
@@ -593,14 +592,13 @@ TEST(headers, too_many_headers_rejected) {
 }
 
 TEST(headers, total_header_bytes_cap_rejected) {
-  /* This test uses 80 headers of about 1000 bytes each, which is 80KB.
-   * That is well above the total cap of 64KB. It stays well below the cap
-   * of 100 headers, and well below the cap of 8192 bytes for each line. It
-   * therefore isolates the limit on the total bytes. The test feeds the
-   * bytes one piece at a time. It sends the status line first, and then one
-   * header line for each chttp1_parser_execute call. It can therefore stop
-   * as soon as the parser reports the error. It does not build one huge
-   * buffer up front. */
+  /* This test uses 80 headers of about 1000 bytes each, which is 80KB: well
+   * above the total cap of 64KB, but well below the cap of 100 headers and
+   * the cap of 8192 bytes for each line, so it isolates the limit on the
+   * total bytes. The test feeds the bytes one piece at a time, sending the
+   * status line first and then one header line for each
+   * chttp1_parser_execute call, so that it can stop as soon as the parser
+   * reports the error instead of building one huge buffer up front. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -660,14 +658,14 @@ TEST(headers, max_total_header_bytes_override_rejects_below_builtin_default) {
 TEST(headers,
      request_line_itself_counts_against_max_total_header_bytes_override) {
   /* A regression test. chttpsvr_config_t.max_header_bytes is documented to
-   * bound "request line + all header lines". The request line, or the
-   * status line, must therefore add to total_header_bytes itself.
+   * bound "request line + all header lines", so the request line, or the
+   * status line, must add to total_header_bytes itself, and
    * process_header_line must not be the only thing that adds to it.
-   * Without that, a request-target far above the configured cap is still
-   * accepted. Only the much larger CHTTP1_MAX_LINE_LEN then bounds it. The
-   * request line alone here is well above the small override below, and
-   * nowhere near CHTTP1_MAX_LINE_LEN. The parser must reject it before it
-   * sees any header. */
+   * Otherwise a request-target far above the configured cap is accepted,
+   * bounded only by the much larger CHTTP1_MAX_LINE_LEN. The request line
+   * alone here is well above the small override below and nowhere near
+   * CHTTP1_MAX_LINE_LEN, and the parser must reject it before it sees any
+   * header. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -682,11 +680,11 @@ TEST(headers,
 }
 
 TEST(headers, request_line_and_headers_share_the_same_total_bytes_budget) {
-  /* A request line and a header line can each fit on their own, while
-   * their SUM is above the override. The parser must still reject them.
-   * This confirms that the request line really adds to the same running
-   * total that a header line adds to. The parser does not track it
-   * separately, and it does not ignore it. */
+  /* A request line and a header line can each fit on their own while their
+   * SUM is above the override, and the parser must still reject them. This
+   * confirms that the request line really adds to the same running total
+   * that a header line adds to, rather than being tracked separately or
+   * ignored. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -742,11 +740,11 @@ TEST(framing, content_length_decimal_overflow_rejected) {
 }
 
 TEST(framing, transfer_encoding_not_chunked_reads_until_eof) {
-  /* RFC 7230 SS3.3.3 covers a RESPONSE here. The last token of its
-   * Transfer-Encoding is not "chunked". The recipient therefore reads the
-   * body until the connection closes. The parser does not reject it. It
-   * rejects a REQUEST in the same case; see the request_body_framing group.
-   * A request has no EOF framing to fall back on. */
+  /* RFC 7230 SS3.3.3 covers a RESPONSE here: the last token of its
+   * Transfer-Encoding is not "chunked", so the recipient reads the body
+   * until the connection closes, and the parser does not reject it. It does
+   * reject a REQUEST in the same case (see the request_body_framing group),
+   * because a request has no EOF framing to fall back on. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -761,17 +759,17 @@ TEST(framing, transfer_encoding_not_chunked_reads_until_eof) {
 TEST(framing,
      response_content_length_with_non_chunked_transfer_encoding_rejected) {
   /* RFC 7230 SS3.3.3 covers this. A Transfer-Encoding and a Content-Length
-   * that frame the same message are an ambiguous pair. A recipient must
-   * resolve it in favour of the Transfer-Encoding, or reject the message.
-   * A recipient that accepts it frames the response at exactly
-   * Content-Length bytes. It leaves whatever follows those bytes unread,
-   * and it reports the message as cleanly complete and eligible for
-   * keep-alive. The surplus bytes then sit on a connection that the client
-   * gives back to its idle pool. The next request that reuses that
-   * connection reads those bytes as its own response.
+   * that frame the same message are an ambiguous pair, which a recipient
+   * must resolve in favour of the Transfer-Encoding, or reject. A recipient
+   * that accepts it frames the response at exactly Content-Length bytes,
+   * leaves whatever follows those bytes unread, and reports the message as
+   * cleanly complete and eligible for keep-alive. The surplus bytes then sit
+   * on a connection that the client gives back to its idle pool, and the
+   * next request that reuses that connection reads those bytes as its own
+   * response.
    *
-   * This test is not vacuous. Narrow this rejection to request mode and it
-   * fails. It then reports CHTTP1_PAUSED, a body of 3 bytes, and a
+   * This test is not vacuous: narrow this rejection to request mode and it
+   * fails, reporting CHTTP1_PAUSED, a body of 3 bytes, and a
    * chttp1_should_keep_alive() that answers true, with "EXTRA" left
    * unread. */
   chttp1_parser_t parser;
@@ -785,9 +783,9 @@ TEST(framing,
 
 TEST(framing,
      response_non_chunked_transfer_encoding_before_content_length_rejected) {
-  /* The order of the headers does not change the ambiguity. The parser
-   * decides the rejection after it reads every Transfer-Encoding line. It
-   * does not decide it on the line that arrives second. */
+  /* The order of the headers does not change the ambiguity: the parser
+   * decides the rejection after it has read every Transfer-Encoding line,
+   * not on the line that arrives second. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -799,10 +797,10 @@ TEST(framing,
 
 TEST(framing,
      response_content_length_with_chunked_then_non_chunked_te_rejected) {
-  /* RFC 7230 SS3.2.2 merges the Transfer-Encoding lines into one list. That
-   * list ends in "gzip" here. This is therefore the same ambiguous pair,
-   * although "chunked" appears in the list. A test on each line that only
-   * looked for that word would accept it. */
+  /* RFC 7230 SS3.2.2 merges the Transfer-Encoding lines into one list, which
+   * ends in "gzip" here. So this is the same ambiguous pair, although
+   * "chunked" appears in the list, and a test on each line that only looked
+   * for that word would accept it. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -815,10 +813,10 @@ TEST(framing,
 TEST(framing,
      response_non_chunked_transfer_encoding_alone_still_reads_until_eof) {
   /* The counterpart that the rejection above must not swallow. There is no
-   * Content-Length here, so there is nothing to disagree with. RFC 7230
+   * Content-Length here, so there is nothing to disagree with, and RFC 7230
    * SS3.3.3 frames exactly this response: the recipient reads until the
-   * connection closes. Such a message is never eligible for keep-alive. It
-   * therefore carries no hazard of its own for a pooled connection. */
+   * connection closes. Such a message is never eligible for keep-alive, so
+   * it carries no hazard of its own for a pooled connection. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -832,18 +830,18 @@ TEST(framing,
 }
 
 TEST(framing, response_chunked_applied_twice_across_lines_rejected) {
-  /* RFC 7230 SS3.3.1 says this: "A sender MUST NOT apply chunked more than
+  /* RFC 7230 SS3.3.1 says: "A sender MUST NOT apply chunked more than
    * once to a message body". RFC 7230 SS3.2.2 merges these two lines into
-   * one list, "chunked, gzip, chunked". That list applies chunked twice.
-   * One recipient de-chunks once, and another de-chunks twice. The two then
-   * disagree about where the body ends. That framing disagreement is what
-   * response smuggling needs. The parser therefore refuses the message, and
-   * it resolves it in neither direction.
+   * one list, "chunked, gzip, chunked", which applies chunked twice. One
+   * recipient de-chunks once and another de-chunks twice, so the two
+   * disagree about where the body ends, and that framing disagreement is
+   * what response smuggling needs. The parser therefore refuses the message
+   * rather than resolving it in either direction.
    *
-   * This test is not vacuous. Without the count of occurrences over the
+   * This test is not vacuous: without the count of occurrences over the
    * merged list, the parser accepts the message as an ordinary chunked
-   * response. It then completes with CHTTP1_PAUSED, a body of 3 bytes, and
-   * a chttp1_should_keep_alive() that answers true. */
+   * response, which completes with CHTTP1_PAUSED, a body of 3 bytes, and a
+   * chttp1_should_keep_alive() that answers true. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -856,7 +854,7 @@ TEST(framing, response_chunked_applied_twice_across_lines_rejected) {
 }
 
 TEST(framing, response_chunked_repeated_on_two_lines_rejected) {
-  /* The same rule, in its plainest form. Two Transfer-Encoding lines that
+  /* The same rule in its plainest form: two Transfer-Encoding lines that
    * each say "chunked" merge into the list "chunked, chunked". */
   chttp1_parser_t parser;
   test_ctx_t ctx;
@@ -871,8 +869,8 @@ TEST(framing, response_chunked_repeated_on_two_lines_rejected) {
 
 TEST(framing, response_chunked_twice_within_one_line_rejected) {
   /* Both occurrences on one line make the same message, and the parser
-   * refuses it in the same way. The count is over transfer-codings, and not
-   * over header lines. */
+   * refuses it in the same way, because the count is over transfer-codings,
+   * not over header lines. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -885,9 +883,9 @@ TEST(framing, response_chunked_twice_within_one_line_rejected) {
 }
 
 TEST(framing, response_chunked_applied_twice_is_case_insensitive) {
-  /* The name of a transfer-coding ignores the letter case. Other spellings
-   * therefore count as the same coding. A literal match would let this
-   * message through. */
+  /* The name of a transfer-coding ignores the letter case, so other spellings
+   * count as the same coding; a literal match would let this message
+   * through. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -900,10 +898,9 @@ TEST(framing, response_chunked_applied_twice_is_case_insensitive) {
 }
 
 TEST(framing, response_chunked_last_after_an_earlier_chunked_rejected) {
-  /* The merged list ends in "chunked" here, as "gzip, chunked, chunked".
-   * The framing that this message would otherwise get is therefore chunked
-   * framing. It is still chunked applied twice, and the parser still
-   * refuses it. */
+  /* The merged list ends in "chunked" here, as "gzip, chunked, chunked", so
+   * the framing that this message would otherwise get is chunked framing.
+   * It is still chunked applied twice, and the parser still refuses it. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -918,10 +915,10 @@ TEST(framing, response_chunked_last_after_an_earlier_chunked_rejected) {
 TEST(framing, response_single_nonfinal_chunked_still_reads_until_eof) {
   /* The counterpart that the rejection above must not swallow. RFC 7230
    * SS3.3.1 lets a response apply chunked ONCE in a position that is not
-   * the last one. RFC 7230 SS3.3.3 frames such a message: the recipient
+   * the last one, and RFC 7230 SS3.3.3 frames such a message: the recipient
    * reads until the connection closes. A rule that refused every "chunked"
-   * before the end of the list would refuse this legal message. The parser
-   * therefore counts occurrences, and not position. */
+   * before the end of the list would refuse this legal message, so the
+   * parser counts occurrences, not position. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -1586,8 +1583,8 @@ static void assert_fragmented_matches_oneshot(const char *msg, size_t len) {
     init_test(&parser, &ctx);
     chttp1_errno_t rv1 = chttp1_parser_execute(&parser, msg, split);
     if (rv1 == CHTTP1_PAUSED) {
-      /* The whole message fits before this split point. A short message
-       * with a large split is one such case. Nothing is left to feed. */
+      /* The whole message fits before this split point (a short message with a
+       * large split is one such case), so nothing is left to feed. */
       REQUIRE_EQ(chttp1_parser_consumed(&parser), ref_consumed);
       continue;
     }
@@ -1599,13 +1596,13 @@ static void assert_fragmented_matches_oneshot(const char *msg, size_t len) {
     REQUIRE_EQ(ctx.header_count, ref_ctx.header_count);
     REQUIRE_EQ(ctx.body_len, ref_ctx.body_len);
     REQUIRE_TRUE(memcmp(ctx.body, ref_ctx.body, ctx.body_len) == 0);
-    /* The _Generic printer of REQUIRE_EQ in tau does not handle bool. This
-     * code therefore casts to int. */
+    /* The _Generic printer of REQUIRE_EQ in tau does not handle bool, so this
+     * code casts to int. */
     REQUIRE_EQ((int)chttp1_should_keep_alive(&parser), (int)ref_keep_alive);
-    /* A hard contract. execute() never returns CHTTP1_OK with bytes left
-     * over. The "rv1 == CHTTP1_OK" above therefore already means that the
-     * first call consumed all `split` bytes. There is nothing more to
-     * check here. To reach this point is the check. */
+    /* A hard contract: execute() never returns CHTTP1_OK with bytes left
+     * over, so the "rv1 == CHTTP1_OK" above already means that the first
+     * call consumed all `split` bytes. There is nothing more to check here;
+     * reaching this point is the check. */
   }
 }
 
@@ -1670,13 +1667,13 @@ TEST(finish_matrix, mid_chunk_is_unsafe) {
 
 TEST(finish_matrix, at_clean_boundary_is_safe_no_callback) {
   /* chttpclient.c itself never calls chttp1_parser_finish after execute()
-   * returned CHTTP1_PAUSED. It reports success at once instead, and the
-   * documented contract of chttp1_parser_execute says so. This test calls
-   * finish anyway. It does that only to drive the CHTTP1_FINISH_SAFE case
-   * of the switch directly. A message that completed on a normal path,
-   * which the EOF does not frame, leaves finish_state at
-   * CHTTP1_FINISH_SAFE. finish() reports that as CHTTP1_OK, and it does not
-   * call on_message_complete a second time. */
+   * has returned CHTTP1_PAUSED: it reports success at once instead, as the
+   * documented contract of chttp1_parser_execute says. This test calls
+   * finish anyway, only to drive the CHTTP1_FINISH_SAFE case of the switch
+   * directly. A message that completed on a normal path, which the EOF does
+   * not frame, leaves finish_state at CHTTP1_FINISH_SAFE, which finish()
+   * reports as CHTTP1_OK without calling on_message_complete a second
+   * time. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -1701,15 +1698,15 @@ TEST(finish_matrix, inside_eof_delimited_body_is_safe_with_callback) {
 TEST(finish_matrix,
      calling_finish_twice_after_eof_delimited_body_does_not_refire_callback) {
   /* The CHTTP1_FINISH_SAFE_WITH_CB case must update finish_state after it
-   * fires on_message_complete. It must not update parser->state alone.
-   * Without that, finish_state stays at CHTTP1_FINISH_SAFE_WITH_CB. A
-   * second finish() call on a parser that is already at
-   * CHTTP1_ST_MESSAGE_DONE then enters that same branch again, and it calls
-   * on_message_complete again. That breaks two contracts. The callback
-   * documents that it fires exactly one time. This function documents that
-   * a parser which is already at a clean boundary gets CHTTP1_OK. The two
-   * extra finish() calls below are what make this test non-vacuous. Each
-   * one must report CHTTP1_OK, and neither may fire the callback again. */
+   * fires on_message_complete, not parser->state alone. Otherwise
+   * finish_state stays at CHTTP1_FINISH_SAFE_WITH_CB, and a second finish()
+   * call on a parser that is already at CHTTP1_ST_MESSAGE_DONE enters that
+   * same branch again and calls on_message_complete again. That breaks two
+   * contracts: the callback documents that it fires exactly once, and this
+   * function documents that a parser which is already at a clean boundary
+   * gets CHTTP1_OK. The two extra finish() calls below are what make this
+   * test non-vacuous: each must report CHTTP1_OK, and neither may fire the
+   * callback again. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -1910,10 +1907,11 @@ TEST(request_line, split_across_every_byte_boundary) {
 
 TEST(request_line, single_leading_blank_line_tolerated) {
   /* RFC 7230 SS3.5 says that a server SHOULD ignore at least one empty line
-   * before the request-line. Some clients send a stray CRLF after a POST
-   * body. This is a regression test. The parser must not reject such a line
-   * outright with PH_ERROR, where method_len == 0. That rejection closes a
-   * healthy keep-alive or pipelined connection over one stray CRLF. */
+   * before the request-line, and some clients send a stray CRLF after a
+   * POST body. This is a regression test: the parser must not reject such a
+   * line outright with PH_ERROR, where method_len == 0, because that
+   * rejection closes a healthy keep-alive or pipelined connection over one
+   * stray CRLF. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -1974,9 +1972,9 @@ TEST(request_line, excessive_leading_blank_lines_rejected) {
 
 TEST(request_body_framing, no_framing_headers_means_no_body_not_eof) {
   /* A request with no Content-Length and no chunked Transfer-Encoding has
-   * NO body at all. A response is different. The message completes at once
-   * after the headers. It does not wait for an EOF. There would be nothing
-   * to wait for, because the connection does not close. */
+   * NO body at all, unlike a response: the message completes at once after
+   * the headers instead of waiting for an EOF; there would be nothing to
+   * wait for, because the connection does not close. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -2174,14 +2172,14 @@ TEST(request_body_framing, trailer_name_not_whitelisted) {
 
 TEST(request_body_framing,
      transfer_encoding_present_but_final_coding_not_chunked_rejected) {
-  /* RFC 7230 SS3.3.3 covers this. The final coding of the
-   * Transfer-Encoding of a request can be something other than "chunked".
-   * The length of the message is then undetermined. A server that obeys the
-   * RFC MUST reject such a request outright. It must not quietly read it as
-   * a request with no body. A request and a response are asymmetric here: a
-   * request has no fallback to EOF framing, and a response does. This is a
-   * regression test. The parser must reject the request. It must not accept
-   * it quietly, as if the Transfer-Encoding were absent. */
+  /* RFC 7230 SS3.3.3 covers this. When the final coding of the
+   * Transfer-Encoding of a request is something other than "chunked", the
+   * length of the message is undetermined, and a server that obeys the RFC
+   * MUST reject such a request outright rather than quietly read it as a
+   * request with no body. A request and a response are asymmetric here: a
+   * request has no fallback to EOF framing, while a response does. This is
+   * a regression test: the parser must reject the request instead of
+   * quietly accepting it as if the Transfer-Encoding were absent. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -2193,11 +2191,11 @@ TEST(
     request_body_framing,
     transfer_encoding_chunked_not_last_split_across_two_header_lines_rejected) {
   /* A regression test. transfer_encoding_has_nonfinal_chunked sees only
-   * one header line at a time. An EARLIER Transfer-Encoding line can claim
-   * "chunked" as final, and a SECOND Transfer-Encoding line can follow it.
-   * RFC 7230 SS3.2.2 joins repeated header lines into one comma-separated
-   * list, in order. Such a pair must not get past that check. A check of
-   * each line on its own does let it past. */
+   * one header line at a time, so an EARLIER Transfer-Encoding line can
+   * claim "chunked" as final while a SECOND Transfer-Encoding line follows
+   * it. RFC 7230 SS3.2.2 joins repeated header lines into one
+   * comma-separated list, in order, so such a pair must not get past that
+   * check, although a check of each line on its own does let it past. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -2209,10 +2207,10 @@ TEST(
 
 TEST(request_body_framing,
      transfer_encoding_chunked_last_split_across_two_header_lines_accepted) {
-  /* The legal counterpart of the case above. "chunked" arrives as the LAST
-   * token of the LAST Transfer-Encoding line. Here that is the second line,
-   * and the first line does not end in chunked. That is valid framing, and
-   * the parser must still accept it. */
+  /* The legal counterpart of the case above: "chunked" arrives as the LAST
+   * token of the LAST Transfer-Encoding line, here the second line, and the
+   * first line does not end in chunked. That is valid framing, and the
+   * parser must still accept it. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -2226,11 +2224,11 @@ TEST(request_body_framing,
 
 TEST(request_body_framing,
      response_mode_final_coding_not_chunked_still_reads_until_eof) {
-  /* Response mode has a separate, documented reduction of scope of its
-   * own. See the doc comment of value_ends_with_chunked. It does not depend
-   * on the rejection above, which belongs to request mode alone. A response
-   * whose Transfer-Encoding does not end in "chunked" falls back to EOF
-   * framing. The parser does not reject it. */
+  /* Response mode has a separate, documented reduction of scope of its own
+   * (see the doc comment of value_ends_with_chunked), which does not depend
+   * on the rejection above, since that rejection belongs to request mode
+   * alone. A response whose Transfer-Encoding does not end in "chunked"
+   * falls back to EOF framing instead of being rejected. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -2242,11 +2240,11 @@ TEST(request_body_framing,
 }
 
 TEST(request_body_framing, single_line_chunked_then_gzip_rejected) {
-  /* The single-line path of transfer_encoding_has_nonfinal_chunked. The
-   * path above covers a list that two header lines split. Here "chunked"
-   * appears before the end of the token list of one line. That is always
-   * wrong, and the parser must reject it at once. The last token makes no
-   * difference. */
+  /* The single-line path of transfer_encoding_has_nonfinal_chunked, while
+   * the path above covers a list that two header lines split. Here "chunked"
+   * appears before the end of the token list of one line, which is always
+   * wrong, and the parser must reject it at once, whatever the last token
+   * is. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -2256,9 +2254,9 @@ TEST(request_body_framing, single_line_chunked_then_gzip_rejected) {
 }
 
 TEST(request_body_framing, single_line_gzip_then_chunked_accepted) {
-  /* The legal counterpart on one line. More than one coding, separated by
+  /* The legal counterpart on one line: more than one coding, separated by
    * commas, sits on ONE Transfer-Encoding line, and the list ends in
-   * "chunked". That is valid framing. The parser must accept it and parse
+   * "chunked". That is valid framing, which the parser must accept, parsing
    * the body as chunked. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
@@ -2274,11 +2272,11 @@ TEST(request_body_framing, single_line_gzip_then_chunked_accepted) {
 TEST(request_body_framing,
      response_mode_single_line_chunked_then_gzip_reads_until_eof) {
   /* The reduction of scope in response mode applies to a value with more
-   * than one coding on one line. It applies there as much as to the
-   * single-coding case above. The parser does NOT reject a response whose
-   * Transfer-Encoding line ends in something other than "chunked".
+   * than one coding on one line just as much as to the single-coding case
+   * above: the parser does NOT reject a response whose Transfer-Encoding
+   * line ends in something other than "chunked".
    * transfer_encoding_has_nonfinal_chunked runs only under
-   * CHTTP1_PARSE_REQUEST. The final coding is then not "chunked", so the
+   * CHTTP1_PARSE_REQUEST, and since the final coding is not "chunked", the
    * response falls back to EOF framing. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
@@ -2295,9 +2293,9 @@ TEST(request_body_framing,
      response_mode_single_line_gzip_then_chunked_accepted) {
   /* This matches single_line_gzip_then_chunked_accepted above, for
    * response mode. value_ends_with_chunked does not tell a request from a
-   * response. A response whose Transfer-Encoding line ends in "chunked"
-   * therefore parses its body as chunked. What comes before it on the same
-   * line makes no difference. */
+   * response, so a response whose Transfer-Encoding line ends in "chunked"
+   * parses its body as chunked, whatever comes before it on the same
+   * line. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -2310,13 +2308,13 @@ TEST(request_body_framing,
 }
 
 TEST(request_body_framing, chunked_applied_twice_across_lines_rejected) {
-  /* RFC 7230 SS3.3.1 says "MUST NOT apply chunked more than once". That
+  /* RFC 7230 SS3.3.1 says "MUST NOT apply chunked more than once", which
    * binds a request exactly as it binds a response. RFC 7230 SS3.2.2 merges
    * these two lines into "chunked, chunked", and the parser refuses the
-   * message. This test is not vacuous. Without the count of occurrences
-   * over the merged list, the final coding of the second line is "chunked".
-   * The parser then accepts the message as an ordinary chunked request, and
-   * it completes with CHTTP1_PAUSED and a body of 3 bytes. */
+   * message. This test is not vacuous: without the count of occurrences
+   * over the merged list, the final coding of the second line is "chunked",
+   * so the parser accepts the message as an ordinary chunked request, which
+   * completes with CHTTP1_PAUSED and a body of 3 bytes. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -2330,13 +2328,13 @@ TEST(request_body_framing, chunked_applied_twice_across_lines_rejected) {
 
 TEST(request_body_framing, chunked_twice_within_one_line_rejected) {
   /* Both occurrences sit on one line, and the parser refuses them in the
-   * same way. Two separate rules reject this message in request mode. The
-   * first is the count of occurrences. The second is "chunked must be the
-   * last transfer-coding of a request". This test therefore pins the
-   * outcome, and it does not isolate the count of occurrences.
+   * same way. Two separate rules reject this message in request mode: the
+   * count of occurrences, and "chunked must be the last transfer-coding of a
+   * request". This test therefore pins the outcome without isolating the
+   * count of occurrences;
    * framing.response_chunked_twice_within_one_line_rejected is the
-   * non-vacuous test for that rule. The rule about the final coding does
-   * not bind a response at all. */
+   * non-vacuous test for that rule, because the rule about the final coding
+   * does not bind a response at all. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -2372,11 +2370,11 @@ TEST(divert, content_length_body_diverts_before_consuming) {
 }
 
 TEST(divert, body_already_in_same_buffer_is_not_consumed_by_divert) {
-  /* The critical carry-over case. The header block AND the body bytes
+  /* The critical carry-over case: the header block AND the body bytes
    * arrive in the SAME chttp1_parser_execute call. The diversion must still
-   * stop exactly at the header boundary. It must leave the body bytes
-   * unconsumed, so that the caller can hand them on as carry-over. It must
-   * not swallow them into on_body because they are already available. */
+   * stop exactly at the header boundary and leave the body bytes unconsumed,
+   * so that the caller can hand them on as carry-over, instead of swallowing
+   * them into on_body because they are already available. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -2470,8 +2468,8 @@ TEST(content_length_accessor, true_with_declared_value_once_headers_complete) {
    * "reused internally to track the CURRENT chunk's remaining byte count
    * once chunked parsing begins... calling this after body parsing has
    * already started returns a value with a different meaning". That caveat
-   * does not apply yet. This is exactly the window that the real caller in
-   * chttpserver.c uses it in. */
+   * does not apply yet, and this is exactly the window in which the real
+   * caller in chttpserver.c uses it. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -2577,9 +2575,9 @@ TEST(chunk_size_limit, override_rejects_oversized_chunk_before_reading_data) {
       "POST /x HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, headers, strlen(headers)),
              CHTTP1_OK);
-  /* This declares a chunk far larger than the override, and it sends none
-   * of the data of that chunk. The rejection must happen the instant the
-   * parser reads the chunk-size line. It must not wait for ever for data
+  /* This declares a chunk far larger than the override and sends none of
+   * the data of that chunk. The rejection must happen the instant the
+   * parser reads the chunk-size line, rather than waiting for ever for data
    * that never comes. */
   const char *chunk_size = "8000000000000000\r\n"; /* about 9.2 exabytes */
   REQUIRE_EQ(chttp1_parser_execute(&parser, chunk_size, strlen(chunk_size)),
@@ -2604,9 +2602,9 @@ TEST(chunk_size_limit, override_accepts_chunk_at_exactly_the_limit) {
 
 TEST(chunk_size_limit, not_set_for_an_unrelated_parse_error) {
   /* chttp1_chunk_size_limit_exceeded() must be false for every OTHER cause
-   * of a CHTTP1_ERROR. It must not be false only because nobody set it.
-   * This test forces a different rejection, with a malformed status line,
-   * and then reads the flag. */
+   * of a CHTTP1_ERROR, and not merely because nobody set it, so this test
+   * forces a different rejection, with a malformed status line, and then
+   * reads the flag. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -2650,9 +2648,9 @@ TEST(expect_continue, other_expect_value_not_detected) {
 }
 
 TEST(expect_continue, works_with_divert) {
-  /* This is the point of the feature. A caller can divert the read of the
-   * body to a worker thread. Such a caller still needs to know one thing at
-   * CHTTP1_HEADERS_ONLY time. It must know whether it already wrote a "100
+  /* This is the point of the feature: a caller that diverts the read of the
+   * body to a worker thread still needs to know one thing at
+   * CHTTP1_HEADERS_ONLY time, namely whether it has already written a "100
    * Continue" interim response. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
@@ -2674,29 +2672,29 @@ static void make_pair(int fds[2]) {
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
 }
 
-/* The variant that does not block. The stream_tls tests below need it.
+/* The variant that does not block, which the stream_tls tests below need.
  * tls_drive_handshake() drives a TLS handshake with one thread, in a
- * ping-pong loop. It calls the step of one side, then the step of the
- * other, and it repeats. That loop deadlocks on a socketpair that blocks.
- * The BIO_read inside SSL_accept and SSL_connect can block itself. It then
- * waits for bytes that the peer never gets a chance to send. The next thing
- * this thread would do is drive the step of that peer. Under gdb
+ * ping-pong loop that calls the step of one side, then the step of the
+ * other, and repeats. That loop deadlocks on a blocking socketpair: the
+ * BIO_read inside SSL_accept and SSL_connect can block, waiting for bytes
+ * that the peer never gets a chance to send, because the next thing this
+ * thread would do is drive the step of that peer. Under gdb
  * that hang appears as ctls_conn_handshake_step blocked inside a plain
  * BIO_read, which calls the read(2) syscall.
  *
- * The plaintext "stream" tests above need none of this. They always put the
- * poll(2) call of chttp1_stream_read or chttp1_stream_write in front of
- * every read and every write. A few of them call read(2) or write(2)
- * directly. Those only touch a fd after the peer wrote to it, on the same
- * thread. A socket in blocking mode therefore never blocks there. */
+ * The plaintext "stream" tests above need none of this, because they
+ * always put the poll(2) call of chttp1_stream_read or chttp1_stream_write
+ * in front of every read and every write. The few of them that call read(2)
+ * or write(2) directly only touch a fd after the peer has written to it, on
+ * the same thread, so a socket in blocking mode never blocks there. */
 static void make_nonblocking_pair(int fds[2]) {
   make_pair(fds);
   for (int i = 0; i < 2; i++) {
-    /* A failure here that nobody checks leaves fds[i] in blocking mode.
-     * The comment directly above this function explains why that deadlocks
-     * the single-threaded ping-pong loop of tls_drive_handshake(). A quiet
+    /* An unchecked failure here leaves fds[i] in blocking mode, which, as the
+     * comment directly above this function explains, deadlocks the
+     * single-threaded ping-pong loop of tls_drive_handshake(). A quiet
      * failure of fcntl() would therefore become a real hang that is hard to
-     * diagnose. This check turns it into a clean, immediate test
+     * diagnose; this check turns it into a clean, immediate test
      * failure. */
     int flags = fcntl(fds[i], F_GETFL, 0);
     REQUIRE_GE(flags, 0);
@@ -2781,33 +2779,32 @@ TEST(stream, read_timeout_when_nothing_available) {
   close(fds[1]);
 }
 
-/* Coverage for the documented contract of timeout_ms == 0. That contract
- * is "return immediately if fd is not already readable/writable right now".
- * Two code paths must obey it. The first is chttp1_stream_write, in its TLS
- * branch and in its plaintext branch, which share one retry loop. The
- * second is the plaintext branch of chttp1_stream_read.
+/* Coverage for the documented contract of timeout_ms == 0, which is
+ * "return immediately if fd is not already readable/writable right now".
+ * Two code paths must obey it: chttp1_stream_write, whose TLS branch and
+ * plaintext branch share one retry loop, and the plaintext branch of
+ * chttp1_stream_read.
  *
  * Neither path may compute a fresh deadline of "now + timeout_ms" and then
  * derive "the time that is left until it" from a SECOND clock_gettime()
- * call. That must not happen before the path calls poll(2), or before it
- * tries the real I/O. For timeout_ms == 0, any time at all between two such
- * reads of the clock is already above a budget of zero. Some time always
- * passes, however little. The value that the path computes again is
- * therefore always at or below 0. Both functions then report a timeout,
- * even when the fd is ready right now. They never call poll(2), and they
- * never try the real read(2) or write(2).
+ * call before it calls poll(2) or tries the real I/O. For timeout_ms == 0,
+ * any time at all between two such reads of the clock is already above a
+ * budget of zero, and some time always passes, however little, so the
+ * recomputed value is always at or below 0. Both functions would then
+ * report a timeout even when the fd is ready right now, without ever
+ * calling poll(2) or trying the real read(2) or write(2).
  *
- * The three tests below build exactly that "already ready" condition. For a
- * read, the data already sits in the receive buffer of the socket. For a
- * write, an ordinary socketpair that was just connected is always writable
- * at once. The tests are therefore not vacuous. A timeout that the code
- * makes up, in place of a real transfer, fails them. */
+ * The three tests below build exactly that "already ready" condition: for a
+ * read, the data already sits in the receive buffer of the socket, and for
+ * a write, an ordinary socketpair that was just connected is always
+ * writable at once. The tests are therefore not vacuous: a timeout that the
+ * code makes up in place of a real transfer fails them. */
 TEST(stream, read_timeout_zero_returns_data_when_already_available) {
   int fds[2];
   make_pair(fds);
   chttp1_stream_t s;
   REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], NULL, 0, NULL));
-  /* This thread writes these bytes itself, before the read below. By the
+  /* This thread writes these bytes itself, before the read below, so by the
      time chttp1_stream_read runs, the bytes already sit in the receive
      buffer of the kernel for fds[0]. They are therefore really available
      "right now", and no wait at all is needed. */
@@ -2872,12 +2869,11 @@ TEST(stream, write_timeout_zero_succeeds_when_already_writable) {
 }
 
 TEST(stream, read_error_on_bad_fd) {
-  /* poll(2) itself ignores a negative fd. POSIX says that an entry with
-   * fd < 0 is never reported ready. Such an fd would therefore only time
-   * out here, with no error. A real error for an invalid fd needs an fd
-   * number that is well formed and already closed. poll(2) reports such an
-   * fd as ready with POLLNVAL. The read(2) after it then really fails with
-   * EBADF. */
+  /* poll(2) itself ignores a negative fd: POSIX says that an entry with
+   * fd < 0 is never reported ready, so such an fd would only time out here,
+   * with no error. A real error for an invalid fd needs an fd number that is
+   * well formed and already closed, which poll(2) reports as ready with
+   * POLLNVAL, and the read(2) after it then really fails with EBADF. */
   int fds[2];
   make_pair(fds);
   int bad_fd = fds[0];
@@ -2934,18 +2930,18 @@ TEST(stream, push_back_leftover_zero_len_is_a_noop) {
 }
 
 TEST(stream, push_back_leftover_overflow_guard_rejects_without_allocating) {
-  /* `total = len + existing` needs an overflow check of its own, before
-   * the code allocates `total` bytes. Two values of separate sizes make
-   * that sum. One is a chunk that the caller just pushed back. The other is
-   * whatever carry-over the stream already holds. A sum near SIZE_MAX wraps
-   * without that check. The allocation is then far too small, and the copy
-   * writes far past its end.
+  /* `total = len + existing` needs an overflow check of its own before the
+   * code allocates `total` bytes. That sum is made of two values of separate
+   * sizes: a chunk that the caller has just pushed back, and whatever
+   * carry-over the stream already holds. Without that check, a sum near
+   * SIZE_MAX wraps, the allocation is far too small, and the copy writes far
+   * past its end.
    *
-   * This test fakes `existing` to SIZE_MAX directly on the struct. It
-   * leaves carry NULL, so nothing ever allocates or touches a real buffer
-   * of that size. This follows the pattern that this project uses for this
-   * class of overflow guard: assert that the guard rejects before any real
-   * work happens. */
+   * This test fakes `existing` to SIZE_MAX directly on the struct and leaves
+   * carry NULL, so nothing ever allocates or touches a real buffer of that
+   * size. This follows the pattern that this project uses for this class of
+   * overflow guard: assert that the guard rejects before any real work
+   * happens. */
   chttp1_stream_t s;
   memset(&s, 0, sizeof(s));
   s.prepared = true;
@@ -3054,9 +3050,9 @@ TEST(stream_tls, write_over_real_tls_connection) {
 
 TEST(stream_tls, leftover_decrypted_bytes_drained_before_ctls_conn_read) {
   /* This matches the plaintext carry-over test. The leftover bytes here
-   * stand for application bytes that are already decrypted. The reactor
-   * thread produces them with ctls_conn_read(), inside its own loop that
-   * parses the headers. The leftover argument of
+   * stand for application bytes that are already decrypted, which the
+   * reactor thread produces with ctls_conn_read() inside its own loop that
+   * parses the headers; the leftover argument of
    * chttp1_stream_prepare_tls is never raw bytes off the wire. */
   ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL),

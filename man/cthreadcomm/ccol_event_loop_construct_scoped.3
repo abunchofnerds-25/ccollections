@@ -12,41 +12,40 @@ ccol_event_loop_construct_scoped(name, max_events_per_wait, num_lock_stripes,
 .fi
 .SH DESCRIPTION
 .nf
-This macro declares a ccol_event_loop variable with the name name. It
-tags that variable with the cleanup attribute of GCC and Clang. It
-then calls ccol_event_loop_create() to initialise the variable. It
-calls ccol_fatal_err() when the create fails. The library destroys the
-variable automatically when it leaves its scope, with no explicit
-ccol_event_loop_destroy() call. That destroy shuts every reactor
-thread down, joins each one, and frees every registration.
+This macro declares a ccol_event_loop variable with the name name, tags
+it with the cleanup attribute of GCC and Clang, and then calls
+ccol_event_loop_create() to initialise it. It calls ccol_fatal_err()
+when the create fails. The library destroys the variable automatically
+when it leaves its scope, with no explicit ccol_event_loop_destroy()
+call; that destroy shuts every reactor thread down, joins each one, and
+frees every registration.
 .fi
 .SH PARAMETERS
 .nf
 name                  Name of the variable for the ccol_event_loop handle.
 max_events_per_wait   Size of the event batch buffer of the polling
-                      thread. The value must be from 1 to INT_MAX. It
-                      must also be small enough that max_events_per_wait
-                      times the size of one kernel event record (struct
+                      thread. The value must be from 1 to INT_MAX, and
+                      small enough that max_events_per_wait times the
+                      size of one kernel event record (struct
                       epoll_event on Linux, struct kevent on FreeBSD)
                       does not overflow size_t.
 num_lock_stripes      Number of independent lock stripes for the registry
-                      of fds and entries. The value must be >= 1. A
+                      of fds and entries. The value must be >= 1; a
                       value of 1 means one shared lock.
 num_reactor_threads   Number of background reactor threads. The value
-                      must be >= 1. A value of 1 means one thread that
+                      must be >= 1; a value of 1 means one thread that
                       polls and dispatches in line.
 .fi
 .SH NOTES
 .nf
 This macro calls ccol_fatal_err() on a failure. A caller may rely on
-no callback being able to reach anything in the scope of this loop.
-One such thing is a mutex, or a buffer that the arg of a callback
-points at. That reliance must hold up to the join at the exit of the
-scope, and it must include that join. It is not enough for it to hold
-up to an explicit ccol_event_loop_remove(3) call before that point.
-See the notes of ccol_event_loop_remove(3) about a callback that
-outlives the return of that call. The implicit shutdown of this scope
-has the same property.
+no callback being able to reach anything in the scope of this loop,
+such as a mutex or a buffer that the arg of a callback points at. That
+reliance must hold up to and including the join at the exit of the
+scope; it is not enough for it to hold up to an explicit
+ccol_event_loop_remove(3) call before that point. See the notes of
+ccol_event_loop_remove(3) about a callback that outlives the return of
+that call: the implicit shutdown of this scope has the same property.
 .fi
 .SH EXAMPLES
 .nf

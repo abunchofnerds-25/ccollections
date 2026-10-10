@@ -11,9 +11,8 @@ cbmap_destroy(cbm);
 .fi
 .SH DESCRIPTION
 .nf
-Frees all the resources of the BST map. This includes all the nodes,
-all the keys and all the values. The macro then sets the map pointer
-to NULL.
+Frees all the resources of the BST map, including all the nodes, all the
+keys and all the values, and then sets the map pointer to NULL.
 .fi
 .SH PARAMETERS
 .nf
@@ -25,8 +24,9 @@ cbm  BST map to destroy (the macro sets it to NULL after it destroys
 A call with a NULL pointer is safe
 
 The macro evaluates cbm exactly once. It must be a modifiable lvalue,
-such as a variable or an element of an array, so an expression with a
-side effect, such as handles[i++], destroys and clears one element.
+such as a variable or an element of an array, and an expression with a
+side effect, such as handles[i++], therefore destroys and clears one
+element.
 .fi
 .SH "SEE ALSO"
 .BR cbmap_create (3)

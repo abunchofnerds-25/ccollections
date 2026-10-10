@@ -11,20 +11,20 @@ cjson cjson_get(cjson root, const char *path);
 .fi
 .SH DESCRIPTION
 .nf
-Navigates from root through the components of path.  It returns the
+Navigates from root through the components of path and returns the
 node that the last component addresses.
 
-path is a dot-separated sequence of component strings.  A component
-can start with '#' and then hold one or more decimal digits.  Such a
-component addresses an array element by a zero-based index when the
-current node is CJSON_LIST.  In every other case the macro uses the
-whole component as a literal object key, and the '#' is part of that
-key.  A bare '#' with no digits after it on a CJSON_LIST node is an
-error, and the macro returns NULL.
+path is a dot-separated sequence of component strings.  When the
+current node is CJSON_LIST, a component that starts with '#' followed
+by one or more decimal digits addresses an array element by a
+zero-based index.  In every other case the macro uses the whole
+component as a literal object key, and the '#' is part of that key.
+A bare '#' with no digits after it on a CJSON_LIST node is an error,
+and the macro returns NULL.
 
-A NULL root gives NULL.  A NULL path or an empty path gives root
-unchanged.  An empty component in a path addresses nothing, and the
-macro then gives NULL.  A leading dot, a trailing dot and two dots
+A NULL root gives NULL, while a NULL path or an empty path gives root
+unchanged.  An empty component in a path addresses nothing, so the
+macro then gives NULL; a leading dot, a trailing dot and two dots
 together (as in "a..b") make an empty component.
 
 Escape sequences in path components:
@@ -40,10 +40,10 @@ path   Dot-separated path string, for example
 .fi
 .SH RETURN VALUE
 .nf
-A cjson handle to the target node.  The caller does not own it.
-The macro returns NULL when a component along the path is missing.
-It also returns NULL when the type of the current node does not
-support the asked-for step.
+A cjson handle to the target node, which the caller does not own.
+The macro returns NULL when a component along the path is missing, or
+when the type of the current node does not support the asked-for
+step.
 .fi
 .SH NOTES
 .nf

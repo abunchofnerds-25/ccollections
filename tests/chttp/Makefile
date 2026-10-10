@@ -2,8 +2,7 @@ INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
 SRC_FILE_PREFIX = chttp
 # chttp1_parser.c is the shared HTTP/1.1 parser that the tests at the end of
-# tests.c drive directly. ctls.c, chashmap.c and common.c are what it links
-# against.
+# tests.c drive directly; it links against ctls.c, chashmap.c and common.c.
 SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/chttp1_parser.c \
 	../../src/ctls.c ../../src/chashmap.c ../../src/common.c
 ALL_SRC_FILES = tests.c $(SRC_FILES)
@@ -15,9 +14,9 @@ CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 $(CCOL_HARDENING_CFLAGS) -Wstrict
 	-Wformat=2 -Wformat-security -Wall -Wextra -gdwarf-4 -g3 -O3 -Werror $(EXTRA_CFLAGS)
 COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
 # The two wraps route every send(2) and read(2) call of the linked sources
-# through __wrap_send and __wrap_read in tests.c. Both pass straight through,
-# except where a test arms them to report one EINTR, which no real socket
-# produces on demand.
+# through __wrap_send and __wrap_read in tests.c. Both pass straight through
+# unless a test arms them to report one EINTR, which no real socket produces
+# on demand.
 LFLAGS = -lpthread -lssl -lcrypto $(call ccol_ld_wrap,send read) $(CCOL_PLATFORM_LIBS)
 
 build:
@@ -29,14 +28,13 @@ test: build
 memtest: build
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 ./tests
 
-# The flag "--ignore-errors negative" is there for one reason. The coverage
-# counters of gcov are plain increments and are not atomic. Two threads can
-# race on one counter in instrumented code that runs concurrently. gcov then
-# reports a hit count below zero, which is false. This happens in more than
-# one module, and also inside a glibc header. It is a limit of the
-# instrumentation of gcov, and not a defect in the logic of this library. The
-# Makefile of tests/chttpclient carries the same flag, and its comment gives
-# the full reason.
+# The flag "--ignore-errors negative" is there because the coverage counters
+# of gcov are plain, non-atomic increments: in instrumented code that runs
+# concurrently, two threads can race on one counter, and gcov then reports a
+# false hit count below zero. This happens in more than one module and also
+# inside a glibc header; it is a limit of the gcov instrumentation, not a
+# defect in the logic of this library. The Makefile of tests/chttpclient
+# carries the same flag, and its comment gives the full reason.
 generate_coverage_report:
 	$(CC)  $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \

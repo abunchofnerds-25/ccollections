@@ -11,28 +11,27 @@ void *ctpool_future_get(ctpool_future *f);
 .fi
 .SH DESCRIPTION
 .nf
-Blocks until the task that this future belongs to stops. It then
-returns the void* value that the task function returned. The return
-value is NULL when ctpool_shutdown_immediate cancelled the task, and
-ctpool_future_cancelled(f) then returns true.
+Blocks until the task that this future belongs to stops, then returns
+the void* value that the task function returned. If
+ctpool_shutdown_immediate cancelled the task, the return value is NULL
+and ctpool_future_cancelled(f) returns true.
 
-This call does not free the future. The caller must call
+This call does not free the future; the caller must call
 ctpool_future_free after it reads the result.
 
 Any number of threads can be inside this call on one future at the same
-time. Every one of them receives the same result. Each of them holds a
-reference of its own for the length of its call. The future therefore
+time, and every one of them receives the same result. Each of them
+holds a reference of its own for the length of its call, so the future
 outlives every waiter that is inside it, whatever order the other
-references go in. The reference of the task goes when the task stops.
-The reference of the caller goes with ctpool_future_free. Whichever
+references go in. The reference of the task goes when the task stops,
+the reference of the caller goes with ctpool_future_free, and whichever
 thread leaves the future last is the one that destroys it.
 
 Result ownership: the pool never allocates, copies or frees the void*
-that comes back. It only carries the pointer that the task function
-returned. ctpool_future_free releases the handle of the future, and
-never the result. The caller owns the result after this function
-returns. That caller must free it in the way that the task function
-allocated it.
+that comes back; it only carries the pointer that the task function
+returned. ctpool_future_free releases the handle of the future, never
+the result. Once this function returns, the caller owns the result and
+must free it in the way that the task function allocated it.
 .fi
 .SH PARAMETERS
 .nf

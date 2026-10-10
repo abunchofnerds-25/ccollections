@@ -2,10 +2,10 @@
 .project
 obj/
 # These are build products. Each pattern starts with a slash, which ties it to
-# the root of the repository. The patterns therefore describe only what a
-# `make` in the root makes. Without that slash, a pattern matches at every
-# level, and libccollections.so.* would then also hide the committed ABI
-# baselines under abi/.
+# the root of the repository, so the patterns describe only what a `make` in
+# the root makes. Without that slash a pattern matches at every level, and
+# libccollections.so.* would then also hide the committed ABI baselines under
+# abi/.
 /libccollections.so
 # The shared objects with a version in the name: libccollections.so.<ABI> and
 # libccollections.so.<VERSION>
@@ -29,11 +29,11 @@ tests/*/timeout-*
 __pycache__/
 tests/cyaml/differential/cyaml_to_json
 # libFuzzer finds new corpus entries and writes them back into the corpus
-# directory that you give it. It names each one with a plain hash and no
-# extension. Commit only the seed files that somebody took out on purpose.
-# Those are the *.bin files, and the *.yaml files for the document corpus of
-# cyaml. The path corpus of cyaml carries a NUL inside each input, so its
-# seeds are *.bin like the matching corpus of cjson.
+# directory that you give it, naming each one with a plain hash and no
+# extension. Commit only the seed files that somebody took out on purpose:
+# the *.bin files, and the *.yaml files for the document corpus of cyaml. The
+# path corpus of cyaml carries a NUL inside each input, so its seeds are *.bin
+# like the matching corpus of cjson.
 tests/chttpclient/fuzz/corpus_request/*
 !tests/chttpclient/fuzz/corpus_request/*.bin
 tests/chttpclient/fuzz/corpus_response/*
@@ -63,9 +63,9 @@ massif.out.*
 tests/*/.build-flags
 
 # These are the build products of the benchmarks. baseline.json is not under
-# version control, on purpose. It records absolute times for one machine. A
-# comparison of a run against a baseline from other hardware therefore reports
-# a difference that has nothing to do with a change to the library.
+# version control, on purpose: it records absolute times for one machine, so a
+# comparison of a run against a baseline from other hardware reports a
+# difference that has nothing to do with a change to the library.
 /bench/bench
 /bench/baseline.json
 /bench/.build-flags

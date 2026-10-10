@@ -14,9 +14,9 @@ TAU_MAIN()
 // ============================================================================
 // VECTOR OF HASHMAPS
 //
-// Each element of the outer cvec is a chmap handle (a pointer).  The outer
+// Each element of the outer cvec is a chmap handle (a pointer), so the outer
 // vector stores the raw bytes of the pointer.  A caller must destroy every
-// inner map before it destroys the vector.  Without that, the inner maps
+// inner map before it destroys the vector; otherwise, the inner maps
 // leak.
 // ============================================================================
 
@@ -196,9 +196,9 @@ TEST(vec_of_bmaps, independent_maps_do_not_interfere) {
 // ============================================================================
 // HASHMAP OF VECTORS
 //
-// The outer chmap stores a cvec handle as each value.  The map copies the
-// 8-byte pointer.  A caller must iterate and destroy the inner vectors before
-// it destroys the outer map.
+// The outer chmap stores a cvec handle as each value, and the map copies the
+// 8-byte pointer, so a caller must iterate and destroy the inner vectors
+// before it destroys the outer map.
 // ============================================================================
 
 TEST(hmap_of_vecs, category_to_int_list) {
@@ -398,7 +398,7 @@ TEST(bmap_of_bmaps, nested_sorted_maps) {
   cbmap_construct(outer, int, cbmap);
 
   // The inner map for group i holds the keys 0..4, with the values j + i*10.
-  // The test inserts the keys in reverse, to confirm that the BST sorts
+  // The test inserts the keys in reverse to confirm that the BST sorts
   // them.
   for (int i = 0; i < 3; i++) {
     cbmap_construct(inner, int, int);
@@ -447,7 +447,7 @@ TEST(bmap_of_bmaps, nested_sorted_maps) {
 // ============================================================================
 // VECTOR OF VECTORS
 //
-// Each element of the outer cvec is another cvec handle (a pointer).  This
+// Each element of the outer cvec is another cvec handle (a pointer), which
 // makes a jagged 2D structure, where the rows can have different lengths.
 // ============================================================================
 
@@ -487,7 +487,7 @@ TEST(vec_of_vecs, sort_rows_independently) {
   int data1[] = {9, 7, 8, 6};
   int data2[] = {2, 2, 2, 2, 2, 2};
 
-  // Construct each row in its own scope.  Each handle goes into matrix.
+  // Construct each row in its own scope, and put each handle into matrix.
   {
     cvec_construct(row, int);
     cvec_append_array(row, data0, 5);
@@ -572,7 +572,7 @@ TEST(vec_of_vecs, append_outer_vector_of_double_rows) {
 // VECTOR OF CSTRINGS
 //
 // The outer cvec stores cstr handles, which are elements of the size of a
-// pointer.  This is the same as the storage of any other container handle.
+// pointer, stored the same way as any other container handle.
 // ============================================================================
 
 TEST(vec_of_cstrings, build_and_retrieve) {

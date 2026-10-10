@@ -12,22 +12,22 @@ ccol_retval_t chttpsvr_resp_write_json(chttpsvr_resp *resp,
 .fi
 .SH DESCRIPTION
 .nf
-Appends len bytes of json to the response body.  It then sets the
-Content-Type response header to "application/json".  It writes the
-body first.  resp therefore does not change at all when the body
-allocation runs out of memory: the function installs no header and
-buffers no bytes.
+Appends len bytes of json to the response body and then sets the
+Content-Type response header to "application/json".  Because the body
+is written first, resp does not change at all when the body
+allocation runs out of memory: no header is installed and no bytes
+are buffered.
 
-It returns ccol_invalid_args at once, and changes nothing in resp,
-when resp or json is NULL, and when len is 0.  A JSON body of zero
-length with the Content-Type header set has no valid meaning.  The
-function therefore rejects it.  It does not silently set the header
-with no body bytes.
+When resp or json is NULL, or when len is 0, it returns
+ccol_invalid_args at once and changes nothing in resp.  A zero-length
+JSON body with the Content-Type header set has no valid meaning, so
+the function rejects it instead of silently setting the header with
+no body bytes.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success           - The function appended the body bytes and set
-                         the Content-Type header.
+ccol_success           - The body bytes were appended and the
+                         Content-Type header was set.
 ccol_invalid_args      - resp or json is NULL, or len is 0.
 ccol_not_enough_memory - The allocation of the body buffer or of the
                          header buffer failed.

@@ -26,17 +26,17 @@
  * @file bench_maps.c
  * @brief Benchmarks for chashmap and cbstmap.
  *
- * chashmap chooses its implementation from the key type and the value type. An
+ * chashmap chooses its implementation from the key type and the value type: an
  * integral key and an integral value of eight bytes or fewer get open
- * addressing. Everything else gets separate chaining, and this includes every
- * string key. These benchmarks measure both paths, because one change can
- * easily make one path faster and the other path slower.
+ * addressing, and everything else, including every string key, gets separate
+ * chaining. These benchmarks measure both paths, because one change can easily
+ * make one path faster and the other path slower.
  *
  * Where GLib is on the machine, these benchmarks also measure GHashTable and
- * GTree on the same workload. Those figures give you a scale. They are not a
- * target. GHashTable stores pointers and leaves ownership of a key to the
- * caller, and chashmap copies a key and a value into its own storage. The two
- * therefore do different amounts of work for the same call.
+ * GTree on the same workload. Those figures give you a scale, not a target:
+ * GHashTable stores pointers and leaves ownership of a key to the caller,
+ * while chashmap copies a key and a value into its own storage, so the two do
+ * different amounts of work for the same call.
  */
 
 #include <cbstmap.h>
@@ -53,9 +53,9 @@
 
 #define BENCH_MAP_N 100000
 
-/* The harness draws the keys one time, in the same way on every run, and every
- * map case shares them. The comparison between the implementations therefore
- * uses identical input. */
+/* The harness draws the keys once, in the same way on every run, and every map
+ * case shares them, so the comparison between the implementations uses
+ * identical input. */
 typedef struct {
   int *keys;
   size_t count;
@@ -129,8 +129,8 @@ static void hmap_int_insert_run(void *state, size_t n) {
   hmap_state_t *st = state;
   chmap m = st->m;
   chmap_redeclare(m, int, int);
-  /* The value is in a local of the value type. Therefore, the timed loop does
-   * no conversion. */
+  /* The value is in a local of the value type, so the timed loop does no
+   * conversion. */
   for (size_t i = 0; i < n; i++) {
     int v = (int)i;
     chmap_insert(m, st->ks->keys[i], v);
@@ -154,14 +154,14 @@ static void *hmap_int_filled_setup(size_t n) {
   return st;
 }
 
-/* Every lookup arm compares the sum that it accumulates against a sum from the
-   setup, which the harness does not time. The setup computes that sum with the
-   same traversal. A miss costs much less than a hit. A defect that stopped the
-   map from finding a key would therefore report a large speed increase, under
-   a name that promises the opposite. Nobody questions a result of that shape.
-   The keys are random and not in order, so the set holds duplicates. This is
-   why the harness measures the expected sum instead of computing it from a
-   formula: for a duplicated key, the map keeps only the value from the last
+/* Every lookup arm compares the sum that it accumulates against a sum that the
+   setup, which the harness does not time, computes with the same traversal. A
+   miss costs much less than a hit, so a defect that stopped the map from
+   finding a key would report a large speed increase under a name that promises
+   the opposite, and nobody questions a result of that shape. The keys are
+   random and not in order, so the set holds duplicates; this is why the
+   harness measures the expected sum instead of computing it from a formula,
+   because for a duplicated key the map keeps only the value from the last
    insert. */
 static void hmap_int_lookup_run(void *state, size_t n) {
   hmap_state_t *st = state;
@@ -176,9 +176,8 @@ static void hmap_int_lookup_run(void *state, size_t n) {
   bench_sink_value((long long)acc);
 }
 
-/* Every lookup here misses. That is the path that probes for the longest time
-   before it can
- * conclude the key is absent. */
+/* Every lookup here misses, which is the path that probes for the longest time
+ * before it can conclude that the key is absent. */
 static void hmap_int_lookup_miss_run(void *state, size_t n) {
   hmap_state_t *st = state;
   chmap m = st->m;
@@ -450,19 +449,18 @@ typedef struct uth_entry {
   UT_hash_handle hh;
 } uth_entry_t;
 
-/* The arm with a string key needs its own entry type. uthash keys a table on
-   one named member, so a table with a string key needs a type of its own. The
-   key bytes sit inside the entry. That matches how the map on the other side
-   of this comparison stores a short key, so both sides pay for the same key
-   COPY.
+/* The arm with a string key needs its own entry type, because uthash keys a
+   table on one named member. The key bytes sit inside the entry, which
+   matches how the map on the other side of this comparison stores a short
+   key, so both sides pay for the same key COPY.
 
-   Both sides do not pay for the same node allocation, and this is the one row
-   where that matters. A string key puts chashmap on its separate chaining
+   The two sides do not pay for the same node allocation, and this is the one
+   row where that matters. A string key puts chashmap on its separate chaining
    backend, which allocates one chain node for each insert inside the timed
-   loop. These entries come from a block that the setup obtains, and the
+   loop, while these entries come from a block that the setup obtains and the
    harness does not time the setup. The insert_str_int row therefore charges
-   this library for one allocation in each operation that uthash does not pay.
-   That row understates this library. It does not flatter it. */
+   this library for one allocation in each operation that uthash does not pay,
+   so that row understates this library instead of flattering it. */
 typedef struct uth_str_entry {
   char key[16];
   int val;
@@ -490,13 +488,13 @@ static void uth_teardown(void *state) {
   free(st);
 }
 
-/* The setup allocates the entry storage as one block. The measured loop
- * therefore holds the work of uthash itself, and not one malloc for each
- * insert. On the rows with an integer key, neither side pays an allocation for
- * each entry. Both grow their table a few times inside the timed loop and copy
- * the entries into it. That cost follows the number of GROWTHS, and not the
- * number of inserts. On the rows with a string key the two sides do differ.
- * See the comment on uth_str_entry_t for which way that difference goes. */
+/* The setup allocates the entry storage as one block, so the measured loop
+ * holds the work of uthash itself and not one malloc for each insert. On the
+ * rows with an integer key, neither side pays an allocation for each entry:
+ * both grow their table a few times inside the timed loop and copy the entries
+ * into it, a cost that follows the number of GROWTHS and not the number of
+ * inserts. On the rows with a string key the two sides do differ; see the
+ * comment on uth_str_entry_t for which way that difference goes. */
 static void *uth_empty_setup(size_t n) {
   uth_state_t *st = calloc(1, sizeof(*st));
   if (!st) return NULL;
@@ -534,9 +532,9 @@ static void uth_str_insert_run(void *state, size_t n) {
        comparison. */
     memcpy(e->key, st->ks->str_keys[i], strlen(st->ks->str_keys[i]) + 1);
     e->val = (int)i;
-    /* This hashes the key one time, which matches the find-or-insert of
-       chmap_insert. A find and then an add hashes the key two times, and the
-       other side of this comparison does not do that. */
+    /* This hashes the key once, which matches the find-or-insert of
+       chmap_insert. A find and then an add hashes the key twice, which the
+       other side of this comparison does not do. */
     uth_str_entry_t *replaced = NULL;
     HASH_REPLACE_STR(st->str_head, key, e, replaced);
     (void)replaced;
@@ -574,8 +572,8 @@ static void uth_insert_run(void *state, size_t n) {
     uth_entry_t *e = &st->pool[i];
     e->key = st->ks->keys[i];
     e->val = (int)i;
-    /* This hashes the key one time. See uth_str_insert_run for why a find and
-       then an add is not an equal comparison against chmap_insert. */
+    /* This hashes the key once. See uth_str_insert_run for why a find and then
+       an add is not an equal comparison against chmap_insert. */
     uth_entry_t *replaced = NULL;
     HASH_REPLACE_INT(st->head, key, e, replaced);
     (void)replaced;
@@ -611,11 +609,11 @@ static void uth_lookup_run(void *state, size_t n) {
 
 /* ------------------------------------------------------------------------ */
 
-/* chashmap and cbstmap hold no lock of their own, by design. One shared map
- * that several threads drive would therefore be a data race and not a
- * benchmark. Each thread builds and drives its own map. That is how you use
- * these containers from several threads, and this case measures whether that
- * use scales. */
+/* chashmap and cbstmap hold no lock of their own, by design, so one shared map
+ * that several threads drive would be a data race and not a benchmark. Each
+ * thread builds and drives its own map instead, which is how you use these
+ * containers from several threads, and this case measures whether that use
+ * scales. */
 BENCH_MT_SETUP(hmap_int_empty_setup)
 BENCH_MT_SETUP(hmap_int_filled_setup)
 BENCH_MT_SETUP(hmap_str_empty_setup)
@@ -693,9 +691,9 @@ void bench_register_maps(void) {
                             .teardown = uth_teardown,
                             .n = BENCH_MAP_N});
   /* The cases with a string key reach a different backend of the map under
-     test. That backend is separate chaining and not open addressing. They
-     therefore need a reference of their own. Without one, they report a count
-     in nanoseconds with nothing to compare it against. */
+     test, separate chaining instead of open addressing, so they need a
+     reference of their own; without one, they report a count in nanoseconds
+     with nothing to compare it against. */
   bench_add(&(bench_case_t){.group = "chashmap",
                             .name = "insert_str_int",
                             .vs = "uthash",

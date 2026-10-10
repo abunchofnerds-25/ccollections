@@ -12,29 +12,28 @@ cjson cjson_clone(cjson node);
 .SH DESCRIPTION
 .nf
 Returns a fully independent copy of the subtree under node.  The
-function duplicates every string.  It copies every array and every
-object together with its contents.  The clone uses the same
-allocator as the source, which is the allocator that the root node
-keeps.  Each object of the copy keeps its members in the order of
-the source object.
+function duplicates every string and copies every array and every
+object together with its contents.  The clone uses the same allocator
+as the source, which is the allocator that the root node keeps, and
+each object of the copy keeps its members in the order of the source
+object.
 
-The function refuses a subtree that nests more than 500 levels deep.
-Each array or object is one level, in any combination, and a scalar
-adds none.  It reports such a
-subtree in the same way as an allocation failure.  The limit is the
-same as the limit of the parser, so the function can clone any tree
-that parsed.  Only the construction API can build a deeper tree,
-through cjson_list_push() and cjson_dictionary_set().  That API has
-no depth bound, where a parsed document does.  The limit is a policy
-limit.  It is not a guess about the stack size of the calling
-thread.  The function walks the nesting with an explicit worklist on
-the heap.  A tree at the limit therefore costs the same small, fixed
-amount of native stack as a flat one.  An ordinary tree never comes
-near this depth.
+The function refuses a subtree that nests more than 500 levels deep,
+where each array or object is one level, in any combination, and a
+scalar adds none.  It reports such a subtree in the same way as an
+allocation failure.  The limit is the same as the limit of the
+parser, so the function can clone any tree that parsed; only the
+construction API, through cjson_list_push() and
+cjson_dictionary_set(), can build a deeper tree, because that API has
+no depth bound while a parsed document does.  This is a policy limit,
+not a guess about the stack size of the calling thread: the function
+walks the nesting with an explicit worklist on the heap, so a tree at
+the limit costs the same small, fixed amount of native stack as a
+flat one.  An ordinary tree never comes near this depth.
 .fi
 .SH RETURN VALUE
 .nf
-A new root node on success.  The caller owns it.  NULL when the
+A new root node, which the caller owns, on success.  NULL when the
 allocation fails, or when node nests more than 500 levels deep.
 .fi
 .SH "SEE ALSO"

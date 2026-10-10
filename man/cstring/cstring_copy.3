@@ -11,7 +11,7 @@ cstr cstring_copy(cstr s, char **err);
 .fi
 .SH DESCRIPTION
 .nf
-This function allocates a new cstring with the same content as s. After the
+This function allocates a new cstring with the same content as s; after the
 call, the two strings are fully independent.
 .fi
 .SH PARAMETERS
@@ -22,8 +22,8 @@ err   Optional pointer to receive an error string on failure
 .SH RETURN VALUE
 .nf
 A new cstring on success
-NULL when an allocation fails. The function then writes the details to *err
-if err is not NULL
+NULL when an allocation fails, in which case the function writes the details
+to *err if err is not NULL
 .fi
 .SH NOTES
 .nf

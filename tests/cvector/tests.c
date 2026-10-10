@@ -57,10 +57,10 @@ TEST(cvectors, create_fails) {
   REQUIRE_NE((void *)err_str, NULL);
 }
 
-// The first allocation of the backing buffer holds 4 elements. Its byte count
-// is _ccol_cvector_minimum_capacity * elem_size. An elem_size large enough to
-// overflow size_t there must be rejected at once. Without that, the product
-// wraps silently to a small allocation, and v->elem_size still records the
+// The first allocation of the backing buffer holds 4 elements, so its byte
+// count is _ccol_cvector_minimum_capacity * elem_size. An elem_size large
+// enough to overflow size_t there must be rejected at once; otherwise the
+// product wraps silently to a small allocation, while v->elem_size records the
 // real, huge value.
 TEST(cvectors, create_fails_on_elem_size_overflow) {
   char *err_str = NULL;
@@ -75,7 +75,7 @@ TEST(cvectors, create_fails_on_elem_size_overflow) {
 }
 
 // A large elem_size that does NOT overflow the initial capacity allocation
-// must still be accepted; the overflow guard must not be over-strict.
+// must be accepted: the overflow guard must not be over-strict.
 TEST(cvectors, create_succeeds_with_large_elem_size) {
   char *err_str = NULL;
   size_t large_elem_size = 1024 * 1024;  // 1 MiB per element
@@ -144,8 +144,8 @@ TEST(cvectors, get_mprocs) {
   cvector *custom_cvec = cvector_create_full(sizeof(int), &custom, NULL);
   ccol_memmgmt_procs_t *stored = cvector_get_mprocs(custom_cvec);
   REQUIRE_NE((void *)stored, NULL);
-  // The vector keeps its own copy of the procs struct on the heap. It does
-  // not keep the pointer of the caller. But the function pointers inside that
+  // The vector keeps its own copy of the procs struct on the heap instead of
+  // the pointer of the caller, but the function pointers inside that
   // copy must match the ones from the creation call.
   REQUIRE_NE((void *)stored, (void *)&custom);
   REQUIRE_TRUE(stored->malloc == custom.malloc);
@@ -155,12 +155,12 @@ TEST(cvectors, get_mprocs) {
   cvector_destroy(custom_cvec);
 }
 
-// cvector_get_mprocs(NULL) must call ccol_fatal_err(), which asserts. It must
-// not dereference a NULL vector directly. Every other accessor in this module
+// cvector_get_mprocs(NULL) must call ccol_fatal_err(), which asserts, instead
+// of dereferencing a NULL vector directly. Every other accessor in this module
 // behaves in the same way: cvector_at, cvector_elem_count, cvector_reset,
 // cvector_data_ptr, cvector_find, cvector_push_back, cvector_pop_back and
-// cvector_reserve. This test runs in a forked child, because the assertion
-// stops the whole process. type_safe_at_out_of_bounds_is_fatal has the same
+// cvector_reserve. This test runs in a forked child because the assertion
+// stops the whole process; type_safe_at_out_of_bounds_is_fatal has the same
 // shape.
 TEST(cvectors, get_mprocs_null_vec_is_fatal) {
   pid_t pid = fork();
@@ -278,10 +278,10 @@ TEST(cvectors, push_back_self_alias_no_realloc) {
 
 TEST(cvectors, push_back_self_alias_triggers_expansion) {
   // The vector holds 4 elements and its capacity is 4, so it is exactly
-  // full. A push of an element that is already in the vector back onto
-  // itself therefore forces scale_the_cvector_size_up to call realloc.
-  // Without a guard, new_elem points into the buffer of the vector itself. It
-  // dangles the moment realloc moves that buffer, and the copy after that
+  // full, and a push of an element that is already in the vector back onto
+  // itself forces scale_the_cvector_size_up to call realloc.
+  // Without a guard, new_elem points into the buffer of the vector itself, so
+  // it dangles the moment realloc moves that buffer, and the copy after that
   // reads freed memory.
   cvector *cvec = cvector_create(sizeof(int), NULL);
   for (int i = 0; i < 4; ++i) {
@@ -802,7 +802,7 @@ TEST(cvectors, append_array_null_ptr) {
 TEST(cvectors, append_array_overflow_detection) {
   cvector *cvec = cvector_create(sizeof(int), NULL);
 
-  // Try to append SIZE_MAX elements with a valid pointer. This must fail,
+  // Try to append SIZE_MAX elements with a valid pointer. This must fail
   // because the byte count overflows.
   int dummy[1] = {0};
   int result = (int)cvector_append_array(cvec, dummy, SIZE_MAX);
@@ -830,7 +830,7 @@ TEST(cvectors, append_array_self_alias_no_realloc) {
   REQUIRE_EQ(cvector_get_capacity(cvec),
              _ccol_cvector_minimum_capacity);  // no realloc
   // Source range ends exactly where the destination begins (touching, not
-  // overlapping): the cheaper memcpy path must still be used, not
+  // overlapping): the cheaper memcpy path must be used here, not
   // memmove.
   REQUIRE_EQ(cvector_overlap_copy_count_for_tests, overlap_count_before);
 
@@ -899,31 +899,31 @@ TEST(cvectors, append_array_partial_self_alias_triggers_expansion) {
 }
 
 // arr_ptr can alias the buffer of v at an offset where the requested
-// elem_count reads past the *live* elem_count of the vector. It then reads
-// into capacity that is reserved but not yet live. The source byte range and
-// the destination byte range then genuinely overlap. Every self-alias test
-// above is different, because its source range always ends exactly where the
-// destination begins. A plain memcpy is not safe for such an overlap, and a
-// simple forward copy of bytes is not either. The write of the first appended
-// element can destroy source bytes that a later appended element still needs.
-// cvector_copy_into_tail must detect this and use a memmove, which is safe
-// for an overlap.
+// elem_count reads past the *live* elem_count of the vector, that is, into
+// capacity that is reserved but not yet live, so the source byte range and
+// the destination byte range genuinely overlap. This differs from every
+// self-alias test above, whose source range always ends exactly where the
+// destination begins. Neither a plain memcpy nor a simple forward copy of
+// bytes is safe for such an overlap, because the write of the first
+// appended element can destroy source bytes that a later appended element
+// needs. cvector_copy_into_tail must detect this and use a memmove, which
+// is safe for an overlap.
 //
 // The two tests below use a large element count with a shift of only ONE
-// ELEMENT between the source range and the destination range. Nearly the
-// whole copy therefore overlaps itself. The size and the shift are
-// load-bearing, and not incidental. A smaller shift and size drive the exact
-// same code path, and they can still pass with the overlap check turned off.
-// An overlap is undefined behavior, and not behavior that is guaranteed to be
-// wrong. A given memcpy can therefore happen not to corrupt a few small
-// elements at that size and shift. A huge total size with a shift of one
-// element is the classic pattern. It is a "shift an array by one in place
-// with a memcpy instead of a memmove". Any implementation that copies in
-// pieces
-// smaller than the whole buffer cannot get this right without the overlap
-// handling of memmove. Every real memcpy copies in such pieces, by design,
-// for anything longer than a few bytes. This test therefore reproduces
-// reliably, whatever memcpy and whatever compiler the build uses.
+// ELEMENT between the source range and the destination range, so nearly the
+// whole copy overlaps itself. The size and the shift are load-
+// bearing, not incidental: a smaller shift and size drive the exact
+// same code path, but they can pass with the overlap check turned
+// off. An overlap is undefined behavior, not behavior that is
+// guaranteed to be wrong, so a given memcpy can happen not to
+// corrupt a few small elements at that size and shift. A huge total
+// size with a shift of one element is the classic pattern of "shift
+// an array by one in place with a memcpy instead of a memmove": any
+// implementation that copies in pieces smaller than the whole buffer
+// cannot get this right without the overlap handling of memmove, and
+// every real memcpy copies in such pieces, by design, for anything
+// longer than a few bytes. So this test reproduces reliably,
+// whatever memcpy and whatever compiler the build uses.
 TEST(cvectors, append_array_self_alias_overlap_shift_by_one_no_realloc) {
   const int n = 10000;
   cvector *cvec = cvector_create(sizeof(int), NULL);
@@ -931,9 +931,9 @@ TEST(cvectors, append_array_self_alias_overlap_shift_by_one_no_realloc) {
   cvector_push_back(cvec, &(int){1});
   REQUIRE_EQ(cvector_elem_count(cvec), (size_t)2);
 
-  // Grow the capacity and leave elem_count alone. Then fill the spare region
-  // with deterministic values, directly through the raw data pointer. That
-  // region is allocated but not yet live. This goes around push_back
+  // Grow the capacity, leave elem_count alone, and then fill the spare region
+  // with deterministic values directly through the raw data pointer. That
+  // region is allocated but not yet live, and this goes around push_back
   // completely, so no shrink logic ever runs.
   REQUIRE_TRUE(cvector_reserve(cvec, (size_t)n));
   int *base = cvector_data_ptr(cvec);
@@ -948,10 +948,10 @@ TEST(cvectors, append_array_self_alias_overlap_shift_by_one_no_realloc) {
   int result = (int)cvector_append_array(cvec, base + 1, (size_t)(n - 2));
   REQUIRE_EQ(result, true);
   REQUIRE_EQ(cvector_elem_count(cvec), (size_t)n);
-  // This is the whole point of this test. It confirms that the code took the
-  // memmove branch, which is safe for an overlap. It does not trust the
-  // output of the copy alone. No contract makes a real memcpy corrupt an
-  // overlapping copy. A memcpy is only permitted to corrupt one.
+  // This is the whole point of this test: it confirms that the code took the
+  // memmove branch, which is safe for an overlap, instead of trusting the
+  // output of the copy alone, because no contract makes a real memcpy corrupt
+  // an overlapping copy; a memcpy is only permitted to corrupt one.
   REQUIRE_GT(cvector_overlap_copy_count_for_tests, overlap_count_before);
 
   REQUIRE_EQ(*(int *)cvector_at(cvec, 0), 0);
@@ -980,9 +980,9 @@ TEST(cvectors,
   // count = cap - 1 elements starting at index 1: new_elem_count = 2 +
   // (cap - 1) = cap + 1 > capacity, forcing cvector_reserve to realloc.
   // The source range [1, cap) and the destination range [2, cap+1) overlap
-  // almost completely, with a shift of one element. The copy must survive
-  // both things correctly. The realloc is the first, and the code recomputes
-  // arr_ptr against the new buffer. The overlap is the second.
+  // almost completely, with a shift of one element. The copy must handle
+  // both things correctly: the realloc, after which the code recomputes
+  // arr_ptr against the new buffer, and the overlap.
   size_t overlap_count_before = cvector_overlap_copy_count_for_tests;
   int result = (int)cvector_append_array(cvec, base + 1, (size_t)(cap - 1));
   REQUIRE_EQ(result, true);
@@ -1271,9 +1271,9 @@ static void *_reset_test_realloc(void *ptr, size_t size) {
 static void _reset_test_free(void *ptr) { free(ptr); }
 
 // cvector_reset must not touch the allocator at all when the vector already
-// sits at _ccol_cvector_minimum_capacity. That shrink does nothing.
-// scale_the_cvector_size_down has an early-return guard for the same case.
-// cvector_reset must still shrink, and therefore call realloc, when a shrink
+// sits at _ccol_cvector_minimum_capacity, where that shrink does nothing
+// (scale_the_cvector_size_down has an early-return guard for the same case).
+// cvector_reset must shrink, and so call realloc, when a shrink
 // is genuinely needed.
 TEST(cvectors, reset_skips_realloc_when_already_at_minimum_capacity) {
   ccol_memmgmt_procs_t procs = {.malloc = _reset_test_malloc,
@@ -1480,11 +1480,11 @@ TEST(cvectors, type_safe_at_ptr) {
 }
 
 // cvec_at stops the process with ccol_fatal_err() for an index that is out of
-// bounds. Every other type-inferred macro has the same "aborting convenience
+// bounds; every other type-inferred macro has the same "aborting convenience
 // API" contract. cvector_at() returns NULL for such an index, and a direct
 // dereference of that NULL gives a SIGSEGV instead. This test runs in a
-// forked child, because ccol_fatal_err stops the whole process.
-// tests/cthreadpool/tests.c uses a forked child for misuse that stops the
+// forked child because ccol_fatal_err stops the whole process, as the tests in
+// tests/cthreadpool/tests.c do for misuse that stops the
 // process in the same way.
 TEST(cvectors, type_safe_at_out_of_bounds_is_fatal) {
   pid_t pid = fork();
@@ -1678,23 +1678,23 @@ TEST(cvectors, construct_scoped_lifecycle) {
 // MACRO HYGIENE TESTS
 // ========================================================================
 //
-// cvec_push and cvec_pop each declare an internal local that holds a result.
-// Neither of them can give that local the plain name 'r'. cvec_pop also holds
-// an element in a local, and that local cannot have the plain name '_tmp'. The
-// problem is in the SAME statement whose initializer holds the parameters of
-// the macro. The preprocessor substitutes these parameters as text. In C, the
-// scope of a declared identifier starts directly after its own declarator.
-// That is before the initializer is evaluated. The usual `int x = x;` problem
-// is the same rule.
+// cvec_push and cvec_pop each declare an internal local that holds a result,
+// and neither of them can give that local the plain name 'r'. cvec_pop also
+// holds an element in a local, which cannot have the plain name '_tmp'. The
+// problem lies in the SAME statement whose initializer holds the parameters of
+// the macro, which the preprocessor substitutes as text: in C, the
+// scope of a declared identifier starts directly after its own declarator,
+// that is, before the initializer is evaluated (the usual `int x = x;` problem
+// follows from the same rule).
 //
 // A caller can give the bare name 'r' to its own vector variable, or to the
-// expression that it pushes or pops. This project frequently uses 'r' for a
+// expression that it pushes or pops, and this project frequently uses 'r' for a
 // retval local. If a macro local had that name, the identifier of the
-// caller would silently resolve to the local of the macro, and not to the
-// real variable of the caller. That local has no value yet. The result would
-// be incorrect data, with no compiler warning at any optimization level.
-// Therefore, each such internal local has a name that is specific to its own
-// macro. No real identifier of a caller can collide with it.
+// caller would silently resolve to the local of the macro instead of the
+// real variable of the caller, while that local has no value yet. The result
+// would be incorrect data, with no compiler warning at any optimization level.
+// So each such internal local has a name that is specific to its own
+// macro, which no real identifier of a caller can collide with.
 
 TEST(cvectors, push_value_named_r_is_not_shadowed_by_internal_retval) {
   cvec_construct(vec, int);
@@ -1727,10 +1727,10 @@ TEST(cvectors, pop_from_vector_variable_named_r_is_not_shadowed) {
 
 TEST(cvectors, pop_from_vector_variable_named__tmp_is_not_shadowed) {
   // The internal local of cvec_pop that holds an element must not be a plain
-  // '_tmp'. A vector variable that the caller names '_tmp' drives the
-  // cross-statement form of the same hazard. Such a declaration in the body
+  // '_tmp', because a vector variable that the caller names '_tmp' drives the
+  // cross-statement form of the same hazard: such a declaration in the body
   // of the statement expression of the macro declares '_tmp' again, with the
-  // element type of the vector. It then shadows the cvec of the caller for
+  // element type of the vector, and so shadows the cvec of the caller for
   // the rest of the scope of that statement expression.
   cvec_construct(_tmp, int);
   cvec_push(_tmp, 3);
@@ -1742,19 +1742,19 @@ TEST(cvectors, pop_from_vector_variable_named__tmp_is_not_shadowed) {
   cvec_destroy(_tmp);
 }
 
-// cvec_at must not expand its index argument two times. One expansion serves
-// the bounds-checked access of cvector_at(). The other serves the re-read
+// cvec_at must not expand its index argument two times: one expansion serving
+// the bounds-checked access of cvector_at(), and the other serving the re-read
 // that _cvec_at_checked() makes for its message alone. The two are arguments
 // of the very same function call, so nothing sequences one against the other.
 // For an ordinary variable or a literal index, a double expansion is
-// invisible. For an index expression with a side effect, such as cvec_at(vec,
-// i++), it is genuine undefined behavior. In practice the index variable then
-// advances by 2 for each call, and not by 1. The loop silently skips every
-// other element, and it walks off the end of the vector. A capture of the
+// invisible; for an index expression with a side effect, such as cvec_at(vec,
+// i++), it is genuine undefined behavior: in practice the index variable then
+// advances by 2 for each call instead of by 1, so the loop silently skips every
+// other element and walks off the end of the vector. Capturing the
 // index into a local exactly one time, before either use, prevents that. The
-// tests below read and write through a loop with a bare j++ index expression.
-// They assert that the loop variable advances by exactly 1 for each
-// iteration. They also assert that the loop visits every element exactly one
+// tests below read and write through a loop with a bare j++ index expression,
+// and assert that the loop variable advances by exactly 1 for each
+// iteration and that the loop visits every element exactly one
 // time, in order.
 TEST(cvectors, at_index_expression_with_side_effect_evaluated_once) {
   cvec_construct(vec, int);
@@ -1797,30 +1797,30 @@ TEST(cvectors, at_index_expression_with_side_effect_evaluated_once_as_lvalue) {
 // ========================================================================
 //
 // cvec_reserve puts its new_capacity_count argument in two places of its
-// expansion. cvec_append_array does the same with its elem_count argument. One
-// place is the real call to cvector_reserve() or cvector_append_array(). The
-// other place is the ccol_fatal_err() message, which the macro makes only on
-// the failure path. Neither macro can do that without a guard that evaluates
-// the argument one time. The index of cvec_at has such a guard (see the
-// "at_index_expression_with_side_effect_evaluated_once*" tests above). The
-// internal locals of cvec_push and cvec_pop also have one.
+// expansion, and cvec_append_array does the same with its elem_count argument:
+// one place is the real call to cvector_reserve() or cvector_append_array(),
+// and the other is the ccol_fatal_err() message, which the macro makes only on
+// the failure path. So both macros need a guard that evaluates
+// the argument one time, like the one that the index of cvec_at has (see the
+// "at_index_expression_with_side_effect_evaluated_once*" tests above) and the
+// internal locals of cvec_push and cvec_pop have.
 //
 // Without that guard, an argument expression with a side effect runs a second
-// time when the real call fails. That second run occurs only to make the
-// message. It silently does the real side effect again, and it can show a
-// value that is different from the value that the call used. All of this
-// occurs immediately before ccol_fatal_err() stops the process. A macro that
-// copies the argument into a local exactly one time prevents this. cvec_at
-// does the same with its index.
+// time when the real call fails, only to make the
+// message: it silently repeats the real side effect, and it can show a
+// value that differs from the value that the call used, all
+// immediately before ccol_fatal_err() stops the process. A macro that
+// copies the argument into a local exactly one time prevents this, as cvec_at
+// does with its index.
 //
-// The two tests below use a deterministic failure. One test goes above
-// ccol_max_elem_count, and the other test causes an overflow of the total of
-// the append. Neither test uses an allocator that fails. Therefore, the call
-// count below comes only from the expansion of the macro, and not from a retry
-// in the allocator. The tests record that count in shared memory from mmap. The
+// The two tests below use a deterministic failure: one test goes above
+// ccol_max_elem_count, and the other causes an overflow of the total of
+// the append. Neither uses an allocator that fails, so the call
+// count below comes only from the expansion of the macro, not from a retry
+// in the allocator. The tests record that count in shared memory from mmap: the
 // forked child is the process that does the double evaluation, and that child
-// then aborts. Therefore, the parent can see only the state that the abort does
-// not remove: memory that the two processes share across the fork.
+// then aborts, so the parent can see only the state that the abort does
+// not remove, which is memory that the two processes share across the fork.
 
 static int *g_reserve_side_effect_call_count;
 static size_t reserve_side_effecting_target(void) {
@@ -1897,27 +1897,27 @@ TEST(cvectors, append_array_fatal_err_evaluates_count_argument_exactly_once) {
 // PUSH TYPE-CONVERSION TESTS
 // ========================================================================
 //
-// cvec_push must not take the address of new_elem directly. It must not make
-// a compound literal whose type is the OWN type of new_elem. It also must not
+// cvec_push must not take the address of new_elem directly, must not make
+// a compound literal whose type is the OWN type of new_elem, and must not
 // use a _Static_assert over sizeof() as its only guard:
-// - Such an assert finds a new_elem of a different SIZE. It therefore
+// - Such an assert finds a new_elem of a different SIZE, and so
 //   prevents a read out of bounds.
 // - It does nothing for a new_elem of a different TYPE and the *same* size.
 // - A push of a `float` into a vector from cvec_construct(v, int) passes the
 //   size check, because sizeof(float) == sizeof(int) on every mainstream
 //   platform.
 // - The raw 4-byte IEEE 754 bit pattern then goes byte for byte into the int
-//   storage of the vector. A plain C assignment, such as
+//   storage of the vector, whereas a plain C assignment, such as
 //   `int x = some_float;`, converts the value.
-// - A read of that element gives the bits of the float read as an int, and not
-//   the expected truncated integer value. No compiler shows a warning, at any
+// - A read of that element gives the bits of the float read as an int instead
+//   of the expected truncated integer value, and no compiler warns, at any
 //   optimization level.
 //
-// Therefore, the internal temporary has the declared element type of v, and
-// new_elem initializes it. The conversion then goes through the real assignment
-// rules of the C compiler. cvec_find uses the same pattern. These tests push a
-// value of a different type with the same size. They check the real VALUE that
-// results. They do not only check that the call compiles and gives success. A
+// So the internal temporary has the declared element type of v, and
+// new_elem initializes it, which sends the conversion through the real
+// assignment rules of the C compiler; cvec_find uses the same pattern. These
+// tests push a value of another type of the same size and check the real VALUE
+// that results, not only that the call compiles and gives success, because a
 // push through a temporary with no type also compiles and gives ccol_success,
 // but it silently stores an incorrect value.
 
@@ -1926,8 +1926,8 @@ TEST(cvectors,
   cvec_construct(vec, int);
   cvec_push(vec, 3.0f);
   // A raw byte copy of 3.0f's IEEE-754 bit pattern reinterpreted as int
-  // would be 1077936128, not 3. If this ever regresses, that's exactly the
-  // wrong value that would come back.
+  // would be 1077936128, not 3, so a regression brings back exactly that
+  // wrong value.
   REQUIRE_EQ(cvec_at(vec, 0), 3);
   cvec_destroy(vec);
 }
@@ -1950,14 +1950,14 @@ TEST(cvectors, push_expression_double_into_long_long_vector_converts) {
 TEST(cvectors,
      push_negative_float_into_int_vector_truncates_like_plain_assignment) {
   cvec_construct(vec, int);
-  // The value goes through a variable, and not as a literal. The Clang warning
-  // -Wliteral-conversion shows a narrowing conversion of a literal that is a
-  // compile-time constant. It does not show it for a general expression. If
-  // the test gives -9.75f directly to cvec_push, the literal initializes the
-  // typed temporary of the macro, and the warning occurs. This test does the
-  // truncation below on purpose. Therefore, the warning is not correct here. A
-  // variable has the same value at run time, and the warning has no constant
-  // literal to find.
+  // The value goes through a variable instead of a literal, because the Clang
+  // warning -Wliteral-conversion flags a narrowing conversion of a literal that
+  // is a compile-time constant, but not of a general expression. If
+  // the test gave -9.75f directly to cvec_push, the literal would initialize
+  // the typed temporary of the macro and the warning would fire, although this
+  // test does the truncation below on purpose, so the warning is not correct
+  // here. A variable has the same value at run time and gives the warning no
+  // constant literal to find.
   float negative_value = -9.75f;
   cvec_push(vec, negative_value);
   int expected =
@@ -1966,11 +1966,11 @@ TEST(cvectors,
   cvec_destroy(vec);
 }
 
-// An int literal with no suffix can go into a vector of a wider integer type.
-// Any smaller integer type can too. Such a push must genuinely convert to
-// that wider type. The macro must not reject it at compile time on its size.
-// A _Static_assert over sizeof() refuses to compile such a push at all, even
-// though the conversion is an ordinary and completely safe one in C.
+// An int literal with no suffix can go into a vector of a wider integer type,
+// and so can any smaller integer type. Such a push must genuinely convert to
+// that wider type instead of being rejected at compile time on its size, as
+// a _Static_assert over sizeof() would do by refusing to compile such a push at
+// all, even though the conversion is an ordinary and completely safe one in C.
 TEST(cvectors, push_expression_int_literal_into_long_vector_converts) {
   cvec_construct(vec, long);
   cvec_push(vec, 5);
@@ -1986,12 +1986,12 @@ TEST(cvectors, push_int_lvalue_into_long_vector_converts) {
   cvec_destroy(vec);
 }
 
-// The conversion must happen before anything touches the vector. An lvalue
-// that aliases the vector, such as cvec_at itself, is then read one time and
-// correctly. Any growth of the capacity that the push starts cannot affect
+// The conversion must happen before anything touches the vector, so an lvalue
+// that aliases the vector, such as cvec_at itself, is read one time and
+// correctly, and no growth of the capacity that the push starts can affect
 // it. This test drives the same self-alias-during-growth case as
-// push_back_self_alias_via_type_safe_macro above. It drives it through the
-// code path that carries the conversion.
+// push_back_self_alias_via_type_safe_macro above, but
+// through the code path that carries the conversion.
 TEST(cvectors, push_self_alias_is_safe_with_conversion) {
   cvec_construct(vec, int);
   for (int i = 0; i < 4; ++i) {
@@ -2022,12 +2022,12 @@ TEST(cvectors, iterator_empty_vector) {
   cvec_destroy(vec);
 }
 
-// cvector_begin_iter(NULL, ...) must behave the same as an empty vector. It
-// must return NULL and must not touch err. It must not assert.
+// cvector_begin_iter(NULL, ...) must behave the same as an empty vector: it
+// must return NULL, set err to NULL, and must not assert.
 // chashmap_begin_iter() and cbmap_begin_iter() are tolerant of NULL in the
-// same deliberate way, and all three container modules stay consistent here.
-// A container field can therefore stay uninitialized while nothing is in it
-// yet. A caller can iterate such a field directly, with no NULL guard of its
+// same deliberate way, so all three container modules stay consistent here,
+// and a container field can stay a null pointer while nothing is in it yet:
+// a caller can iterate such a field directly, with no NULL guard of its
 // own.
 TEST(cvectors, begin_iter_null_vec_returns_null_like_empty) {
   cvec null_vec = NULL;
@@ -2035,7 +2035,7 @@ TEST(cvectors, begin_iter_null_vec_returns_null_like_empty) {
   REQUIRE_EQ((void *)cvector_begin_iter(null_vec, &err), NULL);
   REQUIRE_EQ((void *)err, NULL);
 
-  // NULL for err itself must also be tolerated (it's documented as optional).
+  // NULL for err itself must also be tolerated (it is documented as optional).
   REQUIRE_EQ((void *)cvector_begin_iter(null_vec, NULL), NULL);
 }
 
@@ -2271,7 +2271,7 @@ TEST(cvectors, sort_stable) {
 // A budget-style counting allocator: the first g_sort_oom_budget calls to
 // malloc/calloc/realloc succeed (delegating to the real allocator); every
 // call after the budget is exhausted returns NULL. free() always delegates
-// to the real free() unconditionally, so whatever DID succeed is still
+// to the real free() unconditionally, so whatever DID succeed is
 // released correctly during cvector_destroy.
 static int g_sort_oom_budget = 0;
 static void *_sort_oom_malloc(size_t size) {
@@ -2292,11 +2292,11 @@ static void *_sort_oom_realloc(void *ptr, size_t size) {
 static void _sort_oom_free(void *ptr) { free(ptr); }
 
 // The internal allocation of the temp buffer of the sort can fail. cvec_sort
-// and cvector_sort_with_comparison_proc must then call ccol_fatal_err(). They
-// must not silently leave the vector unsorted, which tells the caller
-// nothing. Every other type-inferred macro in cvector.h that changes a vector
-// behaves in the same way. This test runs in a forked child, because
-// ccol_fatal_err() stops the whole process.
+// and cvector_sort_with_comparison_proc must then call ccol_fatal_err() rather
+// than silently leave the vector unsorted, which tells
+// the caller nothing; every other type-inferred macro in cvector.h that changes
+// a vector behaves in the same way. This test runs in a forked child because
+// ccol_fatal_err() stops the whole process;
 // type_safe_at_out_of_bounds_is_fatal has the same shape.
 TEST(cvectors, sort_out_of_memory_is_fatal) {
   pid_t pid = fork();
@@ -2311,10 +2311,10 @@ TEST(cvectors, sort_out_of_memory_is_fatal) {
                                   .calloc = _sort_oom_calloc,
                                   .realloc = _sort_oom_realloc,
                                   .free = _sort_oom_free};
-    // The budget covers exactly the construction of the vector. That is 1
+    // The budget covers exactly the construction of the vector (1
     // calloc for the struct, 1 malloc for the copy of the procs, and 1 malloc
-    // for the first data buffer. It also covers three push_backs, which stay
-    // inside the first capacity of 4 and therefore need no allocation. The
+    // for the first data buffer) plus three push_backs, which stay
+    // inside the first capacity of 4 and so need no allocation. The
     // malloc for the temp buffer of the sort is then the 4th call to the
     // allocator, and it must fail.
     g_sort_oom_budget = 3;
@@ -2334,14 +2334,14 @@ TEST(cvectors, sort_out_of_memory_is_fatal) {
 }
 
 // cvec_sort on a vector of `signed char` must use a genuine default signed
-// comparator. It must not silently fall back to a NULL one. The _Generic
-// dispatch of csort_get_default_comparison_proc must therefore carry a case
-// for the separate `signed char` type, and not only one for a plain `char`.
-// ccol_is_integral_type() in common.h classifies `signed char` as integral.
-// This project also documents it elsewhere as a first-class signed type. This
-// test uses negative values on purpose. They show that the comparator is a
-// real signed comparison. They rule out an unsigned order or a raw-byte order
-// by accident.
+// comparator instead of silently falling back to a NULL one, so the _Generic
+// dispatch of csort_get_default_comparison_proc must carry a case
+// for the separate `signed char` type, not only one for a plain `char`.
+// ccol_is_integral_type() in common.h classifies `signed char` as integral,
+// and this project documents it elsewhere as a first-class signed type. This
+// test uses negative values on purpose: they show that the comparator is a
+// real signed comparison and rule out an unsigned order or a raw-byte order
+// that happens to pass.
 TEST(cvectors, sort_signed_char_uses_genuine_signed_default_comparator) {
   cvec_construct(vec, signed char);
   cvec_push(vec, (signed char)3);
@@ -2360,23 +2360,23 @@ TEST(cvectors, sort_signed_char_uses_genuine_signed_default_comparator) {
   cvec_destroy(vec);
 }
 
-// Some element types have no default comparison procedure. A bool, a struct,
+// Some element types have no default comparison procedure: a bool, a struct,
 // a union, a pointer to anything other than a char, and a char array of a
-// fixed size are such types. The _Static_assert of cvec_sort rejects them, so
-// such a call never builds and never reaches a running program. A test binary
-// has to compile, so it cannot drive a diagnostic that the compiler issues.
-// compile_probes.sh pins that rejection instead. The `test` target of this
-// directory runs it beside this binary. It asserts, under every compiler that
+// fixed size. The _Static_assert of cvec_sort rejects them, so
+// such a call never builds and never reaches a running program. Because a test
+// binary has to compile, it cannot drive a diagnostic that the compiler issues;
+// compile_probes.sh pins that rejection instead, run by the `test` target of
+// this directory beside this binary. It asserts, under every compiler that
 // is available, that each of those element types fails to compile with a
-// message naming cvector_sort_with_comparison_proc. It also asserts that
-// every supported element type still compiles.
+// message naming cvector_sort_with_comparison_proc, and that
+// every supported element type compiles.
 //
-// An enumerated type IS supported and must keep sorting. C makes every
-// enumerated type compatible with one of the standard integer types.
-// _Generic therefore selects the comparator of that type. This test covers
-// two enumerations. The compiler can represent the first as unsigned. It
-// cannot represent the second that way, because that one has a negative
-// enumerator. The two resolve to different comparators.
+// An enumerated type IS supported and must keep sorting: C makes every
+// enumerated type compatible with one of the standard integer types, so
+// _Generic selects the comparator of that type. This test covers
+// two enumerations: the compiler can represent the first as unsigned, but
+// not the second, because that one has a negative
+// enumerator, so the two resolve to different comparators.
 typedef enum {
   cvec_test_enum_low = 0,
   cvec_test_enum_mid = 7,
@@ -2419,11 +2419,11 @@ TEST(cvectors, sort_of_a_signed_enum_vector_orders_negative_enumerators_first) {
   cvec_destroy(vec);
 }
 
-// Every element type that cvec_sort accepts must really sort. It is not
-// enough that it compiles. The sweep below is macro-driven. It covers each
-// integer width, each signedness, and each floating type in one place. A
+// Every element type that cvec_sort accepts must really sort; it is not
+// enough that it compiles. The sweep below is macro-driven and covers each
+// integer width, each signedness, and each floating type in one place, so a
 // comparator that the _Generic dispatch of csort loses for one width
-// therefore shows up as a wrong order. It does not show up as a test that is
+// shows up as a wrong order instead of as a test that is
 // silently absent.
 #define CVEC_TEST_SORTS_INTEGRAL(T, lo, mid, hi)                       \
   do {                                                                 \
@@ -2515,9 +2515,9 @@ TEST(cvectors, sort_sweeps_every_supported_char_pointer_element_type) {
   }
 }
 
-// cvec_find keeps accepting every element type on purpose. That includes the
-// types that cvec_sort rejects. Equality byte by byte is a real answer for a
-// type with no default comparison procedure. An order is not.
+// cvec_find accepts every element type on purpose, including the
+// types that cvec_sort rejects, because equality byte by byte is a real answer
+// for a type with no default comparison procedure, while an order is not.
 TEST(cvectors, find_on_an_element_type_without_a_default_comparator_compiles) {
   cvec_construct(vec, bool);
   bool t = true, f = false;
@@ -2764,9 +2764,9 @@ static bool cvector_is_power_of_two(size_t x) {
 }
 
 // This test runs a random sequence of push_back, pop_back, reserve and reset
-// operations. It checks the structural invariants after every single one.
-// elem_count never goes above the capacity. The capacity never drops below
-// _ccol_cvector_minimum_capacity, and it is always a power of two. data_ptr is
+// operations and checks the structural invariants after every single one:
+// elem_count never goes above the capacity, the capacity never drops below
+// _ccol_cvector_minimum_capacity and is always a power of two, and data_ptr is
 // never NULL while the capacity is above 0.
 // A fixed seed is used (see common_invariants.h) so a failure is always
 // reproducible from the printed seed alone.
@@ -2824,16 +2824,16 @@ TEST(cvectors, invariants_random_ops) {
 /*         ELEMENT EQUALITY, MACRO HYGIENE AND ITERATOR RAII                  */
 /* ========================================================================== */
 
-/* cvec_find compares with the default comparison proc of the element type.
- * Equality is therefore the equality of the type, and not the equality of its
- * object representation. That difference is load-bearing for any type whose
- * representation carries bytes that the value does not fix. The 80-bit long
- * double of x86-64 is such a type. It uses 10 of its 16 bytes, and nothing
- * initialises the other 6. A comparison byte by byte of two objects that hold
- * the identical value therefore reports them as different. It also reads
- * indeterminate bytes. These tests are not vacuous. A comparison of raw bytes
- * here makes the first test report every element that is present as missing at
- * -O0. It also makes valgrind report an uninitialised read at every
+/* cvec_find compares with the default comparison proc of the element type, so
+ * equality is the equality of the type, not the equality of its object
+ * representation. That difference is load-bearing for any type whose
+ * representation carries bytes that the value does not fix, such as the
+ * 80-bit long double of x86-64, which uses 10 of its 16 bytes while nothing
+ * initialises the other 6. A comparison byte by byte of two objects that
+ * hold the identical value therefore reports them as different, and it also
+ * reads indeterminate bytes. These tests are not vacuous: a comparison of raw
+ * bytes here makes the first test report every element that is present as
+ * missing at -O0, and makes valgrind report an uninitialised read at every
  * optimisation level. */
 static long double helper_parse_long_double(const char *s) {
   char *end;
@@ -2854,12 +2854,11 @@ TEST(find, long_double_vector_finds_every_present_value) {
   bool absent_reported_absent =
       (cvec_find(vec, helper_parse_long_double("99.5")) == ccol_invalid_size);
 
-  /* This is the case that separates the two rules. The values -0.0L and 0.0L
-   * are equal. They differ in the byte that holds their sign bit. Only a
-   * comparison of values finds this one. The four lookups above agree with a
-   * comparison of bytes whenever the padding bytes happen to match. They are
-   * therefore a check of correctness, and not the thing that pins the
-   * contract. */
+  /* This is the case that separates the two rules: the values -0.0L and 0.0L
+   * are equal, but they differ in the byte that holds their sign bit, so only
+   * a comparison of values finds this one. The four lookups above agree with
+   * a comparison of bytes whenever the padding bytes happen to match, so they
+   * are a check of correctness, not the thing that pins the contract. */
   cvec_construct(zvec, long double);
   cvec_push(zvec, -0.0L);
   size_t neg_zero_idx = cvec_find(zvec, 0.0L);
@@ -2905,12 +2904,11 @@ TEST(find, an_aggregate_element_type_is_accepted_by_the_macro) {
 }
 
 /* For cvec_push and for cvec_find, a named array is a value of an array
- * element type. The macro fills the value with zeros to the element size.
- * Therefore, a shorter array or string literal finds the element that went
- * in with the same text. The macro cuts a longer array to the element size.
- * This test is non-vacuous: if the macro stores the argument by
- * initialization (`T tmp = (elem);`), the code does not compile for a named
- * array. */
+ * element type. The macro fills the value with zeros to the element size, so
+ * a shorter array or string literal finds the element that went in with the
+ * same text, and it cuts a longer array to the element size. This test is
+ * non-vacuous: if the macro stores the argument by initialization
+ * (`T tmp = (elem);`), the code does not compile for a named array. */
 TEST(find, a_named_array_is_a_value_of_an_array_element_type) {
   typedef char name8[8];
   cvec_construct(vec, name8);
@@ -2963,18 +2961,17 @@ TEST(find, an_int_array_element_type_pushes_and_finds_by_value) {
 
 TEST(macro_hygiene, caller_identifiers_matching_macro_temporaries_still_work) {
   /* Every temporary that a public macro declares carries a name that no
-   * realistic identifier of a caller collides with. A macro can expand an
-   * expression from the caller into the scope of its own temporary. A shared
-   * name then makes the argument of the caller resolve to that temporary. The
-   * reason is that an identifier is in scope from the end of its own
-   * declarator. None of the cvector macros here expands an expression of the
-   * caller into such a scope. This test is therefore a standing guard against
-   * that changing. It does not separate a current defect. The form of this
-   * hazard that a caller can reach is pinned in tests/chashmap, where the key
-   * argument does reach the scope of a temporary. */
-  /* The two variables below come BEFORE the construct. The temporary of the
-   * construct and init macro is therefore the one that would capture
-   * them. */
+   * realistic identifier of a caller collides with. When a macro expands an
+   * expression from the caller into the scope of its own temporary, a shared
+   * name makes the argument of the caller resolve to that temporary, because
+   * an identifier is in scope from the end of its own declarator. None of the
+   * cvector macros here expands an expression of the caller into such a
+   * scope, so this test is a standing guard against that changing rather than
+   * a test that separates a current defect. The form of this hazard that a
+   * caller can reach is pinned in tests/chashmap, where the key argument does
+   * reach the scope of a temporary. */
+  /* The two variables below come BEFORE the construct, so the temporary of
+   * the construct and init macro is the one that would capture them. */
   int err = 42;
   int index = 7;
   cvec_construct(vec, int);
@@ -2989,17 +2986,17 @@ TEST(macro_hygiene, caller_identifiers_matching_macro_temporaries_still_work) {
   REQUIRE_EQ(found, (size_t)1);
 }
 
-/* This function returns -1 through an exit from the scope. That exit happens
+/* This function returns -1 through an exit from the scope that happens
  * before anything assigns the iterator variable. ccol_iter_declare attaches a
  * cleanup handler that runs on every exit from the enclosing block, this one
- * included. The variable that it declares must therefore start as NULL. The
- * handler dereferences that variable and calls through a function pointer
- * inside it. For an indeterminate value that is an arbitrary indirect call,
- * and not a dereference of NULL. A missing initialiser is caught at compile
- * time, every time. A read of the variable below is then a
+ * included, so the variable that it declares must start as NULL: the handler
+ * dereferences that variable and calls through a function pointer inside it,
+ * and for an indeterminate value that is an arbitrary indirect call, not a
+ * dereference of NULL. A missing initialiser is caught at compile time,
+ * every time, because a read of the variable below is then a
  * -Wmaybe-uninitialized error under the -Werror of this project. The
- * assertion at run time records the value that the cleanup handler would have
- * seen. An uninitialised stack slot makes that value non-NULL only some of
+ * assertion at run time records the value that the cleanup handler would
+ * have seen, which an uninitialised stack slot makes non-NULL only some of
  * the time. */
 static void *helper_iter_value_before_assignment;
 
@@ -3008,12 +3005,11 @@ static int helper_iter_early_return(cvec vec, bool take_early_exit) {
   ccol_iter_declare(vec, it);
   int seen = 0;
   if (take_early_exit) {
-    /* The record of the value is the assertion that matters. The cleanup
-     * handler that runs on this return dereferences this variable. It then
-     * calls through a function pointer inside it. The declaration must
-     * therefore leave the variable NULL. Whether an uninitialised slot holds
-     * a trapping value is a property of the stack. It is not part of the
-     * contract. */
+    /* The record of the value is the assertion that matters: the cleanup
+     * handler that runs on this return dereferences this variable and calls
+     * through a function pointer inside it, so the declaration must leave
+     * the variable NULL. Whether an uninitialised slot holds a trapping
+     * value is a property of the stack, not part of the contract. */
     helper_iter_value_before_assignment = (void *)it;
     return -1;
   }
@@ -3051,14 +3047,14 @@ TEST(iterator_raii, a_scope_exit_before_the_iterator_is_assigned_is_safe) {
 // char * vectors holding NULL elements, and a NULL needle
 // ========================================================================
 
-// A char * vector with NULL holes is an ordinary shape. An argv-style list is
+// A char * vector with NULL holes is an ordinary shape: an argv-style list is
 // one, and so is a sparse table of optional strings. Both cvec_find() and
 // cvec_sort() reach _csort_default_string_comparison_proc with those NULL
-// elements. That comparator orders NULL before every string that is not NULL.
-// It makes NULL equal only to another NULL. Both macros therefore stay
-// defined for such a vector. These tests are not vacuous. Without that
-// ordering rule, the comparator hands a null pointer to strcmp(). The whole
-// binary then dies with SIGSEGV, and one assertion does not merely fail.
+// elements, and that comparator orders NULL before every string that is not
+// NULL and makes NULL equal only to another NULL, so both macros
+// stay defined for such a vector. These tests are not vacuous: without that
+// ordering rule, the comparator hands a null pointer to strcmp(), and the whole
+// binary dies with SIGSEGV instead of one assertion merely failing.
 TEST(null_strings, find_in_a_char_ptr_vector_holding_a_null_element) {
   cvec_construct(vec, char *);
   cvec_push(vec, "alpha");
@@ -3072,8 +3068,8 @@ TEST(null_strings, find_in_a_char_ptr_vector_holding_a_null_element) {
   cvec_destroy(vec);
 }
 
-// A caller searches for NULL to ask for the first free slot of such a vector.
-// cvec_find must therefore answer a NULL needle. It must not dereference
+// A caller searches for NULL to ask for the first free slot of such a vector,
+// so cvec_find must answer a NULL needle without dereferencing
 // it.
 TEST(null_strings, find_a_null_needle_reports_the_first_null_element) {
   cvec_construct(vec, char *);
@@ -3087,8 +3083,8 @@ TEST(null_strings, find_a_null_needle_reports_the_first_null_element) {
   cvec_destroy(vec);
 }
 
-// Here a vector with no NULL element at all gets a NULL needle. Every
-// comparison then has a NULL on one side only. None of them may go to
+// Here a vector with no NULL element at all gets a NULL needle, so every
+// comparison has a NULL on one side only, and none of them may go to
 // strcmp().
 TEST(null_strings, find_a_null_needle_in_a_vector_without_null_elements) {
   cvec_construct(vec, char *);
@@ -3126,11 +3122,11 @@ TEST(null_strings, sort_a_char_ptr_vector_holding_null_elements) {
 // ========================================================================
 
 // A source range that aliases the vector may read past the live element count
-// of v, into capacity that is reserved but not yet live. It may never read
-// past the reservation itself. The bytes after that belong to no allocation
+// of v, into capacity that is reserved but not yet live, but it may never read
+// past the reservation itself: the bytes after that belong to no allocation
 // of the vector, so a read of them is an over-read of the heap. The call must
-// reject such a request with false. It must leave the vector completely
-// untouched. This test is not vacuous. Without the bound, the call reports
+// reject such a request with false and leave the vector completely
+// untouched. This test is not vacuous: without the bound, the call reports
 // true, and AddressSanitizer reports a heap-buffer-overflow READ inside the
 // copy.
 TEST(cvectors, append_array_rejects_a_source_range_past_the_reservation) {
@@ -3150,11 +3146,11 @@ TEST(cvectors, append_array_rejects_a_source_range_past_the_reservation) {
 }
 
 // This test sweeps the boundary of the bound itself, from inside it to one
-// element past it. A source range that ends exactly at the end of the
-// reservation is accepted. The same range with one more element is rejected.
-// An assertion on the accepted side alone leaves the rejection untested. An
-// assertion on the rejected side alone does not show that the bound is off by
-// nothing.
+// element past it: a source range that ends exactly at the end of the
+// reservation is accepted, and the same range with one more element is
+// rejected. An assertion on the accepted side alone leaves the rejection
+// untested, and an assertion on the rejected side alone does not show that the
+// bound is off by nothing.
 TEST(cvectors, append_array_accepts_a_source_range_ending_at_the_reservation) {
   cvector *cvec = cvector_create(sizeof(int), NULL);
   REQUIRE_TRUE(cvector_reserve(cvec, (size_t)16));
@@ -3174,7 +3170,7 @@ TEST(cvectors, append_array_accepts_a_source_range_ending_at_the_reservation) {
   REQUIRE_EQ(*(int *)cvector_at(cvec, 4), 15);
 
   // The same starting offset with one more element runs one slot past the
-  // (now grown) reservation's end and is refused.
+  // end of the grown reservation and is refused.
   size_t capacity = cvector_get_capacity(cvec);
   base = (int *)cvector_data_ptr(cvec);
   REQUIRE_FALSE(cvector_append_array(cvec, base + (capacity - 4), (size_t)5));
@@ -3257,9 +3253,9 @@ TEST(qualified_char_ptr, sort_and_find_for_signed_and_unsigned_const_pointers) {
 /* ========================================================================== */
 
 /* An allocator that overwrites every block with a poison pattern before it
- * frees it. A read of freed memory then gives the poison and not the stale
- * value, so a use after free through a stale pointer faults in an ordinary
- * run and does not depend on a sanitizer to show. */
+ * frees it, so that a read of freed memory gives the poison instead of the
+ * stale value, and a use after free through a stale pointer faults in an
+ * ordinary run without depending on a sanitizer to show. */
 typedef union {
   size_t size;
   max_align_t align;
@@ -3371,7 +3367,7 @@ static unsigned cvec_sort_lcg(unsigned *state) {
   return (*state >> 16) & 0x7fff;
 }
 
-/* Sorts one copy through cvec_sort, and a second copy through the getter
+/* Sorts one copy through cvec_sort and a second copy through the getter
  * path of csort_sort, and requires the same elements in the same order. The
  * getter path is the reference: it is the general algorithm, with the same
  * pass structure. eq compares two elements; for a long double it compares
@@ -3571,8 +3567,8 @@ static cvec_rv_point cvec_rv_make_point(int x, int y) {
 }
 
 /* A brace initializer takes a struct rvalue as the initializer of the first
- * member, and that does not compile. This test therefore fails to build
- * against a macro that pushes through one. */
+ * member, which does not compile, so this test fails to build against a
+ * macro that pushes through one. */
 TEST(push_expressions, a_struct_rvalue_from_a_function_is_pushed_whole) {
   cvec_construct(v, cvec_rv_point);
   cvec_push(v, cvec_rv_make_point(3, 4));
@@ -3622,7 +3618,8 @@ typedef struct {
 } cvec_padded_elem;
 
 /* A value built by member assignment over storage that holds a non-zero byte
- * pattern. Two values with the same members then differ in their padding. */
+ * pattern, so that two values with the same members differ in their
+ * padding. */
 static __attribute__((noinline)) cvec_padded_elem
 cvec_padded_make(char tag, long id, unsigned char garbage) {
   cvec_padded_elem e;
@@ -3658,9 +3655,9 @@ static __attribute__((noinline)) size_t cvec_padded_find(cvec v, int i) {
 #endif
 
 /* When the compiler has __builtin_clear_padding, cvec_push and cvec_find
- * clear the padding of their own copy of the value. The stored elements
- * then have zero padding. The byte-wise fallback of cvec_find then matches
- * a needle whose members are equal, whatever its padding bytes hold. This
+ * clear the padding of their own copy of the value, so the stored elements
+ * have zero padding, and the byte-wise fallback of cvec_find matches a
+ * needle whose members are equal, whatever its padding bytes hold. This
  * test is non-vacuous under GCC: without the clear operation, the stored
  * elements have the pattern of the value in their padding, and each lookup
  * fails. */
@@ -3695,8 +3692,8 @@ TEST(padding, the_value_macros_clear_the_padding_of_their_copy) {
 }
 
 /* The temporary of a value macro drops the top-level qualifiers of the
- * element type and keeps an array element type whole. Both shapes therefore
- * still push and find, with the padding clear in place. */
+ * element type and keeps an array element type whole, so both shapes push
+ * and find, with the padding clear in place. */
 typedef char cvec_padding_char_array[16];
 
 TEST(padding, qualified_and_array_element_types_push_and_find) {
@@ -3730,9 +3727,9 @@ TEST(padding, qualified_and_array_element_types_push_and_find) {
 
 static const int cvec_const_source_table[] = {3, 1, 4, 1, 5};
 
-/* cvector_append_array() takes a pointer to const. An append from a const
- * array therefore compiles under -Werror, through the function and through
- * the macro. This test does not build when the parameter drops the const. */
+/* cvector_append_array() takes a pointer to const, so an append from a const
+ * array compiles under -Werror, through the function and through the macro.
+ * This test does not build when the parameter drops the const. */
 TEST(cvectors, append_array_accepts_a_const_source) {
   cvec_construct(v, int);
   bool raw = cvector_append_array(v, cvec_const_source_table, 5);
@@ -3781,7 +3778,7 @@ TEST(cvectors, sort_with_comparison_proc_evaluates_the_vector_once) {
   REQUIRE_EQ(first1, 3);
 }
 
-/* cvector_destroy evaluates its lvalue once. The element that it frees is
+/* cvector_destroy evaluates its lvalue once: the element that it frees is
  * the element that it sets to NULL, and no neighbour is read or written. */
 TEST(cvectors, destroy_evaluates_the_vector_once) {
   cvec vs[4] = {NULL, NULL, NULL, NULL};
@@ -3871,7 +3868,7 @@ TEST(cvec_elem_type_spelling, a_null_char_pointer_element) {
 }
 
 /* cvec_pop compiles and works for a vector with a const-qualified element
- * type. Its temporary is written through cvector_pop_back(), so it has the
+ * type, because its temporary, which cvector_pop_back() writes, has the
  * element type without its qualifiers. This test is non-vacuous: a temporary
  * declared with the qualified element type makes this file fail to compile
  * with -Werror=discarded-qualifiers. */

@@ -40,19 +40,18 @@ SOFTWARE.
 /* ========================================================================== */
 
 /*
- * A single cache entry. A key belongs to exactly one segment of the cache.
- * The entry of that key is in two data structures of that segment at the same
+ * A single cache entry. A key belongs to exactly one segment of the cache, and
+ * the entry of that key is in two data structures of that segment at the same
  * time:
  *
  *   1. The hash map (the map of the segment): key -> clru_entry*
- *      The map stores a COPY of the pointer (8 bytes). The pointer leads to
- *      the mutable entry. That entry holds the condition variable and the
- *      value.
+ *      The map stores a COPY of the pointer (8 bytes), which leads to the
+ *      mutable entry that holds the condition variable and the value.
  *
  *   2. The LRU doubly-linked list. The entry is in this list only when it is
- *      LIVE, that is, when it has a value. Two sentinel nodes bound the list.
- *      The segment embeds both of them (lru_head is the MRU end, lru_tail is
- *      the LRU end). Each segment therefore has its own eviction order.
+ *      LIVE, that is, when it has a value. Two sentinel nodes bound the list,
+ *      and the segment embeds both of them (lru_head is the MRU end, lru_tail
+ *      is the LRU end), so each segment has its own eviction order.
  *
  * Entry lifecycle:
  *   PLACEHOLDER  in map, NOT in LRU, value==NULL, fetch_in_progress or
@@ -62,7 +61,7 @@ SOFTWARE.
  *                entry keeps its place in the eviction order and in the size
  *                of the segment for the whole call, exactly as if no set were
  *                in flight. evict_lru() treats such an entry as a victim like
- *                any other. It reports the old value to the eviction callback
+ *                any other: it reports the old value to the eviction callback
  *                and turns the entry back into a PLACEHOLDER, which the set
  *                then either fills (success) or removes (failure).
  *   DEAD         NOT in map, NOT in LRU, evicted==true. Only the threads that
@@ -71,16 +70,16 @@ SOFTWARE.
  *                thread holds the mutex of the owning segment.
  *
  * Locking discipline:
- *   The mutex of a segment protects ALL the fields of that segment. It also
- *   protects all the fields of every entry in that segment. The condition
- *   variable of each entry shares that same mutex, which is what cond_wait
- *   needs. A key maps to one segment. Every step of an operation on that key
- *   stays inside that segment. This is why no operation holds two of these
- *   mutexes, and why there is no lock order to get wrong.
+ *   The mutex of a segment protects ALL the fields of that segment and all
+ *   the fields of every entry in that segment. The condition variable of each
+ *   entry shares that same mutex, which is what cond_wait needs. A key maps to
+ *   one segment, and every step of an operation on that key stays inside that
+ *   segment, which is why no operation holds two of these mutexes and why
+ *   there is no lock order to get wrong.
  *
- *   The slow operations are the remote getter and the remote setter. They
- *   always run OUTSIDE the mutex. A thread that unlocks the mutex while it
- *   holds a pointer to an entry MUST increment entry->waiters first. It must
+ *   The slow operations, the remote getter and the remote setter, always run
+ *   OUTSIDE the mutex. A thread that unlocks the mutex while it holds a
+ *   pointer to an entry MUST increment entry->waiters first, and must
  *   decrement entry->waiters when it locks the mutex again. Without this,
  *   another thread frees the entry while the first thread still uses it.
  *
@@ -88,12 +87,12 @@ SOFTWARE.
  *   file all obey it: the two miss paths that run a remote getter, and the
  *   set path that runs a remote setter. A PLACEHOLDER happens to be
  *   unreachable by eviction today, because evict_lru() picks its victim from
- *   the LRU list and a placeholder is not in that list. That is a property of
- *   the eviction policy and not of the reference rule. A window that leans on
- *   it holds a bare pointer whose safety no counter records, and it becomes a
- *   use-after-free the moment some future change lets a placeholder be
- *   reclaimed. The reference costs one increment and one decrement under a
- *   mutex that the thread already holds.
+ *   the LRU list and a placeholder is not in that list, but that is a
+ *   property of the eviction policy and not of the reference rule. A window
+ *   that leans on it holds a bare pointer whose safety no counter records,
+ *   and it becomes a use-after-free the moment some future change lets a
+ *   placeholder be reclaimed. The reference costs one increment and one
+ *   decrement under a mutex that the thread already holds.
  */
 typedef struct clru_entry {
   void *key;
@@ -108,31 +107,30 @@ typedef struct clru_entry {
   bool set_in_progress;   /* a remote/async setter is running for this key */
   bool evicted;           /* removed from map+LRU; kept alive by waiters */
 
-  /* Only the miss path of __clrucache_get_into() sets this. It sets this when
-   * the size of the value that a remote getter fetched does not match the
-   * buf_size of the caller that asked. It sets it immediately before it tears
-   * that entry down as a failed fetch. A live entry never has this true. A
-   * coalesced waiter that wakes up and finds entry->value still NULL reads
-   * this field. It then reports the same ccol_unexpected_failure that the
-   * thread which ran the fetch got. Without this field, that waiter reports
-   * the generic ccol_key_not_found that every other fetch failure produces.
-   * Without this field, only the one thread that runs the remote getter
-   * learns that the real problem is a value of the wrong size. That
-   * contradicts the coalescing contract of this module, which says that "all
-   * others ... receive the same result" (see the file-level doc comment of
-   * clrucache.h). */
+  /* Only the miss path of __clrucache_get_into() sets this: it sets it when the
+   * size of the value that a remote getter fetched does not match the buf_size
+   * of the caller that asked, immediately before it tears that entry down as a
+   * failed fetch. A live entry never has this true. A coalesced waiter that
+   * wakes up and finds entry->value still NULL reads this field and then
+   * reports the same ccol_unexpected_failure that the thread which ran the
+   * fetch got. Without this field, that waiter reports the generic
+   * ccol_key_not_found that every other fetch failure produces, and only the
+   * one thread that runs the remote getter learns that the real problem is a
+   * value of the wrong size. That contradicts the coalescing contract of this
+   * module, which says that "all others ... receive the same result" (see the
+   * file-level doc comment of clrucache.h). */
   bool fetch_size_mismatch;
 
-  /* How many threads hold a reference to this entry and are not the one that
-   * owns its lifecycle. Two kinds of thread are counted. The first is a
-   * thread blocked on cond. The second is a thread that released the mutex of
-   * the segment to run a remote getter or a remote setter for this entry, and
-   * that will touch the entry again when it takes that mutex back.
+  /* How many threads hold a reference to this entry without being the one that
+   * owns its lifecycle. Two kinds of thread are counted: a thread blocked on
+   * cond, and a thread that released the mutex of the segment to run a remote
+   * getter or a remote setter for this entry and that will touch the entry
+   * again when it takes that mutex back.
    *
-   * The count is what keeps entry_free() away from an entry that another
-   * thread can still reach. A thread that drops the count to zero on an entry
-   * whose evicted flag is set is the thread that frees it. The mutex of the
-   * owning segment protects this field. */
+   * The count is what keeps entry_free() away from an entry that another thread
+   * can still reach. A thread that drops the count to zero on an entry whose
+   * evicted flag is set is the thread that frees it. The mutex of the owning
+   * segment protects this field. */
   int waiters;
 
   struct clru_entry *prev; /* LRU list links (NULL when not in LRU) */
@@ -140,53 +138,50 @@ typedef struct clru_entry {
   bool in_lru;
 
   /* Only the two miss paths set this, immediately before they tear down an
-   * entry whose remote getter failed (a size mismatch included). A live
-   * entry never has this true. It is what separates the two ways a coalesced
-   * waiter can wake up and find no value. When the operation it waited on
-   * was a FETCH, the remote getter already answered for the key, and every
-   * waiter reports that same answer. When the operation was a SET that
-   * failed, nobody asked the remote getter anything. That waiter then drops
-   * its reference and runs its lookup again, so an absent key takes the
-   * ordinary miss path, which runs the remote getter. A get that ends in
-   * "not found" without a getter call would match no serial order of the
-   * get and the failed set.
+   * entry whose remote getter failed (a size mismatch included); a live entry
+   * never has this true. It is what separates the two ways a coalesced waiter
+   * can wake up and find no value. When the operation it waited on was a FETCH,
+   * the remote getter already answered for the key, and every waiter reports
+   * that same answer. When the operation was a SET that failed, nobody asked
+   * the remote getter anything, so that waiter drops its reference and runs its
+   * lookup again, and an absent key then takes the ordinary miss path, which
+   * runs the remote getter. A get that ends in "not found" without a getter
+   * call would match no serial order of the get and the failed set.
    *
-   * The field sits beside in_lru, in the tail padding of the struct, so it
-   * adds no size and moves no other field. The segment embeds two sentinel
-   * entries, so a larger entry would also move the fields of the segment
-   * that the hit path reads. */
+   * The field sits beside in_lru, in the tail padding of the struct, so it adds
+   * no size and moves no other field. This matters because the segment embeds
+   * two sentinel entries, so a larger entry would also move the fields of the
+   * segment that the hit path reads. */
   bool fetch_failed;
 } clru_entry;
 
-/* clru_cache is an opaque value handle. The top 32 bits are the slot index
- * and the bottom 32 bits are the generation. See the doc comment on the
- * typedef in include/clrucache.h. The library resolves the handle through
- * this table before it touches the struct clrucache* behind it. This is what
- * lets __clrucache_destroy report a second destroy as a ccol_fatal_err
- * instead of a use-after-free or a double-free. It detects a concurrent
- * second destroy, which races another destroy on the same still-live handle.
- * It also detects a sequential one, where the handle is stale after an
- * earlier destroy already completed. The table marks a slot not-in-use at the
- * moment it releases that slot. It also increments the generation of the slot
- * on every reuse. A stale handle can therefore never alias a later, unrelated
- * cache that holds the same slot index. This table mirrors
- * chttpcli_slot_table, chttpsvr_slot_table and ccol_event_loop_slot_table
- * exactly. See the copy of this comment in src/chttpclient.c for the full
- * design rationale.
+/* clru_cache is an opaque value handle: the top 32 bits are the slot index and
+ * the bottom 32 bits are the generation (see the doc comment on the typedef in
+ * include/clrucache.h). The library resolves the handle through this table
+ * before it touches the struct clrucache* behind it, which is what lets
+ * __clrucache_destroy report a second destroy as a ccol_fatal_err instead of a
+ * use-after-free or a double-free. It detects both a concurrent second destroy,
+ * which races another destroy on the same still-live handle, and a sequential
+ * one, where the handle is stale after an earlier destroy already completed.
+ * The table marks a slot not-in-use at the moment it releases that slot and
+ * increments the generation of the slot on every reuse, so a stale handle can
+ * never alias a later, unrelated cache that holds the same slot index. This
+ * table mirrors chttpcli_slot_table, chttpsvr_slot_table and
+ * ccol_event_loop_slot_table exactly; see the copy of this comment in
+ * src/chttpclient.c for the full design rationale.
  *
  * The lock of the table is a read-write lock, not a plain mutex.
- * _clrucache_resolve only reads. It bounds-checks idx, compares the
- * generation and reads slot->ptr. It runs on every single get, set and delete
- * call on a clru_cache. _clrucache_handle_slot_acquire and
- * __clrucache_destroy are the only writers. Each of them runs one time in the
- * whole life of a cache, and not one time per operation. This mirrors the
- * identical slot-table rwlocks in cthreadcomm.c, cthreadpool.c and
- * chttpclient.c. Like chttpcli_slot_table in chttpclient.c, this table has no
- * pthread_atfork() protection of its own, because clrucache.c registers none.
- * cthreadcomm.c and cthreadpool.c have a subtle write lock that a tracked
- * thread ID drives, so that they can initialize it again in the child. That
- * subtlety does not apply here. This table has no fork()-time lock state to
- * keep. */
+ * _clrucache_resolve only reads (it bounds-checks idx, compares the generation
+ * and reads slot->ptr), and it runs on every single get, set and delete call on
+ * a clru_cache, while _clrucache_handle_slot_acquire and __clrucache_destroy,
+ * the only writers, each run one time in the whole life of a cache, not one
+ * time per operation. This mirrors the identical slot-table rwlocks in
+ * cthreadcomm.c, cthreadpool.c and chttpclient.c. Like chttpcli_slot_table in
+ * chttpclient.c, this table has no pthread_atfork() protection of its own,
+ * because clrucache.c registers none. cthreadcomm.c and cthreadpool.c have a
+ * subtle write lock that a tracked thread ID drives, so that they can
+ * initialize it again in the child, but that subtlety does not apply here: this
+ * table has no fork()-time lock state to keep. */
 typedef struct {
   struct clrucache *ptr; /* NULL when slot is free */
   uint32_t generation;   /* A fresh value on every acquire. It is monotonic
@@ -204,28 +199,28 @@ static struct {
   cvec free_indices; /* A cvec of uint32_t. It is a LIFO free list that gives
                          O(1) reuse */
   /* The number of slot indices that a push onto free_indices could not take,
-     because that push could not allocate. Such a slot is fully released. Its
-     ptr is NULL and its in_use is false, but nothing names it. Without this
+     because that push could not allocate. Such a slot is fully released (its
+     ptr is NULL and its in_use is false), but nothing names it. Without this
      counter, that slot stays unreachable for the rest of the life of the
      process, and every later create grows the table by one more slot. An
-     acquire that finds free_indices empty and this counter above zero
-     recovers one slot with a scan of slots instead. The scan is unambiguous
-     because it runs only when the free list is empty. A released slot is
-     either on that list or lost, and never both. The code reads and writes
-     this field only under the write lock. */
+     acquire that finds free_indices empty and this counter above zero recovers
+     one slot with a scan of slots instead. The scan is unambiguous because it
+     runs only when the free list is empty, so a released slot is either on that
+     list or lost, and never both. The code reads and writes this field only
+     under the write lock. */
   size_t lost_indices;
-  /* True when the process-exit destructor finds a cache that is still live
-     and leaves this table alone. The destroy that then releases the last slot
-     does the release that the destructor could not do. Without this field, a
-     cache that a destructor linked earlier than this one destroys leaves the
-     table and the pin index allocated for the rest of the process. A leak
-     checker that treats still-reachable memory as an error reports that. The
-     code reads and writes this field only under the write lock. */
+  /* True when the process-exit destructor finds a cache that is still live and
+     leaves this table alone; the destroy that then releases the last slot does
+     the release that the destructor could not do. Without this field, a cache
+     that a destructor linked earlier than this one destroys leaves the table
+     and the pin index allocated for the rest of the process, which a leak
+     checker that treats still-reachable memory as an error reports. The code
+     reads and writes this field only under the write lock. */
   bool release_deferred;
 } clrucache_slot_table = {0};
 
 /* The definitions are with the process-exit teardown below. The declarations
-   are here, because the final locked section of __clrucache_destroy does the
+   are here because the final locked section of __clrucache_destroy does the
    release that the destructor defers. */
 static bool _clrucache_any_slot_live_locked(void);
 static void _clrucache_release_slot_table_locked(void);
@@ -245,29 +240,28 @@ static void _clrucache_slot_table_init_globals(void) {
 
 /* One segment of a cache. Each segment has its own lock.
  *
- * The library divides a cache into several of these segments. A key belongs
- * to exactly one segment, and a hash of the key selects that segment (see
- * shard_for). Each segment carries its own map, its own eviction order and
- * its own lock. Operations on keys that land in different segments therefore
- * run at the same time. They do not queue behind one another.
+ * The library divides a cache into several of these segments. A key belongs to
+ * exactly one segment, which a hash of the key selects (see shard_for), and
+ * each segment carries its own map, its own eviction order and its own lock, so
+ * operations on keys that land in different segments run at the same time
+ * instead of queuing behind one another.
  *
- * Every segment holds a copy of the configured callbacks. A segment does not
- * reach them through a back-pointer. This keeps the operations of each
- * segment inside memory that the segment already owns. The allocator is the
- * one thing that a segment borrows. The router holds the single copy of the
- * allocator of the caller. A copy in each segment needs a free by the same
+ * Every segment holds a copy of the configured callbacks instead of reaching
+ * them through a back-pointer, which keeps the operations of each segment
+ * inside memory that the segment already owns. The allocator is the one thing
+ * that a segment borrows: the router holds the single copy of the allocator of
+ * the caller, because a copy in each segment would need a free by the same
  * allocator that the copy names. */
 typedef struct clru_shard {
-  /* key -> clru_entry*. The value type is a pointer. The map therefore
-     selects its own backend from the key type. It uses open addressing for an
-     integral key or a pointer key. It uses separate chaining for a string, a
-     struct, or a long double. */
+  /* key -> clru_entry*. The value type is a pointer, so the map selects its own
+     backend from the key type: open addressing for an integral key or a pointer
+     key, and separate chaining for a string, a struct, or a long double. */
   chmap map;
 
-  /* Sentinel nodes for the doubly-linked LRU list.
-   * lru_head.next is the MRU entry. lru_tail.prev is the LRU entry.
-   * The struct embeds the sentinels. They are not on the heap. Nothing uses
-   * their cond, key and value fields. */
+  /* Sentinel nodes for the doubly-linked LRU list. lru_head.next is the MRU
+   * entry and lru_tail.prev is the LRU entry. The struct embeds the sentinels
+   * instead of putting them on the heap, and nothing uses their cond, key and
+   * value fields. */
   clru_entry lru_head;
   clru_entry lru_tail;
 
@@ -287,16 +281,15 @@ struct clrucache {
   clru_shard **shards;
   size_t shard_count;
 
-  /* The declared key type, and its width when the type has a fixed width. The
-   * width is 0 when the type has no fixed width. These two fields keep the
-   * choice of segment in agreement with the maps inside the segments about
-   * which keys are the same key. They also let the library reject a
-   * hand-built cmap_pair whose size does not agree with the type. The library
-   * rejects it before anything reads through it. */
+  /* The declared key type, and its width when the type has a fixed width (0
+   * when it has none). These two fields keep the choice of segment in agreement
+   * with the maps inside the segments about which keys are the same key, and
+   * they let the library reject a hand-built cmap_pair whose size does not
+   * agree with the type before anything reads through it. */
   ccol_data_type key_type;
   size_t key_fixed_width;
 
-  /* The capacity that the caller asked for. It is exactly the sum of the own
+  /* The capacity that the caller asked for, which is exactly the sum of the own
    * capacities of the segments. */
   size_t capacity;
 
@@ -308,10 +301,10 @@ struct clrucache {
   clru_cache self_handle;
 
   /* The copy of the allocator of the caller. m_procs points here when the
-   * caller gave an allocator, and is NULL otherwise. The cache keeps no
-   * pointer to the struct of the caller, so that struct may go out of scope
-   * as soon as clrucache_create_full returns. It sits after every field
-   * that a lookup reads, so that it moves none of them. */
+   * caller gave an allocator, and is NULL otherwise. The cache keeps no pointer
+   * to the struct of the caller, so that struct may go out of scope as soon as
+   * clrucache_create_full returns. It sits after every field that a lookup
+   * reads, so that it moves none of them. */
   ccol_memmgmt_procs_t m_procs_copy;
 };
 
@@ -319,46 +312,44 @@ struct clrucache {
 /*                    CLRU_CACHE HANDLE RESOLVE / UNPIN                       */
 /* ========================================================================== */
 
-/* Resolves h and pins the result against a concurrent destroy. It returns
- * NULL when h is 0 or garbage. It also returns NULL when h names a slot that
- * is free now, or a slot that the table already reused, which gives the wrong
- * generation. On success the caller MUST call
- * _clrucache_resolve_unpin(result) exactly one time. It must call it as soon
- * as it finishes with the resolved struct clrucache*. */
-/* The hot half of the slot table. It maps a handle to a pointer. It also
- * holds the pin that keeps a cache alive for the length of a call. It is
- * separate from the table itself, because a resolve runs on every public
- * call. A resolve must not write anything that another thread reads. The
- * recycle of a slot is cold, and it stays under the rwlock. */
+/* Resolves h and pins the result against a concurrent destroy. It returns NULL
+ * when h is 0 or garbage, and also when h names a slot that is free now, or a
+ * slot that the table already reused, which gives the wrong generation. On
+ * success the caller MUST call _clrucache_resolve_unpin(result) exactly one
+ * time, as soon as it finishes with the resolved struct clrucache*. */
+/* The hot half of the slot table. It maps a handle to a pointer and holds the
+ * pin that keeps a cache alive for the length of a call. It is separate from
+ * the table itself because a resolve runs on every public call and must not
+ * write anything that another thread reads. The recycle of a slot is cold, and
+ * it stays under the rwlock. */
 static ccol_pintable clrucache_pintable;
 
 static struct clrucache *_clrucache_resolve(clru_cache h) {
-  /* There is no lock here and no shared write. Every public entry point of
-   * this module runs this function. A write here to memory that another
-   * thread reads therefore costs time on every single cache operation. */
+  /* There is no lock here and no shared write. Every public entry point of this
+   * module runs this function, so a write here to memory that another thread
+   * reads costs time on every single cache operation. */
   return (struct clrucache *)ccol_pintable_pin(&clrucache_pintable, h);
 }
 
 static void _clrucache_resolve_unpin(struct clrucache *raw) {
-  /* This function releases the pin and touches nothing else. A lock of the
-   * own mutex of this cache here makes every operation lock that mutex twice.
-   * The second lock comes immediately after the unlock. That is how a convoy
+  /* This function releases the pin and touches nothing else. Locking the own
+   * mutex of this cache here would make every operation lock that mutex twice,
+   * with the second lock immediately after the unlock, which is how a convoy
    * keeps itself alive under concurrent callers. There is also no wakeup to
-   * deliver. __clrucache_destroy polls the pin count. It does not sleep on a
-   * condition variable and wait for this function.
+   * deliver: __clrucache_destroy polls the pin count instead of sleeping on a
+   * condition variable and waiting for this function.
    *
-   * The read of raw->self_handle before the release is safe, because the pin
-   * is still held at that point. After the release, another thread can free
-   * the object at any instant. Nothing may touch raw after this call. */
+   * The read of raw->self_handle before the release is safe because the pin is
+   * still held at that point. After the release, another thread can free the
+   * object at any instant, so nothing may touch raw after this call. */
   ccol_pintable_unpin(&clrucache_pintable, raw->self_handle);
 }
 
 #ifdef RUNNING_UNIT_TESTS
-/* Test-only. This makes the very next push onto the free list behave exactly
- * as an allocation failure does. It then disarms itself. Without it, the
- * recovery of a lost index below needs a real out-of-memory condition at one
- * specific cvector_push_back. An ordinary test run cannot reach that
- * condition. */
+/* Test-only. This makes the very next push onto the free list behave exactly as
+ * an allocation failure does, and then disarms itself. Without it, the recovery
+ * of a lost index below needs a real out-of-memory condition at one specific
+ * cvector_push_back, which an ordinary test run cannot reach. */
 static _Atomic bool g_clrucache_fail_next_free_index_push = false;
 
 void _clrucache_force_next_free_index_push_failure_for_tests(void) {
@@ -368,10 +359,10 @@ void _clrucache_force_next_free_index_push_failure_for_tests(void) {
 
 /* Hands idx back for reuse. The caller holds the write lock.
  *
- * This function records a failed push. It does not drop it in silence. The
- * slot that the index names is already fully released. A silent drop strands
- * that index for the life of the process, and it makes every later create
- * grow the table again. See clrucache_slot_table.lost_indices. */
+ * This function records a failed push instead of dropping it in silence. The
+ * slot that the index names is already fully released, so a silent drop strands
+ * that index for the life of the process and makes every later create grow the
+ * table again. See clrucache_slot_table.lost_indices. */
 static void _clrucache_free_index_release_locked(uint32_t idx) {
 #ifdef RUNNING_UNIT_TESTS
   if (atomic_exchange(&g_clrucache_fail_next_free_index_push, false)) {
@@ -385,22 +376,22 @@ static void _clrucache_free_index_release_locked(uint32_t idx) {
 }
 
 /* Recovers one slot index that a failed push onto the free list stranded (see
- * clrucache_slot_table.lost_indices). It scans for a slot that is released,
- * but that nothing names. The caller holds the write lock, and the caller
- * already found free_indices empty. That is what makes "ptr is NULL and
- * in_use is false" mean lost, and not only free. A slot that a release put on
- * that list successfully is on the list. A slot whose destroy is still in
- * progress keeps a ptr that is not NULL until the very end of that destroy.
- * The destroy clears in_use as its first step, and it clears ptr only in its
- * final locked step. The two tests together therefore skip exactly that
- * window. This function only returns an index that the table already holds.
- * It can never take the table past CCOL_PIN_MAX_SLOTS.
+ * clrucache_slot_table.lost_indices) by scanning for a slot that is released
+ * but that nothing names. The caller holds the write lock and has already found
+ * free_indices empty, which is what makes "ptr is NULL and in_use is false"
+ * mean lost, and not only free: a slot that a release put on that list
+ * successfully is on the list. A slot whose destroy is still in progress keeps
+ * a ptr that is not NULL until the very end of that destroy, because the
+ * destroy clears in_use as its first step and clears ptr only in its final
+ * locked step, so the two tests together skip exactly that window. This
+ * function only returns an index that the table already holds, so it can never
+ * take the table past CCOL_PIN_MAX_SLOTS.
  *
- * This function is out of line. The code reaches it only when the counter is
- * above zero, so an ordinary acquire pays one comparison for it. The function
- * sets the counter to zero when the scan finds nothing. Without that, a
- * counter that outlives its slot makes every future acquire scan the
- * table. */
+ * This function is out of line, and the code reaches it only when the counter
+ * is above zero, so an ordinary acquire pays one comparison for it. The
+ * function sets the counter to zero when the scan finds nothing; without that,
+ * a counter that outlives its slot makes every future acquire scan the table.
+ */
 static __attribute__((noinline)) bool _clrucache_reclaim_lost_index_locked(
     uint32_t *out_idx) {
   size_t slot_count = cvector_elem_count(clrucache_slot_table.slots);
@@ -417,7 +408,7 @@ static __attribute__((noinline)) bool _clrucache_reclaim_lost_index_locked(
   return false;
 }
 
-/* Allocates a fresh slot for cache, or reuses a slot that a release freed. It
+/* Allocates a fresh slot for cache, or reuses a slot that a release freed, and
  * returns the resulting handle, or 0 when it cannot allocate memory.
  * clrucache_create_full calls it one time, after the object is fully
  * constructed in every other respect. */
@@ -433,12 +424,12 @@ static clru_cache _clrucache_handle_slot_acquire(struct clrucache *cache) {
              _clrucache_reclaim_lost_index_locked(&idx)) {
     slot = (clrucache_slot_t *)cvector_at(clrucache_slot_table.slots, idx);
   } else {
-    /* The pin table cannot hold a slot whose index is past its own limit.
-     * Nothing can publish such a slot. This code therefore refuses it here.
-     * It does not claim the slot and then roll the claim back. A roll-back
-     * puts an index that no later publish can use onto the free list, and
-     * every acquire pops from that list. This is an ordinary failure, which
-     * is how a caller must already treat a table that cannot grow. */
+    /* The pin table cannot hold a slot whose index is past its own limit, and
+     * nothing can publish such a slot, so this code refuses it here instead of
+     * claiming the slot and then rolling the claim back. A roll-back would put
+     * an index that no later publish can use onto the free list, from which
+     * every acquire pops. This is an ordinary failure, which is how a caller
+     * must already treat a table that cannot grow. */
     if (cvector_elem_count(clrucache_slot_table.slots) >= CCOL_PIN_MAX_SLOTS) {
       ccol_rw_lock_unlock(clrucache_slot_table.rwlock);
       return 0;
@@ -452,30 +443,28 @@ static clru_cache _clrucache_handle_slot_acquire(struct clrucache *cache) {
     slot = (clrucache_slot_t *)cvector_at(clrucache_slot_table.slots, idx);
   }
   slot->generation++;
-  /* Skip the one generation value that collides with the reserved sentinel
-   * for an "invalid handle" (0). That value comes up after about 2^32 reuses
-   * of this exact slot index. See the identical guard in
-   * chttpcli_handle_slot_acquire for the full rationale. */
+  /* Skip the one generation value that collides with the reserved sentinel for
+   * an "invalid handle" (0), which comes up after about 2^32 reuses of this
+   * exact slot index. See the identical guard in chttpcli_handle_slot_acquire
+   * for the full rationale. */
   if (slot->generation == 0) slot->generation++;
   clru_cache h = ((clru_cache)idx << 32) | (clru_cache)slot->generation;
 
-  /* The code writes this before it publishes the handle. A resolver that
-   * finds this cache therefore also finds the handle that its own unpin
-   * needs. */
+  /* The code writes this before it publishes the handle, so a resolver that
+   * finds this cache also finds the handle that its own unpin needs. */
   cache->self_handle = h;
 
-  /* A publish can allocate memory. A failure leaves a handle that no call can
-   * resolve. The slot therefore goes back on the free list. */
+  /* A publish can allocate memory, and a failure leaves a handle that no call
+   * can resolve, so the slot goes back on the free list. */
   if (!ccol_pintable_publish(&clrucache_pintable, idx, slot->generation,
                              cache)) {
-    /* The code clears this as the index goes back on the free list. This
-     * struct therefore never carries a handle that names a slot which now
-     * belongs to another object. An unpin with such a handle charges the pin
-     * count of that other object for a pin that nobody took. The caller frees
-     * this object and does not resolve it again, so no path reads this field
-     * after this point. The clear is what keeps that fact local to this
-     * function. Without it, every future user of the failure path must know
-     * the rule. */
+    /* The code clears this as the index goes back on the free list, so this
+     * struct never carries a handle that names a slot which belongs to another
+     * object; an unpin with such a handle would charge the pin count of that
+     * other object for a pin that nobody took. The caller frees this object
+     * without resolving it again, so no path reads this field after this point.
+     * The clear is what keeps that fact local to this function: without it,
+     * every future user of the failure path must know the rule. */
     cache->self_handle = 0;
     _clrucache_free_index_release_locked(idx);
     ccol_rw_lock_unlock(clrucache_slot_table.rwlock);
@@ -523,11 +512,11 @@ static clru_entry *entry_alloc(clru_shard *cache) {
       (clru_entry *)_ccol_mem_calloc(cache->m_procs, 1, sizeof(clru_entry));
   if (!e) return NULL;
   if (ccol_cond_var_init(e->cond) != 0) {
-    /* Do NOT route this through entry_free(). entry_free() calls
-     * ccol_cond_var_destroy() on a condition variable that no call
-     * initialized successfully, and that is undefined behavior. e->key and
-     * e->value are still NULL after the fresh calloc. A plain free is all
-     * that this path needs. */
+    /* Do NOT route this through entry_free(), which calls
+     * ccol_cond_var_destroy() on a condition variable that no call initialized
+     * successfully, and that is undefined behavior. e->key and e->value are
+     * still NULL after the fresh calloc, so a plain free is all that this path
+     * needs. */
     _ccol_mem_free(cache->m_procs, e);
     return NULL;
   }
@@ -538,13 +527,12 @@ static clru_entry *entry_alloc(clru_shard *cache) {
  * Precondition: no other thread can reach e, and no other thread references e
  * now. Exactly two situations give that. (1) No call published e into
  * cache->map, because an allocation or an insert failed before or during
- * map_upsert or chmap_insert_elem. No other thread can find e at all.
- * (2) e->evicted == true and e->waiters == 0. A call published e. A later
- * call removed it from both the map and the LRU list, and every thread that
- * waited
- * on it woke up and released its reference. The caller can hold the mutex of
- * the segment, or not hold it. Correctness depends only on one of the two
- * situations above. It does not depend on the mutex. */
+ * map_upsert or chmap_insert_elem, so no other thread can find e at all. (2)
+ * e->evicted == true and e->waiters == 0: a call published e, a later call
+ * removed it from both the map and the LRU list, and every thread that waited
+ * on it woke up and released its reference. The caller may or may not hold the
+ * mutex of the segment, because correctness depends only on one of the two
+ * situations above and not on the mutex. */
 static void entry_free(clru_shard *cache, clru_entry *e) {
   _ccol_mem_free(cache->m_procs, e->key);
   _ccol_mem_free(cache->m_procs, e->value);
@@ -561,23 +549,22 @@ static void entry_free(clru_shard *cache, clru_entry *e) {
  * call. It returns true when it evicts an entry, and false when the list is
  * empty.
  *
- * The victim is always the true least recently used entry. That includes an
- * entry whose key has a remote setter in flight. Such a set has not happened
- * yet: it takes effect when its remote call returns, and only if that call
- * succeeds. Until then the key holds its old value in its old place, and an
- * insert that needs room evicts it exactly as it evicts any other key. To
- * spare it would be right only if the set later succeeds. If the set fails,
- * sparing it has cost an innocent key its place, and no later step can
- * give that key back without undoing an eviction that a caller may already
- * have observed.
+ * The victim is always the true least recently used entry, including an entry
+ * whose key has a remote setter in flight. Such a set has not happened yet: it
+ * takes effect when its remote call returns, and only if that call succeeds.
+ * Until then the key holds its old value in its old place, and an insert that
+ * needs room evicts it exactly as it evicts any other key. Sparing it would be
+ * right only if the set later succeeds; if the set fails, sparing it has cost
+ * an innocent key its place, and no later step can give that key back without
+ * undoing an eviction that a caller may already have observed.
  *
- * An evicted entry with a set in flight stays in the map. It becomes a
- * placeholder again: no value, out of the eviction order and out of the size
- * of the segment. The set that owns it then finishes the job. On success it
- * stores the new value and inserts the key at the most recently used end,
- * which is exactly what a set of an absent key does. On failure it removes
- * the placeholder, and the key stays evicted. Every thread that waits on the
- * key waits on that set, so none of them can observe the placeholder. */
+ * An evicted entry with a set in flight stays in the map and becomes a
+ * placeholder again: no value, out of the eviction order and out of the size of
+ * the segment. The set that owns it then finishes the job. On success it stores
+ * the new value and inserts the key at the most recently used end, which is
+ * exactly what a set of an absent key does; on failure it removes the
+ * placeholder, and the key stays evicted. Every thread that waits on the key
+ * waits on that set, so none of them can observe the placeholder. */
 static bool evict_lru(clru_shard *cache) {
   clru_entry *victim = cache->lru_tail.prev;
   if (victim == &cache->lru_head) return false; /* nothing to evict */
@@ -610,9 +597,9 @@ static bool evict_lru(clru_shard *cache) {
   return true;
 }
 
-/* Make sure that cache->size < cache->capacity. This function evicts LRU
- * entries to get there. Every entry that cache->size counts is in the LRU
- * list and can be evicted, so the loop always reaches that bound. */
+/* Make sure that cache->size < cache->capacity by evicting LRU entries. Every
+ * entry that cache->size counts is in the LRU list and can be evicted, so the
+ * loop always reaches that bound. */
 static void make_room(clru_shard *cache) {
   while (cache->size >= cache->capacity) {
     if (!evict_lru(cache)) break;
@@ -623,15 +610,13 @@ static void make_room(clru_shard *cache) {
 /*                         CHMAP LOOKUP HELPER                                */
 /* ========================================================================== */
 
-/* Look up the entry pointer that the internal chmap stores.
- * It returns NULL when the map does not hold the key. The caller must hold
- * cache->mutex.
+/* Look up the entry pointer that the internal chmap stores. It returns NULL
+ * when the map does not hold the key. The caller must hold cache->mutex.
  *
- * The SSO storage of a chmap_entry is aligned naturally. This memcpy is
- * therefore defense-in-depth, and not a live requirement for alignment. It
- * stays here for consistency with cjson, cyaml, cthreadcomm and chttpclient.
- * Those modules use the same pattern for their own pointer storage inside a
- * chmap. */
+ * The SSO storage of a chmap_entry is aligned naturally, so this memcpy is
+ * defense-in-depth and not a live requirement for alignment. It stays here for
+ * consistency with cjson, cyaml, cthreadcomm and chttpclient, which use the
+ * same pattern for their own pointer storage inside a chmap. */
 static clru_entry *map_lookup(clru_shard *cache, const cmap_pair *key_pair) {
   const cmap_pair *found = NULL;
   ccol_retval_t r = chmap_get_elem_ref(cache->map, key_pair, &found);
@@ -655,32 +640,31 @@ static ccol_retval_t map_upsert(clru_shard *cache, const cmap_pair *key_pair,
 /* The number of segments that a cache of this capacity gets. Each segment has
  * its own lock.
  *
- * More segments give less contention. But they also give a coarser picture of
- * the eviction order, because each segment evicts from its own order. The
- * capacity bounds the count, so that no segment starts with nothing to hold.
- * A ceiling also bounds the count. This is why a very large cache does not
- * pay for segments that no realistic number of threads uses at the same
- * time. */
+ * More segments give less contention, but also a coarser picture of the
+ * eviction order, because each segment evicts from its own order. The capacity
+ * bounds the count, so that no segment starts with nothing to hold, and a
+ * ceiling also bounds it, so that a very large cache does not pay for segments
+ * that no realistic number of threads uses at the same time. */
 #define CLRU_MAX_SHARDS 16u
 
-/* The number of entries that a segment must be worth before the library
- * divides the cache at all.
+/* The number of entries that a segment must be worth before the library divides
+ * the cache at all.
  *
  * A division costs real capacity, and not only capacity in principle. A hash
- * spreads the keys. At any instant some segments therefore hold more than
- * their share and other segments hold less. A cache that is full to exactly
- * its capacity then evicts from the full segments while the other segments
- * still have room. The smaller each segment is, the worse that unevenness
- * gets, because the spread is relative to the size of the segment.
- * Measurements with randomly distributed keys show that segments of four
- * entries keep about three quarters of a full cache. Segments of this size
- * keep the loss down to the few percent that the public documentation states
- * as the cost of a division.
+ * spreads the keys, so at any instant some segments hold more than their share
+ * and other segments hold less, and a cache that is full to exactly its
+ * capacity then evicts from the full segments while the other segments still
+ * have room. The smaller each segment is, the worse that unevenness gets,
+ * because the spread is relative to the size of the segment. Measurements with
+ * randomly distributed keys show that segments of four entries keep about three
+ * quarters of a full cache, while segments of this size keep the loss down to
+ * the few percent that the public documentation states as the cost of a
+ * division.
  *
- * This value is here for two reasons. A cache that is small enough for the
- * loss to matter stays undivided, and it keeps one exact, global eviction
- * order. A cache that is large enough for lock contention to be the real
- * problem gets exactly as many segments as it gets without this value. */
+ * This value serves two purposes. A cache that is small enough for the loss to
+ * matter stays undivided and keeps one exact, global eviction order, while a
+ * cache that is large enough for lock contention to be the real problem gets
+ * exactly as many segments as it would get without this value. */
 #define CLRU_MIN_ENTRIES_PER_SHARD 64u
 
 static size_t shard_count_for(size_t capacity) {
@@ -690,29 +674,29 @@ static size_t shard_count_for(size_t capacity) {
   return n;
 }
 
-/* Spreads the whole value of a hash over its low bits, before the code
- * reduces that hash to a segment index.
+/* Spreads the whole value of a hash over its low bits, before the code reduces
+ * that hash to a segment index.
  *
  * The reduction is a modulo by the segment count, and a modulo reads only the
  * low bits of what it gets. The hash of the map is built to be read from its
  * top bits, which is where the map takes an index from, and the map gives no
  * promise about the spread of its low bits. A modulo that reads a hash whose
  * low bits depend only on the low bits of the key reads only the low bits of
- * the key, and a key set that holds those bits constant is ordinary, and not
- * exotic. Every pointer from malloc is aligned to at least 16 bytes. An
+ * the key, and a key set that holds those bits constant is ordinary, not
+ * exotic: every pointer from malloc is aligned to at least 16 bytes, and an
  * identifier that a block size or a page size scales has as many trailing
- * zeroes as that size. Such a set would land entirely on one segment. That
- * serialises the whole cache on the lock of that segment. It also caps the
- * cache at the share of the capacity that the segment holds. The cache then
- * evicts everything past that share while the other segments stay empty.
+ * zeroes as that size. Such a set would land entirely on one segment, which
+ * serialises the whole cache on the lock of that segment and caps the cache at
+ * the share of the capacity that the segment holds; the cache then evicts
+ * everything past that share while the other segments stay empty.
  *
- * The finalizer below is what rules that out whatever the hash of the map
- * is. It stays a concern of the cache, and not of the map, because the map
- * reads the same hash from its own high bits. A poor spread costs a hash
- * table some probes, but a segment count partitions a fixed capacity. The
- * finalizer is the standard 64-bit avalanche, which makes every output bit
- * depend on every input bit. It sits ahead of a mutex lock and a map lookup,
- * so its few instructions are not the cost that matters here. */
+ * The finalizer below is what rules that out whatever the hash of the map is.
+ * It stays a concern of the cache, and not of the map, because the map reads
+ * the same hash from its own high bits: a poor spread costs a hash table some
+ * probes, but a segment count partitions a fixed capacity. The finalizer is the
+ * standard 64-bit avalanche, which makes every output bit depend on every input
+ * bit. It sits ahead of a mutex lock and a map lookup, so its few instructions
+ * are not the cost that matters here. */
 static inline size_t clru_reduce(uint64_t h, size_t shard_count) {
   h ^= h >> 33;
   h *= 0xff51afd7ed558ccdULL;
@@ -724,23 +708,22 @@ static inline size_t clru_reduce(uint64_t h, size_t shard_count) {
 
 /* Gives the segment that a key belongs to.
  *
- * Each segment has its own map. Two keys that a map treats as one key must
- * therefore land on the same segment. Without that, the cache holds two
- * entries for one key, and a later get cannot find what a set stored. Byte
- * identity is not the notion of key identity that the map uses for every type
- * it accepts. -0.0 and 0.0 are one key for float and for double. The map
- * hashes and compares a long double by value. It does this because the type
- * carries padding on some ABIs. Those padding bytes are often uninitialised,
- * and any read of them is a hazard. A route through the key hash of the
- * map is therefore what keeps a cache with segments equivalent to a cache
- * without segments. It also keeps this path from a read of bytes that the
- * caller never wrote.
+ * Each segment has its own map, so two keys that a map treats as one key must
+ * land on the same segment; otherwise the cache holds two entries for one key,
+ * and a later get cannot find what a set stored. Byte identity is not the
+ * notion of key identity that the map uses for every type it accepts: -0.0 and
+ * 0.0 are one key for float and for double, and the map hashes and compares a
+ * long double by value, because the type carries padding on some ABIs, and
+ * those padding bytes are often uninitialised, so any read of them is a
+ * hazard. A route through the key hash of the map is therefore what keeps a
+ * cache with segments equivalent to a cache without segments, and it also
+ * keeps this path from reading bytes that the caller never wrote.
  *
  * This function returns NULL when key_pair->size does not agree with the own
- * width of a fixed-width key type. That is what stops a read past the end of
- * a cmap_pair of the wrong size that a caller built. This check runs ahead of
- * the segment count. One malformed key therefore reports ccol_invalid_args
- * whether or not the cache is large enough to have segments. */
+ * width of a fixed-width key type, which is what stops a read past the end of a
+ * cmap_pair of the wrong size that a caller built. This check runs ahead of the
+ * segment count, so one malformed key reports ccol_invalid_args whether or not
+ * the cache is large enough to have segments. */
 static clru_shard *shard_for(struct clrucache *router,
                              const cmap_pair *key_pair) {
   if (router->key_fixed_width != 0 &&
@@ -753,9 +736,9 @@ static clru_shard *shard_for(struct clrucache *router,
   return router->shards[clru_reduce(h, router->shard_count)];
 }
 
-/* Frees the allocation of the router. The copy of the allocator of the
- * caller lives inside the router, so the function reads the free procedure
- * out of it before the router goes away. */
+/* Frees the allocation of the router. The copy of the allocator of the caller
+ * lives inside the router, so the function reads the free procedure out of it
+ * before the router goes away. */
 static void router_free_self(struct clrucache *router) {
   ccol_memmgmt_procs_t *mp = router->m_procs;
   if (router->shards) _ccol_mem_free(mp, router->shards);
@@ -767,9 +750,9 @@ static void router_free_self(struct clrucache *router) {
   }
 }
 
-/* Builds one segment. Everything below the router belongs to a single
- * segment. This function is therefore the whole construction of a segment:
- * its own map, its own eviction order and its own lock. */
+/* Builds one segment. Everything below the router belongs to a single segment,
+ * so this function is the whole construction of a segment: its own map, its own
+ * eviction order and its own lock. */
 static clru_shard *shard_create(size_t capacity, ccol_data_type key_type,
                                 clru_remote_getter_t getter,
                                 clru_remote_setter_t setter,
@@ -780,9 +763,9 @@ static clru_shard *shard_create(size_t capacity, ccol_data_type key_type,
     if (err) *err = CCOL_ERR_STR("failed to allocate cache segment");
     return NULL;
   }
-  /* The segment borrows this. It does not copy it. The router owns the one
-   * copy of the allocator of the caller, and the router lives longer than
-   * every segment that it creates. */
+  /* The segment borrows this instead of copying it. The router owns the one
+   * copy of the allocator of the caller, and the router lives longer than every
+   * segment that it creates. */
   cache->m_procs = mprocs;
 
   char *map_err = NULL;
@@ -803,11 +786,11 @@ static clru_shard *shard_create(size_t capacity, ccol_data_type key_type,
   cache->lru_tail.prev = &cache->lru_head;
   cache->lru_tail.next = NULL;
 
-  /* This code checks the return value. POSIX lets pthread_mutex_init fail for
-   * a real reason, for example ENOMEM. A handle that carries a mutex which is
-   * not fully initialized makes every later lock on that mutex undefined
-   * behavior. This mirrors the ccol_cond_var_init check in entry_alloc, in
-   * this same file. */
+  /* This code checks the return value because POSIX lets pthread_mutex_init
+   * fail for a real reason, for example ENOMEM, and a handle that carries a
+   * mutex which is not fully initialized makes every later lock on that mutex
+   * undefined behavior. This mirrors the ccol_cond_var_init check in
+   * entry_alloc, in this same file. */
   if (ccol_mutex_init(cache->mutex) != 0) {
     if (err) *err = CCOL_ERR_STR("failed to initialize cache mutex");
     __chmap_destroy(cache->map);
@@ -823,16 +806,16 @@ static clru_shard *shard_create(size_t capacity, ccol_data_type key_type,
 }
 
 /* Evicts everything that a segment still holds, and then frees the segment
- * itself. The eviction runs under the lock of the segment. The caller
- * supplies the eviction callback, and every other path that calls it holds
- * that lock too. */
+ * itself. The eviction runs under the lock of the segment, because the caller
+ * supplies the eviction callback and every other path that calls it holds that
+ * lock too. */
 static void shard_destroy(clru_shard *cache) {
   if (!cache) return;
   ccol_mutex_lock(cache->mutex);
   /* evict_lru() returns false exactly when the list is empty. No set is in
    * flight when a destroy reaches this point, because the pin count of the
-   * handle drains every in-flight call first. Every entry that this loop
-   * evicts therefore leaves the map as well. */
+   * handle drains every in-flight call first, so every entry that this loop
+   * evicts leaves the map as well. */
   while (evict_lru(cache)) {
   }
   ccol_mutex_unlock(cache->mutex);
@@ -890,10 +873,10 @@ clru_cache clrucache_create_full(size_t capacity, ccol_data_type key_type,
     return CLRU_CACHE_INVALID;
   }
 
-  /* The capacities of the segments add up to exactly the total that the
-   * caller requested. The first `capacity % shard_count` segments carry one
-   * extra entry each. Nothing is lost to rounding, and the caller still gets
-   * the capacity that it asked for. */
+  /* The capacities of the segments add up to exactly the total that the caller
+   * requested: the first `capacity % shard_count` segments carry one extra
+   * entry each, so nothing is lost to rounding and the caller gets the capacity
+   * that it asked for. */
   size_t base = capacity / router->shard_count;
   size_t extra = capacity % router->shard_count;
   for (size_t i = 0; i < router->shard_count; i++) {
@@ -907,13 +890,13 @@ clru_cache clrucache_create_full(size_t capacity, ccol_data_type key_type,
     }
   }
 
-  /* The acquisition of a slot is the LITERAL LAST step. It runs after the
+  /* The acquisition of a slot is the LITERAL LAST step, and it runs after the
    * cache is fully constructed in every other respect. This mirrors the
-   * constructors of chttpcli, chttpsvr and ccol_event_loop exactly. No caller
-   * ever sees a handle until this function is about to return success.
-   * ccol_event_loop and ctpool start threads of their own. This module does
-   * not. A failure here therefore stops no thread. It only frees what the
-   * function already constructed successfully. */
+   * constructors of chttpcli, chttpsvr and ccol_event_loop exactly: no caller
+   * ever sees a handle until this function is about to return success. Unlike
+   * ccol_event_loop and ctpool, this module starts no threads of its own, so a
+   * failure here stops no thread and only frees what the function already
+   * constructed successfully. */
   clru_cache h = _clrucache_handle_slot_acquire(router);
   if (h == 0) {
     if (err) *err = CCOL_ERR_STR("failed to allocate clru_cache handle slot");
@@ -932,15 +915,15 @@ clru_cache clrucache_create_full(size_t capacity, ccol_data_type key_type,
 void __clrucache_destroy(clru_cache cache) {
   if (!cache) return;
 
-  /* Resolve cache through the slot table. Mark the slot not-in-use in the
+  /* Resolve cache through the slot table, and mark the slot not-in-use in the
    * same critical section as the lookup. This is what makes a second destroy
-   * call on the same handle value see a resolve failure. That second call can
-   * be concurrent, or later and sequential. It never races the teardown of
-   * this call. See the file-level comment of the slot table and the comment
-   * on _clrucache_resolve for the full design. A stale handle that reaches
-   * here, or one that a call already destroyed, is exactly the misuse that
-   * this generation-tagged handle design catches. It is fatal. It is not a
-   * silent use-after-free or double-free. */
+   * call on the same handle value, whether concurrent or later and sequential,
+   * see a resolve failure, so it never races the teardown of this call. See the
+   * file-level comment of the slot table and the comment on _clrucache_resolve
+   * for the full design. A stale handle that reaches here, or one that a call
+   * already destroyed, is exactly the misuse that this generation-tagged handle
+   * design catches, and it is fatal instead of a silent use-after-free or
+   * double-free. */
   ccol_call_once(clrucache_slot_table.once, _clrucache_slot_table_init_globals);
   uint32_t idx = (uint32_t)(cache >> 32);
   uint32_t gen = (uint32_t)(cache & 0xFFFFFFFFu);
@@ -964,20 +947,20 @@ void __clrucache_destroy(clru_cache cache) {
   slot->in_use = false; /* This blocks ALL future resolves for this handle
                             from this instant. It also blocks a second,
                             concurrent destroy attempt */
-  /* Same step, same lock. From here the table grants no new pin. That is what
+  /* Same step, same lock. From here the table grants no new pin, which is what
    * lets the count below reach zero and stay there. */
   ccol_pintable_retire(&clrucache_pintable, idx);
   ccol_rw_lock_unlock(clrucache_slot_table.rwlock);
 
-  /* Wait for the pin count to reach 0 BEFORE any teardown logic runs at all.
-   * Do not wait only before the free of memory. This mirrors the order in
-   * chttpcli exactly. A wait first is safe here. It is not safe in ctpool.
-   * The blocking waits of this module are the ccol_cond_var_wait loops that
-   * coalesce a getter or a setter. The remote_getter or remote_setter call of
-   * some other application thread completes for that key and releases them.
-   * That mechanism is fully independent of what destroy does. No pinned or
-   * blocked caller here depends on destroy-side logic to release its own
-   * pin. */
+  /* Wait for the pin count to reach 0 BEFORE any teardown logic runs at all,
+   * not only before the free of memory. This mirrors the order in chttpcli
+   * exactly. Waiting first is safe here, although it is not safe in ctpool: the
+   * blocking waits of this module are the ccol_cond_var_wait loops that
+   * coalesce a getter or a setter, and the remote_getter or remote_setter call
+   * of some other application thread, which completes for that key, releases
+   * them. That mechanism is fully independent of what destroy does, so no
+   * pinned or blocked caller here depends on destroy-side logic to release its
+   * own pin. */
   {
     long delay_ns = 1000;
     while (ccol_pintable_pins(&clrucache_pintable, idx) > 0) {
@@ -987,19 +970,19 @@ void __clrucache_destroy(clru_cache cache) {
     }
   }
 
-  /* Evict every live entry that remains, and call the eviction callback for
-   * each one. Then free every segment, and then the router itself. */
+  /* Evict every live entry that remains, calling the eviction callback for each
+   * one, then free every segment, and then the router itself. */
   router_destroy_shards(raw);
   router_free_self(raw);
 
-  /* Release the slot last. Do it only after the teardown and the free of raw
-   * are complete. This is what marks the handle as reusable: the increment of
-   * the generation of the slot, and the push of the index back onto the free
-   * list. No earlier step marks it. Fetch the slot again by idx. Do not reuse
-   * `slot`. A concurrent clrucache_create_full can run its own
-   * _clrucache_handle_slot_acquire in between. That call can allocate the
-   * backing array of slots again through cvector_push_back. Any pointer into
-   * that array from before this second lock is then invalid. idx itself is
+  /* Release the slot last, only after the teardown and the free of raw are
+   * complete. This is what marks the handle as reusable (the increment of the
+   * generation of the slot, and the push of the index back onto the free list),
+   * and no earlier step marks it. Fetch the slot again by idx instead of
+   * reusing `slot`: a concurrent clrucache_create_full can run its own
+   * _clrucache_handle_slot_acquire in between, and that call can allocate the
+   * backing array of slots again through cvector_push_back, which makes any
+   * pointer into that array from before this second lock invalid. idx itself is
    * stable. */
   ccol_rw_lock_wrlock(clrucache_slot_table.rwlock);
   clrucache_slot_t *slot2 =
@@ -1010,22 +993,22 @@ void __clrucache_destroy(clru_cache cache) {
       stale handle can therefore never match the generation of a FUTURE
       acquire for this same index */
   _clrucache_free_index_release_locked(idx);
-  /* The process-exit destructor already ran, and it found this cache live.
-     The release that it could not do belongs to the call that frees the last
-     slot. This call can be that one. */
+  /* The process-exit destructor already ran and found this cache live. The
+     release that it could not do belongs to the call that frees the last slot,
+     and this call can be that one. */
   _clrucache_release_slot_table_if_deferred_locked();
   ccol_rw_lock_unlock(clrucache_slot_table.rwlock);
 }
 
 #ifdef RUNNING_UNIT_TESTS
-/* Resolves h to the struct clrucache* behind it, and does NOT pin it. This is
- * a bare lookup in the slot table. It is safe for tests, because the test
- * code that calls it runs synchronously on one thread. There is no concurrent
- * destroy to race. _clrucache_resolve needs a matching _unpin call, and this
- * function needs none, so a test has nothing to remember. A forgotten unpin
+/* Resolves h to the struct clrucache* behind it, and does NOT pin it. This is a
+ * bare lookup in the slot table, which is safe for tests because the test code
+ * that calls it runs synchronously on one thread, so there is no concurrent
+ * destroy to race. _clrucache_resolve needs a matching _unpin call, while this
+ * function needs none, so a test has nothing to remember: a forgotten unpin
  * leaves a pin outstanding on that cache, and that hangs every future
- * clru_destroy call against it in silence.
- * It returns NULL under exactly the same conditions as _clrucache_resolve. */
+ * clru_destroy call against it in silence. It returns NULL under exactly the
+ * same conditions as _clrucache_resolve. */
 struct clrucache *_clrucache_resolve_for_tests(clru_cache h) {
   ccol_call_once(clrucache_slot_table.once, _clrucache_slot_table_init_globals);
   if (h == 0) return NULL;
@@ -1042,18 +1025,17 @@ struct clrucache *_clrucache_resolve_for_tests(clru_cache h) {
   return raw;
 }
 
-/* Reads how many slots the handle table for a clru_cache holds now. This
- * count includes the slots that the table grew, and the slots that a release
- * freed but no acquire reused yet. It lets a test assert that a loop of
- * creates and destroys reuses freed slots. Without that, the table grows
- * without bound. */
-/* The sum of the capacities of the segments, and the number of segments.
- * The division hands the first `capacity % shard_count` segments one extra
- * entry each. A caller can observe nothing that separates a division which
- * keeps that remainder from one which drops it. clrucache_capacity() reports
- * the number that the caller asked for in both cases. The eviction slack in a
- * full cache is far wider than the one or two entries at stake. A direct read
- * of the segments is what lets a test pin this. */
+/* Reads how many slots the handle table for a clru_cache holds now, including
+ * the slots that the table grew and the slots that a release freed but no
+ * acquire reused yet. It lets a test assert that a loop of creates and destroys
+ * reuses freed slots; without that, the table grows without bound. */
+/* The sum of the capacities of the segments, and the number of segments. The
+ * division hands the first `capacity % shard_count` segments one extra entry
+ * each. A caller can observe nothing that separates a division which keeps that
+ * remainder from one which drops it: clrucache_capacity() reports the number
+ * that the caller asked for in both cases, and the eviction slack in a full
+ * cache is far wider than the one or two entries at stake. A direct read of the
+ * segments is what lets a test pin this. */
 size_t _clrucache_segment_capacity_sum_for_tests(clru_cache cache,
                                                  size_t *out_segments) {
   struct clrucache *raw = _clrucache_resolve(cache);
@@ -1092,11 +1074,11 @@ size_t _clrucache_keyed_segment_maps_for_tests(clru_cache cache,
 }
 
 /* The indices that sit on the free list now. Read this together with the
- * capacity above. A roll-back that loses a slot shows up as a table that
- * grew, but only while the free list is empty. A test that measures the
- * growth alone therefore passes or fails according to how many handles the
- * earlier tests held at one time. The two values together describe the table
- * independently of that. */
+ * capacity above. A roll-back that loses a slot shows up as a table that grew,
+ * but only while the free list is empty, so a test that measures the growth
+ * alone passes or fails according to how many handles the earlier tests held at
+ * one time. The two values together describe the table independently of that.
+ */
 size_t _clrucache_free_index_count_for_tests(void) {
   ccol_call_once(clrucache_slot_table.once, _clrucache_slot_table_init_globals);
   ccol_rw_lock_rdlock(clrucache_slot_table.rwlock);
@@ -1105,11 +1087,11 @@ size_t _clrucache_free_index_count_for_tests(void) {
   return n;
 }
 
-/* The number of waiter references that the entry of key_pair holds now, or
- * -1 when the cache does not hold the key. A thread that blocks on the entry
- * holds one, and so does a thread that runs a remote getter or a remote
- * setter for it. A test polls this to learn that a getter really waits on an
- * operation in flight, instead of guessing with a sleep. */
+/* The number of waiter references that the entry of key_pair holds now, or -1
+ * when the cache does not hold the key. A thread that blocks on the entry holds
+ * one, and so does a thread that runs a remote getter or a remote setter for
+ * it. A test polls this to learn that a getter really waits on an operation in
+ * flight, instead of guessing with a sleep. */
 int _clrucache_key_waiters_for_tests(clru_cache cache,
                                      const cmap_pair *key_pair) {
   struct clrucache *raw = _clrucache_resolve(cache);
@@ -1135,24 +1117,23 @@ size_t _clrucache_slot_table_capacity_for_tests(void) {
 }
 
 /*
- * Lets a test bias which of two threads wins the race for the mutex of a
- * segment. It does not guarantee the winner. The race starts after a
- * successful fetch or set publishes an entry. The thread that publishes the
- * entry STILL HOLDS that mutex when it calls this function. The call comes
- * immediately before ccol_cond_var_broadcast() and ccol_mutex_unlock(). The
- * broadcast is what first makes a coalesced waiter on that same entry start
- * to contend for the mutex. A longer hold of the mutex here gives more time
- * to a concurrent, unrelated thread that wants the same mutex. One example of
- * such a thread is a thread that runs an eviction which removes the entry
- * that the publish added. That thread can then queue up for the mutex BEFORE
- * anything wakes the coalesced waiter. POSIX guarantees no FIFO order, but in
- * practice the thread that is already in the queue gets the mutex first after
- * the release. This is what lets a test exercise the path where a coalesced
- * waiter survives a racing eviction. Without it, the test depends on rare
- * scheduling luck that is hard to reproduce. This flag does not disarm
- * itself. A test arms it for exactly the one call under test. The test must
- * then set it back to 0 itself, so that later, unrelated tests in the same
- * process are unaffected. */
+ * Lets a test bias, without guaranteeing, which of two threads wins the race
+ * for the mutex of a segment. The race starts after a successful fetch or set
+ * publishes an entry: the thread that publishes the entry STILL HOLDS that
+ * mutex when it calls this function, immediately before
+ * ccol_cond_var_broadcast() and ccol_mutex_unlock(), and the broadcast is what
+ * first makes a coalesced waiter on that same entry start to contend for the
+ * mutex. A longer hold of the mutex here gives more time to a concurrent,
+ * unrelated thread that wants the same mutex, such as a thread that runs an
+ * eviction which removes the entry that the publish added, so that thread can
+ * queue up for the mutex BEFORE anything wakes the coalesced waiter. POSIX
+ * guarantees no FIFO order, but in practice the thread that is already in the
+ * queue gets the mutex first after the release. This is what lets a test
+ * exercise the path where a coalesced waiter survives a racing eviction;
+ * without it, the test depends on rare scheduling luck that is hard to
+ * reproduce. This flag does not disarm itself: a test arms it for exactly the
+ * one call under test and must then set it back to 0 itself, so that later,
+ * unrelated tests in the same process are unaffected. */
 static _Atomic unsigned int _clru_test_post_publish_delay_us = 0;
 static _Atomic bool _clru_test_post_publish_delay_entered = false;
 
@@ -1161,17 +1142,16 @@ void clru_test_set_post_publish_delay_us(unsigned int delay_us) {
   atomic_store(&_clru_test_post_publish_delay_us, delay_us);
 }
 
-/* Lets a test poll for one fact: the thread that publishes an entry entered
- * its delay, and therefore still holds the mutex of that segment right now.
- * The test does not need that mutex for this. It also cannot take the mutex
- * here safely. A lock of the mutex makes the thread that polls block until
- * the delay is over, which defeats the point. This is what lets the own
- * evictor thread of a test try to lock the mutex at the earliest possible
- * moment. A poll from userspace cannot get closer to it. Without this, the
- * test guesses at a fixed sleep duration. Such a sleep can fire too early,
- * before the thread that publishes locks the mutex again, and there is then
- * nothing to queue up behind. It can also leave less margin than the test
- * intends. */
+/* Lets a test poll for one fact: the thread that publishes an entry entered its
+ * delay, and so still holds the mutex of that segment right now. The test does
+ * not need that mutex for this, and it cannot safely take the mutex here
+ * either, because locking it would make the polling thread block until the
+ * delay is over, which defeats the point. This is what lets the own evictor
+ * thread of a test try to lock the mutex at the earliest possible moment; no
+ * poll from userspace can get closer to it. Without this, the test guesses at
+ * a fixed sleep duration, which can fire too early, before the thread that
+ * publishes locks the mutex again, leaving nothing to queue up behind, or can
+ * leave less margin than the test intends. */
 bool clru_test_post_publish_delay_entered(void) {
   return atomic_load(&_clru_test_post_publish_delay_entered);
 }
@@ -1184,29 +1164,28 @@ static void _clru_test_maybe_delay_post_publish(void) {
 }
 #endif
 
-/* Frees the bookkeeping arrays of the slot table at process exit. The
- * leak-kind report of make memtest then does not flag them as still
- * reachable. This mirrors _cleanup_event_loop_slot_table of ccol_event_loop
- * exactly. See the comment on that function for the full rationale. That
- * comment also says why this is sound only when the application destroys
- * every clru_cache that it creates before process exit. This test suite
- * already satisfies that precondition for a clean make memtest. This function
- * MUST use ccol_call_once. An __attribute__((destructor)) function runs for
- * the whole shared object, whichever parts of it the process used. Without
- * ccol_call_once, a process that links this library and creates no clru_cache
- * locks a mutex here that no call to pthread_mutex_init prepared. */
-/* Tells whether any slot still names a cache. The caller holds the write
- * lock.
+/* Frees the bookkeeping arrays of the slot table at process exit, so that the
+ * leak-kind report of make memtest does not flag them as still reachable. This
+ * mirrors _cleanup_event_loop_slot_table of ccol_event_loop exactly; see the
+ * comment on that function for the full rationale, including why this is sound
+ * only when the application destroys every clru_cache that it creates before
+ * process exit. This test suite satisfies that precondition for a clean make
+ * memtest. This function MUST use ccol_call_once, because an
+ * __attribute__((destructor)) function runs for the whole shared object,
+ * whichever parts of it the process used: without ccol_call_once, a process
+ * that links this library and creates no clru_cache locks a mutex here that no
+ * call to pthread_mutex_init prepared. */
+/* Tells whether any slot still names a cache. The caller holds the write lock.
  *
- * This scan reads slot->ptr, and not slot->in_use. A destroy clears in_use as
- * its first step, so that it rejects a second destroy or a new resolve as
- * early as possible. The rest of the teardown runs after that step. That rest
- * drains the pins and does the final locked release of the index. A scan that
- * trusts in_use alone frees this table out from under a destroy that is still
- * in that window. The last step of that destroy then indexes the table.
- * The code writes ptr only after a slot is fully acquired, and it clears ptr
- * only in that final locked step. ptr is therefore true for exactly as long
- * as the table must not be released. */
+ * This scan reads slot->ptr, not slot->in_use. A destroy clears in_use as its
+ * first step, so that it rejects a second destroy or a new resolve as early as
+ * possible, and the rest of the teardown, which drains the pins and does the
+ * final locked release of the index, runs after that step. A scan that trusts
+ * in_use alone frees this table out from under a destroy that is still in that
+ * window, and the last step of that destroy then indexes the table. The code
+ * writes ptr only after a slot is fully acquired and clears it only in that
+ * final locked step, so ptr is true for exactly as long as the table must not
+ * be released. */
 static bool _clrucache_any_slot_live_locked(void) {
   size_t slot_count = cvector_elem_count(clrucache_slot_table.slots);
   for (size_t i = 0; i < slot_count; i++) {
@@ -1217,24 +1196,23 @@ static bool _clrucache_any_slot_live_locked(void) {
   return false;
 }
 
-/* Releases the bookkeeping of the table and the pin index. The caller
- * holds the write lock, and the caller already established that no slot is
- * live.
+/* Releases the bookkeeping of the table and the pin index. The caller holds the
+ * write lock and has already established that no slot is live.
  *
  * The slot storage of the pin index is deliberately never released while the
- * process runs, because a resolve indexes it with no lock held. A leak
- * checker that treats still-reachable memory as an error therefore reports it
- * at exit, unless this function releases it here. The code sets each vector
- * to NULL as it destroys it. That is what makes a later call answer "already
- * released" instead of an index into a freed vector. This function does not
- * destroy the rwlock. It can run from an ordinary destroy that still holds
- * that lock. */
-/* One out-of-line call holds both the check and the release. The destroy path
- * that must make that call therefore keeps the code shape that it has without
- * any of this. Cold code in a hot object file is not free. Inline here, the
- * same few instructions measurably slow the push path of an unrelated
- * container, because they shift what the linker lays out around it. The
- * instruction count does not change. */
+ * process runs, because a resolve indexes it with no lock held, so a leak
+ * checker that treats still-reachable memory as an error reports it at exit
+ * unless this function releases it here. The code sets each vector to NULL as
+ * it destroys it, which is what makes a later call answer "already released"
+ * instead of indexing a freed vector. This function does not destroy the
+ * rwlock, because it can run from an ordinary destroy that still holds that
+ * lock. */
+/* One out-of-line call holds both the check and the release, so the destroy
+ * path that must make that call keeps the code shape that it has without any of
+ * this. Cold code in a hot object file is not free: inline here, the same few
+ * instructions measurably slow the push path of an unrelated container, because
+ * they shift what the linker lays out around it, although the instruction count
+ * does not change. */
 static __attribute__((noinline)) void
 _clrucache_release_slot_table_if_deferred_locked(void) {
   if (clrucache_slot_table.release_deferred &&
@@ -1253,18 +1231,18 @@ static void _clrucache_release_slot_table_locked(void) {
 __attribute__((destructor)) static void _cleanup_clrucache_slot_table(void) {
   ccol_call_once(clrucache_slot_table.once, _clrucache_slot_table_init_globals);
   /* There is nothing to do, and nothing that is safe to touch. The code sets
-     each vector to NULL as it destroys it. A second run of this function
-     therefore answers here, instead of an index into a freed vector. */
+     each vector to NULL as it destroys it, so a second run of this function
+     answers here instead of indexing a freed vector. */
   if (!clrucache_slot_table.slots) return;
   ccol_rw_lock_wrlock(clrucache_slot_table.rwlock);
   /* Release only after nothing remains that can still resolve a handle. The
    * order of the destructor of one translation unit against the destructor of
-   * another is not for this library to decide. Without this check, a later
-   * destructor that still holds a live handle finds the table and the pin
-   * index freed under it. In that case this code hands the release to the
-   * destroy that frees the last slot. It does not skip the release. An
-   * application that destroys its caches therefore leaves nothing behind, in
-   * whatever order the destructors run. */
+   * another is not for this library to decide, and without this check a later
+   * destructor that still holds a live handle finds the table and the pin index
+   * freed under it. In that case this code hands the release to the destroy
+   * that frees the last slot instead of skipping it, so an application that
+   * destroys its caches leaves nothing behind, in whatever order the
+   * destructors run. */
   if (_clrucache_any_slot_live_locked()) {
     clrucache_slot_table.release_deferred = true;
     ccol_rw_lock_unlock(clrucache_slot_table.rwlock);
@@ -1273,16 +1251,15 @@ __attribute__((destructor)) static void _cleanup_clrucache_slot_table(void) {
   _clrucache_release_slot_table_locked();
   ccol_rw_lock_unlock(clrucache_slot_table.rwlock);
   /* This code deliberately does not destroy the rwlock. The rwlock has static
-     storage duration, so it holds nothing that a leak checker reports. The
-     destructor cannot own its lifetime in any case. The deferred branch above
-     returns while the table is still live. The release that happens later
-     runs while it holds this very lock. There is therefore no path where
-     every user is provably finished with the lock. A destroy of the lock here
-     leaves the entry points of the other branch with a read lock on a
-     destroyed object. That turns a stale-handle call, which is documented to
-     fail cleanly through ccol_fatal_err, into undefined behaviour. The order
-     of destructors across translation units is also not for this library to
-     decide. */
+     storage duration, so it holds nothing that a leak checker reports, and the
+     destructor cannot own its lifetime in any case: the deferred branch above
+     returns while the table is still live, and the release that happens later
+     runs while it holds this very lock, so there is no path where every user is
+     provably finished with the lock. Destroying the lock here would leave the
+     entry points of the other branch with a read lock on a destroyed object,
+     which turns a stale-handle call, documented to fail cleanly through
+     ccol_fatal_err, into undefined behaviour. The order of destructors across
+     translation units is also not for this library to decide. */
 }
 
 /* ========================================================================== */
@@ -1298,14 +1275,14 @@ static ccol_retval_t clrucache_get_full_retry(struct clrucache *raw,
  * Every path that returns a result releases that mutex and the pin of the
  * handle first.
  *
- * The one case that must look the key up again is a waiter that finds that
- * a set failed. The entry point instantiates this body with again == NULL,
- * and there that case leaves through a call to clrucache_get_full_retry(). A
- * loop back to the lookup inside the entry point would keep more values live
- * across the whole function, and that costs the hit path a spill. The cold
- * function instantiates the body with again != NULL. There the body reports
- * the retry through *again, with the mutex and the pin still held, and the
- * cold function loops. */
+ * The one case that must look the key up again is a waiter that finds that a
+ * set failed. The entry point instantiates this body with again == NULL, and
+ * there that case leaves through a call to clrucache_get_full_retry(), because
+ * a loop back to the lookup inside the entry point would keep more values live
+ * across the whole function, which costs the hit path a spill. The cold
+ * function instantiates the body with again != NULL; there the body reports the
+ * retry through *again, with the mutex and the pin still held, and the cold
+ * function loops. */
 static inline __attribute__((always_inline)) ccol_retval_t
 clrucache_get_full_locked(struct clrucache *raw, clru_shard *shard,
                           const cmap_pair *key_pair, cmap_pair *val_out,
@@ -1320,8 +1297,8 @@ clrucache_get_full_locked(struct clrucache *raw, clru_shard *shard,
       return ccol_key_not_found;
     }
 
-    /* Create a placeholder. Other threads that wait for the same key can then
-     * find it. They coalesce onto the single remote fetch that follows. */
+    /* Create a placeholder, so that other threads that wait for the same key
+     * can find it and coalesce onto the single remote fetch that follows. */
     entry = entry_alloc(shard);
     if (!entry) {
       ccol_mutex_unlock(shard->mutex);
@@ -1331,11 +1308,11 @@ clrucache_get_full_locked(struct clrucache *raw, clru_shard *shard,
 
     entry->key = _ccol_mem_alloc(shard->m_procs, key_pair->size);
     if (!entry->key) {
-      /* Unlock the mutex before the free. This matches every other entry_free
-       * call site in this file that frees an entry which no call published
-       * into cache->map. The lock of a segment must not stay held across the
-       * _ccol_mem_free and ccol_cond_var_destroy calls for the freed entry.
-       * Without this unlock, those calls block every other concurrent getter
+      /* Unlock the mutex before the free, which matches every other entry_free
+       * call site in this file that frees an entry which no call published into
+       * cache->map. The lock of a segment must not stay held across the
+       * _ccol_mem_free and ccol_cond_var_destroy calls for the freed entry;
+       * without this unlock, those calls block every other concurrent getter
        * and setter on this cache for their whole duration. */
       ccol_mutex_unlock(shard->mutex);
       entry_free(shard, entry);
@@ -1347,16 +1324,16 @@ clrucache_get_full_locked(struct clrucache *raw, clru_shard *shard,
     entry->fetch_in_progress = true;
 
     /* ccol_key_already_present is a documented SUCCESS outcome of
-     * chmap_insert_elem. It means that the map wrote the stored value of the
+     * chmap_insert_elem: it means that the map wrote the stored value of the
      * key, which is the entry pointer here, in place. This code must treat it
-     * the same as ccol_success. Every other chmap_insert_elem call site in
-     * this codebase does the same (see cjson.c and clogger.c). This outcome
-     * is structurally unreachable here, because map_lookup() confirmed that
-     * the key is absent under this same, uninterrupted hold of the mutex. But
-     * a hard failure here is dangerous, and not only redundant. The map
-     * already points at `entry` when chmap_insert_elem returns. A free of
-     * `entry` here, which a plain out-of-memory failure does, leaves a
-     * dangling pointer behind for the very next lookup of this key. */
+     * the same as ccol_success, as every other chmap_insert_elem call site in
+     * this codebase does (see cjson.c and clogger.c). This outcome is
+     * structurally unreachable here, because map_lookup() confirmed that the
+     * key is absent under this same, uninterrupted hold of the mutex, but a
+     * hard failure here would be dangerous, not only redundant: the map already
+     * points at `entry` when chmap_insert_elem returns, so a free of `entry`
+     * here, which a plain out-of-memory failure does, leaves a dangling pointer
+     * behind for the very next lookup of this key. */
     ccol_retval_t ins = map_upsert(shard, key_pair, entry);
     if (ins != ccol_success && ins != ccol_key_already_present) {
       ccol_mutex_unlock(shard->mutex);
@@ -1365,11 +1342,11 @@ clrucache_get_full_locked(struct clrucache *raw, clru_shard *shard,
       return ins;
     }
 
-    /* This thread is the fetcher. Hold a reference across the window where
-     * the mutex is not held, exactly as the remote-setter window of
+    /* This thread is the fetcher. Hold a reference across the window where the
+     * mutex is not held, exactly as the remote-setter window of
      * clrucache_set_full does. See the locking discipline at the top of this
-     * file: a thread that unlocks while it holds a pointer to an entry takes
-     * a reference first, with no exception for a placeholder. */
+     * file: a thread that unlocks while it holds a pointer to an entry takes a
+     * reference first, with no exception for a placeholder. */
     entry->waiters++;
     ccol_mutex_unlock(shard->mutex);
 
@@ -1401,8 +1378,8 @@ clrucache_get_full_locked(struct clrucache *raw, clru_shard *shard,
 
 #ifdef RUNNING_UNIT_TESTS
       /* This widens the window that a concurrent, unrelated eviction has to
-       * reach and lock shard->mutex. It widens it before the broadcast below
-       * wakes any coalesced waiter. See the doc comment on the hook. */
+       * reach and lock shard->mutex, before the broadcast below wakes any
+       * coalesced waiter. See the doc comment on the hook. */
       _clru_test_maybe_delay_post_publish();
 #endif
       ccol_cond_var_broadcast(entry->cond);
@@ -1427,9 +1404,9 @@ clrucache_get_full_locked(struct clrucache *raw, clru_shard *shard,
     }
   }
 
-  /* The entry exists. Wait for any operation in progress to settle. A hit
-   * on a settled entry is the common case, and the hint keeps its path
-   * straight. */
+  /* The entry exists, so wait for any operation in progress to settle. A hit on
+   * a settled entry is the common case, and the hint keeps its path straight.
+   */
   if (__builtin_expect(entry->fetch_in_progress || entry->set_in_progress, 0)) {
     entry->waiters++;
     while (entry->fetch_in_progress || entry->set_in_progress) {
@@ -1460,11 +1437,11 @@ clrucache_get_full_locked(struct clrucache *raw, clru_shard *shard,
         }
         return clrucache_get_full_retry(raw, shard, key_pair, val_out);
       }
-      /* The fetch that this call coalesced onto failed. There is nothing to
+      /* The fetch that this call coalesced onto failed, so there is nothing to
        * give back. A fetch can also have a value of the wrong size; see the
        * comment on fetch_size_mismatch. Every coalesced waiter then gets the
-       * same report as the thread that ran the remote getter. This code does
-       * not downgrade that report to the generic "not found" because this
+       * same report as the thread that ran the remote getter: this code does
+       * not downgrade that report to the generic "not found" just because this
        * thread did not run the fetch. */
       ccol_retval_t fail_r = entry->fetch_size_mismatch
                                  ? ccol_unexpected_failure
@@ -1475,35 +1452,34 @@ clrucache_get_full_locked(struct clrucache *raw, clru_shard *shard,
       _clrucache_resolve_unpin(raw);
       return fail_r;
     }
-    /* entry->value is not NULL. The operation that this call coalesced onto
+    /* entry->value is not NULL, so the operation that this call coalesced onto
      * succeeded. Fall through to the shared path below that gives the value
      * back, even when entry->evicted is now true. An unrelated, concurrent
-     * cache operation can evict this entry from the map and the LRU list. It
-     * can do that in the window between the broadcast of the fetcher or the
-     * setter and the wakeup of this thread. entry itself, and its value, are
-     * still safe to read here. This thread still holds a waiter reference on
-     * the entry, and that is exactly what keeps the entry alive until this
-     * thread finishes. A coalesced waiter must get the same result as the
-     * fetcher or the setter. It must not discard a value that is in front of
-     * it, only because an eviction removed the entry moments later. */
+     * cache operation can evict this entry from the map and the LRU list in the
+     * window between the broadcast of the fetcher or the setter and the wakeup
+     * of this thread, but entry itself, and its value, are still safe to read
+     * here, because this thread still holds a waiter reference on the entry,
+     * and that is exactly what keeps the entry alive until this thread
+     * finishes. A coalesced waiter must get the same result as the fetcher or
+     * the setter, instead of discarding a value that is in front of it only
+     * because an eviction removed the entry moments later. */
   }
 
-  /* Copy the value out. Refresh the LRU position of the entry when the entry
-   * is still live. */
-  /* Invariant: entry->value != NULL here always means one of two things. The
-   * entry is still LIVE, which is in_lru. Or an eviction removed the entry
+  /* Copy the value out, and refresh the LRU position of the entry when the
+   * entry is still live. */
+  /* Invariant: entry->value != NULL here always means one of two things: the
+   * entry is still LIVE, which is in_lru, or an eviction removed the entry
    * after a call stored a value in it successfully. In that second case the
    * entry is not part of the LRU list, and nothing may treat it as one. An
-   * eviction removes the entry from the map before it sets evicted=true. A
-   * map_lookup result that is not NULL and that needed no wait is therefore
-   * always a valid LIVE entry. */
+   * eviction removes the entry from the map before it sets evicted=true, so a
+   * map_lookup result that is not NULL and that needed no wait is always a
+   * valid LIVE entry. */
   ccol_assert(entry->value != NULL);
   ccol_assert(entry->evicted || entry->in_lru);
 
-  /* Allocate the copy for the caller BEFORE this code promotes the LRU
-   * position of the entry. A call that fails here, because it cannot
-   * allocate memory, must not also move the entry to the front of the
-   * eviction order. */
+  /* Allocate the copy for the caller BEFORE this code promotes the LRU position
+   * of the entry: a call that fails here, because it cannot allocate memory,
+   * must not also move the entry to the front of the eviction order. */
   void *copy = _ccol_mem_alloc(shard->m_procs, entry->value_size);
   if (!copy) {
     bool should_free = (entry->evicted && entry->waiters == 0);
@@ -1548,11 +1524,11 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
   }
 
   /* Everything below works on this one segment. A key belongs to exactly one
-   * segment. Its lookup, its eviction order and the coalescence of concurrent
-   * misses for it therefore all happen here. NULL means that the size of
-   * the key does not agree with the width of the declared key type. The map
-   * of the segment rejects such a key in turn. A rejection here keeps the
-   * choice of segment from a read past the end of the key. */
+   * segment, so its lookup, its eviction order and the coalescence of
+   * concurrent misses for it all happen here. NULL means that the size of the
+   * key does not agree with the width of the declared key type, which the map
+   * of the segment would reject in turn; rejecting it here keeps the choice of
+   * segment from reading past the end of the key. */
   clru_shard *shard = shard_for(raw, key_pair);
   if (!shard) {
     _clrucache_resolve_unpin(raw);
@@ -1568,17 +1544,16 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
 /* ========================================================================== */
 
 /*
- * Helper. It allocates a new placeholder entry for the given key, and it
- * inserts that entry into the chmap. It returns the entry on success. On
- * failure it returns NULL and writes the real ccol_retval_t to *err_out. This
- * matches how the miss paths of clrucache_get_full and __clrucache_get_into
- * handle the return value of map_upsert. A failure that is not an
- * out-of-memory failure, for example ccol_container_full, must be reported as
- * itself. This code must not fold it into a generic ccol_not_enough_memory.
- * The caller must hold cache->mutex. This helper always returns with
- * cache->mutex held, both on success and on failure. It unlocks that mutex
- * only for a short time around its own entry_free() calls. See the comment at
- * those call sites.
+ * Helper. It allocates a new placeholder entry for the given key and inserts
+ * that entry into the chmap. It returns the entry on success; on failure it
+ * returns NULL and writes the real ccol_retval_t to *err_out, which matches how
+ * the miss paths of clrucache_get_full and __clrucache_get_into handle the
+ * return value of map_upsert. A failure that is not an out-of-memory failure,
+ * for example ccol_container_full, must be reported as itself instead of being
+ * folded into a generic ccol_not_enough_memory. The caller must hold
+ * cache->mutex. This helper always returns with cache->mutex held, on success
+ * and on failure alike, and unlocks that mutex only for a short time around its
+ * own entry_free() calls; see the comment at those call sites.
  */
 static clru_entry *create_and_insert_placeholder(clru_shard *cache,
                                                  const cmap_pair *key_pair,
@@ -1591,12 +1566,12 @@ static clru_entry *create_and_insert_placeholder(clru_shard *cache,
 
   e->key = _ccol_mem_alloc(cache->m_procs, key_pair->size);
   if (!e->key) {
-    /* Unlock the mutex before the free, and lock it again before the return.
-     * The "returns with cache->mutex held" contract of this helper then holds
-     * whatever the outcome is. The lock of a segment must not stay held
-     * across the _ccol_mem_free and ccol_cond_var_destroy calls for the freed
-     * entry. Without this unlock, those calls block every other concurrent
-     * getter and setter on this cache for their whole duration. */
+    /* Unlock the mutex before the free, and lock it again before the return, so
+     * that the "returns with cache->mutex held" contract of this helper holds
+     * whatever the outcome is. The lock of a segment must not stay held across
+     * the _ccol_mem_free and ccol_cond_var_destroy calls for the freed entry;
+     * without this unlock, those calls block every other concurrent getter and
+     * setter on this cache for their whole duration. */
     ccol_mutex_unlock(cache->mutex);
     entry_free(cache, e);
     ccol_mutex_lock(cache->mutex);
@@ -1621,8 +1596,8 @@ static clru_entry *create_and_insert_placeholder(clru_shard *cache,
 }
 
 /*
- * Helper. It writes a value into an entry and makes that entry LIVE.
- * It evicts when it must. The caller must hold cache->mutex.
+ * Helper. It writes a value into an entry and makes that entry LIVE, evicting
+ * when it must. The caller must hold cache->mutex.
  */
 static ccol_retval_t entry_store_value(clru_shard *cache, clru_entry *entry,
                                        const cmap_pair *val_pair) {
@@ -1667,16 +1642,15 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
   clru_entry *entry;
 
   /*
-   * Loop until this thread owns the set slot for this key. One map_lookup
-   * plus one create-or-wait is not enough. Many setter threads can block on
-   * the same operation in progress. They can all wake up at the same time
-   * after that operation completes or fails. Without the loop, the second
-   * thread to run calls create_and_insert_placeholder for a key that the
-   * first thread already inserted again. It then gets
-   * ccol_key_already_present from chmap_insert_elem, and it returns
-   * ccol_not_enough_memory to the caller, which is wrong. A loop back to
-   * map_lookup finds the placeholder of the first thread and waits for it.
-   * That serialises the setters correctly.
+   * Loop until this thread owns the set slot for this key. One map_lookup plus
+   * one create-or-wait is not enough, because many setter threads can block on
+   * the same operation in progress and all wake up at the same time after that
+   * operation completes or fails. Without the loop, the second thread to run
+   * calls create_and_insert_placeholder for a key that the first thread already
+   * inserted again, gets ccol_key_already_present from chmap_insert_elem, and
+   * wrongly returns ccol_not_enough_memory to the caller. A loop back to
+   * map_lookup finds the placeholder of the first thread and waits for it,
+   * which serialises the setters correctly.
    */
   for (;;) {
     entry = map_lookup(shard, key_pair);
@@ -1703,20 +1677,19 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
       break; /* The entry survived. This thread owns it */
     }
     /* Some call cleaned the entry up while this thread waited. Loop back and
-     * check the map again before this thread creates a new placeholder,
-     * because another waiter can create one first. */
+     * check the map again before this thread creates a new placeholder, because
+     * another waiter can create one first. */
     bool should_free = (entry->waiters == 0);
     if (should_free) {
-      /* Unlock the mutex before the free. This matches every other
-       * entry_free call site in this file. The lock of a segment must not
-       * stay held across the _ccol_mem_free and ccol_cond_var_destroy calls
-       * for the freed entry. Without this unlock, those calls block every
-       * other concurrent getter and setter on this cache for their whole
-       * duration. A lock again and a continue of the loop are safe. Nothing
-       * touches `entry` again, except the next map_lookup() call, which
-       * assigns a new value to it. The pin of this function keeps `shard`
-       * itself alive, whether or not the mutex is held. This function takes
-       * that pin at its start, through _clrucache_resolve. */
+      /* Unlock the mutex before the free, which matches every other entry_free
+       * call site in this file. The lock of a segment must not stay held across
+       * the _ccol_mem_free and ccol_cond_var_destroy calls for the freed entry;
+       * without this unlock, those calls block every other concurrent getter
+       * and setter on this cache for their whole duration. Locking again and
+       * continuing the loop are safe: nothing touches `entry` again except the
+       * next map_lookup() call, which assigns a new value to it, and the pin
+       * that this function takes at its start, through _clrucache_resolve,
+       * keeps `shard` itself alive whether or not the mutex is held. */
       ccol_mutex_unlock(shard->mutex);
       entry_free(shard, entry);
       ccol_mutex_lock(shard->mutex);
@@ -1726,27 +1699,26 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
   /* This thread now owns the set slot */
   entry->set_in_progress = true;
 
-  /* Without a remote setter, this whole operation is a plain update in
-   * memory. This code then never unlocks the mutex, because there is nothing
-   * to block on. It also never touches the LRU list ahead of
-   * entry_store_value(). That function handles both cases correctly on its
-   * own: !in_lru for a new entry or a placeholder, and in_lru for an entry
-   * that exists and moves to the front. This is what avoids a needless pair
-   * of an unlock and a lock on every clru_set() call. That is the common case
-   * for a cache with no remote source. */
+  /* Without a remote setter, this whole operation is a plain update in memory,
+   * so this code never unlocks the mutex, because there is nothing to block on.
+   * It also never touches the LRU list ahead of entry_store_value(), which
+   * handles both cases correctly on its own: !in_lru for a new entry or a
+   * placeholder, and in_lru for an entry that exists and moves to the front.
+   * This avoids a needless pair of an unlock and a lock on every clru_set()
+   * call, which is the common case for a cache with no remote source. */
   bool remote_ok = true;
 
   if (shard->remote_setter) {
-    /* The set takes effect when the remote call returns, and only if that
-     * call succeeds. Until then a LIVE entry stays exactly what it is: in the
+    /* The set takes effect when the remote call returns, and only if that call
+     * succeeds. Until then a LIVE entry stays exactly what it is: in the
      * eviction order at its old place, and in the size of the segment. A
      * concurrent insert that needs room can therefore evict it, as the true
-     * least recently used entry, and never evicts some other key in its
-     * place. The segment also never holds more entries than its capacity.
-     * See evict_lru() for what such an eviction leaves behind.
+     * least recently used entry, and never evicts some other key in its place,
+     * and the segment never holds more entries than its capacity. See
+     * evict_lru() for what such an eviction leaves behind.
      *
-     * Hold a waiter reference. Nothing then frees the entry while this thread
-     * blocks in the remote call. */
+     * Hold a waiter reference, so that nothing frees the entry while this
+     * thread blocks in the remote call. */
     entry->waiters++;
     ccol_mutex_unlock(shard->mutex);
 
@@ -1758,21 +1730,20 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
 
   ccol_retval_t retval = remote_ok ? ccol_success : ccol_unexpected_failure;
 
-  /* entry->evicted is always false here. set_in_progress keeps the entry in
-   * the map for the whole call. An eviction during the remote call only
-   * turns a LIVE entry back into a placeholder; see evict_lru(). The entry
-   * is therefore either LIVE (in_lru) or a placeholder with no value (not
-   * in_lru). A placeholder is either new, or a LIVE entry that an eviction
+  /* entry->evicted is always false here, because set_in_progress keeps the
+   * entry in the map for the whole call, and an eviction during the remote call
+   * only turns a LIVE entry back into a placeholder (see evict_lru()). The
+   * entry is therefore either LIVE (in_lru) or a placeholder with no value (not
+   * in_lru), and a placeholder is either new or a LIVE entry that an eviction
    * took during the remote call. */
   if (remote_ok) {
     ccol_retval_t store_r = entry_store_value(shard, entry, val_pair);
     if (store_r != ccol_success) {
-      /* This code cannot allocate memory. entry_store_value() fails before it
-       * touches the value of the entry or the LRU list. A LIVE entry
-       * therefore keeps its old value and its exact place in the eviction
-       * order, and needs nothing at all. A placeholder holds no value, and
-       * this call is what created it or what it belongs to. Remove it from
-       * the map. */
+      /* This code cannot allocate memory, and entry_store_value() fails before
+       * it touches the value of the entry or the LRU list. A LIVE entry
+       * therefore keeps its old value and its exact place in the eviction order
+       * and needs nothing at all. A placeholder holds no value, and this call
+       * is what created it or what it belongs to, so remove it from the map. */
       if (!entry->in_lru) {
         cmap_pair kp = {.ptr = entry->key, .size = entry->key_size};
         chmap_delete_elem(shard->map, &kp);
@@ -1787,17 +1758,17 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
       return store_r;
     }
   } else if (!entry->in_lru) {
-    /* The remote setter failed, and the entry holds no value. Either this
-     * call created it, or an eviction took the key during the remote call.
-     * In both cases the key is absent from the cache once the set is
-     * undone. Remove the placeholder. A getter that waited on this set then
-     * looks the key up again and takes the ordinary miss path, which runs
-     * the remote getter when the cache has one.
+    /* The remote setter failed, and the entry holds no value: either this call
+     * created it, or an eviction took the key during the remote call. In both
+     * cases the key is absent from the cache once the set is undone, so remove
+     * the placeholder. A getter that waited on this set then looks the key up
+     * again and takes the ordinary miss path, which runs the remote getter when
+     * the cache has one.
      *
-     * A LIVE entry needs nothing at all. The failed set never moved it, never
-     * took it out of the size of the segment and never touched its value. The
-     * cache is therefore exactly as the concurrent operations alone left it,
-     * which is what a set that never happened leaves. */
+     * A LIVE entry needs nothing at all: the failed set never moved it, never
+     * took it out of the size of the segment and never touched its value, so
+     * the cache is exactly as the concurrent operations alone left it, which is
+     * what a set that never happened leaves. */
     cmap_pair kp = {.ptr = entry->key, .size = entry->key_size};
     chmap_delete_elem(shard->map, &kp);
     entry->evicted = true;
@@ -1827,17 +1798,17 @@ static ccol_retval_t clrucache_get_into_retry(struct clrucache *raw,
                                               void *buf, size_t buf_size);
 
 /* The body of __clrucache_get_into(), entered with the mutex of the segment
- * held. Every path that returns a result releases that mutex and the pin of
- * the handle first.
+ * held. Every path that returns a result releases that mutex and the pin of the
+ * handle first.
  *
- * The one case that must look the key up again is a waiter that finds that
- * a set failed. The entry point instantiates this body with again == NULL,
- * and there that case leaves through a call to clrucache_get_into_retry(). A
- * loop back to the lookup inside the entry point would keep more values live
- * across the whole function, and that costs the hit path a spill. The cold
- * function instantiates the body with again != NULL. There the body reports
- * the retry through *again, with the mutex and the pin still held, and the
- * cold function loops. */
+ * The one case that must look the key up again is a waiter that finds that a
+ * set failed. The entry point instantiates this body with again == NULL, and
+ * there that case leaves through a call to clrucache_get_into_retry(), because
+ * a loop back to the lookup inside the entry point would keep more values live
+ * across the whole function, which costs the hit path a spill. The cold
+ * function instantiates the body with again != NULL; there the body reports the
+ * retry through *again, with the mutex and the pin still held, and the cold
+ * function loops. */
 static inline __attribute__((always_inline)) ccol_retval_t
 clrucache_get_into_locked(struct clrucache *raw, clru_shard *shard,
                           const cmap_pair *key_pair, void *buf, size_t buf_size,
@@ -1898,14 +1869,14 @@ clrucache_get_into_locked(struct clrucache *raw, clru_shard *shard,
 
     if (fetch_ok && fetched.ptr && fetched.size > 0) {
       /* Reject a value whose size does not match the destination buffer
-       * exactly. A larger value overflows buf. A smaller value leaves the
-       * tail of buf untouched, and that tail is uninitialized or stale data
-       * from the stack or heap of the caller. Such a call still reports
-       * ccol_success, and it hands the caller of the type-inferred clru_get()
-       * macro a ValT that is only partly filled. A cache of a value with the
-       * wrong size also makes every future __clrucache_get_into call for this
-       * key meet the same problem. This code therefore treats any mismatch of
-       * size as a complete failure of the fetch, and it caches nothing. */
+       * exactly. A larger value overflows buf, and a smaller value leaves the
+       * tail of buf untouched, so that tail holds uninitialized or stale data
+       * from the stack or heap of the caller while the call still reports
+       * ccol_success, handing the caller of the type-inferred clru_get() macro
+       * a ValT that is only partly filled. Caching a value with the wrong size
+       * would also make every future __clrucache_get_into call for this key
+       * meet the same problem, so this code treats any mismatch of size as a
+       * complete failure of the fetch and caches nothing. */
       if (fetched.size != buf_size) {
         _ccol_mem_free(shard->m_procs, fetched.ptr);
         cmap_pair kp = {.ptr = entry->key, .size = entry->key_size};
@@ -1981,11 +1952,11 @@ clrucache_get_into_locked(struct clrucache *raw, clru_shard *shard,
         }
         return clrucache_get_into_retry(raw, shard, key_pair, buf, buf_size);
       }
-      /* The fetch that this call coalesced onto failed. There is nothing to
+      /* The fetch that this call coalesced onto failed, so there is nothing to
        * give back. A fetch can also have a value of the wrong size; see the
        * comment on fetch_size_mismatch. Every coalesced waiter then gets the
-       * same report as the thread that ran the remote getter. This code does
-       * not downgrade that report to the generic "not found" because this
+       * same report as the thread that ran the remote getter: this code does
+       * not downgrade that report to the generic "not found" just because this
        * thread did not run the fetch. */
       ccol_retval_t fail_r = entry->fetch_size_mismatch
                                  ? ccol_unexpected_failure
@@ -1996,25 +1967,24 @@ clrucache_get_into_locked(struct clrucache *raw, clru_shard *shard,
       _clrucache_resolve_unpin(raw);
       return fail_r;
     }
-    /* entry->value is not NULL. The operation that this call coalesced onto
+    /* entry->value is not NULL, so the operation that this call coalesced onto
      * succeeded. Fall through to the shared path below that gives the value
-     * back, even when entry->evicted is now true. See the identical
-     * reasoning in the wait branch of clrucache_get_full. */
+     * back, even when entry->evicted is now true. See the identical reasoning
+     * in the wait branch of clrucache_get_full. */
   }
 
-  /* Invariant: entry->value != NULL here always means one of two things. The
-   * entry is still LIVE, which is in_lru. Or an eviction removed the entry
+  /* Invariant: entry->value != NULL here always means one of two things: the
+   * entry is still LIVE, which is in_lru, or an eviction removed the entry
    * after a call stored a value in it successfully. In that second case the
    * entry is not part of the LRU list, and nothing may treat it as one. */
   ccol_assert(entry->value != NULL);
   ccol_assert(entry->evicted || entry->in_lru);
 
-  /* Reject a mismatch of size in either direction BEFORE this code promotes
-   * the LRU position of the entry. See the requirement for an identical size,
-   * and its reasoning, in the fetch-path check of this same function above.
-   * Only an exact match may go into buf. A call that this code is going to
-   * reject must not also move the entry to the front of the eviction
-   * order. */
+  /* Reject a mismatch of size in either direction BEFORE this code promotes the
+   * LRU position of the entry; see the requirement for an identical size, and
+   * its reasoning, in the fetch-path check of this same function above. Only an
+   * exact match may go into buf, and a call that this code is going to reject
+   * must not also move the entry to the front of the eviction order. */
   if (entry->value_size != buf_size) {
     bool should_free = (entry->evicted && entry->waiters == 0);
     ccol_mutex_unlock(shard->mutex);
@@ -2074,11 +2044,11 @@ ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
 size_t clrucache_size(clru_cache cache) {
   struct clrucache *raw = _clrucache_resolve(cache);
   if (!raw) return 0;
-  /* This function adds the sizes of the segments, each one under its own
-   * lock. The total is a snapshot, and not a value at one instant. It does
-   * not show a concurrent insert into a segment that this loop already
-   * counted. A concurrent insert during a read under a single lock is also
-   * absent from such a total. */
+  /* This function adds the sizes of the segments, each one under its own lock,
+   * so the total is a snapshot and not a value at one instant: it does not show
+   * a concurrent insert into a segment that this loop already counted. A total
+   * read under a single lock also misses a concurrent insert during the read.
+   */
   size_t total = 0;
   for (size_t i = 0; i < raw->shard_count; i++) {
     clru_shard *sh = raw->shards[i];
@@ -2093,8 +2063,8 @@ size_t clrucache_size(clru_cache cache) {
 size_t clrucache_capacity(clru_cache cache) {
   struct clrucache *raw = _clrucache_resolve(cache);
   if (!raw) return 0;
-  /* The creation fixes this value, and nothing writes it again. It therefore
-   * needs no lock. */
+  /* The creation fixes this value, and nothing writes it again, so it needs no
+   * lock. */
   size_t c = raw->capacity;
   _clrucache_resolve_unpin(raw);
   return c;

@@ -1,12 +1,11 @@
 # citerators: one loop for every container
 
-`citerators` is the iteration API of the three containers that you can
-iterate over: [cvector](cvector.md), [chashmap](chashmap.md) and
-[cbstmap](cbstmap.md). You write the same loop for each container. You get
-typed pointers to each key and value, without casts.
+`citerators` is the iteration API shared by the three containers that you
+can iterate over: [cvector](cvector.md), [chashmap](chashmap.md) and
+[cbstmap](cbstmap.md). You write the same loop for each of them and get typed
+pointers to every key and value, with no casts.
 
-Do not include this header yourself. `cvector.h`, `chashmap.h` and
-`cbstmap.h` each include it.
+Do not include this header yourself; `cvector.h`, `chashmap.h` and `cbstmap.h` each include it for you.
 
 ## A first example
 
@@ -29,20 +28,19 @@ int main(void) {
 }
 ```
 
-`ccol_for_each(container, it, { body })` does these steps:
+`ccol_for_each(container, it, { body })`:
 
-1. It declares the iterator `it`.
-2. It runs the body one time for each element.
-3. It destroys the iterator when the loop stops. This occurs when the loop
-   gets to the end. It also occurs when you go out of the loop with `break`
-   or `return`.
+1. declares the iterator `it`;
+2. runs the body once for each element;
+3. destroys the iterator when the loop stops, whether the loop reaches the
+   end or you leave it with `break` or `return`.
 
-In the body:
+Inside the body:
 
 - `ccol_iter_key_ptr(it)` points to the current key.
 - `ccol_iter_val_ptr(it)` points to the current value.
 
-Both pointers have the correct types. Thus, in the example above,
+Both pointers have the correct types, so in the example above
 `*ccol_iter_key_ptr(it)` is a `char *` and `*ccol_iter_val_ptr(it)` is an
 `int`.
 
@@ -54,8 +52,8 @@ Both pointers have the correct types. Thus, in the example above,
 | `chmap` of `K` to `V` | `const K *` | `V *` (`V const *` when `V` is `char *`) |
 | `cbmap` of `K` to `V` | `const K *` | `V *` (`V const *` when `V` is `char *`) |
 
-For a vector, the "key" is the index of the element. Thus one loop gives
-you the index and the element:
+For a vector, the "key" is the index of the element, so one loop gives you
+both the index and the element:
 
 ```c
 #include <stdio.h>
@@ -78,16 +76,16 @@ int main(void) {
 
 ## Order
 
-- The iterator goes through a vector by index, from 0 up.
-- The iterator goes through a `cbmap` in ascending key order.
-- A `chmap` has no defined order. Do not depend on the order. When you need
-  an order, copy the entries into a vector and sort them. The word counter
-  example below shows this.
+- A vector is visited by index, from 0 upwards.
+- A `cbmap` is visited in ascending key order.
+- A `chmap` has no defined order, so do not depend on one. When you need an
+  order, copy the entries into a vector and sort them, as the word counter
+  example below does.
 
 ## Change values while you iterate
 
-The value pointer points to the stored value. Thus you can change values
-in place:
+The value pointer points at the stored value, so you can change values in
+place:
 
 ```c
 ccol_for_each(prices, it, {
@@ -95,21 +93,21 @@ ccol_for_each(prices, it, {
 });
 ```
 
-Keys are read-only. A `char *` value is also read-only: you cannot make it
-point to a different string, because the compiler refuses this. To keep a
-different string, insert the key again after the loop.
+Keys are read-only, and so is a `char *` value: the compiler refuses to
+make it point to a different string. To store a different string, insert the
+key again after the loop.
 
-In the loop, **do not insert or remove elements** of the container that you
-iterate over. This makes the iterator invalid. Record the changes that you
-want to make. Then make them after the loop. The example that removes
-expired sessions, below, shows this procedure.
+Inside the loop, **do not insert or remove elements** of the container you
+are iterating over, because that invalidates the iterator. Record the changes
+you want to make and apply them after the loop, as the example below that
+removes expired sessions does.
 
 ## Write the loop yourself
 
-`ccol_for_each` is enough for most loops. You can also write your own
-`for` statement. For example, you can keep the iterator after the loop, or
-use a more complex loop condition. To do this, declare the iterator with
-`ccol_iter_declare`. Then move it with `ccol_begin` and `ccol_iter_next`:
+`ccol_for_each` covers most loops, but you can also write your own `for`
+statement, for example to keep the iterator after the loop or to use a more
+complex loop condition. Declare the iterator with `ccol_iter_declare`, then
+move it with `ccol_begin` and `ccol_iter_next`:
 
 ```c
 #include <stdio.h>
@@ -140,20 +138,19 @@ int main(void) {
 
 The rules for this form are:
 
-- `ccol_begin` gives `NULL` (`ccol_end`) when the container is empty.
-- `ccol_iter_next` gives `NULL` after the last element. At that point, it
-  also frees the iterator.
-- If you go out of the loop early, the iterator continues to exist. Call
-  `ccol_iter_destroy(it)` when you do not need it. Alternatively, let the end
-  of the scope free it, because `ccol_iter_declare` destroys it
-  automatically there.
+- `ccol_begin` returns `NULL` (`ccol_end`) when the container is empty.
+- `ccol_iter_next` returns `NULL` after the last element, and frees the
+  iterator at that point.
+- If you leave the loop early, the iterator stays alive. Call
+  `ccol_iter_destroy(it)` when you are done with it, or let the end of the
+  scope free it, since `ccol_iter_declare` destroys it automatically there.
 
 ## Iterate over a container that you received
 
-The iterator macros must know the types of the container. In a function
-that gets a container as a parameter, first state the types again. Use the
-`*_redeclare` macro of the container, as you do before all other typed
-macros:
+The iterator macros need to know the container's types. In a function that
+receives a container as a parameter, restate the types first with the
+container's `*_redeclare` macro, just as you would before any other typed
+macro:
 
 ```c
 #include <stdio.h>
@@ -185,21 +182,22 @@ int main(void) {
 }
 ```
 
-A container handle that is `NULL` is the same as an empty container for
-the iterator. An example is a container that you create only when you add
-the first element. Thus the loop does not need its own `NULL` check.
+To the iterator, a `NULL` container handle is the same as an empty
+container. This covers, for example, a container that you create only when
+you add its first element, and it means the loop needs no `NULL` check of its
+own.
 
 ## Example: the most frequent words
 
-The program does these steps:
+The program:
 
-1. It counts words with a hash map.
-2. It iterates over the map and copies the counts into a vector.
-3. It sorts the vector by count, with the most frequent word first.
-4. It prints the first three words.
+1. counts words with a hash map;
+2. iterates over the map and copies the counts into a vector;
+3. sorts the vector by count, most frequent word first;
+4. prints the first three words.
 
-The sort is stable, and the first sort puts the words in alphabetical
-order. Thus words with the same count are in alphabetical order.
+Because the sort is stable and the first sort puts the words in alphabetical
+order, words with the same count stay in alphabetical order.
 
 ```c
 #include <stdio.h>
@@ -251,16 +249,16 @@ int main(void) {
 }
 ```
 
-The `word` pointers in the table borrow the copies of the keys that the
-map owns. This is correct here, because the map does not change while the
-program uses the table. Also, the program destroys the table first.
+The `word` pointers in the table borrow the key copies that the map owns.
+That is safe here because the map does not change while the program uses the
+table, and the program destroys the table first.
 
 ## Example: remove expired sessions
 
-A server keeps sessions in an ordered map. The map goes from a session id
-to the last time that the server saw the session. You must not remove
-entries while the loop iterates over the map. Thus the function records the
-expired ids in a vector during the loop. After the loop, it removes them.
+A server keeps its sessions in an ordered map from a session id to the last
+time the server saw that session. Since entries must not be removed while the
+loop iterates over the map, the function records the expired ids in a vector
+during the loop and removes them afterwards.
 
 ```c
 #include <stdio.h>
@@ -302,18 +300,18 @@ int main(void) {
 
 ## Good to know
 
-- **Do not insert or remove elements while you iterate.** First record the
-  changes. Then make them after the loop.
+- **Do not insert or remove elements while you iterate.** Record the
+  changes and apply them after the loop.
 - **The pointers are borrowed.** The key and value pointers are valid only
-  while the iterator is on that element and the container does not change.
-  Copy the data that you must keep.
-- **An iterator can continue to exist after an early exit from the loop.**
-  After its container is destroyed, do not move or read that iterator. The
-  automatic cleanup at the end of the scope is safe.
-- **Only `cvec`, `chmap` and `cbmap` work.** If you give a different type to
-  `ccol_begin` or `ccol_for_each`, the code does not compile.
+  while the iterator is on that element and the container does not change, so
+  copy any data that you need to keep.
+- **An iterator can outlive an early exit from the loop.** Once its container
+  is destroyed, do not move or read that iterator; the automatic cleanup at
+  the end of the scope is safe.
+- **Only `cvec`, `chmap` and `cbmap` work.** Passing any other type to
+  `ccol_begin` or `ccol_for_each` does not compile.
 - **GNU C.** The macros use statement expressions and the `cleanup`
-  attribute. Thus compile with GCC or Clang and `-std=gnu11`.
+  attribute, so compile with GCC or Clang and `-std=gnu11`.
 
 ## Reference
 
@@ -328,7 +326,7 @@ Overview: [citerators(7)](../man/citerators/citerators.7)
 [ccol_iter_val_ptr(3)](../man/citerators/ccol_iter_val_ptr.3),
 [ccol_iter_destroy(3)](../man/citerators/ccol_iter_destroy.3)
 
-The functions of each container that `ccol_begin` calls:
+The per-container functions that `ccol_begin` calls:
 [cvector_begin_iter(3)](../man/cvector/cvector_begin_iter.3),
 [chashmap_begin_iter(3)](../man/chashmap/chashmap_begin_iter.3),
 [cbmap_begin_iter(3)](../man/cbstmap/cbmap_begin_iter.3)

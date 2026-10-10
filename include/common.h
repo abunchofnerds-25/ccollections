@@ -200,10 +200,15 @@ void _ccol_cloexec_gate_register(void);
  * writer, and the child's thread has a new one). macOS refuses to initialize
  * an object that it still sees as a lock in use, with EBUSY. The object is
  * therefore cleared first. On FreeBSD the lock is a pointer to a block that
- * the init replaces in either case.
+ * the init replaces in either case. The forking thread must hold the write
+ * lock, as a fork-prepare handler leaves it. It gives 0 or an error number.
  */
-#define ccol_rw_lock_reinit_in_child(a) \
-  (memset(&(a), 0, sizeof(a)), pthread_rwlock_init(&(a), NULL))
+#define ccol_rw_lock_reinit_in_child(a) _ccol_rw_lock_reinit_in_child(&(a))
+/* The parameter is void *: under a strict -std=c11, <pthread.h> declares no
+ * rwlock type, and a header that only includes this one must still compile. */
+#pragma GCC visibility push(hidden)
+int _ccol_rw_lock_reinit_in_child(void *lock);
+#pragma GCC visibility pop
 
 /** @brief Take the write lock (exclusive access) */
 #define ccol_rw_lock_wrlock(a) pthread_rwlock_wrlock(&(a))

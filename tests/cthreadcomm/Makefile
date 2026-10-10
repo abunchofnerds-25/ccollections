@@ -61,12 +61,10 @@ test: build
 # chttpclient and chttpserver. The option is set for consistency across all
 # three suites that fork and then start new threads. It also protects against
 # a future test that makes this parent multi-threaded at fork time.
-# suppressions=tsan_rwlock_reinit.supp: this is a known ThreadSanitizer
-# limitation, and it is confirmed to be a non-bug. It happens around the
-# rwlock reinit that gives this module fork() safety. The comment in that file
-# shows the independent reproduction that proves it, and that reproduction
-# uses no code from cthreadcomm.c. tests/clogger/Makefile has the same
-# precedent: a known non-bug that a suppression hides for a documented reason.
+# suppressions=tsan_rwlock_reinit.supp: one "thread leak" that
+# ThreadSanitizer reports in the child of one fork test, for a thread that the
+# parent joins. The comment in that file gives the reason and the independent
+# reproduction.
 test_tsan: build_tsan
 	TSAN_OPTIONS="die_after_fork=0 suppressions=tsan_rwlock_reinit.supp" ./tests_tsan
 

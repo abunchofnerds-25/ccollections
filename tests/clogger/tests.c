@@ -4877,6 +4877,12 @@ TEST(fork_safety, child_can_log_after_fork) {
 #define FORK_CHURN_WRITER_COUNT 4
 #define FORK_CHURN_ITERATIONS 300
 
+/* Set after the child is reaped. A writer stays alive until then, so that no
+ * writer has finished, unjoined, when the fork() runs, however late the sleep
+ * before it ends. ThreadSanitizer reports such a thread in the child as a
+ * thread leak when the child exits. */
+static atomic_int _fork_churn_stop;
+
 static void *_fork_churn_writer(void *arg) {
   clog *lg = (clog *)arg;
   for (int i = 0; i < FORK_CHURN_ITERATIONS; i++) {
@@ -4884,6 +4890,8 @@ static void *_fork_churn_writer(void *arg) {
     clog child = clog_derive(*lg);
     if (child != CLOG_INVALID) clog_close(child);
   }
+  struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+  while (!atomic_load(&_fork_churn_stop)) nanosleep(&pause, NULL);
   return NULL;
 }
 
@@ -4903,6 +4911,7 @@ TEST(fork_safety, concurrent_fork_during_churn_does_not_hang) {
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
+  atomic_store(&_fork_churn_stop, 0);
   pthread_t writers[FORK_CHURN_WRITER_COUNT];
   bool writer_created[FORK_CHURN_WRITER_COUNT];
   int writer_create_failures = 0;
@@ -4915,6 +4924,7 @@ TEST(fork_safety, concurrent_fork_during_churn_does_not_hang) {
     /* There is no fork() yet. Join every thread that started, before this
      * test fails. No background thread may outlive the stack frame of this
      * test function, where `lg` and `dir` above live. */
+    atomic_store(&_fork_churn_stop, 1);
     for (int i = 0; i < FORK_CHURN_WRITER_COUNT; i++)
       if (writer_created[i]) pthread_join(writers[i], NULL);
     clog_close(lg);
@@ -4935,6 +4945,7 @@ TEST(fork_safety, concurrent_fork_during_churn_does_not_hang) {
     /* Every writer thread above started, which the check above guarantees.
      * Join all of them before this test fails. Do not leave them at work on
      * `lg` and `dir` after this test function returns. */
+    atomic_store(&_fork_churn_stop, 1);
     for (int i = 0; i < FORK_CHURN_WRITER_COUNT; i++)
       pthread_join(writers[i], NULL);
     clog_close(lg);
@@ -4958,12 +4969,13 @@ TEST(fork_safety, concurrent_fork_during_churn_does_not_hang) {
   if (!reaped) {
     kill(pid, SIGKILL);
     waitpid(pid, &status, 0);
-    REQUIRE_TRUE(false); /* the child does not finish inside the bound */
   }
 
   /* The writer threads of the parent must still finish. If
    * _clog_atfork_parent does not unlock everything it locks, these joins
-   * hang. */
+   * hang. They run before any assertion, so that no writer outlives the
+   * frame of this test. */
+  atomic_store(&_fork_churn_stop, 1);
   for (int i = 0; i < FORK_CHURN_WRITER_COUNT; i++)
     pthread_join(writers[i], NULL);
 
@@ -4979,6 +4991,7 @@ TEST(fork_safety, concurrent_fork_during_churn_does_not_hang) {
    * test writes last. */
   char buf[1 << 20];
   size_t len = read_file(path, buf, sizeof(buf));
+  REQUIRE_TRUE(reaped); /* the child finishes inside the bound */
   REQUIRE_GT(len, (size_t)0);
   REQUIRE_NE(strstr(buf, "final parent marker"), NULL);
 

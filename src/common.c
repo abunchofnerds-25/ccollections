@@ -29,6 +29,36 @@ SOFTWARE.
 #include <limits.h>
 #include <stdatomic.h>
 
+/* ThreadSanitizer does not model a lock that the child of fork() initializes
+ * again. It keeps the write lock held by the thread that forked, so it sees
+ * no release that a later lock in the child can follow: it reports a data
+ * race between two accesses that both hold the lock, or an inversion against
+ * the lock that it thinks is still held. The child therefore tells it that
+ * the write lock is released, with the pair of annotations that surround an
+ * unlock and no unlock between them. The lock that the init then makes is a
+ * new lock in the model too. */
+#if defined(__SANITIZE_THREAD__)
+#define _CCOL_COMMON_TSAN 1
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define _CCOL_COMMON_TSAN 1
+#endif
+#endif
+#if defined(_CCOL_COMMON_TSAN)
+int __tsan_mutex_pre_unlock(void *addr, unsigned flags);
+void __tsan_mutex_post_unlock(void *addr, unsigned flags);
+#endif
+
+int _ccol_rw_lock_reinit_in_child(void *lock) {
+  ccol_rw_lock_t *rw = lock;
+#if defined(_CCOL_COMMON_TSAN)
+  (void)__tsan_mutex_pre_unlock(rw, 0);
+  __tsan_mutex_post_unlock(rw, 0);
+#endif
+  memset(rw, 0, sizeof(*rw));
+  return ccol_rw_lock_init(*rw);
+}
+
 /* Returns the smallest power of two that is >= input, or ccol_invalid_size
  * when that power does not fit in a size_t. For an input of at least 2, the
  * answer is 2 to the power of the bit length of input - 1. One count of
@@ -324,24 +354,6 @@ __attribute__((constructor)) static void _ccol_atfork_order_register(void) {
  * fork-prepare handler takes the write side, so a fork() waits for every such
  * descriptor to be closed on exec. The read side never waits for anything
  * but a fork, and a thread that holds it takes no other lock. */
-/* ThreadSanitizer does not model a lock that the child of fork() initializes
- * again: it keeps the lock held by the thread that forked, and then reports
- * every lock that the child takes later as an inversion against it. The child
- * handler therefore tells it that the write lock is released, with the pair
- * of annotations that surround an unlock and no unlock between them. The lock
- * that the child then initializes is a new lock in the model too. */
-#if defined(__SANITIZE_THREAD__)
-#define _CCOL_CLOEXEC_GATE_TSAN 1
-#elif defined(__has_feature)
-#if __has_feature(thread_sanitizer)
-#define _CCOL_CLOEXEC_GATE_TSAN 1
-#endif
-#endif
-#if defined(_CCOL_CLOEXEC_GATE_TSAN)
-int __tsan_mutex_pre_unlock(void *addr, unsigned flags);
-void __tsan_mutex_post_unlock(void *addr, unsigned flags);
-#endif
-
 static ccol_rw_lock_t _ccol_cloexec_gate;
 static ccol_once_flag_t _ccol_cloexec_gate_once = CCOL_ONCE_INIT;
 static ccol_once_flag_t _ccol_cloexec_gate_reg_once = CCOL_ONCE_INIT;
@@ -401,12 +413,6 @@ static void _ccol_cloexec_gate_parent(void) {
 static void _ccol_cloexec_gate_child(void) {
 #ifdef RUNNING_UNIT_TESTS
   _ccol_cloexec_gate_prepared_for_tests = false;
-#endif
-#if defined(_CCOL_CLOEXEC_GATE_TSAN)
-  if (_ccol_cloexec_gate_ok) {
-    (void)__tsan_mutex_pre_unlock(&_ccol_cloexec_gate, 0);
-    __tsan_mutex_post_unlock(&_ccol_cloexec_gate, 0);
-  }
 #endif
   if (_ccol_cloexec_gate_ok)
     _ccol_cloexec_gate_ok =

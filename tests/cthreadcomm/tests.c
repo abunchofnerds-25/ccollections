@@ -30,8 +30,9 @@ TAU_MAIN()
 extern struct ccol_event_loop_s *_ccol_event_loop_resolve_for_tests(
     ccol_event_loop h);
 extern size_t _ccol_event_loop_slot_table_capacity_for_tests(void);
-extern bool _ccol_event_loop_resolve_pin_and_sleep_for_tests(ccol_event_loop h,
-                                                             int ms);
+extern bool _ccol_event_loop_resolve_pin_until_for_tests(ccol_event_loop h,
+                                                         atomic_int *pinned,
+                                                         atomic_int *release);
 extern void _ccol_event_loop_set_poller_batch_gen_for_tests(
     ccol_event_loop loop, uint64_t value);
 
@@ -8421,54 +8422,87 @@ TEST(ccol_event_loop_handle_lifecycle, concurrent_double_destroy_is_fatal) {
 
 typedef struct {
   ccol_event_loop h;
-  int sleep_ms;
+  atomic_int pinned;
+  atomic_int release;
   bool resolved;
-} evl_pin_sleep_arg_t;
+} evl_pin_hold_arg_t;
 
-static void *evl_pin_sleep_thread(void *arg) {
-  evl_pin_sleep_arg_t *a = (evl_pin_sleep_arg_t *)arg;
-  a->resolved =
-      _ccol_event_loop_resolve_pin_and_sleep_for_tests(a->h, a->sleep_ms);
+static void *evl_pin_hold_thread(void *arg) {
+  evl_pin_hold_arg_t *a = (evl_pin_hold_arg_t *)arg;
+  a->resolved = _ccol_event_loop_resolve_pin_until_for_tests(a->h, &a->pinned,
+                                                             &a->release);
+  /* A handle that did not resolve never sets pinned; the test must not wait
+   * for it. */
+  if (!a->resolved) atomic_store(&a->pinned, -1);
   return NULL;
 }
 
-/* This proves that destroy waits out a resolve that is in flight. It races
- * two things against each other on the same handle. One is a thread that
- * resolves and pins the handle for a deliberately long duration that the
- * test controls directly. It does that with
- * _ccol_event_loop_resolve_pin_and_sleep_for_tests. ccol_event_loop has no
- * naturally slow public entry point to borrow for this, where chttpcli has
- * chttpclient_do against a slow endpoint. The other is a concurrent
- * ccol_event_loop_destroy. destroy must block until something releases the
- * pin. It must not race ahead and free the loop under the pointer that is
- * still resolved. */
+typedef struct {
+  ccol_event_loop h;
+  atomic_int returned;
+} evl_destroy_arg_t;
+
+static void *evl_destroy_thread(void *arg) {
+  evl_destroy_arg_t *a = (evl_destroy_arg_t *)arg;
+  ccol_event_loop_destroy(a->h);
+  atomic_store(&a->returned, 1);
+  return NULL;
+}
+
+/* This proves that destroy waits out a resolve that is in flight. A thread
+ * resolves and pins the handle and holds the pin until this test releases
+ * it, through _ccol_event_loop_resolve_pin_until_for_tests. ccol_event_loop
+ * has no naturally slow public entry point to borrow for this. A destroy on a
+ * second thread must block until the pin is released. It must not race ahead
+ * and free the loop under the pointer that is still resolved.
+ *
+ * The check does not compare two clocks. While release is clear the pin is
+ * held, so a destroy that waits for pins cannot have returned, however slow
+ * the machine is. The wait before the check gives a destroy that does not
+ * wait the time to return, so that the test fails then. */
 TEST(ccol_event_loop_handle_lifecycle, resolve_then_use_race_destroy_waits) {
-  ccol_event_loop_construct(loop, 8, 1, 1);
+  ccol_event_loop loop = ccol_event_loop_create(8, 1, 1, NULL);
+  REQUIRE_NE(loop, CCOL_EVENT_LOOP_INVALID);
 
-  evl_pin_sleep_arg_t pin_arg = {.h = loop, .sleep_ms = 100, .resolved = false};
-  pthread_t pin_thread;
-  REQUIRE_EQ(pthread_create(&pin_thread, NULL, evl_pin_sleep_thread, &pin_arg),
-             0);
+  evl_pin_hold_arg_t pin_arg = {.h = loop, .resolved = false};
+  atomic_init(&pin_arg.pinned, 0);
+  atomic_init(&pin_arg.release, 0);
+  evl_destroy_arg_t destroy_arg = {.h = loop};
+  atomic_init(&destroy_arg.returned, 0);
 
-  /* This gives the pin thread a short head start. Its resolve, and therefore
-   * its pin, then definitely happens before destroy fires. */
-  struct timespec startup = {.tv_sec = 0, .tv_nsec = 10000000}; /* 10 ms */
-  nanosleep(&startup, NULL);
+  pthread_t pin_thread, destroy_thread;
+  bool pin_started =
+      pthread_create(&pin_thread, NULL, evl_pin_hold_thread, &pin_arg) == 0;
+  struct timespec poll = {.tv_sec = 0, .tv_nsec = 1000000};
+  /* A bound against a hang only; the pin normally lands at once. */
+  for (int i = 0; pin_started && i < 10000 && atomic_load(&pin_arg.pinned) == 0;
+       i++)
+    nanosleep(&poll, NULL);
+  bool pinned = atomic_load(&pin_arg.pinned) == 1;
 
-  struct timespec t0, t1;
-  clock_gettime(CLOCK_MONOTONIC, &t0);
-  ccol_event_loop_destroy(loop); /* This must block until the 100ms sleep of
-            the pin thread fully elapses. That thread still holds the pin. */
-  clock_gettime(CLOCK_MONOTONIC, &t1);
-  long elapsed_ms =
-      (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
+  bool destroy_started = false;
+  int returned_while_pinned = -1;
+  if (pinned) {
+    destroy_started = pthread_create(&destroy_thread, NULL, evl_destroy_thread,
+                                     &destroy_arg) == 0;
+    struct timespec margin = {.tv_sec = 0, .tv_nsec = 200000000}; /* 200 ms */
+    nanosleep(&margin, NULL);
+    returned_while_pinned = atomic_load(&destroy_arg.returned);
+  }
+  atomic_store(&pin_arg.release, 1);
+  if (pin_started) pthread_join(pin_thread, NULL);
+  if (destroy_started) {
+    pthread_join(destroy_thread, NULL);
+  } else {
+    ccol_event_loop_destroy(loop);
+  }
 
-  pthread_join(pin_thread, NULL);
+  REQUIRE_TRUE(pin_started);
   REQUIRE_TRUE(pin_arg.resolved);
-  /* The pin thread slept about 100ms while it held the pin. A destroy that
-   * returns well inside that time did NOT really wait for the pin. The
-   * resolve-then-use protection has then failed. */
-  REQUIRE_GT(elapsed_ms, 50L);
+  REQUIRE_TRUE(pinned);
+  REQUIRE_TRUE(destroy_started);
+  REQUIRE_EQ(returned_while_pinned, 0);
+  REQUIRE_EQ(atomic_load(&destroy_arg.returned), 1);
 }
 
 typedef struct {

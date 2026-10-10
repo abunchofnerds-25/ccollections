@@ -8610,25 +8610,26 @@ size_t _ccol_event_loop_slot_table_capacity_for_tests(void) {
   return n;
 }
 
-/* A test-only hook that builds a genuinely long-held pin. It resolves h
- * through the real _ccol_event_loop_resolve, so the pin is real. The bare
- * lookup of _ccol_event_loop_resolve_for_tests is different. The hook then
- * sleeps for ms milliseconds while it still holds the pin, and unpins after
- * that.
+/* A test-only hook that builds a pin that the test holds as long as it
+ * wants. It resolves h through the real _ccol_event_loop_resolve, so the pin
+ * is real. It then sets *pinned, waits until the test sets *release, and
+ * unpins after that.
  *
  * Every real public entry point is quick and bounded. This module therefore
  * has no naturally slow call to prove that a concurrent destroy really blocks
- * on pending_resolve_count. Without this hook, such a test only shows that
- * the destroy happened not to crash. The hook gives the
- * resolve_then_use_race_destroy_waits test a reliable way to control that
- * directly. It returns false when h does not resolve at all, because there is
- * then nothing to hold a pin on. */
-bool _ccol_event_loop_resolve_pin_and_sleep_for_tests(ccol_event_loop h,
-                                                      int ms) {
+ * on pending_resolve_count. A pin of a fixed duration does not prove it
+ * either: a slow machine can spend most of that duration before the destroy
+ * starts. With this hook the destroy cannot return while *release is clear,
+ * whatever the speed of the machine. It returns false when h does not
+ * resolve at all, because there is then nothing to hold a pin on. */
+bool _ccol_event_loop_resolve_pin_until_for_tests(ccol_event_loop h,
+                                                  atomic_int *pinned,
+                                                  atomic_int *release) {
   struct ccol_event_loop_s *raw = _ccol_event_loop_resolve(h);
   if (!raw) return false;
-  struct timespec ts = {.tv_sec = ms / 1000, .tv_nsec = (ms % 1000) * 1000000};
-  nanosleep(&ts, NULL);
+  atomic_store(pinned, 1);
+  struct timespec ts = {.tv_sec = 0, .tv_nsec = 1000000};
+  while (!atomic_load(release)) nanosleep(&ts, NULL);
   _ccol_event_loop_resolve_unpin(raw);
   return true;
 }

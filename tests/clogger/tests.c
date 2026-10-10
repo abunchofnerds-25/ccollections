@@ -11340,9 +11340,14 @@ TEST(compression, fatal_waits_for_queued_compressions_before_exit) {
       .compress_rotated = true,
   };
 
+  /* The output of the child goes to a file beside the test directory. A
+   * child that a signal ends then still shows what it printed (a sanitizer
+   * report, or the message of a fatal error) in the output of this test. */
+  char err_path[160];
+  snprintf(err_path, sizeof(err_path), "%s.child_err", dir);
   pid_t pid = fork();
   if (pid == 0) {
-    int dn = open("/dev/null", O_WRONLY);
+    int dn = open(err_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
       dup2(dn, STDERR_FILENO);
@@ -11356,6 +11361,13 @@ TEST(compression, fatal_waits_for_queued_compressions_before_exit) {
   }
   int status = 0;
   if (pid > 0) waitpid(pid, &status, 0);
+  if (pid > 0 && !WIFEXITED(status)) {
+    char err_text[8192] = {0};
+    read_file(err_path, err_text, sizeof(err_text));
+    fprintf(stderr, "child ended by signal %d; its output:\n%s\n",
+            WIFSIGNALED(status) ? WTERMSIG(status) : -1, err_text);
+  }
+  unlink(err_path);
 
   int plain, gz, invalid_gz;
   count_rotated(dir, "app.log", &plain, &gz, &invalid_gz);

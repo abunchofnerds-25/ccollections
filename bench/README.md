@@ -4,7 +4,8 @@
 the containers, the string, the sort, the memory pools, the LRU cache, the
 thread pool, the queues, the logger, both serializers, and one HTTP round trip.
 
-The harness links against the `libccollections.so` that the root `make` built.
+The harness links against the shared library that the root `make` built
+(`libccollections.so`, or `libccollections.dylib` on macOS).
 It does not compile the sources of the library into its own binary. It
 therefore measures the code that ships, at the flags that it ships with,
 through the same dynamic call that an application makes.
@@ -80,7 +81,9 @@ cores. A case ends when its slowest worker ends, so one efficiency core decides
 the whole figure. The harness builds the CPU list at run time from
 `/sys/devices/cpu_core/cpus` and from the sibling list of each core. It
 therefore needs no configuration, and it assumes nothing about how the machine
-numbers its CPUs. `--no-pin` turns the pinning off.
+numbers its CPUs. `--no-pin` turns the pinning off. macOS has no call that
+binds a thread to a CPU, so there the harness always runs unpinned, and its
+header says so. Expect a larger spread between runs on macOS.
 
 One result of this is worth knowing. A case that asks for more workers than the
 machine has performance cores must put two workers on some of them. The

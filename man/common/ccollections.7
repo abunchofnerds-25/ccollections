@@ -194,6 +194,18 @@ while a handle from before the fork() is live. fork() does not copy
 the threads that these handles need. Therefore, a handle from the parent
 cannot do work in the child, and you cannot make it operate again
 there.
+
+Each descriptor that the library creates is closed on exec, so a
+child that calls exec() keeps none of them. On macOS, a socket, an
+accepted socket and a pipe take two calls to become closed on exec.
+A fork() of another thread then waits until both calls are done,
+which takes some microseconds. posix_spawn(3) runs no fork handler,
+so it does not wait. On macOS, a program that calls posix_spawn()
+while another thread can create a socket through the library gives
+the POSIX_SPAWN_CLOEXEC_DEFAULT flag to posix_spawnattr_setflags(3),
+and names with posix_spawn_file_actions_addinherit_np(3) each
+descriptor that the child must keep. This wait does not depend on
+CCOL_FORK_SAFETY_REQUIRED.
 .fi
 .SH "THREAD SAFETY"
 .nf

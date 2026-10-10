@@ -39,13 +39,12 @@ endif
 # macOS puts the version before the suffix, and the install name of the
 # library plays the part of the SONAME:
 #   libccollections.dylib, libccollections.1.dylib, libccollections.1.0.0.dylib
+SHARED_LIBRARY_NAME = lib$(SHORT_LIBRARY_NAME).$(CCOL_SHARED_LIBRARY_SUFFIX)
 ifeq ($(CCOL_UNAME_S),Darwin)
-SHARED_LIBRARY_NAME = lib$(SHORT_LIBRARY_NAME).dylib
 SHARED_LIBRARY_SONAME = lib$(SHORT_LIBRARY_NAME).$(ABI_VERSION).dylib
 SHARED_LIBRARY_REAL = lib$(SHORT_LIBRARY_NAME).$(VERSION).dylib
 SHARED_LIBRARY_ANY_VERSION = lib$(SHORT_LIBRARY_NAME).*.dylib
 else
-SHARED_LIBRARY_NAME = lib$(SHORT_LIBRARY_NAME).so
 SHARED_LIBRARY_SONAME = $(SHARED_LIBRARY_NAME).$(ABI_VERSION)
 SHARED_LIBRARY_REAL = $(SHARED_LIBRARY_NAME).$(VERSION)
 SHARED_LIBRARY_ANY_VERSION = $(SHARED_LIBRARY_NAME).*
@@ -453,6 +452,14 @@ check_dso_unload: $(SHARED_LIBRARY_NAME)
 # allocated at exit. The test suites compile the sources into their own
 # binaries. Therefore, no suite sees what the destructors of the shared object
 # do at exit.
+# Installs into a temporary prefix, builds the example of README.md with the
+# flags of the installed ccollections.pc, runs it linked against the shared
+# library and against the archive, and uninstalls. No test suite sees the
+# install, because each suite compiles the sources into its own binary.
+.PHONY: check_install
+check_install: $(SHARED_LIBRARY_NAME) $(STATIC_LIBRARY_NAME)
+	@MAKE="$(MAKE)" CC="$(CC)" ./ci_scripts/check_install.sh
+
 .PHONY: check_exit_reachable
 check_exit_reachable: $(SHARED_LIBRARY_NAME)
 	@CC="$(CC)" CCOL_VALGRIND_SUPP="$(CCOL_VALGRIND_SUPP)" ./ci_scripts/check_exit_reachable.sh $(SHARED_LIBRARY_REAL)

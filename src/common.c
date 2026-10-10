@@ -254,8 +254,21 @@ static unsigned _ccol_atfork_seq_len;
 static bool _ccol_atfork_ran_before[ccol_atfork_module_count]
                                    [ccol_atfork_module_count];
 
+#if defined(_CCOL_CLOEXEC_GATE)
+extern bool _ccol_cloexec_gate_prepared_for_tests;
+#endif
+
 void _ccol_atfork_order_record(ccol_atfork_module_t ccol_module) {
   if ((unsigned)ccol_module >= (unsigned)ccol_atfork_module_count) return;
+#if defined(_CCOL_CLOEXEC_GATE)
+  /* The close-on-exec gate must be the last prepare handler; see
+     _ccol_cloexec_gate_register. */
+  if (_ccol_cloexec_gate_prepared_for_tests)
+    ccol_fatal_err(
+        "fork-prepare handler of %s ran after the close-on-exec gate, so a "
+        "fork() can wait for a lock whose holder waits for the gate",
+        _ccol_atfork_module_names[ccol_module]);
+#endif
 
   /* There is no lock here, and this is deliberate. This code runs only inside
      a fork-prepare handler. Those handlers run one sequence at a time, under
@@ -304,3 +317,122 @@ __attribute__((constructor)) static void _ccol_atfork_order_register(void) {
   }
 }
 #endif /* RUNNING_UNIT_TESTS */
+
+#if defined(_CCOL_CLOEXEC_GATE)
+/* The close-on-exec gate; see its comment in common.h. A thread that creates
+ * a descriptor in two steps holds the read side across both steps, and the
+ * fork-prepare handler takes the write side, so a fork() waits for every such
+ * descriptor to be closed on exec. The read side never waits for anything
+ * but a fork, and a thread that holds it takes no other lock. */
+/* ThreadSanitizer does not model a lock that the child of fork() initializes
+ * again: it keeps the lock held by the thread that forked, and then reports
+ * every lock that the child takes later as an inversion against it. The child
+ * handler therefore tells it that the write lock is released, with the pair
+ * of annotations that surround an unlock and no unlock between them. The lock
+ * that the child then initializes is a new lock in the model too. */
+#if defined(__SANITIZE_THREAD__)
+#define _CCOL_CLOEXEC_GATE_TSAN 1
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define _CCOL_CLOEXEC_GATE_TSAN 1
+#endif
+#endif
+#if defined(_CCOL_CLOEXEC_GATE_TSAN)
+int __tsan_mutex_pre_unlock(void *addr, unsigned flags);
+void __tsan_mutex_post_unlock(void *addr, unsigned flags);
+#endif
+
+static ccol_rw_lock_t _ccol_cloexec_gate;
+static ccol_once_flag_t _ccol_cloexec_gate_once = CCOL_ONCE_INIT;
+static ccol_once_flag_t _ccol_cloexec_gate_reg_once = CCOL_ONCE_INIT;
+static bool _ccol_cloexec_gate_ok;
+
+#ifdef RUNNING_UNIT_TESTS
+/* How many times a thread entered and left the gate, so that a test can
+ * check that every creation site uses it and leaves it on every path. */
+atomic_ulong _ccol_cloexec_gate_enters_for_tests;
+atomic_ulong _ccol_cloexec_gate_leaves_for_tests;
+/* True from the prepare handler of the gate until the parent or the child
+ * handler. Each fork-prepare handler of a module reports itself to
+ * _ccol_atfork_order_record, which ends the process when the gate already
+ * ran in the same fork. Only prepare handlers run in that window, so the
+ * flag needs no lock. */
+bool _ccol_cloexec_gate_prepared_for_tests;
+#endif
+
+static void _ccol_cloexec_gate_init(void) {
+  _ccol_cloexec_gate_ok = ccol_rw_lock_init(_ccol_cloexec_gate) == 0;
+}
+
+void _ccol_cloexec_gate_enter(void) {
+  ccol_call_once(_ccol_cloexec_gate_once, _ccol_cloexec_gate_init);
+  if (_ccol_cloexec_gate_ok) ccol_rw_lock_rdlock(_ccol_cloexec_gate);
+#ifdef RUNNING_UNIT_TESTS
+  atomic_fetch_add_explicit(&_ccol_cloexec_gate_enters_for_tests, 1,
+                            memory_order_relaxed);
+#endif
+}
+
+void _ccol_cloexec_gate_leave(void) {
+#ifdef RUNNING_UNIT_TESTS
+  atomic_fetch_add_explicit(&_ccol_cloexec_gate_leaves_for_tests, 1,
+                            memory_order_relaxed);
+#endif
+  if (_ccol_cloexec_gate_ok) ccol_rw_lock_unlock(_ccol_cloexec_gate);
+}
+
+static void _ccol_cloexec_gate_prepare(void) {
+  ccol_call_once(_ccol_cloexec_gate_once, _ccol_cloexec_gate_init);
+  if (_ccol_cloexec_gate_ok) ccol_rw_lock_wrlock(_ccol_cloexec_gate);
+#ifdef RUNNING_UNIT_TESTS
+  _ccol_cloexec_gate_prepared_for_tests = true;
+#endif
+}
+
+static void _ccol_cloexec_gate_parent(void) {
+#ifdef RUNNING_UNIT_TESTS
+  _ccol_cloexec_gate_prepared_for_tests = false;
+#endif
+  if (_ccol_cloexec_gate_ok) ccol_rw_lock_unlock(_ccol_cloexec_gate);
+}
+
+/* The child has one thread, and a plain unlock does not always release a
+ * lock that another thread took (see ccol_rw_lock_reinit_in_child). */
+static void _ccol_cloexec_gate_child(void) {
+#ifdef RUNNING_UNIT_TESTS
+  _ccol_cloexec_gate_prepared_for_tests = false;
+#endif
+#if defined(_CCOL_CLOEXEC_GATE_TSAN)
+  if (_ccol_cloexec_gate_ok) {
+    (void)__tsan_mutex_pre_unlock(&_ccol_cloexec_gate, 0);
+    __tsan_mutex_post_unlock(&_ccol_cloexec_gate, 0);
+  }
+#endif
+  if (_ccol_cloexec_gate_ok)
+    _ccol_cloexec_gate_ok =
+        ccol_rw_lock_reinit_in_child(_ccol_cloexec_gate) == 0;
+}
+
+/* The prepare handlers of fork() run in the reverse order of their
+ * registration, so the handler that registers first runs last. The gate must
+ * run after every prepare handler of the library: those handlers take locks
+ * that a thread can hold while it waits to enter the gate, so in the other
+ * order a handler waits for such a thread, the thread waits for the gate,
+ * and fork() never returns. ccol_at_fork therefore calls this before it
+ * registers any handler, and the constructor below calls it at load. No
+ * order of constructors, of static linking or of first use can register a
+ * handler of the library ahead of the gate. When the registration fails, the
+ * gate still runs, and only the wait of fork() is absent. */
+static void _ccol_cloexec_gate_do_register(void) {
+  (void)_ccol_at_fork_raw(_ccol_cloexec_gate_prepare, _ccol_cloexec_gate_parent,
+                          _ccol_cloexec_gate_child);
+}
+
+void _ccol_cloexec_gate_register(void) {
+  ccol_call_once(_ccol_cloexec_gate_reg_once, _ccol_cloexec_gate_do_register);
+}
+
+__attribute__((constructor)) static void _ccol_cloexec_gate_at_load(void) {
+  _ccol_cloexec_gate_register();
+}
+#endif /* _CCOL_CLOEXEC_GATE */

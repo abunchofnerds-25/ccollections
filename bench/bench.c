@@ -50,6 +50,16 @@
 #if defined(__FreeBSD__)
 #include <pthread_np.h> /* pthread_setaffinity_np */
 #endif
+/* macOS has no call that binds a thread to a CPU. Its affinity tags are only
+ * hints, and Apple silicon ignores them. The harness therefore runs unpinned
+ * there, and it says so in its header. */
+#ifndef BENCH_CAN_PIN
+#if defined(__APPLE__)
+#define BENCH_CAN_PIN 0
+#else
+#define BENCH_CAN_PIN 1
+#endif
+#endif
 #include <sched.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -296,6 +306,7 @@ static bool g_pin_enabled = true;
 static _Atomic bool g_pin_failed = false;
 static _Atomic bool g_topology_degraded = false;
 
+#if BENCH_CAN_PIN
 static long read_long_file(const char *path) {
   FILE *f = fopen(path, "r");
   if (!f) return -1;
@@ -435,6 +446,12 @@ static void bench_widen_for_setup(void) {
   if (pthread_setaffinity_np(pthread_self(), sizeof(set), &set) != 0)
     atomic_store_explicit(&g_pin_failed, true, memory_order_relaxed);
 }
+
+#else
+static void bench_topology_init(void) { g_cpu_count = 0; }
+static void bench_pin(size_t slot) { (void)slot; }
+static void bench_widen_for_setup(void) {}
+#endif
 
 static void bench_restore_after_setup(void) { bench_pin(0); }
 
@@ -979,6 +996,11 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < g_cpu_count && i < 16; i++)
       printf(" %d", g_cpu_order[i].cpu);
     printf("%s\n", g_cpu_count > 16 ? " ..." : "");
+  } else if (g_pin_enabled && !BENCH_CAN_PIN) {
+    printf(
+        "bench: this system cannot bind a thread to a core; running\n"
+        "       unpinned, so a worker may share a core with another and\n"
+        "       figures will vary more between runs\n");
   } else if (g_pin_enabled) {
     printf(
         "bench: could not read this machine's core topology; running\n"

@@ -31,11 +31,14 @@ SOFTWARE.
  * and the socket carries SO_NOSIGPIPE, so CCOL_MSG_NOSIGNAL is 0.
  * _CCOL_EMULATE_DARWIN_SOCK selects the macOS form elsewhere, which is how the
  * test suites of Linux and FreeBSD run it (Linux has no SO_NOSIGPIPE, so it
- * keeps MSG_NOSIGNAL). */
+ * keeps MSG_NOSIGNAL). Where the flags take a second call, both calls run
+ * inside the close-on-exec gate of common.h, so a fork() of another thread
+ * never gives a child the socket before it is closed on exec. */
 
 #ifndef CCOL_INTERNAL_CSOCK_H
 #define CCOL_INTERNAL_CSOCK_H
 
+#include <common.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -94,10 +97,23 @@ static inline int ccol_sock_nosigpipe(int fd) {
 #endif
 }
 
+#if defined(_CCOL_EMULATE_DARWIN_SOCK)
+/* Leaves the close-on-exec gate and gives fd, with the errno of the steps
+ * inside the gate. */
+static inline int _ccol_sock_gate_leave(int fd) {
+  int saved = errno;
+  _ccol_cloexec_gate_leave();
+  errno = saved;
+  return fd;
+}
+#endif
+
 /* socket(2) for a non-blocking socket that is closed on exec. */
 static inline int ccol_socket_nb(int domain, int type, int protocol) {
 #if defined(_CCOL_EMULATE_DARWIN_SOCK)
-  return _ccol_sock_setup(socket(domain, type, protocol), true);
+  _ccol_cloexec_gate_enter();
+  return _ccol_sock_gate_leave(
+      _ccol_sock_setup(socket(domain, type, protocol), true));
 #else
   return socket(domain, type | SOCK_NONBLOCK | SOCK_CLOEXEC, protocol);
 #endif
@@ -107,8 +123,14 @@ static inline int ccol_socket_nb(int domain, int type, int protocol) {
  * file that never accepts needs no declaration of accept4(), which glibc
  * gives only under _GNU_SOURCE. */
 #if defined(_CCOL_EMULATE_DARWIN_SOCK)
+static inline int _ccol_accept_nb_gated(int fd, struct sockaddr *addr,
+                                        socklen_t *addrlen) {
+  _ccol_cloexec_gate_enter();
+  return _ccol_sock_gate_leave(
+      _ccol_sock_setup(accept(fd, addr, addrlen), true));
+}
 #define ccol_accept_nb(fd, addr, addrlen) \
-  _ccol_sock_setup(accept((fd), (addr), (addrlen)), true)
+  _ccol_accept_nb_gated((fd), (addr), (addrlen))
 #else
 #define ccol_accept_nb(fd, addr, addrlen) \
   accept4((fd), (addr), (addrlen), SOCK_NONBLOCK | SOCK_CLOEXEC)
@@ -118,16 +140,18 @@ static inline int ccol_socket_nb(int domain, int type, int protocol) {
 static inline int ccol_socketpair_nb(int domain, int type, int protocol,
                                      int sv[2]) {
 #if defined(_CCOL_EMULATE_DARWIN_SOCK)
-  if (socketpair(domain, type, protocol, sv) != 0) return -1;
+  _ccol_cloexec_gate_enter();
+  if (socketpair(domain, type, protocol, sv) != 0)
+    return _ccol_sock_gate_leave(-1);
   if (_ccol_sock_setup(sv[0], true) < 0) {
     close(sv[1]);
-    return -1;
+    return _ccol_sock_gate_leave(-1);
   }
   if (_ccol_sock_setup(sv[1], true) < 0) {
     close(sv[0]);
-    return -1;
+    return _ccol_sock_gate_leave(-1);
   }
-  return 0;
+  return _ccol_sock_gate_leave(0);
 #else
   return socketpair(domain, type | SOCK_NONBLOCK | SOCK_CLOEXEC, protocol, sv);
 #endif

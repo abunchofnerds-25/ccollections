@@ -74,6 +74,15 @@ endif
 # test defines the function under its own name (see the test).
 ccol_ld_wrap = $(if $(filter Darwin,$(CCOL_UNAME_S)),-DTEST_NO_LD_WRAP=1,$(foreach s,$(1),-Wl,--wrap=$(s)))
 
+# The suffix of a shared library: libccollections.dylib on macOS, and
+# libccollections.so elsewhere. The root Makefile and bench/ both name the
+# library with it.
+ifeq ($(CCOL_UNAME_S),Darwin)
+  CCOL_SHARED_LIBRARY_SUFFIX := dylib
+else
+  CCOL_SHARED_LIBRARY_SUFFIX := so
+endif
+
 # The linker hardening of every link: RELRO and immediate binding. Both are
 # options of the ELF linkers; Apple's linker has neither (a Mach-O image binds
 # its pointers read-only on its own), and rejects them.

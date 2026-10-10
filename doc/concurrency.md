@@ -308,6 +308,43 @@ This changes only the fork handling. The library keeps all locks and all
 other guarantees. When you remove the handlers, your program must not call
 `fork()` while a different thread can be in one of those modules.
 
+### Descriptors and exec()
+
+Each descriptor that the library creates is closed on exec. Therefore, a
+child that calls `exec()` keeps none of them.
+
+On macOS, a socket, an accepted socket and a pipe take two calls to become
+closed on exec. A `fork()` from a different thread waits until both calls
+are done. The wait takes some microseconds. It does not depend on
+`CCOL_FORK_SAFETY_REQUIRED`.
+
+`posix_spawn()` runs no fork handlers, so it does not wait. On macOS, a
+program that calls `posix_spawn()` while a different thread can create a
+socket through the library must give `POSIX_SPAWN_CLOEXEC_DEFAULT` to
+`posix_spawnattr_setflags()`. Then name each descriptor that the child must
+keep with `posix_spawn_file_actions_addinherit_np()`:
+
+```c
+#include <spawn.h>
+
+extern char **environ;
+
+/* Runs argv[0] with only standard input, output and error. */
+static int spawn_clean(pid_t *pid, char *const argv[]) {
+    posix_spawnattr_t attr;
+    posix_spawn_file_actions_t fa;
+    posix_spawnattr_init(&attr);
+    posix_spawn_file_actions_init(&fa);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
+    for (int fd = 0; fd <= 2; fd++)
+        posix_spawn_file_actions_addinherit_np(&fa, fd);
+    int rc = posix_spawnp(pid, argv[0], &fa, &attr, argv, environ);
+    posix_spawn_file_actions_destroy(&fa);
+    posix_spawnattr_destroy(&attr);
+    return rc;
+}
+```
+
 ## Reference
 
 [ccollections(7)](../man/common/ccollections.7) (thread-safety classes, fork policy,

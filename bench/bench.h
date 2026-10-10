@@ -41,7 +41,7 @@
  * work it does. One outlier therefore moves a mean and leaves a median alone.
  *
  * The benchmarks link against the shipped form of the library. This is the real
- * libccollections.so, built at the flags that it ships with. They do not
+ * shared library, built at the flags that it ships with. They do not
  * compile its sources into the benchmark binary. A call from here therefore
  * pays the same dynamic call cost that an application pays, and that is the
  * number worth reporting.

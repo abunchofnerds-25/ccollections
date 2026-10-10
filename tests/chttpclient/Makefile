@@ -54,7 +54,7 @@ SRC_CFLAGS = $(CFLAGS_COMMON) $(SRC_OPT) $(EXTRA_CFLAGS)
 # binaries need.
 SRC_OBJS = $(notdir $(COMMON_SRC_FILES:.c=.o))
 PARSER_OBJS = chttp1_parser.o ctls.o chashmap.o common.o
-TSAN_CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 -fsanitize=thread -Wall -Wextra -Werror -g -O1
+TSAN_CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 -fsanitize=thread -Wall -Wextra -Werror -g -O1 $(EXTRA_CFLAGS)
 
 LFLAGS = -lpthread -lssl -lcrypto -lz -lm $(CCOL_PLATFORM_LIBS)
 
@@ -140,6 +140,9 @@ test_tsan: build_tsan check_tsan_supp
 # fails just as loudly when the file gives no anchor at all. An empty file, a
 # file with a new name and a file that it cannot read therefore cannot pass
 # while it examines nothing.
+# The symbol table of Mach-O puts one underscore in front of every C name, and
+# the anchors are C names.
+CCOL_NM_C_NAMES = $(if $(filter Darwin,$(CCOL_UNAME_S)),| sed 's/^_//')
 .PHONY: check_tsan_supp
 check_tsan_supp: build_tsan
 	@anchors=`sed -n 's/^race:\(.*\)$$/\1/p' tsan_openssl.supp | tr -d '*' | sort -u`; \
@@ -147,7 +150,7 @@ check_tsan_supp: build_tsan
 		echo "check_tsan_supp: tsan_openssl.supp yields no race: anchor" >&2; \
 		exit 1; \
 	fi; \
-	ownsyms=`nm --defined-only tests_tsan | awk 'NF >= 3 { print $$3 }' | sort -u`; \
+	ownsyms=`nm --defined-only tests_tsan | awk 'NF >= 3 { print $$3 }' $(CCOL_NM_C_NAMES) | sort -u`; \
 	if [ -z "$$ownsyms" ]; then \
 		echo "check_tsan_supp: no symbols read from tests_tsan" >&2; \
 		exit 1; \

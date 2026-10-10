@@ -1,14 +1,12 @@
 name: macOS
 
-# The port to macOS is in progress, so this workflow runs only for the branch
-# of that port, and by hand (Actions -> macOS -> Run workflow). GitHub shows
-# the button only for a workflow that is on the default branch. The workflow
-# joins the push and pull_request triggers of ci.yml when every suite passes
-# here.
+# macOS is a supported platform, so this workflow runs on the same triggers
+# as ci.yml: every push to any branch, and every pull request. It is a
+# separate workflow because its jobs run on macOS runners. It also runs by
+# hand (Actions -> macOS -> Run workflow).
 on:
   push:
-    branches:
-      - adding-support-for-unix-platforms
+  pull_request:
   workflow_dispatch:
 
 concurrency:
@@ -17,14 +15,18 @@ concurrency:
 
 jobs:
   macos:
-    name: macOS ${{ matrix.arch }} (Apple clang${{ matrix.mode == 'asan' && ', ASan + UBSan' || '' }})
+    name: macOS ${{ matrix.arch }} (Apple clang${{ matrix.mode == 'asan' && ', ASan + UBSan' || matrix.mode == 'tsan' && ', ThreadSanitizer' || '' }})
     strategy:
       # One job that fails must not cancel the others: each run must give as
       # many failures as it can.
       fail-fast: false
       matrix:
         runner: [macos-15, macos-15-intel]
-        mode: [plain, asan]
+        # tsan runs the test_tsan targets. The macOS build compiles the
+        # emulated locks, condition variables, semaphore and per-thread state
+        # of common.h, ctlsmodel.h and csock.h, and only this mode runs them
+        # under ThreadSanitizer on the real system.
+        mode: [plain, asan, tsan]
         include:
           - runner: macos-15
             arch: arm64
@@ -53,10 +55,14 @@ jobs:
         # CPATH and LIBRARY_PATH give clang its headers and its libraries.
         # zlib is part of the macOS SDK.
         run: |
-          brew install make openssl@3 coreutils
+          brew install make openssl@3 coreutils pkgconf
           ssl="$(brew --prefix openssl@3)"
           echo "CPATH=$ssl/include" >> "$GITHUB_ENV"
           echo "LIBRARY_PATH=$ssl/lib" >> "$GITHUB_ENV"
+          # check_install links a program statically with the flags of
+          # pkg-config, which must find openssl.pc. Homebrew keeps OpenSSL
+          # out of the default search path of pkg-config.
+          echo "PKG_CONFIG_PATH=$ssl/lib/pkgconfig" >> "$GITHUB_ENV"
           # The tests make certificates with the openssl command. The one in
           # /usr/bin is LibreSSL; this puts the OpenSSL that the library
           # links first in PATH for every later step.
@@ -76,19 +82,32 @@ jobs:
         # module. gtimeout (coreutils) stops a module that hangs after 30
         # minutes, so one hang does not use the time of the whole job. macOS
         # gives a process 256 descriptors by default, and some suites open
-        # more than 300 connections at once.
+        # more than 300 connections at once. The tsan mode runs the
+        # test_tsan target of each module that has one, and the engine-stop
+        # binary of chttpserver.
         run: |
           ulimit -n 4096
           failed=""
+          run_target() {
+            echo "::group::$1 $2"
+            if ! gtimeout -k 30s 30m gmake -C "tests/$1" "$2"; then
+              failed="$failed $1:$2"
+            fi
+            echo "::endgroup::"
+          }
           for dir in tests/*/; do
             [ -f "$dir/Makefile" ] || continue
             m="$(basename "$dir")"
-            echo "::group::$m"
-            if ! gtimeout -k 30s 30m gmake -C "$dir" test; then
-              failed="$failed $m"
+            if [ "${{ matrix.mode }}" = tsan ]; then
+              grep -q '^test_tsan:' "$dir/Makefile" || continue
+              run_target "$m" test_tsan
+            else
+              run_target "$m" test
             fi
-            echo "::endgroup::"
           done
+          if [ "${{ matrix.mode }}" = tsan ]; then
+            run_target chttpserver test_engine_stop_tsan
+          fi
           if [ -n "$failed" ]; then
             echo "Failed modules:$failed"
             exit 1
@@ -101,6 +120,19 @@ jobs:
         # check_exit_reachable needs valgrind, which does not run on macOS.
         if: matrix.mode == 'plain'
         run: |
+          gmake check_headers
           gmake check_namespace
           gmake check_abi
           gmake check_dso_unload
+      - name: Build the benchmarks and list their cases
+        # The harness is built and listed only, never timed: a shared runner
+        # has far more noise than the changes that the benchmarks must find.
+        if: matrix.mode == 'plain'
+        run: |
+          gmake -C bench
+          ./bench/bench --list | head -5
+      - name: Install, build an application against the install, uninstall
+        # Last, because the install links the library again with the install
+        # name of its temporary prefix.
+        if: matrix.mode == 'plain'
+        run: gmake check_install

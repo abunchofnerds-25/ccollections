@@ -13,34 +13,47 @@ This page tells you about these topics:
 |---|---|---|
 | Linux | yes | glibc; CI builds and tests it |
 | FreeBSD | 14 and later | base C library; CI builds and tests it |
-| macOS | no | does not build |
+| macOS | 15 and later | Apple clang; CI builds and tests it on arm64 and x86-64 |
 | OpenBSD, NetBSD | no | do not build |
 | Windows | no | it does not have the GNU extensions or the system calls |
 | x86-64, i386, AArch64, ARM32 (armhf) | yes | CI tests AArch64 and ARM32 under emulation |
-| GCC, Clang | yes | CI tests both on all of the architectures above |
+| GCC, Clang | yes | CI tests both on Linux and FreeBSD, and Apple clang on macOS |
 | MSVC | no | it has none of the GNU extensions that the macros need |
 
 ## Operating systems
 
-**Linux and FreeBSD.** CI builds and tests both. FreeBSD 14 is the oldest
-release that CI tests. No release before 13 can work, because the library
-needs `eventfd(2)`.
+**Linux, FreeBSD and macOS.** CI builds and tests all three. FreeBSD 14
+and macOS 15 are the oldest releases that CI tests. No FreeBSD release
+before 13 can work, because the library needs `eventfd(2)` there.
 
 The reactor of `cthreadcomm`, `chttpclient` and `chttpserver` uses
-`epoll(7)` on Linux and `kqueue(2)` on FreeBSD. The behavior is the same on
-the two systems. This includes level-triggered reports, one-shot re-arms and
-the delivery of errors. When a man page gives the name of an `epoll` call or
-flag, the FreeBSD build uses the equivalent `kqueue` item.
+`epoll(7)` on Linux and `kqueue(2)` on FreeBSD and macOS. The behavior is
+the same on all three systems. This includes level-triggered reports,
+one-shot re-arms and the delivery of errors. When a man page gives the name
+of an `epoll` call or flag, the FreeBSD and macOS builds use the equivalent
+`kqueue` item.
 
-On FreeBSD, build with `gmake` (see [Building](building.md)).
+On FreeBSD and macOS, build with `gmake` (see [Building](building.md)). On
+macOS, Homebrew gives GNU make (`brew install make`) and OpenSSL
+(`brew install openssl@3`). OpenSSL from Homebrew is outside the paths that
+clang searches, so give its directories to the build:
 
-macOS, OpenBSD and NetBSD do not build. The library does not support
-Windows.
+```bash
+ssl="$(brew --prefix openssl@3)"
+CPATH="$ssl/include" LIBRARY_PATH="$ssl/lib" gmake
+```
+
+On macOS, the build makes `libccollections.dylib`. The library behaves as on
+the other systems, with one addition about `fork()` and `posix_spawn()`
+that [Concurrency](concurrency.md#descriptors-and-exec) describes.
+
+OpenBSD and NetBSD do not build. The library does not support Windows.
 
 ## C libraries
 
-The library supports glibc on Linux and the base C library on FreeBSD. It
-does not support other C libraries, for example musl. CI does not test them.
+The library supports glibc on Linux, the base C library on FreeBSD and the
+system C library on macOS. It does not support other C libraries, for
+example musl. CI does not test them.
 
 ## Architectures
 
@@ -52,8 +65,8 @@ different on different platforms.
 
 ## Compilers and language mode
 
-The library supports GCC and Clang, and CI uses both on all platforms. Two
-separate requirements apply.
+The library supports GCC and Clang. CI uses both on Linux and FreeBSD, and
+Apple clang on macOS. Two separate requirements apply.
 
 **Code that uses the typed macros needs `-std=gnu11`** (or a later `gnu`
 mode). The macros use C11 and three GNU extensions that GCC and Clang both
@@ -136,6 +149,9 @@ thirds slower on Linux, and up to 1.9 times slower on FreeBSD. It is then
 slower than `malloc` itself. On C libraries other than glibc and the C
 library of FreeBSD, the general model is the default.
 
+On macOS, thread-local storage has no static reserve, so `dlopen()` of the
+library always works, and none of this section applies.
+
 ## Unloading the library with dlclose
 
 A process can unload the library with `dlclose()`, continue to run, and then
@@ -154,6 +170,11 @@ You must do two things:
   cached memory is important to you. When the code is unloaded, the library
   cannot free the per-thread cache of a thread that continues to run. This
   cache stays allocated until the process stops.
+
+On macOS, `dlclose()` never unloads the library, because the dynamic loader
+never unloads a library that has thread-local variables (see `dlclose(3)` of
+macOS). The library and its handlers then stay until the process stops. You
+must still destroy each handle before the `dlclose()`.
 
 ## Reference
 

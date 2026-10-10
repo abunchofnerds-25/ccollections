@@ -53,8 +53,11 @@ last rotation.  Before the first rotation of the logger, when the file
 already holds data, it counts from the moment at which that file
 began.  That moment is the stamp of the newest rotated generation on
 disk, because the rotation that made it also created the current
-file.  Without one, it is the birth time of the file, where statx(2)
-reports one, and the last modification time otherwise.  When the file
+file.  Without one, it is the birth time of the file, where the system
+reports one (statx(2) on Linux, and stat(2) on FreeBSD and macOS), and
+the last modification time otherwise.  On FreeBSD, a change of the
+modification time to an earlier moment also moves the birth time to
+that moment.  When the file
 is empty or new, the interval counts from the creation of the logger.
 A process that runs for less than the interval, or restarts often,
 therefore still rotates.  A starting moment in the future counts as

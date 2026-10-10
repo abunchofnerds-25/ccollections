@@ -25,9 +25,12 @@ sudo apt-get install build-essential clang libssl-dev zlib1g-dev \
 
 `make test` needs only the compiler, OpenSSL and zlib. `make memtest` needs
 Valgrind. Coverage needs lcov. The fuzzers need Clang. The structural half
-of `make check_abi` needs `abigail-tools`. On FreeBSD, use `gmake` in all
-locations where this page says `make`. Also install `binutils` for the
-interface checks, because they need GNU `readelf` and GNU `nm`.
+of `make check_abi` needs `abigail-tools`. `make check_install` needs
+`pkg-config`. On FreeBSD and macOS, use `gmake` in all locations where this
+page says `make`. On FreeBSD, also install `binutils` for the interface
+checks, because they need GNU `readelf` and GNU `nm`. On macOS, Homebrew
+gives `gmake`, OpenSSL and `pkg-config` (see [Building](building.md)).
+Valgrind does not run on macOS, so `make memtest` does not run there.
 
 ## Running the tests
 
@@ -156,11 +159,15 @@ make update_abi_baseline   # record that baseline again after you add API
 make check_filenames       # each installable file name is a literal path
 make check_dso_unload      # fork() works after dlopen(), use and
                            # dlclose() of the library
+make check_install         # install into a temporary prefix, build the
+                           # README example with pkg-config, run it linked
+                           # to the shared library and to the archive,
+                           # uninstall
 make hardening_report      # the hardening flags that this compiler accepts
 ```
 
-On macOS, use `gmake`. The checks read the dylib and the archive with the
-`nm` of the developer tools. `check_abi` then compares the exported symbols
+On macOS, the checks read the dylib and the archive with the `nm` of the
+developer tools. `check_abi` then compares the exported symbols
 only, because the structural half reads DWARF from an ELF file. The ELF build
 checks the enumerators and the tags of the headers for macOS as well.
 `check_dso_unload` accepts a library that stays mapped after `dlclose()`,
@@ -224,8 +231,10 @@ again in the same way, give that file as the only argument:
 - the logger and the two serializers
 - an HTTP round trip
 
-It links with the `libccollections.so` that the root `make` builds.
-Therefore, it measures the shipped code with the shipped flags.
+It links with the shared library that the root `make` builds. Therefore, it
+measures the shipped code with the shipped flags. macOS cannot bind a thread
+to a core, so there the harness runs unpinned, and its figures vary more
+between runs.
 
 ```bash
 make bench_update      # record a baseline for this machine
@@ -277,7 +286,8 @@ Each push and each pull request runs these jobs. Each job blocks a merge
 when it fails:
 
 - **Linux x86-64, GCC:** `make test`, `make memtest`, `check_namespace`,
-  `check_headers`, `check_abi`, `check_filenames`, `check_dso_unload`, the
+  `check_headers`, `check_abi`, `check_filenames`, `check_dso_unload`,
+  `check_exit_reachable`, `check_install`, the
   compact mempool layout, the general thread-local storage model, a full run
   with `CCOL_FORK_SAFETY_REQUIRED=0`, and a build of the benchmarks.
 - **Linux x86-64, Clang:** `make test` and `make memtest`.
@@ -290,14 +300,20 @@ when it fails:
 - **Coverage threshold:** `coverage_site` and `coverage_check`.
 - **AddressSanitizer with UndefinedBehaviorSanitizer** (Clang).
 - **ThreadSanitizer:** each `test_tsan` target, one time with GCC and one
-  time with Clang.
+  time with Clang, and one more time with Clang and the
+  `_CCOL_EMULATE_DARWIN_*` switches.
 - **i386:** GCC and Clang builds of each suite, `check_abi` for i386, and an
   UndefinedBehaviorSanitizer run with the two compilers.
 - **AArch64 and ARM32:** cross builds with GCC and with Clang, each test
   binary run under QEMU, and `check_abi` for each architecture.
 - **FreeBSD 14 x86-64:** each suite with the base Clang and with GCC 14,
-  `memtest`, `check_abi`, `check_dso_unload`, and the ThreadSanitizer
-  targets.
+  `memtest`, `check_abi`, `check_dso_unload`, `check_exit_reachable`,
+  `check_install`, and the ThreadSanitizer targets.
+- **macOS 15, arm64 and x86-64:** each suite with Apple clang, one time as
+  is and one time with AddressSanitizer and UndefinedBehaviorSanitizer, and
+  each `test_tsan` target. Also `check_headers`, `check_namespace`,
+  `check_abi`, `check_dso_unload` and `check_install`, and a build of the
+  benchmarks.
 - **Fuzzing:** each target above, for a limited time.
 
 On a push to `main`, a separate workflow builds the merged coverage report

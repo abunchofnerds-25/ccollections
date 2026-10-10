@@ -86,7 +86,7 @@ SRC_CFLAGS = $(CFLAGS_COMMON) $(SRC_OPT) $(EXTRA_CFLAGS)
 # them into every binary that it produces. It does not recompile them for each
 # binary.
 SRC_OBJS = $(notdir $(COMMON_SRC_FILES:.c=.o))
-TSAN_CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 -fsanitize=thread -Wall -Wextra -Werror -g -O1 -fPIC
+TSAN_CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 -fsanitize=thread -Wall -Wextra -Werror -g -O1 -fPIC $(EXTRA_CFLAGS)
 
 LFLAGS = -lpthread -lssl -lcrypto -lm -lz -rdynamic $(CCOL_PLATFORM_LIBS)
 

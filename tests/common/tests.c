@@ -1049,3 +1049,214 @@ TEST(fatal_err, prints_the_message_of_the_caller_and_aborts) {
   REQUIRE_TRUE(strstr(text1, ": fatal: n=42 s=text\n") != NULL);
   REQUIRE_TRUE(strstr(text0, "tests.c:") == text0);
 }
+
+#if defined(_CCOL_CLOEXEC_GATE)
+/* ------------------------------------------------------------------------
+ * The close-on-exec gate: where a descriptor takes two steps to become
+ * closed on exec, a fork() of another thread waits for both steps.
+ * ------------------------------------------------------------------------ */
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <internal/csock.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <sys/socket.h>
+#include <time.h>
+
+extern atomic_ulong _ccol_cloexec_gate_enters_for_tests;
+extern atomic_ulong _ccol_cloexec_gate_leaves_for_tests;
+
+typedef struct {
+  _Atomic int forked;
+  pid_t pid;
+} gate_fork_ctx;
+
+static void *gate_forker(void *arg) {
+  gate_fork_ctx *c = (gate_fork_ctx *)arg;
+  pid_t pid = fork();
+  if (pid == 0) _exit(0);
+  c->pid = pid;
+  atomic_store(&c->forked, 1);
+  return NULL;
+}
+
+/* A fork() cannot return while a thread is inside the gate, because the
+ * fork-prepare handler of the gate waits for the read side. The check after
+ * the wait can therefore never see a fork that returned while the gate was
+ * held, however slow the machine is.
+ *
+ * This test is non-vacuous: without the fork-prepare handler of the gate,
+ * the fork returns at once and forked_inside is 1. */
+TEST(cloexec_gate, fork_waits_while_a_descriptor_is_inside_the_gate) {
+  gate_fork_ctx c;
+  atomic_init(&c.forked, 0);
+  c.pid = -1;
+  _ccol_cloexec_gate_enter();
+  pthread_t t;
+  bool started = pthread_create(&t, NULL, gate_forker, &c) == 0;
+  struct timespec wait = {.tv_sec = 0, .tv_nsec = 200 * 1000 * 1000};
+  nanosleep(&wait, NULL);
+  int forked_inside = atomic_load(&c.forked);
+  _ccol_cloexec_gate_leave();
+  if (started) pthread_join(t, NULL);
+  int status = 0;
+  bool reaped = c.pid > 0 && waitpid(c.pid, &status, 0) == c.pid;
+
+  REQUIRE_TRUE(started);
+  REQUIRE_EQ(forked_inside, 0);
+  REQUIRE_EQ(atomic_load(&c.forked), 1);
+  REQUIRE_TRUE(reaped);
+  REQUIRE_TRUE(WIFEXITED(status));
+}
+
+/* Gives true when fd is closed on exec and, if nonblock, non-blocking. */
+static bool gate_fd_flags_ok(int fd, bool nonblock) {
+  int fd_flags = fcntl(fd, F_GETFD);
+  int fl_flags = fcntl(fd, F_GETFL);
+  return fd_flags >= 0 && (fd_flags & FD_CLOEXEC) && fl_flags >= 0 &&
+         (!nonblock || (fl_flags & O_NONBLOCK));
+}
+
+/* The counts of entries and exits of the gate since a mark. */
+typedef struct {
+  unsigned long enters;
+  unsigned long leaves;
+} gate_mark;
+
+static gate_mark gate_mark_now(void) {
+  gate_mark m = {atomic_load(&_ccol_cloexec_gate_enters_for_tests),
+                 atomic_load(&_ccol_cloexec_gate_leaves_for_tests)};
+  return m;
+}
+
+static bool gate_used_once(gate_mark before) {
+  gate_mark after = gate_mark_now();
+  return after.enters - before.enters == 1 && after.leaves - before.leaves == 1;
+}
+
+/* Every call that creates a descriptor in two steps enters the gate once and
+ * leaves it once, on success and on failure, and gives a descriptor that is
+ * closed on exec.
+ *
+ * This test is non-vacuous: a creation site that skips the gate leaves both
+ * counts unchanged, and a failure path that skips the exit leaves the
+ * entries one ahead. */
+TEST(cloexec_gate, every_two_step_creation_uses_the_gate) {
+#if defined(_CCOL_EMULATE_DARWIN_SOCK)
+  gate_mark m = gate_mark_now();
+  int s = ccol_socket_nb(AF_INET, SOCK_STREAM, 0);
+  bool socket_gated = gate_used_once(m);
+  bool socket_flags = s >= 0 && gate_fd_flags_ok(s, true);
+
+  m = gate_mark_now();
+  int bad = ccol_socket_nb(-1, SOCK_STREAM, 0);
+  bool bad_socket_gated = gate_used_once(m) && bad < 0;
+
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  socklen_t alen = sizeof(addr);
+  int cli = -1, acc = -1;
+  bool listening = s >= 0 && bind(s, (struct sockaddr *)&addr, alen) == 0 &&
+                   listen(s, 1) == 0 &&
+                   getsockname(s, (struct sockaddr *)&addr, &alen) == 0;
+  if (listening) {
+    cli = socket(AF_INET, SOCK_STREAM, 0);
+    if (cli >= 0) (void)connect(cli, (struct sockaddr *)&addr, alen);
+  }
+  struct pollfd pfd = {.fd = s, .events = POLLIN, .revents = 0};
+  bool ready = listening && cli >= 0 && poll(&pfd, 1, 5000) == 1;
+  m = gate_mark_now();
+  if (ready) acc = ccol_accept_nb(s, NULL, NULL);
+  bool accept_gated = ready && gate_used_once(m);
+  bool accept_flags = acc >= 0 && gate_fd_flags_ok(acc, true);
+
+  m = gate_mark_now();
+  int none = ccol_accept_nb(s, NULL, NULL);
+  bool empty_accept_gated = s >= 0 && gate_used_once(m) && none < 0;
+
+  int sv[2] = {-1, -1};
+  m = gate_mark_now();
+  int pr = ccol_socketpair_nb(AF_UNIX, SOCK_STREAM, 0, sv);
+  bool pair_gated = gate_used_once(m);
+  bool pair_flags =
+      pr == 0 && gate_fd_flags_ok(sv[0], true) && gate_fd_flags_ok(sv[1], true);
+
+  m = gate_mark_now();
+  int bad_sv[2];
+  int bad_pair = ccol_socketpair_nb(-1, SOCK_STREAM, 0, bad_sv);
+  bool bad_pair_gated = gate_used_once(m) && bad_pair != 0;
+
+  if (sv[0] >= 0) close(sv[0]);
+  if (sv[1] >= 0) close(sv[1]);
+  if (acc >= 0) close(acc);
+  if (cli >= 0) close(cli);
+  if (s >= 0) close(s);
+
+  REQUIRE_TRUE(socket_gated);
+  REQUIRE_TRUE(socket_flags);
+  REQUIRE_TRUE(bad_socket_gated);
+  REQUIRE_TRUE(listening);
+  REQUIRE_TRUE(accept_gated);
+  REQUIRE_TRUE(accept_flags);
+  REQUIRE_TRUE(empty_accept_gated);
+  REQUIRE_TRUE(pair_gated);
+  REQUIRE_TRUE(pair_flags);
+  REQUIRE_TRUE(bad_pair_gated);
+#endif
+#if defined(_CCOL_EMULATE_DARWIN_SYNC)
+  ccol_semaphore_t sem;
+  gate_mark sm = gate_mark_now();
+  bool sem_made = ccol_semaphore_init(sem, 1) == 0;
+  bool sem_gated = gate_used_once(sm);
+  bool sem_flags = sem_made && gate_fd_flags_ok(sem.fd[0], false) &&
+                   gate_fd_flags_ok(sem.fd[1], false);
+  if (sem_made) ccol_semaphore_destroy(sem);
+  REQUIRE_TRUE(sem_made);
+  REQUIRE_TRUE(sem_gated);
+  REQUIRE_TRUE(sem_flags);
+#endif
+}
+/* A fork-prepare handler that the library registers before its own
+ * constructor runs. The constructor below has priority 101, so on the ELF
+ * systems it runs before every constructor of the default priority, the one of
+ * the gate in common.c included. macOS does not order constructors by
+ * priority, so there it is an ordinary constructor. */
+extern bool _ccol_cloexec_gate_prepared_for_tests;
+static _Atomic int gate_early_handler_saw_gate = -1;
+
+static void gate_early_prepare(void) {
+  atomic_store(&gate_early_handler_saw_gate,
+               _ccol_cloexec_gate_prepared_for_tests ? 1 : 0);
+}
+
+#if defined(__APPLE__)
+__attribute__((constructor))
+#else
+__attribute__((constructor(101)))
+#endif
+static void
+gate_register_early_handler(void) {
+  (void)ccol_at_fork(gate_early_prepare, NULL, NULL);
+}
+
+/* A handler that ccol_at_fork registers runs before the prepare handler of
+ * the gate, even when it registers before the constructor of the gate runs.
+ * In the other order a fork() can wait for a lock whose holder waits to enter
+ * the gate.
+ *
+ * This test is non-vacuous on the ELF systems: when ccol_at_fork does not
+ * register the gate first, the gate registers after this handler, its prepare
+ * handler runs first, and the handler sees it. */
+TEST(cloexec_gate, a_handler_registered_before_the_library_runs_before_gate) {
+  atomic_store(&gate_early_handler_saw_gate, -1);
+  pid_t pid = fork();
+  if (pid == 0) _exit(0);
+  int status = 0;
+  bool reaped = pid > 0 && waitpid(pid, &status, 0) == pid;
+  REQUIRE_TRUE(reaped);
+  REQUIRE_EQ(atomic_load(&gate_early_handler_saw_gate), 0);
+}
+#endif /* _CCOL_CLOEXEC_GATE */

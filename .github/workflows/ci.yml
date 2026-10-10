@@ -90,6 +90,13 @@ jobs:
       # directly and has its own destructors.
       - name: nothing of the library is left allocated at exit
         run: make check_exit_reachable
+      # The suites compile the sources into each test binary, so none of them
+      # sees the install. This step installs into a temporary prefix, builds
+      # the example of README.md with the flags of the installed
+      # ccollections.pc, runs it against the shared library and against the
+      # archive, and uninstalls.
+      - name: the library installs, and an application builds against it
+        run: make check_install
       # CCOL_MEMPOOL_COMPACT_LAYOUT selects a second entry layout. That layout
       # includes a different way to derive an index from an address. About
       # twenty conditional sites hold it. Any builder can turn the switch on,
@@ -197,9 +204,9 @@ jobs:
           # make.
           # binutils gives the ABI gate GNU readelf and nm, which the base
           # system's elftoolchain tools do not replace; libabigail gives it
-          # abidw and abidiff.
+          # abidw and abidiff. pkgconf gives check_install its pkg-config.
           prepare: |
-            pkg install -y gmake gcc14 valgrind binutils libabigail
+            pkg install -y gmake gcc14 valgrind binutils libabigail pkgconf
           # Every suite runs: with the base clang, with gcc14, and under
           # valgrind (tests/valgrind_freebsd.supp joins every valgrind run on
           # FreeBSD through platform.mk). `gmake clean` between the passes
@@ -215,6 +222,7 @@ jobs:
             gmake check_abi
             gmake check_dso_unload
             gmake check_exit_reachable
+            gmake check_install
             # ThreadSanitizer with clang, on every module that has a TSan
             # target. The guest runs under KVM, whose kvmclock the fast
             # clock_gettime of libc maps on first use, and TSan deadlocks on
@@ -400,6 +408,48 @@ jobs:
       - name: chttpserver test_tsan (Clang)
         run: cd tests/chttpserver && make CC=clang test_tsan
       - name: chttpserver test_engine_stop_tsan (Clang)
+        run: cd tests/chttpserver && make CC=clang test_engine_stop_tsan
+
+  linux-x86_64-tsan-macos-paths:
+    name: Linux x86_64 (ThreadSanitizer, Clang, macOS code paths)
+    runs-on: ubuntu-latest
+    # The macOS build compiles its own timed locks, a condition variable that
+    # waits on a relative time, a pipe semaphore, per-thread state on the
+    # heap and the close-on-exec gate. The two ThreadSanitizer jobs above
+    # compile none of it. This job runs the same targets with every
+    # _CCOL_EMULATE_DARWIN_* switch that Linux runs, built with Clang, which
+    # also sees a race on a struct copy. The macOS workflow runs the same
+    # targets on the real system.
+    timeout-minutes: 90
+    env:
+      EXTRA_CFLAGS: >-
+        -D_CCOL_EMULATE_DARWIN_SYNC=1 -D_CCOL_EMULATE_DARWIN_SOCK=1
+        -D_CCOL_EMULATE_DARWIN_MEMRCHR=1 -D_CCOL_EMULATE_DARWIN_TLS=1
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang libssl-dev zlib1g-dev
+      - name: cpintable test_tsan (Clang, macOS code paths)
+        run: cd tests/cpintable && make CC=clang test_tsan
+      - name: cmempool test_tsan (Clang, macOS code paths)
+        run: cd tests/cmempool && make CC=clang test_tsan
+      - name: clrucache test_tsan (Clang, macOS code paths)
+        run: cd tests/clrucache && make CC=clang test_tsan
+      - name: mixed test_tsan (Clang, macOS code paths)
+        run: cd tests/mixed && make CC=clang test_tsan
+      - name: clogger test_tsan (Clang, macOS code paths)
+        run: cd tests/clogger && make CC=clang test_tsan
+      - name: cthreadpool test_tsan (Clang, macOS code paths)
+        run: cd tests/cthreadpool && make CC=clang test_tsan
+      - name: cthreadcomm test_tsan (Clang, macOS code paths)
+        run: cd tests/cthreadcomm && make CC=clang test_tsan
+      - name: ctls test_tsan (Clang, macOS code paths)
+        run: cd tests/ctls && make CC=clang test_tsan
+      - name: chttpclient test_tsan (Clang, macOS code paths)
+        run: cd tests/chttpclient && make CC=clang test_tsan
+      - name: chttpserver test_tsan (Clang, macOS code paths)
+        run: cd tests/chttpserver && make CC=clang test_tsan
+      - name: chttpserver test_engine_stop_tsan (Clang, macOS code paths)
         run: cd tests/chttpserver && make CC=clang test_engine_stop_tsan
 
   linux-x86_64-memtest-macos-paths:

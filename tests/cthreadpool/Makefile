@@ -43,7 +43,7 @@ SRC_CFLAGS = $(CFLAGS_COMMON) $(SRC_OPT) $(EXTRA_CFLAGS)
 # The library objects are built once here and linked into every binary this
 # directory produces, rather than recompiled per binary.
 SRC_OBJS = $(notdir $(SRC_FILES:.c=.o))
-TSAN_CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 -fsanitize=thread -Wall -Wextra -Werror -g -O1
+TSAN_CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 -fsanitize=thread -Wall -Wextra -Werror -g -O1 $(EXTRA_CFLAGS)
 COVERAGE_FLAGS =
 COVERAGE_ON = -fprofile-arcs -ftest-coverage
 LFLAGS = -lpthread $(CCOL_PLATFORM_LIBS)

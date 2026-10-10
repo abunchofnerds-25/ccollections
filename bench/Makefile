@@ -1,6 +1,7 @@
 # The benchmarks for every module.
 #
-# These link against the real libccollections.so that the root Makefile builds.
+# These link against the real shared library that the root Makefile builds
+# (libccollections.so, or libccollections.dylib on macOS).
 # They do not compile the sources of the library into themselves. A measured
 # call therefore pays the same dynamic call cost that an application pays, and
 # the measured code is the code that ships, at the flags that it ships with.
@@ -28,6 +29,7 @@ EXTRA_CFLAGS ?=
 CFLAGS = -I$(ROOT)/$(INCLUDE_DIR) -I. -std=gnu11 -D_GNU_SOURCE \
 	-O2 -g -Wall -Wextra -Werror $(EXTRA_CFLAGS)
 
+LIBRARY = $(ROOT)/libccollections.$(CCOL_SHARED_LIBRARY_SUFFIX)
 LDFLAGS = -L$(ROOT) -Wl,-rpath,$(abspath $(ROOT))
 LDLIBS = -lccollections -lpthread -lm
 
@@ -93,8 +95,15 @@ FORCE:
 
 all: $(BIN)
 
-$(BIN): $(OBJS) $(ROOT)/libccollections.so
+# On macOS a program records the library by its install name, an absolute
+# path in the LIBDIR of the build, and dyld then ignores the rpath. The link
+# therefore points that entry at the library in the build tree.
+$(BIN): $(OBJS) $(LIBRARY)
 	$(CC) -o $@ $(OBJS) $(LDFLAGS) $(LDLIBS)
+ifeq ($(CCOL_UNAME_S),Darwin)
+	install_name_tool -change "$$(otool -D $(LIBRARY) | tail -n 1)" \
+		"$(abspath $(LIBRARY))" $@
+endif
 
 # The library is a prerequisite of the link. A library that the build makes
 # again after these objects therefore links the binary again. The build goes
@@ -108,7 +117,7 @@ $(BIN): $(OBJS) $(ROOT)/libccollections.so
 # newly compiled harness objects against the shared object of the previous
 # build. A measurement must never do that. The sub-make does nothing when the
 # library is current, so it links nothing without need.
-$(ROOT)/libccollections.so: FORCE
+$(LIBRARY): FORCE
 	@$(MAKE) --no-print-directory -C $(ROOT) $(notdir $@)
 
 %.o: %.c bench.h $(LIB_HEADERS) .build-flags

@@ -10,8 +10,10 @@ run the test suites, see [Testing](testing.md).
 
 ## Requirements
 
-- **GNU make.** On FreeBSD, its name is `gmake`. The system `make` on
-  FreeBSD only prints a message that tells you this.
+- **GNU make** 4 or later. On FreeBSD, its name is `gmake`. The system
+  `make` on FreeBSD only prints a message that tells you this. The `make`
+  of macOS is GNU make 3.81, which is too old. Homebrew installs a current
+  one as `gmake`.
 - **GCC or Clang** with C11 and the GNU extensions (see
   [Platforms](platforms.md)).
 - **OpenSSL** (`libssl`, `libcrypto`) and **zlib**, with their development
@@ -33,10 +35,18 @@ On FreeBSD:
 pkg install gmake
 ```
 
+On macOS, with Homebrew (the macOS SDK has zlib):
+
+```bash
+brew install make openssl@3
+export CPATH="$(brew --prefix openssl@3)/include"
+export LIBRARY_PATH="$(brew --prefix openssl@3)/lib"
+```
+
 ## Building
 
 ```bash
-make            # gmake on FreeBSD
+make            # gmake on FreeBSD and macOS
 ```
 
 The build makes these files in the top directory:
@@ -48,6 +58,10 @@ The build makes these files in the top directory:
 | `libccollections.so` | the development link that `-lccollections` finds |
 | `libccollections.a` | the static archive |
 | `ccollections.pc` | the `pkg-config` metadata |
+
+On macOS, the three shared library files are `libccollections.1.0.0.dylib`,
+`libccollections.1.dylib` and `libccollections.dylib`. The install name of
+the library, which programs record, is `$(LIBDIR)/libccollections.1.dylib`.
 
 The compiler is `gcc` on Linux and the system `cc` on other systems. To use
 a different compiler, give it on the command line or in the environment:
@@ -145,6 +159,9 @@ indexes:
 - the cache of the dynamic linker (`ldconfig`, or `ldconfig -R` on FreeBSD)
 - the man page index (`mandb`, or `makewhatis` on FreeBSD)
 
+On macOS, the install updates neither. The dynamic linker of macOS keeps
+no cache to update, and `man` finds the installed pages without an index.
+
 If one of these updates fails, the install does not fail.
 
 ## Including the headers
@@ -187,7 +204,8 @@ gcc -std=gnu11 -o myapp myapp.c -lccollections
 You possibly installed into a prefix that is not standard. If the program
 then cannot find `libccollections.so.1` at run time, add that `lib`
 directory to the search path of the loader. Use `LD_LIBRARY_PATH`, or an
-rpath such as `-Wl,-rpath,$HOME/.local/lib`.
+rpath such as `-Wl,-rpath,$HOME/.local/lib`. On macOS, a program finds the
+library through its install name, which is the `LIBDIR` of the install.
 
 ### In your own Makefile
 
@@ -296,6 +314,9 @@ make EXTRA_CFLAGS="-DCCOL_FORK_SAFETY_REQUIRED=0"
 ```
 
 This changes nothing else about thread safety. The library keeps all locks.
+On macOS, a `fork()` also waits while the library makes a new socket closed
+on exec. That wait stays, because it protects a child that calls `exec()`
+(see [Concurrency](concurrency.md#descriptors-and-exec)).
 
 ### CCOL_MEMPOOL_COMPACT_LAYOUT
 

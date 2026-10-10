@@ -104,9 +104,11 @@ SOFTWARE.
  * with them.
  *
  * This switch changes nothing else about the thread safety of a module. Its
- * own locks stay. The safety of a concurrent create and destroy through the
- * generation-tagged handle tables stays. The switch controls only the
- * protection that is specific to fork().
+ * own locks stay. The close-on-exec gate below also stays, because it keeps
+ * the descriptors of the library out of a child that calls exec(), which is
+ * the pattern that this switch is for. The safety of a concurrent create and
+ * destroy through the generation-tagged handle tables stays. The switch
+ * controls only the protection that is specific to fork().
  *
  * The value is 1, which compiles the fork safety in. This is the value unless
  * a caller defines the macro before the first include of this header.
@@ -129,6 +131,29 @@ SOFTWARE.
  * realtime clock. Only the library defines it, never an application. */
 #if defined(__APPLE__) && !defined(_CCOL_EMULATE_DARWIN_SYNC)
 #define _CCOL_EMULATE_DARWIN_SYNC 1
+#endif
+
+/* The close-on-exec gate. Where a descriptor cannot be created closed on
+ * exec in one call (a socket, an accepted socket, a socket pair and a pipe on
+ * macOS), the library creates it and then sets FD_CLOEXEC. A fork() of
+ * another thread between the two steps gives the child the descriptor without
+ * the flag, and an exec() in that child keeps it open. The library therefore
+ * makes both steps between _ccol_cloexec_gate_enter() and
+ * _ccol_cloexec_gate_leave(), which take the read side of a process-wide
+ * lock, and a fork-prepare handler takes the write side. A fork() thus waits
+ * until no descriptor is between the two steps. posix_spawn(3) runs no fork
+ * handler, so a program that spawns a child on macOS while the library
+ * creates a socket uses POSIX_SPAWN_CLOEXEC_DEFAULT. The gate exists only
+ * where the two steps exist, so it costs nothing on Linux and FreeBSD. The
+ * two functions are internal and not exported. */
+#if defined(__APPLE__) || defined(_CCOL_EMULATE_DARWIN_SYNC) || \
+    defined(_CCOL_EMULATE_DARWIN_SOCK)
+#define _CCOL_CLOEXEC_GATE 1
+#pragma GCC visibility push(hidden)
+void _ccol_cloexec_gate_enter(void);
+void _ccol_cloexec_gate_leave(void);
+void _ccol_cloexec_gate_register(void);
+#pragma GCC visibility pop
 #endif
 
 /** @brief Mutex type (wraps pthread_mutex_t) */
@@ -430,9 +455,16 @@ static inline int _ccol_cond_var_timedwait_clock(_ccol_cond_var_s *c,
  * set, as sem_init() does. */
 static inline int _ccol_semaphore_pipe_init(_ccol_semaphore_s *s,
                                             unsigned value) {
-  if (pipe(s->fd) != 0) return -1;
+  _ccol_cloexec_gate_enter();
+  if (pipe(s->fd) != 0) {
+    int saved = errno;
+    _ccol_cloexec_gate_leave();
+    errno = saved;
+    return -1;
+  }
   (void)fcntl(s->fd[0], F_SETFD, FD_CLOEXEC);
   (void)fcntl(s->fd[1], F_SETFD, FD_CLOEXEC);
+  _ccol_cloexec_gate_leave();
   for (unsigned i = 0; i < value; i++) {
     if (write(s->fd[1], "", 1) != 1) {
       int saved = errno;
@@ -545,9 +577,21 @@ static inline int _ccol_semaphore_pipe_post(_ccol_semaphore_s *s) {
 #define ccol_thread_ls_get(key) pthread_getspecific((key))
 
 /** @brief Register prepare, parent and child handlers that run around
- *  fork(2) */
-#define ccol_at_fork(prepare, parent, child) \
+ *  fork(2)
+ *
+ * Where the close-on-exec gate exists, this registers the handlers of the
+ * gate first, one time. The prepare handlers run in the reverse order of
+ * their registration, so the gate then waits after every other prepare
+ * handler of the library, whichever of them registers first. */
+#define _ccol_at_fork_raw(prepare, parent, child) \
   pthread_atfork((prepare), (parent), (child))
+#if defined(_CCOL_CLOEXEC_GATE)
+#define ccol_at_fork(prepare, parent, child) \
+  (_ccol_cloexec_gate_register(), _ccol_at_fork_raw(prepare, parent, child))
+#else
+#define ccol_at_fork(prepare, parent, child) \
+  _ccol_at_fork_raw(prepare, parent, child)
+#endif
 
 /**
  * @brief Get a thread's name (wraps pthread_getname_np)

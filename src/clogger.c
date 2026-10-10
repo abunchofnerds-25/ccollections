@@ -7189,6 +7189,9 @@ static void _clog_seed_last_rotation(clog_shared_t *sh, int fd,
     seed = stamp;
     seeded = true;
   }
+  /* The birth time comes from statx(2) on Linux and from struct stat on
+   * macOS and FreeBSD. A filesystem that keeps none reports 0 on macOS and
+   * -1 on FreeBSD, and the seed then stays the modification time. */
 #if defined(__linux__) && defined(STATX_BTIME)
   if (!seeded) {
     struct statx stx;
@@ -7196,6 +7199,13 @@ static void _clog_seed_last_rotation(clog_shared_t *sh, int fd,
         (stx.stx_mask & STATX_BTIME))
       seed = (time_t)stx.stx_btime.tv_sec;
   }
+#elif defined(__APPLE__)
+  (void)fd;
+  if (!seeded && st->st_birthtimespec.tv_sec > 0)
+    seed = st->st_birthtimespec.tv_sec;
+#elif defined(__FreeBSD__)
+  (void)fd;
+  if (!seeded && st->st_birthtim.tv_sec > 0) seed = st->st_birthtim.tv_sec;
 #else
   (void)fd;
   (void)seeded;

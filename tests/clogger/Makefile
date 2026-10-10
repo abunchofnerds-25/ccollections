@@ -46,7 +46,7 @@ CONSUMER_CFLAGS = $(CFLAGS_NO_DEFINITIONS) $(TEST_OPT) $(EXTRA_CFLAGS)
 # The build makes the library objects one time here. It links them into every
 # binary of this directory, and does not compile them again for each one.
 SRC_OBJS = $(notdir $(SRC_FILES:.c=.o))
-TSAN_CFLAGS_NO_DEFINITIONS = $(INCLUDES) -std=gnu11 -fsanitize=thread -Wall -Wextra -Werror -g -O1
+TSAN_CFLAGS_NO_DEFINITIONS = $(INCLUDES) -std=gnu11 -fsanitize=thread -Wall -Wextra -Werror -g -O1 $(EXTRA_CFLAGS)
 TSAN_CFLAGS = $(TSAN_CFLAGS_NO_DEFINITIONS) $(DEFINITIONS)
 COVERAGE_FLAGS =
 COVERAGE_ON = -fprofile-arcs -ftest-coverage

@@ -11387,23 +11387,33 @@ static bool _write_file_with_mtime(const char *path, const char *text,
 }
 
 #if defined(__linux__)
-#if defined(__linux__)
 #include <linux/stat.h>
 #endif
-#endif
 
-/* Gives true when the kernel and the filesystem report a birth time for
- * path. It asks the kernel directly, because this file does not define
- * _GNU_SOURCE, which the statx() wrapper of glibc needs. */
-static bool _file_reports_birth_time(const char *path) {
+/* Gives the birth time of path in seconds, as the kernel and the filesystem
+ * report it, or -1 when they report none. It asks through statx(2) on
+ * Linux, with the system call itself so that it needs no wrapper of the C
+ * library, and through struct stat on macOS and FreeBSD. */
+static time_t _file_birth_time(const char *path) {
 #if defined(__linux__) && defined(STATX_BTIME) && defined(SYS_statx)
   struct statx stx;
   memset(&stx, 0, sizeof(stx));
-  return syscall(SYS_statx, AT_FDCWD, path, 0, STATX_BTIME, &stx) == 0 &&
-         (stx.stx_mask & STATX_BTIME);
+  if (syscall(SYS_statx, AT_FDCWD, path, 0, STATX_BTIME, &stx) == 0 &&
+      (stx.stx_mask & STATX_BTIME))
+    return (time_t)stx.stx_btime.tv_sec;
+  return -1;
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+  struct stat st;
+  if (stat(path, &st) != 0) return -1;
+#if defined(__APPLE__)
+  time_t b = st.st_birthtimespec.tv_sec;
+#else
+  time_t b = st.st_birthtim.tv_sec;
+#endif
+  return b > 0 ? b : -1;
 #else
   (void)path;
-  return false;
+  return -1;
 #endif
 }
 
@@ -11463,12 +11473,15 @@ TEST(rotation_time, interval_counts_from_the_newest_rotated_generation) {
  * time of the file where the filesystem reports one, and from its last
  * modification time otherwise. The file here was created just now and then
  * given a modification time 1000 seconds in the past, so the two answers
- * differ: a birth time starts the interval now and nothing rotates, and a
- * modification time rotates on the first write. The test probes which one
- * this filesystem offers and expects the matching outcome.
+ * differ: a recent birth time starts the interval now and nothing rotates,
+ * and a modification time rotates on the first write. FreeBSD moves the
+ * birth time back to a modification time that is older, so there the birth
+ * time is old as well. The test reads the birth time that this filesystem
+ * reports and expects the matching outcome.
  *
- * This test is non-vacuous: on a filesystem that reports a birth time, a
- * seed that skips it takes the old modification time and rotates. */
+ * This test is non-vacuous: on a filesystem that reports a recent birth
+ * time, a seed that skips it takes the old modification time and
+ * rotates. */
 TEST(rotation_time, interval_counts_from_birth_time_else_mtime) {
   char dir[64];
   REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
@@ -11476,7 +11489,8 @@ TEST(rotation_time, interval_counts_from_birth_time_else_mtime) {
   snprintf(path, sizeof(path), "%s/app.log", dir);
   bool prepared =
       _write_file_with_mtime(path, "old record\n", time(NULL) - 1000);
-  bool has_btime = prepared && _file_reports_birth_time(path);
+  time_t btime = prepared ? _file_birth_time(path) : -1;
+  bool recent_btime = btime >= 0 && btime > time(NULL) - 100;
 
   clog_rotation_cfg_t cfg = {
       .time_rotation_enabled = true,
@@ -11496,11 +11510,66 @@ TEST(rotation_time, interval_counts_from_birth_time_else_mtime) {
 
   REQUIRE_TRUE(prepared);
   REQUIRE_NE(lg, CLOG_INVALID);
-  if (has_btime) {
+  if (recent_btime) {
     REQUIRE_EQ(rotated, 0);
   } else {
     REQUIRE_EQ(rotated, 1);
     REQUIRE_TRUE(old_rotated);
+  }
+}
+
+/* A file whose birth time is older than the interval rotates on the first
+ * write, although it was modified just now. The file is given timestamps
+ * 1000 seconds in the past and is then written again, which moves only its
+ * modification time to now. FreeBSD moves the birth time back with the
+ * modification time, so there the birth time stays 1000 seconds old; Linux
+ * keeps the real birth time, which is recent. The test reads the birth time
+ * that this filesystem reports and expects the matching outcome.
+ *
+ * This test is non-vacuous: on a filesystem that reports the old birth time,
+ * a seed that skips it takes the recent modification time and nothing
+ * rotates. */
+TEST(rotation_time, old_birth_time_rotates_a_recently_modified_file) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[128];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  bool prepared =
+      _write_file_with_mtime(path, "old record\n", time(NULL) - 1000);
+  if (prepared) {
+    int fd = open(path, O_WRONLY | O_APPEND | O_CLOEXEC);
+    prepared = fd >= 0;
+    if (prepared) {
+      prepared = write(fd, "newer record\n", 13) == 13;
+      close(fd);
+    }
+  }
+  time_t btime = prepared ? _file_birth_time(path) : -1;
+  bool old_btime = btime >= 0 && btime <= time(NULL) - 100;
+
+  clog_rotation_cfg_t cfg = {
+      .time_rotation_enabled = true,
+      .rotation_interval_us = 100000000,
+      .max_rotated_files = 5,
+  };
+  clog lg =
+      prepared ? clog_open_file(path, CLOG_INFO, &cfg, NULL) : CLOG_INVALID;
+  if (lg != CLOG_INVALID) {
+    ccol_log_info(lg, "new record");
+    clog_close(lg);
+  }
+
+  int rotated = count_files_with_prefix(dir, "app.log.");
+  bool old_rotated = dir_files_contain(dir, "app.log.", "old record");
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(prepared);
+  REQUIRE_NE(lg, CLOG_INVALID);
+  if (old_btime) {
+    REQUIRE_EQ(rotated, 1);
+    REQUIRE_TRUE(old_rotated);
+  } else {
+    REQUIRE_EQ(rotated, 0);
   }
 }
 

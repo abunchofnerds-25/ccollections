@@ -21,7 +21,7 @@ LFLAGS = -lssl -lcrypto -lpthread $(CCOL_PLATFORM_LIBS)
 # connection through a shared context, and the destruction of that same
 # object.
 TSAN_CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 -fsanitize=thread \
-	-Wall -Wextra -Werror -g -O1
+	-Wall -Wextra -Werror -g -O1 $(EXTRA_CFLAGS)
 
 # tests_sigpipe is a binary of its own because it needs the default
 # disposition of SIGPIPE, and tests ignores SIGPIPE for the whole process.

@@ -13,7 +13,7 @@ COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
 # This build uses -O1, and not the -O3 of the ordinary build. What this
 # build exercises is the instrumentation of ThreadSanitizer. A higher level
 # buys nothing here, and it makes a report harder to read back to source.
-TSAN_CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 -fsanitize=thread -Wall -Wextra -Werror -g -O1
+TSAN_CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 -fsanitize=thread -Wall -Wextra -Werror -g -O1 $(EXTRA_CFLAGS)
 # The wrap routes every pthread_mutex_lock that the library and the tests
 # make through a counter in tests.c, which forwards to the real function. The
 # thread-cache tests assert on how many locks an operation takes, which is a

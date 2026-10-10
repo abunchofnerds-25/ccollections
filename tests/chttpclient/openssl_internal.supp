@@ -1,49 +1,50 @@
-# Suppressions for reachable memory held by OpenSSL's own internal RSA/BN
-# caches (RSA blinding state, BN_MONT_CTX Montgomery contexts, and similar
-# lazily-computed values populated during RSA key generation and signing;
-# exercised here by tests_parser's stream_tls test group, which uses
-# ctls_ctx_cert_add()'s self-signed certificate generation to drive a real
-# TLS handshake).
+# Suppressions for reachable memory held by OpenSSL's own internal caches
+# (RSA blinding state, BN_MONT_CTX Montgomery contexts, encoder and provider
+# tables, and similar lazily-computed values populated during RSA key
+# generation and signing). tests_parser's stream_tls test group is what
+# reaches them here: it drives a real TLS handshake off a certificate
+# ctls_ctx_cert_add() generates in process, so the key generation happens
+# inside libcrypto rather than in a separate openssl(1) process.
 #
-# These blocks are allocated via OpenSSL's own CRYPTO_malloc/CRYPTO_zalloc
-# wrappers (or, depending on the exact libcrypto build, malloc/realloc
-# called directly from a caller those wrappers were inlined into) and kept
-# alive for the lifetime of the process by libcrypto's own internal
-# static/thread-local state; they are only released by an explicit
-# OPENSSL_cleanup() call, which this codebase does not make (calling it
-# unconditionally at process exit is not safe in a library meant to be
-# embedded in a larger application that may still have other OpenSSL
-# handles in use). They are not leaks, matching the same category already
-# documented in tests/ctls/openssl_internal.supp (this file's origin) and
-# tests/chttpclient/ld_so_dlopen.supp (glibc's own NSS module loading).
+# These blocks are allocated through OpenSSL's own CRYPTO_malloc/CRYPTO_zalloc
+# wrappers and kept alive for the lifetime of the process by libcrypto's own
+# internal static and thread-local state; they are only released by an
+# explicit OPENSSL_cleanup() call, which this codebase does not make (calling
+# it unconditionally at process exit is not safe in a library meant to be
+# embedded in a larger application that may still have other OpenSSL handles
+# in use). They are not leaks, matching the same category already documented
+# in ld_so_dlopen.supp for glibc's own NSS module loading.
 #
-# Matched by the allocation's own ORIGIN LIBRARY rather than a specific
-# wrapper function name: whether CRYPTO_malloc/CRYPTO_zalloc/CRYPTO_strdup/
+# Matched by the allocation's own ORIGIN LIBRARY rather than by a wrapper
+# function name. Whether CRYPTO_malloc/CRYPTO_zalloc/CRYPTO_strdup/
 # CRYPTO_strndup/BN_MONT_CTX_new/OPENSSL_sk_deep_copy (and others) show up as
-# their own separate frame between malloc/realloc and the rest of the stack,
-# or get inlined away entirely, is a distro/compiler/optimization-level
-# choice of however that particular libcrypto.so.3 was built, not something
-# this codebase controls or can rely on being stable across environments;
-# confirmed directly (same libcrypto version and test, different distro
-# builds) to vary exactly this way. Any "still reachable" block whose
-# backtrace includes at least one frame inside libcrypto.so.3 or
-# libssl.so.3 is, by construction, memory this codebase's own code did not
-# allocate and cannot safely free, regardless of which of OpenSSL's own many
-# internal call paths produced it or how many of its own wrapper frames that
-# particular build happened to inline away.
+# their own frame between malloc/realloc and the rest of the stack, or get
+# inlined away entirely, is a choice of however that particular libcrypto.so.3
+# was built, not something this codebase controls; the one frame that is
+# always present regardless is that the caller of malloc/realloc lives in
+# libcrypto.so.3, which is exactly what these rules require. A block libssl
+# asks for is covered by the same rules, because libssl allocates through
+# CRYPTO_malloc, which lives in libcrypto.
+#
+# That frame is pinned to position one, immediately above the allocator,
+# deliberately: a rule that merely requires a libcrypto frame SOMEWHERE in the
+# stack also matches a block THIS PROJECT's own code allocates while running
+# underneath libcrypto, which ctls.c does every time OpenSSL invokes its SNI
+# or ALPN callback. Such a block is this project's to account for, and these
+# rules leave it reported.
 {
-   openssl_internal_still_reachable_via_libcrypto
+   openssl_internal_still_reachable_malloc_from_libcrypto
    Memcheck:Leak
    match-leak-kinds: reachable
-   ...
+   fun:malloc
    obj:*/libcrypto.so.3
    ...
 }
 {
-   openssl_internal_still_reachable_via_libssl
+   openssl_internal_still_reachable_realloc_from_libcrypto
    Memcheck:Leak
    match-leak-kinds: reachable
-   ...
-   obj:*/libssl.so.3
+   fun:realloc
+   obj:*/libcrypto.so.3
    ...
 }

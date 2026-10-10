@@ -23,26 +23,30 @@ SOFTWARE.
 */
 
 /*
- * Differential tests: chttp1_parser.c cross-checked against picohttpparser
- * (vendored under picohttpparser/, an independent, production-deployed
- * HTTP/1.x parser used by the h2o web server), on the same raw byte
- * sequences. Two independently written parsers agreeing on request/response
- * line extraction, header extraction, and chunked-body decoding is much
- * stronger evidence against a subtle framing bug (an off-by-one in chunk-size
- * parsing, a header-value trimming mistake, and so on) than either parser's
- * own self-consistent test suite alone.
+ * Differential tests, which cross-check chttp1_parser.c against
+ * picohttpparser on the same raw byte sequences. picohttpparser is vendored
+ * under picohttpparser/; it is a separate HTTP/1.x parser that the h2o web
+ * server runs in production.
  *
- * Scope: picohttpparser only parses request/status lines, headers, and
- * decodes chunked-body octets; it does not itself enforce this project's own
- * additional RFC 7230 SS3.3.1 hardening (rejecting "chunked" unless it is the
- * final Transfer-Encoding token, the request/response framing asymmetry for
- * a non-chunked-final Transfer-Encoding, and so on), so that hardening is
- * intentionally out of scope for this file and stays covered by its own
- * dedicated regression tests in tests_parser.c. This file only compares the
- * two parsers on messages both are expected to accept.
+ * When two parsers that different people wrote agree on the extraction of a
+ * request line or a status line, the extraction of the headers, and the
+ * decoding of a chunked body, that agreement is much stronger evidence
+ * against a small framing bug than the self-consistent test suite of either
+ * parser alone. An off-by-one in the parse of a chunk size is one such bug,
+ * and a mistake in how a header value is trimmed is another.
+ *
+ * The scope of this file is narrow. picohttpparser parses only a request
+ * line or a status line and the headers, and it decodes the octets of a
+ * chunked body, but it does not apply the extra hardening of RFC 7230
+ * SS3.3.1 that this project adds: that hardening rejects "chunked" unless it
+ * is the last Transfer-Encoding token, and it also covers the asymmetry
+ * between a request and a response for a Transfer-Encoding that does not end
+ * in chunked. That hardening is deliberately out of scope here, and its own
+ * regression tests in tests_parser.c cover it, so this file compares the two
+ * parsers only on messages that both are expected to accept.
  */
 
-#include <chttp1_parser.h>
+#include <internal/chttp1_parser.h>
 #include <string.h>
 
 #include "../tau/tau.h"
@@ -118,9 +122,9 @@ static int c_on_message_complete(chttp1_parser_t *p) {
   return 0;
 }
 
-/* Static storage duration: chttp1_parser_init{,_request} only borrows the
- * settings pointer rather than copying it, matching tests_parser.c's own
- * identical rationale. */
+/* Static storage duration, because chttp1_parser_init{,_request} only
+ * borrows the settings pointer instead of copying it; tests_parser.c does the
+ * same for the same reason. */
 static const chttp1_settings_t g_response_settings = {
     .on_header = c_on_header,
     .on_headers_complete = c_on_headers_complete,
@@ -136,8 +140,9 @@ static const chttp1_settings_t g_request_settings = {
     .on_message_complete = c_on_message_complete,
 };
 
-/* Both parsers must agree on the exact set of (name, value) pairs and their
- * order; a differing header count or any mismatched pair fails the check. */
+/* Both parsers must agree on the exact set of (name, value) pairs and on
+ * their order, so a header count that differs fails the check, and so does
+ * any pair that does not match. */
 static bool headers_match(const chttp1_ctx_t *c1,
                           const struct phr_header *phr_headers,
                           size_t phr_num_headers) {
@@ -263,9 +268,10 @@ TEST(response_differential, http_1_0_redirect) {
 /*                    CHUNKED BODY DECODING                                   */
 /* ========================================================================== */
 
-/* Decodes chunked_body (headers already stripped) via picohttpparser, and
- * decodes the same bytes, framed behind a minimal chunked response, via
- * chttp1_parser; both decoded bodies must come out byte-identical. */
+/* This decodes chunked_body, whose headers are already stripped, with
+ * picohttpparser, and then decodes the same bytes with chttp1_parser behind a
+ * small chunked response. The two decoded bodies must be identical, byte for
+ * byte. */
 static void check_chunked(const char *chunked_body) {
   size_t chunked_len = strlen(chunked_body);
 

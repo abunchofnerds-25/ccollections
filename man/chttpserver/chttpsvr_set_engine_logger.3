@@ -5,41 +5,49 @@ chttpsvr_set_engine_logger \- set the logger for engine-level diagnostics
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 ccol_retval_t chttpsvr_set_engine_logger(clog cl);
 .fi
 .SH DESCRIPTION
 .nf
 Derives a child logger from cl, adds the field
-component=http-server-engine, and installs it as the shared reactor's
-diagnostics logger.  Any
-previously installed engine logger is closed.
+component=http-server-engine to it, and installs it as the diagnostics
+logger of the shared reactor.  It closes the logger derived by an
+earlier call and, when there is one, the fallback logger of a running
+engine.
 
 The reactor logs to this handle at exactly three points: a TLS
-handshake failure, a listen-socket bind failure, and each idle-timeout
-sweep pass that closes one or more connections.  If no engine logger
-has been installed when the engine first starts, a fallback logger
-(fd 2, level CLOG_FATAL) is installed automatically, mirroring
-ccol_create_chttpsvr's own internal stderr/FATAL-only logger; since all
-three diagnostic points above log below CLOG_FATAL, that fallback
-logger's min_level filters every one of them out, so it is silent in
-practice unless this function is used to install a more verbose one.
+handshake failure, a listen-socket bind failure, and each pass of the
+idle-timeout sweep that closes one or more connections.  When no
+logger from this function is in place as the engine starts, the engine
+installs a fallback logger automatically, which writes to fd 2 at
+level CLOG_FATAL, like the internal stderr-only, FATAL-only logger of
+ccol_create_chttpsvr.  All three diagnostic points above log below
+CLOG_FATAL, so the min_level of that fallback logger filters every one
+of them out, and the fallback logger is silent in practice.  Use this
+function to install a more informative logger.
 
-May be called at any time, including before the first chttpsvr_start,
-while the reactor is already running, or after a full engine stop; the
-reactor's own diagnostics logger is scoped to the reactor's lifetime
-(see chttpsvr_engine_stop), so a full stop/restart cycle requires
-calling this again if engine-level logging is still wanted afterward.
+You can call this function at any time: before the first
+chttpsvr_start, while the reactor is already running, and after a
+full engine stop.  The child logger serves the currently running
+reactor, if there is one, and every reactor that a later
+chttpsvr_start brings up after a full engine stop, until another call
+of this function replaces it.
 
-cl must not be CLOG_INVALID; the derived child logger is owned by the
-engine and must not be closed by the caller.
+cl must not be CLOG_INVALID.  The library owns the derived child
+logger and closes it when another call replaces it, or at process
+exit or library unload when no engine is running at that point; the
+caller must not close it.  The caller keeps ownership of cl and may
+close cl at any time, because the child logger is a handle of its own
+and keeps the destination of cl open for as long as it lives.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success on success.
-ccol_invalid_args if cl is CLOG_INVALID.
-ccol_not_enough_memory if the child logger cannot be allocated.
+ccol_invalid_args when cl is CLOG_INVALID.
+ccol_not_enough_memory when the child logger cannot be
+                  allocated.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_start (3),

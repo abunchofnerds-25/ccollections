@@ -1,28 +1,30 @@
-.TH CSTR_INIT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH CSTR_INIT 3 "2026-09-28" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cstr_init \- initialise a declared cstr using default allocators
+cstr_init \- initialise a declared cstr with the default allocators
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 cstr_init(s, initial);
 .fi
 .SH DESCRIPTION
 .nf
-Calls cstring_create() to initialise the already-declared cstr variable s
-with the given initial content. Calls ccol_fatal_err() if creation fails.
+This macro calls cstring_create() to initialise the cstr variable s with
+the initial content that you give. You must declare s first. It calls
+ccol_fatal_err() if the creation fails.
 .fi
 .SH PARAMETERS
 .nf
-s        cstr variable to initialise (must have been declared)
+s        cstr lvalue to initialise (you must declare it first); the macro
+         assigns it once, after the string is created
 initial  Initial content (C string or NULL for empty string)
 .fi
 .SH NOTES
 .nf
-Calls ccol_fatal_err() on allocation failure; use cstring_create() directly
-if you need to handle errors gracefully
+This macro calls ccol_fatal_err() when an allocation fails; call
+cstring_create() directly when you want to handle an error yourself
 .fi
 .SH EXAMPLES
 .nf

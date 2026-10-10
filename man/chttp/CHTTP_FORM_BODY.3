@@ -5,16 +5,17 @@ CHTTP_FORM_BODY \- construct a chttp_request_body_t for URL-encoded form content
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttp.h>
+#include <ccollections/chttp.h>
 
 CHTTP_FORM_BODY(d, n)
 .fi
 .SH DESCRIPTION
 .nf
-Expands to a chttp_request_body_t initialiser with Content-Type set to
-"application/x-www-form-urlencoded", data pointer d, and byte length n.
-The caller is responsible for percent-encoding the key/value pairs
-before passing them to this macro.
+This macro expands to an initializer for a chttp_request_body_t that
+sets Content-Type to "application/x-www-form-urlencoded", the data
+pointer to d and the byte length to n.  The caller must apply the
+percent encoding to the pairs of a key and a value before it gives
+them to this macro.
 .fi
 .SH "SEE ALSO"
 .BR CHTTP_JSON_BODY (3),

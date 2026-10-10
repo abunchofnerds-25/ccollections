@@ -5,13 +5,13 @@ cstr_ends_with \- check whether the string ends with a suffix
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 cstr_ends_with(s, sfx);
 .fi
 .SH DESCRIPTION
 .nf
-Pass-through wrapper for cstring_ends_with().
+This macro is a pass-through wrapper for cstring_ends_with().
 .fi
 .SH PARAMETERS
 .nf
@@ -20,7 +20,7 @@ sfx   Suffix string
 .fi
 .SH RETURN VALUE
 .nf
-true if the string ends with sfx, false otherwise
+true if the string ends with sfx, false if it does not
 .fi
 .SH "SEE ALSO"
 .BR cstring_ends_with (3),

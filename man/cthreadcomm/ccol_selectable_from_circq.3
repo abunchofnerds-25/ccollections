@@ -5,31 +5,34 @@ ccol_selectable_from_circq \- build a ccol_selectable from a ccol_circular_queue
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadcomm.h>
+#include <ccollections/cthreadcomm.h>
 
 ccol_selectable_from_circq(q, dir);
 .fi
 .SH DESCRIPTION
 .nf
-Constructs a ccol_selectable tagged-union value of type ccol_selectable_circq
-wrapping the given ccol_circular_queue pointer with the specified direction.
+This macro builds a ccol_selectable value, a tagged union whose type
+here is ccol_selectable_circq, that wraps the ccol_circular_queue
+pointer that you give, with the direction that you give.
 
   ccol_select_read; wait for at least one message to arrive (read-wait)
   ccol_select_write; wait until the queue has room for a send (write-wait)
 
-This is a macro that expands to a compound literal; it has no run-time
-overhead beyond loading the pointer.
+This macro expands to a compound literal, so it costs nothing at run
+time beyond the load of the pointer.
 
 ccol_select() only reports readiness for either direction; it never
-consumes or reserves anything itself.  The caller must subsequently call
-ccol_circq_try_recv_zc() (read-direction win) or ccol_circq_try_send_zc()
-(write-direction win) itself, since nothing is claimed or reserved by
-ccol_select() (TOCTOU, same as POSIX select(2)).
+consumes or reserves anything itself, so the caller must then make the
+call itself: ccol_circq_try_recv_zc() when the read direction wins,
+and ccol_circq_try_send_zc() when the write direction wins. Because
+ccol_select() claims nothing and reserves nothing, there is a
+time-of-check to time-of-use gap, the same as the one in POSIX
+select(2).
 .fi
 .SH PARAMETERS
 .nf
-q    ccol_circular_queue pointer to wrap.  Passing NULL produces a selectable
-     that ccol_select() will reject with ccol_invalid_args.
+q    ccol_circular_queue pointer to wrap. A NULL value makes a
+     selectable that ccol_select() rejects with ccol_invalid_args.
 dir  ccol_select_read or ccol_select_write.
 .fi
 .SH RETURN VALUE
@@ -46,8 +49,8 @@ size_t idx;
 ccol_select_va(&idx,
     ccol_selectable_from_circq(q0, ccol_select_read),
     ccol_selectable_from_circq(q1, ccol_select_read));
-/* on ccol_success, claim the message via ccol_circq_try_recv_zc() on
-   whichever of q0/q1 idx points at */
+/* on ccol_success, claim the message with ccol_circq_try_recv_zc() on
+   whichever of q0 and q1 idx points at */
 
 /* Mixed: wait until q0 has room to send or q1 has a message: */
 ccol_select_va(&idx,

@@ -5,7 +5,7 @@ chttpsvr_resp_write_json \- append JSON to the response body
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 ccol_retval_t chttpsvr_resp_write_json(chttpsvr_resp *resp,
                                         const char *json, size_t len);
@@ -13,20 +13,24 @@ ccol_retval_t chttpsvr_resp_write_json(chttpsvr_resp *resp,
 .SH DESCRIPTION
 .nf
 Appends len bytes of json to the response body and then sets the
-Content-Type response header to "application/json".  The body is
-written first so that an OOM failure on body allocation leaves resp
-completely unchanged (no header is installed, no bytes are buffered).
+Content-Type response header to "application/json".  Because the body
+is written first, resp does not change at all when the body
+allocation runs out of memory: no header is installed and no bytes
+are buffered.
 
-Returns ccol_invalid_args immediately (without modifying resp) when
-resp or json is NULL, or when len is 0.  A zero-length JSON body with
-Content-Type set is semantically invalid, so the function rejects it
-rather than silently setting the header with no body bytes.
+When resp or json is NULL, or when len is 0, it returns
+ccol_invalid_args at once and changes nothing in resp.  A zero-length
+JSON body with the Content-Type header set has no valid meaning, so
+the function rejects it instead of silently setting the header with
+no body bytes.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success           - Body bytes appended and Content-Type header set.
+ccol_success           - The body bytes were appended and the
+                         Content-Type header was set.
 ccol_invalid_args      - resp or json is NULL, or len is 0.
-ccol_not_enough_memory - Body or header buffer allocation failed.
+ccol_not_enough_memory - The allocation of the body buffer or of the
+                         header buffer failed.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_resp_write (3),

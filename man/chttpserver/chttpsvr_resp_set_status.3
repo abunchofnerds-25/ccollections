@@ -5,27 +5,31 @@ chttpsvr_resp_set_status \- set the HTTP response status code
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 void chttpsvr_resp_set_status(chttpsvr_resp *resp, int status_code);
 .fi
 .SH DESCRIPTION
 .nf
-Sets the HTTP status code for the response.  The default is 200.
+Sets the HTTP status code for the response; the default is 200.
 
-status_code is stored verbatim, with no validation here.  A value
-outside the valid HTTP status-code range 100-999 is sent as 500
-Internal Server Error instead when the response is sent; the stored
-value itself is not altered.
+The library stores status_code exactly as given and does no checking
+here.  When the server sends the response, a value outside the valid
+HTTP status-code range of 100 to 999 goes on the wire as 500 Internal
+Server Error instead, although the stored value itself does not
+change.
 .fi
 .SH NOTES
 .nf
-Setting status_code to a 1xx (informational), 204, or 304 value
-suppresses the response body on the wire regardless of whatever was
-already written via chttpsvr_resp_write/_write_str/_printf/_write_json
-(RFC 9110 6.4.1/15.2.1/15.4.5: none of the three may ever carry one);
-a 1xx or 204 additionally never carries an auto-injected Content-Length
-header.  See chttpsvr_resp_write(3)'s own NOTES section.
+A status_code of 1xx (informational), 204 or 304 drops the response
+body on the wire, including whatever chttpsvr_resp_write,
+chttpsvr_resp_write_str, chttpsvr_resp_printf or
+chttpsvr_resp_write_json has already written, because RFC 9110 6.4.1,
+15.2.1 and 15.4.5 forbid all three of these codes from ever carrying a
+body.  None of the three gets an automatic Content-Length header,
+though a 304 carries the one that the handler set, if any.  A 1xx also
+gets no automatic Date header.  See the NOTES section of
+chttpsvr_resp_write(3).
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_resp_set_header (3),

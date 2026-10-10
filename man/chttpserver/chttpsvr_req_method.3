@@ -5,30 +5,31 @@ chttpsvr_req_method \- return the HTTP method of a request
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 chttp_method_t chttpsvr_req_method(const chttpsvr_req *req);
 .fi
 .SH DESCRIPTION
 .nf
 Returns the HTTP method of req as a chttp_method_t enum value.  The
-return value is always one of the seven concrete methods (CHTTP_GET,
-CHTTP_POST, CHTTP_PUT, CHTTP_DELETE, CHTTP_PATCH, CHTTP_HEAD,
-CHTTP_OPTIONS); CHTTP_ANY is never returned, even when the matched
-route was registered with CHTTP_ANY.
+value is always one of the seven real methods (CHTTP_GET, CHTTP_POST,
+CHTTP_PUT, CHTTP_DELETE, CHTTP_PATCH, CHTTP_HEAD and CHTTP_OPTIONS);
+the function never returns CHTTP_ANY, even when the route that matched
+was registered with CHTTP_ANY.
 
 A request whose method the server does not recognize at all (a WebDAV
-verb such as PROPFIND, TRACE, CONNECT, a custom verb, ...) never
-reaches any handler in the first place, including one registered with
-CHTTP_ANY: it is rejected with 501 Not Implemented before routing ever
-runs (see chttpsvr_register_handler(3)'s own notes on CHTTP_ANY).  This
-is what makes "always one of the seven concrete methods" an exhaustive
-guarantee rather than merely the common case.
+verb such as PROPFIND, a verb such as TRACE or CONNECT, or a custom
+verb) never reaches any handler, including one registered with
+CHTTP_ANY: the server rejects it with 501 Not Implemented before
+routing runs (see the notes on CHTTP_ANY in
+chttpsvr_register_handler(3)).  This is what makes "always one of the
+seven real methods" a complete guarantee rather than just the common
+case.
 
-When req is NULL the function returns CHTTP_GET.  Unlike most other
-request accessors (which return NULL for a NULL req), chttp_method_t is
-an integer enum with no sentinel value, so callers must guard against
-NULL before calling this function if req may be NULL.
+The function returns CHTTP_GET when req is NULL.  Most other request
+accessors return NULL for a NULL req, but chttp_method_t is an integer
+enum with no sentinel value, so this one cannot.  If req can be NULL,
+check for NULL before calling this function.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_req_path (3),

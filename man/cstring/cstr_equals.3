@@ -5,13 +5,13 @@ cstr_equals \- check whether the string equals a C string
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 cstr_equals(s, str);
 .fi
 .SH DESCRIPTION
 .nf
-Pass-through wrapper for cstring_equals().
+This macro is a pass-through wrapper for cstring_equals().
 .fi
 .SH PARAMETERS
 .nf
@@ -20,7 +20,7 @@ str   C string to compare against
 .fi
 .SH RETURN VALUE
 .nf
-true if contents are equal, false otherwise
+true if the two contents are equal, false if they are not
 .fi
 .SH "SEE ALSO"
 .BR cstring_equals (3),

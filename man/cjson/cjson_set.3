@@ -5,44 +5,78 @@ cjson_set \- write a C scalar to the DOM leaf at a dot-separated path
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cjson.h>
+#include <ccollections/cjson.h>
 
 ccol_retval_t cjson_set(cjson root, const char *path, val);
 .fi
 .SH DESCRIPTION
 .nf
-Expands to a call to _cjson_set_typed() with the type and raw value
-of val derived at compile time via _Generic.
+The macro finds the type and the raw value of val at compile time
+with _Generic, and writes the value as a scalar to the leaf node that
+path addresses.
 
 Accepted C types for val:
   bool                       -> CJSON_BOOL
-  any integer type           -> CJSON_INTEGER (stored as long long)
+  any integer type           -> CJSON_INTEGER (stored as long long);
+                                an unsigned value > LLONG_MAX
+                                -> CJSON_FLOAT (stored as double)
   float / double             -> CJSON_FLOAT  (stored as double)
   char * / const char *      -> CJSON_STRING  (strdup'd copy)
+  char array (char buf[N])   -> CJSON_STRING
   string literal ("...")     -> CJSON_STRING
-  NULL                       -> CJSON_NULL
+  NULL, C23 nullptr          -> CJSON_NULL
 
-Any other C type (long double, a struct, or any pointer type other
-than char * / const char *) is rejected: cjson_set
-returns ccol_invalid_args and the target leaf is left untouched
-(created leaves are not left behind as CJSON_NULL for an unsupported
-type; an existing leaf's value is not overwritten).
+Before C23 the macro true is the int 1, so cjson_set(doc, k, true)
+stores the CJSON_INTEGER 1; write (bool)true for a CJSON_BOOL.  In C23
+true has the type bool and needs no cast. The library headers do not
+include <stdbool.h> under C23, but a C library whose <stdbool.h> still
+defines true as 1 there (FreeBSD 14) brings the int back into every
+file that includes it.
 
-A void * value that is not NULL is rejected the same way
-(ccol_invalid_args), rather than being silently written as
-CJSON_NULL: only a genuine NULL value is treated as an intentional
-null, even though void * is also the compile-time type of the bare
-NULL literal.
+The macro copies val into a local whose type is the type of val after
+array-to-pointer conversion, with top-level qualifiers removed.  A
+char array, such as a buffer that snprintf(3) filled, therefore
+arrives as a pointer to its first character, and a pointer that is
+itself const, such as a static const char *const, arrives as an
+ordinary pointer; each one gives the text of the string.
 
-Signed integer types are sign-extended to long long correctly.
-Unsigned integers in the range [0, LLONG_MAX] round-trip faithfully.
-Unsigned values > LLONG_MAX are stored with their bit pattern
-reinterpreted as a signed long long.
+cjson_set rejects all other C types, including long double, a struct,
+and all pointer types other than char * and const char *.  For such a
+type, cjson_set gives ccol_invalid_args and does not change the
+target leaf: it neither creates a new leaf nor changes the value of a
+leaf that exists.
 
-The leaf is created if it does not yet exist (its immediate parent
-must already exist).  If the leaf exists its type is changed
-unconditionally: existing array or object subtrees are deep-freed
-before the new value is written.
+cjson_set also rejects a void * value that is not NULL, with
+ccol_invalid_args: only a NULL value writes CJSON_NULL, although
+void * is also the compile-time type of the bare NULL literal.
+
+A char *, const char * or string-literal value must be valid UTF-8.
+JSON text is UTF-8 (RFC 8259 section 8.1), so any other byte sequence
+has no JSON form, and cjson_set returns ccol_invalid_args without
+touching the target leaf, the same behaviour as for a double that is
+not finite.  The same rule holds for the leaf component of the path
+itself, which becomes an object key when the library has to create
+the leaf: every key that the tree holds is valid UTF-8, so the
+library refuses a key that is not instead of storing it.  cjson_get(3)
+and cjson_delete(3) need no matching rule, because they only look a
+component up, and a component that is not valid UTF-8 can never match
+a key that is already there, so they report it as absent.
+
+Signed integer types are sign-extended to long long correctly, and
+unsigned integers in the range [0, LLONG_MAX] round-trip faithfully.
+An unsigned value > LLONG_MAX, which only a 64-bit unsigned type such
+as uint64_t can hold, has no long long form, so the macro stores it
+as the CJSON_FLOAT nearest to it, which is what cjson_parse(3) makes
+of the same decimal literal.  Read such a leaf with
+cjson_double_val(3).  A double holds an integer exactly only up to
+2^53, so the low digits of such a value can be lost.
+
+The macro creates the leaf if it does not exist, but the immediate
+parent of the leaf must exist.  If the leaf exists, the macro updates
+that node in place, so a handle to the node stays valid.  The macro
+gives the node the type of val, whatever its current type is; if the
+node is an array or an object, the macro deep-frees its children
+before it writes the new value.
 .fi
 .SH PARAMETERS
 .nf
@@ -59,9 +93,11 @@ ccol_invalid_args; an empty path or path component (leading,
                      trailing, or consecutive dots), parent type
                      incompatible with the leaf component, a
                      malformed array index (non-numeric, negative,
-                     or bare '#' with no digits), val's C type is
-                     not one of the accepted types listed above, or
-                     val is a void * value that is not NULL.
+                     or bare '#' with no digits), a path component
+                     that is not valid UTF-8, a string value that is
+                     not valid UTF-8, val's C type is not one of the
+                     accepted types listed above, or val is a void *
+                     value that is not NULL.
 ccol_key_not_found; the parent path, or a syntactically valid but
                      out-of-range array index, does not exist.  An
                      array, unlike an object, has no way to
@@ -72,13 +108,14 @@ ccol_container_full; the parent object has already reached its
 .fi
 .SH NOTES
 .nf
-Passing a bool literal requires an explicit cast: (bool)true.
-Without the cast, the integer value 1 is seen instead of _Bool,
-resulting in CJSON_INTEGER rather than CJSON_BOOL.
+A bool literal needs an explicit cast: (bool)true.  Without the cast
+the macro sees the integer value 1, not _Bool, and the result is
+CJSON_INTEGER instead of CJSON_BOOL.
 
-Plain char inherits the platform's default signedness (signed on
-x86/x86-64 Linux, unsigned where -funsigned-char applies, e.g. ARM).
-Use signed char or unsigned char explicitly when portability matters.
+Plain char takes the default signedness of the platform: it is
+signed on x86/x86-64 Linux and unsigned where -funsigned-char
+applies, for example on ARM.  Write signed char or unsigned char
+explicitly when portability is important.
 .fi
 .SH EXAMPLES
 .nf
@@ -95,6 +132,8 @@ cjson_set(doc, "users.#0.deprecated", NULL);
 .fi
 .SH "SEE ALSO"
 .BR cjson_get (3),
-.BR _cjson_set_typed (3),
+.BR cjson_delete (3),
+.BR cjson_double_val (3),
+.BR cjson_create_string (3),
 .BR cjson_dictionary_set (3),
 .BR cjson_list_push (3)

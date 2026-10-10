@@ -5,7 +5,7 @@ ccol_r_mempool_create_from_preallocated_buffer \- create ranged pool from user b
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cmempool.h>
+#include <ccollections/cmempool.h>
 
 ccol_r_mempool *ccol_r_mempool_create_from_preallocated_buffer(
     void *buffer,
@@ -20,17 +20,18 @@ ccol_r_mempool *ccol_r_mempool_create_from_preallocated_buffer(
 .fi
 .SH DESCRIPTION
 .nf
-Creates a ranged memory pool using a user-provided buffer instead of
-allocating sub-pool storage from the heap. The buffer is divided into
-contiguous segments, one per size tier, using the same size/count
-progression as ccol_r_mempool_create(). Useful for embedded systems.
+Creates a ranged memory pool on top of a buffer that the caller gives, so
+no storage for a sub-pool comes from the heap. The library divides the
+buffer into contiguous segments, one for each size tier, with the same
+progression of sizes and counts as ccol_r_mempool_create(). This is
+useful on embedded systems.
 .fi
 .SH PARAMETERS
 .nf
 buffer                     Pointer to preallocated buffer
-buf_size                   Size of buffer in bytes (must match
-                          CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE
-                          exactly)
+buf_size                   Size of buffer in bytes (must match exactly
+                          what CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER
+                          produces for the same parameters)
 smallest_size_power_of_two              Exponent for smallest pool size
 largest_size_power_of_two               Exponent for largest pool size
 number_of_smallest_size_elems_power_of_two  Exponent for smallest pool count
@@ -46,16 +47,26 @@ Returns NULL on failure
 .fi
 .SH NOTES
 .nf
-Buffer size must exactly match CCOL_CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE
-Buffer is not freed by ccol_r_mempool_destroy() (user manages buffer lifetime)
-Pool structs are still allocated via mmgmt_procs
-Buffer contains all sub-pools in adjacent segments
-Returns NULL with error if the buffer is not aligned to at least
-  16 bytes, which is what every entry the pool hands out is
-  aligned to and therefore what entry 0, sitting at the buffer's own
-  address, has to satisfy; a buffer declared via
-  CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER already meets this
-Same power-of-two size/count constraints as ccol_r_mempool_create() apply
+The buffer size must match exactly what
+  CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER produces for the same
+  parameters
+ccol_r_mempool_destroy() does not free the buffer; the caller owns the
+  life of that buffer
+The pool structs still come from mmgmt_procs
+Each sub-pool calls the functions of mmgmt_procs for its dynamic
+fallback entries, and for its own bookkeeping of them, in the middle of
+an update of its own state, with its lock held when it has one. Those
+functions must therefore not call back into this same ranged pool: with
+a lock the call can deadlock, and without one it corrupts that state. An
+allocator built on a pool must draw from a different pool
+The buffer holds every sub-pool in segments that sit next to each other
+The function returns NULL with an error if the buffer is not aligned to
+  at least 16 bytes, which is the alignment that every entry the pool
+  hands out is guaranteed to meet. Entry 0 sits at the address of the
+  buffer itself, so the buffer has to meet it too; a buffer that
+  CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER declares already does
+The same power-of-two limits on size and count as ccol_r_mempool_create()
+  apply here
 .fi
 .SH "SEE ALSO"
 .BR CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER (3),

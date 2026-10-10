@@ -1,0 +1,89 @@
+.TH CVEC_CONSTRUCT_MP_SCOPED 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cvec_construct_mp_scoped \- construct a vector with a custom allocator, destroyed automatically at scope exit
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cvector.h>
+
+cvec_construct_mp_scoped(v, type, mprocs);
+.fi
+.SH DESCRIPTION
+.nf
+This macro declares a vector variable named v that holds elements of the
+given type, creates the vector through mprocs, and adds a cleanup handler
+that destroys the vector when control leaves the scope around it. The
+macro is cvec_construct_mp(3) plus that handler, with one more
+difference: this macro initializes the companion type variables to NULL,
+while cvec_construct_mp(3) deliberately leaves them indeterminate.
+Everything else that cvec_construct_mp(3) documents holds here unchanged,
+including the private copy of the procedure table that the vector keeps
+and the stop of the program through ccol_fatal_err() for a failed
+creation.
+
+The macro initializes the variable to NULL before it creates the vector,
+which makes the handler safe on a path that leaves the block between the
+declaration and a successful creation. The destruction happens on every
+exit from the scope: the closing brace, a return, a break, a continue, or
+a goto out of the block. Because the macro sets the variable to NULL as
+it destroys the vector, an explicit call to cvec_destroy(3) earlier in
+the block frees nothing twice.
+
+The vector goes back through the same procedures that created it, so
+those functions must be callable at the end of the scope.
+.fi
+.SH PARAMETERS
+.nf
+v       Name of the vector variable to declare and create
+type    Element type, for example int, double or struct foo
+mprocs  Pointer to a ccol_memmgmt_procs_t. Its malloc, calloc, realloc
+        and free members must all be set. Pass NULL for the default
+        allocator.
+.fi
+.SH RETURN VALUE
+.nf
+None. The macro expands to declarations and then a statement, not to an
+expression.
+.fi
+.SH NOTES
+.nf
+The macro stops the program through ccol_fatal_err() when it cannot
+create the vector, with a message that names v and the error below it.
+The macro is built on the cleanup attribute, so it needs GCC or Clang.
+On a toolchain that does not have that attribute, use
+cvec_construct_mp(3) with an explicit cvec_destroy(3).
+Because the macro expands to declarations and then a statement, it
+belongs where declarations are legal and cannot be the body of an if or
+a loop without braces.
+The macro pastes v into the names of the companion variables, so v must
+be a plain identifier.
+When the vector holds pointers to heap buffers, the macro does not free
+the elements one by one, so free the element data before you leave the
+scope.
+.fi
+.SH WARNINGS
+.nf
+The vector must not live longer than its scope: do not return v, and do
+not store it anywhere that code reads after the end of the block. When
+the ownership must leave the block, use cvec_construct_mp(3).
+.fi
+.SH EXAMPLES
+.nf
+void process(ccol_memmgmt_procs_t *procs) {
+    cvec_construct_mp_scoped(vec, int, procs);
+
+    cvec_push(vec, 42);
+
+    if (cvec_size(vec) != 1) {
+        return;   /* vec is destroyed here */
+    }
+}                 /* and here */
+.fi
+.SH "SEE ALSO"
+.BR cvec_construct_mp (3),
+.BR cvec_construct_scoped (3),
+.BR cvec_declare_scoped (3),
+.BR cvec_init_mp (3),
+.BR cvec_destroy (3),
+.BR cvector_create_full (3)

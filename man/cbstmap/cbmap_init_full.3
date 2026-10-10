@@ -1,0 +1,91 @@
+.TH CBMAP_INIT_FULL 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cbmap_init_full \- create an ordered map with a custom allocator and comparison into an already declared handle
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cbstmap.h>
+
+cbmap_init_full(hm_name, mmgmt_procs, custom_comparison_proc);
+.fi
+.SH DESCRIPTION
+.nf
+Creates an ordered map that takes all of its memory from mmgmt_procs and
+orders its keys with custom_comparison_proc, and assigns that map to
+hm_name. The caller must declare the handle first, with cbmap_declare(3) or
+cbmap_declare_scoped(3). The key type and the value type do not come to
+this macro as arguments: the macro reads them from the companion type
+variables that the declare macro created.
+
+This is the widest of the init macros. cbmap_init(3) is this macro with the
+default allocator and the default order, cbmap_init_mp(3) gives only an
+allocator, and cbmap_init_cc(3) gives only a comparison procedure. Each of
+the two arguments can be NULL, which selects the matching default, so this
+one macro covers every combination.
+
+The one-step equivalents are cbmap_construct_full(3) and
+cbmap_construct_full_scoped(3).
+.fi
+.SH PARAMETERS
+.nf
+hm_name                 The map handle that the caller declared before,
+                        into which the macro creates the map
+mmgmt_procs             Pointer to a ccol_memmgmt_procs_t, or NULL for the
+                        default allocator
+custom_comparison_proc  A ccol_comparison_proc_t, or NULL for the
+                        default order for the declared key type
+.fi
+.SH RETURN VALUE
+.nf
+None. This macro expands to a statement and does not expand to an
+expression.
+.fi
+.SH "CUSTOM COMPARISON"
+.nf
+The procedure gets pointers to two keys. It returns a negative value when
+the first key orders before the second key, a positive value when the
+first key orders after the second key, and zero when the map must treat
+the two keys as the same key. A zero makes a call an update instead of an
+insert, so the procedure defines both key equality and key order.
+
+The procedure must give a strict weak order over the key type, and that
+order must not change while the map holds elements. Because the procedure
+gets two bare pointers and no lengths, it can only read a width that the
+declared key type fixes. The map validates the width of an incoming key
+against that type and aligns its stored keys for that type.
+cbmap_create_full(3) describes the default orders that a procedure replaces.
+.fi
+.SH NOTES
+.nf
+The macro stops the program through ccol_fatal_err() if the creation fails
+When the caller gives a ccol_memmgmt_procs_t, none of its four members
+may be NULL. The map copies the procedures into itself, but the
+procedures and the comparison procedure must stay callable for the whole
+life of the map
+The walk visits the elements in ascending key order, by the order that the
+map got. cbmap_begin_iter(3) describes that contract
+Only the key type reaches the container; only the type-inferred macros read
+the declared value type
+.fi
+.SH EXAMPLES
+.nf
+ccol_memmgmt_procs_t procs = {
+    .malloc = my_malloc, .calloc = my_calloc,
+    .realloc = my_realloc, .free = my_free,
+};
+int version_cmp(const void *a, const void *b);
+
+cbmap_declare(releases, version, char *);
+cbmap_init_full(releases, &procs, version_cmp);
+cbmap_destroy(releases);
+.fi
+.SH "SEE ALSO"
+.BR cbmap_init (3),
+.BR cbmap_init_mp (3),
+.BR cbmap_init_cc (3),
+.BR cbmap_declare (3),
+.BR cbmap_construct_full (3),
+.BR cbmap_begin_iter (3),
+.BR cbmap_create_full (3),
+.BR cbmap_destroy (3)

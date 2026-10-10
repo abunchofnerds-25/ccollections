@@ -1,53 +1,58 @@
 .TH CYAML_GET 3 "2026-09-06" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cyaml_get \- navigate to a DOM node via a dot-separated path
+cyaml_get \- navigate to a DOM node with a dot-separated path
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cyaml.h>
+#include <ccollections/cyaml.h>
 
 cyaml cyaml_get(cyaml root, const char *path);
 .fi
 .SH DESCRIPTION
 .nf
-Thin wrapper around _cyaml_get().  Navigate from root through a
-dot-separated path and return the node at the destination.
+Navigate from root through a dot-separated path and return the node at
+the destination.
 
 Path syntax:
-  - Components are separated by dots ('.').
-  - A component beginning with '#' followed by one or more decimal
-    digits indexes into a CYAML_LIST by position (e.g. "#0" is
-    the first element).
-  - All other components are treated as literal CYAML_DICTIONARY keys.
-  - A bare '#' with no trailing digits has no valid index
-    interpretation: when the current node is a CYAML_DICTIONARY it is
-    used as a literal key (e.g. addressing a key literally named
-    "#"), exactly like any other non-"#N" component; when the current
-    node is a CYAML_LIST, there is no literal-key fallback for a list
-    at all, so navigation fails and NULL is returned, matching cjson's
-    own bare-'#' rejection for that case.
-  - Escape sequences: '\e.' -> literal '.' in the key (not a
-    separator); '\e\e' -> literal '\e' in the key.  A '\e' before any
-    other character is left unchanged.
-  - An empty component (nothing between two dots, or a leading or
-    trailing dot) has no valid interpretation as either a literal
-    empty-string key or a "#N" index, at any position in the path;
-    navigation fails.
+  - A dot ('.') separates the components.
+  - A component that starts with '#' followed by one or more decimal
+    digits indexes into a CYAML_LIST by position; for example, "#0"
+    is the first element.
+  - The macro reads every other component as a literal
+    CYAML_DICTIONARY key.
+  - A bare '#' with no digits after it has no valid meaning as an
+    index.  When the current node is a CYAML_DICTIONARY, the macro
+    uses it as a literal key, exactly as it uses any other component
+    that is not "#N", so such a path addresses a key with the literal
+    name "#".  When the current node is a CYAML_LIST, there is no
+    literal-key fallback for a list at all, so the navigation fails
+    and the macro returns NULL.  cjson rejects a bare '#' in that case
+    in the same way.
+  - Escape sequences: '\e.' gives a literal '.' in the key instead of
+    a separator, and '\e\e' gives a literal '\e' in the key.  A '\e'
+    before any other character stays unchanged.
+  - An empty component (nothing between two dots, a leading dot, or a
+    trailing dot) has no valid meaning, either as a literal
+    empty-string key or as a "#N" index.  This holds at every position
+    in the path, and the navigation fails.
+  - A NULL or empty path identifies root itself, and the macro then
+    gives root.
+  - A NULL root identifies no node, and the macro then gives NULL.
 
-The returned reference is NON-OWNING.  It becomes invalid if the
-containing node is mutated or destroyed.
+The returned reference is NON-OWNING and becomes invalid when the
+caller changes or destroys the node that holds it.
 .fi
 .SH PARAMETERS
 .nf
-root  Root cyaml handle (typically CYAML_DICTIONARY or CYAML_LIST).
-path  Dot-separated path string literal or char *.
+root  Root cyaml handle, normally a CYAML_DICTIONARY or a CYAML_LIST.
+path  Dot-separated path, given as a string literal or a char *.
 .fi
 .SH RETURN VALUE
 .nf
-Non-owning cyaml handle at the target, or NULL if root is NULL, any
-component along the path is missing, the node type is incompatible,
-or the path contains an empty component.
+A non-owning cyaml handle at the target, or NULL when root is NULL, when
+a component along the path is missing, when the node type does not
+fit, or when the path holds an empty component.
 .fi
 .SH EXAMPLES
 .nf
@@ -55,9 +60,8 @@ cyaml port = cyaml_get(doc, "server.ports.#0");
 if (cyaml_type(port) == CYAML_INTEGER)
     printf("%lld\en", cyaml_int_val(port));
 
-/* Top-level access with empty path returns root itself */
+/* An empty path gives root itself */
 cyaml same = cyaml_get(doc, "");
 .fi
 .SH "SEE ALSO"
-.BR cyaml_set (3),
-.BR _cyaml_get (3)
+.BR cyaml_set (3)

@@ -5,18 +5,20 @@ CHTTP_BODY \- construct a chttp_request_body_t with an explicit content type
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttp.h>
+#include <ccollections/chttp.h>
 
 CHTTP_BODY(data_ptr, data_len, content_type_str)
 .fi
 .SH DESCRIPTION
 .nf
-Expands to a chttp_request_body_t initialiser with the given raw data
-pointer, length, and Content-Type string.
+This macro expands to an initializer for a chttp_request_body_t from
+the raw data pointer, the length and the Content-Type string that you
+give it.
 
-data_ptr       Pointer to the body bytes (not copied by the macro).
-data_len       Length of the body in bytes.
-content_type_str  Content-Type header value string.
+data_ptr       A pointer to the body bytes. The macro does not copy
+               them.
+data_len       The length of the body in bytes.
+content_type_str  The value string of the Content-Type header.
 .fi
 .SH EXAMPLES
 .nf

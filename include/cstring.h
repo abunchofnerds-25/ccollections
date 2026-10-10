@@ -24,42 +24,48 @@ SOFTWARE.
 
 #pragma once
 
-#include <cvector.h>
+#include "cvector.h"
 
-/* Everything declared from here to the end of this header is part of the
- * public ABI of libccollections and is exported from the shared library.
- * The library itself is built with -fvisibility=hidden, so any function or
- * object that is not covered by one of these blocks stays internal to the
- * library, is absent from its dynamic symbol table, and cannot be
- * interposed by, or collide with, a symbol of the same name in the
- * application that links against it. */
+/* Everything that this header declares from here to the end of the file is
+ * part of the public ABI of libccollections, and the shared library exports
+ * all of it. The library is built with -fvisibility=hidden, so any function
+ * or object that one of these blocks does not cover stays internal to the
+ * library: it is absent from the dynamic symbol table of the library, the
+ * application that links against the library cannot interpose it, and a
+ * symbol of the same name in that application cannot collide with it. */
 #pragma GCC visibility push(default)
 
 /**
  * @file cstring.h
  * @brief Dynamic string container with a rich set of string operations
  *
- * Provides a heap-allocated, automatically resizing string container.
- * The internal buffer always holds a null-terminated C string and is
- * kept at a power-of-two capacity (minimum 16 bytes).
+ * This module gives you a string container on the heap that changes its own
+ * size when it needs more room. The internal buffer always holds a
+ * null-terminated C string, and its capacity is always a power of two, with
+ * a smallest capacity of 16 bytes.
  *
  * Key features:
- * - Automatic capacity management (grows to next power of two when needed)
- * - Full set of common string operations (append, prepend, insert, find, etc.)
- * - Custom memory management support
- * - RAII-style automatic destruction via _ccol_destructor attribute
- * - Split returns a cvec of cstr for easy iteration
+ * - The container manages its own capacity and grows to the next power of
+ *   two when it needs more room.
+ * - A full set of common string operations: append, prepend, insert, find
+ *   and others.
+ * - Support for custom memory management
+ * - RAII-style automatic destruction with the _ccol_destructor attribute
+ * - Split gives back a cvec of cstr, which is easy to iterate over
  *
  * Integration with maps (chashmap / cbstmap):
- * cstr is NOT a recognised key or value type in the map containers. Those
- * containers understand char * keys natively (content-based hashing, SSO).
- * Use cstring_c_str() to obtain a char * view and pass that as the key:
+ * cstr is NOT a key type or a value type that the map containers know. Those
+ * containers understand char * keys directly: they hash such a key by its
+ * content and keep a short key inside the entry itself, which is the small
+ * string optimisation (SSO). Call cstring_c_str() to get a char * view and
+ * give that as the key:
  *
  *     char *k = (char *)cstring_c_str(my_cstr);
  *     chmap_insert(map, k, value);
  *
- * The map copies the string content immediately, so the cstr can be
- * mutated or destroyed afterwards without affecting the stored entry.
+ * The map copies the content of the string immediately, so you can change or
+ * destroy the cstr afterwards without affecting the entry that the map
+ * holds.
  */
 
 /** @brief Opaque string structure */
@@ -75,15 +81,17 @@ typedef cstring *cstr;
 /**
  * @brief Create a string with custom memory management
  *
- * Allocates and initialises a new cstring. If @p initial is non-NULL its
- * content is copied in; passing NULL creates an empty string.  The internal
- * buffer capacity is rounded up to the nearest power of two (minimum 16).
+ * This function allocates and initialises a new cstring. If @p initial is not
+ * NULL, the function copies the content of @p initial into the new string,
+ * and a NULL value for @p initial creates an empty string. The function
+ * rounds the capacity of the internal buffer up to the nearest power of two,
+ * with a smallest capacity of 16.
  *
  * @param initial  Initial C string content, or NULL for an empty string
  * @param m_procs  Custom memory management procedures, or NULL for default
  * @param err      Optional pointer to receive an error string on failure
  *
- * @return Pointer to newly created string, or NULL on failure
+ * @return Pointer to the new string, or NULL on failure
  *
  * @see cstring_create
  * @see cstring_destroy
@@ -94,13 +102,13 @@ cstr cstring_create_full(const char *initial, ccol_memmgmt_procs_t *m_procs,
 /**
  * @brief Create a string with default memory management
  *
- * Convenience wrapper around cstring_create_full() that uses the default
- * malloc/free allocators.
+ * This function is a convenience wrapper around cstring_create_full() that
+ * uses the default malloc/free allocators.
  *
  * @param initial  Initial C string content, or NULL for an empty string
  * @param err      Optional pointer to receive an error string on failure
  *
- * @return Pointer to newly created string, or NULL on failure
+ * @return Pointer to the new string, or NULL on failure
  */
 static inline __attribute__((always_inline)) cstr
 cstring_create(const char *initial, char **err) {
@@ -108,16 +116,16 @@ cstring_create(const char *initial, char **err) {
 }
 
 /**
- * @brief Create a string using the default memory management in an
+ * @brief Create a string with the default memory management in an
  * optimistic manner
  *
- * Convenience wrapper around cstring_create_full() that uses the default
- * memory management mechanisms and does not provide an error buffer,
- * expecting a probable success.
+ * This function is a convenience wrapper around cstring_create_full() that
+ * uses the default memory management mechanisms. It gives no error buffer,
+ * because it expects success.
  *
  * @param initial The initial C string, or NULL for an empty string
  *
- * @return Pointer to newly created string, or NULL on failure.
+ * @return Pointer to the new string, or NULL on failure.
  *
  */
 static inline __attribute__((always_inline)) cstr
@@ -129,7 +137,8 @@ cstring_new(const char *initial) {
  * @brief Get the memory management procedures for a string
  *
  * @param s  String to query
- * @return   Pointer to memory management procedures, or NULL if using defaults
+ * @return   Pointer to the memory management procedures, or NULL if the
+ *           string uses the default procedures
  * @note     Will assert if s is NULL
  */
 ccol_memmgmt_procs_t *cstring_get_mprocs(cstr s);
@@ -145,23 +154,34 @@ void __cstring_destroy(cstr s);
 /**
  * @brief Destroy a string and set its pointer to NULL
  *
- * Frees the internal buffer and the container itself. The pointer is set to
- * NULL after destruction so double-free is safe.
+ * This macro frees the internal buffer and the container and then sets the
+ * pointer to NULL, so a second call to this macro is safe.
  *
- * @param s  String variable to destroy (set to NULL on return)
+ * @param s  String variable to destroy (set to NULL on return). It must be a
+ * modifiable lvalue, such as a variable or an element of a vector, and the
+ * macro evaluates it exactly once.
  */
 #define cstring_destroy(s)    \
-  do {                        \
-    if ((s)) {                \
-      __cstring_destroy((s)); \
-      s = NULL;               \
-    }                         \
+  _ccol_cstring_destroy_impl( \
+      s, _ccol_uniq(__ccol_cstring_destroy_slot, __COUNTER__))
+
+/* Internal: the body of cstring_destroy. slot is a name from _ccol_uniq(),
+ * so the macro nests inside the argument of another destroy macro and stays
+ * -Wshadow clean. The argument is evaluated exactly once. */
+#define _ccol_cstring_destroy_impl(s, slot) \
+  do {                                      \
+    __typeof__(s) *slot = &(s);             \
+    if (*slot) {                            \
+      __cstring_destroy(*slot);             \
+      *slot = NULL;                         \
+    }                                       \
   } while (0)
 
 /**
  * @brief Cleanup helper for _ccol_destructor (RAII)
  *
- * Called automatically when a scoped cstr variable leaves scope.
+ * The program calls this function automatically when a scoped cstr variable
+ * leaves its scope.
  *
  * @param sp  Pointer to the cstr variable
  */
@@ -177,7 +197,7 @@ static inline void ___cstring_destroy(cstr *sp) {
 /* ========================================================================== */
 
 /**
- * @brief Return the number of characters in the string (excluding '\0')
+ * @brief Return the number of characters in the string (without the '\0')
  *
  * @param s  String to query
  * @return   Length in bytes
@@ -190,7 +210,8 @@ size_t cstring_length(cstr s);
  *
  * @param s  String to query
  * @return   Pointer to internal null-terminated buffer
- * @warning  Pointer becomes invalid after any mutating operation
+ * @warning  The pointer becomes invalid after any operation that changes the
+ *           string
  * @note     Will assert if s is NULL
  */
 const char *cstring_c_str(cstr s);
@@ -221,7 +242,7 @@ bool cstring_is_empty(cstr s);
 /**
  * @brief Append a C string to the end of this string
  *
- * @param s    String to modify
+ * @param s    String to change
  * @param str  C string to append (must not be NULL)
  *
  * @return ccol_success on success
@@ -235,7 +256,7 @@ ccol_retval_t cstring_append(cstr s, const char *str);
 /**
  * @brief Prepend a C string to the beginning of this string
  *
- * @param s    String to modify
+ * @param s    String to change
  * @param str  C string to prepend (must not be NULL)
  *
  * @return ccol_success on success
@@ -249,9 +270,10 @@ ccol_retval_t cstring_prepend(cstr s, const char *str);
 /**
  * @brief Insert a C string at a given position
  *
- * Characters at positions >= @p pos are shifted right to make room.
+ * The function moves the characters at the positions >= @p pos to the right
+ * to make room.
  *
- * @param s    String to modify
+ * @param s    String to change
  * @param pos  Insertion position (0 ... length, inclusive)
  * @param str  C string to insert (must not be NULL)
  *
@@ -266,14 +288,14 @@ ccol_retval_t cstring_insert(cstr s, size_t pos, const char *str);
 /**
  * @brief Replace the entire content of this string with a new C string
  *
- * @param s    String to modify
+ * @param s    String to change
  * @param str  New content (must not be NULL)
  *
  * @return ccol_success on success
  * @return ccol_invalid_args if str is NULL
- * @return ccol_container_full if str is too large to represent (not
- * reachable in practice: would require a str spanning the entire address
- * space)
+ * @return ccol_container_full if str is too large to represent, which a real
+ * program cannot reach, because it needs a str that fills the full address
+ * space.
  * @return ccol_not_enough_memory if reallocation fails
  * @note   Will assert if s is NULL
  */
@@ -282,8 +304,8 @@ ccol_retval_t cstring_set(cstr s, const char *str);
 /**
  * @brief Clear all characters and shrink capacity back to the minimum
  *
- * If the reallocation to shrink the buffer fails, the capacity is left
- * unchanged; the length is always reset to 0 regardless.
+ * If the reallocation that shrinks the buffer fails, the capacity does not
+ * change, but the function always resets the length to 0.
  *
  * @param s  String to reset
  * @note     Will assert if s is NULL
@@ -293,13 +315,15 @@ void cstring_reset(cstr s);
 /**
  * @brief Pre-allocate capacity for at least @p min_capacity bytes
  *
- * Rounds @p min_capacity up to the nearest power of two (minimum 16).
- * Does nothing and returns true if current capacity is already sufficient.
+ * This function rounds @p min_capacity up to the nearest power of two, with
+ * a smallest capacity of 16. If the current capacity is already enough, the
+ * function does nothing and returns true.
  *
  * @param s             String to reserve capacity for
- * @param min_capacity  Minimum number of bytes to reserve (including '\0')
+ * @param min_capacity  Minimum number of bytes to reserve (with the '\0')
  *
- * @return true on success, false if reallocation fails or size too large
+ * @return true on success, false if the reallocation fails or if the size is
+ *         too large
  * @note   Will assert if s is NULL
  */
 bool cstring_reserve(cstr s, size_t min_capacity);
@@ -307,7 +331,7 @@ bool cstring_reserve(cstr s, size_t min_capacity);
 /**
  * @brief Convert all characters to uppercase in-place
  *
- * @param s  String to modify
+ * @param s  String to change
  * @note     Will assert if s is NULL
  */
 void cstring_to_upper(cstr s);
@@ -315,17 +339,17 @@ void cstring_to_upper(cstr s);
 /**
  * @brief Convert all characters to lowercase in-place
  *
- * @param s  String to modify
+ * @param s  String to change
  * @note     Will assert if s is NULL
  */
 void cstring_to_lower(cstr s);
 
 /**
- * @brief Strip leading and trailing whitespace in-place
+ * @brief Strip the whitespace at the start and at the end, in-place
  *
- * Uses isspace() to classify whitespace.
+ * This function uses isspace() to classify whitespace.
  *
- * @param s  String to modify
+ * @param s  String to change
  * @note     Will assert if s is NULL
  */
 void cstring_trim(cstr s);
@@ -334,15 +358,18 @@ void cstring_trim(cstr s);
  * @brief Replace every non-overlapping occurrence of @p needle with
  * @p replacement
  *
- * Builds the result into a fresh buffer then swaps it in, so @p replacement
- * may safely contain @p needle without causing infinite loops.
+ * The function builds the result in a new buffer and then swaps that buffer
+ * in, so @p replacement can contain @p needle without causing an infinite
+ * loop.
  *
- * @param s            String to modify
+ * @param s            String to change
  * @param needle       Substring to search for (must not be NULL or empty)
  * @param replacement  Substitute string (must not be NULL)
  *
- * @return ccol_success on success (including when needle is not found)
- * @return ccol_invalid_args if needle is NULL/empty or replacement is NULL
+ * @return ccol_success on success, including the case where the function
+ * does not find needle.
+ * @return ccol_invalid_args if needle is NULL or empty, or if replacement is
+ * NULL
  * @return ccol_container_full if the result would overflow size_t
  * @return ccol_not_enough_memory if buffer allocation fails
  * @note   Will assert if s is NULL
@@ -357,13 +384,14 @@ ccol_retval_t cstring_replace(cstr s, const char *needle,
 /**
  * @brief Compare the string to a C string (lexicographic order)
  *
- * Semantics identical to strcmp().
+ * The semantics are identical to strcmp().
  *
  * @param s    String to compare
  * @param str  C string to compare against
  *
  * @return Negative / zero / positive if s < / == / > str
- * @return 1 if str is NULL (a non-null string is considered greater)
+ * @return 1 if str is NULL, because the library treats a non-null string as
+ * the greater one.
  * @note   Will assert if s is NULL
  */
 int cstring_compare(cstr s, const char *str);
@@ -374,7 +402,7 @@ int cstring_compare(cstr s, const char *str);
  * @param s    String to compare
  * @param str  C string to compare against
  *
- * @return true if contents are equal, false otherwise
+ * @return true if the two contents are equal, false if they are not
  * @note   Will assert if s is NULL
  */
 bool cstring_equals(cstr s, const char *str);
@@ -425,10 +453,23 @@ size_t cstring_find(cstr s, const char *needle);
  * @param needle  Substring to find
  *
  * @return Zero-based index of the last occurrence
- * @return cstring_length(s) if @p needle is an empty string (the past-the-end
- * position, matching C++'s std::string::rfind("") convention)
+ * @return cstring_length(s) if @p needle is an empty string: the
+ * past-the-end position, the same convention as the one that
+ * std::string::rfind("") uses in C++.
  * @return ccol_invalid_size if not found, or if @p needle is NULL
  * @note   Will assert if s is NULL
+ * @note   Occurrences that overlap count: the last "aba" in "ababa" starts
+ * at index 2
+ * @note   For a string of 256 bytes or more, the search runs from the end of
+ * the string and stops at the first match that it meets, and its time is
+ * linear in the length of the string plus the length of @p needle, whatever
+ * the two hold. A shorter string is searched from its start, which is faster
+ * at that length.
+ * @note   A needle of up to 128 bytes needs no memory. A longer needle can
+ * make the search take one temporary table of one size_t per byte of the
+ * needle from the allocator of s, and free it before the call returns. When
+ * that allocator refuses the table, the search gives the same answer, but
+ * its time can then grow with the product of the two lengths.
  */
 size_t cstring_rfind(cstr s, const char *needle);
 
@@ -439,10 +480,11 @@ size_t cstring_rfind(cstr s, const char *needle);
 /**
  * @brief Create a new cstring holding a sub-range of this string
  *
- * Characters in the range [@p start, @p start + @p length) are copied into
- * a freshly allocated cstring. If @p start + @p length extends beyond the
- * end of the string, the range is clamped to the end. If @p start is at or
- * beyond the string length, an empty cstring is returned.
+ * The function copies the characters in the range [@p start, @p start +
+ * @p length) into a new cstring. If @p start + @p length goes past the end
+ * of the string, the function clamps the range to the end, and if @p start
+ * is at the length of the string or past it, the function returns an empty
+ * cstring.
  *
  * @param s       Source string
  * @param start   Zero-based start index
@@ -450,7 +492,7 @@ size_t cstring_rfind(cstr s, const char *needle);
  * @param err     Optional pointer to receive an error string on failure
  *
  * @return New cstring, or NULL on allocation failure
- * @note   Caller must destroy the returned cstring when done
+ * @note   The caller must destroy the cstring that this function returns
  * @note   Will assert if s is NULL
  */
 cstr cstring_substring(cstr s, size_t start, size_t length, char **err);
@@ -462,7 +504,7 @@ cstr cstring_substring(cstr s, size_t start, size_t length, char **err);
  * @param err  Optional pointer to receive an error string on failure
  *
  * @return New cstring with the same content, or NULL on failure
- * @note   Caller must destroy the returned cstring when done
+ * @note   The caller must destroy the cstring that this function returns
  * @note   Will assert if s is NULL
  */
 cstr cstring_copy(cstr s, char **err);
@@ -470,26 +512,29 @@ cstr cstring_copy(cstr s, char **err);
 /**
  * @brief Split the string by @p delimiter and return the parts as a vector
  *
- * Each token between occurrences of @p delimiter (including empty tokens at
- * the start/end if the string begins/ends with the delimiter) is placed as a
- * newly allocated cstr into the returned cvec.
+ * The function puts each token between the occurrences of @p delimiter into
+ * the cvec that it returns, each token as a new cstr. An empty token at the
+ * start or at the end, which you get when the string starts or ends with
+ * the delimiter, is also a token.
  *
  * @param s          String to split
  * @param delimiter  Separator string (must not be NULL or empty)
  * @param err        Optional pointer to receive an error string on failure
  *
- * @return cvec (of elem_size == sizeof(cstr)) containing the tokens, or NULL
- * on failure
+ * @return cvec that holds the tokens, or NULL on failure. Its elem_size is
+ * sizeof(cstr).
  *
- * @note The caller is responsible for destroying every cstr inside the vector
- * as well as the vector itself, e.g.:
+ * @note The caller must destroy every cstr in the vector, and the vector
+ * too. For example:
  * @code
  * cvec parts = cstring_split(s, ",", NULL);
- * cvec_redeclare(parts, cstr);
- * for (size_t i = 0; i < cvec_size(parts); i++) {
- *   cstr_destroy(cvec_at(parts, i));
+ * if (parts) {
+ *   cvec_redeclare(parts, cstr);
+ *   for (size_t i = 0; i < cvec_size(parts); i++) {
+ *     cstr_destroy(cvec_at(parts, i));
+ *   }
+ *   cvec_destroy(parts);
  * }
- * cvec_destroy(parts);
  * @endcode
  * @note Will assert if s is NULL
  */
@@ -509,7 +554,8 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
 /**
  * @brief Declare a cstr variable with automatic RAII destruction
  *
- * When the variable leaves scope __cstring_destroy is called automatically.
+ * The program calls __cstring_destroy automatically when the variable leaves
+ * its scope.
  *
  * @param s  Name of the variable to declare
  */
@@ -517,40 +563,46 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
   cstr s _ccol_destructor(___cstring_destroy) = NULL
 
 /**
- * @brief Initialise a declared cstr using default allocators
+ * @brief Initialise a declared cstr with the default allocators
  *
- * Calls ccol_fatal_err() if creation fails.
+ * This macro calls ccol_fatal_err() if the creation fails.
  *
- * @param s        cstr variable to initialise (must have been declared)
+ * @param s        cstr lvalue to initialise (you must declare it first). The
+ *                 macro assigns it once, after the string is created.
  * @param initial  Initial content (C string or NULL for empty)
  */
-#define cstr_init(s, initial)                                  \
-  do {                                                         \
-    char *_cstr_err = NULL;                                    \
-    s = cstring_create((initial), &_cstr_err);                 \
-    if (!s) {                                                  \
-      ccol_fatal_err("cstr_init('%s'): %s", #s,                \
-                     _cstr_err ? _cstr_err : "unknown error"); \
-    }                                                          \
+#define cstr_init(s, initial)                                                  \
+  do {                                                                         \
+    char *__cstr_init_err = NULL;                                              \
+    __typeof__(s) __cstr_init_s = cstring_create((initial), &__cstr_init_err); \
+    if (!__cstr_init_s) {                                                      \
+      ccol_fatal_err("cstr_init('%s'): %s", #s,                                \
+                     __cstr_init_err ? __cstr_init_err : "unknown error");     \
+    }                                                                          \
+    (s) = __cstr_init_s;                                                       \
   } while (0)
 
 /**
- * @brief Initialise a declared cstr using custom memory management
+ * @brief Initialise a declared cstr with custom memory management
  *
- * Calls ccol_fatal_err() if creation fails.
+ * This macro calls ccol_fatal_err() if the creation fails.
  *
- * @param s        cstr variable to initialise (must have been declared)
+ * @param s        cstr lvalue to initialise (you must declare it first). The
+ *                 macro assigns it once, after the string is created.
  * @param initial  Initial content (C string or NULL for empty)
  * @param mprocs   Custom memory management procedures
  */
-#define cstr_init_mp(s, initial, mprocs)                       \
-  do {                                                         \
-    char *_cstr_err = NULL;                                    \
-    s = cstring_create_full((initial), (mprocs), &_cstr_err);  \
-    if (!s) {                                                  \
-      ccol_fatal_err("cstr_init_mp('%s'): %s", #s,             \
-                     _cstr_err ? _cstr_err : "unknown error"); \
-    }                                                          \
+#define cstr_init_mp(s, initial, mprocs)                               \
+  do {                                                                 \
+    char *__cstr_init_mp_err = NULL;                                   \
+    __typeof__(s) __cstr_init_mp_s =                                   \
+        cstring_create_full((initial), (mprocs), &__cstr_init_mp_err); \
+    if (!__cstr_init_mp_s) {                                           \
+      ccol_fatal_err(                                                  \
+          "cstr_init_mp('%s'): %s", #s,                                \
+          __cstr_init_mp_err ? __cstr_init_mp_err : "unknown error");  \
+    }                                                                  \
+    (s) = __cstr_init_mp_s;                                            \
   } while (0)
 
 /**
@@ -603,9 +655,9 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
   cstr_init_mp(s, initial, mprocs)
 
 /**
- * @brief Destroy a cstr and set it to NULL (type-safe wrapper)
+ * @brief Destroy a cstr and set it to NULL (type-inferred wrapper)
  *
- * @param s  cstr variable to destroy
+ * @param s  cstr lvalue to destroy. The macro evaluates it exactly once.
  */
 #define cstr_destroy(s) cstring_destroy((s))
 
@@ -613,25 +665,27 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
 /*                         OPERATION MACROS                                   */
 /* ========================================================================== */
 
-/* Every retval local below is deliberately named with a macro-specific,
- * double-underscore-prefixed identifier rather than the shorter '_r'. Each
- * one is declared in the same statement whose initializer embeds the
- * caller's own arguments via macro substitution, and C's declarator-scope
- * rule ("the scope of an identifier begins right after its own declarator",
- * i.e. before the initializer is even evaluated; the same rule that makes
- * `int x = x;` a self-reference, not a copy of an outer x) means a caller
- * who happens to name one of their own arguments identically to the local
- * would silently bind to this macro's own not-yet-initialized local instead
- * of their own. For cstr_append/_prepend/_set/_replace the shadowed
- * parameters are all `const char *`, so such a collision with a short,
- * plausible name like '_r' would at least fail to compile (an enum used
- * where a pointer is expected); for cstr_insert's `pos` (a size_t, silently
- * convertible from an enum with no diagnostic guaranteed under every
- * caller's own compiler and warning flags) it would not. A name this
- * specific to its own one macro is the only practical fix available to a
- * non-hygienic C macro. */
+/* Every retval local below has a name that belongs to one macro only and
+ * starts with two underscores, because the shorter name '_r' is not safe
+ * here. Each macro declares its local in one statement whose initializer
+ * holds the arguments of the caller, since the macro substitutes them there.
+ * The declarator-scope rule of C says that the scope of an identifier begins
+ * directly after its own declarator, so the scope begins before the compiler
+ * evaluates the initializer; this is the same rule that makes `int x = x;` a
+ * self-reference and not a copy of an outer x. When a caller gives one of its
+ * own arguments the same name as the local, that argument binds to the
+ * not-yet-initialized local of this macro instead of the argument of the
+ * caller, and no tool reports it. For cstr_append, cstr_prepend, cstr_set and
+ * cstr_replace, every shadowed parameter is a `const char *`, so such a
+ * collision with a short, plausible name like '_r' fails to compile, because
+ * the code puts an enum where a pointer belongs. The `pos` parameter of
+ * cstr_insert, however, is a size_t; a size_t takes an enum value silently,
+ * and no compiler is required to report this under any set of warning flags,
+ * so that collision compiles and the caller gets a wrong value. A name this
+ * specific to one macro is the only practical fix for a C macro, because a C
+ * macro is not hygienic. */
 
-/** @brief Append @p str; calls ccol_fatal_err() on failure */
+/** @brief Append @p str. This macro calls ccol_fatal_err() on failure */
 #define cstr_append(s, str)                                                \
   do {                                                                     \
     ccol_retval_t __cstr_append_r = cstring_append((s), (str));            \
@@ -641,7 +695,7 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
     }                                                                      \
   } while (0)
 
-/** @brief Prepend @p str; calls ccol_fatal_err() on failure */
+/** @brief Prepend @p str. This macro calls ccol_fatal_err() on failure */
 #define cstr_prepend(s, str)                                                 \
   do {                                                                       \
     ccol_retval_t __cstr_prepend_r = cstring_prepend((s), (str));            \
@@ -651,7 +705,8 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
     }                                                                        \
   } while (0)
 
-/** @brief Insert @p str at @p pos; calls ccol_fatal_err() on failure */
+/** @brief Insert @p str at @p pos. This macro calls ccol_fatal_err() on
+ * failure */
 #define cstr_insert(s, pos, str)                                           \
   do {                                                                     \
     ccol_retval_t __cstr_insert_r = cstring_insert((s), (pos), (str));     \
@@ -661,8 +716,8 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
     }                                                                      \
   } while (0)
 
-/** @brief Replace entire content with @p str; calls ccol_fatal_err() on failure
- */
+/** @brief Replace the full content with @p str. This macro calls
+ * ccol_fatal_err() on failure */
 #define cstr_set(s, str)                                             \
   do {                                                               \
     ccol_retval_t __cstr_set_r = cstring_set((s), (str));            \
@@ -672,8 +727,8 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
     }                                                                \
   } while (0)
 
-/** @brief Replace all occurrences of @p needle; calls ccol_fatal_err() on
- * failure */
+/** @brief Replace all the occurrences of @p needle. This macro calls
+ * ccol_fatal_err() on failure */
 #define cstr_replace(s, needle, replacement)                                 \
   do {                                                                       \
     ccol_retval_t __cstr_replace_r =                                         \
@@ -684,29 +739,57 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
     }                                                                        \
   } while (0)
 
-/** @brief Reserve at least @p cap bytes; calls ccol_fatal_err() on failure */
-#define cstr_reserve(s, cap)                                                  \
+/** @brief Reserve at least @p cap bytes. This macro calls ccol_fatal_err()
+ * on failure. It evaluates @p cap exactly once, so the failure message
+ * reports the capacity that the call used. */
+#define cstr_reserve(s, cap)        \
+  _ccol_cstr_reserve_impl(s, (cap), \
+                          _ccol_uniq(__ccol_cstr_reserve_cap, __COUNTER__))
+
+/* The public macro above names every temporary of this body with
+ * _ccol_uniq(), so the macro nests inside the argument of any
+ * public macro, itself included. */
+#define _ccol_cstr_reserve_impl(s, cap, __cstr_reserve_cap)                   \
   do {                                                                        \
-    if (!cstring_reserve((s), (cap))) {                                       \
+    size_t __cstr_reserve_cap = (cap);                                        \
+    if (!cstring_reserve((s), __cstr_reserve_cap)) {                          \
       ccol_fatal_err(                                                         \
           "cstr_reserve('%s'): failed to reserve %zu bytes (out of memory?)", \
-          #s, (size_t)(cap));                                                 \
+          #s, __cstr_reserve_cap);                                            \
     }                                                                         \
   } while (0)
 
-/** @brief Create a new cstring that contains the content of [start,start+len)
- * of the cstring s; calls ccol_fatal_err() on failure */
-#define cstr_substring(s, start, len)                                    \
-  ({                                                                     \
-    char *_cstr_sub_err = NULL;                                          \
-    cstr _cstr_sub_result =                                              \
-        cstring_substring((s), (start), (len), &_cstr_sub_err);          \
-    if (!_cstr_sub_result) {                                             \
-      ccol_fatal_err("cstr_substring('%s', start=%zu, len=%zu): %s", #s, \
-                     (size_t)(start), (size_t)(len),                     \
-                     _cstr_sub_err ? _cstr_sub_err : "unknown error");   \
-    }                                                                    \
-    _cstr_sub_result;                                                    \
+/** @brief Create a new cstring that holds the content of [start,start+len)
+ * of the cstring s. This macro calls ccol_fatal_err() on failure. It
+ * evaluates each argument exactly once, so the failure message reports the
+ * start and the length that the call used. */
+#define cstr_substring(s, start, len)                                          \
+  _ccol_cstr_substring_impl(                                                   \
+      s, (start), (len), _ccol_uniq(__ccol_cstr_substring_start, __COUNTER__), \
+      _ccol_uniq(__ccol_cstr_substring_len, __COUNTER__),                      \
+      _ccol_uniq(__ccol_cstr_substring_err, __COUNTER__),                      \
+      _ccol_uniq(__ccol_cstr_substring_result, __COUNTER__))
+
+/* The public macro above names every temporary of this body with
+ * _ccol_uniq(), so the macro nests inside the argument of any
+ * public macro, itself included. */
+#define _ccol_cstr_substring_impl(s, start, len, __cstr_substring_start,      \
+                                  __cstr_substring_len, __cstr_substring_err, \
+                                  __cstr_substring_result)                    \
+  ({                                                                          \
+    size_t __cstr_substring_start = (start);                                  \
+    size_t __cstr_substring_len = (len);                                      \
+    char *__cstr_substring_err = NULL;                                        \
+    __auto_type __cstr_substring_result =                                     \
+        cstring_substring((s), __cstr_substring_start, __cstr_substring_len,  \
+                          &__cstr_substring_err);                             \
+    if (!__cstr_substring_result) {                                           \
+      ccol_fatal_err(                                                         \
+          "cstr_substring('%s', start=%zu, len=%zu): %s", #s,                 \
+          __cstr_substring_start, __cstr_substring_len,                       \
+          __cstr_substring_err ? __cstr_substring_err : "unknown error");     \
+    }                                                                         \
+    __cstr_substring_result;                                                  \
   })
 
 /* Simple pass-through wrappers */
@@ -733,44 +816,45 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
 
 #ifdef RUNNING_UNIT_TESTS
 /**
- * @brief Expose the internal allocated capacity (bytes) for testing
+ * @brief Expose the internal capacity in bytes, for the tests
  *
  * @param s  String to query
- * @return   Number of bytes currently allocated for the data buffer
+ * @return   Number of bytes that the data buffer holds at this moment
  */
 size_t cstring_get_capacity(cstr s);
 
 /**
- * @brief Expose the internal size_t-wraparound guard used by every mutating
- * function for testing
+ * @brief Expose the internal guard against a wraparound of a size_t, for the
+ * tests
  *
- * Lets a test exercise the guard that rejects a length of exactly SIZE_MAX
- * (which would otherwise silently wrap to 0 once 1 is added for the null
- * terminator) directly, without needing to construct a string spanning the
- * entire address space to reach it through the public API.
+ * Every function that changes a string uses this guard, which rejects a
+ * length of exactly SIZE_MAX: without the guard, that length wraps silently
+ * to 0 when the code adds 1 for the null terminator. This declaration lets a
+ * test drive the guard directly, so the test needs no string that fills the
+ * full address space to reach the guard through the public API.
  *
- * @param length  Candidate content length (in bytes, excluding '\0')
+ * @param length  Candidate content length, in bytes, without the '\0'
  * @return        true if length + 1 fits in a size_t, false if length is
  * exactly SIZE_MAX
  */
 bool cstring_length_fits_with_terminator_for_tests(size_t length);
 
 /**
- * @brief Expose cstring_replace()'s internal overflow-checked length
- * arithmetic for testing
+ * @brief Expose the length arithmetic of cstring_replace(), which checks for
+ * an overflow, for the tests
  *
- * Lets a test exercise cstring_replace()'s ccol_container_full overflow
- * guards directly, without needing to construct real multi-gigabyte strings
- * to reach them through the public API.
+ * This declaration lets a test drive the ccol_container_full overflow guards
+ * of cstring_replace() directly, so the test needs no real string of many
+ * gigabytes to reach those guards through the public API.
  *
- * @param orig_length  Length the string would have had before the replace
+ * @param orig_length  Length of the string before the replace
  * @param nlen         Needle length
  * @param rlen         Replacement length
  * @param count        Number of non-overlapping occurrences (must be > 0)
- * @param new_len_out  Receives the computed new length on ccol_success
+ * @param new_len_out  Receives the new length on ccol_success
  *
  * @return ccol_success on success
- * @return ccol_container_full if the computation would overflow size_t
+ * @return ccol_container_full if the computation overflows a size_t
  */
 ccol_retval_t cstring_replace_compute_new_length_for_tests(size_t orig_length,
                                                            size_t nlen,

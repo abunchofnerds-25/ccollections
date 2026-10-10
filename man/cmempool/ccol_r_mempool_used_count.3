@@ -5,14 +5,14 @@ ccol_r_mempool_used_count \- get number of used entries for a size
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cmempool.h>
+#include <ccollections/cmempool.h>
 
 size_t ccol_r_mempool_used_count(ccol_r_mempool *rmp, size_t size);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the number of currently allocated entries from the pool that would
-service the given size. Does not include dynamic allocations.
+Returns how many entries are allocated from the pool that would serve the
+given size, not counting any dynamic allocation.
 .fi
 .SH PARAMETERS
 .nf
@@ -26,18 +26,18 @@ Returns 0 on error
 .fi
 .SH NOTES
 .nf
-Returns 0 if size is invalid (0 or > largest_size)
-Size is rounded up to next power-of-2 pool
-Thread-safe if pool created with single_threaded=false
-Dynamic allocations are tracked separately
+It returns 0 if size is invalid, which means 0 or above largest_size
+It rounds size up to the next power-of-two pool
+Thread-safe if the pool was created with single_threaded=false
+The pool tracks a dynamic allocation separately
 
-Exact whenever the sub-pool is quiescent. Entries parked in a thread's
-own cache count as free, since nothing has them. Under concurrent
-allocation on a tier that maintains per-thread caches the result can
-briefly sit a few entries above ccol_r_mempool_total_capacity() for that
-size, and never above the physical slot count that
-ccol_r_mempool_allocated_bytes(3) accounts for; see
-ccol_mempool_total_capacity(3) for why.
+The count is exact whenever the sub-pool is quiet. An entry parked in the
+cache of a thread counts as free, because nothing holds it. Under
+concurrent allocation on a tier that keeps a cache for each thread, the
+result can sit a few entries above ccol_r_mempool_total_capacity() for
+that size for a short time, but it never goes above the physical slot
+count that ccol_r_mempool_allocated_bytes(3) accounts for. See
+ccol_mempool_total_capacity(3) for the reason.
 .fi
 .SH "SEE ALSO"
 .BR ccol_r_mempool_total_capacity (3),

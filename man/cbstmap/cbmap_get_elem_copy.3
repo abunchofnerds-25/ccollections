@@ -5,42 +5,61 @@ cbmap_get_elem_copy \- copy the value associated with a key out of a BST map
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cbstmap.h>
+#include <ccollections/cbstmap.h>
 
 ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
                                   void *target_buf, size_t target_buf_size);
 .fi
 .SH DESCRIPTION
 .nf
-Searches the map for key_pair and copies the associated value into
-target_buf. The buffer size must match the stored value's size exactly;
-a partial copy is never performed, so a value can never be silently
-truncated. This is stricter than chmap_get_elem_copy(3), which copies
-min(value_size, target_buf_size) bytes instead.
+Searches the map for key_pair and copies the value of that key into
+target_buf. The size of the buffer must match the size of the stored
+value exactly: the function never does a partial copy, so it never
+truncates a value without a report. This rule is stricter than the rule
+of chmap_get_elem_copy(3), which copies min(value_size,
+target_buf_size) bytes instead.
 .fi
 .SH PARAMETERS
 .nf
 cbm              BST map to search
 key_pair         Key to look up
-target_buf       Buffer to receive the value copy
-target_buf_size  Size of target_buf, which must equal the stored value's
-                 own size
+target_buf       Buffer that receives the copy of the value
+target_buf_size  Size of target_buf, which must equal the size of the
+                 stored value
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success        - Key found, value copied into target_buf
-ccol_key_not_found  - Key does not exist in map
-ccol_invalid_args   - target_buf_size does not match the stored value's
-                      size, or key_pair's size does not match a
-                      fixed-width key type's own size (see
-                      cbmap_create_full(3))
+ccol_success        - The function found the key and copied the value
+                      into target_buf
+ccol_key_not_found  - The key is not in the map
+ccol_invalid_args   - key_pair is NULL, key_pair carries a NULL ptr
+                      with a non-zero size, target_buf is NULL
+                      with a non-zero target_buf_size,
+                      target_buf_size does not
+                      match the size of the stored value, or the size
+                      of key_pair does not match the size of a
+                      fixed-width key type (see cbmap_create_full(3))
 .fi
 .SH NOTES
 .nf
+The ptr of a key_pair needs no particular alignment, because the
+comparison reads the key bytes with memcpy and never through a pointer
+cast to the key type. A caller can therefore point key_pair->ptr straight
+at key bytes that sit at an arbitrary offset inside a larger buffer, such
+as a field sliced out of a packed network frame or a memory-mapped
+record, without copying them into an aligned local first.
 O(log n) complexity
-Requires an exact value size match, unlike chmap_get_elem_copy(3)
-target_buf is left untouched on every failure
-Asserts if cbm is NULL
+The two value sizes must match exactly, while chmap_get_elem_copy(3) does
+not need an exact match
+The function does not touch target_buf on any failure
+The function asserts if cbm is NULL
+The function reports a NULL key_pair as ccol_invalid_args, which matches
+chmap_get_elem_copy(3)
+A key_pair whose ptr is NULL and whose size is not zero promises bytes
+that it has no storage for, so the function reports it as
+ccol_invalid_args too
+A key_pair of size zero is correct, with a ptr or without one, and looks
+up the empty key
 .fi
 .SH "SEE ALSO"
 .BR cbmap_get_elem_ref (3),

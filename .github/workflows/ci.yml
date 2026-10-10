@@ -4,12 +4,11 @@ on:
   push:
   pull_request:
 
-# A push to a branch that also has an open pull request is built twice, once
-# for each trigger. That is deliberate: pushing a branch with no pull request
-# open is a normal way to get a full matrix run here, so the push trigger
-# cannot be narrowed to main without losing it. Superseding runs on the same
-# ref cancel their predecessor so the duplication costs queue time at most
-# once per ref.
+# A push to a branch that also has an open pull request starts two builds, one
+# for each trigger, on purpose: a push to a branch with no open pull request is
+# a normal way to get a full matrix run here, so the push trigger cannot be
+# limited to main. A newer run on the same ref cancels the run before it, so the
+# second build costs queue time only once for each ref.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -18,22 +17,25 @@ jobs:
   linux-x86_64-gcc:
     name: Linux x86_64 (GCC)
     runs-on: ubuntu-latest
-    # No in-process mechanism bounds a hang here: a blocked queue receive or a
-    # drain that never completes simply stops producing output, and this job's
-    # own default ceiling is six hours. The suites this runs take about twenty
-    # minutes of wall clock natively (make test plus make memtest), so this
-    # leaves several times that as headroom for a slower hosted runner while
-    # keeping a recurrence cheap rather than silent.
+    # Nothing inside the process puts a limit on a hang here: a queue receive
+    # that blocks, or a drain that never completes, simply stops the output, and
+    # the default ceiling of this job is six hours. The suites that it runs take
+    # about twenty minutes of real time on this machine (`make test` plus `make
+    # memtest`), so this timeout leaves several times that much room for a
+    # slower hosted runner while it keeps the cost of a hang small and does not
+    # hide one.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
-        # abigail-tools supplies abidiff, which upgrades the ABI check from a
-        # comparison of exported symbol names to one that also covers function
-        # signatures and public struct layouts. That layer reads the x86_64
-        # corpus baseline under abi/, which this job's architecture matches, so
-        # it runs here. Without the package check_abi reports that signature
-        # and layout checking did not run rather than passing silently.
+        # abigail-tools gives you abidiff, with which the ABI check does more
+        # than compare the names of the exported symbols: it also covers the
+        # function signatures and the layouts of the public structs. That layer
+        # reads the corpus baseline under abi/ for the architecture of the
+        # library that the job built, and the check takes that architecture from
+        # the ELF header of the library. Without this package, check_abi reports
+        # that it did not check signatures and layouts; it does not pass in
+        # silence.
         run: sudo apt-get update && sudo apt-get install -y libssl-dev zlib1g-dev valgrind abigail-tools
       - name: make test
         run: make test
@@ -41,44 +43,135 @@ jobs:
         run: make memtest
       - name: public interface is fully namespaced
         run: make check_namespace
-      # The exported ABI is a public contract in its own right, and one no test
-      # suite can observe: every suite links the .c files directly, where a
-      # symbol that the shared library fails to export resolves exactly as an
-      # exported one does. Only a diff against the committed baseline in abi/
-      # catches a symbol that vanished (breaking every linked application) or
-      # one that escaped through a missing `static`.
+      # The typed container macros need -std=gnu11 because they use statement
+      # expressions, but merely INCLUDING a header must not need it: otherwise a
+      # consumer's own header that includes one would force gnu11 on everything
+      # downstream of it. chttpclient.h expands chmap_declare() inside a public
+      # struct, so it is the header where this can regress first. The check adds
+      # -pedantic-errors, and it also compiles each header from the installed
+      # layout behind an application directory that shadows every other public
+      # name, which proves that a header finds its own siblings.
+      - name: every installed header compiles standalone under strict -std=c11 -pedantic-errors
+        run: make check_headers
+      # The exported ABI is a public contract of its own, and no test suite can
+      # see it: every suite links the .c files directly, and there a symbol that
+      # the shared library does not export resolves in the same way as an
+      # exported one. Only a diff against the committed baseline in abi/ finds a
+      # symbol that disappeared, which breaks every linked application, and only
+      # that diff finds a symbol that escaped through a missing `static`.
       - name: exported ABI matches the committed baseline
         run: make check_abi
-      # CCOL_MEMPOOL_COMPACT_LAYOUT selects a second entry layout, including a
-      # different address-to-index derivation, behind about twenty conditional
-      # sites. It is a builder-visible switch, so those sites ship; without this
-      # step no build anywhere compiles them and the layout rots unnoticed. The
-      # flag reaches the library sources and the suite's own translation unit
-      # together, which is what the switch requires of any caller.
+      # `make install` and `make uninstall` build their argument lists from the
+      # basenames under include/ and man/. A name that holds a shell
+      # pathname-expansion character stops naming one file of this project and
+      # starts naming a pattern that matches inside the INSTALLATION directory,
+      # where `rm -f` would delete and `sed -i` would rewrite the files of other
+      # packages. The recipes run under `set -f`; this gate is the other half,
+      # and it keeps such a name out of the tree.
+      - name: every installable filename is a literal path
+        run: make check_filenames
+      # pthread_atfork() handlers live in the process-global state of the C
+      # library, and POSIX gives no way to take them back, so a module that
+      # registers them from a shared object that you later dlclose() would make
+      # the next fork() in that process call into an address that is not mapped.
+      # glibc takes those handlers back for each object that it unloads, which
+      # is what makes this library safe to unload. This step proves that on the
+      # built artifact instead of assuming it; no test suite can prove it,
+      # because each suite links the .c files directly and never loads a .so.
+      - name: fork() still works after the library is dlclose()d
+        run: make check_dso_unload
+      # Each destructor of the shared object runs at exit, whatever part of the
+      # library a program used. This step links a program that uses almost
+      # nothing of the library against the built .so, and fails when valgrind
+      # finds memory of the library that is allocated at exit. No suite can see
+      # this, because each suite links the .c files directly and has its own
+      # destructors.
+      - name: nothing of the library is left allocated at exit
+        run: make check_exit_reachable
+      # The suites compile the sources into each test binary, so none of them
+      # sees the install. This step installs into a temporary prefix, builds
+      # the example of README.md with the flags of the installed
+      # ccollections.pc, runs it against the shared library and against the
+      # archive, and uninstalls.
+      - name: the library installs, and an application builds against it
+        run: make check_install
+      # CCOL_MEMPOOL_COMPACT_LAYOUT selects a second entry layout, which
+      # includes a different way to derive an index from an address and is held
+      # in about twenty conditional sites. Any builder can turn the switch on,
+      # so those sites ship; without this step no build compiles them, and that
+      # layout decays without notice. The flag reaches the library sources and
+      # the translation unit of the suite together, which the switch needs from
+      # every caller.
       - name: cmempool under the compact entry layout
         run: |
           set -eo pipefail
           make -C tests/cmempool clean
           make -C tests/cmempool EXTRA_CFLAGS="-DCCOL_MEMPOOL_COMPACT_LAYOUT=1" test
           make -C tests/cmempool clean
-      # Built, not run. Benchmark timings on a shared, virtualized runner vary
-      # more widely than most regressions worth catching, so there is no
-      # threshold that is both stable and useful here; the baseline is recorded
-      # per machine and compared locally instead. What CI is good for is making
-      # sure the benchmarks still compile against the current API, since code
-      # that is never built rots silently.
+      # CCOL_MEMPOOL_DYNAMIC_TLS selects the general thread-local storage model
+      # in place of initial-exec for the per-thread fast paths of cmempool and
+      # of the handle-resolve pin index. doc/platforms.md documents it as a
+      # supported build for a process that dlopen()s this library when the
+      # static thread-local block is full. Because the switch ships, it needs a
+      # build that compiles and RUNS it. The step also reads the switch from the
+      # artifact: a flag that did not get to the compiler shows nothing in a
+      # green log.
+      - name: thread-local fast paths under the general TLS model
+        run: |
+          set -eo pipefail
+          make clean
+          make EXTRA_CFLAGS="-DCCOL_MEMPOOL_DYNAMIC_TLS=1"
+          so=$(ls libccollections.so.1.*)
+          # initial-exec emits R_X86_64_TPOFF64; the general model does not.
+          if readelf -Wr "$so" | grep -q TPOFF; then
+            echo "CCOL_MEMPOOL_DYNAMIC_TLS did not reach the library" >&2
+            exit 1
+          fi
+          for m in cmempool cpintable clogger clrucache cthreadpool; do
+            make -C "tests/$m" clean
+            make -C "tests/$m" EXTRA_CFLAGS="-DCCOL_MEMPOOL_DYNAMIC_TLS=1" test
+            make -C "tests/$m" clean
+          done
+          make clean
+      # CCOL_FORK_SAFETY_REQUIRED=0 removes each pthread_atfork() registration
+      # of this library, and the handle state that exists only for those
+      # registrations. common.h and ccollections(7) document it as a complete
+      # opt-out for an application that never forks, or that always execs
+      # immediately after a fork. Because the switch ships, the full suite must
+      # build and run with it. The step also reads the switch from the artifact:
+      # without the fork-safety code, nothing in the library can refer to
+      # pthread_atfork.
+      - name: full suite with the fork-safety machinery compiled out
+        run: |
+          set -eo pipefail
+          make clean
+          make EXTRA_CFLAGS="-DCCOL_FORK_SAFETY_REQUIRED=0"
+          so=$(ls libccollections.so.1.*)
+          if objdump -R "$so" | grep -q pthread_atfork; then
+            echo "CCOL_FORK_SAFETY_REQUIRED=0 did not reach the library" >&2
+            exit 1
+          fi
+          make EXTRA_CFLAGS="-DCCOL_FORK_SAFETY_REQUIRED=0" test
+          make clean
+      # This step builds the benchmarks and does not run them. On a shared,
+      # virtual runner a benchmark time moves more than most regressions that
+      # are worth catching, so no threshold here is both steady and useful; each
+      # machine records its own baseline and compares against it locally. What
+      # CI does well is to prove that the benchmarks compile against the current
+      # API, because code that nothing builds decays without notice.
       - name: benchmarks build
         run: make -C bench && ./bench/bench --list
 
   linux-x86_64-clang:
     name: Linux x86_64 (Clang)
     runs-on: ubuntu-latest
-    # No in-process mechanism bounds a hang here: a blocked queue receive or a
-    # drain that never completes simply stops producing output, and this job's
-    # own default ceiling is six hours. The suites this runs take about twenty
-    # minutes of wall clock natively (make test plus make memtest), so this
-    # leaves several times that as headroom for a slower hosted runner while
-    # keeping a recurrence cheap rather than silent.
+    # Nothing inside the process puts a limit on a hang here: a queue receive
+    # that blocks, or a drain that never completes, simply stops the output, and
+    # the default ceiling of this job is six hours. The suites that it runs take
+    # about twenty minutes of real time on this machine (`make test` plus `make
+    # memtest`), so this timeout leaves several times that much room for a
+    # slower hosted runner while it keeps the cost of a hang small and does not
+    # hide one.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -89,37 +182,91 @@ jobs:
       - name: make memtest (valgrind)
         run: make CC=clang memtest
 
+  freebsd-x86_64:
+    name: FreeBSD 14 x86_64 (Clang and GCC)
+    runs-on: ubuntu-latest
+    # The FreeBSD guest boots inside the Linux runner, so this job pays for
+    # the boot, for valgrind and for ThreadSanitizer in a VM; the timeout
+    # leaves room for all three.
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: test suites under FreeBSD
+        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1.5.9
+        with:
+          release: "14.5"
+          usesh: true
+          copyback: false
+          # The base system carries clang (as cc), OpenSSL and zlib. GNU make
+          # is gmake, because the build needs it and FreeBSD's make is BSD
+          # make.
+          # binutils gives the ABI gate GNU readelf and nm, which the base
+          # system's elftoolchain tools do not replace; libabigail gives it
+          # abidw and abidiff. pkgconf gives check_install its pkg-config.
+          prepare: |
+            pkg install -y gmake gcc14 valgrind binutils libabigail pkgconf
+          # Every suite runs: with the base clang, with gcc14, and under
+          # valgrind (tests/valgrind_freebsd.supp joins every valgrind run on
+          # FreeBSD through platform.mk). `gmake clean` between the passes
+          # drops the objects of the previous compiler.
+          run: |
+            set -eu
+            gmake test
+            gmake clean >/dev/null
+            gmake test CC=gcc14
+            gmake clean >/dev/null
+            gmake memtest
+            gmake
+            gmake check_abi
+            gmake check_dso_unload
+            gmake check_exit_reachable
+            gmake check_install
+            # ThreadSanitizer with clang, on every module that has a TSan
+            # target. The guest runs under KVM, whose kvmclock the fast
+            # clock_gettime of libc maps on first use; TSan deadlocks on that
+            # mapping, and the slow path avoids it. tests/tsan_freebsd.c and
+            # tests/test_sanitizer.h carry the rest of what this runtime needs.
+            # Each module is bounded, so a hang fails the step instead of the
+            # whole job timeout.
+            sysctl kern.timecounter.fast_gettime=0
+            for m in cpintable cmempool clrucache mixed clogger cthreadpool cthreadcomm ctls chttpclient chttpserver; do
+              timeout 1200 gmake -C "tests/$m" test_tsan
+            done
+            sysctl kern.timecounter.fast_gettime=1
+
   linux-x86_64-minimal:
     name: Linux x86_64 (minimal build, no optional modules)
     runs-on: ubuntu-latest
-    # No in-process mechanism bounds a hang here: a blocked queue receive or a
-    # drain that never completes simply stops producing output, and this job's
-    # own default ceiling is six hours. The suites this runs take about twenty
-    # minutes of wall clock natively (make test plus make memtest), so this
-    # leaves several times that as headroom for a slower hosted runner while
-    # keeping a recurrence cheap rather than silent.
+    # Nothing inside the process puts a limit on a hang here: a queue receive
+    # that blocks, or a drain that never completes, simply stops the output, and
+    # the default ceiling of this job is six hours. The suites that it runs take
+    # about twenty minutes of real time on this machine (`make test` plus `make
+    # memtest`), so this timeout leaves several times that much room for a
+    # slower hosted runner while it keeps the cost of a hang small and does not
+    # hide one.
     timeout-minutes: 90
     steps:
-      # Deliberately installs neither libssl-dev nor zlib1g-dev. A build with
-      # every optional module disabled must need neither, and the surest way to
-      # keep that true is to build it where they are absent.
+      # This job installs neither libssl-dev nor zlib1g-dev, on purpose: a build
+      # with every optional module turned off must need neither of them, and the
+      # best way to keep that true is to make such a build on a machine that
+      # does not have them.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: make test (all optional modules off)
         run: |
           make WITH_CJSON=0 WITH_CYAML=0 WITH_CLOGGER=0 \
                WITH_CHTTPCLIENT=0 WITH_CHTTPSERVER=0 test
-      # The `test` target recurses into the per-module suites and never builds
-      # the shared library, so the artifact the next step reads has to be built
-      # here rather than assumed to exist.
+      # The `test` target goes into the suite of each module and never builds
+      # the shared library, so this step must build the artifact that the next
+      # step reads instead of assuming that it is already there.
       - name: build the minimal shared library
         run: |
           make WITH_CJSON=0 WITH_CYAML=0 WITH_CLOGGER=0 \
                WITH_CHTTPCLIENT=0 WITH_CHTTPSERVER=0
       - name: confirm the library links nothing beyond pthread and libm
-        # `pipefail` and resolving the versioned name through `ls` are both
-        # load-bearing: a readelf failure inside a pipeline reports the exit
-        # status of `awk` instead, which leaves `needed` empty and lets the
-        # loop below pass without examining anything at all.
+        # Both `pipefail` and the use of `ls` to find the versioned name are
+        # necessary. A readelf failure inside a pipeline otherwise gives you the
+        # exit status of `awk` instead, which leaves `needed` empty, and the
+        # loop below then passes after it examined nothing at all.
         run: |
           set -eo pipefail
           so=$(ls libccollections.so.1.*)
@@ -136,23 +283,25 @@ jobs:
   linux-x86_64-coverage:
     name: Coverage threshold
     runs-on: ubuntu-latest
-    # No in-process mechanism bounds a hang here: a blocked queue receive or a
-    # drain that never completes simply stops producing output, and this job's
-    # own default ceiling is six hours. The suites this runs take about twenty
-    # minutes of wall clock natively (make test plus make memtest), so this
-    # leaves several times that as headroom for a slower hosted runner while
-    # keeping a recurrence cheap rather than silent.
+    # Nothing inside the process puts a limit on a hang here: a queue receive
+    # that blocks, or a drain that never completes, simply stops the output, and
+    # the default ceiling of this job is six hours. The suites that it runs take
+    # about twenty minutes of real time on this machine (`make test` plus `make
+    # memtest`), so this timeout leaves several times that much room for a
+    # slower hosted runner while it keeps the cost of a hang small and does not
+    # hide one.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libssl-dev zlib1g-dev lcov
       # Every file in src/ and include/ must reach the threshold that
-      # ci_scripts/check_test_coverages.sh defines. Running that here rather than only in
-      # coverage.yml is what keeps it useful: coverage.yml runs on a push to
-      # main, so on its own it would only report a shortfall that has already
-      # landed. Rebuilding every suite instrumented is the bulk of this job's
-      # cost, and is still well inside what the rest of this matrix spends.
+      # ci_scripts/check_test_coverages.sh sets. This step runs that check here
+      # and not only in coverage.yml, which is what keeps the check useful:
+      # coverage.yml runs on a push to main, so on its own it would report a
+      # shortfall only after that shortfall is already in main. A build of every
+      # suite with instrumentation is most of the cost of this job, but that
+      # cost is well below what the rest of this matrix spends.
       - name: Build the merged coverage report
         run: make coverage_site
       - name: Check every file against the coverage threshold
@@ -161,36 +310,39 @@ jobs:
   linux-x86_64-sanitizers:
     name: Linux x86_64 (ASan + UBSan)
     runs-on: ubuntu-latest
-    # No in-process mechanism bounds a hang here: a blocked queue receive or a
-    # drain that never completes simply stops producing output, and this job's
-    # own default ceiling is six hours. The suites this runs take about twenty
-    # minutes of wall clock natively (make test plus make memtest), so this
-    # leaves several times that as headroom for a slower hosted runner while
-    # keeping a recurrence cheap rather than silent.
+    # Nothing inside the process puts a limit on a hang here: a queue receive
+    # that blocks, or a drain that never completes, simply stops the output, and
+    # the default ceiling of this job is six hours. The suites that it runs take
+    # about twenty minutes of real time on this machine (`make test` plus `make
+    # memtest`), so this timeout leaves several times that much room for a
+    # slower hosted runner while it keeps the cost of a hang small and does not
+    # hide one.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y clang libssl-dev zlib1g-dev
       - name: make test (EXTRA_CFLAGS=-fsanitize=address,undefined -fno-sanitize-recover=undefined)
-        # ASan's shadow-memory instrumentation and valgrind's own
-        # instrumentation are fundamentally incompatible, so this job never
-        # runs `make memtest` on top of a sanitizer build.
+        # The shadow memory instrumentation of AddressSanitizer and the
+        # instrumentation of valgrind cannot work together, so this job never
+        # runs `make memtest` on a build with a sanitizer.
         #
-        # -fno-sanitize-recover=undefined: without it, UBSan reports a
-        # detected UB to stderr and keeps running, so a real, live UB finding
-        # here would not fail this job at all; the process still exits 0.
+        # -fno-sanitize-recover=undefined is necessary: without it,
+        # UndefinedBehaviorSanitizer writes a report to stderr and continues,
+        # and a real finding here would not fail this job, because the process
+        # exits 0 all the same.
         run: make CC=clang EXTRA_CFLAGS="-fsanitize=address,undefined -fno-sanitize-recover=undefined" test
 
   linux-x86_64-tsan:
     name: Linux x86_64 (ThreadSanitizer)
     runs-on: ubuntu-latest
-    # No in-process mechanism bounds a hang here: a blocked queue receive or a
-    # drain that never completes simply stops producing output, and this job's
-    # own default ceiling is six hours. The suites this runs take about twenty
-    # minutes of wall clock natively (make test plus make memtest), so this
-    # leaves several times that as headroom for a slower hosted runner while
-    # keeping a recurrence cheap rather than silent.
+    # Nothing inside the process puts a limit on a hang here: a queue receive
+    # that blocks, or a drain that never completes, simply stops the output, and
+    # the default ceiling of this job is six hours. The suites that it runs take
+    # about twenty minutes of real time on this machine (`make test` plus `make
+    # memtest`), so this timeout leaves several times that much room for a
+    # slower hosted runner while it keeps the cost of a hang small and does not
+    # hide one.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -202,12 +354,16 @@ jobs:
         run: cd tests/cmempool && make test_tsan
       - name: clrucache test_tsan
         run: cd tests/clrucache && make test_tsan
+      - name: mixed test_tsan (behavioural compatibility corpus)
+        run: cd tests/mixed && make test_tsan
       - name: clogger test_tsan
         run: cd tests/clogger && make test_tsan
       - name: cthreadpool test_tsan
         run: cd tests/cthreadpool && make test_tsan
       - name: cthreadcomm test_tsan
         run: cd tests/cthreadcomm && make test_tsan
+      - name: ctls test_tsan
+        run: cd tests/ctls && make test_tsan
       - name: chttpclient test_tsan
         run: cd tests/chttpclient && make test_tsan
       - name: chttpserver test_tsan
@@ -215,15 +371,118 @@ jobs:
       - name: chttpserver test_engine_stop_tsan
         run: cd tests/chttpserver && make test_engine_stop_tsan
 
+  linux-x86_64-tsan-clang:
+    name: Linux x86_64 (ThreadSanitizer, Clang)
+    runs-on: ubuntu-latest
+    # The GCC ThreadSanitizer job above does not see a data race on a struct
+    # assignment: GCC's instrumentation pass emits no __tsan_write for a struct
+    # copy, so a race on a copied struct timespec or any other aggregate passes
+    # it, while Clang instruments the same copy and reports the race. This job
+    # runs the same targets built with Clang, so that this class has a job that
+    # can see it. The timeout follows the GCC job.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang libssl-dev zlib1g-dev
+      - name: cpintable test_tsan (Clang)
+        run: cd tests/cpintable && make CC=clang test_tsan
+      - name: cmempool test_tsan (Clang)
+        run: cd tests/cmempool && make CC=clang test_tsan
+      - name: clrucache test_tsan (Clang)
+        run: cd tests/clrucache && make CC=clang test_tsan
+      - name: mixed test_tsan (behavioural compatibility corpus) (Clang)
+        run: cd tests/mixed && make CC=clang test_tsan
+      - name: clogger test_tsan (Clang)
+        run: cd tests/clogger && make CC=clang test_tsan
+      - name: cthreadpool test_tsan (Clang)
+        run: cd tests/cthreadpool && make CC=clang test_tsan
+      - name: cthreadcomm test_tsan (Clang)
+        run: cd tests/cthreadcomm && make CC=clang test_tsan
+      - name: ctls test_tsan (Clang)
+        run: cd tests/ctls && make CC=clang test_tsan
+      - name: chttpclient test_tsan (Clang)
+        run: cd tests/chttpclient && make CC=clang test_tsan
+      - name: chttpserver test_tsan (Clang)
+        run: cd tests/chttpserver && make CC=clang test_tsan
+      - name: chttpserver test_engine_stop_tsan (Clang)
+        run: cd tests/chttpserver && make CC=clang test_engine_stop_tsan
+
+  linux-x86_64-tsan-macos-paths:
+    name: Linux x86_64 (ThreadSanitizer, Clang, macOS code paths)
+    runs-on: ubuntu-latest
+    # The macOS build compiles its own timed locks, a condition variable that
+    # waits on a relative time, a pipe semaphore, per-thread state on the heap
+    # and the close-on-exec gate, and the two ThreadSanitizer jobs above compile
+    # none of it. This job runs the same targets with every
+    # _CCOL_EMULATE_DARWIN_* switch that Linux runs, built with Clang, which
+    # also sees a race on a struct copy. The macOS workflow runs the same
+    # targets on the real system.
+    timeout-minutes: 90
+    env:
+      EXTRA_CFLAGS: >-
+        -D_CCOL_EMULATE_DARWIN_SYNC=1 -D_CCOL_EMULATE_DARWIN_SOCK=1
+        -D_CCOL_EMULATE_DARWIN_MEMRCHR=1 -D_CCOL_EMULATE_DARWIN_TLS=1
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang libssl-dev zlib1g-dev
+      - name: cpintable test_tsan (Clang, macOS code paths)
+        run: cd tests/cpintable && make CC=clang test_tsan
+      - name: cmempool test_tsan (Clang, macOS code paths)
+        run: cd tests/cmempool && make CC=clang test_tsan
+      - name: clrucache test_tsan (Clang, macOS code paths)
+        run: cd tests/clrucache && make CC=clang test_tsan
+      - name: mixed test_tsan (Clang, macOS code paths)
+        run: cd tests/mixed && make CC=clang test_tsan
+      - name: clogger test_tsan (Clang, macOS code paths)
+        run: cd tests/clogger && make CC=clang test_tsan
+      - name: cthreadpool test_tsan (Clang, macOS code paths)
+        run: cd tests/cthreadpool && make CC=clang test_tsan
+      - name: cthreadcomm test_tsan (Clang, macOS code paths)
+        run: cd tests/cthreadcomm && make CC=clang test_tsan
+      - name: ctls test_tsan (Clang, macOS code paths)
+        run: cd tests/ctls && make CC=clang test_tsan
+      - name: chttpclient test_tsan (Clang, macOS code paths)
+        run: cd tests/chttpclient && make CC=clang test_tsan
+      - name: chttpserver test_tsan (Clang, macOS code paths)
+        run: cd tests/chttpserver && make CC=clang test_tsan
+      - name: chttpserver test_engine_stop_tsan (Clang, macOS code paths)
+        run: cd tests/chttpserver && make CC=clang test_engine_stop_tsan
+
+  linux-x86_64-memtest-macos-paths:
+    name: Linux x86_64 (memtest, macOS code paths)
+    runs-on: ubuntu-latest
+    # macOS has no valgrind, and leaks(1) there drops the exit status of the
+    # test and hangs on a program that forks. The code that only macOS compiles
+    # sits behind the _CCOL_EMULATE_DARWIN_* switches, which this job turns on,
+    # so valgrind checks those paths for leaks and memory errors on every push:
+    # the condition variable, timed locks and semaphore of common.h (SYNC), the
+    # socket setup and the bounded send of csock.h (SOCK), the portable memrchr
+    # (MEMRCHR), and the per-thread state that a key owns (TLS). The kqueue wake
+    # descriptor (WAKEFD) needs kqueue, so only FreeBSD can run it. The suites
+    # take about as long as the memtest of the GCC job.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev zlib1g-dev valgrind
+      - name: make memtest with every macOS switch
+        run: >-
+          make memtest EXTRA_CFLAGS="-D_CCOL_EMULATE_DARWIN_SYNC=1
+          -D_CCOL_EMULATE_DARWIN_SOCK=1 -D_CCOL_EMULATE_DARWIN_MEMRCHR=1
+          -D_CCOL_EMULATE_DARWIN_TLS=1"
+
   linux-i386-gcc:
     name: Linux i386 (GCC, gcc -m32)
     runs-on: ubuntu-latest
-    # No in-process mechanism bounds a hang here: a blocked queue receive or a
-    # drain that never completes simply stops producing output, and this job's
-    # own default ceiling is six hours. The suites this runs take about twenty
-    # minutes of wall clock natively (make test plus make memtest), so this
-    # leaves several times that as headroom for a slower hosted runner while
-    # keeping a recurrence cheap rather than silent.
+    # Nothing inside the process puts a limit on a hang here: a queue receive
+    # that blocks, or a drain that never completes, simply stops the output, and
+    # the default ceiling of this job is six hours. The suites that it runs take
+    # about twenty minutes of real time on this machine (`make test` plus `make
+    # memtest`), so this timeout leaves several times that much room for a
+    # slower hosted runner while it keeps the cost of a hang small and does not
+    # hide one.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -231,116 +490,133 @@ jobs:
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get install -y gcc-multilib libssl-dev:i386 zlib1g-dev:i386
+          sudo apt-get install -y gcc-multilib libssl-dev:i386 zlib1g-dev:i386 abigail-tools
       - name: make test
-        # No `make memtest` leg here: valgrind cannot run a 32-bit process on
-        # this runner without an additional 32-bit debuginfo package
-        # (libc6-dbg:i386) that this job does not install.
+        # This job has no `make memtest` step, because valgrind cannot run a
+        # 32-bit process on this runner without one more 32-bit debug
+        # information package, libc6-dbg:i386, which this job does not install.
         run: make CC="gcc -m32" test
+      # Struct layout belongs to one architecture, so the x86_64 job cannot
+      # replace this one: a member that goes from size_t to unsigned long long,
+      # for example, changes nothing on LP64 and moves every later field on
+      # ILP32. The check reads the architecture out of the ELF header of the
+      # library, so it takes the i386 baseline even though the runner is x86_64.
+      # The `test` target goes into the suite directories and never builds the
+      # library itself, so the prerequisite of check_abi is what builds it here.
+      - name: exported ABI matches the committed i386 baseline
+        run: make CC="gcc -m32" check_abi
 
   linux-i386-clang:
     name: Linux i386 (Clang, clang -m32)
     runs-on: ubuntu-latest
-    # No in-process mechanism bounds a hang here: a blocked queue receive or a
-    # drain that never completes simply stops producing output, and this job's
-    # own default ceiling is six hours. The suites this runs take about twenty
-    # minutes of wall clock natively (make test plus make memtest), so this
-    # leaves several times that as headroom for a slower hosted runner while
-    # keeping a recurrence cheap rather than silent.
+    # Nothing inside the process puts a limit on a hang here: a queue receive
+    # that blocks, or a drain that never completes, simply stops the output, and
+    # the default ceiling of this job is six hours. The suites that it runs take
+    # about twenty minutes of real time on this machine (`make test` plus `make
+    # memtest`), so this timeout leaves several times that much room for a
+    # slower hosted runner while it keeps the cost of a hang small and does not
+    # hide one.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
-        # gcc-multilib is still required even though gcc is not the compiler
-        # used here: clang -m32 relies on the same 32-bit crt objects/libgcc
-        # that a native gcc installation's own multilib support provides
-        # (found automatically under /usr/lib/gcc/x86_64-linux-gnu/<ver>/32/,
-        # unlike the aarch64/arm32 Clang jobs' cross-compiled targets, this
-        # needs no explicit -B: it is the same host gcc installation clang
-        # already detects, just building for its 32-bit multilib variant).
+        # This job needs gcc-multilib although gcc is not the compiler here:
+        # clang -m32 uses the same 32-bit crt objects and libgcc that the
+        # multilib support of a native gcc installation gives, and clang finds
+        # them automatically under /usr/lib/gcc/x86_64-linux-gnu/<ver>/32/. This
+        # job therefore needs no -B flag, while the aarch64 and arm32 Clang jobs
+        # do, because their targets are cross-compiled; here clang detects the
+        # same host gcc installation and only builds for its 32-bit multilib
+        # form.
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
           sudo apt-get install -y clang gcc-multilib libssl-dev:i386 zlib1g-dev:i386
       - name: make test
-        # Same rationale as the i386 GCC job above for omitting `make
-        # memtest`.
+        # This job leaves out `make memtest` for the same reason as the i386
+        # GCC job above.
         run: make CC="clang -m32" test
 
   linux-i386-ubsan:
     name: Linux i386 (UBSan, gcc -m32 and clang -m32)
     runs-on: ubuntu-latest
-    # No in-process mechanism bounds a hang here: a blocked queue receive or a
-    # drain that never completes simply stops producing output, and this job's
-    # own default ceiling is six hours. The suites this runs take about twenty
-    # minutes of wall clock natively (make test plus make memtest), so this
-    # leaves several times that as headroom for a slower hosted runner while
-    # keeping a recurrence cheap rather than silent.
+    # Nothing inside the process puts a limit on a hang here: a queue receive
+    # that blocks, or a drain that never completes, simply stops the output, and
+    # the default ceiling of this job is six hours. The suites that it runs take
+    # about twenty minutes of real time on this machine (`make test` plus `make
+    # memtest`), so this timeout leaves several times that much room for a
+    # slower hosted runner while it keeps the cost of a hang small and does not
+    # hide one.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
-        # No separate sanitizer package for the GCC leg: gcc-multilib pulls the
-        # 32-bit UndefinedBehaviorSanitizer runtime in transitively, through
-        # gcc-<ver>-multilib -> lib32gcc-<ver>-dev -> lib32ubsan1. The Clang leg
-        # needs gcc-multilib too, for the same 32-bit crt objects and libgcc the
-        # plain i386 Clang job relies on.
+        # The GCC step needs no sanitizer package of its own, because
+        # gcc-multilib brings in the 32-bit UndefinedBehaviorSanitizer runtime
+        # through a chain of dependencies: gcc-<ver>-multilib ->
+        # lib32gcc-<ver>-dev -> lib32ubsan1. The Clang step also needs
+        # gcc-multilib, for the same 32-bit crt objects and libgcc that the
+        # plain i386 Clang job uses.
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
           sudo apt-get install -y clang gcc-multilib libssl-dev:i386 zlib1g-dev:i386
       - name: make test (EXTRA_CFLAGS=-fsanitize=undefined -fno-sanitize-recover=undefined)
-        # Neither half of this combination reaches what the pair does. Whether
-        # an expression is well defined can depend on the width of size_t (a
-        # shift distance in range for 64 bits can exceed 32), and instrumenting
-        # an operation is what makes a compiler reckon with an expression it
-        # would otherwise fold away, so a defect can sit in the intersection and
-        # be invisible to both the x86_64 sanitizer job and the plain i386 jobs.
+        # Neither half of this combination finds what the pair finds. Whether an
+        # expression is well defined can depend on the width of size_t: a shift
+        # distance that is in range for 64 bits can be too large for 32.
+        # Instrumentation is also what makes a compiler deal with an expression
+        # that it would otherwise fold away, so a defect can sit between the
+        # two, where neither the x86_64 sanitizer job nor the plain i386 jobs
+        # can see it.
         #
-        # -fno-sanitize-recover=undefined: without it, UBSan reports a detected
-        # problem to stderr and keeps running, so a real finding here would not
-        # fail the job at all; the process still exits 0.
+        # -fno-sanitize-recover=undefined is necessary: without it,
+        # UndefinedBehaviorSanitizer writes a report to stderr and continues,
+        # and a real finding here would not fail the job, because the process
+        # exits 0 all the same.
         #
-        # Both compilers, as the two plain i386 jobs also cover both: their
-        # UndefinedBehaviorSanitizer implementations do not check the same set
-        # of things, so one can be clean where the other is not.
+        # This job uses both compilers, as the two plain i386 jobs also do:
+        # their UndefinedBehaviorSanitizer versions do not check the same set of
+        # things, so one can be clean where the other is not.
         #
-        # No AddressSanitizer leg and no `make memtest`: 32-bit ASan wants an
-        # address-space reservation this runner does not reliably allow, and
-        # valgrind cannot run a 32-bit process here without libc6-dbg:i386,
-        # which is why the two plain i386 jobs omit memtest as well.
+        # This job has no AddressSanitizer step and no `make memtest`. A 32-bit
+        # AddressSanitizer needs a reservation of address space that this runner
+        # does not always give, and valgrind cannot run a 32-bit process here
+        # without libc6-dbg:i386, which is also why the two plain i386 jobs
+        # leave out memtest.
         run: make CC="gcc -m32" EXTRA_CFLAGS="-fsanitize=undefined -fno-sanitize-recover=undefined" test
       - name: make test (clang -m32, EXTRA_CFLAGS=-fsanitize=undefined -fno-sanitize-recover=undefined)
-        # The build-identity stamp the objects depend on covers the compiler and
-        # its flags, so switching CC here rebuilds rather than relinking the
-        # previous leg's objects.
+        # The objects depend on the build identity stamp, which holds the
+        # compiler and its flags, so a change of CC here builds the objects
+        # again instead of linking the objects of the step before it.
         run: make CC="clang -m32" EXTRA_CFLAGS="-fsanitize=undefined -fno-sanitize-recover=undefined" test
 
   linux-aarch64-gcc:
     name: Linux aarch64 (cross-compile + QEMU)
     runs-on: ubuntu-latest
-    # qemu-user has a timing-dependent deadlock class around a guest fork():
-    # a lock held inside the emulator at that instant is inherited locked by
-    # the child, whose threads then sleep on a futex with nothing able to
-    # release them. The one identified instance of it, linux-user's own
-    # fd_trans_lock (gitlab.com/qemu-project/qemu/-/issues/2846), is fixed in
-    # the qemu-user this job installs below. This bound covers whatever else
-    # in that class remains: no in-process timeout can recover from it,
-    # because the itimer this suite's own alarm() safety nets rely on is
-    # stuck inside the same deadlock, and an occurrence ran for over 3 hours
-    # with zero output before being cancelled. The bound keeps a recurrence
-    # cheap instead of silently burning runner time.
+    # qemu-user has a class of deadlock around a guest fork() that depends on
+    # timing: a lock that the emulator holds at that instant passes to the child
+    # in a locked state, and the threads of the child then sleep on a futex,
+    # waiting for a lock that nothing can unlock. One member of that class is known: the fd_trans_lock
+    # of linux-user itself, at gitlab.com/qemu-project/qemu/-/issues/2846. The
+    # qemu-user that this job installs below corrects it. This time limit covers
+    # whatever else remains in that class. No timeout inside the process can
+    # recover from it, because the itimer that the alarm() safety nets of this
+    # suite depend on is stuck in the same deadlock. One such event ran for more
+    # than 3 hours with no output before somebody cancelled it; this limit keeps
+    # another such event cheap and does not let one use runner time in silence.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
-        # arm64 is a ports architecture: its package indices live on
-        # ports.ubuntu.com, not on the primary/security archive mirrors this
-        # runner's default sources point at. Restrict the default sources to
-        # amd64 (they carry no arm64 indices at all) and add a dedicated
-        # arm64 source pointed at ports.ubuntu.com, or `apt-get update`
-        # 404s trying to fetch nonexistent arm64 indices from the default
-        # mirrors once arm64 is registered as a foreign architecture.
+        # arm64 is a ports architecture: its package indices are on
+        # ports.ubuntu.com, not on the primary and security archive mirrors that
+        # the default sources of this runner name. You must limit the default
+        # sources to amd64, because they hold no arm64 indices at all, and you
+        # must also add an arm64 source of its own that names ports.ubuntu.com.
+        # Without both steps, `apt-get update` gets a 404 as soon as arm64
+        # becomes a foreign architecture, because it asks the default mirrors
+        # for arm64 indices that do not exist.
         run: |
           sudo dpkg --add-architecture arm64
           if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
@@ -352,26 +628,26 @@ jobs:
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
           EOF
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu libssl-dev:arm64 zlib1g-dev:arm64
+          sudo apt-get install -y gcc-aarch64-linux-gnu libssl-dev:arm64 zlib1g-dev:arm64 abigail-tools
       - name: Install a qemu-user build without the fd_trans_lock fork bug
-        # Ubuntu 24.04 ships qemu-user 8.2.2, which carries a linux-user bug
-        # that can leave its internal, process-wide fd_trans_lock permanently
-        # locked in a forked child (gitlab.com/qemu-project/qemu/-/issues/2846).
-        # Every thread of that child then sleeps on a futex forever, which
-        # surfaces here as an unrelated-looking test hanging until its own
-        # bounded wait gives up. The trigger is not something a guest program
-        # can avoid by forking carefully: qemu-user runs more than one host
-        # thread even while the emulated program is single-threaded, so any
-        # guest fork() is exposed. Measured against this repository's own
-        # cthreadcomm suite, 8.2.2 fails roughly one full-suite run in ten,
-        # landing on a different fork() test each time, while 10.x passes.
+        # Ubuntu 24.04 ships qemu-user 8.2.2, which has a linux-user bug that
+        # can leave its internal, process-wide fd_trans_lock locked for ever in
+        # a forked child; see gitlab.com/qemu-project/qemu/-/issues/2846. Every
+        # thread of that child then sleeps on a futex for ever, which here shows
+        # as a test that hangs until its own bounded wait gives up and that
+        # looks unrelated to fork(). A guest program cannot avoid the trigger by
+        # a careful fork: qemu-user runs more than one host thread even when the
+        # emulated program has one thread, so any guest fork() is exposed.
+        # Measured against the cthreadcomm suite of this repository, 8.2.2 fails
+        # about one full-suite run in ten, on a different fork() test each time,
+        # while version 10.x passes.
         #
-        # The static qemu-user binary is copied out of an official Debian
-        # trixie image rather than installed from apt, because no Ubuntu 24.04
-        # archive carries a fixed build. Nothing else about these jobs changes:
-        # the binary is static-pie with no libc dependency, so it runs directly
-        # on the runner, and the cross toolchain, sysroot and build flags stay
-        # exactly as they were.
+        # This step copies the static qemu-user binary out of an official Debian
+        # trixie image instead of installing one from apt, because no Ubuntu
+        # 24.04 archive holds a corrected build. Nothing else about these jobs
+        # changes: the binary is static-pie and needs no libc, so it runs
+        # directly on the runner, and the cross toolchain, the sysroot and the
+        # build flags all stay the same.
         run: |
           set -e
           STAGE=$(mktemp -d)
@@ -384,50 +660,52 @@ jobs:
           sudo rm -rf "$STAGE"
           qemu-aarch64-static --version | head -1
       - name: Cross-build and run each module's test suite under qemu-aarch64
-        # The per-module test/memtest targets hardcode a bare `./tests`
-        # invocation with no prefix-injection point, so an aarch64 binary
-        # built via CC=aarch64-linux-gnu-gcc cannot simply be run through
-        # `make test` on this x86_64 runner; it would try to execute an
-        # ARM binary directly and fail immediately with "cannot execute
-        # binary file". Each module is instead built via the existing
-        # `build` target (unmodified) and its resulting `./tests` binary run
-        # directly through qemu-aarch64. No `make memtest` (valgrind) leg:
-        # running valgrind nested inside qemu-user emulation is not a
-        # reliably supported combination.
+        # The test and memtest targets of each module hold a plain `./tests`
+        # command, with no place to put a prefix, so you cannot run an aarch64
+        # binary from CC=aarch64-linux-gnu-gcc through `make test` on this
+        # x86_64 runner: the shell would try to run an ARM binary directly, and
+        # it would fail at once with "cannot execute binary file". This job
+        # therefore builds each module with the existing `build` target, which
+        # it does not change, and then runs the `./tests` binary of that module
+        # through qemu-aarch64. There is no `make memtest` step with valgrind,
+        # because valgrind inside qemu-user emulation is not a combination that
+        # works reliably.
         run: |
           set -e
-          # Several suites fork a child that deliberately abort()s to prove a
-          # misuse is fatal. qemu-user writes a guest core dump per abort into
-          # the working directory, which these deliberate aborts give no reason
-          # to keep and which runs to gigabytes across a full sweep, so the
-          # limit is zeroed rather than left to whatever the runner defaults to.
+          # Several suites fork a child that calls abort() on purpose, to prove
+          # that a misuse stops the process, and qemu-user writes one guest core
+          # dump for each abort into the working directory. There is no reason
+          # to keep a core dump from a deliberate abort, and across a full sweep
+          # they reach several gigabytes, so this job sets the limit to zero
+          # instead of leaving it at the default of the runner.
           ulimit -c 0
           for dir in tests/*/; do
             mod=$(basename "$dir")
             [ "$mod" = "tau" ] && continue
             echo "::group::$mod"
-            # Build exactly what this module's own `test` target builds, and
-            # run exactly the binaries its recipe runs, so this job covers the
-            # same set as the native jobs. Most modules have one binary, but
-            # chttpclient, chttpserver and cyaml each have several, and a
-            # module that gains another later is picked up here with no edit
-            # to this workflow. Deriving both lists from the Makefile keeps
-            # that in step automatically; cyaml's build_differential is
-            # correctly left out, since it is deliberately not a `test`
-            # prerequisite.
+            # This builds exactly what the `test` target of this module builds
+            # and runs exactly the binaries that its recipe runs, so this job
+            # covers the same set as the native jobs. Most modules have one
+            # binary, while chttpclient, chttpserver and cyaml each have
+            # several. A module that gets another binary later appears here with
+            # no edit to this workflow, because both lists come from the
+            # Makefile and stay in step with it automatically. The
+            # build_differential target of cyaml stays out, which is correct,
+            # because it is not a prerequisite of `test`.
             targets=$(sed -n 's/^test:[[:space:]]*//p' "$dir/Makefile" | head -1)
             bins=$(awk '/^test:/{f=1;next} f&&/^\t\.\//{sub(/^\t\.\//,"");print $1;next} f&&/^[^\t]/{exit}' "$dir/Makefile")
-            # Both lists are derived by matching this module's own Makefile, so a
-            # recipe that changes shape yields an empty list, the loop below
-            # iterates zero times, and the module is built but never run, with
-            # nothing non-zero for `set -e` to see. Assert they are non-empty.
+            # Both lists come from a match against the Makefile of this module,
+            # so a recipe that changes shape gives an empty list. The loop below
+            # then runs zero times, and the job builds the module but never runs
+            # it, with no non-zero status for `set -e` to see; these two tests
+            # prove that neither list is empty.
             test -n "$targets" || { echo "no test targets parsed from $dir/Makefile" >&2; exit 1; }
             test -n "$bins" || { echo "no test binaries parsed from $dir/Makefile" >&2; exit 1; }
             (cd "$dir" && make CC=aarch64-linux-gnu-gcc $targets)
-            # Run from inside the module directory, exactly as its own
-            # `test` target does: at least one binary (cyaml's
-            # tests_spec_suite) resolves its vendored data files relative
-            # to its own directory and fails outright from anywhere else.
+            # This runs from inside the module directory, exactly as the `test`
+            # target of that module does: at least one binary, tests_spec_suite
+            # of cyaml, finds its data files relative to its own directory and
+            # fails completely from any other directory.
             for bin in $bins; do
               echo "--- $bin ---"
               (cd "$dir" && qemu-aarch64-static -L /usr/aarch64-linux-gnu "./$bin")
@@ -435,21 +713,32 @@ jobs:
             echo "::endgroup::"
           done
 
+      # Struct layout belongs to one architecture, so no other job can replace
+      # this one. The check reads the architecture out of the ELF header of the
+      # library and not from the runner, which is x86_64 here, so it takes the
+      # aarch64 baseline for this cross-built library. Nothing runs under QEMU,
+      # because a read of an ELF file and its debug information is a static
+      # comparison. The `test` targets of each module above never build the
+      # library itself, so the prerequisite of check_abi is what builds it.
+      - name: exported ABI matches the committed aarch64 baseline
+        run: make CC=aarch64-linux-gnu-gcc check_abi
+
   linux-aarch64-clang:
     name: Linux aarch64 (Clang cross-compile + QEMU)
     runs-on: ubuntu-latest
-    # See linux-aarch64-gcc's own comment above for the full rationale: this
-    # job runs the identical fork() tests under the same emulator, so it
-    # carries the identical residual deadlock risk.
+    # See the comment in the linux-aarch64-gcc job above for the full reason.
+    # This job runs the same fork() tests under the same emulator, so it has
+    # the same remaining risk of a deadlock.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
-        # Same arm64-ports setup as the aarch64 GCC job above (see its own
-        # comment for why); additionally installs clang itself, and keeps
-        # gcc-aarch64-linux-gnu even though it is not the compiler used here,
-        # since clang has no crt objects/libgcc of its own for this target
-        # and needs gcc-aarch64-linux-gnu's to link against.
+        # This is the same arm64 ports setup as in the aarch64 GCC job above
+        # (see the comment there for the reason), and this job also installs
+        # clang itself. It keeps gcc-aarch64-linux-gnu although gcc is not the
+        # compiler here, because clang has no crt objects and no libgcc of its
+        # own for this target and links against the ones from
+        # gcc-aarch64-linux-gnu.
         run: |
           sudo dpkg --add-architecture arm64
           if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
@@ -463,8 +752,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang gcc-aarch64-linux-gnu libssl-dev:arm64 zlib1g-dev:arm64
       - name: Install a qemu-user build without the fd_trans_lock fork bug
-        # See linux-aarch64-gcc's own identical step above for the full
-        # rationale.
+        # See the same step in the linux-aarch64-gcc job above for the full
+        # reason.
         run: |
           set -e
           STAGE=$(mktemp -d)
@@ -477,53 +766,56 @@ jobs:
           sudo rm -rf "$STAGE"
           qemu-aarch64-static --version | head -1
       - name: Cross-build and run each module's test suite under qemu-aarch64
-        # Same shape as the aarch64 GCC job above (bare ./tests invocation,
-        # no memtest leg; see its own comment for the full rationale on
-        # both). The one real difference is how CC cross-compiles:
+        # This has the same shape as the aarch64 GCC job above: a plain ./tests
+        # command and no memtest step (see the comment in that job for the full
+        # reason for both). The one real difference is how CC cross-compiles:
         #
-        # -B points clang at gcc-aarch64-linux-gnu's own crtbeginS.o/libgcc/
-        # libgcc_s, which clang has no equivalent of on its own; the exact
-        # path is discovered at run time (not hardcoded), since it names the
-        # specific GCC version this runner's own gcc-aarch64-linux-gnu
-        # package happens to ship, not a fixed version this workflow should
-        # assume. An explicit --sysroot= is deliberately NOT passed:
-        # Debian/Ubuntu's aarch64-linux-gnu-ld already has the correct
-        # sysroot (/usr/aarch64-linux-gnu) built into it at package-build
-        # time, and passing --sysroot= again on top of that double-prefixes
-        # every path ld resolves and breaks the link (reproduced directly:
-        # "cannot find /usr/aarch64-linux-gnu/lib/libc.so.6 inside
-        # /usr/aarch64-linux-gnu" with --sysroot= present, gone once removed).
+        # -B points clang at the crtbeginS.o, libgcc and libgcc_s of
+        # gcc-aarch64-linux-gnu, because clang has none of its own. The job
+        # finds the exact path at run time and does not hold a fixed one,
+        # because the path names the GCC version that the gcc-aarch64-linux-gnu
+        # package of this runner ships, and this workflow must not assume a
+        # version. The job does NOT pass an explicit --sysroot=, on purpose: the
+        # aarch64-linux-gnu-ld of Debian and Ubuntu already holds the correct
+        # sysroot, /usr/aarch64-linux-gnu, from the time somebody built the
+        # package, and a --sysroot= on top of that puts the prefix in front of
+        # every path that ld resolves a second time, so the link fails. With
+        # --sysroot= present, ld reports "cannot find
+        # /usr/aarch64-linux-gnu/lib/libc.so.6 inside /usr/aarch64-linux-gnu";
+        # without the flag the error goes away.
         run: |
           set -e
           AARCH64_GCC_CROSS_DIR=$(find /usr/lib/gcc-cross/aarch64-linux-gnu -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
-          # See linux-aarch64-gcc's own identical line above for why.
+          # See the same line in the linux-aarch64-gcc job above for the
+          # reason.
           ulimit -c 0
           for dir in tests/*/; do
             mod=$(basename "$dir")
             [ "$mod" = "tau" ] && continue
             echo "::group::$mod"
-            # Build exactly what this module's own `test` target builds, and
-            # run exactly the binaries its recipe runs, so this job covers the
-            # same set as the native jobs. Most modules have one binary, but
-            # chttpclient, chttpserver and cyaml each have several, and a
-            # module that gains another later is picked up here with no edit
-            # to this workflow. Deriving both lists from the Makefile keeps
-            # that in step automatically; cyaml's build_differential is
-            # correctly left out, since it is deliberately not a `test`
-            # prerequisite.
+            # This builds exactly what the `test` target of this module builds
+            # and runs exactly the binaries that its recipe runs, so this job
+            # covers the same set as the native jobs. Most modules have one
+            # binary, while chttpclient, chttpserver and cyaml each have
+            # several. A module that gets another binary later appears here with
+            # no edit to this workflow, because both lists come from the
+            # Makefile and stay in step with it automatically. The
+            # build_differential target of cyaml stays out, which is correct,
+            # because it is not a prerequisite of `test`.
             targets=$(sed -n 's/^test:[[:space:]]*//p' "$dir/Makefile" | head -1)
             bins=$(awk '/^test:/{f=1;next} f&&/^\t\.\//{sub(/^\t\.\//,"");print $1;next} f&&/^[^\t]/{exit}' "$dir/Makefile")
-            # Both lists are derived by matching this module's own Makefile, so a
-            # recipe that changes shape yields an empty list, the loop below
-            # iterates zero times, and the module is built but never run, with
-            # nothing non-zero for `set -e` to see. Assert they are non-empty.
+            # Both lists come from a match against the Makefile of this module,
+            # so a recipe that changes shape gives an empty list. The loop below
+            # then runs zero times, and the job builds the module but never runs
+            # it, with no non-zero status for `set -e` to see; these two tests
+            # prove that neither list is empty.
             test -n "$targets" || { echo "no test targets parsed from $dir/Makefile" >&2; exit 1; }
             test -n "$bins" || { echo "no test binaries parsed from $dir/Makefile" >&2; exit 1; }
             (cd "$dir" && make CC="clang --target=aarch64-linux-gnu -B$AARCH64_GCC_CROSS_DIR" $targets)
-            # Run from inside the module directory, exactly as its own
-            # `test` target does: at least one binary (cyaml's
-            # tests_spec_suite) resolves its vendored data files relative
-            # to its own directory and fails outright from anywhere else.
+            # This runs from inside the module directory, exactly as the `test`
+            # target of that module does: at least one binary, tests_spec_suite
+            # of cyaml, finds its data files relative to its own directory and
+            # fails completely from any other directory.
             for bin in $bins; do
               echo "--- $bin ---"
               (cd "$dir" && qemu-aarch64-static -L /usr/aarch64-linux-gnu "./$bin")
@@ -534,19 +826,19 @@ jobs:
   linux-arm32-gcc:
     name: Linux arm32 (cross-compile + QEMU)
     runs-on: ubuntu-latest
-    # See linux-aarch64-gcc's own comment above for the full rationale: this
-    # job runs the identical fork() tests under qemu-arm, so it carries the
-    # identical residual deadlock risk.
+    # See the comment in the linux-aarch64-gcc job above for the full reason.
+    # This job runs the same fork() tests under qemu-arm, so it has the same
+    # remaining risk of a deadlock.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
-        # armhf is a ports architecture, exactly like arm64 above: its
-        # package indices live on ports.ubuntu.com, not on the primary/
-        # security archive mirrors this runner's default sources point at.
-        # Restrict the default sources to amd64 and add a dedicated armhf
-        # source pointed at ports.ubuntu.com, mirroring the aarch64 job's
-        # own identical fix.
+        # armhf is a ports architecture in the same way as arm64 above: its
+        # package indices are on ports.ubuntu.com, not on the primary and
+        # security archive mirrors that the default sources of this runner name.
+        # Limit the default sources to amd64, and add an armhf source of its own
+        # that names ports.ubuntu.com; this is the same change as in the aarch64
+        # job.
         run: |
           sudo dpkg --add-architecture armhf
           if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
@@ -558,10 +850,10 @@ jobs:
           deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
           EOF
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf libssl-dev:armhf zlib1g-dev:armhf
+          sudo apt-get install -y gcc-arm-linux-gnueabihf libssl-dev:armhf zlib1g-dev:armhf abigail-tools
       - name: Install a qemu-user build without the fd_trans_lock fork bug
-        # See linux-aarch64-gcc's own identical step above for the full
-        # rationale.
+        # See the same step in the linux-aarch64-gcc job above for the full
+        # reason.
         run: |
           set -e
           STAGE=$(mktemp -d)
@@ -574,43 +866,45 @@ jobs:
           sudo rm -rf "$STAGE"
           qemu-arm-static --version | head -1
       - name: Cross-build and run each module's test suite under qemu-arm
-        # Same shape as the aarch64 job above: build each module via the
-        # existing `build` target with CC=arm-linux-gnueabihf-gcc and run the
-        # resulting ./tests binary directly through qemu-arm, since this
-        # x86_64 runner cannot execute an armhf binary on its own. No `make
-        # memtest` (valgrind) leg, for the same reason the aarch64 job has
-        # none: valgrind nested inside qemu-user emulation is not a
-        # reliably supported combination.
+        # This has the same shape as the aarch64 job above: it builds each
+        # module with the existing `build` target and
+        # CC=arm-linux-gnueabihf-gcc, and then runs the ./tests binary of that
+        # module through qemu-arm, because this x86_64 runner cannot run an
+        # armhf binary on its own. There is no `make memtest` step with
+        # valgrind, for the same reason as in the aarch64 job: valgrind inside
+        # qemu-user emulation is not a combination that works reliably.
         run: |
           set -e
-          # See linux-aarch64-gcc's own identical line above for why.
+          # See the same line in the linux-aarch64-gcc job above for the
+          # reason.
           ulimit -c 0
           for dir in tests/*/; do
             mod=$(basename "$dir")
             [ "$mod" = "tau" ] && continue
             echo "::group::$mod"
-            # Build exactly what this module's own `test` target builds, and
-            # run exactly the binaries its recipe runs, so this job covers the
-            # same set as the native jobs. Most modules have one binary, but
-            # chttpclient, chttpserver and cyaml each have several, and a
-            # module that gains another later is picked up here with no edit
-            # to this workflow. Deriving both lists from the Makefile keeps
-            # that in step automatically; cyaml's build_differential is
-            # correctly left out, since it is deliberately not a `test`
-            # prerequisite.
+            # This builds exactly what the `test` target of this module builds
+            # and runs exactly the binaries that its recipe runs, so this job
+            # covers the same set as the native jobs. Most modules have one
+            # binary, while chttpclient, chttpserver and cyaml each have
+            # several. A module that gets another binary later appears here with
+            # no edit to this workflow, because both lists come from the
+            # Makefile and stay in step with it automatically. The
+            # build_differential target of cyaml stays out, which is correct,
+            # because it is not a prerequisite of `test`.
             targets=$(sed -n 's/^test:[[:space:]]*//p' "$dir/Makefile" | head -1)
             bins=$(awk '/^test:/{f=1;next} f&&/^\t\.\//{sub(/^\t\.\//,"");print $1;next} f&&/^[^\t]/{exit}' "$dir/Makefile")
-            # Both lists are derived by matching this module's own Makefile, so a
-            # recipe that changes shape yields an empty list, the loop below
-            # iterates zero times, and the module is built but never run, with
-            # nothing non-zero for `set -e` to see. Assert they are non-empty.
+            # Both lists come from a match against the Makefile of this module,
+            # so a recipe that changes shape gives an empty list. The loop below
+            # then runs zero times, and the job builds the module but never runs
+            # it, with no non-zero status for `set -e` to see; these two tests
+            # prove that neither list is empty.
             test -n "$targets" || { echo "no test targets parsed from $dir/Makefile" >&2; exit 1; }
             test -n "$bins" || { echo "no test binaries parsed from $dir/Makefile" >&2; exit 1; }
             (cd "$dir" && make CC=arm-linux-gnueabihf-gcc $targets)
-            # Run from inside the module directory, exactly as its own
-            # `test` target does: at least one binary (cyaml's
-            # tests_spec_suite) resolves its vendored data files relative
-            # to its own directory and fails outright from anywhere else.
+            # This runs from inside the module directory, exactly as the `test`
+            # target of that module does: at least one binary, tests_spec_suite
+            # of cyaml, finds its data files relative to its own directory and
+            # fails completely from any other directory.
             for bin in $bins; do
               echo "--- $bin ---"
               (cd "$dir" && qemu-arm-static -L /usr/arm-linux-gnueabihf "./$bin")
@@ -618,21 +912,32 @@ jobs:
             echo "::endgroup::"
           done
 
+      # Struct layout belongs to one architecture, so no other job can replace
+      # this one. The check reads the architecture out of the ELF header of the
+      # library and not from the runner, which is x86_64 here, so it takes the
+      # armhf baseline for this cross-built library. Nothing runs under QEMU,
+      # because a read of an ELF file and its debug information is a static
+      # comparison. The `test` targets of each module above never build the
+      # library itself, so the prerequisite of check_abi is what builds it.
+      - name: exported ABI matches the committed armhf baseline
+        run: make CC=arm-linux-gnueabihf-gcc check_abi
+
   linux-arm32-clang:
     name: Linux arm32 (Clang cross-compile + QEMU)
     runs-on: ubuntu-latest
-    # See linux-aarch64-gcc's own comment above for the full rationale: this
-    # job runs the identical fork() tests under qemu-arm, so it carries the
-    # identical residual deadlock risk.
+    # See the comment in the linux-aarch64-gcc job above for the full reason.
+    # This job runs the same fork() tests under qemu-arm, so it has the same
+    # remaining risk of a deadlock.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
-        # Same armhf-ports setup as the arm32 GCC job above (see its own
-        # comment for why); additionally installs clang itself, and keeps
-        # gcc-arm-linux-gnueabihf even though it is not the compiler used
-        # here, since clang has no crt objects/libgcc of its own for this
-        # target and needs gcc-arm-linux-gnueabihf's to link against.
+        # This is the same armhf ports setup as in the arm32 GCC job above (see
+        # the comment there for the reason), and this job also installs clang
+        # itself. It keeps gcc-arm-linux-gnueabihf although gcc is not the
+        # compiler here, because clang has no crt objects and no libgcc of its
+        # own for this target and links against the ones from
+        # gcc-arm-linux-gnueabihf.
         run: |
           sudo dpkg --add-architecture armhf
           if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
@@ -646,8 +951,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang gcc-arm-linux-gnueabihf libssl-dev:armhf zlib1g-dev:armhf
       - name: Install a qemu-user build without the fd_trans_lock fork bug
-        # See linux-aarch64-gcc's own identical step above for the full
-        # rationale.
+        # See the same step in the linux-aarch64-gcc job above for the full
+        # reason.
         run: |
           set -e
           STAGE=$(mktemp -d)
@@ -660,62 +965,60 @@ jobs:
           sudo rm -rf "$STAGE"
           qemu-arm-static --version | head -1
       - name: Cross-build and run each module's test suite under qemu-arm
-        # Same shape as the arm32 GCC job above (bare ./tests invocation, no
-        # memtest leg; see its own comment for the full rationale on both),
-        # and the same cross-linking approach (-B, no explicit --sysroot=)
-        # as the aarch64 Clang job above; see that job's own comment for the
-        # full rationale (gcc-arm-linux-gnueabihf-ld has its own correct
-        # sysroot built in, and passing --sysroot= again on top of that
-        # double-prefixes every path ld resolves and breaks the link).
+        # This has the same shape as the arm32 GCC job above: a plain ./tests
+        # command and no memtest step (see the comment in that job for the full
+        # reason for both). It cross-links in the same way as the aarch64 Clang
+        # job above, with -B and no explicit --sysroot= (see the comment in that
+        # job for the full reason). In short, gcc-arm-linux-gnueabihf-ld already
+        # holds its own correct sysroot, and a --sysroot= on top of that puts
+        # the prefix in front of every path that ld resolves a second time, so
+        # the link fails.
         #
-        # EXTRA_CFLAGS="-Wno-error=unused-command-line-argument": Clang does
-        # not implement -fstack-clash-protection's actual codegen for this
-        # target at all (confirmed empirically: a binary built with the flag
-        # is byte-identical to one built without it, on both clang-18 and
-        # clang-19; GCC's own arm-linux-gnueabihf cross-compiler DOES
-        # implement it, genuinely differing binaries, so linux-arm32-gcc
-        # above still provides real protection for this architecture).
-        # Whether Clang's driver actually WARNS about this is, separately,
-        # its own genuine driver quirk: "argument unused during compilation"
-        # fires only when the link step has no -l flag at all, so a
-        # module's own LFLAGS being empty or not is what silently decided
-        # whether -Werror caught it, not anything about the module's source.
-        # Downgrading only this one, fully-understood diagnostic class from
-        # fatal to a visible warning (never silencing it outright, e.g. via
-        # a decoy -l flag) keeps the CI log honestly showing that this one
-        # compiler/target combination cannot provide this specific hardening
-        # flag, rather than hiding it.
+        # clang generates no code for -fstack-clash-protection on this target: a
+        # binary built with the flag is identical, byte for byte, to one built
+        # without it, on both clang-18 and clang-19, and the driver then reports
+        # "argument unused during compilation". The root Makefile and
+        # tests/hardening.mk therefore PROBE each hardening flag and pass only
+        # the ones that this compiler implements for this target, so this job
+        # needs no -Wno-error of its own. Run `make hardening_report` to see
+        # which flags survive for a given compiler and target.
+        #
+        # The arm-linux-gnueabihf cross compiler of GCC does generate that code,
+        # and its binaries really do differ, so the linux-arm32-gcc job above
+        # gives real protection on this architecture.
         run: |
           set -e
           ARM_GCC_CROSS_DIR=$(find /usr/lib/gcc-cross/arm-linux-gnueabihf -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
-          # See linux-aarch64-gcc's own identical line above for why.
+          # See the same line in the linux-aarch64-gcc job above for the
+          # reason.
           ulimit -c 0
           for dir in tests/*/; do
             mod=$(basename "$dir")
             [ "$mod" = "tau" ] && continue
             echo "::group::$mod"
-            # Build exactly what this module's own `test` target builds, and
-            # run exactly the binaries its recipe runs, so this job covers the
-            # same set as the native jobs. Most modules have one binary, but
-            # chttpclient, chttpserver and cyaml each have several, and a
-            # module that gains another later is picked up here with no edit
-            # to this workflow. Deriving both lists from the Makefile keeps
-            # that in step automatically; cyaml's build_differential is
-            # correctly left out, since it is deliberately not a `test`
-            # prerequisite.
+            # This builds exactly what the `test` target of this module builds
+            # and runs exactly the binaries that its recipe runs, so this job
+            # covers the same set as the native jobs. Most modules have one
+            # binary, while chttpclient, chttpserver and cyaml each have
+            # several. A module that gets another binary later appears here with
+            # no edit to this workflow, because both lists come from the
+            # Makefile and stay in step with it automatically. The
+            # build_differential target of cyaml stays out, which is correct,
+            # because it is not a prerequisite of `test`.
             targets=$(sed -n 's/^test:[[:space:]]*//p' "$dir/Makefile" | head -1)
             bins=$(awk '/^test:/{f=1;next} f&&/^\t\.\//{sub(/^\t\.\//,"");print $1;next} f&&/^[^\t]/{exit}' "$dir/Makefile")
-            # Both lists are derived by matching this module's own Makefile, so a
-            # recipe that changes shape yields an empty list, the loop below
-            # iterates zero times, and the module is built but never run, with
-            # nothing non-zero for `set -e` to see. Assert they are non-empty.
+            # Both lists come from a match against the Makefile of this module,
+            # so a recipe that changes shape gives an empty list. The loop below
+            # then runs zero times, and the job builds the module but never runs
+            # it, with no non-zero status for `set -e` to see; these two tests
+            # prove that neither list is empty.
             test -n "$targets" || { echo "no test targets parsed from $dir/Makefile" >&2; exit 1; }
             test -n "$bins" || { echo "no test binaries parsed from $dir/Makefile" >&2; exit 1; }
-            (cd "$dir" && make CC="clang --target=arm-linux-gnueabihf -B$ARM_GCC_CROSS_DIR" EXTRA_CFLAGS="-Wno-error=unused-command-line-argument" $targets)
-            # Run from inside the module directory, exactly as its own
-            # `test` target does: at least one binary (cyaml's
-            # tests_spec_suite) resolves its vendored data files relative
-            # to its own directory and fails outright from anywhere else.
+            (cd "$dir" && make CC="clang --target=arm-linux-gnueabihf -B$ARM_GCC_CROSS_DIR" $targets)
+            # This runs from inside the module directory, exactly as the `test`
+            # target of that module does: at least one binary, tests_spec_suite
+            # of cyaml, finds its data files relative to its own directory and
+            # fails completely from any other directory.
             for bin in $bins; do
               echo "--- $bin ---"
               (cd "$dir" && qemu-arm-static -L /usr/arm-linux-gnueabihf "./$bin")

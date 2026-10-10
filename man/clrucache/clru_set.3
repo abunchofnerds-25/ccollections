@@ -1,50 +1,81 @@
 .TH CLRU_SET 3 "2026-08-02" "c_collections" "C Collections Library - Macros"
 .SH NAME
-clru_set \- store a value by key (type-safe convenience wrapper)
+clru_set \- store a value by key (a type-inferred convenience wrapper)
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <clrucache.h>
+#include <ccollections/clrucache.h>
 
 ccol_retval_t clru_set(name, key, val);
 .fi
 .SH DESCRIPTION
 .nf
-Type-safe GNU C statement expression that converts key and val to the
-cache's own declared KeyT/ValT (the same way a plain C assignment would),
-serialises the converted values into cmap_pair values, and calls
-clrucache_set_full().
+A type-inferred GNU C statement expression that converts key and val
+to the declared KeyT and ValT of the cache, in the same way as a plain
+C assignment, serialises the converted values into cmap_pair values,
+and calls clrucache_set_full().
 
-Converting val to ValT (rather than storing val's own natural expression
-type verbatim) means an int literal passed for a double-valued cache
-stores the double value 5.0, not a 4-byte copy of the int's own bit
-pattern; a val (or key) expression whose type cannot be implicitly
-converted to the cache's declared ValT (or KeyT) is a compile error at
-this point.
+The macro converts val to ValT instead of storing the natural
+expression type of val unchanged, so an int literal that goes into a
+double-valued cache stores the double value 5.0, not a 4-byte copy of
+the bit pattern of the int. The compiler must be able to convert a val
+or key expression implicitly to the declared ValT or KeyT of the
+cache; one that it cannot convert is a compile error at this point. A
+character-pointer KeyT or ValT is the exception: the macro keeps the
+pointer type of the expression, so a const char * key or value for a
+char * cache needs no cast.
 
-If a remote setter was configured at construction it is called
-synchronously before the cache is updated. On setter failure the
-function returns ccol_unexpected_failure and the cache is left unchanged.
+A key of a struct type is the same key as another one only when every
+byte of the two is equal, padding included; see KEYS WITH PADDING in
+clrucache_create_full(3). With GCC 11 or later this macro sets the
+padding of its own copy of the key to zero.
+
+If the caller configured a remote setter at construction, the library
+calls it synchronously before it updates the cache. When the setter
+fails, the macro returns ccol_unexpected_failure and the cache does not
+change for that key; even the position of that key in the eviction
+order stays the same. While the setter runs, a concurrent insert that
+needs room can evict the key like any other entry; see
+clrucache_set_full(3).
 .fi
 .SH PARAMETERS
 .nf
-name  Cache variable. Must be a plain variable declared with
-      clru_construct/clru_declare, or restored with clru_redeclare()
-      in the current scope (this is what supplies KeyT/ValT for the
-      conversion above); it cannot be an arbitrary expression such as
-      a struct member access.
-key   Key expression; any expression implicitly convertible to KeyT.
-val   Value expression; any expression implicitly convertible to ValT.
+name  Cache variable. It must be a plain variable, declared with
+      clru_construct or clru_declare, or restored with
+      clru_redeclare() in the current scope, because that is what
+      gives the KeyT and the ValT for the conversion above. name
+      cannot be any other expression, for example a read of a struct
+      member.
+key   Key expression: any expression that the compiler can convert
+      implicitly to KeyT.
+val   Value expression: any expression that the compiler can convert
+      implicitly to ValT.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success             Value stored (remote setter succeeded, if any).
-ccol_unexpected_failure  Remote setter returned false; cache unchanged.
-ccol_invalid_args        cache is CLRU_CACHE_INVALID or a stale
-                         (already-destroyed) handle; or a null
-                         pointer or zero-size argument.
-ccol_not_enough_memory   Memory allocation for the new value failed.
+ccol_success             The macro stored the value, and the remote
+                         setter succeeded, if there is one.
+ccol_unexpected_failure  The remote setter returned false. The set
+                         changed nothing, but a concurrent insert can
+                         have evicted the key (see above).
+ccol_invalid_args        cache is CLRU_CACHE_INVALID, or cache is a
+                         stale handle that a call already destroyed, or
+                         an argument is a null pointer, or an argument
+                         has a size of zero. A key or a value of a
+                         character-pointer type that is NULL is not a
+                         string, so it gives this code.
+ccol_not_enough_memory   The allocation of memory for the new value
+                         failed.
+.fi
+.SH NOTES
+.nf
+This macro uses a GNU C statement expression ({...}), so it needs GCC
+or Clang.
+When you pass the cache handle across scopes, for example into a
+thread function, declare a local alias and call clru_redeclare() on it
+before you call clru_set(); clru_get() needs the same. See
+clru_redeclare(3).
 .fi
 .SH EXAMPLES
 .nf
@@ -55,13 +86,6 @@ double v = 3.14;
 clru_set(cache, k, v);
 
 clru_destroy(cache);
-.fi
-.SH NOTES
-.nf
-Uses a GNU C statement expression ({...}); requires GCC or Clang.
-When passing the cache handle across scopes (e.g. into a thread
-function), declare a local alias and call clru_redeclare() on it before
-calling clru_set(), the same as clru_get() requires; see clru_redeclare(3).
 .fi
 .SH "SEE ALSO"
 .BR clru_get (3),

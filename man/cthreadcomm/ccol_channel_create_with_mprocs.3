@@ -1,0 +1,91 @@
+.TH CCOL_CHANNEL_CREATE_WITH_MPROCS 3 "2026-09-20" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccol_channel_create_with_mprocs \- create a two-way ccol_channel with custom memory management
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_channel *ccol_channel_create_with_mprocs(size_t max_size,
+                        ccol_memmgmt_procs_t *mmgmt_procs, char **err_str);
+.fi
+.SH DESCRIPTION
+.nf
+This function creates a ccol_channel, which holds two circular queues
+inside, one for each direction: ccol_owner_to_workers and
+ccol_workers_to_owner. The function creates both with the same
+max_size, so the two directions have the same capacity.
+
+The function takes the ID of the calling thread, and that thread becomes
+the owner of the ccol_channel. Every later ccol_chan_ call compares the
+ID of its own thread with that ID and routes itself from the result:
+the owner sends to ccol_owner_to_workers and receives from
+ccol_workers_to_owner, while every other thread does the opposite.
+Those calls therefore need no direction argument.
+
+The function allocates both queues below the channel, and the ccol_channel
+struct itself, through mmgmt_procs. The ccol_channel keeps its own copy of
+those procedures and frees itself through them, so the
+ccol_memmgmt_procs_t of the caller does not need to live longer than
+this call. A NULL value selects the default malloc and free, which is
+what the ccol_channel_create() macro does.
+.fi
+.SH PARAMETERS
+.nf
+max_size     Maximum number of messages that each direction can hold.
+             Because one circular queue holds each direction, the bound
+             of ccol_circular_queue_create_with_mprocs(3) applies: at
+             least 1, no larger than ccol_max_elem_count, and no larger
+             than SIZE_MAX / sizeof(c_message_t).
+mmgmt_procs  Custom memory management procedures, or NULL to use the
+             default malloc and free. If the value is not NULL, all of
+             malloc, calloc, realloc and free must be set.
+err_str      Optional pointer that gets an error string on failure. Pass
+             NULL to ignore it.
+.fi
+.SH RETURN VALUE
+.nf
+On success, the function gives a pointer to the new ccol_channel. If
+err_str is not NULL, the function sets *err_str to NULL.
+
+On failure, the function gives NULL, and if err_str is not NULL,
+*err_str describes the reason. A failure has one of three causes:
+mmgmt_procs is malformed because it sets some but not all of malloc,
+calloc, realloc and free; an allocation failed; or the function could
+not create one of the two circular queues below the channel, for any of
+the reasons in ccol_circular_queue_create_with_mprocs(3), such as a
+max_size that is out of range. If the function creates the first queue
+and then fails on the second one, it frees the first queue before it
+returns, so no failure path leaves anything allocated.
+.fi
+.SH NOTES
+.nf
+All operations are thread-safe.
+You must destroy the channel with ccol_channel_destroy() after you finish
+with it.
+The channel picks the direction itself from the ID of the thread that
+calls it.
+The owner thread is the thread that called this function, and it must
+stay alive for all the time that the ccol_channel is in use. To route a
+message, the channel compares the ID of the calling thread with the ID
+that it took here. After the first owner exits, the OS can give the
+same ID to a new, unrelated thread; the channel then routes that thread
+as the owner too, and it reports nothing.
+There are two supported ways to combine fork(2) with a ccol_channel:
+call fork(2) before you create the ccol_channel, or create the
+ccol_channel, then call fork(2) and immediately call exec(3). One
+pattern is not supported: a program that continues to run with no
+exec(3) in between while a ccol_channel from before the fork is live.
+On top of that rule, the library adds a defense in depth: the child
+never inherits a lock in the locked state from another thread that
+held it at the instant of the fork.  Because neither queue below the
+channel owns a thread of its own, a ccol_channel that a child inherits
+in that way stays fully usable.
+.fi
+.SH "SEE ALSO"
+.BR ccol_channel_create (3),
+.BR ccol_channel_destroy (3),
+.BR ccol_circular_queue_create_with_mprocs (3),
+.BR ccol_chan_send_zc (3),
+.BR ccol_chan_recv_zc (3)

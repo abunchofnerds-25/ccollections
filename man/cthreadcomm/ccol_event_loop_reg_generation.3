@@ -5,40 +5,42 @@ ccol_event_loop_reg_generation \- caller-visible identity token for a registrati
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadcomm.h>
+#include <ccollections/cthreadcomm.h>
 
 uint64_t ccol_event_loop_reg_generation(ccol_event_loop loop, ccol_event_reg reg);
 .fi
 .SH DESCRIPTION
 .nf
-Returns a monotonically increasing value, unique loop-wide, minted once
-when the fd (or queue/ccol_channel bridge) reg belongs to is first
-registered (ccol_event_loop_add()'s new-entry path) and shared by every
-registration on that same fd for as long as it lives; including
-across ccol_event_loop_modify() (a direction flip is the same underlying
-fd/connection, so it keeps the same generation) and across both a read
-and a write registration on the same fd (both share one generation,
-since they represent one logical connection).
+This function returns a value that only grows and that is unique
+across one loop. reg belongs to an fd, or to the bridge of a queue or
+of a ccol_channel, and the library mints the value one time, when it
+first registers that fd, on the new-entry path of
+ccol_event_loop_add(). Every registration on that same fd shares the
+value for as long as the fd lives. This includes a call to
+ccol_event_loop_modify(), because a flip of the direction keeps the
+same fd and the same connection below it, and it includes a read
+registration and a write registration on the same fd, which share one
+generation because they stand for one logical connection.
 
-This exists for a caller's own defensive bookkeeping across fd reuse:
-a caller holding onto a connection object across several asynchronous
-steps can stamp it with the generation it read right after
-ccol_event_loop_add() returned, and later compare against a fresh read to
-detect whether it is still reasoning about the same logical
-connection, or whether the underlying fd number has since been closed
-and reused by an unrelated new connection.
+This value exists for the defensive bookkeeping of a caller across the
+reuse of an fd. A caller that holds a connection object across several
+asynchronous steps can stamp that object with the generation that it
+reads right after ccol_event_loop_add() returns, and later compare
+that stamp with a fresh read. The comparison shows whether the caller
+reasons about the same logical connection, or whether something closed
+the fd number and an unrelated new connection has taken it.
 
-Generation is not required for basic correctness. ccol_event_loop's own
-dispatch path already validates a registration's liveness before
-invoking any callback, unconditionally, whether or not a caller ever
-calls this function at all: with more than one reactor thread, the
-single polling thread collects readiness and a separate dispatch
-worker thread runs the callback afterward, so a registration removed
-(or whose fd was reused by a brand-new registration) between one such
-batch being collected and processed is safely skipped at dispatch
-time rather than misdispatched or leading to a use-after-free.  This
-function's return value is purely for the calling application's own
-bookkeeping on top of that guarantee.
+Basic correctness does not need the generation: the dispatch path of
+ccol_event_loop always checks that a registration is live before it
+calls any callback, whether or not a caller ever calls this function.
+With more than one reactor thread, the single poller thread collects
+readiness, and a separate dispatch worker thread runs the callback
+after that. A registration can disappear between the collect step and
+the process step of one batch, because something removes it or a
+brand new registration reuses its fd; the loop then safely skips it at
+dispatch time, never dispatches it wrongly, and never causes a
+use-after-free. The return value of this function is only for the
+bookkeeping of the application, on top of that guarantee.
 .fi
 .SH PARAMETERS
 .nf
@@ -48,25 +50,27 @@ reg   Registration to query.
 .SH RETURN VALUE
 .nf
 Returns the generation value.
-Returns 0 if reg is CCOL_EVENT_REG_INVALID or otherwise fails to resolve
-(including because it was already removed), or if loop is
-CCOL_EVENT_LOOP_INVALID or a stale/already-destroyed handle (0 is never a
-valid generation for a real registration; the counter starts at 1).
+Returns 0 when reg is CCOL_EVENT_REG_INVALID, or when reg fails to
+resolve for another reason, such as an earlier removal, and it also
+returns 0 when loop is CCOL_EVENT_LOOP_INVALID, or a handle that is
+stale or that something already destroyed. 0 is never a valid
+generation for a real registration, because the counter starts at 1.
 .fi
 .SH NOTES
 .nf
-Safe to call at any time on any ccol_event_reg value ever returned by
-ccol_event_loop_add for this loop, including one already removed (whether
-by this thread earlier or a genuinely concurrent one racing right
-now): reg is resolved against loop's own registration table before
-anything is dereferenced, so an already-removed or otherwise stale
-handle is always detected as such and reported as generation 0, never
-a use-after-free.
+Safe to call at any time on any ccol_event_reg value that
+ccol_event_loop_add ever returned for this loop, including a value
+that something already removed, either earlier on this thread or on
+another thread that races this call. The library resolves reg against
+the registration table of loop before it dereferences anything, so it
+always finds a handle that is stale, or that something already
+removed, and reports generation 0; it never causes a use-after-free.
 .fi
 .SH THREAD SAFETY
 .nf
-Safe to call from any thread, at any time, including concurrently with
-dispatch, ccol_event_loop_modify(), and ccol_event_loop_remove().
+Safe to call from any thread, at any time, including at the same time
+as a dispatch, as ccol_event_loop_modify(), or as
+ccol_event_loop_remove().
 .fi
 .SH EXAMPLES
 .nf
@@ -76,13 +80,16 @@ typedef struct conn {
 } conn_t;
 
 conn_t *c = malloc(sizeof(*c));
+if (!c) { perror("malloc"); exit(1); }
+/* A callback of this registration can run before the next two stores,
+   so it takes the handle from its reg parameter, never from c->reg. */
 c->reg = ccol_event_loop_add(loop, ccol_selectable_from_fd(fd, ccol_select_read),
                         handlers, c, NULL);
 c->generation = ccol_event_loop_reg_generation(loop, c->reg);
 
-/* ... later, from some other asynchronous step holding a conn_t* ... */
+/* ... later, from another asynchronous step that holds a conn_t* ... */
 if (ccol_event_loop_reg_generation(loop, c->reg) != c->generation) {
-    /* stale: this fd number has been closed and reused since */
+    /* stale: something closed this fd number and reused it */
 }
 .fi
 .SH "SEE ALSO"

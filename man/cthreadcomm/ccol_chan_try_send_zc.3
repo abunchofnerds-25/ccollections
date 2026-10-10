@@ -1,35 +1,37 @@
 .TH CCOL_CHAN_TRY_SEND_ZC 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-ccol_chan_try_send_zc \- try to send without blocking
+ccol_chan_try_send_zc \- try to send a message with no block
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadcomm.h>
+#include <ccollections/cthreadcomm.h>
 
 ccol_retval_t ccol_chan_try_send_zc(ccol_channel *ch, c_message_t *msg);
 .fi
 .SH DESCRIPTION
 .nf
-Attempts to send immediately through the automatically-selected queue.
-Returns immediately if the queue is full.
+This function tries to send the message immediately through the queue
+that the channel picks itself, and returns immediately if that queue is
+full.
 .fi
 .SH PARAMETERS
 .nf
 ch   Channel to send through
-msg  Message to send (data ownership transfers on success)
+msg  Message to send. On success the ownership of the data moves to the
+     channel.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success         - Message sent successfully
-ccol_invalid_args    - ch or msg is NULL, or msg validation fails
-ccol_not_permitted   - Sending disabled on selected direction
-ccol_container_full  - Selected queue is full
+ccol_success         - The function sent the message
+ccol_invalid_args    - ch or msg is NULL, or the check of msg fails
+ccol_not_permitted   - Sends on the chosen direction are turned off
+ccol_container_full  - The chosen queue is full
 .fi
 .SH NOTES
 .nf
-Never blocks
-Direction is automatically determined by thread ID
+The function never blocks.
+The function picks the direction itself from the ID of the thread.
 .fi
 .SH "SEE ALSO"
 .BR ccol_chan_send_zc (3),

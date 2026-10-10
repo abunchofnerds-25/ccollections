@@ -1,38 +1,63 @@
-.TH CCOL_CHANNEL_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH CCOL_CHANNEL_DESTROY 3 "2026-09-26" "c_collections" "C Collections Library - Macros"
 .SH NAME
 ccol_channel_destroy \- destroy a ccol_channel
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadcomm.h>
+#include <ccollections/cthreadcomm.h>
 
 ccol_channel_destroy(ch);
 .fi
 .SH DESCRIPTION
 .nf
-Frees all resources associated with the ccol_channel including both internal
-queues. The ccol_channel pointer is automatically set to NULL.
+This macro frees all the resources of the ccol_channel, including both
+of the queues inside it, and then sets the ccol_channel pointer to
+NULL.
+
+ccol_event_loop_remove() does not wait for a callback that it already
+gave to a reactor thread, so such a callback can be inside one of the
+queues of the channel when the removal returns. This call blocks until
+every one of those callbacks finishes with that queue, and only then
+frees the queue. This is what makes the documented teardown sequence
+(drain, remove, destroy) safe as written.
+
+A callback that the loop runs for a different registration can run this
+whole sequence for this channel, with any num_reactor_threads. A
+dispatch that the loop collected for it but did not start yet does not
+hold the destroy up, and it never runs its callback after the removal.
 .fi
 .SH PARAMETERS
 .nf
-ch   Channel to destroy (will be set to NULL)
-.fi
-.SH WARNINGS
-.nf
-Messages remaining in either direction cause assertion failure
-Drain both queues before destroying
-A ccol_select()/ccol_select_timed() call or a ccol_event_loop registration
-(ccol_selectable_from_chan) still watching either direction also causes
-assertion failure; the still-linked waiter would otherwise reference
-the underlying queue's own, about-to-be-freed mutex
-Call ccol_event_loop_remove(), or let every watching ccol_select()/
-ccol_select_timed() call return, before destroying
+ch   Channel to destroy. The macro sets it to NULL.
 .fi
 .SH NOTES
 .nf
-Safe to call with NULL pointer
+You can call this with a NULL pointer.
+
+The macro evaluates ch exactly once. It must be a modifiable lvalue,
+such as a variable or an element of an array, so an expression with a
+side effect, such as handles[i++], destroys and clears one element.
+.fi
+.SH WARNINGS
+.nf
+Messages that stay in one of the directions cause an assertion failure,
+so drain both queues before you destroy the channel.
+A watcher on one of the directions also causes an assertion failure. A
+watcher is a ccol_select() call, a ccol_select_timed() call, or an
+ccol_event_loop registration (ccol_selectable_from_chan). Without that
+assertion, the waiter would stay linked and point to the mutex of the
+queue below the channel, which the destroy is about to free.
+Call ccol_event_loop_remove() before you destroy the channel, or let
+every ccol_select() call and every ccol_select_timed() call that
+watches the channel return first.
+Do not call this from inside an ccol_event_loop callback that dispatches
+one of the directions of this ccol_channel: the destroy would wait for
+that same callback. This is a caller error, and the program stops
+through ccol_fatal_err().
+Do not hold an application lock across this call if one of these
+callbacks takes that lock, because the destroy waits for the callback
+while the callback waits for the lock.
 .fi
 .SH "SEE ALSO"
-.BR ccol_channel_create (3),
-.BR __ccol_channel_destroy (3)
+.BR ccol_channel_create (3)

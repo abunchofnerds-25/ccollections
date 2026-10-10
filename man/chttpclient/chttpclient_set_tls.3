@@ -1,75 +1,117 @@
 .TH CHTTPCLIENT_SET_TLS 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-chttpclient_set_tls \- set TLS configuration for a client
+chttpclient_set_tls \- set the TLS configuration of a client
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpclient.h>
+#include <ccollections/chttpclient.h>
 
 ccol_retval_t chttpclient_set_tls(chttpcli cli,
                                   const chttp_tls_config_t *tls);
 .fi
 .SH DESCRIPTION
 .nf
-Copies the supplied TLS configuration into the client.  Passing NULL
-restores the default (verify_peer = true, verify_host = true, system
-CA bundle, no client certificate).
+This function copies the TLS configuration that you give into the
+client. A tls of NULL puts the defaults back: verification of the
+chain and of the hostname, the system CA bundle and no client
+certificate.
 
-The strings in chttp_tls_config_t (cert_path, key_path, ca_bundle_path)
-are deep-copied into client-owned buffers; the caller's originals may
-be freed or reused immediately after this call returns.
+The function deep-copies the strings of chttp_tls_config_t (cert_path,
+key_path and ca_bundle_path) into buffers that the client owns, so the
+caller can free or reuse its own originals at once after this call
+returns.
 
-cert_path/key_path/ca_bundle_path are validated for readability
-lazily, at the time an HTTPS request actually needs them, rather than
-here; a path that is not a readable regular file, whether because it
-does not exist or because it names a directory or another non-file
-object, is accepted here without error and only surfaces as
-ccol_http_tls_cert_load_failed from
-chttpclient_do/chttpclient_do_streaming once a request needs it.
+This function does not check that it can read cert_path, key_path and
+ca_bundle_path; the client checks each path later, at the moment an
+HTTPS request needs it. A path that points at no file at all, or at a
+directory or another object that is not a file, is accepted here with
+no error, and then gives ccol_http_tls_cert_load_failed from
+chttpclient_do or from chttpclient_do_streaming once a request needs
+it.
 
-Each of the three files is read whole, and any one of them larger than
-16 MB is rejected with ccol_http_tls_cert_load_failed rather than read
-into memory. A PEM artefact is far smaller than that (a certificate or
-key is a few kilobytes, a full system CA bundle a few hundred), so the
-limit is only reached by a path that points at something which is not
-a PEM file at all.
+The client reads each of the three files whole, and rejects a file
+above 16 MB with ccol_http_tls_cert_load_failed without reading it
+into memory. A PEM artefact is much smaller than that (a certificate
+or a key is a few kilobytes, and a full system CA bundle is a few
+hundred kilobytes), so only a path that points at something other than
+a PEM file reaches the limit.
 
-ca_bundle_path must additionally contribute at least one certificate.
-A readable file that parses to none (an empty file, a key on its own,
-a file that is not PEM at all) is reported as
-ccol_http_tls_cert_load_failed rather than accepted as a trust store
-that trusts no issuer.
+ca_bundle_path must also give at least one certificate. A file that
+the client can read can still parse to no certificate: an empty file,
+a key on its own, or a file that is not PEM at all. The client reports
+ccol_http_tls_cert_load_failed for such files, because it does not
+accept a trust store that trusts no issuer.
 
-cert_path and key_path are a pair: providing exactly one of the two
-(the other NULL) is rejected outright as ccol_invalid_args, rather
-than silently treated as "no client certificate configured", which
-would leave an mTLS deployment believing it presents a client
-certificate when it never does.
+ca_bundle_path may also hold certificate revocation lists (CRLs)
+beside its CA certificates. The client then enforces them against the
+certificate chain of every server, as the ssl_crl directive of nginx
+does: every certificate of that chain below its trust anchor needs a
+CRL of its issuer in the bundle. A request fails with
+ccol_http_tls_cert_verification_failed for a revoked certificate, for a
+certificate whose issuer has no CRL in the bundle, and for a CRL past
+its next update time. A bundle with no CRL checks no revocation.
 
-verify_host always implies verify_peer: a request run with
-verify_peer = false but verify_host = true still performs full
-certificate chain verification, since hostname matching against an
-unverified certificate provides no real security guarantee. See
-CHTTP_TLS_DEFAULT(3) for details.
+cert_path and key_path are a pair. If you set one of the two and leave
+the other NULL, the function gives ccol_invalid_args instead of
+treating that state as "no client certificate", because such silence
+leaves an mTLS deployment believing that it presents a client
+certificate while it never does.
+
+A chttp_tls_config_t whose every byte is zero is the SAFE
+configuration: it verifies the certificate chain of the server and
+matches its hostname. Both verification fields are named for what
+turning them ON gives up, so a struct built with = {0}, or with a
+designated initializer that names only some of the fields, can never
+end up with less verification than the caller asked for.
+
+insecure_skip_verify accepts any certificate from any peer, and also
+makes insecure_skip_hostname_check irrelevant: a hostname matched
+against a certificate that nothing validated proves nothing, so there
+is no way to ask for the hostname check without the chain check.
+
+insecure_skip_hostname_check keeps the chain verification and drops
+only the hostname match. See CHTTP_TLS_DEFAULT(3) for more.
+
+The new configuration applies to every request after this call
+returns, including a request that could reuse a keep-alive connection
+from the pool. The key of both idle pools is the origin
+("scheme://host:port", or "unix://<path>"), and that key says nothing
+about the TLS policy of the handshake of a pooled connection. The
+client therefore retires, instead of reusing, every pooled HTTPS
+connection that it made under the configuration that this call
+replaces, and the next request to that origin does a fresh handshake
+under the new settings. The client keeps reusing a pooled plain-HTTP
+connection, because no TLS setting applies to it. A connection that
+another request already holds out of the pool finishes under the
+configuration that it started with: the client retires only the
+connections that are still idle.
 .fi
 .SH PARAMETERS
 .nf
-cli   Client handle; must not be CHTTPCLI_INVALID.
-tls   TLS configuration to copy, or NULL to restore defaults.
+cli   The client handle. It must not be CHTTPCLI_INVALID.
+tls   The TLS configuration to copy, or NULL to put the defaults
+      back.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success          Configuration updated.
-ccol_invalid_args     cli is CHTTPCLI_INVALID or a stale/already-
-                      destroyed handle, or exactly one of
-                      tls->cert_path/key_path is set.
+ccol_success          The client has the new configuration.
+ccol_invalid_args     cli is CHTTPCLI_INVALID, or a stale handle of
+                      a client that is already destroyed, or you set
+                      exactly one of tls->cert_path and
+                      tls->key_path, or you set
+                      tls->insecure_skip_verify together with a
+                      tls->ca_bundle_path. A bundle exists to be
+                      verified against, so that pair states two
+                      incompatible policies, and the function
+                      refuses it rather than picking one.
 ccol_not_enough_memory
-                      Memory allocation failed; the client's TLS
-                      configuration is left at the default
-                      (verify_peer = true, verify_host = true,
-                      system CA bundle, no client certificate)
-                      rather than partially applied.
+                      An allocation of memory failed. The TLS
+                      configuration of the client then holds the
+                      defaults (verification of the chain and of
+                      the hostname, the system CA bundle and no
+                      client certificate); the client does not
+                      apply part of your configuration.
 .fi
 .SH "SEE ALSO"
 .BR CHTTP_TLS_DEFAULT (3),

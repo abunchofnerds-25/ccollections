@@ -1,47 +1,59 @@
-.TH CVECTOR_APPEND_ARRAY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CVECTOR_APPEND_ARRAY 3 "2026-09-28" "c_collections" "C Collections Library - Functions"
 .SH NAME
-cvector_append_array \- append array of elements to vector
+cvector_append_array \- append an array of elements to a vector
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cvector.h>
+#include <ccollections/cvector.h>
 
-bool cvector_append_array(cvec v, void *arr_ptr, size_t elem_count);
+bool cvector_append_array(cvec v, const void *arr_ptr, size_t elem_count);
 .fi
 .SH DESCRIPTION
 .nf
-Appends an array of elements to the end of the vector. Automatically
-reserves capacity if needed to hold all elements.
+This function appends an array of elements to the end of the vector,
+reserving more capacity automatically when the vector needs space for all
+the elements.
 .fi
 .SH PARAMETERS
 .nf
 v           Vector to append to
-arr_ptr     Pointer to array of elements
-elem_count  Number of elements in array
+arr_ptr     Pointer to the array of elements. The function only reads
+            through it, so it can point at a const array.
+elem_count  Number of elements in the array
 .fi
 .SH RETURN VALUE
 .nf
-Returns true on success
-Returns false if:
-  - new total count would overflow or exceed ccol_max_elem_count
-  - memory allocation fails
+Gives true on success
+Gives false when:
+  - the new total count overflows or is more than ccol_max_elem_count
+  - the memory allocation fails
+  - arr_ptr aliases the backing buffer of v and elem_count reads past
+    the end of the reservation of that buffer
 .fi
 .SH NOTES
 .nf
-All elements are appended or none (atomic operation)
-Automatically reserves capacity if needed
-Elements are copied into the vector
-Asserts if v is NULL
-arr_ptr may safely point into v's own backing buffer (for example a
-pointer returned by cvector_data_ptr(3) or cvector_at(3)); any
-capacity expansion this call triggers will not invalidate it
-The source and destination ranges are allowed to overlap (for example
-when arr_ptr aliases v's own buffer and elem_count reads past the
-vector's current element count); the copy is overlap-safe
-The cvec_append_array(3) macro evaluates elem_count exactly once,
-including on the failure path, so a side-effecting expression is safe
-to pass
+The function appends all the elements or none of them.
+The function reserves more capacity automatically when this is
+necessary.
+The function copies the elements into the vector.
+The function asserts when v is NULL.
+arr_ptr can safely point into the backing buffer of v, for example a
+pointer from cvector_data_ptr(3) or from cvector_at(3); a capacity
+growth that this call starts does not invalidate such a pointer.
+The source range and the destination range can overlap, for example
+when an arr_ptr aliases the buffer of v and its elem_count reads past
+the current element count of the vector, into capacity that the vector
+reserved already. The copy is safe when the ranges overlap.
+A source range that aliases must stay inside the reserved capacity of v.
+The call gives false, and leaves v unchanged, in one case: an arr_ptr
+that points into the backing buffer of v with an elem_count that reads
+past the end of the reservation of that buffer. Only a source range that
+aliases can have this bound, because an array of the caller has no
+extent that this function can see, as is true for every C array that a
+caller passes as a bare pointer.
+The cvec_append_array(3) macro evaluates elem_count exactly once, on the
+failure path too, so an expression with a side effect is safe to pass.
 .fi
 .SH "SEE ALSO"
 .BR cvec_append_array (3),

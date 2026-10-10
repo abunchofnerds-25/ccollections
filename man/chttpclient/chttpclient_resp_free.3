@@ -1,26 +1,29 @@
 .TH CHTTPCLIENT_RESP_FREE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-chttpclient_resp_free \- free a response and all its owned resources
+chttpclient_resp_free \- free a response and every resource that it owns
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpclient.h>
+#include <ccollections/chttpclient.h>
 
 void chttpclient_resp_free(chttpcli_response *resp);
 .fi
 .SH DESCRIPTION
 .nf
-Frees the response body buffer, the response headers map, and the
-response struct itself.  Safe to call with NULL.
+This function frees the buffer of the response body, the map of the
+response headers, and the response struct itself. A call with NULL is
+safe.
 .fi
 .SH NOTES
 .nf
-The _m_procs pointer inside the response is a non-owning reference to
-the creating client's allocator.  When using a custom allocator, all
-responses must be freed before the client that produced them is
-destroyed.
+A response carries its own copy of the allocator procs of the client
+that made it and does not refer to that client, so you can free a
+response before or after chttpclient_destroy of the client. The
+functions that a custom allocator names must still be callable.
 .fi
 .SH "SEE ALSO"
+.BR chttpclient_resp_header_count (3),
+.BR chttpclient_resp_header_at (3),
 .BR chttpclient_do (3),
 .BR chttpclient_resp_header (3)

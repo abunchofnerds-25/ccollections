@@ -5,47 +5,70 @@ cjson_dictionary_set \- set or replace a key in an object node
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cjson.h>
+#include <ccollections/cjson.h>
 
 ccol_retval_t cjson_dictionary_set(cjson obj, const char *key, cjson child);
 .fi
 .SH DESCRIPTION
 .nf
-Inserts or replaces the value for key in obj.  If a previous child
-existed under key, the new child is stored first and the previous
-child is deep-freed only once it is safely in place, so a failed
-insert never leaves the slot dangling.
+Sets or replaces the value for key in obj.  If a previous child is
+already under key, the library stores the new child first and
+deep-frees the previous child only after the new child is safely in
+place, so a failed insert never leaves the slot dangling.  On success
+the object owns child and the caller must not free it.
 
-Ownership of child transfers to obj on every outcome that touches
-child at all: on success the object owns child; on a failure caused
-by obj/key being invalid (obj is NULL or not CJSON_DICTIONARY, key is
-NULL) or by an internal insertion failure, a freshly unattached child
-is deep-freed by cjson_dictionary_set and must not be freed by the
-caller.  The one class of failure that leaves child completely
-untouched, still owned by whatever it was already attached to, is an
-already-attached child (see below); this holds regardless of what
-else is wrong with the call, so an invalid obj/key never causes an
-already-attached child to be destroyed.
+The object keeps its members in insertion order: a new key goes after
+every other member, and a replacement keeps the place of the key.  See
+cjson_dictionary_first(3).
 
-child must not already be attached to a list/dictionary parent, and
-must not already contain obj somewhere within its own subtree, with
-one exception: passing the exact node already stored under key back
-in (e.g. cjson_dictionary_set(obj, k, cjson_dictionary_get(obj, k)))
-is a harmless no-op that returns ccol_success without modifying obj.
-Any other already-attached child (stored under a different key, in
-a different container, or obj itself) is rejected with
-ccol_invalid_args, leaving child completely untouched and still owned
-by whatever it was already attached to.  Likewise, if obj is already
-reachable by descending from child (attaching child would then make
-obj both a new ancestor of child and an existing descendant of it, a
-cycle), the call fails with ccol_invalid_args; if that check cannot be
-completed under memory pressure, ccol_not_enough_memory is returned
-instead of silently risking an undetected cycle.
+One return code carries one ownership rule, the same rule as for
+cjson_list_push:
+
+  ccol_invalid_args always means that the call rejected its arguments
+  and touched nothing: child is exactly as it was before the call, and
+  the caller still owns it, or the container that it is already
+  attached to still owns it.  That owner must still destroy it.
+
+  Every other non-success code (ccol_not_enough_memory,
+  ccol_container_full) always means that ownership moved to this
+  call, which has already deep-freed child, so a second free of child
+  is a double free.
+
+child must not already be attached to a list parent or to a
+dictionary parent, with one exception: the caller can pass back the
+exact node that is already stored under key, for example
+cjson_dictionary_set(obj, k, cjson_dictionary_get(obj, k)).  This is a
+harmless no-op that returns ccol_success and does not change obj.
+
+These are the ccol_invalid_args rejections: child is NULL; child is
+already attached somewhere else, under a different key or in another
+container; child is obj itself; obj is NULL or is not a
+CJSON_DICTIONARY; key is NULL or is not valid UTF-8.  There is one
+more rejection: obj is already reachable when you descend from child.
+Attaching child would then make obj a new ancestor of child while obj
+stays a descendant of child, which is a cycle.
+
+The library cannot always complete that last check when memory is
+low.  Rather than take the risk of an undetected cycle, it then
+returns ccol_not_enough_memory, and this call deep-frees child in the
+same way as when the insert itself fails for lack of memory.
+
+The expected time of a set, a get and a remove is constant, also when
+an untrusted peer chooses the keys.  The object hashes its keys with a
+secret seed that the library chooses one time for each process, and if
+the keys collide, it changes to a hash keyed with
+a secret 128-bit key; see cjson_parse(3).
+
+Every key that the tree holds is valid UTF-8, which is what lets
+cjson_serialize() write the key out unchanged.  The library refuses a
+key that is not valid UTF-8 instead of storing it; see
+cjson_create_string(3) for the same rule on string values.
 .fi
 .SH PARAMETERS
 .nf
 obj    Target dictionary node (must be CJSON_DICTIONARY).
-key    Null-terminated key string; a copy is stored internally.
+key    Null-terminated key string, which must be valid UTF-8.  The
+       library stores a copy of it.
 child  Value node; must not already be attached elsewhere, and must
        not already contain obj in its own subtree (see above).
 .fi
@@ -57,13 +80,17 @@ count.
 .fi
 .SH NOTES
 .nf
-A node returned by cjson_get(), cjson_list_get(), or
-cjson_dictionary_get() is a borrowed reference into an existing tree,
-not a freshly owned node, and must never be passed as child unless it
-is the value already stored under key (see above).  Use cjson_clone()
-first to obtain an independent copy that is safe to store elsewhere.
+A node that cjson_get(), cjson_list_get() or cjson_dictionary_get()
+returns is a borrowed reference into a tree that already exists, not
+a new node that the caller owns.  Never give such a node as child,
+unless it is the value that is already stored under key (see above).
+Use cjson_clone() first to get an independent copy, which is safe to
+store somewhere else.
 .fi
 .SH "SEE ALSO"
 .BR cjson_dictionary_get (3),
+.BR cjson_dictionary_first (3),
 .BR cjson_create_dictionary (3),
+.BR cjson_create_string (3),
+.BR cjson_list_push (3),
 .BR cjson_clone (3)

@@ -1,26 +1,27 @@
-.TH CSTR_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH CSTR_DESTROY 3 "2026-09-28" "c_collections" "C Collections Library - Macros"
 .SH NAME
 cstr_destroy \- destroy a cstr and set it to NULL
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 cstr_destroy(s);
 .fi
 .SH DESCRIPTION
 .nf
-Type-safe alias for cstring_destroy(). Destroys the string and sets the
-pointer to NULL.
+This macro is a type-inferred alias for cstring_destroy(). It destroys the
+string and sets the pointer to NULL.
 .fi
 .SH PARAMETERS
 .nf
-s   cstr variable to destroy
+s   cstr lvalue to destroy, such as a variable or an element of an
+    array; the macro evaluates it exactly once and sets it to NULL
 .fi
 .SH NOTES
 .nf
-Safe to call with a NULL pointer (no-op)
+A call with a NULL pointer is safe and does nothing
 .fi
 .SH "SEE ALSO"
 .BR cstring_destroy (3)

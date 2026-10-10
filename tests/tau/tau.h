@@ -19,6 +19,7 @@ Copyright (c) 2021 Jason Dsouza <http://github.com/jasmcaus>
 TAU_DISABLE_DEBUG_WARNINGS
 
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -239,8 +240,8 @@ TAU_C_FUNC __declspec(dllimport) int __stdcall QueryPerformanceFrequency(
 #define TAU_USE_CLOCKGETTIME
 #endif  // __GLIBC__
 
-#elif defined(__APPLE__)
-#include <mach/mach_time.h>
+#elif defined(__unix__) || defined(__APPLE__)
+#include <time.h>
 #endif  // _MSC_VER
 
 /**
@@ -290,8 +291,14 @@ static inline double tauClock() {
   return TAU_CAST(double, ts.tv_sec) * 1000 * 1000 * 1000 +
          TAU_CAST(double, ts.tv_nsec);  // in nanoseconds
 
-#elif __APPLE__
-  return TAU_CAST(double, mach_absolute_time());
+#elif defined(__unix__) || defined(__APPLE__)
+  /* The same monotonic clock as the Linux branch above, for the BSDs and
+     macOS. mach_absolute_time() counts timebase ticks, which are nanoseconds
+     only on Intel Macs; on Apple silicon a tick is about 41.7 ns. */
+  struct timespec ts = {0, 0};
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return TAU_CAST(double, ts.tv_sec) * 1000 * 1000 * 1000 +
+         TAU_CAST(double, ts.tv_nsec);  // in nanoseconds
 #endif  // TAU_WIN_
 }
 
@@ -634,24 +641,32 @@ TAU_WEAK TAU_OVERLOADABLE void TAU_OVERLOAD_PRINTER(
 #define TAU_CAN_USE_OVERLOADABLES
 #endif  // TAU_CAN_USE_OVERLOADABLES
 
-#define TAU_OVERLOAD_PRINTER(val)                   \
-  tauPrintf(_Generic((val),                         \
-                char: "'%c'",                       \
-                char *: "%s",                       \
-                unsigned char: "%hhu",              \
-                short: "%hd",                       \
-                unsigned short: "%hu",              \
-                int: "%d",                          \
-                unsigned int: "%u",                 \
-                long: "%ld",                        \
-                long long: "%lld",                  \
-                unsigned long: "%lu",               \
-                unsigned long long: "%" TAU_PRIu64, \
-                float: "%f",                        \
-                double: "%f",                       \
-                long double: "%Lf",                 \
-                void *: "%p"),                      \
-            (val))
+/* A NULL string reaches the printer only on the failure path of a string
+   assertion; printing it with %s is undefined, so it prints as "(null)". */
+static inline const char *tau_str_or_null(const char *s) {
+  return s ? s : "(null)";
+}
+
+#define TAU_OVERLOAD_PRINTER(val)                                        \
+  tauPrintf(_Generic((val),                                              \
+                char: "'%c'",                                            \
+                char *: "%s",                                            \
+                unsigned char: "%hhu",                                   \
+                short: "%hd",                                            \
+                unsigned short: "%hu",                                   \
+                int: "%d",                                               \
+                unsigned int: "%u",                                      \
+                long: "%ld",                                             \
+                long long: "%lld",                                       \
+                unsigned long: "%lu",                                    \
+                unsigned long long: "%llu",                              \
+                float: "%f",                                             \
+                double: "%f",                                            \
+                long double: "%Lf",                                      \
+                void *: "%p"),                                           \
+            _Generic((val),                                              \
+                char *: tau_str_or_null((const char *)(uintptr_t)(val)), \
+                default: (val)))
 
 #else
 // If we're here, this means that the Compiler does not support overloadable
@@ -1518,6 +1533,12 @@ static void tauRunTests() {
     if (tauTestContext.foutput)
       fprintf(tauTestContext.foutput, "<testcase name=\"%s\">",
               tauTestContext.tests[i].name);
+
+    // Empty the output buffers before the test body runs. A log that goes
+    // to a pipe then names the test that runs at the moment, also when the
+    // test hangs, and a child of fork() inherits no output to print again.
+    fflush(stdout);
+    if (tauTestContext.foutput) fflush(tauTestContext.foutput);
 
     // Start the timer
     const double start = tauClock();

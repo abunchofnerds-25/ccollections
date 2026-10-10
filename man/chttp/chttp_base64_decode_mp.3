@@ -1,40 +1,45 @@
 .TH CHTTP_BASE64_DECODE_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-chttp_base64_decode_mp \- base64-decode a string with a custom allocator
+chttp_base64_decode_mp \- decode a base64 string with a custom allocator
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttp.h>
+#include <ccollections/chttp.h>
 
 void *chttp_base64_decode_mp(ccol_memmgmt_procs_t *mp,
                              const char *b64_input, size_t *out_len);
 .fi
 .SH DESCRIPTION
 .nf
-Decodes a NUL-terminated standard RFC 4648 base64 string (the '+'/'/'
-alphabet, '=' padding). The input length is taken from
-strlen(b64_input); it must be a multiple of 4 bytes, and any '='
-padding must appear only as the final one or two characters. Any
-other malformed input (invalid character, misplaced padding, wrong
-length) is rejected.
+This function decodes a NUL-terminated standard RFC 4648 base64
+string, which uses the '+' and '/' alphabet with '=' padding.  The
+function takes the input length from strlen(b64_input), and that
+length must be a multiple of 4 bytes.  Any '=' padding must be the
+last character or the last two characters.  In a padded final group,
+the bits that no decoded byte holds must be zero (RFC 4648 section
+3.5), so that every byte string has exactly one encoding: "QQ=="
+decodes to "A", and "QR==" is malformed.  The function rejects every
+malformed input, that is, an input with an invalid character, padding
+in the wrong place, nonzero padding bits, or the wrong length.
 
-The returned buffer is NUL-terminated as a convenience for decoding
-text payloads, but the decoded data may legitimately contain embedded
-NUL bytes; always use out_len, never strlen(), to determine its
-real size.
+The buffer that the function gives back ends with a NUL, which helps
+when you decode text.  But the decoded data can also contain NUL bytes
+inside it, so always use out_len to get the real size, and never
+strlen().
 .fi
 .SH PARAMETERS
 .nf
-mp         Custom allocator, or NULL for malloc/free.
-b64_input  NUL-terminated base64 string to decode. Must not be NULL.
-out_len    Optional; receives the decoded byte length. Pass NULL to
-           ignore.
+mp         A custom allocator, or NULL for malloc/free.
+b64_input  The NUL-terminated base64 string to decode. It must not
+           be NULL.
+out_len    Optional; it gets the decoded byte length. Give NULL to
+           ignore it.
 .fi
 .SH RETURN VALUE
 .nf
-Newly allocated decoded buffer on success.
-NULL on allocation failure or malformed input.
+A new buffer with the decoded bytes on success.
+NULL if the allocation fails or the input is malformed.
 .fi
 .SH "SEE ALSO"
 .BR chttp_base64_decode (3),

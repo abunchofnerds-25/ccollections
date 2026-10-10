@@ -1,0 +1,79 @@
+.TH CBMAP_CONSTRUCT_MP 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cbmap_construct_mp \- declare and create an ordered map that takes its memory from a custom allocator
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cbstmap.h>
+
+cbmap_construct_mp(hm_name, key_t, val_t, mmgmt_procs);
+.fi
+.SH DESCRIPTION
+.nf
+Declares an ordered map handle named hm_name, together with the companion
+type variables that carry key_t and val_t to every later type-inferred
+macro, and then creates a map that takes all of its memory from
+mmgmt_procs.
+
+The macro is cbmap_construct(3) plus an allocator, and it uses the default
+order for key_t. cbmap_construct_cc(3) replaces the order instead, and
+cbmap_construct_full(3) takes both. cbmap_construct_mp_scoped(3) is the same
+macro with a cleanup attribute, which destroys the map at the exit of the
+scope.
+
+cbmap_declare(3) followed by cbmap_init_mp(3) is the two-step form. Use it
+when the caller must handle a creation failure and the failure must not be
+fatal.
+.fi
+.SH PARAMETERS
+.nf
+hm_name      Name for the map handle to declare
+key_t        Key type. It tells every later macro how to read a key, and
+             tells the container which order to give the tree
+val_t        Value type. Only the type-inferred macros read it; the
+             library never gives it to the container
+mmgmt_procs  Pointer to a ccol_memmgmt_procs_t, or NULL for the default
+             allocator
+.fi
+.SH RETURN VALUE
+.nf
+None. This macro declares variables and does not expand to an expression.
+.fi
+.SH NOTES
+.nf
+The macro stops the program through ccol_fatal_err() if the creation fails
+All four members of ccol_memmgmt_procs_t must not be NULL
+The map copies the procedures into itself, so the ccol_memmgmt_procs_t of
+the caller does not have to outlive the call; the procedures themselves,
+however, must stay callable for the whole life of the map
+Every tree node that the map allocates later comes from these procedures,
+and everything that the map frees goes back to them
+The allocator has no effect on the order: key_t decides the order, as
+cbmap_create_full(3) describes, and the walk goes in ascending key order
+Destroy the map with cbmap_destroy(3). The companion type variables follow
+the scope of the handle, so a function that receives the handle needs
+cbmap_redeclare(3) there
+.fi
+.SH EXAMPLES
+.nf
+ccol_memmgmt_procs_t procs = {
+    .malloc = my_malloc, .calloc = my_calloc,
+    .realloc = my_realloc, .free = my_free,
+};
+
+cbmap_construct_mp(sorted, int, char *, &procs);
+int k = 42;
+cbmap_insert(sorted, k, "hello");
+cbmap_destroy(sorted);
+.fi
+.SH "SEE ALSO"
+.BR cbmap_construct (3),
+.BR cbmap_construct_mp_scoped (3),
+.BR cbmap_construct_cc (3),
+.BR cbmap_construct_full (3),
+.BR cbmap_init_mp (3),
+.BR cbmap_declare (3),
+.BR cbmap_redeclare (3),
+.BR cbmap_create_full (3),
+.BR cbmap_destroy (3)

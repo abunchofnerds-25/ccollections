@@ -5,18 +5,20 @@ cyaml_dictionary_get \- look up a key in a dictionary
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cyaml.h>
+#include <ccollections/cyaml.h>
 
 cyaml cyaml_dictionary_get(cyaml map, const char *key);
 .fi
 .SH DESCRIPTION
 .nf
-Return a non-owning reference to the value stored under key in map.
+Return a non-owning reference to the value that map stores under key.
 .fi
 .SH RETURN VALUE
 .nf
-Child node, or NULL if key is absent or map is not a CYAML_DICTIONARY.
+The child node, or NULL when key is absent or when map is not a
+CYAML_DICTIONARY.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_dictionary_set (3),
+.BR cyaml_dictionary_first (3),
 .BR cyaml_dictionary_size (3)

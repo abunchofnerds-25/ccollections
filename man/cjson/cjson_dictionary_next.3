@@ -1,0 +1,40 @@
+.TH CJSON_DICTIONARY_NEXT 3 "2026-09-29" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cjson_dictionary_next \- step a dictionary cursor onto the next member
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cjson.h>
+
+bool cjson_dictionary_next(cjson_dictionary_iter *it);
+.fi
+.SH DESCRIPTION
+.nf
+Steps the cursor it, which cjson_dictionary_first(3) filled, onto the
+member that follows the current one in insertion order.  After a call
+that returns true, it->key and it->value describe that member.  The
+order, the lifetime of it->key and the changes that the cursor
+survives are described in cjson_dictionary_first(3).
+.fi
+.SH PARAMETERS
+.nf
+it  A cursor that cjson_dictionary_first(3) filled.
+.fi
+.SH RETURN VALUE
+.nf
+true when it now stands on the next member.
+
+false when the previous call gave the last member, and on every call
+after that; the function then sets it->key and it->value to NULL.
+false also when it is NULL.
+.fi
+.SH NOTES
+.nf
+The cursor survives the replacement of any value, an insert, and the
+removal of any member other than the one that this call is about to
+read; cjson_dictionary_first(3) states the exact rule.
+.fi
+.SH "SEE ALSO"
+.BR cjson_dictionary_first (3),
+.BR cjson_dictionary_remove (3)

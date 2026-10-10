@@ -5,7 +5,7 @@ chttpsvr_router_on_stream \- register a streaming handler on a sub-router
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 ccol_retval_t chttpsvr_router_on_stream(chttpsvr_router *router,
                                          chttp_method_t method,
@@ -15,28 +15,31 @@ ccol_retval_t chttpsvr_router_on_stream(chttpsvr_router *router,
 .fi
 .SH DESCRIPTION
 .nf
-Same as chttpsvr_register_streaming_handler but registers the route on
-a sub-router.  All pattern validation rules from
-chttpsvr_register_streaming_handler apply here as well, including the
-requirement that pattern begins with '/', that {name} segments
-contain only [A-Za-z0-9_], that the same {name} is not used more than
-once, and support for CHTTP_ANY as the method argument.
+Works like chttpsvr_register_streaming_handler, but registers the
+route on a sub-router.  Every pattern rule that
+chttpsvr_register_streaming_handler gives applies here as well:
+pattern must start with '/', a {name} segment must contain only
+[A-Za-z0-9_], and the same {name} must not appear more than once.
+CHTTP_ANY is also supported as the method argument.  The handler runs
+on the streaming pool of the server, exactly like a handler registered
+with chttpsvr_register_streaming_handler.
 
-This function validates that router's owning server has not been
-destroyed (including concurrently, from another thread) before
-touching it; a call racing a chttpsvr_destroy of the owning server
-simply returns ccol_invalid_args rather than touching freed memory.
+This function first checks that the server that owns router has not
+been destroyed, and the check also covers a concurrent destroy from
+another thread: a call that races a chttpsvr_destroy of the owning
+server returns ccol_invalid_args and touches no freed memory.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success on success.
-ccol_invalid_args if router, pattern, or fn is NULL; if pattern does
-                  not begin with '/'; if pattern contains consecutive
-                  slashes or a trailing slash; if a {name} segment
-                  contains characters outside [A-Za-z0-9_]; if the
-                  same {name} is used more than once; or if router's
-                  owning server has since been destroyed.
-ccol_not_enough_memory if allocation fails.
+ccol_invalid_args when router, pattern or fn is NULL; when pattern
+                  does not start with '/'; when pattern has two
+                  consecutive slashes or a trailing slash; when a
+                  {name} segment contains a character outside
+                  [A-Za-z0-9_]; when the same {name} appears more than
+                  once; or when the server that owns router has been
+                  destroyed.
+ccol_not_enough_memory when an allocation fails.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_register_streaming_handler (3),

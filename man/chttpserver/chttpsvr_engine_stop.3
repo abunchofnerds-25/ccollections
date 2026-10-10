@@ -5,66 +5,70 @@ chttpsvr_engine_stop \- signal the engine to stop
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 void chttpsvr_engine_stop(void);
 .fi
 .SH DESCRIPTION
 .nf
-Signals chttpserver's own shared reactor (and its companion
-idle-timeout sweep thread) to stop, forcing it down even if other
+Signals the shared reactor of chttpserver, and the idle-timeout sweep
+thread beside it, to stop, forcing them down even while other
 chttpsvr instances in the same process still hold a reference and are
-still fully started.  This reactor is independent of chttpclient's own
-engine, so calling this function has no effect on any chttpclient
-async work (chttpclient_do_async/_streaming,
-chttpclient_do_pooled/_streaming) in the same process.  Returns
-immediately; use chttpsvr_engine_wait() to block until the stop
-completes.
+still fully started.  This reactor is separate from the engine of
+chttpclient, so a call to this function has no effect on the async
+work of chttpclient in the same process (chttpclient_do_async,
+chttpclient_do_async_streaming, chttpclient_do_pooled and
+chttpclient_do_pooled_streaming).  It returns at once; use
+chttpsvr_engine_wait() to block until the stop completes.
 
-Before the shared reactor is actually torn down, every chttpsvr
-instance still registered in the process (regardless of whether it is
-still started) is quiesced exactly as chttpsvr_destroy() would quiesce
-it on its own: listener closed, in-flight requests drained, idle
-connections closed, worker pool shut down, and the instance's own
-reference to the engine released.  This makes the ONE, single
-chttpsvr_destroy(srv) call in the documented signal-handler shutdown
-pattern below safe even though it runs after the engine has already
-been torn down: srv was already quiesced above, so this call only
-frees the remaining per-server memory (see __chttpsvr_destroy's own
-documentation) rather than repeating any teardown work.  This does not
-make repeated destroy calls on the same handle safe; calling
-chttpsvr_destroy(srv) (or __chttpsvr_destroy) a second time on a
-handle already destroyed by an earlier call, through this path or any
-other, remains a fatal error, exactly as __chttpsvr_destroy's own
-documentation describes.
+Before it tears the shared reactor down, the library quiesces every
+chttpsvr instance that is still registered in the process, whether or
+not the instance is still started, in exactly the way that
+chttpsvr_destroy() does: it closes the listener, drains the in-flight
+requests, closes the idle and parked connections and the requests
+that wait for body memory, answers the queued streaming requests with
+503, shuts the worker pools down, and frees the engine reference of
+that instance.
+This is what makes the ONE chttpsvr_destroy(srv) call in the
+signal-handler shutdown pattern below safe, even though it runs after
+the library has torn the engine down: srv has already been quiesced,
+so that call only frees the remaining memory of the server and
+repeats no teardown work.  This mechanism does not make repeated destroy
+calls on the same handle safe: a second chttpsvr_destroy(srv) call on a
+handle that an earlier call has already destroyed is a fatal error, with
+abort() and SIGABRT, on this path as on every other one.
 
     static void on_signal(int sig) { (void)sig; chttpsvr_engine_stop(); }
     /* ... */
-    chttpsvr_start(srv, &cfg);
+    if (chttpsvr_start(srv, &cfg) != ccol_success) {
+        chttpsvr_destroy(srv);
+        chttpsvr_engine_wait();   /* the stop can be incomplete */
+        return 1;
+    }
     chttpsvr_engine_wait();   /* returns once on_signal fires */
     chttpsvr_destroy(srv);    /* safe: srv was already quiesced above */
 
-Non-blocking and async-signal-safe: it is safe to call this function
-directly from a POSIX signal handler (e.g. SIGINT, SIGTERM).  This is
-the only function in this module documented as async-signal-safe;
-chttpsvr_stop() is not (see its own WARNINGS section) and must not be
-called directly from a signal handler.
+This function does not block and is async-signal-safe, so it can be
+called directly from a POSIX signal handler, for example for SIGINT or
+SIGTERM.  It is the only function in this module that is documented
+as async-signal-safe; chttpsvr_stop() is not (see the WARNINGS section
+of that function), so do not call chttpsvr_stop() directly from a
+signal handler.
 
-The library does not install any signal handlers.  Applications are
-responsible for wiring this function into whatever signal or shutdown
-mechanism they use.
+The library installs no signal handlers; an application must connect
+this function to whatever signal or shutdown mechanism it uses.
 
-Safe to call before the reactor has ever started (no-op).
+It is safe to call this function before the reactor has ever started;
+it then does nothing.
 
-Safe to call more than once, including while an earlier call's own
-drain is still in progress (e.g. two SIGTERMs delivered moments apart,
-or a defensive extra call from application shutdown code): a repeated
-or overlapping call is a no-op, never a second, redundant teardown
-attempt.
+You can call it more than once, including while the drain started by
+an earlier call is still running, as happens when two SIGTERMs arrive
+moments apart or when the shutdown code of an application makes an
+extra defensive call.  A repeated or overlapping call does nothing and
+is never a second teardown.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_engine_wait (3),
 .BR chttpsvr_stop (3),
 .BR chttpsvr_start (3),
-.BR __chttpsvr_destroy (3),
 .BR chttpsvr_destroy (3)

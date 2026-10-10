@@ -5,21 +5,21 @@ ccol_mempool_allocated_bytes \- report the memory a pool holds for its entries
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cmempool.h>
+#include <ccollections/cmempool.h>
 
 size_t ccol_mempool_allocated_bytes(ccol_mempool *mp);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the size in bytes of the single block mp holds for its entries
-and their per-entry state.
+Returns the size in bytes of the single block that mp holds for its
+entries and for the state of each entry.
 
 This is what the pool costs, which ccol_mempool_total_capacity(3)
-deliberately does not report. A thread-safe pool large enough to keep
-per-thread caches holds a reserve beyond the count it was created with,
-so its memory exceeds what its usable capacity accounts for. Use this
-call to size a pool against a memory budget rather than reproducing the
-reserve arithmetic.
+deliberately does not report: a thread-safe pool large enough to keep a
+cache for each thread holds a reserve above the count that it was created
+with, so its memory exceeds what its usable capacity accounts for. Use
+this call to size a pool against a memory budget, so that you do not have
+to repeat the reserve arithmetic yourself.
 .fi
 .SH PARAMETERS
 .nf
@@ -27,30 +27,30 @@ mp                        Memory pool to query (must not be NULL)
 .fi
 .SH RETURN VALUE
 .nf
-Returns the size in bytes of the pool's entry block
+Returns the size in bytes of the entry block of the pool
 .fi
 .SH NOTES
 .nf
-The entry block is counted and nothing else. The handle itself is a
-small fixed allocation; per-thread caches are separate allocations made
-lazily as threads first use the pool, bounded by the same reserve; and
-entries served by the dynamic fallback are not part of this block at all,
-so ccol_mempool_dynamic_allocs_count(3) is what accounts for those.
+The call counts the entry block and nothing else. The handle itself is a
+small fixed allocation, and the cache of each thread is a separate
+allocation that the library makes when that thread first uses the pool;
+the same reserve bounds those caches. An entry that the dynamic fallback
+serves is not part of this block at all;
+ccol_mempool_dynamic_allocs_count(3) accounts for those.
 
-For a pool built by
-ccol_mempool_create_from_preallocated_buffer(3) this reports the part of
-the caller's own buffer that was divided into entries. Such a pool never
-receives a cache and carries no reserve, so the figure is exactly the
-element count times the stride, plus one status byte per element. The
-pool allocated none of it.
+For a pool built by ccol_mempool_create_from_preallocated_buffer(3), this
+reports the part of the caller's buffer that the pool divided into
+entries. Such a pool never receives a cache and carries no reserve, so
+the figure is exactly the element count times the stride, plus one
+status byte for each element, and the pool allocated none of it.
 
-The value does not change over the pool's lifetime.
+The value does not change over the lifetime of the pool.
 .fi
 .SH "THREAD SAFETY"
 .nf
 Thread-safe when the pool was created with single_threaded = false.
-Acquires the pool's lock, so it is a cold-path call and not intended for
-use inside a hot loop.
+The call takes the lock of the pool, which makes it a cold-path call:
+do not use it inside a hot loop.
 .fi
 .SH "SEE ALSO"
 .BR ccol_mempool_total_capacity (3),

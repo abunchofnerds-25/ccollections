@@ -5,7 +5,7 @@ ccol_mempool_create_from_preallocated_buffer \- create pool from user buffer
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cmempool.h>
+#include <ccollections/cmempool.h>
 
 ccol_mempool *ccol_mempool_create_from_preallocated_buffer(
     void *buffer,
@@ -18,51 +18,61 @@ ccol_mempool *ccol_mempool_create_from_preallocated_buffer(
 .fi
 .SH DESCRIPTION
 .nf
-Creates a memory pool using a user-provided buffer instead of allocating
-from the heap. Useful for embedded systems or when heap allocation is
-undesirable.
+Creates a memory pool on top of a buffer from the caller, so the pool
+does not allocate from the heap. This is useful on embedded systems, and
+whenever you do not want a heap allocation.
 .fi
 .SH PARAMETERS
 .nf
-buffer                     Pointer to preallocated buffer
-buf_size                   Size of buffer in bytes
-elem_size                  Size of each element in bytes (must be > 0;
-                          if smaller than sizeof(uintptr_t) it is rounded
-                          up, mirroring ccol_mempool_create(); maximum
-                          SIZE_MAX minus the stride rounding)
-fallback_to_dynamic_memory If true, allocate from heap when pool exhausted
-single_threaded           If true, omit locking
+buffer                     Pointer to the preallocated buffer
+buf_size                   Size of the buffer in bytes
+elem_size                  Size of each element in bytes. It must be
+                          > 0. If it is smaller than sizeof(uintptr_t),
+                          the library rounds it up, in the same way as
+                          ccol_mempool_create(). The maximum is
+                          SIZE_MAX less the stride rounding
+fallback_to_dynamic_memory If true, allocate from the heap when the pool
+                          is empty
+single_threaded           If true, do not lock
 mmgmt_procs               Custom memory management, or NULL
-err                       Optional pointer to receive error string
+err                       Optional pointer that receives an error string
 .fi
 .SH RETURN VALUE
 .nf
-Returns pointer to newly created memory pool on success
+Returns a pointer to the new memory pool on success
 Returns NULL on failure
 .fi
 .SH NOTES
 .nf
-Element count is calculated as buf_size / (stride + 1). An entry carries
-  no header; stride is elem_size rounded up to 16 bytes and then, unless
-  the library was built with -DCCOL_MEMPOOL_COMPACT_LAYOUT=1, on up to a
-  power of two, so every element in the pool is aligned for any object
-  type and not just the first. The one extra byte per element is that
-  element's own status byte, which lives in the same buffer after the
-  entries. CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER sizes its own buffer
-  with the same arithmetic and is the way to get it right without
-  restating it
-Buffer is not freed by ccol_mempool_destroy() (user manages buffer lifetime)
-Pool struct itself is still allocated via mmgmt_procs
-Returns NULL with error if elem_size is zero
-If elem_size is nonzero but < sizeof(uintptr_t), it is rounded up
-  (same as ccol_mempool_create())
-Returns NULL with error if elem_size would overflow size_t once the
-stride rounding is applied
-Returns NULL with error if the buffer is not aligned to at least
-  16 bytes, which is what every entry the pool hands out is
-  aligned to and therefore what entry 0, sitting at the buffer's own
-  address, has to satisfy; a buffer declared via
-  CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER already meets this
+The element count is buf_size / (stride + 1); an entry carries no
+  header. The stride is elem_size rounded up to 16 bytes, and then
+  further up to a power of two unless the library was built with
+  -DCCOL_MEMPOOL_COMPACT_LAYOUT=1, so every element in the pool, not
+  only the first one, is aligned for any object type. The one extra
+  byte for each element is the status byte of that element, which stays
+  in the same buffer, after the entries.
+  CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER sizes its own buffer with the
+  same arithmetic, which makes it the way to get the size right without
+  a second statement of the formula
+ccol_mempool_destroy() does not free the buffer; the caller owns the
+  lifetime of the buffer
+The pool struct itself still comes from mmgmt_procs
+The pool calls the functions of mmgmt_procs for its dynamic fallback
+entries, and for its own bookkeeping of them, in the middle of an update
+of its own state, with its lock held when it has one. Those functions
+must therefore not call back into this same pool: with a lock the call
+deadlocks, and without one it corrupts that state. An allocator built on
+a pool must draw from a different pool
+Returns NULL with an error if elem_size is zero
+If elem_size is nonzero but < sizeof(uintptr_t), the library rounds it
+  up, as ccol_mempool_create() does
+Returns NULL with an error if elem_size would overflow size_t after the
+stride rounding
+Returns NULL with an error if the buffer is not aligned to at least 16
+  bytes. Every entry that the pool hands out is aligned to 16 bytes, and
+  entry 0 sits at the address of the buffer, so the buffer must meet
+  that alignment. A buffer that comes from
+  CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER already meets it
 .fi
 .SH "SEE ALSO"
 .BR CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER (3),

@@ -1,32 +1,32 @@
 .TH CCOL_LOG_ALERT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-ccol_log_alert \- emit a log line at ALERT level with a backtrace
+clog_alert \- emit a log line at ALERT level with a backtrace
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <clogger.h>
+#include <ccollections/clogger.h>
 
-ccol_log_alert(clog lg, const char *fmt, ...);
+clog_alert(clog lg, const char *fmt, ...);
 .fi
 .SH DESCRIPTION
 .nf
-Expands to a call to _clog_write() at CLOG_ALERT level with automatic
-source location capture. After writing the structured log line, a stack
-backtrace is appended in the same way as ccol_log_error():
+Writes a log line at CLOG_ALERT level, capturing __FILE__, __LINE__
+and __func__ by itself.  After the structured log line it appends a
+stack backtrace, in the same way as clog_error():
 
   ts=... level=ALERT src=file.c:42 func=handle msg="disk full"
   \et#0 ./myapp(handle+0x1a) [0x7f...]
   \et#1 ./myapp(main+0x42) [0x7f...]
 
-ALERT maps to RFC 5424 syslog severity 1 ("alert; action must be taken
-immediately").  In CLOG_FMT_SYSLOG mode each backtrace frame is emitted
-as a separate syslog message using the same PRI, TIMESTAMP, and MSGID as
-the original record.
+ALERT maps to RFC 5424 syslog severity 1, which reads "alert; action
+must be taken immediately".  In CLOG_FMT_SYSLOG mode the library writes
+each backtrace frame as a separate syslog message with the same PRI,
+TIMESTAMP and MSGID as the original record.
 
-ALERT sits between ERROR (severity 3) and FATAL (severity 0) in the
-clog_level_t ordering.  Use it for conditions that require immediate
-operator attention but do not necessarily terminate the process.
+In the order of clog_level_t, ALERT sits between ERROR (severity 3) and
+FATAL (severity 0).  Use it for a condition that needs the attention of
+an operator at once but need not stop the process.
 .fi
 .SH PARAMETERS
 .nf
@@ -36,36 +36,35 @@ fmt    printf-style format string.
 .fi
 .SH NOTES
 .nf
-Like ccol_log_error, ccol_log_alert does NOT terminate the process. Use
-ccol_log_fatal if process termination is required.
-Backtrace requires the binary to be linked with -rdynamic.  On platforms
-without execinfo.h, or on a transient allocation failure while resolving
-symbol names, capture itself fails; a single "backtrace unavailable"
-marker line (or, in CLOG_FMT_SYSLOG mode, marker record) is emitted in
-place of the usual per-frame output, so the omission is visible rather
-than silent.
+clog_alert does NOT stop the process, and neither does
+clog_error; use clog_fatal when the process must stop.
+A backtrace needs the binary to be linked with -rdynamic.  The capture
+itself can fail, on a platform with no execinfo.h or on a transient
+allocation failure while the library resolves symbol names.  The logger
+then writes one "backtrace unavailable" marker line in place of the
+usual output for each frame (a marker record in CLOG_FMT_SYSLOG mode),
+so the omission is visible instead of silent.
 The backtrace write is protected by the shared write lock, so the
 backtrace and the preceding log line always appear contiguously.
-Under sustained memory pressure, or when the record's own content
-already leaves little room before the internal buffer cap, an
-individual backtrace frame that cannot be formatted is omitted (in
-favor of any shorter frame that follows) rather than written
-incomplete; every line that is written is always a complete,
-well-formed record. If none of the frames fit at all, a single
-"backtrace unavailable" marker line (or, in CLOG_FMT_SYSLOG mode,
-marker record) takes their place, the same marker used when capture
-itself fails. In CLOG_FMT_JSON mode, if the backtrace cannot be
-embedded at all under such pressure, a "bt_error":"unavailable" key
-takes the place of "bt" so the omission is visible rather than
-silent.
+When memory pressure lasts for a time, or the content of a record
+leaves little room before the internal buffer cap, a single backtrace
+frame that the library cannot format is omitted, while a shorter frame
+that follows it can still go out.  The library never writes an
+incomplete frame, so every line that it writes is a complete,
+well-formed record.  When not one frame fits, one "backtrace
+unavailable" marker line takes their place (a marker record in
+CLOG_FMT_SYSLOG mode); this is the same marker that the library uses
+when the capture itself fails.  Under such pressure in CLOG_FMT_JSON
+mode the library can fail to embed the backtrace at all, and a
+"bt_error":"unavailable" key then takes the place of "bt", so the
+omission is visible and not silent.
 .fi
 .SH EXAMPLES
 .nf
-ccol_log_alert(lg, "primary database unreachable, failing over");
-ccol_log_alert(lg, "disk usage at %d%%, writes may fail soon", pct);
+clog_alert(lg, "primary database unreachable, failing over");
+clog_alert(lg, "disk usage at %d%%, writes may fail soon", pct);
 .fi
 .SH "SEE ALSO"
-.BR ccol_log_error (3),
-.BR ccol_log_fatal (3),
-.BR _clog_write (3),
+.BR clog_error (3),
+.BR clog_fatal (3),
 .BR clog_open_fd_mp (3)

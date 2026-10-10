@@ -36,12 +36,13 @@ SOFTWARE.
 static const char g_chttp_base64_alphabet[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-/* Reverse lookup table: maps a base64 alphabet byte to its 6-bit value, or
- * -1 for any byte that is not part of the alphabet (including '=', which is
- * handled separately as a padding marker, not a data character). Built once,
- * lazily, via pthread_once rather than a designated-initializer literal;
- * a literal would need every one of the 61 non-specified alphabet slots to
- * default to something other than 0, since 0 already means 'A'. */
+/* The reverse lookup table, which maps a byte of the base64 alphabet to its
+ * 6-bit value and holds -1 for a byte that is not part of the alphabet. That
+ * includes '=', because the code treats '=' as a padding marker and not as a
+ * data character. The code builds the table once, and only when it first
+ * needs it, with pthread_once. A designated-initializer literal cannot do
+ * this job, because it needs a default other than 0 for each of the 61 slots
+ * that it does not name, while 0 already means 'A'. */
 static signed char g_chttp_base64_decode_table[256];
 static ccol_once_flag_t g_chttp_base64_decode_table_once = CCOL_ONCE_INIT;
 
@@ -60,17 +61,17 @@ static void _chttp_base64_decode_table_init(void) {
 }
 
 /**
- * @brief Base64-encode a buffer (custom allocator).
+ * @brief Encode a buffer as base64 (custom allocator).
  */
 char *chttp_base64_encode_mp(ccol_memmgmt_procs_t *mp, const void *data,
                              size_t len, size_t *out_len) {
   if (!data && len > 0) return NULL;
-  /* enc_len below is ((len+2)/3)*4; len is a caller-supplied length with no
+  /* enc_len below is ((len+2)/3)*4. The caller gives len, which has no
    * upper bound of its own, so both "len+2" and the final "*4" need an
-   * overflow check. Practically unreachable (it would take a multi-exabyte
-   * input to actually wrap size_t), but an unchecked size computation
-   * feeding an allocation is worth rejecting outright rather than trusting
-   * the input never gets that large. */
+   * overflow check. No real input reaches this point, because an input of
+   * many exabytes is necessary to wrap size_t, but a size computation that
+   * feeds an allocation must not stay unchecked. This check rejects the
+   * input instead of trusting that the input never becomes that large. */
   if (len > (SIZE_MAX / 4) * 3 - 4) return NULL;
 
   const unsigned char *p = (const unsigned char *)data;
@@ -108,7 +109,7 @@ char *chttp_base64_encode_mp(ccol_memmgmt_procs_t *mp, const void *data,
 }
 
 /**
- * @brief Base64-decode a NUL-terminated base64 string (custom allocator).
+ * @brief Decode a base64 string that ends with a NUL (custom allocator).
  */
 void *chttp_base64_decode_mp(ccol_memmgmt_procs_t *mp, const char *b64_input,
                              size_t *out_len) {
@@ -127,11 +128,11 @@ void *chttp_base64_decode_mp(ccol_memmgmt_procs_t *mp, const char *b64_input,
   ccol_call_once(g_chttp_base64_decode_table_once,
                  _chttp_base64_decode_table_init);
 
-  /* '=' padding may only appear as the final one or two bytes of the whole
-   * string; this pre-scan bounds the output allocation exactly, and the
-   * per-group validation loop below independently rejects any other
-   * placement of '=' (elsewhere in the string, or data following a padding
-   * byte within the last group) before ever writing past that bound. */
+  /* '=' padding can only be the last byte or the last two bytes of the
+   * whole string, so this pre-scan gives the output allocation an exact
+   * bound. The loop below validates each group on its own, and it rejects a
+   * '=' in any other place (somewhere else in the string, or after a padding
+   * byte inside the last group) before it writes past that bound. */
   size_t pad = 0;
   if (b64_input[in_len - 1] == '=') {
     pad = 1;
@@ -172,6 +173,20 @@ void *chttp_base64_decode_mp(ccol_memmgmt_procs_t *mp, const char *b64_input,
       }
     }
 
+    /* A padded final group carries bits that no output byte holds: the low
+     * 4 bits of the second character before "==", and the low 2 bits of
+     * the third character before "=". RFC 4648 SS3.5 makes an encoder set
+     * them to zero, and a decoder may refuse data where they are not.
+     * Without this check, "QQ==" and "QR==" both decode to "A", so two
+     * different strings name the same bytes, and a comparison of encoded
+     * values (a credential, a digest) disagrees with a comparison of the
+     * bytes. So only the canonical spelling is accepted. */
+    if ((vals[2] < 0 && (vals[1] & 0x0F) != 0) ||
+        (vals[2] >= 0 && vals[3] < 0 && (vals[2] & 0x03) != 0)) {
+      _ccol_mem_free(mp, out);
+      return NULL;
+    }
+
     uint32_t n = ((uint32_t)vals[0] << 18) | ((uint32_t)vals[1] << 12) |
                  ((uint32_t)(vals[2] < 0 ? 0 : vals[2]) << 6) |
                  (uint32_t)(vals[3] < 0 ? 0 : vals[3]);
@@ -193,24 +208,23 @@ void *chttp_base64_decode_mp(ccol_memmgmt_procs_t *mp, const char *b64_input,
  * @brief Build a "Basic <base64(username:password)>" header value (custom
  * allocator).
  */
-/* Does the actual work for chttp_basic_auth_mp, taking user_len/pass_len as
- * explicit parameters (rather than computing them via strlen() internally)
- * so the overflow guard below can be exercised directly from a white-box
- * test with a fake length pair, without needing to actually construct a
- * multi-exabyte input string; see
- * _chttp_basic_auth_overflow_guard_for_tests below. */
+/* This function does the work for chttp_basic_auth_mp. It takes user_len
+ * and pass_len as explicit parameters instead of computing them with
+ * strlen() inside, so a white-box test can drive the overflow guard below
+ * with a pair of fake lengths without building an input string of many
+ * exabytes. See _chttp_basic_auth_overflow_guard_for_tests below. */
 static char *_chttp_basic_auth_len(ccol_memmgmt_procs_t *mp,
                                    const char *username, size_t user_len,
                                    const char *password, size_t pass_len) {
-  /* Overflow guard on the "needed size" computation below, mirroring
-   * chttp_base64_encode_mp's own identical guard just above: user_len and
-   * pass_len are two independently caller-supplied string lengths, so their
-   * sum reaching close to SIZE_MAX does not require either string alone to
-   * be implausibly large. Leaves room for both the ':' separator below and
-   * the final allocation's own NUL terminator. Unreachable in practice
-   * (would need multi-exabyte input strings), but this project treats a
-   * reducible/unguarded overflow in a size computation as a real bug
-   * regardless of how large an input is needed to trigger it. */
+  /* The overflow guard for the computation of the necessary size below,
+   * the same guard that chttp_base64_encode_mp has above. The caller gives
+   * user_len and pass_len as two separate string lengths, so their sum can
+   * come close to SIZE_MAX even if neither string alone is very large. The
+   * guard leaves space for the ':' separator below and for the NUL
+   * terminator of the final allocation. No real input reaches this point,
+   * because input strings of many exabytes are necessary, but this project
+   * treats an overflow in a size computation as a real bug when you can
+   * remove it, whatever the size of the necessary input. */
   if (pass_len > SIZE_MAX - user_len || user_len + pass_len > SIZE_MAX - 2)
     return NULL;
   size_t combined_len = user_len + 1 + pass_len;
@@ -237,20 +251,32 @@ static char *_chttp_basic_auth_len(ccol_memmgmt_procs_t *mp,
 char *chttp_basic_auth_mp(ccol_memmgmt_procs_t *mp, const char *username,
                           const char *password) {
   if (!username || !password) return NULL;
+  /* RFC 7617 SS2: the user-id must not contain a colon. The colon is the
+   * ONE delimiter in the "user-id ':' password" string that this function
+   * builds, and a recipient cuts that string at its FIRST colon. Without
+   * this rejection, the cut of a username with a colon in it falls in the
+   * wrong place: the username "a:b" with the password "c" encodes to the
+   * same bytes as the username "a" with the password "b:c", so a caller that
+   * asks for one identity sends a different one, and two different sets of
+   * credentials can encode to the same bytes. A colon in the PASSWORD is
+   * legal, and the function builds the string as the caller asks, because
+   * the password is everything after the first colon. */
+  if (strchr(username, ':')) return NULL;
   return _chttp_basic_auth_len(mp, username, strlen(username), password,
                                strlen(password));
 }
 
 #ifdef RUNNING_UNIT_TESTS
 /*
- * White-box test helper exposing _chttp_basic_auth_len's overflow guard
- * directly. ONLY safe to call with a fake_user_len/fake_pass_len pair that
- * actually exceeds the guard's own threshold, so the guard rejects before
- * snprintf ever reads past username/password's own real, short contents.
- * Not part of the public API; gated so this symbol does not leak into a
- * production build of libccollections.so, matching every white-box helper
- * already established elsewhere in this project (e.g. chttpclient.c's
- * _chttp_ob_append_overflow_guard_for_tests).
+ * A white-box helper for the tests that shows the overflow guard of
+ * _chttp_basic_auth_len directly. It is safe ONLY with a pair of
+ * fake_user_len and fake_pass_len values that goes above the threshold of
+ * that guard, so that the guard rejects the call before snprintf reads past
+ * the real, short contents of username and password. This helper is not
+ * part of the public API: a gate keeps this symbol out of a production
+ * build of libccollections.so, as it does for every other white-box helper
+ * in this project (for example _chttp_ob_append_overflow_guard_for_tests in
+ * chttpclient.c).
  */
 bool _chttp_basic_auth_overflow_guard_for_tests(ccol_memmgmt_procs_t *mp,
                                                 const char *username,

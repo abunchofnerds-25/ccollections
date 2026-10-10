@@ -1,30 +1,42 @@
-# Suppresses a known, third-party-only ThreadSanitizer race inside OpenSSL's
-# own X509_NAME_cmp/X509_cmp machinery (an ASN1_STRING read racing a
-# concurrent write during certificate verification's canonical-encoding
-# lazy-cache population), triggered when several concurrent client
-# handshakes verify certificates against one shared ctls_ctx_t trust store
-# (e.g. chttpclient's Tier 2/3 async engine firing several requests to
-# certificate-verifying HTTPS origins at once). See ctls_conn_handshake_
-# step's own doc comment in include/ctls.h for the full account: confirmed
-# via an independent, ctls.c-free reproduction (raw OpenSSL, no c_collections
-# code at all) to be entirely internal to libcrypto, with real precedent in
-# OpenSSL's own issue tracker across multiple versions. Every concurrent
-# handshake still completes correctly regardless (this is a data race the
-# detector flags, not an actual verification/handshake failure), confirmed
-# by a clean `make memtest` (valgrind) pass on the exact same test.
-# Deliberately not "fixed" by locking around the verification or handshake
-# step instead of suppressing the report: the only locking scope found to
-# be 100% reliable (serialising the entire handshake call, not just
-# verification) requires holding a lock across real network I/O waits
-# between this module's own non-blocking handshake-step calls, which would
-# serialise concurrent connections' actual data transfer, not just a brief
-# CPU-bound moment; a real throughput regression to paper over what is
-# very likely someone else's bug, not a fix.
+# ThreadSanitizer reports a data race entirely inside OpenSSL's libcrypto
+# when several concurrent client handshakes verify peer certificates against
+# one shared trust store, which is what chttpclient's Tier 2/3 async engine
+# does whenever it has more than one request in flight to a certificate-
+# verifying HTTPS origin (tests.c's own
+# async_tls.concurrent_https_requests_all_succeed).
 #
-# Anchored on _async_tls_advance (this module's own handshake-stepping call
-# site, always symbol-resolved) rather than the OpenSSL-internal frame names
-# directly, since the exact internal function touched varies across
-# reproductions: some show ASN1_STRING_set/_cmp by name, others show only an
-# unresolved libcrypto.so.3 offset a few frames deeper (same underlying
-# category, confirmed via the same independent reproduction).
-race:_async_tls_advance
+# The report is always the same shape: ASN1_STRING_cmp reads a heap block
+# that ASN1_STRING_set concurrently writes, the block allocated through
+# CRYPTO_malloc, with every frame that touches it inside libcrypto.so.3.
+# In spite of the report, every concurrent handshake completes and verifies
+# correctly: what the detector reports is the access pattern, not a handshake
+# failure.
+#
+# The race is libcrypto's own, not this project's. A standalone program that
+# links nothing but libssl and libcrypto, and runs eight concurrent
+# socketpair-backed client handshakes against one shared client SSL_CTX,
+# reproduces the identical ASN1_STRING_cmp/ASN1_STRING_set report with no
+# application frame in either racing access stack at all.
+#
+# Neither calling-side mitigation is usable, both measured against that same
+# standalone program. Serialising each client's whole handshake call behind
+# one mutex does remove the report; this module drives the handshake one
+# non-blocking step at a time (ctls_conn_handshake_step, declared in
+# include/internal/ctls.h), so that lock scope spans the network waits
+# between steps and serialises concurrent connections' actual data transfer
+# rather than a brief CPU-bound moment. Giving every connection its own
+# SSL_CTX, and with it its own trust store, also removes this report, but
+# exposes a different libcrypto-internal race in its place and costs a full
+# trust-store rebuild per connection.
+#
+# The anchor names a libcrypto frame, never one of this project's own
+# functions. A suppression matches on any frame of either racing access, so
+# an anchor naming a function in this module silences a race in this
+# library's own code just as readily as the third-party one it is written
+# for; an anchor on the handshake-stepping call site silences a race whose
+# only frames are that function itself. Two things keep that from happening
+# quietly: the Makefile's check_tsan_supp target fails the build when an
+# anchor below names a symbol this test binary defines, and test_tsan runs
+# with print_suppressions=1 so every run prints how many times the anchor
+# matched, leaving a dead suppression distinguishable from a working one.
+race:ASN1_STRING_cmp

@@ -5,7 +5,7 @@ ccol_mempool_create \- create a fixed-size memory pool
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cmempool.h>
+#include <ccollections/cmempool.h>
 
 ccol_mempool *ccol_mempool_create(size_t elem_count,
                         size_t elem_size,
@@ -16,101 +16,128 @@ ccol_mempool *ccol_mempool_create(size_t elem_count,
 .fi
 .SH DESCRIPTION
 .nf
-Creates a memory pool that manages a fixed number of fixed-size elements.
-All allocations return elements of the same size. Provides O(1) allocation
-and deallocation using a free list.
+Creates a memory pool that manages a fixed number of fixed-size elements,
+so every allocation returns an element of the same size. The pool uses a
+free list to give O(1) allocation and deallocation.
 .fi
 .SH PARAMETERS
 .nf
 elem_count                 Number of elements in the pool (must be > 0)
-elem_size                  Size of each element in bytes (must be > 0,
-                          minimum sizeof(uintptr_t), maximum SIZE_MAX
-                          minus the stride rounding)
-fallback_to_dynamic_memory If true, allocate from heap when pool exhausted
-single_threaded           If true, omit locking (faster but not thread-safe)
-mmgmt_procs               Custom memory management, or NULL for default
-err                       Optional pointer to receive error string
+elem_size                  Size of each element in bytes. It must be > 0.
+                          The minimum is sizeof(uintptr_t). The maximum
+                          is SIZE_MAX less the stride rounding
+fallback_to_dynamic_memory If true, allocate from the heap when the pool
+                          is empty
+single_threaded           If true, do not lock (faster but not
+                          thread-safe)
+mmgmt_procs               Custom memory management, or NULL for the
+                          default
+err                       Optional pointer that receives an error string
 .fi
 .SH RETURN VALUE
 .nf
-Returns pointer to newly created memory pool on success
+Returns a pointer to the new memory pool on success
 Returns NULL on failure
 .fi
 .SH NOTES
 .nf
-The stride between elements is elem_size rounded up to 16 bytes and then,
-unless the library was built with -DCCOL_MEMPOOL_COMPACT_LAYOUT=1, on up
-to a power of two; see "Compile-Time Configuration" in README.md. Either
-way every element is aligned for any object type, not just the first.
-This matches what malloc() guarantees, so any object that can be stored
-in heap memory can be stored in an entry
-If elem_size < sizeof(uintptr_t), it is rounded up
-Returns NULL with error if elem_size would overflow size_t once the
-stride rounding is applied, or if elem_count and that stride together
-would overflow it: a pool holds one stride per element followed by one
-status byte per element, all in one block
-With fallback enabled, pool never fails allocation (until system OOM)
-Pool must be destroyed with ccol_mempool_destroy() when done
+The stride between elements is elem_size rounded up to 16 bytes, and the
+library then rounds it further up to a power of two unless it was built
+with -DCCOL_MEMPOOL_COMPACT_LAYOUT=1 (see doc/building.md in the source
+tree). In both cases every element, not only the first one, is aligned
+for any object type. This matches what malloc() guarantees, so any
+object that you can store in heap memory can go into an entry
+If elem_size < sizeof(uintptr_t), the library rounds it up
+Returns NULL with an error in two cases: an elem_size that would
+overflow size_t after the stride rounding, and an elem_count and a
+stride that together would overflow size_t. A pool holds one stride for
+each element, then one status byte for each element, all in one block
+With the fallback on, an allocation from the pool never fails until the
+system runs out of memory
+The caller must destroy the pool with ccol_mempool_destroy()
+The pool calls the functions of mmgmt_procs for its dynamic fallback
+entries, and for its own bookkeeping of them, in the middle of an update
+of its own state, with its lock held when it has one. Those functions
+must therefore not call back into this same pool: with a lock the call
+deadlocks, and without one it corrupts that state. An allocator built on
+a pool must draw from a different pool
 
 Sizing for performance:
 
 Give a thread-safe pool at least 8 elements. Below that there is no room
-to carve out a per-thread cache, so every allocation and every free takes
-the pool's lock and concurrent callers serialise against one another.
-8 is a floor, not a target: cache size grows with the pool, so a pool
-sized for real use does considerably better than one sized at exactly 8.
+for a cache for each thread, so every allocation and every free takes
+the lock of the pool and concurrent callers serialise against one
+another. 8 is a floor, not a target: the cache size grows with the
+pool, so a pool sized for real use does much better than one sized at
+exactly 8.
 
-A pool that receives a cache allocates a reserve beyond elem_count. The
-reserve is what keeps elem_count obtainable by any thread no matter how
-many entries other threads are holding in their own caches. It costs
-memory, at most half of elem_count, falling to a quarter at 8192
-elements, an eighth at 16384, and to a few percent or less from roughly
-65536 upward; the reserve stops growing once a cache reaches its maximum
-depth, so a large pool pays proportionally far less than a small one.
+A pool gives out at most one cache for every 8 elements, and at most 16
+in all. A thread that arrives when every cache is taken works through
+the lock of the pool (one lock for each allocation and each free, which
+is what a pool without a cache costs) until a thread that holds a cache
+exits, at which point it gets one. Size a pool that many threads share
+so that each of them gets a cache.
+
+A pool that receives a cache allocates a reserve above elem_count, which
+keeps elem_count available to any thread no matter how many entries
+other threads hold in their own caches. The reserve costs memory: at
+most half of elem_count, falling to a quarter at 8192 elements, an
+eighth at 16384, and a few percent or less from about 65536 upward. The
+reserve stops growing once a cache reaches its maximum depth, so a large
+pool pays proportionally far less than a small one.
 
 ccol_mempool_total_capacity() reports elem_count, and
-ccol_mempool_used_count() counts only entries genuinely handed out rather
-than entries merely pulled into a cache. What the reserve does change is
-how exact the upper end of that count is under concurrent load: an entry
-leaves a thread's cache with no lock held and so with no count to
-consult, so entries are committed to a cache before it is known whether
-they will be needed. That decision favours the guarantee above, and in
-exchange concurrent callers can briefly hold a few entries more than
-elem_count at once, never more than elem_count plus the reserve. The
-memory involved is allocated when the pool is created either way, so
-nothing grows at run time. See ccol_mempool_total_capacity(3).
+ccol_mempool_used_count() counts only the entries that the pool truly
+handed out, not an entry that the pool merely pulled into a cache. What
+the reserve does change is how exact the upper end of that count is
+under concurrent load. An entry leaves the cache of a thread with no
+lock held, and so with no count to consult, which means entries go into
+a cache before anybody knows whether they are needed. That decision
+favours the guarantee above; in exchange, concurrent callers can hold a
+few entries more than elem_count at one time, for a short time, but
+never more than elem_count plus the reserve. In either case the memory
+is allocated when the pool is created, so nothing grows at run time.
+See ccol_mempool_total_capacity(3).
 
-Pools created with single_threaded = true, and pools created by
-ccol_mempool_create_from_preallocated_buffer(), never use the cache.
-Neither the reserve nor the 8-element floor applies to them.
+A thread gets a cache only once it holds a value on a thread-specific
+key of the library, which is what lets the library free that cache when
+the thread exits. A thread for which that fails works through the lock
+of the pool, as above, and asks again at its next miss. A process that
+has no thread-specific key left to give, and a library that is being
+unloaded, give no pool a cache.
 
-The right elem_count, elem_size and single_threaded setting depend on the
-access pattern, the number of threads and the object lifetime of the
-program using the pool, and no single choice is best for all of them.
-Measure rather than assume: "make bench" in the source tree runs the
-pool's own benchmarks alongside the system allocator on the current
-machine.
+Neither a pool created with single_threaded = true nor a pool created by
+ccol_mempool_create_from_preallocated_buffer() ever uses the cache, and
+the reserve and the 8-element floor do not apply to them.
+
+The right elem_count, elem_size and single_threaded setting depend on
+three things: the access pattern, the number of threads, and the object
+lifetime of the program that uses the pool. No single choice is best
+for all of them, so measure rather than assume. "make bench" in the
+source tree runs the benchmarks of the pool beside the system allocator,
+on the current machine.
 .fi
 .SH "THREAD SAFETY"
 .nf
-Thread-safe when single_threaded is false, using a mutex.
+Thread-safe when single_threaded is false, in which case the pool uses a
+mutex.
 
-On the common path a thread-safe pool takes no lock at all. Each thread
+On the common path a thread-safe pool takes no lock at all: each thread
 keeps a small private cache of entries and reaches the shared free list
-only to refill or flush it, so threads allocating and freeing
-concurrently do not contend with one another, so throughput rises as
-threads are added.
+only to refill or flush that cache. Threads that allocate and free at
+the same time therefore do not contend with one another, and throughput
+rises as you add threads.
 
-Entries held in one thread's cache return to the shared free list when
-that thread exits. Destroying the pool releases its whole block, those
-entries included; the cache's own allocation is a separate matter, and
-ccol_mempool_destroy(3) gives the points at which it goes back to your
-allocator. Join a thread before destroying a pool it used, which is
-sufficient because a thread's cleanup runs before pthread_join()
-returns.
+An entry in the cache of one thread returns to the shared free list when
+that thread exits, and a destroy of the pool frees its whole block,
+those entries included. The allocation of the cache itself is a
+separate matter; ccol_mempool_destroy(3) gives the points at which that
+allocation goes back to your allocator. Join a thread before you destroy
+a pool that it used. That is enough, because the cleanup of a thread
+runs before pthread_join() returns.
 
-Passing single_threaded = true removes all locking and all caching. Such
-a pool must never be used from more than one thread.
+A single_threaded = true pool has no lock and no cache. Never use such a
+pool from more than one thread.
 .fi
 .SH "SEE ALSO"
 .BR ccol_mempool_create_from_preallocated_buffer (3),

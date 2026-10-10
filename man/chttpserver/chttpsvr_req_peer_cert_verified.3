@@ -1,0 +1,43 @@
+.TH CHTTPSVR_REQ_PEER_CERT_VERIFIED 3 "2026-09-29" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_req_peer_cert_verified \- report whether the TLS client presented a verified certificate
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpserver.h>
+
+bool chttpsvr_req_peer_cert_verified(const chttpsvr_req *req);
+.fi
+.SH DESCRIPTION
+.nf
+Returns true only when the request arrived over TLS, the client
+presented a certificate during the handshake, and that certificate
+verified against the ca_bundle_path of the server.
+
+It returns false for a plaintext connection, for a server with no
+ca_bundle_path, for a client that presented no certificate, and when
+req is NULL.
+
+With the default configuration, a server that has a ca_bundle_path
+accepts no client without such a certificate, so every request there
+reports true.  When client_cert_optional is set in chttp_tls_config_t,
+a client that presents nothing is accepted as well, and this function
+is how a handler or a middleware tells such a client apart from a
+verified one.  In either mode, a client whose certificate does not
+verify never reaches a handler.
+
+The answer belongs to the connection, so every request on one
+keep-alive connection reports the same value, and a resumed TLS
+session reports the answer of the handshake that established it.
+.fi
+.SH RETURN VALUE
+.nf
+true or false, as described above.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_start (3),
+.BR chttpsvr_req_peer_cert_der (3),
+.BR chttpsvr_req_peer_cert_sha256 (3),
+.BR chttpsvr_req_peer_cert_subject (3),
+.BR CHTTP_TLS_DEFAULT (3)

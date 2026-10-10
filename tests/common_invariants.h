@@ -28,11 +28,12 @@ SOFTWARE.
 #include <stdio.h>
 #include <time.h>
 
-/* Shared seeded PRNG for randomized-operation invariant tests across
- * test suites (not part of the library itself; test-only). A fixed seed
- * (rather than one freshly drawn from the OS) is deliberate: on a test
- * failure, printing the seed via ccol_invariants_print_seed lets the exact
- * same operation sequence be reproduced by hardcoding that seed. */
+/* A seeded pseudo random number generator (PRNG) that several test suites
+ * share for the invariant tests that run a random sequence of operations. It
+ * is not part of the library; only the tests use it. The seed is fixed instead
+ * of coming from the OS on purpose: when a test fails,
+ * ccol_invariants_print_seed prints the seed, so you can hardcode it and
+ * reproduce exactly the same sequence of operations. */
 typedef struct {
   uint64_t state;
 } ccol_invariants_rng_t;
@@ -42,8 +43,8 @@ static inline void ccol_invariants_seed(ccol_invariants_rng_t *rng,
   rng->state = seed;
 }
 
-/* splitmix64, chosen for being small, dependency-free, and good enough to
- * drive test operation sequences (not for anything cryptographic). */
+/* splitmix64: small, free of dependencies and good enough to drive a
+ * sequence of test operations, but not for cryptography. */
 static inline uint64_t ccol_invariants_next_u64(ccol_invariants_rng_t *rng) {
   uint64_t z = (rng->state += 0x9E3779B97F4A7C15ULL);
   z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
@@ -57,8 +58,9 @@ static inline uint64_t ccol_invariants_next_bounded(ccol_invariants_rng_t *rng,
   return ccol_invariants_next_u64(rng) % bound;
 }
 
-/* A fixed default seed, used unless a test picks its own. Printed on every
- * run (not just on failure) so a seed is always visible in test output. */
+/* The fixed default seed, which a test uses unless it chooses its own. Every
+ * run prints its seed, not only a run that fails, so a seed is always visible
+ * in the test output. */
 #define CCOL_INVARIANTS_DEFAULT_SEED 0xC0FFEEULL
 
 static inline void ccol_invariants_print_seed(const char *test_name,

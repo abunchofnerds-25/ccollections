@@ -1,17 +1,17 @@
 .TH CSTR_IS_EMPTY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cstr_is_empty \- check whether the string contains no characters
+cstr_is_empty \- check whether the string holds no characters
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 cstr_is_empty(s);
 .fi
 .SH DESCRIPTION
 .nf
-Pass-through wrapper for cstring_is_empty().
+This macro is a pass-through wrapper for cstring_is_empty().
 .fi
 .SH PARAMETERS
 .nf
@@ -19,7 +19,7 @@ s   cstr to query
 .fi
 .SH RETURN VALUE
 .nf
-true if length is zero, false otherwise
+true if the length is zero, false if it is not
 .fi
 .SH "SEE ALSO"
 .BR cstring_is_empty (3),

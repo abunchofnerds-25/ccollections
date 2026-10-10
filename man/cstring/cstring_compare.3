@@ -5,14 +5,14 @@ cstring_compare \- compare the string to a C string
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 int cstring_compare(cstr s, const char *str);
 .fi
 .SH DESCRIPTION
 .nf
-Compares the content of s to the null-terminated C string str using
-strcmp() semantics.
+This function compares the content of s to the null-terminated C string str,
+with the same semantics as strcmp().
 .fi
 .SH PARAMETERS
 .nf
@@ -21,10 +21,11 @@ str   C string to compare against
 .fi
 .SH RETURN VALUE
 .nf
-Negative if s < str
+A negative value if s < str
 Zero if s == str
-Positive if s > str
-1 if str is NULL (a non-null string is considered greater than NULL)
+A positive value if s > str
+1 if str is NULL, because the library treats a non-null string as greater
+than NULL
 .fi
 .SH NOTES
 .nf

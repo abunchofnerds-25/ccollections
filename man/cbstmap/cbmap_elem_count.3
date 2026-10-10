@@ -5,13 +5,13 @@ cbmap_elem_count \- get the number of elements in the map
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cbstmap.h>
+#include <ccollections/cbstmap.h>
 
 size_t cbmap_elem_count(cbmap cbm);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the current number of key-value pairs stored in the BST map.
+Returns the number of key-value pairs that the BST map currently stores.
 .fi
 .SH PARAMETERS
 .nf
@@ -19,12 +19,12 @@ cbm  BST map to query
 .fi
 .SH RETURN VALUE
 .nf
-Returns number of elements in the map
+Returns the number of elements in the map
 .fi
 .SH NOTES
 .nf
 O(1) complexity
-Asserts if cbm is NULL
+The function asserts if cbm is NULL
 .fi
 .SH "SEE ALSO"
 .BR cbmap_insert_elem (3),

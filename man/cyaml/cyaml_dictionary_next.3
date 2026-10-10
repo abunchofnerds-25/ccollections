@@ -1,0 +1,46 @@
+.TH CYAML_DICTIONARY_NEXT 3 "2026-09-29" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_dictionary_next \- step a dictionary cursor onto the next member
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cyaml.h>
+
+bool cyaml_dictionary_next(cyaml_dictionary_iter *it);
+.fi
+.SH DESCRIPTION
+.nf
+Steps the cursor it, which cyaml_dictionary_first(3) filled, onto the
+member that follows the current one in insertion order.  After a call
+that returns true, it->key and it->value describe that member.
+The cursor holds that member from the moment it stepped onto the
+current one, so it stays valid across every change that leaves that
+successor in place: a replacement of any value, the removal of any
+other member, and an insert.  Removing the successor or destroying the
+dictionary invalidates it.  cyaml_dictionary_first(3) describes the
+order, the lifetime of it->key and it->value, and each of those
+changes.
+.fi
+.SH PARAMETERS
+.nf
+it  A cursor that cyaml_dictionary_first(3) filled.
+.fi
+.SH RETURN VALUE
+.nf
+true when it now stands on the next member.
+
+false when the previous call gave the last member, and on every call
+after that; the function then sets it->key and it->value to NULL.
+Also false when it is NULL.
+.fi
+.SH NOTES
+.nf
+Removing the current member with cyaml_dictionary_remove(3) does not
+invalidate the cursor; removing the successor or destroying the
+dictionary does.  See
+cyaml_dictionary_first(3) for every change and its effect.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_dictionary_first (3),
+.BR cyaml_dictionary_remove (3)

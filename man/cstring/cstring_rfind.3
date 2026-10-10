@@ -1,18 +1,26 @@
-.TH CSTRING_RFIND 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CSTRING_RFIND 3 "2026-09-28" "c_collections" "C Collections Library - Functions"
 .SH NAME
 cstring_rfind \- find the last occurrence of a substring
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 size_t cstring_rfind(cstr s, const char *needle);
 .fi
 .SH DESCRIPTION
 .nf
 Searches the string for the last occurrence of needle and returns its
-zero-based starting index.
+zero-based starting index. Occurrences that overlap count, so the last
+occurrence of "aba" in "ababa" starts at index 2.
+
+For a string of 256 bytes or more, the search runs from the end of the
+string toward its start and stops at the first match that it meets, so
+the bytes to the left of that match are never read. Its time is then
+linear in the length of the string plus the length of needle, whatever
+the two hold. A shorter string is searched from its start, which is
+faster at that length.
 .fi
 .SH PARAMETERS
 .nf
@@ -28,6 +36,12 @@ ccol_invalid_size ((size_t)-1) if needle is not found, or if needle is NULL
 .SH NOTES
 .nf
 Asserts if s is NULL
+A needle of up to 128 bytes needs no memory. A longer needle can make
+the search take one temporary table (one size_t per byte of needle) from
+the allocator of s, and the search frees that table before the call
+returns. When that allocator refuses the table, the search still gives
+the same answer, but its time can then grow with the product of the two
+lengths
 .fi
 .SH "SEE ALSO"
 .BR cstring_find (3)

@@ -5,15 +5,16 @@ cvector_reset \- clear all elements and reset capacity
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cvector.h>
+#include <ccollections/cvector.h>
 
 void cvector_reset(cvec v);
 .fi
 .SH DESCRIPTION
 .nf
-Removes all elements from the vector and attempts to shrink the capacity
-back to the minimum (4 elements). If reallocation fails, the capacity
-remains unchanged but the element count is still reset to 0.
+Removes every element from the vector and then tries to shrink the
+capacity back to the minimum of 4 elements. When the reallocation fails,
+the capacity stays the same, but the element count becomes 0 all the
+same.
 .fi
 .SH PARAMETERS
 .nf
@@ -21,9 +22,11 @@ v    Vector to reset
 .fi
 .SH NOTES
 .nf
-Element count becomes 0
-Capacity reset to minimum (4) if reallocation succeeds
-Does not free individual elements - caller must do this first if needed
+The element count becomes 0
+The capacity goes back to the minimum (4) when the reallocation
+succeeds
+Does not free the elements one by one; the caller must do this first
+when it is necessary
 Asserts if v is NULL
 .fi
 .SH "SEE ALSO"

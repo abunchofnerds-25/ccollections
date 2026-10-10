@@ -1,18 +1,18 @@
 .TH CVECTOR_APPEND_CVECTOR 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-cvector_append_cvector \- append vector to vector
+cvector_append_cvector \- append a vector to a vector
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cvector.h>
+#include <ccollections/cvector.h>
 
 bool cvector_append_cvector(cvec v_to, cvec v_from);
 .fi
 .SH DESCRIPTION
 .nf
-Appends all elements from one vector to another. Both vectors must have
-the same element size.
+This function appends all the elements of one vector to another vector;
+both vectors must have the same element size.
 .fi
 .SH PARAMETERS
 .nf
@@ -21,17 +21,19 @@ v_from  Source vector
 .fi
 .SH RETURN VALUE
 .nf
-Returns true on success
-Returns false if the combined element count would overflow or exceed
+Gives true on success
+Gives false when the combined element count overflows or is more than
 ccol_max_elem_count
-Returns false if memory allocation fails
+Gives false when the memory allocation fails
 .fi
 .SH NOTES
 .nf
-Element sizes must match (asserts if different)
-All elements are appended or none
-Automatically reserves capacity if needed
-Asserts if v_to or v_from is NULL
+The two element sizes must be the same; the function asserts when they
+are different.
+The function appends all the elements or none of them.
+The function reserves more capacity automatically when this is
+necessary.
+The function asserts when v_to or v_from is NULL.
 .fi
 .SH "SEE ALSO"
 .BR cvec_append_cvec (3),

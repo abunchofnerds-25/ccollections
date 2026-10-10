@@ -5,43 +5,74 @@ ccol_event_loop_destroy \- destroy a ccol_event_loop and invalidate the handle
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadcomm.h>
+#include <ccollections/cthreadcomm.h>
 
 ccol_event_loop_destroy(loop)
 .fi
 .SH DESCRIPTION
 .nf
-Macro wrapper around __ccol_event_loop_destroy. Blocks until every
-in-flight resolved use of the handle has finished, shuts every
-reactor thread down (if not already shut down), frees every
-remaining registration, then sets loop to CCOL_EVENT_LOOP_INVALID.
+This macro blocks until every in-flight resolved use of the handle
+stops, then shuts every reactor thread down (if something did not
+already shut them down) and frees every registration that remains.
+Finally it sets loop to CCOL_EVENT_LOOP_INVALID.
 
-loop must be a currently live handle or CCOL_EVENT_LOOP_INVALID (a
-silent no-op). Calling this on a stale handle (one already
-destroyed, sequentially by an earlier call or concurrently by
-another thread) is a FATAL ERROR (abort()/SIGABRT), not a silent
-double-free; see __ccol_event_loop_destroy(3) for further detail.
+The shutdown is the same graceful drain as ccol_event_loop_shutdown(3):
+the callbacks that the loop already collected run, and loop stays a
+live handle for them until the drain ends. A callback can therefore
+call ccol_event_loop_remove(3), ccol_event_loop_pause(3),
+ccol_event_loop_resume(3), ccol_event_loop_modify(3) and
+ccol_event_loop_add(3) on loop during the destroy, with the same results
+as during ccol_event_loop_shutdown(3). This makes it safe to close a
+connection from its own callback (remove every registration of it,
+close the fd, free arg) while another thread destroys the loop: once
+the removals return, no callback of those registrations runs again.
+Once the drain ends, loop stops resolving, and every later call on it
+fails as for a destroyed handle.
 
-Calling this on loop from within a callback currently dispatching
-on one of loop's own reactor/dispatch threads is likewise a FATAL
-ERROR (abort()/SIGABRT), not a deadlock or a silent no-op; defer
-destruction to another thread, or to after the callback returns,
-instead.
+loop must be a handle that is live at the time of the call, or
+CCOL_EVENT_LOOP_INVALID, which does nothing. A call on a stale handle
+(one that an earlier call already destroyed, or that another thread
+destroys at the same time) is a FATAL ERROR (abort()/SIGABRT), not a
+silent double free. The handle carries a generation tag that the
+library checks before it touches the loop, so it always finds such a
+value and never dereferences it.
 
-See __ccol_event_loop_destroy(3) for the queue-outlives-the-loop safety
-guarantee this provides for queue-backed registrations.
+A call on loop from inside a callback that runs on one of the reactor
+threads of loop, or on one of its dispatch threads, is also a FATAL
+ERROR (abort()/SIGABRT), not a deadlock or a silent no-op. Give the
+destroy to another thread instead, or do it after the callback
+returns.
 
-Every remaining registration's handlers.on_removed (see
-ccol_event_loop_add(3)), if set, fires exactly once as part of freeing it
-here, the same guarantee an ordinary ccol_event_loop_remove() call gives a
-still-live registration.
+A queue-backed registration comes from ccol_selectable_from_circq(),
+ccol_selectable_from_dynq() or ccol_selectable_from_chan(). This
+macro unlinks such a registration from the waiter list of its own
+queue as it frees it, so a queue that outlives this ccol_event_loop is
+never left with a waiter pointer that dangles. The reverse order is
+the responsibility of the caller: do not destroy a queue while a
+registration for it is live. ccol_circular_queue_destroy(3),
+ccol_dynamic_queue_destroy(3) and ccol_channel_destroy(3) find that
+case and assert against it.
+
+Each registration that remains has a handlers.on_removed field (see
+ccol_event_loop_add(3)). If it is set, it fires exactly one time as
+part of the free here, which is the same guarantee that an ordinary
+ccol_event_loop_remove() call gives to a live registration.
 .fi
 .SH PARAMETERS
 .nf
 loop  An lvalue of type ccol_event_loop.
 .fi
+.SH NOTES
+.nf
+The destroy never closes a registered fd and never destroys a
+registered queue or ccol_channel; the owner of each one keeps it, as
+ccol_event_loop_remove(3) leaves it.
+
+The macro evaluates loop exactly once. It must be a modifiable lvalue,
+such as a variable or an element of an array, so an expression with a
+side effect, such as handles[i++], destroys and clears one element.
+.fi
 .SH "SEE ALSO"
-.BR __ccol_event_loop_destroy (3),
-.BR ___ccol_event_loop_destroy (3),
 .BR ccol_event_loop_create (3),
-.BR ccol_event_loop_shutdown (3)
+.BR ccol_event_loop_shutdown (3),
+.BR ccol_event_loop_remove (3)

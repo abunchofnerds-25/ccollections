@@ -1,0 +1,88 @@
+.TH CBMAP_CREATE_CH 3 "2026-10-06" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cbmap_create_ch \- create a BST map ordered by a custom comparison procedure
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cbstmap.h>
+
+typedef int (*ccol_comparison_proc_t)(const void *first,
+                                      const void *second);
+
+cbmap cbmap_create_ch(ccol_data_type key_type,
+                      ccol_comparison_proc_t custom_comparison_proc,
+                      char **err);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a self-balancing BST map in which custom_comparison_proc sets the
+order of the keys. The function is a thin inline wrapper over
+cbmap_create_full(3) that gives NULL for the memory management
+procedures, so the map uses the default allocator. The type-inferred
+equivalents are cbmap_construct_cc(3) and cbmap_init_cc(3).
+
+The procedure decides the order of the keys and nothing else: key_type
+sets the width that the map expects of every key_pair of a fixed-width
+key type, and key_type also sets the alignment of every stored key.
+
+cbmap_construct_cc(3) gives the contract of the procedure:
+  - It returns a negative value, zero or a positive value.
+  - It defines key equality and key order.
+  - It must give a consistent, transitive order for the whole life of
+    the map.
+.fi
+.SH PARAMETERS
+.nf
+key_type                Type of the keys that the map stores
+custom_comparison_proc  Comparison procedure, or NULL for the default
+                        order for key_type
+err                     Optional pointer that receives an error string on
+                        failure, or NULL
+.fi
+.SH RETURN VALUE
+.nf
+A new map on success.
+NULL on failure, in which case *err is set to an error string when err is
+not NULL.
+.fi
+.SH NOTES
+.nf
+The procedure gets two bare pointers to key bytes, and a key that comes
+in through the raw layer can be at any address. Read a key that is wider
+than one byte through memcpy, not through a pointer cast to the key type
+The procedure must stay callable for the whole life of the map
+The function reports a failure instead of stopping the program, while the
+cbmap_construct_cc(3) and cbmap_init_cc(3) macros call ccol_fatal_err()
+on a failure
+Destroy the map with cbmap_destroy(3)
+.fi
+.SH EXAMPLES
+.nf
+typedef struct { int major; int minor; } version;
+
+int version_cmp(const void *a, const void *b) {
+    version x, y;
+    memcpy(&x, a, sizeof(x));
+    memcpy(&y, b, sizeof(y));
+    if (x.major != y.major) {
+        return (x.major > y.major) - (x.major < y.major);
+    }
+    return (x.minor > y.minor) - (x.minor < y.minor);
+}
+
+char *err = NULL;
+cbmap releases = cbmap_create_ch(ccol_other_types, version_cmp, &err);
+if (!releases) {
+    fprintf(stderr, "%s\en", err);
+    return 1;
+}
+/* ... cbmap_insert_elem(releases, ...) ... */
+cbmap_destroy(releases);
+.fi
+.SH "SEE ALSO"
+.BR cbmap_create (3),
+.BR cbmap_create_full (3),
+.BR cbmap_construct_cc (3),
+.BR cbmap_init_cc (3),
+.BR cbmap_destroy (3)

@@ -27,19 +27,19 @@
  * @brief Benchmark driver: runs the registered cases, reports them, and
  *        compares them against a recorded baseline.
  *
- * The baseline is a JSON file read and written with this library's own cjson,
- * and it is deliberately local rather than committed. An absolute
- * nanoseconds-per-operation figure describes one machine's cache hierarchy,
- * clock behavior and background load; comparing a run here against a figure
- * recorded on different hardware reports a difference that has nothing to do
- * with any change to the library. What is worth measuring is the same machine
- * before and after a change, which is what `make bench_update` followed by
- * `make bench` gives.
+ * The baseline is a JSON file, which the driver reads and writes with the
+ * cjson module of this library. The file stays on the local machine on
+ * purpose, and the project does not commit it: a figure in nanoseconds for
+ * each operation describes the cache hierarchy, the clock behavior and the
+ * background load of one machine, so a run here against a figure from other
+ * hardware reports a difference that has nothing to do with a change to the
+ * library. What is worth measuring is one machine before a change and after
+ * it, which `make bench_update` followed by `make bench` gives you.
  *
- * Cases that measure a third-party library are reported for comparison but
- * never checked against the baseline: their timings track that project's
- * performance and the version of it installed, neither of which this
- * repository controls.
+ * The driver reports a case that measures a third-party library for
+ * comparison, but never checks such a case against the baseline, because its
+ * times follow the performance of another project and the version of that
+ * project on this machine, and this repository controls neither of them.
  */
 
 #include "bench.h"
@@ -47,6 +47,19 @@
 #include <cjson.h>
 #include <errno.h>
 #include <pthread.h>
+#if defined(__FreeBSD__)
+#include <pthread_np.h> /* pthread_setaffinity_np */
+#endif
+/* macOS has no call that binds a thread to a CPU: its affinity tags are only
+ * hints, and Apple silicon ignores them. The harness therefore runs unpinned
+ * there, and says so in its header. */
+#ifndef BENCH_CAN_PIN
+#if defined(__APPLE__)
+#define BENCH_CAN_PIN 0
+#else
+#define BENCH_CAN_PIN 1
+#endif
+#endif
 #include <sched.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -57,75 +70,81 @@
 #include <unistd.h>
 
 #define BENCH_MAX_CASES 256
-/* Sampling is bounded by wall-clock time rather than a fixed repetition count.
- * A fixed count treats a case costing microseconds and one costing seconds
- * identically, which either under-samples the cheap case into uselessness or
- * makes the expensive one unrunnable. A time budget instead spends the same
- * effort everywhere and lets each case take as many samples as it can afford.
+/* Real time bounds the sampling instead of a fixed number of repetitions. A
+ * fixed number treats a case that costs microseconds and a case that costs
+ * seconds in the same way, so it either takes too few samples of the cheap
+ * case to be useful or makes the expensive case impossible to run. A time
+ * budget spends the same effort everywhere, and each case takes as many
+ * samples as that budget pays for.
  *
- * It also survives a change in machine speed. The number of samples adapts to
- * whatever the CPU is doing, so a run on a faster clock collects more of them
- * rather than silently measuring something incomparable to the last run.
+ * A time budget also survives a change in the speed of the machine, because
+ * the number of samples follows what the CPU does: a run on a faster clock
+ * collects more samples instead of measuring something that you cannot
+ * compare with the last run.
  *
- * The floor guarantees enough samples for a median and a spread to mean
- * anything, even where that overruns the budget; the ceiling stops a very cheap
- * case spending its whole budget long after the numbers stopped moving. */
+ * The floor gives enough samples for a median and a spread to mean something,
+ * even when that goes past the budget. The ceiling stops a very cheap case
+ * from spending its whole budget long after the numbers stop moving. */
 #define BENCH_DEFAULT_BUDGET_SEC 5.0
 #define BENCH_MIN_SAMPLES 10
 #define BENCH_MAX_SAMPLES 2000
-/* A regression has to clear this to be reported. Repeated runs of an unchanged
- * library on an otherwise idle machine stay inside a few percent, but a shared
- * or virtualized host is far noisier, and a threshold tight enough to catch
- * every real 5 percent regression reports a dozen false ones per run on such a
- * host, which is how a performance check stops being read. */
+/* A regression must be larger than this before the driver reports it.
+ * Repeated runs of an unchanged library on an idle machine stay inside a few
+ * percent, while a shared or virtual host moves much more. On such a host, a
+ * threshold tight enough to catch every real 5 percent regression reports
+ * about a dozen false ones in each run, and that is how a performance check
+ * stops being read. */
 #define BENCH_DEFAULT_THRESHOLD_PCT 20.0
 
-/* A case is held to the run-to-run variation it actually exhibits on this
- * machine, recorded by --calibrate, rather than to one constant shared by every
- * case. One constant cannot serve both ends of the range. A laptop with cores
- * of two different speeds sharing one package power budget runs a twelve-thread
- * case whose median moves by more than half between two runs of an unchanged
- * library, while a single-threaded case on the same machine repeats to a few
- * percent; a threshold wide enough to keep the first quiet cannot catch a real
- * regression in the second. Where the measurement is dominated by the machine
- * rather than by the library, the honest answer is to report the case and gate
- * nothing on it, which is what BENCH_UNGATEABLE_PCT below decides. */
-/* Every figure here depends on the die temperature at the instant it is taken,
- * and a run heats the machine it is measuring. Measured on a laptop with this
- * suite: the package reaches its ceiling roughly a minute into a run, and one
- * unchanged case costs about 15 percent more at 98C than at 55C, with the
- * multithreaded cases considerably worse because their clock is bounded by a
- * package power budget shared across every active core. A run that starts cold
- * therefore measures its first group in a state its last group can never be in,
- * and two runs are comparable only when both start from the same state.
+/* Each case has its own threshold, from the variation that the case shows
+ * between runs on this machine, which --calibrate records. One constant
+ * shared by every case cannot serve both ends of the range. On a laptop whose
+ * cores have two different speeds and share one package power budget, the
+ * median of a twelve-thread case moves by more than half between two runs of
+ * an unchanged library, while a single-threaded case on the same machine
+ * repeats to a few percent; a threshold wide enough to keep the first case
+ * quiet cannot catch a real regression in the second. Where the machine
+ * contributes more to a measurement than the library does, the honest answer
+ * is to report the case and to gate nothing on it, which
+ * BENCH_UNGATEABLE_PCT below decides. */
+/* Every figure here depends on the temperature of the die at the instant that
+ * the driver takes it, and a run heats the machine that it measures. Measured
+ * on a laptop with this suite: the package reaches its ceiling about a minute
+ * into a run, and one unchanged case costs about 15 percent more at 98C than at
+ * 55C. The cases with many threads are much worse, because a package power
+ * budget that every active core shares bounds their clock. A run that starts
+ * cold therefore measures its first group in a state that its last group can
+ * never be in, and you can compare two runs only when both start from the
+ * same state.
  *
- * --warmup loads every core first so a run begins in the state a long run
- * settles into anyway. It is off by default because it is not free of its own
- * side effect: it adds heat, so back-to-back short runs each start hotter than
- * the last, and on a machine that sheds heat slowly it makes a sequence of
- * runs less comparable rather than more. It helps a single full run started on
- * a cold machine. Measure whether it helps on the machine in question before
- * turning it on, rather than assuming. */
+ * --warmup loads every core first, so that a run starts in the state that a
+ * long run reaches anyway. It is off by default because it has a side effect
+ * of its own: it adds heat, so a sequence of short runs starts hotter each
+ * time, and on a machine that loses heat slowly that makes those runs harder
+ * to compare, not easier. It helps one full run that starts on a cold
+ * machine. Measure whether it helps on your own machine before you turn it
+ * on, instead of assuming. */
 #define BENCH_DEFAULT_WARMUP_SEC 0.0
 #define BENCH_DEFAULT_CALIBRATE_PASSES 5
-/* Measured variation is widened by this before it becomes a limit: a handful of
- * passes samples the spread rather than bounding it, so a later run can land
- * outside the range those passes happened to cover without anything having
- * changed. */
+/* The driver makes the measured variation larger by this amount before it uses
+ * it as a limit, because a few passes sample the spread without bounding it:
+ * a later run can land outside the range that those passes covered while
+ * nothing has changed. */
 #define BENCH_GATE_SAFETY 1.5
-/* No case is held tighter than this however quiet its calibration was, so a
- * machine that happened to be undisturbed for the calibration cannot pin a
- * threshold that no later run can meet. */
+/* No case gets a threshold tighter than this, whatever its calibration
+ * showed, so a machine that nothing disturbed during the calibration cannot
+ * set a threshold that no later run can meet. */
 #define BENCH_GATE_FLOOR_PCT 5.0
-/* Above this a case is reported but never gated. A real regression in such a
- * case still shows up as a number that moved, and is still worth reading; it
- * just cannot be an automatic failure without failing on an unchanged tree. */
+/* Above this value, the driver reports a case but never gates on it. A real
+ * regression in such a case still appears as a number that moved and is
+ * worth reading, but it cannot be an automatic failure, because such a gate
+ * would also fail on a tree that nobody changed. */
 #define BENCH_UNGATEABLE_PCT 30.0
 
-/* What one case measured. spread_pct is the p90-to-p10 range as a percentage of
- * the median: robust to a single outlier, unlike max-minus-min, and it is what
- * makes a reported difference interpretable. A change smaller than a case's own
- * spread is not a result. */
+/* What one case measured. spread_pct is the p90-to-p10 range as a percentage
+ * of the median, which, unlike the maximum minus the minimum, one outlier does
+ * not move. It is also what lets a reader understand a reported difference: a
+ * change smaller than the spread of a case is not a result. */
 typedef struct {
   double median;
   double spread_pct;
@@ -136,14 +155,14 @@ typedef struct {
   bench_case_t bc;
   bench_result_t result;
   bool ran;
-  /* Distinguished from !ran: a case a --filter excluded keeps whatever the
+  /* This differs from !ran. A case that a --filter left out keeps whatever the
      baseline already recorded for it, while one that ran and could not be
      measured has no current figure and must not keep a stale one. */
   bool skipped;
-  /* Filled by --calibrate: how far this case's own median moved across whole
-     suite passes. Kept per case because it differs by two orders of magnitude
-     between a single-threaded case and a twelve-thread one, which is the whole
-     reason a single shared threshold does not work. */
+  /* --calibrate fills this in: how far the median of this case moved across
+     whole suite passes. Kept per case because it differs by two orders of
+     magnitude between a single-threaded case and a twelve-thread one, which is
+     the whole reason a single shared threshold does not work. */
   double gate_pct;
   bool have_gate;
 } bench_entry_t;
@@ -166,9 +185,9 @@ void bench_add(const bench_case_t *bc) {
   g_case_count++;
 }
 
-/* Names for the variants bench_add_mt generates. bench_add copies the case
- * struct but not the strings it points at, so the generated name needs storage
- * that outlives the caller's stack. */
+/* The names for the forms that bench_add_mt generates. bench_add copies the
+ * case struct but not the strings that the struct points at, so the generated
+ * name needs storage that lives longer than the stack of the caller. */
 static char g_mt_names[BENCH_MAX_CASES][64];
 static size_t g_mt_name_count;
 
@@ -203,9 +222,10 @@ double bench_now_ns(void) {
   return (double)ts.tv_sec * 1e9 + (double)ts.tv_nsec;
 }
 
-/* A stored value whose fractional part happens to be zero serializes without a
- * decimal point and parses back as an integer node, so both number types are
- * accepted. Returns 0 for anything else, including a missing key. */
+/* A stored value with a fractional part of zero serializes with no decimal
+ * point and then parses back as an integer node, so this function accepts
+ * both number types. It returns 0 for anything else, and also for a key that
+ * is not there. */
 static double bench_number(cjson node) {
   if (!node) return 0.0;
   cjson_node_type_t t = cjson_type(node);
@@ -222,12 +242,13 @@ static int cmp_double(const void *a, const void *b) {
 /**
  * @brief Run one case and return its median nanoseconds per operation.
  *
- * Returns a negative value when the case could not run, which happens when its
- * setup reports failure. A benchmark that cannot allocate its fixture is not a
- * measurement of anything, and skipping it leaves every other case's numbers
- * intact where aborting the process would discard them.
+ * This returns a negative value when the case could not run, which happens
+ * when the setup of the case reports a failure. A benchmark that cannot
+ * allocate its fixture measures nothing, so the driver skips it and keeps the
+ * numbers of every other case, all of which it would lose if it stopped the
+ * process instead.
  */
-/* One worker of a threaded case. */
+/* One worker of a case that uses threads. */
 typedef struct {
   const bench_case_t *bc;
   void *state;
@@ -240,29 +261,35 @@ static __thread unsigned g_thread_index;
 
 unsigned bench_thread_index(void) { return g_thread_index; }
 
-/* One logical CPU per physical core, fastest first, so no measured thread ever
- * shares a core with another. A core's two SMT threads are not two cores: they
- * share execution resources, so a pair of workers landing on one runs at
- * roughly half speed while an identical pair on two cores does not, and which
- * of the two happens is the scheduler's choice afresh every run. Measured on a
- * six-P-core machine, pinning four workers one per physical core took a
- * compute-bound reference from 23 percent variation between runs to 3.6.
+/* This list holds one logical CPU for each physical core, fastest first, so
+ * that no measured thread shares a core with another thread. The two SMT
+ * threads of one core are not two cores, because they share the execution
+ * resources of that core: two workers on one core run at about half speed,
+ * while the same two workers on two cores do not. The scheduler chooses again
+ * on every run, so you cannot know which one you get. Measured on a machine
+ * with six performance cores: four workers, pinned one to each physical core,
+ * took a compute-bound reference from 23 percent variation between runs down
+ * to 3.6 percent.
  *
- * Derived from sysfs rather than assumed from CPU numbering, which does not
- * follow one convention: siblings are adjacent on some machines (1-2, 3-4) and
- * half a table apart on others, so "use the first half of the CPUs" picks a set
- * of nothing but sibling pairs on the former.
+ * This list comes from sysfs. Do not derive it from the CPU numbers, which
+ * follow no single convention: on some machines the siblings are next to each
+ * other, such as 1-2 and 3-4, and on others they are half a table apart. On
+ * the first kind, "use the first half of the CPUs" picks a set that holds
+ * nothing but sibling pairs.
  *
- * Restricted to the performance cores where the machine has two kinds. A
- * heterogeneous machine runs its efficiency cores around a fifth slower, and a
- * case ends when its slowest worker does, so letting one worker land on an
- * efficiency core sets the whole figure by that core while which worker it is
- * changes from run to run. /sys/devices/cpu_core/cpus names them, the same list
- * perf reads to separate the two PMUs; without that file every core is the same
- * kind and all of them are used. Ordered so that the one-per-core entries come
- * first and the second thread of each core only after every core has one, which
- * keeps a case narrower than the core count entirely free of sharing and makes
- * a wider one share deterministically rather than differently each run. */
+ * Where a machine has two kinds of core, this list holds only the performance
+ * cores, because there the efficiency cores run about a fifth slower. A case
+ * ends when its slowest worker ends, so one worker on an efficiency core
+ * decides the whole figure, and which worker that is changes from run to run.
+ * /sys/devices/cpu_core/cpus names the performance cores; it is the same list
+ * that perf reads to separate the two PMUs. Where that file is missing, every
+ * core is the same kind and this list holds all of them.
+ *
+ * The order puts the one-for-each-core entries first, and the second thread of
+ * each core comes only after every core has one entry. A case with fewer
+ * workers than cores therefore shares nothing, and a case with more workers
+ * shares in the same way on every run instead of in a different way each
+ * time. */
 #define BENCH_MAX_CPUS 256
 
 typedef struct {
@@ -280,6 +307,7 @@ static bool g_pin_enabled = true;
 static _Atomic bool g_pin_failed = false;
 static _Atomic bool g_topology_degraded = false;
 
+#if BENCH_CAN_PIN
 static long read_long_file(const char *path) {
   FILE *f = fopen(path, "r");
   if (!f) return -1;
@@ -289,9 +317,9 @@ static long read_long_file(const char *path) {
   return v;
 }
 
-/* The first entry of thread_siblings_list identifies the core; every sibling
+/* The first entry of thread_siblings_list names the core, and every sibling
  * of one core reports the same first entry, so keeping only the CPUs that name
- * themselves there keeps exactly one per core. */
+ * themselves there keeps exactly one CPU for each core. */
 static int siblings_leader(int cpu) {
   char path[128];
   snprintf(path, sizeof(path),
@@ -310,9 +338,9 @@ static int cmp_cpu_desc(const void *a, const void *b) {
   return x->cpu < y->cpu ? -1 : (x->cpu > y->cpu);
 }
 
-/* Parses a sysfs cpu list ("0-11", "0,5,8-10") into set. Returns false when the
- * file is absent, which is how a machine with one kind of core reports itself
- * and is not an error. */
+/* This parses a sysfs CPU list, such as "0-11" or "0,5,8-10", into set. It
+ * returns false when the file is not there, which is how a machine with one
+ * kind of core reports itself, and that is not an error. */
 static bool read_cpu_list(const char *path, cpu_set_t *set) {
   FILE *f = fopen(path, "r");
   if (!f) return false;
@@ -348,8 +376,9 @@ static void bench_topology_init(void) {
   cpu_set_t perf_cores;
   bool have_perf = read_cpu_list("/sys/devices/cpu_core/cpus", &perf_cores);
 
-  /* Two sweeps: every core's first thread, then the remaining threads. A case
-   * asking for no more workers than there are cores therefore never shares. */
+  /* This makes two passes: the first takes the first thread of every core and
+   * the second takes the other threads, so a case that asks for no more
+   * workers than there are cores never shares a core. */
   for (int pass = 0; pass < 2; pass++) {
     for (int cpu = 0; cpu < CPU_SETSIZE && cpu < BENCH_MAX_CPUS; cpu++) {
       if (!CPU_ISSET(cpu, &allowed)) continue;
@@ -389,9 +418,9 @@ static void bench_topology_init(void) {
   }
 }
 
-/* slot is the worker's index. Wraps only when a case asks for more threads than
- * the machine has cores, which is the one situation where sharing is the point
- * rather than an accident. */
+/* slot is the index of the worker. It goes back to the start only when a case
+ * asks for more threads than the machine has cores, which is the one situation
+ * where sharing is the purpose and not an accident. */
 static void bench_pin(size_t slot) {
   if (!g_pin_enabled || g_cpu_count == 0) return;
   cpu_set_t set;
@@ -401,39 +430,71 @@ static void bench_pin(size_t slot) {
     atomic_store_explicit(&g_pin_failed, true, memory_order_relaxed);
 }
 
+/* A thread inherits the CPU affinity of the thread that creates it, so a
+ * fixture that starts threads of its own, such as the workers of a thread
+ * pool or the writer of an asynchronous logger, would otherwise start them on
+ * the single CPU that the driver is pinned to. Every one of them would then
+ * time-share that core with the driver and with the benchmark worker pinned
+ * to the same CPU, and the case would measure the order in which the
+ * scheduler wakes them rather than the library. The driver therefore lets a
+ * fixture's own threads use every CPU in the pin list while it builds the
+ * fixture, and pins itself again afterwards. */
+static void bench_widen_for_setup(void) {
+  if (!g_pin_enabled || g_cpu_count == 0) return;
+  cpu_set_t set;
+  CPU_ZERO(&set);
+  for (size_t i = 0; i < g_cpu_count; i++) CPU_SET(g_cpu_order[i].cpu, &set);
+  if (pthread_setaffinity_np(pthread_self(), sizeof(set), &set) != 0)
+    atomic_store_explicit(&g_pin_failed, true, memory_order_relaxed);
+}
+
+#else
+static void bench_topology_init(void) { g_cpu_count = 0; }
+static void bench_pin(size_t slot) { (void)slot; }
+static void bench_widen_for_setup(void) {}
+#endif
+
+static void bench_restore_after_setup(void) { bench_pin(0); }
+
 static void *bench_worker_main(void *arg) {
   bench_worker_t *w = arg;
   g_thread_index = w->index;
-  /* Before the gate, so the clock never covers the move and every sample of
-   * this case runs on the same cores as the last one. */
+  /* This happens before the gate, so the clock never covers the move and
+   * every sample of this case runs on the same cores as the sample before
+   * it. */
   bench_pin(w->index);
-  /* Announce, then wait to be released. The clock starts on the other side of
-   * this gate, so it covers the measured work and not the cost of spawning
-   * threads: a real caller creates its threads once and runs many operations on
-   * them, and charging thread creation to the operation count would tax the
-   * wider variants for something they do not do per operation.
+  /* Each worker reports that it is ready and then waits for the release. The
+   * clock starts on the other side of this gate, so it covers the measured
+   * work and not the cost of creating the threads. A real caller creates its
+   * threads one time and then runs many operations on them, so charging
+   * thread creation to the operation count would tax the forms with many
+   * threads for work that they do not do for each operation.
    *
-   * The wait cannot hang on a thread that was never created, because the
-   * releasing side sets the flag for however many threads it actually
-   * started. */
+   * This wait cannot hang on a thread that nothing created, because the side
+   * that releases the gate sets the flag for the number of threads that it
+   * really started. */
   atomic_fetch_add_explicit(w->ready, 1, memory_order_relaxed);
   while (!atomic_load_explicit(w->go, memory_order_acquire)) sched_yield();
   w->bc->run(w->state, w->bc->n);
   return NULL;
 }
 
-/* Builds a case's fixture, runs its body once, and tears it down, returning the
- * wall time spent in the body alone. For a threaded case the body runs on
- * bc->threads workers, all released together once every one of them is up, and
- * the elapsed time runs from that release to the last worker finishing.
+/* This builds the fixture of a case, runs its body one time, frees the
+ * fixture, and returns the real time inside the body alone. For a case with
+ * threads, the body runs on bc->threads workers, which the driver releases
+ * together once every one of them is ready; the measured time runs from that
+ * release to the end of the last worker.
  *
- * Returns a negative time if the fixture could not be built, which skips the
- * case rather than reporting a measurement of nothing. */
+ * This returns a negative time when it could not build the fixture, and the
+ * driver then skips the case instead of reporting a measurement of
+ * nothing. */
 static double bench_one_pass(const bench_case_t *bc) {
   unsigned threads = bc->threads > 1 ? bc->threads : 1;
 
   if (threads == 1) {
+    bench_widen_for_setup();
     void *state = bc->setup ? bc->setup(bc->n) : bc->setup_mt(bc->n, 1);
+    bench_restore_after_setup();
     if (!state) return -1.0;
     double t0 = bench_now_ns();
     bc->run(state, bc->n);
@@ -455,12 +516,15 @@ static double bench_one_pass(const bench_case_t *bc) {
   atomic_uint ready = 0;
   atomic_int go = 0;
 
-  /* A shared fixture is built once and handed to every worker, which is what
-   * puts them in contention. A private fixture is built per worker, which is
-   * the only valid arrangement for a type with no internal locking. */
+  /* The driver builds a shared fixture one time and gives it to every worker,
+   * which is what makes the workers contend, or else a private fixture for
+   * each worker, which is the only correct form for a type that has no lock
+   * of its own. */
   void *shared = NULL;
   if (bc->shared_fixture) {
+    bench_widen_for_setup();
     shared = bc->setup_mt(bc->n, threads);
+    bench_restore_after_setup();
     if (!shared) {
       free(th);
       free(w);
@@ -470,7 +534,9 @@ static double bench_one_pass(const bench_case_t *bc) {
   }
   for (unsigned i = 0; i < threads; i++) {
     if (!bc->shared_fixture) {
+      bench_widen_for_setup();
       owned[i] = bc->setup_mt(bc->n, threads);
+      bench_restore_after_setup();
       if (!owned[i]) {
         for (unsigned j = 0; j < i; j++) bc->teardown(owned[j]);
         free(th);
@@ -507,8 +573,8 @@ static double bench_one_pass(const bench_case_t *bc) {
   free(w);
   free(owned);
   /* A case that could not start every worker measured something other than
-   * what it claims to, so it is reported as skipped rather than as a fast
-   * result. */
+   * what it claims to measure, so the driver reports it as skipped instead of
+   * as a fast result. */
   return started == threads ? (t1 - t0) : -1.0;
 }
 
@@ -528,8 +594,9 @@ static void *warmup_spin(void *arg) {
   return NULL;
 }
 
-/* Deliberately compute-bound and library-free: what it has to reproduce is the
- * thermal and clock state a run settles into, not any particular workload. */
+/* This loop is compute-bound and uses no part of the library, on purpose: it
+ * must reproduce the thermal state and the clock state that a run reaches,
+ * not any particular workload. */
 static void bench_warmup(double seconds) {
   if (seconds <= 0.0) return;
   long n = sysconf(_SC_NPROCESSORS_ONLN);
@@ -542,23 +609,24 @@ static void bench_warmup(double seconds) {
     for (long i = 0; i < n; i++)
       if (pthread_create(&th[i], NULL, warmup_spin, &deadline) == 0) started++;
   }
-  /* The calling thread spins as well, so a machine where no worker could be
-   * started is still warmed rather than silently left cold. */
+  /* The calling thread runs the loop as well, so a machine where no worker
+   * could start still gets warm instead of being left cold without a word. */
   warmup_spin(&deadline);
   for (unsigned i = 0; i < started; i++) pthread_join(th[i], NULL);
   free(th);
 }
 
-/* Collects samples until the budget is spent, the ceiling is reached, or (when
- * fixed_reps is non-zero) that many have been taken. Never stops below
- * BENCH_MIN_SAMPLES, even if that overruns the budget: a median of three
- * numbers is not worth reporting. */
+/* This collects samples until the budget is gone or until it reaches the
+ * ceiling; when fixed_reps is not zero, it stops after that many samples. It
+ * never stops below BENCH_MIN_SAMPLES, even when that goes past the budget,
+ * because a median of three numbers is not worth reporting. */
 static bool run_case(const bench_case_t *bc, double budget_sec,
                      size_t fixed_reps, double *samples, bench_result_t *out) {
-  /* One untimed repetition first. It pays the first-touch page faults for the
-   * fixture, populates the branch predictors and warms the instruction cache,
-   * all of which otherwise land entirely on the first timed repetition and
-   * make it the slowest of the set for reasons unrelated to the code. */
+  /* One repetition runs first, and the driver does not time it. It pays the
+   * first-touch page faults of the fixture, fills the branch predictors and
+   * warms the instruction cache; without it, all of that work lands on the
+   * first timed repetition, which is then the slowest of the set for reasons
+   * that have nothing to do with the code. */
   if (bench_one_pass(bc) < 0.0) return false; /* untimed warm-up */
 
   size_t ceiling = fixed_reps ? fixed_reps : BENCH_MAX_SAMPLES;
@@ -566,8 +634,9 @@ static bool run_case(const bench_case_t *bc, double budget_sec,
   double deadline = bench_now_ns() + budget_sec * 1e9;
   size_t count = 0;
 
-  /* Divided by the total operations across all workers, so a threaded figure
-   * is directly comparable to the same case run on one thread. */
+  /* The driver divides by the total number of operations across all the
+   * workers, so you can compare a figure from several threads directly with
+   * the figure from the same case on one thread. */
   double ops = (double)bc->n * (bc->threads > 1 ? bc->threads : 1);
 
   while (count < ceiling) {
@@ -614,9 +683,9 @@ static char *read_whole_file(const char *path) {
     return NULL;
   }
   long len = ftell(f);
-  /* A baseline is a few kilobytes of JSON. Anything past this ceiling is not
-   * one, and feeding an unbounded ftell() result straight to an allocator
-   * turns a mistyped path into a multi-gigabyte request. */
+  /* A baseline is a few kilobytes of JSON, so a file past this ceiling is not
+   * a baseline. Never give an allocator an ftell() result with no bound, or a
+   * path with a typing mistake becomes a request for several gigabytes. */
   if (len < 0 || len > 16L * 1024L * 1024L) {
     fclose(f);
     return NULL;
@@ -636,22 +705,23 @@ static char *read_whole_file(const char *path) {
   return buf;
 }
 
-/* Attaches one value to entry, and owns it either way.
+/* This attaches one value to entry, and it owns that value in both cases.
  *
- * cjson_dictionary_set transfers ownership of the child unconditionally: on a
- * failed insert it destroys the child itself rather than handing it back, which
- * is what its own documentation promises. So the child is freed here only when
- * it was never handed over, and destroying it after a failed set would be a
- * double free rather than cleanup. */
+ * cjson_dictionary_set takes ownership of the child whatever happens: when
+ * the insert fails, it destroys the child itself instead of giving it back,
+ * as its own documentation promises. This function therefore frees the child
+ * only when it never gave the child away, because a destroy after a failed set
+ * is a double free and not a cleanup. */
 static bool baseline_put(cjson entry, const char *key, cjson value) {
   if (!value) return false;
   return cjson_dictionary_set(entry, key, value) == ccol_success;
 }
 
-/* Builds one baseline entry. Every node is attached as soon as it exists, so an
- * allocation that fails partway leaves nothing unowned: destroying the entry
- * frees what was attached, the failed set has already freed what it refused,
- * and what was never created needs no freeing. */
+/* This builds one baseline entry and attaches every node as soon as that
+ * node exists, so an allocation that fails part way leaves nothing without an
+ * owner: a destroy of the entry frees what this function attached, the set
+ * that failed has already freed what it refused, and what nothing created
+ * needs no free. */
 static cjson baseline_entry(double ns, double spread_pct, size_t samples,
                             double gate_pct, bool have_gate) {
   cjson entry = cjson_create_dictionary();
@@ -663,10 +733,10 @@ static cjson baseline_entry(double ns, double spread_pct, size_t samples,
     cjson_destroy(entry);
     return NULL;
   }
-  /* Absent rather than zero when the baseline was recorded without calibrating,
-   * so the comparison can tell "measured as quiet" from "never measured" and
-   * fall back to the flat floor for the latter instead of gating everything at
-   * zero tolerance. */
+  /* This key is missing, and not zero, when somebody recorded the baseline
+   * without a calibration, so the comparison can tell "measured and quiet"
+   * from "never measured" and use the flat floor for the second. Without
+   * this, it would gate every case at a tolerance of zero. */
   if (have_gate &&
       !baseline_put(entry, "gate_pct", cjson_create_double(gate_pct))) {
     cjson_destroy(entry);
@@ -675,10 +745,11 @@ static cjson baseline_entry(double ns, double spread_pct, size_t samples,
   return entry;
 }
 
-/* previous is whatever was loaded from the file, or NULL. A case that did not
- * run in this invocation (one a --filter excluded) keeps the figure already
- * recorded for it rather than disappearing: the file is rewritten whole, so
- * writing only what ran would silently discard every other case's baseline. */
+/* previous is what the driver loaded from the file, or NULL. A case that did
+ * not run this time, because a --filter left it out, keeps the figure that the
+ * file already holds for it instead of disappearing: the driver writes the
+ * whole file again, and if it wrote only the cases that ran, it would quietly
+ * lose the baseline of every other case. */
 static int write_baseline(const char *path, cjson previous) {
   cjson root = cjson_create_dictionary();
   if (!root) return -1;
@@ -689,27 +760,26 @@ static int write_baseline(const char *path, cjson previous) {
     char key[256];
     snprintf(key, sizeof(key), "%s/%s", g_cases[i].bc.group,
              g_cases[i].bc.name);
-    /* The spread is recorded with the median because a later comparison needs
-     * to know what "different" means for this case. A flat percentage applied
-     * to every case either drowns the quiet ones in false alarms or lets a real
-     * regression hide inside a noisy one. */
+    /* The driver records the spread beside the median, because a later
+     * comparison must know what "different" means for this case: one flat
+     * percentage for every case either fills the quiet cases with false alarms
+     * or lets a real regression hide inside a noisy one. */
     cjson entry;
     if (g_cases[i].ran) {
       entry = baseline_entry(
           g_cases[i].result.median, g_cases[i].result.spread_pct,
           g_cases[i].result.samples, g_cases[i].gate_pct, g_cases[i].have_gate);
     } else if (g_cases[i].skipped) {
-      /* Ran and could not be measured. Dropping it is the honest answer: a
-         carried-over figure would be compared against on the next run as
-         though it described this build. */
+      /* The case ran and the driver could not measure it. Dropping it is the
+         honest answer, because the next run would compare against a
+         carried-over figure as though it described this build. */
       continue;
     } else {
       cjson prev = previous ? cjson_dictionary_get(previous, key) : NULL;
       if (!prev) continue;
-      /* A baseline recorded before spreads were kept stores a bare number
-         rather than a dictionary, which is what the comparison path below
-         also accepts; reading it through cjson_dictionary_get alone would
-         rewrite it as zero. */
+      /* A baseline entry can be a plain number and not a dictionary. The
+         comparison path below accepts that form too. A read through
+         cjson_dictionary_get alone would write it back as zero. */
       cjson prev_ns = cjson_dictionary_get(prev, "ns");
       cjson prev_gate = cjson_dictionary_get(prev, "gate_pct");
       entry = baseline_entry(
@@ -719,8 +789,8 @@ static int write_baseline(const char *path, cjson previous) {
           bench_number(prev_gate), prev_gate != NULL);
     }
     if (!entry) goto out;
-    /* Ownership transfers whether or not the insert succeeds, so a failure
-     * here needs no destroy of its own; see baseline_put. */
+    /* Ownership passes to the callee whether the insert succeeds or not, so a
+     * failure here needs no destroy of its own. See baseline_put. */
     if (cjson_dictionary_set(root, key, entry) != ccol_success) goto out;
   }
 
@@ -733,10 +803,10 @@ static int write_baseline(const char *path, cjson previous) {
     cjson_serialize_free(text);
     goto out;
   }
-  /* Every write is checked, and fclose last: the payload is buffered, so a
-   * full disk or a quota is reported by the flush rather than by the fputs.
-   * Reporting success over a truncated baseline would make the next run
-   * compare against a file that describes nothing. */
+  /* The driver checks every write, and it checks fclose last: the data sits
+   * in a buffer, so a full disk or a quota appears at the flush and not at the
+   * fputs. A report of success over a truncated baseline would make the next
+   * run compare against a file that describes nothing. */
   bool written = (fputs(text, f) >= 0);
   written = written && (fputc('\n', f) != EOF);
   if (fclose(f) != 0) written = false;
@@ -804,16 +874,16 @@ int main(int argc, char **argv) {
   bool update = false, list_only = false;
   size_t calibrate = 0;
   double warmup = BENCH_DEFAULT_WARMUP_SEC;
-  /* Reporting and failing are separate decisions, because whether this machine
-   * can support the second is an empirical question about the machine. Measured
-   * here over full-suite runs of an unchanged library, with every case held to
-   * the variation it exhibited during calibration, about half of all runs still
-   * produced at least one flagged case, and half of the suite varied too much
-   * to be gated at all. A check that fails that often stops being read, which
-   * costs more than the regressions it would have caught. So the numbers are
-   * always reported and --gate decides whether a flagged case is also a
-   * non-zero exit, for a machine that has been calibrated and shown to hold
-   * it. */
+  /* To report and to fail are two separate decisions, and whether a machine
+   * can carry the second is a question that you answer by measurement.
+   * Measured here over full-suite runs of an unchanged library, with each case
+   * held to the variation from its own calibration: about half of all runs
+   * still flagged at least one case, and half of the suite moved too much to
+   * gate at all. A check that fails that often stops being read, which costs
+   * more than the regressions it would have caught. The driver therefore
+   * always reports the numbers, and --gate decides whether a flagged case is
+   * also a non-zero exit, for a machine that somebody has calibrated and
+   * shown to hold it. */
   bool gate = false;
 
   bench_topology_init();
@@ -877,9 +947,9 @@ int main(int argc, char **argv) {
   }
 
   size_t sample_cap = reps ? reps : BENCH_MAX_SAMPLES;
-  /* Bounded before the multiply: --reps comes straight off the command line,
-     and a value above this wraps the product to a small allocation that the
-     sample loop then writes past. */
+  /* The driver bounds this before the multiply. --reps comes straight from
+   * the command line, and a value above this wraps the product to a small
+   * allocation that the sample loop then writes past. */
   if (sample_cap > SIZE_MAX / sizeof(double)) {
     fprintf(stderr, "bench: --reps is too large\n");
     return 2;
@@ -890,8 +960,9 @@ int main(int argc, char **argv) {
     return 2;
   }
 
-  /* The baseline is loaded before the run so that a malformed or missing one
-   * is reported up front rather than after several minutes of measurement. */
+  /* The driver loads the baseline before the run, so a baseline that is
+   * missing, or that it cannot parse, appears at once instead of after several
+   * minutes of measurement. */
   cjson baseline = NULL;
   if (!update) {
     char *text = read_whole_file(baseline_path);
@@ -900,18 +971,18 @@ int main(int argc, char **argv) {
       baseline = cjson_parse(text, &err);
       free(text);
       if (!baseline) {
+        /* The message belongs to the library: it lives in storage for each
+         * thread that the next parse on this thread reuses, so nothing here
+         * frees it. */
         fprintf(stderr, "bench: cannot parse %s (%s); running without it\n",
                 baseline_path, err ? err : "unknown error");
-        /* The parser's own release entry point, not free(): the string comes
-         * from whatever allocator the parse used, which the API documents as
-         * the caller's to release through this. */
-        cjson_serialize_free(err);
       }
     }
   }
 
   if (g_pin_enabled && g_cpu_count) {
-    /* The single-threaded cases run on this thread, so it is pinned too. */
+    /* The cases with one thread run on this thread, so the driver pins it as
+     * well. */
     bench_pin(0);
     if (atomic_load_explicit(&g_topology_degraded, memory_order_relaxed))
       printf(
@@ -925,6 +996,11 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < g_cpu_count && i < 16; i++)
       printf(" %d", g_cpu_order[i].cpu);
     printf("%s\n", g_cpu_count > 16 ? " ..." : "");
+  } else if (g_pin_enabled && !BENCH_CAN_PIN) {
+    printf(
+        "bench: this system cannot bind a thread to a core; running\n"
+        "       unpinned, so a worker may share a core with another and\n"
+        "       figures will vary more between runs\n");
   } else if (g_pin_enabled) {
     printf(
         "bench: could not read this machine's core topology; running\n"
@@ -942,12 +1018,13 @@ int main(int argc, char **argv) {
   }
 
   if (calibrate) {
-    /* Whole passes over the suite, never repeats of one case back to back.
-     * What a gate has to survive is the difference between two independent
-     * runs, and a large part of that difference is where in the run a case
-     * sits: the machine is cool for the first group and saturated by the last,
-     * so a case measured twice in a row reports a steadiness it does not have
-     * at the moment the comparison is actually made. */
+    /* The driver makes whole passes over the suite and never repeats one case
+     * several times together. A gate must survive the difference between two
+     * independent runs, and a large part of that difference is where in the
+     * run a case sits, because the machine is cool for the first group and
+     * fully hot by the last one. A case that the driver measures two times
+     * together therefore reports a steadiness that it does not have at the
+     * moment of the real comparison. */
     double *meds = calloc(g_case_count * calibrate, sizeof(double));
     if (!meds) {
       fprintf(stderr, "bench: out of memory\n");
@@ -962,8 +1039,9 @@ int main(int argc, char **argv) {
         char full[256];
         snprintf(full, sizeof(full), "%s/%s", e->bc.group, e->bc.name);
         if (filter && !strstr(full, filter)) continue;
-        /* A comparison arm exists to be read next to its own case in the same
-         * run; it is never gated, so it needs no calibration. */
+        /* A comparison arm exists so that you can read it beside its own case
+         * in the same run; the driver never gates on it, so it needs no
+         * calibration. */
         if (e->bc.vs) continue;
         bench_result_t res = {0};
         if (!run_case(&e->bc, budget, reps, samples, &res)) {
@@ -997,17 +1075,17 @@ int main(int argc, char **argv) {
       }
       if (!complete) continue;
       double across = (hi - lo) / lo * 100.0;
-      /* Floored at how far this case's own samples scatter inside a single
-       * pass. Passes that happen to agree with each other do not make a case
-       * steady: one whose samples span 80 percent within a pass can land
-       * anywhere in that span on the next run, and gating it at the two
-       * percent its passes happened to differ by is how a gate fails on an
-       * unchanged tree. Whichever of the two is larger is the real answer. */
+      /* The floor for this limit is how far the samples of this case scatter
+       * inside one pass, because passes that agree with each other do not make
+       * a case steady: a case whose samples span 80 percent inside one pass can
+       * land anywhere in that span on the next run, and a gate at the two
+       * percent by which its passes differed is how a gate fails on a tree that
+       * nobody changed. The larger of the two numbers is the real answer. */
       e->gate_pct =
           across > e->result.spread_pct ? across : e->result.spread_pct;
       e->have_gate = true;
-      /* The figure recorded is the middle pass rather than the last, so the
-       * baseline does not encode whichever pass the machine ran hottest for. */
+      /* The driver records the middle pass and not the last one, so the
+       * baseline does not hold the pass for which the machine was hottest. */
       double *row = &meds[i * calibrate];
       qsort(row, calibrate, sizeof(double), cmp_double);
       e->result.median = row[calibrate / 2];
@@ -1092,7 +1170,7 @@ int main(int argc, char **argv) {
         have_old_gate = (g != NULL);
         old_gate = bench_number(g);
       } else {
-        /* A baseline recorded before spreads were kept stores a bare number. */
+        /* A baseline entry can be a plain number and not a dictionary. */
         old = bench_number(prev);
       }
       if (old > 0.0) {
@@ -1101,17 +1179,19 @@ int main(int argc, char **argv) {
         double limit;
         bool gateable = true;
         if (have_old_gate) {
-          /* The case's own recorded run-to-run variation sets its limit. This
-           * is the only quantity that answers the question a gate asks, which
-           * is whether this difference is larger than the difference two runs
-           * of the same library produce by themselves. */
+          /* The recorded variation between runs for this case sets its
+           * limit, because that is the only quantity that answers the question
+           * a gate asks: whether this difference is larger than the
+           * difference that two runs of the same library give by
+           * themselves. */
           limit = old_gate * BENCH_GATE_SAFETY;
           if (limit < threshold) limit = threshold;
           gateable = old_gate <= BENCH_UNGATEABLE_PCT;
         } else {
-          /* Recorded without calibrating. The within-run spreads bound
-           * sampling error but say nothing about movement between runs, so
-           * this fallback is deliberately the looser of the two rules. */
+          /* Somebody recorded this baseline without a calibration. A spread
+           * inside one run bounds the sampling error but says nothing about
+           * how much a figure moves between two runs, so this fallback is the
+           * looser of the two rules, on purpose. */
           double noise =
               res.spread_pct > old_spread ? res.spread_pct : old_spread;
           limit = noise > BENCH_DEFAULT_THRESHOLD_PCT
@@ -1134,11 +1214,12 @@ int main(int argc, char **argv) {
   free(samples);
 
   if (update) {
-    /* Read whatever is already recorded, purely so cases this run did not
-     * measure keep their figures. The file is rewritten whole, so a run
-     * narrowed by --filter, or one where a case's setup failed, would
-     * otherwise erase every case it did not touch. Not loaded earlier because
-     * an update run deliberately compares against nothing. */
+    /* This reads what the file already holds, so that a case which this run
+     * did not measure keeps its figure: the driver writes the whole file
+     * again, and a run that --filter narrowed, or a run where the setup of a
+     * case failed, would otherwise erase every case that it did not touch. The
+     * driver does not load the file earlier, because an update run compares
+     * against nothing, on purpose. */
     cjson previous = NULL;
     char *prev_text = read_whole_file(baseline_path);
     if (prev_text) {
@@ -1196,9 +1277,9 @@ int main(int argc, char **argv) {
         "       Read the cases marked ! against their own calibrated limits\n"
         "       before treating any of them as real.\n");
 
-  /* Reported after the run rather than at the banner, because a pin is
-     attempted by every worker as it starts and can fail long after the header
-     claiming the run is pinned has been printed. */
+  /* The driver reports this after the run and not in the banner, because
+   * every worker attempts a pin as it starts, and a pin can fail long after
+   * the header that claims the run is pinned has been printed. */
   if (atomic_load_explicit(&g_pin_failed, memory_order_relaxed))
     printf(
         "bench: at least one thread could not be pinned, so some figures\n"

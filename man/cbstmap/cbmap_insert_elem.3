@@ -5,7 +5,7 @@ cbmap_insert_elem \- insert a key-value pair into the BST map
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cbstmap.h>
+#include <ccollections/cbstmap.h>
 
 ccol_retval_t cbmap_insert_elem(cbmap cbm,
                                  const cmap_pair *key_pair,
@@ -13,31 +13,50 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm,
 .fi
 .SH DESCRIPTION
 .nf
-Inserts a key-value pair into the BST map. If the key already exists,
-the old value is replaced. Tree is automatically rebalanced using AVL
-rotations after insertion.
+Inserts a key-value pair into the BST map, or replaces the old value if
+the key is already in the map, and then balances the tree again with AVL
+rotations.
 .fi
 .SH PARAMETERS
 .nf
 cbm        BST map to insert into
-key_pair   Key to insert (copied into map)
-val_pair   Value to associate with key (copied into map)
+key_pair   Key to insert (the function copies it into the map)
+val_pair   Value for that key (the function copies it into the map)
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success               - New key inserted successfully
-ccol_key_already_present   - Key already existed; value updated successfully
-ccol_container_full        - Map has reached ccol_max_elem_count
-ccol_not_enough_memory     - Memory allocation failed
-ccol_invalid_args          - key_pair's size does not match a fixed-width
-                             key type's own size (see cbmap_create_full(3))
+ccol_success               - The function inserted a new key
+ccol_key_already_present   - The key was already in the map, and the
+                             function updated its value
+ccol_container_full        - The map holds ccol_max_elem_count elements
+ccol_not_enough_memory     - A memory allocation failed
+ccol_invalid_args          - key_pair or val_pair is NULL, one of the
+                             two pairs carries a NULL ptr with a
+                             non-zero size, or the size of key_pair
+                             does not match the size of a fixed-width
+                             key type (see cbmap_create_full(3))
 .fi
 .SH NOTES
 .nf
+The ptr of a key_pair needs no particular alignment, because the
+comparison reads the key bytes with memcpy and never through a pointer
+cast to the key type. A caller can therefore point key_pair->ptr straight
+at key bytes that sit at an arbitrary offset inside a larger buffer, such
+as a field sliced out of a packed network frame or a memory-mapped
+record, without copying them into an aligned local first.
 O(log n) complexity
-Key and value data are copied into the map
-If key exists, old value is freed and replaced
-Asserts if cbm is NULL
+The function copies the key data and the value data into the map
+If the key is already in the map, the function frees the old value and
+puts the new value in its place
+The function asserts if cbm is NULL
+The function reports a NULL key_pair or a NULL val_pair as
+ccol_invalid_args, which matches chmap_insert_elem(3)
+A pair whose ptr is NULL and whose size is not zero promises bytes that
+it has no storage for, so the function reports it as ccol_invalid_args
+too
+A size of 0 is correct for the key or the value, with a ptr or without
+one, and stores an empty key or an empty value. Here the BST map differs
+from chmap_insert_elem(3), which rejects a key or a value of size zero
 .fi
 .SH "SEE ALSO"
 .BR cbmap_insert (3),

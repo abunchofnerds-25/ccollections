@@ -1,23 +1,23 @@
 .TH CHTTPCLI_CONSTRUCT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-chttpcli_construct \- declare and initialise a chttpcli handle
+chttpcli_construct \- declare and initialize a chttpcli handle
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpclient.h>
+#include <ccollections/chttpclient.h>
 
 chttpcli_construct(name)
 .fi
 .SH DESCRIPTION
 .nf
-Declares a chttpcli variable named name and immediately calls
-ccol_create_chttpclient to initialise it.  On failure, calls ccol_fatal_err()
-and does not return.
+This macro declares a chttpcli variable called name and initializes it
+at once with a call to ccol_create_chttpclient. If the creation fails,
+the macro calls ccol_fatal_err() and does not return.
 .fi
 .SH PARAMETERS
 .nf
-name     Identifier for the new handle variable.
+name     The identifier of the new handle variable.
 .fi
 .SH "SEE ALSO"
 .BR chttpcli_construct_scoped (3),

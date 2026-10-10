@@ -1,0 +1,68 @@
+.TH CVEC_RESERVE 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cvec_reserve \- reserve capacity for future elements (type-inferred, fatal on failure)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cvector.h>
+
+cvec_reserve(v, new_capacity_count);
+.fi
+.SH DESCRIPTION
+.nf
+This macro is a wrapper for cvector_reserve() that calls ccol_fatal_err()
+when the reservation fails, so a caller with no useful recovery for an
+allocation failure does not need to test a return value. A reservation
+that is too large to represent is also a failure; see NOTES for the two
+limits that the macro tests it against.
+
+The capacity grows to the next power of two at or above
+new_capacity_count, with a floor of 4 elements, so the reserved capacity
+is usually larger than the request. A request at or below the current
+capacity does nothing, and this call never shrinks the capacity. The
+macro does not change the element count: the new space is capacity and
+not elements, and you can reach it only after a push into it.
+.fi
+.SH PARAMETERS
+.nf
+v                   Vector to reserve capacity for
+new_capacity_count  Minimum number of elements to reserve
+.fi
+.SH NOTES
+.nf
+The macro stops the program through ccol_fatal_err() when the reservation
+fails, which happens when the allocation fails, when the capacity is more
+than ccol_max_elem_count, or when the capacity multiplied by the element
+size overflows a size_t.
+The macro tests both limits against the rounded-up capacity rather than
+against new_capacity_count itself, so a request inside a limit can still
+fail after the round-up to the next power of two. A vector of wide
+elements reaches the size_t overflow limit first: that limit bounds the
+capacity at SIZE_MAX divided by the element size, which for any element
+wider than one byte is the lower limit of the two.
+The macro evaluates new_capacity_count exactly once on every path, the
+failure path included, so an expression with a side effect is safe to
+pass.
+The macro rounds the real capacity up to a power of two, with a minimum
+of 4.
+The element count stays the same; use cvec_size(3) to read it.
+A reservation invalidates every pointer from an earlier
+cvec_data_ptr(3) or cvec_at_ptr(3).
+The macro asserts when v is NULL.
+To handle a failed reservation yourself, use cvector_reserve(3) directly;
+that function does not stop the program.
+.fi
+.SH EXAMPLES
+.nf
+cvec_construct(vec, int);
+cvec_reserve(vec, 100);   // capacity becomes 128, size stays 0
+for (int i = 0; i < 100; i++) {
+    cvec_push(vec, i);   // no reallocation in the loop
+}
+cvec_destroy(vec);
+.fi
+.SH "SEE ALSO"
+.BR cvector_reserve (3),
+.BR cvec_append_array (3),
+.BR cvec_push (3)

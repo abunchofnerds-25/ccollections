@@ -1,0 +1,72 @@
+.TH CHTTPSVR_REQ_PEER_CERT_SUBJECT 3 "2026-10-01" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_req_peer_cert_subject \- give the subject of the verified client certificate
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpserver.h>
+
+const char *chttpsvr_req_peer_cert_subject(const chttpsvr_req *req);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the subject of the client certificate of the request as an RFC
+2253 distinguished name, which lists its attributes from the most
+specific to the least specific, for example
+
+    CN=alice,OU=staff,O=Example
+
+Every byte above 0x7F, every control character and every character
+that RFC 2253 reserves is escaped with a backslash, so the string is
+printable ASCII and a name crafted by a client cannot pass for
+another one; an organization "Example, Inc." reads as
+O=Example\e, Inc.  Compare the subject as a whole string, because a
+substring of a subject can come from any of its attributes.
+
+The subject is returned only when chttpsvr_req_peer_cert_verified(3)
+reports true for req.  It belongs to the connection, so every request
+on one keep-alive connection gets the same text, and a resumed TLS
+session gets the subject verified by the handshake that established
+it.
+.fi
+.SH PARAMETERS
+.nf
+req  The request handle.
+.fi
+.SH RETURN VALUE
+.nf
+A NUL-terminated string that stays valid for the lifetime of the
+request; do not free it.
+
+NULL in every case where chttpsvr_req_peer_cert_verified(3) reports
+false (a plaintext connection, a server with no ca_bundle_path, a
+client that presented no certificate, and a NULL req), and also NULL
+when an allocation fails; call chttpsvr_req_peer_cert_verified(3) to
+tell the two apart.
+.fi
+.SH THREAD SAFETY
+.nf
+As with every other request accessor, call it only on the thread that
+runs the handler or the middleware of req.
+.fi
+.SH EXAMPLES
+.nf
+#include <ccollections/chttpserver.h>
+#include <string.h>
+
+static void handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx)
+{
+    (void)ctx;
+    const char *who = chttpsvr_req_peer_cert_subject(req);
+    if (!who || strcmp(who, "CN=billing,O=Example") != 0) {
+        chttpsvr_resp_set_status(resp, CHTTP_STATUS_FORBIDDEN);
+        return;
+    }
+    chttpsvr_resp_write_str(resp, "ok");
+}
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_req_peer_cert_verified (3),
+.BR chttpsvr_req_peer_cert_der (3),
+.BR chttpsvr_req_peer_cert_sha256 (3)

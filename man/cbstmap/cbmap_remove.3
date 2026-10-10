@@ -1,18 +1,23 @@
 .TH CBMAP_REMOVE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cbmap_remove \- remove a key-value pair (type-safe)
+cbmap_remove \- remove a key-value pair (type-inferred)
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cbstmap.h>
+#include <ccollections/cbstmap.h>
 
 ccol_retval_t cbmap_remove(hm_name, key);
 .fi
 .SH DESCRIPTION
 .nf
-Type-safe wrapper for cbmap_delete_elem() that returns the result code.
-Tree is automatically rebalanced after deletion.
+Type-inferred wrapper for cbmap_delete_elem() that returns the result
+code. The map balances the tree again after the delete.
+
+The lookup key goes through the DECLARED key type of the tree, in the
+same way as in cbmap_insert(3), so a key that the tree stored through
+that conversion is only ever found again by a lookup that makes the same
+one. A literal and a computed expression are both accepted.
 .fi
 .SH PARAMETERS
 .nf
@@ -21,13 +26,15 @@ key      Key to remove
 .fi
 .SH RETURN VALUE
 .nf
-Returns ccol_success if removed
-Returns ccol_key_not_found if not found
+Returns ccol_success if the macro removes the key
+Returns ccol_key_not_found if the key is not in the map
+Returns ccol_invalid_args if key is a NULL character pointer, which is
+not a string
 .fi
 .SH NOTES
 .nf
-Does not terminate on key_not_found
-Frees memory for key and value
+The macro does not stop the program on ccol_key_not_found
+The macro frees the memory of the key and of the value
 .fi
 .SH "SEE ALSO"
 .BR cbmap_delete_elem (3),

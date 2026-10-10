@@ -1,3 +1,7 @@
+/* posix_openpt(3) and its companions need it on glibc. */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include <clogger.h>
 #include <common.h>
 #include <dirent.h>
@@ -15,10 +19,57 @@
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/prctl.h>
+#elif defined(__FreeBSD__)
+#include <pthread_np.h>
+#endif
+
+/* The OS thread ID of the calling thread, the number that ps(1) shows and
+ * that the proc field of a record carries. */
+static int _test_os_tid(void) {
+#if defined(__linux__)
+  return (int)syscall(SYS_gettid);
+#elif defined(__FreeBSD__)
+  return pthread_getthreadid_np();
+#elif defined(__APPLE__)
+  uint64_t tid = 0;
+  pthread_threadid_np(NULL, &tid);
+  return (int)tid;
+#endif
+}
+
+/* The name of the calling thread as the system holds it, at most 16 bytes
+ * with the terminator. */
+static void _test_get_thread_name(char buf[17]) {
+#if defined(__linux__)
+  prctl(PR_GET_NAME, buf);
+#else
+  /* An unnamed thread reads as the program name here, as on Linux and as
+   * the library reports it. */
+  if (pthread_getname_np(pthread_self(), buf, 17) != 0 || buf[0] == '\0')
+    snprintf(buf, 17, "%.15s", getprogname());
+#endif
+}
+
+/* Renames the calling thread without going through the library. */
+static void _test_set_thread_name(const char *name) {
+#if defined(__linux__)
+  prctl(PR_SET_NAME, name);
+#elif defined(__APPLE__)
+  pthread_setname_np(name);
+#else
+  pthread_setname_np(pthread_self(), name);
+#endif
+}
+
+#include "consumer_view.h"
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #include <tau/tau.h>
+#include <test_fds.h>
+#include <test_sanitizer.h>
 #pragma GCC diagnostic pop
 
 TAU_MAIN()
@@ -27,22 +78,21 @@ TAU_MAIN()
 /*                         HELPERS                                            */
 /* ========================================================================== */
 
-/* Some environments' own backtrace()/backtrace_symbols() genuinely cannot
- * unwind this process's call stack at all: a minimal, clogger.c-free
- * program built for arm32 and run under qemu-arm's user-mode emulation
- * reports depth=0 from a plain backtrace() call three frames deep, with no
- * c_collections code involved. clog's own _capture_backtrace()
- * already treats this identically to a genuinely shallow real capture
- * (see its own CLOG_BT_INITIAL_FRAME doc comment): "nothing to append,
- * nothing to report missing", by design, not a bug. A handful of tests
- * below specifically assert that requesting a backtrace produces visible
- * frame content (or, for the "all frames failed to fit" tests, a marker
- * derived from having enough real frames to overflow the buffer);
- * neither assertion can hold in an environment where the underlying OS/
- * libc capability itself never produces more than a couple of frames, so
- * those tests probe this directly and skip (return early, which Tau
- * simply records as passed) rather than fail on a platform limitation
- * that has nothing to do with clog's own logic. */
+/* In some environments the backtrace() and backtrace_symbols() functions
+ * cannot unwind the call stack of this process at all: a small program built
+ * for arm32 that contains no clogger.c (and no c_collections code at all)
+ * reports depth=0 under the user-mode emulation of qemu-arm from a plain
+ * backtrace() call three frames deep.
+ * The _capture_backtrace() function of clog treats this the same way as a
+ * real capture that is shallow (see the doc comment of CLOG_BT_INITIAL_FRAME):
+ * it appends nothing and reports nothing as missing, by design. Some tests
+ * below assert that a request for a backtrace gives visible frame content,
+ * and the "all frames failed to fit" tests assert a marker instead, which
+ * needs enough real frames to overflow the buffer. Neither assertion can hold
+ * when the OS or the libc never gives more than two or three frames, so those
+ * tests probe this capability directly and skip by returning early, which Tau
+ * records as a pass. That is better than a failure that comes from a platform
+ * limit instead of from the logic of clog. */
 static bool backtrace_capture_genuinely_available(void) {
   void *frames[8];
   int depth = backtrace(frames, 8);
@@ -60,7 +110,8 @@ static size_t drain_pipe(clog lg, int rfd, int wfd, char *buf, size_t cap) {
   return (size_t)n;
 }
 
-/* Read up to `cap-1` bytes of a file into buf, NUL-terminate, return length. */
+/* This reads up to `cap-1` bytes of a file into buf, adds a NUL terminator
+ * and returns the length. */
 static size_t read_file(const char *path, char *buf, size_t cap) {
   int fd = open(path, O_RDONLY);
   if (fd < 0) {
@@ -96,7 +147,7 @@ static void cleanup_dir(const char *dir, const char *prefix) {
   while ((e = readdir(d)) != NULL) {
     if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
     if (strncmp(e->d_name, prefix, strlen(prefix)) == 0) {
-      snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
+      snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
       unlink(path);
     }
   }
@@ -125,17 +176,17 @@ static int count_files_with_suffix(const char *dir, const char *suffix) {
  */
 static int gunzip_test(const char *gz_path) {
   char cmd[1024];
-  snprintf(cmd, sizeof cmd, "gunzip -t '%s' 2>/dev/null", gz_path);
+  snprintf(cmd, sizeof(cmd), "gunzip -t '%s' 2>/dev/null", gz_path);
   return system(cmd);
 }
 
 /*
- * Decompress <gz_path> into buf (up to cap-1 bytes), NUL-terminate.
- * Returns the number of decompressed bytes, or 0 on error.
+ * This decompresses <gz_path> into buf, up to cap-1 bytes, and adds a NUL
+ * terminator. It returns the number of decompressed bytes, or 0 on an error.
  */
 static size_t gunzip_read(const char *gz_path, char *buf, size_t cap) {
   char cmd[1024];
-  snprintf(cmd, sizeof cmd, "gunzip -c '%s' 2>/dev/null", gz_path);
+  snprintf(cmd, sizeof(cmd), "gunzip -c '%s' 2>/dev/null", gz_path);
   FILE *f = popen(cmd, "r");
   if (!f) return 0;
   size_t got = fread(buf, 1, cap - 1, f);
@@ -171,39 +222,25 @@ static int make_tmpdir(char *out, size_t outsz) {
   return 0;
 }
 
-/* Count this process's currently-open file descriptors via /proc/self/fd
- * (Linux-specific); returns -1 if unavailable, letting a caller skip
- * gracefully on a platform without /proc rather than false-failing. The one
- * extra fd opendir() itself uses is already closed by closedir() before
- * this function returns, so it never leaks into the count a caller compares
- * a later call's result against. */
-static int count_open_fds(void) {
-  DIR *d = opendir("/proc/self/fd");
-  if (!d) return -1;
-  int count = 0;
-  struct dirent *e;
-  while ((e = readdir(d)) != NULL) {
-    if (e->d_name[0] == '.') continue;
-    count++;
-  }
-  closedir(d);
-  return count;
-}
+/* Count the file descriptors that this process has open (see test_fds.h);
+ * a caller compares the results of two calls. */
+static int count_open_fds(void) { return test_count_open_fds(); }
 
-/* Reads /proc/<pid>/<name> (a single-line-ish pseudo-file) into buf, NUL-
- * terminated, returning true on success. Best-effort diagnostic-only: false
- * on any failure (process already fully reaped, permission, etc.), which the
- * caller reports as part of the dump rather than treating as fatal; this
- * runs only after a bounded wait has already timed out, so it must never
- * itself introduce a new way to hang or crash the test binary. Mirrors
- * tests/cthreadcomm/tests.c's own identically-named/-shaped helper (see that
- * file's own _dump_stuck_child_diagnostics for the same pattern); it is a
- * separate copy rather than shared code, since these are two independent
- * test binaries with no shared test-only header between them. */
+/* Reads /proc/<pid>/<name>, a pseudo-file of one line or of a small number of
+ * lines, into buf and adds a NUL terminator. It returns true after a success.
+ * It is a best-effort diagnostic only: it returns false after any failure,
+ * for example a process that the OS already reaped, or a permission problem,
+ * and the caller prints that failure as part of the dump instead of treating
+ * it as fatal. This code runs only after a bounded wait times out, so it must
+ * never add a new way for the test binary to hang or to crash.
+ * tests/cthreadcomm/tests.c has a helper with the same name and the same
+ * shape (see _dump_stuck_child_diagnostics in that file for the same
+ * pattern). This is a separate copy instead of shared code, because the two
+ * test binaries are independent and share no test-only header. */
 static bool _clog_test_read_proc_file(pid_t pid, const char *name, char *buf,
                                       size_t buf_cap) {
   char path[64];
-  snprintf(path, sizeof path, "/proc/%d/%s", (int)pid, name);
+  snprintf(path, sizeof(path), "/proc/%d/%s", (int)pid, name);
   int fd = open(path, O_RDONLY);
   if (fd < 0) return false;
   ssize_t n = read(fd, buf, buf_cap - 1);
@@ -213,32 +250,39 @@ static bool _clog_test_read_proc_file(pid_t pid, const char *name, char *buf,
   return true;
 }
 
-/* Diagnostic-only: dumps whatever the host kernel's /proc still says about
- * pid (and each of its own threads, if any) after a bounded wait for it has
- * already timed out. Exists for async.fatal_drains_queue_before_writing_
- * and_terminating (see that test's own comment), whose occasional CI-only
- * hang has no confirmed cause: unlike the cthreadcomm fork() tests that do
- * carry the qemu-user fd_trans_lock signature, it does not reproduce in 15
- * direct attempts against the same qemu-user version. If it recurs, THIS
- * dump is what answers it: a State: S with a real /proc/<pid>/syscall
- * entry (a genuine futex/nanosleep/whatever wait, not a placeholder) and a
- * broad SigBlk mask
- * blocking nearly every signal would match the confirmed qemu-user
- * fd_trans_lock signature after all (qemu-user's own linux-user
- * fd_trans_lock, a process-wide pthread mutex left permanently locked in a
- * forked child if another thread in the parent was holding it at the instant
- * of fork(); gitlab.com/qemu-project/qemu/-/issues/2846, present in
- * qemu-user 8.2.2 and fixed in 10.x, which is what the CI jobs install);
- * that broad SigBlk mask is qemu-user's own baseline thread-management
- * behavior, present regardless of whether this specific test's own child
- * ever calls alarm() itself (it does not), so do not expect a specific
- * pending signal in ShdPnd the way the cthreadcomm cases show; the mask
- * itself, not a particular pending bit, is the signal to look for here.
- * State: R with high CPU and an empty wchan would instead point at a genuine
- * spin; a State: Z (zombie) would point at a waitpid()-observation bug under
- * emulation rather than anything the child was actually doing.
- * status/wchan/syscall/stat are each read independently so one
- * missing/unreadable file does not suppress the others. */
+/* This function is a diagnostic only. It dumps everything that /proc on the
+ * host kernel has to say about pid, and about each thread of pid, after a
+ * bounded wait for that process times out.
+ *
+ * It exists for async.fatal_drains_queue_before_writing_and_terminating (see
+ * the comment of that test). The cause of the rare CI-only hang of that test
+ * is not confirmed: the cthreadcomm fork() tests carry the qemu-user
+ * fd_trans_lock signature, but this hang does not reproduce in 15 direct
+ * attempts against the same version of qemu-user.
+ *
+ * If the hang happens again, this dump is what answers it. Look for a State:
+ * S together with a real /proc/<pid>/syscall entry and a broad SigBlk mask
+ * that blocks nearly every signal, a combination that matches the confirmed
+ * qemu-user fd_trans_lock signature. A real syscall entry means a true futex
+ * or nanosleep wait instead of a placeholder. fd_trans_lock is a process-wide
+ * pthread mutex inside the linux-user part of qemu-user, and it stays locked
+ * forever in a forked child when another thread in the parent holds it at
+ * the instant of the fork() (see gitlab.com/qemu-project/qemu/-/issues/2846).
+ * The bug is in qemu-user 8.2.2 and is fixed in 10.x, which is the version
+ * that the CI jobs install.
+ *
+ * That broad SigBlk mask is the normal thread-management behaviour of
+ * qemu-user, and it is there even though the child of this test never calls
+ * alarm(). Do not expect one specific pending signal in ShdPnd, as the
+ * cthreadcomm cases show: here the mask itself is the signal to look for,
+ * not one particular pending bit.
+ *
+ * A State: R with high CPU use and an empty wchan points at a real spin
+ * instead, and a State: Z (zombie) points at a bug in the waitpid()
+ * observation under emulation, not at anything that the child does.
+ *
+ * The function reads status, wchan, syscall and stat one by one, so one file
+ * that is missing or unreadable does not suppress the others. */
 static void _clog_test_dump_stuck_child_diagnostics(pid_t pid) {
   char buf[4096];
   fprintf(stderr,
@@ -248,7 +292,7 @@ static void _clog_test_dump_stuck_child_diagnostics(pid_t pid) {
 
   static const char *const files[] = {"status", "wchan", "syscall", "stat"};
   for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
-    if (_clog_test_read_proc_file(pid, files[i], buf, sizeof buf)) {
+    if (_clog_test_read_proc_file(pid, files[i], buf, sizeof(buf))) {
       fprintf(stderr, "[STUCK_CHILD_DIAG] /proc/%d/%s:\n%s\n", (int)pid,
               files[i], buf);
     } else {
@@ -259,7 +303,7 @@ static void _clog_test_dump_stuck_child_diagnostics(pid_t pid) {
   }
 
   char task_dir[64];
-  snprintf(task_dir, sizeof task_dir, "/proc/%d/task", (int)pid);
+  snprintf(task_dir, sizeof(task_dir), "/proc/%d/task", (int)pid);
   DIR *td = opendir(task_dir);
   if (!td) {
     fprintf(stderr, "[STUCK_CHILD_DIAG] /proc/%d/task: unreadable\n", (int)pid);
@@ -268,8 +312,8 @@ static void _clog_test_dump_stuck_child_diagnostics(pid_t pid) {
     while ((ent = readdir(td)) != NULL) {
       if (ent->d_name[0] == '.') continue;
       char rel[16 + sizeof(ent->d_name)];
-      snprintf(rel, sizeof rel, "task/%s/status", ent->d_name);
-      if (_clog_test_read_proc_file(pid, rel, buf, sizeof buf)) {
+      snprintf(rel, sizeof(rel), "task/%s/status", ent->d_name);
+      if (_clog_test_read_proc_file(pid, rel, buf, sizeof(buf))) {
         fprintf(stderr, "[STUCK_CHILD_DIAG] /proc/%d/%s:\n%s\n", (int)pid, rel,
                 buf);
       }
@@ -291,10 +335,10 @@ TEST(lifecycle, open_fd_and_close) {
 
 TEST(lifecycle, open_file_and_close) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
 
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -338,15 +382,17 @@ TEST(lifecycle, open_fd_rejects_invalid_and_readonly_fds) {
 TEST(lifecycle, writing_to_a_broken_pipe_does_not_crash_the_process) {
   int pipefd[2];
   REQUIRE_EQ(pipe(pipefd), 0);
-  close(pipefd[0]); /* close the read end, breaking the write end */
+  close(pipefd[0]); /* close the read end, which breaks the write end */
 
   clog lg = clog_open_fd(pipefd[1], CLOG_INFO, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* Without SIGPIPE suppressed, this write() would raise SIGPIPE and, under
-   * its default disposition, terminate the whole test process rather than
-   * merely fail this one assertion. */
-  ccol_log_info(lg, "should not crash the process");
+  /* Under the default CLOG_SIGPIPE_AUTO policy, this first write to a pipe
+   * from the calling thread sets SIGPIPE to SIG_IGN for the process. Without
+   * that, the write raises SIGPIPE, whose default disposition stops the
+   * whole test process instead of only failing this one assertion.
+   * tests_sigpipe.c covers the policy itself. */
+  clog_info(lg, "should not crash the process");
 
   clog_close(lg);
   close(pipefd[1]);
@@ -358,19 +404,19 @@ TEST(lifecycle, writing_to_a_broken_pipe_does_not_crash_the_process) {
 
 TEST(output, logfmt_fields_present) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_info(lg, "hello world");
+  clog_info(lg, "hello world");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* All mandatory logfmt keys must be present */
   REQUIRE_NE(strstr(buf, "ts="), NULL);
@@ -388,19 +434,19 @@ TEST(output, logfmt_fields_present) {
 
 TEST(output, message_with_special_chars_is_quoted) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_info(lg, "key=\"value\"");
+  clog_info(lg, "key=\"value\"");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
   /* The message contains '"' so it must be double-quoted in the output */
   REQUIRE_NE(strstr(buf, "msg="), NULL);
 
@@ -409,22 +455,22 @@ TEST(output, message_with_special_chars_is_quoted) {
 
 TEST(output, all_levels_in_output) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_trace(lg, "t");
-  ccol_log_debug(lg, "d");
-  ccol_log_info(lg, "i");
-  ccol_log_warn(lg, "w");
+  clog_trace(lg, "t");
+  clog_debug(lg, "d");
+  clog_info(lg, "i");
+  clog_warn(lg, "w");
 
   clog_close(lg);
 
   char buf[8192];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "TRACE"), NULL);
   REQUIRE_NE(strstr(buf, "DEBUG"), NULL);
@@ -439,19 +485,19 @@ TEST(output, error_produce_backtrace) {
     return; /* see this helper's
                  own doc comment */
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_ERROR, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_error(lg, "something bad");
+  clog_error(lg, "something bad");
 
   clog_close(lg);
 
   char buf[8192];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* The backtrace continuation line starts with a tab followed by '#' */
   REQUIRE_NE(strstr(buf, "\t#"), NULL);
@@ -465,27 +511,27 @@ TEST(output, error_produce_backtrace) {
 
 static void *_proc_test_thread(void *arg) {
   clog lg = *(clog *)arg;
-  ccol_log_info(lg, "from spawned thread");
+  clog_info(lg, "from spawned thread");
   return NULL;
 }
 
 TEST(proc_field, logfmt_proc_has_name_pid_tid_structure) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
   pid_t pid = getpid();
-  pid_t tid = (pid_t)syscall(SYS_gettid);
+  pid_t tid = (pid_t)_test_os_tid();
 
-  ccol_log_info(lg, "proc test");
+  clog_info(lg, "proc test");
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* proc= field must be present */
   char *proc_start = strstr(buf, "proc=");
@@ -496,20 +542,20 @@ TEST(proc_field, logfmt_proc_has_name_pid_tid_structure) {
   /* proc format: progname(pid):tname(tid) */
   /* (pid): must appear in the progname section */
   char pid_part[48];
-  snprintf(pid_part, sizeof pid_part, "(%d):", (int)pid);
+  snprintf(pid_part, sizeof(pid_part), "(%d):", (int)pid);
   REQUIRE_NE(strstr(val, pid_part), NULL);
 
   /* (tid) must appear in the thread section */
   char tid_part[48];
-  snprintf(tid_part, sizeof tid_part, "(%d)", (int)tid);
+  snprintf(tid_part, sizeof(tid_part), "(%d)", (int)tid);
   REQUIRE_NE(strstr(val, tid_part), NULL);
 
-  /* Extract the value (ends at next space) and verify exactly one colon */
+  /* Extract the value, which ends at the next space; check for one colon. */
   char *val_end = strchr(val, ' ');
   REQUIRE_NE(val_end, NULL);
   size_t val_len = (size_t)(val_end - val);
   char proc_val[256];
-  REQUIRE_EQ((val_len < sizeof proc_val), 1);
+  REQUIRE_EQ((val_len < sizeof(proc_val)), 1);
   memcpy(proc_val, val, val_len);
   proc_val[val_len] = '\0';
 
@@ -522,34 +568,34 @@ TEST(proc_field, logfmt_proc_has_name_pid_tid_structure) {
 
 TEST(proc_field, json_proc_has_name_pid_tid_structure) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_JSON);
 
   pid_t pid = getpid();
-  pid_t tid = (pid_t)syscall(SYS_gettid);
+  pid_t tid = (pid_t)_test_os_tid();
 
-  ccol_log_info(lg, "proc json test");
+  clog_info(lg, "proc json test");
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* "proc": key must exist */
   REQUIRE_NE(strstr(buf, "\"proc\":"), NULL);
 
   /* (pid): must appear in the progname section of the proc value */
   char pid_part[48];
-  snprintf(pid_part, sizeof pid_part, "(%d):", (int)pid);
+  snprintf(pid_part, sizeof(pid_part), "(%d):", (int)pid);
   REQUIRE_NE(strstr(buf, pid_part), NULL);
 
   /* (tid) must appear in the thread section of the proc value */
   char tid_part[48];
-  snprintf(tid_part, sizeof tid_part, "(%d)", (int)tid);
+  snprintf(tid_part, sizeof(tid_part), "(%d)", (int)tid);
   REQUIRE_NE(strstr(buf, tid_part), NULL);
 
   cleanup_dir(dir, "app.log");
@@ -563,38 +609,38 @@ TEST(proc_field, syslog_proc_in_sd_element) {
   clog_set_format(lg, CLOG_FMT_SYSLOG);
 
   pid_t pid = getpid();
-  pid_t tid = (pid_t)syscall(SYS_gettid);
+  pid_t tid = (pid_t)_test_os_tid();
 
-  ccol_log_info(lg, "proc syslog test");
+  clog_info(lg, "proc syslog test");
 
   char buf[4096];
-  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof(buf));
 
   /* proc SD param must be present inside the [ccol ...] element */
   REQUIRE_NE(strstr(buf, "proc=\""), NULL);
 
   /* (pid): must appear in the progname section of the proc SD value */
   char pid_part[48];
-  snprintf(pid_part, sizeof pid_part, "(%d):", (int)pid);
+  snprintf(pid_part, sizeof(pid_part), "(%d):", (int)pid);
   REQUIRE_NE(strstr(buf, pid_part), NULL);
 
   /* (tid) must appear in the thread section of the proc SD value */
   char tid_part[48];
-  snprintf(tid_part, sizeof tid_part, "(%d)", (int)tid);
+  snprintf(tid_part, sizeof(tid_part), "(%d)", (int)tid);
   REQUIRE_NE(strstr(buf, tid_part), NULL);
 }
 
 TEST(proc_field, different_threads_have_different_tids) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
   /* Log from the main thread */
-  ccol_log_info(lg, "main thread");
+  clog_info(lg, "main thread");
 
   /* Log from a spawned thread */
   pthread_t thr;
@@ -610,7 +656,7 @@ TEST(proc_field, different_threads_have_different_tids) {
   clog_close(lg);
 
   char buf[131072];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* Collect both proc= values */
   char *main_proc = strstr(buf, "proc=");
@@ -632,7 +678,7 @@ TEST(proc_field, different_threads_have_different_tids) {
     char *close = strchr(open, ')');
     REQUIRE_NE(close, NULL);
     size_t len = (size_t)(close - (open + 1));
-    REQUIRE_EQ((len < sizeof get_tid_str[i]), 1);
+    REQUIRE_EQ((len < sizeof(get_tid_str[i])), 1);
     memcpy(get_tid_str[i], open + 1, len);
     get_tid_str[i][len] = '\0';
   }
@@ -649,22 +695,22 @@ TEST(proc_field, different_threads_have_different_tids) {
 
 TEST(filtering, messages_below_min_level_dropped) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_WARN, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_trace(lg, "should not appear");
-  ccol_log_debug(lg, "should not appear");
-  ccol_log_info(lg, "should not appear");
-  ccol_log_warn(lg, "this should appear");
+  clog_trace(lg, "should not appear");
+  clog_debug(lg, "should not appear");
+  clog_info(lg, "should not appear");
+  clog_warn(lg, "this should appear");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_EQ(strstr(buf, "should not appear"), NULL);
   REQUIRE_NE(strstr(buf, "this should appear"), NULL);
@@ -674,15 +720,15 @@ TEST(filtering, messages_below_min_level_dropped) {
 
 TEST(filtering, off_suppresses_all_log_output) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_OFF, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_error(lg, "suppressed");
-  ccol_log_alert(lg, "suppressed");
+  clog_error(lg, "suppressed");
+  clog_alert(lg, "suppressed");
 
   clog_close(lg);
 
@@ -695,24 +741,24 @@ TEST(filtering, off_suppresses_all_log_output) {
 
 TEST(filtering, set_level_changes_filter) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_WARN, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_info(lg, "before change - dropped");
+  clog_info(lg, "before change - dropped");
 
   clog_set_level(lg, CLOG_TRACE);
   REQUIRE_EQ(clog_get_level(lg), CLOG_TRACE);
 
-  ccol_log_info(lg, "after change - visible");
+  clog_info(lg, "after change - visible");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_EQ(strstr(buf, "before change"), NULL);
   REQUIRE_NE(strstr(buf, "after change"), NULL);
@@ -726,9 +772,9 @@ TEST(filtering, set_level_changes_filter) {
 
 TEST(fields, set_field_appears_in_output) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -736,12 +782,12 @@ TEST(fields, set_field_appears_in_output) {
   clog_set_field(lg, "service", "auth");
   clog_set_field(lg, "env", "prod");
 
-  ccol_log_info(lg, "request handled");
+  clog_info(lg, "request handled");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "service=auth"), NULL);
   REQUIRE_NE(strstr(buf, "env=prod"), NULL);
@@ -751,9 +797,9 @@ TEST(fields, set_field_appears_in_output) {
 
 TEST(fields, update_existing_field) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -761,12 +807,12 @@ TEST(fields, update_existing_field) {
   clog_set_field(lg, "req_id", "aaa");
   clog_set_field(lg, "req_id", "bbb"); /* override */
 
-  ccol_log_info(lg, "test");
+  clog_info(lg, "test");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_EQ(strstr(buf, "req_id=aaa"), NULL);
   REQUIRE_NE(strstr(buf, "req_id=bbb"), NULL);
@@ -776,9 +822,9 @@ TEST(fields, update_existing_field) {
 
 TEST(fields, remove_field_disappears) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -786,12 +832,12 @@ TEST(fields, remove_field_disappears) {
   clog_set_field(lg, "trace_id", "xyz");
   clog_remove_field(lg, "trace_id");
 
-  ccol_log_info(lg, "test");
+  clog_info(lg, "test");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_EQ(strstr(buf, "trace_id"), NULL);
 
@@ -800,9 +846,9 @@ TEST(fields, remove_field_disappears) {
 
 TEST(fields, clear_removes_all) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -812,12 +858,12 @@ TEST(fields, clear_removes_all) {
   clog_set_field(lg, "c", "3");
   clog_clear_fields(lg);
 
-  ccol_log_info(lg, "empty fields");
+  clog_info(lg, "empty fields");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_EQ(strstr(buf, " a="), NULL);
   REQUIRE_EQ(strstr(buf, " b="), NULL);
@@ -829,15 +875,15 @@ TEST(fields, clear_removes_all) {
 
 TEST(fields, invalid_key_is_rejected) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* These keys must be silently ignored (empty, space, '=', control char, DEL,
-   * ']', '\', '"'). */
+  /* The logger must ignore these keys and report nothing. They hold an empty
+   * name, a space, '=', a control char, DEL, ']', '\' or '"'. */
   clog_set_field(lg, "", "v"); /* empty; violates RFC 5424 1*32PRINTUSASCII */
   clog_set_field(lg, "bad key", "v");
   clog_set_field(lg, "bad=key", "v");
@@ -847,17 +893,17 @@ TEST(fields, invalid_key_is_rejected) {
                  "key",
                  "v");                 /* DEL (0x7f); not PRINTUSASCII */
   clog_set_field(lg, "bad]key", "v");  /* ']' breaks RFC 5424 SD elements */
-  clog_set_field(lg, "bad\\key", "v"); /* '\' corrupts logfmt quoting */
-  clog_set_field(lg, "bad\"key", "v"); /* '"' corrupts logfmt quoting */
+  clog_set_field(lg, "bad\\key", "v"); /* '\' corrupts the logfmt quotes */
+  clog_set_field(lg, "bad\"key", "v"); /* '"' corrupts the logfmt quotes */
   /* This key is valid and must appear. */
   clog_set_field(lg, "good_key", "ok");
 
-  ccol_log_info(lg, "test");
+  clog_info(lg, "test");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_EQ(strstr(buf, "=v"), NULL); /* empty key would produce =v */
   REQUIRE_EQ(strstr(buf, "bad key"), NULL);
@@ -870,30 +916,30 @@ TEST(fields, invalid_key_is_rejected) {
 
 TEST(fields, reserved_key_names_are_rejected) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_JSON);
 
-  /* Every key _clog_write() itself always emits must be rejected as a field
-   * name; allowing one through would produce a duplicate JSON key, a
+  /* The logger must reject every key that _clog_write() always writes itself;
+   * if one such key passes, the output holds a duplicate JSON key, a
    * duplicate logfmt key= token, or a duplicate syslog SD-PARAM-NAME. */
   const char *reserved[] = {"ts",   "level", "proc", "src",
                             "func", "msg",   "bt",   "bt_error"};
   for (size_t i = 0; i < sizeof(reserved) / sizeof(reserved[0]); i++)
     clog_set_field(lg, reserved[i], "should-not-appear");
-  /* An ordinary key must still work. */
+  /* An ordinary key must work as usual. */
   clog_set_field(lg, "good_key", "ok");
 
-  ccol_log_info(lg, "reserved key test");
+  clog_info(lg, "reserved key test");
 
   clog_close(lg);
 
   char buf[8192];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_EQ(strstr(buf, "should-not-appear"), NULL);
   REQUIRE_NE(strstr(buf, "\"good_key\":\"ok\""), NULL);
@@ -903,21 +949,21 @@ TEST(fields, reserved_key_names_are_rejected) {
 
 TEST(fields, value_with_spaces_is_quoted) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
   clog_set_field(lg, "host", "web server 01");
 
-  ccol_log_info(lg, "test");
+  clog_info(lg, "test");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* Value contains spaces -> must be quoted */
   REQUIRE_NE(strstr(buf, "host=\"web server 01\""), NULL);
@@ -927,26 +973,26 @@ TEST(fields, value_with_spaces_is_quoted) {
 
 TEST(fields, del_byte_in_value_is_escaped) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* DEL (0x7f) must be escaped as \x7f in quoted logfmt values.
-   * String literal concatenation terminates the hex escape before 'e'. */
+  /* The logger must escape DEL (0x7f) as \x7f in a quoted logfmt value.
+   * Splitting the string literal ends the hex escape before 'e'. */
   clog_set_field(lg, "k",
                  "val\x7f"
                  "end");
-  ccol_log_info(lg,
-                "msg\x7f"
-                "end");
+  clog_info(lg,
+            "msg\x7f"
+            "end");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* Raw DEL must not appear in the output. */
   REQUIRE_EQ(memchr(buf, 0x7f, strlen(buf)), NULL);
@@ -958,27 +1004,28 @@ TEST(fields, del_byte_in_value_is_escaped) {
 
 TEST(fields, del_byte_in_key_is_rejected) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* DEL (0x7f) is not in PRINTUSASCII (0x21-0x7e).  Keys are emitted verbatim
-   * in logfmt, so a DEL key would silently corrupt the output.  It must be
-   * rejected like C0 control characters. */
+  /* DEL (0x7f) is not in PRINTUSASCII (0x21-0x7e). The logger writes a key
+   * into logfmt unchanged, so a DEL key would corrupt the output without any
+   * report; the logger must reject it, as it rejects a C0 control
+   * character. */
   clog_set_field(lg,
                  "bad\x7f"
                  "key",
                  "v");
   clog_set_field(lg, "good_key", "ok");
 
-  ccol_log_info(lg, "test");
+  clog_info(lg, "test");
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* No raw DEL must appear in the output. */
   REQUIRE_EQ(memchr(buf, 0x7f, strlen(buf)), NULL);
@@ -991,55 +1038,56 @@ TEST(fields, del_byte_in_key_is_rejected) {
 }
 
 TEST(fields, non_ascii_byte_in_key_is_rejected) {
-  /* CLOG_FMT_SYSLOG is restricted to fd-based loggers (a file-backed logger
-   * silently ignores clog_set_format(..., CLOG_FMT_SYSLOG)), so this test
-   * needs a pipe rather than the usual tmpfile, matching the other
-   * syslog.* tests' own setup. */
+  /* Only an fd-based logger can use CLOG_FMT_SYSLOG: a file-backed logger
+   * ignores clog_set_format(..., CLOG_FMT_SYSLOG) and reports nothing. So
+   * this test needs a pipe instead of the usual temporary file, like the
+   * other syslog.* tests. */
   int pipefd[2];
   REQUIRE_EQ(pipe(pipefd), 0);
   clog lg = clog_open_fd(pipefd[1], CLOG_INFO, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_SYSLOG);
 
-  /* A byte >= 0x80 is outside PRINTUSASCII (0x21-0x7e); RFC 5424 requires
-   * SD-PARAM-NAME to be PRINTUSASCII only, so a key containing one must be
-   * rejected like any other out-of-range byte, not merely passed through
-   * verbatim into the structured-data element. */
+  /* A byte >= 0x80 is outside PRINTUSASCII (0x21-0x7e), and RFC 5424 needs an
+   * SD-PARAM-NAME that holds PRINTUSASCII characters only. So the logger must
+   * reject a key that holds such a byte, like any other byte that is out of
+   * range, instead of copying that key unchanged into the structured-data
+   * element. */
   clog_set_field(lg, "bad\xc3\xa9key",
                  "v"); /* embeds a UTF-8 'e with accent' */
   clog_set_field(lg, "good_key", "ok");
 
-  ccol_log_info(lg, "test");
+  clog_info(lg, "test");
 
   char buf[4096];
-  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof(buf));
 
   /* No raw high-bit byte from the rejected key must appear in the output. */
   REQUIRE_EQ(memchr(buf, (int)(unsigned char)0xc3, strlen(buf)), NULL);
   /* The rejected key must not emit a v="..." SD-PARAM. */
   REQUIRE_EQ(strstr(buf, "=\"v\""), NULL);
-  /* The valid key must still be present. */
+  /* The valid key must be present all the same. */
   REQUIRE_NE(strstr(buf, "good_key=\"ok\""), NULL);
 }
 
 TEST(fields, newline_and_cr_in_value_are_escaped) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* Value contains raw LF, CR, and HT; all must be escaped in logfmt
-   * output so the record remains a single line. */
+  /* The value holds a raw LF, a raw CR and a raw HT, and the logfmt output
+   * must escape all three so that the record stays on one line. */
   clog_set_field(lg, "payload", "line1\nline2\rend\ttab");
-  ccol_log_info(lg, "escape test");
+  clog_info(lg, "escape test");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* The entire record must fit on a single logfmt line: exactly one ts= */
   int ts_count = 0;
@@ -1067,21 +1115,21 @@ TEST(fields, newline_and_cr_in_value_are_escaped) {
 
 TEST(fields, empty_value_is_quoted) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
   /* An empty string value must be emitted as "" in logfmt. */
   clog_set_field(lg, "empty_field", "");
-  ccol_log_info(lg, "empty value test");
+  clog_info(lg, "empty value test");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* The field must appear with an explicitly quoted empty string value. */
   REQUIRE_NE(strstr(buf, "empty_field=\"\""), NULL);
@@ -1091,22 +1139,22 @@ TEST(fields, empty_value_is_quoted) {
 
 TEST(fields, backslash_in_value_is_quoted_and_escaped_in_logfmt) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* A backslash in a value triggers double-quoting in logfmt, and each
-   * backslash is escaped as \\ inside the quoted string. */
+  /* A backslash in a value makes logfmt put that value in double quotes, and
+   * each backslash then becomes \\ inside the quoted string. */
   clog_set_field(lg, "win_path", "C:\\Users\\foo");
-  ccol_log_info(lg, "backslash test");
+  clog_info(lg, "backslash test");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* Value must appear as win_path="C:\\Users\\foo"; each \ escaped to \\. */
   REQUIRE_NE(strstr(buf, "win_path=\"C:\\\\Users\\\\foo\""), NULL);
@@ -1120,25 +1168,26 @@ TEST(fields, backslash_in_value_is_quoted_and_escaped_in_logfmt) {
 
 TEST(output, long_message_uses_heap_and_is_not_truncated) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* Build a message longer than the 1024-byte stack buffer in _clog_write so
-   * that the heap-allocation fallback is exercised. */
+  /* Build a message that is longer than the 1024-byte stack buffer in
+   * _clog_write, so that the logger uses the fallback that allocates on the
+   * heap. */
   char long_msg[2048];
-  memset(long_msg, 'A', sizeof long_msg - 1);
-  long_msg[sizeof long_msg - 1] = '\0';
+  memset(long_msg, 'A', sizeof(long_msg) - 1);
+  long_msg[sizeof(long_msg) - 1] = '\0';
 
-  ccol_log_info(lg, "%s", long_msg);
+  clog_info(lg, "%s", long_msg);
 
   clog_close(lg);
 
   char buf[8192];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* The full 2047-character message must appear verbatim in the output. */
   REQUIRE_NE(strstr(buf, long_msg), NULL);
@@ -1146,11 +1195,12 @@ TEST(output, long_message_uses_heap_and_is_not_truncated) {
   cleanup_dir(dir, "app.log");
 }
 
-/* An allocator that fails any request over 4096 bytes (the initial write
- * buffer / logger-construction allocations all fit under this; only a large
- * message's heap-spill allocation is meant to exceed it), used to force the
- * "heap allocation for the full message failed" fallback path deterministically
- * without needing a message anywhere near CLOG_BUF_MAX. */
+/* An allocator that fails every request of more than 4096 bytes. The first
+ * write buffer and the allocations of the logger construction are all below
+ * this limit, and only the heap spill of a large message goes above it, so
+ * this allocator forces the fallback path for "the heap allocation for the
+ * full message failed". The result is deterministic, and the message does not
+ * need to be near CLOG_BUF_MAX. */
 static void *_size_capped_malloc(size_t sz) {
   return sz > 4096 ? NULL : malloc(sz);
 }
@@ -1165,9 +1215,9 @@ static void *_size_capped_realloc(void *p, size_t sz) {
 TEST(output,
      message_exceeding_stack_buffer_marks_truncation_when_heap_alloc_fails) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   ccol_memmgmt_procs_t procs = {
       .malloc = _size_capped_malloc,
@@ -1179,23 +1229,24 @@ TEST(output,
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, &procs);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* Longer than the 1024-byte stack buffer, and its +1-byte heap spill
-   * request (~5000 bytes) exceeds the 4096-byte cap above, while everything
-   * the record itself needs (well under 4096) does not. */
+  /* This message is longer than the 1024-byte stack buffer, and its heap spill
+   * request of one more byte is about 5000 bytes, above the 4096-byte cap
+   * above, while everything else that the record needs stays well below 4096
+   * bytes. */
   char long_msg[5000];
-  memset(long_msg, 'A', sizeof long_msg - 1);
-  long_msg[sizeof long_msg - 1] = '\0';
+  memset(long_msg, 'A', sizeof(long_msg) - 1);
+  long_msg[sizeof(long_msg) - 1] = '\0';
 
-  ccol_log_info(lg, "%s", long_msg);
+  clog_info(lg, "%s", long_msg);
 
   clog_close(lg);
 
   char buf[8192];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
-  /* The heap spill failed, so the full message must NOT appear verbatim... */
+  /* The heap spill fails, so the full message must NOT appear as it is... */
   REQUIRE_EQ(strstr(buf, long_msg), NULL);
-  /* ...and the resulting truncation must be visibly indicated, not silent. */
+  /* ...and the output must show that truncation clearly. */
   REQUIRE_NE(strstr(buf, "...[truncated]"), NULL);
 
   cleanup_dir(dir, "app.log");
@@ -1207,31 +1258,32 @@ TEST(output,
 
 TEST(oversized, logfmt_message_over_buf_cap_falls_back_cleanly) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* Exceeds clogger's internal 16 MiB write-buffer cap. */
+  /* This size is above the internal 16 MiB write-buffer cap of clogger. */
   size_t sz = 17UL * 1024 * 1024;
   char *huge = malloc(sz + 1);
   REQUIRE_NE(huge, CLOG_INVALID);
   memset(huge, 'A', sz);
   huge[sz] = '\0';
 
-  ccol_log_info(lg, "%s", huge);
-  ccol_log_info(lg, "normal record after the oversized one");
+  clog_info(lg, "%s", huge);
+  clog_info(lg, "normal record after the oversized one");
 
   clog_close(lg);
   free(huge);
 
   char buf[8192];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
-  /* Exactly two well-formed lines: the fallback notice, then the normal
-   * record; the oversized message must never desynchronize the stream. */
+  /* There must be exactly two well-formed lines, the fallback notice first and
+   * the normal record second: the oversized message must never desynchronize
+   * the stream. */
   int ts_count = 0;
   const char *p = buf;
   while ((p = strstr(p, "ts=")) != NULL) {
@@ -1242,9 +1294,10 @@ TEST(oversized, logfmt_message_over_buf_cap_falls_back_cleanly) {
   REQUIRE_NE(strstr(buf, "too large to emit"), NULL);
   REQUIRE_NE(strstr(buf, "normal record after the oversized one"), NULL);
 
-  /* The fallback line itself must be well-formed: a properly closed quoted
-   * msg value followed by a real trailing newline, not a dangling `msg="`
-   * with nothing after it, which is what an unguarded overflow produces. */
+  /* The fallback line itself must be well-formed: a quoted msg value that
+   * closes correctly, followed by a real newline at the end, and never a
+   * `msg="` with nothing after it, which is the broken shape that an overflow
+   * with no guard produces. */
   char *fallback_line = strstr(buf, "too large to emit");
   REQUIRE_NE(fallback_line, NULL);
   char *line_end = strchr(fallback_line, '\n');
@@ -1256,9 +1309,9 @@ TEST(oversized, logfmt_message_over_buf_cap_falls_back_cleanly) {
 
 TEST(oversized, json_message_over_buf_cap_falls_back_cleanly) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -1270,17 +1323,17 @@ TEST(oversized, json_message_over_buf_cap_falls_back_cleanly) {
   memset(huge, 'B', sz);
   huge[sz] = '\0';
 
-  ccol_log_info(lg, "%s", huge);
-  ccol_log_info(lg, "normal json record");
+  clog_info(lg, "%s", huge);
+  clog_info(lg, "normal json record");
 
   clog_close(lg);
   free(huge);
 
   char buf[8192];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
-  /* Both lines must be complete, individually valid JSON objects; neither
-   * may bleed into the other. */
+  /* Both lines must be complete JSON objects, each valid on its own, and
+   * neither line may bleed into the other. */
   int json_lines = 0;
   char *line = buf;
   while (*line == '{') {
@@ -1297,17 +1350,18 @@ TEST(oversized, json_message_over_buf_cap_falls_back_cleanly) {
   cleanup_dir(dir, "app.log");
 }
 
-/* When the record itself falls back to the generic oversized-record
- * placeholder (see _clog_build_fallback_record), a backtrace requested via
- * ccol_log_error/ccol_log_alert/ccol_log_fatal must still be visibly marked as
- * omitted in the JSON output, exactly like a "bt" array that failed to embed
- * inline (see _emit_backtrace_json's own bt_error marker); never a record that
- * silently looks like an ordinary non-backtrace success. */
+/* The record can fall back to the general placeholder for an oversized
+ * record (see _clog_build_fallback_record). When a call to clog_error,
+ * clog_alert or clog_fatal asks for a backtrace, the JSON output must
+ * still show clearly that the backtrace is absent, with the same mark as for
+ * a "bt" array that the logger cannot embed inline (see the bt_error marker
+ * of _emit_backtrace_json). The record must never look like an ordinary
+ * success that asks for no backtrace. */
 TEST(oversized, json_fallback_with_backtrace_marks_bt_as_unavailable) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_ERROR, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -1319,13 +1373,13 @@ TEST(oversized, json_fallback_with_backtrace_marks_bt_as_unavailable) {
   memset(huge, 'B', sz);
   huge[sz] = '\0';
 
-  ccol_log_error(lg, "%s", huge);
+  clog_error(lg, "%s", huge);
 
   clog_close(lg);
   free(huge);
 
   char buf[8192];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
 
   /* Exactly one well-formed JSON object line. */
@@ -1335,8 +1389,8 @@ TEST(oversized, json_fallback_with_backtrace_marks_bt_as_unavailable) {
   REQUIRE_EQ(*(nl - 1), '}');
 
   REQUIRE_NE(strstr(buf, "too large to emit"), NULL);
-  /* The requested backtrace must be marked as omitted, not silently absent
-   * with no way to distinguish this from a call that never asked for one. */
+  /* The output must mark the requested backtrace as absent, so that a reader
+   * can tell this record from a call that asks for no backtrace. */
   REQUIRE_NE(strstr(buf, "\"bt_error\""), NULL);
   REQUIRE_EQ(strstr(buf, "\"bt\":["), NULL);
 
@@ -1356,11 +1410,11 @@ TEST(oversized, syslog_message_over_buf_cap_falls_back_cleanly) {
   memset(huge, 'C', sz);
   huge[sz] = '\0';
 
-  ccol_log_info(lg, "%s", huge);
-  ccol_log_info(lg, "normal syslog record");
+  clog_info(lg, "%s", huge);
+  clog_info(lg, "normal syslog record");
 
   char buf[4096];
-  size_t n = drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+  size_t n = drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof(buf));
   free(huge);
 
   /* Exactly two well-formed, correctly PRI-prefixed syslog records. */
@@ -1381,20 +1435,20 @@ TEST(oversized, syslog_message_over_buf_cap_falls_back_cleanly) {
   REQUIRE_NE(strstr(buf, "normal syslog record"), NULL);
 }
 
-/* Unlike JSON (which embeds the backtrace inline in the very record that
- * falls back to the placeholder, see json_fallback_with_backtrace_marks_bt_
- * as_unavailable above), logfmt writes backtrace frames as separate,
+/* JSON embeds the backtrace inline, in the same record that falls back to
+ * the placeholder (see json_fallback_with_backtrace_marks_bt_as_unavailable
+ * above). logfmt is different: it writes the backtrace frames as separate,
  * independent continuation lines after the primary record. An oversized
- * message replacing that primary record with the fallback placeholder must
- * not suppress those continuation lines: the fallback path and the
- * backtrace-emission path are independent, and a requested backtrace must
- * still show up. */
+ * message replaces that primary record with the fallback placeholder, but it
+ * must not suppress those continuation lines: the fallback path and the
+ * backtrace path are independent, and a requested backtrace must appear all
+ * the same. */
 TEST(oversized,
      logfmt_message_over_buf_cap_with_backtrace_still_writes_backtrace_lines) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_ERROR, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -1405,13 +1459,13 @@ TEST(oversized,
   memset(huge, 'A', sz);
   huge[sz] = '\0';
 
-  ccol_log_error(lg, "%s", huge);
+  clog_error(lg, "%s", huge);
 
   clog_close(lg);
   free(huge);
 
   char buf[8192];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
 
   /* Exactly one primary "ts=" record: the fallback placeholder. */
@@ -1424,16 +1478,16 @@ TEST(oversized,
   REQUIRE_EQ(ts_count, 1);
   REQUIRE_NE(strstr(buf, "too large to emit"), NULL);
 
-  /* The backtrace's own tab-indented continuation lines must still follow,
-   * exactly as they would for an ordinary (non-oversized) ccol_log_error call,
-   * in any environment where backtrace capture is genuinely available at
-   * all (see backtrace_capture_genuinely_available()'s own doc comment). */
+  /* The tab-indented continuation lines of the backtrace must follow as well,
+   * exactly as for an ordinary clog_error call that is not oversized, in
+   * every environment where the backtrace capture works (see the doc comment
+   * of backtrace_capture_genuinely_available()). */
   if (backtrace_capture_genuinely_available()) {
     REQUIRE_NE(strstr(buf, "\t#"), NULL);
   }
 
-  /* Every line, whether the fallback record or a backtrace continuation,
-   * must be individually well-formed and newline-terminated; the oversized
+  /* Every line, whether the fallback record or a backtrace continuation line,
+   * must be well-formed on its own and end with a newline: the oversized
    * message must never desynchronize the stream. */
   size_t i = 0;
   while (i < len) {
@@ -1446,9 +1500,9 @@ TEST(oversized,
   cleanup_dir(dir, "app.log");
 }
 
-/* Syslog's own backtrace frames are likewise written as separate PRI-prefixed
- * records, independent of whether the primary record fell back to the
- * placeholder for being oversized (see the logfmt counterpart above). */
+/* Syslog also writes its backtrace frames as separate records with a PRI
+ * prefix, whether or not the primary record falls back to the placeholder
+ * because it is oversized. See the logfmt test above. */
 TEST(oversized,
      syslog_message_over_buf_cap_with_backtrace_still_writes_backtrace_lines) {
   int pipefd[2];
@@ -1463,18 +1517,19 @@ TEST(oversized,
   memset(huge, 'D', sz);
   huge[sz] = '\0';
 
-  ccol_log_error(lg, "%s", huge);
+  clog_error(lg, "%s", huge);
 
   char buf[8192];
-  size_t n = drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+  size_t n = drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof(buf));
   free(huge);
 
-  /* PRI for CLOG_ERROR at the default CLOG_SYSLOG_USER facility (1):
-   * 1*8 + 3 (error severity) = 11. At least two well-formed "<11>1 "
-   * records: the fallback placeholder, plus one or more backtrace frames;
-   * in any environment where backtrace capture is genuinely available at
-   * all (see backtrace_capture_genuinely_available()'s own doc comment);
-   * otherwise just the fallback placeholder itself. */
+  /* The PRI for CLOG_ERROR at the default CLOG_SYSLOG_USER facility (1) is
+   * 1*8 + 3 = 11, where 3 is the severity of an error. In every environment
+   * where the backtrace capture works (see the doc comment of
+   * backtrace_capture_genuinely_available()), there must be at least two
+   * well-formed "<11>1 " records: the fallback placeholder, and one or more
+   * backtrace frames. In any other environment there is only the fallback
+   * placeholder. */
   int rec_count = 0;
   const char *p = buf;
   while ((p = strstr(p, "<11>1 ")) != NULL) {
@@ -1505,9 +1560,9 @@ TEST(oversized,
 
 TEST(rotation, size_rotation_creates_new_file) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_rotation_cfg_t cfg = {
       .size_rotation_enabled = true,
@@ -1521,8 +1576,7 @@ TEST(rotation, size_rotation_creates_new_file) {
 
   /* Write enough data to exceed the threshold several times */
   for (int i = 0; i < 20; i++)
-    ccol_log_info(lg, "rotation test message index=%d padding-padding-padding",
-                  i);
+    clog_info(lg, "rotation test message index=%d padding-padding-padding", i);
 
   clog_close(lg);
 
@@ -1535,9 +1589,9 @@ TEST(rotation, size_rotation_creates_new_file) {
 
 TEST(rotation, max_rotated_files_respected) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_rotation_cfg_t cfg = {
       .size_rotation_enabled = true,
@@ -1551,8 +1605,8 @@ TEST(rotation, max_rotated_files_respected) {
 
   /* Drive enough rotations to exceed max_rotated_files */
   for (int i = 0; i < 40; i++)
-    ccol_log_info(
-        lg, "rotation pruning test idx=%d extra-data-to-fill-the-buffer", i);
+    clog_info(lg, "rotation pruning test idx=%d extra-data-to-fill-the-buffer",
+              i);
 
   clog_close(lg);
 
@@ -1563,16 +1617,16 @@ TEST(rotation, max_rotated_files_respected) {
   cleanup_dir(dir, "app.log");
 }
 
-/* A zero-initialized (i.e. left unset) max_rotated_files must fall back to
- * CLOG_DEFAULT_MAX_ROTATED_FILES (7), exactly like the other two rotation
- * fields fall back to their own CLOG_DEFAULT_* constant when left at 0.
- * Treating 0 as "no limit" instead would silently accumulate rotated files
- * forever and risk filling the disk. */
+/* A max_rotated_files of zero means that the caller does not set the field,
+ * so it must fall back to CLOG_DEFAULT_MAX_ROTATED_FILES (7), just as the
+ * other two rotation fields fall back to their own CLOG_DEFAULT_* constant
+ * when they stay at 0. If 0 meant "no limit", rotated files would collect
+ * forever and could fill the disk. */
 TEST(rotation, max_rotated_files_zero_falls_back_to_default) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_rotation_cfg_t cfg = {
       .size_rotation_enabled = true,
@@ -1584,10 +1638,10 @@ TEST(rotation, max_rotated_files_zero_falls_back_to_default) {
   clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* Drive well more than CLOG_DEFAULT_MAX_ROTATED_FILES rotations; without
-   * the default quota, every one of them would survive on disk. */
+  /* Drive many more rotations than CLOG_DEFAULT_MAX_ROTATED_FILES; without
+   * the default quota, every one of them stays on the disk. */
   for (int i = 0; i < 40; i++)
-    ccol_log_info(lg, "default prune quota test idx=%d extra-data-to-fill", i);
+    clog_info(lg, "default prune quota test idx=%d extra-data-to-fill", i);
 
   clog_close(lg);
 
@@ -1598,14 +1652,14 @@ TEST(rotation, max_rotated_files_zero_falls_back_to_default) {
   cleanup_dir(dir, "app.log");
 }
 
-/* Same as above, but for a negative max_rotated_files: <= 0 falls back to
- * the default uniformly, matching max_file_size/rotation_interval_secs
- * exactly rather than treating 0 and negative values differently. */
+/* This is the same test for a negative max_rotated_files: every value that
+ * is <= 0 falls back to the default, matching max_file_size, and the logger
+ * does not treat 0 and a negative value differently. */
 TEST(rotation, max_rotated_files_negative_falls_back_to_default) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_rotation_cfg_t cfg = {
       .size_rotation_enabled = true,
@@ -1618,7 +1672,7 @@ TEST(rotation, max_rotated_files_negative_falls_back_to_default) {
   REQUIRE_NE(lg, CLOG_INVALID);
 
   for (int i = 0; i < 40; i++)
-    ccol_log_info(lg, "default prune quota test idx=%d extra-data-to-fill", i);
+    clog_info(lg, "default prune quota test idx=%d extra-data-to-fill", i);
 
   clog_close(lg);
 
@@ -1629,20 +1683,20 @@ TEST(rotation, max_rotated_files_negative_falls_back_to_default) {
   cleanup_dir(dir, "app.log");
 }
 
-/* A file that merely starts with "<base>.<14 digits>" but isn't one this
- * logger ever produced (e.g. a manual, date-stamped backup a human or another
- * tool dropped in the same directory) must never be treated as a prune
- * candidate. A real rotated name is always exactly "<base>.<14 digits>",
- * optionally followed by "_NNNN" and/or ".gz"; anything else trailing the 14
- * digits must exclude the file from pruning entirely. */
+/* A file can start with "<base>.<14 digits>" without coming from this
+ * logger, for example a manual backup with a date stamp that a person or
+ * another tool puts in the same directory, and the pruner must never select
+ * such a file. A real rotated name is always "<base>.<14 digits>", optionally
+ * followed by "_NNNN" after the digits and ".gz" at the end; any other text
+ * after the 14 digits keeps the file out of the prune completely. */
 TEST(rotation, prune_never_deletes_unrelated_file_with_similar_name) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   char foreign_path[600];
-  snprintf(foreign_path, sizeof foreign_path,
+  snprintf(foreign_path, sizeof(foreign_path),
            "%s/app.log.20260101000000_my_manual_backup", dir);
   {
     int fd = open(foreign_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -1663,20 +1717,19 @@ TEST(rotation, prune_never_deletes_unrelated_file_with_similar_name) {
   clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* Drive enough rotations to force the pruner to run repeatedly against a
-   * quota of just 1 kept file. */
+  /* Drive enough rotations to make the pruner run many times, with a quota
+   * that keeps only 1 file. */
   for (int i = 0; i < 40; i++)
-    ccol_log_info(lg, "prune safety test idx=%d extra-data-to-fill-the-buffer",
-                  i);
+    clog_info(lg, "prune safety test idx=%d extra-data-to-fill-the-buffer", i);
 
   clog_close(lg);
 
-  /* The foreign file must survive untouched, no matter how many times the
-   * pruner ran. */
+  /* The foreign file must stay, with its content unchanged, however many
+   * times the pruner runs. */
   struct stat st;
   REQUIRE_EQ(stat(foreign_path, &st), 0);
   char buf[64];
-  read_file(foreign_path, buf, sizeof buf);
+  read_file(foreign_path, buf, sizeof(buf));
   REQUIRE_STREQ(buf, "do not delete me");
 
   cleanup_dir(dir, "app.log");
@@ -1684,19 +1737,19 @@ TEST(rotation, prune_never_deletes_unrelated_file_with_similar_name) {
 
 TEST(rotation, logger_recovers_after_file_externally_deleted) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  /* Pre-fill the file so bytes_written starts just 1 byte below the rotation
-   * threshold.  The very first log write (which is at least 80 bytes) will
-   * push the counter over the limit and trigger rotation. */
+  /* Fill the file first, so that bytes_written starts 1 byte below the
+   * rotation threshold; the first log write, which is at least 80 bytes, then
+   * pushes the counter above the limit and starts a rotation. */
   {
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     REQUIRE_NE(fd, -1);
     char filler[9999];
-    memset(filler, 'x', sizeof filler);
-    ssize_t w = write(fd, filler, sizeof filler);
+    memset(filler, 'x', sizeof(filler));
+    ssize_t w = write(fd, filler, sizeof(filler));
     (void)w;
     close(fd);
   }
@@ -1711,28 +1764,29 @@ TEST(rotation, logger_recovers_after_file_externally_deleted) {
   clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* Simulate an external agent deleting the log file while the logger has it
-   * open.  The fd remains valid; the directory entry is gone. */
+  /* Simulate an external agent that deletes the log file while the logger
+   * holds it open: the fd stays valid, but the directory entry is gone. */
   REQUIRE_EQ(unlink(path), 0);
 
-  /* First write: bytes_written (9999 + line_len) >= 10000.  Rotation triggers.
-   * rename(path, rotated) returns ENOENT (source gone).  _rotate treats
-   * ENOENT as a clean slate: it creates a fresh file at `path` via O_CREAT
-   * and continues normally. */
-  ccol_log_info(lg, "triggers rotation");
+  /* At the first write, bytes_written (9999 + line_len) is >= 10000, so a
+   * rotation starts. rename(path, rotated) returns ENOENT because the source
+   * is gone, and _rotate treats ENOENT as a clean slate: it creates a new
+   * file at `path` with O_CREAT and continues in the normal way. */
+  clog_info(lg, "triggers rotation");
 
-  /* Second write: bytes_written reset to 0 after rotation; line_len < 10000.
-   * No further rotation; this line lands in the recreated file at `path`. */
-  ccol_log_info(lg, "after recovery");
+  /* At the second write, bytes_written is 0 again after the rotation and
+   * line_len is below 10000, so there is no other rotation, and this line
+   * goes into the new file at `path`. */
+  clog_info(lg, "after recovery");
 
   clog_close(lg);
 
-  /* The logger must have recreated the file at the original path. */
+  /* The logger must create the file again at the original path. */
   struct stat st;
   REQUIRE_EQ(stat(path, &st), 0);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
   REQUIRE_NE(strstr(buf, "after recovery"), NULL);
 
   cleanup_dir(dir, "app.log");
@@ -1740,28 +1794,28 @@ TEST(rotation, logger_recovers_after_file_externally_deleted) {
 
 TEST(rotation, time_based_rotation_creates_rotated_file) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_rotation_cfg_t cfg = {
       .size_rotation_enabled = false,
       .time_rotation_enabled = true,
-      .rotation_interval_secs = 1,
+      .rotation_interval_us = 1000000,
       .max_rotated_files = 0,
   };
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* First write establishes last_rotation baseline; no rotation yet. */
-  ccol_log_info(lg, "before rotation");
+  /* The first write sets the last_rotation baseline without a rotation. */
+  clog_info(lg, "before rotation");
 
   /* Sleep long enough to exceed the 1-second rotation interval. */
   sleep(2);
 
   /* This write triggers time-based rotation. */
-  ccol_log_info(lg, "after rotation");
+  clog_info(lg, "after rotation");
 
   clog_close(lg);
 
@@ -1771,7 +1825,7 @@ TEST(rotation, time_based_rotation_creates_rotated_file) {
 
   /* The live file must contain the post-rotation message. */
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
   REQUIRE_NE(strstr(buf, "after rotation"), NULL);
 
   cleanup_dir(dir, "app.log");
@@ -1779,14 +1833,14 @@ TEST(rotation, time_based_rotation_creates_rotated_file) {
 
 TEST(rotation, same_second_collision_uses_suffix) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  /* With max_file_size = 10, every log write (each >>10 bytes) triggers an
-   * immediate size-based rotation.  Five rotations within the same UTC second
-   * forces the collision-handling code to generate _0001, _0002, ... suffixes.
-   */
+  /* With max_file_size = 10, every log write starts an immediate size-based
+   * rotation, because each write is much larger than 10 bytes, so five
+   * rotations inside the same UTC second make the collision code generate
+   * the suffixes _0001, _0002 and so on. */
   clog_rotation_cfg_t cfg = {
       .size_rotation_enabled = true,
       .max_file_size = 10,
@@ -1797,7 +1851,7 @@ TEST(rotation, same_second_collision_uses_suffix) {
   clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  for (int i = 0; i < 5; i++) ccol_log_info(lg, "collision test %d", i);
+  for (int i = 0; i < 5; i++) clog_info(lg, "collision test %d", i);
 
   clog_close(lg);
 
@@ -1807,11 +1861,11 @@ TEST(rotation, same_second_collision_uses_suffix) {
   cleanup_dir(dir, "app.log");
 }
 
-/* A persistently failing rotation (e.g. the destination directory lost write
- * permission) must not be retried on every single write: once one attempt
- * fails, further attempts are backed off for a bounded window rather than
- * costing every subsequent write the full rename()/open() syscall overhead
- * for as long as the underlying condition persists. */
+/* A rotation can fail again and again, for example when the destination
+ * directory loses its write permission, and the logger must not retry the
+ * rotation at every write: after one try fails, it backs off for a bounded
+ * window. Without this, every later write pays the full syscall cost of
+ * rename() and open() for as long as the condition lasts. */
 TEST(rotation, persistent_failure_does_not_retry_on_every_write) {
   if (geteuid() == 0) {
     fprintf(stderr,
@@ -1822,9 +1876,9 @@ TEST(rotation, persistent_failure_does_not_retry_on_every_write) {
   }
 
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_rotation_cfg_t cfg = {
       .size_rotation_enabled = true,
@@ -1836,17 +1890,16 @@ TEST(rotation, persistent_failure_does_not_retry_on_every_write) {
   clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* Remove write permission on the directory so rename() inside _rotate()
-   * keeps failing with EACCES on every attempt, simulating a persistent
-   * rotation failure. */
+  /* Remove the write permission on the directory, so that rename() inside
+   * _rotate() fails with EACCES at every try, which simulates a rotation
+   * failure that does not go away. */
   REQUIRE_EQ(chmod(dir, 0555), 0);
 
   clog_test_reset_rotate_attempt_count();
 
-  /* Every one of these 20 writes is individually over the 10-byte
-   * threshold, so without a backoff each would attempt (and fail) rotation. */
-  for (int i = 0; i < 20; i++)
-    ccol_log_info(lg, "retry backoff test idx=%d", i);
+  /* Each one of these 20 writes is above the 10-byte threshold on its own, so
+   * without a backoff, each write tries a rotation and fails. */
+  for (int i = 0; i < 20; i++) clog_info(lg, "retry backoff test idx=%d", i);
 
   size_t attempts = clog_test_get_rotate_attempt_count();
   REQUIRE_GT(attempts, (size_t)0);
@@ -1875,9 +1928,9 @@ TEST(derive, derived_is_not_null) {
 
 TEST(derive, inherits_parent_fields) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog parent = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_INVALID);
@@ -1888,13 +1941,13 @@ TEST(derive, inherits_parent_fields) {
   clog child = clog_derive(parent);
   REQUIRE_NE(child, CLOG_INVALID);
 
-  ccol_log_info(child, "from child");
+  clog_info(child, "from child");
 
   clog_close(child);
   clog_close(parent);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* Child must carry the snapshot of parent's fields at derive time */
   REQUIRE_NE(strstr(buf, "service=auth"), NULL);
@@ -1905,9 +1958,9 @@ TEST(derive, inherits_parent_fields) {
 
 TEST(derive, child_field_does_not_affect_parent) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog parent = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_INVALID);
@@ -1917,14 +1970,14 @@ TEST(derive, child_field_does_not_affect_parent) {
 
   clog_set_field(child, "req_id", "child-only");
 
-  /* Only parent writes; its line must not carry the child-only field */
-  ccol_log_info(parent, "parent line");
+  /* Only the parent writes, and its line must not hold the child-only field */
+  clog_info(parent, "parent line");
 
   clog_close(child);
   clog_close(parent);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_EQ(strstr(buf, "req_id"), NULL);
 
@@ -1933,9 +1986,9 @@ TEST(derive, child_field_does_not_affect_parent) {
 
 TEST(derive, parent_field_after_derive_does_not_affect_child) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog parent = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_INVALID);
@@ -1943,17 +1996,18 @@ TEST(derive, parent_field_after_derive_does_not_affect_child) {
   clog child = clog_derive(parent);
   REQUIRE_NE(child, CLOG_INVALID);
 
-  /* Add a field to parent AFTER the derive snapshot was taken */
+  /* Add a field to the parent AFTER clog_derive takes the snapshot */
   clog_set_field(parent, "added_after", "yes");
 
-  /* Only child writes; its line must not carry the post-derive parent field */
-  ccol_log_info(child, "child line");
+  /* Only the child writes, and its line must not hold the parent field that
+   * comes after the derive. */
+  clog_info(child, "child line");
 
   clog_close(child);
   clog_close(parent);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_EQ(strstr(buf, "added_after"), NULL);
 
@@ -1962,9 +2016,9 @@ TEST(derive, parent_field_after_derive_does_not_affect_child) {
 
 TEST(derive, shares_output_target) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog parent = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_INVALID);
@@ -1972,14 +2026,14 @@ TEST(derive, shares_output_target) {
   clog child = clog_derive(parent);
   REQUIRE_NE(child, CLOG_INVALID);
 
-  ccol_log_info(parent, "parent message");
-  ccol_log_info(child, "child message");
+  clog_info(parent, "parent message");
+  clog_info(child, "child message");
 
   clog_close(child);
   clog_close(parent);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* Both messages must land in the same file */
   REQUIRE_NE(strstr(buf, "parent message"), NULL);
@@ -1990,9 +2044,9 @@ TEST(derive, shares_output_target) {
 
 TEST(derive, child_close_does_not_break_parent) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog parent = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_INVALID);
@@ -2000,15 +2054,15 @@ TEST(derive, child_close_does_not_break_parent) {
   clog child = clog_derive(parent);
   REQUIRE_NE(child, CLOG_INVALID);
 
-  ccol_log_info(child, "before child close");
+  clog_info(child, "before child close");
   clog_close(child);
 
-  /* Parent must still be usable after the derived logger is closed */
-  ccol_log_info(parent, "after child close");
+  /* The parent must keep working after clog_close on the derived logger */
+  clog_info(parent, "after child close");
   clog_close(parent);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "before child close"), NULL);
   REQUIRE_NE(strstr(buf, "after child close"), NULL);
@@ -2018,9 +2072,9 @@ TEST(derive, child_close_does_not_break_parent) {
 
 TEST(derive, parent_close_does_not_break_child) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog parent = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_INVALID);
@@ -2028,15 +2082,15 @@ TEST(derive, parent_close_does_not_break_child) {
   clog child = clog_derive(parent);
   REQUIRE_NE(child, CLOG_INVALID);
 
-  ccol_log_info(parent, "before parent close");
+  clog_info(parent, "before parent close");
   clog_close(parent);
 
-  /* Child must still be usable after its parent is closed */
-  ccol_log_info(child, "after parent close");
+  /* The child must keep working after clog_close on its parent */
+  clog_info(child, "after parent close");
   clog_close(child);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "before parent close"), NULL);
   REQUIRE_NE(strstr(buf, "after parent close"), NULL);
@@ -2046,9 +2100,9 @@ TEST(derive, parent_close_does_not_break_child) {
 
 TEST(derive, independent_level) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog parent = clog_open_file_mp(path, CLOG_WARN, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_INVALID);
@@ -2056,17 +2110,18 @@ TEST(derive, independent_level) {
   clog child = clog_derive(parent);
   REQUIRE_NE(child, CLOG_INVALID);
 
-  /* Lower child's level below parent's; child sees DEBUG, parent does not */
+  /* Set the level of the child below the level of the parent, so that the
+   * child sees DEBUG and the parent does not. */
   clog_set_level(child, CLOG_DEBUG);
 
-  ccol_log_debug(parent, "parent debug - dropped");
-  ccol_log_debug(child, "child debug - visible");
+  clog_debug(parent, "parent debug - dropped");
+  clog_debug(child, "child debug - visible");
 
   clog_close(child);
   clog_close(parent);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_EQ(strstr(buf, "parent debug"), NULL);
   REQUIRE_NE(strstr(buf, "child debug"), NULL);
@@ -2076,9 +2131,9 @@ TEST(derive, independent_level) {
 
 TEST(derive, field_override_in_child_is_independent) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog parent = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_INVALID);
@@ -2091,14 +2146,14 @@ TEST(derive, field_override_in_child_is_independent) {
   /* Override the inherited field in the child only */
   clog_set_field(child, "version", "2");
 
-  ccol_log_info(parent, "parent write");
-  ccol_log_info(child, "child write");
+  clog_info(parent, "parent write");
+  clog_info(child, "child write");
 
   clog_close(child);
   clog_close(parent);
 
   char buf[8192];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* Locate the two log lines */
   char *parent_line = strstr(buf, "parent write");
@@ -2118,17 +2173,17 @@ TEST(derive, field_override_in_child_is_independent) {
   if (pe) *pe = '\0';
   if (ce) *ce = '\0';
 
-  REQUIRE_NE(strstr(ps, "version=1"), NULL); /* parent kept original */
-  REQUIRE_NE(strstr(cs, "version=2"), NULL); /* child has its override */
+  REQUIRE_NE(strstr(ps, "version=1"), NULL); /* the parent keeps the first */
+  REQUIRE_NE(strstr(cs, "version=2"), NULL); /* the child has its override */
 
   cleanup_dir(dir, "app.log");
 }
 
 TEST(derive, grandchild_derive) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog parent = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_INVALID);
@@ -2136,7 +2191,7 @@ TEST(derive, grandchild_derive) {
 
   clog child = clog_derive(parent);
   REQUIRE_NE(child, CLOG_INVALID);
-  /* child inherits origin=parent from the snapshot; add its own field */
+  /* The child inherits origin=parent from the snapshot; add its own field */
   clog_set_field(child, "gen", "child");
 
   /* Derive a grandchild from the child */
@@ -2144,15 +2199,15 @@ TEST(derive, grandchild_derive) {
   REQUIRE_NE(grandchild, CLOG_INVALID);
   /* grandchild inherits both origin=parent and gen=child */
 
-  /* Close parent and child first; grandchild must remain fully usable */
+  /* Close the parent and the child first; the grandchild must keep working */
   clog_close(parent);
   clog_close(child);
 
-  ccol_log_info(grandchild, "from grandchild");
+  clog_info(grandchild, "from grandchild");
   clog_close(grandchild);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "from grandchild"), NULL);
   /* Both inherited fields must appear in the grandchild's line */
@@ -2164,9 +2219,9 @@ TEST(derive, grandchild_derive) {
 
 TEST(derive, multiple_children_from_one_parent) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog parent = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_INVALID);
@@ -2180,15 +2235,15 @@ TEST(derive, multiple_children_from_one_parent) {
   REQUIRE_NE(child2, CLOG_INVALID);
   clog_set_field(child2, "name", "c2");
 
-  ccol_log_info(child1, "from child1");
-  ccol_log_info(child2, "from child2");
+  clog_info(child1, "from child1");
+  clog_info(child2, "from child2");
 
   clog_close(child1);
   clog_close(child2);
   clog_close(parent);
 
   char buf[8192];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* Both messages land in the same file */
   REQUIRE_NE(strstr(buf, "from child1"), NULL);
@@ -2239,15 +2294,15 @@ typedef struct {
 static void *_writer_thread(void *arg) {
   thread_arg_t *a = (thread_arg_t *)arg;
   for (int i = 0; i < MSGS_PER_THREAD; i++)
-    ccol_log_info(a->lg, "thread=%d msg=%d", a->thread_id, i);
+    clog_info(a->lg, "thread=%d msg=%d", a->thread_id, i);
   return NULL;
 }
 
 TEST(threading, concurrent_writes_produce_no_garbled_lines) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -2275,9 +2330,9 @@ TEST(threading, concurrent_writes_produce_no_garbled_lines) {
 
   clog_close(lg);
 
-  /* Every line must start with "ts="; no interleaved partial writes */
+  /* Every line must start with "ts=": no partial write may interleave. */
   char buf[131072];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_NE(len, (size_t)0);
 
   int bad_lines = 0;
@@ -2332,7 +2387,7 @@ TEST(custom_alloc, open_fd_uses_custom_allocator) {
   clog lg = clog_open_fd_mp(STDERR_FILENO, CLOG_INFO, NULL, &procs);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_info(lg, "custom allocator test");
+  clog_info(lg, "custom allocator test");
 
   clog_close(lg);
 
@@ -2342,9 +2397,9 @@ TEST(custom_alloc, open_fd_uses_custom_allocator) {
 
 TEST(custom_alloc, open_file_uses_custom_allocator) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   _custom_alloc_count = 0;
   _custom_free_count = 0;
@@ -2360,12 +2415,12 @@ TEST(custom_alloc, open_file_uses_custom_allocator) {
   REQUIRE_NE(lg, CLOG_INVALID);
 
   clog_set_field(lg, "env", "test");
-  ccol_log_info(lg, "custom allocator file test");
+  clog_info(lg, "custom allocator file test");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
   REQUIRE_NE(strstr(buf, "custom allocator file test"), NULL);
 
   REQUIRE_NE(_custom_alloc_count, (size_t)0);
@@ -2376,9 +2431,9 @@ TEST(custom_alloc, open_file_uses_custom_allocator) {
 
 TEST(custom_alloc, derived_logger_uses_parent_allocator) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   _custom_alloc_count = 0;
   _custom_free_count = 0;
@@ -2396,12 +2451,12 @@ TEST(custom_alloc, derived_logger_uses_parent_allocator) {
   clog child = clog_derive(parent);
   REQUIRE_NE(child, CLOG_INVALID);
 
-  ccol_log_info(child, "child using parent allocator");
+  clog_info(child, "child using parent allocator");
   clog_close(child);
   clog_close(parent);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
   REQUIRE_NE(strstr(buf, "child using parent allocator"), NULL);
 
   REQUIRE_NE(_custom_alloc_count, (size_t)0);
@@ -2413,7 +2468,7 @@ TEST(custom_alloc, derived_logger_uses_parent_allocator) {
 TEST(custom_alloc, invalid_mprocs_returns_null) {
   ccol_memmgmt_procs_t bad_procs = {
       .malloc = _custom_malloc,
-      .free = NULL, /* missing free; must be rejected */
+      .free = NULL, /* free is absent, so the logger must reject this */
       .calloc = _custom_calloc,
       .realloc = _custom_realloc,
   };
@@ -2422,10 +2477,10 @@ TEST(custom_alloc, invalid_mprocs_returns_null) {
   REQUIRE_EQ(lg, CLOG_INVALID);
 }
 
-/* A counting allocator whose malloc/calloc/realloc can be made to fail on
- * exactly one numbered call, used below to force clog_open_file_mp()'s own
- * later construction steps (async logging setup) to fail after the log
- * file itself has already been successfully opened. */
+/* A counting allocator whose malloc, calloc and realloc can fail at exactly
+ * one numbered call. The test below uses it to make a later construction
+ * step of clog_open_file_mp() fail, namely the setup of the async logging,
+ * after the open of the log file has succeeded. */
 static _Atomic int g_ctor_fail_call_count = 0;
 static _Atomic int g_ctor_fail_at = -1;
 
@@ -2445,30 +2500,26 @@ static void *_ctor_fail_realloc(void *p, size_t sz) {
   return _ctor_fail_should_fail() ? NULL : realloc(p, sz);
 }
 
-/* clog_open_file_mp() opens its log file with a real open() call before the
- * rest of construction runs, so EVERY later failure path (async logging
- * setup, _shared_async_init(), engaged by a non-NULL async_cfg) must close
- * that fd, not only the earlier, separate "_alloc() itself fails" one.
- * Swept across a wide range of "fail the Nth allocation" points, rather than
- * one hardcoded count (which would be fragile against unrelated
- * allocation-count changes elsewhere in the construction sequence), so
- * several iterations land squarely inside async setup itself; every
- * iteration (whether the failure lands there, earlier inside _alloc(), or
- * nowhere at all) must leave the process's open-fd count exactly where it
- * started. */
+/* clog_open_file_mp() opens its log file with a real open() call that runs
+ * before the rest of the construction, so EVERY later failure path must
+ * close that fd. This includes the setup of the async logging in
+ * _shared_async_init(), which a non-NULL async_cfg turns on, and not only
+ * the earlier, separate path where _alloc() itself fails.
+ *
+ * The test sweeps a wide range of "fail the Nth allocation" points instead
+ * of one hardcoded count, which is fragile because the number of allocations
+ * in the construction sequence can change for an unrelated reason. With a
+ * sweep, several iterations land inside the async setup itself. Every
+ * iteration must leave the open-fd count of the process at its start value,
+ * whether the failure lands in the async setup, lands earlier inside
+ * _alloc(), or does not happen at all. */
 TEST(custom_alloc, open_file_async_init_failure_does_not_leak_fd) {
   int baseline = count_open_fds();
-  if (baseline < 0) {
-    fprintf(stderr,
-            "[SKIP] open_file_async_init_failure_does_not_leak_fd: "
-            "/proc/self/fd unavailable on this platform\n");
-    return;
-  }
 
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   ccol_memmgmt_procs_t procs = {
       .malloc = _ctor_fail_malloc,
@@ -2497,12 +2548,13 @@ TEST(custom_alloc, open_file_async_init_failure_does_not_leak_fd) {
 /*                         NULL HANDLE VALIDATION                             */
 /* ========================================================================== */
 
-/* Every public entry point must assert (not silently segfault with no
- * diagnostic) when handed a NULL logger handle, matching this project's own
- * established convention for an invalid raw handle (see e.g. chashmap.c's
- * chmap_elem_count/chmap_reset, or cvector.c's raw-layer functions, both of
- * which ccol_assert(false) on NULL rather than dereferencing it). Each check
- * runs in a forked child since the assertion aborts the whole process. */
+/* Every public entry point must assert when it gets a NULL logger handle
+ * instead of segfaulting with no diagnostic. This is the convention of this
+ * project for an invalid raw handle: for example, chmap_elem_count and
+ * chmap_reset in chashmap.c, and the raw-layer functions of cvector.c, all
+ * call ccol_assert(false) on NULL instead of dereferencing it. Each check
+ * below runs in a forked child, because the assertion aborts the whole
+ * process. */
 
 static void _call_clog_close_null(void) { clog_close(CLOG_INVALID); }
 static void _call_clog_derive_null(void) { (void)clog_derive(CLOG_INVALID); }
@@ -2534,9 +2586,7 @@ static void _call_clog_clear_fields_null(void) {
   clog_clear_fields(CLOG_INVALID);
 }
 static void _call_clog_flush_null(void) { clog_flush(CLOG_INVALID); }
-static void _call_log_info_null(void) {
-  ccol_log_info(CLOG_INVALID, "message");
-}
+static void _call_log_info_null(void) { clog_info(CLOG_INVALID, "message"); }
 
 static void _expect_fatal(void (*fn)(void)) {
   pid_t pid = fork();
@@ -2548,7 +2598,7 @@ static void _expect_fatal(void (*fn)(void)) {
       close(dn);
     }
     fn();
-    _exit(0); /* unreachable if the handle-validation assert fired */
+    _exit(0); /* the handle-validation assert stops the child first */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -2560,34 +2610,44 @@ static void _expect_fatal(void (*fn)(void)) {
 TEST(null_handle, close_is_fatal) { _expect_fatal(_call_clog_close_null); }
 TEST(null_handle, derive_is_fatal) { _expect_fatal(_call_clog_derive_null); }
 TEST(null_handle, set_level_is_fatal) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   _expect_fatal(_call_clog_set_level_null);
 }
 TEST(null_handle, get_level_is_fatal) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   _expect_fatal(_call_clog_get_level_null);
 }
 TEST(null_handle, set_format_is_fatal) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   _expect_fatal(_call_clog_set_format_null);
 }
 TEST(null_handle, get_format_is_fatal) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   _expect_fatal(_call_clog_get_format_null);
 }
 TEST(null_handle, set_facility_is_fatal) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   _expect_fatal(_call_clog_set_facility_null);
 }
 TEST(null_handle, get_facility_is_fatal) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   _expect_fatal(_call_clog_get_facility_null);
 }
 TEST(null_handle, set_field_is_fatal) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   _expect_fatal(_call_clog_set_field_null);
 }
 TEST(null_handle, remove_field_is_fatal) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   _expect_fatal(_call_clog_remove_field_null);
 }
 TEST(null_handle, clear_fields_is_fatal) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   _expect_fatal(_call_clog_clear_fields_null);
 }
 TEST(null_handle, flush_is_fatal) { _expect_fatal(_call_clog_flush_null); }
 TEST(null_handle, write_via_log_macro_is_fatal) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   _expect_fatal(_call_log_info_null);
 }
 
@@ -2595,11 +2655,12 @@ TEST(null_handle, write_via_log_macro_is_fatal) {
 /*                         ROBUSTNESS UNDER ALLOCATION FAILURE                */
 /* ========================================================================== */
 
-/* An allocator whose realloc() fails on exactly its g_realloc_fail_at'th
- * call (1-indexed; <=0 means "never fail") and succeeds otherwise, letting a
- * single test sweep a fault across every buffer-growth call a ccol_log_error()
- * with backtrace can make (logger construction, field-map operations, the
- * primary record, and every individual backtrace frame). */
+/* An allocator whose realloc() fails at exactly the g_realloc_fail_at'th
+ * call, counting from 1, where a value <= 0 means "never fail"; every other
+ * call succeeds. So one test can sweep a fault across every buffer growth
+ * that a clog_error() with a backtrace can make: the logger
+ * construction, the field-map operations, the primary record, and each
+ * backtrace frame. */
 static int g_realloc_fail_at = -1;
 static int g_realloc_call_count = 0;
 
@@ -2621,45 +2682,46 @@ TEST(robustness, error_with_backtrace_never_writes_malformed_lines_under_oom) {
       .realloc = _counting_realloc,
   };
 
-  /* Sweep the fault across a wide range of call indices so it lands during
-   * construction, the primary record, and (on a platform with backtrace
-   * support) individual backtrace frames alike; every one of those buffer
-   * growths must degrade gracefully rather than write a malformed line. */
+  /* Sweep the fault across a wide range of call indices, so that it lands in
+   * the construction, in the primary record, and in a backtrace frame on a
+   * platform with backtrace support. Every one of those buffer growths must
+   * degrade cleanly, and none of them may write a malformed line. */
   for (int fail_at = 1; fail_at <= 80; fail_at++) {
     char dir[256];
-    REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+    REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
     char path[512];
-    snprintf(path, sizeof path, "%s/app.log", dir);
+    snprintf(path, sizeof(path), "%s/app.log", dir);
 
     g_realloc_call_count = 0;
     g_realloc_fail_at = fail_at;
 
     clog lg = clog_open_file_mp(path, CLOG_ERROR, NULL, NULL, &procs);
     if (!lg) {
-      /* Construction itself hit the fault; nothing to check this round. */
+      /* The construction itself hits the fault, so there is nothing to check
+       * in this round. */
       cleanup_dir(dir, "app.log");
       continue;
     }
 
-    ccol_log_error(lg, "robustness check %d", fail_at);
+    clog_error(lg, "robustness check %d", fail_at);
 
-    g_realloc_fail_at = -1; /* don't let close()'s own bookkeeping fault */
+    g_realloc_fail_at = -1; /* do not let the bookkeeping of close() fault */
     clog_close(lg);
 
     char buf[65536];
-    size_t len = read_file(path, buf, sizeof buf);
+    size_t len = read_file(path, buf, sizeof(buf));
 
-    /* Every emitted line, whether the primary record or a backtrace
-     * continuation, must be individually well-formed: starting with the
-     * expected prefix and ending with a real newline. A malformed/partial
-     * write (e.g. a truncated backtrace frame with no trailing newline)
-     * would otherwise merge into whatever line follows it. */
+    /* Every line that the logger writes, whether the primary record or a
+     * backtrace continuation line, must be well-formed on its own: it must
+     * start with the expected prefix and end with a real newline. Without
+     * this, a partial write merges into the line that follows it, as with a
+     * truncated backtrace frame that has no newline at its end. */
     size_t i = 0;
     while (i < len) {
       REQUIRE_TRUE(buf[i] == 't' || buf[i] == '\t');
       if (buf[i] == 't') REQUIRE_EQ(strncmp(buf + i, "ts=", 3), 0);
       char *nl = memchr(buf + i, '\n', len - i);
-      REQUIRE_NE(nl, NULL); /* every line must be newline-terminated */
+      REQUIRE_NE(nl, NULL); /* every line must end with a newline */
       i = (size_t)(nl - buf) + 1;
     }
 
@@ -2669,16 +2731,18 @@ TEST(robustness, error_with_backtrace_never_writes_malformed_lines_under_oom) {
   g_realloc_fail_at = -1;
 }
 
-/* JSON embeds the backtrace inline, before the record's closing "}\n", via a
- * separate code path from logfmt/syslog's own after-the-write, per-frame
- * emitters. A buffer-growth allocation failure while appending the "bt"
- * array (or backtrace_symbols() itself failing) must never silently omit the
- * backtrace from an otherwise ordinary-looking, successfully-closed JSON
- * record with no indication anything was missing: either the "bt" array
- * survives (possibly frame-truncated), a "bt_error" marker takes its place,
- * or the whole record is replaced by the well-formed oversized-record
- * fallback; but a JSON object closing normally with neither "bt" nor
- * "bt_error" present must never happen for a with_backtrace=true call. */
+/* JSON embeds the backtrace inline, before the closing "}\n" of the record,
+ * which is a separate code path from logfmt and syslog: those two write one
+ * frame at a time, after the main write.
+ *
+ * A buffer-growth allocation can fail while the logger appends the "bt"
+ * array, and backtrace_symbols() can fail as well. The record must never
+ * drop the backtrace while still looking like an ordinary, correctly closed
+ * JSON record. One of three things must happen: the "bt" array stays,
+ * possibly with fewer frames; a "bt_error" marker takes its place; or the
+ * well-formed fallback for an oversized record replaces the whole record. For
+ * a call with with_backtrace=true, a JSON object that closes in the normal
+ * way with no "bt" and no "bt_error" must never happen. */
 TEST(robustness, json_backtrace_failure_is_never_silently_dropped) {
   ccol_memmgmt_procs_t procs = {
       .malloc = _counting_malloc,
@@ -2689,9 +2753,9 @@ TEST(robustness, json_backtrace_failure_is_never_silently_dropped) {
 
   for (int fail_at = 1; fail_at <= 80; fail_at++) {
     char dir[256];
-    REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+    REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
     char path[512];
-    snprintf(path, sizeof path, "%s/app.log", dir);
+    snprintf(path, sizeof(path), "%s/app.log", dir);
 
     g_realloc_call_count = 0;
     g_realloc_fail_at = fail_at;
@@ -2703,13 +2767,13 @@ TEST(robustness, json_backtrace_failure_is_never_silently_dropped) {
     }
     clog_set_format(lg, CLOG_FMT_JSON);
 
-    ccol_log_error(lg, "json backtrace robustness check %d", fail_at);
+    clog_error(lg, "json backtrace robustness check %d", fail_at);
 
     g_realloc_fail_at = -1;
     clog_close(lg);
 
     char buf[65536];
-    size_t len = read_file(path, buf, sizeof buf);
+    size_t len = read_file(path, buf, sizeof(buf));
     if (len == 0) {
       cleanup_dir(dir, "app.log");
       continue;
@@ -2733,12 +2797,12 @@ TEST(robustness, json_backtrace_failure_is_never_silently_dropped) {
   g_realloc_fail_at = -1;
 }
 
-/* An allocator whose calloc() fails on demand (controlled by
- * g_fail_next_calloc), leaving malloc()/realloc()/free() untouched.  Used to
- * deterministically fail exactly one calloc() call (specifically, the
- * chashmap iterator allocation inside chashmap_begin_iter()) without
- * disturbing logger construction or clog_set_field()'s own map-growth
- * allocations, which must be allowed to succeed normally beforehand. */
+/* An allocator whose calloc() fails on demand, controlled by
+ * g_fail_next_calloc, while malloc(), realloc() and free() behave normally.
+ * The test uses it to fail exactly one calloc() call in a deterministic way:
+ * the iterator allocation inside chashmap_begin_iter(). It disturbs neither
+ * the logger construction nor the map-growth allocations of clog_set_field(),
+ * both of which must succeed first. */
 static int g_fail_next_calloc = 0;
 
 static void *_fail_next_calloc_malloc(size_t sz) { return malloc(sz); }
@@ -2754,14 +2818,15 @@ static void *_fail_next_calloc_realloc(void *p, size_t sz) {
   return realloc(p, sz);
 }
 
-/* chashmap_begin_iter() allocates its own iterator struct via calloc(); a
- * single transient failure of that one call, unrelated to the size of the
- * record being written, must not silently drop every field from an
- * otherwise-normal-looking record with no indication anything went wrong.
- * It must instead surface exactly like any other unrecoverable append
- * failure in _clog_write(): the well-formed fallback placeholder record,
- * carrying an accurate diagnostic (this is a transient allocation failure,
- * not an oversized record; the two must be distinguishable). */
+/* chashmap_begin_iter() allocates its own iterator struct with calloc(), and
+ * that one call can fail one time for a reason that has nothing to do with
+ * the size of the record. The logger must not then drop every field and
+ * write a record that looks normal anyway; it must report the problem in the
+ * same way as any other append failure in _clog_write() that it cannot
+ * recover from, which is the well-formed fallback placeholder record. The
+ * placeholder must carry a correct diagnostic: this fault is a transient
+ * allocation failure, not an oversized record, and a reader must be able to
+ * tell the two apart. */
 TEST(robustness, field_iterator_alloc_failure_never_silently_drops_fields) {
   ccol_memmgmt_procs_t procs = {
       .malloc = _fail_next_calloc_malloc,
@@ -2772,11 +2837,11 @@ TEST(robustness, field_iterator_alloc_failure_never_silently_drops_fields) {
 
   const clog_format_t formats[] = {CLOG_FMT_LOGFMT, CLOG_FMT_JSON,
                                    CLOG_FMT_SYSLOG};
-  for (size_t fi = 0; fi < sizeof formats / sizeof formats[0]; fi++) {
+  for (size_t fi = 0; fi < sizeof(formats) / sizeof(formats[0]); fi++) {
     char dir[256];
-    REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+    REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
     char path[512];
-    snprintf(path, sizeof path, "%s/app.log", dir);
+    snprintf(path, sizeof(path), "%s/app.log", dir);
 
     clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, &procs);
     REQUIRE_NE(lg, CLOG_INVALID);
@@ -2785,31 +2850,30 @@ TEST(robustness, field_iterator_alloc_failure_never_silently_drops_fields) {
     clog_set_field(lg, "service", "auth");
     clog_set_field(lg, "env", "prod");
 
-    /* Fail exactly the next calloc() call: the field-map iterator's own
-     * allocation, triggered from inside the ccol_log_info() call below. */
+    /* Fail exactly the next calloc() call, which is the allocation of the
+     * field-map iterator that the clog_info() call below makes. */
     g_fail_next_calloc = 1;
-    ccol_log_info(lg, "message that must not silently lose its fields");
+    clog_info(lg, "message that must not silently lose its fields");
     g_fail_next_calloc = 0;
 
     clog_close(lg);
 
     char buf[4096];
-    size_t len = read_file(path, buf, sizeof buf);
+    size_t len = read_file(path, buf, sizeof(buf));
     REQUIRE_GT(len, (size_t)0);
 
-    /* Either both fields made it into a well-formed record, or the fault
-     * was surfaced via the well-formed fallback placeholder; what must
-     * never happen is a record that looks like an ordinary success while
-     * silently missing both fields. */
+    /* Either both fields reach a well-formed record, or the well-formed
+     * fallback placeholder reports the fault; a record that looks like an
+     * ordinary success but holds neither field must never happen. */
     bool has_service = strstr(buf, "service") != NULL;
     bool has_env = strstr(buf, "env") != NULL;
     bool has_alloc_failure_notice =
         strstr(buf, "transient allocation failure") != NULL;
     REQUIRE_TRUE((has_service && has_env) || has_alloc_failure_notice);
 
-    /* This specific fault is a transient allocation failure, not an
-     * oversized record; the fallback (when it fires) must say so rather
-     * than misreport it as "too large to emit". */
+    /* This fault is a transient allocation failure, not an oversized record,
+     * so when the fallback fires, it must say so instead of reporting
+     * "too large to emit". */
     if (has_alloc_failure_notice)
       REQUIRE_EQ(strstr(buf, "too large to emit"), NULL);
 
@@ -2817,11 +2881,11 @@ TEST(robustness, field_iterator_alloc_failure_never_silently_drops_fields) {
   }
 }
 
-/* An allocator whose malloc() fails on demand (controlled by
- * g_fail_next_malloc), leaving calloc()/realloc()/free() untouched. Used to
- * deterministically fail exactly one heap allocation triggered from inside a
- * single _clog_write() call, without disturbing logger construction (which
- * must succeed normally beforehand via a real malloc()). */
+/* An allocator whose malloc() fails on demand, controlled by
+ * g_fail_next_malloc, while calloc(), realloc() and free() behave normally.
+ * The test uses it to fail exactly one heap allocation inside one
+ * _clog_write() call, in a deterministic way, without disturbing the logger
+ * construction, which must first succeed with a real malloc(). */
 static int g_fail_next_malloc = 0;
 static void *_fail_next_malloc_malloc(size_t sz) {
   if (g_fail_next_malloc) {
@@ -2838,21 +2902,24 @@ static void *_fail_next_malloc_realloc(void *p, size_t sz) {
   return realloc(p, sz);
 }
 
-/* A genuine allocator failure while spilling a long __FILE__ path to a heap
- * buffer inside _clog_build_header() must not leave _clog_build_record()'s
- * own alloc_failure verdict false. If it does, the record falls back to the
- * generic "log record too large to emit" note even though the true cause has
- * nothing to do with the record's size at all; see clog_buf_t.oom's own doc
- * comment. Directly exercises _clog_write() with a synthetic "file" argument
- * >= the 512-byte stack buffer _clog_build_header() uses to build the logfmt
- * "src=" value, the only way to reach the heap-spill branch deterministically
- * (the log_* macros always pass the literal, normally-short __FILE__ of their
- * own call site). */
+/* _clog_build_header() spills a long __FILE__ path to a heap buffer, and a
+ * real allocator failure there must not leave the alloc_failure verdict of
+ * _clog_build_record() at false. If it does, the record falls back to the
+ * general note "log record too large to emit", which is wrong, because the
+ * true cause has nothing to do with the size of the record. See the doc
+ * comment of clog_buf_t.oom.
+ *
+ * The test calls _clog_write() directly with a synthetic "file" argument that
+ * is at least as long as the 512-byte stack buffer that _clog_build_header()
+ * uses to build the logfmt "src=" value. This direct call is the only
+ * deterministic way to reach the heap-spill branch, because the log_* macros
+ * always pass the literal __FILE__ of their own call site, and that path is
+ * normally short. */
 TEST(robustness, header_build_allocation_failure_reported_accurately) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   ccol_memmgmt_procs_t procs = {
       .malloc = _fail_next_malloc_malloc,
@@ -2865,13 +2932,13 @@ TEST(robustness, header_build_allocation_failure_reported_accurately) {
   REQUIRE_NE(lg, CLOG_INVALID);
 
   char long_file[600];
-  memset(long_file, 'A', sizeof long_file);
-  long_file[sizeof long_file - 1] = '\0';
+  memset(long_file, 'A', sizeof(long_file));
+  long_file[sizeof(long_file) - 1] = '\0';
 
-  /* Fail exactly the next malloc() call: the long-src heap-spill buffer
-   * triggered from inside the _clog_write() call below (no fields are set on
-   * this logger, so no field-iterator allocation competes for this same
-   * single fault). */
+  /* Fail exactly the next malloc() call, which is the heap-spill buffer for
+   * the long src value that the _clog_write() call below makes. This logger
+   * holds no fields, so no field-iterator allocation competes for the same
+   * single fault. */
   g_fail_next_malloc = 1;
   _clog_write(lg, CLOG_INFO, long_file, 42, "myfunc", false, "hello world");
   g_fail_next_malloc = 0;
@@ -2879,37 +2946,38 @@ TEST(robustness, header_build_allocation_failure_reported_accurately) {
   clog_close(lg);
 
   char buf[4096];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
 
-  /* Must be reported as what it actually is (a transient allocation
-   * failure), never mislabeled as an oversized record. */
+  /* The record must name the real cause, a transient allocation failure, and
+   * never label the fault as an oversized record. */
   REQUIRE_NE(strstr(buf, "transient allocation failure"), NULL);
   REQUIRE_EQ(strstr(buf, "too large to emit"), NULL);
 
   cleanup_dir(dir, "app.log");
 }
 
-/* Directly exercises _clog_write() with a synthetic "file" argument >= the
- * 512-byte stack buffer _clog_write() uses to build the logfmt "src=" value,
- * containing logfmt-special bytes (space, '=').  Calling _clog_write()
- * directly (rather than via the log_* macros, which always pass the literal
- * __FILE__ of the call site) is the only way to control the file argument's
- * length precisely enough to reach this code path. */
+/* This test calls _clog_write() directly with a synthetic "file" argument
+ * that is at least as long as the 512-byte stack buffer that _clog_write()
+ * uses to build the logfmt "src=" value, and that also holds bytes that are
+ * special to logfmt: a space and '='. Only a direct call gives exact control
+ * over the length of the file argument, which is what reaches this code
+ * path, because the log_* macros always pass the literal __FILE__ of the call
+ * site. */
 TEST(robustness, long_file_path_in_src_field_is_still_quoted_in_logfmt) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
   char long_file[600];
-  memset(long_file, 'A', sizeof long_file);
-  long_file[0] = ' ';   /* logfmt-special: would-be first byte of src= value */
-  long_file[100] = '='; /* logfmt-special: must not be read as a new token */
-  long_file[sizeof long_file - 1] = '\0';
+  memset(long_file, 'A', sizeof(long_file));
+  long_file[0] = ' ';   /* special to logfmt: first byte of the src= value */
+  long_file[100] = '='; /* special to logfmt: not to be read as a new token */
+  long_file[sizeof(long_file) - 1] = '\0';
 
   _clog_write(lg, CLOG_INFO, long_file, 42, "myfunc", false, "hello %s",
               "world");
@@ -2917,13 +2985,13 @@ TEST(robustness, long_file_path_in_src_field_is_still_quoted_in_logfmt) {
   clog_close(lg);
 
   char buf[4096];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
 
-  /* The record must stay exactly one well-formed logfmt line: a single
-   * "ts=" token, and the msg= value must still be found and correctly
-   * isolated; neither possible if the long src value had leaked an
-   * unquoted space/'=' into the middle of the line. */
+  /* The record must stay one well-formed logfmt line with one "ts=" token,
+   * and the msg= value must stay easy to find and to isolate. Neither is
+   * possible if the long src value leaks an unquoted space or an unquoted '='
+   * into the middle of the line. */
   int ts_count = 0;
   const char *p = buf;
   while ((p = strstr(p, "ts=")) != NULL) {
@@ -2932,8 +3000,9 @@ TEST(robustness, long_file_path_in_src_field_is_still_quoted_in_logfmt) {
   }
   REQUIRE_EQ(ts_count, 1);
 
-  /* The src= value must be quoted: a raw, unquoted space/'=' from the long
-   * file path must never appear as bare " src= " (no opening quote). */
+  /* The src= value must carry quotes: a raw, unquoted space or '=' from the
+   * long file path must never appear as a bare " src= " with no first
+   * quote. */
   REQUIRE_EQ(strstr(buf, " src= "), NULL);
   REQUIRE_NE(strstr(buf, " src=\""), NULL);
   REQUIRE_NE(strstr(buf, "msg=\"hello world\""), NULL);
@@ -2941,39 +3010,38 @@ TEST(robustness, long_file_path_in_src_field_is_still_quoted_in_logfmt) {
   cleanup_dir(dir, "app.log");
 }
 
-/* A width/precision combination large enough that the two conversions'
- * combined output length exceeds INT_MAX makes vsnprintf() itself fail
- * (glibc returns -1 with errno=EOVERFLOW) before producing any content at
- * all, rather than merely truncating; the one case _clog_write()'s own
- * message-formatting step cannot route through its usual heap-spill /
- * "...[truncated]" fallback, since there is no partial content to fall back
- * to in the first place. */
+/* A width and precision can be large enough that the total output length of
+ * the two conversions goes above INT_MAX, and then vsnprintf() itself fails:
+ * glibc returns -1 and sets errno to EOVERFLOW, producing no content at all
+ * instead of truncating. With no partial content left to keep, this is the
+ * one case that the message format step of _clog_write() cannot route
+ * through its usual heap-spill and "...[truncated]" fallback. */
 TEST(robustness, format_string_failure_writes_diagnostic_not_silence) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* The width is passed as a runtime argument (rather than embedded as a
-   * literal digit sequence in the format string) specifically so GCC's own
-   * static format-overflow analysis (-Wformat=2) cannot compute the
-   * resulting length at compile time and reject the call outright; the
-   * overflow this test needs to exercise is a genuine *runtime* vsnprintf()
-   * failure, not a compile-time-detectable one. */
-  int huge_width = 2000000000;
+  /* This test needs a real run-time failure of vsnprintf(), not one that the
+   * compiler can detect. So the width arrives as an argument instead of as
+   * digits in the format string, and a volatile read keeps it a run-time
+   * value at every optimization level, so the format-overflow analysis of the
+   * compiler cannot fold it. */
+  volatile int huge_width_source = 2000000000;
+  int huge_width = huge_width_source;
   _clog_write(lg, CLOG_INFO, __FILE__, __LINE__, __func__, false, "%*d%*d",
               huge_width, 1, huge_width, 1);
 
   clog_close(lg);
 
   char buf[4096];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
 
-  /* Must not be a silently dropped, empty record: a well-formed placeholder
-   * line naming the real cause must be written instead. */
+  /* The logger must not drop the record and write nothing; it must write a
+   * well-formed placeholder line that names the real cause. */
   REQUIRE_GT(len, (size_t)0);
   REQUIRE_NE(strstr(buf, "ts="), NULL);
   REQUIRE_NE(strstr(buf, "log message formatting failed"), NULL);
@@ -3007,22 +3075,23 @@ TEST(json, get_set_round_trip) {
 
 TEST(json, basic_json_structure) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_JSON);
 
-  ccol_log_info(lg, "hello world");
+  clog_info(lg, "hello world");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
-  /* Line must be a JSON object: starts with '{', closes with '}' before '\n' */
+  /* The line must be a JSON object, starting with '{' and closing with '}'
+   * before the '\n'. */
   REQUIRE_EQ(buf[0], '{');
   char *nl = strchr(buf, '\n');
   REQUIRE_NE(nl, NULL);
@@ -3043,23 +3112,23 @@ TEST(json, basic_json_structure) {
 
 TEST(json, all_levels_in_json_output) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_JSON);
 
-  ccol_log_trace(lg, "t");
-  ccol_log_debug(lg, "d");
-  ccol_log_info(lg, "i");
-  ccol_log_warn(lg, "w");
+  clog_trace(lg, "t");
+  clog_debug(lg, "d");
+  clog_info(lg, "i");
+  clog_warn(lg, "w");
 
   clog_close(lg);
 
   char buf[8192];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "\"TRACE\""), NULL);
   REQUIRE_NE(strstr(buf, "\"DEBUG\""), NULL);
@@ -3071,9 +3140,9 @@ TEST(json, all_levels_in_json_output) {
 
 TEST(json, fields_are_top_level_json_keys) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -3081,12 +3150,12 @@ TEST(json, fields_are_top_level_json_keys) {
   clog_set_field(lg, "env", "prod");
   clog_set_field(lg, "service", "auth");
 
-  ccol_log_info(lg, "test");
+  clog_info(lg, "test");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "\"env\":\"prod\""), NULL);
   REQUIRE_NE(strstr(buf, "\"service\":\"auth\""), NULL);
@@ -3096,27 +3165,27 @@ TEST(json, fields_are_top_level_json_keys) {
 
 TEST(json, special_chars_escaped_in_message) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_JSON);
 
   /* Message contains a double-quote and a newline */
-  ccol_log_info(lg, "say \"hi\"\nworld");
+  clog_info(lg, "say \"hi\"\nworld");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* Double-quote must be escaped as \" in the JSON string */
   REQUIRE_NE(strstr(buf, "\\\""), NULL);
   /* Newline must be escaped as \n (two chars: backslash + n) */
   REQUIRE_NE(strstr(buf, "\\n"), NULL);
-  /* The entire record must still be a single line ending with }\n */
+  /* The entire record must stay a single line ending with }\n */
   char *first_nl = strchr(buf, '\n');
   REQUIRE_NE(first_nl, NULL);
   REQUIRE_EQ(*(first_nl - 1), '}');
@@ -3126,21 +3195,21 @@ TEST(json, special_chars_escaped_in_message) {
 
 TEST(json, special_chars_escaped_in_field_value) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_JSON);
   clog_set_field(lg, "path", "C:\\Users\\foo");
 
-  ccol_log_info(lg, "test");
+  clog_info(lg, "test");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* Backslash must be escaped as \\ */
   REQUIRE_NE(strstr(buf, "C:\\\\Users\\\\foo"), NULL);
@@ -3150,28 +3219,28 @@ TEST(json, special_chars_escaped_in_field_value) {
 
 TEST(json, del_byte_escaped_in_json) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_JSON);
 
-  /* DEL (0x7f) in a field value and in the message must be escaped as \u007f
-   * in JSON output.  String literal concatenation prevents GCC from treating
-   * \x7fe as a multi-digit hex escape sequence. */
+  /* The JSON output must escape DEL (0x7f) as \u007f, both in a field value
+   * and in the message. Splitting the string literal stops GCC from reading
+   * \x7fe as one hex escape of several digits. */
   clog_set_field(lg, "k",
                  "val\x7f"
                  "end");
-  ccol_log_info(lg,
-                "msg\x7f"
-                "end");
+  clog_info(lg,
+            "msg\x7f"
+            "end");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* Raw DEL must not appear in the output. */
   REQUIRE_EQ(memchr(buf, 0x7f, strlen(buf)), NULL);
@@ -3183,26 +3252,26 @@ TEST(json, del_byte_escaped_in_json) {
 
 TEST(json, valid_multibyte_utf8_passed_through_unescaped) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_JSON);
 
-  /* A genuine 2-byte e-acute (U+00E9), 3-byte euro sign (U+20AC), and 4-byte
-   * emoji (U+1F600): all well-formed UTF-8, so none of them should ever be
-   * replaced with the Unicode replacement character. */
+  /* These are a 2-byte e-acute (U+00E9), a 3-byte euro sign (U+20AC) and a
+   * 4-byte emoji (U+1F600), all well-formed UTF-8, so the logger must never
+   * replace one of them with the Unicode replacement character. */
   const char *msg =
       "caf\xc3\xa9 costs \xe2\x82\xac"
       "1 \xf0\x9f\x98\x80";
-  ccol_log_info(lg, "%s", msg);
+  clog_info(lg, "%s", msg);
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, msg), NULL);
   REQUIRE_EQ(strstr(buf, "\\ufffd"), NULL);
@@ -3212,25 +3281,25 @@ TEST(json, valid_multibyte_utf8_passed_through_unescaped) {
 
 TEST(json, invalid_utf8_lone_continuation_byte_replaced_with_replacement_char) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_JSON);
 
-  /* 0x80 is a continuation byte with no preceding lead byte; never valid
-   * UTF-8 on its own. */
+  /* 0x80 is a continuation byte with no lead byte before it, so it is never
+   * valid UTF-8 on its own. */
   const char *msg =
       "before\x80"
       "after";
-  ccol_log_info(lg, "%s", msg);
+  clog_info(lg, "%s", msg);
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "before\\ufffdafter"), NULL);
   REQUIRE_EQ(memchr(buf, 0x80, strlen(buf)), NULL);
@@ -3240,25 +3309,25 @@ TEST(json, invalid_utf8_lone_continuation_byte_replaced_with_replacement_char) {
 
 TEST(json, invalid_utf8_overlong_encoding_replaced_with_replacement_char) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_JSON);
 
-  /* 0xc0 0x80 is the classic overlong encoding of NUL; 0xc0/0xc1 can never
-   * begin a well-formed sequence at all. */
+  /* 0xc0 0x80 is the well-known overlong encoding of NUL; the bytes 0xc0 and
+   * 0xc1 can never start a well-formed sequence. */
   const char *msg =
       "before\xc0\x80"
       "after";
-  ccol_log_info(lg, "%s", msg);
+  clog_info(lg, "%s", msg);
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "\\ufffd"), NULL);
   REQUIRE_EQ(memchr(buf, 0xc0, strlen(buf)), NULL);
@@ -3271,25 +3340,25 @@ TEST(json, invalid_utf8_overlong_encoding_replaced_with_replacement_char) {
 
 TEST(json, invalid_utf8_surrogate_half_replaced_with_replacement_char) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_JSON);
 
-  /* 0xed 0xa0 0x80 would decode to U+D800, a UTF-16 surrogate half that is
-   * never a valid Unicode scalar value on its own. */
+  /* 0xed 0xa0 0x80 decodes to U+D800, one half of a UTF-16 surrogate pair,
+   * which is never a valid Unicode scalar value on its own. */
   const char *msg =
       "before\xed\xa0\x80"
       "after";
-  ccol_log_info(lg, "%s", msg);
+  clog_info(lg, "%s", msg);
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "\\ufffd"), NULL);
   REQUIRE_EQ(memchr(buf, 0xed, strlen(buf)), NULL);
@@ -3299,24 +3368,23 @@ TEST(json, invalid_utf8_surrogate_half_replaced_with_replacement_char) {
 
 TEST(json, invalid_utf8_truncated_sequence_at_end_of_message_replaced) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_JSON);
 
-  /* A 3-byte lead (0xe2) with nothing following it at all; the sequence is
-   * truncated by the end of the message, not merely by a bad continuation
-   * byte. */
+  /* This is a 3-byte lead (0xe2) with nothing after it: the end of the
+   * message truncates the sequence, not a bad continuation byte. */
   const char *msg = "trunc\xe2";
-  ccol_log_info(lg, "%s", msg);
+  clog_info(lg, "%s", msg);
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "trunc\\ufffd"), NULL);
   REQUIRE_EQ(memchr(buf, 0xe2, strlen(buf)), NULL);
@@ -3326,9 +3394,9 @@ TEST(json, invalid_utf8_truncated_sequence_at_end_of_message_replaced) {
 
 TEST(json, invalid_utf8_in_field_value_is_also_sanitized) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -3337,12 +3405,12 @@ TEST(json, invalid_utf8_in_field_value_is_also_sanitized) {
                  "v\xff"
                  "end");
 
-  ccol_log_info(lg, "test");
+  clog_info(lg, "test");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "\"k\":\"v\\ufffdend\""), NULL);
   REQUIRE_EQ(memchr(buf, 0xff, strlen(buf)), NULL);
@@ -3352,20 +3420,20 @@ TEST(json, invalid_utf8_in_field_value_is_also_sanitized) {
 
 TEST(json, error_has_inline_bt_array) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_ERROR, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_JSON);
 
-  ccol_log_error(lg, "something failed");
+  clog_error(lg, "something failed");
 
   clog_close(lg);
 
   char buf[8192];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* Backtrace must be an inline JSON array */
   REQUIRE_NE(strstr(buf, "\"bt\":["), NULL);
@@ -3380,36 +3448,36 @@ TEST(json, error_has_inline_bt_array) {
   cleanup_dir(dir, "app.log");
 }
 
-/* Consistency guard: JSON treats a genuinely successful-but-shallow capture
- * (depth <= CLOG_BT_INITIAL_FRAME) as a real, empty backtrace rather than a
- * failure (see _emit_backtrace_json()'s own array_content_is_accurate
- * check); this pins that behavior down directly, using the same
- * clog_test_force_shallow_backtrace_depth() hook the logfmt and syslog
- * tests use to exercise the identical boundary condition in those two
- * formats. */
+/* This test guards consistency. A capture can succeed and still be shallow,
+ * with a depth <= CLOG_BT_INITIAL_FRAME, and JSON treats such a capture as a
+ * real, empty backtrace instead of a failure (see the
+ * array_content_is_accurate check of _emit_backtrace_json()). This test pins
+ * that behaviour with the clog_test_force_shallow_backtrace_depth() hook,
+ * which the logfmt and syslog tests also use for the same boundary condition
+ * in those two formats. */
 TEST(json, error_with_shallow_backtrace_capture_still_yields_empty_bt_array) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_ERROR, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_JSON);
 
   clog_test_force_shallow_backtrace_depth(true);
-  ccol_log_error(lg, "something failed");
+  clog_error(lg, "something failed");
   clog_test_force_shallow_backtrace_depth(false);
 
   clog_close(lg);
 
   char buf[8192];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
-  /* A genuinely successful-but-shallow capture is a real, empty backtrace,
-   * not a failure: "bt":[] with no bt_error marker, exactly matching an
-   * ordinary (non-shallow) successful capture's own "bt":[...] shape, just
-   * with zero elements. */
+  /* A capture that succeeds but is shallow is a real, empty backtrace, not a
+   * failure: the output holds "bt":[] and no bt_error marker, the same
+   * "bt":[...] shape as for an ordinary capture that succeeds, but with zero
+   * elements. */
   REQUIRE_NE(strstr(buf, "\"bt\":[]"), NULL);
   REQUIRE_EQ(strstr(buf, "bt_error"), NULL);
 
@@ -3418,9 +3486,9 @@ TEST(json, error_with_shallow_backtrace_capture_still_yields_empty_bt_array) {
 
 TEST(json, format_shared_with_derived_logger) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog parent = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_INVALID);
@@ -3434,14 +3502,14 @@ TEST(json, format_shared_with_derived_logger) {
    */
   REQUIRE_EQ(clog_get_format(child), CLOG_FMT_JSON);
 
-  ccol_log_info(child, "child json");
-  ccol_log_info(parent, "parent json");
+  clog_info(child, "child json");
+  clog_info(parent, "parent json");
 
   clog_close(child);
   clog_close(parent);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* Both lines must be JSON objects */
   int json_lines = 0;
@@ -3459,25 +3527,25 @@ TEST(json, format_shared_with_derived_logger) {
 
 TEST(output, alert_level_appears_in_logfmt) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_ALERT, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_alert(lg, "alert message");
+  clog_alert(lg, "alert message");
 
   clog_close(lg);
 
   char buf[8192];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "ALERT"), NULL);
   REQUIRE_NE(strstr(buf, "alert message"), NULL);
-  /* ccol_log_alert must produce a backtrace continuation line, in any
-   * environment where backtrace capture is genuinely available at all (see this
-   * file's own backtrace_capture_genuinely_available() doc comment). */
+  /* clog_alert must write a backtrace continuation line in every
+   * environment where the backtrace capture works. See the doc comment of
+   * backtrace_capture_genuinely_available() in this file. */
   if (backtrace_capture_genuinely_available()) {
     REQUIRE_NE(strstr(buf, "\t#"), NULL);
   }
@@ -3487,20 +3555,20 @@ TEST(output, alert_level_appears_in_logfmt) {
 
 TEST(output, error_and_alert_level_strings_in_logfmt) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_error(lg, "error event");
-  ccol_log_alert(lg, "alert event");
+  clog_error(lg, "error event");
+  clog_alert(lg, "alert event");
 
   clog_close(lg);
 
   char buf[16384];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "ERROR"), NULL);
   REQUIRE_NE(strstr(buf, "ALERT"), NULL);
@@ -3515,23 +3583,23 @@ TEST(output, alert_produces_backtrace) {
     return; /* see this helper's
                  own doc comment */
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_ALERT, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_alert(lg, "critical failure");
+  clog_alert(lg, "critical failure");
 
   clog_close(lg);
 
   char buf[8192];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "ALERT"), NULL);
   REQUIRE_NE(strstr(buf, "critical failure"), NULL);
-  /* ccol_log_alert must produce at least one backtrace continuation line */
+  /* clog_alert must produce at least one backtrace continuation line */
   REQUIRE_NE(strstr(buf, "\t#"), NULL);
 
   cleanup_dir(dir, "app.log");
@@ -3539,9 +3607,9 @@ TEST(output, alert_produces_backtrace) {
 
 TEST(json, set_format_on_derived_affects_parent) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog parent = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_INVALID);
@@ -3549,19 +3617,19 @@ TEST(json, set_format_on_derived_affects_parent) {
   clog child = clog_derive(parent);
   REQUIRE_NE(child, CLOG_INVALID);
 
-  /* Set JSON format via child; parent should see it too */
+  /* Set the JSON format on the child; the parent must see it too */
   clog_set_format(child, CLOG_FMT_JSON);
   REQUIRE_EQ(clog_get_format(parent), CLOG_FMT_JSON);
 
-  ccol_log_info(parent, "parent line");
+  clog_info(parent, "parent line");
 
   clog_close(child);
   clog_close(parent);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
-  /* Parent's line must be JSON */
+  /* The line of the parent must be JSON */
   REQUIRE_EQ(buf[0], '{');
 
   cleanup_dir(dir, "app.log");
@@ -3569,21 +3637,21 @@ TEST(json, set_format_on_derived_affects_parent) {
 
 TEST(json, error_and_alert_level_strings_in_json) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_JSON);
 
-  ccol_log_error(lg, "e");
-  ccol_log_alert(lg, "a");
+  clog_error(lg, "e");
+  clog_alert(lg, "a");
 
   clog_close(lg);
 
   char buf[16384];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "\"ERROR\""), NULL);
   REQUIRE_NE(strstr(buf, "\"ALERT\""), NULL);
@@ -3593,20 +3661,20 @@ TEST(json, error_and_alert_level_strings_in_json) {
 
 TEST(json, alert_has_inline_bt_array) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_ALERT, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_JSON);
 
-  ccol_log_alert(lg, "alert event");
+  clog_alert(lg, "alert event");
 
   clog_close(lg);
 
   char buf[16384];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* Alert must carry an inline bt array */
   int bt_count = 0;
@@ -3625,23 +3693,23 @@ TEST(json, alert_has_inline_bt_array) {
 
 TEST(json, tab_and_cr_in_field_value_are_escaped) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_JSON);
 
-  /* Field value with embedded HT and CR; both must be JSON-escaped */
+  /* The field value holds an HT and a CR, and JSON must escape both. */
   clog_set_field(lg, "data", "col1\tcol2\r\n");
 
-  ccol_log_info(lg, "tab and cr test");
+  clog_info(lg, "tab and cr test");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* Raw HT and CR must not appear in the JSON output */
   REQUIRE_EQ(memchr(buf, '\t', strlen(buf)), NULL);
@@ -3665,11 +3733,11 @@ TEST(json, tab_and_cr_in_field_value_are_escaped) {
 /* ========================================================================== */
 
 /*
- * ccol_log_fatal calls exit() internally.  To prevent clogger allocations from
- * showing up as "still reachable" in the child's valgrind report we register
- * an atexit handler in the child that closes the logger before the process
- * terminates.  The global is set only inside the child branch (after fork) so
- * it never fires in the parent process.
+ * clog_fatal calls exit() inside the library, so the child registers an
+ * atexit handler that closes the logger before the process stops. Without
+ * this handler, the valgrind report of the child shows the clogger
+ * allocations as "still reachable". Only the child branch sets the global,
+ * after the fork, so the handler never fires in the parent process.
  */
 static clog _g_fatal_child_lg = CLOG_INVALID;
 static void _fatal_child_cleanup(void) {
@@ -3686,10 +3754,10 @@ TEST(syslog, basic_structure) {
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_SYSLOG);
 
-  ccol_log_info(lg, "hello syslog");
+  clog_info(lg, "hello syslog");
 
   char buf[4096];
-  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof(buf));
 
   /* PRI for LOG_USER(1) + INFO(6) = 14 */
   REQUIRE_NE(strstr(buf, "<14>1 "), NULL);
@@ -3718,12 +3786,12 @@ TEST(syslog, severity_encoding) {
 
   /* LOG_USER(1): WARN->4 -> PRI=12; ERROR->3 -> PRI=11; ALERT->1 -> PRI=9;
      FATAL->0 -> PRI=8 */
-  ccol_log_warn(lg, "w");
-  ccol_log_error(lg, "e");
-  ccol_log_alert(lg, "a");
+  clog_warn(lg, "w");
+  clog_error(lg, "e");
+  clog_alert(lg, "a");
 
   char buf[16384];
-  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "<12>"), NULL); /* WARN   */
   REQUIRE_NE(strstr(buf, "<11>"), NULL); /* ERROR  */
@@ -3743,10 +3811,10 @@ TEST(syslog, facility_change) {
   clog_set_facility(lg, CLOG_SYSLOG_DAEMON);
   REQUIRE_EQ(clog_get_facility(lg), CLOG_SYSLOG_DAEMON);
 
-  ccol_log_info(lg, "daemon log");
+  clog_info(lg, "daemon log");
 
   char buf[4096];
-  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "<30>"), NULL);
   REQUIRE_NE(strstr(buf, "daemon log"), NULL);
@@ -3761,10 +3829,10 @@ TEST(syslog, fields_in_sd) {
   clog_set_field(lg, "service", "auth");
   clog_set_field(lg, "env", "prod");
 
-  ccol_log_info(lg, "structured");
+  clog_info(lg, "structured");
 
   char buf[4096];
-  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof(buf));
 
   /* Fields must appear as SD params inside the [ccol ...] element. */
   REQUIRE_NE(strstr(buf, "service=\"auth\""), NULL);
@@ -3780,25 +3848,27 @@ TEST(syslog, sd_param_name_over_32_chars_is_shortened_with_a_stable_suffix) {
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_SYSLOG);
 
-  /* 37-char key; exceeds RFC 5424 SD-PARAM-NAME limit of 32. Names longer
-   * than the limit are shortened to a 23-char prefix of the original key
-   * plus a '~' and an 8-hex-digit hash of the full key (32 chars total),
-   * rather than a bare 32-char prefix, so two distinct long keys sharing a
-   * common prefix cannot collide into the identical SD-PARAM-NAME (see
-   * long_keys_sharing_prefix_get_distinct_sd_param_names below). */
+  /* This key has 37 characters, above the RFC 5424 SD-PARAM-NAME limit of 32.
+   * The logger shortens a name that is above the limit to a 23-character
+   * prefix of the original key, then a '~', then an 8-digit hex hash of the
+   * full key, for a total of 32 characters. A bare 32-character prefix is not
+   * enough, because two different long keys with a common prefix would then
+   * collide into one SD-PARAM-NAME. See
+   * long_keys_sharing_prefix_get_distinct_sd_param_names below. */
   clog_set_field(lg, "abcdefghijklmnopqrstuvwxyz_123456789", "val");
 
-  ccol_log_info(lg, "truncation");
+  clog_info(lg, "truncation");
 
   char buf[4096];
-  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof(buf));
 
   /* The stable prefix (first 23 chars of the original key) must be present. */
   char *name_start = strstr(buf, "abcdefghijklmnopqrstuv");
   REQUIRE_NE(name_start, NULL);
 
-  /* The emitted SD-PARAM-NAME itself (up to the '=') must be at most 32
-   * characters; the full, over-limit key must never appear verbatim. */
+  /* The SD-PARAM-NAME that the logger writes, up to the '=', must be 32
+   * characters or fewer, and the full key, which is above the limit, must
+   * never appear unchanged. */
   char *eq = strchr(name_start, '=');
   REQUIRE_NE(eq, NULL);
   REQUIRE_TRUE((size_t)(eq - name_start) <= 32);
@@ -3812,16 +3882,17 @@ TEST(syslog, long_keys_sharing_prefix_get_distinct_sd_param_names) {
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_SYSLOG);
 
-  /* Two distinct 40-char-plus keys sharing the same first 32 characters; a
-   * bare 32-char truncation would collide both into the identical
-   * SD-PARAM-NAME, which RFC 5424 forbids within one SD-ELEMENT. */
+  /* These two different keys are longer than 40 characters and share their
+   * first 32 characters, so a bare truncation to 32 characters would make
+   * both collide into one SD-PARAM-NAME, which RFC 5424 forbids inside one
+   * SD-ELEMENT. */
   clog_set_field(lg, "abcdefghijklmnopqrstuvwxyz_123456_ONE", "one");
   clog_set_field(lg, "abcdefghijklmnopqrstuvwxyz_123456_TWO", "two");
 
-  ccol_log_info(lg, "collision test");
+  clog_info(lg, "collision test");
 
   char buf[4096];
-  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof(buf));
 
   char *one_val = strstr(buf, "=\"one\"");
   char *two_val = strstr(buf, "=\"two\"");
@@ -3845,22 +3916,23 @@ TEST(syslog, long_keys_sharing_prefix_get_distinct_sd_param_names) {
 
 TEST(syslog, file_logger_rejects_syslog_format) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* Attempting to set SYSLOG format on a file-backed logger must be a no-op. */
+  /* A call that sets the SYSLOG format on a file-backed logger must do
+   * nothing. */
   clog_set_format(lg, CLOG_FMT_SYSLOG);
   REQUIRE_EQ(clog_get_format(lg), CLOG_FMT_LOGFMT);
 
-  ccol_log_info(lg, "still logfmt");
+  clog_info(lg, "still logfmt");
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* Output must be logfmt, not syslog. */
   REQUIRE_NE(strstr(buf, "ts="), NULL);
@@ -3879,10 +3951,10 @@ TEST(syslog, backtrace_as_separate_messages) {
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_SYSLOG);
 
-  ccol_log_error(lg, "with backtrace");
+  clog_error(lg, "with backtrace");
 
   char buf[16384];
-  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof(buf));
 
   /* There must be at least two syslog messages (main + >=1 backtrace frame). */
   int msg_count = 0;
@@ -3898,12 +3970,13 @@ TEST(syslog, backtrace_as_separate_messages) {
 }
 
 TEST(syslog, fatal_severity_encoding) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  /* clog_open_fd with owns_fd=false allows CLOG_FMT_SYSLOG on a file fd. */
+  /* clog_open_fd with owns_fd=false lets CLOG_FMT_SYSLOG work on a file fd. */
   int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
   REQUIRE_NE(fd, -1);
 
@@ -3911,8 +3984,8 @@ TEST(syslog, fatal_severity_encoding) {
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_SYSLOG);
 
-  /* ccol_log_fatal terminates the process; use a child to verify it and capture
-   * the log output it writes before calling exit(). */
+  /* clog_fatal stops the process, so use a child to check it and to
+   * collect the log output that it writes before the exit() call. */
   pid_t pid = fork();
   if (pid == 0) {
     int dn = open("/dev/null", O_WRONLY);
@@ -3923,7 +3996,7 @@ TEST(syslog, fatal_severity_encoding) {
     }
     _g_fatal_child_lg = lg;
     atexit(_fatal_child_cleanup);
-    ccol_log_fatal(lg, "fatal syslog event");
+    clog_fatal(lg, "fatal syslog event");
     _exit(0); /* unreachable */
   }
   REQUIRE_NE(pid, -1);
@@ -3934,7 +4007,7 @@ TEST(syslog, fatal_severity_encoding) {
   close(fd);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* LOG_USER(1) * 8 + FATAL syslog severity(0) = 8 */
   REQUIRE_NE(strstr(buf, "<8>"), NULL);
@@ -3952,15 +4025,15 @@ TEST(syslog, sd_param_value_special_chars_escaped) {
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_SYSLOG);
 
-  /* RFC 5424 SD-PARAM-VALUE requires ], \, and " to be escaped. */
+  /* RFC 5424 needs an escape for ], \ and " in an SD-PARAM-VALUE. */
   clog_set_field(lg, "bracket", "val]end");
   clog_set_field(lg, "backslash", "C:\\foo");
   clog_set_field(lg, "quote", "say \"hi\"");
 
-  ccol_log_info(lg, "sd escape test");
+  clog_info(lg, "sd escape test");
 
   char buf[4096];
-  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof(buf));
 
   /* ']' -> '\]' */
   REQUIRE_NE(strstr(buf, "\\]"), NULL);
@@ -3977,13 +4050,14 @@ TEST(syslog, message_with_embedded_newline_stays_single_record) {
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_SYSLOG);
 
-  /* A raw newline in the message would otherwise split one syslog record
-   * into two lines, forging what looks like an unrelated, unprefixed
-   * second record; a classic log-injection vector. It must be escaped. */
-  ccol_log_info(lg, "first part\nFAKE-INJECTED-LINE data=1");
+  /* The logger must escape a raw newline in the message. Without the escape,
+   * that newline splits one syslog record into two lines, and the second line
+   * then looks like a separate record with no prefix, which is a well-known
+   * way to inject content into a log. */
+  clog_info(lg, "first part\nFAKE-INJECTED-LINE data=1");
 
   char buf[4096];
-  size_t n = drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+  size_t n = drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof(buf));
 
   /* Exactly one syslog record: the entire output is a single line. */
   int nl_count = 0;
@@ -3994,7 +4068,7 @@ TEST(syslog, message_with_embedded_newline_stays_single_record) {
 
   /* The embedded newline must survive as a literal backslash-n escape. */
   REQUIRE_NE(strstr(buf, "first part\\nFAKE-INJECTED-LINE"), NULL);
-  /* No raw injected content masquerading as a second, unprefixed record. */
+  /* No raw injected content may look like a second record with no prefix. */
   REQUIRE_EQ(strstr(buf, "\nFAKE-INJECTED-LINE"), NULL);
 }
 
@@ -4006,10 +4080,10 @@ TEST(syslog, field_value_with_embedded_newline_stays_single_record) {
   clog_set_format(lg, CLOG_FMT_SYSLOG);
 
   clog_set_field(lg, "payload", "line1\nFAKE-INJECTED-LINE");
-  ccol_log_info(lg, "structured");
+  clog_info(lg, "structured");
 
   char buf[4096];
-  size_t n = drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+  size_t n = drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof(buf));
 
   int nl_count = 0;
   for (size_t i = 0; i < n; i++)
@@ -4027,10 +4101,10 @@ TEST(syslog, sd_value_cr_and_tab_are_escaped) {
   clog_set_format(lg, CLOG_FMT_SYSLOG);
 
   clog_set_field(lg, "data", "a\rb\tc");
-  ccol_log_info(lg, "cr and tab test");
+  clog_info(lg, "cr and tab test");
 
   char buf[4096];
-  size_t n = drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+  size_t n = drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof(buf));
 
   /* Raw CR/HT bytes must not appear anywhere in the record. */
   REQUIRE_EQ(memchr(buf, '\r', n), NULL);
@@ -4044,24 +4118,25 @@ TEST(syslog, sd_value_cr_and_tab_are_escaped) {
 
 TEST(lifecycle, open_file_appends_to_existing) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   /* Write a sentinel line with the first logger. */
   clog lg1 = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg1, CLOG_INVALID);
-  ccol_log_info(lg1, "first open");
+  clog_info(lg1, "first open");
   clog_close(lg1);
 
-  /* Open the same path again; must append, not truncate. */
+  /* Open the same path again; the logger must append instead of
+   * truncating. */
   clog lg2 = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg2, CLOG_INVALID);
-  ccol_log_info(lg2, "second open");
+  clog_info(lg2, "second open");
   clog_close(lg2);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* Both messages must be present in the file. */
   REQUIRE_NE(strstr(buf, "first open"), NULL);
@@ -4076,24 +4151,24 @@ TEST(lifecycle, open_file_appends_to_existing) {
 
 TEST(filtering, set_level_to_off_suppresses_everything) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_info(lg, "before off - visible");
+  clog_info(lg, "before off - visible");
 
   clog_set_level(lg, CLOG_OFF);
   REQUIRE_EQ(clog_get_level(lg), CLOG_OFF);
 
-  ccol_log_alert(lg, "after off - suppressed");
+  clog_alert(lg, "after off - suppressed");
 
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "before off - visible"), NULL);
   REQUIRE_EQ(strstr(buf, "after off - suppressed"), NULL);
@@ -4107,22 +4182,22 @@ TEST(filtering, set_level_to_off_suppresses_everything) {
 
 TEST(fields, remove_nonexistent_field_is_noop) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* Removing a key that was never set must not crash. */
+  /* A call that removes a key which the caller never sets must not crash. */
   clog_remove_field(lg, "nonexistent");
   clog_remove_field(lg, "also_never_set");
 
-  ccol_log_info(lg, "still works");
+  clog_info(lg, "still works");
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
   REQUIRE_NE(strstr(buf, "still works"), NULL);
 
   cleanup_dir(dir, "app.log");
@@ -4130,22 +4205,23 @@ TEST(fields, remove_nonexistent_field_is_noop) {
 
 TEST(fields, clear_empty_fields_is_noop) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* Clearing fields on a logger that never had any must not crash. */
+  /* A call that clears the fields of a logger with no fields must not
+   * crash. */
   clog_clear_fields(lg);
   clog_clear_fields(lg);
 
-  ccol_log_info(lg, "still works");
+  clog_info(lg, "still works");
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
   REQUIRE_NE(strstr(buf, "still works"), NULL);
 
   cleanup_dir(dir, "app.log");
@@ -4153,27 +4229,28 @@ TEST(fields, clear_empty_fields_is_noop) {
 
 TEST(fields, null_key_or_value_is_noop) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* NULL key and NULL value must both be rejected silently. */
+  /* The logger must reject a NULL key and a NULL value without reporting
+   * anything. */
   clog_set_field(lg, NULL, "v");
   clog_set_field(lg, "k", NULL);
   clog_set_field(lg, NULL, NULL);
   clog_remove_field(lg, NULL);
 
   clog_set_field(lg, "good", "yes");
-  ccol_log_info(lg, "null field test");
+  clog_info(lg, "null field test");
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
-  /* Only the valid field must appear; no crash. */
+  /* Only the valid field may appear, and the process must not crash. */
   REQUIRE_NE(strstr(buf, "good=yes"), NULL);
 
   cleanup_dir(dir, "app.log");
@@ -4214,10 +4291,10 @@ TEST(syslog, syslog_format_inherited_by_derived_logger) {
   /* Child shares the parent's backing store, so it must see syslog format. */
   REQUIRE_EQ(clog_get_format(child), CLOG_FMT_SYSLOG);
 
-  ccol_log_info(child, "child syslog");
+  clog_info(child, "child syslog");
 
   char buf[4096];
-  drain_pipe(parent, pipefd[0], pipefd[1], buf, sizeof buf);
+  drain_pipe(parent, pipefd[0], pipefd[1], buf, sizeof(buf));
   clog_close(child);
 
   /* Output must be RFC 5424 syslog, not logfmt. */
@@ -4225,55 +4302,56 @@ TEST(syslog, syslog_format_inherited_by_derived_logger) {
   REQUIRE_NE(strstr(buf, "child syslog"), NULL);
 }
 
-/* RFC 5424 APP-NAME sanitization must filter out non-PRINTUSASCII bytes
- * wherever they occur, not stop at the first one and discard everything
- * after it. */
-/* The same PRINTUSASCII filter is used for both APP-NAME and HOSTNAME (see
- * _sanitize_syslog_printusascii_field()'s own doc comment in clogger.c); this
- * test exercises it via the APP-NAME-shaped accessor, but the coverage
- * applies identically to the HOSTNAME field, which shares the exact same
- * RFC 5424 "1*NNNPRINTUSASCII" grammar and is filtered the same way rather
- * than truncated at its first disqualifying byte. */
+/* The sanitizer for the RFC 5424 APP-NAME must filter out every byte that is
+ * not PRINTUSASCII, at any position, instead of stopping at the first such
+ * byte and dropping everything after it. */
+/* The same PRINTUSASCII filter serves both APP-NAME and HOSTNAME (see the
+ * doc comment of _sanitize_syslog_printusascii_field() in clogger.c). This
+ * test drives the filter through the accessor for APP-NAME, and the coverage
+ * holds in the same way for the HOSTNAME field, which has the same RFC 5424
+ * "1*NNNPRINTUSASCII" grammar and which the logger filters in the same way
+ * instead of truncating it at its first bad byte. */
 TEST(syslog, appname_sanitizer_filters_not_truncates) {
   char out[49];
 
-  /* A disqualifying byte in the middle must be dropped, not cause everything
-   * after it to be discarded too. */
+  /* The function must drop a bad byte in the middle without also dropping
+   * everything after that byte. */
   clog_test_sanitize_syslog_appname(
       "ab\x01"
       "cd",
-      out, sizeof out);
+      out, sizeof(out));
   REQUIRE_STREQ(out, "abcd");
 
-  /* No PRINTUSASCII bytes at all (including an empty input) falls back to
-   * "-". */
-  clog_test_sanitize_syslog_appname("\x01\x02", out, sizeof out);
+  /* An input with no PRINTUSASCII byte falls back to "-", and so does an
+   * empty input. */
+  clog_test_sanitize_syslog_appname("\x01\x02", out, sizeof(out));
   REQUIRE_STREQ(out, "-");
-  clog_test_sanitize_syslog_appname("", out, sizeof out);
+  clog_test_sanitize_syslog_appname("", out, sizeof(out));
   REQUIRE_STREQ(out, "-");
 
-  /* Output is capped at outsz-1 bytes even when the input has more good
-   * bytes than that. */
+  /* The output stops at outsz-1 bytes when the input holds more good bytes
+   * than that. */
   char small_out[4];
-  clog_test_sanitize_syslog_appname("abcdefgh", small_out, sizeof small_out);
+  clog_test_sanitize_syslog_appname("abcdefgh", small_out, sizeof(small_out));
   REQUIRE_EQ(strlen(small_out), (size_t)3);
   REQUIRE_STREQ(small_out, "abc");
 }
 
-/* outsz == 0 and outsz == 1 must both be handled explicitly. Computing
- * outsz - 1 on a size_t wraps around to SIZE_MAX for outsz == 0 (size_t is
- * unsigned), which defeats the loop's own bound entirely and lets the
- * function write an unbounded number of bytes into a destination buffer that
- * has none allocated at all; outsz == 1 leaves room for the NUL terminator
- * alone, so the two-byte "-" fallback would write one byte past the end of a
- * 1-byte buffer. Every destination buffer below is heap-allocated at its
- * exact documented size (never a larger stack array) specifically so a
- * regression here is caught directly as a heap buffer overflow by valgrind
- * (make memtest), not merely masked by incidental stack padding a
- * stack-array version of this test could accidentally survive. */
+/* The function must handle outsz == 0 and outsz == 1 as their own cases.
+ * size_t is unsigned, so outsz - 1 wraps to SIZE_MAX when outsz is 0, which
+ * destroys the bound of the loop: the function then writes an unbounded
+ * number of bytes into a destination buffer with no space at all. An outsz
+ * of 1 leaves room for the NUL terminator alone, so the "-" fallback of two
+ * bytes would write one byte past the end of a 1-byte buffer.
+ *
+ * Every destination buffer below comes from the heap at its exact documented
+ * size, never from a larger stack array, so valgrind (make memtest) reports a
+ * regression here directly as a heap buffer overflow. A version of this test
+ * with a stack array can survive the same regression, because the padding of
+ * the stack hides it. */
 TEST(syslog, appname_sanitizer_tolerates_degenerate_output_sizes) {
-  /* outsz == 0: the function must not touch *out at all; there is no byte
-   * in it to safely write even a NUL terminator to. */
+  /* outsz == 0: the function must not touch *out at all; there is no byte in
+   * it, so even a NUL terminator has no safe place. */
   char *zero_out = malloc(1);
   REQUIRE_NE(zero_out, NULL);
   zero_out[0] = 'Z';
@@ -4281,8 +4359,8 @@ TEST(syslog, appname_sanitizer_tolerates_degenerate_output_sizes) {
   REQUIRE_EQ(zero_out[0], 'Z');
   free(zero_out);
 
-  /* outsz == 1: only room for the NUL terminator itself; the "-" fallback
-   * (which needs 2 bytes) must not be attempted. */
+  /* outsz == 1: there is room for the NUL terminator only, so the function
+   * must not try the "-" fallback, which needs 2 bytes. */
   char *one_out = malloc(1);
   REQUIRE_NE(one_out, NULL);
   clog_test_sanitize_syslog_appname("abc", one_out, 1);
@@ -4303,44 +4381,50 @@ TEST(syslog, appname_sanitizer_tolerates_degenerate_output_sizes) {
   free(two_out);
 }
 
-/* Direct coverage of the control-character escaper shared by RFC 5424 MSG
- * content and by backtrace frame text in the logfmt and syslog formats (see
- * _buf_append_ctrl_escaped()'s own doc comment in clogger.c). Backtrace frame
- * text comes from backtrace_symbols(), whose real output cannot be forced to
- * contain a control character from a test, so this exercises the shared
- * escaping primitive directly rather than only indirectly through a real
- * backtrace. */
+/* This test covers the escaper for control characters directly. The RFC 5424
+ * MSG content shares that escaper with the backtrace frame text of the
+ * logfmt and syslog formats (see the doc comment of
+ * _buf_append_ctrl_escaped() in clogger.c). The backtrace frame text comes
+ * from backtrace_symbols(), and a test cannot force a control character into
+ * its real output, so the test drives the shared primitive directly instead
+ * of only through a real backtrace. */
 TEST(syslog, ctrl_escaped_helper_neutralizes_control_bytes) {
   char out[64];
 
   clog_test_append_ctrl_escaped("plain text, no escaping needed", out,
-                                sizeof out);
+                                sizeof(out));
   REQUIRE_STREQ(out, "plain text, no escaping needed");
 
-  /* '\n' and '\r' use the same two-character mnemonic escapes as every other
-   * format in this file; a raw newline here would otherwise split a
-   * logfmt/syslog backtrace line (or the syslog MSG field) into two. */
-  clog_test_append_ctrl_escaped("line1\nline2", out, sizeof out);
+  /* '\n' and '\r' use the same two-character escapes as every other format
+   * in this file. Without them, a raw newline splits a backtrace line of
+   * logfmt or syslog into two, and it splits the syslog MSG field as well. */
+  clog_test_append_ctrl_escaped("line1\nline2", out, sizeof(out));
   REQUIRE_STREQ(out, "line1\\nline2");
-  clog_test_append_ctrl_escaped("a\rb\tc", out, sizeof out);
+  clog_test_append_ctrl_escaped("a\rb\tc", out, sizeof(out));
   REQUIRE_STREQ(out, "a\\rb\\tc");
+
+  /* A backslash is escaped too, so the escape of a newline and the two
+   * characters backslash and n never read the same. */
+  clog_test_append_ctrl_escaped("x\\ny", out, sizeof(out));
+  REQUIRE_STREQ(out, "x\\\\ny");
 
   /* Every other control byte (and DEL) falls back to the generic \xXX form.
    */
   clog_test_append_ctrl_escaped(
       "del\x7f"
       "end",
-      out, sizeof out);
+      out, sizeof(out));
   REQUIRE_STREQ(out, "del\\x7fend");
   clog_test_append_ctrl_escaped(
       "a\x01"
       "b",
-      out, sizeof out);
+      out, sizeof(out));
   REQUIRE_STREQ(out, "a\\x01b");
 
-  /* Output is truncated (not overflowed) when it does not fit outsz. */
+  /* The function truncates the output when it does not fit outsz, and never
+   * overflows the buffer. */
   char small_out[6];
-  clog_test_append_ctrl_escaped("ab\ncd", small_out, sizeof small_out);
+  clog_test_append_ctrl_escaped("ab\ncd", small_out, sizeof(small_out));
   REQUIRE_EQ(strlen(small_out), (size_t)5);
   REQUIRE_STREQ(small_out, "ab\\nc");
 }
@@ -4363,16 +4447,16 @@ static void *_derived_writer_thread(void *arg) {
   if (!child) return NULL;
   clog_set_field(child, "writer", "yes");
   for (int i = 0; i < DERIVED_MSGS_PER_THREAD; i++)
-    ccol_log_info(child, "derived id=%d msg=%d", a->id, i);
+    clog_info(child, "derived id=%d msg=%d", a->id, i);
   clog_close(child);
   return NULL;
 }
 
 TEST(threading, concurrent_parent_and_derived_writers_no_garbled_lines) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog parent = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(parent, CLOG_INVALID);
@@ -4393,7 +4477,7 @@ TEST(threading, concurrent_parent_and_derived_writers_no_garbled_lines) {
 
   /* Parent also writes concurrently. */
   for (int i = 0; i < DERIVED_MSGS_PER_THREAD; i++)
-    ccol_log_info(parent, "parent msg=%d", i);
+    clog_info(parent, "parent msg=%d", i);
 
   for (int i = 0; i < DERIVED_THREAD_COUNT; i++)
     if (created[i]) pthread_join(threads[i], NULL);
@@ -4408,7 +4492,7 @@ TEST(threading, concurrent_parent_and_derived_writers_no_garbled_lines) {
 
   /* Every non-backtrace line must start with "ts=". */
   char buf[524288];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_NE(len, (size_t)0);
 
   int bad_lines = 0;
@@ -4424,19 +4508,20 @@ TEST(threading, concurrent_parent_and_derived_writers_no_garbled_lines) {
   cleanup_dir(dir, "app.log");
 }
 
-/* _clog_write() checks min_level once, unlocked, before acquiring
- * shared->mutex (a fast path so a filtered-out call does not contend for the
- * lock every other writer needs), then re-checks it again under the lock.
- * This stresses that unlocked check racing concurrent clog_set_level() calls
- * on the same handle from another thread: it must never crash, and any line
- * that does make it through must still be a well-formed, complete record. */
+/* _clog_write() checks min_level once with no lock, before it locks
+ * shared->mutex, so that a call that the filter drops stays away from the
+ * lock that every other writer needs; the function then checks the level
+ * again under the lock. This test stresses that unlocked check against
+ * concurrent clog_set_level() calls on the same handle from another thread.
+ * The code must never crash, and every line that passes the filter must be a
+ * complete, well-formed record. */
 #define LEVEL_FASTPATH_WRITER_COUNT 4
 #define LEVEL_FASTPATH_ITERATIONS 500
 
 static void *_level_fastpath_writer(void *arg) {
   clog lg = *(clog *)arg;
   for (int i = 0; i < LEVEL_FASTPATH_ITERATIONS; i++)
-    ccol_log_trace(lg, "filtered %d", i);
+    clog_trace(lg, "filtered %d", i);
   return NULL;
 }
 
@@ -4449,9 +4534,9 @@ static void *_level_fastpath_toggler(void *arg) {
 
 TEST(threading, concurrent_filtered_writes_and_level_changes_no_crash) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -4479,21 +4564,21 @@ TEST(threading, concurrent_filtered_writes_and_level_changes_no_crash) {
   REQUIRE_EQ(create_failures, 0);
 
   clog_set_level(lg, CLOG_INFO);
-  ccol_log_info(lg, "final marker");
+  clog_info(lg, "final marker");
   clog_close(lg);
 
-  /* Sized well above the true worst case (LEVEL_FASTPATH_WRITER_COUNT *
-   * LEVEL_FASTPATH_ITERATIONS = 2000 lines, each well under 300 bytes, if
-   * every single write happens to land while the toggler has left the level
-   * at CLOG_TRACE) rather than a size picked to fit the "typical" number of
-   * lines that pass the filter: read_file() performs a single, bounded
-   * read() from the start of the file, so an undersized buffer here would
-   * intermittently truncate the file before reaching "final marker" (written
-   * last) on whichever run happens to let more trace lines through than
-   * usual; a 131072-byte buffer is small enough to hit exactly that
-   * timing-dependent truncation. */
+  /* This buffer is much larger than the true worst case, which is
+   * LEVEL_FASTPATH_WRITER_COUNT * LEVEL_FASTPATH_ITERATIONS = 2000 lines,
+   * each one well below 300 bytes, and which happens when every write lands
+   * while the toggler holds the level at CLOG_TRACE. The size does not come
+   * from the typical number of lines that pass the filter: read_file() does
+   * one bounded read() from the start of the file, so a buffer that is too
+   * small truncates the file before "final marker", which the test writes
+   * last, on a run that lets more trace lines through than usual. A buffer
+   * of 131072 bytes is small enough to hit that truncation, which depends on
+   * timing. */
   char buf[1 << 20];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
   REQUIRE_NE(strstr(buf, "final marker"), NULL);
 
@@ -4516,7 +4601,7 @@ TEST(threading, concurrent_filtered_writes_and_level_changes_no_crash) {
 static void *_field_race_writer(void *arg) {
   clog lg = *(clog *)arg;
   for (int i = 0; i < FIELD_RACE_ITERATIONS; i++)
-    ccol_log_info(lg, "field race %d", i);
+    clog_info(lg, "field race %d", i);
   return NULL;
 }
 
@@ -4529,25 +4614,27 @@ static void *_field_race_mutator(void *arg) {
   return NULL;
 }
 
-/* _clog_emit_fields()'s own live-field source must not read
- * chmap_elem_count(lg->fields) BEFORE acquiring fields_mutex, which races a
- * concurrent clog_set_field()/clog_remove_field() call on the same handle
- * from another thread. chashmap is an externally synchronized container in
- * this codebase (every other access to lg->fields in clogger.c
- * (_snapshot_fields(), clog_set_field(), clog_remove_field(),
- * clog_clear_fields(), clog_derive()) takes fields_mutex first), so an
- * unsynchronized read of lg->fields's own internal element count, concurrent
- * with a fields_mutex-protected mutation of the exact same map, is undefined
- * behavior even though it is hard to observe as a functional difference in a
- * plain (non-TSan) run. This test's own assertions only check for the
- * absence of a crash and well-formed output; the race itself is what running
- * this suite under -fsanitize=thread (see this directory's test_tsan target)
- * is meant to catch. */
+/* The live-field source of _clog_emit_fields() must not read
+ * chmap_elem_count(lg->fields) BEFORE it locks fields_mutex, because such a
+ * read races a concurrent clog_set_field() or clog_remove_field() call on the
+ * same handle from another thread.
+ *
+ * In this codebase chashmap is a container that the caller must synchronize,
+ * and every other access to lg->fields in clogger.c locks fields_mutex first:
+ * _snapshot_fields(), clog_set_field(), clog_remove_field(),
+ * clog_clear_fields() and clog_derive(). A thread that reads the internal
+ * element count of lg->fields with no lock while another thread changes that
+ * same map under fields_mutex causes undefined behaviour, which a plain run
+ * without ThreadSanitizer rarely shows as any difference in behaviour.
+ *
+ * The assertions of this test only check that there is no crash and that the
+ * output is well-formed; a run of this suite under -fsanitize=thread catches
+ * the race itself (see the test_tsan target of this directory). */
 TEST(threading, concurrent_set_field_and_write_no_race) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -4577,7 +4664,7 @@ TEST(threading, concurrent_set_field_and_write_no_race) {
   clog_close(lg);
 
   char buf[1 << 20];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
 
   int bad_lines = 0;
@@ -4600,7 +4687,7 @@ TEST(threading, concurrent_set_field_and_write_no_race) {
 static void *_slot_churn_writer(void *arg) {
   clog *lg = (clog *)arg;
   for (int i = 0; i < SLOT_CHURN_ITERATIONS; i++) {
-    ccol_log_info(*lg, "churn writer message %d", i);
+    clog_info(*lg, "churn writer message %d", i);
     clog_set_level(*lg, (i % 2 == 0) ? CLOG_TRACE : CLOG_INFO);
     (void)clog_get_level(*lg);
   }
@@ -4612,27 +4699,30 @@ static void *_slot_churn_deriver(void *arg) {
   for (int i = 0; i < SLOT_CHURN_DERIVE_ITERATIONS; i++) {
     clog child = clog_derive(*parent);
     if (child == CLOG_INVALID) continue;
-    ccol_log_info(child, "derived churn message %d", i);
+    clog_info(child, "derived churn message %d", i);
     clog_close(child);
   }
   return NULL;
 }
 
-/* Stresses the rwlock-protected slot table and the lock-free pin/unpin
- * against real concurrent slot reuse: several threads continuously resolve
- * (ccol_log_info/clog_set_level/clog_get_level) one shared, still-open handle
- * while a separate thread repeatedly derives-then-immediately-closes fresh
- * child handles sharing the same underlying target; each close cycles a
- * slot through in_use=false, freed=true, generation bump, and reacquisition
- * by the very next derive, exactly the churn pattern _clog_atfork_prepare's
- * own freed-flag walk and _clog_handle_acquire's own freed-reset exist to
- * handle correctly. No crash, no hang, and no valgrind/TSan report is the
- * whole point of this test; it makes no assertion about log content. */
+/* This test stresses two mechanisms against real, concurrent slot reuse:
+ * the slot table that the rwlock protects, and the lock-free pin and unpin.
+ * Several threads resolve one shared handle, which stays open, again and
+ * again through clog_info, clog_set_level and clog_get_level, while a
+ * separate thread repeatedly derives a new child handle and closes it at
+ * once. Every child shares the same target.
+ *
+ * Each close moves a slot through in_use=false, then freed=true, then a
+ * generation bump, and the next derive then takes the slot again. This is
+ * the churn pattern that the freed-flag walk of _clog_atfork_prepare and the
+ * freed-reset of _clog_handle_acquire exist to handle. The whole point of
+ * this test is no crash, no hang, and no report from valgrind or from
+ * ThreadSanitizer; it asserts nothing about the log content. */
 TEST(threading, concurrent_derive_close_churn_stresses_slot_table) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -4667,34 +4757,35 @@ TEST(threading, concurrent_derive_close_churn_stresses_slot_table) {
 /*                         FORK SAFETY                                       */
 /* ========================================================================== */
 
-/* This entire section exercises src/clogger.c's own pthread_atfork()-based
- * fork() safety machinery, which is itself compiled out when
- * CCOL_FORK_SAFETY_REQUIRED is 0 (see that macro's own doc comment in
- * common.h); without that machinery these tests' own premises (a forked child
- * never inheriting a locked clog_slot_table.rwlock/shared->mutex/fields_mutex)
- * do not hold, so they are compiled out along with it rather than left in to
- * hang or fail. */
+/* This whole section drives the fork() safety machinery of src/clogger.c,
+ * which is built on pthread_atfork() and which the compiler drops when
+ * CCOL_FORK_SAFETY_REQUIRED is 0 (see the doc comment of that macro in
+ * common.h). Without the machinery, the premise of these tests, that a
+ * forked child never inherits a locked clog_slot_table.rwlock, shared->mutex
+ * or fields_mutex, does not hold, so the tests are dropped with the
+ * machinery instead of being left in to hang or to fail. */
 #if CCOL_FORK_SAFETY_REQUIRED
 
-/* A synchronous logger created before fork(), logged from in the child:
- * exercises the atfork prepare/parent/child protection of
- * clog_slot_table.rwlock/shared->mutex/fields_mutex directly. This test is
- * non-vacuous: _clog_atfork_release re-initializes the rwlock in the child
- * rather than merely unlocking it, and without that the child inherits the
- * write-locked rwlock and its own subsequent _clog_resolve() call blocks
- * forever in ccol_rw_lock_rdlock, hanging permanently. */
+/* The test creates a synchronous logger before the fork() and logs from the
+ * child, which drives the atfork prepare, parent and child protection of
+ * clog_slot_table.rwlock, shared->mutex and fields_mutex directly. This test
+ * is not vacuous: _clog_atfork_release initializes the rwlock again in the
+ * child instead of only unlocking it. Without that, the child inherits the
+ * write-locked rwlock, its next _clog_resolve() call blocks forever in
+ * ccol_rw_lock_rdlock, and the child hangs. */
 TEST(fork_safety, child_can_log_after_fork) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
   pid_t pid = fork();
   if (pid == 0) {
-    ccol_log_info(lg, "message from child");
+    clog_info(lg, "message from child");
     clog_close(lg);
     _exit(0);
   }
@@ -4702,14 +4793,15 @@ TEST(fork_safety, child_can_log_after_fork) {
 
   int status;
   bool reaped = false;
-  /* Bounded wait, not a blocking waitpid(): a fork-safety regression hangs
-   * the child forever, and this test must fail visibly rather than hang the
-   * whole suite. 30s (not a few hundred ms) specifically to stay well clear
-   * of make memtest's own valgrind instrumentation overhead, which applies
-   * to this forked child too: at a 5s bound valgrind slows the child enough
-   * to miss it, triggering the SIGKILL fallback below and leaving that
-   * child's own heap allocations reported as "still reachable" instead of
-   * cleanly freed by its own _exit()/clog_close() path. */
+  /* This is a bounded wait instead of a blocking waitpid(): a regression in
+   * the fork safety hangs the child forever, and this test must then fail
+   * visibly instead of hanging the whole suite. The bound is 30s, not a few
+   * hundred milliseconds, to keep it well clear of the valgrind
+   * instrumentation cost of make memtest, which applies to this forked child
+   * too. At a bound of 5s, valgrind slows the child enough to miss it, the
+   * SIGKILL fallback below then runs, and the heap allocations of that child
+   * appear as "still reachable". With a large enough bound, the _exit() and
+   * clog_close() path of the child itself frees them cleanly. */
   for (int waited_ms = 0; waited_ms < 30000; waited_ms += 20) {
     pid_t r = waitpid(pid, &status, WNOHANG);
     if (r == pid) {
@@ -4721,43 +4813,49 @@ TEST(fork_safety, child_can_log_after_fork) {
   if (!reaped) {
     kill(pid, SIGKILL);
     waitpid(pid, &status, 0);
-    REQUIRE_TRUE(false); /* child never completed within the bound */
+    REQUIRE_TRUE(false); /* the child does not finish inside the bound */
   }
-  /* WIFEXITED only, deliberately not WEXITSTATUS(status) == 0 too: this
-   * child's own exit code is not reliably 0 under this suite's own memtest
-   * flags, for a reason that has nothing to do with this test's own
-   * correctness. make memtest runs with --errors-for-leak-kinds=all plus
-   * --error-exitcode=1; when the child (forked mid-suite, well before the
-   * REST of this binary's own tests have run and freed their own,
-   * unrelated allocations) reaches its own normal, voluntary exit, valgrind
-   * runs a full "still reachable" leak check against the CHILD's entire
-   * process image at that instant; which necessarily includes every
-   * still-live allocation belonging to every OTHER, unrelated test and
-   * module in this binary that simply has not been torn down yet by that
-   * point in the suite (this is expected and correct: this whole process
-   * is only ever fully quiesced once, at the very end of main(), not after
-   * every individual test). --errors-for-leak-kinds=all counts that as a
-   * real error and silently overrides the child's own exit status to
-   * --error-exitcode's value, regardless of what value _exit() was actually
-   * given; --child-silent-after-fork=yes only suppresses the child's own
-   * diagnostic OUTPUT, not this exit-status substitution (a minimal
-   * fork()+_exit(0) program with a single allocation reproduces the
-   * identical override). This is a property of forking mid-suite under this
-   * project's own memtest flags, and switching _exit() for exit() does not
-   * change it: exit() lets this file's own destructor run, but a full
-   * --leak-check=full pass at that same instant still finds every other
-   * still-reachable allocation belonging to the rest of the not-yet-run
-   * suite regardless, forcing the identical override. WIFEXITED alone
-   * already catches what this test actually cares about: a fork-safety
-   * regression hangs the child (caught above, by the bounded wait) or
-   * crashes it (a real ccol_assert()/ccol_fatal_err() abort raises SIGABRT,
-   * making WIFEXITED false here, not merely WEXITSTATUS nonzero). */
+  /* This check deliberately uses WIFEXITED alone, without also requiring
+   * WEXITSTATUS(status) == 0, because the exit code of this child is not
+   * reliably 0 under the memtest flags of this suite, for a reason that has
+   * nothing to do with the correctness of this test.
+   *
+   * make memtest runs with --errors-for-leak-kinds=all and
+   * --error-exitcode=1. The test forks this child in the middle of the
+   * suite, well before the rest of the tests in this binary run and free
+   * their own, unrelated allocations. When the child then reaches its own
+   * normal, voluntary exit, valgrind runs a full "still reachable" leak check
+   * over the whole process image of that child at that instant, and that
+   * image holds every live allocation of every other test and module in this
+   * binary that nothing has torn down yet. This is expected and correct: the
+   * process becomes fully quiet only once, at the very end of main(), not
+   * after each test.
+   *
+   * --errors-for-leak-kinds=all counts that as a real error and replaces the
+   * exit status of the child with the value of --error-exitcode, whatever
+   * value _exit() gets. The option --child-silent-after-fork=yes suppresses
+   * only the diagnostic OUTPUT of the child, not this replacement of the exit
+   * status. A small program that only calls fork() and _exit(0), with one
+   * allocation, reproduces the same override.
+   *
+   * This is a property of a fork in the middle of the suite under the
+   * memtest flags of this project, and changing _exit() to exit() does not
+   * help: exit() lets the destructor of this file run, but a full
+   * --leak-check=full pass at that same instant finds every other
+   * still-reachable allocation of the rest of the suite all the same, and
+   * forces the same override.
+   *
+   * WIFEXITED alone catches what this test cares about. A regression in the
+   * fork safety either hangs the child, which the bounded wait above catches,
+   * or crashes it: a real ccol_assert() or ccol_fatal_err() abort raises
+   * SIGABRT, which makes WIFEXITED false here, and not only WEXITSTATUS
+   * nonzero. */
   REQUIRE_TRUE(WIFEXITED(status));
 
   clog_close(lg);
 
   char buf[4096];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
   REQUIRE_NE(strstr(buf, "message from child"), NULL);
 
@@ -4767,31 +4865,41 @@ TEST(fork_safety, child_can_log_after_fork) {
 #define FORK_CHURN_WRITER_COUNT 4
 #define FORK_CHURN_ITERATIONS 300
 
+/* Set after the child is reaped. A writer stays alive until then, so that no
+ * writer has finished, unjoined, when the fork() runs, however late the sleep
+ * before it ends; ThreadSanitizer reports such a thread in the child as a
+ * thread leak when the child exits. */
+static atomic_int _fork_churn_stop;
+
 static void *_fork_churn_writer(void *arg) {
   clog *lg = (clog *)arg;
   for (int i = 0; i < FORK_CHURN_ITERATIONS; i++) {
-    ccol_log_info(*lg, "fork churn message %d", i);
+    clog_info(*lg, "fork churn message %d", i);
     clog child = clog_derive(*lg);
     if (child != CLOG_INVALID) clog_close(child);
   }
+  struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+  while (!atomic_load(&_fork_churn_stop)) nanosleep(&pause, NULL);
   return NULL;
 }
 
-/* Triggers fork() from a dedicated thread while several OTHER threads are
- * concurrently logging/deriving/closing on the same shared target,
- * confirming the parent's own logging continues uninterrupted immediately
- * after fork() returns; verifying _clog_atfork_parent actually restores
- * normal operation (releasing every lock it acquired in _clog_atfork_
- * prepare), not merely that the child avoids hanging. */
+/* This test calls fork() from one thread while several OTHER threads log,
+ * derive and close on the same shared target, and it confirms that the
+ * logging of the parent continues without a break as soon as fork() returns.
+ * So it checks that _clog_atfork_parent restores normal operation and
+ * unlocks every lock that _clog_atfork_prepare locks, not only that the
+ * child avoids a hang. */
 TEST(fork_safety, concurrent_fork_during_churn_does_not_hang) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
+  atomic_store(&_fork_churn_stop, 0);
   pthread_t writers[FORK_CHURN_WRITER_COUNT];
   bool writer_created[FORK_CHURN_WRITER_COUNT];
   int writer_create_failures = 0;
@@ -4801,9 +4909,10 @@ TEST(fork_safety, concurrent_fork_during_churn_does_not_hang) {
     if (!writer_created[i]) writer_create_failures++;
   }
   if (writer_create_failures > 0) {
-    /* No fork() attempted yet; join whatever did get created before failing,
-     * so no background thread outlives this test function's own stack
-     * frame (which `lg` and `dir` above live on). */
+    /* There is no fork() yet. Before this test fails, join every thread that
+     * started, because no background thread may outlive the stack frame of
+     * this test function, where `lg` and `dir` above live. */
+    atomic_store(&_fork_churn_stop, 1);
     for (int i = 0; i < FORK_CHURN_WRITER_COUNT; i++)
       if (writer_created[i]) pthread_join(writers[i], NULL);
     clog_close(lg);
@@ -4815,16 +4924,16 @@ TEST(fork_safety, concurrent_fork_during_churn_does_not_hang) {
   usleep(1000);
   pid_t pid = fork();
   if (pid == 0) {
-    /* Child: only this thread exists here; confirm it can still resolve
-     * and use the inherited handle before exiting. */
-    ccol_log_info(lg, "post-fork child message");
+    /* In the child only this thread exists. Confirm that it can resolve the
+     * inherited handle and use it before it exits. */
+    clog_info(lg, "post-fork child message");
     _exit(0);
   }
   if (pid == -1) {
-    /* Every writer thread above was successfully created (the check just
-     * above already guarantees this); join them all before failing, rather
-     * than leaving them running against `lg`/`dir` after this test function
-     * returns. */
+    /* Every writer thread above started, which the check above guarantees.
+     * Join all of them before this test fails instead of leaving them at work
+     * on `lg` and `dir` after this test function returns. */
+    atomic_store(&_fork_churn_stop, 1);
     for (int i = 0; i < FORK_CHURN_WRITER_COUNT; i++)
       pthread_join(writers[i], NULL);
     clog_close(lg);
@@ -4834,9 +4943,9 @@ TEST(fork_safety, concurrent_fork_during_churn_does_not_hang) {
 
   int status;
   bool reaped = false;
-  /* 30s bound: see the identical note on fork_safety.child_can_log_after_
-   * fork's own wait above for why this must stay well clear of make
-   * memtest's own valgrind instrumentation overhead. */
+  /* The bound is 30s; see the same note on the wait of
+   * fork_safety.child_can_log_after_fork above. The bound must stay well
+   * clear of the valgrind instrumentation cost of make memtest. */
   for (int waited_ms = 0; waited_ms < 30000; waited_ms += 20) {
     pid_t r = waitpid(pid, &status, WNOHANG);
     if (r == pid) {
@@ -4848,43 +4957,46 @@ TEST(fork_safety, concurrent_fork_during_churn_does_not_hang) {
   if (!reaped) {
     kill(pid, SIGKILL);
     waitpid(pid, &status, 0);
-    REQUIRE_TRUE(false); /* child never completed within the bound */
   }
 
-  /* The parent's own writer threads must still be able to finish; if
-   * _clog_atfork_parent failed to release everything it locked, these
-   * joins would hang. */
+  /* The writer threads of the parent must finish as usual: if
+   * _clog_atfork_parent does not unlock everything it locks, these joins
+   * hang. They run before any assertion, so that no writer outlives the
+   * frame of this test. */
+  atomic_store(&_fork_churn_stop, 1);
   for (int i = 0; i < FORK_CHURN_WRITER_COUNT; i++)
     pthread_join(writers[i], NULL);
 
-  ccol_log_info(lg, "final parent marker");
+  clog_info(lg, "final parent marker");
   clog_close(lg);
 
-  /* Sized well above the true worst case (FORK_CHURN_WRITER_COUNT *
-   * FORK_CHURN_ITERATIONS = 1200 lines), matching the identical sizing
-   * rationale already established for threading.
-   * concurrent_filtered_writes_and_level_changes_no_crash above: read_file()
-   * performs a single, bounded read(), so an undersized buffer here would
-   * truncate the file before reaching "final parent marker" (written
-   * last). */
+  /* This buffer is much larger than the true worst case, which is
+   * FORK_CHURN_WRITER_COUNT * FORK_CHURN_ITERATIONS = 1200 lines, for the
+   * same reason as in
+   * threading.concurrent_filtered_writes_and_level_changes_no_crash above:
+   * read_file() does one bounded read(), so a buffer that is too small
+   * truncates the file before "final parent marker", which the test writes
+   * last. */
   char buf[1 << 20];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
+  REQUIRE_TRUE(reaped); /* the child finishes inside the bound */
   REQUIRE_GT(len, (size_t)0);
   REQUIRE_NE(strstr(buf, "final parent marker"), NULL);
 
   cleanup_dir(dir, "app.log");
 }
 
-/* Appends one line to path, creating it if necessary. Used by
- * _fork_safety_rollback_race_child() below to record its own progress
- * somewhere the outer test can read back; NOT via its own exit code, since
- * that is unreliable under make memtest for the same documented reason
- * fork_safety.child_can_log_after_fork's own WIFEXITED-only check exists:
- * valgrind's --errors-for-leak-kinds=all silently overrides a forked child's
- * real exit code to --error-exitcode's value the instant it finds ANY
- * "still reachable" allocation in that child's inherited process image,
- * which a child forked mid-suite (inheriting every other, not-yet-torn-down
- * test's own live allocations) always does. */
+/* Appends one line to path, creating the file if it does not exist.
+ * _fork_safety_rollback_race_child() below uses it to record its own
+ * progress in a place that the outer test can read back, instead of using
+ * its exit code, which is not reliable under make memtest for the same reason
+ * that the WIFEXITED-only check of fork_safety.child_can_log_after_fork
+ * exists. The --errors-for-leak-kinds=all option of valgrind replaces the
+ * real exit code of a forked child with the value of --error-exitcode as
+ * soon as it finds ANY "still reachable" allocation in the inherited process
+ * image of that child, and a child that a test forks in the middle of the
+ * suite always has one: it inherits the live allocations of every other test
+ * that nothing has torn down yet. */
 static void _fork_safety_marker_append(const char *path, const char *line) {
   int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
   if (fd < 0) return;
@@ -4893,42 +5005,45 @@ static void _fork_safety_marker_append(const char *path, const char *line) {
   close(fd);
 }
 
-/* Runs entirely inside an isolated, forked-off child: a slot left in the
- * shape this test guards against crashes the calling process at the SECOND
- * fork() below (inside _clog_atfork_prepare(), which runs synchronously in
- * the calling thread before fork() itself returns anywhere), so this whole
- * scenario must not run directly in the main test process. `marker_path` is
- * used exactly like a log file any other test in this suite reads back after
- * a forked child exits; see this function's own _fork_safety_marker_append
- * helper above for why exit codes are not used for this instead. */
+/* This function runs inside an isolated, forked child only. A slot left in
+ * the shape that this test guards against crashes the calling process at the
+ * SECOND fork() below, inside _clog_atfork_prepare(), which runs in the
+ * calling thread before fork() returns anywhere. So this whole scenario must
+ * not run in the main test process.
+ *
+ * `marker_path` works like a log file that any other test in this suite
+ * reads back after a forked child exits. See the _fork_safety_marker_append
+ * helper above for the reason this code does not use exit codes. */
 static void _fork_safety_rollback_race_child(const char *marker_path) {
   char dir[256];
-  if (make_tmpdir(dir, sizeof dir) != 0) _exit(0);
+  if (make_tmpdir(dir, sizeof(dir)) != 0) _exit(0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  /* Force this logger's own acquisition to grow the slot table with a fresh
-   * slot and then fail that slot's own live_shareds registration step,
-   * driving _clog_handle_acquire() into the exact rollback path that can
-   * leave a freshly-grown, never-registered slot behind with freed == false
-   * and ptr == NULL simultaneously; regardless of whatever free_indices
-   * entries earlier tests already run in this process may have left behind
-   * for reuse, which would otherwise mask it via the OTHER, already-safe
-   * rollback branch (a reused slot, already freed == true). */
+  /* This forces the acquisition of this logger to grow the slot table with a
+   * fresh slot and then fails the live_shareds registration step of that
+   * slot, so that _clog_handle_acquire() takes the exact rollback path under
+   * test. That path can leave a slot that it has just grown, and that nothing
+   * registered, with freed == false and ptr == NULL at the same time.
+   * Earlier tests in this process may have left free_indices entries behind
+   * for reuse, and those entries would otherwise hide the defect, because the
+   * acquisition would take the OTHER rollback branch, which is already safe
+   * because it reuses a slot that is already freed == true. */
   clog_test_force_next_fresh_slot_registration_failure(true);
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   if (lg != CLOG_INVALID) {
     cleanup_dir(dir, "app.log");
-    _exit(0); /* the forced failure did not apply; nothing more to check */
+    _exit(0); /* the forced failure does not apply, so nothing to check */
   }
   _fork_safety_marker_append(marker_path, "acquire_failed_as_expected\n");
 
-  /* fork() here drives _clog_atfork_prepare()'s walk over every slot in
-   * clog_slot_table.slots. A slot left behind above with freed == false and ptr
-   * == NULL makes that walk's ccol_mutex_lock(slot->ptr->fields_mutex) call
-   * dereference NULL and crash this entire process (this line never returning
-   * at all, in either direction),
-   * well before either fork() return value was ever seen. */
+  /* The fork() here drives the walk of _clog_atfork_prepare() over every
+   * slot in clog_slot_table.slots. If the step above leaves a slot with
+   * freed == false and ptr == NULL, the
+   * ccol_mutex_lock(slot->ptr->fields_mutex) call of that walk dereferences
+   * NULL and crashes this whole process: this line then never returns, in
+   * either direction, and the process never sees a return value from
+   * fork(). */
   pid_t pid = fork();
   _fork_safety_marker_append(marker_path, "survived_fork_call\n");
 
@@ -4938,54 +5053,55 @@ static void _fork_safety_rollback_race_child(const char *marker_path) {
   _exit(0);
 }
 
-/* The second rollback in _clog_handle_acquire, and the one
- * handle_acquire_rollback_leaves_slot_fork_safe below does not reach.
- * Publishing the handle into the pin index is the last step of an acquisition,
- * after live_shareds registration has already succeeded, so its failure has
- * that registration to undo as well as the slot. The caller, handed
- * CLOG_INVALID, goes on to free the shared object; an entry left behind in
- * live_shareds means the next fork() locks a mutex inside that freed memory.
+/* This is the second rollback in _clog_handle_acquire, the one that
+ * handle_acquire_rollback_leaves_slot_fork_safe below does not reach. The
+ * last step of an acquisition publishes the handle into the pin index, and
+ * the live_shareds registration succeeds before that step, so a failure of
+ * the publish step has that registration to undo as well as the slot. The
+ * caller gets CLOG_INVALID and then frees the shared object, so an entry
+ * left behind in live_shareds means that the next fork() locks a mutex
+ * inside that freed memory.
  *
- * Isolated in its own child for the same reason as
- * handle_acquire_rollback_leaves_slot_fork_safe below: the failure it stages
- * leaves a freed shared object behind if the rollback is wrong, and a later
- * fork in the same process would then lock a mutex inside it. What this one
- * proves is that the fork survives. The rollback itself is pinned by
- * handle_publish_rollback_leaves_no_registered_shared below, which runs in this
- * process and fails without any instrumentation. */
+ * This scenario runs in its own child, for the same reason as
+ * handle_acquire_rollback_leaves_slot_fork_safe below: when the rollback is
+ * wrong, the failure that it stages leaves a freed shared object behind, and
+ * a later fork in the same process then locks a mutex inside that object.
+ * This test proves that the fork survives, while the test
+ * handle_publish_rollback_leaves_no_registered_shared below pins the
+ * rollback itself, in this process and failing with no instrumentation. */
 extern void _ccol_pintable_force_next_publish_failure_for_tests(void);
 
 static void _fork_safety_publish_rollback_child(const char *marker_path) {
   char dir[256];
-  if (make_tmpdir(dir, sizeof dir) != 0) _exit(0);
+  if (make_tmpdir(dir, sizeof(dir)) != 0) _exit(0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   _ccol_pintable_force_next_publish_failure_for_tests();
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   if (lg != CLOG_INVALID) {
     clog_close(lg);
     cleanup_dir(dir, "app.log");
-    _exit(0); /* the forced failure did not apply; nothing more to check */
+    _exit(0); /* the forced failure does not apply, so nothing to check */
   }
   _fork_safety_marker_append(marker_path, "acquire_failed_as_expected\n");
 
-  /* Proves the arming above is what made that open fail, rather than a
-   * mkdtemp, an open(2) or an allocation failing ahead of the publish and
-   * leaving the one-shot flag still armed. The flag is consumed by the next
-   * publish whether or not that publish then succeeds, so a second open must
-   * succeed here; without this check the whole child reads as a pass for a
-   * failure that never reached the rollback under test. */
+  /* This proves that the arming above is what makes that open fail. Without
+   * it, a mkdtemp, an open(2) or an allocation could fail ahead of the
+   * publish and leave the one-shot flag armed, which the next publish
+   * consumes whether that publish then succeeds or not, so a second open
+   * must succeed here. Without this check, the whole child reads as a pass
+   * for a failure that never reaches the rollback under test. */
   clog probe = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   if (probe != CLOG_INVALID) {
     _fork_safety_marker_append(marker_path, "forced_failure_was_consumed\n");
     clog_close(probe);
   }
 
-  /* The shared object this acquisition registered has been freed by the
-   * caller's own error path. If the rollback left it in live_shareds,
-   * _clog_atfork_prepare's walk locks sh->mutex inside freed memory here,
-   * synchronously, before fork() returns anywhere. */
+  /* The error path of the caller frees the shared object that this
+   * acquisition registered. If the rollback leaves that object in
+   * live_shareds, the walk of _clog_atfork_prepare locks sh->mutex inside
+   * freed memory here, before fork() returns anywhere. */
   pid_t pid = fork();
   _fork_safety_marker_append(marker_path, "survived_fork_call\n");
 
@@ -4995,23 +5111,24 @@ static void _fork_safety_publish_rollback_child(const char *marker_path) {
   _exit(0);
 }
 
-/* The rollback's whole job is to undo the live_shareds registration the
- * acquisition made before publishing, so the count of registered shared objects
- * coming back to what it was is the property. Checked here, in this process,
- * rather than inside the forked child above: a count read takes the table's
- * read lock, and a child that inherited the fork handler's write lock and then
- * re-initialised it reads as still write-locked to ThreadSanitizer, which has
- * no way to model that re-initialisation as a release.
+/* The whole job of the rollback is to undo the live_shareds registration
+ * that the acquisition makes before the publish, so the property to check is
+ * that the count of registered shared objects returns to its earlier value.
+ * This test checks it in this process instead of inside the forked child
+ * above: a read of the count takes the read lock of the table, and a child
+ * inherits the write lock of the fork handler and then initializes that lock
+ * again, which ThreadSanitizer cannot model as a release, so it reads the
+ * lock as write-locked all the same.
  *
- * This test is non-vacuous: removing the live_shareds rollback leaves the count
- * one higher. Relying on a sanitizer or a leak checker to notice the stale
- * entry instead does not work, because the access it enables happens in a
- * forked child whose exit status the fork test discards. */
+ * This test is not vacuous: remove the live_shareds rollback and the count
+ * is one higher. A sanitizer or a leak checker cannot find the stale entry
+ * instead, because the access that the stale entry permits happens in a
+ * forked child, and the fork test discards the exit status of that child. */
 TEST(fork_safety, handle_publish_rollback_leaves_no_registered_shared) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   size_t before = clog_test_live_shareds_count();
 
@@ -5021,8 +5138,9 @@ TEST(fork_safety, handle_publish_rollback_leaves_no_registered_shared) {
   if (!refused) clog_close(lg);
   size_t after = clog_test_live_shareds_count();
 
-  /* Proves the arming above is what refused that open, rather than something
-     failing ahead of the publish and leaving the one-shot flag still armed. */
+  /* This proves that the arming above is what refuses that open; without it,
+     something could fail ahead of the publish and leave the one-shot flag
+     armed. */
   clog probe = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   bool probe_opened = (probe != CLOG_INVALID);
   if (probe_opened) clog_close(probe);
@@ -5035,10 +5153,11 @@ TEST(fork_safety, handle_publish_rollback_leaves_no_registered_shared) {
 }
 
 TEST(fork_safety, handle_publish_rollback_unregisters_the_shared_object) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   char marker_dir[256];
-  REQUIRE_EQ(make_tmpdir(marker_dir, sizeof marker_dir), 0);
+  REQUIRE_EQ(make_tmpdir(marker_dir, sizeof(marker_dir)), 0);
   char marker_path[512];
-  snprintf(marker_path, sizeof marker_path, "%s/marker", marker_dir);
+  snprintf(marker_path, sizeof(marker_path), "%s/marker", marker_dir);
 
   pid_t pid = fork();
   if (pid == 0) {
@@ -5061,16 +5180,16 @@ TEST(fork_safety, handle_publish_rollback_unregisters_the_shared_object) {
   if (!reaped) {
     kill(pid, SIGKILL);
     waitpid(pid, &status, 0);
-    REQUIRE_TRUE(false); /* child never completed within the bound */
+    REQUIRE_TRUE(false); /* the child does not finish inside the bound */
   }
-  /* Everything the markers have to say is read out and the directory removed
-     before any of it is asserted: a failing REQUIRE_ returns from the test on
-     the spot and would leave the mkdtemp directory behind. The strstr calls are
-     guarded on a non-empty read, since buf is only written when there was
-     something to read. */
+  /* The test reads everything from the markers and removes the directory
+     before it asserts any of it, because a REQUIRE_ that fails returns from
+     the test at once and would leave the mkdtemp directory behind. The
+     strstr calls run only after a read that is not empty, because
+     read_file() writes buf only when there is something to read. */
   bool exited = WIFEXITED(status);
   char buf[256];
-  size_t len = read_file(marker_path, buf, sizeof buf);
+  size_t len = read_file(marker_path, buf, sizeof(buf));
   bool saw_acquire_failed =
       len > 0 && strstr(buf, "acquire_failed_as_expected") != NULL;
   bool saw_failure_consumed =
@@ -5086,23 +5205,26 @@ TEST(fork_safety, handle_publish_rollback_unregisters_the_shared_object) {
   REQUIRE_TRUE(saw_survived_fork);
 }
 
-/* _clog_handle_acquire()'s rollback for a failed live_shareds registration
- * must restore BOTH slot->freed and slot->ptr to the same shape a slot
- * retired by clog_close() itself always ends up in, regardless of which of
- * the two acquisition branches produced it. Pushing the slot's index back
- * onto free_indices without setting slot->freed = true is not enough for a
- * slot that came from the "grow the table with a brand new slot" branch
- * (clog_slot_t fresh = {0}, i.e. already freed == false, ptr == NULL before
- * the rollback even runs): _clog_atfork_prepare()'s own walk only ever skips
- * a slot via `if (slot->freed) continue;`, so it dereferences that slot's
- * NULL ptr (ccol_mutex_lock(slot->ptr->fields_mutex)) the moment any thread
- * calls fork() while that now-"free" index sits unused in free_indices,
- * crashing the whole process. */
+/* The rollback of _clog_handle_acquire() for a failed live_shareds
+ * registration must restore BOTH slot->freed and slot->ptr, leaving the slot
+ * in the same shape as a slot that clog_close() itself retires, in either of
+ * the two acquisition branches.
+ *
+ * Pushing the index of the slot back onto free_indices is not enough on its
+ * own; the rollback must also set slot->freed = true. A slot from the branch
+ * that grows the table with a new slot starts as clog_slot_t fresh = {0}, so
+ * before the rollback runs, freed is already false and ptr is already NULL.
+ * The walk of _clog_atfork_prepare() skips a slot only through
+ * `if (slot->freed) continue;`, so it dereferences the NULL ptr of that slot
+ * in ccol_mutex_lock(slot->ptr->fields_mutex) as soon as any thread calls
+ * fork() while the supposedly "free" index sits unused in free_indices, and
+ * that crashes the whole process. */
 TEST(fork_safety, handle_acquire_rollback_leaves_slot_fork_safe) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   char marker_dir[256];
-  REQUIRE_EQ(make_tmpdir(marker_dir, sizeof marker_dir), 0);
+  REQUIRE_EQ(make_tmpdir(marker_dir, sizeof(marker_dir)), 0);
   char marker_path[512];
-  snprintf(marker_path, sizeof marker_path, "%s/marker", marker_dir);
+  snprintf(marker_path, sizeof(marker_path), "%s/marker", marker_dir);
 
   pid_t pid = fork();
   if (pid == 0) {
@@ -5113,9 +5235,9 @@ TEST(fork_safety, handle_acquire_rollback_leaves_slot_fork_safe) {
 
   int status;
   bool reaped = false;
-  /* 30s bound: see the identical note on fork_safety.child_can_log_after_
-   * fork's own wait above for why this must stay well clear of make
-   * memtest's own valgrind instrumentation overhead. */
+  /* The bound is 30s; see the same note on the wait of
+   * fork_safety.child_can_log_after_fork above. The bound must stay well
+   * clear of the valgrind instrumentation cost of make memtest. */
   for (int waited_ms = 0; waited_ms < 30000; waited_ms += 20) {
     pid_t r = waitpid(pid, &status, WNOHANG);
     if (r == pid) {
@@ -5127,28 +5249,27 @@ TEST(fork_safety, handle_acquire_rollback_leaves_slot_fork_safe) {
   if (!reaped) {
     kill(pid, SIGKILL);
     waitpid(pid, &status, 0);
-    REQUIRE_TRUE(false); /* child never completed within the bound */
+    REQUIRE_TRUE(false); /* the child does not finish inside the bound */
   }
-  /* WIFEXITED only, deliberately not the child's own exit code; see
-   * fork_safety.child_can_log_after_fork's own identical note above for why
-   * a forked child's exit code is not a reliable signal under make memtest.
-   * This test is non-vacuous: a slot left in the unsafe shape makes this
-   * REQUIRE_TRUE itself fail (the child dies with SIGSEGV instead of exiting
-   * at all), which is the actual crash detection this test performs. */
+  /* This check deliberately uses WIFEXITED alone instead of the exit code of
+   * the child, which is not a reliable signal under make memtest (see the
+   * same note on fork_safety.child_can_log_after_fork above). This test is
+   * not vacuous: a slot in the unsafe shape makes this REQUIRE_TRUE fail,
+   * because the child then dies with SIGSEGV instead of exiting, which is how
+   * this test finds the crash. */
   REQUIRE_TRUE(WIFEXITED(status));
 
-  /* The marker file is what actually confirms the scenario was exercised at
-   * all (rather than the forced hook silently not applying) and that the
-   * process got all the way past the fork() call under test, not merely that
-   * SOME exit happened. */
+  /* The marker file confirms two things: that the scenario really runs, with
+   * the forced hook applying, and that the process gets all the way past the
+   * fork() call under test. An exit on its own is not enough. */
   char buf[256];
-  size_t len = read_file(marker_path, buf, sizeof buf);
+  size_t len = read_file(marker_path, buf, sizeof(buf));
   bool saw_acquire_failed =
       len > 0 && strstr(buf, "acquire_failed_as_expected") != NULL;
   bool saw_survived_fork = len > 0 && strstr(buf, "survived_fork_call") != NULL;
 
-  /* Removed before the assertions, so a failing one does not leave the
-     mkdtemp directory behind. */
+  /* This runs before the assertions, so that an assertion that fails does not
+     leave the mkdtemp directory behind. */
   cleanup_dir(marker_dir, "marker");
 
   REQUIRE_GT(len, (size_t)0);
@@ -5156,22 +5277,25 @@ TEST(fork_safety, handle_acquire_rollback_leaves_slot_fork_safe) {
   REQUIRE_TRUE(saw_survived_fork);
 }
 
-/* clog_test_force_next_fresh_slot_registration_failure() forces
- * _clog_handle_acquire()'s rollback path for clog_open_fd_mp()/
- * clog_open_file_mp()/clog_derive() alike (as its own doc comment, and
- * clogger.h's public one, both state), which requires the forced-failure
- * branch to apply unconditionally, regardless of whether the acquiring
- * handle's shared object is already present in clog_slot_table.live_shareds.
- * clog_derive()'s shared object is always the parent's own, already-
- * registered one (guaranteed present in live_shareds for as long as parent
- * remains a live, pinned handle), so a hook consulted only when
- * already_registered is false would be silently defeated for this one of its
- * three documented call sites: the hook would still auto-disarm itself, but
- * clog_derive() would return a perfectly valid handle instead of the
- * documented CLOG_INVALID. No process-isolation/fork needed here (unlike
- * handle_acquire_rollback_leaves_slot_fork_safe above): this test only
- * exercises the ordinary rollback return path, which does not corrupt any
- * process-wide state when it works correctly. */
+/* clog_test_force_next_fresh_slot_registration_failure() forces the rollback
+ * path of _clog_handle_acquire() for clog_open_fd_mp(), clog_open_file_mp()
+ * and clog_derive() alike, as both its own doc comment and the public one in
+ * clogger.h state. So the forced-failure branch must apply in every case,
+ * whether or not the shared object of the acquiring handle is already in
+ * clog_slot_table.live_shareds.
+ *
+ * The shared object of clog_derive() is always the already-registered object
+ * of the parent, which stays in live_shareds for as long as the parent is a
+ * live, pinned handle. A hook that the code reads only when
+ * already_registered is false is therefore defeated for this one of its
+ * three documented call sites: such a hook disarms itself all the same, but
+ * clog_derive() returns a valid handle in place of the documented
+ * CLOG_INVALID.
+ *
+ * Unlike handle_acquire_rollback_leaves_slot_fork_safe above, this test needs
+ * no process isolation and no fork, because it drives only the ordinary
+ * rollback return path, which corrupts no process-wide state when it works
+ * correctly. */
 TEST(fork_safety, handle_acquire_rollback_hook_also_fires_for_derive) {
   clog parent = clog_open_fd_mp(STDERR_FILENO, CLOG_INFO, NULL, NULL);
   REQUIRE_NE(parent, CLOG_INVALID);
@@ -5180,11 +5304,11 @@ TEST(fork_safety, handle_acquire_rollback_hook_also_fires_for_derive) {
   clog child = clog_derive(parent);
   REQUIRE_EQ(child, CLOG_INVALID);
 
-  /* The hook must be confined to the one acquisition it targeted: a plain,
-   * unforced clog_derive() call right after it must succeed normally, and
-   * the parent handle itself (whose already-registered shared object the
-   * forced failure above must never have touched or corrupted) must still be
-   * fully usable. */
+  /* The hook must affect only the one acquisition that it targets: a plain
+   * clog_derive() call right after it, with no force, must succeed, and the
+   * parent handle must keep working fully. The forced failure above must
+   * never touch or corrupt the already-registered shared object of that
+   * parent. */
   clog child2 = clog_derive(parent);
   REQUIRE_NE(child2, CLOG_INVALID);
 
@@ -5192,29 +5316,30 @@ TEST(fork_safety, handle_acquire_rollback_hook_also_fires_for_derive) {
   clog_close(parent);
 }
 
-/* Second half of pending_compress_not_permanently_exempt_from_pruning_in_child
- * below, run entirely inside the forked child: only this thread exists here,
- * so the parent's own writer thread that was mid-compression (and mid-
- * usleep(), holding the pending-compress delay) at fork() time does not
- * exist in this process at all. One more write is enough to prove the point:
- * max_file_size == 1 guarantees it triggers a fresh rotation, whose own
- * _prune_rotated() pass is what reveals whether the first rotation's own .gz
- * file is still wrongly treated as "compression still in flight" here.
- * stale_gz (not stale_plain) is what this test checks: the uncompressed
- * source is also unlinked by the PARENT's own still-running compressing
- * thread once it finishes (a race with this child that has nothing to do
- * with the behaviour under test), but nothing other than a prune pass in
- * THIS process ever touches stale_gz. */
+/* This is the second half of
+ * pending_compress_not_permanently_exempt_from_pruning_in_child below, and
+ * it runs inside the forked child, where only this thread exists. At the
+ * moment of the fork(), the compressor thread of the parent is in the middle
+ * of a compression, held after it created its temporary output, and that
+ * thread does not exist in this process at all.
+ *
+ * One more write proves the point: max_file_size == 1 makes that write start
+ * a new rotation, and the _prune_rotated() pass of that rotation shows
+ * whether this process goes on treating the source of the first rotation as
+ * a compression in flight. The check runs right after that write, while the
+ * compression of the parent stays held until the parent releases it after
+ * the fork; only that compression could otherwise remove the source. */
 static void _fork_pending_compress_child(clog lg, const char *dir,
-                                         const char *stale_gz,
+                                         const char *stale_plain,
                                          const char *marker_path) {
-  clog_test_set_pending_compress_delay_us(0); /* this process's own copy of
-      the hook; never affects the parent's already-in-flight compression */
+  /* The copy of the hook in this process. It never changes the compression
+   * that the parent started, and it lets the compression of this child run. */
+  clog_test_hold_compressions(false);
 
-  ccol_log_info(lg, "generation two content");
+  clog_info(lg, "generation two content");
+  bool pruned = (access(stale_plain, F_OK) != 0);
   clog_close(lg);
 
-  bool pruned = (access(stale_gz, F_OK) != 0);
   _fork_safety_marker_append(marker_path,
                              pruned ? "pruned\n" : "still_exempt\n");
   cleanup_dir(dir, "app.log");
@@ -5223,40 +5348,44 @@ static void _fork_pending_compress_child(clog lg, const char *dir,
 
 static void *_fork_pending_compress_writer(void *arg) {
   clog lg = *(clog *)arg;
-  ccol_log_info(lg, "generation one content");
+  clog_info(lg, "generation one content");
   return NULL;
 }
 
-/* _rotate() releases shared->mutex around its slow gzip-compression step,
- * publishing a stack-allocated clog_pending_compress_t node into
- * sh->pending_compress for the duration (see _rotate()'s own comment) so a
- * concurrent rotation's own _prune_rotated() pass never deletes a file still
- * being written. A fork() landing inside that exact window would otherwise
- * leave that node linked into the CHILD's own copy of sh->pending_compress
- * forever: the compressing thread that alone would ever unlink it does not
- * exist in a freshly forked child (fork() duplicates only the calling
- * thread), so _prune_rotated() in that child would treat the node's
- * filenames as permanently "still being compressed" and exempt them from
- * deletion no matter how many further rotations that child went on to
- * perform; a silent, permanent max_rotated_files violation for that one
- * generation, specific to the child. _clog_atfork_child() therefore clears
- * sh->pending_compress for every live shared target, since no compression is
- * genuinely still in flight in a freshly forked child. */
+/* The compressor thread of a shared target unlocks shared->mutex around its
+ * slow gzip-compression step, and for that time it marks the job as the
+ * running compression of the target (see "BACKGROUND COMPRESSION" in
+ * src/clogger.c), so that the _prune_rotated() pass of a concurrent rotation
+ * never deletes a file that is still open for a read.
+ *
+ * A fork() inside that exact window copies that mark into the CHILD. Only
+ * the compressor thread ever clears it, and that thread does not exist in a
+ * new forked child, because fork() copies only the calling thread. Without
+ * handling, _prune_rotated() in that child treats the filenames of the job
+ * as "still under compression" forever and never deletes them, however many
+ * more rotations that child runs. The result is a permanent
+ * max_rotated_files violation for that one generation, which nothing reports
+ * and which happens only in the child.
+ *
+ * So _clog_atfork_child() forgets the running compression and the queue of
+ * every live shared target, since no compression is truly in flight in a new
+ * forked child. */
 TEST(fork_safety,
      pending_compress_not_permanently_exempt_from_pruning_in_child) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   char marker_dir[256];
-  REQUIRE_EQ(make_tmpdir(marker_dir, sizeof marker_dir), 0);
+  REQUIRE_EQ(make_tmpdir(marker_dir, sizeof(marker_dir)), 0);
   char marker_path[512];
-  snprintf(marker_path, sizeof marker_path, "%s/marker", marker_dir);
+  snprintf(marker_path, sizeof(marker_path), "%s/marker", marker_dir);
 
   clog_rotation_cfg_t cfg = {
       .size_rotation_enabled = true,
-      .max_file_size = 1, /* any write triggers rotation */
+      .max_file_size = 1, /* Any write triggers a rotation. */
       .time_rotation_enabled = false,
       .max_rotated_files = 1,
       .compress_rotated = true,
@@ -5264,89 +5393,65 @@ TEST(fork_safety,
   clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* Long enough to comfortably outlast fork() plus the child's own single
-   * write/rotation/prune sequence below. */
-  clog_test_set_pending_compress_delay_us(1000000);
+  /* The compression of the first rotation stays held after it creates its
+   * temporary output until this test releases it after the fork(). */
+  clog_test_hold_compressions(true);
 
   pthread_t t;
   int create_rv = pthread_create(&t, NULL, _fork_pending_compress_writer, &lg);
   if (create_rv != 0) {
-    /* No thread was ever created, so there is nothing to join; still close
-     * lg and clean up before failing, matching the identical reasoning at
-     * the stale_gz[0] == '\0' check further below. */
-    clog_test_set_pending_compress_delay_us(0);
+    clog_test_hold_compressions(false);
     clog_close(lg);
     cleanup_dir(marker_dir, "marker");
     cleanup_dir(dir, "app.log");
   }
   REQUIRE_EQ(create_rv, 0);
 
-  /* Spin-wait until the first rotation's .gz destination genuinely exists on
-   * disk, so fork() below is guaranteed to land inside the real, on-disk
-   * compression window rather than racing it. */
-  while (!clog_test_gz_dest_opened()) usleep(1000);
+  /* Wait until the compression of the first rotation truly runs, so that the
+   * fork() below lands inside it. */
+  bool opened = false;
+  for (int i = 0; i < 30000 && !opened; i++) {
+    opened = clog_test_gz_dest_opened();
+    if (!opened) usleep(1000);
+  }
 
-  /* Snapshot the one-and-only rotated file's own ".gz" name while it is
-   * guaranteed to already exist on disk (created by gzopen() before the
-   * delay), before fork(). */
-  char stale_gz[1024] = {0};
-  {
-    DIR *d = opendir(dir);
-    /* Disarm this global, process-wide delay knob HERE, unconditionally,
-     * regardless of what opendir()/the scan below finds: it is safe (the
-     * writer thread's own in-flight _gzip_compress_file() call already
-     * captured its own LOCAL copy of the delay value before starting its
-     * usleep(), per that function's own doc comment, so disarming the
-     * global now does not cut that sleep short) and it must happen before
-     * the REQUIRE_NE below, which can return from this test function
-     * immediately on failure. Leaving this knob armed past that early
-     * return would leave every later test's own gzip compression calls,
-     * for the rest of this binary's entire run, paying an extra full second
-     * each. That cascades: this test's own REQUIRE_NE below fails
-     * intermittently under qemu-arm's scheduling variance, and roughly a
-     * dozen further, otherwise-unrelated compression tests are silently
-     * corrupted with it. The symptom to look for is every subsequent
-     * _gzip_compress_file() call taking a suspiciously exact ~1000ms
-     * despite compressing a file of only a few hundred bytes. */
-    clog_test_set_pending_compress_delay_us(0);
-    REQUIRE_NE((void *)d, (void *)NULL);
+  /* The source of the one rotated file: the name of the temporary output
+   * without ".gz.tmp". */
+  char stale_plain[1024] = {0};
+  DIR *d = opened ? opendir(dir) : NULL;
+  if (d) {
     struct dirent *e;
     while ((e = readdir(d)) != NULL) {
       size_t nlen = strlen(e->d_name);
-      if (nlen >= 3 && strcmp(e->d_name + nlen - 3, ".gz") == 0)
-        snprintf(stale_gz, sizeof stale_gz, "%s/%s", dir, e->d_name);
+      if (nlen > 7 && strcmp(e->d_name + nlen - 7, ".gz.tmp") == 0)
+        snprintf(stale_plain, sizeof(stale_plain), "%s/%.*s", dir,
+                 (int)(nlen - 7), e->d_name);
     }
     closedir(d);
   }
-  if (stale_gz[0] == '\0') {
-    /* The premise verification itself failed: the writer thread's own
-     * first rotation never produced a .gz file we could observe on disk
-     * before forking. We are not going to fork() at all on this path, so
-     * the "must stay in flight for fork() to land inside it" reason for
-     * leaving the writer thread unjoined and lg still open does not apply;
-     * do both now, unconditionally, before failing. Without this, this
-     * exact failure (which occurs intermittently under qemu-arm's
-     * scheduling variance) leaks the writer thread and its own
-     * still-mid-compress clog_shared_t for the rest of this binary's run; a
-     * second, independent leak alongside the delay-knob one handled above,
-     * and on its own enough to corrupt roughly a dozen further,
-     * otherwise-unrelated compression tests for the remainder of the run. */
+  if (stale_plain[0] == '\0') {
+    /* The premise fails: no compression of the first rotation is visible
+     * in flight. This path makes no fork() at all; it releases the
+     * compression, joins the writer thread and closes lg before the test
+     * fails, so that nothing of this test outlives it. */
+    clog_test_hold_compressions(false);
     pthread_join(t, NULL);
     clog_close(lg);
     cleanup_dir(marker_dir, "marker");
     cleanup_dir(dir, "app.log");
   }
-  REQUIRE_NE(stale_gz[0], '\0');
+  REQUIRE_NE(stale_plain[0], '\0');
 
   pid_t pid = fork();
   if (pid == 0) {
-    _fork_pending_compress_child(lg, dir, stale_gz, marker_path);
+    _fork_pending_compress_child(lg, dir, stale_plain, marker_path);
     _exit(127); /* unreachable */
   }
+  /* In the parent, let the original compression finish in the normal way;
+   * this test is only about the separate copy of its running mark in the
+   * CHILD. */
+  clog_test_hold_compressions(false);
   if (pid == -1) {
-    /* Thread `t` was already successfully created above; join it (rather
-     * than leaving it running against `lg`/`dir` after this test function
-     * returns) before failing. */
     pthread_join(t, NULL);
     clog_close(lg);
     cleanup_dir(marker_dir, "marker");
@@ -5354,15 +5459,6 @@ TEST(fork_safety,
   }
   REQUIRE_NE(pid, -1);
 
-  /* Parent: let the original, still-in-flight compression finish normally
-   * and unlink its own pending-compress bookkeeping exactly as it always
-   * has; this test is only about the CHILD's own, separate copy of that
-   * list, not about disturbing the parent's already-correct behavior. The
-   * global delay knob itself is already disarmed above (must happen before
-   * fork(), not here, so an early REQUIRE_NE up there can never skip it);
-   * joining the writer thread and closing lg still belong here, AFTER
-   * fork(), since the whole point of this test is forking while that
-   * thread's own compression is still genuinely in flight. */
   pthread_join(t, NULL);
   clog_close(lg);
 
@@ -5379,12 +5475,12 @@ TEST(fork_safety,
   if (!reaped) {
     kill(pid, SIGKILL);
     waitpid(pid, &status, 0);
-    REQUIRE_TRUE(false); /* child never completed within the bound */
+    REQUIRE_TRUE(false); /* the child does not finish inside the bound */
   }
   REQUIRE_TRUE(WIFEXITED(status));
 
   char buf[256];
-  size_t len = read_file(marker_path, buf, sizeof buf);
+  size_t len = read_file(marker_path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
   REQUIRE_NE(strstr(buf, "pruned"), NULL);
 
@@ -5392,53 +5488,55 @@ TEST(fork_safety,
   cleanup_dir(dir, "app.log");
 }
 
-/* Runs clog_close() on *lg on a background thread, for
+/* Runs clog_close() on *lg on a background thread for
  * fork_safety.fork_during_concurrent_close_does_not_leak_target_in_child
- * below: the outer test needs this call suspended (via
- * clog_test_set_close_finalize_delay_us()) on a thread OTHER than the one
- * that calls fork(), so the forked child inherits a slot that is mid-close
- * on a thread that will never resume there. */
+ * below. The outer test needs this call suspended with
+ * clog_test_set_close_finalize_delay_us() on a thread OTHER than the one
+ * that calls fork(), so that the forked child inherits a slot in the middle
+ * of a close, on a thread that never resumes there. */
 static void *_fork_close_race_closer(void *arg) {
   clog *lg = (clog *)arg;
   clog_close(*lg);
   return NULL;
 }
 
-/* _clog_atfork_release()'s own child-side handling must finish, on the
- * vanished thread's behalf, a clog_close() that a DIFFERENT thread was
- * suspended in between that call's own step 2 (in_use cleared) and step 4
- * (slot retired, the shared target's reference released) at the instant one
- * thread called fork(); see clog_atfork_closing_t's own doc comment in
- * clogger.c. Without that, the target stays permanently unreclaimed in the
- * child: the thread that would have finished retiring the slot and releasing
- * the target's reference does not exist in a freshly forked child at all
- * (fork() duplicates only the calling thread), so neither step ever runs
- * there, and the target's ref_count can never reach zero afterward no matter
- * how long that child process goes on to run. */
+/* The child-side handling of _clog_atfork_release() must finish a
+ * clog_close() on behalf of a thread that is gone: a DIFFERENT thread is
+ * suspended in that call at the instant one thread calls fork(), between
+ * step 2 of the call, which clears in_use, and step 4, which retires the slot
+ * and releases the reference of the shared target. See the doc comment of
+ * clog_atfork_closing_t in clogger.c.
+ *
+ * Without that handling, the child never reclaims the target. The thread
+ * that would retire the slot and release the reference of the target does
+ * not exist in a new forked child at all, because fork() copies only the
+ * calling thread, so neither step ever runs there, and the ref_count of the
+ * target can never reach zero, however long that child process runs. */
 TEST(fork_safety, fork_during_concurrent_close_does_not_leak_target_in_child) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   char marker_dir[256];
-  REQUIRE_EQ(make_tmpdir(marker_dir, sizeof marker_dir), 0);
+  REQUIRE_EQ(make_tmpdir(marker_dir, sizeof(marker_dir)), 0);
   char marker_path[512];
-  snprintf(marker_path, sizeof marker_path, "%s/marker", marker_dir);
+  snprintf(marker_path, sizeof(marker_path), "%s/marker", marker_dir);
 
-  /* Baseline BEFORE opening the logger under test, so the assertion below
-   * holds regardless of how many other shared targets happen to already be
-   * live elsewhere in this same test binary at this point in the suite. */
+  /* Take the baseline BEFORE the open of the logger under test, so that the
+   * assertion below holds whatever number of other shared targets are
+   * already live elsewhere in this test binary at this point. */
   size_t baseline = clog_test_live_shareds_count();
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
   REQUIRE_EQ(clog_test_live_shareds_count(), baseline + 1);
 
-  /* Long enough to comfortably outlast fork() plus the child's own
-   * live_shareds check below; clog_test_close_finalize_delay_entered()
-   * (polled below) is what actually makes landing inside this window
-   * deterministic, not the length of the delay itself. */
+  /* This delay is long enough to outlast the fork() and the live_shareds
+   * check of the child below. What makes the landing inside this window
+   * deterministic is clog_test_close_finalize_delay_entered(), which the
+   * code below polls, not the length of the delay. */
   clog_test_set_close_finalize_delay_us(1000000);
 
   clog to_close = lg;
@@ -5446,34 +5544,33 @@ TEST(fork_safety, fork_during_concurrent_close_does_not_leak_target_in_child) {
   REQUIRE_EQ(pthread_create(&closer, NULL, _fork_close_race_closer, &to_close),
              0);
 
-  /* Spin-wait until the closer thread has genuinely entered the widened
-   * step-3/4 window (in_use already cleared, slot not yet retired) before
-   * forking, rather than relying on a fixed sleep and hoping the timing
-   * lines up. */
+  /* Spin-wait until the closer thread enters the wide window of steps 3 and
+   * 4, where in_use is clear and the slot is not yet retired, and only then
+   * fork; a fixed sleep that hopes for good timing is not enough. */
   while (!clog_test_close_finalize_delay_entered()) usleep(1000);
 
   pid_t pid = fork();
   if (pid == 0) {
-    /* Child: only this thread exists here; the closer thread suspended
-     * mid-clog_close() on `lg` never resumes. By the time fork() has
-     * returned here at all, _clog_atfork_child() has already run
-     * (pthread_atfork's own machinery invokes it synchronously as part of
-     * fork() itself, strictly before fork() returns in either process), so
-     * the effect is already observable immediately: the suspended close has
-     * been finished on the vanished thread's behalf and lg's own target is
-     * reclaimed here, rather than live_shareds staying stuck at
-     * baseline + 1 forever. */
+    /* In the child only this thread exists, and the closer thread, which the
+     * delay suspends in the middle of clog_close() on `lg`, never resumes.
+     * _clog_atfork_child() runs before fork() returns here at all, because
+     * the machinery of pthread_atfork calls it as part of fork() itself, in
+     * the calling thread, before fork() returns in either process, so the
+     * effect is visible at once: the library finishes the suspended close on
+     * behalf of the thread that is gone and reclaims the target of lg here,
+     * so live_shareds does not stay at baseline + 1 forever. */
     char buf[64];
-    snprintf(buf, sizeof buf, "live_shareds=%zu\n",
+    snprintf(buf, sizeof(buf), "live_shareds=%zu\n",
              clog_test_live_shareds_count());
     _fork_safety_marker_append(marker_path, buf);
     _exit(0);
   }
   if (pid == -1) {
-    /* The closer thread is genuinely still suspended (mid clog_close())
-     * behind the artificial delay armed above; disarm it and join before
-     * failing, rather than leaving it running against `to_close`/`lg` (both
-     * local to this test function) after this test function returns. */
+    /* The closer thread stays suspended in the middle of clog_close(), behind
+     * the artificial delay above. Disarm that delay and join the thread
+     * before this test fails, instead of leaving the thread at work on
+     * `to_close` and `lg`, which are both local to this test function, after
+     * this test function returns. */
     clog_test_set_close_finalize_delay_us(0);
     pthread_join(closer, NULL);
     cleanup_dir(marker_dir, "marker");
@@ -5494,23 +5591,22 @@ TEST(fork_safety, fork_during_concurrent_close_does_not_leak_target_in_child) {
   if (!reaped) {
     kill(pid, SIGKILL);
     waitpid(pid, &status, 0);
-    REQUIRE_TRUE(false); /* child never completed within the bound */
+    REQUIRE_TRUE(false); /* the child does not finish inside the bound */
   }
   REQUIRE_TRUE(WIFEXITED(status));
 
-  /* The parent's own closer thread, and the real, unaffected clog_close()
-   * it is running, must still finish normally once the artificial delay
-   * elapses; confirming _clog_atfork_parent() released everything it
-   * locked and that this changes nothing about the parent's own
-   * behavior. */
+  /* The closer thread of the parent runs a real clog_close() that nothing
+   * changes, and both must finish in the normal way once the artificial
+   * delay ends. This confirms that _clog_atfork_parent() unlocks everything
+   * it locks, and that none of this changes the behaviour of the parent. */
   clog_test_set_close_finalize_delay_us(0);
   pthread_join(closer, NULL);
   REQUIRE_EQ(clog_test_live_shareds_count(), baseline);
 
   char expect[64];
-  snprintf(expect, sizeof expect, "live_shareds=%zu", baseline);
+  snprintf(expect, sizeof(expect), "live_shareds=%zu", baseline);
   char buf[256];
-  size_t len = read_file(marker_path, buf, sizeof buf);
+  size_t len = read_file(marker_path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
   REQUIRE_NE(strstr(buf, expect), NULL);
 
@@ -5524,15 +5620,15 @@ TEST(fork_safety, fork_during_concurrent_close_does_not_leak_target_in_child) {
 /*                         ASYNC LOGGING                                      */
 /* ========================================================================== */
 
-/* Polls read_file() up to bound_ms (checking every 5ms) until needle appears
- * in path's own content, or the bound elapses. Used throughout this section
- * instead of a fixed sleep, since exactly when the writer thread gets
- * scheduled to process a given message is inherently non-deterministic. */
+/* Polls read_file() every 5ms, for up to bound_ms, until needle appears in
+ * the content of path or the bound ends. This section uses it in place of a
+ * fixed sleep, because the exact moment when the scheduler lets the writer
+ * thread process a given message is not deterministic. */
 static bool _poll_for_substring(const char *path, const char *needle,
                                 int bound_ms) {
   char buf[1 << 16];
   for (int waited_ms = 0; waited_ms < bound_ms; waited_ms += 5) {
-    size_t len = read_file(path, buf, sizeof buf);
+    size_t len = read_file(path, buf, sizeof(buf));
     (void)len;
     if (strstr(buf, needle) != NULL) return true;
     usleep(5000);
@@ -5542,19 +5638,19 @@ static bool _poll_for_substring(const char *path, const char *needle,
 
 TEST(async, construct_and_close_unbounded_queue) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg_t cfg = {0}; /* queue_size == 0 -> unbounded */
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_info(lg, "hello async unbounded");
-  clog_close(lg); /* drains the writer thread before returning */
+  clog_info(lg, "hello async unbounded");
+  clog_close(lg); /* drains the writer thread before it returns */
 
   char buf[4096];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
   REQUIRE_NE(strstr(buf, "hello async unbounded"), NULL);
 
@@ -5563,44 +5659,45 @@ TEST(async, construct_and_close_unbounded_queue) {
 
 TEST(async, construct_and_close_bounded_queue) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg_t cfg = {.queue_size = 8};
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_info(lg, "hello async bounded");
+  clog_info(lg, "hello async bounded");
   clog_close(lg);
 
   char buf[4096];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
   REQUIRE_NE(strstr(buf, "hello async bounded"), NULL);
 
   cleanup_dir(dir, "app.log");
 }
 
-/* An all-zero clog_async_cfg_t (a non-NULL pointer to a struct whose every
- * field is 0) must still enable async mode, with every zero field falling
- * back to its own documented default; unlike clog_rotation_cfg_t, there is
- * no "enabled" flag inside this struct to leave false. */
+/* An all-zero clog_async_cfg_t, that is, a pointer that is not NULL to a
+ * struct in which every field is 0, must turn on the async mode all the
+ * same, with every zero field falling back to its own documented default.
+ * Unlike clog_rotation_cfg_t, this struct holds no "enabled" flag that a
+ * caller can leave false. */
 TEST(async, degenerate_all_zero_config_falls_back_to_defaults) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg_t cfg = {0};
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_info(lg, "degenerate config still works");
+  clog_info(lg, "degenerate config still works");
   clog_flush(lg);
 
   char buf[4096];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
   REQUIRE_NE(strstr(buf, "degenerate config still works"), NULL);
 
@@ -5610,16 +5707,16 @@ TEST(async, degenerate_all_zero_config_falls_back_to_defaults) {
 
 TEST(async, messages_eventually_reach_target_without_explicit_flush) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   /* Small interval so this test does not need to wait long. */
-  clog_async_cfg_t cfg = {.flush_interval_ms = 20};
+  clog_async_cfg_t cfg = {.flush_interval_us = 20000};
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_info(lg, "eventually visible");
+  clog_info(lg, "eventually visible");
   REQUIRE_TRUE(_poll_for_substring(path, "eventually visible", 2000));
 
   clog_close(lg);
@@ -5628,18 +5725,19 @@ TEST(async, messages_eventually_reach_target_without_explicit_flush) {
 
 TEST(async, size_triggered_flush) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  /* A tiny flush_buffer_size and a long flush_interval_ms isolate the
-   * size-based trigger: if this test's own message ever appears, it can
-   * only be because the buffer threshold, not the timer, fired. */
-  clog_async_cfg_t cfg = {.flush_buffer_size = 32, .flush_interval_ms = 60000};
+  /* A small flush_buffer_size and a long flush_interval_us isolate the
+   * size-based trigger: if the message of this test appears, only the
+   * buffer threshold can be the cause, not the timer. */
+  clog_async_cfg_t cfg = {.flush_buffer_size = 32,
+                          .flush_interval_us = 60000000};
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  for (int i = 0; i < 20; i++) ccol_log_info(lg, "size trigger filler %d", i);
+  for (int i = 0; i < 20; i++) clog_info(lg, "size trigger filler %d", i);
 
   REQUIRE_TRUE(_poll_for_substring(path, "size trigger filler", 3000));
 
@@ -5649,59 +5747,90 @@ TEST(async, size_triggered_flush) {
 
 TEST(async, duration_triggered_flush) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  /* A huge flush_buffer_size and a short interval isolate the duration-based
-   * trigger: this one message can never reach the size threshold on its
-   * own, so if it appears, the timer fired. */
+  /* A large flush_buffer_size and a short interval isolate the trigger that
+   * depends on duration: this one message can never reach the size
+   * threshold on its own, so if it appears, the timer fired. */
   clog_async_cfg_t cfg = {.flush_buffer_size = 1 << 20,
-                          .flush_interval_ms = 30};
+                          .flush_interval_us = 30000};
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_info(lg, "duration trigger marker");
+  clog_info(lg, "duration trigger marker");
   REQUIRE_TRUE(_poll_for_substring(path, "duration trigger marker", 3000));
 
   clog_close(lg);
   cleanup_dir(dir, "app.log");
 }
 
+/* A record whose job outlasts the whole flush interval leaves the writer
+ * thread with no time left to wait, so its next receive waits for 0
+ * microseconds, which is a receive that does not wait and that answers an
+ * empty queue with ccol_container_empty. That answer must flush the batch as
+ * an expired interval does. This test is non-vacuous: a writer that takes
+ * ccol_container_empty for a failure never flushes the record on time, and
+ * the record reaches the file only at clog_close(). */
+TEST(async, an_interval_that_ran_out_during_a_job_still_flushes) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  clog_async_cfg_t cfg = {.flush_buffer_size = 1 << 20,
+                          .flush_interval_us = 20000};
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
+  bool seen = false;
+  if (lg != CLOG_INVALID) {
+    /* Each record holds the writer for 100 ms, five intervals. */
+    clog_test_set_writer_job_delay_us(100000);
+    clog_info(lg, "late interval marker");
+    seen = _poll_for_substring(path, "late interval marker", 3000);
+    clog_test_set_writer_job_delay_us(0);
+    clog_close(lg);
+  }
+  cleanup_dir(dir, "app.log");
+  REQUIRE_NE(lg, CLOG_INVALID);
+  REQUIRE_TRUE(seen);
+}
+
 /* ========================================================================== */
 /*                         ASYNC MESSAGE FORMATTING                          */
 /*                                                                            */
-/* Mirrors the synchronous path's own output.long_message_uses_heap_and_is_  */
-/* not_truncated / message_exceeding_stack_buffer_marks_truncation_when_     */
-/* heap_alloc_fails / robustness.format_string_failure_writes_diagnostic_    */
-/* not_silence, but drives them through _clog_write_async()'s OWN message-   */
-/* formatting logic (job->msg_inline / job->msg_heap, a 256-byte inline      */
-/* buffer distinct from and smaller than _clog_write_sync()'s 1024-byte      */
-/* stack buffer) rather than the synchronous body those tests exercise;      */
-/* a distinct code path with its own dedicated coverage below.              */
+/* These tests mirror three tests of the synchronous path. Those three are  */
+/* output.long_message_uses_heap_and_is_not_truncated,                      */
+/* output.message_exceeding_stack_buffer_marks_truncation_when_heap_alloc_  */
+/* fails and robustness.format_string_failure_writes_diagnostic_not_       */
+/* silence. The tests below drive the message format logic of               */
+/* _clog_write_async() itself, which uses job->msg_inline and               */
+/* job->msg_heap. That inline buffer of 256 bytes is separate from, and     */
+/* smaller than, the 1024-byte stack buffer of _clog_write_sync(). It is a  */
+/* separate code path, so it gets its own coverage below.                   */
 /* ========================================================================== */
 
 TEST(async, long_message_uses_heap_and_is_not_truncated) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg_t cfg = {0};
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* Longer than job->msg_inline's 256-byte inline buffer, forcing
-   * _clog_write_async()'s own job->msg_heap spill. */
+  /* This message is longer than the 256-byte inline buffer job->msg_inline,
+   * so _clog_write_async() must spill it into job->msg_heap. */
   char long_msg[2048];
-  memset(long_msg, 'A', sizeof long_msg - 1);
-  long_msg[sizeof long_msg - 1] = '\0';
+  memset(long_msg, 'A', sizeof(long_msg) - 1);
+  long_msg[sizeof(long_msg) - 1] = '\0';
 
-  ccol_log_info(lg, "%s", long_msg);
+  clog_info(lg, "%s", long_msg);
   clog_flush(lg);
 
   char buf[8192];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   /* The full 2047-character message must appear verbatim in the output. */
   REQUIRE_NE(strstr(buf, long_msg), NULL);
@@ -5713,16 +5842,17 @@ TEST(async, long_message_uses_heap_and_is_not_truncated) {
 TEST(async,
      message_exceeding_inline_buffer_marks_truncation_when_heap_alloc_fails) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  /* Reuses output.message_exceeding_stack_buffer_marks_truncation_when_
-   * heap_alloc_fails' own _size_capped_* allocator (fails any request over
-   * 4096 bytes): every allocation this job needs besides the message's own
-   * heap spill (the envelope, sh->async_buf's CLOG_BUF_INITIAL == 4096
-   * byte buffer, the unbounded queue's own per-message node) fits at or
-   * under that cap, isolating the failure to job->msg_heap alone. */
+  /* This test reuses the _size_capped_* allocator of
+   * output.message_exceeding_stack_buffer_marks_truncation_when_heap_alloc_
+   * fails, which fails every request of more than 4096 bytes. Every other
+   * allocation of this job fits at or below that cap (the envelope, the
+   * CLOG_BUF_INITIAL == 4096 byte buffer of sh->async_buf, and the node for
+   * each message in the unbounded queue), so the failure reaches
+   * job->msg_heap alone. */
   ccol_memmgmt_procs_t procs = {
       .malloc = _size_capped_malloc,
       .free = _size_capped_free,
@@ -5734,54 +5864,59 @@ TEST(async,
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &cfg, &procs);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* Longer than the 256-byte inline buffer, and its +1-byte heap spill
-   * request (~5000 bytes) exceeds the 4096-byte cap above. */
+  /* This message is longer than the 256-byte inline buffer, and its heap
+   * spill request of one more byte is about 5000 bytes, above the 4096-byte
+   * cap above. */
   char long_msg[5000];
-  memset(long_msg, 'A', sizeof long_msg - 1);
-  long_msg[sizeof long_msg - 1] = '\0';
+  memset(long_msg, 'A', sizeof(long_msg) - 1);
+  long_msg[sizeof(long_msg) - 1] = '\0';
 
-  ccol_log_info(lg, "%s", long_msg);
+  clog_info(lg, "%s", long_msg);
   clog_flush(lg);
 
   char buf[8192];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
-  /* The heap spill failed, so the full message must NOT appear verbatim... */
+  /* The heap spill fails, so the full message must NOT appear as it is... */
   REQUIRE_EQ(strstr(buf, long_msg), NULL);
-  /* ...and the resulting truncation must be visibly indicated, not silent. */
+  /* ...and the output must show that truncation clearly. */
   REQUIRE_NE(strstr(buf, "...[truncated]"), NULL);
 
   clog_close(lg);
   cleanup_dir(dir, "app.log");
 }
 
-/* A width/precision combination large enough that the two conversions'
- * combined output length exceeds INT_MAX makes vsnprintf() itself fail
- * before producing any content at all (see robustness.format_string_
- * failure_writes_diagnostic_not_silence's own identical rationale for why
- * the width is a runtime argument); here it is _clog_write_async()'s own
- * vsnprintf() call into job->msg_inline that must fail this way, not
- * _clog_write_sync()'s. */
+/* A width and precision can be large enough that the total output length of
+ * the two conversions goes above INT_MAX, and then vsnprintf() itself fails
+ * and produces no content at all. See
+ * robustness.format_string_failure_writes_diagnostic_not_silence for why the
+ * width is a run-time argument. Here the call that must fail this way is the
+ * vsnprintf() of _clog_write_async() into job->msg_inline, not the one of
+ * _clog_write_sync(). */
 TEST(async, format_string_failure_writes_diagnostic_not_silence) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg_t cfg = {0};
   clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  int huge_width = 2000000000;
+  /* A volatile read keeps the width a run-time value at every optimization
+   * level, so the format-overflow analysis of the compiler cannot fold it
+   * and vsnprintf() really fails at run time. */
+  volatile int huge_width_source = 2000000000;
+  int huge_width = huge_width_source;
   _clog_write(lg, CLOG_INFO, __FILE__, __LINE__, __func__, false, "%*d%*d",
               huge_width, 1, huge_width, 1);
   clog_flush(lg);
 
   char buf[4096];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
 
-  /* Must not be a silently dropped, empty record: a well-formed placeholder
-   * line naming the real cause must be written instead. */
+  /* The logger must not drop the record and write nothing; it must write a
+   * well-formed placeholder line that names the real cause. */
   REQUIRE_GT(len, (size_t)0);
   REQUIRE_NE(strstr(buf, "ts="), NULL);
   REQUIRE_NE(strstr(buf, "log message formatting failed"), NULL);
@@ -5790,32 +5925,34 @@ TEST(async, format_string_failure_writes_diagnostic_not_silence) {
   cleanup_dir(dir, "app.log");
 }
 
-/* A field mutated/removed between submission and flush must still show its
- * value AS OF SUBMISSION TIME in the emitted record; proving fields are
- * genuinely snapshotted at submission, not read live by the writer thread. */
+/* A caller can change or remove a field between the submission and the
+ * flush, and the record must show the value of that field AT THE TIME OF
+ * SUBMISSION all the same. This proves that the logger takes a snapshot of
+ * the fields at the submission instead of the writer thread reading them
+ * live. */
 TEST(async, fields_snapshot_reflects_submission_time_not_flush_time) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  /* Long interval and large buffer: nothing auto-flushes before this test's
-   * own explicit clog_flush() call below, giving a wide window to mutate
-   * the field before the writer thread ever builds the record. */
+  /* A long interval and a large buffer mean that nothing flushes on its own
+   * before the explicit clog_flush() call below, which gives a wide window to
+   * change the field before the writer thread builds the record. */
   clog_async_cfg_t cfg = {.flush_buffer_size = 1 << 20,
-                          .flush_interval_ms = 60000};
+                          .flush_interval_us = 60000000};
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
   clog_set_field(lg, "stage", "before");
-  ccol_log_info(lg, "field snapshot check");
+  clog_info(lg, "field snapshot check");
   clog_set_field(lg, "stage", "after");
   clog_remove_field(lg, "stage");
 
   clog_flush(lg);
 
   char buf[4096];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
   REQUIRE_NE(strstr(buf, "stage=before"), NULL);
   REQUIRE_EQ(strstr(buf, "stage=after"), NULL);
@@ -5824,21 +5961,22 @@ TEST(async, fields_snapshot_reflects_submission_time_not_flush_time) {
   cleanup_dir(dir, "app.log");
 }
 
-/* A backtrace requested from a spawned thread with a uniquely-named function
- * must show that thread's own call stack, captured on the calling thread at
- * submission time; never the writer thread's own, unrelated stack. */
+/* When a thread with a function of a unique name asks for a backtrace, that
+ * backtrace must show the call stack of that thread, captured on the calling
+ * thread at the time of the submission, and never the unrelated stack of the
+ * writer thread. */
 static clog g_bt_test_lg;
 static void *_clog_bt_uniquely_named_worker_fn(void *arg) {
   (void)arg;
-  ccol_log_error(g_bt_test_lg, "backtrace from worker thread");
+  clog_error(g_bt_test_lg, "backtrace from worker thread");
   return NULL;
 }
 
 TEST(async, backtrace_captured_on_calling_thread_not_writer_thread) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg_t cfg = {0};
   g_bt_test_lg = clog_open_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
@@ -5858,7 +5996,7 @@ TEST(async, backtrace_captured_on_calling_thread_not_writer_thread) {
   clog_flush(g_bt_test_lg);
 
   char buf[8192];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
   REQUIRE_NE(strstr(buf, "backtrace from worker thread"), NULL);
   REQUIRE_NE(strstr(buf, "_clog_bt_uniquely_named_worker_fn"), NULL);
@@ -5869,16 +6007,20 @@ TEST(async, backtrace_captured_on_calling_thread_not_writer_thread) {
 }
 
 /* _emit_backtrace_syslog_lines() must leave its scratch buffer reset after
- * writing the LAST frame's line, not only before building each one. For the
- * async writer thread, that scratch buffer is sh->async_buf itself; the same
- * buffer _writer_flush_now() consults via "sh->async_buf.len > 0" to decide
- * whether there is unflushed data pending. Left non-empty after a
- * with_backtrace job, the next flush trigger that isn't itself another
- * CLOG_FMT_SYSLOG job silently re-writes the last frame's already-transmitted
- * bytes to the fd a second time. A long flush_interval_ms makes
- * clog_close()'s own shutdown-sentinel-driven flush the ONLY flush this job
- * can ever see before drain_pipe() reads the pipe, so this exercises that
- * trigger deterministically rather than racing a real-time idle timeout. */
+ * it writes the line of the LAST frame; a reset before each line is not
+ * enough. For the async writer thread that scratch buffer is sh->async_buf
+ * itself, and _writer_flush_now() reads the same buffer through
+ * "sh->async_buf.len > 0" to decide whether data waits for a flush.
+ *
+ * A buffer left non-empty after a job with a backtrace causes a repeat
+ * write: the next flush trigger that is not another CLOG_FMT_SYSLOG job
+ * writes the bytes of the last frame to the fd a second time, and nothing
+ * reports it.
+ *
+ * A long flush_interval_us makes the shutdown-sentinel flush of clog_close()
+ * the ONLY flush that this job can see before drain_pipe() reads the pipe,
+ * so this test drives that trigger in a deterministic way instead of racing
+ * a real idle timeout. */
 TEST(async, syslog_backtrace_not_duplicated_on_shutdown_drain) {
   if (!backtrace_capture_genuinely_available())
     return; /* see this helper's
@@ -5886,21 +6028,21 @@ TEST(async, syslog_backtrace_not_duplicated_on_shutdown_drain) {
   int pipefd[2];
   REQUIRE_EQ(pipe(pipefd), 0);
 
-  clog_async_cfg_t cfg = {.flush_interval_ms = 60000};
+  clog_async_cfg_t cfg = {.flush_interval_us = 60000000};
   clog lg = clog_open_fd_mp(pipefd[1], CLOG_ERROR, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_SYSLOG);
 
-  ccol_log_error(lg, "with backtrace via async");
+  clog_error(lg, "with backtrace via async");
 
   char buf[16384];
-  size_t len = drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+  size_t len = drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
 
-  /* Split into individual syslog messages (each starts with "<11>1 ") and
-   * confirm none of them repeats verbatim: a scratch buffer left non-empty
-   * shows up here as the last backtrace frame's own line being silently
-   * re-sent immediately afterward by the shutdown drain. */
+  /* Split the output into single syslog messages, each starting with
+   * "<11>1 ", and confirm that no message repeats. A scratch buffer left
+   * non-empty appears here as one more copy of the line of the last
+   * backtrace frame, which the shutdown drain sends right after it. */
   const char *starts[64];
   int n = 0;
   for (const char *p = buf; (p = strstr(p, "<11>1 ")) != NULL && n < 64; p++)
@@ -5919,27 +6061,27 @@ TEST(async, syslog_backtrace_not_duplicated_on_shutdown_drain) {
   }
 }
 
-/* The same leftover-scratch-buffer hazard, exercised via
- * _emit_backtrace_syslog_lines()'s OTHER return path that could leave one
- * behind: the single "#error backtrace unavailable" marker record (backtrace
- * capture forced to fail) must appear exactly once, not be silently re-sent
- * by clog_close()'s own shutdown drain. */
+/* This is the same hazard of a scratch buffer left behind, through the
+ * OTHER return path of _emit_backtrace_syslog_lines() that can leave one.
+ * The test forces the backtrace capture to fail, and the single marker
+ * record "#error backtrace unavailable" must then appear exactly once: the
+ * shutdown drain of clog_close() must not send it a second time. */
 TEST(async,
      syslog_backtrace_capture_failure_marker_not_duplicated_on_shutdown_drain) {
   int pipefd[2];
   REQUIRE_EQ(pipe(pipefd), 0);
 
-  clog_async_cfg_t cfg = {.flush_interval_ms = 60000};
+  clog_async_cfg_t cfg = {.flush_interval_us = 60000000};
   clog lg = clog_open_fd_mp(pipefd[1], CLOG_ERROR, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_SYSLOG);
 
   clog_test_force_backtrace_capture_failure(true);
-  ccol_log_error(lg, "boom");
+  clog_error(lg, "boom");
   clog_test_force_backtrace_capture_failure(false);
 
   char buf[8192];
-  size_t len = drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+  size_t len = drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
 
   int occurrences = 0;
@@ -5951,16 +6093,18 @@ TEST(async,
   REQUIRE_EQ(occurrences, 1);
 }
 
-/* _emit_backtrace_syslog_lines() must build each backtrace continuation
- * line's own TIMESTAMP field from the SAME submission-time timestamp
- * (job->ts) already used for the primary record it continues, never from a
- * fresh gettimeofday() call made at WRITE time. Under async logging the
- * writer thread's own processing of a job happens on a different thread (and
- * potentially well after) the original submission, so a write-time timestamp
- * makes a record's TIMESTAMP field and its own backtrace frames' TIMESTAMP
- * fields silently disagree. Every syslog message produced for one
- * ccol_log_error() call (the primary record and every one of its backtrace
- * frames) must carry the exact same, byte-identical TIMESTAMP field. */
+/* _emit_backtrace_syslog_lines() must build the TIMESTAMP field of each
+ * backtrace continuation line from job->ts, the same submission-time
+ * timestamp that the primary record uses, and must never call
+ * gettimeofday() again at the time of the write.
+ *
+ * With async logging, the writer thread processes a job on another thread,
+ * possibly long after the submission, so a timestamp taken at the write
+ * makes the TIMESTAMP field of a record disagree with the TIMESTAMP fields
+ * of its backtrace frames without anything reporting it. One
+ * clog_error() call produces a primary record and its backtrace frames,
+ * and every one of those syslog messages must carry the same TIMESTAMP
+ * field, byte for byte. */
 TEST(async, syslog_backtrace_timestamp_matches_primary_record) {
   if (!backtrace_capture_genuinely_available())
     return; /* see this helper's
@@ -5973,10 +6117,10 @@ TEST(async, syslog_backtrace_timestamp_matches_primary_record) {
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_SYSLOG);
 
-  ccol_log_error(lg, "timestamp correlation check");
+  clog_error(lg, "timestamp correlation check");
 
   char buf[16384];
-  size_t len = drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+  size_t len = drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
 
   /* Extract the RFC 5424 TIMESTAMP token (the field right after "<PRI>1 ")
@@ -6000,111 +6144,121 @@ TEST(async, syslog_backtrace_timestamp_matches_primary_record) {
   for (int i = 1; i < n; i++) REQUIRE_STREQ(timestamps[i], timestamps[0]);
 }
 
-/* The writer thread's own CLOG_FMT_SYSLOG branch must flush the shared async
- * batch buffer before building its own record, never just _buf_reset() it.
- * clog_set_format() never touches that buffer, and a job's own render format
- * is read live from the shared target (never captured at submission time),
- * so without that flush a message logged under a batching format
- * (CLOG_FMT_LOGFMT/CLOG_FMT_JSON), already built into the still-unflushed
- * batch buffer by the time the format is switched to CLOG_FMT_SYSLOG, is
- * silently discarded (never written to the fd at all) the instant the next
- * (syslog) job's record is built. A generous flush_interval_ms keeps the
- * first message from being flushed on its own before the switch; the short
- * sleep after it gives the writer thread time to have already dequeued and
- * built it into the batch buffer, reproducing the exact window this depends
- * on. Both messages must survive regardless of exactly how that race
- * resolves. */
+/* The CLOG_FMT_SYSLOG branch of the writer thread must flush the shared
+ * async batch buffer before it builds its own record; a plain _buf_reset()
+ * is not enough. clog_set_format() never touches that buffer, and a job
+ * reads its render format live from the shared target instead of capturing
+ * the format at the submission.
+ *
+ * A batching format (CLOG_FMT_LOGFMT or CLOG_FMT_JSON) can already have
+ * built a message into the batch buffer before a switch to CLOG_FMT_SYSLOG.
+ * Without that flush, the logger discards that message: it never writes it
+ * to the
+ * fd, and it reports nothing. The loss happens as soon as the next syslog
+ * job builds its record.
+ *
+ * A large flush_interval_us stops the first message from getting a flush of
+ * its own before the switch, and the short sleep after it gives the writer
+ * thread time to dequeue that message and build it into the batch buffer,
+ * which reproduces the exact window that the test needs. Both messages must
+ * survive, whatever the outcome of that race. */
 TEST(async, format_switch_to_syslog_does_not_drop_buffered_batch) {
   int pipefd[2];
   REQUIRE_EQ(pipe(pipefd), 0);
 
-  clog_async_cfg_t cfg = {.flush_interval_ms = 60000};
+  clog_async_cfg_t cfg = {.flush_interval_us = 60000000};
   clog lg = clog_open_fd_mp(pipefd[1], CLOG_INFO, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_info(lg, "pre-switch logfmt message");
+  clog_info(lg, "pre-switch logfmt message");
   usleep(50000); /* let the writer thread build this into the batch buffer */
 
   clog_set_format(lg, CLOG_FMT_SYSLOG);
-  ccol_log_info(lg, "post-switch syslog message");
+  clog_info(lg, "post-switch syslog message");
 
   char buf[8192];
-  size_t n = drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+  size_t n = drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof(buf));
   REQUIRE_GT(n, (size_t)0);
 
   REQUIRE_NE(strstr(buf, "pre-switch logfmt message"), NULL);
   REQUIRE_NE(strstr(buf, "post-switch syslog message"), NULL);
 }
 
-/* CLOG_FATAL must drain everything already queued before writing (and
- * exiting after) the fatal record itself; otherwise messages logged
- * moments before a crash, still sitting unflushed, would be silently lost.
+/* CLOG_FATAL must drain everything already in the queue before it writes the
+ * fatal record, and only then exit. Without this, a message logged moments
+ * before a crash is left unflushed, and the logger loses it with no report.
  *
- * This test has one open, CI-only failure mode (seen on linux-aarch64-gcc,
- * under qemu-user 8.2.2): the child is not reaped within the 30s bound
- * below. It does NOT match the confirmed, external, already-filed qemu-user
- * fd_trans_lock bug that several cthreadcomm fork() tests do carry
- * (linux-user's own internal fd_trans_lock, a process-wide pthread mutex
- * left permanently locked in a forked child if another thread in the parent
- * was holding it at the instant of fork(); gitlab.com/qemu-project/qemu/-/
- * issues/2846): 15 direct reproduction attempts of THIS test, against the
- * identical real qemu-aarch64 8.2.2 environment, all pass cleanly in ~22ms
- * each, and an adjacent, otherwise-trivial test in that same CI run shows an
- * elevated ~2.3s duration, consistent with ordinary CI-runner contention/
- * slowness rather than a deterministic race. The actual cause is still open.
- * The instrumentation below (checkpoints plus a /proc dump on timeout,
- * mirroring tests/cthreadcomm/tests.c's own established pattern for exactly
- * this class of qemu-only mystery) exists so that if this recurs, there is
- * enough information to actually diagnose it rather than only a bare
- * "REQUIRE_TRUE(false), reason unknown": a State: S child with a real
- * /proc/<pid>/syscall entry and a broad SigBlk mask blocking nearly every
- * signal would match the confirmed fd_trans_lock signature after all (this
- * child never calls alarm() itself, so, unlike the cthreadcomm cases, do
- * not expect any particular pending signal in ShdPnd; the mask
- * itself is qemu-user's own baseline thread-management behavior and is what
- * to look for here); a State: R child spinning at high CPU with an empty
- * wchan would instead point at a genuine busy loop; and which [DEBUG_TEST]
- * checkpoint was the last one printed narrows down where inside the child
- * it actually got stuck. */
+ * This test has one open failure mode that appears in CI only, on
+ * linux-aarch64-gcc under qemu-user 8.2.2: the parent does not reap the
+ * child inside the 30s bound below. It does NOT match the confirmed,
+ * external, already-filed qemu-user fd_trans_lock bug that several
+ * cthreadcomm fork() tests do carry. That bug is in the internal
+ * fd_trans_lock of linux-user, a process-wide pthread mutex that stays
+ * locked forever in a forked child when another thread in the parent holds
+ * it at the instant of the fork (see
+ * gitlab.com/qemu-project/qemu/-/issues/2846). 15 direct reproduction
+ * attempts of THIS test, against the same real qemu-aarch64 8.2.2
+ * environment, all pass cleanly in about 22ms each, while an adjacent,
+ * simple test in that same CI run shows a high duration of about 2.3s,
+ * which fits ordinary contention and slowness of a CI runner rather than a
+ * deterministic race. The real cause is not known.
+ *
+ * The instrumentation below, checkpoints plus a /proc dump on a timeout,
+ * mirrors the pattern of tests/cthreadcomm/tests.c for this class of
+ * qemu-only mystery. It exists so that a recurrence carries enough
+ * information for a real diagnosis, instead of only a bare
+ * REQUIRE_TRUE(false) with no reason.
+ *
+ * Look for a child in State: S, with a real /proc/<pid>/syscall entry and a
+ * broad SigBlk mask that blocks nearly every signal, a combination that
+ * matches the confirmed fd_trans_lock signature. This child never calls
+ * alarm() itself,
+ * so, unlike the cthreadcomm cases, do not expect any particular pending
+ * signal in ShdPnd: the mask itself is the normal thread-management
+ * behaviour of qemu-user, and the mask is what to look for here. A child in
+ * State: R that spins at high CPU with an empty wchan points at a real busy
+ * loop instead. The last [DEBUG_TEST] checkpoint that the child prints
+ * narrows down where inside the child it stops. */
 TEST(async, fatal_drains_queue_before_writing_and_terminating) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   pid_t pid = fork();
   if (pid == 0) {
-    /* Deliberately does NOT redirect STDOUT_FILENO/STDERR_FILENO to
-     * /dev/null: silencing them here would defeat the entire purpose of the
-     * checkpoints below, exactly the point tests/cthreadcomm/tests.c's own
-     * identical hang-chasing tests already document: a silenced child that
-     * hangs leaves nothing to show how far it got. */
+    /* This child deliberately does NOT redirect STDOUT_FILENO and
+     * STDERR_FILENO to /dev/null, because silence here defeats the whole
+     * purpose of the checkpoints below. The hang-chasing tests of
+     * tests/cthreadcomm/tests.c document the same point: a silent child that
+     * hangs shows nothing about how far it got. */
     fprintf(stderr, "[DEBUG_TEST] child pid=%d about to clog_open_file_mp\n",
             (int)getpid());
-    /* Long interval and large buffer: none of the non-fatal messages below
-     * can have been auto-flushed by the timer or the size threshold before
-     * ccol_log_fatal() runs a few lines later. */
+    /* The interval is long and the buffer is large, so neither the timer nor
+     * the size threshold can flush any of the messages below before
+     * clog_fatal() runs a few lines later. */
     clog_async_cfg_t cfg = {.flush_buffer_size = 1 << 20,
-                            .flush_interval_ms = 60000};
+                            .flush_interval_us = 60000000};
     clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
     if (lg == CLOG_INVALID) _exit(2);
     fprintf(stderr,
             "[DEBUG_TEST] child pid=%d opened, about to log queued "
             "message one\n",
             (int)getpid());
-    ccol_log_info(lg, "queued message one");
+    clog_info(lg, "queued message one");
     fprintf(stderr,
             "[DEBUG_TEST] child pid=%d logged message one, about to log "
             "queued message two\n",
             (int)getpid());
-    ccol_log_info(lg, "queued message two");
+    clog_info(lg, "queued message two");
     fprintf(stderr,
             "[DEBUG_TEST] child pid=%d logged message two, about to "
-            "ccol_log_fatal\n",
+            "clog_fatal\n",
             (int)getpid());
-    ccol_log_fatal(lg, "the fatal record itself");
+    clog_fatal(lg, "the fatal record itself");
     fprintf(stderr,
-            "[DEBUG_TEST] child pid=%d ccol_log_fatal returned (should be "
+            "[DEBUG_TEST] child pid=%d clog_fatal returned (should be "
             "unreachable!)\n",
             (int)getpid());
     _exit(0); /* unreachable */
@@ -6130,7 +6284,7 @@ TEST(async, fatal_drains_queue_before_writing_and_terminating) {
   REQUIRE_FALSE(WIFSIGNALED(status));
 
   char buf[4096];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
 
   char *p1 = strstr(buf, "queued message one");
@@ -6139,66 +6293,69 @@ TEST(async, fatal_drains_queue_before_writing_and_terminating) {
   REQUIRE_NE(p1, NULL);
   REQUIRE_NE(p2, NULL);
   REQUIRE_NE(pf, NULL);
-  /* Chronological order on disk: both queued messages, then the fatal one.
-   * Compared as byte offsets (not raw pointers) since tau's own _Generic
-   * printer treats char* as a C string, which would print confusingly (the
-   * rest of buf from that point on) in a failure message otherwise. */
+  /* The order on the disk follows the clock: both queued messages come
+   * first, and then the fatal one. The test compares byte offsets instead of
+   * raw pointers, because the _Generic printer of tau treats a char* as a C
+   * string, so a failure message would otherwise print the rest of buf from
+   * that point on. */
   REQUIRE_LT((long)(p1 - buf), (long)(p2 - buf));
   REQUIRE_LT((long)(p2 - buf), (long)(pf - buf));
 
   cleanup_dir(dir, "app.log");
 }
 
-/* An idle async logger (nothing logged after its first message) must NEVER
- * rotate on its own, no matter how many multiples of the interval elapse
- * with nothing further written; exactly mirroring the synchronous write
- * path's own documented "time rotation triggers on the first WRITE after
- * the interval elapses" contract, not "rotates automatically once the
- * interval elapses regardless of whether anything new is logged". The
- * writer thread's own periodic flush-interval wakeups (distinct from the
- * rotation interval) must never fire a rotation on their own account either,
- * since _writer_flush_now()'s whole rotation-and-write block is gated on
- * async_buf actually holding something to write. Once a NEW message finally
- * is logged after the interval has elapsed, exactly one rotation must
- * occur (not one per elapsed interval, and not zero). */
+/* An idle async logger that logs nothing after its first message must NEVER
+ * rotate on its own, however many multiples of the interval pass with no
+ * further write. This mirrors the documented contract of the synchronous
+ * write path: a time rotation starts at the first WRITE after the interval
+ * ends, and the logger does not rotate on its own when the interval ends and
+ * nothing new arrives.
+ *
+ * The writer thread wakes up at each flush interval, which is a different
+ * interval from the rotation one, and those wakeups must never start a
+ * rotation either: the whole rotation-and-write block of _writer_flush_now()
+ * runs only when async_buf holds something to write.
+ *
+ * When a NEW message finally arrives after the interval ends, exactly one
+ * rotation must happen: not one for each interval that passes, and not
+ * zero. */
 TEST(async, idle_logger_does_not_rotate_until_next_write_after_interval) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  /* rotation_interval_secs must stay comfortably above the tolerance this
-   * test itself grants the "first message" flush below (2000ms): a
-   * rotation_interval_secs of 1 is TIGHTER than that self-declared 2000ms
-   * worst-case landing time, so a flush that merely lands anywhere between
-   * 1000ms and 2000ms after construction (within the test's own stated
-   * tolerance, and genuinely reachable under make memtest's own valgrind
-   * instrumentation overhead) makes _clog_time_rotate_if_due() correctly
-   * (per this library's own documented "next write after the interval
-   * elapses" contract) rotate as part of THAT flush, before the idle-wait
-   * phase below even starts, spuriously failing the "must not have rotated
-   * yet" check a few lines down. 3 seconds leaves a wide margin above that
-   * same 2000ms tolerance. */
+  /* rotation_interval_us must stay well above the tolerance that this test
+   * grants the flush of the "first message" below, which is 2000ms. A
+   * rotation_interval_us of 1 s is TIGHTER than that worst-case landing
+   * time: a flush can land anywhere between 1000ms and 2000ms after the
+   * construction, which is inside the stated tolerance of the test and which
+   * the valgrind instrumentation cost of make memtest reaches.
+   * _clog_time_rotate_if_due() then rotates as part of THAT flush, which is
+   * correct under the documented "next write after the interval ends"
+   * contract of this library, but which happens before the idle-wait phase
+   * below starts and so fails the "must not have rotated yet" check a few
+   * lines down for no real reason. A value of 3 seconds leaves a wide margin
+   * above the same 2000ms tolerance. */
   clog_rotation_cfg_t rcfg = {
       .time_rotation_enabled = true,
-      .rotation_interval_secs = 3,
+      .rotation_interval_us = 3000000,
   };
-  clog_async_cfg_t acfg = {.flush_interval_ms = 50};
+  clog_async_cfg_t acfg = {.flush_interval_us = 50000};
   clog lg = clog_open_file_mp(path, CLOG_INFO, &rcfg, &acfg, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_info(lg, "first message");
+  clog_info(lg, "first message");
   REQUIRE_TRUE(_poll_for_substring(path, "first message", 2000));
 
-  /* Idle well past the rotation interval (which the writer thread's own
-   * 50ms flush-interval wakeups keep waking up through), with nothing
-   * further logged: must not rotate on its own. */
+  /* Stay idle well past the rotation interval, with no further log call. The
+   * writer thread keeps waking up every 50ms for its flush interval, and the
+   * logger must not rotate on its own. */
   usleep(4000000);
   REQUIRE_EQ(count_files_with_prefix(dir, "app.log."), 0);
 
-  /* The next write, now that the interval has elapsed, must trigger exactly
-   * one rotation. */
-  ccol_log_info(lg, "second message");
+  /* The interval ends, so the next write must start exactly one rotation. */
+  clog_info(lg, "second message");
   clog_close(lg);
 
   REQUIRE_EQ(count_files_with_prefix(dir, "app.log."), 1);
@@ -6208,24 +6365,24 @@ TEST(async, idle_logger_does_not_rotate_until_next_write_after_interval) {
 
 TEST(async, flush_drains_a_slow_to_self_flush_setup) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg_t cfg = {.flush_buffer_size = 1 << 20,
-                          .flush_interval_ms = 60000};
+                          .flush_interval_us = 60000000};
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_info(lg, "needs an explicit flush");
+  clog_info(lg, "needs an explicit flush");
 
-  /* Without clog_flush(), this message would not appear for a full minute
-   * (flush_interval_ms=60000) or a very large accumulated batch
-   * (flush_buffer_size=1MiB); neither of which this test waits for. */
+  /* Without clog_flush(), this message waits for a full minute, because
+   * flush_interval_us is 60000000, or for a very large batch, because
+   * flush_buffer_size is 1MiB. This test waits for neither. */
   clog_flush(lg);
 
   char buf[4096];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
   REQUIRE_NE(strstr(buf, "needs an explicit flush"), NULL);
 
@@ -6233,10 +6390,11 @@ TEST(async, flush_drains_a_slow_to_self_flush_setup) {
   cleanup_dir(dir, "app.log");
 }
 
-/* An allocator whose malloc() can be made to fail on demand, used to force
- * the unbounded queue's own internal node allocation to fail inside
- * ccol_dynmq_send_zc(), pinning clog_flush()'s own "return promptly instead of
- * hanging when the enqueue itself fails" path (see _clog_flush_pinned()). */
+/* An allocator whose malloc() can fail on demand. The test uses it to make
+ * the internal node allocation of the unbounded queue fail inside
+ * ccol_dynmq_send_zc(), which pins the path of clog_flush() that returns at
+ * once, instead of hanging, when the enqueue itself fails. See
+ * _clog_flush_pinned(). */
 static _Atomic bool g_flush_oom_fail_malloc = false;
 static void *_flush_oom_malloc(size_t sz) {
   if (atomic_load(&g_flush_oom_fail_malloc)) return NULL;
@@ -6254,9 +6412,9 @@ static void *_flush_oom_realloc(void *p, size_t sz) {
 
 TEST(async, flush_returns_promptly_when_enqueue_fails) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   ccol_memmgmt_procs_t procs = {
       .malloc = _flush_oom_malloc,
@@ -6265,8 +6423,8 @@ TEST(async, flush_returns_promptly_when_enqueue_fails) {
       .realloc = _flush_oom_realloc,
   };
 
-  clog_async_cfg_t cfg = {0}; /* unbounded queue: its own send-side node
-      allocation is the thing this test forces to fail */
+  clog_async_cfg_t cfg = {0}; /* an unbounded queue. This test forces its
+      own send-side node allocation to fail. */
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &cfg, &procs);
   REQUIRE_NE(lg, CLOG_INVALID);
 
@@ -6274,7 +6432,7 @@ TEST(async, flush_returns_promptly_when_enqueue_fails) {
 
   struct timeval t0, t1;
   gettimeofday(&t0, NULL);
-  clog_flush(lg); /* must return promptly, not hang */
+  clog_flush(lg); /* must return at once, and must not hang */
   gettimeofday(&t1, NULL);
 
   long elapsed_ms =
@@ -6286,49 +6444,50 @@ TEST(async, flush_returns_promptly_when_enqueue_fails) {
   cleanup_dir(dir, "app.log");
 }
 
-/* _clog_flush_pinned() must check the return value of both ccol_mutex_init()
- * and ccol_cond_var_init() on its own stack-local synchronization object
- * before going on to ccol_mutex_lock()/ccol_cond_var_wait() on it. A failed
- * init (impossible to trigger for real against glibc's own default-attribute
- * implementation, but not impossible per POSIX, e.g. under ENOMEM) otherwise
- * means operating on a not-fully-initialized mutex (undefined behavior, not
- * a graceful degradation), reachable from clog_flush() and, worse, from
- * _clog_write()'s own FATAL path. This one call instead fails open (nothing
- * enqueued, no wait attempted), exactly like the "enqueue itself failed"
- * case just above. */
+/* _clog_flush_pinned() must check the return value of ccol_mutex_init() and
+ * of ccol_cond_var_init() on its own synchronization object on the stack,
+ * before it calls ccol_mutex_lock() or ccol_cond_var_wait() on that object.
+ * A real failure of either init is not reachable against the
+ * default-attribute implementation of glibc, but POSIX permits one, for
+ * example under ENOMEM, and without the checks the code then works on a
+ * mutex that is not fully initialized, which is undefined behaviour instead
+ * of a clean degradation. This path is reachable from clog_flush() and,
+ * worse, from the FATAL path of _clog_write(). This one call instead fails
+ * open: it enqueues nothing and tries no wait, the same behaviour as for the
+ * "the enqueue itself fails" case above. */
 TEST(async, flush_returns_promptly_when_mutex_init_fails) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg_t cfg = {0};
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_info(lg, "before forced ccol_mutex_init failure");
+  clog_info(lg, "before forced ccol_mutex_init failure");
 
   clog_test_force_flush_mutex_init_failure(true);
 
   struct timeval t0, t1;
   gettimeofday(&t0, NULL);
-  clog_flush(lg); /* must return promptly, not hang or crash */
+  clog_flush(lg); /* must return at once, with no hang and no crash */
   gettimeofday(&t1, NULL);
 
   long elapsed_ms =
       (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_usec - t0.tv_usec) / 1000L;
   REQUIRE_LT(elapsed_ms, (long)2000);
 
-  /* The forced failure must have auto-disarmed; this logger must still be
-   * fully usable afterward, proving the failed init left no corrupted state
-   * or leaked resource behind. */
-  ccol_log_info(lg, "after forced ccol_mutex_init failure");
+  /* The forced failure must disarm itself, and this logger must keep working
+   * fully after it, which proves that the failed init leaves no corrupt state
+   * and no leaked resource behind. */
+  clog_info(lg, "after forced ccol_mutex_init failure");
   clog_flush(lg);
 
   clog_close(lg);
 
   char buf[4096];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
   REQUIRE_NE(strstr(buf, "before forced ccol_mutex_init failure"), NULL);
   REQUIRE_NE(strstr(buf, "after forced ccol_mutex_init failure"), NULL);
@@ -6336,41 +6495,41 @@ TEST(async, flush_returns_promptly_when_mutex_init_fails) {
   cleanup_dir(dir, "app.log");
 }
 
-/* The same contract as flush_returns_promptly_when_mutex_init_fails above,
- * exercised via the OTHER init call: ccol_cond_var_init() failing after
- * ccol_mutex_init() already succeeded must release that already-initialized
- * mutex rather than leaking it, and must not attempt to wait on the
- * never-initialized condition variable. */
+/* This is the same contract as flush_returns_promptly_when_mutex_init_fails
+ * above, through the OTHER init call: ccol_cond_var_init() can fail after
+ * ccol_mutex_init() succeeds, and the code must then destroy that
+ * initialized mutex instead of leaking it, and must make no wait on the
+ * condition variable, which is not initialized. */
 TEST(async, flush_returns_promptly_when_condvar_init_fails) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg_t cfg = {0};
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_info(lg, "before forced condvar_init failure");
+  clog_info(lg, "before forced condvar_init failure");
 
   clog_test_force_flush_condvar_init_failure(true);
 
   struct timeval t0, t1;
   gettimeofday(&t0, NULL);
-  clog_flush(lg); /* must return promptly, not hang or crash */
+  clog_flush(lg); /* must return at once, with no hang and no crash */
   gettimeofday(&t1, NULL);
 
   long elapsed_ms =
       (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_usec - t0.tv_usec) / 1000L;
   REQUIRE_LT(elapsed_ms, (long)2000);
 
-  ccol_log_info(lg, "after forced condvar_init failure");
+  clog_info(lg, "after forced condvar_init failure");
   clog_flush(lg);
 
   clog_close(lg);
 
   char buf[4096];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
   REQUIRE_NE(strstr(buf, "before forced condvar_init failure"), NULL);
   REQUIRE_NE(strstr(buf, "after forced condvar_init failure"), NULL);
@@ -6388,22 +6547,22 @@ static void *_teardown_retry_closer(void *arg) {
   return NULL;
 }
 
-/* _shared_async_teardown() must check whether the writer thread's shutdown
- * sentinel was actually sent before going on to join that thread. For the
- * default unbounded queue, that send (ccol_dynmq_send_zc()) can genuinely
- * fail under memory pressure (its own internal node allocation failing,
- * exactly the condition a caller may be closing loggers in response to),
- * which without a retry leaves the writer thread waiting forever for a
- * sentinel that will now never arrive, hanging clog_close() permanently; the
- * signature is the closing thread parked in pthread_join inside
- * _shared_async_teardown while the writer thread is parked in
- * ccol_dynmq_timed_recv_zc. The sentinel send is therefore retried with a
- * bounded backoff instead of giving up after one attempt. */
+/* _shared_async_teardown() must check whether the send of the shutdown
+ * sentinel to the writer thread succeeds before it joins that thread. With
+ * the default unbounded queue, that send through ccol_dynmq_send_zc() can
+ * really fail under memory pressure, when its own internal node allocation
+ * fails, which is exactly the condition under which a caller may close
+ * loggers. Without a retry, the writer thread then waits forever for a
+ * sentinel that never arrives, and clog_close() hangs forever, with a
+ * closing thread parked in pthread_join inside _shared_async_teardown while
+ * the writer thread is parked in ccol_dynmq_timed_recv_zc. So the code
+ * retries the sentinel send with a bounded backoff instead of giving up after
+ * one try. */
 TEST(async, close_recovers_from_transient_oom_instead_of_hanging) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   ccol_memmgmt_procs_t procs = {
       .malloc = _flush_oom_malloc,
@@ -6412,12 +6571,12 @@ TEST(async, close_recovers_from_transient_oom_instead_of_hanging) {
       .realloc = _flush_oom_realloc,
   };
 
-  clog_async_cfg_t cfg = {0}; /* unbounded queue: its own shutdown-sentinel
-      node allocation is what this test forces to fail, then recover */
+  clog_async_cfg_t cfg = {0}; /* an unbounded queue. This test forces its
+      own shutdown-sentinel node allocation to fail, and then to recover. */
   g_teardown_retry_lg = clog_open_file_mp(path, CLOG_INFO, NULL, &cfg, &procs);
   REQUIRE_NE(g_teardown_retry_lg, CLOG_INVALID);
 
-  ccol_log_info(g_teardown_retry_lg, "before oom");
+  clog_info(g_teardown_retry_lg, "before oom");
 
   atomic_store(&g_flush_oom_fail_malloc, true);
   atomic_store(&g_teardown_retry_close_done, false);
@@ -6425,18 +6584,18 @@ TEST(async, close_recovers_from_transient_oom_instead_of_hanging) {
   pthread_t th;
   REQUIRE_EQ(pthread_create(&th, NULL, _teardown_retry_closer, NULL), 0);
 
-  /* Simulate a transient OOM window: every allocation fails for a while,
-   * then the allocator recovers, exactly like a real transient allocation
-   * failure clearing up. This test is non-vacuous: without the retry,
-   * close() is already unrecoverably hung by the time the very first
-   * sentinel send attempt fails, so clearing the flag afterward cannot
+  /* Simulate a short window with no memory: every allocation fails for a
+   * while, and then the allocator recovers, which is what a real, transient
+   * allocation failure looks like when it clears up. This test is not
+   * vacuous: without the retry, close() already hangs beyond recovery by the
+   * time the first sentinel send fails, and a later clear of the flag cannot
    * help. */
   usleep(300000);
   atomic_store(&g_flush_oom_fail_malloc, false);
 
-  /* Bounded wait, not a blocking pthread_join(): without the bounded retry
-   * above, this thread hangs forever, and this test must fail visibly
-   * rather than hang the whole suite. */
+  /* This is a bounded wait instead of a blocking pthread_join(): without the
+   * bounded retry above, this thread hangs forever, and this test must then
+   * fail visibly instead of hanging the whole suite. */
   bool done = false;
   for (int waited_ms = 0; waited_ms < 10000; waited_ms += 20) {
     if (atomic_load(&g_teardown_retry_close_done)) {
@@ -6445,21 +6604,21 @@ TEST(async, close_recovers_from_transient_oom_instead_of_hanging) {
     }
     usleep(20000);
   }
-  REQUIRE_TRUE(done); /* close() must eventually return, not hang forever */
+  REQUIRE_TRUE(done); /* close() must return in the end, and must not hang */
   pthread_join(th, NULL);
 
   cleanup_dir(dir, "app.log");
 }
 
-/* An allocator that fails exactly its Nth malloc/calloc/realloc call
- * (counted together, matching real allocation order), used to land a
- * forced failure precisely on ccol_dynmq_send_zc()'s own internal node
- * allocation inside _clog_write_async(); distinct from
- * flush_returns_promptly_when_enqueue_fails' own allocator above, which
- * fails every allocation unconditionally rather than one numbered call, and
- * is therefore unsuitable for reaching this specific call site without also
- * failing the envelope/field-snapshot allocations that must be allowed to
- * succeed first. */
+/* An allocator that fails exactly its Nth call, counting malloc, calloc and
+ * realloc together to match the real allocation order. The test uses it to
+ * land a forced failure on the internal node allocation of
+ * ccol_dynmq_send_zc() inside _clog_write_async().
+ *
+ * The allocator of flush_returns_promptly_when_enqueue_fails above is
+ * different: it fails every allocation instead of one numbered call, so it
+ * cannot reach this call site without failing the envelope and
+ * field-snapshot allocations, which must succeed first. */
 static _Atomic int g_enqueue_fail_call_count = 0;
 static _Atomic int g_enqueue_fail_at = -1;
 
@@ -6479,20 +6638,21 @@ static void *_enqueue_fail_realloc(void *p, size_t sz) {
   return _enqueue_fail_should_fail() ? NULL : realloc(p, sz);
 }
 
-/* _clog_write_async()'s own enqueue-failure fallback (used when
- * ccol_dynmq_send_zc()/ccol_circq_send_zc() itself fails, e.g. the unbounded
- * queue's own node allocation failing under memory pressure) must run both
- * of the rotation checks every other write path in this file applies before
- * writing the record directly to sh->fd. Without them, max_file_size is
- * silently defeated for exactly the record that hit this path; and since
- * that record never touches sh->async_buf, not even a later clog_flush()
- * notices, because _writer_flush_now() only runs its own rotation checks
- * when async_buf has content. */
+/* The enqueue-failure fallback of _clog_write_async() runs when
+ * ccol_dynmq_send_zc() or ccol_circq_send_zc() itself fails, for example
+ * when the node allocation of the unbounded queue fails under memory
+ * pressure. That fallback must run both rotation checks that every other
+ * write path in this file runs before it writes the record straight to
+ * sh->fd. Without them, max_file_size has no effect for exactly the record
+ * that takes this path, and nothing reports it. That record never touches
+ * sh->async_buf, so a later clog_flush() does not notice either, because
+ * _writer_flush_now() runs its own rotation checks only when async_buf holds
+ * content. */
 TEST(async, enqueue_failure_fallback_still_rotates_on_size) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   ccol_memmgmt_procs_t procs = {
       .malloc = _enqueue_fail_malloc,
@@ -6503,37 +6663,39 @@ TEST(async, enqueue_failure_fallback_still_rotates_on_size) {
 
   clog_rotation_cfg_t rcfg = {0};
   rcfg.size_rotation_enabled = true;
-  rcfg.max_file_size = 10; /* tiny: any real record crosses it */
+  rcfg.max_file_size = 10; /* small: any real record goes past it */
 
   clog_async_cfg_t acfg = {0}; /* unbounded queue */
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, &rcfg, &acfg, &procs);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* One ordinary write to confirm rotation genuinely works end to end for
-   * this setup, and to leave bytes_written freshly reset to 0 by _rotate(). */
-  ccol_log_info(lg, "seed");
+  /* One ordinary write confirms that the rotation works end to end for this
+   * setup, and it also leaves bytes_written at 0 again, because _rotate()
+   * resets it. */
+  clog_info(lg, "seed");
   clog_flush(lg);
 
   int rotated_before = count_files_with_prefix(dir, "app.log.");
   REQUIRE_EQ(rotated_before, 1);
 
-  /* Fail exactly the 2nd allocation of the next ccol_log_info() call: with no
-   * fields set and a short message, allocation #1 is the envelope calloc,
-   * and #2 is ccol_dynmq_send_zc()'s own internal node allocation;
-   * landing this failure squarely on the enqueue call itself, not on
-   * anything upstream of it that would otherwise route through the
-   * ordinary, already-correct _clog_write_sync() fallback instead.
-   * (_snapshot_fields()'s own ccol_growbuf_init() is skipped entirely for a
-   * zero-field logger like this one, so it never appears in this count.) */
+  /* Fail exactly the 2nd allocation of the next clog_info() call. This
+   * logger holds no fields and the message is short, so allocation #1 is
+   * the calloc for the envelope and #2 is the internal node allocation of
+   * ccol_dynmq_send_zc(). The failure therefore lands on the enqueue call
+   * itself and not on anything before that call, which would route through
+   * the ordinary, already correct _clog_write_sync()
+   * fallback.
+   * _snapshot_fields() skips its own ccol_growbuf_init() completely for a
+   * logger with no fields, so that call never appears in this count. */
   atomic_store(&g_enqueue_fail_call_count, 0);
   atomic_store(&g_enqueue_fail_at, 2);
-  ccol_log_info(lg, "x");
+  clog_info(lg, "x");
   atomic_store(&g_enqueue_fail_at, -1);
 
-  /* The record must have been written synchronously (this fallback path
-   * never touches the queue), and it must have triggered rotation right
-   * then and there; no clog_flush() needed. */
+  /* The logger must write the record synchronously, because this fallback
+   * path never touches the queue, and that write must also start the
+   * rotation at once, with no clog_flush() call needed. */
   int rotated_after = count_files_with_prefix(dir, "app.log.");
   REQUIRE_GT(rotated_after, rotated_before);
 
@@ -6541,14 +6703,14 @@ TEST(async, enqueue_failure_fallback_still_rotates_on_size) {
   cleanup_dir(dir, "app.log");
 }
 
-/* Sibling of the test above, covering time-based rather than size-based
- * rotation: the same enqueue-failure fallback path must also honor
- * rotation_interval_secs, not just max_file_size. */
+/* This test is a sibling of the test above for the time-based rotation
+ * instead of the size-based one: the same enqueue-failure fallback path
+ * must obey rotation_interval_us, and not only max_file_size. */
 TEST(async, enqueue_failure_fallback_still_rotates_on_time) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   ccol_memmgmt_procs_t procs = {
       .malloc = _enqueue_fail_malloc,
@@ -6559,28 +6721,29 @@ TEST(async, enqueue_failure_fallback_still_rotates_on_time) {
 
   clog_rotation_cfg_t rcfg = {0};
   rcfg.time_rotation_enabled = true;
-  rcfg.rotation_interval_secs = 1;
+  rcfg.rotation_interval_us = 1000000;
 
   clog_async_cfg_t acfg = {0};
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, &rcfg, &acfg, &procs);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_info(lg, "seed");
+  clog_info(lg, "seed");
   clog_flush(lg);
   int rotated_before = count_files_with_prefix(dir, "app.log.");
   REQUIRE_EQ(rotated_before, 0);
 
-  usleep(1100 * 1000); /* let rotation_interval_secs elapse */
+  usleep(1100 * 1000); /* wait for rotation_interval_us to end */
 
-  /* See enqueue_failure_fallback_still_rotates_on_size's own comment: with no
-   * fields set, allocation #1 is the envelope calloc and #2 is
-   * ccol_dynmq_send_zc()'s own internal node allocation (the enqueue call
-   * itself); _snapshot_fields()'s ccol_growbuf_init() is skipped entirely
-   * for a zero-field logger, so it is never part of this count. */
+  /* See the comment of enqueue_failure_fallback_still_rotates_on_size. This
+   * logger holds no fields, so allocation #1 is the calloc for the envelope,
+   * and allocation #2 is the internal node allocation of
+   * ccol_dynmq_send_zc(), which is the enqueue call itself.
+   * _snapshot_fields() skips its own ccol_growbuf_init() completely for a
+   * logger with no fields, so that call is never part of this count. */
   atomic_store(&g_enqueue_fail_call_count, 0);
   atomic_store(&g_enqueue_fail_at, 2);
-  ccol_log_info(lg, "x");
+  clog_info(lg, "x");
   atomic_store(&g_enqueue_fail_at, -1);
 
   int rotated_after = count_files_with_prefix(dir, "app.log.");
@@ -6590,26 +6753,30 @@ TEST(async, enqueue_failure_fallback_still_rotates_on_time) {
   cleanup_dir(dir, "app.log");
 }
 
-/* _clog_write_async()'s own enqueue-failure fallback must first drain
- * whatever is already sitting, successfully enqueued but not yet processed
- * by the writer thread, ahead of it in the SAME queue before writing its own
- * record directly to sh->fd. Without that, a message that failed to enqueue
- * can win the race for lg->shared->mutex and land on disk BEFORE an earlier,
- * already-submitted message the writer thread simply hasn't gotten around to
- * processing yet, silently reordering output relative to submission order.
- * flush_buffer_size/flush_interval_ms are both set far out of reach so
- * nothing OTHER than the drain-before-direct-write (_clog_flush_pinned(),
- * called before the fallback write) can put "message A" on disk this early.
- * Without that drain, "message A" is still sitting unflushed in
- * sh->async_buf at this point (only clog_close()'s own final drain, never
- * reached in this test, would write it), so "message B" appears in the file
- * FIRST, or "message A" is absent entirely. */
+/* The enqueue-failure fallback of _clog_write_async() must first drain
+ * whatever waits ahead of it in the SAME queue, messages that are already
+ * enqueued but that the writer thread has not processed yet. Only then may
+ * the fallback write its own record straight to sh->fd.
+ *
+ * Without that drain, a message that fails to enqueue can win the race for
+ * lg->shared->mutex and land on the disk BEFORE an earlier message that the
+ * caller already submitted and the writer thread has not reached yet, so the
+ * order of the output differs from the order of the submissions, and
+ * nothing reports it.
+ *
+ * flush_buffer_size and flush_interval_us are both far out of reach, so
+ * nothing other than the drain before the direct write (the
+ * _clog_flush_pinned() call ahead of the fallback write) can put
+ * "message A" on the disk this early. Without it, "message A" sits
+ * unflushed in sh->async_buf at this point, and only the final drain of
+ * clog_close() would write it, which this test never reaches. So "message B"
+ * appears in the file FIRST, or "message A" is absent completely. */
 TEST(async,
      enqueue_failure_direct_write_does_not_reorder_already_queued_message) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   ccol_memmgmt_procs_t procs = {
       .malloc = _enqueue_fail_malloc,
@@ -6619,27 +6786,28 @@ TEST(async,
   };
 
   clog_async_cfg_t acfg = {.flush_buffer_size = 1 << 20,
-                           .flush_interval_ms = 60000}; /* unbounded queue */
+                           .flush_interval_us = 60000000}; /* unbounded queue */
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &acfg, &procs);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  ccol_log_info(lg, "message A (already queued)");
+  clog_info(lg, "message A (already queued)");
 
-  /* Fail exactly the enqueue call for the very next ccol_log_info(): allocation
-   * #1 is the envelope calloc and #2 is ccol_dynmq_send_zc()'s own internal
-   * node allocation; the same targeting already established and explained by
-   * enqueue_failure_fallback_still_rotates_on_size above. */
+  /* This fails exactly the enqueue call of the very next clog_info():
+   * allocation #1 is the envelope calloc, and allocation #2 is the internal
+   * node allocation of ccol_dynmq_send_zc(). The comment of
+   * enqueue_failure_fallback_still_rotates_on_size above already explains
+   * this choice. */
   atomic_store(&g_enqueue_fail_call_count, 0);
   atomic_store(&g_enqueue_fail_at, 2);
-  ccol_log_info(lg, "message B (enqueue fails, written directly)");
+  clog_info(lg, "message B (enqueue fails, written directly)");
   atomic_store(&g_enqueue_fail_at, -1);
 
-  /* No explicit clog_flush() here at all: by the time ccol_log_info() for
-   * "message B" has returned, both messages must already be on disk, in
-   * submission order, purely as a consequence of the fallback path's own
-   * drain-before-direct-write. */
+  /* There is no clog_flush() call here. When the clog_info() call for
+   * "message B" returns, both messages must already be on the disk, in the
+   * order of their submission, and the drain before the direct write of the
+   * fallback path is the only cause of this. */
   char buf[4096];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
   char *pos_a = strstr(buf, "message A");
   char *pos_b = strstr(buf, "message B");
@@ -6651,25 +6819,27 @@ TEST(async,
   cleanup_dir(dir, "app.log");
 }
 
-/* _snapshot_fields()'s own out_pool->oom branch must not destroy
- * job->field_pool itself (ccol_growbuf_destroy() frees out_pool->buf without
- * ever nulling the pointer afterward), because _clog_async_job_release()
- * unconditionally destroys job->field_pool again once it is done with the
- * job. Doing both frees the same heap block twice the moment a field's
- * key/value data is large enough to force the field pool's internal growbuf
- * to grow past its initial capacity and that growth's own realloc() fails. A
- * field long enough to guarantee at least one growbuf_grow() call is set
- * once up front; an allocator that fails exactly one numbered
- * malloc/calloc/realloc call is then swept across enough calls to land on
- * that growth's realloc() at least once. A double free here either aborts
- * the process outright (glibc's own heap consistency checks) or is caught by
- * make memtest (valgrind); this test's own job is simply to survive the
- * sweep without crashing. */
+/* The out_pool->oom branch of _snapshot_fields() must not destroy
+ * job->field_pool itself. ccol_growbuf_destroy() frees out_pool->buf without
+ * setting that pointer to NULL afterwards, and _clog_async_job_release()
+ * always destroys job->field_pool again when it finishes with the job, so
+ * the two destroys together would free the same heap block twice. This
+ * happens when the key and value data of a field are large enough to grow
+ * the internal growbuf of the field pool past its first capacity, as soon as
+ * the realloc() of that growth fails.
+ *
+ * The test sets one field that is long enough to guarantee at least one
+ * growbuf_grow() call. An allocator that fails exactly one numbered malloc,
+ * calloc or realloc call then sweeps enough calls to land on the realloc()
+ * of that growth at least once. A double free here either aborts the process
+ * through the heap consistency checks of glibc, or make memtest catches it
+ * with valgrind; the only job of this test is to survive the sweep with no
+ * crash. */
 TEST(async, field_snapshot_growbuf_oom_does_not_double_free) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   ccol_memmgmt_procs_t procs = {
       .malloc = _enqueue_fail_malloc,
@@ -6682,86 +6852,88 @@ TEST(async, field_snapshot_growbuf_oom_does_not_double_free) {
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &acfg, &procs);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* A value long enough that appending "key\0value\0" to the field pool's
-   * 256-byte initial growbuf capacity always requires at least one
-   * growbuf_grow() call (and therefore one _ccol_mem_realloc() call),
-   * regardless
-   * of exactly where else in this call an allocation happens to land. */
+  /* This value is long enough that appending "key\0value\0" to the 256-byte
+   * first growbuf capacity of the field pool always needs at least one
+   * growbuf_grow() call, and therefore one _ccol_mem_realloc() call,
+   * wherever else in this call an allocation lands. */
   char big_value[400];
-  memset(big_value, 'v', sizeof big_value - 1);
-  big_value[sizeof big_value - 1] = '\0';
+  memset(big_value, 'v', sizeof(big_value) - 1);
+  big_value[sizeof(big_value) - 1] = '\0';
   clog_set_field(lg, "big", big_value);
 
   for (int fail_at = 1; fail_at <= 20; fail_at++) {
     atomic_store(&g_enqueue_fail_call_count, 0);
     atomic_store(&g_enqueue_fail_at, fail_at);
-    ccol_log_info(lg, "msg %d", fail_at);
+    clog_info(lg, "msg %d", fail_at);
     atomic_store(&g_enqueue_fail_at, -1);
-    clog_flush(lg); /* drain this iteration's job before arming the next
-        fault, so the writer thread's own, unrelated allocations never fall
-        inside the next iteration's armed window */
+    clog_flush(lg); /* drain the job of this round before the code arms the
+        next fault, so that the unrelated allocations of the writer thread
+        never fall inside the armed window of the next round. */
   }
 
   clog_close(lg);
   cleanup_dir(dir, "app.log");
 }
 
-/* The async writer thread's fallback placeholder (built whenever a queued
- * job's own record is too large, or hits a transient allocation failure)
- * must not append itself into sh->async_buf (the shared aggregation buffer
- * batching jobs from every handle sharing this target) via a sequence of
- * UNCHECKED appends. If that buffer is already sitting close enough to its
- * own growth ceiling that even the small, fixed-size fallback cannot fit
- * (reachable whenever flush_buffer_size is configured close to that ceiling,
- * since nothing then proactively flushes the buffer before a job's own
- * record building runs into it directly), an unchecked fallback silently
- * truncates mid-record instead of ever being written, contradicting this
- * library's own documented "the record is not truncated or emitted
- * malformed" guarantee. Whatever is already safely buffered is flushed and
- * retries against a freshly emptied buffer, which always has room.
- * async_buf's own growth ceiling follows the configured flush_buffer_size
- * whenever that is larger than the library's internal 16 MiB single-record
- * default (see _buf_raise_cap_limit()), so this test sizes its messages
- * against the actually-configured flush_buffer_size below, not a hardcoded
- * constant. */
+/* The record of a queued job can be too large, or it can hit a transient
+ * allocation failure; the writer thread of the async path then builds a
+ * fallback placeholder. It must not append that placeholder into sh->async_buf
+ * with a sequence of appends that it does not check. sh->async_buf is the
+ * shared aggregation buffer that batches jobs from every handle that shares
+ * this target.
+ *
+ * That buffer can sit so close to its own growth ceiling that even the small,
+ * fixed-size fallback does not fit. A configured flush_buffer_size close to
+ * that ceiling reaches this state, because nothing then flushes the buffer
+ * before the record build of a job runs into it. An unchecked fallback then
+ * truncates in the middle of the record, and the logger never writes it, which
+ * breaks the documented guarantee of this library that a record is neither
+ * truncated nor malformed. The writer thread instead flushes whatever is
+ * already safely in the buffer and tries again against an empty buffer, which
+ * always has room.
+ *
+ * The growth ceiling of async_buf follows the configured flush_buffer_size
+ * whenever that value is larger than the internal 16 MiB single-record
+ * default of the library (see _buf_raise_cap_limit()), so this test sizes
+ * its messages from the flush_buffer_size that it configures instead of from
+ * a hardcoded constant. */
 TEST(async,
      fallback_record_still_well_formed_when_batch_buffer_is_nearly_full) {
-  /* Calibrate this format's fixed per-record overhead (everything on a
-   * logfmt line except the message content itself) with a plain synchronous
-   * logger and a short, otherwise unremarkable message that needs no
-   * quoting; letting the real, multi-megabyte messages below be sized
-   * precisely without this test hardcoding any internal layout beyond the
-   * documented 16 MiB cap itself. */
+  /* Calibrate the fixed overhead of one record in this format, that is,
+   * everything on a logfmt line except the message content. The calibration
+   * uses a plain synchronous logger and a short message that needs no
+   * quotes, which lets the test size the real messages below, several
+   * megabytes each, exactly, without hardcoding any internal layout beyond
+   * the documented 16 MiB cap. */
   char calib_dir[256];
-  REQUIRE_EQ(make_tmpdir(calib_dir, sizeof calib_dir), 0);
+  REQUIRE_EQ(make_tmpdir(calib_dir, sizeof(calib_dir)), 0);
   char calib_path[512];
-  snprintf(calib_path, sizeof calib_path, "%s/calib.log", calib_dir);
+  snprintf(calib_path, sizeof(calib_path), "%s/calib.log", calib_dir);
 
   clog calib_lg = clog_open_file_mp(calib_path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(calib_lg, CLOG_INVALID);
   const char *calib_msg = "CALIBRATION_MESSAGE_CONTENT";
-  ccol_log_info(calib_lg, "%s", calib_msg);
+  clog_info(calib_lg, "%s", calib_msg);
   clog_close(calib_lg);
 
   char calib_buf[1024];
-  size_t calib_len = read_file(calib_path, calib_buf, sizeof calib_buf);
+  size_t calib_len = read_file(calib_path, calib_buf, sizeof(calib_buf));
   REQUIRE_GT(calib_len, strlen(calib_msg));
   size_t fixed_overhead = calib_len - strlen(calib_msg);
   cleanup_dir(calib_dir, "calib.log");
 
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  /* flush_buffer_size configured well above the library's own internal 16
-   * MiB single-record default, so async_buf's own growth ceiling is raised
-   * to match it (see _buf_raise_cap_limit()) and is never proactively
-   * flushed by size before a job's own record building can run up against
-   * that (now larger) ceiling directly; exactly the scenario this
-   * flush-and-retry recovery exists for. */
+  /* flush_buffer_size is well above the internal 16 MiB single-record
+   * default of the library, so the growth ceiling of async_buf rises to
+   * match it (see _buf_raise_cap_limit()), and nothing flushes the buffer by
+   * size before the record build of a job runs into that larger ceiling.
+   * This is the scenario that the flush-and-retry recovery exists for. */
   const size_t write_buf_cap = 20UL * 1024 * 1024; /* == acfg.flush_buffer_size
-      below, and therefore genuinely async_buf's own cap_limit */
+      below, and therefore the real cap_limit of async_buf */
   clog_async_cfg_t acfg = {.flush_buffer_size = write_buf_cap};
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &acfg, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -6779,13 +6951,13 @@ TEST(async,
   memset(huge_msg, 'D', huge_len);
   huge_msg[huge_len] = '\0';
 
-  /* Both queued before any flush, so they land in async_buf back to back on
-   * the writer thread: the first brings async_buf to within `room` bytes of
-   * the cap (a legitimate, well-formed record of its own), then the second
-   * one's own record (and, without the flush this test pins, even ITS
-   * fallback) cannot fit as-is. */
-  ccol_log_info(lg, "%s", first_msg);
-  ccol_log_info(lg, "%s", huge_msg);
+  /* Both messages go into the queue before any flush, so they land in
+   * async_buf one after the other on the writer thread. The first brings
+   * async_buf to within `room` bytes of the cap and is a valid, well-formed
+   * record of its own; the record of the second one does not fit, and
+   * without the flush that this test pins, even ITS fallback does not fit. */
+  clog_info(lg, "%s", first_msg);
+  clog_info(lg, "%s", huge_msg);
   clog_flush(lg);
   clog_close(lg);
 
@@ -6798,9 +6970,9 @@ TEST(async,
   size_t len = read_file(path, buf, read_cap);
   REQUIRE_GT(len, (size_t)0);
 
-  /* Exactly two well-formed lines: the first (huge but individually
-   * fitting) message, then the second message's fallback placeholder;
-   * the two must never desynchronize into a single, merged/truncated line. */
+  /* There must be exactly two well-formed lines: first the huge message,
+   * which fits on its own, and then the fallback placeholder of the second
+   * message. The two must never merge into one truncated line. */
   int ts_count = 0;
   const char *p = buf;
   while ((p = strstr(p, "ts=")) != NULL) {
@@ -6813,9 +6985,9 @@ TEST(async,
   REQUIRE_NE(fallback_line, NULL);
   char *line_end = strchr(fallback_line, '\n');
   REQUIRE_NE(line_end, NULL);
-  /* Well-formed: a properly closed quoted msg value followed by a real
-   * trailing newline, not a dangling, mid-field fragment silently glued to
-   * whatever a corrupted implementation would have written next. */
+  /* A well-formed line holds a quoted msg value that closes correctly,
+   * followed by a real newline at the end, instead of a fragment that stops
+   * in the middle of a field and joins whatever comes next. */
   REQUIRE_EQ(*(line_end - 1), '"');
 
   free(buf);
@@ -6823,55 +6995,58 @@ TEST(async,
 }
 
 /*
- * A distinct case from the one the test above guards: a genuinely ordinary,
- * small message must never be silently replaced by the "too large to emit"
- * fallback placeholder just because unrelated content already sitting in the
- * shared async batch buffer left too little room for its own real record
- * while still leaving enough room for the much smaller fallback note. The
- * test above only exercises the case where NEITHER the real record NOR the
- * fallback fits (which flushes and retries); this one exercises the narrower
- * case where the fallback alone fits, so without a retry there the writer
- * thread never attempts one at all, and a message that would have fit fine
- * on its own is lost and misreported as oversized.
+ * This is a different case from the one that the test above guards: an
+ * ordinary, small message must never become the "too large to emit" fallback
+ * placeholder. Unrelated content in the shared async batch buffer can leave
+ * too little room for the real record of that message while leaving enough
+ * room for the much smaller fallback note.
+ *
+ * The test above drives the case where NEITHER the real record NOR the
+ * fallback fits, which flushes and tries again, while this test drives the
+ * narrower case where the fallback alone fits. Without a retry there, the
+ * writer thread never tries again at all, so a message that fits well on its
+ * own is lost, and the log wrongly reports it as oversized.
  */
 TEST(async,
      ordinary_small_message_not_misreported_as_too_large_by_batch_neighbor) {
   const char *small_msg = "reachable small message";
 
-  /* Calibrate this test's own fixed per-record overhead (everything on a
-   * logfmt line besides the message content itself; ts/level/proc/src/
-   * func=), via a plain synchronous logger sharing this test's own
-   * __FILE__/__func__ (tau generates one function per TEST(), so this test's
-   * own generated function name, whatever length it happens to be, is
-   * exactly what every ccol_log_info() call below also pays for). Without this,
-   * a filler record sized purely off write_buf_cap could itself exceed
-   * CLOG_BUF_MAX in an empty buffer once this per-record overhead is added
-   * back in, polluting the sweep below with the (correctly-handled) genuine
-   * oversized-record case instead of the narrow one this test targets. */
+  /* Calibrate the fixed overhead of one record for this test, that is,
+   * everything on a logfmt line besides the message content (ts, level, proc,
+   * src and func=). The calibration uses a plain synchronous logger that
+   * shares the __FILE__ and __func__ of this test: tau generates one
+   * function for each TEST(), so every clog_info() call below pays for
+   * the generated function name of this test, whatever its length.
+   *
+   * Without this calibration, a filler record sized only from write_buf_cap
+   * can itself go above CLOG_BUF_MAX in an empty buffer once this overhead
+   * comes back in, so the sweep below would also cover the real
+   * oversized-record case, which the code already handles, and miss the
+   * narrow case that this test aims at. */
   char calib_dir[256];
-  REQUIRE_EQ(make_tmpdir(calib_dir, sizeof calib_dir), 0);
+  REQUIRE_EQ(make_tmpdir(calib_dir, sizeof(calib_dir)), 0);
   char calib_path[512];
-  snprintf(calib_path, sizeof calib_path, "%s/calib.log", calib_dir);
+  snprintf(calib_path, sizeof(calib_path), "%s/calib.log", calib_dir);
   clog calib_lg = clog_open_file_mp(calib_path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(calib_lg, CLOG_INVALID);
   const char *calib_msg = "FILLER_OVERHEAD_CALIBRATION_MESSAGE";
-  ccol_log_info(calib_lg, "%s", calib_msg);
+  clog_info(calib_lg, "%s", calib_msg);
   clog_close(calib_lg);
   char calib_buf[1024];
-  size_t calib_len = read_file(calib_path, calib_buf, sizeof calib_buf);
+  size_t calib_len = read_file(calib_path, calib_buf, sizeof(calib_buf));
   REQUIRE_GT(calib_len, strlen(calib_msg));
   size_t fixed_overhead = calib_len - strlen(calib_msg);
   cleanup_dir(calib_dir, "calib.log");
 
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  /* flush_buffer_size deliberately configured ABOVE clogger's internal 16
-   * MiB write-buffer cap, so async_buf is never proactively flushed by size
-   * before a job's own record building runs into whatever room a prior job
-   * already sharing the batch left behind. */
+  /* flush_buffer_size is deliberately ABOVE the internal 16 MiB write-buffer
+   * cap of clogger, so nothing flushes async_buf by size in time, and the
+   * record build of a job runs into the room that an earlier job in the
+   * same batch leaves behind. */
   clog_async_cfg_t acfg = {.flush_buffer_size = 20UL * 1024 * 1024};
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &acfg, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -6881,29 +7056,31 @@ TEST(async,
   REQUIRE_NE(filler, NULL);
   memset(filler, 'B', write_buf_cap);
 
-  /* Sweep a wide range of leftover headroom values (bytes remaining in the
-   * batch buffer after the filler record, i.e. `room - fixed_overhead`)
-   * rather than trying to precisely calibrate the fallback placeholder's own
-   * size: at least one value in this range is guaranteed to land strictly
-   * between the fallback placeholder's own size and the small message's real
-   * record size, which is exactly the window that needs a retry against a
-   * freshly emptied buffer: the fallback fits, the real record does not.
-   * Starting the sweep at fixed_overhead keeps every filler record, on its
-   * own, safely within CLOG_BUF_MAX (so it never itself needs the fallback,
-   * genuinely or otherwise). clog_flush() between iterations drains each pair
-   * to disk and resets the batch buffer to empty, so every iteration starts
-   * from the same, deterministic "buffer just grew to CLOG_BUF_MAX and is
-   * otherwise empty" state regardless of what an earlier iteration did.
+  /* Sweep a wide range of leftover headroom values, the bytes that stay free
+   * in the batch buffer after the filler record, which is
+   * `room - fixed_overhead`. A sweep is better than an exact calibration of
+   * the size of the fallback placeholder, because at least one value in this
+   * range lands between the size of the fallback placeholder and the size of
+   * the real record of the small message. That window, where the fallback
+   * fits and the real record does not, is the one that needs a retry against
+   * an empty buffer.
+   * The sweep starts at fixed_overhead, which keeps every filler
+   * record inside CLOG_BUF_MAX on its own, so no filler record needs the
+   * fallback, for a real reason or otherwise.
    *
-   * The underlying file is truncated back to empty after each iteration's
-   * own pair is checked (via a second fd on the same path; clog itself
-   * always opens for append, with no truncate of its own): the destination
-   * fd stays open and O_APPEND throughout, so a write immediately following
-   * an external truncate simply lands at the new, now-zero end of file,
-   * exactly as if this were a fresh logger for that one iteration. Without
-   * this, the file would accumulate roughly (number of iterations) times
-   * write_buf_cap bytes on disk, and this test's own read-back buffer would
-   * need to grow to match just to see the last iteration's own pair at all. */
+   * The clog_flush() call between rounds writes each pair to the disk and
+   * empties the batch buffer, so every round starts from the same
+   * deterministic state, where the buffer has just grown to CLOG_BUF_MAX and
+   * holds nothing else, whatever an earlier round did.
+   *
+   * The test truncates the file back to empty after it checks the pair of
+   * each round, through a second fd on the same path, because clog always
+   * opens for append and never truncates. The destination fd stays open with
+   * O_APPEND the whole time, so a write right after an external truncate
+   * lands at the new end of the file, which is zero, the same as a fresh
+   * logger for that one round. Without this, the file would collect about
+   * write_buf_cap bytes for each round, and the read-back buffer of this test
+   * would have to grow to match, only to see the pair of the last round. */
   size_t read_cap = write_buf_cap * 2;
   char *buf = malloc(read_cap);
   REQUIRE_NE(buf, NULL);
@@ -6911,17 +7088,17 @@ TEST(async,
   for (size_t room = fixed_overhead + 50; room <= fixed_overhead + 1200;
        room += 25) {
     filler[write_buf_cap - room] = '\0';
-    ccol_log_info(lg, "%s", filler);
-    filler[write_buf_cap - room] = 'B'; /* restore for the next iteration */
-    ccol_log_info(lg, "%s", small_msg);
+    clog_info(lg, "%s", filler);
+    filler[write_buf_cap - room] = 'B'; /* restore it for the next round */
+    clog_info(lg, "%s", small_msg);
     clog_flush(lg);
     pairs_logged++;
 
     size_t len = read_file(path, buf, read_cap);
     REQUIRE_GT(len, (size_t)0);
-    /* This one iteration's ordinary small message must never be replaced by
-     * the misleading "too large to emit" placeholder, or be silently
-     * dropped altogether. */
+    /* The ordinary small message of this round must never become the
+     * incorrect "too large to emit" placeholder, and the logger must not
+     * drop it either. */
     REQUIRE_EQ(strstr(buf, "too large to emit"), NULL);
     REQUIRE_NE(strstr(buf, small_msg), NULL);
 
@@ -6938,33 +7115,38 @@ TEST(async,
 }
 
 /*
- * _emit_backtrace_lines() (the logfmt backtrace emitter) must report failure
- * rather than being void-returning. Discarding every failure silently
- * (including the case where not one single frame's own line fits in whatever
- * room is left, not just an individual oversized frame) lets
- * _clog_build_record() unconditionally report the record as fully,
- * successfully built. That is reachable whenever the batch buffer a
- * with_backtrace=true job's own record lands in (sh->async_buf, here left
- * with only a few hundred to a couple thousand bytes of headroom by an
- * earlier, unrelated filler record already sharing the same batch) has
- * enough room for the record's own primary content but not enough for any
- * individual backtrace frame line: a real ccol_log_error()/ccol_log_alert()/
- * ccol_log_fatal() call could then reach disk with its message intact but its
- * entire requested backtrace silently missing; indistinguishable from a call
- * that never requested one at all, contradicting this file's own "a reader
- * must always be able to tell 'backtrace omitted' apart from 'never
- * requested'" guarantee (honored, and tested, for capture failure too, per
- * logfmt_backtrace_capture_failure_emits_marker_line above, and for
- * JSON/syslog's own equivalent scenarios). _emit_backtrace_lines() therefore
- * falls back to the same small, fixed-size "unavailable" marker already used
- * when capture itself fails, whenever not one single frame fit.
+ * _emit_backtrace_lines(), the backtrace emitter of logfmt, must report a
+ * failure instead of returning void. If it discards every failure,
+ * _clog_build_record() always reports the record as fully and successfully
+ * built, and one of the failures that it would discard is the case where not
+ * one single frame line fits in the room that is left, which is not only the
+ * case of one oversized frame.
  *
- * Mirrors ordinary_small_message_not_misreported_as_too_large_by_batch_
- * neighbor's own room-sweep exactly (same calibration, same range): the
- * precise byte offset this failure mode needs depends on backtrace frame
- * text (full binary/library paths from backtrace_symbols()) this test has no
- * way to predict in advance, so at least one value in this range is expected
- * to land inside the window it targets regardless of environment.
+ * This case is reached when the batch buffer holds enough room for the
+ * primary content of a record with with_backtrace=true, but not enough room
+ * for any single backtrace frame line. Here that buffer is sh->async_buf,
+ * which an earlier, unrelated filler record in the same batch leaves with
+ * only a few hundred to a few thousand bytes of headroom.
+ *
+ * A real clog_error(), clog_alert() or clog_fatal() call could
+ * then reach the disk with its message intact and its whole requested
+ * backtrace absent, and a reader could not tell that record from a call that
+ * asks for no backtrace. That breaks the guarantee of this file that a
+ * reader can always tell "backtrace omitted" from "never requested", which
+ * the library honours and tests for a capture failure too (see
+ * logfmt_backtrace_capture_failure_emits_marker_line above, with the
+ * equivalent scenarios of JSON and syslog beside it). So whenever not one
+ * frame fits, _emit_backtrace_lines() falls back to the same small,
+ * fixed-size "unavailable" marker that it uses when the capture fails.
+ *
+ * This test mirrors the room sweep of
+ * ordinary_small_message_not_misreported_as_too_large_by_batch_neighbor,
+ * with the same calibration and the same range. The exact byte offset that
+ * this failure mode needs depends on the backtrace frame text, which holds
+ * the full paths of the binary and the libraries, from
+ * backtrace_symbols().
+ * This test cannot predict that text, but at least one value in this range
+ * is expected to land inside the target window in any environment.
  */
 TEST(async, backtrace_never_silently_lost_when_batch_buffer_is_nearly_full) {
   if (!backtrace_capture_genuinely_available())
@@ -6973,24 +7155,24 @@ TEST(async, backtrace_never_silently_lost_when_batch_buffer_is_nearly_full) {
   const char *small_msg = "reachable small message with backtrace";
 
   char calib_dir[256];
-  REQUIRE_EQ(make_tmpdir(calib_dir, sizeof calib_dir), 0);
+  REQUIRE_EQ(make_tmpdir(calib_dir, sizeof(calib_dir)), 0);
   char calib_path[512];
-  snprintf(calib_path, sizeof calib_path, "%s/calib.log", calib_dir);
+  snprintf(calib_path, sizeof(calib_path), "%s/calib.log", calib_dir);
   clog calib_lg = clog_open_file_mp(calib_path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(calib_lg, CLOG_INVALID);
   const char *calib_msg = "FILLER_OVERHEAD_CALIBRATION_MESSAGE";
-  ccol_log_info(calib_lg, "%s", calib_msg);
+  clog_info(calib_lg, "%s", calib_msg);
   clog_close(calib_lg);
   char calib_buf[1024];
-  size_t calib_len = read_file(calib_path, calib_buf, sizeof calib_buf);
+  size_t calib_len = read_file(calib_path, calib_buf, sizeof(calib_buf));
   REQUIRE_GT(calib_len, strlen(calib_msg));
   size_t fixed_overhead = calib_len - strlen(calib_msg);
   cleanup_dir(calib_dir, "calib.log");
 
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg_t acfg = {.flush_buffer_size = 20UL * 1024 * 1024};
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &acfg, NULL);
@@ -7008,9 +7190,9 @@ TEST(async, backtrace_never_silently_lost_when_batch_buffer_is_nearly_full) {
   for (size_t room = fixed_overhead + 50; room <= fixed_overhead + 1200;
        room += 25) {
     filler[write_buf_cap - room] = '\0';
-    ccol_log_info(lg, "%s", filler);
-    filler[write_buf_cap - room] = 'B';  /* restore for the next iteration */
-    ccol_log_error(lg, "%s", small_msg); /* with_backtrace = true */
+    clog_info(lg, "%s", filler);
+    filler[write_buf_cap - room] = 'B'; /* restore it for the next round */
+    clog_error(lg, "%s", small_msg);    /* with_backtrace = true */
     clog_flush(lg);
     pairs_logged++;
 
@@ -7019,9 +7201,9 @@ TEST(async, backtrace_never_silently_lost_when_batch_buffer_is_nearly_full) {
 
     char *rec = strstr(buf, small_msg);
     REQUIRE_NE(rec, NULL);
-    /* Never neither: this record's own trailing content must always be
-     * either at least one real backtrace frame line or the fixed-size
-     * "unavailable" marker; never a silent absence of both. */
+    /* The content at the end of this record must always hold at least one
+     * real backtrace frame line, or the fixed-size "unavailable" marker;
+     * both must never be absent. */
     bool has_frame = strstr(rec, "\t#") != NULL;
     bool has_marker = strstr(rec, "backtrace unavailable") != NULL;
     REQUIRE_TRUE(has_frame || has_marker);
@@ -7039,27 +7221,30 @@ TEST(async, backtrace_never_silently_lost_when_batch_buffer_is_nearly_full) {
 }
 
 /*
- * _emit_backtrace_json() must not close an empty "bt":[] array when a
- * record's own header/fields/msg leave just enough room in the batch buffer
- * to open and close the "bt" array but not enough for even one real frame's
- * own text to fit. Such an array is byte-for-byte indistinguishable from a
- * genuinely shallow backtrace with no frames beyond the initial two,
- * silently defeating the whole reason "bt_error" exists (see this file's own
- * "In the rare case that the backtrace itself cannot be embedded ... the
- * record is still closed normally with a bt_error key" contract in
- * README.md). Closing an empty array would also count as a fully successful
- * build, so the writer thread's own used_fallback-driven retry (see
- * _clog_writer_thread_main()'s logfmt/JSON branch) would never even notice
- * anything had been lost; the LOGFMT sibling test directly above this one
- * has no equivalent exposure, since _emit_backtrace_lines() detects "not one
- * frame fit" directly.
+ * _emit_backtrace_json() must not close an empty "bt":[] array in the case
+ * where the header, the fields and the msg of a record fill the batch buffer
+ * to the point where just enough room is left to open and close the "bt"
+ * array, but not enough for the text of even one real frame.
  *
- * Mirrors backtrace_never_silently_lost_when_batch_buffer_is_nearly_full's
- * own approach (a calibrated filler message that pushes async_buf to within
- * a swept range of `room` bytes of CLOG_BUF_MAX before an error-with-
- * backtrace record is logged) but for CLOG_FMT_JSON specifically, and adds an
- * explicit check that "bt":[] never stands in for a genuinely non-empty,
- * merely space-starved backtrace.
+ * Such an array is identical, byte for byte, to a real shallow backtrace
+ * with no frames after the first two, so it removes the reason for
+ * "bt_error". clog_error(3) states the contract: in the rare case that
+ * the logger cannot put the backtrace into the record, it closes the record
+ * in the usual way, with a bt_error key.
+ *
+ * A closed empty array also counts as a fully successful build, so the
+ * retry of the writer thread, which used_fallback drives, would never notice
+ * that anything is lost (see the logfmt and JSON branch of
+ * _clog_writer_thread_main()). The LOGFMT sibling test directly above this
+ * one has no such exposure, because _emit_backtrace_lines() detects "not one
+ * frame fits" directly.
+ *
+ * This test mirrors the approach of
+ * backtrace_never_silently_lost_when_batch_buffer_is_nearly_full: a
+ * calibrated filler message pushes async_buf to within a swept range of
+ * `room` bytes of CLOG_BUF_MAX, and the test then logs an error record with
+ * a backtrace, here for CLOG_FMT_JSON. It also adds a check that "bt":[]
+ * never stands for a backtrace that is real but has no space.
  */
 TEST(async, json_backtrace_never_silently_becomes_an_empty_array) {
   if (!backtrace_capture_genuinely_available())
@@ -7068,25 +7253,25 @@ TEST(async, json_backtrace_never_silently_becomes_an_empty_array) {
   const char *small_msg = "reachable small json message with backtrace";
 
   char calib_dir[256];
-  REQUIRE_EQ(make_tmpdir(calib_dir, sizeof calib_dir), 0);
+  REQUIRE_EQ(make_tmpdir(calib_dir, sizeof(calib_dir)), 0);
   char calib_path[512];
-  snprintf(calib_path, sizeof calib_path, "%s/calib.log", calib_dir);
+  snprintf(calib_path, sizeof(calib_path), "%s/calib.log", calib_dir);
   clog calib_lg = clog_open_file_mp(calib_path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(calib_lg, CLOG_INVALID);
   clog_set_format(calib_lg, CLOG_FMT_JSON);
   const char *calib_msg = "FILLER_OVERHEAD_CALIBRATION_MESSAGE";
-  ccol_log_info(calib_lg, "%s", calib_msg);
+  clog_info(calib_lg, "%s", calib_msg);
   clog_close(calib_lg);
   char calib_buf[1024];
-  size_t calib_len = read_file(calib_path, calib_buf, sizeof calib_buf);
+  size_t calib_len = read_file(calib_path, calib_buf, sizeof(calib_buf));
   REQUIRE_GT(calib_len, strlen(calib_msg));
   size_t fixed_overhead = calib_len - strlen(calib_msg);
   cleanup_dir(calib_dir, "calib.log");
 
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_async_cfg_t acfg = {.flush_buffer_size = 20UL * 1024 * 1024};
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &acfg, NULL);
@@ -7105,9 +7290,9 @@ TEST(async, json_backtrace_never_silently_becomes_an_empty_array) {
   for (size_t room = fixed_overhead + 50; room <= fixed_overhead + 1200;
        room += 25) {
     filler[write_buf_cap - room] = '\0';
-    ccol_log_info(lg, "%s", filler);
-    filler[write_buf_cap - room] = 'B';  /* restore for the next iteration */
-    ccol_log_error(lg, "%s", small_msg); /* with_backtrace = true */
+    clog_info(lg, "%s", filler);
+    filler[write_buf_cap - room] = 'B'; /* restore it for the next round */
+    clog_error(lg, "%s", small_msg);    /* with_backtrace = true */
     clog_flush(lg);
     pairs_logged++;
 
@@ -7116,9 +7301,9 @@ TEST(async, json_backtrace_never_silently_becomes_an_empty_array) {
 
     char *rec = strstr(buf, small_msg);
     REQUIRE_NE(rec, NULL);
-    /* Never a "bt":[] standing in for a genuinely dropped, non-empty
-     * backtrace: either real frame content, or the explicit bt_error
-     * marker, but never an empty array silently masquerading as a shallow
+    /* A "bt":[] must never stand for a real backtrace that the logger
+     * drops: the record must hold real frame content, or the explicit
+     * bt_error marker, and an empty array must never look like a shallow
      * one. */
     bool has_real_frame = strstr(rec, "\"bt\":[\"") != NULL;
     bool has_bt_error = strstr(rec, "\"bt_error\"") != NULL;
@@ -7139,33 +7324,35 @@ TEST(async, json_backtrace_never_silently_becomes_an_empty_array) {
 }
 
 /*
- * _clog_write_unrepresentable_record() (the very last resort
- * _clog_build_record() itself falls back to when not even its own small
- * fallback placeholder fits into the target buffer) must account for
- * with_backtrace, or a requested LOGFMT backtrace is dropped with no trace
- * of it whatsoever. CLOG_FMT_SYSLOG has no equivalent exposure (its own
- * backtrace lines are always emitted independently of this function, by its
- * own callers, regardless of what happened to the primary record);
- * CLOG_FMT_JSON embeds a "bt_error" marker into its own fallback text via
- * _clog_build_fallback_record() whenever THAT (ordinarily-reachable)
- * fallback fits; but unless with_backtrace reaches THIS function, the one
- * case where not even the JSON/logfmt fallback fits is a fully silent
- * backtrace loss for both.
+ * _clog_build_record() falls back to _clog_write_unrepresentable_record() as
+ * its last resort, when not even its own small fallback placeholder fits
+ * into the target buffer. That function must take with_backtrace into
+ * account; without that, a requested LOGFMT backtrace disappears with no
+ * sign of it at all.
  *
- * Reaching this function through the ordinary log_* call path requires not
- * even _clog_build_record()'s own small fallback placeholder to fit in the
- * target buffer (unreachable in practice given this library's actual
- * CLOG_BUF_INITIAL value; see that function's own doc comment), so this
- * exercises it directly via clog_test_write_unrepresentable_record(),
- * mirroring clog_test_gzip_compress_file()'s own precedent for testing a
- * similarly hard-to-reach internal helper.
+ * CLOG_FMT_SYSLOG has no such exposure, because its callers always write its
+ * backtrace lines separately from this function, whatever happens to the
+ * primary record. CLOG_FMT_JSON embeds a "bt_error" marker into its own
+ * fallback text through _clog_build_fallback_record() whenever THAT
+ * fallback fits, which is reachable in ordinary use. But with_backtrace must
+ * reach THIS function, because without it, the case where not even the JSON
+ * or the logfmt fallback fits loses the backtrace for both, with no
+ * report.
+ *
+ * To reach this function through the ordinary log_* call path, not even the
+ * small fallback placeholder of _clog_build_record() may fit in the target
+ * buffer, which the real CLOG_BUF_INITIAL value of this library makes
+ * unreachable in practice (see the doc comment of that function). So this
+ * test calls clog_test_write_unrepresentable_record() directly, following
+ * the precedent of clog_test_gzip_compress_file(), which tests another
+ * internal helper that is hard to reach.
  */
 TEST(robustness,
      unrepresentable_record_logfmt_still_signals_missing_backtrace) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -7174,27 +7361,27 @@ TEST(robustness,
   clog_close(lg);
 
   char buf[4096];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
 
   char *primary = strstr(buf, "log record dropped");
   REQUIRE_NE(primary, NULL);
 
-  /* Required: a "backtrace unavailable" continuation line must follow the
-   * primary placeholder line, exactly like an ordinary (non-unrepresentable)
-   * logfmt record whose backtrace capture failed already gets one. */
+  /* A "backtrace unavailable" continuation line must follow the primary
+   * placeholder line, the same line that an ordinary logfmt record whose
+   * backtrace capture fails gets. */
   REQUIRE_NE(strstr(primary, "#error backtrace unavailable"), NULL);
 
   cleanup_dir(dir, "app.log");
 }
 
-/* Complement of the behaviour above: with_backtrace == false must never grow
- * a marker line that was never requested in the first place. */
+/* This is the opposite of the behaviour above. With with_backtrace == false,
+ * the record must never gain a marker line that nobody asks for. */
 TEST(robustness, unrepresentable_record_logfmt_no_marker_without_backtrace) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -7204,7 +7391,7 @@ TEST(robustness, unrepresentable_record_logfmt_no_marker_without_backtrace) {
   clog_close(lg);
 
   char buf[4096];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
 
   REQUIRE_NE(strstr(buf, "log record dropped"), NULL);
@@ -7213,16 +7400,16 @@ TEST(robustness, unrepresentable_record_logfmt_no_marker_without_backtrace) {
   cleanup_dir(dir, "app.log");
 }
 
-/* The CLOG_FMT_JSON analogue of the behaviour above:
- * _clog_write_unrepresentable_ record() must embed a "bt_error" marker into its
- * own single JSON line whenever with_backtrace is true, exactly like
- * _clog_build_fallback_ record() already does for JSON's own
- * ordinarily-reachable fallback. */
+/* This is the CLOG_FMT_JSON form of the behaviour above: whenever
+ * with_backtrace is true, _clog_write_unrepresentable_record() must embed a
+ * "bt_error" marker into its own single JSON line, as
+ * _clog_build_fallback_record() already does for the JSON fallback
+ * that is reachable in ordinary use. */
 TEST(robustness, unrepresentable_record_json_embeds_bt_error_marker) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -7231,25 +7418,25 @@ TEST(robustness, unrepresentable_record_json_embeds_bt_error_marker) {
   clog_close(lg);
 
   char buf[4096];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
 
   REQUIRE_NE(strstr(buf, "log record dropped"), NULL);
-  /* Required: JSON's own bt_error marker must be embedded even in this
-   * innermost fallback, not just in the ordinarily-reachable one
-   * _clog_build_fallback_record() handles. */
+  /* The bt_error marker of JSON must appear even in this innermost fallback,
+   * not only in the fallback that _clog_build_fallback_record() handles,
+   * which is reachable in ordinary use. */
   REQUIRE_NE(strstr(buf, "\"bt_error\":\"unavailable\""), NULL);
 
   cleanup_dir(dir, "app.log");
 }
 
-/* Complement of the behaviour above for JSON: an unrepresentable record
- * without with_backtrace must carry no bt_error marker at all. */
+/* This is the opposite of the behaviour above, for JSON: an unrepresentable
+ * record with no with_backtrace must carry no bt_error marker at all. */
 TEST(robustness, unrepresentable_record_json_no_marker_without_backtrace) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -7258,7 +7445,7 @@ TEST(robustness, unrepresentable_record_json_no_marker_without_backtrace) {
   clog_close(lg);
 
   char buf[4096];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
 
   REQUIRE_NE(strstr(buf, "log record dropped"), NULL);
@@ -7268,17 +7455,21 @@ TEST(robustness, unrepresentable_record_json_no_marker_without_backtrace) {
 }
 
 /*
- * _emit_backtrace_syslog_lines()'s own syms == NULL ("backtrace capture
- * failed") branch must still get something onto the wire when the one small
- * append that builds its "backtrace unavailable" marker record into the
- * caller's buffer fails too. Without an allocation-free last resort, that
- * double failure (capture already failed, then the marker's own append
- * failed as well) silently writes nothing at all, unlike almost every other
- * build-into-a-buffer call site in this file. Forces both failures
- * deterministically: real backtrace capture never even runs here (this test
- * calls the marker branch directly), and clog_test_force_next_buf_ensure_
- * failure() forces the one append inside it to fail despite this library's
- * own buffer-sizing constants otherwise making that unreachable in practice.
+ * _emit_backtrace_syslog_lines() has a branch for syms == NULL, which means
+ * that the backtrace capture failed. That branch must put something on the
+ * wire even when one more thing fails: the one small append that builds its
+ * "backtrace unavailable" marker record into the buffer of the
+ * caller. Without a last
+ * resort that needs no allocation, that double failure (first the capture,
+ * then the append of the marker) writes nothing at all, and nothing reports
+ * it, unlike almost every other build-into-a-buffer call site in this
+ * file.
+ *
+ * This test forces both failures in a deterministic way. The real backtrace
+ * capture never runs here, because the test calls the marker branch
+ * directly, and clog_test_force_next_buf_ensure_failure() then forces the
+ * one append inside it to fail, an append failure that the buffer-sizing
+ * constants of this library make unreachable in ordinary use.
  */
 TEST(robustness, syslog_backtrace_unavailable_marker_survives_append_failure) {
   int pipefd[2];
@@ -7291,44 +7482,46 @@ TEST(robustness, syslog_backtrace_unavailable_marker_survives_append_failure) {
   clog_test_emit_backtrace_syslog_unavailable_marker(lg, CLOG_ERROR);
 
   char buf[4096];
-  size_t len = drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+  size_t len = drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
 
-  /* Required: some record signalling the omitted backtrace must still reach
-   * the wire, even though the ordinary (buffer-based) marker build failed. */
+  /* Some record that signals the absent backtrace must reach the wire even
+   * though the ordinary marker build, which uses the buffer, fails. */
   REQUIRE_NE(strstr(buf, "backtrace unavailable"), NULL);
-  /* Well-formed: a real syslog PRI header, and a single, newline-terminated
-   * line; not a truncated fragment that could desynchronize the stream. */
+  /* A well-formed record holds a real syslog PRI header and one line that
+   * ends with a newline, instead of a truncated fragment that can
+   * desynchronize the stream. */
   REQUIRE_EQ(buf[0], '<');
   char *nl = strchr(buf, '\n');
   REQUIRE_NE(nl, NULL);
   REQUIRE_EQ(*(nl + 1), '\0');
 }
 
-/* The logfmt/syslog analogue of json.fatal_has_inline_bt_array's own
- * "backtrace omission must never be silent" guarantee: unlike JSON (which
- * carries a dedicated bt_error marker), a NULL syms must not make
- * _emit_backtrace_lines()/_emit_backtrace_syslog_lines() bare no-ops: a
- * reader of a with_backtrace=true logfmt/syslog record would then have no
- * way to tell "the backtrace was omitted" apart from "no backtrace was ever
- * requested". */
+/* This is the logfmt and syslog form of the guarantee of
+ * json.fatal_has_inline_bt_array: the loss of a backtrace must never be
+ * silent. JSON carries a dedicated bt_error marker, but logfmt and syslog do
+ * not, so a NULL syms must not turn _emit_backtrace_lines() and
+ * _emit_backtrace_syslog_lines() into functions that do nothing; otherwise a
+ * reader of a logfmt or syslog record with with_backtrace=true could not
+ * tell "the logger omitted the backtrace" from "nobody asked for a
+ * backtrace". */
 TEST(robustness, logfmt_backtrace_capture_failure_emits_marker_line) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
   clog_test_force_backtrace_capture_failure(true);
-  ccol_log_error(lg, "boom");
+  clog_error(lg, "boom");
   clog_test_force_backtrace_capture_failure(false);
 
   clog_close(lg);
 
   char buf[4096];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
   REQUIRE_NE(strstr(buf, "boom"), NULL);
   REQUIRE_NE(strstr(buf, "\t#error backtrace unavailable\n"), NULL);
@@ -7345,14 +7538,14 @@ TEST(robustness, syslog_backtrace_capture_failure_emits_marker_record) {
   clog_set_format(lg, CLOG_FMT_SYSLOG);
 
   clog_test_force_backtrace_capture_failure(true);
-  ccol_log_error(lg, "boom");
+  clog_error(lg, "boom");
   clog_test_force_backtrace_capture_failure(false);
 
   clog_close(lg);
   close(pipefd[1]);
 
   char buf[4096];
-  ssize_t n = read(pipefd[0], buf, sizeof buf - 1);
+  ssize_t n = read(pipefd[0], buf, sizeof(buf) - 1);
   REQUIRE_GT(n, (ssize_t)0);
   buf[n] = '\0';
   close(pipefd[0]);
@@ -7362,20 +7555,20 @@ TEST(robustness, syslog_backtrace_capture_failure_emits_marker_record) {
 }
 
 /*
- * _emit_backtrace_syslog_lines()'s real-syms loop must track whether any
- * frame actually got written. If every single frame's own append fails (each
- * frame gets its own freshly reset scratch buffer, so this is reachable only
- * under a genuine, sustained allocation failure persisting across all of
- * them), a loop with no such notion returns having written nothing at all:
- * no frame, and no "unavailable" marker either, unlike the syms == NULL
- * (capture failed outright) case right above, which always emits one. A real
- * backtrace that is successfully captured but entirely unwritten would then
- * be indistinguishable from one that was never requested. Uses
- * clog_test_force_all_syslog_backtrace_frames_failure() to force every
- * frame to fail deterministically, since genuinely reproducing a sustained
- * allocation failure across every one of this function's own small,
- * comfortably-sized per-frame appends is impractical given this library's
- * own buffer-sizing constants.
+ * The loop over real syms in _emit_backtrace_syslog_lines() must track whether
+ * it writes any frame at all. Each frame gets its own scratch buffer that the
+ * code resets first, so a failure of every frame is reachable only under a real
+ * allocation failure that lasts across all of them. A loop with no such
+ * tracking then returns with nothing written: no frame, and no "unavailable"
+ * marker, unlike the syms == NULL case above, where the capture fails outright
+ * and one marker is always written. A real backtrace that the logger captures
+ * and then writes nowhere would be identical to one that nobody asks for.
+ *
+ * The test uses clog_test_force_all_syslog_backtrace_frames_failure() to
+ * make every frame fail in a deterministic way, because the appends of this
+ * function for each frame are small and have plenty of room under the
+ * buffer-sizing constants of this library, so a real allocation failure
+ * across all of them is not practical to reproduce.
  */
 TEST(robustness,
      syslog_backtrace_all_frames_failing_still_emits_marker_record) {
@@ -7389,77 +7582,78 @@ TEST(robustness,
   REQUIRE_NE(lg, CLOG_INVALID);
   clog_set_format(lg, CLOG_FMT_SYSLOG);
 
-  /* A genuine, successfully captured backtrace (unlike the capture-failure
-   * test above): real backtrace support must be present on this platform
-   * and functioning normally, only every frame's own append is forced to
-   * fail. */
+  /* Unlike the capture-failure test above, this test needs a real backtrace
+   * from the capture, so the platform must have real backtrace support that
+   * works in the normal way; only the append of each frame fails, and the
+   * test forces that. */
   clog_test_force_all_syslog_backtrace_frames_failure(true);
-  ccol_log_error(lg, "boom");
+  clog_error(lg, "boom");
   clog_test_force_all_syslog_backtrace_frames_failure(false);
 
   clog_close(lg);
   close(pipefd[1]);
 
   char buf[4096];
-  ssize_t n = read(pipefd[0], buf, sizeof buf - 1);
+  ssize_t n = read(pipefd[0], buf, sizeof(buf) - 1);
   REQUIRE_GT(n, (ssize_t)0);
   buf[n] = '\0';
   close(pipefd[0]);
 
   REQUIRE_NE(strstr(buf, "boom"), NULL);
-  /* Never neither: some record signalling the omitted backtrace must still
-   * reach the wire, exactly as when capture fails outright, and no real
-   * "\t#N " frame line (which the forced failure never let through) must be
-   * present instead. */
+  /* Some record that signals the absent backtrace must reach the wire, as it
+   * does when the capture fails outright, and no real "\t#N " frame line may
+   * appear instead, because the forced failure lets none through. */
   REQUIRE_NE(strstr(buf, "#error backtrace unavailable"), NULL);
   REQUIRE_EQ(strstr(buf, "\t#0 "), NULL);
 }
 
 /*
- * _emit_backtrace_lines() must distinguish a genuinely successful capture
- * that simply found no frame beyond the two internal bookkeeping ones (depth
- * <= CLOG_BT_INITIAL_FRAME) from "every frame failed to fit"; treating the
- * two alike emits the misleading "#error backtrace unavailable" marker even
- * though nothing has actually gone wrong. _emit_backtrace_json() makes this
- * exact distinction too (see its own array_content_is_accurate check); this
- * exercises the logfmt counterpart via clog_test_force_shallow_backtrace_
- * depth(), which reports a real, non-NULL capture clamped to a shallow
- * depth, deterministically reproducing the boundary condition without
- * depending on a genuinely shallow call stack (which never happens in
- * practice on this platform).
+ * _emit_backtrace_lines() must tell two cases apart: a capture that succeeds
+ * and finds no frame beyond the two internal bookkeeping ones (a depth
+ * <= CLOG_BT_INITIAL_FRAME), and "every frame failed to fit". If the
+ * function treats them alike, it writes the misleading
+ * "#error backtrace unavailable" marker although nothing is wrong.
+ * _emit_backtrace_json() makes the same distinction (see its
+ * array_content_is_accurate check).
+ *
+ * This test drives the logfmt side with
+ * clog_test_force_shallow_backtrace_depth(), a hook that reports a real
+ * capture that is not NULL, clamped to a shallow depth. That reproduces the
+ * boundary condition in a deterministic way, without depending on a real
+ * shallow call stack, which never happens on this platform.
  */
 TEST(robustness, logfmt_shallow_backtrace_capture_emits_no_marker) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
   clog_test_force_shallow_backtrace_depth(true);
-  ccol_log_error(lg, "boom");
+  clog_error(lg, "boom");
   clog_test_force_shallow_backtrace_depth(false);
 
   clog_close(lg);
 
   char buf[4096];
-  size_t len = read_file(path, buf, sizeof buf);
+  size_t len = read_file(path, buf, sizeof(buf));
   REQUIRE_GT(len, (size_t)0);
   REQUIRE_NE(strstr(buf, "boom"), NULL);
-  /* Required: a genuinely successful-but-shallow capture must never be
-   * misreported as an unavailable one. */
+  /* A capture that succeeds but is shallow must never appear as an
+   * unavailable one. */
   REQUIRE_EQ(strstr(buf, "backtrace unavailable"), NULL);
-  /* Nor should it fabricate a frame line for a frame that was never
-   * actually captured. */
+  /* The logger must not invent a frame line for a frame that the capture
+   * never gets either. */
   REQUIRE_EQ(strstr(buf, "\t#"), NULL);
 
   cleanup_dir(dir, "app.log");
 }
 
-/* The CLOG_FMT_SYSLOG analogue of the behaviour above: a genuinely successful
- * but shallow capture must not produce a spurious extra "unavailable" marker
- * record on the wire either. */
+/* This is the CLOG_FMT_SYSLOG form of the behaviour above: a capture that
+ * succeeds but is shallow must not put an extra "unavailable" marker record
+ * on the wire either. */
 TEST(robustness, syslog_shallow_backtrace_capture_emits_no_marker_record) {
   int pipefd[2];
   REQUIRE_EQ(pipe(pipefd), 0);
@@ -7469,26 +7663,26 @@ TEST(robustness, syslog_shallow_backtrace_capture_emits_no_marker_record) {
   clog_set_format(lg, CLOG_FMT_SYSLOG);
 
   clog_test_force_shallow_backtrace_depth(true);
-  ccol_log_error(lg, "boom");
+  clog_error(lg, "boom");
   clog_test_force_shallow_backtrace_depth(false);
 
   clog_close(lg);
   close(pipefd[1]);
 
   char buf[4096];
-  ssize_t n = read(pipefd[0], buf, sizeof buf - 1);
+  ssize_t n = read(pipefd[0], buf, sizeof(buf) - 1);
   REQUIRE_GT(n, (ssize_t)0);
   buf[n] = '\0';
   close(pipefd[0]);
 
   REQUIRE_NE(strstr(buf, "boom"), NULL);
-  /* Required: no "unavailable" marker for a genuinely successful-but-shallow
-   * capture. */
+  /* There must be no "unavailable" marker for a capture that succeeds but
+   * is shallow. */
   REQUIRE_EQ(strstr(buf, "backtrace unavailable"), NULL);
-  /* And no fabricated frame line either. */
+  /* There must be no invented frame line either. */
   REQUIRE_EQ(strstr(buf, "\t#"), NULL);
-  /* Exactly one record reached the wire (the primary message); not a
-   * second, spurious marker record appended after it. */
+  /* Exactly one record, the primary message, reaches the wire, with no
+   * second, extra marker record after it. */
   char *nl = strchr(buf, '\n');
   REQUIRE_NE(nl, NULL);
   REQUIRE_EQ(*(nl + 1), '\0');
@@ -7500,20 +7694,22 @@ TEST(robustness, syslog_shallow_backtrace_capture_emits_no_marker_record) {
 static void *_async_stress_writer(void *arg) {
   clog lg = *(clog *)arg;
   for (int i = 0; i < ASYNC_STRESS_ITERATIONS; i++)
-    ccol_log_info(lg, "async stress line %d", i);
+    clog_info(lg, "async stress line %d", i);
   return NULL;
 }
 
-/* Async analogue of threading.concurrent_parent_and_derived_writers_no_
- * garbled_lines: several threads hammering an async-enabled logger
- * concurrently must never produce a garbled (partial/merged) line. */
+/* This is the async form of
+ * threading.concurrent_parent_and_derived_writers_no_garbled_lines: several
+ * threads drive a logger with async mode at the same time, and they must
+ * never produce a line that is partial or merged. */
 TEST(threading, concurrent_async_writes_produce_no_garbled_lines) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  clog_async_cfg_t cfg = {.flush_buffer_size = 4096, .flush_interval_ms = 20};
+  clog_async_cfg_t cfg = {.flush_buffer_size = 4096,
+                          .flush_interval_us = 20000};
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
@@ -7543,7 +7739,7 @@ TEST(threading, concurrent_async_writes_produce_no_garbled_lines) {
   char line[512];
   int total_lines = 0;
   int bad_lines = 0;
-  while (fgets(line, sizeof line, f)) {
+  while (fgets(line, sizeof(line), f)) {
     total_lines++;
     if (strncmp(line, "ts=", 3) != 0 ||
         strstr(line, "async stress line") == NULL) {
@@ -7562,12 +7758,12 @@ TEST(threading, concurrent_async_writes_produce_no_garbled_lines) {
 /*                         COMPRESSION                                        */
 /* ========================================================================== */
 
-/* Rotation produces a valid gzip file decompressible with gunzip. */
+/* A rotation produces a valid gzip file that gunzip can decompress. */
 TEST(compression, rotated_file_is_valid_gzip) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_rotation_cfg_t cfg = {
       .size_rotation_enabled = true,
@@ -7581,32 +7777,33 @@ TEST(compression, rotated_file_is_valid_gzip) {
   REQUIRE_NE(lg, CLOG_INVALID);
 
   for (int i = 0; i < 20; i++)
-    ccol_log_info(
-        lg, "compression test message index=%d padding-to-force-rotation", i);
+    clog_info(lg, "compression test message index=%d padding-to-force-rotation",
+              i);
 
   clog_close(lg);
 
   /* At least one .gz file must exist. */
   REQUIRE_GT(count_files_with_suffix(dir, ".gz"), 0);
 
-  /* All rotated files should be .gz; no raw uncompressed rotated files. */
+  /* Every rotated file must be a .gz file; none may stay uncompressed. */
   REQUIRE_EQ(count_files_with_suffix(dir, ".gz"),
              count_files_with_prefix(dir, "app.log."));
 
   /* gunzip -t must pass on the first .gz file found. */
   char gz_path[512];
-  REQUIRE_EQ(find_file_with_suffix(dir, ".gz", gz_path, sizeof gz_path), 0);
+  REQUIRE_EQ(find_file_with_suffix(dir, ".gz", gz_path, sizeof(gz_path)), 0);
   REQUIRE_EQ(gunzip_test(gz_path), 0);
 
   cleanup_dir(dir, "app.log");
 }
 
-/* Decompressed content must match the log lines that were written. */
+/* The decompressed content must match the log lines that the test
+ * writes. */
 TEST(compression, decompressed_content_matches_written_log) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_rotation_cfg_t cfg = {
       .size_rotation_enabled = true,
@@ -7619,12 +7816,12 @@ TEST(compression, decompressed_content_matches_written_log) {
   clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* Write a distinctive sentinel into the first batch so it ends up rotated. */
-  ccol_log_info(
+  /* Write a clear sentinel into the first batch, so the logger rotates it. */
+  clog_info(
       lg,
       "sentinel_marker_abc123 index=0 pad=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
   for (int i = 1; i < 15; i++)
-    ccol_log_info(
+    clog_info(
         lg,
         "sentinel_marker_abc123 index=%d pad=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
         i);
@@ -7632,10 +7829,10 @@ TEST(compression, decompressed_content_matches_written_log) {
   clog_close(lg);
 
   char gz_path[512];
-  REQUIRE_EQ(find_file_with_suffix(dir, ".gz", gz_path, sizeof gz_path), 0);
+  REQUIRE_EQ(find_file_with_suffix(dir, ".gz", gz_path, sizeof(gz_path)), 0);
 
   char decomp[65536];
-  size_t dlen = gunzip_read(gz_path, decomp, sizeof decomp);
+  size_t dlen = gunzip_read(gz_path, decomp, sizeof(decomp));
   REQUIRE_GT(dlen, (size_t)0);
 
   /* The sentinel must appear somewhere in the decompressed output. */
@@ -7658,9 +7855,9 @@ TEST(compression, decompressed_content_matches_written_log) {
 /* With compress_rotated=false, no .gz file is ever produced. */
 TEST(compression, no_compression_when_disabled) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_rotation_cfg_t cfg = {
       .size_rotation_enabled = true,
@@ -7674,8 +7871,8 @@ TEST(compression, no_compression_when_disabled) {
   REQUIRE_NE(lg, CLOG_INVALID);
 
   for (int i = 0; i < 20; i++)
-    ccol_log_info(
-        lg, "no-compress test message index=%d padding-padding-padding", i);
+    clog_info(lg, "no-compress test message index=%d padding-padding-padding",
+              i);
 
   clog_close(lg);
 
@@ -7684,12 +7881,12 @@ TEST(compression, no_compression_when_disabled) {
   cleanup_dir(dir, "app.log");
 }
 
-/* max_rotated_files cap is respected even when compression is enabled. */
+/* The cap of max_rotated_files holds even when compression is on. */
 TEST(compression, max_rotated_files_respected_with_compression) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_rotation_cfg_t cfg = {
       .size_rotation_enabled = true,
@@ -7703,16 +7900,17 @@ TEST(compression, max_rotated_files_respected_with_compression) {
   REQUIRE_NE(lg, CLOG_INVALID);
 
   for (int i = 0; i < 60; i++)
-    ccol_log_info(
-        lg, "pruning+compress test idx=%d extra-data-to-fill-the-buffer", i);
+    clog_info(lg, "pruning+compress test idx=%d extra-data-to-fill-the-buffer",
+              i);
 
   clog_close(lg);
 
   /*
-   * _prune_rotated runs before compression, keying on the timestamp-only name.
-   * After pruning at most max_rotated_files raw rotated files remain; they are
-   * then compressed to .gz.  The live file ("app.log") is not counted.
-   * Allow one extra in case the final rotation raced with the check.
+   * _prune_rotated runs before the compression and keys on the name with the
+   * timestamp alone, so after the prune at most max_rotated_files raw rotated
+   * files are left, which the library then compresses to .gz. This count
+   * leaves out the live file ("app.log") and allows one more file, because
+   * the last rotation can race with the check.
    */
   int gz_count = count_files_with_suffix(dir, ".gz");
   REQUIRE_LE(gz_count, cfg.max_rotated_files + 1);
@@ -7721,22 +7919,24 @@ TEST(compression, max_rotated_files_respected_with_compression) {
   cleanup_dir(dir, "app.log");
 }
 
-/* An empty log file (0 bytes at rotation) compresses to a valid gzip. */
+/* An empty log file, which is 0 bytes at the rotation, compresses to a valid
+ * gzip file. */
 TEST(compression, empty_file_compresses_cleanly) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  /* Pre-create the log file with 0 bytes so we can manually trigger rotation
-   * via the internal clog_rotate_now helper available in unit-test builds. */
+  /* Create the log file first, with 0 bytes, so that the test can trigger a
+   * rotation by hand with the internal clog_rotate_now helper, which a
+   * unit-test build offers. */
   int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
   REQUIRE_NE(fd, -1);
   close(fd);
 
   clog_rotation_cfg_t cfg = {
       .size_rotation_enabled = true,
-      .max_file_size = 1, /* any write triggers rotation */
+      .max_file_size = 1, /* Any write triggers a rotation. */
       .time_rotation_enabled = false,
       .max_rotated_files = 5,
       .compress_rotated = true,
@@ -7745,54 +7945,55 @@ TEST(compression, empty_file_compresses_cleanly) {
   clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* A single write forces a rotation of the (nearly-empty) file. */
-  ccol_log_info(lg, "trigger rotation");
+  /* One write forces a rotation of the file, which is nearly empty. */
+  clog_info(lg, "trigger rotation");
   clog_close(lg);
 
   char gz_path[512];
-  int found = find_file_with_suffix(dir, ".gz", gz_path, sizeof gz_path);
+  int found = find_file_with_suffix(dir, ".gz", gz_path, sizeof(gz_path));
   if (found == 0) {
-    /* If a .gz was produced it must be valid. */
+    /* A .gz file that the library produced must be valid. */
     REQUIRE_EQ(gunzip_test(gz_path), 0);
   }
-  /* If no .gz exists the file was too small to trigger rotation; that is
-   * also acceptable; the test verifies there is no crash. */
+  /* No .gz file means that the file was too small to trigger a rotation,
+   * which is also acceptable: this test checks that nothing crashes. */
 
   cleanup_dir(dir, "app.log");
 }
 
-/* _gzip_compress_file() must not unlink() its destination path on a failure
- * that happened before its own gzopen() call ever ran: a source file that
- * can't even be opened means the destination was never touched by this call
- * at all. Unlinking unconditionally instead silently deletes a
- * coincidentally pre-existing, unrelated file at that exact destination path
- * on a compression attempt that never wrote a single byte to it. Exercised
- * directly via the internal helper (clog_test_gzip_compress_file), since
- * reproducing the real scenario end to end would require an external actor
- * deleting a just-rotated file in the narrow window between rename() and
- * this call's own fopen(). */
+/* When a failure happens before the gzopen() call of _gzip_compress_file()
+ * ever runs, the function must not unlink() its destination path. A source
+ * file that the function cannot even open means that this call never
+ * touched the destination at all, so an unlink with no condition silently
+ * deletes an unrelated file that already sits at that exact destination
+ * path, although the compression that deletes it never wrote a single byte
+ * to it. This test drives the internal helper clog_test_gzip_compress_file()
+ * directly, because reproducing the real scenario end to end would need an
+ * outside actor that deletes a file that a rotation has just made, in the
+ * narrow window between rename() and the fopen() of this call. */
 TEST(compression,
      compress_failure_before_dst_created_leaves_existing_dst_untouched) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
 
   char src[512];
-  snprintf(src, sizeof src, "%s/does-not-exist.log", dir);
+  snprintf(src, sizeof(src), "%s/does-not-exist.log", dir);
 
   char dst[512];
-  snprintf(dst, sizeof dst, "%s/preexisting.log.gz", dir);
+  snprintf(dst, sizeof(dst), "%s/preexisting.log.gz", dir);
   int fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
   REQUIRE_NE(fd, -1);
   const char *marker = "unrelated pre-existing content";
   REQUIRE_EQ(write(fd, marker, strlen(marker)), (ssize_t)strlen(marker));
   close(fd);
 
-  /* src does not exist, so fopen() fails before gzopen(dst, ...) is ever
-   * reached; compression must report failure without touching dst at all. */
+  /* src does not exist, so fopen() fails before the code ever reaches
+   * gzopen(dst, ...). The compression must report a failure without
+   * touching dst at all. */
   REQUIRE_FALSE(clog_test_gzip_compress_file(src, dst));
 
   char buf[256];
-  size_t len = read_file(dst, buf, sizeof buf);
+  size_t len = read_file(dst, buf, sizeof(buf));
   REQUIRE_EQ(len, strlen(marker));
   REQUIRE_EQ(memcmp(buf, marker, strlen(marker)), 0);
 
@@ -7800,34 +8001,34 @@ TEST(compression,
   rmdir(dir);
 }
 
-/* Concurrent rotation stress test targeting the race between one rotation's
- * gzip compression (run outside shared->mutex, on purpose, so slow I/O
- * doesn't stall other writers) and a second, concurrent rotation's own
- * pruning pass: without this protection, that second rotation's prune can
- * delete the first rotation's rotated file before its compression has
- * finished (or even started) reading it, silently losing that generation's
- * log data entirely rather than merely leaving it uncompressed. Many writer
- * threads sharing one logger, a tiny max_file_size, and compress_rotated=true
- * drive many overlapping rotate+compress cycles; every .gz file that does get
- * produced must be a complete, valid gzip archive; a file destroyed
- * mid-read by a racing prune would instead fail gunzip -t or produce
- * truncated content. */
+/* A stress test for concurrent rotations. It drives the race between the
+ * gzip compression of one rotation, which runs outside shared->mutex on
+ * purpose so that slow I/O does not stall other writers, and the prune pass
+ * of another rotation that runs at the same time. Without this protection,
+ * the prune of that second rotation can delete the rotated file of the first
+ * one before the compression of that file finishes its read, or even starts
+ * it, and the log data of that generation is then lost completely, not
+ * merely left uncompressed. Many writer threads share one logger here, and a
+ * tiny max_file_size with compress_rotated=true drives many rotate and
+ * compress cycles that overlap. Every .gz file that the library produces
+ * must be a complete, valid gzip archive; a prune that destroys a file in
+ * the middle of a read instead makes gunzip -t fail, or gives truncated
+ * content. */
 #define ROTATE_STRESS_THREAD_COUNT 6
 #define ROTATE_STRESS_MSGS_PER_THREAD 150
 
 static void *_rotate_stress_writer(void *arg) {
   clog lg = *(clog *)arg;
   for (int i = 0; i < ROTATE_STRESS_MSGS_PER_THREAD; i++)
-    ccol_log_info(lg, "rotate stress padding-padding-padding-padding idx=%d",
-                  i);
+    clog_info(lg, "rotate stress padding-padding-padding-padding idx=%d", i);
   return NULL;
 }
 
 TEST(compression, concurrent_rotations_never_corrupt_or_lose_a_gz_file) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_rotation_cfg_t cfg = {
       .size_rotation_enabled = true,
@@ -7859,9 +8060,9 @@ TEST(compression, concurrent_rotations_never_corrupt_or_lose_a_gz_file) {
 
   clog_close(lg);
 
-  /* Every .gz file produced under this concurrent hammering must be a
-   * complete, valid gzip archive; never truncated or missing entirely due
-   * to a racing prune. */
+  /* Every .gz file that this concurrent load produces must be a complete,
+   * valid gzip archive: a prune that races must never truncate one, nor
+   * remove one completely. */
   DIR *d = opendir(dir);
   REQUIRE_NE((void *)d, (void *)NULL);
   struct dirent *e;
@@ -7870,7 +8071,7 @@ TEST(compression, concurrent_rotations_never_corrupt_or_lose_a_gz_file) {
     size_t nlen = strlen(e->d_name);
     if (nlen < 3 || strcmp(e->d_name + nlen - 3, ".gz") != 0) continue;
     char gz_path[1024];
-    snprintf(gz_path, sizeof gz_path, "%s/%s", dir, e->d_name);
+    snprintf(gz_path, sizeof(gz_path), "%s/%s", dir, e->d_name);
     REQUIRE_EQ(gunzip_test(gz_path), 0);
     gz_checked++;
   }
@@ -7880,76 +8081,88 @@ TEST(compression, concurrent_rotations_never_corrupt_or_lose_a_gz_file) {
   cleanup_dir(dir, "app.log");
 }
 
-/* Deterministic counterpart to the stress test above: _prune_rotated()'s
- * pending-compress protection must cover the compressed DESTINATION (".gz")
- * file a concurrent rotation is still writing, not merely the uncompressed
- * SOURCE it is reading from. Uses the RUNNING_UNIT_TESTS-only
- * synchronization hooks (clog_test_set_pending_compress_delay_us /
- * clog_test_gz_dest_opened) to force this exact narrow window
- * deterministically, rather than relying on real thread-scheduling luck the
- * way the broader stress test above does. */
+/* The deterministic counterpart to the stress test above. The
+ * pending-compress protection of _prune_rotated() must cover the compressed
+ * DESTINATION file, the ".gz" file that a concurrent rotation is in the
+ * middle of writing, and not the uncompressed SOURCE alone, which that
+ * rotation reads from. This test uses two synchronization hooks that only a
+ * RUNNING_UNIT_TESTS build offers,
+ * clog_test_set_pending_compress_delay_us() and clog_test_gz_dest_opened(),
+ * to force this exact narrow window every time, while the wider stress test
+ * above depends on the luck of the real thread scheduler. */
 static void *_gzrace_first_rotation_writer(void *arg) {
   clog lg = *(clog *)arg;
-  ccol_log_info(lg, "first rotation content");
+  clog_info(lg, "first rotation content");
   return NULL;
 }
 
 TEST(compression,
      prune_never_deletes_a_gz_file_still_being_written_by_another_rotation) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog_rotation_cfg_t cfg = {
       .size_rotation_enabled = true,
-      .max_file_size = 1, /* any write triggers rotation */
+      .max_file_size = 1, /* Any write triggers a rotation. */
       .time_rotation_enabled = false,
-      .max_rotated_files = 1, /* tight quota: forces prune to try to delete
-                                  something on the second rotation */
+      .max_rotated_files = 1, /* A tight quota that forces the prune to try to
+                                  delete something on the second rotation. */
       .compress_rotated = true,
   };
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* Arm a long, deterministic delay: the first rotation's compress step will
-   * pause right after creating its .gz destination on disk, before writing
-   * any content to it. */
+  /* Arm a long, deterministic delay, so that the compress step of the first
+   * rotation pauses directly after it creates its .gz destination on the
+   * disk, before it writes any content to that file. */
   clog_test_set_pending_compress_delay_us(500000); /* 500ms */
 
   pthread_t t;
   REQUIRE_EQ(pthread_create(&t, NULL, _gzrace_first_rotation_writer, &lg), 0);
 
-  /* Spin-wait until the first rotation's .gz destination genuinely exists on
-   * disk (rather than sleeping a fixed guess), so the second rotation
-   * triggered right below is guaranteed to race a real, on-disk file. */
+  /* Spin-wait until the .gz destination of the first rotation really exists
+   * on the disk, instead of a fixed sleep with a guess, so that the second
+   * rotation directly below always races a real file on the disk. */
   while (!clog_test_gz_dest_opened()) usleep(1000);
 
-  /* Disarm the delay so the second rotation's own compress step (triggered
-   * below) does not also pause; the first rotation's own in-flight compress
-   * already captured its own 500ms delay locally and is unaffected. */
+  /* Disarm the delay, so that the compress step of the second rotation,
+   * which the line below triggers, does not also pause. The in-flight
+   * compress of the first rotation already took its own local copy of the
+   * 500ms delay, so this disarm does not touch it. */
   clog_test_set_pending_compress_delay_us(0);
 
-  /* This rotation's own pruning pass runs while the first rotation's
-   * compress is still mid-flight; its candidate set on disk is the first
-   * rotation's uncompressed source, that same rotation's in-progress .gz
-   * destination, and this rotation's own freshly rotated (not yet
-   * compressed) file. */
-  ccol_log_info(lg, "second rotation content");
+  /* The prune pass of this rotation runs while the compress of the first
+   * rotation is in flight, and its set of candidates on the disk holds three
+   * files: the uncompressed source of the first rotation, the .gz
+   * destination of that same rotation, which is in progress, and the file
+   * that this rotation has just rotated and not yet compressed. */
+  clog_info(lg, "second rotation content");
+  /* The prune pass of the second rotation is over while the compression of
+   * the first one stays held, so both of its files must be on disk: the
+   * temporary output that becomes the .gz file, and the source that it
+   * reads. A prune that races can delete them while the compression is in
+   * flight, and the content of that generation then disappears completely
+   * while the compression "succeeds" all the same: an unlink of a file that
+   * is open removes only its directory entry, and the writer keeps appending
+   * to an inode that no longer has a name. No .gz file exists before the
+   * output is complete. */
+  int gz_during = count_files_with_suffix(dir, ".gz");
+  int tmp_during = count_files_with_suffix(dir, ".gz.tmp");
+  int rotated_during = count_files_with_prefix(dir, "app.log.");
 
   pthread_join(t, NULL);
   clog_close(lg);
 
-  /* Both rotation generations' compressed output must have survived: a
-   * racing prune deleting the first rotation's still-in-flight .gz file
-   * would make that generation's content vanish entirely rather than merely
-   * corrupt it (unlinking a still-open file only removes its directory
-   * entry; the writer keeps appending to the now-nameless inode until its
-   * own fd closes, at which point the data is gone for good, and the
-   * now-"successfully" closed compression then also removes its own
-   * uncompressed source); leaving only one .gz file instead of two. */
-  REQUIRE_EQ(count_files_with_suffix(dir, ".gz"), 2);
+  REQUIRE_EQ(gz_during, 0);
+  REQUIRE_EQ(tmp_during, 1);
+  REQUIRE_EQ(rotated_during, 3);
+  /* Once the first compression ends, max_rotated_files == 1 retires its
+   * generation, and the second generation is the one that stays,
+   * compressed. */
+  REQUIRE_EQ(count_files_with_suffix(dir, ".gz"), 1);
 
   DIR *d = opendir(dir);
   REQUIRE_NE((void *)d, (void *)NULL);
@@ -7959,57 +8172,52 @@ TEST(compression,
     size_t nlen = strlen(e->d_name);
     if (nlen < 3 || strcmp(e->d_name + nlen - 3, ".gz") != 0) continue;
     char gz_path[1024];
-    snprintf(gz_path, sizeof gz_path, "%s/%s", dir, e->d_name);
+    snprintf(gz_path, sizeof(gz_path), "%s/%s", dir, e->d_name);
     REQUIRE_EQ(gunzip_test(gz_path), 0);
     char content[512];
-    gunzip_read(gz_path, content, sizeof content);
+    gunzip_read(gz_path, content, sizeof(content));
     if (strstr(content, "first rotation content")) found_first = true;
     if (strstr(content, "second rotation content")) found_second = true;
   }
   closedir(d);
-  REQUIRE_TRUE(found_first);
+  REQUIRE_FALSE(found_first);
   REQUIRE_TRUE(found_second);
 
   cleanup_dir(dir, "app.log");
 }
 
-/* _prune_rotated()'s own reconstruction of each candidate's full path (via
- * _path_dir()/_path_base() + readdir()'s bare filename) is NOT guaranteed to
- * reproduce the literal file_path prefix _rotate() itself uses to build the
- * pending-compress list's own path/gz_path strings, whenever file_path has
- * no '/' at all: _path_dir() then returns "." (a directory component that
- * never actually appeared in file_path), so the reconstructed candidate
- * ("./app.log.<ts>...") never string-compares equal to the pending entry
- * ("app.log.<ts>..."), silently defeating the in-flight-compression
- * protection. This is otherwise identical to
+/* A logger opened with a bare filename, one that holds no '/', works in the
+ * working directory of the process at the time of the open. The names that
+ * _prune_rotated() lists there must match the names of the compression in
+ * flight exactly, or the protection of that compression silently does
+ * nothing. This test is otherwise identical to
  * prune_never_deletes_a_gz_file_still_being_written_by_another_rotation
- * above, just opened via a bare relative filename (with the process cwd
- * temporarily pointed at the test's own tmpdir) instead of an absolute path;
- * every other test in this suite uses make_tmpdir()'s absolute paths, which
- * round-trip correctly through _path_dir()/_path_base() and so cannot
- * exercise this case. */
+ * above, but it opens a bare relative filename in place of an absolute path
+ * and temporarily points the cwd of the process at its own tmpdir. Every
+ * other test in this suite uses the absolute paths that make_tmpdir()
+ * gives, so they cannot drive this case. */
 TEST(compression,
      prune_survives_gz_race_with_a_bare_relative_filename_no_slash) {
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
 
   char oldcwd[1024];
-  REQUIRE_NE((void *)getcwd(oldcwd, sizeof oldcwd), (void *)NULL);
+  REQUIRE_NE((void *)getcwd(oldcwd, sizeof(oldcwd)), (void *)NULL);
   REQUIRE_EQ(chdir(dir), 0);
 
   clog_rotation_cfg_t cfg = {
       .size_rotation_enabled = true,
-      .max_file_size = 1, /* any write triggers rotation */
+      .max_file_size = 1, /* Any write triggers a rotation. */
       .time_rotation_enabled = false,
-      .max_rotated_files = 1, /* tight quota: forces prune to try to delete
-                                  something on the second rotation */
+      .max_rotated_files = 1, /* A tight quota that forces the prune to try to
+                                  delete something on the second rotation. */
       .compress_rotated = true,
   };
 
-  /* "app.log", not "<dir>/app.log": no '/' anywhere in this path at all. */
+  /* This is "app.log", not "<dir>/app.log": the path holds no '/' at all. */
   clog lg = clog_open_file_mp("app.log", CLOG_INFO, &cfg, NULL, NULL);
   if (lg == CLOG_INVALID) {
-    chdir(oldcwd);
+    if (chdir(oldcwd) != 0) perror("chdir back to the original directory");
     REQUIRE_NE(lg, CLOG_INVALID);
   }
 
@@ -8020,27 +8228,35 @@ TEST(compression,
   if (prv != 0) {
     clog_test_set_pending_compress_delay_us(0);
     clog_close(lg);
-    chdir(oldcwd);
+    if (chdir(oldcwd) != 0) perror("chdir back to the original directory");
     REQUIRE_EQ(prv, 0);
   }
 
   while (!clog_test_gz_dest_opened()) usleep(1000);
   clog_test_set_pending_compress_delay_us(0);
 
-  ccol_log_info(lg, "second rotation content");
+  clog_info(lg, "second rotation content");
+  /* See the absolute-path version of this race above. */
+  int gz_during = count_files_with_suffix(dir, ".gz");
+  int tmp_during = count_files_with_suffix(dir, ".gz.tmp");
+  int rotated_during = count_files_with_prefix(dir, "app.log.");
 
   pthread_join(t, NULL);
   clog_close(lg);
 
-  /* Every file operation this test needs is done; restore the process-wide
-   * cwd before any further REQUIRE (below) could return early and leave it
-   * pointed at a directory this test's own cleanup_dir() is about to
-   * remove; every other test in this suite assumes an unchanged cwd. */
+  /* Every file operation that this test needs is done, so restore the cwd of
+   * the process now: any REQUIRE below can return early, which would leave
+   * the cwd pointed at a directory that the cleanup_dir() of this test is
+   * about to remove, and every other test in this suite expects an unchanged
+   * cwd. */
   REQUIRE_EQ(chdir(oldcwd), 0);
 
-  /* Both rotation generations' compressed output must have survived, exactly
-   * as in the absolute-path version of this race above. */
-  REQUIRE_EQ(count_files_with_suffix(dir, ".gz"), 2);
+  /* This is exactly the rule of the absolute-path version of this race
+   * above. */
+  REQUIRE_EQ(gz_during, 0);
+  REQUIRE_EQ(tmp_during, 1);
+  REQUIRE_EQ(rotated_during, 3);
+  REQUIRE_EQ(count_files_with_suffix(dir, ".gz"), 1);
 
   DIR *d = opendir(dir);
   REQUIRE_NE((void *)d, (void *)NULL);
@@ -8050,15 +8266,15 @@ TEST(compression,
     size_t nlen = strlen(e->d_name);
     if (nlen < 3 || strcmp(e->d_name + nlen - 3, ".gz") != 0) continue;
     char gz_path[1024];
-    snprintf(gz_path, sizeof gz_path, "%s/%s", dir, e->d_name);
+    snprintf(gz_path, sizeof(gz_path), "%s/%s", dir, e->d_name);
     REQUIRE_EQ(gunzip_test(gz_path), 0);
     char content[512];
-    gunzip_read(gz_path, content, sizeof content);
+    gunzip_read(gz_path, content, sizeof(content));
     if (strstr(content, "first rotation content")) found_first = true;
     if (strstr(content, "second rotation content")) found_second = true;
   }
   closedir(d);
-  REQUIRE_TRUE(found_first);
+  REQUIRE_FALSE(found_first);
   REQUIRE_TRUE(found_second);
 
   cleanup_dir(dir, "app.log");
@@ -8069,10 +8285,11 @@ TEST(compression,
 /* ========================================================================== */
 
 TEST(fatal, terminates_process) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -8087,7 +8304,7 @@ TEST(fatal, terminates_process) {
     }
     _g_fatal_child_lg = lg;
     atexit(_fatal_child_cleanup);
-    ccol_log_fatal(lg, "process must die");
+    clog_fatal(lg, "process must die");
     _exit(0); /* unreachable */
   }
   REQUIRE_NE(pid, -1);
@@ -8102,10 +8319,11 @@ TEST(fatal, terminates_process) {
 }
 
 TEST(fatal, writes_log_before_terminating) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -8120,7 +8338,7 @@ TEST(fatal, writes_log_before_terminating) {
     }
     _g_fatal_child_lg = lg;
     atexit(_fatal_child_cleanup);
-    ccol_log_fatal(lg, "fatal condition encountered");
+    clog_fatal(lg, "fatal condition encountered");
     _exit(0); /* unreachable */
   }
   REQUIRE_NE(pid, -1);
@@ -8130,7 +8348,7 @@ TEST(fatal, writes_log_before_terminating) {
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_TRUE(WIFEXITED(wstatus));
   REQUIRE_NE(WEXITSTATUS(wstatus), 0);
@@ -8141,13 +8359,14 @@ TEST(fatal, writes_log_before_terminating) {
 }
 
 TEST(fatal, writes_backtrace_before_terminating) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   if (!backtrace_capture_genuinely_available())
     return; /* see this helper's
                  own doc comment */
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -8162,7 +8381,7 @@ TEST(fatal, writes_backtrace_before_terminating) {
     }
     _g_fatal_child_lg = lg;
     atexit(_fatal_child_cleanup);
-    ccol_log_fatal(lg, "fatal with trace");
+    clog_fatal(lg, "fatal with trace");
     _exit(0); /* unreachable */
   }
   REQUIRE_NE(pid, -1);
@@ -8172,7 +8391,7 @@ TEST(fatal, writes_backtrace_before_terminating) {
   clog_close(lg);
 
   char buf[8192];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "\t#"), NULL);
 
@@ -8180,13 +8399,14 @@ TEST(fatal, writes_backtrace_before_terminating) {
 }
 
 TEST(fatal, writes_and_terminates_with_clog_off) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
-  /* ccol_log_fatal bypasses the level filter: even with CLOG_OFF the message
-   * must be written and the process must terminate. */
+  /* clog_fatal goes past the level filter: even with CLOG_OFF, the
+   * library must write the message, and the process must stop. */
   clog lg = clog_open_file_mp(path, CLOG_OFF, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
@@ -8200,7 +8420,7 @@ TEST(fatal, writes_and_terminates_with_clog_off) {
     }
     _g_fatal_child_lg = lg;
     atexit(_fatal_child_cleanup);
-    ccol_log_fatal(lg, "fatal bypasses filter");
+    clog_fatal(lg, "fatal bypasses filter");
     _exit(0); /* unreachable */
   }
   REQUIRE_NE(pid, -1);
@@ -8210,7 +8430,7 @@ TEST(fatal, writes_and_terminates_with_clog_off) {
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_TRUE(WIFEXITED(wstatus));
   REQUIRE_NE(WEXITSTATUS(wstatus), 0);
@@ -8225,10 +8445,11 @@ TEST(fatal, writes_and_terminates_with_clog_off) {
 /* ========================================================================== */
 
 TEST(json, fatal_level_string_in_json) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -8244,7 +8465,7 @@ TEST(json, fatal_level_string_in_json) {
     }
     _g_fatal_child_lg = lg;
     atexit(_fatal_child_cleanup);
-    ccol_log_fatal(lg, "fatal json message");
+    clog_fatal(lg, "fatal json message");
     _exit(0); /* unreachable */
   }
   REQUIRE_NE(pid, -1);
@@ -8254,7 +8475,7 @@ TEST(json, fatal_level_string_in_json) {
   clog_close(lg);
 
   char buf[4096];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "\"FATAL\""), NULL);
   REQUIRE_NE(strstr(buf, "fatal json message"), NULL);
@@ -8263,10 +8484,11 @@ TEST(json, fatal_level_string_in_json) {
 }
 
 TEST(json, fatal_has_inline_bt_array) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
   char dir[256];
-  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
-  snprintf(path, sizeof path, "%s/app.log", dir);
+  snprintf(path, sizeof(path), "%s/app.log", dir);
 
   clog lg = clog_open_file_mp(path, CLOG_FATAL, NULL, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
@@ -8282,7 +8504,7 @@ TEST(json, fatal_has_inline_bt_array) {
     }
     _g_fatal_child_lg = lg;
     atexit(_fatal_child_cleanup);
-    ccol_log_fatal(lg, "fatal event");
+    clog_fatal(lg, "fatal event");
     _exit(0); /* unreachable */
   }
   REQUIRE_NE(pid, -1);
@@ -8292,7 +8514,7 @@ TEST(json, fatal_has_inline_bt_array) {
   clog_close(lg);
 
   char buf[8192];
-  read_file(path, buf, sizeof buf);
+  read_file(path, buf, sizeof(buf));
 
   REQUIRE_NE(strstr(buf, "\"bt\":["), NULL);
   REQUIRE_EQ(strstr(buf, "\t#"),
@@ -8305,46 +8527,1085 @@ TEST(json, fatal_has_inline_bt_array) {
   cleanup_dir(dir, "app.log");
 }
 
+/* ========================================================================== */
+/*                  FRAMING AROUND A RETAINED CONTINUATION                    */
+/* ========================================================================== */
+
+/* True when line begins where a record of this module begins. There are five
+ * such beginnings: the "ts=" of a logfmt record, the "level=" of a logfmt
+ * marker record, the PRI of a syslog record, the brace of a JSON record, and
+ * the leading tab of a logfmt backtrace continuation line. */
+static bool line_starts_a_record(const char *line) {
+  return strncmp(line, "ts=", 3) == 0 || strncmp(line, "level=", 6) == 0 ||
+         line[0] == '<' || line[0] == '{' || line[0] == '\t';
+}
+
+/*
+ * This counts the places inside `line` where another record begins, past the
+ * point at which a record may legitimately begin. Two things count: the
+ * "ts=" of a logfmt record beyond offset 0, and the "<PRI>1 " of a syslog
+ * record beyond that point, whose ">1 " sits at offset 2 to 4, because PRI
+ * is one to three digits. Each of these is one record written into the
+ * middle of another.
+ */
+static int count_interior_record_starts(const char *line) {
+  int n = 0;
+  /* An empty line holds no record at all, and the searches below skip the
+   * first byte of the line, which an empty line does not have. */
+  if (line[0] == '\0') return 0;
+  for (const char *p = strstr(line + 1, "ts="); p; p = strstr(p + 1, "ts="))
+    n++;
+  for (const char *p = strstr(line, ">1 "); p; p = strstr(p + 1, ">1 "))
+    if (p - line > 4) n++;
+  return n;
+}
+
+/*
+ * This walks buf line by line and reports how many lines there are, how many
+ * do not begin a record, and how many hold a record that begins inside
+ * another one. It adds a NUL terminator to each line in place while it
+ * inspects that line and restores the byte afterwards, so buf reads the same
+ * before and after.
+ */
+static void inspect_record_framing(char *buf, int *out_lines, int *out_unframed,
+                                   int *out_interior) {
+  int lines = 0, unframed = 0, interior = 0;
+  char *line = buf;
+  while (*line) {
+    char *nl = strchr(line, '\n');
+    if (nl) *nl = '\0';
+    lines++;
+    if (line[0] == '\0' || !line_starts_a_record(line)) unframed++;
+    if (count_interior_record_starts(line) > 0) interior++;
+    if (nl) *nl = '\n';
+    if (!nl) break;
+    line = nl + 1;
+  }
+  *out_lines = lines;
+  *out_unframed = unframed;
+  *out_interior = interior;
+}
+
+/* A body long enough that two capped writes of SPLIT_WRITE_CAP bytes, one
+ * after the other, both stop inside the very first record. */
+#define SPLIT_WRITE_CAP ((size_t)100)
+
+/* This fills body with `marker` and then filler that needs no logfmt escape,
+ * so the record carries the marker verbatim. */
+static void make_split_test_body(char *body, size_t bodysz,
+                                 const char *marker) {
+  memset(body, 'A', bodysz - 1);
+  body[bodysz - 1] = '\0';
+  memcpy(body, marker, strlen(marker));
+}
+
+/*
+ * The async writer thread can hold the continuation of a record whose first
+ * half is already on the disk, and a record that goes straight to the
+ * descriptor must not land between those two halves. CLOG_FMT_SYSLOG output
+ * is exempt from batching and takes exactly that route, with each record
+ * going out in its own write(), while the batch buffer may hold a
+ * continuation that the flush ahead of it could not deliver. The library
+ * settles the continuation first, which here means giving up on it: it
+ * writes the missing newline of the half-written record, and a marker that
+ * names the loss, in place of the rest. So a consumer that reads the file
+ * line by line sees well-formed lines throughout.
+ *
+ * This test is not vacuous: without the settle, the library writes the
+ * syslog record into the middle of the logfmt record that it delivered by
+ * half, so the line that carries it also carries the start of that record,
+ * which is exactly what count_interior_record_starts() reports.
+ */
+TEST(split_record_framing, a_syslog_record_never_lands_inside_a_retained_one) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  /* A descriptor this test owns: CLOG_FMT_SYSLOG is only ever accepted on
+   * one the logger did not open for itself. */
+  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  REQUIRE_NE(fd, -1);
+
+  /* The buffer is large enough that only the explicit flushes below write
+   * anything, and the interval is long enough that the timer of the writer
+   * thread does not flush first. */
+  clog_async_cfg_t acfg = {
+      .queue_size = 0,
+      .flush_buffer_size = 1024UL * 1024UL,
+      .flush_interval_us = 60000000,
+  };
+
+  clog lg = clog_open_fd_mp(fd, CLOG_INFO, &acfg, NULL);
+  if (lg == CLOG_INVALID) close(fd);
+  REQUIRE_NE(lg, CLOG_INVALID);
+
+  char body1[320], body2[320], body3[320];
+  make_split_test_body(body1, sizeof(body1), "RECORDONEBODY");
+  make_split_test_body(body2, sizeof(body2), "RECORDTWOBODY");
+  make_split_test_body(body3, sizeof(body3), "RECORDTHREEBODY");
+
+  clog_info(lg, "%s", body1);
+  clog_info(lg, "%s", body2);
+  clog_info(lg, "%s", body3);
+
+  /* Two attempts at the batch, one after the other, both stop inside the
+   * first record: the write of this flush, and the attempt that the syslog
+   * record below makes before it writes itself. */
+  clog_test_force_short_writes(SPLIT_WRITE_CAP, 2);
+  clog_flush(lg);
+
+  clog_set_format(lg, CLOG_FMT_SYSLOG);
+  clog_info(lg, "SYSLOGRECORDBODY");
+  /* The writer thread handles this after the record above, so this call
+   * returns after the library writes that record. */
+  clog_flush(lg);
+
+  clog_close(lg);
+  close(fd);
+
+  char buf[16384];
+  size_t len = read_file(path, buf, sizeof(buf));
+  int lines = 0, unframed = 0, interior = 0;
+  inspect_record_framing(buf, &lines, &unframed, &interior);
+  bool has_marker = strstr(buf, "log record truncated") != NULL;
+  bool has_second = strstr(buf, "RECORDTWOBODY") != NULL;
+  bool has_third = strstr(buf, "RECORDTHREEBODY") != NULL;
+  bool has_syslog = strstr(buf, "SYSLOGRECORDBODY") != NULL;
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_GT(len, (size_t)0);
+  /* No line holds a record that begins inside another one, and every line
+   * begins one. */
+  REQUIRE_EQ(interior, 0);
+  REQUIRE_EQ(unframed, 0);
+  /* The library reports the half of the first record that it could not
+   * deliver instead of dropping that half in silence... */
+  REQUIRE_TRUE(has_marker);
+  /* ...it delivers the records that the batch holds behind it as usual... */
+  REQUIRE_TRUE(has_second);
+  REQUIRE_TRUE(has_third);
+  /* ...and it delivers the syslog record that it had to write past them. */
+  REQUIRE_TRUE(has_syslog);
+}
+
+/* An allocator whose calloc fails exactly once, on demand, so that a test
+ * can fail one specific internal allocation while every other one works
+ * normally, including the allocations that the writer thread and the
+ * teardown of the logger make after the body of the test returns. */
+static _Atomic bool _fail_one_calloc = false;
+static void *_failing_calloc(size_t n, size_t sz) {
+  if (atomic_exchange(&_fail_one_calloc, false)) return NULL;
+  return calloc(n, sz);
+}
+static void *_failing_calloc_malloc(size_t sz) { return malloc(sz); }
+static void _failing_calloc_free(void *p) { free(p); }
+static void *_failing_calloc_realloc(void *p, size_t sz) {
+  return realloc(p, sz);
+}
+
+/*
+ * The synchronous write path serves an async logger too: a CLOG_FATAL call
+ * takes it, and so does an ordinary call whose job envelope the allocator
+ * cannot supply, which is what this test forces. That record goes straight
+ * to the descriptor, so it must not land between the two halves of a record
+ * whose continuation the batch buffer holds.
+ *
+ * This test is not vacuous: without the settle, the library writes the
+ * record onto the fragment that is already on the disk, the two merge into
+ * one line, and count_interior_record_starts() reports that.
+ */
+TEST(split_record_framing,
+     a_synchronous_record_never_lands_inside_a_retained_one) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  ccol_memmgmt_procs_t procs = {
+      .malloc = _failing_calloc_malloc,
+      .free = _failing_calloc_free,
+      .calloc = _failing_calloc,
+      .realloc = _failing_calloc_realloc,
+  };
+
+  clog_async_cfg_t acfg = {
+      .queue_size = 0,
+      .flush_buffer_size = 1024UL * 1024UL,
+      .flush_interval_us = 60000000,
+  };
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &acfg, &procs);
+  REQUIRE_NE(lg, CLOG_INVALID);
+
+  char body1[320], body2[320], body3[320];
+  make_split_test_body(body1, sizeof(body1), "RECORDONEBODY");
+  make_split_test_body(body2, sizeof(body2), "RECORDTWOBODY");
+  make_split_test_body(body3, sizeof(body3), "RECORDTHREEBODY");
+
+  clog_info(lg, "%s", body1);
+  clog_info(lg, "%s", body2);
+  clog_info(lg, "%s", body3);
+
+  clog_test_force_short_writes(SPLIT_WRITE_CAP, 2);
+  clog_flush(lg);
+  /* The writer thread parks on its own queue by the time that the flush it
+   * acknowledged returns, so the next allocation that the logger makes, the
+   * envelope that the call below needs, is the one that this arms against.
+   * A failure of it hands that call to the synchronous write path. */
+  atomic_store(&_fail_one_calloc, true);
+  clog_info(lg, "SYNCHRONOUSRECORDBODY");
+  atomic_store(&_fail_one_calloc, false);
+
+  clog_flush(lg);
+  clog_close(lg);
+
+  char buf[16384];
+  size_t len = read_file(path, buf, sizeof(buf));
+  int lines = 0, unframed = 0, interior = 0;
+  inspect_record_framing(buf, &lines, &unframed, &interior);
+  bool has_marker = strstr(buf, "log record truncated") != NULL;
+  bool has_second = strstr(buf, "RECORDTWOBODY") != NULL;
+  bool has_third = strstr(buf, "RECORDTHREEBODY") != NULL;
+  bool has_sync = strstr(buf, "SYNCHRONOUSRECORDBODY") != NULL;
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_GT(len, (size_t)0);
+  REQUIRE_EQ(interior, 0);
+  REQUIRE_EQ(unframed, 0);
+  REQUIRE_TRUE(has_marker);
+  REQUIRE_TRUE(has_second);
+  REQUIRE_TRUE(has_third);
+  REQUIRE_TRUE(has_sync);
+}
+
+/*
+ * CLOG_FATAL takes the synchronous write path on an async logger, and it is
+ * the one caller of that path that must never wait, because the process is
+ * on its way to exit(). When the batch buffer holds a continuation, the
+ * library gives that continuation one bounded attempt at delivery and then
+ * gives up on it, repairing the framing in its place. It neither writes the
+ * fatal record into the middle of a record that it wrote by half, nor blocks
+ * the call on a descriptor that will not take the
+ * rest.
+ *
+ * This test runs in a forked child, because the call stops the process. It
+ * deliberately asserts nothing about the exit STATUS of that child, only
+ * that the child stopped with no signal, inside a bounded wait: valgrind
+ * overrides the real status of a forked child as soon as it finds any
+ * still-reachable allocation in the inherited process image, and such a
+ * child always has one.
+ *
+ * This test must also stay ahead of the fixture for the deferred slot-table
+ * release below. That fixture publishes two loggers for its own destructor
+ * to close in a deliberate race, and a child forked after that publication
+ * inherits them, so a stop through exit() runs that destructor, and that
+ * race, inside the child, where ThreadSanitizer reports it against a test
+ * that has nothing to do with it.
+ *
+ * This test is not vacuous: without the settle, the library writes the fatal
+ * record onto the fragment that is already on the disk, the two become one
+ * line, and count_interior_record_starts() reports that.
+ */
+TEST(split_record_framing, a_fatal_record_never_lands_inside_a_retained_one) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  /* The child stops through exit(), which flushes whatever the stdio buffers
+   * of this process held at the time of the fork(), so draining them here
+   * first stops the harness from writing its output twice. */
+  fflush(NULL);
+  pid_t pid = fork();
+  if (pid == 0) {
+    clog_async_cfg_t cfg = {.flush_buffer_size = 1 << 20,
+                            .flush_interval_us = 60000000};
+    clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
+    if (lg == CLOG_INVALID) _exit(2);
+
+    char body1[320], body2[320];
+    make_split_test_body(body1, sizeof(body1), "RECORDONEBODY");
+    make_split_test_body(body2, sizeof(body2), "RECORDTWOBODY");
+    clog_info(lg, "%s", body1);
+    clog_info(lg, "%s", body2);
+
+    /* Three attempts at the batch, one after the other, all stop inside the
+     * first record: the write of this flush, the drain that CLOG_FATAL runs
+     * before anything else, and the attempt that the fatal record makes
+     * before it gives up on the rest. */
+    clog_test_force_short_writes(SPLIT_WRITE_CAP, 3);
+    clog_flush(lg);
+
+    clog_fatal(lg, "FATALRECORDBODY");
+    _exit(0); /* unreachable */
+  }
+  REQUIRE_NE(pid, -1);
+
+  int status;
+  bool reaped = false;
+  for (int waited_ms = 0; waited_ms < 30000; waited_ms += 20) {
+    pid_t r = waitpid(pid, &status, WNOHANG);
+    if (r == pid) {
+      reaped = true;
+      break;
+    }
+    usleep(20000);
+  }
+  if (!reaped) {
+    _clog_test_dump_stuck_child_diagnostics(pid);
+    kill(pid, SIGKILL);
+    waitpid(pid, &status, 0);
+    REQUIRE_TRUE(false);
+  }
+  REQUIRE_FALSE(WIFSIGNALED(status));
+
+  char buf[16384];
+  size_t len = read_file(path, buf, sizeof(buf));
+  int lines = 0, unframed = 0, interior = 0;
+  inspect_record_framing(buf, &lines, &unframed, &interior);
+  bool has_marker = strstr(buf, "log record truncated") != NULL;
+  bool has_fatal = strstr(buf, "FATALRECORDBODY") != NULL;
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_GT(len, (size_t)0);
+  REQUIRE_EQ(interior, 0);
+  REQUIRE_EQ(unframed, 0);
+  REQUIRE_TRUE(has_marker);
+  /* The record that names the cause of the stop reaches the log, which is the
+   * whole reason that this path writes synchronously. */
+  REQUIRE_TRUE(has_fatal);
+}
+
+/* ------------------------------------------------------------------------ */
+/* Write errors that no retry outlasts, and the last delivery attempt        */
+/* ------------------------------------------------------------------------ */
+
+/* The async configuration of the tests below: the buffer is large enough,
+ * and the interval long enough, that only the explicit flushes, the close
+ * and the fatal path write anything. */
+static const clog_async_cfg_t g_undelivered_acfg = {
+    .queue_size = 0,
+    .flush_buffer_size = 1024UL * 1024UL,
+    .flush_interval_us = 60000000,
+};
+
+/*
+ * A flush whose write fails with an error that no later attempt outlasts
+ * (EPIPE here) drops the batch and writes a marker that names the loss, and
+ * the records after it then go out as usual. Offering the same batch again
+ * would fail the same way, while every later record piles up behind it.
+ *
+ * This test is non-vacuous: when the flush keeps the batch after such an
+ * error, the file holds no marker, and the next flush delivers the batch
+ * after all.
+ */
+TEST(undelivered_batch, an_error_no_retry_outlasts_drops_it_with_a_marker) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &g_undelivered_acfg, NULL);
+  if (lg == CLOG_INVALID) cleanup_dir(dir, "app.log");
+  REQUIRE_NE(lg, CLOG_INVALID);
+
+  clog_info(lg, "BATCHRECORDONE");
+  clog_info(lg, "BATCHRECORDTWO");
+  clog_info(lg, "BATCHRECORDTHREE");
+  clog_test_force_write_errors(EPIPE, 1);
+  clog_flush(lg);
+  clog_test_force_write_errors(0, 0);
+  clog_info(lg, "RECORDAFTERTHEDROP");
+  clog_close(lg);
+
+  char buf[16384];
+  size_t len = read_file(path, buf, sizeof(buf));
+  char expected[96];
+  snprintf(expected, sizeof(expected),
+           "undelivered batch dropped (records=3 bytes=");
+  bool has_marker = strstr(buf, expected) != NULL;
+  char why[32];
+  snprintf(why, sizeof(why), "write error %d", EPIPE);
+  bool has_why = strstr(buf, why) != NULL;
+  bool has_batch = strstr(buf, "BATCHRECORD") != NULL;
+  bool has_after = strstr(buf, "RECORDAFTERTHEDROP") != NULL;
+  int lines = 0, unframed = 0, interior = 0;
+  inspect_record_framing(buf, &lines, &unframed, &interior);
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_GT(len, (size_t)0);
+  REQUIRE_TRUE(has_marker);
+  REQUIRE_TRUE(has_why);
+  REQUIRE_FALSE(has_batch);
+  REQUIRE_TRUE(has_after);
+  REQUIRE_EQ(lines, 2);
+  REQUIRE_EQ(unframed, 0);
+  REQUIRE_EQ(interior, 0);
+}
+
+/*
+ * A flush whose write fails with an error that a later attempt can outlast
+ * (ENOSPC here) keeps the batch, and the next flush delivers it whole, with
+ * no marker. This pins the other side of the rule of the test above.
+ */
+TEST(undelivered_batch, a_transient_error_keeps_it_for_the_next_flush) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &g_undelivered_acfg, NULL);
+  if (lg == CLOG_INVALID) cleanup_dir(dir, "app.log");
+  REQUIRE_NE(lg, CLOG_INVALID);
+
+  clog_info(lg, "BATCHRECORDONE");
+  clog_info(lg, "BATCHRECORDTWO");
+  clog_test_force_write_errors(ENOSPC, 1);
+  clog_flush(lg);
+  clog_test_force_write_errors(0, 0);
+  char mid[16384];
+  size_t mid_len = read_file(path, mid, sizeof(mid));
+  clog_flush(lg);
+  clog_close(lg);
+
+  char buf[16384];
+  read_file(path, buf, sizeof(buf));
+  bool has_marker = strstr(buf, "log record truncated") != NULL;
+  bool has_one = strstr(buf, "BATCHRECORDONE") != NULL;
+  bool has_two = strstr(buf, "BATCHRECORDTWO") != NULL;
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_EQ(mid_len, (size_t)0);
+  REQUIRE_FALSE(has_marker);
+  REQUIRE_TRUE(has_one);
+  REQUIRE_TRUE(has_two);
+}
+
+/*
+ * The last flush of a closing logger is its last delivery attempt. A batch
+ * that it keeps after a transient error has no later retry, so the close
+ * names it with a marker instead of freeing it in silence.
+ *
+ * This test is non-vacuous: without the marker the file stays empty, and
+ * nothing names the lost record.
+ */
+TEST(undelivered_batch, a_close_names_what_its_last_flush_could_not_deliver) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &g_undelivered_acfg, NULL);
+  if (lg == CLOG_INVALID) cleanup_dir(dir, "app.log");
+  REQUIRE_NE(lg, CLOG_INVALID);
+
+  clog_info(lg, "BATCHRECORDONE");
+  clog_test_force_write_errors(ENOSPC, 1);
+  clog_close(lg);
+  clog_test_force_write_errors(0, 0);
+
+  char buf[16384];
+  read_file(path, buf, sizeof(buf));
+  bool has_marker =
+      strstr(buf, "undelivered batch dropped (records=1 bytes=") != NULL;
+  bool has_why = strstr(buf, "the logger closed") != NULL;
+  bool has_batch = strstr(buf, "BATCHRECORDONE") != NULL;
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(has_marker);
+  REQUIRE_TRUE(has_why);
+  REQUIRE_FALSE(has_batch);
+}
+
+/*
+ * A fatal record is the last write of the process. Whatever the batch holds
+ * after the drain ahead of it gets one more bounded attempt, and a marker
+ * names what that attempt could not deliver, ahead of the fatal record.
+ *
+ * The test runs in a forked child, because the call stops the process, and
+ * it asserts only that the child stopped with no signal, for the reason that
+ * split_record_framing.a_fatal_record_never_lands_inside_a_retained_one
+ * gives.
+ *
+ * This test is non-vacuous: without the marker the file holds the fatal
+ * record alone, and nothing names the record that the process lost.
+ */
+TEST(undelivered_batch, a_fatal_record_names_what_the_batch_could_not_deliver) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  fflush(NULL);
+  pid_t pid = fork();
+  if (pid == 0) {
+    clog lg =
+        clog_open_file_mp(path, CLOG_INFO, NULL, &g_undelivered_acfg, NULL);
+    if (lg == CLOG_INVALID) _exit(2);
+    clog_info(lg, "BATCHRECORDONE");
+    /* The first failure is the drain of the queue, and the second is the
+     * bounded attempt that the fatal path makes after it. */
+    clog_test_force_write_errors(ENOSPC, 2);
+    clog_fatal(lg, "FATALRECORDBODY");
+    _exit(0); /* unreachable */
+  }
+  REQUIRE_NE(pid, -1);
+
+  int status;
+  bool reaped = false;
+  for (int waited_ms = 0; waited_ms < 30000; waited_ms += 20) {
+    if (waitpid(pid, &status, WNOHANG) == pid) {
+      reaped = true;
+      break;
+    }
+    usleep(20000);
+  }
+  if (!reaped) {
+    _clog_test_dump_stuck_child_diagnostics(pid);
+    kill(pid, SIGKILL);
+    waitpid(pid, &status, 0);
+    cleanup_dir(dir, "app.log");
+    REQUIRE_TRUE(false);
+  }
+
+  char buf[16384];
+  read_file(path, buf, sizeof(buf));
+  const char *marker = strstr(buf, "undelivered batch dropped (records=1");
+  const char *why = strstr(buf, "the process stopped");
+  const char *fatal = strstr(buf, "FATALRECORDBODY");
+  bool has_batch = strstr(buf, "BATCHRECORDONE") != NULL;
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_FALSE(WIFSIGNALED(status));
+  REQUIRE_TRUE(marker != NULL);
+  REQUIRE_TRUE(why != NULL);
+  REQUIRE_TRUE(fatal != NULL);
+  REQUIRE_TRUE(marker < fatal);
+  REQUIRE_FALSE(has_batch);
+}
+
+/* ------------------------------------------------------------------------ */
+/* Records that span several lines                                           */
+/* ------------------------------------------------------------------------ */
+
+/* The single call site of every multi-line record below. A logfmt ERROR
+ * record carries its backtrace as tab-indented continuation lines, and one
+ * call site gives a primary line of one length whichever logger writes it.
+ */
+static __attribute__((noinline)) void log_multi_line_record(clog lg) {
+  clog_error(lg, "MULTILINERECORDBODY");
+}
+
+/* The length of the primary line of the record of log_multi_line_record(),
+ * with its newline, as a synchronous logger writes it. 0 on a failure. */
+static size_t multi_line_primary_len(const char *dir) {
+  char path[512];
+  snprintf(path, sizeof(path), "%s/probe.log", dir);
+  clog probe = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  if (probe == CLOG_INVALID) return 0;
+  log_multi_line_record(probe);
+  clog_close(probe);
+  char buf[16384];
+  read_file(path, buf, sizeof(buf));
+  unlink(path);
+  const char *nl = strchr(buf, '\n');
+  if (!nl || nl[1] != '\t') return 0;
+  return (size_t)(nl - buf) + 1;
+}
+
+/* Counts the tab-indented continuation lines of buf that follow neither the
+ * record of log_multi_line_record() nor another continuation line, plus the
+ * empty lines; either one is a framing defect. */
+static void inspect_continuation_lines(const char *buf, int *out_orphans,
+                                       int *out_empty) {
+  int orphans = 0, empty = 0;
+  bool prev_owns = false;
+  const char *line = buf;
+  while (*line) {
+    const char *nl = strchr(line, '\n');
+    size_t n = nl ? (size_t)(nl - line) : strlen(line);
+    if (n == 0) empty++;
+    bool cont = n > 0 && line[0] == '\t';
+    if (cont && !prev_owns) orphans++;
+    bool is_owner = false;
+    const char *hit = strstr(line, "MULTILINERECORDBODY");
+    if (hit && (size_t)(hit - line) < n) is_owner = true;
+    prev_owns = cont || is_owner;
+    if (!nl) break;
+    line = nl + 1;
+  }
+  *out_orphans = orphans;
+  *out_empty = empty;
+}
+
+/*
+ * A short write that ends exactly at the newline between the primary line
+ * of a logfmt record and its backtrace lines splits that record all the
+ * same. The syslog record below goes straight to the descriptor after a
+ * flush that cannot deliver the rest, so the library gives up on the
+ * backtrace lines of the split record, with a marker and no empty line,
+ * before it writes the syslog record, and every backtrace line on disk
+ * follows its own record.
+ *
+ * This test is non-vacuous: when that newline counts as a record boundary,
+ * the syslog record goes out ahead of the backtrace lines, which then land
+ * under it.
+ */
+TEST(split_record_framing, a_split_at_a_backtrace_newline_is_still_a_split) {
+  /* The record of log_multi_line_record() spans several lines only through
+   * its backtrace; see backtrace_capture_genuinely_available(). */
+  if (!backtrace_capture_genuinely_available()) return;
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  size_t primary = multi_line_primary_len(dir);
+  if (primary == 0) cleanup_dir(dir, "app.log");
+  REQUIRE_GT(primary, (size_t)0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) cleanup_dir(dir, "app.log");
+  REQUIRE_NE(fd, -1);
+
+  clog lg = clog_open_fd_mp(fd, CLOG_INFO, &g_undelivered_acfg, NULL);
+  if (lg == CLOG_INVALID) {
+    close(fd);
+    cleanup_dir(dir, "app.log");
+  }
+  REQUIRE_NE(lg, CLOG_INVALID);
+
+  log_multi_line_record(lg);
+  clog_info(lg, "SECONDRECORDBODY");
+  clog_test_force_short_writes(primary, 1);
+  clog_flush(lg);
+  clog_test_force_write_errors(ENOSPC, 1);
+  clog_set_format(lg, CLOG_FMT_SYSLOG);
+  clog_info(lg, "SYSLOGRECORDBODY");
+  clog_flush(lg);
+  clog_test_force_write_errors(0, 0);
+  clog_close(lg);
+  close(fd);
+
+  char buf[65536];
+  read_file(path, buf, sizeof(buf));
+  int orphans = 0, empty = 0;
+  inspect_continuation_lines(buf, &orphans, &empty);
+  bool has_marker = strstr(buf, "undelivered bytes dropped") != NULL;
+  bool has_second = strstr(buf, "SECONDRECORDBODY") != NULL;
+  bool has_syslog = strstr(buf, "SYSLOGRECORDBODY") != NULL;
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_EQ(orphans, 0);
+  REQUIRE_EQ(empty, 0);
+  REQUIRE_TRUE(has_marker);
+  REQUIRE_TRUE(has_second);
+  REQUIRE_TRUE(has_syslog);
+}
+
+/*
+ * When the library gives up on the continuation of a split logfmt record,
+ * it gives up on the whole rest of that record, backtrace lines included,
+ * while the record after it is whole and goes out as usual.
+ *
+ * This test is non-vacuous: when the repair stops at the first newline, the
+ * backtrace lines of the split record stay in the batch and go out later,
+ * under the syslog record.
+ */
+TEST(split_record_framing, a_repair_drops_the_backtrace_of_the_split_record) {
+  /* The record of log_multi_line_record() spans several lines only through
+   * its backtrace; see backtrace_capture_genuinely_available(). */
+  if (!backtrace_capture_genuinely_available()) return;
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) cleanup_dir(dir, "app.log");
+  REQUIRE_NE(fd, -1);
+
+  clog lg = clog_open_fd_mp(fd, CLOG_INFO, &g_undelivered_acfg, NULL);
+  if (lg == CLOG_INVALID) {
+    close(fd);
+    cleanup_dir(dir, "app.log");
+  }
+  REQUIRE_NE(lg, CLOG_INVALID);
+
+  log_multi_line_record(lg);
+  clog_info(lg, "SECONDRECORDBODY");
+  /* Both attempts stop inside the primary line, which is far longer than
+   * the two caps together. */
+  clog_test_force_short_writes(20, 2);
+  clog_flush(lg);
+  clog_set_format(lg, CLOG_FMT_SYSLOG);
+  clog_info(lg, "SYSLOGRECORDBODY");
+  clog_flush(lg);
+  clog_close(lg);
+  close(fd);
+
+  char buf[65536];
+  read_file(path, buf, sizeof(buf));
+  int orphans = 0, empty = 0;
+  inspect_continuation_lines(buf, &orphans, &empty);
+  bool has_tab = strchr(buf, '\t') != NULL;
+  bool has_marker = strstr(buf, "undelivered bytes dropped") != NULL;
+  bool has_second = strstr(buf, "SECONDRECORDBODY") != NULL;
+  bool has_syslog = strstr(buf, "SYSLOGRECORDBODY") != NULL;
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_EQ(orphans, 0);
+  REQUIRE_EQ(empty, 0);
+  REQUIRE_FALSE(has_tab);
+  REQUIRE_TRUE(has_marker);
+  REQUIRE_TRUE(has_second);
+  REQUIRE_TRUE(has_syslog);
+}
+
+/* ------------------------------------------------------------------------ */
+/* Message-oriented sockets                                                  */
+/* ------------------------------------------------------------------------ */
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+
+/* What a receiver thread saw on a datagram socket. */
+typedef struct {
+  int fd;
+  _Atomic bool stop;
+  size_t datagrams; /* every datagram */
+  size_t not_one;   /* datagrams that are not exactly one line */
+  size_t markers;   /* datagrams that carry a loss marker */
+  size_t with_body; /* datagrams that carry `body` */
+  const char *body;
+  bool json_ok;       /* every datagram starts with '{' (JSON runs only) */
+  int start_delay_ms; /* the receiver reads nothing for this long first */
+} dgram_rx_t;
+
+static void *dgram_rx_main(void *arg) {
+  dgram_rx_t *rx = arg;
+  const size_t cap = 70000;
+  char *buf = malloc(cap);
+  rx->json_ok = true;
+  if (!buf) {
+    rx->not_one++;
+    return NULL;
+  }
+  if (rx->start_delay_ms > 0) {
+    struct timespec d = {.tv_sec = rx->start_delay_ms / 1000,
+                         .tv_nsec = (rx->start_delay_ms % 1000) * 1000000L};
+    nanosleep(&d, NULL);
+  }
+  for (;;) {
+    ssize_t n = recv(rx->fd, buf, cap - 1, 0);
+    if (n < 0) {
+      if ((errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) &&
+          !atomic_load(&rx->stop))
+        continue;
+      if (errno == EINTR) continue;
+      break; /* stopped and drained */
+    }
+    buf[n] = '\0';
+    rx->datagrams++;
+    size_t lines = 0;
+    for (ssize_t i = 0; i < n; i++) lines += buf[i] == '\n';
+    if (lines != 1 || n == 0 || buf[n - 1] != '\n') rx->not_one++;
+    if (strstr(buf, "log record truncated")) rx->markers++;
+    if (rx->body && strstr(buf, rx->body)) rx->with_body++;
+    if (buf[0] != '{') rx->json_ok = false;
+  }
+  free(buf);
+  return NULL;
+}
+
+/* Opens a connected pair of datagram sockets, where out[0] receives and
+ * out[1] sends; AF_INET uses a loopback UDP port that the kernel picks. The
+ * receiver wakes every 50 ms so that it can see the stop flag. */
+static int open_dgram_pair(int domain, int out[2]) {
+  if (domain == AF_UNIX) {
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, out) != 0) return -1;
+  } else {
+    out[0] = socket(AF_INET, SOCK_DGRAM, 0);
+    out[1] = socket(AF_INET, SOCK_DGRAM, 0);
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    socklen_t alen = sizeof(a);
+    if (out[0] < 0 || out[1] < 0 ||
+        bind(out[0], (struct sockaddr *)&a, sizeof(a)) != 0 ||
+        getsockname(out[0], (struct sockaddr *)&a, &alen) != 0 ||
+        connect(out[1], (struct sockaddr *)&a, sizeof(a)) != 0) {
+      if (out[0] >= 0) close(out[0]);
+      if (out[1] >= 0) close(out[1]);
+      return -1;
+    }
+  }
+  int big = 4 << 20;
+  (void)setsockopt(out[0], SOL_SOCKET, SO_RCVBUF, &big, sizeof(big));
+  struct timeval tv = {.tv_sec = 0, .tv_usec = 50000};
+  (void)setsockopt(out[0], SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  return 0;
+}
+
+/* Logs `count` records of `fmt` through an async logger on a datagram socket of
+ * `domain`, first logging one record too large for one UDP datagram when
+ * `oversize` is true, and reports what a receiver saw. The logger, the thread
+ * and both sockets are gone when it returns. Returns false when the setup
+ * failed. */
+static bool run_dgram_case_delayed(int domain, clog_format_t fmt, int count,
+                                   bool oversize, int rx_delay_ms,
+                                   dgram_rx_t *rx) {
+  int sv[2];
+  if (open_dgram_pair(domain, sv) != 0) return false;
+  memset(rx, 0, sizeof(*rx));
+  rx->start_delay_ms = rx_delay_ms;
+  rx->fd = sv[0];
+  rx->body = "DATAGRAMRECORDBODY";
+  pthread_t tid;
+  if (pthread_create(&tid, NULL, dgram_rx_main, rx) != 0) {
+    close(sv[0]);
+    close(sv[1]);
+    return false;
+  }
+  clog_async_cfg_t acfg = {0};
+  clog lg = clog_open_fd(sv[1], CLOG_INFO, &acfg);
+  if (lg != CLOG_INVALID) {
+    clog_set_format(lg, fmt);
+    if (oversize) {
+      size_t big_len = 66000;
+      char *big = malloc(big_len + 1);
+      if (big) {
+        memset(big, 'x', big_len);
+        big[big_len] = '\0';
+        clog_info(lg, "%s", big);
+        free(big);
+      }
+    }
+    for (int i = 0; i < count; i++) clog_info(lg, "DATAGRAMRECORDBODY %d", i);
+    clog_close(lg);
+  }
+  atomic_store(&rx->stop, true);
+  pthread_join(tid, NULL);
+  close(sv[0]);
+  close(sv[1]);
+  return lg != CLOG_INVALID;
+}
+
+static bool run_dgram_case(int domain, clog_format_t fmt, int count,
+                           bool oversize, dgram_rx_t *rx) {
+  return run_dgram_case_delayed(domain, fmt, count, oversize, 0, rx);
+}
+
+/*
+ * An async logger on a message-oriented socket writes every record with its
+ * own write, so each datagram carries exactly one record and every record
+ * arrives. The count stays small enough for the receive buffer of a
+ * loopback UDP socket, which drops what does not fit.
+ *
+ * These tests are non-vacuous: with the batch of the stream sinks, many
+ * records share one datagram.
+ */
+TEST(datagram_sink, udp_logfmt_sends_one_record_per_datagram) {
+  dgram_rx_t rx;
+  bool ok = run_dgram_case(AF_INET, CLOG_FMT_LOGFMT, 64, false, &rx);
+  REQUIRE_TRUE(ok);
+  REQUIRE_EQ(rx.datagrams, (size_t)64);
+  REQUIRE_EQ(rx.with_body, (size_t)64);
+  REQUIRE_EQ(rx.not_one, (size_t)0);
+  REQUIRE_EQ(rx.markers, (size_t)0);
+}
+
+TEST(datagram_sink, udp_json_sends_one_record_per_datagram) {
+  dgram_rx_t rx;
+  bool ok = run_dgram_case(AF_INET, CLOG_FMT_JSON, 64, false, &rx);
+  REQUIRE_TRUE(ok);
+  REQUIRE_EQ(rx.datagrams, (size_t)64);
+  REQUIRE_EQ(rx.with_body, (size_t)64);
+  REQUIRE_EQ(rx.not_one, (size_t)0);
+  REQUIRE_TRUE(rx.json_ok);
+}
+
+/* The logger waits for room on an AF_UNIX datagram socket and never drops,
+ * so this sends far more than one batch of the stream sinks would hold. */
+TEST(datagram_sink, unix_logfmt_sends_one_record_per_datagram) {
+  dgram_rx_t rx;
+  bool ok = run_dgram_case(AF_UNIX, CLOG_FMT_LOGFMT, 2000, false, &rx);
+  REQUIRE_TRUE(ok);
+  REQUIRE_EQ(rx.datagrams, (size_t)2000);
+  REQUIRE_EQ(rx.with_body, (size_t)2000);
+  REQUIRE_EQ(rx.not_one, (size_t)0);
+}
+
+/* A receiver that reads nothing for a while fills the datagram queue of the
+ * socket. Linux then blocks the send, while FreeBSD refuses it with ENOBUFS,
+ * which the logger waits out; either way every record arrives, and no loss
+ * marker is written. This test is non-vacuous on FreeBSD: a writer that
+ * treats ENOBUFS as a failed write loses most of the records. */
+TEST(datagram_sink, unix_full_receiver_queue_loses_no_record) {
+  dgram_rx_t rx;
+  bool ok =
+      run_dgram_case_delayed(AF_UNIX, CLOG_FMT_LOGFMT, 2000, false, 300, &rx);
+  REQUIRE_TRUE(ok);
+  REQUIRE_EQ(rx.datagrams, (size_t)2000);
+  REQUIRE_EQ(rx.with_body, (size_t)2000);
+  REQUIRE_EQ(rx.not_one, (size_t)0);
+  REQUIRE_EQ(rx.markers, (size_t)0);
+}
+
+TEST(datagram_sink, unix_json_sends_one_record_per_datagram) {
+  dgram_rx_t rx;
+  bool ok = run_dgram_case(AF_UNIX, CLOG_FMT_JSON, 2000, false, &rx);
+  REQUIRE_TRUE(ok);
+  REQUIRE_EQ(rx.datagrams, (size_t)2000);
+  REQUIRE_EQ(rx.with_body, (size_t)2000);
+  REQUIRE_EQ(rx.not_one, (size_t)0);
+  REQUIRE_TRUE(rx.json_ok);
+}
+
+/*
+ * One record larger than a UDP datagram can be fails alone: a marker names
+ * it, and every record after it arrives as usual.
+ *
+ * This test is non-vacuous: when the record shares a batch with the ones
+ * after it, the whole batch fails with it and nothing arrives.
+ */
+TEST(datagram_sink, udp_oversize_record_is_named_and_the_rest_arrive) {
+  dgram_rx_t rx;
+  bool ok = run_dgram_case(AF_INET, CLOG_FMT_LOGFMT, 8, true, &rx);
+  REQUIRE_TRUE(ok);
+  REQUIRE_EQ(rx.markers, (size_t)1);
+  REQUIRE_EQ(rx.with_body, (size_t)8);
+  REQUIRE_EQ(rx.datagrams, (size_t)9);
+  REQUIRE_EQ(rx.not_one, (size_t)0);
+}
+
+/* ------------------------------------------------------------------------ */
+/* RFC 5424 escaping                                                         */
+/* ------------------------------------------------------------------------ */
+
+/*
+ * A syslog MSG escapes a backslash as well as a control byte, so a real
+ * newline and the two characters backslash and n stay distinguishable.
+ *
+ * This test is non-vacuous: when the backslash passes through as it is,
+ * both messages read "A\nB".
+ */
+TEST(syslog, msg_escaping_keeps_a_backslash_distinct_from_an_escape) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) cleanup_dir(dir, "app.log");
+  REQUIRE_NE(fd, -1);
+  clog lg = clog_open_fd(fd, CLOG_INFO, NULL);
+  if (lg == CLOG_INVALID) {
+    close(fd);
+    cleanup_dir(dir, "app.log");
+  }
+  REQUIRE_NE(lg, CLOG_INVALID);
+  clog_set_format(lg, CLOG_FMT_SYSLOG);
+  clog_info(lg, "%s", "FIRSTA\\nB");
+  clog_info(lg, "%s", "SECONDA\nB");
+  clog_close(lg);
+  close(fd);
+
+  char buf[4096];
+  read_file(path, buf, sizeof(buf));
+  bool first = strstr(buf, "FIRSTA\\\\nB\n") != NULL;
+  bool second = strstr(buf, "SECONDA\\nB\n") != NULL;
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(first);
+  REQUIRE_TRUE(second);
+}
+
+/*
+ * An SD-PARAM-VALUE is UTF-8: a well-formed sequence passes through as it
+ * is, and each byte that is not part of one becomes U+FFFD.
+ *
+ * This test is non-vacuous: without the check, the byte 0xff reaches the
+ * record as it is.
+ */
+TEST(syslog, sd_param_value_is_valid_utf8) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) cleanup_dir(dir, "app.log");
+  REQUIRE_NE(fd, -1);
+  clog lg = clog_open_fd(fd, CLOG_INFO, NULL);
+  if (lg == CLOG_INVALID) {
+    close(fd);
+    cleanup_dir(dir, "app.log");
+  }
+  REQUIRE_NE(lg, CLOG_INVALID);
+  clog_set_format(lg, CLOG_FMT_SYSLOG);
+  clog_set_field(lg, "k",
+                 "a\xff"
+                 "b\xc3\xa9"
+                 "c\xe2\x82");
+  clog_info(lg, "utf8 check");
+  clog_close(lg);
+  close(fd);
+
+  char buf[4096];
+  read_file(path, buf, sizeof(buf));
+  bool sanitized = strstr(buf,
+                          "k=\"a\xef\xbf\xbd"
+                          "b\xc3\xa9"
+                          "c\xef\xbf\xbd\xef\xbf\xbd\"") != NULL;
+  bool raw_ff = strchr(buf, '\xff') != NULL;
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(sanitized);
+  REQUIRE_FALSE(raw_ff);
+}
+
 /* ------------------------------------------------------------------------ */
 /* Deferred slot-table release                                               */
 /* ------------------------------------------------------------------------ */
 
-/* One fixture, deliberately, covering both halves of the deferred release.
+/* One fixture, on purpose, that covers both halves of the deferred release.
  *
- * Only ONE set of loggers in this binary can exercise the release at all: the
- * release fires when the last live slot goes away, so whichever fixture is torn
- * down last is the only one that reaches it, and any other fixture's close
- * simply finds a live sibling and returns. Two separate fixtures therefore
- * cannot both be non-vacuous here however they are ordered, which is why the
- * single-threaded and concurrent cases are driven from the same pair of
- * loggers rather than from one each.
+ * Only ONE set of loggers in this binary can drive the release at all: the
+ * release fires when the last live slot goes away, so whichever fixture is
+ * torn down last is the only one that reaches it, and the close of any other
+ * fixture finds a live sibling and returns. Two separate fixtures therefore
+ * cannot both be non-vacuous here, in any order, which is why one pair of
+ * loggers drives both the single-threaded case and the concurrent case,
+ * instead of one pair for each.
  *
- * Each logger has a derived handle closed during the test, so that two handles
- * shared one clog_shared_t and each close is the one that drops the last
- * reference to its own shared object and walks live_shareds. That walk is the
- * step the release must not have run ahead of.
+ * Each logger has a derived handle that the test closes, so two handles
+ * shared one clog_shared_t, and each close is then the one that drops the
+ * last reference to its own shared object and walks live_shareds. The
+ * release must not run ahead of that walk.
  *
- * Both are then closed concurrently, with one held inside the window in which
- * it has already cleared its slot but still has to read the table. The other
- * close finds no live slot and, judging from that alone, would release the
- * table underneath the first one.
+ * The test then closes both at the same time, holding one inside the window
+ * where that close has already cleared its slot but has yet to read the
+ * table. The other close finds no live slot, and from that alone it would
+ * release the table under the first one.
  *
- * This test is non-vacuous: with an in-flight close uncounted, it dies with
- * "ccol_assert failed" out of cvector_elem_count as the held close walks a
- * vector the other close has destroyed. The abort lands after the harness has
- * printed its summary, so the signal is the binary's exit status, which is what
- * `make test` checks.
+ * This test is not vacuous: with a close in flight that nothing counts, the
+ * binary dies with "ccol_assert failed" out of cvector_elem_count, because
+ * the close that the test holds then walks a vector that the other close
+ * destroyed. The abort lands after the harness prints its summary, so the
+ * signal is the exit status of the binary, which is what `make test` checks.
  *
- * The mechanism for reaching the release at all is link order, so do not "tidy"
- * either half of this away: this file is linked ahead of src/clogger.c and
- * destructors run in reverse link order, so the destructor below runs AFTER
- * clogger's own and therefore closes into a table whose release is already
- * pending. Opening the loggers from an ordinary test is what leaves them open
- * at exit; the suite's other checks on the shared count all compare deltas
- * around their own work, so two extra long-lived loggers do not disturb them.
+ * Link order is what reaches the release at all, so do not "tidy" either
+ * half of this away. The build links this file ahead of src/clogger.c, and a
+ * destructor runs in the reverse of the link order, so the destructor below
+ * runs AFTER the one of clogger and closes into a table whose release is
+ * already pending. Opening the loggers from an ordinary test is what leaves
+ * them open at exit. The other checks of this suite on the shared count all
+ * compare deltas around their own work, so two more long-lived loggers do
+ * not disturb them.
  *
- * Adding another destructor-held logger to this file would silently make this
- * test check nothing, for the reason given at the top. */
+ * One more logger that a destructor holds in this file would silently make
+ * this test check nothing, for the reason that the first paragraph gives. */
 static clog g_deferred_release_a = CLOG_INVALID;
 static clog g_deferred_release_b = CLOG_INVALID;
 
@@ -8358,8 +9619,9 @@ TEST(clogger_deferred_release, a_racing_pair_left_open_defers_then_releases) {
   if (da != CLOG_INVALID) clog_close(da);
   if (db != CLOG_INVALID) clog_close(db);
 
-  /* Published only once both are fully set up, so a partial open cannot leave
-     the destructor below holding one logger it will then decline to close. */
+  /* This publishes the pair only after both are fully set up, so that a
+     partial open cannot leave the destructor below with one logger that it
+     then declines to close. */
   bool opened = (a != CLOG_INVALID && b != CLOG_INVALID && da != CLOG_INVALID &&
                  db != CLOG_INVALID);
   if (opened) {
@@ -8392,7 +9654,8 @@ __attribute__((destructor)) static void _close_the_deferred_release_pair(void) {
   clog_test_set_close_release_window_us(200000);
   pthread_t t;
   if (pthread_create(&t, NULL, _close_b_in_the_window, NULL) != 0) {
-    /* Nothing to race with; close both so the fixture is not left open. */
+    /* There is nothing to race with, so close both, so that nothing leaves
+       the fixture open. */
     clog_test_set_close_release_window_us(0);
     clog_close(g_deferred_release_a);
     clog_close(g_deferred_release_b);
@@ -8401,15 +9664,16 @@ __attribute__((destructor)) static void _close_the_deferred_release_pair(void) {
     return;
   }
 
-  /* Wait for the window to be genuinely occupied rather than sleeping for a
-     guessed interval: a thread slow to start would otherwise read an already
-     disarmed hook, the two closes would serialise, and this would pass having
-     exercised nothing. Bounded only as a hang-safety net.
+  /* Wait until something really occupies the window, instead of sleeping for
+     a guessed interval: a thread that is slow to start would read a hook
+     that is already disarmed, the two closes would then run one after the
+     other, and this check would pass with nothing driven at all. The bound
+     below is a safety net against a hang, and nothing more.
 
-     B holds the window for 200ms once it is in, against the close it is
-     racing, which takes about one microsecond natively and about a fifth of a
-     millisecond under valgrind. That is a margin of roughly three orders of
-     magnitude in the slower of the two environments this suite runs in. */
+     B holds the window for 200ms once it is inside, while the close that it
+     races takes about one microsecond natively and about a fifth of a
+     millisecond under valgrind, a margin of about three orders of magnitude
+     in the slower of the two environments that this suite runs in. */
   for (int i = 0; i < 20000 && !clog_test_close_release_window_entered(); i++) {
     struct timespec ts = {0, 100L * 1000L};
     nanosleep(&ts, NULL);
@@ -8418,4 +9682,4257 @@ __attribute__((destructor)) static void _close_the_deferred_release_pair(void) {
   clog_close(g_deferred_release_a);
   g_deferred_release_a = CLOG_INVALID;
   pthread_join(t, NULL);
+}
+
+/* ========================================================================== */
+/*                         ROTATION PRUNING ROBUSTNESS                        */
+/* ========================================================================== */
+
+/* This creates `path` and writes `text` into it, returning 0 after a
+ * success. */
+static int write_text_file(const char *path, const char *text) {
+  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) return -1;
+  size_t len = strlen(text);
+  ssize_t w = write(fd, text, len);
+  close(fd);
+  return (w == (ssize_t)len) ? 0 : -1;
+}
+
+/* This moves the modification time of `path` forward by `seconds`, or back
+ * for a negative value, and returns 0 after a success. */
+static int shift_file_mtime(const char *path, long seconds) {
+  struct timeval tv[2];
+  gettimeofday(&tv[0], NULL);
+  tv[0].tv_sec += seconds;
+  tv[1] = tv[0];
+  return utimes(path, tv);
+}
+
+/* True when any file in `dir` whose name starts with `prefix` holds
+ * `needle`. */
+static bool any_file_with_prefix_contains(const char *dir, const char *prefix,
+                                          const char *needle) {
+  DIR *d = opendir(dir);
+  if (!d) return false;
+  bool found = false;
+  struct dirent *e;
+  char path[1024];
+  char buf[8192];
+  while (!found && (e = readdir(d)) != NULL) {
+    if (strncmp(e->d_name, prefix, strlen(prefix)) != 0) continue;
+    snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
+    read_file(path, buf, sizeof(buf));
+    if (strstr(buf, needle)) found = true;
+  }
+  closedir(d);
+  return found;
+}
+
+/*
+ * The name of a rotated file carries the wall-clock time of the rotation
+ * that produced it, and the system clock can step backward: an NTP step
+ * correction, a restored VM snapshot and a corrected host clock all do this.
+ * The names that are already on the disk then sort ahead of every name that
+ * comes afterwards, so an order on those names alone would make the
+ * destination that a rotation has just created look like the oldest file in
+ * the directory. The prune pass at the end of that same rotation would then
+ * delete it before anything ever read its contents, and the whole generation
+ * of log data that the rotation moved aside would be lost without any
+ * report.
+ *
+ * This test is not vacuous: the prune pass of a rotation excludes the
+ * destination that it has just created, and that exclusion is what keeps the
+ * payload record below on the disk. Without it, the library unlinks that
+ * record here.
+ */
+TEST(rotation, a_rotation_never_prunes_the_file_it_just_created) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  /* These are rotated files stamped a day ahead of the present, with
+   * modification times to match, which is exactly what a clock that somebody
+   * has since stepped backwards leaves behind: something wrote every one of
+   * them while the clock read ahead of where it reads now. */
+  char ahead_of_now[3][32];
+  for (int i = 0; i < 3; i++) {
+    time_t t = time(NULL) + 24 * 60 * 60 + i;
+    struct tm tm;
+    gmtime_r(&t, &tm);
+    strftime(ahead_of_now[i], sizeof(ahead_of_now[i]), "%Y%m%d%H%M%S", &tm);
+  }
+  char planted[1024];
+  for (size_t i = 0; i < sizeof(ahead_of_now) / sizeof(ahead_of_now[0]); i++) {
+    snprintf(planted, sizeof(planted), "%s.%s", path, ahead_of_now[i]);
+    REQUIRE_EQ(write_text_file(planted, "older generation\n"), 0);
+    REQUIRE_EQ(shift_file_mtime(planted, 3600), 0);
+  }
+
+  clog_rotation_cfg_t cfg = {
+      .size_rotation_enabled = true,
+      .max_file_size = 200,
+      .time_rotation_enabled = false,
+      .max_rotated_files = 2,
+  };
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  REQUIRE_NE(lg, CLOG_INVALID);
+  /* One record comfortably past the threshold. The write lands in app.log,
+   * and the rotation directly after it moves that file aside under a fresh
+   * stamped name. */
+  clog_info(lg, "PAYLOAD-MARKER-ROTATED %s",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  clog_close(lg);
+
+  bool payload_survived =
+      any_file_with_prefix_contains(dir, "app.log", "PAYLOAD-MARKER-ROTATED");
+  int rotated = count_files_with_prefix(dir, "app.log.");
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(payload_survived);
+  /* The prune still counts that file against the quota, although it excludes
+   * it from deletion, so the number of rotated files that stay does not
+   * change. */
+  REQUIRE_EQ((rotated <= 2), 1);
+}
+
+/* ========================================================================== */
+/*                         CONSUMER-SIDE LAYOUT AGREEMENT                     */
+/* ========================================================================== */
+
+/*
+ * The build compiles consumer_view.c without the feature-test macros that
+ * this suite and the library use, so it sees <clogger.h> exactly as an
+ * application with ordinary default flags sees it. Both views of
+ * clog_rotation_cfg_t must describe the same object; otherwise the library
+ * reads every member after the first from an offset that the caller never
+ * wrote.
+ *
+ * On some targets, such as LP64, off_t and time_t have one width whatever
+ * the feature macros say, so a struct built from them also has one layout,
+ * and this test cannot tell the two cases apart there. On an ILP32 target
+ * this test does real work: it separates a public struct with one layout
+ * from one whose layout the application and the library disagree about.
+ */
+TEST(rotation_cfg_abi, a_consumer_sees_the_same_layout_the_library_does) {
+  clogger_consumer_view_t consumer;
+  clogger_consumer_fill_view(&consumer);
+
+  REQUIRE_EQ(consumer.struct_size, sizeof(clog_rotation_cfg_t));
+  REQUIRE_EQ(consumer.struct_align, _Alignof(clog_rotation_cfg_t));
+  REQUIRE_EQ(consumer.off_size_rotation_enabled,
+             offsetof(clog_rotation_cfg_t, size_rotation_enabled));
+  REQUIRE_EQ(consumer.off_max_file_size,
+             offsetof(clog_rotation_cfg_t, max_file_size));
+  REQUIRE_EQ(consumer.off_time_rotation_enabled,
+             offsetof(clog_rotation_cfg_t, time_rotation_enabled));
+  REQUIRE_EQ(consumer.off_rotation_interval_us,
+             offsetof(clog_rotation_cfg_t, rotation_interval_us));
+  REQUIRE_EQ(consumer.off_max_rotated_files,
+             offsetof(clog_rotation_cfg_t, max_rotated_files));
+  REQUIRE_EQ(consumer.off_compress_rotated,
+             offsetof(clog_rotation_cfg_t, compress_rotated));
+  /* Both members have a fixed width, so their sizes are the same everywhere,
+   * whatever flags the build used for the including translation unit. */
+  REQUIRE_EQ(consumer.sizeof_max_file_size, (size_t)8);
+  REQUIRE_EQ(consumer.sizeof_rotation_interval_us, (size_t)8);
+}
+
+/*
+ * The same agreement, driven through the library instead of through
+ * offsetof. A rotation config that an application translation unit fills in
+ * must drive the rotation that the application asked for, while a config
+ * that the library reads from the wrong offsets rotates on a schedule that
+ * nobody configured and turns on options that nobody set, such as gzip
+ * compression here.
+ */
+TEST(rotation_cfg_abi, a_consumer_built_config_rotates_as_it_was_written) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  clog lg = clogger_consumer_open_rotating(path, 200, 2);
+  REQUIRE_NE(lg, CLOG_INVALID);
+  for (int i = 0; i < 20; i++)
+    clog_info(lg, "consumer-built rotation config idx=%d padding-padding", i);
+  clog_close(lg);
+
+  int rotated = count_files_with_prefix(dir, "app.log.");
+  int compressed = count_files_with_suffix(dir, ".gz");
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_GT(rotated, 0);        /* Size rotation is on. */
+  REQUIRE_EQ((rotated <= 2), 1); /* max_rotated_files is 2. */
+  REQUIRE_EQ(compressed, 0);     /* compress_rotated is false. */
+}
+
+/* ========================================================================== */
+/*                         SHORT-WRITE RECORD FRAMING                         */
+/* ========================================================================== */
+
+/* This counts the lines in buf that end with a newline. */
+static int count_lines(const char *buf) {
+  int n = 0;
+  for (const char *p = buf; *p; p++)
+    if (*p == '\n') n++;
+  return n;
+}
+
+/*
+ * The kernel can accept only part of a write, as a filesystem that has just
+ * run out of space does, and so do an RLIMIT_FSIZE ceiling and a peer that
+ * goes away in the middle of a record. The accepted bytes then sit on the
+ * disk with no terminating newline for that record, so the logger writes
+ * that newline itself, and the next record starts a line of its own instead
+ * of being joined onto the fragment. The logger also reports how much of
+ * the record it lost instead of dropping it in silence.
+ *
+ * This test is not vacuous: without the repair, the fragment and the record
+ * after it are one line, so the file holds two lines instead of four, and no
+ * marker names the loss.
+ */
+TEST(short_write, a_cut_short_record_is_terminated_and_the_loss_reported) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  clog lg = clog_open_file(path, CLOG_INFO, NULL, NULL);
+  REQUIRE_NE(lg, CLOG_INVALID);
+
+  clog_info(lg, "FIRST-RECORD");
+  /* The next record reaches the disk 30 bytes deep, and no further. */
+  clog_test_force_short_writes(30, 1);
+  clog_info(lg, "SECOND-RECORD-cut-in-half");
+  clog_info(lg, "THIRD-RECORD");
+  clog_close(lg);
+
+  char buf[8192];
+  read_file(path, buf, sizeof(buf));
+  bool has_marker = strstr(buf, "log record truncated") != NULL;
+  bool has_third = strstr(buf, "THIRD-RECORD") != NULL;
+  int lines = count_lines(buf);
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(has_marker);
+  REQUIRE_TRUE(has_third);
+  /* The file holds four lines, none of them merged into another: the first
+   * record, the fragment of 30 bytes, the marker that names the loss, and
+   * the third record. */
+  REQUIRE_EQ(lines, 4);
+}
+
+/*
+ * An async logger batches records into one buffer and writes the batch in
+ * one call, and that write can be cut short. The bytes that the kernel did
+ * not take then stay in the buffer for the next flush, and because they are
+ * the exact continuation of what did land on the disk, offering them again
+ * both restores the framing of the record that the short write cut in half
+ * and delivers every record behind that one, while discarding them would
+ * lose a whole batch at once.
+ *
+ * This test is not vacuous: drop the rest that the write did not deliver,
+ * and none of the three batched messages below reaches the disk.
+ */
+TEST(short_write, an_async_batch_keeps_what_the_write_did_not_take) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  /* The buffer is large enough that only the explicit flush below writes
+   * anything, and the interval is long enough that the timer of the writer
+   * thread does not flush first. */
+  clog_async_cfg_t acfg = {
+      .queue_size = 0,
+      .flush_buffer_size = 1024UL * 1024UL,
+      .flush_interval_us = 60000000,
+  };
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &acfg, NULL);
+  REQUIRE_NE(lg, CLOG_INVALID);
+
+  clog_info(lg, "ASYNC-BATCHED-ONE");
+  clog_info(lg, "ASYNC-BATCHED-TWO");
+  clog_info(lg, "ASYNC-BATCHED-THREE");
+
+  /* The write of this flush reaches the disk 20 bytes deep, and no further. */
+  clog_test_force_short_writes(20, 1);
+  clog_flush(lg);
+
+  clog_info(lg, "ASYNC-BATCHED-FOUR");
+  clog_close(lg);
+
+  char buf[16384];
+  read_file(path, buf, sizeof(buf));
+  bool has_one = strstr(buf, "ASYNC-BATCHED-ONE") != NULL;
+  bool has_two = strstr(buf, "ASYNC-BATCHED-TWO") != NULL;
+  bool has_three = strstr(buf, "ASYNC-BATCHED-THREE") != NULL;
+  bool has_four = strstr(buf, "ASYNC-BATCHED-FOUR") != NULL;
+  int lines = count_lines(buf);
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(has_one);
+  REQUIRE_TRUE(has_two);
+  REQUIRE_TRUE(has_three);
+  REQUIRE_TRUE(has_four);
+  /* Four records give four lines: the rest of the buffer continued the
+   * record that the short write cut in half instead of starting a new one. */
+  REQUIRE_EQ(lines, 4);
+}
+
+/*
+ * This counts the files in dir whose name starts with prefix and whose
+ * contents hold needle. It reads each candidate on its own, so a string that
+ * spans two files is found in neither.
+ */
+static int count_files_containing(const char *dir, const char *prefix,
+                                  const char *needle) {
+  DIR *d = opendir(dir);
+  if (!d) return 0;
+  int count = 0;
+  struct dirent *e;
+  char path[1024];
+  char contents[8192];
+  while ((e = readdir(d)) != NULL) {
+    if (strncmp(e->d_name, prefix, strlen(prefix)) != 0) continue;
+    snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
+    read_file(path, contents, sizeof(contents));
+    if (strstr(contents, needle)) count++;
+  }
+  closedir(d);
+  return count;
+}
+
+/*
+ * An async batch write can be cut in the middle of a record, and the retry
+ * that delivers the rest of that record restores its framing, which a
+ * truncation marker does not. This works only while both halves reach the
+ * same file, so neither rotation check may rotate while the buffer holds a
+ * continuation: a rotation there renames away the file that holds the first
+ * half, and the continuation opens the fresh one. When the short write makes
+ * a rotation due, the flush that finally drains the buffer takes that
+ * rotation instead.
+ *
+ * This test is not vacuous: a rotation on the short write puts the two
+ * halves of the record in two different files, so no file holds the message
+ * from end to end, and the count below is 0 instead of 1.
+ */
+TEST(short_write, rotation_waits_for_the_retained_half_of_a_record) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  /* Nothing in here needs a logfmt escape, so the body appears in the record
+   * verbatim, and a search can find it as one string. */
+  char body[1025];
+  memset(body, 'A', sizeof(body) - 1);
+  body[sizeof(body) - 1] = '\0';
+  memcpy(body, "SPLITME-HEAD", 12);
+  memcpy(body + sizeof(body) - 1 - 12, "SPLITME-TAIL", 12);
+
+  /* Measure the exact length of this record through a synchronous logger, so
+   * that the short write below aims at a real offset instead of a guessed
+   * one. */
+  char probe_path[512];
+  snprintf(probe_path, sizeof(probe_path), "%s/probe.log", dir);
+  clog probe = clog_open_file(probe_path, CLOG_INFO, NULL, NULL);
+  REQUIRE_NE(probe, CLOG_INVALID);
+  clog_info(probe, "%s", body);
+  clog_close(probe);
+  char probe_buf[8192];
+  size_t record_len = read_file(probe_path, probe_buf, sizeof(probe_buf));
+  unlink(probe_path);
+  /* A record is its prefix plus the body, so it is always longer than the
+   * body, and a stop half a body short of its end lands inside the body,
+   * whatever the prefix weighs. */
+  size_t cut = record_len > sizeof(body) ? record_len - (sizeof(body)) / 2 : 0;
+
+  clog_rotation_cfg_t rcfg = {
+      .size_rotation_enabled = true,
+      .max_file_size = 64, /* The short write alone crosses it. */
+      .time_rotation_enabled = false,
+      .rotation_interval_us = 0,
+      .max_rotated_files = 8,
+      .compress_rotated = false,
+  };
+  /* The buffer is large enough that only the explicit flushes below write
+   * anything, and the interval is long enough that the timer of the writer
+   * thread does not flush first. */
+  clog_async_cfg_t acfg = {
+      .queue_size = 0,
+      .flush_buffer_size = 1024UL * 1024UL,
+      .flush_interval_us = 60000000,
+  };
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, &rcfg, &acfg, NULL);
+  REQUIRE_NE(lg, CLOG_INVALID);
+
+  clog_info(lg, "%s", body);
+
+  /* Reaches disk in the middle of the message body and no further, past
+   * max_file_size, so a size rotation is due the instant it is charged. */
+  clog_test_force_short_writes(cut, 1);
+  clog_flush(lg);
+  /* This delivers the continuation, and the deferred rotation happens here. */
+  clog_flush(lg);
+  clog_close(lg);
+
+  int whole = count_files_containing(dir, "app.log", body);
+  int head = count_files_containing(dir, "app.log", "SPLITME-HEAD");
+  int tail = count_files_containing(dir, "app.log", "SPLITME-TAIL");
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_GT((long)cut, 0L);
+  /* One file holds the message from end to end, and it is the only file that
+   * either end of the message appears in. */
+  REQUIRE_EQ(whole, 1);
+  REQUIRE_EQ(head, 1);
+  REQUIRE_EQ(tail, 1);
+}
+
+/*
+ * Retention must order rotated generations by the timestamp that each
+ * rotated name carries, because that timestamp names the rotation that
+ * produced the file, which a modification time does not describe. The
+ * compression step writes a compressed rotated file, so its mtime records
+ * when the compression finished, and since the compression runs outside the
+ * logger mutex, a later generation that compresses quickly can carry an
+ * older mtime than an earlier one that is in the middle of compression. An
+ * order by mtime then deletes the newest generation.
+ *
+ * This test is not vacuous: an order on these candidates by modification
+ * time deletes the file with the newest name first, because it carries the
+ * oldest mtime, and keeps the file with the oldest name, so both assertions
+ * below invert.
+ */
+TEST(rotation, retention_orders_rotated_files_by_name_not_modification_time) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  /* The names ascend while the modification times descend. */
+  const char *names[3] = {"app.log.20260101120000.gz",
+                          "app.log.20260101120005.gz",
+                          "app.log.20260101120010.gz"};
+  char full[3][800];
+  for (int i = 0; i < 3; i++) {
+    snprintf(full[i], sizeof(full[i]), "%s/%s", dir, names[i]);
+    int fd = open(full[i], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    REQUIRE_NE(fd, -1);
+    ssize_t w = write(fd, "x", 1);
+    (void)w;
+    close(fd);
+    struct timespec ts[2];
+    ts[0].tv_sec = 1000000 + (3 - i) * 1000;
+    ts[0].tv_nsec = 0;
+    ts[1] = ts[0];
+    REQUIRE_EQ(utimensat(AT_FDCWD, full[i], ts, 0), 0);
+  }
+
+  /* The file is filled first, so that one message crosses the threshold
+     exactly once. */
+  {
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    REQUIRE_NE(fd, -1);
+    char filler[4095];
+    memset(filler, 'x', sizeof(filler));
+    ssize_t w = write(fd, filler, sizeof(filler));
+    (void)w;
+    close(fd);
+  }
+
+  clog_rotation_cfg_t cfg = {
+      .size_rotation_enabled = true,
+      .max_file_size = 4096,
+      .time_rotation_enabled = false,
+      /* The prune pass of a rotation protects the new file of that same
+         rotation while counting it all the same, so exactly one generation
+         that already existed may stay, and it must be the one with the
+         newest name. */
+      .max_rotated_files = 2,
+  };
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  REQUIRE_NE(lg, CLOG_INVALID);
+  clog_info(lg, "one message to cross the size threshold");
+  clog_close(lg);
+
+  struct stat st;
+  bool oldest_name_deleted = (stat(full[0], &st) != 0);
+  bool newest_name_kept = (stat(full[2], &st) == 0);
+
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(oldest_name_deleted);
+  REQUIRE_TRUE(newest_name_kept);
+}
+
+/* ========================================================================== */
+/*                         RETENTION KEEPS THE NEWEST GENERATIONS             */
+/* ========================================================================== */
+
+#include <zlib.h>
+
+#define RTN_MAX_THREADS 6
+#define RTN_MAX_RECORDS 600
+
+typedef struct {
+  clog handle;
+  int thread_index;
+  int records;
+  _Atomic int *arrived;
+  _Atomic bool *go;
+} rtn_writer_arg_t;
+
+static void _rtn_nap(void) {
+  struct timespec ts = {0, 100000}; /* 100us */
+  nanosleep(&ts, NULL);
+}
+
+static void *_rtn_writer(void *p) {
+  rtn_writer_arg_t *a = (rtn_writer_arg_t *)p;
+  atomic_fetch_add(a->arrived, 1);
+  while (!atomic_load(a->go)) _rtn_nap();
+  for (int n = 0; n < a->records; n++)
+    clog_info(a->handle, "rtn t=%d n=%d", a->thread_index, n);
+  return NULL;
+}
+
+/* Reads a whole log file into a heap buffer. gzread() reads a file that is
+ * not gzip-compressed as it is, so one reader serves the live file, a plain
+ * rotated file and a compressed one. */
+static char *_rtn_slurp(const char *path) {
+  gzFile f = gzopen(path, "rb");
+  if (!f) return NULL;
+  size_t cap = 4096, len = 0;
+  char *buf = malloc(cap);
+  if (!buf) {
+    gzclose(f);
+    return NULL;
+  }
+  for (;;) {
+    if (cap - len < 2048) {
+      char *nb = realloc(buf, cap * 2);
+      if (!nb) break;
+      buf = nb;
+      cap *= 2;
+    }
+    int got = gzread(f, buf + len, (unsigned)(cap - len - 1));
+    if (got <= 0) break;
+    len += (size_t)got;
+  }
+  gzclose(f);
+  buf[len] = '\0';
+  return buf;
+}
+
+/* This reads every file of the logger in `dir` (the live file, and every
+ * rotated file, compressed or not) and marks each "rtn t=<t> n=<n>" record
+ * that it finds in seen[t][n]. It returns the number of distinct rotated
+ * generations, which is the number of distinct rotated names once a ".gz"
+ * ending is ignored. */
+static int _rtn_collect(const char *dir, bool seen[][RTN_MAX_RECORDS]) {
+  DIR *d = opendir(dir);
+  if (!d) return -1;
+  static char gens[512][sizeof(((struct dirent *)0)->d_name)];
+  int ngens = 0;
+  struct dirent *e;
+  while ((e = readdir(d)) != NULL) {
+    if (strncmp(e->d_name, "app.log", 7) != 0) continue;
+    char full[1024];
+    snprintf(full, sizeof(full), "%s/%s", dir, e->d_name);
+    char *text = _rtn_slurp(full);
+    if (text) {
+      const char *p = text;
+      while ((p = strstr(p, "rtn t=")) != NULL) {
+        int t = -1, n = -1;
+        if (sscanf(p, "rtn t=%d n=%d", &t, &n) == 2 && t >= 0 &&
+            t < RTN_MAX_THREADS && n >= 0 && n < RTN_MAX_RECORDS)
+          seen[t][n] = true;
+        p++;
+      }
+      free(text);
+    }
+    if (strncmp(e->d_name, "app.log.", 8) != 0) continue;
+    char g[sizeof(e->d_name)];
+    snprintf(g, sizeof(g), "%s", e->d_name);
+    size_t gl = strlen(g);
+    if (gl > 3 && strcmp(g + gl - 3, ".gz") == 0) g[gl - 3] = '\0';
+    bool dup = false;
+    for (int i = 0; i < ngens; i++)
+      if (strcmp(gens[i], g) == 0) dup = true;
+    if (!dup && ngens < 512) snprintf(gens[ngens++], sizeof(gens[0]), "%s", g);
+  }
+  closedir(d);
+  return ngens;
+}
+
+/* The records that survive retention are the newest ones, so for each
+ * writer thread, the surviving records of that thread are one contiguous run
+ * that ends at the last record the thread wrote, or nothing at all when a
+ * thread that finished early had every record in generations that later
+ * rotations pushed out. A deleted newer generation beside a surviving older
+ * one leaves a gap in that run. The function returns the number of threads
+ * whose oldest records were pruned, or -1 on a gap or when no record of any
+ * thread survived. */
+static int _rtn_check_suffixes(bool seen[][RTN_MAX_RECORDS], int threads,
+                               int records) {
+  int pruned_threads = 0;
+  bool any_survivor = false;
+  for (int t = 0; t < threads; t++) {
+    int lo = 0;
+    while (lo < records && !seen[t][lo]) lo++;
+    if (lo < records) any_survivor = true;
+    for (int n = lo; n < records; n++)
+      if (!seen[t][n]) {
+        fprintf(stderr, "retention gap: thread %d kept n=%d, lost n=%d\n", t,
+                lo, n);
+        return -1;
+      }
+    if (lo > 0) pruned_threads++;
+  }
+  return any_survivor ? pruned_threads : -1;
+}
+
+typedef struct {
+  bool compress;
+  bool async;
+  int threads;
+  int records;
+  bool use_derived;
+} rtn_case_t;
+
+/* Drives one retention scenario and asserts the newest-generations rule. It
+ * returns 0 on success, and a distinct nonzero code for each failure, so
+ * that the caller asserts once after every thread is joined and every handle
+ * is closed. */
+static int _rtn_run_case(const rtn_case_t *c, int *out_gens) {
+  char dir[256];
+  if (make_tmpdir(dir, sizeof(dir)) != 0) return 1;
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  clog_rotation_cfg_t cfg = {
+      .size_rotation_enabled = true,
+      .max_file_size = 1024,
+      .time_rotation_enabled = false,
+      .max_rotated_files = 3,
+      .compress_rotated = c->compress,
+  };
+  clog_async_cfg_t acfg = {
+      .queue_size = 0, .flush_buffer_size = 256, .flush_interval_us = 5000};
+
+  clog root =
+      clog_open_file_mp(path, CLOG_INFO, &cfg, c->async ? &acfg : NULL, NULL);
+  if (root == CLOG_INVALID) {
+    cleanup_dir(dir, "app.log");
+    return 2;
+  }
+  clog derived = c->use_derived ? clog_derive(root) : CLOG_INVALID;
+
+  _Atomic int arrived = 0;
+  _Atomic bool go = false;
+  pthread_t tids[RTN_MAX_THREADS];
+  rtn_writer_arg_t args[RTN_MAX_THREADS];
+  int started = 0;
+  for (int i = 0; i < c->threads; i++) {
+    args[i].handle = (c->use_derived && (i % 2)) ? derived : root;
+    args[i].thread_index = i;
+    args[i].records = c->records;
+    args[i].arrived = &arrived;
+    args[i].go = &go;
+    if (pthread_create(&tids[i], NULL, _rtn_writer, &args[i]) != 0) break;
+    started++;
+  }
+  while (atomic_load(&arrived) < started) _rtn_nap();
+  atomic_store(&go, true);
+  for (int i = 0; i < started; i++) pthread_join(tids[i], NULL);
+
+  if (derived != CLOG_INVALID) clog_close(derived);
+  clog_close(root);
+
+  int rc = 0;
+  if (started != c->threads) rc = 3;
+
+  static bool seen[RTN_MAX_THREADS][RTN_MAX_RECORDS];
+  memset(seen, 0, sizeof(seen));
+  int gens = _rtn_collect(dir, seen);
+  if (out_gens) *out_gens = gens;
+  if (rc == 0 && gens < 0) rc = 4;
+  if (rc == 0 && gens > cfg.max_rotated_files + 1) rc = 5;
+  int pruned = _rtn_check_suffixes(seen, c->threads, c->records);
+  if (rc == 0 && pruned < 0) rc = 6;
+  /* The scenario must really prune, or it proves nothing. */
+  if (rc == 0 && pruned == 0) rc = 7;
+
+  cleanup_dir(dir, "app.log");
+  return rc;
+}
+
+TEST(retention, newest_generations_survive_sync_plain) {
+  rtn_case_t c = {false, false, 1, 400, false};
+  REQUIRE_EQ(_rtn_run_case(&c, NULL), 0);
+}
+
+TEST(retention, newest_generations_survive_sync_gzip) {
+  rtn_case_t c = {true, false, 1, 400, false};
+  REQUIRE_EQ(_rtn_run_case(&c, NULL), 0);
+}
+
+TEST(retention, newest_generations_survive_async_plain) {
+  rtn_case_t c = {false, true, 1, 400, false};
+  REQUIRE_EQ(_rtn_run_case(&c, NULL), 0);
+}
+
+TEST(retention, newest_generations_survive_async_gzip) {
+  rtn_case_t c = {true, true, 1, 400, false};
+  REQUIRE_EQ(_rtn_run_case(&c, NULL), 0);
+}
+
+TEST(retention, newest_generations_survive_threads_root_and_derived_plain) {
+  rtn_case_t c = {false, false, 4, 150, true};
+  REQUIRE_EQ(_rtn_run_case(&c, NULL), 0);
+}
+
+TEST(retention, newest_generations_survive_threads_root_and_derived_gzip) {
+  rtn_case_t c = {true, false, 4, 150, true};
+  REQUIRE_EQ(_rtn_run_case(&c, NULL), 0);
+}
+
+TEST(retention, newest_generations_survive_async_threads_derived_gzip) {
+  rtn_case_t c = {true, true, 4, 150, true};
+  REQUIRE_EQ(_rtn_run_case(&c, NULL), 0);
+}
+
+/* A second logger on the same path, opened after the first one closed, must
+ * number its rotations above every rotated name that is already on disk; a
+ * process that restarts inside the same second is this case. Otherwise the
+ * second logger takes a name that the first one's retention freed, that name
+ * sorts as the oldest, and the next pass deletes the newest records. */
+TEST(retention, a_reopened_logger_numbers_above_the_names_on_disk) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  clog_rotation_cfg_t cfg = {
+      .size_rotation_enabled = true,
+      .max_file_size = 1024,
+      .time_rotation_enabled = false,
+      .max_rotated_files = 3,
+  };
+
+  int open_failures = 0;
+  for (int round = 0; round < 2; round++) {
+    clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+    if (lg == CLOG_INVALID) {
+      open_failures++;
+      continue;
+    }
+    /* The second logger writes only a few rotations' worth, and its names must
+     * sort above the names that the first one left, from its very first
+     * rotation on. */
+    int first = round == 0 ? 0 : 200, last = round == 0 ? 200 : 230;
+    for (int n = first; n < last; n++) clog_info(lg, "rtn t=0 n=%d", n);
+    clog_close(lg);
+  }
+
+  static bool seen[RTN_MAX_THREADS][RTN_MAX_RECORDS];
+  memset(seen, 0, sizeof(seen));
+  int gens = _rtn_collect(dir, seen);
+  int pruned = _rtn_check_suffixes(seen, 1, 230);
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_EQ(open_failures, 0);
+  REQUIRE_LE(gens, 4);
+  REQUIRE_EQ(pruned, 1);
+}
+
+/* Writes a one-byte file at dir/name. */
+static int _rtn_touch(const char *dir, const char *name) {
+  char full[1024];
+  snprintf(full, sizeof(full), "%s/%s", dir, name);
+  int fd = open(full, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) return -1;
+  ssize_t w = write(fd, "x", 1);
+  close(fd);
+  return w == 1 ? 0 : -1;
+}
+
+static bool _rtn_exists(const char *dir, const char *name) {
+  char full[1024];
+  snprintf(full, sizeof(full), "%s/%s", dir, name);
+  struct stat st;
+  return stat(full, &st) == 0;
+}
+
+/* A new rotated name is always above every generation on disk, even when
+ * the newest one carries a later stamp than the clock reads, as the names of
+ * a process whose clock stepped back by a day do. Retention then orders a
+ * suffix by its number instead of by its text, so "_10000" is newer than
+ * "_9999". */
+TEST(retention, a_new_name_sorts_above_every_existing_name) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  /* A stamp one day ahead of the clock. */
+  time_t ahead = time(NULL) + 24 * 60 * 60;
+  struct tm tm;
+  gmtime_r(&ahead, &tm);
+  char stamp[32];
+  strftime(stamp, sizeof(stamp), "%Y%m%d%H%M%S", &tm);
+  char n9998[64], n9999[64], n10000[64], n10001[64];
+  snprintf(n9998, sizeof(n9998), "app.log.%s_9998", stamp);
+  snprintf(n9999, sizeof(n9999), "app.log.%s_9999", stamp);
+  snprintf(n10000, sizeof(n10000), "app.log.%s_10000", stamp);
+  snprintf(n10001, sizeof(n10001), "app.log.%s_10001", stamp);
+
+  int touch_failures = 0;
+  if (_rtn_touch(dir, n9998) != 0) touch_failures++;
+  if (_rtn_touch(dir, n9999) != 0) touch_failures++;
+
+  clog_rotation_cfg_t cfg = {
+      .size_rotation_enabled = true,
+      .max_file_size = 1, /* Every record rotates. */
+      .time_rotation_enabled = false,
+      .max_rotated_files = 2,
+  };
+  clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  bool opened = (lg != CLOG_INVALID);
+  bool after_first_10000 = false, after_first_9998_gone = false;
+  if (opened) {
+    clog_info(lg, "first");
+    after_first_10000 = _rtn_exists(dir, n10000);
+    after_first_9998_gone = !_rtn_exists(dir, n9998);
+    clog_info(lg, "second");
+    clog_close(lg);
+  }
+  bool kept_10000 = _rtn_exists(dir, n10000);
+  bool kept_10001 = _rtn_exists(dir, n10001);
+  bool dropped_9999 = !_rtn_exists(dir, n9999);
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_EQ(touch_failures, 0);
+  REQUIRE_TRUE(opened);
+  REQUIRE_TRUE(after_first_10000);
+  REQUIRE_TRUE(after_first_9998_gone);
+  REQUIRE_TRUE(kept_10000);
+  REQUIRE_TRUE(kept_10001);
+  REQUIRE_TRUE(dropped_9999);
+}
+
+/* ========================================================================== */
+/*                         RETENTION BOUND UNDER CONCURRENT COMPRESSION       */
+/* ========================================================================== */
+
+#define RTN_BOUND_THREADS 6
+#define RTN_BOUND_RECORDS 6
+
+/* Several threads rotate on every record with compression on, and every
+ * compression is held in flight for 20ms. A deletion pass counts every
+ * generation under compression against max_rotated_files, keeps the newest
+ * max_rotated_files generations, and deletes every older one that is not
+ * under compression. So the generations on disk after a pass, counted from a
+ * directory listing of their own, must exceed max_rotated_files only by the
+ * older generations that the pass kept because they were under compression.
+ * Every compressed file must stay a valid gzip archive.
+ *
+ * This test is non-vacuous: when a pass skips the generations under
+ * compression without counting them, it keeps max_rotated_files other
+ * generations beside them, and the count exceeds that bound. */
+TEST(retention, concurrent_compressions_keep_the_documented_bound) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  clog_rotation_cfg_t cfg = {
+      .size_rotation_enabled = true,
+      .max_file_size = 1, /* Every record rotates. */
+      .time_rotation_enabled = false,
+      .max_rotated_files = 3,
+      .compress_rotated = true,
+  };
+  clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  if (lg == CLOG_INVALID) cleanup_dir(dir, "app.log");
+  REQUIRE_NE(lg, CLOG_INVALID);
+
+  clog_test_reset_max_rotated_generations();
+  clog_test_set_pending_compress_delay_us(20000); /* 20ms per compression */
+
+  _Atomic int arrived = 0;
+  _Atomic bool go = false;
+  pthread_t tids[RTN_BOUND_THREADS];
+  rtn_writer_arg_t args[RTN_BOUND_THREADS];
+  int started = 0;
+  for (int i = 0; i < RTN_BOUND_THREADS; i++) {
+    args[i].handle = lg;
+    args[i].thread_index = i;
+    args[i].records = RTN_BOUND_RECORDS;
+    args[i].arrived = &arrived;
+    args[i].go = &go;
+    if (pthread_create(&tids[i], NULL, _rtn_writer, &args[i]) != 0) break;
+    started++;
+  }
+  while (atomic_load(&arrived) < started) _rtn_nap();
+  atomic_store(&go, true);
+  for (int i = 0; i < started; i++) pthread_join(tids[i], NULL);
+
+  clog_test_set_pending_compress_delay_us(0);
+  clog_close(lg);
+  int max_gens = clog_test_get_max_rotated_generations();
+  int max_beyond = clog_test_get_max_generations_beyond_old_compressions();
+
+  static bool seen[RTN_MAX_THREADS][RTN_MAX_RECORDS];
+  memset(seen, 0, sizeof(seen));
+  int gens_at_end = _rtn_collect(dir, seen);
+
+  int invalid_gz = 0;
+  DIR *d = opendir(dir);
+  if (d) {
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+      size_t nlen = strlen(e->d_name);
+      if (nlen < 3 || strcmp(e->d_name + nlen - 3, ".gz") != 0) continue;
+      char gz_path[1024];
+      snprintf(gz_path, sizeof(gz_path), "%s/%s", dir, e->d_name);
+      if (gunzip_test(gz_path) != 0) invalid_gz++;
+    }
+    closedir(d);
+  }
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_EQ(started, RTN_BOUND_THREADS);
+  REQUIRE_GT(max_gens, 0);
+  REQUIRE_LE(max_beyond, cfg.max_rotated_files);
+  /* The files at the end are what the last pass left: at most
+   * max_rotated_files plus the one compression that the compressor thread of
+   * the target runs at a time. */
+  REQUIRE_LE(gens_at_end, cfg.max_rotated_files + 1);
+  REQUIRE_EQ(invalid_gz, 0);
+}
+
+/* A rotation never waits for an earlier compression to finish. Every
+ * compression here is held in flight for 20ms by the compressor thread, and
+ * six threads rotate on every record. When a rotation proceeds while earlier
+ * compressions are outstanding, running or queued, the deletion passes see
+ * more than one of them at once, while a rotation that waited for its
+ * compression would cap that number at one. This is measured structurally,
+ * from the count that each pass sees, instead of from elapsed time. */
+TEST(retention, a_rotation_never_waits_for_a_compression) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  clog_rotation_cfg_t cfg = {
+      .size_rotation_enabled = true,
+      .max_file_size = 1,
+      .time_rotation_enabled = false,
+      .max_rotated_files = 3,
+      .compress_rotated = true,
+  };
+  clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  if (lg == CLOG_INVALID) cleanup_dir(dir, "app.log");
+  REQUIRE_NE(lg, CLOG_INVALID);
+
+  clog_test_reset_max_rotated_generations();
+  clog_test_set_pending_compress_delay_us(20000);
+
+  _Atomic int arrived = 0;
+  _Atomic bool go = false;
+  pthread_t tids[RTN_BOUND_THREADS];
+  rtn_writer_arg_t args[RTN_BOUND_THREADS];
+  int started = 0;
+  for (int i = 0; i < RTN_BOUND_THREADS; i++) {
+    args[i].handle = lg;
+    args[i].thread_index = i;
+    args[i].records = RTN_BOUND_RECORDS;
+    args[i].arrived = &arrived;
+    args[i].go = &go;
+    if (pthread_create(&tids[i], NULL, _rtn_writer, &args[i]) != 0) break;
+    started++;
+  }
+  while (atomic_load(&arrived) < started) _rtn_nap();
+  atomic_store(&go, true);
+  for (int i = 0; i < started; i++) pthread_join(tids[i], NULL);
+
+  clog_test_set_pending_compress_delay_us(0);
+  clog_close(lg);
+  int max_in_flight = clog_test_get_max_compressions_in_flight();
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_EQ(started, RTN_BOUND_THREADS);
+  /* Six threads each hold a compression for 20ms, and rotations that never
+   * wait put several of them in flight at once. */
+  REQUIRE_GE(max_in_flight, 3);
+}
+
+/* ========================================================================== */
+/*                         THREAD IDENTITY                                    */
+/* ========================================================================== */
+
+typedef struct {
+  char name[64];
+  int pid;
+  int tid;
+} tid_proc_t;
+
+/* Parses the proc field of the record whose message is `msg`, in logfmt
+ * output: proc=<progname>(<pid>):<name>(<tid>). Gives true when found. */
+static bool _tid_parse_proc(const char *text, const char *msg,
+                            tid_proc_t *out) {
+  const char *m = strstr(text, msg);
+  if (!m) return false;
+  const char *line = m;
+  while (line > text && line[-1] != '\n') line--;
+  const char *proc = strstr(line, "proc=");
+  if (!proc || proc > m) return false;
+  const char *pid_paren = strchr(proc, '(');
+  if (!pid_paren || pid_paren > m) return false;
+  out->pid = atoi(pid_paren + 1);
+  const char *colon = strstr(pid_paren, "):");
+  if (!colon || colon > m) return false;
+  const char *name = colon + 2;
+  const char *tid_paren = strchr(name, '(');
+  if (!tid_paren || tid_paren > m) return false;
+  size_t nlen = (size_t)(tid_paren - name);
+  if (nlen >= sizeof(out->name)) return false;
+  memcpy(out->name, name, nlen);
+  out->name[nlen] = '\0';
+  out->tid = atoi(tid_paren + 1);
+  return true;
+}
+
+typedef struct {
+  clog lg;
+  int index;
+  int tid;
+  unsigned fills;
+  ccol_retval_t set_rv;
+} tid_worker_t;
+
+static void *_tid_worker(void *p) {
+  tid_worker_t *w = (tid_worker_t *)p;
+  char name[16];
+  snprintf(name, sizeof(name), "tid-worker-%d", w->index);
+  w->set_rv = ccol_set_thread_name(name);
+  w->tid = _test_os_tid();
+  for (int i = 0; i < 50; i++)
+    clog_info(w->lg, "tid worker %d record %d", w->index, i);
+  w->fills = clog_test_thread_identity_fill_count();
+  return NULL;
+}
+
+/* A thread reads its identity from the system once, however many records
+ * it writes, and every record carries its own name, PID and TID. Each
+ * thread renamed through ccol_set_thread_name() sees its own name. */
+TEST(thread_identity, each_thread_reads_its_identity_once) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  if (lg == CLOG_INVALID) cleanup_dir(dir, "app.log");
+  REQUIRE_NE(lg, CLOG_INVALID);
+
+  enum { N = 4 };
+  pthread_t th[N];
+  tid_worker_t w[N];
+  int started = 0;
+  for (int i = 0; i < N; i++) {
+    memset(&w[i], 0, sizeof(w[i]));
+    w[i].lg = lg;
+    w[i].index = i;
+    if (pthread_create(&th[i], NULL, _tid_worker, &w[i]) != 0) break;
+    started++;
+  }
+  for (int i = 0; i < started; i++) pthread_join(th[i], NULL);
+  clog_close(lg);
+
+  static char text[1 << 20];
+  read_file(path, text, sizeof(text));
+  bool all_ok = true;
+  for (int i = 0; i < started; i++) {
+    char name[32], msg0[64], msg49[64];
+    snprintf(name, sizeof(name), "tid-worker-%d", i);
+    snprintf(msg0, sizeof(msg0), "tid worker %d record 0\"", i);
+    snprintf(msg49, sizeof(msg49), "tid worker %d record 49\"", i);
+    tid_proc_t a, b;
+    bool pa = _tid_parse_proc(text, msg0, &a);
+    bool pb = _tid_parse_proc(text, msg49, &b);
+    if (!pa || !pb || strcmp(a.name, name) != 0 || strcmp(b.name, name) != 0 ||
+        a.tid != w[i].tid || b.tid != w[i].tid || a.pid != (int)getpid() ||
+        w[i].fills != 1 || w[i].set_rv != ccol_success) {
+      fprintf(stderr, "thread %d: parsed %d/%d name '%s' tid %d/%d fills %u\n",
+              i, pa, pb, pa ? a.name : "", pa ? a.tid : -1, w[i].tid,
+              w[i].fills);
+      all_ok = false;
+    }
+  }
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_EQ(started, N);
+  REQUIRE_TRUE(all_ok);
+}
+
+typedef struct {
+  clog lg;
+  ccol_retval_t rv_rename;
+  ccol_retval_t rv_long;
+  ccol_retval_t rv_null;
+  ccol_retval_t rv_empty;
+  char kernel_after_long[17];
+  char kernel_after_invalid[17];
+} tid_rename_t;
+
+static void *_tid_rename_worker(void *p) {
+  tid_rename_t *r = (tid_rename_t *)p;
+  clog_info(r->lg, "rename before");
+  r->rv_rename = ccol_set_thread_name("renamed-thread");
+  clog_info(r->lg, "rename after");
+  r->rv_long = ccol_set_thread_name("abcdefghijklmnopqrstuvwxyz");
+  _test_get_thread_name(r->kernel_after_long);
+  clog_info(r->lg, "rename long");
+  r->rv_null = ccol_set_thread_name(NULL);
+  r->rv_empty = ccol_set_thread_name("");
+  _test_get_thread_name(r->kernel_after_invalid);
+  clog_info(r->lg, "rename invalid");
+  /* A rename that bypasses the library is not seen after the first record. */
+  _test_set_thread_name("other-means");
+  clog_info(r->lg, "rename other means");
+  return NULL;
+}
+
+/* A rename through ccol_set_thread_name() shows in the very next record. A
+ * name longer than 15 bytes keeps its first 15, exactly as the kernel
+ * stores it. NULL and "" are refused and change nothing. */
+TEST(thread_identity, set_thread_name_renames_and_updates_records) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  if (lg == CLOG_INVALID) cleanup_dir(dir, "app.log");
+  REQUIRE_NE(lg, CLOG_INVALID);
+
+  tid_rename_t r;
+  memset(&r, 0, sizeof(r));
+  r.lg = lg;
+  pthread_t th;
+  int prv = pthread_create(&th, NULL, _tid_rename_worker, &r);
+  if (prv == 0) pthread_join(th, NULL);
+  clog_close(lg);
+
+  static char text[1 << 16];
+  read_file(path, text, sizeof(text));
+  tid_proc_t before, after, lng, inv, other;
+  bool ok_before = _tid_parse_proc(text, "rename before", &before);
+  bool ok_after = _tid_parse_proc(text, "rename after", &after);
+  bool ok_long = _tid_parse_proc(text, "rename long", &lng);
+  bool ok_inv = _tid_parse_proc(text, "rename invalid", &inv);
+  bool ok_other = _tid_parse_proc(text, "rename other means", &other);
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_EQ(prv, 0);
+  REQUIRE_TRUE(ok_before && ok_after && ok_long && ok_inv && ok_other);
+  REQUIRE_EQ(r.rv_rename, ccol_success);
+  REQUIRE_EQ(r.rv_long, ccol_success);
+  REQUIRE_EQ(r.rv_null, ccol_invalid_args);
+  REQUIRE_EQ(r.rv_empty, ccol_invalid_args);
+  REQUIRE_STRNE(before.name, "renamed-thread");
+  REQUIRE_STREQ(after.name, "renamed-thread");
+  REQUIRE_STREQ(r.kernel_after_long, "abcdefghijklmno");
+  REQUIRE_STREQ(lng.name, "abcdefghijklmno");
+  REQUIRE_STREQ(r.kernel_after_invalid, "abcdefghijklmno");
+  REQUIRE_STREQ(inv.name, "abcdefghijklmno");
+  REQUIRE_STREQ(other.name, "abcdefghijklmno");
+  REQUIRE_EQ(before.tid, after.tid);
+}
+
+/* ccol_set_thread_name() needs no logger. A thread renamed before any
+ * logger exists logs under that name from its first record. */
+static void *_tid_early_worker(void *p) {
+  tid_rename_t *r = (tid_rename_t *)p;
+  r->rv_rename = ccol_set_thread_name("early-name");
+  return NULL;
+}
+
+TEST(thread_identity, set_thread_name_works_before_any_logger) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  tid_rename_t r;
+  memset(&r, 0, sizeof(r));
+  pthread_t th;
+  /* The worker renames itself with no logger open, then logs. */
+  int prv = pthread_create(&th, NULL, _tid_early_worker, &r);
+  if (prv == 0) pthread_join(th, NULL);
+
+  /* The main thread does the same, on a logger that it opens afterwards. */
+  char saved[17] = {0};
+  _test_get_thread_name(saved);
+  ccol_retval_t main_rv = ccol_set_thread_name("early-main");
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  if (lg != CLOG_INVALID) {
+    clog_info(lg, "early record");
+    clog_close(lg);
+  }
+  /* Restore the name of the main thread for the tests that follow. */
+  ccol_retval_t restore_rv = ccol_set_thread_name(saved);
+
+  static char text[1 << 16];
+  read_file(path, text, sizeof(text));
+  tid_proc_t rec;
+  bool parsed = _tid_parse_proc(text, "early record", &rec);
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_EQ(prv, 0);
+  REQUIRE_EQ(r.rv_rename, ccol_success);
+  REQUIRE_EQ(main_rv, ccol_success);
+  REQUIRE_EQ(restore_rv, ccol_success);
+  REQUIRE_NE(lg, CLOG_INVALID);
+  REQUIRE_TRUE(parsed);
+  REQUIRE_STREQ(rec.name, "early-main");
+  REQUIRE_EQ(rec.tid, _test_os_tid());
+  REQUIRE_EQ(rec.pid, (int)getpid());
+}
+
+/* A child that fork() makes has a new PID, and its one thread a new TID.
+ * The cached identity of the thread that forked must not follow it there.
+ * The child uses the supported pattern: it opens its own logger after the
+ * fork. The parent logs first, so that its thread has a cached identity at
+ * the time of the fork. */
+TEST(thread_identity, a_forked_child_logs_its_own_pid_and_tid) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+  if (lg == CLOG_INVALID) cleanup_dir(dir, "app.log");
+  REQUIRE_NE(lg, CLOG_INVALID);
+  clog_info(lg, "parent record");
+  clog_close(lg);
+
+  pid_t pid = fork();
+  if (pid == 0) {
+    clog clg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL, NULL);
+    if (clg != CLOG_INVALID) {
+      clog_info(clg, "child record");
+      clog_close(clg);
+    }
+    _exit(0);
+  }
+  int status = 0;
+  bool reaped = false;
+  if (pid > 0) {
+    /* A bounded wait, for the reason that
+     * fork_safety.child_can_log_after_fork gives. */
+    for (int waited_ms = 0; waited_ms < 30000; waited_ms += 20) {
+      if (waitpid(pid, &status, WNOHANG) == pid) {
+        reaped = true;
+        break;
+      }
+      usleep(20000);
+    }
+    if (!reaped) {
+      kill(pid, SIGKILL);
+      waitpid(pid, &status, 0);
+    }
+  }
+
+  static char text[1 << 16];
+  read_file(path, text, sizeof(text));
+  tid_proc_t parent_rec, child_rec;
+  bool parsed_parent = _tid_parse_proc(text, "parent record", &parent_rec);
+  bool parsed_child = _tid_parse_proc(text, "child record", &child_rec);
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_NE(pid, -1);
+  REQUIRE_TRUE(reaped);
+  REQUIRE_TRUE(WIFEXITED(status));
+  REQUIRE_TRUE(parsed_parent);
+  REQUIRE_TRUE(parsed_child);
+  REQUIRE_EQ(parent_rec.pid, (int)getpid());
+  REQUIRE_EQ(child_rec.pid, (int)pid);
+#if defined(__linux__)
+  /* The one thread of the child is its main thread, whose TID is its PID. */
+  REQUIRE_EQ(child_rec.tid, (int)pid);
+#else
+  /* A thread ID is not a process ID here; the child read its own. */
+  REQUIRE_NE(child_rec.tid, parent_rec.tid);
+#endif
+}
+
+/* ========================================================================== */
+/*          ROTATION DIRECTORY, BACKGROUND COMPRESSION, WRITER WAIT           */
+/* ========================================================================== */
+
+#include <limits.h>
+
+/* Makes a unique directory under the working directory of the test binary
+ * and gives its relative path in out, so that the files of these tests land
+ * on the filesystem that the tests run from. */
+static int make_cwd_tmpdir(char *out, size_t outsz) {
+  snprintf(out, outsz, "clogger_cwd_test_XXXXXX");
+  return mkdtemp(out) ? 0 : -1;
+}
+
+/* Counts the rotated files "<base>.<...>" in dir, split into the ones that
+ * end in ".gz" and the ones that do not, and also counts the ".gz" files
+ * that gunzip -t rejects. */
+static void count_rotated(const char *dir, const char *base, int *plain,
+                          int *gz, int *invalid_gz) {
+  *plain = 0;
+  *gz = 0;
+  *invalid_gz = 0;
+  char prefix[128];
+  snprintf(prefix, sizeof(prefix), "%s.", base);
+  size_t plen = strlen(prefix);
+  DIR *d = opendir(dir);
+  if (!d) return;
+  struct dirent *e;
+  while ((e = readdir(d)) != NULL) {
+    if (strncmp(e->d_name, prefix, plen) != 0) continue;
+    size_t nlen = strlen(e->d_name);
+    if (nlen >= 3 && strcmp(e->d_name + nlen - 3, ".gz") == 0) {
+      (*gz)++;
+      char gz_path[1024];
+      snprintf(gz_path, sizeof(gz_path), "%s/%s", dir, e->d_name);
+      if (gunzip_test(gz_path) != 0) (*invalid_gz)++;
+    } else {
+      (*plain)++;
+    }
+  }
+  closedir(d);
+}
+
+/* Gives true when a file in dir whose name starts with prefix holds needle,
+ * reading each file as plain text. */
+static bool dir_files_contain(const char *dir, const char *prefix,
+                              const char *needle) {
+  DIR *d = opendir(dir);
+  if (!d) return false;
+  bool found = false;
+  struct dirent *e;
+  static char text[1 << 14];
+  while (!found && (e = readdir(d)) != NULL) {
+    if (strncmp(e->d_name, prefix, strlen(prefix)) != 0) continue;
+    char p[1024];
+    snprintf(p, sizeof(p), "%s/%s", dir, e->d_name);
+    read_file(p, text, sizeof(text));
+    found = strstr(text, needle) != NULL;
+  }
+  closedir(d);
+  return found;
+}
+
+/* Waits, with a bound of 30 seconds, until a held compression has created
+ * its destination. */
+static bool _wait_for_gz_dest_opened(void) {
+  for (int i = 0; i < 30000; i++) {
+    if (clog_test_gz_dest_opened()) return true;
+    usleep(1000);
+  }
+  return false;
+}
+
+/* A logger that opens a relative path keeps rotating in the directory in
+ * which it opened the file after the process changes its working directory,
+ * because every rename, open and deletion of a rotation works relative to
+ * that directory.
+ *
+ * This test is non-vacuous: when the rotation resolves the relative path
+ * against the working directory instead, the rename of "rel.log" in B fails
+ * with ENOENT, the rotation takes that as a deleted file, and it opens a
+ * fresh B/rel.log. The records then move to B, and the test fails on the
+ * file in B. */
+TEST(rotation_dir, relative_path_keeps_its_directory_after_chdir) {
+  char root[64];
+  REQUIRE_EQ(make_cwd_tmpdir(root, sizeof(root)), 0);
+  char a[128], b[128];
+  snprintf(a, sizeof(a), "%s/A", root);
+  snprintf(b, sizeof(b), "%s/B", root);
+  bool made = mkdir(a, 0755) == 0 && mkdir(b, 0755) == 0;
+  int oldcwd = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  bool moved_in = made && oldcwd >= 0 && chdir(a) == 0;
+  clog lg = CLOG_INVALID;
+  bool moved_on = false;
+  if (moved_in) {
+    clog_rotation_cfg_t cfg = {
+        .size_rotation_enabled = true,
+        .max_file_size = 200,
+        .max_rotated_files = 3,
+    };
+    lg = clog_open_file("rel.log", CLOG_INFO, &cfg, NULL);
+    if (lg != CLOG_INVALID) {
+      clog_info(lg, "before chdir");
+      moved_on = chdir("../B") == 0;
+      for (int i = 0; i < 8; i++)
+        clog_info(lg, "after chdir %d padding-padding-padding-padding", i);
+    }
+  }
+  /* Restore the working directory before anything can return early, because
+   * every other test expects it unchanged. */
+  bool restored = oldcwd >= 0 && fchdir(oldcwd) == 0;
+  if (oldcwd >= 0) close(oldcwd);
+  if (lg != CLOG_INVALID) clog_close(lg);
+
+  char live_a[256], live_b[256];
+  snprintf(live_a, sizeof(live_a), "%s/rel.log", a);
+  snprintf(live_b, sizeof(live_b), "%s/rel.log", b);
+  bool live_in_a = access(live_a, F_OK) == 0;
+  bool stray_in_b = access(live_b, F_OK) == 0;
+  int rotated_in_a = count_files_with_prefix(a, "rel.log.");
+  int files_in_b = count_files_with_prefix(b, "rel.log");
+  bool last_record_in_a = dir_files_contain(a, "rel.log", "after chdir 7");
+  cleanup_dir(a, "rel.log");
+  cleanup_dir(b, "rel.log");
+  rmdir(root);
+
+  REQUIRE_TRUE(restored);
+  REQUIRE_TRUE(moved_in);
+  REQUIRE_NE(lg, CLOG_INVALID);
+  REQUIRE_TRUE(moved_on);
+  REQUIRE_TRUE(live_in_a);
+  REQUIRE_TRUE(last_record_in_a);
+  REQUIRE_FALSE(stray_in_b);
+  REQUIRE_EQ(files_in_b, 0);
+  /* Several rotations happened, and retention kept at most three of them,
+   * in A. */
+  REQUIRE_GT(rotated_in_a, 0);
+  REQUIRE_LE(rotated_in_a, 3);
+}
+
+/* A flush interval above LLONG_MAX, such as UINT64_MAX for "flush on size
+ * only", makes the async writer thread wait for a job instead of waking up
+ * with nothing to do, so the count of the timed waits that ended with no job
+ * must stay at zero while the logger sits idle.
+ *
+ * This test is non-vacuous: when the writer narrows the interval to a signed
+ * type, the value turns negative, every wait is a zero wait, and the count
+ * climbs by thousands while the test sleeps. */
+TEST(async, flush_interval_above_llong_max_does_not_spin_the_writer) {
+  const uint64_t intervals[] = {UINT64_MAX, (uint64_t)LLONG_MAX + 1u};
+  for (size_t k = 0; k < sizeof(intervals) / sizeof(intervals[0]); k++) {
+    int pipefd[2];
+    REQUIRE_EQ(pipe(pipefd), 0);
+    clog_async_cfg_t acfg = {.flush_interval_us = intervals[k]};
+    clog lg = clog_open_fd(pipefd[1], CLOG_INFO, &acfg);
+    if (lg == CLOG_INVALID) {
+      close(pipefd[0]);
+      close(pipefd[1]);
+    }
+    REQUIRE_NE(lg, CLOG_INVALID);
+
+    clog_info(lg, "size-only flushing %zu", k);
+    clog_flush(lg);
+    size_t before = clog_test_writer_timeout_wakeups();
+    usleep(200000);
+    size_t after = clog_test_writer_timeout_wakeups();
+
+    char out[4096];
+    drain_pipe(lg, pipefd[0], pipefd[1], out, sizeof(out));
+    char expected[64];
+    snprintf(expected, sizeof(expected), "size-only flushing %zu", k);
+
+    REQUIRE_EQ(after - before, (size_t)0);
+    REQUIRE_NE(strstr(out, expected), NULL);
+  }
+}
+
+/* The gzip compression of a rotated file never runs on the thread that
+ * rotates. For a synchronous logger that thread is the one that logs, so the
+ * log call that causes the rotation returns while the compression is held.
+ *
+ * This test is non-vacuous: when _rotate() compresses in place, the log call
+ * stays inside the held compression until the 30-second safety bound of the
+ * gate, and the compression has finished by the time that the call
+ * returns. */
+TEST(compression, gzip_never_runs_on_the_logging_thread) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[128];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  clog_rotation_cfg_t cfg = {
+      .size_rotation_enabled = true,
+      .max_file_size = 1, /* Every record rotates. */
+      .max_rotated_files = 5,
+      .compress_rotated = true,
+  };
+  clog lg = clog_open_file(path, CLOG_INFO, &cfg, NULL);
+  if (lg == CLOG_INVALID) cleanup_dir(dir, "app.log");
+  REQUIRE_NE(lg, CLOG_INVALID);
+
+  clog_test_hold_compressions(true);
+  size_t fin0 = clog_test_compressions_finished();
+  clog_info(lg, "rotated while the gate is held");
+  size_t fin_after_log = clog_test_compressions_finished() - fin0;
+  bool opened = _wait_for_gz_dest_opened();
+  size_t fin_while_held = clog_test_compressions_finished() - fin0;
+  clog_test_hold_compressions(false);
+  clog_close(lg);
+
+  int plain, gz, invalid_gz;
+  count_rotated(dir, "app.log", &plain, &gz, &invalid_gz);
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_EQ(fin_after_log, (size_t)0);
+  REQUIRE_TRUE(opened);
+  REQUIRE_EQ(fin_while_held, (size_t)0);
+  REQUIRE_EQ(gz, 1);
+  REQUIRE_EQ(plain, 0);
+  REQUIRE_EQ(invalid_gz, 0);
+}
+
+/* The same property for an async logger, whose rotations run on its writer
+ * thread. A clog_flush() waits for the writer thread to write the batch and
+ * to take the rotation that the write causes, but it returns while the
+ * compression that the rotation queued is held, so neither the writer
+ * thread nor a producer behind a bounded queue waits for gzip.
+ *
+ * This test is non-vacuous: when the writer thread compresses in place, the
+ * flush waits for the held compression until the 30-second safety bound of
+ * the gate, and the compression has finished by the time that it returns. */
+TEST(compression, gzip_never_runs_on_the_async_writer_thread) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[128];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  clog_rotation_cfg_t cfg = {
+      .size_rotation_enabled = true,
+      .max_file_size = 1,
+      .max_rotated_files = 5,
+      .compress_rotated = true,
+  };
+  clog_async_cfg_t acfg = {.queue_size = 4};
+  clog lg = clog_open_file(path, CLOG_INFO, &cfg, &acfg);
+  if (lg == CLOG_INVALID) cleanup_dir(dir, "app.log");
+  REQUIRE_NE(lg, CLOG_INVALID);
+
+  clog_test_hold_compressions(true);
+  size_t fin0 = clog_test_compressions_finished();
+  clog_info(lg, "rotated by the writer while the gate is held");
+  clog_flush(lg);
+  size_t fin_after_flush = clog_test_compressions_finished() - fin0;
+  bool opened = _wait_for_gz_dest_opened();
+  size_t fin_while_held = clog_test_compressions_finished() - fin0;
+  clog_test_hold_compressions(false);
+  clog_close(lg);
+
+  int plain, gz, invalid_gz;
+  count_rotated(dir, "app.log", &plain, &gz, &invalid_gz);
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_EQ(fin_after_flush, (size_t)0);
+  REQUIRE_TRUE(opened);
+  REQUIRE_EQ(fin_while_held, (size_t)0);
+  REQUIRE_EQ(gz, 1);
+  REQUIRE_EQ(plain, 0);
+  REQUIRE_EQ(invalid_gz, 0);
+}
+
+static void *_close_in_background(void *arg) {
+  clog_close(*(clog *)arg);
+  return NULL;
+}
+
+/* The last clog_close() of a target returns only after every compression
+ * that its rotations queued has finished. Three rotations queue three
+ * compressions while the first one is held, and the close starts while the
+ * other two are waiting in the queue; after it returns, every rotated file is
+ * a valid ".gz" file with no uncompressed file beside it.
+ *
+ * This test is non-vacuous: when the compressor thread stops without taking
+ * the jobs left in its queue, two rotated files stay uncompressed. */
+TEST(compression, close_finishes_every_queued_compression) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[128];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  clog_rotation_cfg_t cfg = {
+      .size_rotation_enabled = true,
+      .max_file_size = 1,
+      .max_rotated_files = 10,
+      .compress_rotated = true,
+  };
+  clog lg = clog_open_file(path, CLOG_INFO, &cfg, NULL);
+  if (lg == CLOG_INVALID) cleanup_dir(dir, "app.log");
+  REQUIRE_NE(lg, CLOG_INVALID);
+
+  clog_test_hold_compressions(true);
+  for (int i = 0; i < 3; i++) clog_info(lg, "generation %d", i);
+  bool opened = _wait_for_gz_dest_opened();
+
+  pthread_t t;
+  bool closer_started =
+      pthread_create(&t, NULL, _close_in_background, &lg) == 0;
+  if (closer_started) usleep(100000); /* let the close reach its join */
+  clog_test_hold_compressions(false);
+  if (closer_started)
+    pthread_join(t, NULL);
+  else
+    clog_close(lg);
+
+  int plain, gz, invalid_gz;
+  count_rotated(dir, "app.log", &plain, &gz, &invalid_gz);
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(opened);
+  REQUIRE_TRUE(closer_started);
+  REQUIRE_EQ(gz, 3);
+  REQUIRE_EQ(plain, 0);
+  REQUIRE_EQ(invalid_gz, 0);
+}
+
+/* A CLOG_FATAL record that causes a rotation waits for the compression that
+ * the rotation queued before it stops the process. The child here holds each
+ * compression for 300ms and registers no close of its own at exit, so only
+ * the fatal path itself can wait.
+ *
+ * This test is non-vacuous: when the fatal path calls exit() at once, the
+ * process ends inside the held compression, and the uncompressed rotated
+ * file stays beside an empty ".gz" file. */
+TEST(compression, fatal_waits_for_queued_compressions_before_exit) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[128];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  clog_rotation_cfg_t cfg = {
+      .size_rotation_enabled = true,
+      .max_file_size = 1,
+      .max_rotated_files = 5,
+      .compress_rotated = true,
+  };
+
+  /* The output of the child goes to a file beside the test directory, so that
+   * a child that a signal ends shows what it printed (a sanitizer report, or
+   * the message of a fatal error) in the output of this test all the same. */
+  char err_path[160];
+  snprintf(err_path, sizeof(err_path), "%s.child_err", dir);
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open(err_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    clog lg = clog_open_file(path, CLOG_INFO, &cfg, NULL);
+    if (lg == CLOG_INVALID) _exit(0);
+    clog_test_set_pending_compress_delay_us(300000);
+    clog_fatal(lg, "fatal record that rotates");
+    _exit(0); /* unreachable */
+  }
+  int status = 0;
+  if (pid > 0) waitpid(pid, &status, 0);
+  if (pid > 0 && !WIFEXITED(status)) {
+    char err_text[8192] = {0};
+    read_file(err_path, err_text, sizeof(err_text));
+    fprintf(stderr, "child ended by signal %d; its output:\n%s\n",
+            WIFSIGNALED(status) ? WTERMSIG(status) : -1, err_text);
+  }
+  unlink(err_path);
+
+  int plain, gz, invalid_gz;
+  count_rotated(dir, "app.log", &plain, &gz, &invalid_gz);
+  char gz_path[512];
+  char content[4096] = {0};
+  if (find_file_with_suffix(dir, ".gz", gz_path, sizeof(gz_path)) == 0)
+    gunzip_read(gz_path, content, sizeof(content));
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_NE(pid, -1);
+  REQUIRE_TRUE(WIFEXITED(status));
+  REQUIRE_NE(WEXITSTATUS(status), 0);
+  REQUIRE_EQ(gz, 1);
+  REQUIRE_EQ(plain, 0);
+  REQUIRE_EQ(invalid_gz, 0);
+  REQUIRE_NE(strstr(content, "fatal record that rotates"), NULL);
+}
+
+/* Writes text to path and sets both of its timestamps to `when`. */
+static bool _write_file_with_mtime(const char *path, const char *text,
+                                   time_t when) {
+  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+  if (fd < 0) return false;
+  size_t len = strlen(text);
+  bool ok = write(fd, text, len) == (ssize_t)len;
+  close(fd);
+  struct timespec ts[2] = {{.tv_sec = when}, {.tv_sec = when}};
+  return ok && utimensat(AT_FDCWD, path, ts, 0) == 0;
+}
+
+#if defined(__linux__)
+#include <linux/stat.h>
+#endif
+
+/* Gives the birth time of path in seconds, as the kernel and the filesystem
+ * report it, or -1 when they report none. It asks through statx(2) on
+ * Linux, using the system call itself so that it needs no wrapper of the C
+ * library, and through struct stat on macOS and FreeBSD. */
+static time_t _file_birth_time(const char *path) {
+#if defined(__linux__) && defined(STATX_BTIME) && defined(SYS_statx)
+  struct statx stx;
+  memset(&stx, 0, sizeof(stx));
+  if (syscall(SYS_statx, AT_FDCWD, path, 0, STATX_BTIME, &stx) == 0 &&
+      (stx.stx_mask & STATX_BTIME))
+    return (time_t)stx.stx_btime.tv_sec;
+  return -1;
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+  struct stat st;
+  if (stat(path, &st) != 0) return -1;
+#if defined(__APPLE__)
+  time_t b = st.st_birthtimespec.tv_sec;
+#else
+  time_t b = st.st_birthtim.tv_sec;
+#endif
+  return b > 0 ? b : -1;
+#else
+  (void)path;
+  return -1;
+#endif
+}
+
+/* A file that already holds records, beside rotated generations, counts its
+ * time rotation interval from the stamp of the newest generation, which is
+ * when the current file began, so a process that restarts more often than
+ * the interval rotates all the same. The live file here was written just
+ * now, so its birth time and its modification time both say "now".
+ *
+ * This test is non-vacuous: when the seed ignores the rotated generations,
+ * it takes the birth time or the modification time of the live file, none
+ * of the 100 seconds has passed, and nothing rotates. */
+TEST(rotation_time, interval_counts_from_the_newest_rotated_generation) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[128];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  time_t now = time(NULL);
+  time_t then = now - 1000;
+  struct tm tm;
+  gmtime_r(&then, &tm);
+  char stamp[32];
+  strftime(stamp, sizeof(stamp), "%Y%m%d%H%M%S", &tm);
+  char rotated_path[192];
+  snprintf(rotated_path, sizeof(rotated_path), "%s.%s", path, stamp);
+  bool prepared =
+      _write_file_with_mtime(rotated_path, "older generation\n", then) &&
+      _write_file_with_mtime(path, "current record\n", now);
+
+  clog_rotation_cfg_t cfg = {
+      .time_rotation_enabled = true,
+      .rotation_interval_us = 100000000,
+      .max_rotated_files = 5,
+  };
+  clog lg =
+      prepared ? clog_open_file(path, CLOG_INFO, &cfg, NULL) : CLOG_INVALID;
+  if (lg != CLOG_INVALID) {
+    clog_info(lg, "new record");
+    clog_close(lg);
+  }
+
+  int rotated = count_files_with_prefix(dir, "app.log.");
+  bool current_rotated = dir_files_contain(dir, "app.log.", "current record");
+  static char live_text[4096];
+  read_file(path, live_text, sizeof(live_text));
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(prepared);
+  REQUIRE_NE(lg, CLOG_INVALID);
+  REQUIRE_EQ(rotated, 2);
+  REQUIRE_TRUE(current_rotated);
+  REQUIRE_NE(strstr(live_text, "new record"), NULL);
+  REQUIRE_EQ(strstr(live_text, "current record"), NULL);
+}
+
+/* With no rotated generation on disk, the interval counts from the birth
+ * time of the file where the filesystem reports one, and from its last
+ * modification time otherwise. The file here was created just now and then
+ * given a modification time 1000 seconds in the past, so the two answers
+ * differ: a recent birth time starts the interval now and nothing rotates,
+ * and a modification time rotates on the first write. FreeBSD moves the
+ * birth time back to a modification time that is older, so there the birth
+ * time is old as well. The test reads the birth time that this filesystem
+ * reports and expects the matching outcome.
+ *
+ * This test is non-vacuous: on a filesystem that reports a recent birth
+ * time, a seed that skips it takes the old modification time and
+ * rotates. */
+TEST(rotation_time, interval_counts_from_birth_time_else_mtime) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[128];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  bool prepared =
+      _write_file_with_mtime(path, "old record\n", time(NULL) - 1000);
+  time_t btime = prepared ? _file_birth_time(path) : -1;
+  bool recent_btime = btime >= 0 && btime > time(NULL) - 100;
+
+  clog_rotation_cfg_t cfg = {
+      .time_rotation_enabled = true,
+      .rotation_interval_us = 100000000,
+      .max_rotated_files = 5,
+  };
+  clog lg =
+      prepared ? clog_open_file(path, CLOG_INFO, &cfg, NULL) : CLOG_INVALID;
+  if (lg != CLOG_INVALID) {
+    clog_info(lg, "new record");
+    clog_close(lg);
+  }
+
+  int rotated = count_files_with_prefix(dir, "app.log.");
+  bool old_rotated = dir_files_contain(dir, "app.log.", "old record");
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(prepared);
+  REQUIRE_NE(lg, CLOG_INVALID);
+  if (recent_btime) {
+    REQUIRE_EQ(rotated, 0);
+  } else {
+    REQUIRE_EQ(rotated, 1);
+    REQUIRE_TRUE(old_rotated);
+  }
+}
+
+/* A file whose birth time is older than the interval rotates on the first
+ * write, although it was modified just now. The file is given timestamps
+ * 1000 seconds in the past and is then written again, which moves only its
+ * modification time to now. FreeBSD moves the birth time back with the
+ * modification time, so there the birth time stays 1000 seconds old; Linux
+ * keeps the real birth time, which is recent. The test reads the birth time
+ * that this filesystem reports and expects the matching outcome.
+ *
+ * This test is non-vacuous: on a filesystem that reports the old birth time,
+ * a seed that skips it takes the recent modification time and nothing
+ * rotates. */
+TEST(rotation_time, old_birth_time_rotates_a_recently_modified_file) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[128];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  bool prepared =
+      _write_file_with_mtime(path, "old record\n", time(NULL) - 1000);
+  if (prepared) {
+    int fd = open(path, O_WRONLY | O_APPEND | O_CLOEXEC);
+    prepared = fd >= 0;
+    if (prepared) {
+      prepared = write(fd, "newer record\n", 13) == 13;
+      close(fd);
+    }
+  }
+  time_t btime = prepared ? _file_birth_time(path) : -1;
+  bool old_btime = btime >= 0 && btime <= time(NULL) - 100;
+
+  clog_rotation_cfg_t cfg = {
+      .time_rotation_enabled = true,
+      .rotation_interval_us = 100000000,
+      .max_rotated_files = 5,
+  };
+  clog lg =
+      prepared ? clog_open_file(path, CLOG_INFO, &cfg, NULL) : CLOG_INVALID;
+  if (lg != CLOG_INVALID) {
+    clog_info(lg, "new record");
+    clog_close(lg);
+  }
+
+  int rotated = count_files_with_prefix(dir, "app.log.");
+  bool old_rotated = dir_files_contain(dir, "app.log.", "old record");
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(prepared);
+  REQUIRE_NE(lg, CLOG_INVALID);
+  if (old_btime) {
+    REQUIRE_EQ(rotated, 1);
+    REQUIRE_TRUE(old_rotated);
+  } else {
+    REQUIRE_EQ(rotated, 0);
+  }
+}
+
+/* An empty file starts the interval at the open, whatever its modification
+ * time and whatever rotated generations sit beside it, because it holds no
+ * record that could be older than the interval.
+ *
+ * This test is non-vacuous: when the seed ignores the size of the file, it
+ * takes the stamp of the old generation, and the first write rotates the
+ * empty file away. */
+TEST(rotation_time, empty_file_starts_the_interval_at_open) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[128];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  time_t then = time(NULL) - 1000;
+  struct tm tm;
+  gmtime_r(&then, &tm);
+  char stamp[32];
+  strftime(stamp, sizeof(stamp), "%Y%m%d%H%M%S", &tm);
+  char rotated_path[192];
+  snprintf(rotated_path, sizeof(rotated_path), "%s.%s", path, stamp);
+  bool prepared =
+      _write_file_with_mtime(rotated_path, "older generation\n", then) &&
+      _write_file_with_mtime(path, "", then);
+
+  clog_rotation_cfg_t cfg = {
+      .time_rotation_enabled = true,
+      .rotation_interval_us = 100000000,
+      .max_rotated_files = 5,
+  };
+  clog lg =
+      prepared ? clog_open_file(path, CLOG_INFO, &cfg, NULL) : CLOG_INVALID;
+  if (lg != CLOG_INVALID) {
+    clog_info(lg, "first record");
+    clog_close(lg);
+  }
+  int rotated = count_files_with_prefix(dir, "app.log.");
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(prepared);
+  REQUIRE_NE(lg, CLOG_INVALID);
+  REQUIRE_EQ(rotated, 1); /* the planted generation alone */
+}
+
+/* Counts the distinct rotated generations of "app.log" in dir: a file and its
+ * ".gz" form count once. */
+static int count_app_log_generations(const char *dir) {
+  DIR *d = opendir(dir);
+  if (!d) return -1;
+  char seen[64][40];
+  int n = 0;
+  struct dirent *e;
+  while ((e = readdir(d)) != NULL) {
+    if (strncmp(e->d_name, "app.log.", 8) != 0) continue;
+    char key[40];
+    snprintf(key, sizeof(key), "%s", e->d_name + 8);
+    size_t klen = strlen(key);
+    if (klen >= 3 && strcmp(key + klen - 3, ".gz") == 0) key[klen - 3] = '\0';
+    bool dup = false;
+    for (int i = 0; i < n && !dup; i++) dup = strcmp(seen[i], key) == 0;
+    if (!dup && n < 64) snprintf(seen[n++], sizeof(seen[0]), "%s", key);
+  }
+  closedir(d);
+  return n;
+}
+
+/* A deletion pass keeps an old generation while its compression runs. Once
+ * that compression ends, the old generation goes too, so the generations on
+ * disk are again exactly the newest max_rotated_files, with no older one
+ * left beside them. Here the first rotation's compression is held while two
+ * more rotations run with max_rotated_files == 1; the second generation is
+ * deleted and the first one is kept only because it is under compression.
+ *
+ * This test is non-vacuous: when nothing runs the deletion pass again after
+ * the held compression, the first generation outlives it, and the directory
+ * holds the first and the third generations with the second missing between
+ * them. */
+TEST(compression, old_generation_kept_for_compression_goes_when_it_ends) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[128];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  clog_rotation_cfg_t cfg = {
+      .size_rotation_enabled = true,
+      .max_file_size = 1,
+      .max_rotated_files = 1,
+      .compress_rotated = true,
+  };
+  clog lg = clog_open_file(path, CLOG_INFO, &cfg, NULL);
+  if (lg == CLOG_INVALID) cleanup_dir(dir, "app.log");
+  REQUIRE_NE(lg, CLOG_INVALID);
+
+  clog_test_hold_compressions(true);
+  clog_info(lg, "generation one");
+  bool opened = _wait_for_gz_dest_opened();
+  clog_info(lg, "generation two");
+  clog_info(lg, "generation three");
+  clog_test_hold_compressions(false);
+  clog_close(lg);
+
+  int gens = count_app_log_generations(dir);
+  bool has_one = false, has_three = false;
+  char gz_path[512];
+  char content[4096] = {0};
+  if (find_file_with_suffix(dir, ".gz", gz_path, sizeof(gz_path)) == 0) {
+    gunzip_read(gz_path, content, sizeof(content));
+    has_one = strstr(content, "generation one") != NULL;
+    has_three = strstr(content, "generation three") != NULL;
+  }
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(opened);
+  REQUIRE_EQ(gens, 1);
+  REQUIRE_FALSE(has_one);
+  REQUIRE_TRUE(has_three);
+}
+
+/* ------------------------------------------------------------------------ */
+/* Process exit with loggers still open                                      */
+/* ------------------------------------------------------------------------ */
+
+/* Every record "SEQ t=<thread> i=<index>" that dir holds, in the live file
+ * and in every rotated file, plain or compressed. seen has threads * per
+ * entries. It gives the number of records found, duplicates included, and
+ * -1 when a file cannot be read. */
+static long collect_seq_records(const char *dir, int threads, int per,
+                                unsigned char *seen) {
+  memset(seen, 0, (size_t)threads * (size_t)per);
+  DIR *d = opendir(dir);
+  if (!d) return -1;
+  long found = 0;
+  size_t cap = 64u * 1024u * 1024u;
+  char *buf = malloc(cap);
+  if (!buf) {
+    closedir(d);
+    return -1;
+  }
+  struct dirent *e;
+  while ((e = readdir(d)) != NULL) {
+    if (strncmp(e->d_name, "app.log", 7) != 0) continue;
+    char p[1024];
+    snprintf(p, sizeof(p), "%s/%s", dir, e->d_name);
+    size_t nlen = strlen(e->d_name);
+    size_t got = 0;
+    if (nlen >= 3 && strcmp(e->d_name + nlen - 3, ".gz") == 0) {
+      gzFile g = gzopen(p, "rb");
+      if (!g) {
+        found = -1;
+        break;
+      }
+      int r;
+      while (got < cap - 1 &&
+             (r = gzread(g, buf + got, (unsigned)(cap - 1 - got))) > 0)
+        got += (size_t)r;
+      gzclose(g);
+    } else {
+      int fd = open(p, O_RDONLY);
+      if (fd < 0) {
+        found = -1;
+        break;
+      }
+      ssize_t r;
+      while (got < cap - 1 && (r = read(fd, buf + got, cap - 1 - got)) > 0)
+        got += (size_t)r;
+      close(fd);
+    }
+    buf[got] = '\0';
+    for (const char *q = strstr(buf, "SEQ t="); q;
+         q = strstr(q + 1, "SEQ t=")) {
+      int t = -1, i = -1;
+      if (sscanf(q, "SEQ t=%d i=%d", &t, &i) == 2 && t >= 0 && t < threads &&
+          i >= 0 && i < per) {
+        seen[(size_t)t * (size_t)per + (size_t)i] = 1;
+        found++;
+      }
+    }
+  }
+  free(buf);
+  closedir(d);
+  return found;
+}
+
+/* Waits for the child pid for at most bound_ms. It kills a child that does
+ * not finish, and gives false then. */
+static bool wait_child_bounded(pid_t pid, int bound_ms, int *status) {
+  for (int waited = 0; waited < bound_ms; waited += 10) {
+    if (waitpid(pid, status, WNOHANG) == pid) return true;
+    usleep(10000);
+  }
+  kill(pid, SIGKILL);
+  waitpid(pid, status, 0);
+  return false;
+}
+
+/* A child of the tests below marks that it reached its exit() by creating
+ * "<dir>/app.logready". The parent reads the marker instead of the exit
+ * status, because a sanitizer or valgrind replaces the exit status of a
+ * child that it reports on, for reasons that are not this test. */
+/* The children below end with exit(), which runs the destructors of this
+ * file in the child. The fixture of
+ * clogger_deferred_release.a_racing_pair_left_open_defers_then_releases
+ * would then close, in the child, loggers that the parent opened before the
+ * fork(), which is outside the supported use of fork(). Each child forgets
+ * them first. */
+static void forget_parent_fixtures_in_child(void) {
+  g_deferred_release_a = CLOG_INVALID;
+  g_deferred_release_b = CLOG_INVALID;
+}
+
+static void mark_child_ready(const char *log_path) {
+  char p[512];
+  snprintf(p, sizeof(p), "%sready", log_path);
+  int fd = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd >= 0) close(fd);
+}
+
+static bool child_was_ready(const char *dir) {
+  char p[512];
+  snprintf(p, sizeof(p), "%s/app.logready", dir);
+  return access(p, F_OK) == 0;
+}
+
+/* The flush interval that never fires within a test, so that only the exit
+ * drain can deliver a record. */
+#define EXIT_TEST_NO_TIMER_US 3600000000ULL
+
+typedef struct {
+  clog lg;
+  int t;
+  int per;
+} exit_seq_arg_t;
+
+/* Logs through a->lg, a logger that the main thread of the child derived.
+ * The worker threads only log, and every open, derive and close runs on the
+ * main thread of the child, because ThreadSanitizer misreads the lock of the
+ * handle table that the fork handling initializes afresh in a child when a
+ * second thread of that child takes it. */
+static void *exit_seq_writer(void *arg) {
+  exit_seq_arg_t *a = (exit_seq_arg_t *)arg;
+  for (int i = 0; i < a->per; i++) clog_info(a->lg, "SEQ t=%d i=%d", a->t, i);
+  return NULL;
+}
+
+/* The child of the exit tests below: an async logger in fmt and with the
+ * queue size qsize, `threads` threads that each log `per` records and join,
+ * then exit(1) with the logger still open. */
+static void exit_drain_child(const char *path, clog_format_t fmt, size_t qsize,
+                             int threads, int per) {
+  forget_parent_fixtures_in_child();
+  clog_async_cfg_t acfg = {.queue_size = qsize,
+                           .flush_interval_us = EXIT_TEST_NO_TIMER_US};
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &acfg, NULL);
+  if (lg == CLOG_INVALID) _exit(3);
+  clog_set_format(lg, fmt);
+  pthread_t tids[8];
+  exit_seq_arg_t args[8];
+  int started = 0;
+  for (int t = 0; t < threads && t < 8; t++) {
+    args[t] = (exit_seq_arg_t){.lg = clog_derive(lg), .t = t, .per = per};
+    if (args[t].lg == CLOG_INVALID) break;
+    if (pthread_create(&tids[t], NULL, exit_seq_writer, &args[t]) != 0) {
+      clog_close(args[t].lg);
+      break;
+    }
+    started++;
+  }
+  for (int t = 0; t < started; t++) pthread_join(tids[t], NULL);
+  for (int t = 0; t < started; t++) clog_close(args[t].lg);
+  if (started != threads) _exit(4);
+  exit(1);
+}
+
+/* Runs exit_drain_child() in a child and gives how many of the records it
+ * logged are in the file, or -1. */
+static long run_exit_drain_child(const char *dir, clog_format_t fmt,
+                                 size_t qsize, int threads, int per) {
+  char path[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  /* The child ends with exit(), which flushes stdio, so nothing that this
+   * process has buffered may reach the output a second time. */
+  fflush(NULL);
+  pid_t pid = fork();
+  if (pid == 0) exit_drain_child(path, fmt, qsize, threads, per);
+  if (pid < 0) return -1;
+  int status = 0;
+  if (!wait_child_bounded(pid, 120000, &status)) return -1;
+  if (!WIFEXITED(status)) return -1;
+  unsigned char *seen = malloc((size_t)threads * (size_t)per);
+  if (!seen) return -1;
+  long found = collect_seq_records(dir, threads, per, seen);
+  long distinct = 0;
+  for (size_t i = 0; i < (size_t)threads * (size_t)per; i++)
+    distinct += seen[i];
+  free(seen);
+  if (found < 0) return -1;
+  return found == distinct ? distinct : -1;
+}
+
+/* The child of the test below. Its async logger has a queue of one record
+ * and a writer thread that spends 3 s on each record. Record A keeps the
+ * writer busy, and record B then fills the queue: B returns only once the
+ * writer took A, and the writer cannot take B before it is done with A. The
+ * drain then sends its flush request without a wait, as it does once its
+ * budget is spent, while the queue is full. The child reports '1' when the
+ * drain left the target alone, '0' when it did not, and 'x' on a setup
+ * failure. */
+static void exit_drain_full_queue_child(const char *path, int report_fd) {
+  forget_parent_fixtures_in_child();
+  char verdict = 'x';
+  clog_async_cfg_t acfg = {.queue_size = 1,
+                           .flush_interval_us = EXIT_TEST_NO_TIMER_US};
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &acfg, NULL);
+  if (lg != CLOG_INVALID) {
+    clog_test_set_writer_job_delay_us(3000000);
+    clog_info(lg, "record A");
+    clog_info(lg, "record B");
+    clog_test_force_exit_drain_send_without_wait(true);
+    clog_test_run_exit_drain();
+    verdict = clog_test_exit_drain_left_target(lg) ? '1' : '0';
+  }
+  ssize_t w;
+  do {
+    w = write(report_fd, &verdict, 1);
+  } while (w < 0 && errno == EINTR);
+  _exit(0);
+}
+
+/*
+ * A drain whose budget is spent sends its flush request without a wait. To a
+ * bounded queue that is full, that send answers ccol_container_full, and the
+ * drain must then leave the target alone, as for a writer thread that did
+ * not answer in time: it never takes the full queue for a drained one.
+ *
+ * This test is non-vacuous: a drain that treats ccol_container_full as
+ * anything but "not drained" goes on to turn sending off on a queue that
+ * still holds records, and does not leave the target.
+ */
+TEST(exit_drain, a_full_queue_at_the_end_of_the_budget_is_left_alone) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  int pfd[2];
+  bool piped = pipe(pfd) == 0;
+  fflush(NULL);
+  pid_t pid = piped ? fork() : -1;
+  if (pid == 0) {
+    close(pfd[0]);
+    exit_drain_full_queue_child(path, pfd[1]);
+  }
+  char verdict = 0;
+  int status = 0;
+  bool waited = false;
+  if (piped) {
+    close(pfd[1]);
+    if (pid > 0) {
+      ssize_t r;
+      do {
+        r = read(pfd[0], &verdict, 1);
+      } while (r < 0 && errno == EINTR);
+      waited = wait_child_bounded(pid, 60000, &status);
+    }
+    close(pfd[0]);
+  }
+  cleanup_dir(dir, "app.log");
+  REQUIRE_TRUE(piped);
+  REQUIRE_GT(pid, 0);
+  REQUIRE_TRUE(waited);
+  REQUIRE_EQ(verdict, '1');
+}
+
+/*
+ * A process that calls exit() with an async logger still open keeps every
+ * record that it logged. The exit drain delivers the queue and the batch,
+ * for every format and for a bounded and an unbounded queue. The flush
+ * interval never fires here, so only that drain can deliver a record.
+ *
+ * This test is non-vacuous: without the exit drain the writer thread dies
+ * with the process, and the file holds none of these records, or only the
+ * batches that reached the flush size.
+ */
+TEST(exit_drain, exit_keeps_every_record_of_an_async_logger) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  const clog_format_t fmts[3] = {CLOG_FMT_LOGFMT, CLOG_FMT_JSON,
+                                 CLOG_FMT_SYSLOG};
+  const size_t qsizes[2] = {0, 16};
+  long got[3][2];
+  for (int f = 0; f < 3; f++) {
+    for (int q = 0; q < 2; q++) {
+      char dir[64];
+      got[f][q] = -2;
+      if (make_cwd_tmpdir(dir, sizeof(dir)) != 0) continue;
+      got[f][q] = run_exit_drain_child(dir, fmts[f], qsizes[q], 1, 300);
+      cleanup_dir(dir, "app.log");
+    }
+  }
+  for (int f = 0; f < 3; f++)
+    for (int q = 0; q < 2; q++) REQUIRE_EQ(got[f][q], 300L);
+}
+
+/*
+ * Several threads log through derived loggers and finish, and the process
+ * exits: every record of every thread is on disk, once. That is the shape
+ * of a return from main() while the root logger is still open.
+ *
+ * This test is non-vacuous: without the exit drain most of these records
+ * stay in the queue and are lost.
+ */
+TEST(exit_drain, exit_after_threads_finish_keeps_every_record) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  long unbounded = run_exit_drain_child(dir, CLOG_FMT_LOGFMT, 0, 4, 5000);
+  cleanup_dir(dir, "app.log");
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  long bounded = run_exit_drain_child(dir, CLOG_FMT_JSON, 64, 4, 5000);
+  cleanup_dir(dir, "app.log");
+  REQUIRE_EQ(unbounded, 20000L);
+  REQUIRE_EQ(bounded, 20000L);
+}
+
+/* The child of the compression exit tests: a rotating, compressing logger
+ * that rotates once, then exit(0) while that compression runs, or is held
+ * when hold is true. */
+static void exit_compress_child(const char *path, bool hold) {
+  forget_parent_fixtures_in_child();
+  clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
+                             .max_file_size = 1,
+                             .max_rotated_files = 5,
+                             .compress_rotated = true};
+  clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  if (lg == CLOG_INVALID) _exit(3);
+  if (hold) {
+    clog_test_set_exit_drain_budget_ms(200);
+    clog_test_hold_compressions(true);
+  }
+  clog_info(lg, "COMPRESSEDRECORDBODY");
+  if (hold) {
+    bool opened = false;
+    for (int i = 0; i < 20000 && !opened; i++) {
+      opened = clog_test_gz_dest_opened();
+      if (!opened) usleep(1000);
+    }
+    if (!opened) _exit(4);
+  }
+  mark_child_ready(path);
+  exit(0);
+}
+
+/* What a directory holds after exit_compress_child(). */
+typedef struct {
+  int plain;          /* rotated files that are not compressed */
+  int gz;             /* ".gz" files */
+  int invalid_gz;     /* ".gz" files that gunzip -t rejects */
+  int tmp;            /* unfinished compression outputs */
+  bool body_in_plain; /* a plain rotated file holds the record */
+  bool body_in_gz;    /* a ".gz" file holds the record */
+} exit_compress_state_t;
+
+static void inspect_exit_compress_dir(const char *dir,
+                                      exit_compress_state_t *st) {
+  memset(st, 0, sizeof(*st));
+  DIR *d = opendir(dir);
+  if (!d) return;
+  struct dirent *e;
+  while ((e = readdir(d)) != NULL) {
+    if (strncmp(e->d_name, "app.log.", 8) != 0) continue;
+    char p[512];
+    snprintf(p, sizeof(p), "%s/%s", dir, e->d_name);
+    size_t nlen = strlen(e->d_name);
+    char content[4096];
+    if (nlen > 7 && strcmp(e->d_name + nlen - 7, ".gz.tmp") == 0) {
+      st->tmp++;
+    } else if (nlen > 3 && strcmp(e->d_name + nlen - 3, ".gz") == 0) {
+      st->gz++;
+      if (gunzip_test(p) != 0) st->invalid_gz++;
+      gunzip_read(p, content, sizeof(content));
+      if (strstr(content, "COMPRESSEDRECORDBODY")) st->body_in_gz = true;
+    } else {
+      st->plain++;
+      read_file(p, content, sizeof(content));
+      if (strstr(content, "COMPRESSEDRECORDBODY")) st->body_in_plain = true;
+    }
+  }
+  closedir(d);
+}
+
+static bool run_exit_compress_child(const char *dir, bool hold) {
+  char path[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  /* The child ends with exit(), which flushes stdio, so nothing that this
+   * process has buffered may reach the output a second time. */
+  fflush(NULL);
+  pid_t pid = fork();
+  if (pid == 0) exit_compress_child(path, hold);
+  if (pid < 0) return false;
+  int status = 0;
+  if (!wait_child_bounded(pid, 60000, &status)) return false;
+  return WIFEXITED(status) && child_was_ready(dir);
+}
+
+/*
+ * exit() while a compression runs finishes it within the budget of the exit
+ * drain: the rotated record is in one valid ".gz" file, and the source is
+ * gone.
+ *
+ * This test is non-vacuous: without the exit drain the process ends in the
+ * middle of the compression, and the directory holds the source and, at
+ * most, an unfinished output.
+ */
+TEST(exit_drain, exit_finishes_a_running_compression) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  bool ran = run_exit_compress_child(dir, false);
+  exit_compress_state_t st;
+  inspect_exit_compress_dir(dir, &st);
+  cleanup_dir(dir, "app.log");
+  REQUIRE_TRUE(ran);
+  REQUIRE_EQ(st.gz, 1);
+  REQUIRE_EQ(st.invalid_gz, 0);
+  REQUIRE_EQ(st.tmp, 0);
+  REQUIRE_EQ(st.plain, 0);
+  REQUIRE_TRUE(st.body_in_gz);
+}
+
+/*
+ * exit() while a compression cannot finish within the budget of the exit
+ * drain abandons it cleanly: no ".gz" file and no unfinished output remain,
+ * and the uncompressed source keeps the record.
+ *
+ * This test is non-vacuous: a compression that writes its ".gz" name
+ * directly leaves an empty or truncated ".gz" file beside the source.
+ */
+TEST(exit_drain, exit_abandons_a_compression_that_cannot_finish) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  bool ran = run_exit_compress_child(dir, true);
+  exit_compress_state_t st;
+  inspect_exit_compress_dir(dir, &st);
+  cleanup_dir(dir, "app.log");
+  REQUIRE_TRUE(ran);
+  REQUIRE_EQ(st.gz, 0);
+  REQUIRE_EQ(st.tmp, 0);
+  REQUIRE_EQ(st.plain, 1);
+  REQUIRE_TRUE(st.body_in_plain);
+}
+
+/* A custom allocator whose free() calls exit() on any thread but the one
+ * that armed it, once. It puts exit() on the writer thread or on the
+ * compressor thread of a logger, which are the only threads that call the
+ * allocator of a logger besides the threads that log. */
+static _Atomic bool g_exit_on_foreign_free;
+static pthread_t g_exit_free_owner;
+
+static void exit_on_foreign_free(void *p) {
+  if (atomic_load(&g_exit_on_foreign_free) &&
+      !pthread_equal(pthread_self(), g_exit_free_owner)) {
+    atomic_store(&g_exit_on_foreign_free, false);
+    exit(0);
+  }
+  free(p);
+}
+
+/* The child: a logger that uses that allocator, async or compressing, and
+ * exit() from its writer thread or its compressor thread. The exit drain
+ * must not wait for the thread that runs it, and the budget is far longer
+ * than the bound of the parent, so a drain that waits fails the test. */
+static void exit_from_worker_child(const char *path, bool compress) {
+  forget_parent_fixtures_in_child();
+  ccol_memmgmt_procs_t mp = {.malloc = malloc,
+                             .free = exit_on_foreign_free,
+                             .calloc = calloc,
+                             .realloc = realloc};
+  clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
+                             .max_file_size = 1,
+                             .max_rotated_files = 5,
+                             .compress_rotated = true};
+  clog_async_cfg_t acfg = {.flush_interval_us = EXIT_TEST_NO_TIMER_US};
+  clog lg = clog_open_file_mp(path, CLOG_INFO, compress ? &cfg : NULL,
+                              compress ? NULL : &acfg, &mp);
+  if (lg == CLOG_INVALID) _exit(3);
+  clog_test_set_exit_drain_budget_ms(600000);
+  mark_child_ready(path);
+  g_exit_free_owner = pthread_self();
+  atomic_store(&g_exit_on_foreign_free, true);
+  clog_info(lg, "WORKEREXITBODY");
+  /* The writer thread or the compressor thread ends the process. */
+  for (;;) pause();
+}
+
+static bool run_exit_from_worker_child(const char *dir, bool compress) {
+  char path[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  /* The child ends with exit(), which flushes stdio, so nothing that this
+   * process has buffered may reach the output a second time. */
+  fflush(NULL);
+  pid_t pid = fork();
+  if (pid == 0) exit_from_worker_child(path, compress);
+  if (pid < 0) return false;
+  int status = 0;
+  if (!wait_child_bounded(pid, 60000, &status)) return false;
+  return WIFEXITED(status) && child_was_ready(dir);
+}
+
+/*
+ * exit() on the writer thread or on the compressor thread of a logger ends
+ * the process: the exit drain skips the target that the calling thread
+ * serves, and does not wait for itself.
+ *
+ * This test is non-vacuous: without that skip, the drain waits for its own
+ * flush request on the writer thread until its budget runs out, and on the
+ * compressor thread it locks the mutex that the thread already holds.
+ */
+TEST(exit_drain, exit_from_the_writer_or_compressor_thread_does_not_hang) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  bool writer_ok = run_exit_from_worker_child(dir, false);
+  cleanup_dir(dir, "app.log");
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  bool compressor_ok = run_exit_from_worker_child(dir, true);
+  cleanup_dir(dir, "app.log");
+  REQUIRE_TRUE(writer_ok);
+  REQUIRE_TRUE(compressor_ok);
+}
+
+/* The thread of the lock tests below: it takes a lock of the logger and
+ * never lets it go. */
+typedef struct {
+  clog lg; /* CLOG_INVALID: the table lock */
+  _Atomic bool locked;
+} exit_lock_holder_t;
+
+static void *exit_lock_holder(void *arg) {
+  exit_lock_holder_t *h = (exit_lock_holder_t *)arg;
+  if (h->lg == CLOG_INVALID)
+    clog_test_lock_table_forever();
+  else
+    clog_test_lock_target_forever(h->lg);
+  atomic_store(&h->locked, true);
+  for (;;) pause();
+  return NULL;
+}
+
+/* The child: a logger that arms the exit drain (a compressing, rotating one
+ * whose first record rotates and starts its compressor thread, or an async
+ * one), a thread that holds the mutex of that logger or the table lock for
+ * ever, and exit(). The budget of the drain is short, and the parent bounds
+ * the whole child far above it. */
+static void exit_with_held_lock_child(const char *path, bool table_lock) {
+  forget_parent_fixtures_in_child();
+  clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
+                             .max_file_size = 1,
+                             .max_rotated_files = 5,
+                             .compress_rotated = true};
+  clog_async_cfg_t acfg = {.flush_interval_us = EXIT_TEST_NO_TIMER_US};
+  clog lg = clog_open_file_mp(path, CLOG_INFO, table_lock ? NULL : &cfg,
+                              table_lock ? &acfg : NULL, NULL);
+  if (lg == CLOG_INVALID) _exit(3);
+  clog_info(lg, "HELDLOCKBODY");
+  clog_test_set_exit_drain_budget_ms(300);
+  static exit_lock_holder_t holder;
+  holder.lg = table_lock ? CLOG_INVALID : lg;
+  atomic_store(&holder.locked, false);
+  pthread_t tid;
+  if (pthread_create(&tid, NULL, exit_lock_holder, &holder) != 0) _exit(4);
+  for (int i = 0; i < 20000 && !atomic_load(&holder.locked); i++) usleep(1000);
+  if (!atomic_load(&holder.locked)) _exit(5);
+  mark_child_ready(path);
+  exit(0);
+}
+
+/* Runs the child and gives true when it ended with exit() within
+ * bound_ms. */
+static bool run_exit_with_held_lock_child(const char *dir, bool table_lock,
+                                          int bound_ms) {
+  char path[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  fflush(NULL);
+  pid_t pid = fork();
+  if (pid == 0) exit_with_held_lock_child(path, table_lock);
+  if (pid < 0) return false;
+  int status = 0;
+  if (!wait_child_bounded(pid, bound_ms, &status)) return false;
+  return WIFEXITED(status) && child_was_ready(dir);
+}
+
+/*
+ * exit() while another thread holds the mutex of a compressing logger, or the
+ * lock of the table of loggers, for ever: the exit drain gives up on that lock
+ * within its budget, and the process ends.
+ *
+ * This test is non-vacuous: a drain that waits for either lock without a
+ * bound never returns, and the parent kills the child at its bound.
+ */
+TEST(exit_drain, exit_with_a_lock_held_for_ever_ends_within_the_budget) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  bool target_ok = run_exit_with_held_lock_child(dir, false, 30000);
+  cleanup_dir(dir, "app.log");
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  bool table_ok = run_exit_with_held_lock_child(dir, true, 30000);
+  cleanup_dir(dir, "app.log");
+  REQUIRE_TRUE(target_ok);
+  REQUIRE_TRUE(table_ok);
+}
+
+/* ------------------------------------------------------------------------ */
+/* Unfinished compressions of an earlier process                             */
+/* ------------------------------------------------------------------------ */
+
+/* The child: a rotating, compressing logger whose compression is held after
+ * it created its output, and a process that then dies without any exit
+ * handler, as a crash or a kill ends it. */
+static void die_during_compression_child(const char *path) {
+  clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
+                             .max_file_size = 1,
+                             .max_rotated_files = 5,
+                             .compress_rotated = true};
+  clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  if (lg == CLOG_INVALID) _exit(3);
+  clog_test_hold_compressions(true);
+  clog_info(lg, "COMPRESSEDRECORDBODY");
+  for (int i = 0; i < 20000; i++) {
+    if (clog_test_gz_dest_opened()) {
+      mark_child_ready(path);
+      _exit(0);
+    }
+    usleep(1000);
+  }
+  _exit(4);
+}
+
+/*
+ * A process that dies in the middle of a compression leaves no ".gz" file:
+ * the output takes that name only once it is complete. The next open of the
+ * logger removes the unfinished output and compresses the source again.
+ *
+ * This test is non-vacuous: a compression that writes under the ".gz" name
+ * from the start leaves an empty ".gz" file beside the source here.
+ */
+TEST(compression, a_death_during_compression_leaves_no_gz_and_open_redoes_it) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  fflush(NULL);
+  pid_t pid = fork();
+  if (pid == 0) die_during_compression_child(path);
+  int status = 0;
+  bool ran = pid > 0 && wait_child_bounded(pid, 60000, &status) &&
+             WIFEXITED(status) && child_was_ready(dir);
+  exit_compress_state_t died;
+  inspect_exit_compress_dir(dir, &died);
+
+  clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
+                             .max_file_size = 1 << 20,
+                             .max_rotated_files = 5,
+                             .compress_rotated = true};
+  clog lg = clog_open_file(path, CLOG_INFO, &cfg, NULL);
+  if (lg != CLOG_INVALID) clog_close(lg);
+  exit_compress_state_t reopened;
+  inspect_exit_compress_dir(dir, &reopened);
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(ran);
+  REQUIRE_EQ(died.gz, 0);
+  REQUIRE_EQ(died.tmp, 1);
+  REQUIRE_EQ(died.plain, 1);
+  REQUIRE_NE(lg, CLOG_INVALID);
+  REQUIRE_EQ(reopened.gz, 1);
+  REQUIRE_EQ(reopened.invalid_gz, 0);
+  REQUIRE_EQ(reopened.tmp, 0);
+  REQUIRE_EQ(reopened.plain, 0);
+  REQUIRE_TRUE(reopened.body_in_gz);
+}
+
+static bool write_whole_file(const char *path, const char *data, size_t len) {
+  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) return false;
+  bool ok = write(fd, data, len) == (ssize_t)len;
+  close(fd);
+  return ok;
+}
+
+/*
+ * An open of a compressing logger finishes what an earlier process left
+ * unfinished: a truncated ".gz" file beside its source, and an unfinished
+ * output beside its source, are both removed, and each source is compressed
+ * again. Nothing of the earlier generations is lost, and every rotated file
+ * ends as one valid ".gz" file.
+ *
+ * This test is non-vacuous: without that recovery the truncated ".gz" file
+ * stays, gunzip rejects it, and the sources and the unfinished output stay
+ * uncompressed on disk.
+ */
+TEST(compression, open_redoes_compressions_that_an_earlier_process_left) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char p[256];
+  bool setup = true;
+  snprintf(p, sizeof(p), "%s/app.log.20200101000000", dir);
+  setup &= write_whole_file(p, "OLDGENONE\n", 10);
+  /* A truncated gzip stream: the header alone. */
+  snprintf(p, sizeof(p), "%s/app.log.20200101000000.gz", dir);
+  setup &= write_whole_file(p, "\x1f\x8b\x08\x00", 4);
+  snprintf(p, sizeof(p), "%s/app.log.20200101000001", dir);
+  setup &= write_whole_file(p, "OLDGENTWO\n", 10);
+  snprintf(p, sizeof(p), "%s/app.log.20200101000001.gz.tmp", dir);
+  setup &= write_whole_file(p, "\x1f\x8b", 2);
+
+  char path[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
+                             .max_file_size = 1 << 20,
+                             .max_rotated_files = 5,
+                             .compress_rotated = true};
+  clog lg = setup ? clog_open_file(path, CLOG_INFO, &cfg, NULL) : CLOG_INVALID;
+  if (lg != CLOG_INVALID) clog_close(lg);
+
+  exit_compress_state_t st;
+  inspect_exit_compress_dir(dir, &st);
+  char one[256] = {0}, two[256] = {0};
+  snprintf(p, sizeof(p), "%s/app.log.20200101000000.gz", dir);
+  gunzip_read(p, one, sizeof(one));
+  snprintf(p, sizeof(p), "%s/app.log.20200101000001.gz", dir);
+  gunzip_read(p, two, sizeof(two));
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(setup);
+  REQUIRE_NE(lg, CLOG_INVALID);
+  REQUIRE_EQ(st.tmp, 0);
+  REQUIRE_EQ(st.plain, 0);
+  REQUIRE_EQ(st.gz, 2);
+  REQUIRE_EQ(st.invalid_gz, 0);
+  REQUIRE_STREQ(one, "OLDGENONE\n");
+  REQUIRE_STREQ(two, "OLDGENTWO\n");
+}
+
+/*
+ * A compressed rotated file gets the permission bits of the file that it
+ * compresses, as gzip(1) gives them, and not the default of the umask.
+ *
+ * This test is non-vacuous: a ".gz" file created with 0666 under a umask of
+ * 022 gets 0644, not the 0640 of its source.
+ */
+TEST(compression, compressed_file_keeps_the_mode_of_its_source) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  mode_t old_mask = umask(022);
+  clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
+                             .max_file_size = 1,
+                             .max_rotated_files = 5,
+                             .compress_rotated = true};
+  clog lg = clog_open_file(path, CLOG_INFO, &cfg, NULL);
+  bool chmod_ok = lg != CLOG_INVALID && chmod(path, 0640) == 0;
+  if (lg != CLOG_INVALID) {
+    clog_info(lg, "MODERECORD");
+    clog_close(lg);
+  }
+  umask(old_mask);
+  char gz[512];
+  struct stat st;
+  bool have_gz = find_file_with_suffix(dir, ".gz", gz, sizeof(gz)) == 0 &&
+                 stat(gz, &st) == 0;
+  mode_t mode = have_gz ? (st.st_mode & 0777) : 0;
+  cleanup_dir(dir, "app.log");
+  REQUIRE_TRUE(chmod_ok);
+  REQUIRE_TRUE(have_gz);
+  REQUIRE_EQ((unsigned)mode, 0640u);
+}
+
+/* ------------------------------------------------------------------------ */
+/* One file opened twice in one process                                      */
+/* ------------------------------------------------------------------------ */
+
+typedef struct {
+  clog lg;
+  int t;
+  int per;
+} same_file_arg_t;
+
+/* Thread 1 logs slowly, so that whenever the two handles have two targets,
+ * its records keep landing in a file that the other thread rotated away,
+ * for long enough for a compression of that file to finish. */
+static void *same_file_writer(void *arg) {
+  same_file_arg_t *a = (same_file_arg_t *)arg;
+  for (int i = 0; i < a->per; i++) {
+    clog_info(a->lg, "SEQ t=%d i=%d", a->t, i);
+    if (a->t == 1) usleep(200);
+  }
+  return NULL;
+}
+
+/*
+ * Two opens of one rotating, compressing file in one process, through two
+ * spellings of the path, share one target. Records that two threads log
+ * through the two handles while the file rotates and compresses are all on
+ * disk, once each.
+ *
+ * This test is non-vacuous: two independent targets on one file each rename
+ * and compress files that the other one still writes, and records are lost.
+ */
+TEST(same_file, two_rotating_opens_share_one_target_and_lose_nothing) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[256], path2[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  snprintf(path2, sizeof(path2), "./%s/../%s/app.log", dir, dir);
+  clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
+                             .max_file_size = 4096,
+                             .max_rotated_files = 1000,
+                             .compress_rotated = true};
+  clog a = clog_open_file(path, CLOG_INFO, &cfg, NULL);
+  clog b = clog_open_file(path2, CLOG_INFO, &cfg, NULL);
+  enum { PER = 2000 };
+  bool started[2] = {false, false};
+  pthread_t tids[2];
+  same_file_arg_t args[2] = {{.lg = a, .t = 0, .per = PER},
+                             {.lg = b, .t = 1, .per = PER}};
+  if (a != CLOG_INVALID && b != CLOG_INVALID)
+    for (int t = 0; t < 2; t++)
+      started[t] =
+          pthread_create(&tids[t], NULL, same_file_writer, &args[t]) == 0;
+  for (int t = 0; t < 2; t++)
+    if (started[t]) pthread_join(tids[t], NULL);
+  if (a != CLOG_INVALID) clog_close(a);
+  if (b != CLOG_INVALID) clog_close(b);
+
+  unsigned char *seen = malloc(2 * PER);
+  long found = seen ? collect_seq_records(dir, 2, PER, seen) : -1;
+  long distinct = 0;
+  for (int i = 0; seen && i < 2 * PER; i++) distinct += seen[i];
+  free(seen);
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_NE(a, CLOG_INVALID);
+  REQUIRE_NE(b, CLOG_INVALID);
+  REQUIRE_TRUE(started[0] && started[1]);
+  REQUIRE_EQ(distinct, (long)(2 * PER));
+  REQUIRE_EQ(found, (long)(2 * PER));
+}
+
+/*
+ * A rotation_interval_us of 0 is the default interval, and a flush_interval_us
+ * of 0 is the default flush interval: a second open of the same file that
+ * spells either default out joins the first one, and an open with a
+ * different interval does not. The join compares the configurations after
+ * the defaults are applied, so this pins the meaning of 0 exactly.
+ *
+ * This test is non-vacuous: when 0 is kept as it is, or resolved to another
+ * value, the open that spells out the default fails.
+ */
+TEST(same_file, a_zero_interval_is_the_default_interval) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  clog_rotation_cfg_t zero = {.time_rotation_enabled = true,
+                              .rotation_interval_us = 0,
+                              .max_rotated_files = 3};
+  clog_rotation_cfg_t spelled = zero;
+  spelled.rotation_interval_us = CLOG_DEFAULT_ROTATION_INTERVAL_US;
+  clog_rotation_cfg_t other = zero;
+  other.rotation_interval_us = CLOG_DEFAULT_ROTATION_INTERVAL_US + 1000000u;
+  clog_async_cfg_t azero = {.flush_interval_us = 0};
+  clog_async_cfg_t aspelled = {.flush_interval_us =
+                                   CLOG_DEFAULT_ASYNC_FLUSH_INTERVAL_US};
+  clog_async_cfg_t aother = {.flush_interval_us =
+                                 CLOG_DEFAULT_ASYNC_FLUSH_INTERVAL_US + 1u};
+
+  clog a = clog_open_file(path, CLOG_INFO, &zero, &azero);
+  clog b = clog_open_file(path, CLOG_INFO, &spelled, &aspelled);
+  clog diff_rot = clog_open_file(path, CLOG_INFO, &other, &azero);
+  clog diff_flush = clog_open_file(path, CLOG_INFO, &zero, &aother);
+  if (diff_flush != CLOG_INVALID) clog_close(diff_flush);
+  if (diff_rot != CLOG_INVALID) clog_close(diff_rot);
+  if (b != CLOG_INVALID) clog_close(b);
+  if (a != CLOG_INVALID) clog_close(a);
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_NE(a, CLOG_INVALID);
+  REQUIRE_NE(b, CLOG_INVALID);
+  REQUIRE_EQ(diff_rot, CLOG_INVALID);
+  REQUIRE_EQ(diff_flush, CLOG_INVALID);
+}
+
+/*
+ * A second open of a file that a rotating logger of this process writes
+ * fails when its configuration differs: another rotation, no rotation,
+ * async against synchronous. Two opens that both do not rotate stay two
+ * independent loggers, and an open after the last close works again.
+ */
+TEST(same_file, a_second_open_with_another_configuration_fails) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
+                             .max_file_size = 4096,
+                             .max_rotated_files = 3,
+                             .compress_rotated = true};
+  clog_rotation_cfg_t other = cfg;
+  other.max_rotated_files = 4;
+  clog_async_cfg_t acfg = {0};
+
+  clog a = clog_open_file(path, CLOG_INFO, &cfg, NULL);
+  clog diff_rot = clog_open_file(path, CLOG_INFO, &other, NULL);
+  clog no_rot = clog_open_file(path, CLOG_INFO, NULL, NULL);
+  clog async = clog_open_file(path, CLOG_INFO, &cfg, &acfg);
+  clog same = clog_open_file(path, CLOG_DEBUG, &cfg, NULL);
+  clog_level_t same_level = same != CLOG_INVALID ? clog_get_level(same) : 0;
+  clog_level_t a_level = a != CLOG_INVALID ? clog_get_level(a) : 0;
+  if (same != CLOG_INVALID) clog_close(same);
+  if (a != CLOG_INVALID) clog_close(a);
+  clog again = clog_open_file(path, CLOG_INFO, NULL, NULL);
+  clog again2 = clog_open_file(path, CLOG_INFO, NULL, NULL);
+  if (again != CLOG_INVALID) clog_close(again);
+  if (again2 != CLOG_INVALID) clog_close(again2);
+  if (diff_rot != CLOG_INVALID) clog_close(diff_rot);
+  if (no_rot != CLOG_INVALID) clog_close(no_rot);
+  if (async != CLOG_INVALID) clog_close(async);
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_NE(a, CLOG_INVALID);
+  REQUIRE_EQ(diff_rot, CLOG_INVALID);
+  REQUIRE_EQ(no_rot, CLOG_INVALID);
+  REQUIRE_EQ(async, CLOG_INVALID);
+  REQUIRE_NE(same, CLOG_INVALID);
+  REQUIRE_EQ((int)same_level, (int)CLOG_DEBUG);
+  REQUIRE_EQ((int)a_level, (int)CLOG_INFO);
+  REQUIRE_NE(again, CLOG_INVALID);
+  REQUIRE_NE(again2, CLOG_INVALID);
+}
+
+/* ------------------------------------------------------------------------ */
+/* Bounded ends of the process                                               */
+/* ------------------------------------------------------------------------ */
+
+#include <sys/ioctl.h>
+
+/* Gives the capacity of the pipe whose ends are rd and wr, which must be
+ * empty, and leaves it empty: it fills the pipe in non-blocking mode and
+ * reads everything back. It gives 0 on failure. */
+static size_t pipe_capacity(int rd, int wr) {
+  int wfl = fcntl(wr, F_GETFL);
+  int rfl = fcntl(rd, F_GETFL);
+  if (wfl < 0 || rfl < 0) return 0;
+  if (fcntl(wr, F_SETFL, wfl | O_NONBLOCK) != 0) return 0;
+  static char chunk[4096];
+  size_t cap = 0;
+  for (;;) {
+    ssize_t w = write(wr, chunk, sizeof(chunk));
+    if (w > 0) {
+      cap += (size_t)w;
+      continue;
+    }
+    if (w < 0 && errno == EINTR) continue;
+    if (w < 0 && errno == EAGAIN) {
+      /* Room for less than a chunk can remain; one byte at a time. */
+      while (write(wr, chunk, 1) == 1) cap++;
+    }
+    break;
+  }
+  (void)fcntl(wr, F_SETFL, wfl);
+  (void)fcntl(rd, F_SETFL, rfl | O_NONBLOCK);
+  while (read(rd, chunk, sizeof(chunk)) > 0) {
+  }
+  (void)fcntl(rd, F_SETFL, rfl);
+  return cap;
+}
+
+/* Fills the empty pipe (rd, wr) completely and leaves wr in blocking mode.
+ * It gives false on failure. */
+static bool fill_pipe(int rd, int wr) {
+  size_t cap = pipe_capacity(rd, wr);
+  if (cap == 0) return false;
+  int wfl = fcntl(wr, F_GETFL);
+  if (wfl < 0 || fcntl(wr, F_SETFL, wfl | O_NONBLOCK) != 0) return false;
+  static char chunk[4096];
+  size_t put = 0;
+  while (put < cap) {
+    size_t n = cap - put < sizeof(chunk) ? cap - put : sizeof(chunk);
+    ssize_t w = write(wr, chunk, n);
+    if (w <= 0) break;
+    put += (size_t)w;
+  }
+  (void)fcntl(wr, F_SETFL, wfl);
+  return put == cap;
+}
+
+typedef struct {
+  clog lg;
+  const char *rec;
+} blocked_writer_arg_t;
+
+/* Logs a record larger than the pipe for ever: the first write blocks
+ * inside the logger, with the mutex of the logger held, once the pipe is
+ * full, and nothing reads the pipe. */
+static void *blocked_pipe_writer(void *arg) {
+  blocked_writer_arg_t *a = (blocked_writer_arg_t *)arg;
+  for (;;) clog_info(a->lg, "%s", a->rec);
+  return NULL;
+}
+
+/* The child: a synchronous logger on a pipe that nobody reads, whose thread
+ * blocks inside a write with the mutex of that logger held, and a
+ * CLOG_FATAL record on a second logger that writes a file. */
+static void fatal_beside_blocked_pipe_child(const char *path) {
+  forget_parent_fixtures_in_child();
+  int p[2];
+  if (pipe(p) != 0) _exit(3);
+  size_t cap = pipe_capacity(p[0], p[1]);
+  if (cap == 0) _exit(3);
+  char *rec = malloc(2 * cap + 1);
+  if (!rec) _exit(3);
+  memset(rec, 'x', 2 * cap);
+  rec[2 * cap] = '\0';
+  clog pipe_lg = clog_open_fd(p[1], CLOG_INFO, NULL);
+  clog file_lg = clog_open_file(path, CLOG_INFO, NULL, NULL);
+  if (pipe_lg == CLOG_INVALID || file_lg == CLOG_INVALID) _exit(3);
+  blocked_writer_arg_t arg = {.lg = pipe_lg, .rec = rec};
+  pthread_t tid;
+  if (pthread_create(&tid, NULL, blocked_pipe_writer, &arg) != 0) _exit(3);
+  /* A record of twice the capacity cannot go out whole: once the pipe
+   * holds cap bytes, the thread is inside that write, and holds the mutex
+   * of pipe_lg. */
+  for (int i = 0; i < 20000; i++) {
+    int avail = 0;
+    if (ioctl(p[0], FIONREAD, &avail) == 0 && (size_t)avail >= cap) {
+      mark_child_ready(path);
+      clog_fatal(file_lg, "FATALBESIDEBLOCKEDPIPE");
+    }
+    usleep(1000);
+  }
+  _exit(4);
+}
+
+/*
+ * A CLOG_FATAL record ends the process although another thread blocks for
+ * ever inside a write to a pipe that nobody reads, with the mutex of that
+ * other logger held. The fatal record is in its file.
+ *
+ * This test is non-vacuous: an end of a fatal call that takes the mutex of
+ * every logger of the process waits for that thread for ever, and the parent
+ * kills the child at its bound.
+ */
+TEST(fatal, a_logger_blocked_on_a_pipe_does_not_keep_fatal_from_ending) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  fflush(NULL);
+  pid_t pid = fork();
+  if (pid == 0) fatal_beside_blocked_pipe_child(path);
+  int status = 0;
+  bool ended = pid > 0 && wait_child_bounded(pid, 20000, &status);
+  bool ready = child_was_ready(dir);
+  char buf[8192] = {0};
+  read_file(path, buf, sizeof(buf));
+  bool has_fatal = strstr(buf, "FATALBESIDEBLOCKEDPIPE") != NULL;
+  cleanup_dir(dir, "app.log");
+  REQUIRE_TRUE(ready);
+  REQUIRE_TRUE(ended);
+  REQUIRE_TRUE(WIFEXITED(status));
+  REQUIRE_TRUE(has_fatal);
+}
+
+/* The child: an async logger on a pipe that is full and that nobody reads,
+ * whose batch the flush of the exit drain keeps after a transient error.
+ * The settle that follows then meets a descriptor in blocking mode with no
+ * room. The process ends with exit(), or with a CLOG_FATAL record on a
+ * second logger when via_fatal is set. */
+static void exit_with_stalled_pipe_child(const char *path, bool via_fatal) {
+  forget_parent_fixtures_in_child();
+  clog_test_set_exit_drain_budget_ms(2000);
+  int p[2];
+  if (pipe(p) != 0 || !fill_pipe(p[0], p[1])) _exit(3);
+  clog_async_cfg_t acfg = {.flush_interval_us = EXIT_TEST_NO_TIMER_US};
+  clog pipe_lg = clog_open_fd(p[1], CLOG_INFO, &acfg);
+  if (pipe_lg == CLOG_INVALID) _exit(3);
+  clog null_lg = CLOG_INVALID;
+  if (via_fatal) {
+    int nfd = open("/dev/null", O_WRONLY);
+    null_lg = nfd >= 0 ? clog_open_fd(nfd, CLOG_INFO, NULL) : CLOG_INVALID;
+    if (null_lg == CLOG_INVALID) _exit(3);
+  }
+  clog_info(pipe_lg, "STALLEDPIPERECORD");
+  mark_child_ready(path);
+  if (!via_fatal) {
+    /* The one write that fails is the flush that the exit drain asks the
+     * writer thread for. */
+    clog_test_force_write_errors(ENOSPC, 1);
+    exit(0);
+  }
+  /* The fatal record and the truncation marker that its failed write
+   * leaves go first; the third write that fails is the flush that the exit
+   * drain asks the writer thread for. */
+  clog_test_force_write_errors(ENOSPC, 3);
+  clog_fatal(null_lg, "FATALRECORD");
+  _exit(4);
+}
+
+static bool run_exit_with_stalled_pipe_child(const char *dir, bool via_fatal,
+                                             int bound_ms) {
+  char path[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  fflush(NULL);
+  pid_t pid = fork();
+  if (pid == 0) exit_with_stalled_pipe_child(path, via_fatal);
+  if (pid < 0) return false;
+  int status = 0;
+  if (!wait_child_bounded(pid, bound_ms, &status)) return false;
+  return WIFEXITED(status) && child_was_ready(dir);
+}
+
+/*
+ * exit(), and a CLOG_FATAL record, end within the budget of the exit drain
+ * when an async logger holds a batch for a pipe that is full, in blocking
+ * mode, and that nobody reads. The last delivery attempt and the marker that
+ * names the undelivered records are bounded writes, and a bounded write
+ * never makes a call that can block past its bound.
+ *
+ * This test is non-vacuous: a bounded write that polls only after EAGAIN
+ * blocks for ever in write(2) on such a pipe, and the parent kills the child
+ * at its bound.
+ */
+TEST(exit_drain, a_stalled_blocking_pipe_ends_within_the_budget) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  bool exit_ok = run_exit_with_stalled_pipe_child(dir, false, 20000);
+  cleanup_dir(dir, "app.log");
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  bool fatal_ok = run_exit_with_stalled_pipe_child(dir, true, 20000);
+  cleanup_dir(dir, "app.log");
+  REQUIRE_TRUE(exit_ok);
+  REQUIRE_TRUE(fatal_ok);
+}
+
+/* ------------------------------------------------------------------------ */
+/* Rotation and the permissions of the log                                   */
+/* ------------------------------------------------------------------------ */
+
+/*
+ * A rotation creates the new live file with the permission bits of the file
+ * that it replaces, whatever the umask. A log that its operator restricted
+ * to 0600 stays 0600 in the live file and in every rotated and compressed
+ * generation.
+ *
+ * This test is non-vacuous: a live file created with 0644 under a umask of
+ * 022 makes every generation after the first world-readable.
+ */
+TEST(rotation, every_generation_keeps_the_mode_of_the_log) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  bool created = fd >= 0 && fchmod(fd, 0600) == 0;
+  if (fd >= 0) close(fd);
+  mode_t old_mask = umask(022);
+  clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
+                             .max_file_size = 1,
+                             .max_rotated_files = 100,
+                             .compress_rotated = true};
+  clog lg =
+      created ? clog_open_file(path, CLOG_INFO, &cfg, NULL) : CLOG_INVALID;
+  if (lg != CLOG_INVALID) {
+    for (int i = 0; i < 6; i++) clog_info(lg, "SECRETRECORD %d", i);
+    clog_close(lg);
+  }
+  umask(old_mask);
+  int files = 0, gz = 0, wrong = 0;
+  DIR *d = opendir(dir);
+  struct dirent *e;
+  while (d && (e = readdir(d)) != NULL) {
+    if (strncmp(e->d_name, "app.log", 7) != 0) continue;
+    char p[512];
+    snprintf(p, sizeof(p), "%s/%s", dir, e->d_name);
+    struct stat st;
+    if (stat(p, &st) != 0) continue;
+    files++;
+    size_t n = strlen(e->d_name);
+    if (n > 3 && strcmp(e->d_name + n - 3, ".gz") == 0) gz++;
+    if ((st.st_mode & 0777) != 0600) wrong++;
+  }
+  if (d) closedir(d);
+  cleanup_dir(dir, "app.log");
+  REQUIRE_TRUE(created);
+  REQUIRE_NE(lg, CLOG_INVALID);
+  REQUIRE_GE(files, 5);
+  REQUIRE_GE(gz, 4);
+  REQUIRE_EQ(wrong, 0);
+}
+
+/* ------------------------------------------------------------------------ */
+/* The owner and the group of a compressed generation                        */
+/* ------------------------------------------------------------------------ */
+
+#include <poll.h>
+
+/* Picks a group, other than the effective group of the process, that the
+ * process may give a file: any group for root, else a supplementary group.
+ * It gives false when there is none, and then the owner and group tests
+ * below have nothing to observe. */
+static bool pick_foreign_group(gid_t *out) {
+  gid_t own = getegid();
+  if (geteuid() == 0) {
+    *out = own == 1 ? 2 : 1;
+    return true;
+  }
+  gid_t groups[256];
+  int n = getgroups(256, groups);
+  for (int i = 0; i < n; i++) {
+    if (groups[i] != own) {
+      *out = groups[i];
+      return true;
+    }
+  }
+  return false;
+}
+
+/*
+ * A compressed generation gets the owner, the group and the permission bits
+ * of the file that it compresses, as the new live file of a rotation does,
+ * so a log that its operator gave to a group, with mode 0640, stays readable
+ * by that group, and by no other, in its compressed history.
+ *
+ * This test is non-vacuous: a compression that copies only the bits leaves
+ * the .gz file with the group of the process and the group-read bit, so the
+ * group of the process reads it and the group of the log does not. A
+ * process with no second group to give a file (neither root nor a member
+ * of a supplementary group) has nothing to observe, and the test says so.
+ */
+TEST(compression,
+     a_compressed_generation_keeps_the_owner_and_group_of_its_source) {
+  gid_t group;
+  if (!pick_foreign_group(&group)) {
+    printf("  (skipped: the process has no second group to give a file)\n");
+    return;
+  }
+  uid_t owner = geteuid() == 0 ? 1 : geteuid();
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char src[256], dst[300];
+  snprintf(src, sizeof(src), "%s/app.log.1", dir);
+  snprintf(dst, sizeof(dst), "%s.gz", src);
+  int fd = open(src, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  bool prepared = fd >= 0 && write(fd, "RECORD\n", 7) == 7 &&
+                  fchown(fd, owner, group) == 0 && fchmod(fd, 0640) == 0;
+  if (fd >= 0) close(fd);
+  /* A rotation gives the owner of the live file as the owner that it
+   * accepts. As root, the source belongs to a different user, just as the
+   * live file of a log that root writes for that user does. */
+  bool compressed =
+      prepared && clog_test_gzip_compress_file_for_owner(src, dst, owner);
+  struct stat st;
+  bool has_dst = stat(dst, &st) == 0;
+  cleanup_dir(dir, "app.log");
+  REQUIRE_TRUE(prepared);
+  REQUIRE_TRUE(compressed);
+  REQUIRE_TRUE(has_dst);
+  REQUIRE_EQ((unsigned long)st.st_gid, (unsigned long)group);
+  REQUIRE_EQ((unsigned long)st.st_uid, (unsigned long)owner);
+  REQUIRE_EQ((unsigned)(st.st_mode & 0777), 0640u);
+}
+
+/* ------------------------------------------------------------------------ */
+/* An fsync that the filesystem does not offer                               */
+/* ------------------------------------------------------------------------ */
+
+/* Compresses a fresh file while the next fsync() reports err. It gives
+ * whether the compression succeeded, whether the .gz file exists and
+ * whether the source is still there. */
+static bool compress_with_fsync_error(int err, bool *has_dst, bool *has_src) {
+  char dir[64];
+  *has_dst = false;
+  *has_src = false;
+  if (make_cwd_tmpdir(dir, sizeof(dir)) != 0) return false;
+  char src[256], dst[300];
+  snprintf(src, sizeof(src), "%s/app.log.1", dir);
+  snprintf(dst, sizeof(dst), "%s.gz", src);
+  int fd = open(src, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  bool prepared = fd >= 0 && write(fd, "RECORD\n", 7) == 7;
+  if (fd >= 0) close(fd);
+  clog_test_force_next_fsync_error(err);
+  bool ok = prepared && clog_test_gzip_compress_file(src, dst);
+  clog_test_force_next_fsync_error(0);
+  *has_dst = access(dst, F_OK) == 0;
+  *has_src = access(src, F_OK) == 0;
+  cleanup_dir(dir, "app.log");
+  return ok;
+}
+
+/*
+ * A filesystem whose fsync() answers EINVAL or ENOSYS still gets its
+ * rotated files compressed: it offers no way to ask for the data on disk,
+ * and that is not a failure of the compression. A real failure of fsync(),
+ * EIO, still fails the compression and keeps the source.
+ *
+ * This test is non-vacuous: a compression that fails on every fsync()
+ * error leaves every rotated file uncompressed on such a filesystem.
+ */
+TEST(compression,
+     an_fsync_that_the_filesystem_does_not_offer_still_compresses) {
+  bool einval_dst, einval_src, enosys_dst, enosys_src, eio_dst, eio_src;
+  bool einval_ok = compress_with_fsync_error(EINVAL, &einval_dst, &einval_src);
+  bool enosys_ok = compress_with_fsync_error(ENOSYS, &enosys_dst, &enosys_src);
+  bool eio_ok = compress_with_fsync_error(EIO, &eio_dst, &eio_src);
+  REQUIRE_TRUE(einval_ok);
+  REQUIRE_TRUE(einval_dst);
+  REQUIRE_FALSE(einval_src);
+  REQUIRE_TRUE(enosys_ok);
+  REQUIRE_TRUE(enosys_dst);
+  REQUIRE_FALSE(enosys_src);
+  REQUIRE_FALSE(eio_ok);
+  REQUIRE_FALSE(eio_dst);
+  REQUIRE_TRUE(eio_src);
+}
+
+/* ------------------------------------------------------------------------ */
+/* A fatal record on a terminal whose reader stopped                         */
+/* ------------------------------------------------------------------------ */
+
+/* Opens a pseudo-terminal whose reader, the master, never reads, and fills
+ * it until it has a little room, less than one PIPE_BUF write: POLLOUT on
+ * the slave is set, and a blocking write of PIPE_BUF bytes does not fit. It
+ * gives the slave in *slave and the master in *master, or false. */
+static bool open_nearly_full_pty(int *master, int *slave) {
+  *master = posix_openpt(O_RDWR | O_NOCTTY);
+  if (*master < 0) return false;
+  char name[64];
+  const char *pts = NULL;
+  if (grantpt(*master) != 0 || unlockpt(*master) != 0 ||
+      !(pts = ptsname(*master)) || strlen(pts) >= sizeof(name)) {
+    close(*master);
+    return false;
+  }
+  memcpy(name, pts, strlen(pts) + 1);
+  *slave = open(name, O_RDWR | O_NOCTTY);
+  int filler = open(name, O_WRONLY | O_NOCTTY | O_NONBLOCK);
+  if (*slave < 0 || filler < 0) {
+    if (*slave >= 0) close(*slave);
+    if (filler >= 0) close(filler);
+    close(*master);
+    return false;
+  }
+  char block[256];
+  memset(block, 'x', sizeof(block));
+  while (write(filler, block, sizeof(block)) > 0) {
+  }
+  close(filler);
+  /* Reading a few bytes of the master lets the terminal take a little
+   * more, once its worker moves the backlog on. Linux reports the slave
+   * writable after the first such read; FreeBSD only once the output queue
+   * is below its low-water mark, so the reads go on, 64 bytes at a time,
+   * until the slave is writable. */
+  char drop[64];
+  for (int reads = 0; reads < 256; reads++) {
+    if (read(*master, drop, sizeof(drop)) <= 0) break;
+    for (int i = 0; i < (reads == 0 ? 2000 : 20); i++) {
+      struct pollfd pfd = {.fd = *slave, .events = POLLOUT, .revents = 0};
+      if (poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLOUT)) return true;
+      usleep(1000);
+    }
+  }
+  close(*slave);
+  close(*master);
+  *slave = -1;
+  *master = -1;
+  return false;
+}
+
+static void fatal_on_stalled_tty_child(int slave, const char *path) {
+  forget_parent_fixtures_in_child();
+  clog_test_set_exit_drain_budget_ms(1000);
+  int devnull = open("/dev/null", O_WRONLY);
+  if (devnull >= 0) dup2(devnull, STDERR_FILENO);
+  clog lg = clog_open_fd(slave, CLOG_INFO, NULL);
+  if (lg == CLOG_INVALID) _exit(3);
+  static char big[6000];
+  memset(big, 'y', sizeof(big) - 1);
+  mark_child_ready(path);
+  clog_fatal(lg, "%s", big);
+  _exit(4);
+}
+
+/*
+ * A CLOG_FATAL record ends the process within the budget when its output is
+ * a terminal that has a little room left and a reader that stopped, the
+ * state of a frozen remote session. POLLOUT on a terminal says only that
+ * some room is free, so a bounded write that trusted it would block in
+ * write(2) until the whole chunk fits.
+ *
+ * This test is non-vacuous: a bounded write that writes PIPE_BUF bytes to
+ * the terminal after POLLOUT blocks for ever, and the parent kills the child
+ * at its bound.
+ */
+TEST(fatal, a_stalled_terminal_does_not_keep_fatal_from_ending) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  int master = -1, slave = -1;
+  bool pty = open_nearly_full_pty(&master, &slave);
+  pid_t pid = -1;
+  int status = 0;
+  bool ended = false;
+  if (pty) {
+    fflush(NULL);
+    pid = fork();
+    if (pid == 0) fatal_on_stalled_tty_child(slave, path);
+    ended = pid > 0 && wait_child_bounded(pid, 15000, &status);
+  }
+  bool ready = child_was_ready(dir);
+  if (slave >= 0) close(slave);
+  if (master >= 0) close(master);
+  cleanup_dir(dir, "app.log");
+  REQUIRE_TRUE(pty);
+  REQUIRE_TRUE(ready);
+  REQUIRE_TRUE(ended);
+  REQUIRE_TRUE(WIFEXITED(status));
+}
+
+/* ------------------------------------------------------------------------ */
+/* A fatal record behind a busy writer thread                                */
+/* ------------------------------------------------------------------------ */
+
+static void fatal_behind_busy_writer_child(const char *path) {
+  forget_parent_fixtures_in_child();
+  clog_test_set_exit_drain_budget_ms(100);
+  int devnull = open("/dev/null", O_WRONLY);
+  if (devnull >= 0) dup2(devnull, STDERR_FILENO);
+  clog_async_cfg_t acfg = {.flush_interval_us = EXIT_TEST_NO_TIMER_US};
+  clog lg = clog_open_file(path, CLOG_INFO, NULL, &acfg);
+  if (lg == CLOG_INVALID) _exit(3);
+  clog_test_set_writer_job_delay_us(20000);
+  for (int i = 0; i < 200; i++) clog_info(lg, "BACKLOG %d", i);
+  mark_child_ready(path);
+  clog_fatal(lg, "FATALBEHINDBACKLOG");
+  _exit(4);
+}
+
+/*
+ * A CLOG_FATAL record on an async logger reaches its regular file when the
+ * writer thread has a backlog that the budget cannot drain. The writer
+ * thread holds the mutex of the target for each record, here for 20 ms, and
+ * takes it again for the next one at once, yet the fatal call gets the mutex
+ * all the same: the writer thread steps aside while a fatal call waits, and
+ * that wait lasts long enough for the record in hand to finish.
+ *
+ * This test is non-vacuous: a fatal call whose wait for the mutex ends at
+ * the deadline, which the drain has used up, tries the mutex once while the
+ * writer thread holds it, and the record is lost; a writer thread that does
+ * not step aside takes the mutex again ahead of the fatal call.
+ */
+TEST(fatal, a_busy_writer_thread_does_not_cost_the_fatal_record) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  fflush(NULL);
+  pid_t pid = fork();
+  if (pid == 0) fatal_behind_busy_writer_child(path);
+  int status = 0;
+  bool ended = pid > 0 && wait_child_bounded(pid, 20000, &status);
+  bool ready = child_was_ready(dir);
+  size_t cap = 1u << 20;
+  char *buf = malloc(cap);
+  bool has_fatal = false;
+  if (buf) {
+    read_file(path, buf, cap);
+    has_fatal = strstr(buf, "FATALBEHINDBACKLOG") != NULL;
+    free(buf);
+  }
+  cleanup_dir(dir, "app.log");
+  REQUIRE_TRUE(ready);
+  REQUIRE_TRUE(ended);
+  REQUIRE_TRUE(WIFEXITED(status));
+  REQUIRE_TRUE(has_fatal);
+}
+
+/* ------------------------------------------------------------------------ */
+/* A record logged after the exit drain                                      */
+/* ------------------------------------------------------------------------ */
+
+/* The async logger that the destructor below logs to, in a child of the
+ * test that follows; CLOG_INVALID everywhere else. The destructor closes
+ * it too when g_after_drain_close is set. */
+static clog g_after_drain_logger = CLOG_INVALID;
+static bool g_after_drain_close;
+
+/* The destructors of a program run after every exit handler, and so after
+ * the exit drain of the library. */
+__attribute__((destructor)) static void _log_after_the_exit_drain(void) {
+  if (g_after_drain_logger == CLOG_INVALID) return;
+  clog_info(g_after_drain_logger, "AFTERDRAINRECORD");
+  if (g_after_drain_close) clog_close(g_after_drain_logger);
+  g_after_drain_logger = CLOG_INVALID;
+}
+
+static void log_after_drain_child(const char *path, size_t qsize,
+                                  bool close_after) {
+  forget_parent_fixtures_in_child();
+  clog_async_cfg_t acfg = {.queue_size = qsize,
+                           .flush_interval_us = EXIT_TEST_NO_TIMER_US};
+  clog lg = clog_open_file(path, CLOG_INFO, NULL, &acfg);
+  if (lg == CLOG_INVALID) _exit(3);
+  clog_info(lg, "BEFOREEXITRECORD");
+  g_after_drain_logger = lg;
+  g_after_drain_close = close_after;
+  mark_child_ready(path);
+  exit(0);
+}
+
+/* Runs log_after_drain_child() and gives whether both records are in the
+ * file, the child ended and it reached its exit(). */
+static bool run_log_after_drain_child(size_t qsize, bool close_after) {
+  char dir[64];
+  if (make_cwd_tmpdir(dir, sizeof(dir)) != 0) return false;
+  char path[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  fflush(NULL);
+  pid_t pid = fork();
+  if (pid == 0) log_after_drain_child(path, qsize, close_after);
+  int status = 0;
+  bool ended = pid > 0 && wait_child_bounded(pid, 20000, &status);
+  bool ready = child_was_ready(dir);
+  char buf[8192];
+  read_file(path, buf, sizeof(buf));
+  bool before = strstr(buf, "BEFOREEXITRECORD") != NULL;
+  bool after = strstr(buf, "AFTERDRAINRECORD") != NULL;
+  cleanup_dir(dir, "app.log");
+  return ended && WIFEXITED(status) && ready && before && after;
+}
+
+/*
+ * A record that an async logger receives after the exit drain, from a
+ * destructor that does not close the logger, is written by the thread that
+ * logs it, both for an unbounded and for a bounded queue.
+ *
+ * This test is non-vacuous: a record that joins the queue after the drain
+ * waits in the batch of the writer thread for a flush that the end of the
+ * process cuts off, and the file lacks it.
+ */
+TEST(exit_drain, a_record_logged_after_the_drain_is_written) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  bool unbounded = run_log_after_drain_child(0, false);
+  bool bounded = run_log_after_drain_child(16, false);
+  REQUIRE_TRUE(unbounded);
+  REQUIRE_TRUE(bounded);
+}
+
+/*
+ * A destructor that logs to an async logger after the exit drain and then
+ * closes it ends, and both records are in the file.
+ *
+ * This test is non-vacuous: a close whose shutdown request the queue
+ * refuses, since the drain turned sends off, retries for ever, and the
+ * parent kills the child at its bound.
+ */
+TEST(exit_drain, a_close_after_the_drain_ends) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  bool unbounded = run_log_after_drain_child(0, true);
+  bool bounded = run_log_after_drain_child(16, true);
+  REQUIRE_TRUE(unbounded);
+  REQUIRE_TRUE(bounded);
+}
+
+/*
+ * A rotated file whose compressed name cannot fit in the directory stays
+ * uncompressed, and a record in the new live file says so. The rotated
+ * name itself fits: the base name is 238 bytes, the rotated name 253, and
+ * the compressed name 256, above the limit of 255 of the filesystems that
+ * the tests run on.
+ *
+ * This test is non-vacuous: a compression that fails on the length of its
+ * names leaves the file uncompressed and reports nothing.
+ */
+TEST(compression, a_name_too_long_to_compress_is_reported) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  long name_max = pathconf(dir, _PC_NAME_MAX);
+  char base[240];
+  memset(base, 'b', 238);
+  base[238] = '\0';
+  char path[512];
+  snprintf(path, sizeof(path), "%s/%s", dir, base);
+  clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
+                             .max_file_size = 1,
+                             .max_rotated_files = 5,
+                             .compress_rotated = true};
+  clog lg = name_max == 255 ? clog_open_file(path, CLOG_INFO, &cfg, NULL)
+                            : CLOG_INVALID;
+  if (lg != CLOG_INVALID) {
+    clog_info(lg, "LONGNAMERECORD");
+    clog_close(lg);
+  }
+  char buf[4096] = {0};
+  read_file(path, buf, sizeof(buf));
+  bool reported = strstr(buf, "stays uncompressed") != NULL &&
+                  strstr(buf, "level=WARN") != NULL;
+  int rotated = count_files_with_prefix(dir, "bbbbbbbbbb");
+  int gz = count_files_with_suffix(dir, ".gz");
+  cleanup_dir(dir, "bbbbbbbbbb");
+  if (name_max != 255) return; /* the lengths above assume a limit of 255 */
+  REQUIRE_NE(lg, CLOG_INVALID);
+  REQUIRE_TRUE(reported);
+  REQUIRE_EQ(rotated, 2); /* the live file and one rotated file */
+  REQUIRE_EQ(gz, 0);
+}
+
+typedef struct {
+  const char *path;
+  const clog_rotation_cfg_t *cfg;
+  clog lg;
+} recover_open_arg_t;
+
+static void *recover_opener(void *arg) {
+  recover_open_arg_t *a = (recover_open_arg_t *)arg;
+  a->lg = clog_open_file(a->path, CLOG_INFO, a->cfg, NULL);
+  return NULL;
+}
+
+/*
+ * The recovery of unfinished compressions that the first open of a file runs
+ * leaves alone the work of a compression that the same process started.
+ * While it runs, a second open of the file cannot join the target, rotate it
+ * and start a compression that the recovery then takes for the leftover of
+ * a stopped process. Every rotated file is compressed exactly once.
+ *
+ * This test is non-vacuous: when the recovery runs after the target is
+ * published, the second open joins at once and rotates, the recovery removes
+ * the output that the running compression writes and queues its source a
+ * second time, and two compressions run for one rotation.
+ */
+TEST(compression, open_recovery_leaves_a_running_compression_alone) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
+                             .max_file_size = 1,
+                             .max_rotated_files = 5,
+                             .compress_rotated = true};
+  size_t finished_before = clog_test_compressions_finished();
+  clog_test_hold_compressions(true);
+  clog_test_hold_compression_recovery(true);
+  recover_open_arg_t first = {.path = path, .cfg = &cfg, .lg = CLOG_INVALID};
+  pthread_t tid;
+  bool started = pthread_create(&tid, NULL, recover_opener, &first) == 0;
+  bool entered = false;
+  for (int i = 0; started && i < 10000 && !entered; i++) {
+    entered = clog_test_compression_recovery_entered();
+    if (!entered) usleep(1000);
+  }
+  clog second =
+      started ? clog_open_file(path, CLOG_INFO, &cfg, NULL) : CLOG_INVALID;
+  if (second != CLOG_INVALID) clog_info(second, "RECOVERYRACERECORD");
+  bool held = false;
+  for (int i = 0; second != CLOG_INVALID && i < 10000 && !held; i++) {
+    held = clog_test_gz_dest_opened();
+    if (!held) usleep(1000);
+  }
+  clog_test_hold_compression_recovery(false);
+  if (started) pthread_join(tid, NULL);
+  clog_test_hold_compressions(false);
+  if (second != CLOG_INVALID) clog_close(second);
+  if (first.lg != CLOG_INVALID) clog_close(first.lg);
+  size_t runs = clog_test_compressions_finished() - finished_before;
+  int gz = count_files_with_suffix(dir, ".gz");
+  int tmp = count_files_with_suffix(dir, ".gz.tmp");
+  cleanup_dir(dir, "app.log");
+  REQUIRE_TRUE(started);
+  REQUIRE_TRUE(entered);
+  REQUIRE_NE(first.lg, CLOG_INVALID);
+  REQUIRE_NE(second, CLOG_INVALID);
+  REQUIRE_TRUE(held);
+  REQUIRE_EQ(runs, (size_t)1);
+  REQUIRE_EQ(gz, 1);
+  REQUIRE_EQ(tmp, 0);
+}
+
+/* ------------------------------------------------------------------------ */
+/* The enqueue-failure fallback and records that a batch keeps               */
+/* ------------------------------------------------------------------------ */
+
+/* Logs RECORD_A, keeps it in the batch with `errors` failed writes, then
+ * logs RECORD_B through the enqueue-failure fallback, closes, and gives the
+ * offsets of both records in the file, or -1. */
+static void run_fallback_order_case(unsigned int errors, long *off_a,
+                                    long *off_b) {
+  *off_a = -1;
+  *off_b = -1;
+  char dir[256];
+  if (make_tmpdir(dir, sizeof(dir)) != 0) return;
+  char path[512];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  ccol_memmgmt_procs_t procs = {
+      .malloc = _enqueue_fail_malloc,
+      .free = _enqueue_fail_free,
+      .calloc = _enqueue_fail_calloc,
+      .realloc = _enqueue_fail_realloc,
+  };
+  clog_async_cfg_t acfg = {.flush_interval_us = EXIT_TEST_NO_TIMER_US};
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &acfg, &procs);
+  if (lg != CLOG_INVALID) {
+    clog_info(lg, "RECORD_A");
+    /* The first failed write is the flush that the fallback runs first,
+     * which keeps RECORD_A in the batch; a second one fails the delivery
+     * attempt that follows it. */
+    clog_test_force_write_errors(ENOSPC, errors);
+    /* Allocation #1 is the envelope and #2 the node of the queue; see
+     * enqueue_failure_fallback_still_rotates_on_size. */
+    atomic_store(&g_enqueue_fail_call_count, 0);
+    atomic_store(&g_enqueue_fail_at, 2);
+    clog_info(lg, "RECORD_B");
+    atomic_store(&g_enqueue_fail_at, -1);
+    clog_test_force_write_errors(0, 0);
+    clog_close(lg);
+  }
+  char buf[4096] = {0};
+  read_file(path, buf, sizeof(buf));
+  const char *a = strstr(buf, "RECORD_A");
+  const char *b = strstr(buf, "RECORD_B");
+  if (a) *off_a = (long)(a - buf);
+  if (b) *off_b = (long)(b - buf);
+  cleanup_dir(dir, "app.log");
+}
+
+/*
+ * A record that the enqueue-failure fallback writes never lands ahead of a
+ * record that the batch keeps after a transient write error. The batch gets
+ * one more delivery attempt first; when that attempt fails too, the record
+ * joins the batch behind the kept one.
+ *
+ * This test is non-vacuous: a fallback that writes its record straight to
+ * the file puts RECORD_B ahead of RECORD_A, which the batch still holds.
+ */
+TEST(async, enqueue_failure_fallback_keeps_the_order_of_kept_records) {
+  long a1, b1, a2, b2;
+  run_fallback_order_case(1, &a1, &b1);
+  run_fallback_order_case(2, &a2, &b2);
+  REQUIRE_GE(a1, 0L);
+  REQUIRE_GT(b1, a1);
+  REQUIRE_GE(a2, 0L);
+  REQUIRE_GT(b2, a2);
+}
+
+/* The child: a logger on a pipe that is full, in blocking mode, and that
+ * nobody reads, and a CLOG_FATAL record on that same logger. stderr goes to
+ * "<path>err". */
+static void fatal_on_stalled_own_pipe_child(const char *path, bool async) {
+  forget_parent_fixtures_in_child();
+  clog_test_set_exit_drain_budget_ms(1000);
+  char errp[512];
+  snprintf(errp, sizeof(errp), "%serr", path);
+  int efd = open(errp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (efd < 0 || dup2(efd, STDERR_FILENO) < 0) _exit(3);
+  int p[2];
+  if (pipe(p) != 0 || !fill_pipe(p[0], p[1])) _exit(3);
+  clog_async_cfg_t acfg = {.flush_interval_us = EXIT_TEST_NO_TIMER_US};
+  clog lg = clog_open_fd(p[1], CLOG_INFO, async ? &acfg : NULL);
+  if (lg == CLOG_INVALID) _exit(3);
+  if (async) clog_info(lg, "QUEUEDBEFOREFATAL");
+  mark_child_ready(path);
+  clog_fatal(lg, "FATALONSTALLEDPIPE");
+  _exit(4);
+}
+
+static bool run_fatal_on_stalled_own_pipe(const char *dir, bool async,
+                                          bool *reported) {
+  char path[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  fflush(NULL);
+  pid_t pid = fork();
+  if (pid == 0) fatal_on_stalled_own_pipe_child(path, async);
+  if (pid < 0) return false;
+  int status = 0;
+  bool ended = wait_child_bounded(pid, 20000, &status);
+  char errp[512], buf[1024] = {0};
+  snprintf(errp, sizeof(errp), "%serr", path);
+  read_file(errp, buf, sizeof(buf));
+  *reported = strstr(buf, "CLOG_FATAL record could not be written") != NULL;
+  return ended && WIFEXITED(status) && WEXITSTATUS(status) == EXIT_FAILURE &&
+         child_was_ready(dir);
+}
+
+/*
+ * A CLOG_FATAL record on a logger whose own output is a full pipe in
+ * blocking mode, which nobody reads, still stops the process, within the
+ * budget of the exit drain, for a synchronous and an async logger. The
+ * record is lost, and a line on stderr, which is another file here, says so.
+ *
+ * This test is non-vacuous: a fatal record written without a bound blocks
+ * in write(2) for ever, and an async one waits for ever on its writer
+ * thread, which blocks the same way; the parent kills the child at its
+ * bound.
+ */
+TEST(fatal,
+     a_stalled_output_of_its_own_logger_does_not_keep_fatal_from_ending) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  char dir[64];
+  bool sync_reported = false, async_reported = false;
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  bool sync_ok = run_fatal_on_stalled_own_pipe(dir, false, &sync_reported);
+  cleanup_dir(dir, "app.log");
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  bool async_ok = run_fatal_on_stalled_own_pipe(dir, true, &async_reported);
+  cleanup_dir(dir, "app.log");
+  REQUIRE_TRUE(sync_ok);
+  REQUIRE_TRUE(async_ok);
+  REQUIRE_TRUE(sync_reported);
+  REQUIRE_TRUE(async_reported);
+}
+
+/* ========================================================================== */
+/*        ROTATED-LOOKING ENTRIES THAT ARE NOT GENERATIONS OF THE LOG         */
+/* ========================================================================== */
+
+/* The hook below runs inside the window of a rotation in which the live
+ * name names neither the old file nor the new one, and puts an entry there
+ * the way another user who can write the directory would. It acts once. */
+static atomic_int g_rh_hook_fired;
+/* The link hook sets this only when symlinkat() succeeds, and the test
+ * asserts it, because otherwise a failed plant checks nothing. */
+static atomic_int g_rh_link_planted;
+static int g_rh_fifo_reader = -1;
+
+static void rh_plant_link(int dir_fd, const char *base) {
+  if (atomic_exchange(&g_rh_hook_fired, 1)) return;
+  if (symlinkat("app.log-victim", dir_fd, base) == 0)
+    atomic_store(&g_rh_link_planted, 1);
+}
+
+static void rh_plant_fifo(int dir_fd, const char *base) {
+  if (atomic_exchange(&g_rh_hook_fired, 1)) return;
+  if (mkfifoat(dir_fd, base, 0600) == 0)
+    g_rh_fifo_reader = openat(dir_fd, base, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+}
+
+/* The kind of the entry at path, examined without following a link: one
+ * of S_IFREG, S_IFLNK, S_IFIFO and the rest, or 0 when nothing is there. */
+static mode_t rh_entry_kind(const char *path) {
+  struct stat st;
+  if (lstat(path, &st) != 0) return 0;
+  return st.st_mode & S_IFMT;
+}
+
+/* Counts the occurrences of needle in the file at path. */
+static int rh_count_lines_with(const char *path, const char *needle) {
+  char buf[16384];
+  read_file(path, buf, sizeof(buf));
+  int n = 0;
+  for (const char *p = buf; (p = strstr(p, needle)) != NULL; p++) n++;
+  return n;
+}
+
+/*
+ * A link that another user puts at the live name while a rotation runs
+ * never receives a record: the new live file is a file that the rotation
+ * made, and it takes the live name with a rename that replaces the link.
+ *
+ * This test is non-vacuous: a rotation that opens the live name after it
+ * moved the old file aside follows the link, and every record after the
+ * rotation lands in the file that the link names.
+ */
+TEST(rotation_hijack, a_link_put_at_the_live_name_gets_no_record) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[256], victim[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  snprintf(victim, sizeof(victim), "%s/app.log-victim", dir);
+  bool setup = write_whole_file(victim, "VICTIM\n", 7);
+
+  atomic_store(&g_rh_hook_fired, 0);
+  atomic_store(&g_rh_link_planted, 0);
+  clog_test_set_rotate_window_hook(rh_plant_link);
+  clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
+                             .max_file_size = 200,
+                             .max_rotated_files = 3};
+  clog lg = setup ? clog_open_file(path, CLOG_INFO, &cfg, NULL) : CLOG_INVALID;
+  if (lg != CLOG_INVALID) {
+    for (int i = 0; i < 40; i++) clog_info(lg, "RHRECORD %d", i);
+    clog_close(lg);
+  }
+  clog_test_set_rotate_window_hook(NULL);
+
+  bool fired = atomic_load(&g_rh_hook_fired) != 0;
+  bool planted = atomic_load(&g_rh_link_planted) != 0;
+  char vbuf[256];
+  read_file(victim, vbuf, sizeof(vbuf));
+  mode_t live_kind = rh_entry_kind(path);
+  bool last_record_kept =
+      any_file_with_prefix_contains(dir, "app.log", "RHRECORD 39");
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(setup);
+  REQUIRE_NE(lg, CLOG_INVALID);
+  REQUIRE_TRUE(fired);
+  REQUIRE_TRUE(planted);
+  REQUIRE_STREQ(vbuf, "VICTIM\n");
+  REQUIRE_EQ((unsigned)live_kind, (unsigned)S_IFREG);
+  REQUIRE_TRUE(last_record_kept);
+}
+
+/*
+ * A FIFO that another user puts at the live name while a rotation runs
+ * never blocks the rotation and never receives a record.
+ *
+ * This test is non-vacuous: a rotation that opens the live name after it
+ * moved the old file aside opens the FIFO, whose reader this test holds so
+ * that the open does not wait, and writes the next records into it.
+ */
+TEST(rotation_hijack, a_fifo_put_at_the_live_name_gets_no_record) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+
+  atomic_store(&g_rh_hook_fired, 0);
+  g_rh_fifo_reader = -1;
+  clog_test_set_rotate_window_hook(rh_plant_fifo);
+  clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
+                             .max_file_size = 200,
+                             .max_rotated_files = 3};
+  clog lg = clog_open_file(path, CLOG_INFO, &cfg, NULL);
+  if (lg != CLOG_INVALID) {
+    for (int i = 0; i < 4; i++) clog_info(lg, "RHFIFO %d padding", i);
+    clog_close(lg);
+  }
+  clog_test_set_rotate_window_hook(NULL);
+
+  bool fired = atomic_load(&g_rh_hook_fired) != 0;
+  int reader = g_rh_fifo_reader;
+  g_rh_fifo_reader = -1;
+  char fbuf[256];
+  ssize_t got = reader >= 0 ? read(reader, fbuf, sizeof(fbuf)) : -1;
+  if (reader >= 0) close(reader);
+  mode_t live_kind = rh_entry_kind(path);
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_NE(lg, CLOG_INVALID);
+  REQUIRE_TRUE(fired);
+  REQUIRE_NE(reader, -1);
+  REQUIRE_LE(got, 0);
+  REQUIRE_EQ((unsigned)live_kind, (unsigned)S_IFREG);
+}
+
+/* The child of the test below. It ends with _exit() once the close has
+ * returned, and marks that it got there. */
+static void rh_fifo_at_rotated_name_child(const char *path) {
+  forget_parent_fixtures_in_child();
+  clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
+                             .max_file_size = 1 << 20,
+                             .max_rotated_files = 1,
+                             .compress_rotated = true};
+  clog lg = clog_open_file(path, CLOG_INFO, &cfg, NULL);
+  if (lg == CLOG_INVALID) _exit(3);
+  clog_info(lg, "RHGEN");
+  clog_close(lg);
+  mark_child_ready(path);
+  _exit(0);
+}
+
+/*
+ * A FIFO that another user puts at a rotated name is not a generation of
+ * the log: the recovery of compressions at open never queues it, so the
+ * compressor never opens it, clog_close() returns and the FIFO stays.
+ *
+ * This test is non-vacuous: a compressor that opens the FIFO waits for a
+ * writer for ever, clog_close() waits for the compressor, and the parent
+ * kills the child at its bound.
+ */
+TEST(rotation_foreign, a_fifo_at_a_rotated_name_never_blocks_close) {
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[256], fifo[256], gz[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  snprintf(fifo, sizeof(fifo), "%s/app.log.20200101000000", dir);
+  snprintf(gz, sizeof(gz), "%s/app.log.20200101000000.gz", dir);
+  bool setup = mkfifo(fifo, 0600) == 0;
+
+  fflush(NULL);
+  pid_t pid = setup ? fork() : -1;
+  if (pid == 0) rh_fifo_at_rotated_name_child(path);
+  int status = 0;
+  bool ended = pid > 0 && wait_child_bounded(pid, 20000, &status);
+  bool ready = child_was_ready(dir);
+  mode_t fifo_kind = rh_entry_kind(fifo);
+  mode_t gz_kind = rh_entry_kind(gz);
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(setup);
+  REQUIRE_TRUE(ended);
+  REQUIRE_TRUE(ready);
+  REQUIRE_EQ((unsigned)fifo_kind, (unsigned)S_IFIFO);
+  REQUIRE_EQ((unsigned)gz_kind, 0u);
+}
+
+/*
+ * A link that another user puts at a rotated name is not a generation of
+ * the log: nothing reads, archives or deletes it, and the file that it
+ * names keeps its content and is never copied into a ".gz" file.
+ *
+ * This test is non-vacuous: a recovery that compresses the entry reads the
+ * file through the link, writes it to "<name>.gz" and removes the link.
+ */
+TEST(rotation_foreign, a_link_at_a_rotated_name_is_never_read_or_removed) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[256], link[256], gz[256], secret_dir[256], secret[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  snprintf(link, sizeof(link), "%s/app.log.20200101000000", dir);
+  snprintf(gz, sizeof(gz), "%s/app.log.20200101000000.gz", dir);
+  snprintf(secret_dir, sizeof(secret_dir), "%s/secretdir", dir);
+  snprintf(secret, sizeof(secret), "%s/secretdir/secret", dir);
+  bool setup = mkdir(secret_dir, 0700) == 0 &&
+               write_whole_file(secret, "TOPSECRET\n", 10) &&
+               symlink("secretdir/secret", link) == 0;
+
+  clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
+                             .max_file_size = 300,
+                             .max_rotated_files = 1,
+                             .compress_rotated = true};
+  clog lg = setup ? clog_open_file(path, CLOG_INFO, &cfg, NULL) : CLOG_INVALID;
+  if (lg != CLOG_INVALID) {
+    for (int i = 0; i < 30; i++) clog_info(lg, "RHGEN %d padding-padding", i);
+    clog_close(lg);
+  }
+
+  mode_t link_kind = rh_entry_kind(link);
+  mode_t gz_kind = rh_entry_kind(gz);
+  char sbuf[64];
+  read_file(secret, sbuf, sizeof(sbuf));
+  unlink(secret);
+  rmdir(secret_dir);
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(setup);
+  REQUIRE_NE(lg, CLOG_INVALID);
+  REQUIRE_EQ((unsigned)link_kind, (unsigned)S_IFLNK);
+  REQUIRE_EQ((unsigned)gz_kind, 0u);
+  REQUIRE_STREQ(sbuf, "TOPSECRET\n");
+}
+
+/*
+ * A regular file at a rotated name whose stamp lies far in the future, with
+ * a collision suffix that nothing can follow, is not a generation of the
+ * log. It neither stops the naming of rotations nor takes a retention slot,
+ * and retention never deletes it.
+ *
+ * This test is non-vacuous: a naming that starts above that name finds no
+ * free sequence number and refuses every rotation, so no generation stamped
+ * with the clock ever appears, and the file grows without bound.
+ */
+TEST(rotation_foreign, a_far_future_name_neither_stops_rotation_nor_counts) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[256], stuck[256], future[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  snprintf(stuck, sizeof(stuck), "%s/app.log.99991231235959_999999999", dir);
+  snprintf(future, sizeof(future), "%s/app.log.99991231235959", dir);
+  bool setup =
+      write_whole_file(stuck, "", 0) && write_whole_file(future, "F\n", 2);
+
+  clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
+                             .max_file_size = 300,
+                             .max_rotated_files = 2};
+  clog lg = setup ? clog_open_file(path, CLOG_INFO, &cfg, NULL) : CLOG_INVALID;
+  if (lg != CLOG_INVALID) {
+    for (int i = 0; i < 60; i++)
+      clog_info(lg, "RHSTALL %d padding-padding-padding", i);
+    clog_close(lg);
+  }
+
+  /* Every generation that the clock stamps starts with the century. */
+  int generations = count_files_with_prefix(dir, "app.log.2");
+  mode_t stuck_kind = rh_entry_kind(stuck);
+  mode_t future_kind = rh_entry_kind(future);
+  struct stat live_st;
+  bool live_bounded = stat(path, &live_st) == 0 && live_st.st_size < 2048;
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(setup);
+  REQUIRE_NE(lg, CLOG_INVALID);
+  REQUIRE_EQ(generations, 2);
+  REQUIRE_EQ((unsigned)stuck_kind, (unsigned)S_IFREG);
+  REQUIRE_EQ((unsigned)future_kind, (unsigned)S_IFREG);
+  REQUIRE_TRUE(live_bounded);
+}
+
+/*
+ * Every entry that looks like a rotated file and is not a generation gets a
+ * WARN record, and no more than eight such records go out in a minute, so a
+ * directory full of them cannot flood the log.
+ *
+ * This test is non-vacuous: without the records, the log holds none of
+ * them; without the limit, it holds twenty.
+ */
+TEST(rotation_foreign, ignored_entries_are_reported_at_a_bounded_rate) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  bool setup = true;
+  for (int i = 0; i < 20; i++) {
+    char l[256];
+    snprintf(l, sizeof(l), "%s/app.log.202001010000%02d", dir, i);
+    setup &= symlink("nowhere", l) == 0;
+  }
+  clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
+                             .max_file_size = 1 << 20,
+                             .max_rotated_files = 5,
+                             .compress_rotated = true};
+  clog lg = setup ? clog_open_file(path, CLOG_INFO, &cfg, NULL) : CLOG_INVALID;
+  if (lg != CLOG_INVALID) clog_close(lg);
+  int warns = rh_count_lines_with(
+      path,
+      "ignored an entry that is not a rotated file of this log: app.log.");
+  int links = count_files_with_prefix(dir, "app.log.2020");
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(setup);
+  REQUIRE_NE(lg, CLOG_INVALID);
+  REQUIRE_EQ(warns, 8);
+  REQUIRE_EQ(links, 20);
+}
+
+/*
+ * A regular file at a rotated name that another user owns is not a
+ * generation of the log. The test needs to create a file owned by another
+ * user, which only the superuser can do; it does nothing for any other
+ * user.
+ */
+TEST(rotation_foreign, a_file_another_user_owns_is_never_compressed) {
+  if (geteuid() != 0) {
+    printf("  (needs root to create a file another user owns; not run)\n");
+    return;
+  }
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[256], foreign[256], gz[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  snprintf(foreign, sizeof(foreign), "%s/app.log.20200101000000", dir);
+  snprintf(gz, sizeof(gz), "%s/app.log.20200101000000.gz", dir);
+  bool setup = write_whole_file(foreign, "THEIRS\n", 7) &&
+               chown(foreign, 65534, 65534) == 0;
+  clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
+                             .max_file_size = 300,
+                             .max_rotated_files = 1,
+                             .compress_rotated = true};
+  clog lg = setup ? clog_open_file(path, CLOG_INFO, &cfg, NULL) : CLOG_INVALID;
+  if (lg != CLOG_INVALID) {
+    for (int i = 0; i < 30; i++) clog_info(lg, "RHGEN %d padding-padding", i);
+    clog_close(lg);
+  }
+  char fbuf[64];
+  read_file(foreign, fbuf, sizeof(fbuf));
+  mode_t gz_kind = rh_entry_kind(gz);
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(setup);
+  REQUIRE_NE(lg, CLOG_INVALID);
+  REQUIRE_STREQ(fbuf, "THEIRS\n");
+  REQUIRE_EQ((unsigned)gz_kind, 0u);
+}
+
+/*
+ * The private name under which a rotation creates the next live file is
+ * removed at the next open when a stopped process left it behind empty,
+ * and only then: a file with content and a link at a name of that shape
+ * stay.
+ */
+TEST(rotation_foreign, open_removes_only_an_empty_private_file_of_a_rotation) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[256], empty[256], full[256], link[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  snprintf(empty, sizeof(empty), "%s/app.log.tmp0123456789a", dir);
+  snprintf(full, sizeof(full), "%s/app.log.tmp0123456789b", dir);
+  snprintf(link, sizeof(link), "%s/app.log.tmp0123456789c", dir);
+  bool setup = write_whole_file(empty, "", 0) &&
+               write_whole_file(full, "DATA\n", 5) &&
+               symlink("nowhere", link) == 0;
+  clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
+                             .max_file_size = 1 << 20,
+                             .max_rotated_files = 5};
+  clog lg = setup ? clog_open_file(path, CLOG_INFO, &cfg, NULL) : CLOG_INVALID;
+  if (lg != CLOG_INVALID) clog_close(lg);
+  mode_t empty_kind = rh_entry_kind(empty);
+  mode_t full_kind = rh_entry_kind(full);
+  mode_t link_kind = rh_entry_kind(link);
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(setup);
+  REQUIRE_NE(lg, CLOG_INVALID);
+  REQUIRE_EQ((unsigned)empty_kind, 0u);
+  REQUIRE_EQ((unsigned)full_kind, (unsigned)S_IFREG);
+  REQUIRE_EQ((unsigned)link_kind, (unsigned)S_IFLNK);
+}
+
+/*
+ * A rotating logger whose path is a link writes through the link until its
+ * first rotation, which moves the link to a rotated name. From then on the
+ * live file is a regular file that the logger made, and the link, which is
+ * not a generation, is never followed, compressed or removed.
+ *
+ * This test is non-vacuous: a compression that opens the rotated name
+ * through the link writes the file that the link names to "<name>.gz".
+ */
+TEST(rotation_foreign, a_live_path_that_is_a_link_is_moved_aside_once) {
+  char dir[64];
+  REQUIRE_EQ(make_cwd_tmpdir(dir, sizeof(dir)), 0);
+  char path[256], target[256];
+  snprintf(path, sizeof(path), "%s/app.log", dir);
+  snprintf(target, sizeof(target), "%s/app.log-target", dir);
+  bool setup =
+      write_whole_file(target, "", 0) && symlink("app.log-target", path) == 0;
+  clog_rotation_cfg_t cfg = {.size_rotation_enabled = true,
+                             .max_file_size = 300,
+                             .max_rotated_files = 50,
+                             .compress_rotated = true};
+  clog lg = setup ? clog_open_file(path, CLOG_INFO, &cfg, NULL) : CLOG_INVALID;
+  if (lg != CLOG_INVALID) {
+    for (int i = 0; i < 30; i++)
+      clog_info(lg, "RHLINK %02d padding-padding", i);
+    clog_close(lg);
+  }
+  char tbuf[4096];
+  read_file(target, tbuf, sizeof(tbuf));
+  bool first_in_target = strstr(tbuf, "RHLINK 00") != NULL;
+  bool last_in_target = strstr(tbuf, "RHLINK 29") != NULL;
+  mode_t live_kind = rh_entry_kind(path);
+  /* The link sits at a rotated name of its own from here on. */
+  int links = 0;
+  char link_gz[600] = {0};
+  DIR *d = opendir(dir);
+  struct dirent *e;
+  while (d && (e = readdir(d)) != NULL) {
+    char p[512];
+    snprintf(p, sizeof(p), "%s/%s", dir, e->d_name);
+    if (strncmp(e->d_name, "app.log.", 8) == 0 && rh_entry_kind(p) == S_IFLNK) {
+      links++;
+      snprintf(link_gz, sizeof(link_gz), "%s.gz", p);
+    }
+  }
+  if (d) closedir(d);
+  /* Nothing compressed the file that the link names. */
+  mode_t link_gz_kind = link_gz[0] ? rh_entry_kind(link_gz) : 0;
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(setup);
+  REQUIRE_NE(lg, CLOG_INVALID);
+  REQUIRE_TRUE(first_in_target);
+  REQUIRE_FALSE(last_in_target);
+  REQUIRE_EQ((unsigned)live_kind, (unsigned)S_IFREG);
+  REQUIRE_EQ(links, 1);
+  REQUIRE_EQ((unsigned)link_gz_kind, 0u);
 }

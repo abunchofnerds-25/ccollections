@@ -5,19 +5,21 @@ cyaml_dictionary_size \- return the number of keys in a dictionary
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cyaml.h>
+#include <ccollections/cyaml.h>
 
 size_t cyaml_dictionary_size(cyaml node);
 .fi
 .SH DESCRIPTION
 .nf
-Return the number of key-value pairs in the CYAML_DICTIONARY node.  Calls
-ccol_fatal_err() if node is NULL or its type is not CYAML_DICTIONARY.
+Return the number of key-value pairs in the CYAML_DICTIONARY node.  The
+function calls ccol_fatal_err() when node is NULL, and it calls
+ccol_fatal_err() as well when node is not of type CYAML_DICTIONARY.
 .fi
 .SH RETURN VALUE
 .nf
-Key count (0 for empty dictionaries).
+The key count, which is 0 for an empty dictionary.
 .fi
 .SH "SEE ALSO"
+.BR cyaml_dictionary_first (3),
 .BR cyaml_dictionary_get (3),
 .BR cyaml_dictionary_set (3)

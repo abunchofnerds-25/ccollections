@@ -1,57 +1,92 @@
-.TH CCOL_EVENT_LOOP_REMOVE 3 "2026-07-12" "c_collections" "C Collections Library - Functions"
+.TH CCOL_EVENT_LOOP_REMOVE 3 "2026-09-21" "c_collections" "C Collections Library - Functions"
 .SH NAME
 ccol_event_loop_remove \- deregister a selectable from an event loop
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadcomm.h>
+#include <ccollections/cthreadcomm.h>
 
 ccol_retval_t ccol_event_loop_remove(ccol_event_loop loop, ccol_event_reg reg);
 .fi
 .SH DESCRIPTION
 .nf
-Deregisters reg.  Safe to call from within a callback for the very
-registration being removed (self-removal on error is a common pattern),
-as well as from any other thread, including concurrently with an
-in-flight dispatch for the same registration.  No further callback for
-this registration is ever invoked after this call returns, even one
-already collected (e.g. sitting queued for a dispatch worker thread with
-num_reactor_threads > 1) but not yet actually started; this call itself,
-however, does not wait for a dispatch that is already in flight at the
-moment of the call to finish.  A caller that must not free whatever arg
-points to while such a dispatch could still be running needs
-handlers.on_removed (see ccol_event_loop_add(3)): it fires exactly once,
-asynchronously, only once no dispatch of this registration and no other
-ccol_event_loop call resolving it can still be in progress.  A caller
-confident no dispatch can be in flight at the moment of removal (e.g.
-self-removal from within that exact registration's own callback, or a
-registration that was never dispatched to begin with) may still free arg
-immediately without needing on_removed.
+This function deregisters reg. It is safe to call from inside a
+callback for the registration that you remove (self-removal on an
+error is a common pattern), from any other thread, and at the same
+time as an in-flight dispatch for the same registration.
 
-Does not close an fd or affect a queue's own lifetime; only the
-ccol_event_loop's registration bookkeeping is released, mirroring
-ccol_selectable_from_fd's existing "caller owns the fd" contract.
+No later callback for this registration ever runs after this call
+returns. This covers a callback that the loop already collected but
+that has not started yet, such as one that waits in the queue of a
+dispatch worker thread with num_reactor_threads > 1. This call does
+not, however, wait for a dispatch that is already in flight at the
+moment of the call.
 
-Safe to call more than once on the same reg, whether sequentially or
-genuinely concurrently from different threads, and the reg handle
-itself remains safe to pass to a subsequent ccol_event_loop_modify(),
-ccol_event_loop_pause()/_resume(), ccol_event_loop_reg_generation(), or
-ccol_event_loop_remove() call after removal: reg is resolved against its
-own loop's registration table before anything is dereferenced, so an
-already-removed or otherwise stale handle is always detected rather
-than risking a use-after-free. The two repeat-call cases return
-differently, though. A call made strictly after an earlier
-ccol_event_loop_remove() on the same reg has already returned finds reg_h
-no longer resolves at all (that earlier call already released reg's
-own slot before returning) and gets ccol_invalid_args, the same
-outcome ccol_event_loop_modify()/_pause()/_resume()/ccol_event_loop_reg_
-generation() already give for an already-removed reg. A call that
-genuinely races another ccol_event_loop_remove() on the same reg is
-different: if its own resolve still succeeds (a narrow window, since
-reg's slot has not yet been released by the other call), it observes
-reg already marked removed and returns ccol_success as a no-op
-instead.
+A dispatch that is in flight can use whatever arg points to, so a
+caller that cannot otherwise know when that memory is safe to free
+needs handlers.on_removed (see ccol_event_loop_add(3)). It fires
+exactly one time, asynchronously, and only after no dispatch of this
+registration, and no other ccol_event_loop call that resolves it, can
+be in progress. A caller that is sure that no dispatch can be in flight
+at the moment of the removal may free arg at once, with no on_removed;
+self-removal from inside the callback of that exact registration is
+one such case, and a registration that the loop never dispatched is
+another.
+
+This function does not close an fd and does not touch the lifetime of
+a queue; it releases only the registration bookkeeping of the
+ccol_event_loop. This mirrors the "the caller owns the fd" contract of
+ccol_selectable_from_fd.
+
+Remove every registration of an fd before you close that fd, as
+libevent and libuv also require. Once the last of them is removed, the
+loop has stopped watching the fd by the time this call returns, and
+the fd number is free. A new registration of the same fd, or of a new
+descriptor that reuses the number, is independent of the removed one:
+nothing that the loop does afterwards for the removed registration (a
+dispatch in flight, or the later release of its bookkeeping) changes
+how the new one is watched. A registration whose fd is closed first
+holds the number until it is removed, and in the meantime a
+ccol_event_loop_add(3) of a descriptor that reuses the number fails
+with ccol_not_permitted for the direction that the stale registration
+holds, and can fail with ccol_unexpected_failure for the other
+direction.
+
+For a queue selectable or a ccol_channel selectable, the loop finishes
+its own bookkeeping for that queue before this call returns: it
+unlinks the waiter of the registration from the queue and releases the
+registration bookkeeping. A dispatch that is already in flight is a
+separate matter, because its callback holds the selectable that the
+loop gave it and reaches the queue through that selectable. Unlike arg
+above, the queue needs no on_removed handshake for this, because a
+destroy of the queue waits for any such callback to finish with it
+(see ccol_circular_queue_destroy(3)). The ordinary sequence of drain,
+remove and destroy is therefore safe from any thread, but that thread
+must not itself run one of the callbacks of this registration.
+
+It is safe to call this function more than one time on the same reg,
+both for calls one after another and for calls that truly run at the
+same time on different threads. The reg handle also stays safe to pass
+to a later ccol_event_loop_modify(), ccol_event_loop_pause()/_resume(),
+ccol_event_loop_reg_generation() or ccol_event_loop_remove() call
+after a removal. The library resolves reg against the registration
+table of its own loop before it dereferences anything, so it always
+finds a handle that is stale, or that something already removed, and
+never risks a use-after-free.
+
+The two repeat-call cases return different values. A call that runs
+strictly after an earlier ccol_event_loop_remove() on the same reg
+returned finds that reg_h does not resolve at all, because that
+earlier call released the slot of reg before it returned, so it gets
+ccol_invalid_args. That is the same outcome that
+ccol_event_loop_modify(), _pause(), _resume() and
+ccol_event_loop_reg_generation() give for a reg that something
+removed. A call that truly races another ccol_event_loop_remove() on
+the same reg is different: its own resolve can succeed, in a narrow
+window where the other call has not yet released the slot of reg, and
+it then sees that reg is already marked as removed, returns
+ccol_success and does nothing.
 .fi
 .SH PARAMETERS
 .nf
@@ -60,28 +95,32 @@ reg   Registration to remove.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success        Removed (or a genuinely concurrent racing call
-                    against the same reg already removed it first;
-                    see DESCRIPTION).
-ccol_invalid_args   loop is CCOL_EVENT_LOOP_INVALID or a stale/already-
-                    destroyed handle, or reg is CCOL_EVENT_REG_INVALID or
-                    otherwise fails to resolve, including because an
-                    earlier, already-returned ccol_event_loop_remove() call
-                    already removed it.
+ccol_success        The function removed the registration, or
+                    another call on the same reg that truly runs at
+                    the same time removed it first (see
+                    DESCRIPTION).
+ccol_invalid_args   loop is CCOL_EVENT_LOOP_INVALID, or a handle that
+                    is stale, or one that something already destroyed;
+                    or reg is CCOL_EVENT_REG_INVALID, or it fails to
+                    resolve for another reason, such as an earlier
+                    ccol_event_loop_remove() call that has returned
+                    and has removed it.
 .fi
 .SH THREAD SAFETY
 .nf
-Safe to call from any thread, including concurrently with dispatch for
-the same registration and from within that registration's own callback.
+Safe to call from any thread, including at the same time as a dispatch
+for the same registration and from inside the callback of that
+registration.
 .fi
 .SH EXAMPLES
 .nf
-void on_readable(ccol_event_loop loop, ccol_selectable *sel, void *arg) {
+void on_readable(ccol_event_loop loop, ccol_event_reg reg,
+                 ccol_selectable *sel, void *arg) {
     conn_ctx_t *ctx = (conn_ctx_t *)arg;
     char buf[512];
     ssize_t n = read(sel->fd, buf, sizeof(buf));
     if (n <= 0) {
-        ccol_event_loop_remove(loop, ctx->reg);  /* self-removal, safe */
+        ccol_event_loop_remove(loop, reg);  /* self-removal, safe */
         close(sel->fd);
         free(ctx);
         return;

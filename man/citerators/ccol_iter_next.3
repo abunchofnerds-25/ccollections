@@ -1,33 +1,33 @@
 .TH CCOL_ITER_NEXT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-ccol_iter_next \- advance a unified iterator to the next element
+ccol_iter_next \- move a unified iterator on to the next element
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <citerators.h>   /* or any container header */
+#include <ccollections/citerators.h>   /* or any container header */
 
 cmap_iterator *ccol_iter_next(it);
 .fi
 .SH DESCRIPTION
 .nf
-Advances the iterator to the next element by calling the iterator's
-own _next_fn callback.  When the end of the sequence is reached, the
-iterator is automatically destroyed and NULL is returned.
+This macro moves the iterator on to the next element by calling the
+_next_fn callback of the iterator. At the end of the sequence, the macro
+destroys the iterator automatically and gives NULL.
 .fi
 .SH PARAMETERS
 .nf
-it   Iterator variable declared with ccol_iter_declare() or inside
-     ccol_for_each().
+it   Iterator variable that ccol_iter_declare() declares, or an iterator
+     inside ccol_for_each().
 .fi
 .SH RETURN VALUE
 .nf
-Returns the (updated) iterator, or NULL when past the last element.
+The new value of the iterator, or NULL after the last element.
 .fi
 .SH NOTES
 .nf
-After ccol_iter_next() returns NULL, the iterator has been destroyed;
-do not call ccol_iter_destroy() on it afterwards.
+The iterator is destroyed when ccol_iter_next() gives NULL, so do not call
+ccol_iter_destroy() on it after that.
 .fi
 .SH "SEE ALSO"
 .BR ccol_begin (3),

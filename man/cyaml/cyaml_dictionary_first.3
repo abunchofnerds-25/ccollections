@@ -1,0 +1,125 @@
+.TH CYAML_DICTIONARY_FIRST 3 "2026-09-29" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_dictionary_first \- start an iteration over the members of a dictionary node
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cyaml.h>
+
+typedef struct cyaml_dictionary_iter {
+    const char *key;
+    cyaml       value;
+    /* private fields, whose names begin with an underscore */
+} cyaml_dictionary_iter;
+
+bool cyaml_dictionary_first(cyaml dict, cyaml_dictionary_iter *it);
+.fi
+.SH DESCRIPTION
+.nf
+Fill the cursor it and step it onto the first member of the dictionary
+node dict; cyaml_dictionary_next(3) then steps it onto each later
+member.  After a call that returns true, it->key is the key of the
+member and it->value is its value, a borrowed reference with the rules
+of cyaml_dictionary_get(3).
+
+The members come in insertion order, the order in which each key first
+entered the dictionary.  For a parsed document that is the order of the
+members in the text; for a dictionary that the program builds, it is
+the order of the cyaml_dictionary_set(3) and cyaml_set(3) calls that
+added each key.  Replacing the value of a key keeps its place, so a key
+that a document repeats keeps the place of its first occurrence and the
+value of its last.  A key that the program removes and then sets again
+goes after every other member.
+
+The members that a merge key ("<<") brings in take the place of the
+"<<" entry, after the explicit members before it and before the
+explicit members after it.  They come source by source in the order
+that the entry lists them, each source in its own member order.  A key
+that the mapping already holds keeps its own place and value.
+
+cyaml_serialize(3), cyaml_serialize_flow(3) and cyaml_clone(3) use the
+same order, so a parse followed by a serialize keeps the key order of
+the source document.
+
+The cursor is a plain struct that the caller owns, usually on its own
+stack.  The iteration allocates nothing and cannot fail, so there is
+nothing to release and the caller can stop at any point.
+.fi
+.SH PARAMETERS
+.nf
+dict  The dictionary node to walk.
+it    The cursor to fill.  It must not be NULL.
+.fi
+.SH RETURN VALUE
+.nf
+true when it now stands on the first member.
+
+false when dict has no members, when dict is NULL, or when dict is
+not a CYAML_DICTIONARY; the function then sets it->key and it->value
+to NULL.  Also false when it is NULL.
+.fi
+.SH NOTES
+.nf
+it->key points at the copy of the key that the dictionary stores, and
+it stays valid until that member is removed or the dictionary is
+destroyed.
+
+The cursor holds the member that the next step reads, which is the
+successor of the member that the last successful call gave, and it
+stays valid across every change to the dictionary that leaves that
+successor in place:
+
+  - a replacement of the value of any member, the current one
+    included, through cyaml_dictionary_set(3) or cyaml_set(3); the
+    member keeps its place, so the iteration goes on in the same
+    order;
+  - the removal of the current member, or of any member other than
+    the successor (to remove the current member, pass it->key to
+    cyaml_dictionary_remove(3));
+  - an insert of a new key; the new member goes after every other
+    member, and whether this iteration still reaches it is unspecified.
+
+Removing the successor, through cyaml_dictionary_remove(3),
+cyaml_delete(3) or any other call, invalidates the cursor, and so does
+destroying the dictionary.  A later cyaml_dictionary_next(3) on an
+invalid cursor is undefined behavior, so start again with
+cyaml_dictionary_first() after such a change.
+
+it->key and it->value describe the current member as it was when the
+cursor stepped onto it.  Replacing the value of the current member
+through cyaml_dictionary_set(3) destroys the old value, so it->value
+then names freed memory; read the new value with
+cyaml_dictionary_get(3) and it->key.  cyaml_set(3), by contrast,
+updates the existing node in place, so it->value stays the same node.
+.fi
+.SH THREAD SAFETY
+.nf
+A cyaml tree is not thread safe, but several threads can walk the same
+dictionary at the same time, each with its own cursor, while no thread
+changes the dictionary.
+.fi
+.SH EXAMPLES
+.nf
+cyaml doc = cyaml_parse("b: 1\ena: 2\en", NULL);
+cyaml_dictionary_iter it;
+for (bool ok = cyaml_dictionary_first(doc, &it); ok;
+     ok = cyaml_dictionary_next(&it)) {
+    printf("%s = %lld\en", it.key, cyaml_int_val(it.value));
+}
+/* prints "b = 1" and then "a = 2" */
+
+/* Remove every member whose value is null, in one pass. */
+for (bool ok = cyaml_dictionary_first(doc, &it); ok;
+     ok = cyaml_dictionary_next(&it)) {
+    if (cyaml_type(it.value) == CYAML_NULL)
+        cyaml_dictionary_remove(doc, it.key);
+}
+cyaml_destroy(doc);
+.fi
+.SH "SEE ALSO"
+.BR cyaml_dictionary_next (3),
+.BR cyaml_dictionary_get (3),
+.BR cyaml_dictionary_remove (3),
+.BR cyaml_dictionary_size (3),
+.BR cyaml_serialize (3)

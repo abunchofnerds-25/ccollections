@@ -1,47 +1,52 @@
-.TH CTPOOL_TIMED_SUBMIT 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
+.TH CTPOOL_TIMED_SUBMIT 3 "2026-10-01" "c_collections" "C Collections Library - Functions"
 .SH NAME
-ctpool_timed_submit \- submit a task with a relative timeout
+ctpool_timed_submit \- submit a task with a timeout
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadpool.h>
+#include <ccollections/cthreadpool.h>
 
 ccol_retval_t ctpool_timed_submit(ctpool pool,
                                   void (*fn)(void *),
                                   void *arg,
-                                  void (*on_complete)(void *),
-                                  struct timespec *timeout);
+                                  void (*on_complete)(void *arg, bool ran),
+                                  uint64_t timeout_us);
 .fi
 .SH DESCRIPTION
 .nf
-Identical to ctpool_submit except that for bounded queues it waits at
-most timeout for a free slot. The timeout is a relative duration;
-internally it is converted to an absolute deadline using CLOCK_REALTIME.
+Works like ctpool_submit, except that for a bounded queue it waits at
+most timeout_us microseconds for a free slot, measured from the call.
+The library converts the timeout to an absolute deadline with
+CLOCK_MONOTONIC, so a change to the wall clock of the system (by an
+administrator, NTP, or the resume of a virtual machine) does not make
+the wait longer or shorter.
 
-Passing NULL as timeout is equivalent to ctpool_try_submit (no waiting).
+A timeout_us of 0 makes this call the same as ctpool_try_submit, which
+does not wait.
 
-A non-NULL timeout whose tv_nsec field is outside [0, 999999999]
-(for example the un-normalised result of subtracting two struct
-timespec values) is normalised before use rather than producing
-undefined behaviour: {1, -500000000} is treated the same as a
-correctly-normalised {0, 500000000}.
+A timeout too large to form a deadline, such as UINT64_MAX, waits for as
+long as the queue stays full: the deadline saturates at the latest
+representable time and never wraps into the past.
 .fi
 .SH PARAMETERS
 .nf
 pool         Thread pool handle
 fn           Task function (must not be NULL)
-arg          Passed to fn and on_complete (may be NULL)
-on_complete  Called after fn returns (may be NULL)
-timeout      Relative duration to wait (NULL = do not wait)
+arg          The library gives it to fn and on_complete (may be NULL)
+on_complete  Called once for the task: on_complete(arg, true) after
+             fn returns, or on_complete(arg, false) when the pool
+             discards the task unrun (may be NULL)
+timeout_us   Longest time to wait, in microseconds (0 = do not wait)
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success           - task enqueued.
-ccol_invalid_args      - pool is CTPOOL_INVALID or a stale/already-destroyed handle, or fn is NULL.
+ccol_invalid_args      - pool is CTPOOL_INVALID or a stale/already-
+                         destroyed handle, or fn is NULL.
 ccol_not_enough_memory - task struct allocation failed.
 ccol_not_permitted     - pool is shutting down.
-ccol_container_full    - NULL timeout and queue is full.
+ccol_container_full    - timeout_us is 0 and the queue is full.
 ccol_timed_out         - timeout elapsed before a slot became free.
 ccol_unexpected_failure - clock_gettime or pthread_cond_timedwait
                           returned an unexpected error.

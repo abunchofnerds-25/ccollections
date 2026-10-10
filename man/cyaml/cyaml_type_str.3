@@ -5,19 +5,19 @@ cyaml_type_str \- return a string name for a node's type
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cyaml.h>
+#include <ccollections/cyaml.h>
 
 const char *cyaml_type_str(cyaml node);
 .fi
 .SH DESCRIPTION
 .nf
-Return a static string literal naming the type of node, e.g.
-"CYAML_INTEGER".  Returns "CYAML_UNKNOWN" for unexpected type values.
-Useful for diagnostics and test output.
+Return a static string literal that names the type of node, such as
+"CYAML_INTEGER", or "CYAML_UNKNOWN" for a type value that the function
+does not expect.  It is useful in diagnostics and in test output.
 .fi
 .SH RETURN VALUE
 .nf
-Static null-terminated string; caller must not free it.
+A static null-terminated string, which the caller must not free.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_type (3)

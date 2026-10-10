@@ -5,7 +5,7 @@ ccol_create_cthread_pool \- create a thread pool with default memory management
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadpool.h>
+#include <ccollections/cthreadpool.h>
 
 ctpool ccol_create_cthread_pool(size_t num_threads,
                            size_t queue_capacity,
@@ -13,18 +13,22 @@ ctpool ccol_create_cthread_pool(size_t num_threads,
 .fi
 .SH DESCRIPTION
 .nf
-Convenience wrapper around ccol_create_cthread_pool_mp with mprocs = NULL.
-Uses standard malloc/free for all pool-internal allocations.
+A wrapper around ccol_create_cthread_pool_mp with mprocs = NULL, so the
+pool uses the standard malloc and free for every allocation inside it.
 .fi
 .SH PARAMETERS
 .nf
 num_threads    Number of worker threads (must be >= 1)
-queue_capacity 0 or ccol_invalid_size for unbounded; N > 0 for bounded
-err_str        Optional: receives a static error string on failure
+queue_capacity 0 for unbounded; N > 0 for bounded. ccol_invalid_size
+               is refused (see ccol_create_cthread_pool_mp(3)).
+err_str        Optional. It gets a static error string on failure
 .fi
 .SH RETURN VALUE
 .nf
 Returns a new ctpool handle on success, or CTPOOL_INVALID on failure.
+A process that has no thread-specific key left to give gets
+CTPOOL_INVALID from this call and from every later one; see
+ccol_create_cthread_pool_mp(3).
 .fi
 .SH "SEE ALSO"
 .BR ccol_create_cthread_pool_mp (3),

@@ -1,29 +1,30 @@
 .TH CHTTP_GET 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-chttp_get \- perform a GET request via the default client
+chttp_get \- do a GET request with the default client
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpclient.h>
+#include <ccollections/chttpclient.h>
 
 ccol_retval_t chttp_get(const char *url,
                         chttpcli_response **resp_out);
 .fi
 .SH DESCRIPTION
 .nf
-Convenience wrapper: creates a CHTTP_GET request for url, performs it
-via the default client, and frees the request.
+This is a short wrapper that makes a CHTTP_GET request for url, runs
+that request with the default client, and then frees the request.
 .fi
 .SH PARAMETERS
 .nf
-url       Target URL; must not be NULL.
-resp_out  Must not be NULL. Set to NULL immediately, then, on
-          success, receives the response pointer.
+url       The target URL. It must not be NULL.
+resp_out  It must not be NULL. The function sets it to NULL at once,
+          and if the call succeeds, it then gets the pointer to the
+          response.
 .fi
 .SH RETURN VALUE
 .nf
-Same codes as chttpclient_do.
+The same codes as chttpclient_do.
 .fi
 .SH "SEE ALSO"
 .BR chttp_post (3),

@@ -1,0 +1,87 @@
+.TH CVEC_DECLARE_SCOPED 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cvec_declare_scoped \- declare a vector variable destroyed automatically at scope exit
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cvector.h>
+
+cvec_declare_scoped(v, type);
+.fi
+.SH DESCRIPTION
+.nf
+This macro declares a vector variable named v for elements of the given
+type, exactly as cvec_declare(3) does, and adds a cleanup handler that
+destroys the vector when control leaves the scope around it. The macro
+creates no vector: it initializes v to NULL, and v stays NULL until
+cvec_init(3) or cvec_init_mp(3) gives it a vector.
+
+The NULL value in v is what makes the cleanup handler safe here, because
+the handler runs on every exit from the scope, including an exit before
+anything assigns the variable. A scoped declaration that left the variable
+indeterminate would give an arbitrary value to the cleanup handler on any
+early return between the declaration and the creation. Both companion type
+variables start at NULL for the same reason, so nothing in the block reads
+an indeterminate object.
+
+The destruction happens on every path out of the block: the closing brace,
+a return, a break, a continue, or a goto out of the block. Because the
+macro sets the variable to NULL as it destroys the vector, an explicit
+call to cvec_destroy(3) earlier in the block is safe and frees nothing
+twice.
+
+When you can create the vector on the same line as the declaration, use
+cvec_construct_scoped(3) or cvec_construct_mp_scoped(3) instead.
+.fi
+.SH PARAMETERS
+.nf
+v     Name of the vector variable to declare
+type  Element type, for example int, double or struct foo
+      Any type name is accepted, including a function
+      pointer type such as void (*)(int) and an array
+      type such as int[4]. For an array element type,
+      give cvec_push(3) an array or a string literal.
+      The macro copies its bytes into the element
+.fi
+.SH NOTES
+.nf
+The macro is built on __attribute__((cleanup)), so it needs GCC or
+Clang. On a toolchain that does not have that attribute, use
+cvec_declare(3) with an explicit cvec_destroy(3).
+The macro expands to a sequence of declarations and needs a semicolon at
+the end of the call site, so it belongs where declarations are legal and
+cannot be the body of an if or a loop without braces.
+A block that leaves v at NULL is correct, because the cleanup handler
+does nothing for a NULL vector.
+When the vector holds pointers to heap buffers, the macro does not free
+the elements one by one, so free the element data before you leave the
+scope.
+.fi
+.SH WARNINGS
+.nf
+The vector must not live longer than its scope: do not return v, and do
+not store it anywhere that code reads after the end of the block. When
+the ownership must leave the block, use cvec_declare(3).
+.fi
+.SH EXAMPLES
+.nf
+void load(bool use_pool, ccol_memmgmt_procs_t *pool) {
+    cvec_declare_scoped(vec, int);
+
+    if (use_pool) {
+        cvec_init_mp(vec, pool);
+    } else {
+        cvec_init(vec);
+    }
+
+    cvec_push(vec, 42);
+}   /* vec is destroyed here, and on every earlier exit from the block */
+.fi
+.SH "SEE ALSO"
+.BR cvec_declare (3),
+.BR cvec_construct_scoped (3),
+.BR cvec_construct_mp_scoped (3),
+.BR cvec_init (3),
+.BR cvec_init_mp (3),
+.BR cvec_destroy (3)

@@ -26,24 +26,25 @@
  * @file bench.h
  * @brief Measurement harness shared by every benchmark group.
  *
- * A benchmark is a bench_case_t: a setup that builds whatever state the
- * measured work needs, a run that performs exactly n operations, and a
- * teardown. Only run is timed, and setup and teardown are repeated for every
- * repetition, so a case that mutates its state (filling a vector, inserting
- * into a map) measures the same work every time rather than an ever larger
- * container.
+ * A benchmark is a bench_case_t: a setup that builds the state the measured
+ * work needs, a run that does exactly n operations, and a teardown. The
+ * harness times only the run, and it repeats the setup and the teardown for
+ * every repetition. A case that changes its own state, for example one that
+ * fills a vector or inserts into a map, therefore measures the same work every
+ * time instead of a container that grows.
  *
- * Results are reported as nanoseconds per operation, taken as the median over
- * the repetitions. The median rather than the mean because the distribution is
- * one-sided: a repetition can be arbitrarily slowed by a scheduler preemption
- * or a migration, and nothing makes one arbitrarily fast, so a single outlier
- * moves a mean and leaves a median alone.
+ * The harness reports a result in nanoseconds for each operation. It takes the
+ * median across the repetitions instead of the mean, because the distribution
+ * has one long side: the scheduler can stop a repetition, or move it to
+ * another CPU, for any length of time, while nothing can make a repetition
+ * faster than the work it does. One outlier therefore moves a mean and leaves
+ * a median alone.
  *
- * Benchmarks link against the installed shape of the library (the real
- * libccollections.so, built at the flags it ships with) rather than compiling
- * its sources into the benchmark binary. A call from here therefore pays the
- * same dynamic-call cost an application pays, which is the number worth
- * reporting.
+ * The benchmarks link against the shipped form of the library, which is the
+ * real shared library built at the flags that it ships with, instead of
+ * compiling its sources into the benchmark binary, so a call from here pays
+ * the same dynamic call cost that an application pays, and that is the number
+ * worth reporting.
  */
 
 #ifndef CCOL_BENCH_H
@@ -53,42 +54,51 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/** Operations per repetition for a case that does not choose its own size. */
+/** The number of operations for each repetition, for a case that does not
+ * choose its own size. */
 #define BENCH_DEFAULT_N 100000
 
 /**
  * @brief One benchmark.
  *
- * @var bench_case_t::group  Module the case belongs to, e.g. "cvector".
- * @var bench_case_t::name   Case name within the group, e.g. "push_int".
- * @var bench_case_t::vs     Non-NULL when this case measures a third-party
- *                           library for comparison, naming it (e.g. "uthash").
- *                           Such a case is reported next to the c_collections
- *                           case of the same name but is never compared
- *                           against the regression baseline: it tracks another
- *                           project's performance, not this one's.
- * @var bench_case_t::setup  Builds state; returns NULL on allocation failure,
- *                           which skips the case rather than aborting the run.
- * @var bench_case_t::run    Performs exactly n operations against that state.
- * @var bench_case_t::n      Operations per repetition, per thread.
- * @var bench_case_t::threads Worker threads to run the body on. 0 or 1 is an
- *                           ordinary single-threaded case. Above that, every
- *                           worker is built and parked before any of them
- *                           starts, so the timed region holds the work and not
- *                           the thread creation around it, and the reported
- *                           figure is that time divided by n*threads. It is
- *                           therefore directly comparable to the
- *                           single-threaded case and falls as the work spreads
- *                           out.
- * @var bench_case_t::setup_mt Fixture builder for a threaded case, told how
- * many threads will use what it returns. Supplied instead of setup, never
- * alongside it.
- * @var bench_case_t::shared_fixture For a threaded case: true if all threads
- *                           share one fixture, which is what measures
- *                           contention on a thread-safe type; false if each
- *                           thread gets its own, which is the only valid shape
- *                           for the deliberately unguarded containers and
- *                           measures parallel scaling instead.
+ * @var bench_case_t::group  The module that the case belongs to, for example
+ *                           "cvector".
+ * @var bench_case_t::name   The name of the case inside the group, for example
+ *                           "push_int".
+ * @var bench_case_t::vs     Not NULL when the case measures a third-party
+ *                           library for a comparison, and then the name of
+ *                           that library, for example "uthash". The harness
+ *                           reports such a case beside the c_collections case
+ *                           of the same name, but never compares it against
+ *                           the regression baseline, because it follows the
+ *                           performance of another project and not of this
+ *                           one.
+ * @var bench_case_t::setup  Builds the state, or returns NULL when an
+ *                           allocation fails, in which case the harness skips
+ *                           the case instead of stopping the run.
+ * @var bench_case_t::run    Does exactly n operations against that state.
+ * @var bench_case_t::n      The number of operations for each repetition, for
+ *                           each thread.
+ * @var bench_case_t::threads The number of worker threads for the body. A value
+ *                           of 0 or 1 gives an ordinary case with one thread.
+ *                           Above that, the harness builds every worker and
+ *                           parks it before any worker starts, so the timed
+ *                           region holds the work and not the creation of the
+ *                           threads. The reported figure is that time divided
+ *                           by n multiplied by threads, so you can compare it
+ *                           directly with the case that has one thread, and
+ *                           it falls as the work spreads out.
+ * @var bench_case_t::setup_mt The fixture builder for a case with threads; the
+ *                           harness tells it how many threads will use what
+ *                           it returns. Give this instead of setup, and never
+ *                           give both.
+ * @var bench_case_t::shared_fixture For a case with threads: true when all the
+ *                           threads share one fixture, which measures
+ *                           contention on a thread-safe type, and false when
+ *                           each thread gets its own fixture, which measures
+ *                           parallel scaling instead. False is the only
+ *                           correct form for the containers that have no lock
+ *                           of their own.
  */
 typedef struct bench_case {
   const char *group;
@@ -103,7 +113,7 @@ typedef struct bench_case {
   bool shared_fixture;
 } bench_case_t;
 
-/** @brief Register a case. The struct is copied. */
+/** @brief Register a case. The harness copies the struct. */
 void bench_add(const bench_case_t *bc);
 
 /**
@@ -116,24 +126,27 @@ void bench_add(const bench_case_t *bc);
     return fn(n);                                    \
   }
 
-/** Thread counts every multi-threaded variant is run at. */
+/** The thread counts at which the harness runs every form that uses more than
+ * one thread. */
 #define BENCH_MT_THREADS {4u, 8u, 12u}
 
 /**
  * @brief Register one case once per entry in BENCH_MT_THREADS.
  *
- * The template supplies everything except threads; each registered variant
- * takes the template's name with a "_<count>t" suffix, so every variant has its
- * own baseline entry and can be selected with --filter on its own.
+ * The template gives everything except the thread count. Each registered form
+ * takes the name of the template with a "_<count>t" suffix, so every form has
+ * its own baseline entry and you can select each one on its own with
+ * --filter.
  */
 void bench_add_mt(const bench_case_t *tmpl);
 
 /**
  * @brief Which worker of a threaded case is calling, counting from zero.
  *
- * Always 0 for a single-threaded case. A case whose threads share one fixture
- * uses this to reach its own slice of that fixture, so that sharing the subject
- * under test does not also mean sharing the scratch space around it.
+ * This is always 0 for a case with one thread. A case whose threads share one
+ * fixture uses this index to reach its own part of that fixture, so that the
+ * threads share the subject under test without also sharing the scratch space
+ * around it.
  */
 unsigned bench_thread_index(void);
 
@@ -143,21 +156,35 @@ double bench_now_ns(void);
 /**
  * @brief Force a value to be treated as observable.
  *
- * Without this the optimizer is free to delete a computation whose result is
- * never read, which at the library's own -O3 turns several of these loops into
- * nothing at all and reports an implausible nanoseconds-per-operation figure.
+ * Without this, the optimizer may remove a computation whose result nothing
+ * reads. At the -O3 of the library, that turns several of these loops into
+ * nothing at all, and each one then reports a figure in nanoseconds that you
+ * cannot believe.
  */
 static inline void bench_sink(const void *p) {
   __asm__ volatile("" : : "r"(p) : "memory");
 }
 
 /**
+ * @brief Keep a computed value alive without forcing it into memory.
+ *
+ * A loop that accumulates into a local and passes the address of that local
+ * to bench_sink() makes the compiler keep the accumulator in memory, because
+ * the address escapes. Every iteration then pays a store and a reload of it,
+ * and the case measures that latency and not the operation. Sink the value
+ * of an accumulator through this function instead, once, after the loop.
+ */
+static inline void bench_sink_value(long long v) {
+  __asm__ volatile("" : : "r"(v));
+}
+
+/**
  * @brief Abort the run with a message.
  *
- * For invariants whose violation would make a measurement meaningless rather
- * than merely slow. A benchmark that quietly keeps timing after its subject
- * stopped working reports a number, and the number is usually flattering,
- * because a failing fast path is cheaper than a working one.
+ * Use this for a rule whose breach makes a measurement meaningless, and not
+ * merely slow. A benchmark that keeps measuring after its subject stops working
+ * still reports a number, and that number usually flatters the subject,
+ * because a fast path that fails costs less than one that works.
  */
 void bench_die(const char *msg);
 

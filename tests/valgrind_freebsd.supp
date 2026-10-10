@@ -1,0 +1,127 @@
+# FreeBSD-only valgrind suppressions. platform.mk passes this file to every
+# memtest run on FreeBSD and to no run anywhere else.
+#
+# Every entry matches still-reachable blocks only. Definitely, indirectly and
+# possibly lost blocks are never suppressed, so an object that the library or
+# a test loses is reported, together with any lock inside it.
+#
+# FreeBSD's libthr keeps each pthread object on the heap behind a pointer
+# (a pthread_rwlock_t is one pointer wide), where glibc
+# keeps the whole object inline. A lock that lives for the whole process, as
+# the slot-table and registry locks of this library do, is therefore one
+# reachable heap block at exit on FreeBSD and no block at all on glibc.
+# pthread_atfork(3) likewise keeps each registered handler triple in a block
+# that libthr never frees. A program of a few lines that uses none of this
+# library shows both. valgrind's own FreeBSD suppressions already cover the
+# mutex and condition-variable cases.
+
+{
+   freebsd_libthr_rwlock_object_still_reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:aligned_alloc
+   fun:pthread_rwlock_init
+}
+
+{
+   freebsd_libthr_atfork_handler_still_reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   fun:pthread_atfork
+}
+
+# pthread_exit(3) unwinds the exiting thread through libgcc_s, which libthr
+# loads on first use; the unwinder keeps the state that it allocated then.
+{
+   freebsd_libthr_exit_unwinder_still_reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:aligned_alloc
+   obj:/lib/libthr.so.3
+   ...
+   fun:_Unwind_ForcedUnwind
+}
+
+# libc loads the time-zone state once, on the first gmtime_r(3) (here when
+# OpenSSL stamps a certificate), and keeps it for the life of the process.
+{
+   freebsd_libc_timezone_state_still_reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   obj:/lib/libc.so.7
+   fun:pthread_once
+   fun:gmtime_r
+}
+
+# nsdispatch(3) parses /etc/nsswitch.conf once, on the first name-service
+# lookup (here getaddrinfo(3)), and keeps the parsed table, and the
+# thread-specific key that guards it, for the life of the process.
+{
+   freebsd_libc_nsswitch_state_still_reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:nsdispatch
+}
+
+# strerror_r(3) opens the message catalog of libc on its first call and keeps
+# the catalog, the names it copied and the thread-specific key that guards
+# it for the life of the process. The functions that do this are static in
+# libc, and the base system ships libc without symbols, so the entries name
+# the objects: an allocation two calls deep inside libc, called from libc.
+{
+   freebsd_libc_message_catalog_strdup_still_reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   fun:strdup
+   obj:/lib/libc.so.7
+   obj:/lib/libc.so.7
+}
+
+{
+   freebsd_libc_message_catalog_still_reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:calloc
+   obj:/lib/libc.so.7
+   obj:/lib/libc.so.7
+}
+
+{
+   freebsd_libc_message_catalog_key_still_reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:aligned_alloc
+   obj:/lib/libthr.so.3
+   obj:/lib/libthr.so.3
+   obj:/lib/libc.so.7
+   obj:/lib/libc.so.7
+}
+
+# pthread_setname_np(3) keeps a copy of the name with the thread, and frees
+# it when the thread exits; the main thread exits with the process.
+{
+   freebsd_libthr_thread_name_still_reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   fun:strdup
+   fun:pthread_setname_np
+}
+
+# OpenSSL keeps its provider, algorithm-fetch and lock caches until
+# OPENSSL_cleanup(), which a library must not call on behalf of an
+# application. tests/ctls/openssl_internal.supp accepts the same category on
+# Linux by function name; FreeBSD's base libcrypto inlines its allocation
+# wrappers, so this entry matches any reachable block whose allocator was
+# called from inside libcrypto.
+{
+   freebsd_libcrypto_internal_cache_still_reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:*alloc
+   obj:/lib/libcrypto.so.*
+}

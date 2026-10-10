@@ -5,27 +5,28 @@ cstring_set \- replace the entire content with a new C string
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 ccol_retval_t cstring_set(cstr s, const char *str);
 .fi
 .SH DESCRIPTION
 .nf
-Discards the current content of s and replaces it with a copy of str.
-The buffer is grown if necessary; it is never shrunk.
+Removes the current content of s and puts a copy of str in its place. The
+function grows the buffer when this is necessary, but it never shrinks
+the buffer.
 .fi
 .SH PARAMETERS
 .nf
-s     String to modify
+s     String to change
 str   New content (must not be NULL)
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success              - Set succeeded
 ccol_invalid_args         - str is NULL
-ccol_container_full       - str is too large to represent (not reachable
-                            in practice: would require a str spanning the
-                            entire address space)
+ccol_container_full       - str is too large to represent. No real
+                            program reaches this code, because such a
+                            str needs the whole address space
 ccol_not_enough_memory    - Reallocation failed
 .fi
 .SH NOTES

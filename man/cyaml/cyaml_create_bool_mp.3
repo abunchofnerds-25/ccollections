@@ -5,20 +5,26 @@ cyaml_create_bool_mp, cyaml_create_bool \- allocate a YAML boolean node
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cyaml.h>
+#include <ccollections/cyaml.h>
 
 cyaml cyaml_create_bool_mp(bool val, ccol_memmgmt_procs_t *mp);
 cyaml cyaml_create_bool(bool val);
 .fi
 .SH DESCRIPTION
 .nf
-Allocate a DOM node of type CYAML_BOOL with the given value.
+Allocate a DOM node of type CYAML_BOOL that holds val.
 cyaml_create_bool() passes NULL for mp.
 .fi
 .SH PARAMETERS
 .nf
 val  C boolean value.
 mp   Custom allocator, or NULL for default.
+     The library keeps its own copy of the struct, so the caller may
+     release or reuse the struct once this call returns, but the
+     functions that it names must stay callable until the last node
+     built with them is destroyed.  A process can use at most 64
+     distinct sets of four functions; a call that would need a 65th
+     fails and returns NULL.
 .fi
 .SH RETURN VALUE
 .nf

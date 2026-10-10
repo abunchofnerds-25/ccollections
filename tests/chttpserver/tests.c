@@ -17365,26 +17365,34 @@ TEST(listener_host, a_host_name_reports_a_port_taken_on_its_address) {
   /* Another socket holds 127.0.0.1 on the port. "localhost" listens on
      127.0.0.1, so the start must fail, and nothing may listen on ::1 in
      its place. Non-vacuous where localhost also resolves to ::1: a start
-     that goes on to the next address listens there and reports success. */
+     that goes on to the next address listens there and reports success.
+     The holding socket binds port 0 and the test uses the port that the
+     kernel picks, because a fixed port can be in use: FreeBSD gives client
+     connections ephemeral ports from 10000 up, so an earlier connection of
+     this suite can hold any fixed port in TIME_WAIT, and a bind without
+     SO_REUSEADDR then fails. */
   int other = socket(AF_INET, SOCK_STREAM, 0);
   struct sockaddr_in a;
   memset(&a, 0, sizeof(a));
   a.sin_family = AF_INET;
-  a.sin_port = htons((uint16_t)(_LC_PORT + 18));
+  a.sin_port = 0;
   inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
+  socklen_t alen = sizeof(a);
   bool held = other >= 0 &&
               bind(other, (struct sockaddr *)&a, sizeof(a)) == 0 &&
-              listen(other, 4) == 0;
+              listen(other, 4) == 0 &&
+              getsockname(other, (struct sockaddr *)&a, &alen) == 0;
+  uint16_t port = held ? ntohs(a.sin_port) : 0;
   chttpsvr srv = ccol_create_chttpsvr(g_test_logger, NULL);
   ccol_retval_t rv = ccol_success;
   if (held && srv != CHTTPSVR_INVALID) {
     chttpsvr_register_handler(srv, CHTTP_GET, "/lc", _sc_hello_handler, NULL);
     chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
     cfg.host = "localhost";
-    cfg.port = (uint16_t)(_LC_PORT + 18);
+    cfg.port = port;
     rv = chttpsvr_start(srv, &cfg);
   }
-  int v6 = _lc_have_ipv6_loopback() ? _lc_get_v6(_LC_PORT + 18) : -1;
+  int v6 = held && _lc_have_ipv6_loopback() ? _lc_get_v6(port) : -1;
   if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
   if (other >= 0) close(other);
   REQUIRE_TRUE(held);

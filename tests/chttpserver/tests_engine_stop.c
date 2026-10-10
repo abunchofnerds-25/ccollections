@@ -559,12 +559,16 @@ TEST_F(engine_stop_fixture, concurrent_destroy_and_engine_stop_is_safe) {
      _slow_handler, and without the shrink, the chttpsvr_destroy() of srv at
      the exit of the scope below then falls back to the real,
      production-sized _wait_in_flight_bounded timers. This test puts the
-     real defaults back before it returns, on every path. The shrink does
-     not affect the timing of the main path of this test, because
-     _release_slow_handler_after_delay normally releases the handler after
-     its own sleep of 150ms, well before the code reaches either the shrunk
-     bounds or the real default ones. */
-  _chttpsvr_set_wait_in_flight_bounds_for_tests(300, 2000);
+     real defaults back before it returns, on every path. The graceful
+     bound must stay far above the 150ms sleep of
+     _release_slow_handler_after_delay, because the main path needs the
+     handler to finish inside it: a sleep on a busy macOS runner can end
+     150ms late, and a graceful bound of 300ms then escalates to the forced
+     unblock, which cuts the request and fails the test with
+     ccol_http_transfer_aborted. A bound of 3000ms leaves that room and still
+     ends a stalled run in seconds. On the main path the wait ends as soon as
+     the handler returns, so the bound costs nothing there. */
+  _chttpsvr_set_wait_in_flight_bounds_for_tests(3000, 2000);
 
   char *err = NULL;
   /* _ccol_destructor: see the comment of

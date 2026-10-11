@@ -215,11 +215,17 @@ static void _teardown(void) {
    * which chttpsvr_set_engine_logger installs) before this atexit handler
    * returns. This call does nothing when the generation of the TLS
    * certificate above failed and nothing ever started a server. */
+  /* On OpenBSD this exit handler runs while the dynamic loader holds a lock
+   * that the join of the reaper of the engine needs, so the wait never
+   * returns there; see _teardown in tests.c. The reactor can then still run
+   * when the process ends, so the logger stays open too. */
+#if !defined(__OpenBSD__)
   chttpsvr_engine_wait();
   if (g_test_logger) {
     clog_close(g_test_logger);
     g_test_logger = CLOG_INVALID;
   }
+#endif
   _remove_generated_cert();
 }
 
@@ -1995,8 +2001,18 @@ TEST(tls_identity, nothing_is_reported_without_a_verified_certificate) {
     _tls_pair_t p;
     _tls_pair_open(&p, s4, c4, NULL);
     done4 = p.done;
-    seen4 = done4 && SSL_get0_peer_certificate(
-                         _ctls_conn_ssl_for_tests(p.client)) != NULL;
+    if (done4) {
+      /* LibreSSL names the call that takes a reference without the 1, and
+       * OpenSSL 3 deprecates that name. */
+      SSL *cs = _ctls_conn_ssl_for_tests(p.client);
+#if defined(LIBRESSL_VERSION_NUMBER)
+      X509 *peer = SSL_get_peer_certificate(cs);
+#else
+      X509 *peer = SSL_get1_peer_certificate(cs);
+#endif
+      seen4 = peer != NULL;
+      X509_free(peer);
+    }
     empty4 = done4 && _identity_is_empty(p.client);
     _tls_pair_close(&p);
   }
@@ -2091,7 +2107,8 @@ static bool _identity_resume_connect(ctls_ctx_t *server_ctx,
 TEST(tls_identity, a_resumed_session_reports_the_same_identity) {
   /* A client that resumes its session presents no certificate on the wire;
      the server still reports the identity that the original handshake
-     verified, for TLS 1.2 and TLS 1.3. */
+     verified, for TLS 1.2 and TLS 1.3. LibreSSL resumes no TLS 1.3 session,
+     so there only TLS 1.2 is checked. */
   if (!g_cert_ready || !_pki_ready()) {
     fprintf(stderr, "SKIP: no PKI available\n");
     return;
@@ -2099,6 +2116,9 @@ TEST(tls_identity, a_resumed_session_reports_the_same_identity) {
   const int versions[2] = {TLS1_2_VERSION, TLS1_3_VERSION};
   int failed = 0;
   for (int v = 0; v < 2; v++) {
+#if defined(LIBRESSL_VERSION_NUMBER)
+    if (versions[v] == TLS1_3_VERSION) continue;
+#endif
     ctls_ctx_t *s = ctls_ctx_new(NULL);
     bool ok = s &&
               ctls_ctx_cert_add(s, NULL, g_cert_path, g_key_path, NULL, NULL) ==

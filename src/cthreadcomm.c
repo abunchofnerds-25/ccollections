@@ -4939,6 +4939,14 @@ static _Atomic uint32_t g_delay_next_reg_resolve_unpin_ms = 0;
 void ccol_event_loop_test_delay_next_reg_resolve_unpin_ms(uint32_t ms) {
   atomic_store(&g_delay_next_reg_resolve_unpin_ms, ms);
 }
+
+/* Test-only. The unpin takes the delay with an exchange that comes after
+ * its read of removed, so true here means that a caller which armed the
+ * delay has a thread inside that window: the read is done and the pin is
+ * still held. */
+bool ccol_event_loop_test_reg_resolve_unpin_delay_taken_for_tests(void) {
+  return atomic_load(&g_delay_next_reg_resolve_unpin_ms) == 0u;
+}
 #endif
 
 static void _ccol_event_reg_resolve_unpin(struct ccol_event_loop_s *loop,

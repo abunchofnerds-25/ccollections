@@ -3629,7 +3629,13 @@ TEST(chash_maps, long_double_nan_keys_collapse_to_one_key) {
 
   unsigned char other_nan_bytes[sizeof(long double)];
   memcpy(other_nan_bytes, &nan_key, sizeof(nan_key));
-  other_nan_bytes[0] ^= 0x01;  // flip a significant (non-padding) bit
+  // Flip the lowest bit of the significand: the first byte on a
+  // little-endian target, the last one on a big-endian target.
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+  other_nan_bytes[sizeof(other_nan_bytes) - 1] ^= 0x01;
+#else
+  other_nan_bytes[0] ^= 0x01;
+#endif
   long double other_nan;
   memcpy(&other_nan, other_nan_bytes, sizeof(other_nan));
   REQUIRE_TRUE(isnan(other_nan));
@@ -6615,6 +6621,16 @@ static uint64_t xxh_pair_inv(uint64_t a) {
   return x;
 }
 
+/* XXH64 reads its input as little-endian 64-bit words on every target, so a
+ * key that is built from chosen words stores each one in that byte order. */
+static uint64_t xxh_le_word(uint64_t w) {
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+  return __builtin_bswap64(w);
+#else
+  return w;
+#endif
+}
+
 static uint64_t xxh_pair_word_of(uint64_t k) {
   const uint64_t p1 = 0x9E3779B185EBCA87ULL, p2 = 0xC2B2AE3D27D4EB4FULL;
   uint64_t r = k * xxh_pair_inv(p1);
@@ -6628,11 +6644,11 @@ typedef struct {
 
 static void xxh_seed_free_pair(xxh_pair_key *a, xxh_pair_key *b) {
   const uint64_t k1 = 0x1234567890abcdefULL, k2 = 0x0fedcba987654321ULL;
-  a->w[0] = xxh_pair_word_of(k1);
-  a->w[1] = xxh_pair_word_of(k2);
+  a->w[0] = xxh_le_word(xxh_pair_word_of(k1));
+  a->w[1] = xxh_le_word(xxh_pair_word_of(k2));
   a->w[2] = 0x4141414141414141ULL;
-  b->w[0] = xxh_pair_word_of(k1 ^ (1ULL << 36));
-  b->w[1] = xxh_pair_word_of(k2 ^ (1ULL << 63));
+  b->w[0] = xxh_le_word(xxh_pair_word_of(k1 ^ (1ULL << 36)));
+  b->w[1] = xxh_le_word(xxh_pair_word_of(k2 ^ (1ULL << 63)));
   b->w[2] = 0x4141414141414141ULL;
 }
 
@@ -8760,6 +8776,7 @@ static void ah_xxh_multicollision_key(unsigned index, ah_xxh_key *key) {
           inv_p2;
     }
   }
+  for (int i = 0; i < 16; i++) key->w[i] = xxh_le_word(key->w[i]);
 }
 
 static int ah_u64_cmp(const void *a, const void *b) {

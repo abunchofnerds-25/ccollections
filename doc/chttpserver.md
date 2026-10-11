@@ -163,7 +163,7 @@ lists each field with its default. Every timeout field has a name ending in
 
 | `host` | The server listens on |
 |---|---|
-| `NULL` or `""` (the default) | all interfaces, IPv4 and IPv6 |
+| `NULL` or `""` (the default) | all interfaces, IPv4 and IPv6 (IPv4 only on OpenBSD, which has no dual-stack sockets) |
 | `"0.0.0.0"` | all IPv4 interfaces |
 | `"127.0.0.1"`, `"::1"`, `"[::1]"` | exactly that address |
 | `"localhost"` or another name | its first IPv4 address, or its first IPv6 address if it has no IPv4 address |

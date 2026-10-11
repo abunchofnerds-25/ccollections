@@ -171,7 +171,12 @@ static int _generate_all_certs(void) {
   return 0;
 }
 
+static void _teardown(void);
+
 __attribute__((constructor)) static void _setup(void) {
+  /* An exit handler runs on every system; OpenBSD runs no destructor of a
+   * program that links libpthread. */
+  atexit(_teardown);
   /* Every write of ctls goes through send(2) with MSG_NOSIGNAL, so no test
    * here needs this ignore; it keeps a regression of that property from
    * ending this whole binary. tests_sigpipe runs with the default disposition
@@ -185,7 +190,7 @@ __attribute__((constructor)) static void _setup(void) {
   }
 }
 
-__attribute__((destructor)) static void _teardown(void) {
+static void _teardown(void) {
   unlink(g_server_cert);
   unlink(g_server_key);
   unlink(g_client_cert);
@@ -253,7 +258,12 @@ static bool _drive_both(ctls_conn_t *a, ctls_conn_t *b, int max_iters,
 }
 
 static const char *_peer_cert_cn(SSL *ssl, char *buf, size_t buflen) {
+#if defined(LIBRESSL_VERSION_NUMBER)
+  /* LibreSSL names the call that takes a reference without the 1. */
+  X509 *cert = SSL_get_peer_certificate(ssl);
+#else
   X509 *cert = SSL_get1_peer_certificate(ssl);
+#endif
   if (!cert) return NULL;
   X509_NAME *name = X509_get_subject_name(cert);
   int n = X509_NAME_get_text_by_NID(name, NID_commonName, buf, (int)buflen);
@@ -1714,8 +1724,19 @@ TEST(ctls_alpn, alpn_add_race_during_live_handshake_does_not_crash) {
 static _Atomic long g_ssl_ctx_created = 0;
 static _Atomic long g_ssl_ctx_destroyed = 0;
 
-static void _ssl_ctx_census_new(void *parent, void *ptr, CRYPTO_EX_DATA *ad,
-                                int idx, long argl, void *argp) {
+/* OpenSSL declares the new callback of ex data as void, and LibreSSL as int,
+ * where 1 means success. */
+#if defined(LIBRESSL_VERSION_NUMBER)
+#define CENSUS_NEW_RET int
+#define CENSUS_NEW_DONE return 1
+#else
+#define CENSUS_NEW_RET void
+#define CENSUS_NEW_DONE return
+#endif
+
+static CENSUS_NEW_RET _ssl_ctx_census_new(void *parent, void *ptr,
+                                          CRYPTO_EX_DATA *ad, int idx,
+                                          long argl, void *argp) {
   (void)parent;
   (void)ptr;
   (void)ad;
@@ -1723,6 +1744,7 @@ static void _ssl_ctx_census_new(void *parent, void *ptr, CRYPTO_EX_DATA *ad,
   (void)argl;
   (void)argp;
   atomic_fetch_add_explicit(&g_ssl_ctx_created, 1, memory_order_relaxed);
+  CENSUS_NEW_DONE;
 }
 
 static void _ssl_ctx_census_free(void *parent, void *ptr, CRYPTO_EX_DATA *ad,
@@ -3086,6 +3108,18 @@ static bool _resume_connect(ctls_ctx_t *server_ctx, SSL_CTX *client_ctx,
   return ok;
 }
 
+/* LibreSSL resumes no TLS 1.3 session, and its SSL_SESSION_is_resumable()
+ * reports 0 for every session, a TLS 1.2 session that it does resume
+ * included; there a session that the first connection issued is enough. */
+#if defined(LIBRESSL_VERSION_NUMBER)
+#define RESUME_TLS13 0
+#define RESUME_SESSION_ISSUED(s) ((s) != NULL)
+#else
+#define RESUME_TLS13 1
+#define RESUME_SESSION_ISSUED(s) \
+  ((s) != NULL && SSL_SESSION_is_resumable(s) == 1)
+#endif
+
 /* Returns true when both sides report a resumed session on the second of
  * two connections, and neither side reports one on the first. */
 static bool _resume_case_resumes(const _resume_case_t *rc) {
@@ -3114,7 +3148,7 @@ static bool _resume_case_resumes(const _resume_case_t *rc) {
   SSL_SESSION *sess = NULL;
   bool c1 = true, s1 = true, c2 = false, s2 = false;
   ok = ok && _resume_connect(server_ctx, client_ctx, rc, &sess, &c1, &s1);
-  ok = ok && sess && SSL_SESSION_is_resumable(sess) == 1;
+  ok = ok && RESUME_SESSION_ISSUED(sess);
   ok = ok && _resume_connect(server_ctx, client_ctx, rc, &sess, &c2, &s2);
   if (sess) SSL_SESSION_free(sess);
   if (client_ctx) SSL_CTX_free(client_ctx);
@@ -3130,8 +3164,10 @@ TEST(ctls_resumption, a_server_with_a_trust_store_resumes_every_client_shape) {
       {TLS1_3_VERSION, false, "sni.test"}, {TLS1_2_VERSION, true, "sni.test"},
   };
   int failed_mask = 0;
-  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+    if (!RESUME_TLS13 && cases[i].max_version == TLS1_3_VERSION) continue;
     if (!_resume_case_resumes(&cases[i])) failed_mask |= 1 << i;
+  }
   REQUIRE_EQ(failed_mask, 0);
 }
 

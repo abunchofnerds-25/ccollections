@@ -29,7 +29,7 @@ extern bool clru_test_post_publish_delay_entered(void);
 /* ========================================================================== */
 
 TEST(basic, set_and_get_int_key_int_value) {
-  clru_construct(cache, int, int, 10, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 10, NULL, NULL, NULL);
 
   int k = 42, v = 100;
   ccol_retval_t r = clru_set(cache, k, v);
@@ -44,7 +44,7 @@ TEST(basic, set_and_get_int_key_int_value) {
 }
 
 TEST(basic, char_ptr_get_miss_does_not_modify_output) {
-  clru_construct(cache, int, char *, 8, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, char *, 8, NULL, NULL, NULL);
 
   char sentinel_buf[1] = {0};
   char *out = sentinel_buf;
@@ -55,7 +55,7 @@ TEST(basic, char_ptr_get_miss_does_not_modify_output) {
 }
 
 TEST(basic, get_missing_key_returns_not_found) {
-  clru_construct(cache, int, int, 10, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 10, NULL, NULL, NULL);
 
   int out = 0;
   ccol_retval_t r = clru_get(cache, 99, &out);
@@ -65,7 +65,7 @@ TEST(basic, get_missing_key_returns_not_found) {
 }
 
 TEST(basic, overwrite_value) {
-  clru_construct(cache, int, int, 10, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 10, NULL, NULL, NULL);
 
   int k = 1, v1 = 10, v2 = 20;
   clru_set(cache, k, v1);
@@ -79,7 +79,7 @@ TEST(basic, overwrite_value) {
 }
 
 TEST(basic, string_key_int_value) {
-  clru_construct(cache, char *, int, 8, NULL, NULL, NULL);
+  clru_construct_scoped(cache, char *, int, 8, NULL, NULL, NULL);
 
   int v = 55;
   ccol_retval_t r = clru_set(cache, "hello", v);
@@ -98,7 +98,7 @@ TEST(basic, string_key_int_value) {
 }
 
 TEST(basic, size_and_capacity) {
-  clru_construct(cache, int, int, 5, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 5, NULL, NULL, NULL);
 
   REQUIRE_EQ(clrucache_capacity(cache), (size_t)5);
   REQUIRE_EQ(clrucache_size(cache), (size_t)0);
@@ -112,7 +112,7 @@ TEST(basic, size_and_capacity) {
 }
 
 TEST(basic, invalid_args_get) {
-  clru_construct(cache, int, int, 4, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 4, NULL, NULL, NULL);
 
   int k = 1;
   cmap_pair kp = {};
@@ -136,7 +136,7 @@ TEST(basic, invalid_args_get) {
 }
 
 TEST(basic, invalid_args_set) {
-  clru_construct(cache, int, int, 4, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 4, NULL, NULL, NULL);
 
   int k = 1, v = 2;
   cmap_pair kp = {}, vp = {};
@@ -183,7 +183,7 @@ TEST(basic, destroy_null_cache_is_noop) {
 }
 
 TEST(basic, destroy_sets_handle_null) {
-  clru_construct(cache, int, int, 4, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 4, NULL, NULL, NULL);
   clru_set(cache, 1, 10);
   REQUIRE_NE(cache, CLRU_CACHE_INVALID);
   clru_destroy(cache);
@@ -198,7 +198,7 @@ TEST(basic, create_full_null_err_on_failure) {
 }
 
 TEST(basic, size_unchanged_on_overwrite) {
-  clru_construct(cache, int, int, 10, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 10, NULL, NULL, NULL);
 
   int k = 7;
   clru_set(cache, k, 100);
@@ -245,7 +245,7 @@ TEST(eviction, lru_order_respected) {
   eviction_val_captured = -1;
   eviction_count = 0;
 
-  clru_construct(cache, int, int, 3, NULL, NULL, record_eviction);
+  clru_construct_scoped(cache, int, int, 3, NULL, NULL, record_eviction);
 
   /* Insert keys 0,1,2; fills the cache */
   for (int i = 0; i < 3; i++) {
@@ -294,7 +294,7 @@ TEST(eviction, eviction_callback_called_on_destroy) {
 
 TEST(eviction, size_tracked_correctly_across_evictions) {
   eviction_count = 0;
-  clru_construct(cache, int, int, 3, NULL, NULL, record_eviction);
+  clru_construct_scoped(cache, int, int, 3, NULL, NULL, record_eviction);
 
   for (int i = 0; i < 3; i++) clru_set(cache, i, i);
   REQUIRE_EQ(clrucache_size(cache), (size_t)3);
@@ -314,7 +314,7 @@ TEST(eviction, set_promotes_existing_entry_to_mru) {
   eviction_count = 0;
   eviction_key_captured = -1;
 
-  clru_construct(cache, int, int, 3, NULL, NULL, record_eviction);
+  clru_construct_scoped(cache, int, int, 3, NULL, NULL, record_eviction);
 
   /* Fill cache: LRU order after inserts is 0 (LRU) -> 1 -> 2 (MRU) */
   for (int i = 0; i < 3; i++) clru_set(cache, i, i * 10);
@@ -373,8 +373,8 @@ TEST(eviction, failed_set_leaves_the_eviction_order_untouched) {
   rejecting_setter_armed = false;
   rejecting_setter_key = 1;
 
-  clru_construct(cache, int, int, 3, NULL, rejecting_remote_setter,
-                 record_eviction);
+  clru_construct_scoped(cache, int, int, 3, NULL, rejecting_remote_setter,
+                        record_eviction);
 
   /* Fills the cache; order is 1 (LRU) -> 2 -> 3 (MRU), so key 1 is the next
      victim. */
@@ -426,8 +426,8 @@ TEST(eviction, failed_set_does_not_move_a_mid_list_key_to_the_front) {
   rejecting_setter_armed = false;
   rejecting_setter_key = 2;
 
-  clru_construct(cache, int, int, 3, NULL, rejecting_remote_setter,
-                 record_eviction);
+  clru_construct_scoped(cache, int, int, 3, NULL, rejecting_remote_setter,
+                        record_eviction);
 
   /* Order is 1 (LRU) -> 2 -> 3 (MRU). */
   REQUIRE_EQ(clru_set(cache, 1, 10), ccol_success);
@@ -469,7 +469,7 @@ TEST(eviction, capacity_one_always_evicts) {
   eviction_key_captured = -1;
   eviction_val_captured = -1;
 
-  clru_construct(cache, int, int, 1, NULL, NULL, record_eviction);
+  clru_construct_scoped(cache, int, int, 1, NULL, NULL, record_eviction);
 
   clru_set(cache, 10, 100);
   REQUIRE_EQ(clrucache_size(cache), (size_t)1);
@@ -501,7 +501,8 @@ TEST(eviction, callback_receives_correct_string_key_and_value) {
   str_eviction_key[0] = '\0';
   str_eviction_val[0] = '\0';
 
-  clru_construct(cache, char *, char *, 2, NULL, NULL, record_str_eviction);
+  clru_construct_scoped(cache, char *, char *, 2, NULL, NULL,
+                        record_str_eviction);
 
   clru_set(cache, "key1", "val1");
   clru_set(cache, "key2", "val2");
@@ -533,7 +534,7 @@ TEST(eviction, lru_full_order_after_multiple_gets) {
   eviction_key_captured = -1;
   eviction_count = 0;
 
-  clru_construct(cache, int, int, 5, NULL, NULL, record_eviction);
+  clru_construct_scoped(cache, int, int, 5, NULL, NULL, record_eviction);
 
   /* Fill cache; insertion order is 0..4, so 0 is LRU, 4 is MRU */
   for (int i = 0; i < 5; i++) clru_set(cache, i, i * 10);
@@ -615,8 +616,8 @@ TEST(eviction, eviction_callback_fires_for_getter_populated_entry) {
   getter_eviction_count = 0;
   double_key_getter_calls = 0;
 
-  clru_construct(cache, int, int, 3, double_key_getter, NULL,
-                 record_getter_eviction);
+  clru_construct_scoped(cache, int, int, 3, double_key_getter, NULL,
+                        record_getter_eviction);
 
   /* Fetch keys 1, 2, 3 with the getter: values 2, 4, 6. The cache is full. */
   int out = 0;
@@ -691,7 +692,7 @@ static bool retry_remote_getter(const cmap_pair *key, cmap_pair *val) {
 
 TEST(remote_getter, fetches_on_cache_miss) {
   remote_get_call_count = 0;
-  clru_construct(cache, int, int, 10, simple_remote_getter, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 10, simple_remote_getter, NULL, NULL);
 
   int out = 0;
   ccol_retval_t r = clru_get(cache, 7, &out);
@@ -707,7 +708,7 @@ TEST(remote_getter, fetches_on_cache_miss) {
 }
 
 TEST(remote_getter, returns_not_found_on_getter_failure) {
-  clru_construct(cache, int, int, 10, failing_remote_getter, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 10, failing_remote_getter, NULL, NULL);
 
   int out = 0;
   ccol_retval_t r = clru_get(cache, 5, &out);
@@ -718,7 +719,7 @@ TEST(remote_getter, returns_not_found_on_getter_failure) {
 
 TEST(remote_getter, val_out_populated) {
   remote_get_call_count = 0;
-  clru_construct(cache, int, int, 10, simple_remote_getter, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 10, simple_remote_getter, NULL, NULL);
 
   int k = 5;
   cmap_pair kp = {};
@@ -736,7 +737,7 @@ TEST(remote_getter, val_out_populated) {
 
 TEST(remote_getter, retry_after_failure_triggers_new_fetch) {
   retry_getter_call_count = 0;
-  clru_construct(cache, int, int, 10, retry_remote_getter, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 10, retry_remote_getter, NULL, NULL);
 
   int out = 0;
   /* First attempt: getter fails, placeholder is cleaned up */
@@ -760,7 +761,7 @@ TEST(remote_getter, retry_after_failure_triggers_new_fetch) {
 
 TEST(remote_getter, re_fetches_after_eviction) {
   remote_get_call_count = 0;
-  clru_construct(cache, int, int, 1, simple_remote_getter, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 1, simple_remote_getter, NULL, NULL);
 
   int out = 0;
   clru_get(cache, 10, &out);
@@ -802,7 +803,8 @@ static bool false_getter_with_alloc(const cmap_pair *key, cmap_pair *val) {
 }
 
 TEST(remote_getter, getter_returns_true_with_null_ptr_treated_as_miss) {
-  clru_construct(cache, int, int, 10, null_ptr_remote_getter, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 10, null_ptr_remote_getter, NULL,
+                        NULL);
   int out = 0;
   REQUIRE_EQ(clru_get(cache, 5, &out), ccol_key_not_found);
   REQUIRE_EQ(clrucache_size(cache), (size_t)0);
@@ -810,7 +812,8 @@ TEST(remote_getter, getter_returns_true_with_null_ptr_treated_as_miss) {
 }
 
 TEST(remote_getter, getter_returns_true_with_zero_size_treated_as_miss) {
-  clru_construct(cache, int, int, 10, zero_size_remote_getter, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 10, zero_size_remote_getter, NULL,
+                        NULL);
   int out = 0;
   REQUIRE_EQ(clru_get(cache, 5, &out), ccol_key_not_found);
   REQUIRE_EQ(clrucache_size(cache), (size_t)0);
@@ -820,7 +823,8 @@ TEST(remote_getter, getter_returns_true_with_zero_size_treated_as_miss) {
 TEST(remote_getter, getter_returns_false_with_allocated_ptr_no_leak) {
   /* Primary assertion: valgrind / make memtest catches the leak if the
    * cache fails to free val->ptr when the getter returns false. */
-  clru_construct(cache, int, int, 10, false_getter_with_alloc, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 10, false_getter_with_alloc, NULL,
+                        NULL);
   int out = 0;
   REQUIRE_EQ(clru_get(cache, 5, &out), ccol_key_not_found);
   REQUIRE_EQ(clrucache_size(cache), (size_t)0);
@@ -842,7 +846,8 @@ TEST(remote_getter, char_ptr_returns_not_found_on_getter_failure) {
   /* clru_get for char* values routes through clrucache_get_full (not
    * __clrucache_get_into).  Verify that a failing remote getter returns
    * ccol_key_not_found and leaves the caller's pointer untouched. */
-  clru_construct(cache, int, char *, 10, failing_remote_getter, NULL, NULL);
+  clru_construct_scoped(cache, int, char *, 10, failing_remote_getter, NULL,
+                        NULL);
 
   char sentinel[] = "unchanged";
   char *out = sentinel;
@@ -863,7 +868,8 @@ TEST(remote_getter, char_ptr_returns_not_found_on_getter_failure) {
  */
 TEST(remote_getter,
      char_ptr_getter_returns_true_with_null_ptr_treated_as_miss) {
-  clru_construct(cache, int, char *, 10, null_ptr_remote_getter, NULL, NULL);
+  clru_construct_scoped(cache, int, char *, 10, null_ptr_remote_getter, NULL,
+                        NULL);
 
   char *out = NULL;
   REQUIRE_EQ(clru_get(cache, 5, &out), ccol_key_not_found);
@@ -875,7 +881,8 @@ TEST(remote_getter,
 
 TEST(remote_getter,
      char_ptr_getter_returns_true_with_zero_size_treated_as_miss) {
-  clru_construct(cache, int, char *, 10, zero_size_remote_getter, NULL, NULL);
+  clru_construct_scoped(cache, int, char *, 10, zero_size_remote_getter, NULL,
+                        NULL);
 
   char *out = NULL;
   REQUIRE_EQ(clru_get(cache, 5, &out), ccol_key_not_found);
@@ -888,7 +895,8 @@ TEST(remote_getter,
 TEST(remote_getter, char_ptr_getter_returns_false_with_allocated_ptr_no_leak) {
   /* Primary assertion: valgrind / make memtest catches the leak if the
    * cache fails to free val->ptr when the getter returns false (char* path). */
-  clru_construct(cache, int, char *, 10, false_getter_with_alloc, NULL, NULL);
+  clru_construct_scoped(cache, int, char *, 10, false_getter_with_alloc, NULL,
+                        NULL);
 
   char *out = NULL;
   REQUIRE_EQ(clru_get(cache, 5, &out), ccol_key_not_found);
@@ -899,7 +907,7 @@ TEST(remote_getter, char_ptr_getter_returns_false_with_allocated_ptr_no_leak) {
 }
 
 TEST(remote_getter, getter_returns_oversized_value_no_crash) {
-  clru_construct(cache, int, int, 10, oversized_getter, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 10, oversized_getter, NULL, NULL);
   int out = 0;
   /* The oversized value must be rejected without a buffer overflow. */
   ccol_retval_t r = clru_get(cache, 5, &out);
@@ -923,7 +931,7 @@ static bool undersized_getter(const cmap_pair *key, cmap_pair *val) {
 
 TEST(remote_getter,
      getter_returns_undersized_value_rejected_not_partially_copied) {
-  clru_construct(cache, int, int, 10, undersized_getter, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 10, undersized_getter, NULL, NULL);
   /* Poison out with a pattern that is easy to recognise and is not zero. A
    * silent partial copy of the undersized value, in place of a rejection,
    * would leave this sentinel in the high bytes, which the copy does not
@@ -971,7 +979,7 @@ static bool failing_char_key_getter(const cmap_pair *key, cmap_pair *val) {
  */
 TEST(remote_getter, char_ptr_key_fetches_and_caches_via_getter) {
   char_key_getter_call_count = 0;
-  clru_construct(cache, char *, int, 8, strlen_value_getter, NULL, NULL);
+  clru_construct_scoped(cache, char *, int, 8, strlen_value_getter, NULL, NULL);
 
   /* "hello" has 5 chars */
   int out = 0;
@@ -1001,7 +1009,8 @@ TEST(remote_getter, char_ptr_key_fetches_and_caches_via_getter) {
  * leave the cache empty (placeholder cleaned up), same as for integral keys.
  */
 TEST(remote_getter, char_ptr_key_failing_getter_returns_not_found) {
-  clru_construct(cache, char *, int, 8, failing_char_key_getter, NULL, NULL);
+  clru_construct_scoped(cache, char *, int, 8, failing_char_key_getter, NULL,
+                        NULL);
 
   int out = 0;
   REQUIRE_EQ(clru_get(cache, "anything", &out), ccol_key_not_found);
@@ -1031,7 +1040,8 @@ TEST(sync_setter, success_updates_cache) {
   remote_set_should_succeed = true;
   remote_set_call_count = 0;
 
-  clru_construct(cache, int, int, 10, NULL, recording_remote_setter, NULL);
+  clru_construct_scoped(cache, int, int, 10, NULL, recording_remote_setter,
+                        NULL);
 
   int k = 1, v = 42;
   ccol_retval_t r = clru_set(cache, k, v);
@@ -1051,7 +1061,8 @@ TEST(sync_setter, failure_does_not_update_cache) {
   remote_set_should_succeed = false;
   remote_set_call_count = 0;
 
-  clru_construct(cache, int, int, 10, NULL, recording_remote_setter, NULL);
+  clru_construct_scoped(cache, int, int, 10, NULL, recording_remote_setter,
+                        NULL);
 
   int k = 1, v = 99;
   ccol_retval_t r = clru_set(cache, k, v);
@@ -1068,7 +1079,8 @@ TEST(sync_setter, successive_overwrites_with_remote_setter) {
   remote_set_should_succeed = true;
   remote_set_call_count = 0;
 
-  clru_construct(cache, int, int, 10, NULL, recording_remote_setter, NULL);
+  clru_construct_scoped(cache, int, int, 10, NULL, recording_remote_setter,
+                        NULL);
 
   int k = 3;
   /* First set: placeholder created, remote called, entry becomes LIVE */
@@ -1095,7 +1107,8 @@ TEST(sync_setter, failure_on_new_key_followed_by_success) {
   remote_set_should_succeed = false;
   remote_set_call_count = 0;
 
-  clru_construct(cache, int, int, 10, NULL, recording_remote_setter, NULL);
+  clru_construct_scoped(cache, int, int, 10, NULL, recording_remote_setter,
+                        NULL);
 
   /* First set fails: placeholder must be removed entirely */
   int k = 42, v1 = 11;
@@ -1117,7 +1130,8 @@ TEST(sync_setter, failure_on_new_key_followed_by_success) {
 
 TEST(sync_setter, failure_preserves_existing_value) {
   remote_set_should_succeed = true;
-  clru_construct(cache, int, int, 10, NULL, recording_remote_setter, NULL);
+  clru_construct_scoped(cache, int, int, 10, NULL, recording_remote_setter,
+                        NULL);
 
   /* First set succeeds */
   int k = 5, v1 = 10;
@@ -1164,7 +1178,8 @@ TEST(sync_setter, char_ptr_key_setter_success) {
   char_key_setter_last_key[0] = '\0';
   char_key_setter_last_val = -1;
 
-  clru_construct(cache, char *, int, 8, NULL, recording_char_key_setter, NULL);
+  clru_construct_scoped(cache, char *, int, 8, NULL, recording_char_key_setter,
+                        NULL);
 
   REQUIRE_EQ(clru_set(cache, "mykey", 77), ccol_success);
   REQUIRE_EQ(char_key_setter_call_count, 1);
@@ -1188,7 +1203,8 @@ TEST(sync_setter, char_ptr_key_setter_failure_leaves_cache_empty) {
   char_key_setter_should_succeed = false;
   char_key_setter_call_count = 0;
 
-  clru_construct(cache, char *, int, 8, NULL, recording_char_key_setter, NULL);
+  clru_construct_scoped(cache, char *, int, 8, NULL, recording_char_key_setter,
+                        NULL);
 
   REQUIRE_EQ(clru_set(cache, "mykey", 88), ccol_unexpected_failure);
   REQUIRE_EQ(clrucache_size(cache), (size_t)0);
@@ -1321,20 +1337,20 @@ TEST(concurrency, multiple_getters_coalesce_to_single_remote_fetch) {
   for (int i = 0; i < created; i++) {
     pthread_join(tids[i], NULL);
   }
-  REQUIRE_EQ(created, (int)N_THREADS);
 
   /* Cleanup runs unconditionally before the assertions below: REQUIRE_*
    * returns from this function immediately on the first failure, which
    * would otherwise leak the cache. */
   int calls = coalesce_getter_calls;
-  ccol_retval_t retvals[N_THREADS];
-  int results[N_THREADS];
-  for (int i = 0; i < N_THREADS; i++) {
+  ccol_retval_t retvals[N_THREADS] = {0};
+  int results[N_THREADS] = {0};
+  for (int i = 0; i < created; i++) {
     retvals[i] = args[i].retval;
     results[i] = args[i].result;
   }
   clru_destroy(cache);
 
+  REQUIRE_EQ(created, (int)N_THREADS);
   /* Only one remote call should have been made */
   REQUIRE_EQ(calls, 1);
 
@@ -1368,6 +1384,22 @@ static bool clru_await_flag(_Atomic bool *flag) {
     usleep(1000);
   }
   return atomic_load(flag);
+}
+
+extern int _clrucache_key_waiters_for_tests(clru_cache cache,
+                                            const cmap_pair *key_pair);
+
+/* Waits, bounded, until the entry of an int key holds `want` references. The
+   thread that runs the remote call (a fetch or a set) holds one reference,
+   and each thread that waits on its placeholder holds one more, so a count
+   of 1 + N means that N waiters have joined the call. */
+static bool failset_await_waiters(clru_cache cache, int key, int want) {
+  cmap_pair kp = {.ptr = &key, .size = sizeof(key)};
+  for (int waited_ms = 0; waited_ms < CLRU_GATE_WAIT_MS; waited_ms++) {
+    if (_clrucache_key_waiters_for_tests(cache, &kp) == want) return true;
+    usleep(1000);
+  }
+  return _clrucache_key_waiters_for_tests(cache, &kp) == want;
 }
 
 static _Atomic bool setter_started = false;
@@ -1429,16 +1461,19 @@ TEST(concurrency, getters_wait_for_sync_setter) {
 
   sync_setter_arg_t sarg = {cache, 10, 99};
   pthread_t stid;
-  REQUIRE_EQ(pthread_create(&stid, NULL, sync_setter_thread, &sarg), 0);
+  /* The result of each start is captured and asserted only after the cleanup
+     below, because a REQUIRE_ that returns here leaks the cache. */
+  bool stid_started =
+      (pthread_create(&stid, NULL, sync_setter_thread, &sarg) == 0);
 
   /* Wait until setter has started the remote call */
-  (void)clru_await_flag(&setter_started);
+  if (stid_started) (void)clru_await_flag(&setter_started);
 
   /* Start a getter that should block until setter finishes */
   waiter_arg_t warg = {cache, 10, 99, 0, ccol_unexpected_failure, false};
   pthread_t wtid;
   bool waiter_started =
-      (pthread_create(&wtid, NULL, waiter_thread, &warg) == 0);
+      stid_started && (pthread_create(&wtid, NULL, waiter_thread, &warg) == 0);
 
   /* Give getter time to start waiting */
   /* The test captures this value here and asserts on it later, because a
@@ -1456,10 +1491,11 @@ TEST(concurrency, getters_wait_for_sync_setter) {
 
   /* Let the setter finish */
   atomic_store(&setter_may_finish, true);
-  pthread_join(stid, NULL);
+  if (stid_started) pthread_join(stid, NULL);
   if (waiter_started) pthread_join(wtid, NULL);
   clru_destroy(cache);
 
+  REQUIRE_TRUE(stid_started);
   REQUIRE_TRUE(waiter_started);
   REQUIRE_EQ(done_while_blocked, 0);
 
@@ -1479,14 +1515,19 @@ TEST(concurrency, getter_blocked_by_setter_for_existing_key_succeeds) {
 
   clru_construct(cache, int, int, 16, NULL, gating_remote_setter, NULL);
 
-  /* Phase 1: seed key 55 = 550 using the gating setter (let it complete) */
+  /* Phase 1: seed key 55 = 550 using the gating setter (let it complete).
+     Every result before the cleanup below is captured and asserted only
+     after it, because a REQUIRE_ that returns here leaks the cache. */
   sync_setter_arg_t sarg1 = {cache, 55, 550};
   pthread_t stid1;
-  REQUIRE_EQ(pthread_create(&stid1, NULL, sync_setter_thread, &sarg1), 0);
-  (void)clru_await_flag(&setter_started);
-  atomic_store(&setter_may_finish, true);
-  pthread_join(stid1, NULL);
-  REQUIRE_EQ(clrucache_size(cache), (size_t)1);
+  bool stid1_started =
+      (pthread_create(&stid1, NULL, sync_setter_thread, &sarg1) == 0);
+  if (stid1_started) {
+    (void)clru_await_flag(&setter_started);
+    atomic_store(&setter_may_finish, true);
+    pthread_join(stid1, NULL);
+  }
+  size_t size_seeded = clrucache_size(cache);
 
   /* Phase 2: overwrite key 55 = 999 while blocking a concurrent getter */
   atomic_store(&setter_started, false);
@@ -1494,14 +1535,16 @@ TEST(concurrency, getter_blocked_by_setter_for_existing_key_succeeds) {
 
   sync_setter_arg_t sarg2 = {cache, 55, 999};
   pthread_t stid2;
-  REQUIRE_EQ(pthread_create(&stid2, NULL, sync_setter_thread, &sarg2), 0);
-  (void)clru_await_flag(&setter_started);
+  bool stid2_started =
+      stid1_started &&
+      (pthread_create(&stid2, NULL, sync_setter_thread, &sarg2) == 0);
+  if (stid2_started) (void)clru_await_flag(&setter_started);
 
   /* Getter arrives while the setter holds the set_in_progress flag */
   waiter_arg_t warg = {cache, 55, 0, 0, ccol_unexpected_failure, false};
   pthread_t wtid;
   bool waiter_started =
-      (pthread_create(&wtid, NULL, waiter_thread, &warg) == 0);
+      stid2_started && (pthread_create(&wtid, NULL, waiter_thread, &warg) == 0);
 
   /* Confirm the getter is blocked */
   /* The test captures this value here and asserts on it later, because a
@@ -1519,11 +1562,14 @@ TEST(concurrency, getter_blocked_by_setter_for_existing_key_succeeds) {
 
   /* Release the setter */
   atomic_store(&setter_may_finish, true);
-  pthread_join(stid2, NULL);
+  if (stid2_started) pthread_join(stid2, NULL);
   if (waiter_started) pthread_join(wtid, NULL);
   size_t size_after = clrucache_size(cache);
   clru_destroy(cache);
 
+  REQUIRE_TRUE(stid1_started);
+  REQUIRE_EQ(size_seeded, (size_t)1);
+  REQUIRE_TRUE(stid2_started);
   REQUIRE_TRUE(waiter_started);
   REQUIRE_EQ(done_while_blocked, 0);
 
@@ -1547,15 +1593,18 @@ TEST(concurrency, getter_sees_key_not_found_when_new_key_setter_fails) {
 
   sync_setter_arg_t sarg = {cache, 77, 777};
   pthread_t stid;
-  REQUIRE_EQ(pthread_create(&stid, NULL, sync_setter_thread, &sarg), 0);
+  /* Captured and asserted only after the cleanup below, because a REQUIRE_
+     that returns here leaks the cache. */
+  bool stid_started =
+      (pthread_create(&stid, NULL, sync_setter_thread, &sarg) == 0);
 
-  (void)clru_await_flag(&setter_started);
+  if (stid_started) (void)clru_await_flag(&setter_started);
 
   /* Getter arrives while the setter placeholder is live */
   waiter_arg_t warg = {cache, 77, 0, 0, ccol_unexpected_failure, false};
   pthread_t wtid;
   bool waiter_started =
-      (pthread_create(&wtid, NULL, waiter_thread, &warg) == 0);
+      stid_started && (pthread_create(&wtid, NULL, waiter_thread, &warg) == 0);
 
   /* Give the getter time to enter the wait loop */
   /* The test captures this value here and asserts on it later, because a
@@ -1572,11 +1621,12 @@ TEST(concurrency, getter_sees_key_not_found_when_new_key_setter_fails) {
   }
 
   atomic_store(&setter_may_finish, true);
-  pthread_join(stid, NULL);
+  if (stid_started) pthread_join(stid, NULL);
   if (waiter_started) pthread_join(wtid, NULL);
   size_t size_after = clrucache_size(cache);
   clru_destroy(cache);
 
+  REQUIRE_TRUE(stid_started);
   REQUIRE_TRUE(waiter_started);
   REQUIRE_EQ(done_while_blocked, 0);
 
@@ -1598,13 +1648,18 @@ TEST(concurrency, getter_gets_old_value_when_setter_fails_for_existing_key) {
 
   clru_construct(cache, int, int, 16, NULL, gating_remote_setter, NULL);
 
+  /* Every result before the cleanup below is captured and asserted only
+     after it, because a REQUIRE_ that returns here leaks the cache. */
   sync_setter_arg_t sarg1 = {cache, 33, 330};
   pthread_t stid1;
-  REQUIRE_EQ(pthread_create(&stid1, NULL, sync_setter_thread, &sarg1), 0);
-  (void)clru_await_flag(&setter_started);
-  atomic_store(&setter_may_finish, true);
-  pthread_join(stid1, NULL);
-  REQUIRE_EQ(clrucache_size(cache), (size_t)1);
+  bool stid1_started =
+      (pthread_create(&stid1, NULL, sync_setter_thread, &sarg1) == 0);
+  if (stid1_started) {
+    (void)clru_await_flag(&setter_started);
+    atomic_store(&setter_may_finish, true);
+    pthread_join(stid1, NULL);
+  }
+  size_t size_seeded = clrucache_size(cache);
 
   /* Phase 2: attempt to overwrite 330 with 999; setter will fail */
   atomic_store(&setter_started, false);
@@ -1613,14 +1668,16 @@ TEST(concurrency, getter_gets_old_value_when_setter_fails_for_existing_key) {
 
   sync_setter_arg_t sarg2 = {cache, 33, 999};
   pthread_t stid2;
-  REQUIRE_EQ(pthread_create(&stid2, NULL, sync_setter_thread, &sarg2), 0);
-  (void)clru_await_flag(&setter_started);
+  bool stid2_started =
+      stid1_started &&
+      (pthread_create(&stid2, NULL, sync_setter_thread, &sarg2) == 0);
+  if (stid2_started) (void)clru_await_flag(&setter_started);
 
   /* Getter arrives while the failing setter is in progress */
   waiter_arg_t warg = {cache, 33, 330, 0, ccol_unexpected_failure, false};
   pthread_t wtid;
   bool waiter_started =
-      (pthread_create(&wtid, NULL, waiter_thread, &warg) == 0);
+      stid2_started && (pthread_create(&wtid, NULL, waiter_thread, &warg) == 0);
 
   /* The test captures this value here and asserts on it later, because a
      REQUIRE_ that fails between the start of these threads and their release
@@ -1636,11 +1693,14 @@ TEST(concurrency, getter_gets_old_value_when_setter_fails_for_existing_key) {
   }
 
   atomic_store(&setter_may_finish, true);
-  pthread_join(stid2, NULL);
+  if (stid2_started) pthread_join(stid2, NULL);
   if (waiter_started) pthread_join(wtid, NULL);
   size_t size_after = clrucache_size(cache);
   clru_destroy(cache);
 
+  REQUIRE_TRUE(stid1_started);
+  REQUIRE_EQ(size_seeded, (size_t)1);
+  REQUIRE_TRUE(stid2_started);
   REQUIRE_TRUE(waiter_started);
   REQUIRE_EQ(done_while_blocked, 0);
 
@@ -1663,13 +1723,18 @@ TEST(concurrency, multiple_getters_see_old_value_when_setter_fails) {
 
   clru_construct(cache, int, int, 16, NULL, gating_remote_setter, NULL);
 
+  /* Every result before the cleanup below is captured and asserted only
+     after it, because a REQUIRE_ that returns here leaks the cache. */
   sync_setter_arg_t sarg1 = {cache, 42, 420};
   pthread_t stid1;
-  REQUIRE_EQ(pthread_create(&stid1, NULL, sync_setter_thread, &sarg1), 0);
-  (void)clru_await_flag(&setter_started);
-  atomic_store(&setter_may_finish, true);
-  pthread_join(stid1, NULL);
-  REQUIRE_EQ(clrucache_size(cache), (size_t)1);
+  bool stid1_started =
+      (pthread_create(&stid1, NULL, sync_setter_thread, &sarg1) == 0);
+  if (stid1_started) {
+    (void)clru_await_flag(&setter_started);
+    atomic_store(&setter_may_finish, true);
+    pthread_join(stid1, NULL);
+  }
+  size_t size_seeded = clrucache_size(cache);
 
   /* Phase 2: failing overwrite of key 42 */
   atomic_store(&setter_started, false);
@@ -1678,14 +1743,16 @@ TEST(concurrency, multiple_getters_see_old_value_when_setter_fails) {
 
   sync_setter_arg_t sarg2 = {cache, 42, 999};
   pthread_t stid2;
-  REQUIRE_EQ(pthread_create(&stid2, NULL, sync_setter_thread, &sarg2), 0);
-  (void)clru_await_flag(&setter_started);
+  bool stid2_started =
+      stid1_started &&
+      (pthread_create(&stid2, NULL, sync_setter_thread, &sarg2) == 0);
+  if (stid2_started) (void)clru_await_flag(&setter_started);
 
 #define N_OLD_VAL_WAITERS 4
   waiter_arg_t wargs[N_OLD_VAL_WAITERS];
   pthread_t wtids[N_OLD_VAL_WAITERS];
   int wtids_created = 0;
-  for (int i = 0; i < N_OLD_VAL_WAITERS; i++) {
+  for (int i = 0; stid2_started && i < N_OLD_VAL_WAITERS; i++) {
     wargs[i] = (waiter_arg_t){cache, 42, 0, 0, ccol_unexpected_failure, false};
     /* A partial failure here must not let the join loop below join an
      * uninitialized wtids[i] slot. */
@@ -1707,7 +1774,7 @@ TEST(concurrency, multiple_getters_see_old_value_when_setter_fails) {
   }
 
   atomic_store(&setter_may_finish, true);
-  pthread_join(stid2, NULL);
+  if (stid2_started) pthread_join(stid2, NULL);
   for (int i = 0; i < wtids_created; i++) {
     pthread_join(wtids[i], NULL);
   }
@@ -1720,6 +1787,9 @@ TEST(concurrency, multiple_getters_see_old_value_when_setter_fails) {
   size_t size_after = clrucache_size(cache);
   clru_destroy(cache);
 
+  REQUIRE_TRUE(stid1_started);
+  REQUIRE_EQ(size_seeded, (size_t)1);
+  REQUIRE_TRUE(stid2_started);
   REQUIRE_EQ(wtids_created, (int)N_OLD_VAL_WAITERS);
   REQUIRE_EQ(still_blocked, (int)N_OLD_VAL_WAITERS);
   REQUIRE_EQ(got_old_value, (int)N_OLD_VAL_WAITERS);
@@ -1779,13 +1849,23 @@ TEST(concurrency, setters_for_same_key_are_serialized) {
     stids_created++;
     usleep(500); /* stagger slightly so order is deterministic */
   }
-  REQUIRE_EQ(stids_created, (int)N_SETTERS);
+  /* The join and the destroy come before every assertion, because a
+   * REQUIRE_* returns from this function at once: the threads that did start
+   * would then keep running against sargs[] and stids[], which live on this
+   * frame, and the cache would leak. */
   for (int i = 0; i < stids_created; i++) {
     pthread_join(stids[i], NULL);
   }
+  int calls = serial_setter_idx;
+  size_t final_size = clrucache_size(cache);
+  int final_val = 0;
+  ccol_retval_t final_r = clru_get(cache, 7, &final_val);
+  clru_destroy(cache);
+
+  REQUIRE_EQ(stids_created, (int)N_SETTERS);
 
   /* All N_SETTERS remote calls should have been made */
-  REQUIRE_EQ(serial_setter_idx, N_SETTERS);
+  REQUIRE_EQ(calls, N_SETTERS);
 
   /* Each setter value appears exactly once */
   bool seen[N_SETTERS + 1] = {false};
@@ -1802,13 +1882,10 @@ TEST(concurrency, setters_for_same_key_are_serialized) {
   /* The final cached value must be whatever the last setter stored: setters
    * are strictly serialized, so the last element of serial_setter_order is
    * the value that wins in the cache. */
-  REQUIRE_EQ(clrucache_size(cache), (size_t)1);
-  int final_val = 0;
-  REQUIRE_EQ(clru_get(cache, 7, &final_val), ccol_success);
+  REQUIRE_EQ(final_size, (size_t)1);
+  REQUIRE_EQ(final_r, ccol_success);
   REQUIRE_EQ(final_val, serial_setter_order[N_SETTERS - 1]);
 #undef N_SETTERS
-
-  clru_destroy(cache);
 }
 
 TEST(concurrency, concurrent_getters_different_keys) {
@@ -1836,20 +1913,20 @@ TEST(concurrency, concurrent_getters_different_keys) {
   for (int i = 0; i < created; i++) {
     pthread_join(tids[i], NULL);
   }
-  REQUIRE_EQ(created, (int)N_UNIQUE_KEYS);
 
   /* Cleanup runs unconditionally before the assertions below: REQUIRE_*
    * returns from this function immediately on the first failure, which
    * would otherwise leak the cache. */
   int calls = coalesce_getter_calls;
-  ccol_retval_t retvals[N_UNIQUE_KEYS];
-  int results[N_UNIQUE_KEYS];
-  for (int i = 0; i < N_UNIQUE_KEYS; i++) {
+  ccol_retval_t retvals[N_UNIQUE_KEYS] = {0};
+  int results[N_UNIQUE_KEYS] = {0};
+  for (int i = 0; i < created; i++) {
     retvals[i] = args[i].retval;
     results[i] = args[i].result;
   }
   clru_destroy(cache);
 
+  REQUIRE_EQ(created, (int)N_UNIQUE_KEYS);
   /* Each unique key must have triggered exactly one remote call */
   REQUIRE_EQ(calls, N_UNIQUE_KEYS);
 
@@ -1897,21 +1974,24 @@ TEST(concurrency, getter_sees_new_value_after_set_with_concurrent_insertion) {
 
   clru_construct(cache, int, int, 1, NULL, value_gating_setter, NULL);
 
-  /* Seed key 1 = 100; value_gating_setter passes through immediately */
+  /* Seed key 1 = 100; value_gating_setter passes through immediately.
+     Every result before the cleanup below is captured and asserted only
+     after it, because a REQUIRE_ that returns here leaks the cache. */
   clru_set(cache, 1, 100);
-  REQUIRE_EQ(clrucache_size(cache), (size_t)1);
+  size_t size_seeded = clrucache_size(cache);
 
   /* Thread A: slow setter for key 1 = 999 */
   sync_setter_arg_t sarg = {cache, 1, 999};
   pthread_t stid;
-  REQUIRE_EQ(pthread_create(&stid, NULL, sync_setter_thread, &sarg), 0);
-  (void)clru_await_flag(&val_gate_started);
+  bool stid_started =
+      (pthread_create(&stid, NULL, sync_setter_thread, &sarg) == 0);
+  if (stid_started) (void)clru_await_flag(&val_gate_started);
 
   /* Thread B: getter for key 1 (must block until setter finishes) */
   waiter_arg_t warg = {cache, 1, 0, 0, ccol_unexpected_failure, false};
   pthread_t wtid;
   bool waiter_started =
-      (pthread_create(&wtid, NULL, waiter_thread, &warg) == 0);
+      stid_started && (pthread_create(&wtid, NULL, waiter_thread, &warg) == 0);
   /* Captured, not asserted: a failing REQUIRE_ here would return with Thread A
      gated and Thread B blocked on it, neither joined. */
   int done_while_blocked = -1;
@@ -1927,10 +2007,12 @@ TEST(concurrency, getter_sees_new_value_after_set_with_concurrent_insertion) {
 
   /* Release Thread A */
   atomic_store(&val_gate_open, true);
-  pthread_join(stid, NULL);
+  if (stid_started) pthread_join(stid, NULL);
   if (waiter_started) pthread_join(wtid, NULL);
   clru_destroy(cache);
 
+  REQUIRE_EQ(size_seeded, (size_t)1);
+  REQUIRE_TRUE(stid_started);
   REQUIRE_TRUE(waiter_started);
   REQUIRE_EQ(done_while_blocked, 0);
   /* Thread B must have received key 1's new value */
@@ -2006,6 +2088,17 @@ static void *full_api_getter_thread(void *arg) {
  */
 #define COALESCE_EVICTION_RACE_ITERATIONS 15
 
+/* Waits, bounded, until the thread that published an entry is inside its
+ * post-publish delay, where it holds the mutex of the cache. The poll needs
+ * no lock of its own, so the hold of that thread cannot block it. */
+static bool clru_await_post_publish_delay(void) {
+  for (int waited = 0; waited < CLRU_GATE_WAIT_MS * 5; waited++) {
+    if (clru_test_post_publish_delay_entered()) return true;
+    usleep(200);
+  }
+  return clru_test_post_publish_delay_entered();
+}
+
 TEST(concurrency,
      coalesced_fetch_waiter_receives_value_despite_racing_eviction) {
   for (int iter = 0; iter < COALESCE_EVICTION_RACE_ITERATIONS; iter++) {
@@ -2031,7 +2124,11 @@ TEST(concurrency,
     pthread_t wtid;
     bool started_wtid =
         (pthread_create(&wtid, NULL, full_api_getter_thread, &warg) == 0);
-    usleep(50000); /* give Thread B time to enter the wait loop */
+    /* Thread A holds one reference to the placeholder, so a count of 2
+       means that Thread B waits on it. Without this wait, Thread B can come
+       after the eviction below and start a fetch of its own, which does not
+       test the coalesced path. */
+    bool joined_wtid = started_wtid && failset_await_waiters(cache, 1, 2);
 
     /* Release Thread A. It locks the mutex again and publishes key 1 as
      * LIVE, and since the capacity is 1, that key is also the LRU tail.
@@ -2041,23 +2138,30 @@ TEST(concurrency,
     atomic_store(&fetch_gate_open, true);
     /* Wait until Thread A really locks the mutex again and enters its
      * post-publish delay, where it holds the mutex. A fixed sleep here would
-     * be a guess, while a poll of this flag needs no lock of its own, so the
-     * hold of Thread A cannot block the poll. */
-    while (!clru_test_post_publish_delay_entered()) usleep(200);
+     * be a guess. */
+    bool delay_entered = started_ftid && clru_await_post_publish_delay();
 
     /* Thread C is this thread. It inserts an unrelated key while Thread A
      * holds the mutex in the middle of its delay, so this call blocks on the
      * mutex and queues up long before Thread A broadcasts, which makes it
      * very likely to get the mutex ahead of Thread B once Thread A releases
      * it. That evicts key 1, the only entry and so the LRU tail, before
-     * Thread B can read it. */
-    REQUIRE_EQ(clru_set(cache, 2, 200), ccol_success);
+     * Thread B can read it. The result of this set, like every other result
+     * here, is asserted only after the joins and the destroy below, because
+     * a REQUIRE_ that returns earlier leaves both threads running against a
+     * cache that nothing destroys, and leaves the delay hook switched on. */
+    ccol_retval_t set_r = clru_set(cache, 2, 200);
 
     if (started_ftid) pthread_join(ftid, NULL);
     if (started_wtid) pthread_join(wtid, NULL);
+    clru_test_set_post_publish_delay_us(0);
+    clru_destroy(cache);
+
+    REQUIRE_TRUE(delay_entered);
+    REQUIRE_EQ(set_r, ccol_success);
     REQUIRE_TRUE(started_ftid);
     REQUIRE_TRUE(started_wtid);
-    clru_test_set_post_publish_delay_us(0);
+    REQUIRE_TRUE(joined_wtid);
 
     /* Thread A is the fetcher. It always gets its own result, whatever the
      * race does, because it captures its own copy before it unlocks the
@@ -2070,8 +2174,6 @@ TEST(concurrency,
      * Thread C evicted key 1 before Thread B woke up. */
     REQUIRE_EQ(warg.retval, ccol_success);
     REQUIRE_EQ(warg.result, 1001);
-
-    clru_destroy(cache);
   }
 }
 
@@ -2099,7 +2201,10 @@ TEST(concurrency, coalesced_set_waiter_receives_value_despite_racing_eviction) {
     pthread_t wtid;
     bool started_wtid =
         (pthread_create(&wtid, NULL, waiter_thread, &warg) == 0);
-    usleep(50000); /* give Thread B time to enter the wait loop */
+    /* Thread A holds one reference to the placeholder, so a count of 2
+       means that Thread B waits on it. Without this wait, Thread B can come
+       after the eviction below and miss the key. */
+    bool joined_wtid = started_wtid && failset_await_waiters(cache, 1, 2);
 
     /* Release Thread A. It locks the mutex again and stores key 1 as LIVE,
      * and since the capacity is 1, that key is also the LRU tail. Thread A
@@ -2109,29 +2214,32 @@ TEST(concurrency, coalesced_set_waiter_receives_value_despite_racing_eviction) {
     atomic_store(&setter_may_finish, true);
     /* Wait until Thread A really locks the mutex again and enters its
      * post-publish delay, where it holds the mutex. A fixed sleep here would
-     * be a guess, while a poll of this flag needs no lock of its own, so the
-     * hold of Thread A cannot block the poll. */
-    while (!clru_test_post_publish_delay_entered()) usleep(200);
+     * be a guess. */
+    bool delay_entered = started_stid && clru_await_post_publish_delay();
 
     /* Thread C is this thread. It inserts an unrelated key while Thread A
      * holds the mutex in the middle of its delay, which very likely evicts
      * key 1 before Thread B can read it, for the same reason as in the fetch
-     * test above. */
-    REQUIRE_EQ(clru_set(cache, 2, 200), ccol_success);
+     * test above. Every result here is asserted only after the cleanup
+     * below, for the reason that the fetch test above gives. */
+    ccol_retval_t set_r = clru_set(cache, 2, 200);
 
     if (started_stid) pthread_join(stid, NULL);
     if (started_wtid) pthread_join(wtid, NULL);
+    clru_test_set_post_publish_delay_us(0);
+    clru_destroy(cache);
+
+    REQUIRE_TRUE(delay_entered);
+    REQUIRE_EQ(set_r, ccol_success);
     REQUIRE_TRUE(started_stid);
     REQUIRE_TRUE(started_wtid);
-    clru_test_set_post_publish_delay_us(0);
+    REQUIRE_TRUE(joined_wtid);
 
     /* Thread B is the getter that joined the set. It must receive the value
      * that the set of Thread A stored, and never ccol_key_not_found, even
      * when Thread C evicted key 1 before Thread B woke up. */
     REQUIRE_EQ(warg.retval, ccol_success);
     REQUIRE_EQ(warg.result, 100);
-
-    clru_destroy(cache);
   }
 }
 #undef COALESCE_EVICTION_RACE_ITERATIONS
@@ -2424,29 +2532,38 @@ TEST(concurrency,
  * and 1 only after the fetch completes and the entry becomes live.
  */
 TEST(concurrency, size_zero_while_fetch_in_progress) {
-  coalesce_getter_calls = 0;
-  clru_construct(cache, int, int, 10, slow_remote_getter, NULL, NULL);
+  atomic_store(&fetch_gate_started, false);
+  atomic_store(&fetch_gate_open, false);
+  clru_construct(cache, int, int, 10, gating_remote_getter, NULL, NULL);
 
-  REQUIRE_EQ(clrucache_size(cache), (size_t)0);
+  size_t size_before = clrucache_size(cache);
 
   getter_arg_t arg = {cache, 55, 0, ccol_unexpected_failure, NULL};
   pthread_t tid;
-  REQUIRE_EQ(pthread_create(&tid, NULL, getter_thread, &arg), 0);
+  bool started = (pthread_create(&tid, NULL, getter_thread, &arg) == 0);
 
-  /* spin until the remote getter has been entered (placeholder in map) */
-  while (atomic_load(&coalesce_getter_calls) == 0) usleep(1000);
+  /* The remote getter parks on fetch_gate_open until this thread opens it,
+     so the placeholder stays in the map for as long as the read below needs.
+     The size is captured and not asserted here: a failing REQUIRE_ would
+     return with the getter parked and nothing left to join it. */
+  bool entered = started && clru_await_flag(&fetch_gate_started);
+  size_t size_during = clrucache_size(cache);
 
-  /* placeholder is not LIVE, so size must still be 0 */
-  REQUIRE_EQ(clrucache_size(cache), (size_t)0);
+  atomic_store(&fetch_gate_open, true);
+  if (started) pthread_join(tid, NULL);
+  size_t size_after = clrucache_size(cache);
+  clru_destroy(cache);
 
-  pthread_join(tid, NULL);
+  REQUIRE_EQ(size_before, (size_t)0);
+  REQUIRE_TRUE(started);
+  REQUIRE_TRUE(entered);
+  /* The placeholder is not LIVE, so the size is still 0. */
+  REQUIRE_EQ(size_during, (size_t)0);
 
-  /* after the fetch the entry is live */
+  /* After the fetch the entry is live. */
   REQUIRE_EQ(arg.retval, ccol_success);
   REQUIRE_EQ(arg.result, 1055); /* 55 + 1000 */
-  REQUIRE_EQ(clrucache_size(cache), (size_t)1);
-
-  clru_destroy(cache);
+  REQUIRE_EQ(size_after, (size_t)1);
 }
 
 /*
@@ -2456,17 +2573,25 @@ TEST(concurrency, size_zero_while_fetch_in_progress) {
  */
 static volatile int fail_getter_call_count = 0;
 
+/* The failing getters below park on fail_fetch_gate_open until the test has
+   seen every other thread join the placeholder, so no thread can arrive
+   after the fetch has ended and start a second remote call. */
+static _Atomic bool fail_fetch_gate_started = false;
+static _Atomic bool fail_fetch_gate_open = false;
+
 static bool slow_failing_getter(const cmap_pair *key, cmap_pair *val) {
   (void)key;
   (void)val;
   __atomic_fetch_add(&fail_getter_call_count, 1, __ATOMIC_SEQ_CST);
-  usleep(100000); /* 100 ms; gives all threads time to block on the placeholder
-                   */
+  atomic_store(&fail_fetch_gate_started, true);
+  (void)clru_await_flag(&fail_fetch_gate_open);
   return false;
 }
 
 TEST(concurrency, multiple_getters_coalesce_on_failed_fetch) {
   fail_getter_call_count = 0;
+  atomic_store(&fail_fetch_gate_started, false);
+  atomic_store(&fail_fetch_gate_open, false);
   clru_construct(cache, int, int, 16, slow_failing_getter, NULL, NULL);
 
 #define N_FAIL_THREADS 6
@@ -2490,20 +2615,27 @@ TEST(concurrency, multiple_getters_coalesce_on_failed_fetch) {
    * join it. Otherwise the assertion below returns with those threads parked
    * and the fixture leaked. */
   clru_gate_release(&gate, created);
+  /* The fetcher holds one reference to the placeholder and each waiter holds
+     one more, so a count equal to the number of started threads means that
+     every thread has joined the one fetch. The gate opens on every path,
+     also when the wait runs out, so that every thread can be joined. */
+  bool all_joined = failset_await_waiters(cache, 11, created);
+  atomic_store(&fail_fetch_gate_open, true);
   for (int i = 0; i < created; i++) {
     pthread_join(tids[i], NULL);
   }
-  REQUIRE_EQ(created, (int)N_FAIL_THREADS);
 
   /* Cleanup runs unconditionally before the assertions below: REQUIRE_*
    * returns from this function immediately on the first failure, which
    * would otherwise leak the cache. */
   int calls = fail_getter_call_count;
-  ccol_retval_t retvals[N_FAIL_THREADS];
-  for (int i = 0; i < N_FAIL_THREADS; i++) retvals[i] = args[i].retval;
+  ccol_retval_t retvals[N_FAIL_THREADS] = {0};
+  for (int i = 0; i < created; i++) retvals[i] = args[i].retval;
   size_t final_size = clrucache_size(cache);
   clru_destroy(cache);
 
+  REQUIRE_EQ(created, (int)N_FAIL_THREADS);
+  REQUIRE_TRUE(all_joined);
   /* Only one remote call, regardless of how many threads entered */
   REQUIRE_EQ(calls, 1);
 
@@ -2565,13 +2697,22 @@ TEST(concurrency,
   pthread_t wtid;
   bool started_wtid =
       (pthread_create(&wtid, NULL, full_api_getter_thread, &warg) == 0);
-  usleep(50000); /* give Thread B time to enter the wait loop */
+  /* Thread A holds one reference to the placeholder, so a count of 2 means
+     that Thread B waits on it. Without this wait, Thread B can come after the
+     failed fetch and start a fetch of its own. */
+  bool joined_wtid = started_wtid && failset_await_waiters(cache, 1, 2);
 
   atomic_store(&mismatch_gate_open, true);
   if (started_ftid) pthread_join(ftid, NULL);
   if (started_wtid) pthread_join(wtid, NULL);
+  /* The destroy comes before every assertion, because a REQUIRE_* returns
+   * from this function at once and would leak the cache. */
+  size_t final_size = clrucache_size(cache);
+  clru_destroy(cache);
+
   REQUIRE_TRUE(started_ftid);
   REQUIRE_TRUE(started_wtid);
+  REQUIRE_TRUE(joined_wtid);
 
   /* Thread A (the fetcher) gets the specific diagnostic. */
   REQUIRE_EQ(farg.retval, ccol_unexpected_failure);
@@ -2582,9 +2723,7 @@ TEST(concurrency,
   REQUIRE_EQ(warg.retval, ccol_unexpected_failure);
 
   /* The mis-sized value must not have been cached. */
-  REQUIRE_EQ(clrucache_size(cache), (size_t)0);
-
-  clru_destroy(cache);
+  REQUIRE_EQ(final_size, (size_t)0);
 }
 
 /*
@@ -2608,8 +2747,17 @@ TEST(concurrency, setter_waits_for_active_fetch_then_succeeds) {
   bool started_gtid = (pthread_create(&gtid, NULL, getter_thread, &garg) == 0);
 
   /* Wait until the fetch has actually started (placeholder created, mutex
-   * released, slow getter running). */
-  while (atomic_load(&coalesce_getter_calls) == 0) usleep(1000);
+   * released, slow getter running). The wait is bounded, and only a thread
+   * that started can end it. */
+  bool fetch_started = false;
+  for (int waited_ms = 0; started_gtid && waited_ms < CLRU_GATE_WAIT_MS;
+       waited_ms++) {
+    if (atomic_load(&coalesce_getter_calls) != 0) {
+      fetch_started = true;
+      break;
+    }
+    usleep(1000);
+  }
 
   /* Thread B: set key=7; must find fetch_in_progress=true and block */
   sync_setter_arg_t sarg = {cache, 7, 999};
@@ -2619,7 +2767,14 @@ TEST(concurrency, setter_waits_for_active_fetch_then_succeeds) {
 
   if (started_gtid) pthread_join(gtid, NULL);
   if (started_stid) pthread_join(stid, NULL);
+  /* The destroy comes before every assertion, because a REQUIRE_* returns
+   * from this function at once and would leak the cache. */
+  int out = 0;
+  ccol_retval_t final_r = clru_get(cache, 7, &out);
+  clru_destroy(cache);
+
   REQUIRE_TRUE(started_gtid);
+  REQUIRE_TRUE(fetch_started);
   REQUIRE_TRUE(started_stid);
 
   /* Thread A received the value from the remote getter (7 + 1000 = 1007) */
@@ -2632,11 +2787,8 @@ TEST(concurrency, setter_waits_for_active_fetch_then_succeeds) {
   REQUIRE_EQ(remote_set_last_val, 999);
 
   /* Final cached value must reflect the setter's write */
-  int out = 0;
-  REQUIRE_EQ(clru_get(cache, 7, &out), ccol_success);
+  REQUIRE_EQ(final_r, ccol_success);
   REQUIRE_EQ(out, 999);
-
-  clru_destroy(cache);
 }
 
 /*
@@ -2712,7 +2864,6 @@ TEST(concurrency, multiple_char_ptr_getters_coalesce) {
   for (int i = 0; i < created; i++) {
     pthread_join(tids[i], NULL);
   }
-  REQUIRE_EQ(created, (int)N_STR_THREADS);
 
   /* Every cleanup step, for the cache and for each result string that the
    * test allocated, runs on every path before the assertions below, because
@@ -2720,10 +2871,10 @@ TEST(concurrency, multiple_char_ptr_getters_coalesce) {
    * would otherwise leak the cache and every args[i].result that the loop
    * has not yet freed. */
   int calls = char_ptr_coalesce_calls;
-  ccol_retval_t retvals[N_STR_THREADS];
-  char results_copy[N_STR_THREADS][64];
-  bool has_result[N_STR_THREADS];
-  for (int i = 0; i < N_STR_THREADS; i++) {
+  ccol_retval_t retvals[N_STR_THREADS] = {0};
+  char results_copy[N_STR_THREADS][64] = {{0}};
+  bool has_result[N_STR_THREADS] = {false};
+  for (int i = 0; i < created; i++) {
     retvals[i] = args[i].retval;
     has_result[i] = args[i].result != NULL;
     if (has_result[i]) {
@@ -2733,6 +2884,7 @@ TEST(concurrency, multiple_char_ptr_getters_coalesce) {
   }
   clru_destroy(cache);
 
+  REQUIRE_EQ(created, (int)N_STR_THREADS);
   REQUIRE_EQ(calls, 1);
   for (int i = 0; i < N_STR_THREADS; i++) {
     REQUIRE_EQ(retvals[i], ccol_success);
@@ -2755,13 +2907,15 @@ static bool slow_failing_char_ptr_getter(const cmap_pair *key, cmap_pair *val) {
   (void)key;
   (void)val;
   __atomic_fetch_add(&slow_fail_char_ptr_getter_calls, 1, __ATOMIC_SEQ_CST);
-  usleep(100000); /* 100 ms; gives all threads time to block on the
-                     placeholder */
+  atomic_store(&fail_fetch_gate_started, true);
+  (void)clru_await_flag(&fail_fetch_gate_open);
   return false;
 }
 
 TEST(concurrency, multiple_char_ptr_getters_coalesce_on_failed_fetch) {
   slow_fail_char_ptr_getter_calls = 0;
+  atomic_store(&fail_fetch_gate_started, false);
+  atomic_store(&fail_fetch_gate_open, false);
   clru_construct(cache, int, char *, 16, slow_failing_char_ptr_getter, NULL,
                  NULL);
 
@@ -2786,18 +2940,21 @@ TEST(concurrency, multiple_char_ptr_getters_coalesce_on_failed_fetch) {
    * join it. Otherwise the assertion below returns with those threads parked
    * and the fixture leaked. */
   clru_gate_release(&gate, created);
+  /* Every thread must join the one fetch before it ends; see
+     multiple_getters_coalesce_on_failed_fetch. */
+  bool all_joined = failset_await_waiters(cache, 22, created);
+  atomic_store(&fail_fetch_gate_open, true);
   for (int i = 0; i < created; i++) {
     pthread_join(tids[i], NULL);
   }
-  REQUIRE_EQ(created, (int)N_FAIL_STR_THREADS);
 
   /* Every cleanup runs unconditionally before the assertions below:
    * REQUIRE_* returns from this function immediately on the first failure,
    * which would otherwise leak the cache. */
   int calls = slow_fail_char_ptr_getter_calls;
-  ccol_retval_t retvals[N_FAIL_STR_THREADS];
-  bool has_result[N_FAIL_STR_THREADS];
-  for (int i = 0; i < N_FAIL_STR_THREADS; i++) {
+  ccol_retval_t retvals[N_FAIL_STR_THREADS] = {0};
+  bool has_result[N_FAIL_STR_THREADS] = {false};
+  for (int i = 0; i < created; i++) {
     retvals[i] = args[i].retval;
     has_result[i] = args[i].result != NULL;
     if (has_result[i]) free(args[i].result);
@@ -2805,6 +2962,8 @@ TEST(concurrency, multiple_char_ptr_getters_coalesce_on_failed_fetch) {
   size_t final_size = clrucache_size(cache);
   clru_destroy(cache);
 
+  REQUIRE_EQ(created, (int)N_FAIL_STR_THREADS);
+  REQUIRE_TRUE(all_joined);
   /* Only one remote call, regardless of how many threads entered */
   REQUIRE_EQ(calls, 1);
   for (int i = 0; i < N_FAIL_STR_THREADS; i++) {
@@ -2897,24 +3056,29 @@ TEST(concurrency, multiple_setters_race_after_failed_new_key_set) {
   for (int i = 0; i < created; i++) {
     pthread_join(stids[i], NULL);
   }
+  /* The destroy comes before every assertion, because a REQUIRE_* returns
+   * from this function at once and would leak the cache. */
+  int calls = phased_set_count;
+  size_t final_size = clrucache_size(cache);
+  int out = 0;
+  ccol_retval_t final_r = clru_get(cache, 55, &out);
+  clru_destroy(cache);
+
   REQUIRE_EQ(created, (int)N_RACING_SETTERS);
 
   /* All 3 remote setter calls must have been made.  Without the coalescing
    * guard, thread 3 short-circuits with ccol_not_enough_memory and only 2
    * calls are observed. */
-  REQUIRE_EQ(phased_set_count, N_RACING_SETTERS);
+  REQUIRE_EQ(calls, N_RACING_SETTERS);
 
   /* Exactly one live entry must exist; no orphaned entries. */
-  REQUIRE_EQ(clrucache_size(cache), (size_t)1);
+  REQUIRE_EQ(final_size, (size_t)1);
 
   /* The key must be readable with a valid value. */
-  int out = 0;
-  REQUIRE_EQ(clru_get(cache, 55, &out), ccol_success);
+  REQUIRE_EQ(final_r, ccol_success);
   REQUIRE_GE(out, 1);
   REQUIRE_LE(out, N_RACING_SETTERS);
-
 #undef N_RACING_SETTERS
-  clru_destroy(cache);
 }
 
 /* ========================================================================== */
@@ -2942,12 +3106,18 @@ TEST(macros, declare_and_init) {
   int k = 10, v = 20;
   clru_set(cache, k, v);
 
+  /* This test checks the unscoped clru_declare form, so the results go into
+   * locals and the assertions come after the destroy. A failed assertion
+   * then cannot return with the cache still alive. */
   int out = 0;
-  REQUIRE_EQ(clru_get(cache, k, &out), ccol_success);
-  REQUIRE_EQ(out, 20);
-  REQUIRE_EQ(clrucache_size(cache), (size_t)1);
+  ccol_retval_t get_rv = clru_get(cache, k, &out);
+  size_t size = clrucache_size(cache);
 
   clru_destroy(cache);
+
+  REQUIRE_EQ(get_rv, ccol_success);
+  REQUIRE_EQ(out, 20);
+  REQUIRE_EQ(size, (size_t)1);
 }
 
 TEST(macros, declare_scoped_auto_destroys) {
@@ -2980,7 +3150,7 @@ static ccol_retval_t use_cache_in_other_scope(clru_cache cache, int key,
 }
 
 TEST(macros, redeclare_works_across_scope) {
-  clru_construct(cache, int, int, 8, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 8, NULL, NULL, NULL);
 
   int k = 3, v = 33;
   clru_set(cache, k, v);
@@ -3023,7 +3193,7 @@ static bool str_val_remote_getter(const cmap_pair *key, cmap_pair *val) {
  * Use a non-zero sentinel to make the guarantee explicit.
  */
 TEST(get_val_types, non_char_ptr_get_miss_does_not_modify_buf) {
-  clru_construct(cache, int, double, 8, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, double, 8, NULL, NULL, NULL);
 
   double sentinel = 3.14;
   double out = sentinel;
@@ -3036,7 +3206,7 @@ TEST(get_val_types, non_char_ptr_get_miss_does_not_modify_buf) {
 /* non-char* scalar: double */
 
 TEST(get_val_types, double_value_via_macro) {
-  clru_construct(cache, int, double, 8, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, double, 8, NULL, NULL, NULL);
 
   clru_set(cache, 1, 2.5);
 
@@ -3050,7 +3220,7 @@ TEST(get_val_types, double_value_via_macro) {
 /* non-char* struct value */
 
 TEST(get_val_types, struct_value_via_macro) {
-  clru_construct(cache, int, point_t, 8, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, point_t, 8, NULL, NULL, NULL);
 
   point_t v = {.x = 7, .y = 2.5};
   clru_set(cache, 42, v);
@@ -3066,7 +3236,7 @@ TEST(get_val_types, struct_value_via_macro) {
 /* clrucache_get_full: each call produces a fresh independent allocation */
 
 TEST(get_val_types, full_api_returns_independent_copies) {
-  clru_construct(cache, int, int, 8, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 8, NULL, NULL, NULL);
 
   clru_set(cache, 5, 99);
 
@@ -3092,7 +3262,7 @@ TEST(get_val_types, full_api_returns_independent_copies) {
 /* on a miss, val_out fields are not modified */
 
 TEST(get_val_types, missing_key_val_out_untouched) {
-  clru_construct(cache, int, int, 8, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 8, NULL, NULL, NULL);
 
   int k = 99;
   cmap_pair kp = {};
@@ -3112,7 +3282,7 @@ TEST(get_val_types, missing_key_val_out_untouched) {
 /* overwrite: a later get returns the new value */
 
 TEST(get_val_types, overwrite_reflected_in_subsequent_get) {
-  clru_construct(cache, int, double, 8, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, double, 8, NULL, NULL, NULL);
 
   clru_set(cache, 1, 1.0);
   clru_set(cache, 1, 2.5);
@@ -3127,7 +3297,7 @@ TEST(get_val_types, overwrite_reflected_in_subsequent_get) {
 /* char* value: macro transfers heap ownership to caller */
 
 TEST(get_val_types, char_ptr_value_macro_transfers_ownership) {
-  clru_construct(cache, int, char *, 8, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, char *, 8, NULL, NULL, NULL);
 
   clru_set(cache, 10, "hello");
 
@@ -3143,7 +3313,7 @@ TEST(get_val_types, char_ptr_value_macro_transfers_ownership) {
 /* char* value: two consecutive gets return distinct heap pointers */
 
 TEST(get_val_types, char_ptr_value_two_gets_are_independent_copies) {
-  clru_construct(cache, int, char *, 8, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, char *, 8, NULL, NULL, NULL);
 
   clru_set(cache, 7, "world");
 
@@ -3165,7 +3335,7 @@ TEST(get_val_types, char_ptr_value_two_gets_are_independent_copies) {
 /* char* value through clrucache_get_full: size == strlen + 1 */
 
 TEST(get_val_types, char_ptr_value_full_api_size_includes_null_terminator) {
-  clru_construct(cache, int, char *, 8, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, char *, 8, NULL, NULL, NULL);
 
   clru_set(cache, 3, "test_string");
 
@@ -3186,7 +3356,7 @@ TEST(get_val_types, char_ptr_value_full_api_size_includes_null_terminator) {
 /* both key and value are char* */
 
 TEST(get_val_types, char_ptr_key_and_char_ptr_value) {
-  clru_construct(cache, char *, char *, 8, NULL, NULL, NULL);
+  clru_construct_scoped(cache, char *, char *, 8, NULL, NULL, NULL);
 
   clru_set(cache, "k1", "v1");
   clru_set(cache, "k2", "v2");
@@ -3209,7 +3379,8 @@ TEST(get_val_types, char_ptr_key_and_char_ptr_value) {
 /* char* value from remote getter: macro path delivers owned string */
 
 TEST(get_val_types, char_ptr_value_from_remote_getter_macro) {
-  clru_construct(cache, int, char *, 8, str_val_remote_getter, NULL, NULL);
+  clru_construct_scoped(cache, int, char *, 8, str_val_remote_getter, NULL,
+                        NULL);
 
   char *out = NULL;
   REQUIRE_EQ(clru_get(cache, 42, &out), ccol_success);
@@ -3229,7 +3400,8 @@ TEST(get_val_types, char_ptr_value_from_remote_getter_macro) {
 /* char* value from remote getter: clrucache_get_full direct path */
 
 TEST(get_val_types, char_ptr_value_from_remote_getter_full_api) {
-  clru_construct(cache, int, char *, 8, str_val_remote_getter, NULL, NULL);
+  clru_construct_scoped(cache, int, char *, 8, str_val_remote_getter, NULL,
+                        NULL);
 
   int k = 7;
   cmap_pair kp = {};
@@ -3276,26 +3448,34 @@ TEST(get_val_types, get_into_rejects_live_value_too_large_for_buffer) {
   cmap_pair vp = {.ptr = &v,
                   .size = sizeof(v)}; /* sizeof(long long) > sizeof(int) */
 
-  REQUIRE_EQ(clrucache_set_full(cache, &kp, &vp), ccol_success);
-  REQUIRE_EQ(clrucache_size(cache), (size_t)1);
+  /* The results go into locals and the assertions come after the destroy,
+   * so a failed assertion cannot return with the cache still alive. */
+  ccol_retval_t set_rv = clrucache_set_full(cache, &kp, &vp);
+  size_t size_after_set = clrucache_size(cache);
 
   /* Reading into an int buffer (4 bytes) while the cached value is 8 bytes
    * must fail gracefully without corrupting the output buffer. */
   int small_out = 0;
-  REQUIRE_EQ(__clrucache_get_into(cache, &kp, &small_out, sizeof(small_out)),
-             ccol_unexpected_failure);
-  REQUIRE_EQ(small_out, 0); /* buffer must be untouched */
+  ccol_retval_t small_rv =
+      __clrucache_get_into(cache, &kp, &small_out, sizeof(small_out));
 
   /* The entry must still be in the cache. */
-  REQUIRE_EQ(clrucache_size(cache), (size_t)1);
+  size_t size_after_small = clrucache_size(cache);
 
   /* Reading with a correctly-sized buffer must succeed. */
   long long big_out = 0;
-  REQUIRE_EQ(__clrucache_get_into(cache, &kp, &big_out, sizeof(big_out)),
-             ccol_success);
-  REQUIRE_EQ(big_out, 12345LL);
+  ccol_retval_t big_rv =
+      __clrucache_get_into(cache, &kp, &big_out, sizeof(big_out));
 
   __clrucache_destroy(cache);
+
+  REQUIRE_EQ(set_rv, ccol_success);
+  REQUIRE_EQ(size_after_set, (size_t)1);
+  REQUIRE_EQ(small_rv, ccol_unexpected_failure);
+  REQUIRE_EQ(small_out, 0); /* buffer must be untouched */
+  REQUIRE_EQ(size_after_small, (size_t)1);
+  REQUIRE_EQ(big_rv, ccol_success);
+  REQUIRE_EQ(big_out, 12345LL);
 }
 
 TEST(get_val_types, get_into_rejects_live_value_too_small_for_buffer) {
@@ -3309,28 +3489,36 @@ TEST(get_val_types, get_into_rejects_live_value_too_small_for_buffer) {
   cmap_pair vp = {.ptr = &v,
                   .size = sizeof(v)}; /* 1 byte < sizeof(long long) */
 
-  REQUIRE_EQ(clrucache_set_full(cache, &kp, &vp), ccol_success);
-  REQUIRE_EQ(clrucache_size(cache), (size_t)1);
+  /* The results go into locals and the assertions come after the destroy,
+   * so a failed assertion cannot return with the cache still alive. */
+  ccol_retval_t set_rv = clrucache_set_full(cache, &kp, &vp);
+  size_t size_after_set = clrucache_size(cache);
 
   /* A read into an 8-byte buffer, where the cached value is only 1 byte,
    * must fail cleanly: it must never report success while leaving the other
    * 7 bytes of the buffer of the caller untouched. */
   long long big_out = 0x1122334455667788LL;
-  REQUIRE_EQ(__clrucache_get_into(cache, &kp, &big_out, sizeof(big_out)),
-             ccol_unexpected_failure);
-  REQUIRE_EQ(big_out, 0x1122334455667788LL); /* buffer must be untouched */
+  ccol_retval_t big_rv =
+      __clrucache_get_into(cache, &kp, &big_out, sizeof(big_out));
 
   /* The entry must still be in the cache: a size mismatch against ONE
    * caller's buffer does not evict an otherwise-valid cached value. */
-  REQUIRE_EQ(clrucache_size(cache), (size_t)1);
+  size_t size_after_big = clrucache_size(cache);
 
   /* Reading with a correctly-sized buffer must succeed. */
   char small_out = 0;
-  REQUIRE_EQ(__clrucache_get_into(cache, &kp, &small_out, sizeof(small_out)),
-             ccol_success);
-  REQUIRE_EQ(small_out, 0x5A);
+  ccol_retval_t small_rv =
+      __clrucache_get_into(cache, &kp, &small_out, sizeof(small_out));
 
   __clrucache_destroy(cache);
+
+  REQUIRE_EQ(set_rv, ccol_success);
+  REQUIRE_EQ(size_after_set, (size_t)1);
+  REQUIRE_EQ(big_rv, ccol_unexpected_failure);
+  REQUIRE_EQ(big_out, 0x1122334455667788LL); /* buffer must be untouched */
+  REQUIRE_EQ(size_after_big, (size_t)1);
+  REQUIRE_EQ(small_rv, ccol_success);
+  REQUIRE_EQ(small_out, 0x5A);
 }
 
 /*
@@ -3353,20 +3541,21 @@ TEST(get_val_types, get_into_size_mismatch_failure_does_not_promote_lru) {
   long long v1 = 111;
   cmap_pair kp1 = {.ptr = &k1, .size = sizeof(k1)};
   cmap_pair vp1 = {.ptr = &v1, .size = sizeof(v1)};
-  REQUIRE_EQ(clrucache_set_full(cache, &kp1, &vp1), ccol_success);
+  /* The results go into locals and the assertions come after the destroy,
+   * so a failed assertion cannot return with the cache still alive. */
+  ccol_retval_t set1_rv = clrucache_set_full(cache, &kp1, &vp1);
 
   int k2 = 2;
   long long v2 = 222;
   cmap_pair kp2 = {.ptr = &k2, .size = sizeof(k2)};
   cmap_pair vp2 = {.ptr = &v2, .size = sizeof(v2)};
-  REQUIRE_EQ(clrucache_set_full(cache, &kp2, &vp2), ccol_success);
+  ccol_retval_t set2_rv = clrucache_set_full(cache, &kp2, &vp2);
 
   /* Try to read k1, the current LRU entry, into a buffer that is too small.
    * This must fail, and it must not promote k1 in the LRU order. */
   int wrong_size_out = 0;
-  REQUIRE_EQ(__clrucache_get_into(cache, &kp1, &wrong_size_out,
-                                  sizeof(wrong_size_out)),
-             ccol_unexpected_failure);
+  ccol_retval_t wrong_size_rv = __clrucache_get_into(
+      cache, &kp1, &wrong_size_out, sizeof(wrong_size_out));
 
   /* Insert a third key; a capacity of 2 forces exactly one eviction. k1
    * must remain the LRU victim, because its failed read must not have
@@ -3376,17 +3565,24 @@ TEST(get_val_types, get_into_size_mismatch_failure_does_not_promote_lru) {
   long long v3 = 333;
   cmap_pair kp3 = {.ptr = &k3, .size = sizeof(k3)};
   cmap_pair vp3 = {.ptr = &v3, .size = sizeof(v3)};
-  REQUIRE_EQ(clrucache_set_full(cache, &kp3, &vp3), ccol_success);
-  REQUIRE_EQ(clrucache_size(cache), (size_t)2);
+  ccol_retval_t set3_rv = clrucache_set_full(cache, &kp3, &vp3);
+  size_t size_after_set3 = clrucache_size(cache);
 
   long long out = 0;
-  REQUIRE_EQ(__clrucache_get_into(cache, &kp1, &out, sizeof(out)),
-             ccol_key_not_found); /* correctly evicted as the true LRU entry */
-  REQUIRE_EQ(__clrucache_get_into(cache, &kp2, &out, sizeof(out)),
-             ccol_success);
-  REQUIRE_EQ(out, 222LL);
+  ccol_retval_t get1_rv = __clrucache_get_into(cache, &kp1, &out, sizeof(out));
+  ccol_retval_t get2_rv = __clrucache_get_into(cache, &kp2, &out, sizeof(out));
 
   __clrucache_destroy(cache);
+
+  REQUIRE_EQ(set1_rv, ccol_success);
+  REQUIRE_EQ(set2_rv, ccol_success);
+  REQUIRE_EQ(wrong_size_rv, ccol_unexpected_failure);
+  REQUIRE_EQ(set3_rv, ccol_success);
+  REQUIRE_EQ(size_after_set3, (size_t)2);
+  REQUIRE_EQ(get1_rv,
+             ccol_key_not_found); /* correctly evicted as the true LRU entry */
+  REQUIRE_EQ(get2_rv, ccol_success);
+  REQUIRE_EQ(out, 222LL);
 }
 
 /* ========================================================================== */
@@ -3409,7 +3605,7 @@ TEST(get_val_types, get_into_size_mismatch_failure_does_not_promote_lru) {
  * cvec_push in the type-inferred push macro of cvector.
  */
 TEST(type_conversion, set_float_into_int_cache_converts_not_reinterprets) {
-  clru_construct(cache, int, int, 8, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 8, NULL, NULL, NULL);
 
   float f = 7.0f;
   REQUIRE_EQ(clru_set(cache, 1, f), ccol_success);
@@ -3426,7 +3622,7 @@ TEST(type_conversion, set_float_into_int_cache_converts_not_reinterprets) {
 
 TEST(type_conversion,
      set_negative_float_into_int_cache_truncates_like_plain_assignment) {
-  clru_construct(cache, int, int, 8, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 8, NULL, NULL, NULL);
 
   float f = -3.75f;
   REQUIRE_EQ(clru_set(cache, 1, f), ccol_success);
@@ -3439,7 +3635,7 @@ TEST(type_conversion,
 }
 
 TEST(type_conversion, set_int_literal_into_double_cache_converts) {
-  clru_construct(cache, int, double, 8, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, double, 8, NULL, NULL, NULL);
 
   /* An unsuffixed int literal has type int, a different (and smaller) type
    * than the cache's declared double ValT. */
@@ -3453,7 +3649,7 @@ TEST(type_conversion, set_int_literal_into_double_cache_converts) {
 }
 
 TEST(type_conversion, get_into_double_out_param_converts_stored_int) {
-  clru_construct(cache, int, int, 8, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 8, NULL, NULL, NULL);
 
   REQUIRE_EQ(clru_set(cache, 1, 9), ccol_success);
 
@@ -3471,7 +3667,7 @@ TEST(type_conversion, get_into_double_out_param_converts_stored_int) {
 
 TEST(type_conversion,
      get_into_float_out_param_does_not_reinterpret_stored_int) {
-  clru_construct(cache, int, int, 8, NULL, NULL, NULL);
+  clru_construct_scoped(cache, int, int, 8, NULL, NULL, NULL);
 
   REQUIRE_EQ(clru_set(cache, 1, 12), ccol_success);
 
@@ -3491,7 +3687,7 @@ TEST(type_conversion, set_string_key_from_local_char_array_variable) {
   /* The key here is a char[] variable, not a string literal, and the KeyT
    * conversion, which tracks the type, must decay it to char* correctly
    * all the same. */
-  clru_construct(cache, char *, int, 8, NULL, NULL, NULL);
+  clru_construct_scoped(cache, char *, int, 8, NULL, NULL, NULL);
 
   char key_buf[16];
   strcpy(key_buf, "arraykey");
@@ -3573,18 +3769,25 @@ TEST(custom_alloc, get_full_copy_uses_custom_allocator) {
   cmap_pair kp = {}, vp = {};
   _populate_cmap_pair(&kp, k);
   _populate_cmap_pair(&vp, v);
-  REQUIRE_EQ(clrucache_set_full(cache, &kp, &vp), ccol_success);
+  /* The results go into locals and the assertions come after the destroy,
+   * so a failed assertion cannot return with the cache still alive. */
+  ccol_retval_t set_rv = clrucache_set_full(cache, &kp, &vp);
 
   cmap_pair val_out = {};
-  REQUIRE_EQ(clrucache_get_full(cache, &kp, &val_out), ccol_success);
-  REQUIRE_NOT_NULL(val_out.ptr);
-  REQUIRE_EQ(*(int *)val_out.ptr, 42);
+  ccol_retval_t get_rv = clrucache_get_full(cache, &kp, &val_out);
+  bool got_copy = val_out.ptr != NULL;
+  int got = got_copy ? *(int *)val_out.ptr : -1;
 
   /* The custom allocator allocated the copy that clrucache_get_full
    * returned. Free it with that same allocator. */
   _lru_custom_free(val_out.ptr);
 
   __clrucache_destroy(cache);
+
+  REQUIRE_EQ(set_rv, ccol_success);
+  REQUIRE_EQ(get_rv, ccol_success);
+  REQUIRE_TRUE(got_copy);
+  REQUIRE_EQ(got, 42);
   REQUIRE_EQ(_lru_custom_alloc_count, _lru_custom_free_count);
 }
 
@@ -3603,18 +3806,25 @@ TEST(custom_alloc, char_ptr_get_full_uses_custom_allocator) {
   cmap_pair kp = {}, vp = {};
   _populate_cmap_pair(&kp, k);
   _populate_cmap_pair(&vp, v);
-  REQUIRE_EQ(clrucache_set_full(cache, &kp, &vp), ccol_success);
+  /* The results go into locals and the assertions come after the destroy,
+   * so a failed assertion cannot return with the cache still alive. */
+  ccol_retval_t set_rv = clrucache_set_full(cache, &kp, &vp);
 
   cmap_pair val_out = {};
-  REQUIRE_EQ(clrucache_get_full(cache, &kp, &val_out), ccol_success);
-  REQUIRE_NOT_NULL(val_out.ptr);
-  REQUIRE_STREQ((char *)val_out.ptr, "world");
+  ccol_retval_t get_rv = clrucache_get_full(cache, &kp, &val_out);
+  bool got_copy = val_out.ptr != NULL;
+  bool matches = got_copy && strcmp((char *)val_out.ptr, "world") == 0;
 
   /* The custom allocator allocated the char* copy. Free it with that same
    * allocator. */
   _lru_custom_free(val_out.ptr);
 
   __clrucache_destroy(cache);
+
+  REQUIRE_EQ(set_rv, ccol_success);
+  REQUIRE_EQ(get_rv, ccol_success);
+  REQUIRE_TRUE(got_copy);
+  REQUIRE_TRUE(matches);
   REQUIRE_EQ(_lru_custom_alloc_count, _lru_custom_free_count);
 }
 
@@ -3650,13 +3860,15 @@ TEST(custom_alloc, get_full_copy_oom_failure_does_not_promote_lru) {
   cmap_pair kp1 = {}, vp1 = {};
   _populate_cmap_pair(&kp1, k1);
   _populate_cmap_pair(&vp1, v1);
-  REQUIRE_EQ(clrucache_set_full(cache, &kp1, &vp1), ccol_success);
+  /* The results go into locals and the assertions come after the destroy,
+   * so a failed assertion cannot return with the cache still alive. */
+  ccol_retval_t set1_rv = clrucache_set_full(cache, &kp1, &vp1);
 
   int k2 = 2, v2 = 222;
   cmap_pair kp2 = {}, vp2 = {};
   _populate_cmap_pair(&kp2, k2);
   _populate_cmap_pair(&vp2, v2);
-  REQUIRE_EQ(clrucache_set_full(cache, &kp2, &vp2), ccol_success);
+  ccol_retval_t set2_rv = clrucache_set_full(cache, &kp2, &vp2);
 
   /* Force the next allocation to fail. The only allocation that a cache hit
    * makes is the copy that it hands back to the caller, so this fails that
@@ -3664,8 +3876,8 @@ TEST(custom_alloc, get_full_copy_oom_failure_does_not_promote_lru) {
    * allocation of its setup. */
   _lru_fault_alloc_budget = 0;
   cmap_pair val_out = {};
-  REQUIRE_EQ(clrucache_get_full(cache, &kp1, &val_out), ccol_not_enough_memory);
-  REQUIRE_NULL(val_out.ptr);
+  ccol_retval_t oom_rv = clrucache_get_full(cache, &kp1, &val_out);
+  void *oom_ptr = val_out.ptr;
 
   /* Allocations succeed again for everything from here on. */
   _lru_fault_alloc_budget = -1;
@@ -3678,17 +3890,30 @@ TEST(custom_alloc, get_full_copy_oom_failure_does_not_promote_lru) {
   cmap_pair kp3 = {}, vp3 = {};
   _populate_cmap_pair(&kp3, k3);
   _populate_cmap_pair(&vp3, v3);
-  REQUIRE_EQ(clrucache_set_full(cache, &kp3, &vp3), ccol_success);
-  REQUIRE_EQ(clrucache_size(cache), (size_t)2);
+  ccol_retval_t set3_rv = clrucache_set_full(cache, &kp3, &vp3);
+  size_t size_after_set3 = clrucache_size(cache);
 
   cmap_pair out = {};
-  REQUIRE_EQ(clrucache_get_full(cache, &kp1, &out),
-             ccol_key_not_found); /* correctly evicted as the true LRU entry */
-  REQUIRE_EQ(clrucache_get_full(cache, &kp2, &out), ccol_success);
-  REQUIRE_EQ(*(int *)out.ptr, 222);
+  ccol_retval_t get1_rv = clrucache_get_full(cache, &kp1, &out);
+  ccol_retval_t get2_rv = clrucache_get_full(cache, &kp2, &out);
+  bool got_copy = out.ptr != NULL;
+  int got = got_copy ? *(int *)out.ptr : -1;
   free(out.ptr);
+  free(oom_ptr); /* NULL unless the failed read handed back storage */
 
   __clrucache_destroy(cache);
+
+  REQUIRE_EQ(set1_rv, ccol_success);
+  REQUIRE_EQ(set2_rv, ccol_success);
+  REQUIRE_EQ(oom_rv, ccol_not_enough_memory);
+  REQUIRE_NULL(oom_ptr);
+  REQUIRE_EQ(set3_rv, ccol_success);
+  REQUIRE_EQ(size_after_set3, (size_t)2);
+  REQUIRE_EQ(get1_rv,
+             ccol_key_not_found); /* correctly evicted as the true LRU entry */
+  REQUIRE_EQ(get2_rv, ccol_success);
+  REQUIRE_TRUE(got_copy);
+  REQUIRE_EQ(got, 222);
 }
 
 /* The last step of clrucache_create_full publishes the handle into the pin
@@ -4421,7 +4646,9 @@ static void *clru_destroy_thread(void *arg) {
 
 /* Runs one race: call_thread enters the gated remote call, a destroy starts,
  * and the destroy must still be waiting 200 ms later while the gate is shut.
- * It returns through the out parameters, after every thread is joined. */
+ * It returns through the out parameters, after every thread is joined.
+ * *ended is true exactly when the destroy ran; when it is false, the cache
+ * is still alive and the caller must destroy it before any assertion. */
 static void clru_run_gated_destroy_race(clru_cache cache,
                                         void *(*call_thread)(void *),
                                         bool *entered, bool *waited,
@@ -4462,6 +4689,9 @@ TEST(clrucache_handle_lifecycle, resolve_then_use_race_destroy_waits) {
   ccol_retval_t rv;
   clru_run_gated_destroy_race(cache, clru_gated_get_thread, &entered, &waited,
                               &ended, &rv);
+  /* A race that could not start its destroy leaves the cache alive, and a
+     REQUIRE_ below would return with it leaked. */
+  if (!ended) clru_destroy(cache);
   REQUIRE_TRUE(entered);
   REQUIRE_TRUE(waited);
   REQUIRE_TRUE(ended);
@@ -4479,6 +4709,9 @@ TEST(clrucache_handle_lifecycle, resolve_then_use_race_destroy_waits_for_set) {
   ccol_retval_t rv;
   clru_run_gated_destroy_race(cache, clru_gated_set_thread, &entered, &waited,
                               &ended, &rv);
+  /* A race that could not start its destroy leaves the cache alive, and a
+     REQUIRE_ below would return with it leaked. */
+  if (!ended) clru_destroy(cache);
   REQUIRE_TRUE(entered);
   REQUIRE_TRUE(waited);
   REQUIRE_TRUE(ended);
@@ -4532,6 +4765,9 @@ TEST(clrucache_handle_lifecycle, resolve_unpin_race_stress) {
                         &destroy_arg) == 0);
     if (started_capacity_tid) pthread_join(capacity_tid, NULL);
     if (started_destroy_tid) pthread_join(destroy_tid, NULL);
+    /* A destroy thread that did not start leaves the cache alive, and a
+       REQUIRE_ below would return with it leaked. */
+    if (!started_destroy_tid) __clrucache_destroy(cache);
     REQUIRE_TRUE(started_capacity_tid);
     REQUIRE_TRUE(started_destroy_tid);
   }
@@ -4541,25 +4777,34 @@ TEST(clrucache_handle_lifecycle, resolve_unpin_race_stress) {
  * slot's previous occupant; the whole point of the generation counter. */
 TEST(clrucache_handle_lifecycle,
      legitimate_slot_reuse_not_confused_with_stale_handle) {
+  /* Each cache must be destroyed at a fixed point, so the results go into
+   * locals and the assertions come after the destroys. A failed assertion
+   * then cannot return with a cache still alive. */
   clru_cache a = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL, NULL,
                                        NULL, NULL);
-  REQUIRE_NE(a, CLRU_CACHE_INVALID);
+  bool a_created = a != CLRU_CACHE_INVALID;
   clru_cache stale_a = a;
   clru_destroy(a);
 
   clru_cache b = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL, NULL,
                                        NULL, NULL);
-  REQUIRE_NE(b, CLRU_CACHE_INVALID);
+  bool b_created = b != CLRU_CACHE_INVALID;
 
   /* B's operations must succeed normally regardless of whether the
    * allocator happened to reuse A's exact address for B. */
-  REQUIRE_EQ(clrucache_capacity(b), (size_t)8);
+  size_t b_capacity = clrucache_capacity(b);
 
   /* A's stale handle must never resolve to B, even if it reused the same
-   * underlying address; the whole point of the generation counter. */
-  REQUIRE_EQ((void *)_clrucache_resolve_for_tests(stale_a), NULL);
+   * underlying address; the whole point of the generation counter. The
+   * check runs while B is still alive. */
+  void *stale_resolved = (void *)_clrucache_resolve_for_tests(stale_a);
 
   clru_destroy(b);
+
+  REQUIRE_TRUE(a_created);
+  REQUIRE_TRUE(b_created);
+  REQUIRE_EQ(b_capacity, (size_t)8);
+  REQUIRE_EQ(stale_resolved, NULL);
 }
 
 /* The slot table is bounded and does not grow for ever: a loop that creates
@@ -4927,9 +5172,6 @@ TEST(const_char_args, const_char_key_and_value_need_no_cast) {
 /*              A GETTER THAT WAITED ON A SET THAT FAILED                     */
 /* ========================================================================== */
 
-extern int _clrucache_key_waiters_for_tests(clru_cache cache,
-                                            const cmap_pair *key_pair);
-
 /* The backing store of this section holds 100 for every key. */
 static _Atomic int failset_getter_calls = 0;
 static bool failset_remote_getter(const cmap_pair *key, cmap_pair *val) {
@@ -4987,16 +5229,6 @@ static void *full_waiter_thread(void *arg) {
   cmap_pair kp = {.ptr = &a->key, .size = sizeof(a->key)};
   a->retval = clrucache_get_full(a->cache, &kp, &a->out);
   return NULL;
-}
-
-/* Waits, bounded, until the entry of key holds `want` waiter references. */
-static bool failset_await_waiters(clru_cache cache, int key, int want) {
-  cmap_pair kp = {.ptr = &key, .size = sizeof(key)};
-  for (int waited_ms = 0; waited_ms < CLRU_GATE_WAIT_MS; waited_ms++) {
-    if (_clrucache_key_waiters_for_tests(cache, &kp) == want) return true;
-    usleep(1000);
-  }
-  return _clrucache_key_waiters_for_tests(cache, &kp) == want;
 }
 
 static void failset_reset(int gated_key) {

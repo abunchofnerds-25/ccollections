@@ -5878,9 +5878,21 @@ static int __real_pthread_mutex_lock(pthread_mutex_t *m) {
 int __real_pthread_mutex_lock(pthread_mutex_t *m);
 #endif
 static __thread unsigned long mp_test_locks_taken;
+// Where the compiler emulates thread-local storage (OpenBSD), the first
+// access to a thread-local variable takes a pthread mutex of the emulation,
+// which comes through this wrapper, and a count inside the wrapper then
+// enters the emulation again before the variable exists. The constructor
+// makes that first access before the wrapper counts anything; the emulation
+// takes no lock on any later access.
+static atomic_bool mp_test_lock_count_ready;
+__attribute__((constructor)) static void mp_test_lock_count_arm(void) {
+  mp_test_locks_taken = 0;
+  atomic_store(&mp_test_lock_count_ready, true);
+}
 int __wrap_pthread_mutex_lock(pthread_mutex_t *m);
 int __wrap_pthread_mutex_lock(pthread_mutex_t *m) {
-  ++mp_test_locks_taken;
+  if (atomic_load_explicit(&mp_test_lock_count_ready, memory_order_relaxed))
+    ++mp_test_locks_taken;
   return __real_pthread_mutex_lock(m);
 }
 #if defined(TEST_NO_LD_WRAP)

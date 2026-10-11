@@ -396,8 +396,14 @@ TEST_F(engine_stop_fixture,
    * force-unblock. The shrink therefore turns a slow (but not infinite)
    * stall on a test that already fails into a fast, clean report of that
    * failure. This test puts the real defaults back before it returns, on
-   * every path. */
-  _chttpsvr_set_wait_in_flight_bounds_for_tests(300, 2000);
+   * every path. The graceful bound is 3000ms and not shorter, because the
+   * main path needs the handler to finish inside it: the handler is released
+   * right after chttpsvr_engine_stop(), and a worker that wakes late on a
+   * busy machine (valgrind, ThreadSanitizer, a loaded runner) must not meet
+   * the forced unblock, which cuts the request and fails the test. On the
+   * main path the wait ends as soon as the handler returns, so the bound
+   * costs nothing there. */
+  _chttpsvr_set_wait_in_flight_bounds_for_tests(3000, 2000);
 
   char *err = NULL;
   /* _ccol_destructor: see the comment of
@@ -1385,6 +1391,11 @@ TEST_F(engine_stop_fixture, engine_stop_from_signal_handler_does_not_deadlock) {
 extern void _chttpsvr_arm_start_resolve_race_hook_for_tests(void);
 extern void _chttpsvr_wait_start_resolve_race_hook_entered_for_tests(void);
 extern void _chttpsvr_release_start_resolve_race_hook_for_tests(void);
+/* A signal-only hook: the wait returns true once the reaper of
+   chttpsvr_engine_stop() set CHTTPSVR_QS_QUIESCING on a server, and false
+   after 10s. */
+extern void _chttpsvr_arm_quiesce_claimed_signal_for_tests(void);
+extern bool _chttpsvr_wait_quiesce_claimed_signal_entered_for_tests(void);
 
 /* Each call site below allocates this struct on the heap with calloc(),
  * instead of using a shared file-scope global or a local on the stack of a
@@ -1520,16 +1531,19 @@ TEST_F(engine_stop_fixture,
 
   /* The documentation says that chttpsvr_engine_stop() does not block: it
      only starts a background reaper thread. */
+  _chttpsvr_arm_quiesce_claimed_signal_for_tests();
   chttpsvr_engine_stop();
 
-  /* This gives the reaper thread time to run, to reach
-     _quiesce_server_once for srv, to claim CHTTPSVR_QS_QUIESCING, and to
-     block on pending_resolve_count, which the hook above guarantees is not
-     zero at that exact moment, because restart_th holds its pin. This
-     matches the 150ms precedent that this file uses elsewhere to let the
-     other side reach the point where it blocks. */
-  struct timespec settle = {0, 150000000L};
-  nanosleep(&settle, NULL);
+  /* Wait until the reaper thread reaches _quiesce_server_once for srv and
+     claims CHTTPSVR_QS_QUIESCING. It then blocks on pending_resolve_count,
+     which is not zero, because restart_th holds its pin. The released
+     chttpsvr_start() call below takes raw->mutex after that claim, so it
+     always enters the CHTTPSVR_QS_QUIESCING branch that this test is about.
+     The test asserts quiescing_claimed only after cleanup: without the
+     claim, the restart would not race the pass and the test would prove
+     nothing. */
+  bool quiescing_claimed =
+      _chttpsvr_wait_quiesce_claimed_signal_entered_for_tests();
 
   /* This is the real moment under test: it releases the paused chttpsvr_start()
      call of restart_th, which must not wait on quiesce_done_cv while it still
@@ -1597,6 +1611,7 @@ TEST_F(engine_stop_fixture,
 
   chttpsvr_destroy(srv);
   chttpsvr_engine_wait();
+  REQUIRE_TRUE(quiescing_claimed);
 
   REQUIRE_EQ((int)get_rv, (int)ccol_success);
   REQUIRE_EQ(status2, 200);
@@ -1737,32 +1752,30 @@ TEST_F(engine_stop_fixture,
      raw->mutex for the first time since that pin release. */
   _chttpsvr_arm_start_quiescing_unpinned_race_hook_for_tests();
 
+  bool quiescing_claimed = false;
   if (restart_th_created) {
+    _chttpsvr_arm_quiesce_claimed_signal_for_tests();
     chttpsvr_engine_stop(); /* the documentation says it does not block */
-    /* This gives the reaper thread time to run, to reach
-       _quiesce_server_once for srv, to claim CHTTPSVR_QS_QUIESCING, and to
-       block on pending_resolve_count, which is not zero at that exact
-       moment, because restart_th still holds its pin. This matches the
-       150ms precedent that this file uses elsewhere to let the other side
-       reach the point where it blocks. */
-    struct timespec settle = {0, 150000000L};
-    nanosleep(&settle, NULL);
+    /* Wait until the reaper thread reaches _quiesce_server_once for srv and
+       claims CHTTPSVR_QS_QUIESCING. It then blocks on pending_resolve_count,
+       which is not zero, because restart_th still holds its pin. */
+    quiescing_claimed =
+        _chttpsvr_wait_quiesce_claimed_signal_entered_for_tests();
   }
 
   _chttpsvr_release_start_resolve_race_hook_for_tests();
 
-  /* Unlike in the other tests in this file that drive a hook,
-     restart_th_created alone does not prove that the code reaches this
-     hook: it also depends on the reaper, which chttpsvr_engine_stop() above
-     starts, setting CHTTPSVR_QS_QUIESCING before the paused
-     chttpsvr_start() call of restart_th checks quiesce_state again, and
-     this test enforces that order only with the fixed nanosleep of 150ms
-     above, not with a real synchronization primitive. The wait function
-     itself is bounded inside, at 10s, and returns false instead of hanging
-     this whole binary when a loaded machine makes the code miss that race;
-     see its own doc comment in chttpserver.c. */
+  /* restart_th_created alone does not prove that the code reaches this
+     hook: it also needs the reaper, which chttpsvr_engine_stop() above
+     starts, to set CHTTPSVR_QS_QUIESCING before the paused chttpsvr_start()
+     call of restart_th checks quiesce_state again. quiescing_claimed above
+     makes that order certain, because restart_th takes raw->mutex only after
+     the release, and the claim happened before it. The wait function is
+     bounded inside, at 10s, and returns false instead of hanging this
+     whole binary if a regression keeps the call away from the hook; see its
+     own doc comment in chttpserver.c. */
   bool hook_entered = false;
-  if (restart_th_created) {
+  if (restart_th_created && quiescing_claimed) {
     hook_entered =
         _chttpsvr_wait_start_quiescing_unpinned_race_hook_entered_for_tests();
   }
@@ -1891,6 +1904,7 @@ TEST_F(engine_stop_fixture,
   if (engine_refs_should_settle) chttpsvr_engine_wait();
 
   REQUIRE_TRUE(restart_th_created);
+  REQUIRE_TRUE(quiescing_claimed);
   REQUIRE_TRUE(hook_entered);
   REQUIRE_TRUE(destroy_th_created);
   REQUIRE_TRUE(restart_returned);

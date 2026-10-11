@@ -2148,8 +2148,8 @@ ssize_t chttp1_stream_writev2(chttp1_stream_t *stream, const char *a,
     /* Two parts that fit in one record go out as one record: one
      * encryption, one send(2), and a copy of at most 16 KiB, which costs
      * far less than the encryption of the same bytes. */
-    if (alen <= CHTTP1_TLS_COALESCE_MAX - blen &&
-        blen <= CHTTP1_TLS_COALESCE_MAX) {
+    if (blen <= CHTTP1_TLS_COALESCE_MAX &&
+        alen <= CHTTP1_TLS_COALESCE_MAX - blen) {
       char joined[CHTTP1_TLS_COALESCE_MAX];
       memcpy(joined, a, alen);
       memcpy(joined + alen, b, blen);

@@ -10,14 +10,15 @@ run the test suites, see [Testing](testing.md).
 
 ## Requirements
 
-- **GNU make** 4 or later. On FreeBSD it is called `gmake`; the system
-  `make` there only prints a message telling you so. The `make` that ships
+- **GNU make** 4 or later. On FreeBSD and OpenBSD it is called `gmake`; the
+  system `make` of FreeBSD only prints a message telling you so. The `make`
+  that ships
   with macOS is GNU make 3.81, which is too old, so install a current one
   with Homebrew, which names it `gmake`.
 - **GCC or Clang** with C11 and the GNU extensions (see
   [Platforms](platforms.md)).
 - **OpenSSL** (`libssl`, `libcrypto`) and **zlib**, with their development
-  headers. Only the HTTP client and the HTTP server use OpenSSL, and only the
+  headers. On OpenBSD the LibreSSL and the zlib of the base system serve. Only the HTTP client and the HTTP server use OpenSSL, and only the
   logger uses zlib, so you can build without them (see
   [Leaving modules out](#leaving-modules-out)).
 - The system thread library and math library. On the BSDs you also need
@@ -29,10 +30,22 @@ On Debian or Ubuntu:
 sudo apt-get install build-essential libssl-dev zlib1g-dev
 ```
 
+On Alpine Linux (musl):
+
+```bash
+apk add build-base linux-headers openssl-dev zlib-dev
+```
+
 On FreeBSD:
 
 ```bash
 pkg install gmake
+```
+
+On OpenBSD:
+
+```bash
+pkg_add gmake
 ```
 
 On macOS, with Homebrew (the macOS SDK has zlib):
@@ -46,7 +59,7 @@ export LIBRARY_PATH="$(brew --prefix openssl@3)/lib"
 ## Building
 
 ```bash
-make            # gmake on FreeBSD and macOS
+make            # gmake on FreeBSD, OpenBSD and macOS
 ```
 
 The build produces these files in the top directory:
@@ -155,8 +168,10 @@ these variables, or of `PREFIX` or `DESTDIR`, that contains a space or a tab.
 After an install into the live system (no `DESTDIR`), the build updates two
 indexes:
 
-- the cache of the dynamic linker (`ldconfig`, or `ldconfig -R` on FreeBSD)
-- the man page index (`mandb`, or `makewhatis` on FreeBSD)
+- the cache of the dynamic linker (`ldconfig`; `ldconfig -R` on FreeBSD and
+  `ldconfig -m LIBDIR` on OpenBSD, which add to the cache instead of
+  replacing it)
+- the man page index (`mandb`, or `makewhatis` on FreeBSD and OpenBSD)
 
 On macOS the install updates neither, because the macOS dynamic linker keeps
 no cache to update and `man` finds the installed pages without an index.
@@ -364,7 +379,8 @@ it.
 This switch selects the thread-local storage model of the library's
 per-thread fast paths. If you do not set it, its value is `0` (initial-exec,
 the fast model) with glibc and on FreeBSD, and `1` (the general model) on
-other systems. Set it to `1` only if both of these are true:
+other systems. On OpenBSD the compiler emulates thread-local storage, so the
+switch changes nothing there. Set it to `1` only if both of these are true:
 
 - Your program loads the library with `dlopen()`.
 - Your program cannot give the loader the space that the fast model needs.

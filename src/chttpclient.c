@@ -5531,19 +5531,20 @@ static void _client_engine_forget_inherited_locked(void) {
 #ifdef RUNNING_UNIT_TESTS
 /* While g_reaper_final_hold_ms_for_tests is not zero, the next reaper holds
  * cli_engine_bundler.mutex in its final critical section for that many
- * milliseconds, and sets g_reaper_final_held_for_tests while it does. The
- * hold is one-shot, and bounded, so a test that forks while it lasts never
- * hangs the reaper. */
+ * milliseconds, and sets g_reaper_final_hold_entered_for_tests when the
+ * hold starts. That flag stays set until the next hold is armed, so a test
+ * that polls for it cannot miss a hold that has already ended. The hold is
+ * one-shot, and bounded, so a test that forks while it lasts never hangs
+ * the reaper. */
 static _Atomic int g_reaper_final_hold_ms_for_tests = 0;
-static _Atomic bool g_reaper_final_held_for_tests = false;
+static _Atomic bool g_reaper_final_hold_entered_for_tests = false;
 
 static void _reaper_final_hold_for_tests(void) {
   int ms = atomic_exchange(&g_reaper_final_hold_ms_for_tests, 0);
   if (ms <= 0) return;
-  atomic_store(&g_reaper_final_held_for_tests, true);
+  atomic_store(&g_reaper_final_hold_entered_for_tests, true);
   struct timespec ts = {ms / 1000, (long)(ms % 1000) * 1000000L};
   nanosleep(&ts, NULL);
-  atomic_store(&g_reaper_final_held_for_tests, false);
 }
 #endif
 
@@ -12828,6 +12829,21 @@ clog _chttpclient_engine_logger_for_tests(void) {
   return l;
 }
 
+/* Removes the logger that chttpcli_set_engine_logger installed and closes
+ * it, so that the next engine run opens a fallback logger. A test that needs
+ * a fallback logger calls it in a forked child, whatever tests ran before it.
+ * The engine must not be running. */
+void _chttpclient_clear_engine_user_logger_for_tests(void) {
+  ccol_call_once(cli_engine_bundler.once, _client_engine_globals_init);
+  ccol_mutex_lock(cli_engine_bundler.mutex);
+  clog user = cli_engine_bundler.user_logger;
+  cli_engine_bundler.user_logger = CLOG_INVALID;
+  if (cli_engine_bundler.logger == user)
+    cli_engine_bundler.logger = CLOG_INVALID;
+  ccol_mutex_unlock(cli_engine_bundler.mutex);
+  if (user) clog_close(user);
+}
+
 bool _chttpclient_engine_running_for_tests(void) {
   ccol_call_once(cli_engine_bundler.once, _client_engine_globals_init);
   ccol_mutex_lock(cli_engine_bundler.mutex);
@@ -12848,11 +12864,12 @@ void _chttpclient_engine_wait_for_quiescence_for_tests(void) {
 
 /* See g_reaper_final_hold_ms_for_tests. */
 void _chttpclient_hold_next_reaper_final_section_for_tests(int ms) {
+  atomic_store(&g_reaper_final_hold_entered_for_tests, false);
   atomic_store(&g_reaper_final_hold_ms_for_tests, ms);
 }
 
-bool _chttpclient_reaper_final_section_is_held_for_tests(void) {
-  return atomic_load(&g_reaper_final_held_for_tests);
+bool _chttpclient_reaper_final_section_was_entered_for_tests(void) {
+  return atomic_load(&g_reaper_final_hold_entered_for_tests);
 }
 
 /* This waits until no teardown of the engine is in flight, and leaves the

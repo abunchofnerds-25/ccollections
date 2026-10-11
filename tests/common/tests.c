@@ -1261,3 +1261,50 @@ TEST(cloexec_gate, a_handler_registered_before_the_library_runs_before_gate) {
   REQUIRE_EQ(atomic_load(&gate_early_handler_saw_gate), 0);
 }
 #endif /* _CCOL_CLOEXEC_GATE */
+
+/* ------------------------------------------------------------------------ */
+/* fork() in the child of a threaded process                                */
+/* ------------------------------------------------------------------------ */
+
+#include <pthread.h>
+
+static void *fork_again_idle(void *arg) { return arg; }
+
+/* A process that has started a thread, and that holds the fork handlers that
+ * the library registers at load, forks; the child starts a thread and forks
+ * again. Every fork returns, and the child reports that through the pipe.
+ *
+ * This test is non-vacuous on OpenBSD: without the pair of
+ * _CCOL_FORK_THREADED_FIX the second fork waits for ever on the lock that the
+ * first fork left held, and the alarm ends the child before it writes. */
+TEST(fork, a_child_of_a_threaded_process_can_start_a_thread_and_fork) {
+  pthread_t t;
+  REQUIRE_EQ(pthread_create(&t, NULL, fork_again_idle, NULL), 0);
+  REQUIRE_EQ(pthread_join(t, NULL), 0);
+  int fds[2];
+  REQUIRE_EQ(pipe(fds), 0);
+  pid_t pid = fork();
+  if (pid == 0) {
+    close(fds[0]);
+    alarm(10);
+    pthread_t ct;
+    if (pthread_create(&ct, NULL, fork_again_idle, NULL) != 0) _exit(2);
+    pthread_join(ct, NULL);
+    pid_t g = fork();
+    if (g == 0) _exit(0);
+    if (g > 0 && waitpid(g, NULL, 0) == g) {
+      char ok = 1;
+      if (write(fds[1], &ok, 1) != 1) _exit(3);
+    }
+    _exit(0);
+  }
+  close(fds[1]);
+  char byte = 0;
+  ssize_t n = pid > 0 ? read(fds[0], &byte, 1) : -1;
+  close(fds[0]);
+  int status = 0;
+  bool reaped = pid > 0 && waitpid(pid, &status, 0) == pid;
+  REQUIRE_TRUE(reaped);
+  REQUIRE_EQ((int)n, 1);
+  REQUIRE_EQ((int)byte, 1);
+}

@@ -234,6 +234,79 @@ jobs:
             done
             sysctl kern.timecounter.fast_gettime=1
 
+  openbsd-x86_64:
+    name: OpenBSD 7.9 x86_64 (Clang and GCC)
+    runs-on: ubuntu-latest
+    # The OpenBSD guest boots inside the Linux runner, as the FreeBSD one
+    # does, and every suite runs twice in it; the timeout leaves room for
+    # both passes.
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: test suites under OpenBSD
+        uses: vmactions/openbsd-vm@5f7b2c933b8846a138361d6843c52af4bef5d945 # v1.4.8
+        with:
+          release: "7.9"
+          usesh: true
+          copyback: false
+          # The base system carries clang (as cc), LibreSSL, zlib and
+          # pkg-config. GNU make is gmake, and GCC is egcc. OpenBSD has no
+          # valgrind and no libabigail, so this job runs neither memtest nor
+          # the ABI gate.
+          prepare: |
+            pkg_add -I gmake gcc
+          # Every suite runs with the base clang and with egcc; `gmake clean`
+          # between the passes drops the objects of the previous compiler.
+          # Some suites hold several hundred descriptors at once, and root
+          # starts with a soft limit of 128 on OpenBSD.
+          run: |
+            set -eu
+            ulimit -n 1024
+            gmake test
+            gmake clean >/dev/null
+            gmake test CC=egcc
+            gmake clean >/dev/null
+            gmake
+            gmake check_dso_unload
+            gmake check_install
+
+  linux-x86_64-musl:
+    name: Linux x86_64 musl (Alpine 3.24, GCC and Clang)
+    runs-on: ubuntu-latest
+    # Alpine is the usual base image of containers, so this job runs the
+    # suites on musl, inside that image, as root. Every suite runs with GCC
+    # and with Clang, then once more under valgrind.
+    container: alpine:3.24
+    timeout-minutes: 120
+    steps:
+      # git comes first so that actions/checkout clones the repository
+      # instead of downloading an archive of it.
+      - name: Install dependencies
+        run: apk add --no-cache build-base linux-headers openssl openssl-dev zlib-dev valgrind pkgconf clang lld git
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: make test (GCC)
+        run: make test
+      - name: make test (Clang)
+        run: make clean >/dev/null && make CC=clang test
+      # Docker gives the container a descriptor limit near 2^30, and valgrind
+      # refuses to start with it. cjson and cyaml are left out here: musl's
+      # strtod() computes with x87 long double, which valgrind emulates in
+      # 64-bit precision, so under valgrind strtod("3.14") gives
+      # 3.1400000000003274 and their exact float tests fail. The glibc
+      # memtest jobs cover both modules.
+      - name: make memtest (valgrind)
+        run: |
+          set -e
+          ulimit -n 4096
+          make clean >/dev/null
+          for d in tests/*/; do
+            [ -f "$d/Makefile" ] || continue
+            case "$d" in tests/cjson/|tests/cyaml/) continue ;; esac
+            make -C "$d" memtest
+          done
+      - name: unload and install checks
+        run: make && make check_dso_unload && make check_install
+
   linux-x86_64-minimal:
     name: Linux x86_64 (minimal build, no optional modules)
     runs-on: ubuntu-latest
@@ -722,6 +795,141 @@ jobs:
       # library itself, so the prerequisite of check_abi is what builds it.
       - name: exported ABI matches the committed aarch64 baseline
         run: make CC=aarch64-linux-gnu-gcc check_abi
+
+  linux-s390x-gcc:
+    name: Linux s390x, big-endian (cross-compile + QEMU)
+    runs-on: ubuntu-latest
+    # s390x is the one big-endian target of this matrix. A byte-order
+    # assumption in a hash, a serializer, a parser or a test that reads raw
+    # bytes passes on every other job and fails here.
+    # qemu-user has a class of deadlock around a guest fork() that depends on
+    # timing: a lock that the emulator holds at that instant passes to the child
+    # in a locked state, and the threads of the child then sleep on a futex,
+    # waiting for a lock that nothing can unlock. One member of that class is known: the fd_trans_lock
+    # of linux-user itself, at gitlab.com/qemu-project/qemu/-/issues/2846. The
+    # qemu-user that this job installs below corrects it. This time limit covers
+    # whatever else remains in that class. No timeout inside the process can
+    # recover from it, because the itimer that the alarm() safety nets of this
+    # suite depend on is stuck in the same deadlock. One such event ran for more
+    # than 3 hours with no output before somebody cancelled it; this limit keeps
+    # another such event cheap and does not let one use runner time in silence.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install dependencies
+        # s390x is a ports architecture: its package indices are on
+        # ports.ubuntu.com, not on the primary and security archive mirrors that
+        # the default sources of this runner name. You must limit the default
+        # sources to amd64, because they hold no s390x indices at all, and you
+        # must also add an s390x source of its own that names ports.ubuntu.com.
+        # Without both steps, `apt-get update` gets a 404 as soon as s390x
+        # becomes a foreign architecture, because it asks the default mirrors
+        # for s390x indices that do not exist.
+        run: |
+          sudo dpkg --add-architecture s390x
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i '/^Types: deb$/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
+          fi
+          sudo tee /etc/apt/sources.list.d/s390x-ports.list > /dev/null <<'EOF'
+          deb [arch=s390x] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
+          deb [arch=s390x] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
+          deb [arch=s390x] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
+          EOF
+          sudo apt-get update
+          sudo apt-get install -y gcc-s390x-linux-gnu libssl-dev:s390x zlib1g-dev:s390x abigail-tools
+      - name: Install a qemu-user build without the fd_trans_lock fork bug
+        # Ubuntu 24.04 ships qemu-user 8.2.2, which has a linux-user bug that
+        # can leave its internal, process-wide fd_trans_lock locked for ever in
+        # a forked child; see gitlab.com/qemu-project/qemu/-/issues/2846. Every
+        # thread of that child then sleeps on a futex for ever, which here shows
+        # as a test that hangs until its own bounded wait gives up and that
+        # looks unrelated to fork(). A guest program cannot avoid the trigger by
+        # a careful fork: qemu-user runs more than one host thread even when the
+        # emulated program has one thread, so any guest fork() is exposed.
+        # Measured against the cthreadcomm suite of this repository, 8.2.2 fails
+        # about one full-suite run in ten, on a different fork() test each time,
+        # while version 10.x passes.
+        #
+        # This step copies the static qemu-user binary out of an official Debian
+        # trixie image instead of installing one from apt, because no Ubuntu
+        # 24.04 archive holds a corrected build. Nothing else about these jobs
+        # changes: the binary is static-pie and needs no libc, so it runs
+        # directly on the runner, and the cross toolchain, the sysroot and the
+        # build flags all stay the same.
+        run: |
+          set -e
+          STAGE=$(mktemp -d)
+          docker run --rm -v "$STAGE:/out" debian:trixie bash -c '
+            apt-get update -qq
+            apt-get install -y -qq qemu-user-static
+            cp /usr/bin/qemu-s390x-static /out/qemu-s390x-static
+          '
+          sudo install -m 0755 "$STAGE/qemu-s390x-static" /usr/local/bin/qemu-s390x-static
+          sudo rm -rf "$STAGE"
+          qemu-s390x-static --version | head -1
+      - name: Cross-build and run each module's test suite under qemu-s390x
+        # The test and memtest targets of each module hold a plain `./tests`
+        # command, with no place to put a prefix, so you cannot run an s390x
+        # binary from CC=s390x-linux-gnu-gcc through `make test` on this
+        # x86_64 runner: the shell would try to run an s390x binary directly, and
+        # it would fail at once with "cannot execute binary file". This job
+        # therefore builds each module with the existing `build` target, which
+        # it does not change, and then runs the `./tests` binary of that module
+        # through qemu-s390x. There is no `make memtest` step with valgrind,
+        # because valgrind inside qemu-user emulation is not a combination that
+        # works reliably.
+        run: |
+          set -e
+          # Several suites fork a child that calls abort() on purpose, to prove
+          # that a misuse stops the process, and qemu-user writes one guest core
+          # dump for each abort into the working directory. There is no reason
+          # to keep a core dump from a deliberate abort, and across a full sweep
+          # they reach several gigabytes, so this job sets the limit to zero
+          # instead of leaving it at the default of the runner.
+          ulimit -c 0
+          for dir in tests/*/; do
+            mod=$(basename "$dir")
+            [ "$mod" = "tau" ] && continue
+            echo "::group::$mod"
+            # This builds exactly what the `test` target of this module builds
+            # and runs exactly the binaries that its recipe runs, so this job
+            # covers the same set as the native jobs. Most modules have one
+            # binary, while chttpclient, chttpserver and cyaml each have
+            # several. A module that gets another binary later appears here with
+            # no edit to this workflow, because both lists come from the
+            # Makefile and stay in step with it automatically. The
+            # build_differential target of cyaml stays out, which is correct,
+            # because it is not a prerequisite of `test`.
+            targets=$(sed -n 's/^test:[[:space:]]*//p' "$dir/Makefile" | head -1)
+            bins=$(awk '/^test:/{f=1;next} f&&/^\t\.\//{sub(/^\t\.\//,"");print $1;next} f&&/^[^\t]/{exit}' "$dir/Makefile")
+            # Both lists come from a match against the Makefile of this module,
+            # so a recipe that changes shape gives an empty list. The loop below
+            # then runs zero times, and the job builds the module but never runs
+            # it, with no non-zero status for `set -e` to see; these two tests
+            # prove that neither list is empty.
+            test -n "$targets" || { echo "no test targets parsed from $dir/Makefile" >&2; exit 1; }
+            test -n "$bins" || { echo "no test binaries parsed from $dir/Makefile" >&2; exit 1; }
+            (cd "$dir" && make CC=s390x-linux-gnu-gcc $targets)
+            # This runs from inside the module directory, exactly as the `test`
+            # target of that module does: at least one binary, tests_spec_suite
+            # of cyaml, finds its data files relative to its own directory and
+            # fails completely from any other directory.
+            for bin in $bins; do
+              echo "--- $bin ---"
+              (cd "$dir" && qemu-s390x-static -L /usr/s390x-linux-gnu "./$bin")
+            done
+            echo "::endgroup::"
+          done
+
+      # Struct layout belongs to one architecture, so no other job can replace
+      # this one. The check reads the architecture out of the ELF header of the
+      # library and not from the runner, which is x86_64 here, so it takes the
+      # s390x baseline for this cross-built library. Nothing runs under QEMU,
+      # because a read of an ELF file and its debug information is a static
+      # comparison. The `test` targets of each module above never build the
+      # library itself, so the prerequisite of check_abi is what builds it.
+      - name: exported ABI matches the committed s390x baseline
+        run: make CC=s390x-linux-gnu-gcc check_abi
 
   linux-aarch64-clang:
     name: Linux aarch64 (Clang cross-compile + QEMU)

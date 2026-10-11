@@ -3,7 +3,14 @@
 #include <cthreadpool.h>
 #include <dirent.h>
 #include <errno.h>
+/* musl has no backtrace(); the diagnostic and the probes below then capture
+ * no frames. */
+#if __has_include(<execinfo.h>)
 #include <execinfo.h>
+#define TEST_HAS_EXECINFO 1
+#else
+#define TEST_HAS_EXECINFO 0
+#endif
 #include <fcntl.h>
 #include <internal/cdebuglog.h>
 #include <poll.h>
@@ -84,6 +91,7 @@ extern void _ctpool_shutdown_state_for_tests(struct cthread_pool *pool,
 static volatile sig_atomic_t diag_write_fd = -1;
 
 static void _diag_warm_up_backtrace(void) {
+#if TEST_HAS_EXECINFO
   void *dummy[4];
   int n = backtrace(dummy, 4);
   int devnull = open("/dev/null", O_WRONLY);
@@ -91,6 +99,7 @@ static void _diag_warm_up_backtrace(void) {
     backtrace_symbols_fd(dummy, n, devnull);
     close(devnull);
   }
+#endif
 }
 
 /* This handler is async-signal-safe: backtrace() only reads stack frames that
@@ -103,10 +112,12 @@ static void _diag_alarm_handler(int sig) {
   (void)sig;
   int fd = (int)diag_write_fd;
   if (fd >= 0) {
+#if TEST_HAS_EXECINFO
     void *frames[32];
     int n = backtrace(frames, 32);
     ssize_t written = write(fd, frames, (size_t)n * sizeof(frames[0]));
     (void)written;
+#endif
   }
   _exit(66); /* A distinct sentinel, which means that the diagnostic capture
                 fired, not that a plain unhandled signal killed the child, so
@@ -142,7 +153,11 @@ static void _diag_report(int read_fd) {
   if (got <= 0) return;
   int n = (int)(got / (ssize_t)sizeof(frames[0]));
   if (n <= 0) return;
+#if TEST_HAS_EXECINFO
   char **syms = backtrace_symbols(frames, n);
+#else
+  char **syms = NULL;
+#endif
   fprintf(stderr, "  [diagnostic] child was stuck at:\n");
   for (int i = 0; i < n; i++) {
     fprintf(stderr, "    %s\n", syms && syms[i] ? syms[i] : "???");
@@ -183,14 +198,40 @@ static void blocker_fn(void *arg) {
 }
 
 /*
- * shutdown_immediate and queued_tasks_discarded use this helper, a pthread
+ * wait.concurrent_shutdown_drain_unblocks_wait uses this helper, a pthread
  * start routine rather than a pool task, which releases a gate after a short
- * delay so that the blocked worker can exit once ctpool_shutdown_immediate on
- * the main thread discards the queue.
+ * delay so that the blocked worker can exit while a drain is in progress. The
+ * delay is not a margin that the result depends on: the drain runs every
+ * queued task whenever the gate opens.
  */
 static void *release_gate_fn(void *arg) {
   sleep_ms(20);
   atomic_store((atomic_int *)arg, 1);
+  return NULL;
+}
+
+/*
+ * The shutdown_immediate tests use this releaser. It opens the gate of the
+ * blocked worker only after ctpool_shutdown_immediate has set the immediate
+ * flag of the pool. The pool sets that flag and takes the whole queue in one
+ * critical section, so once the flag is visible the queue is already gone,
+ * and the worker cannot dequeue a task that the shutdown must discard. The
+ * wait is bounded at 10 s, after which the gate opens anyway, so that a
+ * broken shutdown makes the test fail and not hang.
+ */
+typedef struct {
+  atomic_int *gate;
+  struct cthread_pool *raw;
+} immediate_release_ctx_t;
+
+static void *release_gate_after_immediate_fn(void *arg) {
+  immediate_release_ctx_t *ctx = (immediate_release_ctx_t *)arg;
+  bool immediate = false;
+  for (int i = 0; i < 10000 && ctx->raw && !immediate; i++) {
+    _ctpool_shutdown_state_for_tests(ctx->raw, NULL, &immediate, NULL);
+    if (!immediate) sleep_ms(1);
+  }
+  atomic_store(ctx->gate, 1);
   return NULL;
 }
 
@@ -723,8 +764,9 @@ TEST(submit, a_worker_without_its_thread_mark_is_still_recognised) {
 
 /* The thread ID of a worker that a shutdown already joined names a free
  * descriptor. glibc caches the stacks of joined threads and hands them to the
- * next threads that start, so a thread that the application starts after the
- * shutdown commonly carries exactly that ID. The self-call check must never
+ * next threads that start, and OpenBSD reuses the memory of a joined thread
+ * at random, so a thread that the application starts after the shutdown can
+ * carry exactly that ID. The self-call check must never
  * mistake such a thread for a worker of the pool: a destroy from it is an
  * ordinary destroy, and must not end the process as a destroy from inside a
  * task of the pool does.
@@ -781,7 +823,9 @@ TEST(submit, a_thread_that_reuses_a_joined_worker_id_is_not_a_worker) {
       ctpool_wait(ctx.pool);
       /* Joins the one worker, whose ID then names a free descriptor. */
       ctpool_shutdown_drain(ctx.pool);
-      for (int i = 0; i < 64 && atomic_load(&ctx.outcome) == 0; i++) {
+      /* glibc gives the ID to the next thread at once; OpenBSD gives it back
+       * at random, after 3 to a few hundred starts. */
+      for (int i = 0; i < 4096 && atomic_load(&ctx.outcome) == 0; i++) {
         pthread_t t;
         if (pthread_create(&t, NULL, ctp_destroy_if_reused_id, &ctx) != 0)
           break;
@@ -2008,9 +2052,10 @@ TEST(shutdown_immediate, queued_tasks_discarded) {
   /* Block the single worker so that tasks accumulate, then call
    * ctpool_shutdown_immediate while the gate is closed, which discards the
    * queue atomically under the pool mutex before the worker can dequeue
-   * anything. A helper thread releases the gate after a brief delay, so that
-   * the worker can exit and the join inside ctpool_shutdown_immediate
-   * completes. All 10 queued tasks must be discarded, so the counter stays 0.
+   * anything. A helper thread releases the gate once the shutdown has taken
+   * the queue, so that the worker can exit and the join inside
+   * ctpool_shutdown_immediate completes. All 10 queued tasks must be discarded,
+   * so the counter stays 0.
    */
   atomic_int gate = 0;
   atomic_int started = 0;
@@ -2025,25 +2070,31 @@ TEST(shutdown_immediate, queued_tasks_discarded) {
     ctpool_submit(pool, inc_counter, &counter, NULL);
   }
 
+  immediate_release_ctx_t rctx = {.gate = &gate,
+                                  .raw = _ctpool_resolve_for_tests(pool)};
   pthread_t releaser;
-  REQUIRE_EQ(pthread_create(&releaser, NULL, release_gate_fn, &gate), 0);
+  int created =
+      pthread_create(&releaser, NULL, release_gate_after_immediate_fn, &rctx);
+  if (created != 0) atomic_store(&gate, 1);
 
   /* The queue is discarded here (the worker is in blocker_fn, not
    * dequeuing), and the call blocks inside until the worker joins; the helper
    * thread releases the gate so that the worker exits. */
   ctpool_shutdown_immediate(pool);
-  pthread_join(releaser, NULL);
-
-  REQUIRE_EQ(atomic_load(&counter), 0);
+  if (created == 0) pthread_join(releaser, NULL);
+  int counter_after = atomic_load(&counter);
   ctpool_destroy(pool);
+
+  REQUIRE_EQ(created, 0);
+  REQUIRE_EQ(counter_after, 0);
 }
 
 TEST(shutdown_immediate, futures_become_cancelled) {
   /* Block the single worker, queue two futures, then call
    * ctpool_shutdown_immediate while the gate is closed (gate=0). The queue
    * is discarded atomically before the worker can dequeue anything, so both
-   * futures must be cancelled. A helper thread releases the gate after a
-   * brief delay, so that the worker can exit. */
+   * futures must be cancelled. A helper thread releases the gate once the
+   * shutdown has taken the queue, so that the worker can exit. */
   atomic_int gate = 0;
   atomic_int started = 0;
   int dummy = 0;
@@ -2058,12 +2109,17 @@ TEST(shutdown_immediate, futures_become_cancelled) {
   REQUIRE_NE((void *)f1, NULL);
   REQUIRE_NE((void *)f2, NULL);
 
+  immediate_release_ctx_t rctx = {.gate = &gate,
+                                  .raw = _ctpool_resolve_for_tests(pool)};
   pthread_t releaser;
-  REQUIRE_EQ(pthread_create(&releaser, NULL, release_gate_fn, &gate), 0);
+  int created =
+      pthread_create(&releaser, NULL, release_gate_after_immediate_fn, &rctx);
+  if (created != 0) atomic_store(&gate, 1);
 
   ctpool_shutdown_immediate(pool); /* discards f1 and f2 while gate==0 */
-  pthread_join(releaser, NULL);
+  if (created == 0) pthread_join(releaser, NULL);
 
+  REQUIRE_EQ(created, 0);
   REQUIRE_TRUE(ctpool_future_cancelled(f1));
   REQUIRE_TRUE(ctpool_future_done(f1));
   REQUIRE_EQ(ctpool_future_get(f1), NULL);
@@ -2147,8 +2203,11 @@ TEST(shutdown_immediate, on_complete_reports_discarded_tasks_as_not_run) {
     accepted++;
   }
 
+  immediate_release_ctx_t rctx = {.gate = &gate,
+                                  .raw = _ctpool_resolve_for_tests(pool)};
   pthread_t releaser;
-  int created = pthread_create(&releaser, NULL, release_gate_fn, &gate);
+  int created =
+      pthread_create(&releaser, NULL, release_gate_after_immediate_fn, &rctx);
   if (created != 0) atomic_store(&gate, 1);
   ctpool_shutdown_immediate(pool); /* discards every queued task */
   int completions_at_return = atomic_load(&completions);
@@ -2202,8 +2261,11 @@ TEST(shutdown_immediate, discarded_on_complete_can_call_back_into_its_pool) {
   ccol_retval_t rv =
       ctpool_submit(pool, noop_fn, &rc, discard_reentry_on_complete);
 
+  immediate_release_ctx_t rctx = {.gate = &gate,
+                                  .raw = _ctpool_resolve_for_tests(pool)};
   pthread_t releaser;
-  int created = pthread_create(&releaser, NULL, release_gate_fn, &gate);
+  int created =
+      pthread_create(&releaser, NULL, release_gate_after_immediate_fn, &rctx);
   if (created != 0) atomic_store(&gate, 1);
   ctpool_shutdown_immediate(pool);
   if (created == 0) pthread_join(releaser, NULL);
@@ -2401,8 +2463,10 @@ TEST(shutdown_immediate, escalated_drain_reports_discarded_tasks_as_not_run) {
       if (!drain_started) sleep_ms(1);
     }
   }
+  immediate_release_ctx_t rctx = {.gate = &gate, .raw = raw};
   pthread_t releaser;
-  int created = pthread_create(&releaser, NULL, release_gate_fn, &gate);
+  int created =
+      pthread_create(&releaser, NULL, release_gate_after_immediate_fn, &rctx);
   if (created != 0) atomic_store(&gate, 1);
   ctpool_shutdown_immediate(pool);
   int completions_at_return = atomic_load(&completions);
@@ -4137,6 +4201,9 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_ctpool_mutex) {
 
 typedef struct {
   _Atomic bool locked;
+  /* Set immediately before the unlock, so that it is true whenever another
+   * thread can take the lock. */
+  _Atomic bool released;
   int hold_ms;
 } ctpool_slot_table_fork_lock_arg_t;
 
@@ -4154,6 +4221,7 @@ static void *ctpool_slot_table_fork_lock_thread(void *arg) {
   struct timespec ts = {.tv_sec = a->hold_ms / 1000,
                         .tv_nsec = (long)(a->hold_ms % 1000) * 1000000L};
   nanosleep(&ts, NULL);
+  atomic_store(&a->released, true);
   ctpool_test_wrunlock_slot_table_for_tests();
   return NULL;
 }
@@ -4185,7 +4253,8 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_ctpool_slot_table) {
   REQUIRE_NE(pool, CTPOOL_INVALID);
 
   enum { HOLD_MS = 300 };
-  ctpool_slot_table_fork_lock_arg_t arg = {.locked = false, .hold_ms = HOLD_MS};
+  ctpool_slot_table_fork_lock_arg_t arg = {
+      .locked = false, .released = false, .hold_ms = HOLD_MS};
   pthread_t holder;
   REQUIRE_EQ(
       pthread_create(&holder, NULL, ctpool_slot_table_fork_lock_thread, &arg),
@@ -4200,9 +4269,6 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_ctpool_slot_table) {
 
   int result_pipe[2];
   REQUIRE_EQ(pipe(result_pipe), 0);
-
-  struct timespec t0, t1;
-  clock_gettime(CLOCK_MONOTONIC, &t0);
 
   pid_t pid = fork();
   REQUIRE_NE(pid, -1);
@@ -4239,13 +4305,20 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_ctpool_slot_table) {
   }
   close(result_pipe[1]);
 
-  clock_gettime(CLOCK_MONOTONIC, &t1);
-  long long elapsed_ms =
-      (t1.tv_sec - t0.tv_sec) * 1000LL + (t1.tv_nsec - t0.tv_nsec) / 1000000LL;
-  /* This proves that the atfork prepare handler really blocks: fork() must
-   * have waited for close to the HOLD_MS of the holder before it returned,
-   * instead of returning almost at once while the holder held the lock. */
-  REQUIRE_GE(elapsed_ms, (long long)(HOLD_MS / 2));
+  /* This proves that the atfork prepare handler really blocks. The holder
+   * took the write lock before this thread called fork(), and the prepare
+   * handler cannot take the write lock until the holder unlocks it, which
+   * the holder does only after it sets `released`. So when fork() returns,
+   * `released` is true, however fast or slow either thread runs. When the
+   * prepare handler does not take the lock, fork() returns while the holder
+   * still sleeps out its HOLD_MS, and this assertion fails, unless this
+   * thread was itself so slow that it called fork() after the hold ended.
+   * The value is read here and asserted after the child is reaped. */
+  bool released_before_fork_returned = atomic_load(&arg.released);
+  /* The holder ends on its own schedule, so the join is bounded, and it runs
+   * before the assertions below so that none of them leaves the holder
+   * unjoined. */
+  pthread_join(holder, NULL);
 
   /* This read is short and bounded: if the child hangs past alarm(3) and is
    * killed before it writes anything, its copy of the write end closes with
@@ -4260,8 +4333,7 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_ctpool_slot_table) {
   int status = 0;
   REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFEXITED(status));
-
-  pthread_join(holder, NULL);
+  REQUIRE_TRUE(released_before_fork_returned);
 
   /* The ctpool_slot_table.rwlock of the parent must be usable after
    * everything above. The release path of the parent is a plain

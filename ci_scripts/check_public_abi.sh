@@ -118,6 +118,7 @@ elf_arch() {
 	"Advanced Micro Devices X86-64:ELF64") echo x86_64 ;;
 	"Intel 80386:ELF32") echo i386 ;;
 	"AArch64:ELF64") echo aarch64 ;;
+	"IBM S/390:ELF64") echo s390x ;;
 	# On 32-bit ARM, the ABI, not the machine, chooses the calling
 	# convention for a floating-point argument, so the hard-float ABI and
 	# the soft-float ABI are two different ABIs, and each one gets its own

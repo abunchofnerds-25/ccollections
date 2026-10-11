@@ -71,13 +71,22 @@ static EVP_PKEY *_ctls_get_root_key(void) {
   ccol_call_once(ctls_root_key_bundle.once, _ctls_root_key_globals_init);
   ccol_mutex_lock(ctls_root_key_bundle.mutex);
   if (!ctls_root_key_bundle.key) {
-    /* EVP_RSA_gen is a thin macro over EVP_PKEY_Q_keygen, and the modern
-     * OpenSSL 3.x replacement for the older sequence of RSA_new, BN_new,
-     * RSA_generate_key_ex and EVP_PKEY_assign_RSA. OpenSSL 3.0 deprecates
-     * that older sequence, so it fires -Wdeprecated-declarations in the
-     * -Werror build of this codebase, and this file is not vendored code, so
-     * it does not build with relaxed warnings. */
-    ctls_root_key_bundle.key = EVP_RSA_gen(2048);
+    /* The EVP_PKEY_CTX key generation exists in OpenSSL 3 and in LibreSSL,
+     * and neither marks it deprecated. OpenSSL 3 deprecates the sequence of
+     * RSA_new, BN_new, RSA_generate_key_ex and EVP_PKEY_assign_RSA, which
+     * fires -Wdeprecated-declarations in the -Werror build, and LibreSSL has
+     * no EVP_RSA_gen. A failure leaves the key NULL, and the next call tries
+     * again. */
+    EVP_PKEY *key = NULL;
+    EVP_PKEY_CTX *kctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, NULL);
+    if (!kctx || EVP_PKEY_keygen_init(kctx) <= 0 ||
+        EVP_PKEY_CTX_set_rsa_keygen_bits(kctx, 2048) <= 0 ||
+        EVP_PKEY_keygen(kctx, &key) <= 0) {
+      EVP_PKEY_free(key);
+      key = NULL;
+    }
+    EVP_PKEY_CTX_free(kctx);
+    ctls_root_key_bundle.key = key;
   }
   EVP_PKEY *key = ctls_root_key_bundle.key;
   ccol_mutex_unlock(ctls_root_key_bundle.mutex);
@@ -167,6 +176,50 @@ static void _ctls_sock_bio_globals_init(void) {
     ccol_fatal_err("ctls socket BIO: failed to initialize mutex");
 }
 
+/* The end-of-file state of the socket BIO, kept in the flags of the BIO and
+ * read back through BIO_CTRL_EOF. OpenSSL names this bit; LibreSSL does not,
+ * and there the bit is one that no BIO flag of LibreSSL uses. */
+#ifdef BIO_FLAGS_IN_EOF
+#define _CTLS_SOCK_BIO_EOF BIO_FLAGS_IN_EOF
+#else
+#define _CTLS_SOCK_BIO_EOF 0x800
+#endif
+
+#if defined(LIBRESSL_VERSION_NUMBER)
+/* LibreSSL has no SSL_has_pending(), so nothing in it tells that the TLS
+ * layer holds part of a record that it cannot decrypt yet. The socket BIO
+ * finds that out itself: it follows the record framing of every byte that it
+ * gives to the TLS layer. A record is a 5-byte header, whose last two bytes
+ * give the length of the body, and then the body. With read-ahead off, which
+ * is the default and which this module never changes, the TLS layer asks for
+ * the bytes of one record only, and it processes a record in the same call
+ * that reads its last byte. So the TLS layer holds a part of a record exactly
+ * while the BIO is inside a record: hdr_got is not 0. */
+typedef struct {
+  uint32_t body_left; /* bytes of the body that the BIO has not given yet */
+  uint8_t hdr_got;    /* header bytes given, 0 to 5; 5 while in the body */
+  uint8_t len_hi;     /* the high byte of the body length */
+} _ctls_rec_track_t;
+
+static void _ctls_rec_track_feed(_ctls_rec_track_t *rt, const char *p, int n) {
+  while (n > 0) {
+    if (rt->hdr_got < 5) {
+      uint8_t c = (uint8_t)*p++;
+      n--;
+      if (rt->hdr_got == 3) rt->len_hi = c;
+      if (rt->hdr_got == 4) rt->body_left = (uint32_t)rt->len_hi << 8 | c;
+      if (++rt->hdr_got == 5 && rt->body_left == 0) rt->hdr_got = 0;
+    } else {
+      uint32_t take = (uint32_t)n < rt->body_left ? (uint32_t)n : rt->body_left;
+      p += take;
+      n -= (int)take;
+      rt->body_left -= take;
+      if (rt->body_left == 0) rt->hdr_got = 0;
+    }
+  }
+}
+#endif
+
 static inline int _ctls_sock_bio_fd(BIO *b) {
   return (int)(intptr_t)BIO_get_data(b);
 }
@@ -190,8 +243,15 @@ static int _ctls_sock_bio_read(BIO *b, char *out, int outl) {
     if (BIO_sock_should_retry(ret))
       BIO_set_retry_read(b);
     else if (ret == 0)
-      BIO_set_flags(b, BIO_FLAGS_IN_EOF);
+      BIO_set_flags(b, _CTLS_SOCK_BIO_EOF);
   }
+#if defined(LIBRESSL_VERSION_NUMBER)
+  /* The connection gives the BIO its framing state through the callback
+   * argument, a plain field that only a BIO callback reads, and this BIO
+   * has no callback. */
+  _ctls_rec_track_t *rt = (_ctls_rec_track_t *)BIO_get_callback_arg(b);
+  if (ret > 0 && rt) _ctls_rec_track_feed(rt, out, ret);
+#endif
   return ret;
 }
 
@@ -221,7 +281,7 @@ static long _ctls_sock_bio_ctrl(BIO *b, int cmd, long num, void *ptr) {
     case BIO_CTRL_FLUSH:
       return 1;
     case BIO_CTRL_EOF:
-      return BIO_test_flags(b, BIO_FLAGS_IN_EOF) != 0;
+      return BIO_test_flags(b, _CTLS_SOCK_BIO_EOF) != 0;
 #ifdef BIO_CTRL_GET_RPOLL_DESCRIPTOR
     case BIO_CTRL_GET_RPOLL_DESCRIPTOR:
     case BIO_CTRL_GET_WPOLL_DESCRIPTOR: {
@@ -500,6 +560,12 @@ struct ctls_conn {
   /* True while the SSL* of this connection owns a BIO that charged a count on
    * the socket BIO method. See ctls_sock_bio_bundle. */
   bool holds_sock_bio;
+#if defined(LIBRESSL_VERSION_NUMBER)
+  /* The record framing that the socket BIO follows for
+   * ctls_conn_has_pending_input(); see _ctls_rec_track_t. The SSL* frees the
+   * BIO before the connection record is freed. */
+  _ctls_rec_track_t rec_track;
+#endif
   /* The DER encoding and the RFC 2253 subject of the verified certificate of
    * the peer, made the first time that a caller asks and kept for the life
    * of the connection; see ctls_conn_peer_cert_der(). peer_info_cert names
@@ -1927,10 +1993,13 @@ ctls_conn_t *ctls_conn_create_client(ctls_ctx_t *ctx, int fd,
     if (err_str) *err_str = "ctls_conn_create_client: socket BIO failure";
     return NULL;
   }
-  BIO_up_ref(bio);
-  SSL_set0_rbio(ssl, bio);
-  SSL_set0_wbio(ssl, bio);
+  /* One BIO for both directions: SSL_set_bio() takes the one reference that
+   * BIO_new() gave. */
+  SSL_set_bio(ssl, bio, bio);
   conn->holds_sock_bio = true;
+#if defined(LIBRESSL_VERSION_NUMBER)
+  BIO_set_callback_arg(bio, (char *)&conn->rec_track);
+#endif
 
   if (hostname && *hostname) {
     struct in_addr v4;
@@ -1949,8 +2018,8 @@ ctls_conn_t *ctls_conn_create_client(ctls_ctx_t *ctx, int fd,
         ok = X509_VERIFY_PARAM_set1_host(param, hostname, 0) == 1;
       }
       if (!ok) {
-        /* The SSL_free() inside the helper also frees the one bio reference
-         * that SSL_set0_rbio and SSL_set0_wbio each took. */
+        /* The SSL_free() inside the helper also frees the BIO reference
+         * that SSL_set_bio() took. */
         _ctls_conn_create_unwind(conn);
         if (err_str)
           *err_str =
@@ -2011,10 +2080,13 @@ ctls_conn_t *ctls_conn_create_server(ctls_ctx_t *ctx, int fd, void *udata,
     if (err_str) *err_str = "ctls_conn_create_server: socket BIO failure";
     return NULL;
   }
-  BIO_up_ref(bio);
-  SSL_set0_rbio(ssl, bio);
-  SSL_set0_wbio(ssl, bio);
+  /* One BIO for both directions: SSL_set_bio() takes the one reference that
+   * BIO_new() gave. */
+  SSL_set_bio(ssl, bio, bio);
   conn->holds_sock_bio = true;
+#if defined(LIBRESSL_VERSION_NUMBER)
+  BIO_set_callback_arg(bio, (char *)&conn->rec_track);
+#endif
   SSL_set_accept_state(ssl);
   return conn;
 }
@@ -2188,10 +2260,29 @@ bool ctls_conn_wants_write(const ctls_conn_t *conn) {
  * OpenSSL holds and has not decrypted. Either one means that the socket can
  * be empty while a read has something to give, so poll(2) and epoll(7) see
  * nothing. This module adds no buffer of its own between the socket BIO and
- * OpenSSL, so these two answers are the whole of it. */
+ * OpenSSL, so these two answers are the whole of it. LibreSSL has no
+ * SSL_has_pending(), and there the socket BIO tells whether the TLS layer
+ * holds part of a record; see _ctls_rec_track_t. */
 bool ctls_conn_has_pending_input(const ctls_conn_t *conn) {
   if (!conn || !conn->ssl) return false;
+#if defined(LIBRESSL_VERSION_NUMBER)
+  return SSL_pending(conn->ssl) > 0 || conn->rec_track.hdr_got != 0;
+#else
   return SSL_pending(conn->ssl) > 0 || SSL_has_pending(conn->ssl) == 1;
+#endif
+}
+
+/* The certificate of the peer, with no new reference: the session keeps one.
+ * LibreSSL has no SSL_get0_peer_certificate(), and its
+ * SSL_get_peer_certificate() takes a reference, which this drops at once. */
+static X509 *_ctls_peer_cert0(const SSL *ssl) {
+#if defined(LIBRESSL_VERSION_NUMBER)
+  X509 *cert = SSL_get_peer_certificate(ssl);
+  X509_free(cert);
+  return cert;
+#else
+  return SSL_get0_peer_certificate(ssl);
+#endif
 }
 
 long ctls_conn_verify_result(const ctls_conn_t *conn) {
@@ -2207,7 +2298,7 @@ long ctls_conn_verify_result(const ctls_conn_t *conn) {
 bool ctls_conn_peer_cert_verified(const ctls_conn_t *conn) {
   if (!conn || !conn->ssl || !conn->handshake_done) return false;
   return (SSL_get_verify_mode(conn->ssl) & SSL_VERIFY_PEER) != 0 &&
-         SSL_get0_peer_certificate(conn->ssl) != NULL &&
+         _ctls_peer_cert0(conn->ssl) != NULL &&
          SSL_get_verify_result(conn->ssl) == X509_V_OK;
 }
 
@@ -2217,7 +2308,7 @@ bool ctls_conn_peer_cert_verified(const ctls_conn_t *conn) {
  * fields that it could not make stay NULL. */
 static const X509 *_ctls_conn_peer_info(ctls_conn_t *conn) {
   if (!ctls_conn_peer_cert_verified(conn)) return NULL;
-  X509 *cert = SSL_get0_peer_certificate(conn->ssl);
+  X509 *cert = _ctls_peer_cert0(conn->ssl);
   if (!cert) return NULL;
   if (conn->peer_info_cert == cert) return cert;
   ccol_memmgmt_procs_t *mp = conn->ctx->m_procs;

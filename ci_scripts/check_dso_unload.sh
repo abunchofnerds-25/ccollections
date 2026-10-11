@@ -42,7 +42,8 @@
 # therefore accepts a library that stays mapped, and the probe compares the
 # count of keys only after a real unload. The probe still loads the library,
 # uses it, closes it, forks and lets a thread exit, so a crash in any of those
-# steps still fails the check.
+# steps still fails the check. musl's dlclose() never unloads either, and the
+# script accepts a resident library that needs libc.musl in the same way.
 #
 # Run this from the root of the repository, after `make`;
 # `make check_dso_unload` and CI both use it.
@@ -68,8 +69,17 @@ if ! FORMAT=$(ccol_object_format "$SO"); then
   echo "check_dso_unload: $SO is neither an ELF nor a Mach-O file" >&2
   exit 2
 fi
+LIBC=other
 if [ "$FORMAT" = elf ]; then
+  # This gate reads the program headers with readelf and needs no nm, which
+  # OpenBSD packages for its own target only as part of a cross toolchain.
+  NM=${NM:-unused}
   . ci_scripts/gnu_binutils.sh
+  # musl's dlclose() never unloads an object (its dlclose(3) does nothing),
+  # which the library itself records by needing libc.musl.
+  if "$READELF" -d "$SO" 2>/dev/null | grep -q 'libc\.musl'; then
+    LIBC=musl
+  fi
   TLS_BUDGET=512
   if ! phdrs=$("$READELF" -lW "$SO"); then
     echo "check_dso_unload: could not read the program headers of $SO" >&2
@@ -302,9 +312,19 @@ int main(int argc, char **argv) {
    * compared only after a real unload. */
   if (mapped_count(needle) == 0) {
     int keys_after = free_key_count();
-    if (keys_after != keys_before) {
+    /* OpenBSD emulates thread-local storage with one pthread key for each
+     * object that has thread-local variables, and an unload never deletes
+     * it, so every load of any such object takes one key for good. Those
+     * keys are not the library's own; a key that a module leaks still shows
+     * as one more. */
+#if defined(__OpenBSD__)
+    int foreign_keys = cycles + 1;
+#else
+    int foreign_keys = 0;
+#endif
+    if (keys_before - keys_after != foreign_keys) {
       fprintf(stderr, "%d thread-specific keys stayed allocated after the "
-                      "last dlclose\n", keys_before - keys_after);
+                      "last dlclose\n", keys_before - keys_after - foreign_keys);
       return 1;
     }
     printf("KEYS-OK\n");
@@ -391,6 +411,12 @@ case "$out" in
       echo "check_dso_unload: accepted, dyld never unloads a dylib that has"
       echo "                  thread-local variables (dlclose(3) of macOS). The"
       echo "                  load, use, close, fork() and thread exit worked."
+      exit 0
+    fi
+    if [ "$LIBC" = musl ]; then
+      echo "check_dso_unload: accepted, musl never unloads an object on"
+      echo "                  dlclose(). The load, use, close, fork() and"
+      echo "                  thread exit worked."
       exit 0
     fi
     echo "check_dso_unload: the library stayed mapped after dlclose ($maps" >&2

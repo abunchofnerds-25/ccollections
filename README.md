@@ -106,8 +106,8 @@ The modules are independent of each other: include only the headers you use.
 
 ### What you need
 
-- Linux (glibc), FreeBSD 14 or later, or macOS 15 or later
-- GCC or Clang (Apple clang on macOS), and GNU make (`gmake` on FreeBSD and macOS)
+- Linux (glibc or musl), FreeBSD 14 or later, OpenBSD 7.9 or later, or macOS 15 or later
+- GCC or Clang (Apple clang on macOS), and GNU make (`gmake` on FreeBSD, OpenBSD and macOS)
 - The development packages of OpenSSL, zlib and pthreads
 
 For example, on Debian or Ubuntu:
@@ -183,7 +183,7 @@ The pages live in [`man/`](man/), one directory per module, and [`man/README`](m
 
 ## Platforms
 
-The library supports Linux with glibc (x86_64, i386, aarch64 and armhf), FreeBSD 14 or later (x86_64) and macOS 15 or later (arm64 and x86_64). CI builds and tests Linux and FreeBSD with both GCC and Clang, and macOS with Apple clang. See [Platforms](doc/platforms.md) for the details.
+The library supports Linux with glibc (x86_64, i386, aarch64, armhf and big-endian s390x) and with musl (x86_64, on Alpine), FreeBSD 14 or later (x86_64), OpenBSD 7.9 or later (x86_64) and macOS 15 or later (arm64 and x86_64). CI builds and tests Linux, FreeBSD and OpenBSD with both GCC and Clang, and macOS with Apple clang. See [Platforms](doc/platforms.md) for the details.
 
 ---
 

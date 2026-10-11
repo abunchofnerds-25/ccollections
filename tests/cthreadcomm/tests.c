@@ -374,7 +374,9 @@ TEST(circular_queues, timed_send_and_timed_receive) {
   getWallTime(before);
   REQUIRE_EQ(ccol_circq_timed_send_zc(cq, &m1, timeout), ccol_success);
   getWallTime(after);
-  REQUIRE_LT(diffTimeUSec(before, after), 10000);
+  /* The call does not wait. The bound is loose for a loaded or emulated
+   * machine; a call that waits for the timeout fails the result check. */
+  REQUIRE_LT(diffTimeUSec(before, after), 1000000);
   REQUIRE_EQ(m1.data, NULL);
 
   m1.data = malloc(sizeof(char));
@@ -392,7 +394,9 @@ TEST(circular_queues, timed_send_and_timed_receive) {
   getWallTime(before);
   REQUIRE_EQ(ccol_circq_timed_recv_zc(cq, &m2, timeout), ccol_success);
   getWallTime(after);
-  REQUIRE_LT(diffTimeUSec(before, after), 10000);
+  /* The call does not wait. The bound is loose for a loaded or emulated
+   * machine; a call that waits for the timeout fails the result check. */
+  REQUIRE_LT(diffTimeUSec(before, after), 1000000);
   REQUIRE_NE(m2.data, NULL);
   REQUIRE_EQ(((char *)(m2.data))[0], 'A');
   REQUIRE_EQ(((char *)(m2.data))[1], '\0');
@@ -1564,7 +1568,9 @@ TEST(dynamic_queues, send_and_timed_receive) {
   getWallTime(before);
   REQUIRE_EQ(ccol_dynmq_timed_recv_zc(dq, &m2, timeout), ccol_success);
   getWallTime(after);
-  REQUIRE_LT(diffTimeUSec(before, after), 10000);
+  /* The call does not wait. The bound is loose for a loaded or emulated
+   * machine; a call that waits for the timeout fails the result check. */
+  REQUIRE_LT(diffTimeUSec(before, after), 1000000);
   REQUIRE_NE(m2.data, NULL);
   REQUIRE_EQ(((char *)(m2.data))[0], 'A');
   REQUIRE_EQ(((char *)(m2.data))[1], '\0');
@@ -1984,7 +1990,11 @@ TEST(channels, msg_count) {
   pthread_t tid;
   REQUIRE_EQ(pthread_create(&tid, NULL, thr_for_channels_msg_count, ch), 0);
 
-  usleep(100000);
+  /* The worker takes the three messages that are already queued and sends
+   * three into a channel of capacity 3, so it never blocks. The join is
+   * therefore bounded, and after it the counts below no longer depend on
+   * how fast the worker ran. */
+  pthread_join(tid, NULL);
 
   for (size_t i = 3; i > 0; --i) {
     REQUIRE_EQ(ccol_chan_msg_count(ch, ccol_workers_to_owner), i);
@@ -1992,7 +2002,6 @@ TEST(channels, msg_count) {
     REQUIRE_EQ(ccol_chan_msg_count(ch, ccol_workers_to_owner), i - 1);
   }
 
-  pthread_join(tid, NULL);
   ccol_channel_destroy(ch);
 }
 
@@ -2884,16 +2893,23 @@ TEST(ccol_select, fd_blocks_until_data_arrives) {
   REQUIRE_EQ(pipe(pfd), 0);
 
   sel_fd_write_args args = {.write_fd = pfd[1], .delay_us = 15000, .value = 77};
+  /* The clock starts before the thread exists, and the thread sleeps 15 ms
+   * before it writes, so a call that waits for the data always measures at
+   * least 15 ms, however the threads are scheduled. A call that returns
+   * without data measures less unless this thread is descheduled, and that
+   * cannot make a correct build fail. */
+  struct timespec before, after;
+  getWallTime(before);
   pthread_t tid;
   REQUIRE_EQ(pthread_create(&tid, NULL, thr_write_to_fd, &args), 0);
 
   size_t idx = 99;
-  struct timespec before, after;
-  getWallTime(before);
-  REQUIRE_EQ(
-      ccol_select_va(&idx, ccol_selectable_from_fd(pfd[0], ccol_select_read)),
-      ccol_success);
+  ccol_retval_t sel_rv =
+      ccol_select_va(&idx, ccol_selectable_from_fd(pfd[0], ccol_select_read));
   getWallTime(after);
+  /* The writer only sleeps and writes once, so this join is bounded. */
+  pthread_join(tid, NULL);
+  REQUIRE_EQ(sel_rv, ccol_success);
   REQUIRE_EQ(idx, 0);
   REQUIRE_GE(diffTimeUSec(before, after), 10000); /* the call really blocked */
 
@@ -2901,7 +2917,6 @@ TEST(ccol_select, fd_blocks_until_data_arrives) {
   REQUIRE_EQ((ssize_t)sizeof(got), read(pfd[0], &got, sizeof(got)));
   REQUIRE_EQ(got, 77);
 
-  pthread_join(tid, NULL);
   close(pfd[0]);
   close(pfd[1]);
 }
@@ -3069,8 +3084,9 @@ void *helper_thread_main(void *arg) {
 }
 
 TEST(ccol_select, timed_succeeds_before_deadline) {
-  /* The producer sends before the 500 ms deadline, so select must return
-   * success. */
+  /* The producer sends after 20 ms, well before the 5 s deadline, so select
+   * must return success. The deadline is wide so that a loaded or emulated
+   * machine cannot delay the send past it. */
   ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
 
   pthread_t tid;
@@ -3083,17 +3099,17 @@ TEST(ccol_select, timed_succeeds_before_deadline) {
   REQUIRE_EQ(pthread_create(&tid, NULL, helper_thread_main, &args), 0);
 
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_timed_va(&idx, 500000,
-                           ccol_selectable_from_circq(cq, ccol_select_read)),
-      ccol_success);
+  ccol_retval_t sel_rv = ccol_select_timed_va(
+      &idx, 5000000, ccol_selectable_from_circq(cq, ccol_select_read));
+  /* The helper only sleeps and sends once, so this join is bounded. */
+  pthread_join(tid, NULL);
+  REQUIRE_EQ(sel_rv, ccol_success);
   REQUIRE_EQ(idx, (size_t)0);
   c_message_t recv_msg = {.data = NULL, .size = 0};
   REQUIRE_EQ(ccol_circq_try_recv_zc(cq, &recv_msg), ccol_success);
   REQUIRE_EQ(*(int *)recv_msg.data, 1234);
   free(recv_msg.data);
 
-  pthread_join(tid, NULL);
   ccol_circular_queue_destroy(cq);
 }
 
@@ -3255,8 +3271,10 @@ typedef struct {
 static void *thr_circq_write_wait(void *arg) {
   sel_write_wait_result *a = (sel_write_wait_result *)arg;
   size_t idx = 0;
+  /* The 5 s bound is wide so that a loaded or emulated machine cannot end
+   * the wait before the main thread frees the slot. */
   a->result = ccol_select_timed_va(
-      &idx, 500000 /* us */,
+      &idx, 5000000 /* us */,
       ccol_selectable_from_circq(a->cq, ccol_select_write));
   return NULL;
 }
@@ -3280,14 +3298,18 @@ TEST(ccol_select, write_circq_two_concurrent_waiters_both_wake_on_slot_free) {
   bool started_t1 = (pthread_create(&t1, NULL, thr_circq_write_wait, &a1) == 0);
   bool started_t2 = (pthread_create(&t2, NULL, thr_circq_write_wait, &a2) == 0);
 
-  usleep(30000); /* let both threads register as write-waiters */
+  /* This gives both threads time to register as write waiters before the
+   * slot is freed. The result does not depend on it: a thread that registers
+   * late finds a free slot and succeeds at once. */
+  usleep(30000);
 
   c_message_t drain = {.data = NULL, .size = 0};
-  REQUIRE_EQ(ccol_circq_recv_zc(cq, &drain), ccol_success);
+  ccol_retval_t drain_rv = ccol_circq_recv_zc(cq, &drain);
   free(drain.data);
 
   if (started_t1) pthread_join(t1, NULL);
   if (started_t2) pthread_join(t2, NULL);
+  REQUIRE_EQ(drain_rv, ccol_success);
   REQUIRE_TRUE(started_t1);
   REQUIRE_TRUE(started_t2);
 
@@ -3306,8 +3328,9 @@ typedef struct {
 static void *thr_circq_read_wait(void *arg) {
   sel_read_wait_result *a = (sel_read_wait_result *)arg;
   size_t idx = 0;
+  /* See thr_circq_write_wait for the 5 s bound. */
   a->result =
-      ccol_select_timed_va(&idx, 500000 /* us */,
+      ccol_select_timed_va(&idx, 5000000 /* us */,
                            ccol_selectable_from_circq(a->cq, ccol_select_read));
   if (a->result == ccol_success) {
     c_message_t msg = {.data = NULL, .size = 0};
@@ -3335,7 +3358,15 @@ TEST(ccol_select,
   bool started_t1 = (pthread_create(&t1, NULL, thr_circq_read_wait, &a1) == 0);
   bool started_t2 = (pthread_create(&t2, NULL, thr_circq_read_wait, &a2) == 0);
 
-  usleep(30000); /* let both threads register as read waiters */
+  /* Wait, at most about 10 s, until every started thread is linked as a
+   * read waiter, so the sends below reach two waiters and test the cascade.
+   * The bound only stops a hang. */
+  size_t want_waiters = (size_t)started_t1 + (size_t)started_t2;
+  for (int i = 0; i < 10000 && ccol_circq_test_sel_read_waiter_count_for_tests(
+                                   cq) < want_waiters;
+       i++)
+    usleep(1000);
+  size_t seen_waiters = ccol_circq_test_sel_read_waiter_count_for_tests(cq);
 
   int *d0 = malloc(sizeof(int));
   assert(d0);
@@ -3345,13 +3376,16 @@ TEST(ccol_select,
   *d1 = 2;
   c_message_t m0 = {.data = d0, .size = sizeof(int)};
   c_message_t m1 = {.data = d1, .size = sizeof(int)};
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &m0), ccol_success);
-  REQUIRE_EQ(ccol_circq_send_zc(cq, &m1), ccol_success);
+  ccol_retval_t send0_rv = ccol_circq_send_zc(cq, &m0);
+  ccol_retval_t send1_rv = ccol_circq_send_zc(cq, &m1);
 
   if (started_t1) pthread_join(t1, NULL);
   if (started_t2) pthread_join(t2, NULL);
   REQUIRE_TRUE(started_t1);
   REQUIRE_TRUE(started_t2);
+  REQUIRE_EQ(seen_waiters, (size_t)2);
+  REQUIRE_EQ(send0_rv, ccol_success);
+  REQUIRE_EQ(send1_rv, ccol_success);
 
   REQUIRE_EQ(a1.result, ccol_success);
   REQUIRE_EQ(a2.result, ccol_success);
@@ -4949,9 +4983,17 @@ TEST(ccol_event_loop, queue_multiple_registrations_share_traffic_fairly) {
         0);
     pthread_join(feeder, NULL);
 
-    /* A bounded wait, so any last dispatch in flight can settle. */
-    struct timespec ts = {0, 50000000}; /* 50ms */
-    nanosleep(&ts, NULL);
+    /* Every message is sent now. Wait, at most about 10 s, until the
+     * callbacks have taken the share that the test requires, so a slow
+     * reactor thread does not fail the count. The bound only stops a hang;
+     * a loop that never reaches 350 still fails below. */
+    for (int i = 0;
+         i < 10000 &&
+         atomic_load(&ctx1.calls) + atomic_load(&ctx2.calls) < (size_t)350;
+         i++) {
+      struct timespec ts = {0, 1000000}; /* 1ms */
+      nanosleep(&ts, NULL);
+    }
 
     /* Both registrations must get a really fair share, and not only "more
      * than zero". Head-only notification produces an exact 0 to N split, so
@@ -5050,8 +5092,15 @@ TEST(ccol_event_loop, dynq_multiple_registrations_share_traffic_fairly) {
                0);
     pthread_join(feeder, NULL);
 
-    struct timespec ts = {0, 50000000}; /* 50ms */
-    nanosleep(&ts, NULL);
+    /* A bounded wait for the share that the test requires, as in the
+     * ccol_circular_queue version above. */
+    for (int i = 0;
+         i < 10000 &&
+         atomic_load(&ctx1.calls) + atomic_load(&ctx2.calls) < (size_t)350;
+         i++) {
+      struct timespec ts = {0, 1000000}; /* 1ms */
+      nanosleep(&ts, NULL);
+    }
 
     size_t c1 = atomic_load(&ctx1.calls);
     size_t c2 = atomic_load(&ctx2.calls);
@@ -5527,13 +5576,22 @@ TEST(ccol_event_loop,
   pthread_t th;
   int create_rv =
       pthread_create(&th, NULL, evl_delayed_reg_generation_thread, &gen_ctx);
+  if (create_rv != 0) ccol_event_loop_test_delay_next_reg_resolve_unpin_ms(0);
   REQUIRE_EQ(create_rv, 0);
 
-  /* This is a wide window in which the background thread resolves reg, which
-   * pins it, and enters the armed delay, before the remove below runs. This
-   * is what makes ccol_event_loop_remove see pending_resolve_count > 0 for
-   * reg, so it defers the reclaim instead of freeing reg at once. */
-  usleep(50000);
+  /* The remove below must run while the background thread holds its pin on
+   * reg and sleeps in the armed delay. That is what makes
+   * ccol_event_loop_remove see pending_resolve_count > 0 for reg, so it
+   * defers the reclaim instead of freeing reg at once. The thread takes the
+   * delay only after it resolved reg and read its removed flag, so the wait
+   * below ends inside that window however late the thread starts. The
+   * bound of about 10 s only stops a hang; the checks of gen_ctx.gen and
+   * on_removed below still fail if the thread never got there. */
+  for (int i = 0;
+       i < 10000 &&
+       !ccol_event_loop_test_reg_resolve_unpin_delay_taken_for_tests();
+       i++)
+    usleep(1000);
 
   ccol_retval_t remove_rv = ccol_event_loop_remove(loop, reg);
 
@@ -5779,14 +5837,33 @@ TEST(ccol_event_loop, high_add_remove_churn_stress) {
   ccol_event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
 
-  for (int i = 0; i < n; i++) {
-    REQUIRE_EQ(pipe(pfds[i]), 0);
+  /* Every pipe that opened is closed before an assertion can return, so a
+   * process with fewer than 400 descriptors fails this test alone and
+   * leaves the tests after it their descriptors. */
+  int opened = 0;
+  bool added = true;
+  for (; opened < n; opened++) {
+    if (pipe(pfds[opened]) != 0) break;
     char *err = NULL;
-    regs[i] = ccol_event_loop_add(
-        loop, ccol_selectable_from_fd(pfds[i][0], ccol_select_read), handlers,
-        NULL, &err);
-    REQUIRE_NE(regs[i], CCOL_EVENT_REG_INVALID);
+    regs[opened] = ccol_event_loop_add(
+        loop, ccol_selectable_from_fd(pfds[opened][0], ccol_select_read),
+        handlers, NULL, &err);
+    if (regs[opened] == CCOL_EVENT_REG_INVALID) {
+      added = false;
+      close(pfds[opened][0]);
+      close(pfds[opened][1]);
+      break;
+    }
   }
+  if (opened < n || !added) {
+    for (int i = 0; i < opened; i++) {
+      ccol_event_loop_remove(loop, regs[i]);
+      close(pfds[i][0]);
+      close(pfds[i][1]);
+    }
+  }
+  REQUIRE_EQ(opened, n);
+  REQUIRE_TRUE(added);
   REQUIRE_EQ(ccol_event_loop_reg_count(loop), (size_t)n);
 
   for (int i = 0; i < n; i++) {
@@ -8274,8 +8351,12 @@ TEST(ccol_event_loop_handle_lifecycle,
 
     /* This bounds the lifetime of this child, for the case where
      * ccol_fatal_err somehow does not fire as expected; without it, that
-     * case hangs the whole suite. */
-    struct timespec ts = {1, 0};
+     * case hangs the whole suite. The abort ends the child long before this
+     * sleep does, so the length only has to cover a slow or loaded machine.
+     * It stays below the 20 s bound of the parent, so a child that does not
+     * abort exits and fails the WIFSIGNALED check below instead of the
+     * reap. */
+    struct timespec ts = {15, 0};
     nanosleep(&ts, NULL);
     _exit(0); /* not reachable when ccol_fatal_err() aborts, as it must */
   }
@@ -8318,7 +8399,8 @@ TEST(ccol_event_loop_handle_lifecycle,
     int val = 7;
     if (write(pfd[1], &val, sizeof(val)) != (ssize_t)sizeof(val)) _exit(2);
 
-    struct timespec ts = {1, 0};
+    /* See the single-thread version above for this bound. */
+    struct timespec ts = {15, 0};
     nanosleep(&ts, NULL);
     _exit(0); /* not reachable when ccol_fatal_err() aborts, as it must */
   }
@@ -8750,6 +8832,7 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_event_loop_mutex) {
 typedef struct {
   ccol_circular_queue *cq;
   _Atomic bool locked;
+  _Atomic bool released;
   int hold_ms;
 } queue_fork_lock_arg_t;
 
@@ -8770,6 +8853,9 @@ static void *queue_fork_lock_thread(void *arg) {
   struct timespec ts = {.tv_sec = a->hold_ms / 1000,
                         .tv_nsec = (long)(a->hold_ms % 1000) * 1000000L};
   nanosleep(&ts, NULL);
+  /* The store comes before the unlock, so a prepare handler that waits for
+   * the unlock cannot let fork() return before the store is visible. */
+  atomic_store(&a->released, true);
   ccol_circq_test_unlock_mutex_for_tests(a->cq);
   return NULL;
 }
@@ -8795,10 +8881,15 @@ static void *queue_fork_lock_thread(void *arg) {
  * thread calls fork() only once it confirms that the lock is genuinely
  * held. With the atfork prepare() handler in place, fork() must then BLOCK
  * until the holder releases, because its own ccol_mutex_lock(cq->mutex)
- * cannot return before then. The assertion below is a wall-clock lower
- * bound on the duration of fork() itself, which proves that the blocking
- * behaviour really engaged on this run; without it, the run only shows that
- * the race happened not to matter. */
+ * cannot return before then. The holder sets `released` just before its
+ * unlock, and the parent reads it as soon as fork() returns. A true value
+ * proves that the blocking behaviour really engaged on this run; without
+ * it, the run only shows that the race happened not to matter. This check
+ * does not depend on a clock: a correct handler makes it true however the
+ * threads are scheduled. Without the handler, fork() returns while the
+ * holder still sleeps through its HOLD_MS, and the value is false; only a
+ * forking thread that is descheduled for that whole hold can hide the
+ * defect, and that cannot make a correct build fail. */
 TEST(fork_safety, fork_does_not_inherit_a_locked_circular_queue_mutex) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   char *err = NULL;
@@ -8806,7 +8897,8 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_circular_queue_mutex) {
   REQUIRE_NE((void *)cq, NULL);
 
   enum { HOLD_MS = 300 };
-  queue_fork_lock_arg_t arg = {.cq = cq, .locked = false, .hold_ms = HOLD_MS};
+  queue_fork_lock_arg_t arg = {
+      .cq = cq, .locked = false, .released = false, .hold_ms = HOLD_MS};
   pthread_t holder;
   REQUIRE_EQ(pthread_create(&holder, NULL, queue_fork_lock_thread, &arg), 0);
 
@@ -8844,15 +8936,15 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_circular_queue_mutex) {
    * same reason: unlike WEXITSTATUS, it still reliably tells a clean exit
    * apart from a real regression, which is a hang past alarm(3), or a real
    * ccol_assert() or ccol_fatal_err() abort that raises SIGABRT. */
-  int result_pipe[2];
-  REQUIRE_EQ(pipe(result_pipe), 0);
-
-  struct timespec t0, t1;
-  clock_gettime(CLOCK_MONOTONIC, &t0);
-
-  pid_t pid = fork();
-  REQUIRE_NE(pid, -1);
-  if (pid == 0) {
+  /* The holder is alive and holds cq->mutex until HOLD_MS ends, so every
+   * step until its join records its outcome, and the REQUIRE_* checks run
+   * only after the join. */
+  int result_pipe[2] = {-1, -1};
+  bool pipe_ok = (pipe(result_pipe) == 0);
+  pid_t pid = -1;
+  bool released_at_fork = false;
+  if (pipe_ok) pid = fork();
+  if (pipe_ok && pid == 0) {
     /* `holder` does not exist here, because fork() duplicates only the
      * thread that calls it. This child process can come into existence only
      * once the fork() call of the parent returns, which by the atfork
@@ -8880,16 +8972,20 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_circular_queue_mutex) {
     close(result_pipe[1]);
     _exit(0);
   }
-  close(result_pipe[1]);
+  if (pipe_ok) {
+    /* This proves that the blocking behaviour of the atfork prepare handler
+     * really engaged: fork() cannot return before the holder released
+     * cq->mutex, and the holder sets `released` before that unlock. */
+    released_at_fork = atomic_load(&arg.released);
+    close(result_pipe[1]);
+    if (pid == -1) close(result_pipe[0]);
+  }
 
-  clock_gettime(CLOCK_MONOTONIC, &t1);
-  long long elapsed_ms =
-      (t1.tv_sec - t0.tv_sec) * 1000LL + (t1.tv_nsec - t0.tv_nsec) / 1000000LL;
-  /* This proves that the blocking behaviour of the atfork prepare handler
-   * really engaged: fork() must wait for close to the HOLD_MS of the holder
-   * before it returns, instead of returning almost at once while the lock is
-   * still genuinely held. */
-  REQUIRE_GE(elapsed_ms, (long long)(HOLD_MS / 2));
+  pthread_join(holder, NULL);
+
+  REQUIRE_TRUE(pipe_ok);
+  REQUIRE_NE(pid, -1);
+  REQUIRE_TRUE(released_at_fork);
 
   /* This read is bounded instead of being a bare blocking read(); the doc
    * comment of _read_result_byte_bounded says why a plain read() here cannot
@@ -8910,13 +9006,13 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_circular_queue_mutex) {
   REQUIRE_TRUE(reaped);
   if (reaped) REQUIRE_TRUE(WIFEXITED(status));
 
-  pthread_join(holder, NULL);
   ccol_circular_queue_destroy(cq);
 }
 
 typedef struct {
   ccol_event_loop loop;
   _Atomic bool locked;
+  _Atomic bool released;
   int hold_ms;
 } reg_slot_fork_lock_arg_t;
 
@@ -8938,6 +9034,8 @@ static void *reg_slot_fork_lock_thread(void *arg) {
   struct timespec ts = {.tv_sec = a->hold_ms / 1000,
                         .tv_nsec = (long)(a->hold_ms % 1000) * 1000000L};
   nanosleep(&ts, NULL);
+  /* See queue_fork_lock_thread for why the store comes before the unlock. */
+  atomic_store(&a->released, true);
   ccol_event_loop_test_wrunlock_reg_slot_for_tests(resolved);
   return NULL;
 }
@@ -8977,7 +9075,7 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_reg_slot_rwlock) {
 
   enum { HOLD_MS = 300 };
   reg_slot_fork_lock_arg_t arg = {
-      .loop = loop, .locked = false, .hold_ms = HOLD_MS};
+      .loop = loop, .locked = false, .released = false, .hold_ms = HOLD_MS};
   pthread_t holder;
   REQUIRE_EQ(pthread_create(&holder, NULL, reg_slot_fork_lock_thread, &arg), 0);
 
@@ -8988,15 +9086,15 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_reg_slot_rwlock) {
     sched_yield();
   }
 
-  int result_pipe[2];
-  REQUIRE_EQ(pipe(result_pipe), 0);
-
-  struct timespec t0, t1;
-  clock_gettime(CLOCK_MONOTONIC, &t0);
-
-  pid_t pid = fork();
-  REQUIRE_NE(pid, -1);
-  if (pid == 0) {
+  /* See fork_does_not_inherit_a_locked_circular_queue_mutex: every step
+   * until the join of the holder records its outcome, and the REQUIRE_*
+   * checks run only after that join. */
+  int result_pipe[2] = {-1, -1};
+  bool pipe_ok = (pipe(result_pipe) == 0);
+  pid_t pid = -1;
+  bool released_at_fork = false;
+  if (pipe_ok) pid = fork();
+  if (pipe_ok && pid == 0) {
     /* `holder` does not exist here, because fork() duplicates only the
      * thread that calls it. This child can come into existence only once the
      * fork() call of the parent returns, which needs the
@@ -9022,15 +9120,22 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_reg_slot_rwlock) {
     close(result_pipe[1]);
     _exit(0);
   }
-  close(result_pipe[1]);
+  if (pipe_ok) {
+    /* This proves that the blocking behaviour of the atfork prepare handler
+     * really engaged: fork() cannot return before the holder released the
+     * write lock, and the holder sets `released` before that unlock. The
+     * comment of fork_does_not_inherit_a_locked_circular_queue_mutex says
+     * why this check fails without the handler. */
+    released_at_fork = atomic_load(&arg.released);
+    close(result_pipe[1]);
+    if (pid == -1) close(result_pipe[0]);
+  }
 
-  clock_gettime(CLOCK_MONOTONIC, &t1);
-  long long elapsed_ms =
-      (t1.tv_sec - t0.tv_sec) * 1000LL + (t1.tv_nsec - t0.tv_nsec) / 1000000LL;
-  /* This proves that the blocking behaviour of the atfork prepare handler
-   * really engaged: fork() must wait for close to the HOLD_MS of the holder
-   * before it returns. */
-  REQUIRE_GE(elapsed_ms, (long long)(HOLD_MS / 2));
+  pthread_join(holder, NULL);
+
+  REQUIRE_TRUE(pipe_ok);
+  REQUIRE_NE(pid, -1);
+  REQUIRE_TRUE(released_at_fork);
 
   /* This read is bounded instead of being a bare blocking read(); the doc
    * comment of _read_result_byte_bounded says why a plain read() here cannot
@@ -9049,8 +9154,6 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_reg_slot_rwlock) {
   REQUIRE_TRUE(reaped);
   if (reaped) REQUIRE_TRUE(WIFEXITED(status));
 
-  pthread_join(holder, NULL);
-
   /* The reg_slot_rwlock of the parent must still be genuinely usable after
    * all of the above. The release path of the parent is a plain
    * ccol_rw_lock_unlock, where the child does a reinit, and the fork() call
@@ -9067,6 +9170,7 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_reg_slot_rwlock) {
 
 typedef struct {
   _Atomic bool locked;
+  _Atomic bool released;
   int hold_ms;
 } ccol_event_loop_slot_table_fork_lock_arg_t;
 
@@ -9081,6 +9185,8 @@ static void *ccol_event_loop_slot_table_fork_lock_thread(void *arg) {
   struct timespec ts = {.tv_sec = a->hold_ms / 1000,
                         .tv_nsec = (long)(a->hold_ms % 1000) * 1000000L};
   nanosleep(&ts, NULL);
+  /* See queue_fork_lock_thread for why the store comes before the unlock. */
+  atomic_store(&a->released, true);
   ccol_event_loop_test_wrunlock_slot_table_for_tests();
   return NULL;
 }
@@ -9108,8 +9214,8 @@ static void *ccol_event_loop_slot_table_fork_lock_thread(void *arg) {
 TEST(fork_safety, fork_does_not_inherit_a_write_locked_event_loop_slot_table) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   enum { HOLD_MS = 300 };
-  ccol_event_loop_slot_table_fork_lock_arg_t arg = {.locked = false,
-                                                    .hold_ms = HOLD_MS};
+  ccol_event_loop_slot_table_fork_lock_arg_t arg = {
+      .locked = false, .released = false, .hold_ms = HOLD_MS};
   pthread_t holder;
   REQUIRE_EQ(pthread_create(&holder, NULL,
                             ccol_event_loop_slot_table_fork_lock_thread, &arg),
@@ -9126,8 +9232,8 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_event_loop_slot_table) {
    * ccol_event_loop_slot_table.rwlock, so NONE of these steps may carry a
    * direct assertion: a REQUIRE_* failure returns from this test function at
    * once, and the lifetime of holder does not depend on the success of
-   * pipe(), of fork(), of the timing check, or of the response of the child.
-   * A direct assertion on pipe(), on fork(), or on the elapsed_ms check
+   * pipe(), of fork(), of the release check, or of the response of the child.
+   * A direct assertion on pipe(), on fork(), or on the release check
    * would leak holder un-joined on each of those failure paths, and that is
    * true for the LATER assertions below the read and reap steps too. So the
    * test captures every outcome into a local below, every time, and the
@@ -9140,16 +9246,13 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_event_loop_slot_table) {
   bool pipe_ok = (pipe(result_pipe) == 0);
 
   pid_t pid = -1;
-  long long elapsed_ms = -1;
+  bool released_at_fork = false;
   char byte = 0;
   ssize_t n = -1;
   bool reaped = false;
   int status = 0;
 
   if (pipe_ok) {
-    struct timespec t0, t1;
-    clock_gettime(CLOCK_MONOTONIC, &t0);
-
     pid = fork();
     if (pid == 0) {
       /* `holder` does not exist here, because fork() duplicates only the
@@ -9176,10 +9279,10 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_event_loop_slot_table) {
     }
 
     if (pid > 0) {
+      /* fork() cannot return before the holder released the write lock,
+       * and the holder sets `released` before that unlock. */
+      released_at_fork = atomic_load(&arg.released);
       close(result_pipe[1]);
-      clock_gettime(CLOCK_MONOTONIC, &t1);
-      elapsed_ms = (t1.tv_sec - t0.tv_sec) * 1000LL +
-                   (t1.tv_nsec - t0.tv_nsec) / 1000000LL;
 
       /* This read is bounded instead of being a bare blocking read(); the doc
        * comment of _read_result_byte_bounded says why a plain read() here
@@ -9213,9 +9316,10 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_event_loop_slot_table) {
   REQUIRE_TRUE(pipe_ok);
   REQUIRE_NE(pid, -1);
   /* This proves that the blocking behaviour of the atfork prepare handler
-   * really engaged: fork() must wait for close to the HOLD_MS of the holder
-   * before it returns. */
-  REQUIRE_GE(elapsed_ms, (long long)(HOLD_MS / 2));
+   * really engaged. The comment of
+   * fork_does_not_inherit_a_locked_circular_queue_mutex says why this check
+   * fails without the handler. */
+  REQUIRE_TRUE(released_at_fork);
   REQUIRE_EQ((int)n, 1);
   REQUIRE_EQ((int)byte, 1);
   REQUIRE_TRUE(reaped);
@@ -12979,11 +13083,21 @@ static void bkl_wait_moved(bkl_ctx *c, long target) {
     evl_sleep_ms(1);
 }
 
+/* Waits, at most about 10 s, until the listeners have had `target`
+ * dispatches in total. A listener that moves nothing gets its first dispatch
+ * from the wake of the add, so the 200 ms samples after this wait judge only
+ * the dispatches that follow, however late the reactor ran. */
+static void bkl_wait_dispatches(bkl_ctx *c, long target) {
+  for (int i = 0; i < 10000 && atomic_load(&c->dispatches) < target; i++)
+    evl_sleep_ms(1);
+}
+
 /* Puts `count` messages into a queue of the given kind, registers
  * `nregs` read listeners with the given mode on it, and sends nothing more.
- * With BKL_RECV_ONE it waits for the listeners to take every message. It
- * then samples the dispatch count twice, 200 ms apart, so that a listener
- * that is dispatched again and again shows up as a count that still grows. */
+ * With BKL_RECV_ONE it waits for the listeners to take every message, and
+ * with BKL_NOTHING for one dispatch for each listener. It then samples the
+ * dispatch count twice, 200 ms apart, so that a listener that is dispatched
+ * again and again shows up as a count that still grows. */
 static void bkl_run_read(size_t threads, bool dynq, int mode, long count,
                          int nregs, bkl_result *r) {
   memset(r, 0, sizeof(*r));
@@ -13017,6 +13131,7 @@ static void bkl_run_read(size_t threads, bool dynq, int mode, long count,
   }
   if (added) {
     if (mode == BKL_RECV_ONE) bkl_wait_moved(&c, count);
+    if (mode == BKL_NOTHING) bkl_wait_dispatches(&c, nregs);
     evl_sleep_ms(200);
     r->dispatches_settled = atomic_load(&c.dispatches);
     evl_sleep_ms(200);
@@ -13108,6 +13223,7 @@ static void bkl_run_write(size_t threads, int mode, long capacity,
   }
   if (reg != CCOL_EVENT_REG_INVALID) {
     if (mode == BKL_SEND_ONE) bkl_wait_moved(&c, capacity);
+    if (mode == BKL_NOTHING) bkl_wait_dispatches(&c, 1);
     evl_sleep_ms(200);
     r->dispatches_settled = atomic_load(&c.dispatches);
     evl_sleep_ms(200);

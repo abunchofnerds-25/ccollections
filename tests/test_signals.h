@@ -31,14 +31,14 @@ SOFTWARE.
 #include <time.h>
 
 /* Consumes every SIGPIPE that is pending for the calling thread or for the
- * process. SIGPIPE must be blocked. macOS has no sigtimedwait(); there
- * sigwait() takes the signal, and it does not block, because the loop calls
- * it only while sigpending() reports the signal. */
+ * process. SIGPIPE must be blocked. macOS and OpenBSD have no
+ * sigtimedwait(); there sigwait() takes the signal, and it does not block,
+ * because the loop calls it only while sigpending() reports the signal. */
 static inline void test_consume_pending_sigpipe(void) {
   sigset_t set;
   sigemptyset(&set);
   sigaddset(&set, SIGPIPE);
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__OpenBSD__)
   sigset_t pending;
   int sig;
   while (sigemptyset(&pending) == 0 && sigpending(&pending) == 0 &&

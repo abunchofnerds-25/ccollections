@@ -38,13 +38,6 @@ SOFTWARE.
 #include <errno.h>
 #include <fcntl.h>
 #include <internal/csock.h>
-#if defined(__APPLE__)
-#include <malloc/malloc.h>
-/* The usable size of a block of malloc(3); macOS names it malloc_size(). */
-#define malloc_usable_size(p) malloc_size(p)
-#else
-#include <malloc.h>
-#endif
 #include <netdb.h>
 #include <netinet/in.h>
 #include <openssl/err.h>
@@ -100,12 +93,12 @@ TAU_MAIN()
 static int test_tryjoin(pthread_t t) {
 #if defined(__GLIBC__)
   return pthread_tryjoin_np(t, NULL);
-#elif defined(TEST_UNDER_TSAN) || defined(__APPLE__)
-  (void)t;
-  return EBUSY;
-#else
+#elif defined(__FreeBSD__) && !defined(TEST_UNDER_TSAN)
   const struct timespec passed = {0, 0};
   return pthread_timedjoin_np(t, NULL, &passed);
+#else
+  (void)t;
+  return EBUSY;
 #endif
 }
 
@@ -169,6 +162,16 @@ typedef struct {
 static test_server_t g_srv;
 static pthread_once_t g_srv_once = PTHREAD_ONCE_INIT;
 static atomic_int g_slow_started = 0;
+/* The route /held answers only after a test releases it. Each held request
+ * reads this epoch when it starts and waits until the epoch changes, so a
+ * release ends every hold that started before it and no hold that starts
+ * after it. See held_release(). */
+static atomic_uint g_held_epoch = 0;
+
+/* Ends every hold of /held that started before this call. A test that
+ * sends a request to /held calls this on every path out, before any
+ * REQUIRE_* that can return early, so that no server thread stays held. */
+static void held_release(void) { atomic_fetch_add(&g_held_epoch, 1u); }
 static atomic_int g_accept_count = 0;
 
 /* Connection-thread registry so stop_test_server can join them all. */
@@ -814,6 +817,22 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
      * for the test to tell them apart. It signals its start as /slow does. */
     atomic_fetch_add(&g_slow_started, 1);
     usleep(500000); /* 500 ms */
+    const char *b = "{\"status\":\"ok\"}";
+    srv_respond(conn_fd, 200, "OK", "application/json", NULL, b, strlen(b),
+                false);
+    return true;
+  }
+
+  if (strcmp(method, "GET") == 0 && strcmp(path, "/held") == 0) {
+    /* A gated sibling of /slow. It signals its start as /slow does, and then
+     * answers only once the test calls held_release(), so a test can keep a
+     * request in flight for exactly as long as it needs. The hold has an
+     * upper bound of about 15 s, so a test that fails to release it cannot
+     * keep this thread for ever. */
+    unsigned epoch = atomic_load(&g_held_epoch);
+    atomic_fetch_add(&g_slow_started, 1);
+    for (int i = 0; i < 1500 && atomic_load(&g_held_epoch) == epoch; i++)
+      usleep(10000); /* 10 ms */
     const char *b = "{\"status\":\"ok\"}";
     srv_respond(conn_fd, 200, "OK", "application/json", NULL, b, strlen(b),
                 false);
@@ -1635,6 +1654,10 @@ static void *srv_accept_loop(void *arg) {
   while (atomic_load(&g_srv.running)) {
     int conn_fd = accept(g_srv.server_fd, NULL, NULL);
     if (conn_fd < 0) break;
+    if (!atomic_load(&g_srv.running)) {
+      close(conn_fd);
+      break;
+    }
     atomic_fetch_add(&g_accept_count, 1);
 
     pthread_t tid;
@@ -1657,6 +1680,10 @@ static void *srv_accept_loop6(void *arg) {
   while (atomic_load(&g_srv.running)) {
     int conn_fd = accept(g_srv.server_fd6, NULL, NULL);
     if (conn_fd < 0) break;
+    if (!atomic_load(&g_srv.running)) {
+      close(conn_fd);
+      break;
+    }
     atomic_fetch_add(&g_accept_count, 1);
 
     pthread_t tid;
@@ -1678,6 +1705,10 @@ static void *srv_accept_loop_unix(void *arg) {
   while (atomic_load(&g_srv.running)) {
     int conn_fd = accept(g_srv.server_fd_unix, NULL, NULL);
     if (conn_fd < 0) break;
+    if (!atomic_load(&g_srv.running)) {
+      close(conn_fd);
+      break;
+    }
     atomic_fetch_add(&g_accept_count, 1);
 
     pthread_t tid;
@@ -1801,24 +1832,26 @@ static void start_test_server(void) {
   }
 }
 
+static void test_wake_listener(int lfd);
+
 __attribute__((destructor)) static void stop_test_server(void) {
   if (g_srv.server_fd > 0) {
     atomic_store(&g_srv.running, 0);
-    /* On Linux, shutdown() makes a blocked accept() return with EINVAL, while
-     * close() alone does not reliably unblock it. */
-    shutdown(g_srv.server_fd, SHUT_RDWR);
+    /* A blocked accept() returns on shutdown() on Linux and FreeBSD, and on
+     * a connection to the listener everywhere; see test_wake_listener. */
+    test_wake_listener(g_srv.server_fd);
     close(g_srv.server_fd);
     g_srv.server_fd = -1;
     pthread_join(g_srv.accept_tid, NULL);
   }
   if (g_srv.server_fd6 > 0) {
-    shutdown(g_srv.server_fd6, SHUT_RDWR);
+    test_wake_listener(g_srv.server_fd6);
     close(g_srv.server_fd6);
     g_srv.server_fd6 = -1;
     pthread_join(g_srv.accept_tid6, NULL);
   }
   if (g_srv.server_fd_unix > 0) {
-    shutdown(g_srv.server_fd_unix, SHUT_RDWR);
+    test_wake_listener(g_srv.server_fd_unix);
     close(g_srv.server_fd_unix);
     g_srv.server_fd_unix = -1;
     pthread_join(g_srv.accept_tid_unix, NULL);
@@ -3676,20 +3709,21 @@ TEST(pool, request_timeout_counts_time_spent_waiting_for_a_pool_slot) {
    * slot frees up, however long that takes.
    *
    * This test uses a pool of size 1. One thread holds the only slot with a
-   * request against /very-slow, where the server sleeps for 500ms, and the
-   * main thread then calls chttpclient_do against the fast /get route with
-   * a request timeout of 20ms.
+   * request against /held, which the server answers only after the test
+   * releases it, and the main thread then calls chttpclient_do against the
+   * fast /get route with a request timeout of 20ms. The test releases the
+   * occupant only after that call has returned.
    *
    * This test is not vacuous. With a deadline that starts after
-   * _slot_acquire, the second call blocks on the full pool for about
-   * 500ms, THEN gets a fresh budget of 20ms, which is enough for a /get
-   * over the loopback, and succeeds. With a deadline that starts at entry,
-   * the 20ms run out while the call waits for the slot, so it times out
-   * near the 20ms mark, long before the slot of the occupant frees up. The
-   * signal is a clear success against a timeout, and it does not depend on
-   * fine timing. */
+   * _slot_acquire, the second call blocks on the full pool until the
+   * release, which comes only after the call returns, so the call blocks
+   * until the bound of about 15 s of /held ends, THEN gets a fresh budget
+   * of 20ms, and succeeds. With a deadline that starts at entry, the 20ms
+   * run out while the call waits for the slot, so it times out near the
+   * 20ms mark. The signal is a clear success against a timeout, and it does
+   * not depend on fine timing. */
   char slow_url[128], get_url[128];
-  make_url(slow_url, sizeof(slow_url), "/very-slow"); /* sleeps 500ms */
+  make_url(slow_url, sizeof(slow_url), "/held");
   make_url(get_url, sizeof(get_url), "/get");
   atomic_store(&g_slow_started, 0);
 
@@ -3709,15 +3743,18 @@ TEST(pool, request_timeout_counts_time_spent_waiting_for_a_pool_slot) {
    * cap of 1 of the pool. Only then does the test set the short timeout and
    * send the second call. This is the synchronisation pattern that this
    * file uses everywhere instead of a fixed sleep (see
-   * do_returns_not_permitted_when_destroying). */
-  while (atomic_load(&g_slow_started) < 1) {
-    struct timespec ts = {.tv_sec = 0, .tv_nsec = 1000000}; /* 1 ms */
-    nanosleep(&ts, NULL);
+   * do_returns_not_permitted_when_destroying). The wait has a bound of
+   * about 10 s, so a request that never reaches the server fails the test
+   * instead of hanging it. */
+  bool occupant_in_flight = false;
+  for (int i = 0; i < 10000 && !occupant_in_flight; i++) {
+    occupant_in_flight = atomic_load(&g_slow_started) >= 1;
+    if (!occupant_in_flight) usleep(1000);
   }
 
   /* Every result below goes into a local variable instead of being asserted
-   * at once. The spin above confirms that occupant_thread runs, and it does
-   * not finish until the /very-slow sleep of 500ms on the server ends, so a
+   * at once. occupant_thread does not finish until the release of /held
+   * further down, so a
    * REQUIRE_* between this point and the join further down returns early
    * while the thread still runs and still writes into the local `occupant`
    * on the stack after the frame of this function is gone. That is a real
@@ -3731,21 +3768,23 @@ TEST(pool, request_timeout_counts_time_spent_waiting_for_a_pool_slot) {
   chttpcli_response *resp = NULL;
   ccol_retval_t rv = ccol_unexpected_failure;
   long elapsed_ms = -1;
-  if (req) {
+  if (req && occupant_in_flight) {
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     rv = chttpclient_do(cli, req, &resp);
     clock_gettime(CLOCK_MONOTONIC, &t1);
     elapsed_ms =
         (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
-    chttp_request_free(req);
   }
+  if (req) chttp_request_free(req);
 
-  /* The join runs before any REQUIRE_* below (see the comment above). It
-   * does not change the measurement above, because elapsed_ms already holds
-   * it at this point. */
+  /* The release and the join run before any REQUIRE_* below (see the
+   * comment above). They do not change the measurement above, because
+   * elapsed_ms already holds it at this point. */
+  held_release();
   pthread_join(occupant_thread, NULL);
 
+  REQUIRE_TRUE(occupant_in_flight);
   REQUIRE_EQ(set_timeout_rv, ccol_success);
   REQUIRE_NE((void *)req, NULL);
   REQUIRE_EQ(rv, ccol_timed_out);
@@ -3753,16 +3792,15 @@ TEST(pool, request_timeout_counts_time_spent_waiting_for_a_pool_slot) {
   /* The return code alone is not enough of a signal, because _slot_acquire
    * must know the deadline too. With a deadline that starts before
    * _slot_acquire, but a _slot_acquire that ignores it, this call still
-   * blocks for the full 500ms of the occupant, since a plain
-   * ccol_cond_var_wait cannot see that the deadline has passed. A later
-   * connect step or read step then finds the expired deadline, so the call
-   * still ends in ccol_timed_out, but only after blocking for much longer
-   * than the 20ms that the test set; that is what this test catches. The
-   * upper bound of 300ms clearly separates a call that returns soon after
-   * its own 20ms (a timer of a busy runner can wake 150ms late, and the
-   * bound leaves room for that) from a call that first blocks for the
-   * 500ms of the occupant. */
-  REQUIRE_LT(elapsed_ms, 300L);
+   * blocks until the hold of the occupant ends, since a plain
+   * ccol_cond_var_wait cannot see that the deadline has passed, and that
+   * hold lasts about 15 s because the release comes only after this call.
+   * A later connect step or read step then finds the expired deadline, so
+   * the call still ends in ccol_timed_out, but only after blocking for much
+   * longer than the 20ms that the test set; that is what this test catches.
+   * The upper bound of 1000ms leaves wide room for a late timer of a busy
+   * runner, and stays far below the hold of the occupant. */
+  REQUIRE_LT(elapsed_ms, 1000L);
 
   REQUIRE_EQ(occupant.result_rv, ccol_success);
   REQUIRE_EQ(occupant.result_status, 200);
@@ -3889,22 +3927,24 @@ TEST(http, run_query_invalid_args) {
 /* ========================================================================== */
 
 TEST(pool, do_returns_not_permitted_when_destroying) {
-  /* The plan of this test: fill ALL pool slots with requests of 100 ms, so
+  /* The plan of this test: fill ALL pool slots with requests to /held, so
    * that a later chttpclient_do MUST block in the ccol_cond_var_wait of
    * _slot_acquire. Once both slots are certainly in flight, the test starts
    * a probe thread, which blocks on the full pool, and only then starts the
    * destroy thread. The destroy sets destroying=true and broadcasts, which
    * wakes the probe, which sees the flag and returns ccol_not_permitted.
-   * The test needs no sleep of a fixed length. */
+   * The server answers /held only after the probe has returned, so no slot
+   * can free up while the probe waits. The test needs no sleep of a fixed
+   * length. */
   char slow_url[128], url[128];
-  make_url(slow_url, sizeof(slow_url), "/slow");
+  make_url(slow_url, sizeof(slow_url), "/held");
   make_url(url, sizeof(url), "/get");
   atomic_store(&g_slow_started, 0);
 
   chttpcli_construct(cli);
   REQUIRE_EQ(chttpclient_set_pool_size(cli, 2), ccol_success);
 
-  /* Fills both slots with slow requests of 100 ms. */
+  /* Fills both slots with requests that the server holds. */
   concurrent_req_arg_t slow_args[2];
   pthread_t slow_tids[2];
   int slow_started = 0;
@@ -3926,10 +3966,12 @@ TEST(pool, do_returns_not_permitted_when_destroying) {
   /* Spins until the server side confirms that every slow request that
    * started is in flight. The bound is slow_started, and never 2: with a
    * count that no live thread can reach, the test hangs here and the test
-   * below never fails. */
-  while (atomic_load(&g_slow_started) < slow_started) {
-    struct timespec ts = {.tv_sec = 0, .tv_nsec = 1000000};
-    nanosleep(&ts, NULL);
+   * below never fails. The wait also has a bound of about 10 s, so a request
+   * that never reaches the server fails the test instead of hanging it. */
+  bool all_slow_in_flight = false;
+  for (int i = 0; i < 10000 && !all_slow_in_flight; i++) {
+    all_slow_in_flight = atomic_load(&g_slow_started) >= slow_started;
+    if (!all_slow_in_flight) usleep(1000);
   }
 
   /* Starts the probe thread. Since both pool slots are in use,
@@ -3972,6 +4014,8 @@ TEST(pool, do_returns_not_permitted_when_destroying) {
    * calls chttpclient_destroy on a `cli` variable that is gone. That is a
    * real stack-use-after-return, not only a lost test result. */
   if (probe_started) pthread_join(probe_tid, NULL);
+  /* The held requests end only now, after the probe has returned. */
+  held_release();
   for (int i = 0; i < slow_started; i++) pthread_join(slow_tids[i], NULL);
   if (destroy_started) pthread_join(destroy_tid, NULL);
   /* do_destroy_thread frees cli when that thread ran. When it never started,
@@ -3980,6 +4024,7 @@ TEST(pool, do_returns_not_permitted_when_destroying) {
   if (!destroy_started) chttpclient_destroy(cli);
 
   REQUIRE_EQ(slow_started, 2);
+  REQUIRE_TRUE(all_slow_in_flight);
   REQUIRE_TRUE(probe_started);
   REQUIRE_TRUE(destroy_started);
   REQUIRE_EQ(probe.result_rv, ccol_not_permitted);
@@ -7934,20 +7979,24 @@ TEST(async_engine, destroy_waits_for_in_flight_async_request) {
 
   chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
   REQUIRE_NE((void *)req, NULL);
+  /* t0 is taken before the submit, so the measured time can only be longer
+   * than the time from the submit to the end of the destroy. The server
+   * cannot answer before its 100ms sleep ends, so a destroy that waits for
+   * the request ends at least 100ms after t0, however late this thread
+   * runs. */
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
   ctpool_future *f = chttpclient_do_async(cli, req);
   chttp_request_free(req);
   REQUIRE_NE((void *)f, NULL);
 
-  struct timespec t0, t1;
-  clock_gettime(CLOCK_MONOTONIC, &t0);
   chttpclient_destroy(cli); /* blocks until the /slow request finishes */
   clock_gettime(CLOCK_MONOTONIC, &t1);
 
   long elapsed_ms =
       (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
   /* This bound is far below the 100ms sleep of /slow, so a destroy that
-   * returns almost at once, because it did not wait, fails here, even with
-   * the scheduling jitter of a busy CI machine. */
+   * returns almost at once, because it did not wait, fails here. */
   REQUIRE_GT(elapsed_ms, 50);
 
   /* This is a stronger check than "the caller can get it in the end": when
@@ -9215,20 +9264,38 @@ static void *carry_mp_poisoned_realloc(void *p, size_t sz) {
   return NULL;
 }
 
+/* Every block carries its requested size in a header in front of it, so that
+ * carry_mp_free() knows the size of a block on every system. The header is
+ * as large as the strictest alignment, so the block keeps the alignment of
+ * malloc(3). */
+#define CARRY_MP_HDR sizeof(max_align_t)
+static void *carry_mp_finish(char *base, size_t sz) {
+  if (!base) return NULL;
+  memcpy(base, &sz, sizeof(sz));
+  return base + CARRY_MP_HDR;
+}
+static size_t carry_mp_size(void *p) {
+  size_t sz;
+  memcpy(&sz, (char *)p - CARRY_MP_HDR, sizeof(sz));
+  return sz;
+}
 static void *carry_mp_malloc(size_t sz) {
-  void *p = malloc(sz);
+  if (sz > SIZE_MAX - CARRY_MP_HDR) return NULL;
+  void *p = carry_mp_finish(malloc(CARRY_MP_HDR + sz), sz);
   if (p) atomic_fetch_add(&g_carry_mp_live_blocks, 1);
   return p;
 }
 static void *carry_mp_calloc(size_t n, size_t sz) {
-  void *p = calloc(n, sz);
+  if (sz != 0 && n > (SIZE_MAX - CARRY_MP_HDR) / sz) return NULL;
+  void *p = carry_mp_finish(calloc(1, CARRY_MP_HDR + n * sz), n * sz);
   if (p) atomic_fetch_add(&g_carry_mp_live_blocks, 1);
   return p;
 }
 static void *carry_mp_realloc(void *p, size_t sz) {
-  void *q = realloc(p, sz);
-  if (q && !p) atomic_fetch_add(&g_carry_mp_live_blocks, 1);
-  return q;
+  if (!p) return carry_mp_malloc(sz);
+  if (sz > SIZE_MAX - CARRY_MP_HDR) return NULL;
+  return carry_mp_finish(realloc((char *)p - CARRY_MP_HDR, CARRY_MP_HDR + sz),
+                         sz);
 }
 static void carry_mp_free(void *p) {
   if (!p) return;
@@ -9238,7 +9305,7 @@ static void carry_mp_free(void *p) {
    * This code checks the size first, because most blocks here are smaller
    * than that, and a read past one is a heap-buffer-overflow, which
    * AddressSanitizer reports. */
-  if (malloc_usable_size(p) >= sizeof(g_carry_mp) &&
+  if (carry_mp_size(p) >= sizeof(g_carry_mp) &&
       memcmp(p, &g_carry_mp, sizeof(g_carry_mp)) == 0) {
     ccol_memmgmt_procs_t *copy = (ccol_memmgmt_procs_t *)p;
     copy->malloc = carry_mp_poisoned_malloc;
@@ -9254,7 +9321,7 @@ static void carry_mp_free(void *p) {
     pthread_mutex_unlock(&g_carry_mp_lock);
     atomic_store(&g_carry_mp_held_overflow, 1);
   }
-  free(p);
+  free((char *)p - CARRY_MP_HDR);
 }
 static ccol_memmgmt_procs_t g_carry_mp = {.malloc = carry_mp_malloc,
                                           .free = carry_mp_free,
@@ -9267,7 +9334,8 @@ static ccol_memmgmt_procs_t g_carry_mp = {.malloc = carry_mp_malloc,
 static size_t carry_mp_release_held(void) {
   pthread_mutex_lock(&g_carry_mp_lock);
   size_t n = g_carry_mp_held_count;
-  for (size_t i = 0; i < n; i++) free(g_carry_mp_held[i]);
+  for (size_t i = 0; i < n; i++)
+    free((char *)g_carry_mp_held[i] - CARRY_MP_HDR);
   g_carry_mp_held_count = 0;
   pthread_mutex_unlock(&g_carry_mp_lock);
   return n;
@@ -12229,10 +12297,28 @@ TEST(chttpcli_handle_lifecycle, concurrent_double_destroy_is_fatal) {
  * block until the call in flight completes, and that call must itself
  * complete and succeed without touching freed memory. A resolve step that
  * only checks the handle and gives the pointer back, with no pin, fails
- * exactly here. */
+ * exactly here.
+ *
+ * The occupant sends its request to /held, which answers only when this
+ * test releases it, so the call stays in flight for as long as the test
+ * needs and no timing margin decides the result. This test is non-vacuous:
+ * a destroy that does not wait for the call in flight returns while the
+ * occupant is still held, and destroy_returned_while_held is then true. */
+typedef struct {
+  chttpcli cli;
+  atomic_int returned;
+} destroy_observed_arg_t;
+
+static void *destroy_observed_thread(void *arg) {
+  destroy_observed_arg_t *a = (destroy_observed_arg_t *)arg;
+  chttpclient_destroy(a->cli);
+  atomic_store(&a->returned, 1);
+  return NULL;
+}
+
 TEST(chttpcli_handle_lifecycle, resolve_then_use_race_destroy_waits) {
-  char slow_url[128];
-  make_url(slow_url, sizeof(slow_url), "/slow");
+  char held_url[128];
+  make_url(held_url, sizeof(held_url), "/held");
 
   chttpcli_construct(cli);
   REQUIRE_EQ(chttpclient_set_pool_size(cli, 1), ccol_success);
@@ -12240,36 +12326,66 @@ TEST(chttpcli_handle_lifecycle, resolve_then_use_race_destroy_waits) {
   atomic_store(&g_slow_started, 0);
   concurrent_req_arg_t occupant = {
       .cli = cli, .result_status = 0, .result_rv = ccol_unexpected_failure};
-  memcpy(occupant.url, slow_url, sizeof(slow_url));
+  memcpy(occupant.url, held_url, sizeof(held_url));
   pthread_t occupant_thread;
-  REQUIRE_EQ(
-      pthread_create(&occupant_thread, NULL, concurrent_req_thread, &occupant),
-      0);
+  bool occupant_started =
+      (pthread_create(&occupant_thread, NULL, concurrent_req_thread,
+                      &occupant) == 0);
 
-  /* This waits until the occupant is confirmed to be in flight (the server
-   * has started to handle /slow by then), and only then fires the destroy,
-   * so that the request in flight and the destroy call below overlap as
-   * much as possible. */
-  while (atomic_load(&g_slow_started) < 1) {
-    struct timespec ts = {.tv_sec = 0, .tv_nsec = 1000000}; /* 1 ms */
-    nanosleep(&ts, NULL);
+  /* This waits until the server holds the request of the occupant. The
+   * occupant then holds its pin and its pool slot until the release below.
+   * The wait has a bound of about 10 s, so a request that never reaches the
+   * server fails the test instead of hanging it. */
+  bool occupant_held = false;
+  for (int i = 0; occupant_started && i < 10000 && !occupant_held; i++) {
+    occupant_held = atomic_load(&g_slow_started) >= 1;
+    if (!occupant_held) usleep(1000);
+  }
+  size_t pins_while_held = _chttpcli_pin_count_for_tests(cli);
+
+  destroy_observed_arg_t d = {.cli = cli};
+  atomic_store(&d.returned, 0);
+  pthread_t destroy_tid;
+  bool destroy_started = false;
+  bool destroy_returned_while_held = false;
+  if (occupant_held) {
+    destroy_started =
+        (pthread_create(&destroy_tid, NULL, destroy_observed_thread, &d) == 0);
+  }
+  if (destroy_started) {
+    /* The handle stops resolving the moment the destroy retires it, so a
+     * setter that fails shows that the destroy has started and now waits
+     * for the call in flight. The setter writes the pool size that the
+     * client already has. */
+    for (int i = 0; i < 10000; i++) {
+      if (chttpclient_set_pool_size(cli, 1) != ccol_success) break;
+      usleep(1000);
+    }
+    /* A destroy that does not wait returns at once after the retire. This
+     * gives it up to 200 ms to do so; a correct destroy never returns while
+     * the occupant is held, however long this loop runs. */
+    for (int i = 0; i < 200 && !destroy_returned_while_held; i++) {
+      destroy_returned_while_held = atomic_load(&d.returned) != 0;
+      if (!destroy_returned_while_held) usleep(1000);
+    }
   }
 
-  struct timespec t0, t1;
-  clock_gettime(CLOCK_MONOTONIC, &t0);
-  chttpclient_destroy(cli); /* this must block until the chttpclient_do call
-                                of the occupant above completes in full */
-  clock_gettime(CLOCK_MONOTONIC, &t1);
-  long elapsed_ms =
-      (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
+  /* The release and every join run before any REQUIRE_* below, because the
+   * occupant and the destroy thread both use this stack frame. */
+  held_release();
+  if (destroy_started) pthread_join(destroy_tid, NULL);
+  if (occupant_started) pthread_join(occupant_thread, NULL);
+  /* destroy_observed_thread frees cli when that thread ran. When it never
+   * started, this function still owns the handle and must free it. */
+  if (!destroy_started) chttpclient_destroy(cli);
 
-  pthread_join(occupant_thread, NULL);
+  REQUIRE_TRUE(occupant_started);
+  REQUIRE_TRUE(occupant_held);
+  REQUIRE_EQ(pins_while_held, (size_t)1);
+  REQUIRE_TRUE(destroy_started);
+  REQUIRE_FALSE(destroy_returned_while_held);
   REQUIRE_EQ(occupant.result_rv, ccol_success);
   REQUIRE_EQ(occupant.result_status, 200);
-  /* /slow sleeps about 100ms on the server, so a destroy that returns well
-   * below that did NOT wait for the call in flight, which means the
-   * resolve-then-use protection failed to pin it. */
-  REQUIRE_GT(elapsed_ms, 50);
 }
 
 /* Resolve and unpin must stay exactly balanced. An unpin that is skipped,
@@ -12705,13 +12821,24 @@ static void _tls_send_response(SSL *ssl, int status, const char *status_text,
  * does nothing on a connection that negotiated TLS 1.2, where the message
  * does not exist.
  */
+#if defined(LIBRESSL_VERSION_NUMBER)
+/* LibreSSL receives a KeyUpdate but has no call that sends one. */
+#define TLS_TEST_CAN_POKE 0
+#else
+#define TLS_TEST_CAN_POKE 1
+#endif
+
 static void _tls_poke_key_update(SSL *ssl) {
+#if TLS_TEST_CAN_POKE
   if (SSL_version(ssl) != TLS1_3_VERSION) return;
   if (SSL_key_update(ssl, SSL_KEY_UPDATE_NOT_REQUESTED) != 1) return;
   /* The call above queues the message, and SSL_do_handshake is what flushes
    * it now; without it, the flush waits for the next application write,
    * which may never come. */
   SSL_do_handshake(ssl);
+#else
+  (void)ssl;
+#endif
 }
 
 /*
@@ -12946,6 +13073,13 @@ static void *_tls_accept_loop(void *arg) {
       if (!atomic_load(&g_tls_srv_running)) break;
       continue;
     }
+    /* The wake connection of a stop is never served. On OpenBSD the stop
+     * runs in an exit handler while the dynamic loader holds a lock that
+     * pthread_create() needs, so serving it would block this thread there. */
+    if (!atomic_load(&g_tls_srv_running)) {
+      close(fd);
+      break;
+    }
     pthread_t tid;
     if (pthread_create(&tid, NULL, _tls_conn_thread, (void *)(intptr_t)fd) !=
         0) {
@@ -12993,7 +13127,7 @@ static int _start_tls_server(void) {
 static void _stop_tls_server(void) {
   if (g_tls_srv_fd < 0) return;
   atomic_store(&g_tls_srv_running, 0);
-  shutdown(g_tls_srv_fd, SHUT_RDWR);
+  test_wake_listener(g_tls_srv_fd);
   close(g_tls_srv_fd);
   g_tls_srv_fd = -1;
   pthread_join(g_tls_accept_tid, NULL);
@@ -13600,6 +13734,11 @@ TEST(tls_io_direction, async_write_wanting_read_registers_read_interest) {
             "SKIP: no self-signed cert available in this environment\n");
     return;
   }
+  if (!TLS_TEST_CAN_POKE) {
+    fprintf(stderr,
+            "SKIP: the TLS library of this build cannot send a KeyUpdate\n");
+    return;
+  }
 
   chttpcli_construct(cli);
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
@@ -14169,6 +14308,7 @@ TEST(async_engine, reaper_spawn_failure_on_a_reactor_thread_does_not_abort) {
 }
 
 extern clog _chttpclient_engine_logger_for_tests(void);
+extern void _chttpclient_clear_engine_user_logger_for_tests(void);
 
 /* The grandchild side of engine_logger_of_an_inherited_engine_is_closed. It
  * reports on report_fd, and it never returns. */
@@ -14193,8 +14333,10 @@ static void _inherited_logger_grandchild(clog inherited, int report_fd) {
  * left, with the fallback logger of that engine run. The engine that the
  * child builds opens a logger of its own, and the child closes the one that
  * it inherited, which nothing else would ever close there. The engine
- * logger of the application stays across the fork; this test runs before
- * any test of this file installs one. This test is non-vacuous: without the
+ * logger of the application stays across the fork, so the child removes
+ * one that an earlier test installed (the order in which the tests run
+ * depends on the compiler, because each test registers itself from a
+ * constructor). This test is non-vacuous: without the
  * close in the forget of an inherited engine, the new engine of the child
  * keeps logging through the inherited handle, and the grandchild reports
  * 'S' and then 'L'.
@@ -14218,6 +14360,7 @@ TEST(async_engine, engine_logger_of_an_inherited_engine_is_closed) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
+    _chttpclient_clear_engine_user_logger_for_tests();
     (void)chttpcli_set_engine_num_reactor_threads(4);
     chttpcli cli = ccol_create_chttpclient(NULL);
     clog inherited = CLOG_INVALID;
@@ -14659,12 +14802,11 @@ static ccol_retval_t run_in_tier(int tier, chttpcli cli,
  * Authorization or a Cookie header. */
 /* Wakes a thread that is blocked in accept(2) on the listening socket lfd.
  * Linux and FreeBSD wake it on shutdown(2). macOS refuses shutdown(2) on a
- * listening socket with ENOTCONN and leaves the thread blocked, so a
- * connection to the listener wakes it there. Each accept loop that a stop
- * wakes in this way checks its running flag right after accept(2) returns,
- * so the wake connection is never served. */
+ * listening socket with ENOTCONN, and OpenBSD wakes it on neither
+ * shutdown(2) nor close(2), so a connection to the listener wakes it there.
+ * Each accept loop that a stop wakes in this way checks its running flag right
+ * after accept(2) returns, so the wake connection is never served. */
 static void test_wake_listener(int lfd) {
-  (void)shutdown(lfd, SHUT_RDWR);
   struct sockaddr_storage ss;
   socklen_t len = sizeof(ss);
   if (getsockname(lfd, (struct sockaddr *)&ss, &len) != 0) return;
@@ -14676,10 +14818,14 @@ static void test_wake_listener(int lfd) {
     struct sockaddr_in6 *a = (struct sockaddr_in6 *)&ss;
     if (IN6_IS_ADDR_UNSPECIFIED(&a->sin6_addr)) a->sin6_addr = in6addr_loopback;
   }
+  /* The connection comes before the shutdown(2): OpenBSD refuses a
+   * connection to a Unix listener that is shut down. */
   int c = socket(ss.ss_family, SOCK_STREAM, 0);
-  if (c < 0) return;
-  (void)connect(c, (struct sockaddr *)&ss, len);
-  close(c);
+  if (c >= 0) {
+    (void)connect(c, (struct sockaddr *)&ss, len);
+    close(c);
+  }
+  (void)shutdown(lfd, SHUT_RDWR);
 }
 
 typedef struct {
@@ -14816,8 +14962,11 @@ extern void _chttp_set_addr_override_for_tests(
 extern void _chttp_set_silent_addr_for_tests(const struct sockaddr *addr,
                                              socklen_t len);
 
-/* A socket bound to 127.0.0.1 that never listens. A connect to its port is
- * refused, and the port stays taken for as long as the socket lives. */
+/* A socket bound to 127.0.0.1 whose port refuses a connect, and stays taken
+ * for as long as the socket lives. Linux and FreeBSD refuse a connect to a
+ * port that a socket has bound and does not listen on. OpenBSD drops it
+ * without an answer, and refuses a connect to a socket that listened and then
+ * shut down, where FreeBSD accepts it. */
 static int refused_port_socket(struct sockaddr_in *out) {
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
@@ -14830,6 +14979,12 @@ static int refused_port_socket(struct sockaddr_in *out) {
     close(fd);
     return -1;
   }
+#if defined(__OpenBSD__)
+  if (listen(fd, 1) != 0 || shutdown(fd, SHUT_RDWR) != 0) {
+    close(fd);
+    return -1;
+  }
+#endif
   return fd;
 }
 
@@ -18072,11 +18227,11 @@ TEST(deadline, remaining_milliseconds_round_up) {
 /* Runs one GET of /slow, which the server answers after about 100 ms, with
  * the given timeouts, through Tier 1 or Tier 2. It returns the result and
  * the HTTP status, and stores the elapsed time in *elapsed_ms. */
-static ccol_retval_t huge_timeout_get(uint64_t connect_us, uint64_t request_us,
-                                      bool async, int *status,
-                                      long *elapsed_ms) {
+static ccol_retval_t huge_timeout_get(const char *path, uint64_t connect_us,
+                                      uint64_t request_us, bool async,
+                                      int *status, long *elapsed_ms) {
   char url[160];
-  make_url(url, sizeof(url), "/slow");
+  make_url(url, sizeof(url), path);
   *status = -1;
   *elapsed_ms = -1;
   chttpcli cli = ccol_create_chttpclient(NULL);
@@ -18128,8 +18283,9 @@ TEST(client_construction, zero_and_huge_timeouts_wait_for_the_answer) {
   long elapsed[2][N];
   for (int tier = 0; tier < 2; tier++)
     for (int k = 0; k < N; k++)
-      rv[tier][k] = huge_timeout_get(timeouts[k], timeouts[k], tier == 1,
-                                     &status[tier][k], &elapsed[tier][k]);
+      rv[tier][k] =
+          huge_timeout_get("/slow", timeouts[k], timeouts[k], tier == 1,
+                           &status[tier][k], &elapsed[tier][k]);
   for (int tier = 0; tier < 2; tier++)
     for (int k = 0; k < N; k++) {
       REQUIRE_EQ(rv[tier][k], ccol_success);
@@ -18140,13 +18296,21 @@ TEST(client_construction, zero_and_huge_timeouts_wait_for_the_answer) {
 }
 
 /* A small request timeout is measured in microseconds: 20000 us against
- * /slow, which answers after about 100 ms, times out. This test is
- * non-vacuous: a client that reads the value as milliseconds waits 20 s,
- * and the request succeeds. */
+ * /held, which answers only after the release below, times out. This test
+ * is non-vacuous: a client that reads the value as milliseconds waits 20 s,
+ * the hold of /held ends after about 15 s, and the request succeeds. */
 TEST(client_construction, a_small_request_timeout_times_out_in_microseconds) {
   int status = 0;
   long elapsed = 0;
-  ccol_retval_t rv = huge_timeout_get(0, 20000, false, &status, &elapsed);
+  atomic_store(&g_slow_started, 0);
+  ccol_retval_t rv =
+      huge_timeout_get("/held", 0, 20000, false, &status, &elapsed);
+  /* The release must come after the server has started the hold, or the
+   * hold ends only at its own bound. The wait for that has a bound of
+   * about 5 s. */
+  for (int i = 0; i < 5000 && atomic_load(&g_slow_started) < 1; i++)
+    usleep(1000);
+  held_release();
   REQUIRE_EQ(rv, ccol_timed_out);
   REQUIRE_LT(elapsed, 5000L);
 }
@@ -18372,6 +18536,18 @@ static ccol_retval_t scripted_do(chttpcli cli, const chttp_request_t *req,
   return rv;
 }
 
+/* Gives ssl a new write BIO and keeps its read BIO, taking the reference
+ * that the caller hands over. OpenSSL counts that the old write BIO is also
+ * the read BIO; LibreSSL frees the old write BIO whatever it is, so there the
+ * read BIO needs a reference of its own first. */
+static void tls_replace_wbio(SSL *ssl, BIO *wbio) {
+  BIO *rbio = SSL_get_rbio(ssl);
+#if defined(LIBRESSL_VERSION_NUMBER)
+  if (rbio == SSL_get_wbio(ssl)) BIO_up_ref(rbio);
+#endif
+  SSL_set_bio(ssl, rbio, wbio);
+}
+
 /* ---- A TLS peer that sends part of a record and stops reading ---------- */
 
 /* The peer completes the handshake, reads the start of the request, and
@@ -18391,10 +18567,10 @@ static void scripted_tls_partial_record(scripted_peer *sp, int fd, int index) {
     (void)SSL_read(ssl, b, sizeof(b));
     BIO *mem = BIO_new(BIO_s_mem());
     if (mem) {
-      /* The SSL takes one reference with set0; this function keeps the
-       * other, so that the record can be read after the write. */
+      /* The SSL takes one reference for its new write BIO; this function
+       * keeps the other, so that the record can be read after the write. */
       BIO_up_ref(mem);
-      SSL_set0_wbio(ssl, mem);
+      tls_replace_wbio(ssl, mem);
       const char *resp = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
       (void)SSL_write(ssl, resp, (int)strlen(resp));
       char *rec = NULL;
@@ -18485,7 +18661,7 @@ static void scripted_tls_partial_record_reading(scripted_peer *sp, int fd,
   BIO *mem = NULL;
   if (SSL_accept(ssl) == 1 && (mem = BIO_new(BIO_s_mem())) != NULL) {
     BIO_up_ref(mem);
-    SSL_set0_wbio(ssl, mem);
+    tls_replace_wbio(ssl, mem);
     const char *resp = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
     (void)SSL_write(ssl, resp, (int)strlen(resp));
     char *rec = NULL;

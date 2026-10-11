@@ -93,7 +93,12 @@ if [ "$os" = Darwin ]; then
 	otool -L "$tmp/hello_shared" | grep -q "$libdir/libccollections\.[0-9]*\.dylib" ||
 		fail "the example does not record $libdir/libccollections.N.dylib"
 else
-	ldd "$tmp/hello_shared" | grep -q "libccollections[^ ]* => $libdir/" ||
+	# Linux and FreeBSD print "name => path", OpenBSD a table whose last
+	# column is the path; the path of the library is in both. The output is
+	# taken whole first: OpenBSD's ldd runs the program, which a grep that
+	# stops at the first match would end with SIGPIPE.
+	loaded=$(ldd "$tmp/hello_shared")
+	printf '%s\n' "$loaded" | grep -q "$libdir/libccollections" ||
 		fail "the example does not load the library from $libdir"
 fi
 

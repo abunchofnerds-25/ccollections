@@ -6,7 +6,14 @@
 #include <common.h>
 #include <dirent.h>
 #include <errno.h>
+/* musl has no backtrace(); the diagnostic and the probes below then capture
+ * no frames. */
+#if __has_include(<execinfo.h>)
 #include <execinfo.h>
+#define TEST_HAS_EXECINFO 1
+#else
+#define TEST_HAS_EXECINFO 0
+#endif
 #include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
@@ -21,7 +28,7 @@
 #include <unistd.h>
 #if defined(__linux__)
 #include <sys/prctl.h>
-#elif defined(__FreeBSD__)
+#elif defined(__FreeBSD__) || defined(__OpenBSD__)
 #include <pthread_np.h>
 #endif
 
@@ -32,6 +39,8 @@ static int _test_os_tid(void) {
   return (int)syscall(SYS_gettid);
 #elif defined(__FreeBSD__)
   return pthread_getthreadid_np();
+#elif defined(__OpenBSD__)
+  return getthrid();
 #elif defined(__APPLE__)
   uint64_t tid = 0;
   pthread_threadid_np(NULL, &tid);
@@ -44,6 +53,9 @@ static int _test_os_tid(void) {
 static void _test_get_thread_name(char buf[17]) {
 #if defined(__linux__)
   prctl(PR_GET_NAME, buf);
+#elif defined(__OpenBSD__)
+  pthread_get_name_np(pthread_self(), buf, 17);
+  if (buf[0] == '\0') snprintf(buf, 17, "%.15s", getprogname());
 #else
   /* An unnamed thread reads as the program name here, as on Linux and as
    * the library reports it. */
@@ -58,6 +70,8 @@ static void _test_set_thread_name(const char *name) {
   prctl(PR_SET_NAME, name);
 #elif defined(__APPLE__)
   pthread_setname_np(name);
+#elif defined(__OpenBSD__)
+  pthread_set_name_np(pthread_self(), name);
 #else
   pthread_setname_np(pthread_self(), name);
 #endif
@@ -93,10 +107,27 @@ TAU_MAIN()
  * tests probe this capability directly and skip by returning early, which Tau
  * records as a pass. That is better than a failure that comes from a platform
  * limit instead of from the logic of clog. */
+/* The first statement of a test of a backtrace capture that succeeds: a
+ * build of the library without backtrace(3), such as on musl, writes the
+ * "backtrace unavailable" marker instead, which other tests cover. */
+#define BT_SKIP_WITHOUT_SUPPORT()                            \
+  do {                                                       \
+    if (!clog_test_backtrace_supported()) {                  \
+      fprintf(stderr,                                        \
+              "SKIP: this build of the library captures no " \
+              "backtrace\n");                                \
+      return;                                                \
+    }                                                        \
+  } while (0)
+
 static bool backtrace_capture_genuinely_available(void) {
+#if TEST_HAS_EXECINFO
   void *frames[8];
   int depth = backtrace(frames, 8);
   return depth > 2;
+#else
+  return false;
+#endif
 }
 
 /* Flush an fd-based logger, close the write-end of a pipe, read all output. */
@@ -1505,6 +1536,7 @@ TEST(oversized,
  * because it is oversized. See the logfmt test above. */
 TEST(oversized,
      syslog_message_over_buf_cap_with_backtrace_still_writes_backtrace_lines) {
+  BT_SKIP_WITHOUT_SUPPORT();
   int pipefd[2];
   REQUIRE_EQ(pipe(pipefd), 0);
   clog lg = clog_open_fd(pipefd[1], CLOG_ERROR, NULL);
@@ -3419,6 +3451,7 @@ TEST(json, invalid_utf8_in_field_value_is_also_sanitized) {
 }
 
 TEST(json, error_has_inline_bt_array) {
+  BT_SKIP_WITHOUT_SUPPORT();
   char dir[256];
   REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
@@ -3456,6 +3489,7 @@ TEST(json, error_has_inline_bt_array) {
  * which the logfmt and syslog tests also use for the same boundary condition
  * in those two formats. */
 TEST(json, error_with_shallow_backtrace_capture_still_yields_empty_bt_array) {
+  BT_SKIP_WITHOUT_SUPPORT();
   char dir[256];
   REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
@@ -3660,6 +3694,7 @@ TEST(json, error_and_alert_level_strings_in_json) {
 }
 
 TEST(json, alert_has_inline_bt_array) {
+  BT_SKIP_WITHOUT_SUPPORT();
   char dir[256];
   REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
@@ -7623,6 +7658,7 @@ TEST(robustness,
  * shallow call stack, which never happens on this platform.
  */
 TEST(robustness, logfmt_shallow_backtrace_capture_emits_no_marker) {
+  BT_SKIP_WITHOUT_SUPPORT();
   char dir[256];
   REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
   char path[512];
@@ -7655,6 +7691,7 @@ TEST(robustness, logfmt_shallow_backtrace_capture_emits_no_marker) {
  * succeeds but is shallow must not put an extra "unavailable" marker record
  * on the wire either. */
 TEST(robustness, syslog_shallow_backtrace_capture_emits_no_marker_record) {
+  BT_SKIP_WITHOUT_SUPPORT();
   int pipefd[2];
   REQUIRE_EQ(pipe(pipefd), 0);
 
@@ -8086,10 +8123,10 @@ TEST(compression, concurrent_rotations_never_corrupt_or_lose_a_gz_file) {
  * DESTINATION file, the ".gz" file that a concurrent rotation is in the
  * middle of writing, and not the uncompressed SOURCE alone, which that
  * rotation reads from. This test uses two synchronization hooks that only a
- * RUNNING_UNIT_TESTS build offers,
- * clog_test_set_pending_compress_delay_us() and clog_test_gz_dest_opened(),
- * to force this exact narrow window every time, while the wider stress test
- * above depends on the luck of the real thread scheduler. */
+ * RUNNING_UNIT_TESTS build offers, clog_test_hold_compressions() and
+ * clog_test_gz_dest_opened(), to force this exact narrow window every time,
+ * while the wider stress test above depends on the luck of the real thread
+ * scheduler. */
 static void *_gzrace_first_rotation_writer(void *arg) {
   clog lg = *(clog *)arg;
   clog_info(lg, "first rotation content");
@@ -8115,32 +8152,32 @@ TEST(compression,
   clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
   REQUIRE_NE(lg, CLOG_INVALID);
 
-  /* Arm a long, deterministic delay, so that the compress step of the first
-   * rotation pauses directly after it creates its .gz destination on the
-   * disk, before it writes any content to that file. */
-  clog_test_set_pending_compress_delay_us(500000); /* 500ms */
+  /* Hold every compression directly after it creates its .gz destination on
+   * the disk, before it writes any content to that file. The gate is
+   * released on every path below, before the join and the close. */
+  clog_test_hold_compressions(true);
 
   pthread_t t;
-  REQUIRE_EQ(pthread_create(&t, NULL, _gzrace_first_rotation_writer, &lg), 0);
+  bool started =
+      (pthread_create(&t, NULL, _gzrace_first_rotation_writer, &lg) == 0);
 
-  /* Spin-wait until the .gz destination of the first rotation really exists
-   * on the disk, instead of a fixed sleep with a guess, so that the second
-   * rotation directly below always races a real file on the disk. */
-  while (!clog_test_gz_dest_opened()) usleep(1000);
-
-  /* Disarm the delay, so that the compress step of the second rotation,
-   * which the line below triggers, does not also pause. The in-flight
-   * compress of the first rotation already took its own local copy of the
-   * 500ms delay, so this disarm does not touch it. */
-  clog_test_set_pending_compress_delay_us(0);
+  /* Wait, with a bound, until the .gz destination of the first rotation
+   * really exists on the disk, so that the second rotation below always
+   * races a real file on the disk. */
+  bool opened = false;
+  for (int i = 0; started && i < 30000 && !opened; i++) {
+    opened = clog_test_gz_dest_opened();
+    if (!opened) usleep(1000);
+  }
 
   /* The prune pass of this rotation runs while the compress of the first
-   * rotation is in flight, and its set of candidates on the disk holds three
+   * rotation is held, and its set of candidates on the disk holds three
    * files: the uncompressed source of the first rotation, the .gz
    * destination of that same rotation, which is in progress, and the file
-   * that this rotation has just rotated and not yet compressed. */
-  clog_info(lg, "second rotation content");
-  /* The prune pass of the second rotation is over while the compression of
+   * that this rotation has just rotated and not yet compressed. The
+   * compression of this rotation waits behind the held one.
+   *
+   * The prune pass of the second rotation is over while the compression of
    * the first one stays held, so both of its files must be on disk: the
    * temporary output that becomes the .gz file, and the source that it
    * reads. A prune that races can delete them while the compression is in
@@ -8149,13 +8186,20 @@ TEST(compression,
    * is open removes only its directory entry, and the writer keeps appending
    * to an inode that no longer has a name. No .gz file exists before the
    * output is complete. */
-  int gz_during = count_files_with_suffix(dir, ".gz");
-  int tmp_during = count_files_with_suffix(dir, ".gz.tmp");
-  int rotated_during = count_files_with_prefix(dir, "app.log.");
+  int gz_during = -1, tmp_during = -1, rotated_during = -1;
+  if (opened) {
+    clog_info(lg, "second rotation content");
+    gz_during = count_files_with_suffix(dir, ".gz");
+    tmp_during = count_files_with_suffix(dir, ".gz.tmp");
+    rotated_during = count_files_with_prefix(dir, "app.log.");
+  }
 
-  pthread_join(t, NULL);
+  clog_test_hold_compressions(false);
+  if (started) pthread_join(t, NULL);
   clog_close(lg);
 
+  REQUIRE_TRUE(started);
+  REQUIRE_TRUE(opened);
   REQUIRE_EQ(gz_during, 0);
   REQUIRE_EQ(tmp_during, 1);
   REQUIRE_EQ(rotated_during, 3);
@@ -8221,27 +8265,28 @@ TEST(compression,
     REQUIRE_NE(lg, CLOG_INVALID);
   }
 
-  clog_test_set_pending_compress_delay_us(500000); /* 500ms */
+  /* See the absolute-path version of this race above. */
+  clog_test_hold_compressions(true);
 
   pthread_t t;
   int prv = pthread_create(&t, NULL, _gzrace_first_rotation_writer, &lg);
-  if (prv != 0) {
-    clog_test_set_pending_compress_delay_us(0);
-    clog_close(lg);
-    if (chdir(oldcwd) != 0) perror("chdir back to the original directory");
-    REQUIRE_EQ(prv, 0);
+
+  bool opened = false;
+  for (int i = 0; prv == 0 && i < 30000 && !opened; i++) {
+    opened = clog_test_gz_dest_opened();
+    if (!opened) usleep(1000);
   }
 
-  while (!clog_test_gz_dest_opened()) usleep(1000);
-  clog_test_set_pending_compress_delay_us(0);
+  int gz_during = -1, tmp_during = -1, rotated_during = -1;
+  if (opened) {
+    clog_info(lg, "second rotation content");
+    gz_during = count_files_with_suffix(dir, ".gz");
+    tmp_during = count_files_with_suffix(dir, ".gz.tmp");
+    rotated_during = count_files_with_prefix(dir, "app.log.");
+  }
 
-  clog_info(lg, "second rotation content");
-  /* See the absolute-path version of this race above. */
-  int gz_during = count_files_with_suffix(dir, ".gz");
-  int tmp_during = count_files_with_suffix(dir, ".gz.tmp");
-  int rotated_during = count_files_with_prefix(dir, "app.log.");
-
-  pthread_join(t, NULL);
+  clog_test_hold_compressions(false);
+  if (prv == 0) pthread_join(t, NULL);
   clog_close(lg);
 
   /* Every file operation that this test needs is done, so restore the cwd of
@@ -8253,6 +8298,8 @@ TEST(compression,
 
   /* This is exactly the rule of the absolute-path version of this race
    * above. */
+  REQUIRE_EQ(prv, 0);
+  REQUIRE_TRUE(opened);
   REQUIRE_EQ(gz_during, 0);
   REQUIRE_EQ(tmp_during, 1);
   REQUIRE_EQ(rotated_during, 3);
@@ -8484,6 +8531,7 @@ TEST(json, fatal_level_string_in_json) {
 }
 
 TEST(json, fatal_has_inline_bt_array) {
+  BT_SKIP_WITHOUT_SUPPORT();
   TEST_SKIP_FORK_IF_UNSUPPORTED();
   char dir[256];
   REQUIRE_EQ(make_tmpdir(dir, sizeof(dir)), 0);
@@ -11379,7 +11427,9 @@ static bool _write_file_with_mtime(const char *path, const char *text,
   return ok && utimensat(AT_FDCWD, path, ts, 0) == 0;
 }
 
-#if defined(__linux__)
+/* glibc and musl declare statx in <sys/stat.h>, and musl then refuses the
+ * kernel header beside it; an older C library needs the kernel header. */
+#if defined(__linux__) && !defined(STATX_BTIME)
 #include <linux/stat.h>
 #endif
 
@@ -12032,7 +12082,7 @@ static void inspect_exit_compress_dir(const char *dir,
   struct dirent *e;
   while ((e = readdir(d)) != NULL) {
     if (strncmp(e->d_name, "app.log.", 8) != 0) continue;
-    char p[512];
+    char p[256 + sizeof(e->d_name)];
     snprintf(p, sizeof(p), "%s/%s", dir, e->d_name);
     size_t nlen = strlen(e->d_name);
     char content[4096];
@@ -12850,7 +12900,7 @@ TEST(rotation, every_generation_keeps_the_mode_of_the_log) {
   struct dirent *e;
   while (d && (e = readdir(d)) != NULL) {
     if (strncmp(e->d_name, "app.log", 7) != 0) continue;
-    char p[512];
+    char p[256 + sizeof(e->d_name)];
     snprintf(p, sizeof(p), "%s/%s", dir, e->d_name);
     struct stat st;
     if (stat(p, &st) != 0) continue;
@@ -13168,7 +13218,21 @@ static clog g_after_drain_logger = CLOG_INVALID;
 static bool g_after_drain_close;
 
 /* The destructors of a program run after every exit handler, and so after
- * the exit drain of the library. */
+ * the exit drain of the library. OpenBSD runs no destructor of a program that
+ * links libpthread, so there no record can be logged from one, and the two
+ * tests below skip. */
+#if defined(__OpenBSD__)
+#define EXIT_TEST_PROGRAM_DESTRUCTORS_RUN 0
+#else
+#define EXIT_TEST_PROGRAM_DESTRUCTORS_RUN 1
+#endif
+#define EXIT_TEST_SKIP_WITHOUT_PROGRAM_DESTRUCTORS()                     \
+  do {                                                                   \
+    if (!EXIT_TEST_PROGRAM_DESTRUCTORS_RUN) {                            \
+      fprintf(stderr, "SKIP: this system runs no program destructor\n"); \
+      return;                                                            \
+    }                                                                    \
+  } while (0)
 __attribute__((destructor)) static void _log_after_the_exit_drain(void) {
   if (g_after_drain_logger == CLOG_INVALID) return;
   clog_info(g_after_drain_logger, "AFTERDRAINRECORD");
@@ -13222,6 +13286,7 @@ static bool run_log_after_drain_child(size_t qsize, bool close_after) {
  */
 TEST(exit_drain, a_record_logged_after_the_drain_is_written) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
+  EXIT_TEST_SKIP_WITHOUT_PROGRAM_DESTRUCTORS();
   bool unbounded = run_log_after_drain_child(0, false);
   bool bounded = run_log_after_drain_child(16, false);
   REQUIRE_TRUE(unbounded);
@@ -13238,6 +13303,7 @@ TEST(exit_drain, a_record_logged_after_the_drain_is_written) {
  */
 TEST(exit_drain, a_close_after_the_drain_ends) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
+  EXIT_TEST_SKIP_WITHOUT_PROGRAM_DESTRUCTORS();
   bool unbounded = run_log_after_drain_child(0, true);
   bool bounded = run_log_after_drain_child(16, true);
   REQUIRE_TRUE(unbounded);
@@ -13912,11 +13978,11 @@ TEST(rotation_foreign, a_live_path_that_is_a_link_is_moved_aside_once) {
   mode_t live_kind = rh_entry_kind(path);
   /* The link sits at a rotated name of its own from here on. */
   int links = 0;
-  char link_gz[600] = {0};
+  char link_gz[256 + sizeof(((struct dirent *)0)->d_name) + 3] = {0};
   DIR *d = opendir(dir);
   struct dirent *e;
   while (d && (e = readdir(d)) != NULL) {
-    char p[512];
+    char p[256 + sizeof(e->d_name)];
     snprintf(p, sizeof(p), "%s/%s", dir, e->d_name);
     if (strncmp(e->d_name, "app.log.", 8) == 0 && rh_entry_kind(p) == S_IFLNK) {
       links++;

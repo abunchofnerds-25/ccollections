@@ -23,8 +23,9 @@ SOFTWARE.
 */
 
 /* Random bytes from the kernel, without blocking: getrandom(2) where the
- * system has it (Linux, FreeBSD), getentropy(3) on macOS, which serves at
- * most 256 bytes a call. It gives false when the bytes are not available,
+ * system has it (Linux, FreeBSD), getentropy(2) on macOS and
+ * OpenBSD, which serves at most 256 bytes a call and has no <sys/random.h>
+ * on OpenBSD. It gives false when the bytes are not available,
  * and the caller then falls back to a mix of its own. */
 
 #ifndef CCOL_INTERNAL_CRANDOM_H
@@ -34,14 +35,18 @@ SOFTWARE.
 #include <stdbool.h> /* C23 has bool, true and false as keywords */
 #endif
 #include <stddef.h>
-#include <sys/random.h>
 #include <sys/types.h>
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__OpenBSD__)
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <sys/random.h>
+#endif
+#else
+#include <sys/random.h>
 #endif
 
 static inline bool ccol_random_bytes(void *buf, size_t len) {
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__OpenBSD__)
   return len <= 256 && getentropy(buf, len) == 0;
 #else
   return getrandom(buf, len, GRND_NONBLOCK) == (ssize_t)len;

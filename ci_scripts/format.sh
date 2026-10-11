@@ -1,8 +1,7 @@
 #!/bin/sh
-# This script formats the C sources exactly as the editor configuration of this
-# project does: clang-format with the Google style and with sorted #include
-# blocks. The repository has no .clang-format file, so this script names the
-# style.
+# This script formats the C sources using clang-format with the Google style
+# and with sorted #include blocks. The repository has no .clang-format file,
+# so this script names the style.
 #
 # Usage, from the root of the repository:
 #   ci_scripts/format.sh                 format each C file in place

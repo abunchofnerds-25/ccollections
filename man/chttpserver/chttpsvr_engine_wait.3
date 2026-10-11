@@ -50,6 +50,13 @@ again.
 
 It is safe to call this function before the reactor has ever started;
 it then does nothing.
+
+On OpenBSD, do not call this function from an exit handler that a
+constructor registered with atexit(3).  OpenBSD runs such a handler
+after the dynamic loader has taken a lock that it keeps until the
+process ends, and the teardown of the reactor joins threads, which
+needs that lock, so the call never returns.  An exit handler that
+main() registers is not affected.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_engine_stop (3),

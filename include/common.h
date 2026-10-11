@@ -156,6 +156,23 @@ void _ccol_cloexec_gate_register(void);
 #pragma GCC visibility pop
 #endif
 
+/* The fork() of OpenBSD takes the lock of its list of fork handlers only
+ * while __isthreaded is set, and it clears that flag in the child before the
+ * child releases the lock, so the release does nothing there. Once that
+ * child starts a thread, its next fork() or pthread_atfork() waits for ever
+ * on the lock. fork() takes the lock only when a handler is registered, and
+ * the library registers handlers, so the library itself puts every program
+ * on that path. On OpenBSD a fork handler pair of the library therefore
+ * records the flag in the prepare step and restores it in the child, which
+ * makes the release in the child real. ccol_at_fork registers that pair
+ * first, one time. The function is internal and not exported. */
+#if defined(__OpenBSD__)
+#define _CCOL_FORK_THREADED_FIX 1
+#pragma GCC visibility push(hidden)
+void _ccol_fork_threaded_fix_register(void);
+#pragma GCC visibility pop
+#endif
+
 /** @brief Mutex type (wraps pthread_mutex_t) */
 #define ccol_mutex_t pthread_mutex_t
 
@@ -586,12 +603,22 @@ static inline int _ccol_semaphore_pipe_post(_ccol_semaphore_s *s) {
  * Where the close-on-exec gate exists, this registers the handlers of the
  * gate first, one time. Because the prepare handlers run in the reverse order
  * of their registration, the gate then waits after every other prepare
- * handler of the library, whichever of them registers first. */
+ * handler of the library, whichever of them registers first. On OpenBSD it
+ * also registers the pair that keeps the fork lock of libc usable in a child
+ * first, one time (see _CCOL_FORK_THREADED_FIX above). */
 #define _ccol_at_fork_raw(prepare, parent, child) \
   pthread_atfork((prepare), (parent), (child))
-#if defined(_CCOL_CLOEXEC_GATE)
+#if defined(_CCOL_CLOEXEC_GATE) && defined(_CCOL_FORK_THREADED_FIX)
+#define _ccol_at_fork_first() \
+  (_ccol_cloexec_gate_register(), _ccol_fork_threaded_fix_register())
+#elif defined(_CCOL_CLOEXEC_GATE)
+#define _ccol_at_fork_first() _ccol_cloexec_gate_register()
+#elif defined(_CCOL_FORK_THREADED_FIX)
+#define _ccol_at_fork_first() _ccol_fork_threaded_fix_register()
+#endif
+#if defined(_ccol_at_fork_first)
 #define ccol_at_fork(prepare, parent, child) \
-  (_ccol_cloexec_gate_register(), _ccol_at_fork_raw(prepare, parent, child))
+  (_ccol_at_fork_first(), _ccol_at_fork_raw(prepare, parent, child))
 #else
 #define ccol_at_fork(prepare, parent, child) \
   _ccol_at_fork_raw(prepare, parent, child)
@@ -602,10 +629,17 @@ static inline int _ccol_semaphore_pipe_post(_ccol_semaphore_s *s) {
  *
  * This is not portable, because only Apple and BSD have it. Only the
  * platform fallback branches in clogger.c use it, for a system that has no
- * thread name lookup through /proc.
+ * thread name lookup through /proc. OpenBSD names the call
+ * pthread_get_name_np(), declares it in <pthread_np.h> and gives no result,
+ * so there the wrapper reports success.
  */
+#if defined(__OpenBSD__)
+#define ccol_get_thread_name_np(thread, buf, len) \
+  (pthread_get_name_np((thread), (buf), (len)), 0)
+#else
 #define ccol_get_thread_name_np(thread, buf, len) \
   pthread_getname_np((thread), (buf), (len))
+#endif
 
 /**
  * @brief Rename the calling thread (wraps pthread_setname_np)
@@ -613,10 +647,14 @@ static inline int _ccol_semaphore_pipe_post(_ccol_semaphore_s *s) {
  * Linux renames a thread through prctl(PR_SET_NAME) instead, so only the
  * platform branches of ccol_set_thread_name() in clogger.c use this. macOS
  * can rename only the calling thread, and its pthread_setname_np takes the
- * name alone; FreeBSD takes the thread too.
+ * name alone; FreeBSD takes the thread too. OpenBSD has
+ * pthread_set_name_np() in <pthread_np.h>, which gives no result.
  */
 #if defined(__APPLE__)
 #define ccol_set_own_thread_name_np(name) pthread_setname_np((name))
+#elif defined(__OpenBSD__)
+#define ccol_set_own_thread_name_np(name) \
+  (pthread_set_name_np(pthread_self(), (name)), 0)
 #else
 #define ccol_set_own_thread_name_np(name) \
   pthread_setname_np(pthread_self(), (name))

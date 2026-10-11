@@ -72,7 +72,8 @@ through its own named constant.
 host follows the listener rules of the Go net package.  NULL or ""
 listens on every interface with one dual-stack socket on [::], which
 also accepts IPv4 clients through v4-mapped addresses, or on 0.0.0.0
-on a host without IPv6.  A literal address listens on exactly that
+on a host without IPv6 and on a system without dual-stack sockets,
+such as OpenBSD, where it therefore accepts no IPv6 client.  A literal address listens on exactly that
 address.  A host name listens on its first IPv4 address when it has
 one, and on its first IPv6 address otherwise, so "localhost" listens
 on 127.0.0.1.
@@ -232,7 +233,8 @@ process, bind the same host and port, so that the kernel load-balances
 the accepts.  ipv6_only sets IPV6_V6ONLY on an AF_INET6 listener, so
 that the listener does not also accept IPv4-mapped connections, and
 makes a host name listen on its IPv6 address when it has one.  With
-ipv6_only off, a NULL or "" host is always dual-stack, and an IPv6
+ipv6_only off, a NULL or "" host is dual-stack wherever the system
+allows it, and an IPv6
 address or name keeps the system default.  The server applies
 enable_keepalive and enable_reuseport on a best-effort basis: a
 setsockopt failure does not make chttpsvr_start fail.  None of the

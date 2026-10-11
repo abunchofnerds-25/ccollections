@@ -78,7 +78,7 @@ extern bool _chttpclient_engine_running_for_tests(void);
 extern void _chttpclient_engine_wait_stopped_unjoined_for_tests(void);
 extern bool _chttpclient_engine_unjoined_reaper_for_tests(pthread_t *out);
 extern void _chttpclient_hold_next_reaper_final_section_for_tests(int ms);
-extern bool _chttpclient_reaper_final_section_is_held_for_tests(void);
+extern bool _chttpclient_reaper_final_section_was_entered_for_tests(void);
 extern void _chttpclient_engine_wait_for_quiescence_for_tests(void);
 
 /* Exit codes of a child. */
@@ -149,6 +149,8 @@ static void _serve_connection(SSL_CTX *ctx, int fd) {
   SSL_free(ssl);
 }
 
+static void _teardown(void);
+
 static void _server_main(int lfd) {
   signal(SIGPIPE, SIG_IGN);
   signal(SIGCHLD, SIG_IGN);
@@ -213,13 +215,16 @@ static void _setup(void) {
   close(lfd);
   g_server_pid = p;
   g_parent_pid = getpid();
+  /* An exit handler runs on every system; OpenBSD runs no destructor of a
+   * program that links libpthread, and the server would outlive the test. */
+  atexit(_teardown);
   g_ready = true;
   g_setup_failed = false;
 }
 
-/* A child of a test also runs this destructor when it exits, but only the
+/* A child of a test also runs this exit handler when it exits, but only the
  * process that started the server stops it. */
-static void __attribute__((destructor)) _teardown(void) {
+static void _teardown(void) {
   if (getpid() != g_parent_pid) return;
   if (g_server_pid > 0) {
     kill(g_server_pid, SIGKILL);
@@ -535,9 +540,14 @@ static void _child_fork_during_reap(void) {
       code = CHILD_SCENARIO_FAILED;
       break;
     }
+    /* The flag stays set once the hold has started, so this poll sees the
+     * hold even when this thread wakes only after the hold has ended. The
+     * fork of such a round then comes after the teardown, which is a valid
+     * state too; the hold lasts long enough that most rounds fork inside
+     * it. */
     bool held = false;
     for (int i = 0; i < 10000 && !held; i++) {
-      held = _chttpclient_reaper_final_section_is_held_for_tests();
+      held = _chttpclient_reaper_final_section_was_entered_for_tests();
       if (!held) usleep(1000);
     }
     if (!held) {

@@ -55,7 +55,7 @@ SOFTWARE.
 #if defined(__linux__)
 #include <sys/prctl.h>
 #endif
-#if defined(__FreeBSD__)
+#if defined(__FreeBSD__) || defined(__OpenBSD__)
 #include <pthread_np.h>
 #endif
 #include <internal/crandom.h>
@@ -65,7 +65,8 @@ SOFTWARE.
 #include <unistd.h>
 #include <zlib.h>
 
-#if defined(__GLIBC__) || defined(__APPLE__) || defined(__FreeBSD__)
+#if defined(__GLIBC__) || defined(__APPLE__) || defined(__FreeBSD__) || \
+    defined(__OpenBSD__)
 #include <execinfo.h>
 #define CLOG_HAS_BACKTRACE 1
 #else
@@ -1964,10 +1965,11 @@ static void _sanitize_syslog_printusascii_field(const char *raw, char *out,
  * is the sentinel for "unavailable" in its own grammar.
  */
 static const char *_raw_progname(void) {
-#if defined(__GLIBC__)
+#if defined(__linux__)
+  /* glibc and musl both keep this name. */
   if (program_invocation_short_name && program_invocation_short_name[0])
     return program_invocation_short_name;
-#elif defined(__APPLE__) || defined(__FreeBSD__)
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__)
   const char *p = getprogname();
   if (p && p[0]) return p;
 #endif
@@ -1998,6 +2000,8 @@ static pid_t _get_tid(void) {
   return (pid_t)tid64;
 #elif defined(__FreeBSD__)
   return (pid_t)pthread_getthreadid_np();
+#elif defined(__OpenBSD__)
+  return getthrid();
 #else
   /* This platform has no portable way to get a real OS-level thread ID, so
    * the code falls back to the pthread handle itself. That handle is unique
@@ -2018,7 +2022,7 @@ static void _get_thread_name(char *buf, size_t bufsz) {
     snprintf(buf, bufsz, "%s", name);
     return;
   }
-#elif defined(__APPLE__) || defined(__FreeBSD__)
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__)
   if (ccol_get_thread_name_np(ccol_get_thread_id(), buf, bufsz) == 0 && buf[0])
     return;
   /* A thread that nobody named has an empty name here, while Linux gives it
@@ -2192,7 +2196,8 @@ static inline const clog_thread_ident_t *_clog_tident_get(void) {
 
 ccol_retval_t ccol_set_thread_name(const char *thread_name) {
   if (!thread_name || thread_name[0] == '\0') return ccol_invalid_args;
-#if defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)
+#if defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__) || \
+    defined(__OpenBSD__)
   /* Linux keeps at most 15 bytes of a thread name, and every platform keeps
    * the same 15, so a name reads back the same everywhere. */
   char name[CLOG_THREAD_NAME_MAX + 1];
@@ -2511,9 +2516,10 @@ static __attribute__((noinline, cold)) void _clog_consume_own_sigpipe(void) {
   sigset_t set;
   sigemptyset(&set);
   sigaddset(&set, SIGPIPE);
-#if defined(__APPLE__)
-  /* No sigtimedwait() here: sigwait() does not block for a signal that
-   * sigpending() reports, because the thread that raised it is this one. */
+#if defined(__APPLE__) || defined(__OpenBSD__)
+  /* macOS and OpenBSD have no sigtimedwait(). sigwait() does not block for
+   * a signal that sigpending() reports, because the thread that raised it is
+   * this one. */
   sigset_t pending;
   sigemptyset(&pending);
   int sig;
@@ -3419,6 +3425,8 @@ static _Atomic bool _clog_test_force_shallow_bt_depth = false;
 void clog_test_force_shallow_backtrace_depth(bool force) {
   atomic_store(&_clog_test_force_shallow_bt_depth, force);
 }
+
+bool clog_test_backtrace_supported(void) { return CLOG_HAS_BACKTRACE != 0; }
 #endif
 
 /*
@@ -3491,7 +3499,7 @@ static int _clog_sync_output(int fd) {
  * gives 0 on success. */
 static int _clog_publish_no_replace(int dir_fd, const char *tmp,
                                     const char *dst) {
-#if defined(RENAME_NOREPLACE) && defined(__GLIBC__)
+#if defined(RENAME_NOREPLACE) && defined(__linux__)
   if (renameat2(dir_fd, tmp, dir_fd, dst, RENAME_NOREPLACE) == 0) return 0;
   if (errno != EINVAL && errno != ENOSYS) return -1;
 #endif
@@ -7151,7 +7159,9 @@ static void _clog_seed_last_rotation(clog_shared_t *sh, int fd,
   }
   /* The birth time comes from statx(2) on Linux and from struct stat on
    * macOS and FreeBSD. A filesystem that keeps none reports 0 on macOS and
-   * -1 on FreeBSD, and the seed then stays the modification time. */
+   * -1 on FreeBSD, and the seed then stays the modification time. Other
+   * systems give no birth time in a public field, so there the seed is the
+   * modification time. */
 #if defined(__linux__) && defined(STATX_BTIME)
   if (!seeded) {
     struct statx stx;

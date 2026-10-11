@@ -105,12 +105,25 @@ static void _teardown(void) {
    * atexit handler returns; without it, the leak check of valgrind can race
    * the exit of the process against the teardown of the reactor.
    * tests_tls.c in this same directory relies on the same reasoning. */
+  /* On OpenBSD this exit handler runs while the dynamic loader holds a lock
+   * that the join of the reaper of the engine needs, so the wait never
+   * returns there; see _teardown in tests.c. The reactor can then still run
+   * when the process ends, so the logger stays open too. */
+#if !defined(__OpenBSD__)
   chttpsvr_engine_wait();
   if (g_test_logger) {
     clog_close(g_test_logger);
     g_test_logger = CLOG_INVALID;
   }
+#endif
 }
+
+extern size_t _chttpsvr_engine_num_reactor_threads_for_tests(void);
+
+/* The reactor thread count of the engine that _setup() started, before any
+ * test runs; see
+ * num_reactor_threads_defaults_to_one_when_unconfigured. */
+static size_t g_initial_reactor_threads;
 
 __attribute__((constructor)) static void _setup(void) {
   char *err = NULL;
@@ -176,6 +189,7 @@ __attribute__((constructor)) static void _setup(void) {
      is no reason to break the symmetry of setup and teardown that works
      across the other test suites of this codebase. */
   atexit(_teardown);
+  g_initial_reactor_threads = _chttpsvr_engine_num_reactor_threads_for_tests();
 }
 
 /* ========================================================================== */
@@ -230,8 +244,6 @@ TEST(chttpserver_mem_mgmt, procs_wired_into_engine_allocations) {
   REQUIRE_GT(__atomic_load_n(&g_mm_free_count, __ATOMIC_RELAXED), (size_t)0);
 }
 
-extern size_t _chttpsvr_engine_num_reactor_threads_for_tests(void);
-
 TEST(chttpserver_mem_mgmt,
      num_reactor_threads_defaults_to_one_when_unconfigured) {
   /* _setup() never called chttpsvr_set_engine_num_reactor_threads before it
@@ -239,7 +251,10 @@ TEST(chttpserver_mem_mgmt,
    * dedicated thread instead of a CPU count that the library detects. That
    * matches the documented default of
    * chttpsvr_set_engine_num_reactor_threads, which a benchmark chose. */
-  REQUIRE_EQ(_chttpsvr_engine_num_reactor_threads_for_tests(), (size_t)1);
+  /* The value comes from _setup(), before any test runs, because a later
+   * test of this file sets 3 and the order in which the tests run depends on
+   * the compiler. */
+  REQUIRE_EQ(g_initial_reactor_threads, (size_t)1);
 }
 
 TEST(chttpserver_mem_mgmt, null_function_pointer_rejected) {

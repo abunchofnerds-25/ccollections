@@ -26,11 +26,14 @@ sudo apt-get install build-essential clang libssl-dev zlib1g-dev \
 `make test` needs only the compiler, OpenSSL and zlib. `make memtest` also
 needs Valgrind, coverage needs lcov, the fuzzers need Clang, the structural
 half of `make check_abi` needs `abigail-tools`, and `make check_install`
-needs `pkg-config`. On FreeBSD and macOS, use `gmake` wherever this page says
-`make`. On FreeBSD, also install `binutils` for the interface checks, which
-need GNU `readelf` and GNU `nm`. On macOS, Homebrew provides `gmake`, OpenSSL
-and `pkg-config` (see [Building](building.md)); Valgrind does not run there,
-so neither does `make memtest`.
+needs `pkg-config`. On FreeBSD, OpenBSD and macOS, use `gmake` wherever
+this page says `make`. On FreeBSD, also install `binutils` for the interface
+checks, which need GNU `readelf` and GNU `nm`. On macOS, Homebrew provides
+`gmake`, OpenSSL and `pkg-config` (see [Building](building.md)). Valgrind
+runs on neither macOS nor OpenBSD, so neither runs `make memtest`. Some
+suites hold several hundred file descriptors at once, so they need a limit
+of about 1024; OpenBSD starts root at 128 and a user at 512, so raise it
+there first with `ulimit -n 1024`.
 
 ## Running the tests
 

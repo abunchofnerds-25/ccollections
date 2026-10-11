@@ -2678,6 +2678,22 @@ void _notify_waiter_test_set_delay_us(int us);
 void ccol_event_loop_test_delay_next_reg_resolve_unpin_ms(uint32_t ms);
 
 /**
+ * @brief For tests only: tell whether an unpin has taken the delay that
+ *        ccol_event_loop_test_delay_next_reg_resolve_unpin_ms armed.
+ *
+ * The unpin takes the delay after it reads whether the registration is
+ * removed, and before it frees its resolve pin. After a test arms the delay
+ * and starts the thread that must take it, a true result therefore means
+ * that this thread holds its pin and has already made that read. A test can
+ * poll this function instead of a fixed sleep before it races a
+ * ccol_event_loop_remove against the pin.
+ *
+ * @return true when no delay is armed, false while an armed delay waits for
+ *         an unpin.
+ */
+bool ccol_event_loop_test_reg_resolve_unpin_delay_taken_for_tests(void);
+
+/**
  * @brief For tests only: lock the internal mutex of cq directly, and go around
  *        every function of the public API.
  *

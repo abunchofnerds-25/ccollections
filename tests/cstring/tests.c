@@ -2512,6 +2512,10 @@ TEST(rfind, agrees_with_the_reference_on_long_periodic_inputs) {
  * Every candidate of the backward scan then agrees with the needle on its
  * first and last byte and differs from it only in the middle. */
 static char *rfind_adversarial(size_t len, size_t b_at) {
+  /* No allocation reaches PTRDIFF_MAX bytes. Saying so here keeps GCC 12
+   * with _FORTIFY_SOURCE=3 from checking the memset below against a buffer
+   * size of len + 1 that has wrapped. */
+  if (len >= PTRDIFF_MAX) return NULL;
   char *buf = malloc(len + 1);
   if (!buf) return NULL;
   memset(buf, 'a', len);

@@ -51,10 +51,10 @@
 #include <pthread_np.h> /* pthread_setaffinity_np */
 #endif
 /* macOS has no call that binds a thread to a CPU: its affinity tags are only
- * hints, and Apple silicon ignores them. The harness therefore runs unpinned
- * there, and says so in its header. */
+ * hints, and Apple silicon ignores them. OpenBSD has no such call either. The
+ * harness therefore runs unpinned on both, and says so in its header. */
 #ifndef BENCH_CAN_PIN
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__OpenBSD__)
 #define BENCH_CAN_PIN 0
 #else
 #define BENCH_CAN_PIN 1

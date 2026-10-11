@@ -92,11 +92,10 @@ CPU list at run time from `/sys/devices/cpu_core/cpus` and the sibling list
 of
 each core, so it needs no configuration and makes no assumption about how
 the
-machine numbers its CPUs. `--no-pin` turns pinning off. macOS offers no way
-to
-bind a thread to a CPU, so there the harness always runs unpinned and says
-so
-in its header; expect a larger spread between runs on macOS.
+machine numbers its CPUs. `--no-pin` turns pinning off. macOS and OpenBSD
+offer no way to bind a thread to a CPU, so there the harness always runs
+unpinned and says so in its header; expect a larger spread between runs
+there.
 
 One consequence is worth knowing: a case that asks for more workers than the
 machine has performance cores has to double some of them up. The assignment

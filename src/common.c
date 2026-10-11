@@ -442,3 +442,38 @@ __attribute__((constructor)) static void _ccol_cloexec_gate_at_load(void) {
   _ccol_cloexec_gate_register();
 }
 #endif /* _CCOL_CLOEXEC_GATE */
+
+#if defined(_CCOL_FORK_THREADED_FIX)
+/* See _CCOL_FORK_THREADED_FIX in common.h. libc exports the flag and no
+ * header declares it. The prepare step runs while fork() holds the lock of
+ * the handler list, so two forks never share the saved value, and the child
+ * step runs before the child releases that lock. The flag is restored only to
+ * the value that it had in the parent: a parent that never started a thread
+ * took no lock, and a release in its child would release a lock that nobody
+ * holds. */
+extern int __isthreaded;
+static int _ccol_fork_was_threaded;
+static ccol_once_flag_t _ccol_fork_threaded_fix_once = CCOL_ONCE_INIT;
+
+static void _ccol_fork_threaded_note(void) {
+  _ccol_fork_was_threaded = __isthreaded;
+}
+
+static void _ccol_fork_threaded_restore(void) {
+  __isthreaded = _ccol_fork_was_threaded;
+}
+
+static void _ccol_fork_threaded_fix_do_register(void) {
+  (void)_ccol_at_fork_raw(_ccol_fork_threaded_note, NULL,
+                          _ccol_fork_threaded_restore);
+}
+
+void _ccol_fork_threaded_fix_register(void) {
+  ccol_call_once(_ccol_fork_threaded_fix_once,
+                 _ccol_fork_threaded_fix_do_register);
+}
+
+__attribute__((constructor)) static void _ccol_fork_threaded_fix_at_load(void) {
+  _ccol_fork_threaded_fix_register();
+}
+#endif /* _CCOL_FORK_THREADED_FIX */

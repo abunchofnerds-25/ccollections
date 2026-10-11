@@ -22,7 +22,8 @@ the Go net package:
   NULL or ""     (NULL is the default of CHTTPSVR_CONFIG_DEFAULT)
                  every interface, with one dual-stack socket on [::]
                  (IPV6_V6ONLY off) that also takes IPv4 clients through
-                 v4-mapped addresses; 0.0.0.0 on a host without IPv6.
+                 v4-mapped addresses; 0.0.0.0 on a host without IPv6
+                 and on a system without dual-stack sockets (OpenBSD).
                  cfg->ipv6_only makes it an IPv6-only listener.
   an address     exactly that address: "0.0.0.0" is every IPv4
                  interface, "::" every IPv6 interface, "127.0.0.1" the

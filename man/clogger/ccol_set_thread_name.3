@@ -11,8 +11,9 @@ ccol_retval_t ccol_set_thread_name(const char *thread_name);
 .fi
 .SH DESCRIPTION
 .nf
-Renames the calling thread, with prctl(PR_SET_NAME) on Linux and
-pthread_setname_np(3) on FreeBSD and macOS.  The next record that the
+Renames the calling thread, with prctl(PR_SET_NAME) on Linux,
+pthread_setname_np(3) on FreeBSD and macOS, and pthread_set_name_np(3)
+on OpenBSD.  The next record that the
 thread writes, through any logger, carries the new name in the thread
 group of its proc field.
 
@@ -40,7 +41,8 @@ ccol_success        The thread has the new name, and its records
                     carry it.
 ccol_invalid_args   thread_name is NULL or empty.  Nothing changes.
 ccol_not_permitted  The system refused the rename, or the platform is
-                    not Linux, FreeBSD or macOS.  Nothing changes.
+                    not Linux, FreeBSD, OpenBSD or macOS.  Nothing
+                    changes.
 .fi
 .SH NOTES
 .nf

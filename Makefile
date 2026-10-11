@@ -232,9 +232,24 @@ EXTRA_CFLAGS ?=
 # than the flags, because a flag in the wrong variable disappears in silence.
 cc-option = $(shell printf 'int main(void){return 0;}' > .ccol_probe.c 2>/dev/null && 	if $(CC) $(EXTRA_CFLAGS) $(1) -Werror -c .ccol_probe.c -o .ccol_probe.o >/dev/null 2>&1; 	then printf '%s' '$(1)'; fi; rm -f .ccol_probe.c .ccol_probe.o)
 
+# The fortify level depends on what the compiler predefines when it
+# optimizes, which a probe without -O cannot see. Alpine's GCC predefines
+# _FORTIFY_SOURCE=2 at -O1 and above, and a plain -D_FORTIFY_SOURCE=3 is then
+# a redefinition that -Werror refuses; there the flag first undefines the
+# default. Apple clang predefines 0 under -fsanitize=address, because the
+# sanitizer checks those accesses itself, and there the build keeps that.
+FORTIFY_PREDEFINED := $(shell $(CC) $(EXTRA_CFLAGS) -O2 -dM -E -x c /dev/null 2>/dev/null | awk '$$2=="_FORTIFY_SOURCE"{print $$3}')
+ifeq ($(FORTIFY_PREDEFINED),)
+  FORTIFY_CFLAGS := $(call cc-option,-D_FORTIFY_SOURCE=3)
+else ifeq ($(FORTIFY_PREDEFINED),0)
+  FORTIFY_CFLAGS :=
+else
+  FORTIFY_CFLAGS := $(call cc-option,-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3)
+endif
+
 HARDENING_CFLAGS := $(call cc-option,-fstack-protector-strong) \
 	$(call cc-option,-fstack-clash-protection) \
-	$(call cc-option,-D_FORTIFY_SOURCE=3)
+	$(FORTIFY_CFLAGS)
 
 COMMON_CFLAGS = -I$(INCLUDE_DIR) \
 	-std=gnu11 \

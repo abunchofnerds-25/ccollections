@@ -615,8 +615,10 @@ typedef struct chttpsvr_conn {
   struct timespec last_progress;
   size_t rate_queued;
   /* The SO_RCVLOWAT that the socket carries now; 0 and 1 both mean the default
-   * of 1. */
+   * of 1. rcvlowat_cap is the highest mark that the receive buffer can
+   * reach, read on the first park, and 0 until then. */
   int rcvlowat;
+  int rcvlowat_cap;
 
   /* The partial-body memory of chttpsvr_config_t.max_partial_body_memory.
    * srv->wait_mutex guards every member of this group once the connection
@@ -7653,23 +7655,21 @@ void _chttpsvr_arm_start_quiescing_unpinned_race_hook_for_tests(void) {
   ccol_mutex_unlock(g_start_quiescing_unpinned_race_hook.mutex);
 }
 
-/* Every OTHER _chttpsvr_wait_*_race_hook_entered_for_tests function in this
- * file reaches its hook every time, as the earlier steps of the calling test
- * prove, but THIS one does not. The only test that uses it,
+/* The only test that uses this hook,
  * start_racing_engine_stop_and_destroy_does_not_free_raw_too_early in
- * tests_engine_stop.c, also depends on a concurrent reaper thread setting
+ * tests_engine_stop.c, reaches it only when a concurrent reaper thread sets
  * CHTTPSVR_QS_QUIESCING before the paused chttpsvr_start() call checks
- * quiesce_state again, and it enforces that order with a fixed nanosleep(150ms)
- * alone, instead of a real synchronization primitive. Load in the environment
- * (valgrind, ThreadSanitizer or a busy CI runner) can stretch that window past
- * 150ms, and nothing then enters this hook at all.
+ * quiesce_state again. The test makes that order certain with
+ * _chttpsvr_wait_quiesce_claimed_signal_entered_for_tests, which returns only
+ * after the reaper claimed the server, and it releases the paused call after
+ * that.
  *
  * The wait here is bounded to 10s, which is generous even under heavy
- * instrumentation, so a missed race becomes a clean test failure that the
- * harness catches. Without the bound, this call hangs, and because it runs on
- * the main test thread, and not on a background one, it hangs the whole binary,
- * which no bounded-join fixture can rescue. The function returns false on a
- * timeout. */
+ * instrumentation, so a regression that keeps the call away from this hook
+ * becomes a clean test failure that the harness catches. Without the bound,
+ * this call hangs, and because it runs on the main test thread, and not on a
+ * background one, it hangs the whole binary, which no bounded-join fixture can
+ * rescue. The function returns false on a timeout. */
 bool _chttpsvr_wait_start_quiescing_unpinned_race_hook_entered_for_tests(void) {
   ccol_call_once(g_start_quiescing_unpinned_race_hook.once,
                  _start_quiescing_unpinned_race_hook_init_globals);
@@ -7713,6 +7713,88 @@ static void _start_quiescing_unpinned_race_hook_wait_if_armed(void) {
     ccol_cond_var_wait(g_start_quiescing_unpinned_race_hook.cv,
                        g_start_quiescing_unpinned_race_hook.mutex);
   ccol_mutex_unlock(g_start_quiescing_unpinned_race_hook.mutex);
+}
+
+/* This is a white-box test hook and nothing else. When a test arms it, the
+ * next _quiesce_server_once() pass that claims a server signals once, right
+ * after it sets quiesce_state to CHTTPSVR_QS_QUIESCING and before it waits
+ * for pending_resolve_count. It only signals and never blocks, so it adds no
+ * new blocking point to the pass. It fires while the pass holds srv->mutex,
+ * and the hook mutex is a leaf lock that no path holds while it takes any
+ * other lock.
+ *
+ * A test that pauses a chttpsvr_start() call with its pin held, and then
+ * calls chttpsvr_engine_stop(), uses this hook to know that the reaper has
+ * claimed the server. When the test then releases the paused call, that call
+ * takes raw->mutex after the claim and so sees CHTTPSVR_QS_QUIESCING every
+ * time. The wait is bounded to 10s and returns false on a timeout, so a
+ * missed claim is a test failure and not a hang of the binary. */
+static struct {
+  ccol_mutex_t mutex;
+  ccol_cond_var_t cv;
+  ccol_once_flag_t once;
+  bool armed;
+  bool entered;
+} g_quiesce_claimed_signal = {0};
+
+static void _quiesce_claimed_signal_init_globals(void) {
+  if (ccol_mutex_init(g_quiesce_claimed_signal.mutex) != 0)
+    ccol_fatal_err("chttpsvr test hook: failed to initialize mutex");
+  /* The bounded wait below computes its deadline on CLOCK_MONOTONIC, so the
+   * condition variable must use that clock too. */
+  ccol_cond_var_attr_t cv_attr;
+  int cv_rc;
+  if (ccol_cond_var_attr_init(cv_attr) == 0) {
+    ccol_cond_var_attr_setclock(cv_attr, CLOCK_MONOTONIC);
+    cv_rc = ccol_cond_var_init_ca(g_quiesce_claimed_signal.cv, cv_attr);
+    ccol_cond_var_attr_destroy(cv_attr);
+  } else {
+    cv_rc = ccol_cond_var_init(g_quiesce_claimed_signal.cv);
+  }
+  if (cv_rc != 0)
+    ccol_fatal_err(
+        "chttpsvr test hook: failed to initialize condition variable");
+}
+
+void _chttpsvr_arm_quiesce_claimed_signal_for_tests(void) {
+  ccol_call_once(g_quiesce_claimed_signal.once,
+                 _quiesce_claimed_signal_init_globals);
+  ccol_mutex_lock(g_quiesce_claimed_signal.mutex);
+  g_quiesce_claimed_signal.armed = true;
+  g_quiesce_claimed_signal.entered = false;
+  ccol_mutex_unlock(g_quiesce_claimed_signal.mutex);
+}
+
+bool _chttpsvr_wait_quiesce_claimed_signal_entered_for_tests(void) {
+  ccol_call_once(g_quiesce_claimed_signal.once,
+                 _quiesce_claimed_signal_init_globals);
+  struct timespec deadline;
+  clock_gettime(CLOCK_MONOTONIC, &deadline);
+  _timespec_add_ms(&deadline, 10000);
+  ccol_mutex_lock(g_quiesce_claimed_signal.mutex);
+  bool timed_out = false;
+  while (!g_quiesce_claimed_signal.entered && !timed_out) {
+    timed_out = ccol_cond_var_timedwait(g_quiesce_claimed_signal.cv,
+                                        g_quiesce_claimed_signal.mutex,
+                                        deadline) == ETIMEDOUT;
+  }
+  bool entered = g_quiesce_claimed_signal.entered;
+  /* A missed signal must not fire later, in an unrelated pass. */
+  g_quiesce_claimed_signal.armed = false;
+  ccol_mutex_unlock(g_quiesce_claimed_signal.mutex);
+  return entered;
+}
+
+static void _quiesce_claimed_signal_fire_if_armed(void) {
+  ccol_call_once(g_quiesce_claimed_signal.once,
+                 _quiesce_claimed_signal_init_globals);
+  ccol_mutex_lock(g_quiesce_claimed_signal.mutex);
+  if (g_quiesce_claimed_signal.armed) {
+    g_quiesce_claimed_signal.armed = false; /* one-shot */
+    g_quiesce_claimed_signal.entered = true;
+    ccol_cond_var_broadcast(g_quiesce_claimed_signal.cv);
+  }
+  ccol_mutex_unlock(g_quiesce_claimed_signal.mutex);
 }
 
 /* This is a white-box test hook and nothing else. When a test arms it,
@@ -8312,6 +8394,14 @@ static bool _timespec_reached(struct timespec now, struct timespec when) {
  * ahead needs fewer bytes from the socket than the plaintext it completes.
  * The mark is therefore 1 whenever ctls_conn_has_pending_input() is true.
  *
+ * The mark must also be a count that the socket can queue. A receive buffer
+ * holds a little less data than its size (OpenBSD gives 16384 bytes and
+ * queues 16358), so a mark at the size of the buffer is never reached and
+ * the connection sleeps until a timeout. The mark is therefore at most half
+ * of the receive buffer, which the first park reads. A buffer that grows
+ * later only leaves the mark lower than it could be, which costs a few more
+ * wake-ups.
+ *
  * The sweep cannot see bytes that sit in the socket below the mark, so it
  * asks the kernel for them (FIONREAD) before it judges such a connection
  * slow; see _parked_expired. */
@@ -8325,6 +8415,18 @@ static void _conn_set_rcvlowat(chttpsvr_conn_t *conn) {
     if (rem > 1)
       want = rem < (uint64_t)_CHTTPSVR_RCVLOWAT_MAX ? (int)rem
                                                     : _CHTTPSVR_RCVLOWAT_MAX;
+  }
+  if (want > 1) {
+    if (conn->rcvlowat_cap == 0) {
+      int rcvbuf = 0;
+      socklen_t len = sizeof(rcvbuf);
+      conn->rcvlowat_cap =
+          getsockopt(conn->fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, &len) == 0 &&
+                  rcvbuf / 2 > 1
+              ? rcvbuf / 2
+              : 1;
+    }
+    if (want > conn->rcvlowat_cap) want = conn->rcvlowat_cap;
   }
   if (want <= 1) {
     if (conn->rcvlowat > 1) {
@@ -10908,6 +11010,17 @@ static _Atomic size_t g_listener_alloc_failure_pause_count_for_tests = 0;
 size_t _chttpsvr_listener_alloc_failure_pause_count_for_tests(void) {
   return atomic_load(&g_listener_alloc_failure_pause_count_for_tests);
 }
+
+/* This is white-box test instrumentation and nothing else. It counts, across
+ * the whole process, how many times _listener_pause_for_resource_pressure
+ * really paused a listener and set listener_paused_for_resource_pressure.
+ * The sweep of the idle timeout clears that flag about once a second, so a
+ * test that polls the flag can miss a pause; a test reads the difference of
+ * this count across its own window instead. */
+static _Atomic size_t g_listener_resource_pause_count_for_tests = 0;
+size_t _chttpsvr_listener_resource_pause_count_for_tests(void) {
+  return atomic_load(&g_listener_resource_pause_count_for_tests);
+}
 #endif /* RUNNING_UNIT_TESTS */
 
 /* Pauses the listener registration of srv in answer to an accept4() errno from
@@ -10933,8 +11046,12 @@ static void _listener_pause_for_resource_pressure(struct chttpserver *srv) {
   ccol_event_reg lreg = srv->listen_reg;
   ccol_mutex_unlock(srv->mutex);
   if (!lreg) return;
-  if (ccol_event_loop_pause(srv_engine_bundler.reactor, lreg) == ccol_success)
+  if (ccol_event_loop_pause(srv_engine_bundler.reactor, lreg) == ccol_success) {
     atomic_store(&srv->listener_paused_for_resource_pressure, true);
+#ifdef RUNNING_UNIT_TESTS
+    atomic_fetch_add(&g_listener_resource_pause_count_for_tests, 1);
+#endif /* RUNNING_UNIT_TESTS */
+  }
 }
 
 /* Logs an allocation failure that the loop finds right after a successful
@@ -11595,12 +11712,24 @@ static int _bind_tcp(int family, const struct sockaddr *sa, socklen_t salen,
   return fd;
 }
 
+/* Whether the system lets an IPv6 socket take IPv4 clients. OpenBSD refuses
+ * to turn IPV6_V6ONLY off, so it has no dual-stack socket. */
+static bool _ipv6_dual_stack_supported(void) {
+  int fd = ccol_socket_nb(AF_INET6, SOCK_STREAM, 0);
+  if (fd < 0) return false;
+  int off = 0;
+  bool ok = setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off)) == 0;
+  close(fd);
+  return ok;
+}
+
 /* Opens the listener that cfg->host names. The rules follow the listener of
  * the Go net package:
  *
  *  - NULL or "": one dual-stack socket on [::] with IPV6_V6ONLY off, which
  *    also takes IPv4 clients through v4-mapped addresses (ipv6_only turns
- *    it into an IPv6-only listener). A host with no IPv6 gets 0.0.0.0.
+ *    it into an IPv6-only listener). A host with no IPv6, and a system with
+ *    no dual-stack socket, such as OpenBSD, get 0.0.0.0.
  *  - A literal IPv4 or IPv6 address: exactly that address. An address in
  *    brackets, as in "[::1]", is the address inside them; a name in
  *    brackets is refused.
@@ -11640,10 +11769,14 @@ static int _make_listen_socket(const char *host, uint16_t port,
                        enable_reuseport, ipv6_only ? 1 : 0);
     if (fd >= 0 || ipv6_only) return fd;
     /* No IPv6 on this host: the socket or the bind of [::] fails with one
-     * of these. Any other failure, such as a port in use, is the answer. */
-    if (errno != EAFNOSUPPORT && errno != EADDRNOTAVAIL &&
-        errno != EPROTONOSUPPORT)
+     * of these. A system with no dual-stack socket refuses the option
+     * instead. Any other failure, such as a port in use, is the answer. */
+    int e = errno;
+    if (e != EAFNOSUPPORT && e != EADDRNOTAVAIL && e != EPROTONOSUPPORT &&
+        _ipv6_dual_stack_supported()) {
+      errno = e;
       return -1;
+    }
     struct sockaddr_in a4;
     memset(&a4, 0, sizeof(a4));
     a4.sin_family = AF_INET;
@@ -13164,8 +13297,41 @@ static void _retired_pools_reap(struct chttpserver *srv, bool wait_all) {
 /* Takes pools out of service; see _chttpsvr_retired_pools_t. A set with no
  * pool is nothing to do. When the record cannot be allocated, the pools
  * drain here, on the calling thread, still with no forced unblock. */
+#ifdef RUNNING_UNIT_TESTS
+/* The worker pool that the latest _retire_pools call of the process took out
+ * of service. */
+static _Atomic ctpool g_last_retired_worker_pool_for_tests = CTPOOL_INVALID;
+
+/* cthreadpool.c defines these two test accessors; cthreadpool.h does not
+ * declare them, because they are not part of its public API. */
+cthread_pool *_ctpool_resolve_for_tests(ctpool h);
+void _ctpool_shutdown_state_for_tests(struct cthread_pool *pool, bool *started,
+                                      bool *immediate, bool *complete);
+
+/* This is a white-box test helper and nothing else. It reports whether the
+ * shutdown of the worker pool that the latest restart retired has started,
+ * which is the point after which a submit to that pool is refused. A pool
+ * that does not resolve was already destroyed, so its shutdown started too.
+ * The caller must hold a task of that pool, for example a worker held in a
+ * hook: the drain then cannot end, and the pool cannot be destroyed while
+ * this helper reads it. */
+bool _chttpsvr_retired_worker_shutdown_started_for_tests(void) {
+  ctpool h = atomic_load(&g_last_retired_worker_pool_for_tests);
+  if (h == CTPOOL_INVALID) return false;
+  struct cthread_pool *pool = _ctpool_resolve_for_tests(h);
+  if (!pool) return true;
+  bool started = false;
+  _ctpool_shutdown_state_for_tests(pool, &started, NULL, NULL);
+  return started;
+}
+#endif /* RUNNING_UNIT_TESTS */
+
 static void _retire_pools(struct chttpserver *srv, _detached_pools_t pools) {
   if (!pools.worker && !pools.reject && !pools.stream) return;
+#ifdef RUNNING_UNIT_TESTS
+  if (pools.worker)
+    atomic_store(&g_last_retired_worker_pool_for_tests, pools.worker);
+#endif /* RUNNING_UNIT_TESTS */
   _chttpsvr_retired_pools_t *rec =
       (_chttpsvr_retired_pools_t *)_ccol_mem_alloc(srv->m_procs, sizeof(*rec));
   if (!rec) {
@@ -13356,6 +13522,9 @@ static void _quiesce_server_once(struct chttpserver *srv) {
     }
     case CHTTPSVR_QS_NOT_QUIESCED:
       srv->quiesce_state = CHTTPSVR_QS_QUIESCING;
+#ifdef RUNNING_UNIT_TESTS
+      _quiesce_claimed_signal_fire_if_armed();
+#endif /* RUNNING_UNIT_TESTS */
       break;
   }
   /* Wait for every call on srv that _chttpsvr_resolve protects and that is in
@@ -14934,28 +15103,6 @@ int _chttpsvr_in_flight_requests_for_tests(chttpsvr h) {
   int n = raw->in_flight_requests;
   ccol_mutex_unlock(raw->mutex);
   return n;
-}
-
-/* This white-box test helper gives listener_paused_for_resource_pressure
- * directly; see the comment of that field. A test that must prove that the
- * library genuinely paused the listener, and that it is not merely quiet
- * because its backlog happened to run dry at the moment of the observation,
- * needs a deterministic check of the state, instead of inferring a pause from
- * the ABSENCE of network activity over some window of time.
- *
- * The real timer of the sweep thread of the idle timeout runs at about 1
- * second, not synchronized with the clock of any test, and it can legitimately
- * resume the listener at any point, and, if the underlying condition still
- * persists, pause it again at once, so a window that a test observes over the
- * network is an inherently flaky signal for this one property.
- *
- * It returns false for an invalid handle, which is the same answer as for a
- * server that it really resolved and that is not paused now, so a test that
- * uses this accessor is expected to know already that h is otherwise valid. */
-bool _chttpsvr_listener_paused_for_resource_pressure_for_tests(chttpsvr h) {
-  struct chttpserver *raw = _chttpsvr_resolve_for_tests(h);
-  if (!raw) return false;
-  return atomic_load(&raw->listener_paused_for_resource_pressure);
 }
 
 /* This is a white-box test hook only. It marks the calling thread as if that

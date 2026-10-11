@@ -26,7 +26,7 @@ endif
 # while the same link fails on FreeBSD. backtrace(3) lives in libexecinfo on
 # the BSDs and in libc on glibc and macOS.
 CCOL_PLATFORM_LIBS := -lpthread -lm
-ifneq ($(filter FreeBSD NetBSD OpenBSD DragonFly,$(CCOL_UNAME_S)),)
+ifneq ($(filter FreeBSD OpenBSD,$(CCOL_UNAME_S)),)
   CCOL_PLATFORM_LIBS += -lexecinfo
 endif
 
@@ -43,10 +43,16 @@ endif
 # ldconfig rebuilds the cache of the dynamic linker from its configured
 # directories, while FreeBSD's ldconfig with no argument would replace its
 # hints with the built-in directories alone; -R is the rescan of the configured
-# ones. FreeBSD indexes man pages with makewhatis(1) and has no mandb.
+# ones. OpenBSD's ldconfig also replaces its hints with the directories that
+# it is given, and -m merges one directory into them instead. FreeBSD and
+# OpenBSD index man pages with makewhatis(1) and have no mandb.
 ifeq ($(CCOL_UNAME_S),FreeBSD)
   CCOL_DEFAULT_PKGCONFIGDIR = $(PREFIX)/libdata/pkgconfig
   CCOL_LDCONFIG = ldconfig -R
+  CCOL_MAN_INDEX = makewhatis $(MAN_INSTALL_DIR)
+else ifeq ($(CCOL_UNAME_S),OpenBSD)
+  CCOL_DEFAULT_PKGCONFIGDIR = $(LIBDIR)/pkgconfig
+  CCOL_LDCONFIG = ldconfig -m $(LIBDIR)
   CCOL_MAN_INDEX = makewhatis $(MAN_INSTALL_DIR)
 else ifeq ($(CCOL_UNAME_S),Darwin)
   # macOS keeps no cache of the dynamic linker to refresh, and its man index

@@ -24,7 +24,8 @@ SOFTWARE.
 
 /* The number of threads of the test process, on every supported system.
  * Linux lists them in /proc/self/task, FreeBSD reports one kern.proc
- * record for each thread, and macOS lists them with task_threads(). Under
+ * record for each thread, OpenBSD one record for the process and one for
+ * each thread, and macOS lists them with task_threads(). Under
  * qemu-user the Linux count also holds the threads of the emulator itself, so a
  * test compares counts with a baseline that it took, and never with a constant.
  */
@@ -40,8 +41,40 @@ SOFTWARE.
 #include <sys/types.h>
 #include <sys/user.h>
 #endif
+#ifdef __OpenBSD__
+#include <sys/sysctl.h>
+#include <sys/types.h>
+#endif
 #ifdef __APPLE__
 #include <mach/mach.h>
+#endif
+
+#ifdef __OpenBSD__
+/* The kern.proc records of this process: one for the process itself, whose
+ * p_tid is -1, and one for each thread. The caller frees *out. Gives the
+ * number of records, or -1. */
+static inline int test_openbsd_proc_records(struct kinfo_proc **out) {
+  int mib[6] = {CTL_KERN,
+                KERN_PROC,
+                KERN_PROC_PID | KERN_PROC_SHOW_THREADS,
+                (int)getpid(),
+                (int)sizeof(struct kinfo_proc),
+                0};
+  size_t len = 0;
+  *out = NULL;
+  if (sysctl(mib, 6, NULL, &len, NULL, 0) != 0) return -1;
+  /* Room for threads that start between the two calls. */
+  len += 16 * sizeof(struct kinfo_proc);
+  struct kinfo_proc *kp = malloc(len);
+  if (!kp) return -1;
+  mib[5] = (int)(len / sizeof(struct kinfo_proc));
+  if (sysctl(mib, 6, kp, &len, NULL, 0) != 0) {
+    free(kp);
+    return -1;
+  }
+  *out = kp;
+  return (int)(len / sizeof(struct kinfo_proc));
+}
 #endif
 
 /* The thread count, or -1 when the system does not report it. */
@@ -68,6 +101,15 @@ static inline int test_thread_count(void) {
     mach_port_deallocate(mach_task_self(), list[i]);
   vm_deallocate(mach_task_self(), (vm_address_t)list, count * sizeof(list[0]));
   return (int)count;
+#elif defined(__OpenBSD__)
+  struct kinfo_proc *kp;
+  int n = test_openbsd_proc_records(&kp);
+  if (n < 0) return -1;
+  int threads = 0;
+  for (int i = 0; i < n; i++)
+    if (kp[i].p_tid != -1) threads++;
+  free(kp);
+  return threads;
 #else
   DIR *d = opendir("/proc/self/task");
   if (!d) return -1;

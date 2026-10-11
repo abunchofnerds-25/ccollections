@@ -1103,6 +1103,16 @@ void clog_test_force_all_syslog_backtrace_frames_failure(bool force);
 void clog_test_force_shallow_backtrace_depth(bool force);
 
 /**
+ * @brief Report whether this build of the library captures backtraces.
+ *
+ * The library captures them where the C library has backtrace(3) (glibc,
+ * macOS and the BSDs), and writes the "backtrace unavailable" marker
+ * elsewhere, such as on musl. A test of a capture that succeeds skips where
+ * this gives false.
+ */
+bool clog_test_backtrace_supported(void);
+
+/**
  * @brief Force the next handle acquisition to grow the slot table with a new
  *        slot, and then fail the live_shareds registration step of that slot,
  *        for a test. It also stops that force.

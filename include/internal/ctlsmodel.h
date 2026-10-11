@@ -59,13 +59,18 @@ SOFTWARE.
 /* macOS releases the thread-local storage (__thread) of an exiting thread
  * before it runs the destructors of pthread keys. A destructor that reads a
  * __thread variable there reads a new, zeroed copy, so state that it must
- * drain is lost. Under _CCOL_EMULATE_DARWIN_TLS, every module whose key
- * destructor drains per-thread state keeps that state in a heap block whose
- * pointer is the value of the key, and the destructor drains the block that
- * it receives as its argument. Elsewhere the state stays in __thread
- * variables. The switch is on by itself on macOS; the test suites of Linux
- * and FreeBSD set it to run the macOS form. */
-#if defined(__APPLE__) && !defined(_CCOL_EMULATE_DARWIN_TLS)
+ * drain is lost. OpenBSD emulates thread-local storage with a pthread key of
+ * its own, which keeps the storage of a thread through one round of key
+ * destructors and frees it in the next, so a destructor that sets its key
+ * again and runs a second round reads a zeroed copy there. Under
+ * _CCOL_EMULATE_DARWIN_TLS, every module whose key destructor drains
+ * per-thread state keeps that state in a heap block whose pointer is the
+ * value of the key, and the destructor drains the block that it receives as
+ * its argument. Elsewhere the state stays in __thread variables. The switch
+ * is on by itself on macOS and OpenBSD; the test suites of Linux and FreeBSD
+ * set it to run that form. */
+#if (defined(__APPLE__) || defined(__OpenBSD__)) && \
+    !defined(_CCOL_EMULATE_DARWIN_TLS)
 #define _CCOL_EMULATE_DARWIN_TLS 1
 #endif
 

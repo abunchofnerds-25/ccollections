@@ -377,7 +377,7 @@ function after that.
 
 `clog_error`, `clog_alert` and `clog_fatal` add a backtrace;
 link with `-rdynamic` to see function names in it. The capture works on
-glibc, FreeBSD and macOS. When the logger cannot get a backtrace, the record
+glibc, FreeBSD, OpenBSD and macOS; musl has no `backtrace()`. When the logger cannot get a backtrace, the record
 says so (`#error backtrace unavailable`, or a `"bt_error"` key in JSON)
 instead of silently leaving it out.
 

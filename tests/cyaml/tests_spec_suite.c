@@ -182,8 +182,11 @@ TEST(spec_suite, accept_reject_matches_expectation) {
               entry->d_name);
       free(in_data);
       closedir(d);
+      /* REQUIRE_TRUE returns only inside a running suite, so this return
+       * keeps in_data from being read after the free on any path. */
+      REQUIRE_TRUE(meta_ok);
+      return;
     }
-    REQUIRE_TRUE(meta_ok);
 
     ++total;
     char *err = NULL;

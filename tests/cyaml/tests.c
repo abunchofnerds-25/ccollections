@@ -15996,13 +15996,22 @@ static void _late_doc_dtor(void *p) {
 
 static void *_late_doc_worker(void *arg) {
   int *ok = (int *)arg;
-  /* Arm the pool key of this thread before the application key gets its
-   * value, so the pool drains before the application destructor runs. */
+  /* The pool must drain before the application destructor runs. glibc runs
+   * the destructors of a thread in the order of their keys, and the pool key
+   * is the older one. OpenBSD runs them in the reverse of the order in which
+   * the keys of the thread first got a value, so the application key gets a
+   * placeholder before anything arms the pool key; a later value keeps that
+   * place. */
+  static char placeholder;
+  if (pthread_setspecific(_late_doc_key, &placeholder) != 0) return NULL;
   cyaml w = cyaml_create_null();
   cyaml_destroy(w);
   cyaml d = cyaml_parse("a: [1, 2, 3]\nb: x\n", NULL);
   *ok = d != NULL && pthread_setspecific(_late_doc_key, d) == 0;
-  if (!*ok) cyaml_destroy(d);
+  if (!*ok) {
+    cyaml_destroy(d);
+    (void)pthread_setspecific(_late_doc_key, NULL);
+  }
   return NULL;
 }
 

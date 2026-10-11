@@ -128,6 +128,23 @@ static bool _any_thread_has_sigpipe_pending(int *threads_seen) {
     found = true;
   return found;
 }
+#elif defined(__OpenBSD__)
+/* The record of each thread holds the signals pending for that thread and
+ * for the process. */
+static bool _any_thread_has_sigpipe_pending(int *threads_seen) {
+  *threads_seen = 0;
+  struct kinfo_proc *kp;
+  int n = test_openbsd_proc_records(&kp);
+  if (n < 0) return false;
+  bool found = false;
+  for (int i = 0; i < n; i++) {
+    if (kp[i].p_tid == -1) continue;
+    ++*threads_seen;
+    if (kp[i].p_siglist & (1 << (SIGPIPE - 1))) found = true;
+  }
+  free(kp);
+  return found;
+}
 #elif defined(__APPLE__)
 /* macOS raises every SIGPIPE on the process and never on one thread, so the
  * pending set that sigpending() gives while the signal is blocked holds it,

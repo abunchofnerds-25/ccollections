@@ -1013,18 +1013,27 @@ static void discard_blocker_task(void *arg) {
 
 static void discard_task(void *arg) { (void)arg; }
 
+/* A discarded task gets its on_complete only after the shutdown has taken it
+ * out of the queue, so from that point the blocked worker can find no task of
+ * this test to run. The first such call therefore opens the gate of the
+ * worker, which lets the shutdown join it. */
 static void discard_complete(void *arg, bool ran) {
   if (ran) atomic_fetch_add(&g_discard_ran_true, 1);
   if (!pthread_equal(pthread_self(), g_submitter_thread))
     atomic_store(&g_discard_on_submitter, 0);
   atomic_fetch_add(&g_discard_calls, 1);
+  if (!ran) atomic_store(&g_discard_gate, 1);
   free(arg);
 }
 
+/* A bound for the case where no discarded on_complete runs: the gate opens
+ * after 10 s, so that the test fails and does not hang. It returns as soon as
+ * the gate is open. */
 static void *discard_release_gate(void *arg) {
   (void)arg;
-  struct timespec ts = {.tv_sec = 0, .tv_nsec = 20000000};
-  nanosleep(&ts, NULL);
+  struct timespec ts = {.tv_sec = 0, .tv_nsec = 1000000};
+  for (int i = 0; i < 10000 && !atomic_load(&g_discard_gate); i++)
+    nanosleep(&ts, NULL);
   atomic_store(&g_discard_gate, 1);
   return NULL;
 }

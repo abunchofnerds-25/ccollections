@@ -50,6 +50,7 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -1256,15 +1257,38 @@ static void _teardown(void) {
     __chttpsvr_destroy(g_srv2);
     g_srv2 = CHTTPSVR_INVALID;
   }
+  /* On OpenBSD an exit handler that a constructor registers runs after the
+   * dynamic loader has taken its lock for the destructors of every object,
+   * and it keeps that lock until the process ends. pthread_join() on
+   * another thread needs that lock there, so a wait for the reaper of the
+   * engine, which joins threads, never returns. There the reactor can still
+   * run when the process ends, so the logger stays open too. The wait and
+   * the close exist to leave nothing running and nothing allocated for
+   * valgrind, which does not run on OpenBSD. */
+#if !defined(__OpenBSD__)
   chttpsvr_engine_wait();
   if (g_test_logger) {
     clog_close(g_test_logger);
     g_test_logger = CLOG_INVALID;
   }
+#endif
 }
 
 __attribute__((constructor)) static void _setup(void) {
   char *err = NULL;
+
+  /* Several tests hold both ends of hundreds of connections in this one
+   * process (one_tick_closes_every_expired_idle_and_parked_connection about
+   * 620 descriptors), which is more than the soft limit of some systems (128
+   * for root and 512 for a user on OpenBSD). The soft limit rises as far as
+   * the hard limit allows, up to 4096. */
+  struct rlimit nofile;
+  if (getrlimit(RLIMIT_NOFILE, &nofile) == 0 && nofile.rlim_cur < 4096) {
+    nofile.rlim_cur = nofile.rlim_max == RLIM_INFINITY || nofile.rlim_max > 4096
+                          ? 4096
+                          : nofile.rlim_max;
+    (void)setrlimit(RLIMIT_NOFILE, &nofile);
+  }
 
   /* Logger for the engine and both server instances. */
   g_test_logger = clog_open_fd(2, CLOG_INFO, NULL);
@@ -2761,9 +2785,14 @@ TEST(chttpserver, bounded_pool_full_returns_503) {
    * Every later test that reaches g_bounded_srv then waits behind a worker
    * that can never make progress. */
   size_t reject_count_before = _chttpsvr_reject_pool_task_count_for_tests();
+  /* The request timeout turns a wrong outcome into a failure instead of a
+   * hang: if request 3 got a queue slot instead of a 503, it would wait for
+   * g_blk_go, which this test sets only after request 3 returns. */
   g_bounded_cli = ccol_create_chttpclient(NULL);
-  bool cli_ok = g_bounded_cli != CHTTPCLI_INVALID &&
-                chttpclient_set_pool_size(g_bounded_cli, 8) == ccol_success;
+  bool cli_ok =
+      g_bounded_cli != CHTTPCLI_INVALID &&
+      chttpclient_set_pool_size(g_bounded_cli, 8) == ccol_success &&
+      chttpclient_set_request_timeout(g_bounded_cli, 30000000) == ccol_success;
 
   /* Reset state from any previous run of this test. */
   pthread_mutex_lock(&g_blk_mtx);
@@ -2802,14 +2831,32 @@ TEST(chttpserver, bounded_pool_full_returns_503) {
    * request stays queued until g_blk_go is set. */
   pthread_t t2;
   bool t2_created = false;
+  bool request2_queued = false;
   if (worker_blocked) {
     t2_created = pthread_create(&t2, NULL, _send_bounded_req, NULL) == 0;
     if (t2_created) {
-      /* Give Request 2 time to traverse the network stack and enter the
-       * queue. Worker is blocked so Request 2 cannot start executing; 50 ms
-       * is generous for a local loopback round-trip. */
-      struct timespec queue_wait = {0, 50000000L}; /* 50 ms */
-      nanosleep(&queue_wait, NULL);
+      /* Wait until the server counts request 2 as in flight. The one reactor
+       * thread increments that count and then submits the task in the same
+       * dispatch, so once the count is 2, request 3 (which the same reactor
+       * thread dispatches later) cannot take the queue slot before request
+       * 2. The 5 s bound only guards against a hang. */
+      extern int _chttpsvr_in_flight_requests_for_tests(chttpsvr h);
+      struct timespec nap = {0, 1000000L}; /* 1 ms */
+      struct timespec deadline;
+      clock_gettime(CLOCK_MONOTONIC, &deadline);
+      deadline.tv_sec += 5;
+      for (;;) {
+        if (_chttpsvr_in_flight_requests_for_tests(g_bounded_srv) >= 2) {
+          request2_queued = true;
+          break;
+        }
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (!(now.tv_sec < deadline.tv_sec || (now.tv_sec == deadline.tv_sec &&
+                                               now.tv_nsec < deadline.tv_nsec)))
+          break;
+        nanosleep(&nap, NULL);
+      }
     }
   }
 
@@ -2818,7 +2865,7 @@ TEST(chttpserver, bounded_pool_full_returns_503) {
   bool got_resp = false;
   bool date_ok = false;
   size_t reject_count_after = reject_count_before;
-  if (worker_blocked && t2_created) {
+  if (worker_blocked && request2_queued) {
     chttpcli_response *resp = _bounded_get();
     if (resp) {
       got_resp = true;
@@ -2857,6 +2904,7 @@ TEST(chttpserver, bounded_pool_full_returns_503) {
   REQUIRE_TRUE(t1_created);
   REQUIRE_TRUE(worker_blocked);
   REQUIRE_TRUE(t2_created);
+  REQUIRE_TRUE(request2_queued);
   REQUIRE_TRUE(got_resp);
   REQUIRE_EQ(status, 503);
   REQUIRE_TRUE(date_ok);
@@ -3387,7 +3435,7 @@ TEST(chttpserver, streaming_body_delivered_in_separate_batches) {
   REQUIRE_TRUE(count_hdr != NULL);
   int batches = atoi(count_hdr + 14);
   hdr_end[0] = saved;
-  /* 21 bytes written 4 at a time with a delay between writes must arrive
+  /* 20 bytes written 4 at a time with a delay between writes must arrive
      as multiple separate reads server-side, not one. */
   REQUIRE_GT(batches, 1);
 }
@@ -8246,11 +8294,22 @@ TEST(chttpserver, max_response_write_duration_exceeded_closes_connection) {
   const char *req =
       "GET /large-response HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: "
       "close\r\n\r\n";
+  extern size_t _chttpsvr_park_kind_count_for_tests(int kind);
+  size_t write_parks_before = _chttpsvr_park_kind_count_for_tests(2);
   REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
 
-  /* Real silence: no read() call of any kind for well longer than the 300ms
-     cap, so the writes of the server have every chance to fill the available
-     buffers and block on backpressure well before the deadline. */
+  /* Real silence: no read() call of any kind until the response write of the
+     server parked on backpressure (a bounded poll of the process-wide count
+     of write parks; nothing else in this binary writes a response now), and
+     then for 700ms more, which is longer than the 300ms cap. The cap counts
+     from the start of the response, which comes before the park, so the
+     deadline has passed when the reads below begin, whatever the speed of
+     the machine. */
+  bool write_parked = false;
+  for (int i = 0; i < 10000 && !write_parked; i++) { /* 10 s at most */
+    write_parked = _chttpsvr_park_kind_count_for_tests(2) > write_parks_before;
+    if (!write_parked) usleep(1000);
+  }
   struct timespec nap = {0, 700000000L}; /* 700ms */
   nanosleep(&nap, NULL);
 
@@ -8275,6 +8334,7 @@ TEST(chttpserver, max_response_write_duration_exceeded_closes_connection) {
      early (compare max_response_write_duration_disabled_allows_slow_reader,
      which confirms that this exact handler and setup deliver the full response
      when the cap is off). */
+  REQUIRE_TRUE(write_parked);
   REQUIRE_LT(total, (size_t)_CHTTPSVR_TEST_LARGE_BODY_SIZE);
 
   chttpsvr_destroy(srv);
@@ -8894,6 +8954,29 @@ static void *_backoff_test_calloc(size_t n, size_t s) {
 static void *_backoff_test_realloc(void *p, size_t s) { return realloc(p, s); }
 
 extern size_t _chttpsvr_listener_alloc_failure_pause_count_for_tests(void);
+extern size_t _chttpsvr_listener_resource_pause_count_for_tests(void);
+
+/* Waits, for 5 s at most, until the process-wide count of listener pauses for
+   resource pressure goes above `before`, and reports whether it did. The count
+   goes up only after ccol_event_loop_pause() succeeded and the pause flag was
+   stored, and the sweep of the idle timeout never takes it back, so a late
+   poll cannot miss a pause. */
+static bool _wait_for_listener_resource_pause(size_t before) {
+  struct timespec deadline;
+  clock_gettime(CLOCK_MONOTONIC, &deadline);
+  deadline.tv_sec += 5;
+  for (;;) {
+    if (_chttpsvr_listener_resource_pause_count_for_tests() > before)
+      return true;
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (!(now.tv_sec < deadline.tv_sec ||
+          (now.tv_sec == deadline.tv_sec && now.tv_nsec < deadline.tv_nsec)))
+      return false;
+    struct timespec nap = {0, 1000000L}; /* 1 ms */
+    nanosleep(&nap, NULL);
+  }
+}
 
 /* After a successful accept4(), a failure of _conn_create() or
    ctls_conn_create_server() (an allocation failure) must not loop straight back
@@ -8915,23 +8998,19 @@ extern size_t _chttpsvr_listener_alloc_failure_pause_count_for_tests(void);
    _listener_resume_if_resource_pressure_cleared), at most
    _CHTTPSVR_IDLE_SWEEP_INTERVAL_MS after the condition clears.
 
-   The test checks both halves with deterministic state checks instead of
-   inferring them from network activity over some window of time. The real 1s
-   timer of the sweep thread runs with no synchronization to the clock of this
-   test, or of any test, so it can resume this exact listener at any point
-   during the test and, with nothing queued behind fd_a to fail again, leave it
-   resumed. A window of network activity is therefore an unreliable signal for
-   "is it paused at this moment". (1) The pause really happens and really takes
-   effect: the test checks both the white-box counter and the
-   listener_paused_for_resource_pressure flag itself immediately after the
-   failure of fd_a. (2) The pause is not permanent: once the failure condition
-   clears, the server accepts and serves a fresh connection, after the sweep
-   thread of the idle timeout resumes the listener. */
+   The test checks both halves with white-box counters instead of inferring
+   them from network activity over some window of time. The real 1s timer of
+   the sweep thread runs with no synchronization to the clock of this test, so
+   it can resume this exact listener, and clear its pause flag, at any point
+   during the test. Neither a window of network activity nor a poll of the
+   flag is therefore a reliable signal of the pause. (1) The pause really
+   happens and really takes effect: the count of real listener pauses goes up,
+   and the count of pauses after an allocation failure goes up by exactly one.
+   (2) The pause is not permanent: once the failure condition clears, the
+   server accepts and serves a fresh connection, after the sweep thread of the
+   idle timeout resumes the listener. */
 TEST(chttpserver,
      post_accept_alloc_failure_pauses_and_resumes_instead_of_busy_looping) {
-  extern bool _chttpsvr_listener_paused_for_resource_pressure_for_tests(
-      chttpsvr h);
-
   ccol_memmgmt_procs_t mp = {_backoff_test_malloc, _backoff_test_free,
                              _backoff_test_calloc, _backoff_test_realloc};
   char *err = NULL;
@@ -8955,6 +9034,8 @@ TEST(chttpserver,
 
   size_t pause_before =
       _chttpsvr_listener_alloc_failure_pause_count_for_tests();
+  size_t resource_pauses_before =
+      _chttpsvr_listener_resource_pause_count_for_tests();
 
   /* The test arms the failure only now, after chttpsvr_start() returned, so
      only the connections that this test makes from here on can reach the calloc
@@ -8977,66 +9058,13 @@ TEST(chttpserver,
   close(fd_a);
   fd_a = -1;
 
-  /* On the server side, close(cfd) (which delivers this EOF to fd_a) runs
-     BEFORE the pause and the counter increment of
-     _listener_log_and_pause_for_alloc_failure, not after them. An EOF here
-     proves only that the connection is closed, and not that the server thread
-     has also paused and incremented the counter. The test therefore polls the
-     counter for at most 2s (well past ordinary scheduling jitter, and well
-     below a hang) instead of reading it once immediately after the EOF read
-     returns. A single read races the scheduling of TSan and fails from time to
-     time: the two threads run on different CPUs, and the delivery of the EOF
-     does not wait for the server thread to reach its next statement. */
-  /* Poll the pause flag itself, directly and repeatedly, instead of inferring
-     "the pause happened" from one read of the counter followed by one read of
-     the flag. The counter increments BEFORE the code even calls
-     _listener_pause_for_resource_pressure (see
-     _listener_log_and_pause_for_alloc_failure), and that call does real work of
-     its own (a mutex lock and unlock, plus a full ccol_event_loop_pause() call,
-     which is a real syscall and not a few uncontended instructions) before it
-     stores the flag. A single read of the flag, timed from the change of the
-     counter, can therefore land in that real gap and see `false` although the
-     pause succeeds a moment later; this failure does occur in practice. A poll
-     of the flag itself, bounded to 2s, has no such gap: once it reads true, the
-     pause has taken effect, and because the counter increment comes before it
-     in program order on the same thread, the counter also shows the change by
-     then.
-
-     One further, narrower race remains. The real sweep thread of the idle
-     timeout runs for the whole of this test binary on its own 1s timer,
-     independent of the timing of this test, and on every tick
-     _listener_resume_if_resource_pressure_cleared atomic_exchanges the flag
-     back to false, without a condition. If a tick lands in the few microseconds
-     between the store of true and the first read of this loop, that read sees
-     false for the whole 2s bound, and so does every later read, because nothing
-     triggers the failure again once the server has processed fd_a. The gap that
-     this poll closes is as wide as a real syscall, and it does fail in
-     practice. This window is only as wide as the overhead of one iteration of
-     this loop against a fixed period of about 1000ms, which is several orders
-     of magnitude narrower: 30 consecutive runs under valgrind and 25 under
-     ThreadSanitizer show zero failures. This file accepts a comparable narrow
-     timing window that is documented elsewhere (see
-     start_racing_engine_stop_and_destroy_does_not_free_raw_too_early in
-     tests_engine_stop.c). */
-  bool paused_flag = false;
-  {
-    struct timespec pause_deadline;
-    clock_gettime(CLOCK_MONOTONIC, &pause_deadline);
-    pause_deadline.tv_sec += 2;
-    for (;;) {
-      paused_flag =
-          _chttpsvr_listener_paused_for_resource_pressure_for_tests(srv);
-      if (paused_flag) break;
-      struct timespec now;
-      clock_gettime(CLOCK_MONOTONIC, &now);
-      if (!(now.tv_sec < pause_deadline.tv_sec ||
-            (now.tv_sec == pause_deadline.tv_sec &&
-             now.tv_nsec < pause_deadline.tv_nsec)))
-        break;
-      struct timespec nap = {0, 1000000L}; /* 1 ms */
-      nanosleep(&nap, NULL);
-    }
-  }
+  /* On the server side, close(cfd), which delivers this EOF to fd_a, runs
+     BEFORE the pause, so the EOF does not prove that the pause happened. The
+     test waits (bounded) for the count of real listener pauses instead. That
+     count goes up only after the pause took effect, and nothing takes it back,
+     so the sweep thread of the idle timeout, which clears the pause flag on
+     its own 1s timer, cannot hide the pause from this wait. */
+  bool paused = _wait_for_listener_resource_pause(resource_pauses_before);
   size_t pause_after = _chttpsvr_listener_alloc_failure_pause_count_for_tests();
 
   /* Clear the failure condition and confirm that the pause is not permanent:
@@ -9066,7 +9094,7 @@ TEST(chttpserver,
   REQUIRE_EQ(eof_r, (ssize_t)0);
   /* Exactly one pause, which the allocation failure of fd_a triggers. */
   REQUIRE_EQ(pause_after - pause_before, (size_t)1);
-  REQUIRE_TRUE(paused_flag);
+  REQUIRE_TRUE(paused);
   REQUIRE_EQ(status_b, 200);
 }
 
@@ -9093,10 +9121,10 @@ TEST(chttpserver,
    "unclassified" branch. It needs no corruption of a real fd and no exhaustion
    of a real system resource, which would depend on the environment and be out
    of proportion for what is, underneath, a simple decision of control flow. The
-   test confirms the reaction of the LISTENER directly with the deterministic
-   accessor of the pause flag, which the independent schedule of the real
-   idle-sweep timer cannot affect, unlike an inference of the paused state from
-   timing observed on the network (see the identical reasoning of
+   test confirms the reaction of the LISTENER directly with the count of real
+   listener pauses, which the independent schedule of the real idle-sweep timer
+   cannot take back, unlike the pause flag or an inference of the paused state
+   from timing observed on the network (see the identical reasoning of
    post_accept_alloc_failure_pauses_and_resumes_instead_of_busy_looping). It
    then confirms that the pause is not permanent, because a fresh connection
    succeeds once the real sweep resumes the listener. */
@@ -9104,8 +9132,6 @@ TEST(chttpserver,
      accept_unclassified_errno_pauses_and_resumes_instead_of_busy_looping) {
   extern void _chttpsvr_force_next_accept_errno_for_tests(chttpsvr h,
                                                           int errno_val);
-  extern bool _chttpsvr_listener_paused_for_resource_pressure_for_tests(
-      chttpsvr h);
 
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       ccol_create_chttpsvr(g_test_logger, NULL);
@@ -9129,6 +9155,8 @@ TEST(chttpserver,
      scopes it to srv: it affects only the very next accept4() dispatch for THIS
      server, so the long-lived shared fixture server of this test (or any other
      server active in this process at the same time) never steals it. */
+  size_t resource_pauses_before =
+      _chttpsvr_listener_resource_pause_count_for_tests();
   _chttpsvr_force_next_accept_errno_for_tests(srv, EINVAL);
 
   int fd_a _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
@@ -9137,51 +9165,17 @@ TEST(chttpserver,
   setsockopt(fd_a, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo_a, sizeof(rcvtimeo_a));
   REQUIRE_EQ(connect(fd_a, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
-  /* Poll the pause flag directly and repeatedly, with a bound, STARTING
-     IMMEDIATELY after connect() and not only after a blocking EOF read of fd_a.
-     The close(cfd) call of this hook (which delivers EOF to fd_a below) runs
-     before _listener_log_accept_err_rate_limited and
-     _listener_pause_for_resource_pressure even begin, and the first of them
-     makes a real, rate-gated log write, which can be slow under valgrind or on
-     a loaded CI runner. A wait for that blocking read before the poll loop
-     starts measurably widens the real gap between "connection closed" and "flag
-     stored". That gives the independent 1s schedule of the real idle-sweep
-     timer more room to fire and clear the flag again before the first iteration
-     of this loop sees it true, which is a real, intermittent failure (see the
-     analogous, narrower discussion of the remaining race in
-     post_accept_alloc_failure_pauses_and_resumes_instead_of_busy_looping; that
-     order makes the same class of race much wider here). A poll that starts at
-     once narrows that gap to the overhead of one iteration of this loop, which
-     matches the tight margin of that sibling test: 120 consecutive runs under
-     valgrind and 40 under ThreadSanitizer pass with zero failures this way,
-     against several failures within about 100 runs when the poll starts only
-     after the blocking read. */
-  bool paused_flag = false;
-  {
-    struct timespec pause_deadline;
-    clock_gettime(CLOCK_MONOTONIC, &pause_deadline);
-    pause_deadline.tv_sec += 2;
-    for (;;) {
-      paused_flag =
-          _chttpsvr_listener_paused_for_resource_pressure_for_tests(srv);
-      if (paused_flag) break;
-      struct timespec now;
-      clock_gettime(CLOCK_MONOTONIC, &now);
-      if (!(now.tv_sec < pause_deadline.tv_sec ||
-            (now.tv_sec == pause_deadline.tv_sec &&
-             now.tv_nsec < pause_deadline.tv_nsec)))
-        break;
-      struct timespec nap = {0, 1000000L}; /* 1 ms */
-      nanosleep(&nap, NULL);
-    }
-  }
+  /* Wait (bounded) for the count of real listener pauses. It goes up only
+     after the pause took effect, and the sweep thread of the idle timeout,
+     which clears the pause flag on its own 1s timer, never takes it back, so
+     the wait cannot miss the pause however late it looks. */
+  bool paused = _wait_for_listener_resource_pause(resource_pauses_before);
 
   /* The real accept4() of fd_a succeeds inside the server, but the hook
      discards that real connection and simulates EINVAL instead. The server
-     closes the real fd at once, without a read or a write on it (strictly
-     before the poll loop above can see the pause flag at all, as its comment
-     says), so fd_a sees a clean EOF and not an error, and this read returns at
-     once, however long the poll above took. */
+     closes the real fd at once, without a read or a write on it, before it
+     pauses the listener, so fd_a sees a clean EOF and not an error, and this
+     read returns at once, however long the poll above took. */
   char eof_buf[16];
   ssize_t eof_r = read(fd_a, eof_buf, sizeof(eof_buf));
   close(fd_a);
@@ -9210,7 +9204,7 @@ TEST(chttpserver,
   chttpsvr_destroy(srv);
 
   REQUIRE_EQ(eof_r, (ssize_t)0);
-  REQUIRE_TRUE(paused_flag);
+  REQUIRE_TRUE(paused);
   REQUIRE_EQ(status_b, 200);
 }
 
@@ -9462,29 +9456,54 @@ TEST(chttpserver, response_write_timeout_closes_slow_reader_connection) {
   /* Deliberately never read while the server writes: its send must stall in the
      end against the receive buffer of this test, which nothing drains, hit
      response_write_timeout_us, and force the connection closed instead of
-     pinning a thread forever. The sweep judges a parked response once a second,
-     and a send queue that shrank since its last look counts as progress, so the
-     limit is exact to one sweep interval. Sleep past the timeout plus two sweep
-     ticks before touching the socket, so that the server has made its decision
-     when the test looks: the first tick can see the queue shrink while the
-     kernel fills the receive buffer of the test, and the second one sees a
-     queue that no reader drains. */
-  struct timespec wait_past_timeout = {3, 0}; /* > 200ms cfg + 2 ticks */
-  nanosleep(&wait_past_timeout, NULL);
+     pinning a thread forever.
+
+     First wait (bounded) until the response write parks. Then move the clock
+     of the slow-client limits forward by 1 s and run one sweep tick on this
+     thread, again and again, until the parked write is gone and no worker
+     owns the connection. A send queue that shrank since the last look counts
+     as progress, so the first ticks can keep the connection while the kernel
+     still fills the receive buffer of this test; a later tick sees a queue
+     that no reader drains and closes the connection. The 20 ticks move the
+     clock 20 s at most: the rate floor and max_response_write_duration_us
+     cannot fire in that time, so only response_write_timeout_us can close
+     the connection here. */
+  extern size_t _chttpsvr_parked_count_for_tests(chttpsvr h, int kind);
+  extern void _chttpsvr_advance_slow_clock_for_tests(long long ms);
+  extern size_t _chttpsvr_sweep_now_for_tests(chttpsvr h);
+  extern int _chttpsvr_in_flight_requests_for_tests(chttpsvr h);
+  bool parked = false;
+  for (int i = 0; i < 10000 && !parked; i++) { /* 10 s at most */
+    parked = _chttpsvr_parked_count_for_tests(srv, 2) >= 1;
+    if (!parked) usleep(1000);
+  }
+  bool closed = false;
+  for (int i = 0; parked && i < 20 && !closed; i++) {
+    _chttpsvr_advance_slow_clock_for_tests(1000);
+    _chttpsvr_sweep_now_for_tests(srv);
+    closed = _chttpsvr_parked_count_for_tests(srv, 2) == 0 &&
+             _chttpsvr_in_flight_requests_for_tests(srv) == 0;
+    if (!closed) usleep(10000);
+  }
 
   /* This bounds every read call below in case of a regression: the connection
      then stays open, and this test otherwise blocks in read() forever instead
-     of failing its assertion cleanly. The identical precaution of
-     max_response_write_duration_exceeded_closes_connection exists for exactly
-     the same reason. */
+     of failing its assertion cleanly. */
   struct timeval rcvtimeo = {5, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
   char buf[65536];
+  size_t total = 0;
   ssize_t r;
-  while ((r = read(fd, buf, sizeof(buf))) >
-         0) { /* drain whatever got through */
-  }
+  while ((r = read(fd, buf, sizeof(buf))) > 0) total += (size_t)r;
+
+  REQUIRE_TRUE(parked);
+  REQUIRE_TRUE(closed);
   REQUIRE_EQ(r, 0); /* EOF: server closed the connection */
+  /* The byte count makes this test non-vacuous: the server does not keep the
+     connection alive, so a timeout that does nothing also ends in EOF, but
+     only after the drain above got the whole body of 400 * 65536 bytes. A
+     connection that the timeout closed delivers a cut-off response. */
+  REQUIRE_LT(total, (size_t)400 * 65536);
 
   chttpsvr_destroy(srv);
 }
@@ -13617,9 +13636,12 @@ TEST(chttpserver, header_read_duration_zero_leaves_a_trickling_peer_alone) {
 
 TEST(chttpserver, slow_but_completing_header_block_is_served) {
   /* The ceiling must not break a client that is merely slow. This one sends
-     its whole header block a byte at a time, taking a few hundred
-     milliseconds against a ceiling of HDR_DURATION_MS, and is served
-     normally. */
+     its whole header block a byte at a time, which takes a few hundred
+     milliseconds, and is served normally. The ceiling here is 10 s, far above
+     that time even on a loaded machine or under valgrind, so the test checks
+     only that a header block which ends under the ceiling is served; the
+     sibling trickled_header_block_is_closed_at_the_duration_ceiling checks
+     that the ceiling closes a block that does not end. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       ccol_create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
@@ -13630,7 +13652,7 @@ TEST(chttpserver, slow_but_completing_header_block_is_served) {
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
   cfg.port = TEST_PORT + 105;
-  cfg.max_header_read_duration_us = (uint64_t)HDR_DURATION_MS * 1000u;
+  cfg.max_header_read_duration_us = 10000000;
   REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
 
   int fd = _connect_silent(TEST_PORT + 105);
@@ -14272,6 +14294,14 @@ static int _sc_connect(int port) {
   inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr);
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
+  /* A test sends a body that a server which has stopped reading leaves in
+   * the kernel, so the send buffer holds it whatever the default of the
+   * system (OpenBSD gives 16 KiB), and a send that still stalls fails after
+   * 30 s instead of waiting for ever. */
+  int sndbuf = 256 * 1024;
+  setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+  struct timeval sndto = {30, 0};
+  setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &sndto, sizeof(sndto));
   if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
     close(fd);
     return -1;
@@ -16499,11 +16529,25 @@ static bool _lc_have_ipv6_loopback(void) {
   return ok;
 }
 
+/* Whether an IPv6 socket can take IPv4 clients here. OpenBSD has no such
+ * socket, and there the default listener is 0.0.0.0, as in Go. */
+static bool _lc_have_dual_stack(void) {
+  int fd = socket(AF_INET6, SOCK_STREAM, 0);
+  if (fd < 0) return false;
+  int off = 0;
+  bool ok = setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off)) == 0;
+  close(fd);
+  return ok;
+}
+
 TEST(listener_host, a_null_or_empty_host_listens_on_ipv4_and_ipv6) {
   /* A NULL or empty host is one dual-stack listener: IPv4 clients reach it
-     through v4-mapped addresses, and IPv6 clients directly. Non-vacuous:
-     a listener on 0.0.0.0 refuses the IPv6 connection. */
-  bool v6 = _lc_have_ipv6_loopback();
+     through v4-mapped addresses, and IPv6 clients directly. On a system with
+     no dual-stack socket it listens on IPv4 alone. Non-vacuous: a listener
+     on 0.0.0.0 refuses the IPv6 connection where the system has dual-stack
+     sockets. */
+  bool v6 = _lc_have_ipv6_loopback() && _lc_have_dual_stack();
+  if (!v6) fprintf(stderr, "SKIP: no dual-stack IPv6; ::1 not checked\n");
   const char *hosts[2] = {NULL, ""};
   int v4_status[2] = {-1, -1}, v6_status[2] = {-1, -1};
   for (int i = 0; i < 2; i++) {
@@ -16521,10 +16565,10 @@ TEST(listener_host, a_null_or_empty_host_listens_on_ipv4_and_ipv6) {
 
 TEST(listener_host, the_default_configuration_listens_on_ipv4_and_ipv6) {
   /* CHTTPSVR_CONFIG_DEFAULT leaves host NULL, so a server started from it
-     answers on 127.0.0.1 and, where the host has IPv6, on ::1. The IPv6
-     half is skipped on a host without IPv6. Non-vacuous: a default of
-     "0.0.0.0" refuses the IPv6 connection. */
-  bool v6 = _lc_have_ipv6_loopback();
+     answers on 127.0.0.1 and, where the host has IPv6 and dual-stack
+     sockets, on ::1. The IPv6 half is skipped on any other host.
+     Non-vacuous: a default of "0.0.0.0" refuses the IPv6 connection. */
+  bool v6 = _lc_have_ipv6_loopback() && _lc_have_dual_stack();
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   bool host_is_null = cfg.host == NULL;
   chttpsvr srv = ccol_create_chttpsvr(g_test_logger, NULL);
@@ -16536,7 +16580,7 @@ TEST(listener_host, the_default_configuration_listens_on_ipv4_and_ipv6) {
   }
   int v4 = started ? _lc_get_v4(_LC_PORT + 14) : -2;
   int v6_status = !v6 ? 200 : (started ? _lc_get_v6(_LC_PORT + 14) : -2);
-  if (!v6) fprintf(stderr, "SKIP: no IPv6 loopback; ::1 not checked\n");
+  if (!v6) fprintf(stderr, "SKIP: no dual-stack IPv6; ::1 not checked\n");
   if (srv != CHTTPSVR_INVALID) chttpsvr_destroy(srv);
   REQUIRE_TRUE(host_is_null);
   REQUIRE_TRUE(started);
@@ -17649,8 +17693,15 @@ static void _rx_pipeline_after_body(int port, const char *path, int *first,
   int fd = _sc_connect(port);
   if (fd >= 0) {
     _lc_arm_failure((size_t)n2, 1);
-    if (_sc_send(fd, head, (size_t)hn)) {
-      _sc_nap_ms(300); /* the head is read and diverted alone */
+    /* The head must be read and diverted alone, before the rest is sent:
+       wait (bounded) until the buffered route parks its body, or until the
+       streaming handler runs on its pool. On a timeout the rest is never
+       sent, *first stays -2 and the caller fails. */
+    _sc_probe_fn diverted = strcmp(path, "/rx-streaming") == 0
+                                ? _sc_stream_active
+                                : _sc_parked_bodies;
+    if (_sc_send(fd, head, (size_t)hn) &&
+        _sc_wait_for(srv, diverted, NULL, 1, 5000)) {
       if (_sc_send(fd, rest, 5 + (size_t)n2)) {
         char buf[2048];
         *first = _sc_read_response(fd, buf, sizeof(buf), NULL, 5000);
@@ -17759,6 +17810,7 @@ extern bool _chttpsvr_divert_submit_hook_entered_for_tests(void);
 extern void _chttpsvr_release_divert_submit_hook_for_tests(void);
 extern size_t _chttpsvr_submit_retried_for_tests(void);
 extern size_t _chttpsvr_retired_drain_started_for_tests(void);
+extern bool _chttpsvr_retired_worker_shutdown_started_for_tests(void);
 
 TEST(restart, a_request_whose_submit_meets_a_retired_pool_is_still_served) {
   /* Two pipelined requests: the worker that runs the first one reads the
@@ -17773,7 +17825,7 @@ TEST(restart, a_request_whose_submit_meets_a_retired_pool_is_still_served) {
   size_t drains_before = _chttpsvr_retired_drain_started_for_tests();
   size_t retried_before = _chttpsvr_submit_retried_for_tests();
   int fd = started ? _sc_connect(_LC_PORT + 29) : -1;
-  bool entered = false, draining = false;
+  bool entered = false, draining = false, shut_down = false;
   ccol_retval_t restart_rv = ccol_unexpected_failure;
   if (fd >= 0) {
     _chttpsvr_arm_divert_submit_hook_for_tests(2);
@@ -17795,8 +17847,14 @@ TEST(restart, a_request_whose_submit_meets_a_retired_pool_is_still_served) {
         draining = _chttpsvr_retired_drain_started_for_tests() > drains_before;
         if (!draining) _sc_nap_ms(1);
       }
-      /* The drain thread shuts the pool down right after it starts. */
-      _sc_nap_ms(200);
+      /* Wait until the drain thread started the shutdown of the retired
+         worker pool, so that the held submit meets a pool that refuses it.
+         The held worker belongs to that pool, so the drain cannot end, and
+         the pool cannot be destroyed, while this loop reads it. */
+      for (int i = 0; draining && i < 5000 && !shut_down; i++) {
+        shut_down = _chttpsvr_retired_worker_shutdown_started_for_tests();
+        if (!shut_down) _sc_nap_ms(1);
+      }
     }
   }
   _chttpsvr_release_divert_submit_hook_for_tests();
@@ -17812,6 +17870,7 @@ TEST(restart, a_request_whose_submit_meets_a_retired_pool_is_still_served) {
   REQUIRE_TRUE(entered);
   REQUIRE_EQ((int)restart_rv, (int)ccol_success);
   REQUIRE_TRUE(draining);
+  REQUIRE_TRUE(shut_down);
   REQUIRE_EQ(first, 200);
   REQUIRE_EQ(second, 200);
   REQUIRE_EQ(retried, (size_t)1);

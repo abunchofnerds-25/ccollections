@@ -106,8 +106,7 @@ static inline void ccol_poll_refine(ccol_poll_event *ev, int fd) {
   (void)fd;
 }
 
-#elif defined(__FreeBSD__) || defined(__APPLE__) || defined(__NetBSD__) || \
-    defined(__OpenBSD__) || defined(__DragonFly__)
+#elif defined(__FreeBSD__) || defined(__APPLE__) || defined(__OpenBSD__)
 
 #include <fcntl.h>
 #include <limits.h>
@@ -236,6 +235,17 @@ static inline int ccol_poll_ctl(int kq, int op, int fd,
     if (S_ISSOCK(st.st_mode)) {
       rfflags = NOTE_LOWAT;
       rdata = _CCOL_POLL_LOWAT_NEVER;
+#if defined(__OpenBSD__)
+    } else if (want_write && S_ISFIFO(st.st_mode) && st.st_dev == 0 &&
+               st.st_ino == 0) {
+      /* OpenBSD does not wake a write filter that is already armed on an
+       * anonymous pipe (no device and no inode; a named FIFO is a socket
+       * there and reports the close) when the reader closes; a write filter
+       * armed after the close and a read filter on the write end do report
+       * it. The write end of a pipe never has data to read, so its read
+       * filter reports only that EOF, and the registration gets the hang-up
+       * that the write filter misses. */
+#endif
     } else {
       want_read = false;
     }
@@ -354,14 +364,15 @@ static inline void ccol_poll_refine(ccol_poll_event *ev, int fd) {
 
 /* A wake descriptor: one descriptor that a poller watches for readability,
  * that ccol_wakefd_notify() makes readable and ccol_wakefd_drain() makes
- * quiet again. It is an eventfd(2) where the system has one (Linux, FreeBSD).
- * macOS has none, and there it is a kqueue of its own that holds one
- * EVFILT_USER event: a trigger makes the kqueue readable, and collecting the
- * event, which carries EV_CLEAR, makes it quiet. _CCOL_EMULATE_DARWIN_WAKEFD
- * selects that form on FreeBSD too, which is how its test suites run it.
- * ccol_wakefd_create() gives the descriptor, closed on exec and
- * non-blocking, or -1 with errno set; close(2) releases it. */
-#if defined(__APPLE__) && !defined(_CCOL_EMULATE_DARWIN_WAKEFD)
+ * quiet again. It is an eventfd(2) where the system has one (Linux and
+ * FreeBSD). macOS and OpenBSD have none, and there it is a kqueue of its own
+ * that holds one EVFILT_USER event: a trigger makes the kqueue readable, and
+ * collecting the event, which carries EV_CLEAR, makes it quiet.
+ * _CCOL_EMULATE_DARWIN_WAKEFD selects that form on FreeBSD too, which is how
+ * its test suites run it. ccol_wakefd_create() gives the descriptor, closed
+ * on exec and non-blocking, or -1 with errno set; close(2) releases it. */
+#if (defined(__APPLE__) || defined(__OpenBSD__)) && \
+    !defined(_CCOL_EMULATE_DARWIN_WAKEFD)
 #define _CCOL_EMULATE_DARWIN_WAKEFD 1
 #endif
 

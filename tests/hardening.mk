@@ -25,6 +25,21 @@ ccol-cc-option = $(shell printf 'int main(void){return 0;}' > .ccol_probe.c 2>/d
 	if $(CC) $(EXTRA_CFLAGS) $(1) -Werror -c .ccol_probe.c -o .ccol_probe.o >/dev/null 2>&1; \
 	then printf '%s' '$(1)'; fi; rm -f .ccol_probe.c .ccol_probe.o)
 
+# The fortify level depends on what the compiler predefines when it
+# optimizes, which a probe without -O cannot see. Alpine's GCC predefines
+# _FORTIFY_SOURCE=2 at -O1 and above, and a plain -D_FORTIFY_SOURCE=3 is then
+# a redefinition that -Werror refuses; there the flag first undefines the
+# default. Apple clang predefines 0 under -fsanitize=address, because the
+# sanitizer checks those accesses itself, and there the build keeps that.
+CCOL_FORTIFY_PREDEFINED := $(shell $(CC) $(EXTRA_CFLAGS) -O2 -dM -E -x c /dev/null 2>/dev/null | awk '$$2=="_FORTIFY_SOURCE"{print $$3}')
+ifeq ($(CCOL_FORTIFY_PREDEFINED),)
+  CCOL_FORTIFY_CFLAGS := $(call ccol-cc-option,-D_FORTIFY_SOURCE=3)
+else ifeq ($(CCOL_FORTIFY_PREDEFINED),0)
+  CCOL_FORTIFY_CFLAGS :=
+else
+  CCOL_FORTIFY_CFLAGS := $(call ccol-cc-option,-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3)
+endif
+
 CCOL_HARDENING_CFLAGS := $(call ccol-cc-option,-fstack-protector-strong) \
 	$(call ccol-cc-option,-fstack-clash-protection) \
-	$(call ccol-cc-option,-D_FORTIFY_SOURCE=3)
+	$(CCOL_FORTIFY_CFLAGS)

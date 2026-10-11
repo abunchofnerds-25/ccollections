@@ -1,25 +1,25 @@
 .TH CCOL_SCOPED_PTR_RELEASE 3 "2026-07-18" "c_collections" "C Collections Library - Macros"
 .SH NAME
-ccol_scoped_ptr_release \- release ownership of a scoped pointer, preventing its auto-free
+ccol_scoped_ptr_release \- release the ownership of a scoped pointer so that it is not freed automatically
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <common.h>
+#include <ccollections/common.h>
 
 released = ccol_scoped_ptr_release(name);
 .fi
 .SH DESCRIPTION
 .nf
-Returns name's current value and sets name to NULL, so the pending
-cleanup registered by ccol_scoped_ptr() or ccol_scoped_ptr_mp() becomes
-a no-op at scope exit. Use this to hand ownership of the pointer out of
-the enclosing scope (for example, as a function's return value) instead
-of having it freed there.
+Returns the current value of name and sets name to NULL, so the cleanup
+that ccol_scoped_ptr() or ccol_scoped_ptr_mp() registered for name
+becomes a no-op at the end of the scope. Use this macro to give the
+ownership of the pointer to code outside the enclosing scope, for
+example as the return value of a function; the pointer is then not
+freed in that scope.
 
-The caller receiving the released value becomes responsible for freeing
-it eventually, with whichever allocator it was originally allocated
-with.
+The caller that receives the released value becomes responsible for
+freeing it, and must free it with the allocator that allocated it.
 .fi
 .SH PARAMETERS
 .nf
@@ -28,31 +28,35 @@ name  A pointer previously declared with ccol_scoped_ptr() or
 .fi
 .SH RETURN VALUE
 .nf
-Returns name's value immediately prior to release (NULL if name was
-never assigned).
+Returns the value of name from immediately before the release (NULL if
+name never received a value).
 .fi
 .SH NOTES
 .nf
-Requires GCC or Clang (the same requirement ccol_scoped_ptr()/
-ccol_scoped_ptr_mp() already have)
+Needs GCC or Clang (ccol_scoped_ptr() and ccol_scoped_ptr_mp() already
+have the same requirement)
 
-Safe to call on a scoped pointer that was never assigned; returns NULL
-and leaves name at NULL.
+A call on a scoped pointer that never received a value is safe: the
+macro returns NULL and leaves name at NULL.
 
-Calling this more than once on the same name is safe but pointless
-after the first call: name is already NULL, so every subsequent call
-simply returns NULL again.
+More than one call on the same name is safe. A call after the first one
+has no use because name is already NULL, and each later call returns
+NULL again.
 .fi
 .SH EXAMPLES
 .nf
+#include <stdlib.h>
+
 char *build(ccol_memmgmt_procs_t *mp) {
   ccol_scoped_ptr_mp(buf, char, mp);
-  buf = _ccol_mem_alloc(mp, 128);
+  buf = mp ? mp->malloc(128) : malloc(128);
   if (!buf) return NULL;
 
   /* ... populate buf ... */
 
-  return ccol_scoped_ptr_release(buf);  /* caller now owns it */
+  /* after the return, the caller owns buf. The caller frees it with
+     mp->free, or with free() when mp is NULL */
+  return ccol_scoped_ptr_release(buf);
 }
 .fi
 .SH "SEE ALSO"

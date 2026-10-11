@@ -5,37 +5,42 @@ ccol_r_mempool_alloc_entry \- allocate an entry from the ranged pool
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cmempool.h>
+#include <ccollections/cmempool.h>
 
 void *ccol_r_mempool_alloc_entry(ccol_r_mempool *rmp, size_t size);
 .fi
 .SH DESCRIPTION
 .nf
-Allocates memory of the requested size from the most appropriate sub-pool.
-The size is rounded up to the nearest power-of-2 pool. If the optimal pool
-is exhausted, tries larger pools. Fallback behavior depends on policy.
+Allocates memory of the requested size from the best sub-pool. The
+function rounds the size up to the nearest power-of-2 pool, and if that
+pool is empty it tries larger pools, except under the policy
+ccol_fallback_at_first_exhaustion, where that pool gives the memory from
+the heap instead. The fallback behavior depends on the policy; see
+ccol_r_mempool_create(3).
 .fi
 .SH PARAMETERS
 .nf
 rmp   Ranged memory pool to allocate from
-size  Size in bytes to allocate (must be > 0 and <= largest_size)
+size  Size in bytes to allocate. It must be > 0 and <= largest_size
 .fi
 .SH RETURN VALUE
 .nf
-Returns pointer to allocated entry on success
+Returns a pointer to the allocated entry on success
 Returns NULL on failure
 .fi
 .SH NOTES
 .nf
-O(1) in common case, O(number_of_pools) worst case
-Returned memory is uninitialized (use ccol_r_mempool_calloc_entry() for zeroed)
-The returned pointer is aligned for any object type, the same guarantee
-malloc() makes, so any object that can be stored in heap memory can be
-stored in a pool entry
-Size is rounded up to next power-of-2 pool size
-Tries progressively larger pools if optimal pool is exhausted
-Thread-safe if pool created with single_threaded=false
-Entry must be freed with ccol_r_mempool_free_entry()
+O(1) in the common case, O(number_of_pools) in the worst case
+The memory that comes back is uninitialized; use
+ccol_r_mempool_calloc_entry() for zeroed memory
+The pointer that comes back is aligned for any object type, the same
+guarantee that malloc() makes, so any object that you can store in heap
+memory can go into a pool entry
+The function rounds the size up to the next power-of-2 pool size
+The function tries larger and larger pools when the best pool is empty,
+unless the policy is ccol_fallback_at_first_exhaustion
+Thread-safe if the pool was created with single_threaded=false
+The caller must free the entry with ccol_r_mempool_free_entry()
 .fi
 .SH "SEE ALSO"
 .BR ccol_r_mempool_calloc_entry (3),

@@ -1,0 +1,102 @@
+.TH CBMAP_CONSTRUCT_CC_SCOPED 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cbmap_construct_cc_scoped \- declare and create an ordered map with a custom comparison procedure, destroyed on scope exit
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cbstmap.h>
+
+cbmap_construct_cc_scoped(hm_name, key_t, val_t, custom_comparison_proc);
+.fi
+.SH DESCRIPTION
+.nf
+Declares an ordered map handle named hm_name, together with the companion
+type variables that carry key_t and val_t to every later type-inferred
+macro, and then creates a map whose keys custom_comparison_proc orders
+instead of the default order for key_t. The macro also attaches the
+cleanup attribute, which destroys the map on every exit from the enclosing
+scope, an early return included.
+
+The macro is cbmap_construct_cc(3) plus that cleanup attribute; nothing else
+differs. cbmap_construct_scoped(3) is the same macro with the default order,
+cbmap_construct_mp_scoped(3) takes an allocator in place of a comparison
+procedure, and cbmap_construct_full_scoped(3) takes both.
+
+A struct key_t needs this scoped variant, because the default order for a
+key type that the map does not recognize is a raw comparison of the
+representation of the key.
+.fi
+.SH PARAMETERS
+.nf
+hm_name                 Name for the map handle to declare
+key_t                   Key type. It tells every later macro how to read
+                        a key, and tells the container which width to
+                        expect and which alignment to give a stored key
+val_t                   Value type. Only the type-inferred macros read
+                        it; the library never gives it to the container
+custom_comparison_proc  A ccol_comparison_proc_t, or NULL for the
+                        default order for key_t
+.fi
+.SH RETURN VALUE
+.nf
+None. This macro declares variables and does not expand to an expression.
+.fi
+.SH "CUSTOM COMPARISON"
+.nf
+The procedure gets pointers to two keys. It returns a negative value when
+the first key orders before the second key, a positive value when the
+first key orders after the second key, and zero when the map must treat
+the two keys as the same key. A zero makes a call an update instead of an
+insert, so the procedure defines both key equality and key order.
+
+The procedure must give a strict weak order over key_t, and that order must
+not change while the map holds elements. Because the procedure gets two
+bare pointers and no lengths, it can only read a width that key_t fixes,
+so the map validates the width of an incoming key against key_t and
+aligns its stored keys for key_t.
+
+The procedure must stay callable for the whole life of the map, which here
+ends at the closing brace of the enclosing scope.
+.fi
+.SH NOTES
+.nf
+The macro stops the program through ccol_fatal_err() if the creation fails
+The macro needs GCC or Clang, because it uses the cleanup attribute
+The macro uses the default allocator
+The walk visits the elements in ascending key order, by the order of this
+procedure. cbmap_begin_iter(3) describes that contract
+The exit of the scope destroys the map and clears the handle, so you can
+also call cbmap_destroy(3) earlier in the scope
+The companion type variables follow the scope of the handle, so a function
+that receives the handle needs cbmap_redeclare(3) there
+.fi
+.SH WARNINGS
+.nf
+The handle must not outlive its scope. Do not return it, and do not store
+it in a place that outlives the scope: either action gives out a handle
+whose map the cleanup attribute frees at the exit of the scope.
+.fi
+.SH EXAMPLES
+.nf
+typedef struct { int major; int minor; } version;
+int version_cmp(const void *a, const void *b);
+
+void summarize(version *v, size_t n) {
+    cbmap_construct_cc_scoped(releases, version, int, version_cmp);
+    int one = 1;
+    for (size_t i = 0; i < n; i++) {
+        cbmap_insert(releases, v[i], one);
+    }
+}                             /* The macro destroys the releases map here */
+.fi
+.SH "SEE ALSO"
+.BR cbmap_construct_cc (3),
+.BR cbmap_construct_scoped (3),
+.BR cbmap_construct_mp_scoped (3),
+.BR cbmap_construct_full_scoped (3),
+.BR cbmap_declare_scoped (3),
+.BR cbmap_init_cc (3),
+.BR cbmap_redeclare (3),
+.BR cbmap_begin_iter (3),
+.BR cbmap_destroy (3)

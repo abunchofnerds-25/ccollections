@@ -1,28 +1,28 @@
 .TH CSTR_REPLACE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cstr_replace \- replace all occurrences of needle; calls ccol_fatal_err() on failure
+cstr_replace \- replace all the occurrences of needle, and call ccol_fatal_err() on failure
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 cstr_replace(s, needle, replacement);
 .fi
 .SH DESCRIPTION
 .nf
-Calls cstring_replace() and calls ccol_fatal_err() if the return value is not
-ccol_success.
+This macro calls cstring_replace() and then calls ccol_fatal_err() if the
+return value is not ccol_success.
 .fi
 .SH PARAMETERS
 .nf
-s              cstr to modify
+s              cstr to change
 needle         Substring to search for (must not be NULL or empty)
 replacement    Substitute string (must not be NULL)
 .fi
 .SH NOTES
 .nf
-Use cstring_replace() directly if you need to handle errors gracefully
+Call cstring_replace() directly when you want to handle an error yourself
 .fi
 .SH "SEE ALSO"
 .BR cstring_replace (3),

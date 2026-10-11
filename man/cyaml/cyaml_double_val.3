@@ -5,15 +5,16 @@ cyaml_double_val \- extract a floating-point value from a CYAML_FLOAT node
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cyaml.h>
+#include <ccollections/cyaml.h>
 
 double cyaml_double_val(cyaml node);
 .fi
 .SH DESCRIPTION
 .nf
-Return the double stored in node.  Calls ccol_fatal_err() if node is NULL or
-if its type is not CYAML_FLOAT.  The returned value may be infinite or
-NaN (see cyaml_create_double_mp).
+Return the double that node stores.  The function calls ccol_fatal_err()
+when node is NULL, and it calls ccol_fatal_err() as well when node is not
+of type CYAML_FLOAT.  The returned value can be infinite or NaN (see
+cyaml_create_double_mp).
 .fi
 .SH PARAMETERS
 .nf
@@ -21,7 +22,7 @@ node  CYAML_FLOAT node.
 .fi
 .SH RETURN VALUE
 .nf
-double value.
+The double value.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_type (3),

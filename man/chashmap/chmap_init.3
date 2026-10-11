@@ -1,0 +1,63 @@
+.TH CHMAP_INIT 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chmap_init \- create a hash map into an already declared handle
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chashmap.h>
+
+chmap_init(hm_name);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a hash map with the default allocator and the map's own hashing,
+and assigns it to hm_name. The caller must declare the handle first, with
+chmap_declare(3) or chmap_declare_scoped(3). The key and value types are
+not arguments here: the macro reads them from the companion type variables
+that the declare macro created.
+
+This is the create half of a declare-then-create pair, for a handle declared
+in one place and created in another; chmap_construct(3) creates the same
+map in one step for the common case where both happen together.
+
+The map picks its implementation strategy from the declared key and value
+types, as chmap_create_full(3) describes.
+.fi
+.SH PARAMETERS
+.nf
+hm_name  The already declared map handle to create the map into
+.fi
+.SH RETURN VALUE
+.nf
+None. This macro expands to a statement and does not expand to an
+expression.
+.fi
+.SH NOTES
+.nf
+Stops the program through ccol_fatal_err() if the creation fails; call
+chmap_create(3) directly when the caller must handle a failure instead of
+the failure being fatal
+Uses CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets
+An assignment over a handle that already holds a map leaks that map, so
+destroy the old map with chmap_destroy(3) first
+chmap_destroy(3) destroys the handle; this is not needed for a handle
+that chmap_declare_scoped(3) declared
+.fi
+.SH EXAMPLES
+.nf
+chmap_declare(scores, char *, int);
+chmap_init(scores);
+int score = 42;
+chmap_insert(scores, "alice", score);
+chmap_destroy(scores);
+.fi
+.SH "SEE ALSO"
+.BR chmap_declare (3),
+.BR chmap_declare_scoped (3),
+.BR chmap_init_mp (3),
+.BR chmap_init_ch (3),
+.BR chmap_init_full (3),
+.BR chmap_construct (3),
+.BR chmap_create (3),
+.BR chmap_destroy (3)

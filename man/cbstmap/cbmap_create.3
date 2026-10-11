@@ -5,40 +5,45 @@ cbmap_create \- create a BST map with default settings
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cbstmap.h>
+#include <ccollections/cbstmap.h>
 
 cbmap cbmap_create(ccol_data_type key_type, char **err);
 .fi
 .SH DESCRIPTION
 .nf
-Creates a self-balancing binary search tree map (AVL tree) with default
-memory management and default comparison based on the key type.
+Creates a self-balancing binary search tree map (AVL tree) that uses the
+default memory management and the default comparison for the key type.
 .fi
 .SH PARAMETERS
 .nf
-key_type  Type of the keys stored in the map
-err       Optional pointer to receive error string on failure
+key_type  Type of the keys that the map stores
+err       Optional pointer that receives an error string on failure
 .fi
 .SH RETURN VALUE
 .nf
-Returns pointer to newly created BST map on success
+Returns a pointer to the new BST map on success
 Returns NULL on failure
 .fi
 .SH NOTES
 .nf
-Default comparison for char: this platform's own native char comparison
-  (signed or unsigned, matching however char behaves on this platform)
-Default comparison for the other signed integer types: signed integer
+Default comparison for char: the native char comparison of this
+  platform, which is signed or unsigned to match the behavior of char on
+  this platform
+Default comparison for the other signed integer types: a signed
+  integer comparison
+Default comparison for the unsigned integer types: an unsigned integer
   comparison
-Default comparison for unsigned integer types: unsigned integer comparison
-Default comparison for float/double/long double: numeric comparison; a NaN
-  key sorts as greater than every non-NaN key and equal to every other NaN
-  key
-Default comparison for ccol_string: strcmp-equivalent lexicographic order
-Map maintains AVL balance: |height(left) - height(right)| <= 1
-All operations are O(log n) for balanced tree
-Map must be destroyed with cbmap_destroy() when done
+Default comparison for float/double/long double: a numeric comparison,
+  in which a NaN key sorts as greater than every non-NaN key and equal to
+  every other NaN key
+Default comparison for ccol_string: a strcmp-equivalent lexicographic
+  order
+The map keeps the AVL balance: |height(left) - height(right)| <= 1
+All operations are O(log n) for a balanced tree
+The caller must destroy the map with cbmap_destroy() after use
 .fi
 .SH "SEE ALSO"
 .BR cbmap_create_full (3),
+.BR cbmap_create_mp (3),
+.BR cbmap_create_ch (3),
 .BR cbmap_destroy (3)

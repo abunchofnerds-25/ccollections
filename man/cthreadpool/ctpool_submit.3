@@ -1,34 +1,71 @@
-.TH CTPOOL_SUBMIT 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
+.TH CTPOOL_SUBMIT 3 "2026-09-21" "c_collections" "C Collections Library - Functions"
 .SH NAME
 ctpool_submit \- submit a task (blocking when bounded queue is full)
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadpool.h>
+#include <ccollections/cthreadpool.h>
 
 ccol_retval_t ctpool_submit(ctpool pool,
                             void (*fn)(void *),
                             void *arg,
-                            void (*on_complete)(void *));
+                            void (*on_complete)(void *arg, bool ran));
 .fi
 .SH DESCRIPTION
 .nf
-Allocates a task struct and appends it to the pool's task queue. For
-unbounded queues the call returns as soon as the task is enqueued and
-never blocks on capacity. For bounded queues the call blocks until a
-slot is available in the queue.
+Allocates a task struct and adds it to the task queue of the pool. For
+an unbounded queue the call returns as soon as the task is in the
+queue and never blocks on capacity; for a bounded queue it blocks until
+the queue has a free slot.
 
-The worker thread that picks up the task calls fn(arg). If on_complete
-is non-NULL the worker calls on_complete(arg) immediately after fn
-returns. The pool never frees arg; ownership remains with the caller.
+The worker thread that picks the task up calls fn(arg), and, when
+on_complete is not NULL, calls on_complete(arg, true) immediately after
+fn returns. The pool never frees arg; the caller keeps that ownership.
+
+on_complete runs exactly once for every task that a submit accepts, and
+ran says whether fn ran. A task that the pool discards before a worker
+takes it gets on_complete(arg, false), and fn never runs.
+ctpool_shutdown_immediate(3) discards every task that is still queued,
+including when it escalates a ctpool_shutdown_drain(3) that is under
+way, and so does a ctpool_destroy(3) of a pool that this process
+inherited across fork(2). Those on_complete(arg, false) calls run on
+the thread that makes that call, before the call returns, with no lock
+of the pool held, so on_complete can release arg in both cases. A
+submit that fails accepts nothing and never calls on_complete.
+
+An on_complete(arg, false) call counts as a call from the on_complete
+callback of a task of the pool, just as a call on a worker does. From
+there, ctpool_wait(3), ctpool_shutdown_drain(3) and
+ctpool_shutdown_immediate(3) on the same pool are no-ops that return at
+once, ctpool_destroy(3) on the same pool is a fatal error, and a submit
+to the same pool returns ccol_not_permitted, because the pool is in
+shutdown (from the ctpool_destroy(3) of a pool inherited across
+fork(2) the handle is already retired, so a submit returns
+ccol_invalid_args there). This holds for every pool whose discarded
+callbacks the thread is running, including when such a callback shuts
+down a second pool and the callbacks of that second pool run nested
+inside it.
+
+A call from a task that runs on this same pool, or from the on_complete
+callback of that task, while a bounded queue is already at capacity,
+returns ccol_container_full instead of waiting. Only the workers of this
+pool can free a slot, and the caller is one of them, so nothing could
+ever satisfy the wait.
+
+Use ctpool_try_submit(3) or ctpool_timed_submit(3) when the caller
+wants to handle a full queue itself, and an unbounded queue when the
+caller must never get a refusal.
 .fi
 .SH PARAMETERS
 .nf
 pool         Thread pool handle
 fn           Task function (must not be NULL)
-arg          Passed verbatim to fn and on_complete (may be NULL)
-on_complete  Called by the worker after fn returns (may be NULL)
+arg          The library gives it to fn and on_complete unchanged
+             (may be NULL)
+on_complete  Called once for the task: on_complete(arg, true) after
+             fn returns, or on_complete(arg, false) when the pool
+             discards the task unrun (may be NULL)
 .fi
 .SH RETURN VALUE
 .nf
@@ -36,6 +73,7 @@ ccol_success           - task enqueued successfully.
 ccol_invalid_args      - pool is CTPOOL_INVALID or a stale/already-destroyed handle, or fn is NULL.
 ccol_not_enough_memory - task struct allocation failed.
 ccol_not_permitted     - pool is shutting down.
+ccol_container_full    - a bounded queue is at capacity and the caller is a worker of this same pool.
 .fi
 .SH "SEE ALSO"
 .BR ctpool_try_submit (3),

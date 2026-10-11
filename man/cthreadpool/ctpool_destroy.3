@@ -5,20 +5,21 @@ ctpool_destroy \- destroy a thread pool and invalidate the handle
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadpool.h>
+#include <ccollections/cthreadpool.h>
 
 ctpool_destroy(pool);
 .fi
 .SH DESCRIPTION
 .nf
-Calls __ctpool_destroy() to wait for every in-flight resolved use of
-the handle to finish, drain or cancel all pending tasks, join all
-worker threads, and free all associated resources. The pool handle
-is then set to CTPOOL_INVALID.
+Drains or cancels every task that is still pending, then joins every
+worker thread, waits for every resolved use of the handle that is still
+in flight to stop, and frees every resource of the pool. The macro then
+sets the pool handle to CTPOOL_INVALID.
 
-If neither ctpool_shutdown_drain() nor ctpool_shutdown_immediate() was
-called beforehand, a drain shutdown is performed implicitly so that all
-queued tasks complete before the pool is freed.
+When the caller called neither ctpool_shutdown_drain() nor
+ctpool_shutdown_immediate() beforehand, the macro runs a drain shutdown
+by itself, so every task in the queue finishes before the library frees
+the pool.
 .fi
 .SH PARAMETERS
 .nf
@@ -27,17 +28,29 @@ pool  Thread pool variable to destroy (set to CTPOOL_INVALID after
 .fi
 .SH NOTES
 .nf
-Safe to call when pool is CTPOOL_INVALID (no-op). Calling this on a
-stale handle (one already destroyed, sequentially by an earlier
-call or concurrently by another thread) is a FATAL ERROR
-(abort()/SIGABRT), not a silent double-free. Calling this on pool
-from within a task (or that task's on_complete callback) currently
-executing on one of pool's own worker threads is also a FATAL
-ERROR, for the same reason; see __ctpool_destroy(3) for further
-detail on both cases.
+It is safe to call when pool is CTPOOL_INVALID; the macro then does
+nothing.
+
+A call on a stale handle (one that an earlier call already destroyed,
+or that another thread destroys at the same time) is a FATAL ERROR,
+which is abort() and SIGABRT. This is never a silent double free: the
+handle carries a generation tag that the library checks before it
+touches the pool, so it always detects such a value and never
+dereferences it.
+
+A call on pool from inside a task that runs on one of the worker threads
+of pool, or from the on_complete callback of that task, is a FATAL ERROR
+as well, for a related reason: that worker is still on its way back
+through its own dispatch loop, and would touch the mutex, the condition
+variables and the struct of the pool again immediately after this call
+freed them. Leave the destroy to another thread instead, or run it after
+the task returns.
+
+The macro evaluates pool exactly once. It must be a modifiable lvalue,
+such as a variable or an element of an array, so an expression with a
+side effect, such as handles[i++], destroys and clears one element.
 .fi
 .SH "SEE ALSO"
 .BR ctpool_construct (3),
-.BR __ctpool_destroy (3),
 .BR ctpool_shutdown_drain (3),
 .BR ctpool_shutdown_immediate (3)

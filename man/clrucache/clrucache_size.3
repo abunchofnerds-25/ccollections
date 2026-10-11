@@ -5,15 +5,16 @@ clrucache_size \- return the number of live entries in the cache
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <clrucache.h>
+#include <ccollections/clrucache.h>
 
 size_t clrucache_size(clru_cache cache);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the current number of live (fully initialised, not evicted)
-entries in the cache. Placeholder entries created during an in-progress
-fetch or set are not counted.
+Returns the number of live entries that the cache holds now. A live
+entry is one that is fully initialised and that no eviction removed;
+the count leaves out a placeholder entry that a fetch or a set in
+progress created.
 .fi
 .SH PARAMETERS
 .nf
@@ -21,20 +22,21 @@ cache  Cache handle.
 .fi
 .SH RETURN VALUE
 .nf
-Number of live entries, or 0 if cache is CLRU_CACHE_INVALID or a
-stale (already-destroyed) handle.
+The number of live entries. It is 0 when cache is CLRU_CACHE_INVALID,
+and 0 when cache is a stale handle that a call already destroyed.
 .fi
 .SH NOTES
 .nf
-cache is an opaque VALUE handle, resolved through a library-owned
-slot table before the underlying cache object is touched; a stale
-handle here is an ordinary error, not a fatal one (fatal-on-stale
-is reserved for __clrucache_destroy).
-Sums the cache's segments, taking each segment's own lock in turn. The
-result is a snapshot rather than an instant: a segment can gain or lose
-an entry after it has been counted, so the total describes no single
-moment.
-O(number of segments), which is a small fixed bound, not O(entries).
+cache is an opaque VALUE handle, which the library resolves through a
+slot table that it owns before it touches the cache object behind the
+handle. A stale handle here is an ordinary error, not a fatal one;
+only clru_destroy() treats a stale handle as fatal.
+This function adds the sizes of the segments of the cache, taking the
+own lock of each segment in turn. The result is a snapshot rather than
+a value at one instant: a segment can gain or lose an entry after this
+function counts it, so the total describes no single moment.
+The complexity is O(number of segments), a small fixed bound, not
+O(entries).
 .fi
 .SH "SEE ALSO"
 .BR clrucache_capacity (3),

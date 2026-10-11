@@ -5,28 +5,37 @@ cjson_clone \- deep-copy a DOM subtree
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cjson.h>
+#include <ccollections/cjson.h>
 
 cjson cjson_clone(cjson node);
 .fi
 .SH DESCRIPTION
 .nf
-Returns a fully independent copy of the subtree rooted at node.
-All strings are duplicated, all arrays and objects are recursively
-cloned.  The clone uses the same allocator as the source (taken from
-the root node's stored allocator).
+Returns a fully independent copy of the subtree under node.  The
+function duplicates every string and copies every array and every
+object together with its contents.  The clone uses the same allocator
+as the source, which is the allocator that the root node keeps, and
+each object of the copy keeps its members in the order of the source
+object.
 
-A subtree nested more than 500 levels deep (arrays and/or objects, in
-any combination) is rejected rather than recursing further; a tree
-built directly through the construction API (cjson_list_push(),
-cjson_dictionary_set()) is not otherwise bounded in depth the way a
-parsed document is, so this cap applies independently of cjson_parse().
-Ordinary trees never approach this depth.
+The function refuses a subtree that nests more than 500 levels deep,
+where each array or object is one level, in any combination, and a
+scalar adds none.  It reports such a subtree in the same way as an
+allocation failure.  The limit is the same as the limit of the
+parser, so the function can clone any tree that parsed; only the
+construction API, through cjson_list_push() and
+cjson_dictionary_set(), can build a deeper tree, because that API has
+no depth bound while a parsed document does.  This is a policy limit,
+not a guess about the stack size of the calling thread: the function
+walks the nesting with an explicit worklist on the heap, so a tree at
+the limit costs the same small, fixed amount of native stack as a
+flat one.  An ordinary tree never comes near this depth.
 .fi
 .SH RETURN VALUE
 .nf
-New root node on success (caller owns it).  NULL on allocation failure,
-or if node is nested more than 500 levels deep.
+A new root node, which the caller owns, on success.  NULL when the
+allocation fails, or when node nests more than 500 levels deep.
 .fi
 .SH "SEE ALSO"
-.BR cjson_destroy (3)
+.BR cjson_destroy (3),
+.BR cjson_dictionary_first (3)

@@ -1,17 +1,19 @@
-.TH CSTR_RFIND 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH CSTR_RFIND 3 "2026-09-28" "c_collections" "C Collections Library - Macros"
 .SH NAME
 cstr_rfind \- find the last occurrence of a substring
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 cstr_rfind(s, needle);
 .fi
 .SH DESCRIPTION
 .nf
-Pass-through wrapper for cstring_rfind().
+This macro is a pass-through wrapper for cstring_rfind(). The search
+runs from the end of the string, and its time is linear in the length of
+the string plus the length of needle. See cstring_rfind(3).
 .fi
 .SH PARAMETERS
 .nf
@@ -20,7 +22,8 @@ needle   Substring to find
 .fi
 .SH RETURN VALUE
 .nf
-Zero-based index of last occurrence, or ccol_invalid_size if not found
+The zero-based index of the last occurrence, or ccol_invalid_size when
+the needle is not found
 .fi
 .SH "SEE ALSO"
 .BR cstring_rfind (3),

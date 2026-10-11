@@ -5,15 +5,15 @@ chmap_delete_elem \- remove a key-value pair from the hash map
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chashmap.h>
+#include <ccollections/chashmap.h>
 
 ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair *key_pair);
 .fi
 .SH DESCRIPTION
 .nf
-Removes the key-value pair with the specified key from the hash map.
-Frees memory for both key and value. Automatically shrinks the map when
-load factor falls below threshold.
+Removes the key-value pair with the specified key from the hash map and
+frees the memory of both the key and the value. The map shrinks
+automatically when its load factor falls below a threshold.
 .fi
 .SH PARAMETERS
 .nf
@@ -34,9 +34,22 @@ ccol_key_not_found  - Key does not exist in map
 .fi
 .SH NOTES
 .nf
+The ptr of a key_pair needs no specified alignment, because the map
+hashes and compares the key bytes through memcpy instead of through a
+pointer cast to the key type. key_pair->ptr can therefore point directly
+at key bytes at any offset in a larger buffer, such as a field in a
+packed network frame or a memory-mapped record, and you do not have to
+copy the key bytes into an aligned local variable first
 Average O(1) complexity
-Frees memory for key and value
-Open-addressing: shrinks when load factor < 0.25 (scale 0.5x)
+Frees the memory of the key and of the value
+Open addressing: shrinks when the load factor < 0.25 (scale 0.5x). A
+grow on insert always leaves the live load above 0.25, so a delete
+never shrinks straight back a table that an insert just grew
+Open addressing: the delete moves the later entries of the same
+cluster back into the gap (backward-shift deletion) and leaves no
+marker for a deleted slot. Entries of that cluster can change slot, so
+every reference that chmap_get_elem_ref(3) or chmap_get_ptr(3) gave
+is invalid after the delete, as after any change to the map
 Separate chaining: shrinks when elem_count < (bucket_count + 1) / 8 (scale 0.25x)
 For a float or double key, see chmap_construct(3) for the map's
 key equality contract (bitwise, except -0.0 canonicalized to 0.0)

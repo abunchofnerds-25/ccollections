@@ -1,0 +1,93 @@
+.TH CJSON_DESTROY 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cjson_destroy \- free a DOM tree and NULL the handle
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cjson.h>
+
+cjson_destroy(node);
+.fi
+.SH DESCRIPTION
+.nf
+Frees node together with every descendant reachable from it, then sets
+node to NULL. A node that is already NULL is left alone and nothing is
+freed.
+
+Because the macro destroys the node and then assigns NULL to node,
+node must be an assignable lvalue of type cjson, not an arbitrary
+expression. Application code must use this form: the assignment of
+NULL is what makes an accidental second destroy of the same variable
+a no-op instead of a double free.
+
+The macro frees each node through the allocator that created it,
+which is the allocator that the caller gave to the cjson_create_*_mp()
+or cjson_parse_mp() call that made the node, so it needs no allocator
+argument.
+
+The macro tears the subtree down without one recursion for each
+level, so it destroys a document of any depth and never exhausts the
+call stack. This is also true for a document that the caller builds
+directly with cjson_list_push() and cjson_dictionary_set(), which
+have no depth bound at all.
+.fi
+.SH PARAMETERS
+.nf
+node  Assignable cjson variable naming the root of the subtree to
+      free. Set to NULL on return. A NULL variable is a no-op. It must
+      name a tree the caller owns, that is, one that is not currently
+      attached to a parent container.
+.fi
+.SH RETURN VALUE
+.nf
+None. The macro expands to a statement, not to an expression.
+.fi
+.SH NOTES
+.nf
+The macro evaluates node one time only. node must be a modifiable
+lvalue, for example a variable or an element of an array, so an
+expression with a side effect, for example handles[i++], destroys and
+clears one element.
+.fi
+.SH WARNINGS
+.nf
+A node that cjson_dictionary_get(), cjson_list_get() or cjson_get()
+returns is a borrowed reference into a tree: the parent still owns it,
+not the caller. Destroying such a node frees it while the parent
+still points at it, and a later destroy of the parent is then a
+double free. Destroy only a root that the caller owns. To remove a
+child, call cjson_dictionary_remove() or cjson_list_remove(), which
+already free what they remove.
+
+A node that the caller gives to cjson_list_push() or
+cjson_dictionary_set() belongs to the container from that moment. On
+most failure paths it also belongs to the container, because the call
+deep-freed it, so a separate destroy of the node is then a double
+free. Only ccol_invalid_args leaves the node with the caller,
+unchanged. These cases give ccol_invalid_args:
+  - A container that is NULL or of the wrong kind.
+  - A node that is attached to a container.
+  - A node that is the container itself.
+  - An attach that would make a cycle.
+  - For cjson_dictionary_set(), a key that is NULL or not valid UTF-8.
+All other failures, each ccol_not_enough_memory included, take
+ownership and free the node. cjson_list_push(3) gives the exact split
+of ownership.
+.fi
+.SH EXAMPLES
+.nf
+cjson doc = cjson_parse("{\e"k\e":[1,2,3]}", NULL);
+if (!doc) return;
+
+/* ... use doc ... */
+
+cjson_destroy(doc);   /* doc is NULL afterwards */
+cjson_destroy(doc);   /* harmless no-op */
+.fi
+.SH "SEE ALSO"
+.BR cjson_declare_scoped (3),
+.BR cjson_parse (3),
+.BR cjson_clone (3),
+.BR cjson_delete (3),
+.BR cjson_list_push (3)

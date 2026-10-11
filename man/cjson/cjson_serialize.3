@@ -5,36 +5,63 @@ cjson_serialize \- serialize a DOM tree to a compact JSON string
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cjson.h>
+#include <ccollections/cjson.h>
 
 char *cjson_serialize(cjson node);
 .fi
 .SH DESCRIPTION
 .nf
-Walks the DOM tree rooted at node and produces a compact (no whitespace)
-JSON string.  A NULL node produces the string "null".
+Walks the DOM tree under node and makes a compact JSON string with
+no whitespace.  A NULL node gives the string "null".
 
-Doubles are serialized with the shortest round-trip decimal
-representation (up to 17 significant digits), always using '.' as the
-decimal separator per RFC 8259, regardless of the calling thread's
-ambient LC_NUMERIC locale setting.  Integers use %lld.  Non-finite
-doubles (Inf, NaN) are serialized as "null".
+The serializer writes the members of each object in insertion order,
+which cjson_dictionary_first(3) describes, and the elements of each
+array in their index order, so the output for one tree is the same on
+every call and in every process.  A document that parses and
+serializes again keeps the order of its members.
 
-A subtree nested more than 500 levels deep (arrays and/or objects, in
-any combination) is not serialized further; NULL is returned instead.
-A tree built directly through the construction API (cjson_list_push(),
-cjson_dictionary_set()) is not otherwise bounded in depth the way a
-parsed document is, so this cap applies independently of cjson_parse().
-Ordinary trees never approach this depth.
+The serializer writes a double as the shortest decimal form that
+reads back as the same value, and that form holds up to 17 significant
+digits.  It always uses '.' as the decimal separator, as RFC 8259
+asks, whatever the LC_NUMERIC locale of the calling thread.  It
+writes an integer with %lld, and a double that is not finite (Inf and
+NaN) as "null".
+
+The output is always valid JSON text.  Every string that a tree
+holds, whether a value or an object key, is well-formed UTF-8; see
+cjson_parse(3) and cjson_create_string(3) for how the library checks
+this wherever bytes enter a tree.  The serializer therefore writes
+string content unchanged and adds only the escapes that JSON itself
+needs.
+
+The serializer refuses a subtree that nests more than 500 levels
+deep and returns NULL for it.  Each array or object is one level, in
+any combination, and a scalar adds none.  The limit is the same as
+the limit of the parser; only the construction API, through
+cjson_list_push() and cjson_dictionary_set(), can build a deeper
+tree, because that API has no depth bound while a parsed document
+does.  This is a policy limit, not a guess about the stack size of
+the calling thread: the serializer walks the nesting with an explicit
+worklist on the heap, so a tree at the limit costs the same small,
+fixed amount of native stack as a flat one.  An ordinary tree never
+comes near this depth.
 .fi
 .SH RETURN VALUE
 .nf
-Heap-allocated null-terminated string on success.
-NULL on allocation failure, or if node is nested more than 500 levels
-deep.
-The caller must free the string with cjson_serialize_free().
+A null-terminated string on the heap on success.
+NULL when the allocation fails, or when node nests more than 500
+levels deep.
+The string comes from the allocator of the root node.  The caller
+frees it with cjson_serialize_free() when the default allocator
+created the tree, and with cjson_serialize_free_mp() and the same
+allocator when a custom allocator created the tree.  Calling
+cjson_serialize_free() on a buffer from a custom allocator gives that
+buffer to plain free(), which never allocated it.
 .fi
 .SH "SEE ALSO"
 .BR cjson_serialize_pretty (3),
 .BR cjson_serialize_free (3),
+.BR cjson_serialize_free_mp (3),
+.BR cjson_create_string (3),
+.BR cjson_dictionary_first (3),
 .BR cjson_parse (3)

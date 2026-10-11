@@ -1,34 +1,36 @@
 .TH CCOL_CHAN_TRY_RECV_ZC 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-ccol_chan_try_recv_zc \- try to receive without blocking
+ccol_chan_try_recv_zc \- try to receive a message with no block
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadcomm.h>
+#include <ccollections/cthreadcomm.h>
 
 ccol_retval_t ccol_chan_try_recv_zc(ccol_channel *ch, c_message_t *target_buf);
 .fi
 .SH DESCRIPTION
 .nf
-Attempts to receive immediately from the automatically-selected queue.
-Returns immediately if the queue is empty.
+This function tries to receive a message immediately from the queue
+that the channel picks itself, and returns immediately if that queue is
+empty.
 .fi
 .SH PARAMETERS
 .nf
 ch          Channel to receive from
-target_buf  Buffer to receive the message
+target_buf  Buffer that gets the message
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success         - Message received (caller must free target_buf->data)
+ccol_success         - The function received a message. The caller must
+                       free target_buf->data.
 ccol_invalid_args    - ch or target_buf is NULL
-ccol_container_empty - Selected queue is empty
+ccol_container_empty - The chosen queue is empty
 .fi
 .SH NOTES
 .nf
-Never blocks
-Direction is automatically determined by thread ID
+The function never blocks.
+The function picks the direction itself from the ID of the thread.
 .fi
 .SH "SEE ALSO"
 .BR ccol_chan_recv_zc (3),

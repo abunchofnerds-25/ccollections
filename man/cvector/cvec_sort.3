@@ -1,19 +1,48 @@
-.TH CVEC_SORT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH CVEC_SORT 3 "2026-09-21" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cvec_sort \- sort vector using default comparison for type
+cvec_sort \- sort a vector with the default comparison for its type
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cvector.h>
+#include <ccollections/cvector.h>
 
 cvec_sort(v);
 .fi
 .SH DESCRIPTION
 .nf
-Sorts the vector in-place using the default comparison function for the
-element type. The default comparator is obtained from the csort library
-based on the type.
+This macro sorts the vector in place with the default comparison function
+for the element type, which it gets from the csort library; the type
+decides which comparator it gets.
+
+A char* vector can hold NULL elements. The default string comparison
+procedure puts NULL before every string that is not NULL, and NULL is
+equal only to another NULL, so every NULL element lands at the front of
+the sorted vector, with the other elements behind them in strcmp() order.
+
+An element type with no default comparison procedure is a compile-time
+error, not a run-time error. Because the type alone decides whether a
+type has a default comparison procedure, cvec_sort carries a
+_Static_assert, and such a call never builds. The diagnostic names the
+vector and points at cvector_sort_with_comparison_proc.
+
+These element types sort: every standard integer type in both
+signednesses, every enumerated type, float, double, long double, char*,
+const char*, signed char* and unsigned char*. Each of the char pointer
+types sorts as a NUL-terminated string, in strcmp() order, and uint8_t*
+is an unsigned char* that sorts the same way. Sort a vector of pointers
+to binary buffers with cvector_sort_with_comparison_proc and a comparator
+that compares the pointers. A char pointer that is itself const or
+volatile, such as const char *const, sorts too, by the content of its
+string. An enumerated type is compatible with one of the standard integer
+types, and the macro chooses the comparison procedure of that type.
+
+The macro rejects at compile time the types that have no default
+comparison procedure: bool, a struct, a union, a pointer to anything
+other than char, and a fixed-size char array such as char[64]. A vector
+of an enum type is not one of them and sorts normally. Sort a rejected
+element type with cvector_sort_with_comparison_proc and an explicit
+comparison procedure.
 .fi
 .SH PARAMETERS
 .nf
@@ -21,25 +50,34 @@ v    Vector to sort
 .fi
 .SH NOTES
 .nf
-Sorts in-place using stable mergesort algorithm
+The macro sorts in place with a stable mergesort algorithm, moving the
+elements inside the backing array directly, with no call for each
+element access.
 O(n log n) time complexity, O(n) space complexity
-Uses default comparison for the element type
-Supported types depend on csort library defaults
-Calls ccol_fatal_err() with a clear diagnostic if the element type has no
-default comparator (use cvector_sort_with_comparison_proc directly with
-an explicit comparison function for such a type)
-Calls ccol_fatal_err() if the sort's internal temporary buffer could not be
-allocated, matching every other mutating type-safe macro in cvector.h
-(cvec_push, cvec_reserve, cvec_append_array, ...); the vector is left
-completely unsorted in that case.
+The macro uses the default comparison for the element type.
+The macro orders a NULL char* element without dereferencing it.
+The code does not compile when the element type has no default
+comparison procedure; the diagnostic names the vector and points at
+cvector_sort_with_comparison_proc.
+cvec_find is deliberately different: it accepts every element type and
+falls back to byte-wise equality, because equality can come from the
+bytes of an element, but an ordering cannot.
+The macro calls ccol_fatal_err() when it cannot allocate the internal
+temporary buffer of the sort, as every other type-inferred macro in
+cvector.h that changes a vector does (cvec_push, cvec_reserve,
+cvec_append_array and the others). The vector then stays completely
+unsorted.
 .fi
 .SH EXAMPLES
 .nf
 cvec_construct(vec, int);
-cvec_push_rvalue(vec, 3);
-cvec_push_rvalue(vec, 1);
-cvec_push_rvalue(vec, 2);
+cvec_push(vec, 3);
+cvec_push(vec, 1);
+cvec_push(vec, 2);
 cvec_sort(vec);  // vec is now [1, 2, 3]
+cvec_destroy(vec);
 .fi
 .SH "SEE ALSO"
-.BR cvector_sort_with_comparison_proc (3)
+.BR cvector_sort_with_comparison_proc (3),
+.BR cvec_find (3),
+.BR csort_get_default_comparison_proc (3)

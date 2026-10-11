@@ -26,17 +26,20 @@
  * @file bench_cache.c
  * @brief Benchmarks for clrucache.
  *
- * Three access patterns, because an LRU cache behaves very differently under
- * each. A pure hit stream touches the recency list on every access and does no
- * eviction; a working set larger than the capacity misses most of the time and
- * fills what it missed, so it evicts on almost every access, which is the
- * expensive path; and a set stream measures insertion with eviction. No remote
- * getter or setter is configured, so what is measured is the cache's own
- * bookkeeping rather than a fetch this repository does not control. That is
- * also why the working-set case fills on a miss itself: with no getter a miss
- * returns immediately and stores nothing, so a get-only stream over a working
- * set this size would never evict once and would report the cost of a failed
- * lookup under the name of the eviction path.
+ * There are three access patterns, because an LRU cache behaves very
+ * differently under each one. A stream of hits alone touches the recency list
+ * on every access and evicts nothing. A working set larger than the capacity
+ * misses most of the time and then fills what it missed, so it evicts on
+ * almost every access, which is the expensive path. A stream of set calls
+ * measures an insert together with an eviction.
+ *
+ * These cases configure no remote getter and no remote setter, so they
+ * measure the bookkeeping of the cache itself instead of a fetch that this
+ * repository does not control. This is also why the working-set case fills the
+ * cache itself on a miss: with no getter, a miss returns at once and stores
+ * nothing, so a stream of get calls alone over a working set of this size would
+ * never evict, and it would report the cost of a failed lookup under the name
+ * of the eviction path.
  */
 
 #include <clrucache.h>
@@ -48,17 +51,18 @@
 #define BENCH_LRU_CAPACITY 4096
 #define BENCH_LRU_N 200000
 
-/* Fewer operations per repetition in the contended variants. The cases are a
- * plain per-operation loop with no fixed cost to amortize, so a shorter
- * repetition measures the same thing; what it buys is many repetitions inside
- * the sampler's budget instead of a handful of very long ones. */
+/* The forms with contention do fewer operations in each repetition. These
+ * cases are a plain loop over the operations, with no fixed cost to spread
+ * out, so a shorter repetition measures the same thing; what it gives you is
+ * many repetitions inside the budget of the sampler instead of a few very long
+ * ones. */
 #define BENCH_LRU_MT_N 20000
 
 typedef struct {
   clru_cache cache;
   int *keys;
-  /* The total lru_get_run reaches when every lookup hits, computed once in
-     setup so the timed loop needs no counter of its own. */
+  /* This is the total that lru_get_run reaches when every lookup hits. The
+     setup computes it once, so the timed loop needs no counter of its own. */
   long long expected_acc;
 } lru_state_t;
 
@@ -72,11 +76,11 @@ static void lru_teardown(void *state) {
   free(st);
 }
 
-/* @param key_span  How many distinct keys the access stream draws from. At or
- *                  below the capacity every access hits; above it, the cache
- *                  evicts continuously. */
+/* @param key_span  The number of distinct keys that the access stream draws
+ *                  from. At or below the capacity, every access hits; above
+ *                  it, the cache evicts all the time. */
 static lru_state_t *lru_make(size_t n, size_t key_span, bool prefill) {
-  lru_state_t *st = calloc(1, sizeof *st);
+  lru_state_t *st = calloc(1, sizeof(*st));
   if (!st) return NULL;
   st->keys = malloc(sizeof(int) * n);
   if (!st->keys) {
@@ -102,14 +106,15 @@ static lru_state_t *lru_make(size_t n, size_t key_span, bool prefill) {
   return st;
 }
 
-/* Half the capacity, not all of it, so that this case really is all hits.
-   Filling a sharded cache to exactly its capacity does not leave every key
-   resident: keys are spread across independently bounded segments, so a
-   segment that draws more than its share evicts while the cache as a whole is
-   still under capacity. Measured at a span equal to the capacity, 4009 of 4096
-   keys survive and 2.16 percent of lookups miss, which is neither the hit path
-   this case is named for nor a stable mix. At half the capacity every key
-   stays, and lru_get_run's own check holds the case to it. */
+/* This uses half the capacity instead of all of it, so that this case really
+   does hit every time. A cache with segments does not keep every key when you
+   fill it to exactly its capacity: the keys spread across segments, each
+   segment has its own bound, and a segment that draws more than its share
+   evicts while the whole cache is still below its capacity. Measured with a
+   span equal to the capacity, 4009 of 4096 keys stay and 2.16 percent of the
+   lookups miss, which is neither the hit path that this case is named for nor
+   a steady mixture. At half the capacity every key stays, and the check inside
+   lru_get_run holds the case to that. */
 static void *lru_hit_setup(size_t n) {
   return lru_make(n, BENCH_LRU_CAPACITY / 2, true);
 }
@@ -131,24 +136,24 @@ static void lru_get_run(void *state, size_t n) {
     int out = 0;
     if (clru_get(c, st->keys[i], &out) == ccol_success) acc += out;
   }
-  /* Every key here is drawn from below the capacity and every one of them was
-     put in during setup, so a miss is impossible and this case genuinely
-     measures hits. Checked rather than assumed, because a miss is much cheaper
-     than a hit: a defect that stopped keys being found would report as a large
-     improvement under a name promising the opposite, which is the shape of
-     result nobody questions. */
-  /* Checked from the sum the loop already accumulates, so the timed body
-     carries no counter of its own: every value equals its key, so a complete
-     run reaches exactly the total computed in setup, and any miss falls
-     short. */
+  /* Every key here comes from below the capacity, and the setup put every one
+     of them into the cache, so a miss is impossible and this case really does
+     measure hits. The code checks this instead of assuming it, because a miss
+     costs much less than a hit: a defect that stopped the cache from finding a
+     key would report a large improvement under a name that promises the
+     opposite, and nobody questions a result of that shape. */
+  /* The check reads the sum that the loop already accumulates, so the timed
+     body carries no counter of its own. Every value equals its key, so a
+     complete run reaches exactly the total computed in setup, and any miss
+     falls short. */
   if (acc != st->expected_acc)
     bench_die("clrucache get_all_hits: a lookup missed");
-  bench_sink(&acc);
+  bench_sink_value((long long)acc);
 }
 
-/* Get, and on a miss put the key in, which is how a cache with no remote getter
- * is actually driven. The working set is eight times the capacity, so most
- * iterations miss, insert and evict. */
+/* This gets a key and, on a miss, puts that key in, which is how a caller
+ * drives a cache that has no remote getter. The working set is eight times the
+ * capacity, so most passes miss, insert and evict. */
 static void lru_get_or_fill_run(void *state, size_t n) {
   lru_state_t *st = state;
   clru_cache c = st->cache;
@@ -162,7 +167,7 @@ static void lru_get_or_fill_run(void *state, size_t n) {
       clru_set(c, st->keys[i], st->keys[i]);
     }
   }
-  bench_sink(&acc);
+  bench_sink_value((long long)acc);
 }
 
 static void lru_set_run(void *state, size_t n) {
@@ -173,10 +178,11 @@ static void lru_set_run(void *state, size_t n) {
   bench_sink(&c);
 }
 
-/* clrucache is internally locked, so its threads share one cache: the figure
- * these cases report is what that lock costs under real contention. The key
- * stream is read-only once built, so sharing it adds nothing the cache itself
- * does not already pay for. */
+/* clrucache holds its own lock, so the threads here share one cache, and the
+ * figure that these cases report is what that lock costs under real
+ * contention. Nothing writes to the key stream after the setup builds it, so
+ * the threads can share it without adding a cost that the cache does not
+ * already pay. */
 BENCH_MT_SETUP(lru_hit_setup)
 BENCH_MT_SETUP(lru_set_setup)
 

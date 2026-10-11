@@ -5,36 +5,43 @@ chttpclient_destroy \- destroy an HTTP client and invalidate the handle
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpclient.h>
+#include <ccollections/chttpclient.h>
 
 chttpclient_destroy(cli)
 .fi
 .SH DESCRIPTION
 .nf
-Macro wrapper around __chttpclient_destroy.  Waits for all in-flight
-requests to complete, frees all resources, then sets cli to
-CHTTPCLI_INVALID.
+This macro waits for every request that is in flight to finish, then
+frees every resource and sets cli to CHTTPCLI_INVALID.
 
-"All in-flight requests" spans every tier: a synchronous
-chttpclient_do/_streaming call still executing on another thread, and
-any chttpclient_do_async/_streaming or chttpclient_do_pooled/
-_streaming request submitted to the shared reactor engine that has
-not yet completed and is not merely sitting idle-pooled.  It is safe
-to call this even if a ctpool_future returned by chttpclient_do_async/
-_streaming has not been waited on yet.
+"Every request that is in flight" covers all three tiers: a synchronous
+chttpclient_do or chttpclient_do_streaming call that still runs on
+another thread, and a request from chttpclient_do_async,
+chttpclient_do_async_streaming, chttpclient_do_pooled or
+chttpclient_do_pooled_streaming, which counts while the shared reactor
+engine still works on it. A connection that sits idle in the pool does
+not count. This macro is safe even when nothing has waited yet on a
+ctpool_future from chttpclient_do_async or from
+chttpclient_do_async_streaming.
 
-cli must be a currently live handle or CHTTPCLI_INVALID (a silent
-no-op).  Calling this on a stale handle (one already destroyed,
-sequentially by an earlier call or concurrently by another thread)
-is a FATAL ERROR (abort()/SIGABRT), not a silent double-free; see
-__chttpclient_destroy(3) for further detail.
+cli must be a handle that is live now, or CHTTPCLI_INVALID, which is a
+silent no-op. Three other kinds of value are a FATAL ERROR: a stale
+handle that an earlier call already destroyed, a stale handle that
+another thread destroys at this same moment, and a forged value or
+garbage. For each of them the macro calls abort() and raises SIGABRT,
+because that is safer than the risk of a silent double free or of a
+use-after-free.
 .fi
 .SH PARAMETERS
 .nf
-cli   An lvalue of type chttpcli.
+cli   An lvalue of the type chttpcli.
+.fi
+.SH NOTES
+.nf
+The macro evaluates cli exactly once. It must be a modifiable lvalue,
+such as a variable or an element of an array, so an expression with a
+side effect, such as handles[i++], destroys and clears one element.
 .fi
 .SH "SEE ALSO"
-.BR __chttpclient_destroy (3),
-.BR ___chttpclient_destroy (3),
 .BR ccol_create_chttpclient (3),
 .BR chttp_default_client (3)

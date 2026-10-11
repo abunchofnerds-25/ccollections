@@ -5,29 +5,31 @@ ccol_selectable_from_dynq \- build a ccol_selectable from a ccol_dynamic_queue
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadcomm.h>
+#include <ccollections/cthreadcomm.h>
 
 ccol_selectable_from_dynq(q, dir);
 .fi
 .SH DESCRIPTION
 .nf
-Constructs a ccol_selectable tagged-union value of type ccol_selectable_dynq
-wrapping the given ccol_dynamic_queue pointer with the specified direction.
+This macro builds a ccol_selectable value, a tagged union whose type
+here is ccol_selectable_dynq, that wraps the ccol_dynamic_queue
+pointer that you give, with the direction that you give.
 
   ccol_select_read; wait for at least one message to arrive (read-wait)
   ccol_select_write; wait until sending is enabled and the queue holds
                      fewer than ccol_max_elem_count messages, the same
                      ceiling ccol_dynmq_send_zc() itself enforces
 
-Because a ccol_dynamic_queue is unbounded in practice, it is always considered
-writable as long as writing is not disabled.  ccol_select_write on a
-ccol_dynamic_queue is only necessary when ccol_dynmq_disable_sending() has been
-called and the caller needs to know when the queue becomes writable again.
+A ccol_dynamic_queue is unbounded in practice, so the library always
+treats it as writable for as long as writes are turned on. You need
+ccol_select_write on a ccol_dynamic_queue in one case only: after a
+call to ccol_dynmq_disable_sending(), when the caller must know when
+the queue becomes writable again.
 .fi
 .SH PARAMETERS
 .nf
-q    ccol_dynamic_queue pointer to wrap.  Passing NULL produces a selectable
-     that ccol_select() will reject with ccol_invalid_args.
+q    ccol_dynamic_queue pointer to wrap. A NULL value makes a
+     selectable that ccol_select() rejects with ccol_invalid_args.
 dir  ccol_select_read or ccol_select_write.
 .fi
 .SH RETURN VALUE
@@ -43,8 +45,9 @@ size_t idx;
 ccol_select_va(&idx,
     ccol_selectable_from_circq(q0, ccol_select_read),
     ccol_selectable_from_dynq(dq, ccol_select_read));
-/* on ccol_success, claim the message via ccol_dynmq_try_recv_zc(dq, ...) or
-   ccol_circq_try_recv_zc(q0, ...), whichever selectable idx points at */
+/* on ccol_success, claim the message with ccol_dynmq_try_recv_zc(dq, ...)
+   or ccol_circq_try_recv_zc(q0, ...), for whichever selectable idx
+   points at */
 .fi
 .SH "SEE ALSO"
 .BR ccol_select (3),

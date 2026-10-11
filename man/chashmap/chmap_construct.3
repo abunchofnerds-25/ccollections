@@ -1,20 +1,20 @@
 .TH CHMAP_CONSTRUCT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-chmap_construct \- type-safe hash map construction
+chmap_construct \- type-inferred hash map construction
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chashmap.h>
+#include <ccollections/chashmap.h>
 
 chmap_construct(hm_name, key_type, val_type);
 .fi
 .SH DESCRIPTION
 .nf
-Type-safe macro for creating a hash map with default settings.
-Automatically determines key and value types and creates type marker
-variables that let the other type-dispatching macros know the declared
-key and value types at each call site.
+Type-inferred macro that creates a hash map with the default settings.
+It determines the key and value types automatically and also creates
+type marker variables, which tell the other type-dispatching macros the
+declared key and value types at each call site.
 .fi
 .SH PARAMETERS
 .nf
@@ -24,38 +24,50 @@ val_type  Type of values
 .fi
 .SH NOTES
 .nf
-Terminates program on allocation failure
+Stops the program if the allocation fails
 Creates hidden type marker variables that the other type-dispatching
-macros read; chmap_redeclare(3) recreates them in another scope
+macros read; chmap_redeclare(3) creates them again in another scope
 Uses CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets
-Uses default memory management and hashing
+Uses the default memory management and the default hashing
 .fi
 .SH "FLOAT AND DOUBLE KEY EQUALITY"
 .nf
-For a float or double key_type, key equality is bitwise equality,
-not IEEE 754 == equality, with one exception: -0.0 and 0.0 are
-canonicalized to the same key, matching -0.0 == 0.0 in C.
-Every other bit pattern, including NaN, follows bitwise equality:
-a NaN key is always found again by the exact bit pattern it was
-inserted with (unlike NaN == NaN, which is always false in C), and
-two different NaN payloads are two different keys.
+For a float or double key_type, key equality is bitwise equality, not
+IEEE 754 == equality, with one exception: the map canonicalizes -0.0
+and 0.0 to the same key, which matches -0.0 == 0.0 in C.
+Every other bit pattern obeys bitwise equality, NaN included, so the
+map always finds a NaN key again by the exact bit pattern that the
+caller inserted it with (in C, NaN == NaN is always false). Two
+different NaN payloads are two different keys.
 .fi
 .SH "LONG DOUBLE KEY EQUALITY"
 .nf
-For a long double key_type, key equality is based on numeric value
-(native ==), not bitwise equality: -0.0L and 0.0L are the same key,
-and two keys holding the identical value remain the same key even
-if their platform-defined padding bits differ. Every NaN long
-double collapses into a single key, unlike float/double's own
-distinct-NaN-payload behavior. This value-based handling is
-bypassed when a custom hashing function is supplied at creation
-time; see chmap_create_full(3).
+For a long double key_type, key equality uses the numeric value
+(native ==) instead of bitwise equality. The keys -0.0L and 0.0L are
+the same key, and two keys that hold the same value stay the same key
+even when their platform-defined padding bits are different. Every NaN
+long double collapses into one key, unlike float and double, where
+each different NaN payload is a different key.
+The map does not use this value-based handling when the caller
+gives a custom hashing function at creation time; see
+chmap_create_full(3).
+.fi
+.SH "STRUCT KEY EQUALITY"
+.nf
+For a key type that the map does not know, such as a struct, key
+equality compares every byte of the key, padding included, and the
+default hash reads every byte too. With GCC 11 or later the macros set
+the padding of their own copy of a key to zero. With any other
+compiler that padding is unspecified, so a padded struct key needs a
+custom hashing function and a custom key equality function, given
+through chmap_construct_full(3). See chmap_create_full(3).
 .fi
 .SH EXAMPLES
 .nf
 chmap_construct(map, int, char*);
 int key = 42;
 chmap_insert(map, key, "hello");
+chmap_destroy(map);
 .fi
 .SH "SEE ALSO"
 .BR chmap_construct_full (3),

@@ -5,29 +5,34 @@ ccol_r_mempool_destroy \- destroy a ranged memory pool
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cmempool.h>
+#include <ccollections/cmempool.h>
 
 ccol_r_mempool_destroy(rmp);
 .fi
 .SH DESCRIPTION
 .nf
-Frees all resources associated with the ranged memory pool including all
-sub-pools. For pools created from preallocated buffers, the buffer itself
-is not freed.
+Frees every resource of the ranged memory pool, every sub-pool included.
+For a pool that was created from a preallocated buffer, this macro does
+not free the buffer itself.
 .fi
 .SH PARAMETERS
 .nf
-rmp  Ranged memory pool to destroy (will be set to NULL)
-.fi
-.SH WARNINGS
-.nf
-Unfreed dynamically allocated pointers via fallback will cause assertion
-failure. All allocated entries should be freed before destroying.
+rmp  Ranged memory pool to destroy. The macro sets it to NULL
 .fi
 .SH NOTES
 .nf
-Safe to call with NULL pointer
-For preallocated pools, user must manage buffer lifetime
+It is safe to call this macro with a NULL pointer
+For a preallocated pool, the caller owns the lifetime of the buffer
+
+The macro evaluates rmp exactly once. It must be a modifiable lvalue,
+such as a variable or an element of an array, so an expression with a
+side effect, such as handles[i++], destroys and clears one element.
+.fi
+.SH WARNINGS
+.nf
+A pointer from the dynamic fallback that nobody freed causes an
+assertion failure, so free every allocated entry before you destroy the
+pool.
 .fi
 .SH "SEE ALSO"
 .BR ccol_r_mempool_create (3),

@@ -1,0 +1,63 @@
+.TH CCOL_DYNMQ_TIMED_RECV_ZC 3 "2026-10-01" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccol_dynmq_timed_recv_zc \- receive a message from a dynamic queue with a timeout
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_retval_t ccol_dynmq_timed_recv_zc(ccol_dynamic_queue *dq,
+                                       c_message_t *target_buf,
+                                       uint64_t timeout_us);
+.fi
+.SH DESCRIPTION
+.nf
+This function waits for a message in the dynamic queue for at most the
+given timeout. If a message arrives in time, the function removes the
+message at the head and transfers the ownership of its data pointer to
+the caller in target_buf. The caller must free target_buf->data after
+it finishes with the data.
+
+The timeout is a count of microseconds from the call, from which the
+library makes an absolute deadline on CLOCK_MONOTONIC.
+.fi
+.SH PARAMETERS
+.nf
+dq          Dynamic queue to receive from
+target_buf  Buffer that gets the message together with the ownership
+            of the data.
+timeout_us  Longest time to wait, in microseconds, from the call. 0
+            does not wait, which makes the call ccol_dynmq_try_recv_zc.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success              - The function received a message. The caller
+                            must free target_buf->data.
+ccol_invalid_args         - dq or target_buf is NULL
+ccol_container_empty      - The timeout is 0 and the queue is empty
+ccol_timed_out            - The timeout ended before a message arrived
+ccol_unexpected_failure   - The wait failed with an error other than a
+                            timeout; errno holds that error
+.fi
+.SH NOTES
+.nf
+The function blocks for the duration of the timeout at most.
+On success, the caller gets the ownership of target_buf->data.
+A timeout of 0 does not wait: the call then does exactly what
+ccol_dynmq_try_recv_zc does and returns its result, so it gives
+ccol_container_empty, not ccol_timed_out, when it cannot proceed at
+once.
+A timeout too large to form a deadline, such as UINT64_MAX, saturates
+to the latest deadline that the clock can hold and in practice waits
+with no end; it never wraps into the past.
+The library measures the timeout against CLOCK_MONOTONIC, so a change
+to the wall clock of the system (by an administrator, by NTP, or by the
+resume of a virtual machine) does not make the timeout longer or
+shorter: the call waits for the duration that the caller gave.
+The function is thread-safe.
+.fi
+.SH "SEE ALSO"
+.BR ccol_dynmq_recv_zc (3),
+.BR ccol_dynmq_try_recv_zc (3),
+.BR ccol_dynmq_send_zc (3)

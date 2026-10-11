@@ -1,31 +1,34 @@
-.TH CTPOOL_FUTURE_FULFILL 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
+.TH CTPOOL_FUTURE_FULFILL 3 "2026-09-21" "c_collections" "C Collections Library - Functions"
 .SH NAME
 ctpool_future_fulfill \- deliver a result to a detached future
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadpool.h>
+#include <ccollections/cthreadpool.h>
 
 ccol_retval_t ctpool_future_fulfill(ctpool_future *f, void *result);
 .fi
 .SH DESCRIPTION
 .nf
-Delivers result to a future created via ctpool_future_create_detached,
-waking any callers currently blocked in ctpool_future_get, then
-releases the producer's reference (freeing the future here if the
-caller already released its own reference via ctpool_future_free).
+Delivers result to a future that ctpool_future_create_detached made,
+wakes every caller that blocks in ctpool_future_get, and then releases
+the reference of the producer.
 
-Must be called exactly once per detached future. Do not call this on
-a future returned by ctpool_submit_future, ctpool_try_submit_future,
-or ctpool_timed_submit_future; those are fulfilled internally by the
-worker thread that runs their task.
+This call frees the future when that is the last reference left, which
+is the case when the caller has already released its own with
+ctpool_future_free and no ctpool_future_get call is still in progress.
+
+Call this exactly one time for each detached future. Do not call it on
+a future that ctpool_submit_future, ctpool_try_submit_future or
+ctpool_timed_submit_future returned: the worker thread that runs the
+task of such a future fulfills it inside the library.
 .fi
 .SH PARAMETERS
 .nf
-f        Future handle; must have been created via
-         ctpool_future_create_detached and not already fulfilled
-result   Result value to deliver; retrievable via ctpool_future_get
+f        Future handle. ctpool_future_create_detached must have made
+         it, and nothing must have fulfilled it yet
+result   Result value to deliver. ctpool_future_get reads it back
 .fi
 .SH RETURN VALUE
 .nf

@@ -5,36 +5,35 @@ chttpsvr_req_header \- look up a request header
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 const char *chttpsvr_req_header(const chttpsvr_req *req,
                                  const char *name);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the value of the request header named name, or NULL if the
-header is absent.  The lookup is case-insensitive.  When a header
-appears multiple times, the last value is returned.
+Returns the value of the request header called name, or NULL when that
+header is absent.  The lookup is case-insensitive, and when a header
+appears more than once the last value is returned.
 
-The returned pointer is valid for the lifetime of the handler
-invocation.
+The pointer stays valid for the duration of the handler call.
 .fi
 .SH NOTES
 .nf
-A chunked request body's trailer fields (RFC 7230 4.1.2) are indexed
-exactly like any other header and become retrievable through this same
-function once they have actually been parsed; there is no separate
-trailer-specific accessor.
+The trailer fields of a chunked request body (RFC 7230 4.1.2) are not
+request headers, and this function never returns one: it answers only
+from the header block of the request, so a trailer field of any name
+reads as absent, on buffered and streaming routes alike.
 
-For a buffered route this is transparent: the handler only ever runs
-once the whole body, trailers included, has already been read, so a
-trailer field is retrievable from the very start of the handler.
-
-For a streaming route, a trailer field becomes retrievable only once
-the handler's own chttpsvr_req_read() calls have drained the body all
-the way to its natural end (a return of 0).  Querying it any earlier
-returns NULL, indistinguishable from the field never having been sent
-at all.
+Trailer fields arrive after the server has routed the request and
+after the middleware has run, and on a buffered route also after the
+server has read the header block.  Indexing trailers alongside headers
+would therefore let a client add a trailer that displaces a header set
+by an upstream proxy (such as X-Forwarded-For, or the identity header
+of an authentication gateway) on a request the server has already
+committed to.  This server has no trailer accessor at all; a
+deployment that needs trailer semantics should terminate the trailers
+in front of this server.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_req_method (3),

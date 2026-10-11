@@ -5,16 +5,16 @@ ccol_mempool_used_count \- report how many pool elements are in use
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cmempool.h>
+#include <ccollections/cmempool.h>
 
 size_t ccol_mempool_used_count(ccol_mempool *mp);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the number of pool-owned elements currently handed out to
-callers. Elements sitting in a per-thread cache have been taken off the
-shared free list but not given to anyone, and are not counted as used.
-Dynamic fallback allocations are not counted either; see
+Returns the number of pool-owned elements that the pool holds out to
+callers now. An element that sits in the cache of a thread has left the
+shared free list, but the pool gave it to nobody, so the call does not
+count it as used. It does not count a dynamic fallback entry either; see
 ccol_mempool_dynamic_allocs_count(3) for those.
 .fi
 .SH PARAMETERS
@@ -23,26 +23,27 @@ mp                        Memory pool to query (must not be NULL)
 .fi
 .SH RETURN VALUE
 .nf
-Returns the number of elements currently in use
+Returns the number of elements in use now
 .fi
 .SH NOTES
 .nf
-Exact whenever the pool is quiescent. If other threads are allocating or
-freeing while this runs, the result is a snapshot that may already be
-stale by the time it is returned, which is inherent in asking for a count
-of something that is moving.
+The count is exact whenever the pool is quiet. If other threads allocate
+or free while this call runs, the result is a snapshot that can already
+be stale when the call returns, which is inherent in a count of
+something that moves.
 
-On a quiescent pool the result never exceeds
-ccol_mempool_total_capacity(). Under concurrent allocation on a pool with
-per-thread caches it can briefly sit a few entries above it, and never
-above the physical slot count that ccol_mempool_allocated_bytes(3)
-accounts for; see ccol_mempool_total_capacity(3) for why.
+On a quiet pool the result never exceeds
+ccol_mempool_total_capacity(). Under concurrent allocation on a pool
+with a cache for each thread, it can sit a few entries above that for a
+short time, but never above the physical slot count that
+ccol_mempool_allocated_bytes(3) reports. See
+ccol_mempool_total_capacity(3) for why.
 .fi
 .SH "THREAD SAFETY"
 .nf
 Thread-safe when the pool was created with single_threaded = false.
-Acquires the pool's lock and walks its per-thread caches, so it is a
-cold-path call and not intended for use inside a hot loop.
+The call takes the lock of the pool and walks the cache of each thread,
+which makes it a cold-path call: do not use it inside a hot loop.
 .fi
 .SH "SEE ALSO"
 .BR ccol_mempool_total_capacity (3),

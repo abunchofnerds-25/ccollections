@@ -1,8 +1,9 @@
 name: Fuzz
 
-# Mandatory, blocking jobs on every push and every pull request, matching
-# ci.yml's own triggers exactly: fuzzing is part of ordinary CI, not a
-# post-merge-only or opt-in check.
+# These jobs are mandatory and they block a merge. They run on every push and on
+# every pull request, with the same triggers as ci.yml. Fuzzing is part of
+# ordinary CI here: it is not a check that runs only after a merge, and it is
+# not a check that you turn on yourself.
 on:
   push:
   pull_request:
@@ -14,16 +15,21 @@ concurrency:
 
 jobs:
   fuzz-yaml:
-    name: cyaml (libFuzzer)
+    name: cyaml (libFuzzer, document + path)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y clang libssl-dev zlib1g-dev
-      - name: Build fuzz target
-        run: cd tests/cyaml && make fuzz
-      - name: Run for a bounded duration
-        run: cd tests/cyaml && ./fuzz_cyaml fuzz/corpus -max_total_time=900
+      - name: Build fuzz targets
+        run: cd tests/cyaml && make fuzz fuzz_path
+      - name: Run the document target for a bounded duration
+        run: cd tests/cyaml && ./fuzz_cyaml fuzz/corpus -max_total_time=600
+      # The path grammar is a second parser, and unlike the document target it
+      # MUTATES the tree that it walks; see fuzz/fuzz_cyaml_path.c. cjson has
+      # the same pair of targets.
+      - name: Run the path target for a bounded duration
+        run: cd tests/cyaml && ./fuzz_cyaml_path fuzz/corpus_path -max_total_time=300
       - name: Upload crash artifact
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -60,18 +66,25 @@ jobs:
           if-no-files-found: ignore
 
   fuzz-http:
-    name: chttp1_parser (libFuzzer, request + response)
+    name: chttpclient (libFuzzer, HTTP/1.1 request + response + URL)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y clang libssl-dev zlib1g-dev
       - name: Build fuzz targets
-        run: cd tests/chttpclient && make fuzz_request fuzz_response
+        run: cd tests/chttpclient && make fuzz_request fuzz_response fuzz_url
       - name: Run request-mode target for a bounded duration
-        run: cd tests/chttpclient && ./fuzz_chttp1_request fuzz/corpus_request -max_total_time=450
+        run: cd tests/chttpclient && ./fuzz_chttp1_request fuzz/corpus_request -max_total_time=300
       - name: Run response-mode target for a bounded duration
-        run: cd tests/chttpclient && ./fuzz_chttp1_response fuzz/corpus_response -max_total_time=450
+        run: cd tests/chttpclient && ./fuzz_chttp1_response fuzz/corpus_response -max_total_time=300
+      # The URL and redirect layer sits ABOVE the parser, and its input is just
+      # as attacker-influenced: a Location header comes from whatever server the
+      # previous hop reached, and the client resolves it before it opens the
+      # next connection. On every input, the target also asserts that a base
+      # which is not a unix-socket target can never resolve to one that is.
+      - name: Run URL and redirect target for a bounded duration
+        run: cd tests/chttpclient && ./fuzz_chttp_url fuzz/corpus_url -max_total_time=300
       - name: Upload crash artifact
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

@@ -1,0 +1,82 @@
+.TH CHMAP_CONSTRUCT_MP_SCOPED 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chmap_construct_mp_scoped \- declare and create a hash map with a custom allocator, destroyed on scope exit
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chashmap.h>
+
+chmap_construct_mp_scoped(hm_name, key_t, val_t, mmgmt_procs);
+.fi
+.SH DESCRIPTION
+.nf
+Declares a hash map handle named hm_name, together with the companion
+type variables that carry key_t and val_t to every later type-inferred
+macro. The macro then creates a map that takes all of its memory from
+mmgmt_procs, and attaches the cleanup attribute, which destroys the map
+at every exit from the enclosing scope, an early return included.
+
+This macro is chmap_construct_mp(3) plus that cleanup attribute, and
+nothing else is different. chmap_construct_scoped(3) is the same macro
+with the default allocator, chmap_construct_ch_scoped(3) takes a hashing
+procedure in place of an allocator, and chmap_construct_full_scoped(3)
+takes both.
+.fi
+.SH PARAMETERS
+.nf
+hm_name      Name for the map handle to declare
+key_t        Key type; it tells every later macro how to read a key and,
+             with val_t, which implementation strategy the map uses
+val_t        Value type
+mmgmt_procs  Pointer to a ccol_memmgmt_procs_t, or NULL for the default
+             allocator
+.fi
+.SH RETURN VALUE
+.nf
+None. This macro declares variables and does not expand to an expression.
+.fi
+.SH NOTES
+.nf
+Stops the program through ccol_fatal_err() if the creation fails
+Needs GCC or Clang, because it uses the cleanup attribute
+All four members of ccol_memmgmt_procs_t must be non-NULL, and the
+procedures must stay callable for the whole life of the map, which here
+ends at the closing brace of the enclosing scope
+Everything that the map allocates comes from these procedures, and the
+destruction at scope exit gives all of it back to them
+Scope exit destroys the map and clears the handle, so an explicit
+chmap_destroy(3) earlier in the scope stays correct
+The companion type variables follow the scope of the handle, so a
+function that receives the handle needs chmap_redeclare(3) there
+.fi
+.SH WARNINGS
+.nf
+The handle must not outlive its scope. Do not return the handle, and do
+not store it anywhere that outlives the scope: either one hands out a
+handle whose map is freed at the exit from the scope.
+.fi
+.SH EXAMPLES
+.nf
+ccol_memmgmt_procs_t procs = {
+    .malloc = my_malloc, .calloc = my_calloc,
+    .realloc = my_realloc, .free = my_free,
+};
+
+void tally(char **words, size_t n) {
+    chmap_construct_mp_scoped(seen, char *, int, &procs);
+    int one = 1;
+    for (size_t i = 0; i < n; i++) {
+        chmap_insert(seen, words[i], one);
+    }
+}                                     /* seen is destroyed here */
+.fi
+.SH "SEE ALSO"
+.BR chmap_construct_mp (3),
+.BR chmap_construct_scoped (3),
+.BR chmap_construct_ch_scoped (3),
+.BR chmap_construct_full_scoped (3),
+.BR chmap_declare_scoped (3),
+.BR chmap_init_mp (3),
+.BR chmap_redeclare (3),
+.BR chmap_destroy (3)

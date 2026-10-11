@@ -1,35 +1,38 @@
 .TH CCOL_CIRCQ_TRY_RECV_ZC 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-ccol_circq_try_recv_zc \- try to receive without blocking
+ccol_circq_try_recv_zc \- try to receive a message with no block
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadcomm.h>
+#include <ccollections/cthreadcomm.h>
 
 ccol_retval_t ccol_circq_try_recv_zc(ccol_circular_queue *cq,
                                  c_message_t *target_buf);
 .fi
 .SH DESCRIPTION
 .nf
-Attempts to receive immediately. If the queue is empty, returns immediately
-with ccol_container_empty. On success, transfers ownership.
+This function tries to receive a message immediately. If the queue is
+empty, it returns ccol_container_empty immediately; on success it
+transfers the ownership.
 .fi
 .SH PARAMETERS
 .nf
 cq          Circular queue to receive from
-target_buf  Buffer to receive the message
+target_buf  Buffer that gets the message
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success         - Message received (caller must free target_buf->data)
+ccol_success         - The function received a message. The caller must
+                       free target_buf->data.
 ccol_invalid_args    - cq or target_buf is NULL
-ccol_container_empty - Queue is empty
+ccol_container_empty - The queue is empty
 .fi
 .SH NOTES
 .nf
-Never blocks
-On success, caller receives ownership and must free target_buf->data
+The function never blocks.
+On success, the caller gets the ownership and must free
+  target_buf->data.
 .fi
 .SH "SEE ALSO"
 .BR ccol_circq_recv_zc (3),

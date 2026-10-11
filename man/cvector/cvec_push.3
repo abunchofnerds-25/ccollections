@@ -1,52 +1,68 @@
-.TH CVEC_PUSH 3 "2026-08-25" "c_collections" "C Collections Library - Macros"
+.TH CVEC_PUSH 3 "2026-09-28" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cvec_push \- push an element onto the vector (type-safe)
+cvec_push \- push an element onto the vector (type-inferred)
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cvector.h>
+#include <ccollections/cvector.h>
 
 cvec_push(v, new_elem);
 .fi
 .SH DESCRIPTION
 .nf
-Type-safe wrapper for cvector_push_back(). new_elem is converted to v's
-declared element type via ordinary C assignment/initialization (exactly
-as "T tmp = new_elem;" would do) before being copied into the vector, so
-the pushed value is what a plain C assignment would have produced, not
-new_elem's own raw byte representation. Calls ccol_fatal_err() on
-cvector_push_back() failure.
+This macro is a type-inferred wrapper for cvector_push_back(). It converts
+new_elem to the declared element type of v with an ordinary C assignment,
+exactly as "T tmp = new_elem;" does, and then copies that converted value
+into the vector, so the pushed value is the result of a plain C
+assignment and not the raw byte representation of new_elem. The macro
+calls ccol_fatal_err() when cvector_push_back() fails.
+For an element type that is an array, such as char[64], new_elem is an
+array or a string literal: the macro zero-fills the element and copies the
+bytes of new_elem into it, up to the smaller of the two sizes. A pointer
+as new_elem for such a type is a compile error, because the macro cannot
+see the size of what it points at.
+The macro never takes the address of new_elem; it first copies the value
+into a temporary of the element type. A literal, a calculated expression
+or a struct value that a function returns is therefore as correct as a
+variable.
 .fi
 .SH PARAMETERS
 .nf
 v         Vector to push onto
-new_elem  Element to push
+new_elem  The element. It can be a variable, a literal or any
+          expression, for example a struct value that a function
+          returns
 .fi
 .SH NOTES
 .nf
-Terminates program on failure
-new_elem's value is converted to v's declared element type the same way
-a plain C assignment would (e.g. an int literal pushed into a
-cvec_construct(v, long) converts to the long value; a float pushed into
-a cvec_construct(v, int) truncates to an int the same way
-"int x = some_float;" would); new_elem's raw bit pattern is never copied
-verbatim into a differently-typed element, even when the two types
-happen to share the same size
-A new_elem whose type cannot be implicitly converted to v's declared
-element type at all is a compile error at this point, not a silently
-reinterpreted value
-new_elem may safely alias into v's own backing buffer (for example
-cvec_at(v, i)): its value is read into a private, non-aliasing temporary
-before v is ever touched, so a capacity expansion this call triggers can
-never invalidate it
+The macro stops the program on failure.
+The macro converts the value of new_elem to the declared element type of
+v in the same way as a plain C assignment. For example, an int literal
+that goes into a cvec_construct(v, long) becomes a long value, and a
+float that goes into a cvec_construct(v, int) truncates to an int, in the
+same way as "int x = some_float;". The macro never copies the raw bit
+pattern of new_elem into an element of a different type, even when the
+two types have the same size.
+A new_elem of a type that has no implicit conversion to the declared
+element type of v is a compile error at this point; the macro never
+reinterprets such a value silently.
+new_elem can safely alias into the backing buffer of v, for example when
+it is cvec_at(v, i). The macro reads the value into a private
+temporary that does not alias before it touches v, so a capacity growth
+that this call starts can never invalidate the value.
+With GCC 11 or later, the macro sets every padding byte of its temporary
+to zero before it pushes it, so a struct element is stored with zero
+padding, which cvec_find(3) relies on. With a compiler that offers no
+__builtin_clear_padding, such as Clang, the padding bytes of the stored
+element are unspecified.
 .fi
 .SH EXAMPLES
 .nf
 cvec_construct(vec, int);
 int x = 42;
 cvec_push(vec, x);
+cvec_destroy(vec);
 .fi
 .SH "SEE ALSO"
-.BR cvec_push_rvalue (3),
 .BR cvector_push_back (3)

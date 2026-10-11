@@ -26,15 +26,17 @@
  * @file bench_logging.c
  * @brief Benchmarks for clogger.
  *
- * Every case writes to /dev/null so that the figure describes formatting,
- * locking and the write path rather than the speed of whatever filesystem the
- * repository happens to sit on. Three dimensions are covered: output format,
- * since logfmt, JSON and syslog do measurably different amounts of formatting
- * work; synchronous against asynchronous, which is the difference between the
- * calling thread doing the write and it handing the record to the writer
- * thread; and the suppressed case, where a record below the logger's level is
- * discarded, which is the cost a program pays for debug logging it has turned
- * off.
+ * Every case writes to /dev/null, so each figure describes the formatting, the
+ * lock and the write path, and not the speed of the filesystem that holds this
+ * repository.
+ *
+ * These cases cover three things. The first is the output format, because
+ * logfmt, JSON and syslog do measurably different amounts of formatting work.
+ * The second is synchronous against asynchronous, which is the difference
+ * between a write by the calling thread and a handover of the record to the
+ * writer thread. The third is the suppressed case, where the logger discards a
+ * record below its own level: the price a program pays for the debug logging
+ * that it has turned off.
  */
 
 #include <clogger.h>
@@ -47,9 +49,10 @@
 
 #define BENCH_LOG_N 50000
 
-/* See the note on the cache benchmarks' own multi-threaded count: these are
- * per-record loops with nothing fixed to amortize, so a shorter repetition
- * measures the same cost and leaves room for many more repetitions. */
+/* See the note on the thread count of the cache benchmarks. These cases are
+ * loops over the records, with no fixed cost to spread out, so a shorter
+ * repetition measures the same cost and leaves room for many more
+ * repetitions. */
 #define BENCH_LOG_MT_N 5000
 
 typedef struct {
@@ -65,7 +68,7 @@ static void log_teardown(void *state) {
 }
 
 static log_state_t *log_make(clog_format_t fmt, const clog_async_cfg_t *async) {
-  log_state_t *st = calloc(1, sizeof *st);
+  log_state_t *st = calloc(1, sizeof(*st));
   if (!st) return NULL;
   st->fd = open("/dev/null", O_WRONLY);
   if (st->fd < 0) {
@@ -94,52 +97,53 @@ static void *log_json_setup(size_t n) {
 static void *log_async_setup(size_t n) {
   (void)n;
   static const clog_async_cfg_t cfg = {
-      .queue_size = 0, .flush_buffer_size = 0, .flush_interval_ms = 0};
+      .queue_size = 0, .flush_buffer_size = 0, .flush_interval_us = 0};
   return log_make(CLOG_FMT_LOGFMT, &cfg);
 }
 
 static void log_write_run(void *state, size_t n) {
   log_state_t *st = state;
   for (size_t i = 0; i < n; i++)
-    ccol_log_info(st->logger, "request completed id=%zu status=%d bytes=%d", i,
-                  200, 1024);
+    clog_info(st->logger, "request completed id=%zu status=%d bytes=%d", i, 200,
+              1024);
   bench_sink(&st->logger);
 }
 
-/* The async writer thread is still draining when the loop ends, so the flush is
- * inside the measurement: without it the case would report only the cost of
- * handing records to the queue, and would look better the further behind the
- * writer thread fell. */
+/* The asynchronous writer thread is still draining the queue when the loop
+ * ends, so the flush is inside the measurement. Without it, this case would
+ * report only the cost of the handover to the queue, and it would look better
+ * the further the writer thread fell behind. */
 static void log_write_async_run(void *state, size_t n) {
   log_state_t *st = state;
   for (size_t i = 0; i < n; i++)
-    ccol_log_info(st->logger, "request completed id=%zu status=%d bytes=%d", i,
-                  200, 1024);
+    clog_info(st->logger, "request completed id=%zu status=%d bytes=%d", i, 200,
+              1024);
   clog_flush(st->logger);
   bench_sink(&st->logger);
 }
 
-/* The caller-side half of the asynchronous path, with no flush: what the
- * logging thread itself pays to hand a record over. Reported alongside the
- * flush-inclusive case above because the two answer different questions, and
- * the flush-inclusive one on its own reads as asynchronous logging being
- * slower than synchronous, when what it shows is that the total work is
- * larger while the caller's share of it is smaller. */
+/* This is the caller half of the asynchronous path, with no flush: what the
+ * logging thread itself pays to hand a record over. The harness reports it
+ * beside the case above, which includes the flush, because the two answer
+ * different questions. On its own, the case with the flush reads as
+ * asynchronous logging that is slower than synchronous logging, while what it
+ * really shows is that the total work is larger and the share of the caller is
+ * smaller. */
 static void log_write_async_caller_run(void *state, size_t n) {
   log_state_t *st = state;
   for (size_t i = 0; i < n; i++)
-    ccol_log_info(st->logger, "request completed id=%zu status=%d bytes=%d", i,
-                  200, 1024);
+    clog_info(st->logger, "request completed id=%zu status=%d bytes=%d", i, 200,
+              1024);
   bench_sink(&st->logger);
 }
 
-/* CLOG_DEBUG is below the logger's CLOG_INFO threshold, so every one of these
- * is discarded. */
+/* CLOG_DEBUG is below the CLOG_INFO threshold of this logger, so the logger
+ * discards every one of these records. */
 static void log_suppressed_run(void *state, size_t n) {
   log_state_t *st = state;
   for (size_t i = 0; i < n; i++)
-    ccol_log_debug(st->logger, "request completed id=%zu status=%d bytes=%d", i,
-                   200, 1024);
+    clog_debug(st->logger, "request completed id=%zu status=%d bytes=%d", i,
+               200, 1024);
   bench_sink(&st->logger);
 }
 

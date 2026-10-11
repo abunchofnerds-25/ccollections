@@ -5,14 +5,14 @@ ccol_end \- end sentinel for iteration
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <citerators.h>   /* or any container header */
+#include <ccollections/citerators.h>   /* or any container header */
 
 ccol_end
 .fi
 .SH DESCRIPTION
 .nf
-Expands to NULL.  All container iterators compare equal to NULL when
-the end of the sequence has been reached.
+This macro expands to NULL, because every container iterator is equal to
+NULL at the end of the sequence.
 .fi
 .SH "SEE ALSO"
 .BR ccol_begin (3),

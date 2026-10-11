@@ -5,16 +5,17 @@ ccol_create_chttpsvr \- create an HTTP server with the default allocator
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 chttpsvr ccol_create_chttpsvr(clog cl, char **err_str);
 .fi
 .SH DESCRIPTION
 .nf
-Inline wrapper for ccol_create_chttpsvr_mp with mprocs = NULL.
+An inline wrapper that calls ccol_create_chttpsvr_mp with mprocs set
+to NULL.
 
-cl may be CLOG_INVALID; see ccol_create_chttpsvr_mp for the logger
-semantics.
+cl may be CLOG_INVALID; see ccol_create_chttpsvr_mp for the rules that
+govern the logger.
 .fi
 .SH RETURN VALUE
 .nf

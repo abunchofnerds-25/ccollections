@@ -5,7 +5,7 @@ cstring_split \- split the string by a delimiter
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 cvec cstring_split(cstr s, const char *delimiter, char **err);
 .fi
@@ -33,11 +33,13 @@ NULL on failure (details written to *err if err is non-NULL)
 The caller is responsible for destroying every cstr inside the vector
 as well as the vector itself:
   cvec parts = cstring_split(s, ",", NULL);
-  for (size_t i = 0; i < cvector_elem_count(parts); i++) {
-    cstr *p = (cstr *)cvector_at(parts, i);
-    cstring_destroy(*p);
+  if (parts) {
+    for (size_t i = 0; i < cvector_elem_count(parts); i++) {
+      cstr *p = (cstr *)cvector_at(parts, i);
+      cstring_destroy(*p);
+    }
+    cvector_destroy(parts);
   }
-  cvector_destroy(parts);
 Asserts if s is NULL
 .fi
 .SH "SEE ALSO"

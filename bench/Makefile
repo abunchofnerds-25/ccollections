@@ -1,46 +1,47 @@
-# Benchmarks for every module.
+# The benchmarks for every module.
 #
-# These link against the real libccollections.so built by the root Makefile,
-# rather than compiling the library's sources in, so that a measured call pays
-# the same dynamic-call cost an application pays and the code being measured is
-# the code that ships, at the flags it ships with. The rpath points at the
-# build tree so the binary runs from a checkout with nothing installed.
+# These link against the real shared library that the root Makefile builds
+# (libccollections.so, or libccollections.dylib on macOS) instead of compiling
+# the sources of the library into themselves, so a measured call pays the same
+# dynamic call cost that an application pays, and the measured code is the code
+# that ships, at the flags that it ships with. The rpath points at the build
+# tree, so the binary runs from a checkout with nothing installed.
 #
-# Optional comparison libraries are detected here rather than assumed. Each one
-# that is missing simply removes its own comparison cases from the run; none is
-# required to build or to run the suite.
+# This Makefile detects the optional comparison libraries instead of assuming
+# that they are there. A library that is missing removes its own comparison
+# cases from the run, and you need none of them to build or to run the suite.
 
-# Plain assignment, not ?=: make predefines CC as `cc`, so ?= never fires and
-# the benchmarks would be built with whatever cc points at rather than with the
-# compiler the library itself was built with. A CC= on the command line still
-# wins over this.
-CC = gcc
+# platform.mk picks the same default compiler as the library build, and a CC=
+# on the command line or in the environment wins over it.
+include ../platform.mk
 ROOT = ..
 
-# `all` must be the default goal; the .build-flags rule below would otherwise
-# claim it by being the first target in the file.
+# `all` must be the default goal. Without this line, the .build-flags rule
+# below becomes the first target in the file and takes that place.
 .DEFAULT_GOAL := all
 
 INCLUDE_DIR = include
 EXTRA_CFLAGS ?=
-# -O2 rather than the library's own -O3: this is harness code, and the aim is
-# for the measured time to be dominated by the library, not by how aggressively
-# the loop around it was optimized. The library itself is already built at -O3.
+# This uses -O2 instead of the -O3 of the library, because this is harness
+# code: the library must decide the measured time, not how much the compiler
+# optimized the loop around it. The library itself is already built at -O3.
 CFLAGS = -I$(ROOT)/$(INCLUDE_DIR) -I. -std=gnu11 -D_GNU_SOURCE \
 	-O2 -g -Wall -Wextra -Werror $(EXTRA_CFLAGS)
 
+LIBRARY = $(ROOT)/libccollections.$(CCOL_SHARED_LIBRARY_SUFFIX)
 LDFLAGS = -L$(ROOT) -Wl,-rpath,$(abspath $(ROOT))
 LDLIBS = -lccollections -lpthread -lm
 
 BASELINE = $(CURDIR)/baseline.json
 
 # --- Optional comparison libraries ----------------------------------------
-# uthash is a single header, so a compile probe is the only reliable test;
-# it has no pkg-config file of its own.
-# Compiled with -include rather than an "#include" line in the probe source: a
-# literal # in a Makefile has to be escaped, and the escape survives into the
-# shell, so printf emits a backslash the compiler then rejects. The probe fails
-# for that reason alone and the library is reported absent while installed.
+# uthash is one header with no pkg-config file of its own, so a compile probe
+# is the only reliable test.
+# The probe uses -include instead of an "#include" line in its source. A
+# literal # in a Makefile needs an escape, and that escape reaches the shell,
+# where printf writes a backslash that the compiler refuses. The probe would
+# then fail for that reason alone, and the build would report the library as
+# missing while it is installed.
 HAVE_UTHASH := $(shell echo 'int main(void){return 0;}' \
 	| $(CC) -x c - -include uthash.h -o /dev/null 2>/dev/null && echo 1)
 HAVE_GLIB := $(shell pkg-config --exists glib-2.0 2>/dev/null && echo 1)
@@ -68,17 +69,23 @@ SRCS = bench.c bench_core.c bench_maps.c bench_concurrency.c bench_cache.c \
 OBJS = $(SRCS:.c=.o)
 BIN = bench
 
-# The library's public headers carry inline functions, type-safe macros and
-# struct layouts that end up compiled into these objects, so an edit to one of
-# them changes what the harness measures. Without this the objects survive a
-# header change while the library is rebuilt around them, and the binary then
-# runs last build's inlined code against this build's shared object, which is
-# the one thing a measurement must never do.
-LIB_HEADERS = $(wildcard $(ROOT)/$(INCLUDE_DIR)/*.h)
+# The public headers of the library carry inline functions, type-inferred
+# macros and struct layouts, all of which end up inside these objects, so an
+# edit to one header changes what the harness measures. Without this rule, the
+# objects survive a header change while the build makes the library again
+# around them, and the binary then runs the inlined code of the previous build
+# against the shared object of this build, which a measurement must never do.
+# include/internal/ has a pattern of its own, because a *.h wildcard cannot
+# match a subdirectory. Without that second pattern, no internal header is a
+# prerequisite: an edit to one of them compiles nothing here, and a later edit
+# to one .c file gives you a binary whose objects disagree about that header.
+LIB_HEADERS = $(wildcard $(ROOT)/$(INCLUDE_DIR)/*.h) \
+              $(wildcard $(ROOT)/$(INCLUDE_DIR)/internal/*.h)
 
-# An object file records nothing about the flags that produced it, so a rebuild
-# after a comparison library is installed or removed, or after CC changes, would
-# otherwise relink stale objects compiled against the previous configuration.
+# An object file records nothing about the flags that made it. Without this
+# stamp, a build after somebody installs or removes a comparison library, or
+# after CC changes, links old objects that were compiled against the
+# configuration before the change.
 .build-flags: FORCE
 	@echo '$(CC) $(CFLAGS)' | cmp -s - $@ || echo '$(CC) $(CFLAGS)' > $@
 .PHONY: FORCE
@@ -86,21 +93,29 @@ FORCE:
 
 all: $(BIN)
 
-$(BIN): $(OBJS) $(ROOT)/libccollections.so
+# On macOS a program records the library by its install name, an absolute
+# path in the LIBDIR of the build, and dyld then ignores the rpath, so the link
+# points that entry at the library in the build tree.
+$(BIN): $(OBJS) $(LIBRARY)
 	$(CC) -o $@ $(OBJS) $(LDFLAGS) $(LDLIBS)
+ifeq ($(CCOL_UNAME_S),Darwin)
+	install_name_tool -change "$$(otool -D $(LIBRARY) | tail -n 1)" \
+		"$(abspath $(LIBRARY))" $@
+endif
 
-# Listed as a prerequisite of the link so that a library rebuilt after these
-# objects relinks the binary, and built through the root makefile so that
-# `make -C bench` works from a clean checkout rather than reporting no rule for
-# it. The root target is the one that knows the library's own flags.
+# The library is a prerequisite of the link, so a library that the build makes
+# again after these objects links the binary again. The build goes through the
+# root makefile, so that `make -C bench` works from a clean checkout instead
+# of reporting that it has no rule for the library; the root target is the one
+# that knows the flags of the library.
 #
-# FORCE, not a prerequisite list: without it make treats the symlink as up to
-# date the moment it exists and never descends, so an edit to a library source
-# leaves `make -C bench` measuring freshly compiled harness objects against the
-# previous build's shared object, which is the one thing a measurement must
-# never do. The sub-make is a no-op when the library is current, so nothing is
-# relinked needlessly.
-$(ROOT)/libccollections.so: FORCE
+# This uses FORCE instead of a list of prerequisites. Without FORCE, make
+# treats the symlink as current as soon as it exists and never goes into the
+# root makefile, so an edit to a library source leaves `make -C bench`
+# measuring newly compiled harness objects against the shared object of the
+# previous build, which a measurement must never do. The sub-make does nothing
+# when the library is current, so it links nothing without need.
+$(LIBRARY): FORCE
 	@$(MAKE) --no-print-directory -C $(ROOT) $(notdir $@)
 
 %.o: %.c bench.h $(LIB_HEADERS) .build-flags
@@ -114,13 +129,15 @@ run: $(BIN)
 update: $(BIN)
 	./$(BIN) --baseline=$(BASELINE) --update $(BENCH_ARGS)
 
-# Measures how far each case's own median moves between whole runs of this
-# unchanged library, and records that as the case's gate. Takes several times
-# one run's wall clock, and is worth repeating whenever the machine it runs on
-# changes, since what it records is a property of that machine.
-# Fails the build on a flagged case. Separate from `run` because whether a
-# machine repeats well enough to carry a gate is something `calibrate` measures
-# rather than something to assume; see the note on --gate in bench.c.
+# This measures how far the median of each case moves between whole runs of
+# this library, with nothing changed in it, and records that movement as the
+# gate for that case. It takes several times the real time of one run. Run it
+# again whenever the machine changes, because what it records is a property of
+# that machine.
+# This stops the build on a flagged case. It is a separate target from `run`,
+# because whether a machine repeats well enough to carry a gate is something
+# that `calibrate` measures, not something to assume. See the note on --gate
+# in bench.c.
 .PHONY: gate
 gate: $(BIN)
 	./$(BIN) --baseline=$(BASELINE) --gate $(BENCH_ARGS)

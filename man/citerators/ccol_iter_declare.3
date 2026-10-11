@@ -5,32 +5,37 @@ ccol_iter_declare \- declare a typed iterator variable with RAII cleanup
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <citerators.h>   /* or any container header */
+#include <ccollections/citerators.h>   /* or any container header */
 
 ccol_iter_declare(container, it);
 .fi
 .SH DESCRIPTION
 .nf
-Declares a cmap_iterator pointer named it bound to the type information
-of container.  The declaration attaches __attribute__((cleanup)) so the
-iterator is destroyed automatically when it leaves scope; no explicit
-ccol_iter_destroy() call is required.
+This macro declares a cmap_iterator pointer named it, which carries the
+type information of container. The declaration adds
+__attribute__((cleanup)), so the iterator is destroyed automatically at the
+end of its scope and the caller needs no explicit ccol_iter_destroy() call.
 
-Also declares two hidden companion type variables that allow
-ccol_iter_key_ptr() and ccol_iter_val_ptr() to return correctly-typed
-pointers for container.
+The macro also declares two hidden companion type variables, which let
+ccol_iter_key_ptr() and ccol_iter_val_ptr() give pointers with the
+correct type for container.
 .fi
 .SH PARAMETERS
 .nf
-container  Container variable previously declared with a *_declare /
-           *_construct macro.  Must be cvec, chmap, or cbmap.
-it         Name to use for the iterator variable.
+container  Container variable, which the caller must declare first with
+           a *_declare or *_construct macro. It must be a cvec, a chmap
+           or a cbmap.
+it         Name for the iterator variable.
 .fi
 .SH NOTES
 .nf
-container must be in scope and its type companion variables must be
-visible (same scope or a parent scope).
-Requires GCC or Clang (uses __attribute__((cleanup))).
+container must be in scope, and its companion type variables must also be
+visible, in the same scope or in a parent scope.
+This macro needs GCC or Clang, because it uses __attribute__((cleanup)).
+A loop that leaves early leaves the iterator live until the end of the
+scope. The container can be destroyed before that point, because the
+cleanup frees the iterator without reading the container; but do not
+advance or dereference such an iterator once its container is gone.
 .fi
 .SH EXAMPLES
 .nf

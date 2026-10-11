@@ -1,0 +1,128 @@
+.TH CHMAP_CONSTRUCT_FULL_SCOPED 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chmap_construct_full_scoped \- declare and create a hash map with custom allocation, hashing and key equality, destroyed on scope exit
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chashmap.h>
+
+chmap_construct_full_scoped(hm_name, key_t, val_t, mmgmt_procs,
+                            custom_hashing_proc,
+                            custom_key_equality_proc);
+.fi
+.SH DESCRIPTION
+.nf
+Declares a hash map handle named hm_name, together with the companion
+type variables that carry key_t and val_t to every later type-inferred
+macro. The macro then creates a map that takes its memory from
+mmgmt_procs, hashes its keys with custom_hashing_proc and compares them
+with custom_key_equality_proc. It also attaches the cleanup attribute,
+which destroys the map at every exit from the enclosing scope, an early
+return included.
+
+This macro is chmap_construct_full(3) plus that cleanup attribute, and
+it is the widest of the scoped construct macros. chmap_construct_scoped(3)
+is this macro with the default allocator and the map's own hashing,
+chmap_construct_mp_scoped(3) gives only an allocator, and
+chmap_construct_ch_scoped(3) gives only a hashing procedure. Each of the
+three arguments can be NULL, which selects the matching default, so this
+one macro covers every combination.
+
+The map picks its implementation strategy from key_t and val_t, as
+chmap_create_full(3) describes. A custom hashing procedure does not change
+that choice, but a custom key equality procedure selects separate chaining.
+.fi
+.SH PARAMETERS
+.nf
+hm_name              Name for the map handle to declare
+key_t                Key type; it tells every later macro how to read a key
+                     and, with val_t, which implementation strategy the map
+                     uses
+val_t                Value type
+mmgmt_procs          Pointer to a ccol_memmgmt_procs_t, or NULL for the
+                     default allocator
+custom_hashing_proc  A ccol_hashing_proc_t, or NULL to use the map's own
+                     hashing for key_t
+custom_key_equality_proc
+                     A ccol_key_equality_proc_t, or NULL to use the map's
+                     own key comparison
+.fi
+.SH RETURN VALUE
+.nf
+None. This macro declares variables and does not expand to an expression.
+.fi
+.SH "CUSTOM HASHING"
+.nf
+A custom procedure receives a pointer to the key bytes and their length,
+and returns an unsigned long. It must return the same value for two keys
+that the map considers equal; for a char * key, equal means equal
+contents, not an equal pointer.
+
+The return value does not need to avalanche, because the map finalizes
+the value that a custom procedure returns with its own bit-mixing step
+before it reduces the value to a slot or a bucket. A procedure that puts
+all of its entropy in the low bits therefore still spreads across the
+table. The contract is only "any function of the key that respects the
+map's notion of key equality".
+.fi
+.SH "CUSTOM KEY EQUALITY"
+.nf
+custom_key_equality_proc receives both keys and both sizes, and returns
+true when the two are the same key. The map uses it in place of its
+built-in comparison. It must agree with custom_hashing_proc: two keys
+that it reports as equal must get the same hash. A key equality procedure
+without a hashing procedure makes the creation fail, and this macro then
+stops the program. A struct key with padding bytes needs both
+procedures; see chmap_create_full(3).
+.fi
+.SH NOTES
+.nf
+Stops the program through ccol_fatal_err() if the creation fails; use
+chmap_declare_scoped(3) with chmap_init_full(3) when the caller must
+handle a failure
+Needs GCC or Clang, because it uses the cleanup attribute
+When the caller gives a ccol_memmgmt_procs_t, all four of its members
+must be non-NULL. The macro copies the procedures into the map, and they,
+like the hashing and key equality procedures, must stay callable for the
+whole life of the map, which here ends at the closing brace of the
+enclosing scope
+Uses CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets
+Scope exit destroys the map and clears the handle, so an explicit
+chmap_destroy(3) earlier in the scope stays correct
+The companion type variables follow the scope of the handle, so a
+function that receives the handle needs chmap_redeclare(3) there
+.fi
+.SH WARNINGS
+.nf
+The handle must not outlive its scope. Do not return the handle, and do
+not store it anywhere that outlives the scope: either one hands out a
+handle whose map is freed at the exit from the scope.
+.fi
+.SH EXAMPLES
+.nf
+ccol_memmgmt_procs_t procs = {
+    .malloc = my_malloc, .calloc = my_calloc,
+    .realloc = my_realloc, .free = my_free,
+};
+unsigned long hash_bytes(const void *p, size_t size);
+
+void tally(char **words, size_t n) {
+    chmap_construct_full_scoped(seen, char *, int, &procs, hash_bytes,
+                                NULL);
+    int one = 1;
+    for (size_t i = 0; i < n; i++) {
+        chmap_insert(seen, words[i], one);
+    }
+}                                     /* seen is destroyed here */
+.fi
+.SH "SEE ALSO"
+.BR chmap_construct_full (3),
+.BR chmap_construct_scoped (3),
+.BR chmap_construct_mp_scoped (3),
+.BR chmap_construct_ch_scoped (3),
+.BR chmap_declare_scoped (3),
+.BR chmap_init_full (3),
+.BR chmap_redeclare (3),
+.BR chmap_create_full (3),
+.BR chmap_destroy (3)

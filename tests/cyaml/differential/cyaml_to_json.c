@@ -23,33 +23,27 @@ SOFTWARE.
 */
 
 /*
- * Standalone differential-testing helper, not part of the public library
- * surface and deliberately kept out of `make test`/`make memtest` (see
- * tests/cyaml/differential/compare_pyyaml.py, this file's only caller).
+ * Standalone differential-testing helper. It is not part of the public
+ * library surface, and it stays out of `make test` and `make memtest`
+ * deliberately; its only caller is
+ * tests/cyaml/differential/compare_pyyaml.py.
  *
- * Reads a YAML document (or stream) from stdin and dumps the resulting DOM
- * as JSON on stdout, so an independent YAML implementation's own output
- * (PyYAML, via compare_pyyaml.py) can be diffed against it at the value
- * level rather than merely the accept/reject level tests_spec_suite.c
- * already covers.
+ * This program reads a YAML document or stream from stdin and dumps the DOM
+ * as JSON on stdout, so that a reader can diff the output of an independent
+ * YAML implementation (PyYAML, which compare_pyyaml.py drives) against it at
+ * the value level. tests_spec_suite.c already covers the accept and reject
+ * level, and this program goes below that level.
  *
- * Exit codes: 0 on successful parse + dump; 1 on a genuine parse error
- * (nothing is written to stdout in that case; the message goes to stderr
- * instead); 2 on a usage/environment error (out of memory, bad output).
+ * Exit codes: 0 after a successful parse and dump; 1 on a real parse error,
+ * where this program writes nothing to stdout and sends the message to
+ * stderr instead; 2 on a usage error or an environment error (out of memory
+ * or bad output).
  */
 
 #include <cyaml.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
-
-/* RUNNING_UNIT_TESTS-gated debug accessor, implemented in src/cyaml.c.
- * Deliberately not declared in the public cyaml.h header; this matches
- * this project's own established white-box-test-accessor convention (see
- * e.g. cvector_get_capacity, cbmap_debug_validate_avl), just with the
- * `extern` declaration living in this standalone tool instead of a
- * tests.c file, since this program is not itself a tau test suite. */
-extern const char *cyaml_debug_dictionary_key_at(cyaml map, size_t index);
 
 static void json_print_escaped_string(const char *s) {
   putchar('"');
@@ -94,12 +88,12 @@ static void dump_node(cyaml node) {
       break;
     case CYAML_FLOAT: {
       double d = cyaml_double_val(node);
-      /* JSON has no NaN/Infinity literal. Encoding these as ordinary
-       * strings would make them indistinguishable from a genuine
-       * CYAML_STRING node on the comparison side, silently hiding a real
-       * type mismatch; encode as a value no legitimate parsed string
-       * could ever equal instead, so compare_pyyaml.py can special-case
-       * them explicitly. */
+      /* JSON has no literal for NaN or Infinity. An encoding of these as
+       * ordinary strings would look the same as a real CYAML_STRING node
+       * on the comparison side, which would hide a real type mismatch
+       * silently. So this code encodes them as a value that no string from
+       * a real parse can ever equal, and compare_pyyaml.py handles them as
+       * a special case. */
       if (isnan(d)) {
         fputs("\"__cyaml_nan__\"", stdout);
       } else if (isinf(d)) {
@@ -124,16 +118,15 @@ static void dump_node(cyaml node) {
     }
     case CYAML_DICTIONARY: {
       putchar('{');
-      size_t i = 0;
-      const char *key;
       bool first = true;
-      while ((key = cyaml_debug_dictionary_key_at(node, i)) != NULL) {
+      cyaml_dictionary_iter it;
+      for (bool more = cyaml_dictionary_first(node, &it); more;
+           more = cyaml_dictionary_next(&it)) {
         if (!first) putchar(',');
         first = false;
-        json_print_escaped_string(key);
+        json_print_escaped_string(it.key);
         putchar(':');
-        dump_node(cyaml_dictionary_get(node, key));
-        i++;
+        dump_node(it.value);
       }
       putchar('}');
       break;
@@ -171,7 +164,6 @@ int main(void) {
   if (!root) {
     fprintf(stderr, "cyaml_to_json: parse error: %s\n",
             err ? err : "(unknown)");
-    free(err);
     return 1;
   }
 
@@ -179,13 +171,13 @@ int main(void) {
   putchar('\n');
   cyaml_destroy(root);
 
-  /* dump_node/putchar above write through buffered stdio (putchar/fputs/
-   * printf), none of whose individual return values this function checks;
-   * a single fflush()+ferror() check here catches any failure among all of
-   * them (a full disk when stdout is redirected to a file, most plausibly),
-   * matching this file's own documented "2 on a usage/environment error
-   * (out of memory, bad output)" exit code contract, which nothing else in
-   * this function currently implements. */
+  /* dump_node and putchar above write through buffered stdio (putchar,
+   * fputs and printf), and this function checks none of their individual
+   * return values. One fflush() and ferror() check here catches a failure in
+   * any of them, most likely a full disk when stdout goes to a file. This
+   * check delivers the part of the exit code contract of this file that
+   * reads "2 on a usage error or an environment error (out of memory or bad
+   * output)"; nothing else in this function delivers it. */
   if (fflush(stdout) != 0 || ferror(stdout)) {
     fprintf(stderr, "cyaml_to_json: error writing output\n");
     return 2;

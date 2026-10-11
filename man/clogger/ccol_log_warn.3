@@ -1,21 +1,21 @@
 .TH CCOL_LOG_WARN 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-ccol_log_warn \- emit a log line at WARN level
+clog_warn \- emit a log line at WARN level
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <clogger.h>
+#include <ccollections/clogger.h>
 
-ccol_log_warn(clog lg, const char *fmt, ...);
+clog_warn(clog lg, const char *fmt, ...);
 .fi
 .SH DESCRIPTION
 .nf
-Expands to a call to _clog_write() at CLOG_WARN level with automatic
-source location capture. No backtrace is appended.
+Writes a log line at CLOG_WARN level, capturing __FILE__, __LINE__
+and __func__ by itself.  No backtrace is appended.
 
-Use WARN for recoverable abnormalities that do not interrupt normal
-operation but merit attention.
+Use WARN for a condition that the program recovers from: it does not
+stop normal operation, but it deserves attention.
 .fi
 .SH PARAMETERS
 .nf
@@ -25,12 +25,11 @@ fmt    printf-style format string.
 .fi
 .SH EXAMPLES
 .nf
-ccol_log_warn(lg, "retry %d/%d connecting to %s", attempt, max, host);
-ccol_log_warn(lg, "config key %s missing, using default", key);
+clog_warn(lg, "retry %d/%d connecting to %s", attempt, max, host);
+clog_warn(lg, "config key %s missing, using default", key);
 .fi
 .SH "SEE ALSO"
-.BR ccol_log_info (3),
-.BR ccol_log_error (3),
-.BR ccol_log_alert (3),
-.BR ccol_log_fatal (3),
-.BR _clog_write (3)
+.BR clog_info (3),
+.BR clog_error (3),
+.BR clog_alert (3),
+.BR clog_fatal (3)

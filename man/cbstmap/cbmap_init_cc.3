@@ -1,0 +1,101 @@
+.TH CBMAP_INIT_CC 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cbmap_init_cc \- create an ordered map with a custom comparison procedure into an already declared handle
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cbstmap.h>
+
+cbmap_init_cc(hm_name, custom_comparison_proc);
+.fi
+.SH DESCRIPTION
+.nf
+Creates an ordered map whose keys custom_comparison_proc orders instead
+of the default order for the declared key type, and assigns the map to
+hm_name. The caller must declare the handle first, with cbmap_declare(3) or
+cbmap_declare_scoped(3). The key type and the value type do not come to
+this macro as arguments: the macro reads them from the companion type
+variables that the declare macro created.
+
+The macro is cbmap_init(3) plus a comparison procedure, and it uses the
+default allocator. cbmap_init_mp(3) replaces the allocator instead, and
+cbmap_init_full(3) takes both.
+
+A struct key type needs this variant. Without a procedure, the map orders a
+key type that it does not recognize by a raw comparison of the
+representation, which reads padding bytes and orders a pointer member by
+its address.
+
+The one-step equivalents are cbmap_construct_cc(3) and
+cbmap_construct_cc_scoped(3).
+.fi
+.SH PARAMETERS
+.nf
+hm_name                 The map handle that the caller declared before,
+                        into which the macro creates the map
+custom_comparison_proc  A ccol_comparison_proc_t, or NULL for the
+                        default order for the declared key type
+.fi
+.SH RETURN VALUE
+.nf
+None. This macro expands to a statement and does not expand to an
+expression.
+.fi
+.SH "CUSTOM COMPARISON"
+.nf
+The procedure gets pointers to two keys. It returns a negative value when
+the first key orders before the second key, a positive value when the
+first key orders after the second key, and zero when the map must treat
+the two keys as the same key. A zero makes a call an update instead of an
+insert, so the procedure defines both key equality and key order.
+
+The procedure must give a strict weak order over the key type, and that
+order must not change while the map holds elements: the same pair of keys
+must always compare in the same way, a comparison in the opposite direction
+must give the opposite sign, and the order must be transitive. An
+inconsistent procedure breaks the placement invariant of the tree, after
+which the map cannot find a key that it holds.
+
+Because the procedure gets two bare pointers and no lengths, it can only
+read a width that the declared key type fixes. The map therefore validates
+the width of an incoming key against that type and aligns its stored keys
+for that type; the procedure decides the order of the keys and nothing
+else.
+.fi
+.SH NOTES
+.nf
+The macro stops the program through ccol_fatal_err() if the creation fails
+The macro uses the default allocator
+The procedure must stay callable for the whole life of the map
+The order of the walk follows this procedure: the walk visits the elements
+in ascending key order, by the order that the map got, as
+cbmap_begin_iter(3) describes
+.fi
+.SH EXAMPLES
+.nf
+typedef struct { int major; int minor; } version;
+
+int version_cmp(const void *a, const void *b) {
+    version x, y;
+    memcpy(&x, a, sizeof(x));   /* a key can be at any address */
+    memcpy(&y, b, sizeof(y));
+    if (x.major != y.major) {
+        return (x.major > y.major) - (x.major < y.major);
+    }
+    return (x.minor > y.minor) - (x.minor < y.minor);
+}
+
+cbmap_declare(releases, version, char *);
+cbmap_init_cc(releases, version_cmp);
+cbmap_destroy(releases);
+.fi
+.SH "SEE ALSO"
+.BR cbmap_init (3),
+.BR cbmap_init_mp (3),
+.BR cbmap_init_full (3),
+.BR cbmap_declare (3),
+.BR cbmap_construct_cc (3),
+.BR cbmap_begin_iter (3),
+.BR cbmap_create_full (3),
+.BR cbmap_destroy (3)

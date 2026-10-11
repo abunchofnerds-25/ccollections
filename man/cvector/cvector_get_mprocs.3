@@ -1,0 +1,41 @@
+.TH CVECTOR_GET_MPROCS 3 "2026-09-20" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cvector_get_mprocs \- get the memory management procedures of a vector
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cvector.h>
+
+ccol_memmgmt_procs_t *cvector_get_mprocs(cvec v);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the memory management procedures that the vector allocates
+through, so code that gets an existing vector can allocate scratch
+storage from the same allocator that the vector uses.
+.fi
+.SH PARAMETERS
+.nf
+v    Vector to query
+.fi
+.SH RETURN VALUE
+.nf
+Returns a pointer to the memory management procedures of the vector
+Returns NULL when the caller created the vector with the default
+allocator, that is, when the mmgmt_procs argument of
+cvector_create_full() was NULL
+.fi
+.SH NOTES
+.nf
+A NULL return is not an error: it means "use the defaults of the
+library", and every routine in the library that takes a
+ccol_memmgmt_procs_t * accepts NULL with exactly that meaning
+The vector owns the structure, and the library frees it when it
+destroys the vector, so do not free the structure yourself
+Asserts if v is NULL
+.fi
+.SH "SEE ALSO"
+.BR cvector_create_full (3),
+.BR cvec_sort (3),
+.BR cvector_destroy (3)

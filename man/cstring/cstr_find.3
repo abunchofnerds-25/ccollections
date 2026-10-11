@@ -5,13 +5,13 @@ cstr_find \- find the first occurrence of a substring
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 cstr_find(s, needle);
 .fi
 .SH DESCRIPTION
 .nf
-Pass-through wrapper for cstring_find().
+This macro is a pass-through wrapper for cstring_find().
 .fi
 .SH PARAMETERS
 .nf
@@ -20,7 +20,8 @@ needle   Substring to find
 .fi
 .SH RETURN VALUE
 .nf
-Zero-based index of first occurrence, or ccol_invalid_size if not found
+The zero-based index of the first occurrence, or ccol_invalid_size when
+the needle is not found
 .fi
 .SH "SEE ALSO"
 .BR cstring_find (3),

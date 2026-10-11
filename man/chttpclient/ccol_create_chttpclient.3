@@ -5,17 +5,18 @@ ccol_create_chttpclient \- create an HTTP client with the default allocator
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpclient.h>
+#include <ccollections/chttpclient.h>
 
 chttpcli ccol_create_chttpclient(char **err_str);
 .fi
 .SH DESCRIPTION
 .nf
-Inline wrapper for ccol_create_chttpclient_mp with mprocs = NULL.
+This is an inline wrapper around ccol_create_chttpclient_mp that passes
+NULL for mprocs.
 .fi
 .SH RETURN VALUE
 .nf
-New client handle, or CHTTPCLI_INVALID on failure.
+A new client handle, or CHTTPCLI_INVALID if the call fails.
 .fi
 .SH "SEE ALSO"
 .BR ccol_create_chttpclient_mp (3)

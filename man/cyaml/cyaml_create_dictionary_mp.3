@@ -5,21 +5,27 @@ cyaml_create_dictionary_mp, cyaml_create_dictionary \- allocate an empty YAML di
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cyaml.h>
+#include <ccollections/cyaml.h>
 
 cyaml cyaml_create_dictionary_mp(ccol_memmgmt_procs_t *mp);
 cyaml cyaml_create_dictionary(void);
 .fi
 .SH DESCRIPTION
 .nf
-Allocate a DOM node of type CYAML_DICTIONARY backed by a chashmap
-(separate chaining, string->pointer).  The dictionary is initially empty.
-Children are added with cyaml_dictionary_set().  cyaml_create_dictionary()
-passes NULL for mp.
+Allocate a DOM node of type CYAML_DICTIONARY, whose entries a chashmap
+holds (separate chaining, string->pointer).  The dictionary starts
+empty; add children to it with cyaml_dictionary_set().
+cyaml_create_dictionary() passes NULL for mp.
 .fi
 .SH PARAMETERS
 .nf
 mp   Custom allocator, or NULL for default.
+     The library keeps its own copy of the struct, so the caller may
+     release or reuse the struct once this call returns, but the
+     functions that it names must stay callable until the last node
+     built with them is destroyed.  A process can use at most 64
+     distinct sets of four functions; a call that would need a 65th
+     fails and returns NULL.
 .fi
 .SH RETURN VALUE
 .nf

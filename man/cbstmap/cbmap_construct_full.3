@@ -1,0 +1,106 @@
+.TH CBMAP_CONSTRUCT_FULL 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cbmap_construct_full \- declare and create an ordered map with custom allocation and comparison
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cbstmap.h>
+
+cbmap_construct_full(hm_name, key_t, val_t, mmgmt_procs,
+                     custom_comparison_proc);
+.fi
+.SH DESCRIPTION
+.nf
+Declares an ordered map handle named hm_name, together with the companion
+type variables that carry key_t and val_t to every later type-inferred
+macro, and then creates a map that takes its memory from mmgmt_procs and
+orders its keys with custom_comparison_proc.
+
+This is the widest of the construct macros. cbmap_construct(3) is this
+macro with the default allocator and the default order,
+cbmap_construct_mp(3) gives only an allocator, and cbmap_construct_cc(3)
+gives only a comparison procedure. Each of the two arguments can be NULL,
+which selects the matching default, so this one macro covers every
+combination.
+
+The macro stops the program through ccol_fatal_err() if the creation fails.
+When the caller must handle a failure and the failure must not be fatal,
+use cbmap_init_full(3) on a handle that you declared before.
+cbmap_construct_full_scoped(3) is the same macro with a cleanup attribute,
+which destroys the map at the exit of the scope.
+.fi
+.SH PARAMETERS
+.nf
+hm_name                 Name for the map handle to declare
+key_t                   Key type. It tells every later macro how to read
+                        a key, and tells the container which width to
+                        expect and which alignment to give a stored key
+val_t                   Value type. Only the type-inferred macros read
+                        it; the library never gives it to the container
+mmgmt_procs             Pointer to a ccol_memmgmt_procs_t, or NULL for the
+                        default allocator
+custom_comparison_proc  A ccol_comparison_proc_t, or NULL for the
+                        default order for key_t
+.fi
+.SH RETURN VALUE
+.nf
+None. This macro declares variables and does not expand to an expression.
+.fi
+.SH "CUSTOM COMPARISON"
+.nf
+The procedure gets pointers to two keys. It returns a negative value when
+the first key orders before the second key, a positive value when the
+first key orders after the second key, and zero when the map must treat
+the two keys as the same key. A zero makes a call an update instead of an
+insert, so the procedure defines both key equality and key order.
+
+The procedure must give a strict weak order over key_t, and that order must
+not change while the map holds elements: the same pair of keys must always
+compare in the same way, a comparison in the opposite direction must give
+the opposite sign, and the order must be transitive. An inconsistent
+procedure breaks the placement invariant of the tree, after which the map
+cannot find a key that it holds.
+
+Because the procedure gets two bare pointers and no lengths, it can only
+read a width that key_t fixes. cbmap_create_full(3) describes the default
+orders that a procedure replaces, and the order that a struct key type
+gets without a procedure.
+.fi
+.SH NOTES
+.nf
+When the caller gives a ccol_memmgmt_procs_t, none of its four members
+may be NULL. The map copies the procedures into itself, but the
+procedures and the comparison procedure must stay callable for the whole
+life of the map
+Every tree node that the map allocates comes from these procedures, and
+everything that the map frees goes back to them
+The walk visits the elements in ascending key order, by the order that the
+map got. cbmap_begin_iter(3) describes that contract
+Destroy the map with cbmap_destroy(3), or use cbmap_construct_full_scoped(3)
+if you want the exit of the scope to destroy it instead
+The companion type variables follow the scope of the handle, so a function
+that receives the handle needs cbmap_redeclare(3) there
+.fi
+.SH EXAMPLES
+.nf
+ccol_memmgmt_procs_t procs = {
+    .malloc = my_malloc, .calloc = my_calloc,
+    .realloc = my_realloc, .free = my_free,
+};
+int version_cmp(const void *a, const void *b);
+
+cbmap_construct_full(releases, version, char *, &procs, version_cmp);
+cbmap_destroy(releases);
+.fi
+.SH "SEE ALSO"
+.BR cbmap_construct (3),
+.BR cbmap_construct_mp (3),
+.BR cbmap_construct_cc (3),
+.BR cbmap_construct_full_scoped (3),
+.BR cbmap_init_full (3),
+.BR cbmap_declare (3),
+.BR cbmap_redeclare (3),
+.BR cbmap_begin_iter (3),
+.BR cbmap_create_full (3),
+.BR cbmap_destroy (3)

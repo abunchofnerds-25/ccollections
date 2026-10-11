@@ -5,15 +5,33 @@ chttpsvr_req_path \- return the URL path of a request
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 const char *chttpsvr_req_path(const chttpsvr_req *req);
 .fi
 .SH DESCRIPTION
 .nf
-Returns a NUL-terminated string containing the URL path of the request,
-without the query string.  The string is valid for the lifetime of the
-handler invocation.
+Returns the NUL-terminated URL path of the request, without the query
+string.  The string stays valid for the duration of the handler call.
+
+The path always begins with "/": a request whose target is neither an
+origin-form path nor an absolute-form http or https URL is answered
+with 400 Bad Request before any middleware runs.  The one exception is
+"OPTIONS *", which the server answers itself, with no middleware and
+no handler; see chttpsvr_start(3).  For an absolute-form target the
+path is the path of that URL, and an empty one becomes "/".
+
+Percent-encoded sequences are decoded by the path rules of RFC 3986,
+so the string is the path that was matched against the route
+patterns.  A middleware that runs for a rejected request (see
+chttpsvr_use(3)) can see a path whose percent-encoding is malformed,
+which is itself one of the reasons why no route could match it.  Such
+a path has no decoded form, so this function returns it exactly as it
+arrived, in its encoded form.
+
+The decoded path can contain a '/' that arrived as %2F, as well as "."
+and ".." segments, which the server neither merges nor removes.  Never
+use it as a file name without checking it first.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_req_raw_query (3),

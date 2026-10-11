@@ -1,11 +1,11 @@
 .TH CHTTPCLIENT_DO_STREAMING 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-chttpclient_do_streaming \- perform an HTTP request with a streaming response body
+chttpclient_do_streaming \- do an HTTP request and stream the response body
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpclient.h>
+#include <ccollections/chttpclient.h>
 
 ccol_retval_t chttpclient_do_streaming(chttpcli cli,
                                        const chttp_request_t *req,
@@ -15,29 +15,34 @@ ccol_retval_t chttpclient_do_streaming(chttpcli cli,
 .fi
 .SH DESCRIPTION
 .nf
-Like chttpclient_do, but delivers the response body to write_fn in
-chunks as data arrives instead of buffering it.  No chttpcli_response
-struct is allocated; response headers are not accessible.
+This function works like chttpclient_do, but it gives the response body
+to write_fn in chunks as the data arrives instead of buffering that
+body. It allocates no chttpcli_response struct, and this path gives you
+no access to the response headers.
 
-write_fn must return the number of bytes consumed.  Returning
-anything other than len aborts the transfer with a failure.
+write_fn must give back the number of bytes that it consumes; a value
+other than len aborts the transfer with a failure.
 .fi
 .SH PARAMETERS
 .nf
-cli             Client handle; must not be CHTTPCLI_INVALID.
-req             Request to execute; must not be NULL.
-write_fn        Callback invoked with each body chunk; must not be NULL.
-write_ctx       Opaque context pointer passed verbatim to write_fn.
-status_code_out Receives the HTTP status code on success; may be NULL.
+cli             The client handle. It must not be CHTTPCLI_INVALID.
+req             The request to run. It must not be NULL.
+write_fn        The callback that the client calls with each chunk of
+                the body. It must not be NULL.
+write_ctx       An opaque context pointer. The client gives it to
+                write_fn without a change.
+status_code_out It gets the HTTP status code after a call that
+                succeeds. It can be NULL.
 .fi
 .SH RETURN VALUE
 .nf
-Same codes as chttpclient_do, except ccol_msg_too_large is never
-returned: chttpclient_set_max_response_body_size has no effect on
-this streaming path, since the caller's own write_fn already
-controls memory use.  Additionally, ccol_http_transfer_aborted is
-returned when write_fn returns anything other than len (not just
-fewer bytes than len, but more too), aborting the transfer.
+The same codes as chttpclient_do, with two differences. The function
+never gives ccol_msg_too_large, because
+chttpclient_set_max_response_body_size has no effect on this streaming
+path: the write_fn of the caller already controls the use of memory
+there. The function also gives ccol_http_transfer_aborted when write_fn
+gives back a value other than len; such a value, whether above len or
+below len, aborts the transfer.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_do (3),

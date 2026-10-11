@@ -1,0 +1,80 @@
+.TH CVECTOR_BEGIN_ITER 3 "2026-09-20" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cvector_begin_iter \- create an iterator positioned at a vector's first element
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cvector.h>
+
+cmap_iterator *cvector_begin_iter(cvec v, char **err);
+.fi
+.SH DESCRIPTION
+.nf
+Allocates an iterator positioned at element 0 that walks the vector in
+index order. The key of the iterator is the zero-based index of the
+element, and its value is the element itself. The caller reads both with
+the unified accessors ccol_iter_key_ptr(3) and ccol_iter_val_ptr(3),
+which give typed pointers straight into the backing buffer of the
+vector, so a write through the value pointer updates the element in
+place.
+
+The generic ccol_begin(3) macro selects this function for a cvec and is
+the ordinary entry point. Call this function directly only when the
+container type is already known and the caller wants the error string.
+.fi
+.SH PARAMETERS
+.nf
+v     Vector to iterate over, or NULL
+err   Optional pointer to receive an error string on failure, or NULL
+.fi
+.SH RETURN VALUE
+.nf
+Returns a pointer to a newly allocated iterator positioned at the first
+element.
+Returns NULL when there is nothing to iterate (v is NULL or the vector
+holds no elements), with *err set to NULL.
+Returns NULL with *err set to an error string when the iterator itself
+could not be allocated.
+.fi
+.SH NOTES
+.nf
+The function sets *err to NULL at entry, before anything else. To tell
+an empty result apart from a failure, test *err, not the return value
+A NULL v iterates as an empty vector instead of reporting an error. This
+is a deliberate cross-module contract that chashmap_begin_iter(3) and
+cbmap_begin_iter(3) share: the caller can iterate a lazily created
+container field that is still NULL because nothing is in it yet, and no
+caller needs to write its own NULL guard first
+The iterator frees itself when ccol_iter_next(3) steps past the last
+element and returns NULL. An iteration that stops early must end with
+ccol_iter_destroy(3), or the caller can declare the iterator with
+ccol_iter_declare(3), so that scope exit destroys it
+The iterator comes from the vector's own memory management procedures
+Every operation that inserts, removes or resizes invalidates the
+iterator
+.fi
+.SH EXAMPLES
+.nf
+cvec_construct(vec, int);
+cvec_push(vec, 10);
+cvec_push(vec, 20);
+
+char *err = NULL;
+ccol_iter_declare(vec, it);
+for (it = cvector_begin_iter(vec, &err); it; it = ccol_iter_next(it)) {
+    printf("[%zu] = %d\en", *ccol_iter_key_ptr(it),
+                            *ccol_iter_val_ptr(it));
+}
+if (err) {
+    fprintf(stderr, "cannot iterate: %s\en", err);
+}
+cvec_destroy(vec);
+.fi
+.SH "SEE ALSO"
+.BR ccol_begin (3),
+.BR ccol_iter_next (3),
+.BR ccol_iter_destroy (3),
+.BR ccol_iter_declare (3),
+.BR chashmap_begin_iter (3),
+.BR cbmap_begin_iter (3)

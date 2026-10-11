@@ -5,40 +5,44 @@ chttpsvr_req_query \- look up all values for a query parameter
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 const char **chttpsvr_req_query(chttpsvr_req *req, const char *key,
                                  size_t *count_out);
 .fi
 .SH DESCRIPTION
 .nf
-Parses the query string lazily on first call and returns a
-NULL-terminated array of all URL-decoded values associated with key.
-If count_out is non-NULL, stores the count.  Returns NULL if the key
-is not present.
+Parses the query string lazily on the first call, then returns a
+NULL-terminated array of every URL-decoded value that belongs to key.
+Each key of the query string is URL-decoded and compared with key as
+given, as url.Values of the Go net/url package does, so pass the
+decoded form: "a b" finds both a+b and a%20b, while "a%20b" finds
+neither.  The count is stored in count_out when count_out is not
+NULL.  The function returns NULL when the key is absent.
 
-The string values pointed to by the array elements are valid for the
-lifetime of the handler invocation.  The array pointer itself is a
-per-request scratch buffer that is recycled on every call to
-chttpsvr_req_query: copy any pointers you need from the returned array
-before making a subsequent call to chttpsvr_req_query on the same
-request.
+The value strings that the array elements point to stay valid for the
+duration of the handler call, but the array itself is a scratch buffer
+for this one request that every call to chttpsvr_req_query reuses, so
+copy out the pointers you need before you make another call to
+chttpsvr_req_query on the same request.
 .fi
 .SH NOTES
 .nf
-This function cannot distinguish an OOM failure (during query-string
-parsing or while growing the result array) from a genuine key-absent
-result.  Both conditions produce (NULL, count=0).  Call
-chttpsvr_req_query_oom(req) after a NULL return to distinguish the two
-cases.  Alternatively, use chttpsvr_req_query_one for single-valued
-keys; that function returns ccol_not_enough_memory on OOM.
+This function cannot distinguish an out-of-memory failure, which can
+happen while the query string is parsed or while the result array
+grows, from a genuine "key is absent" result: both give NULL and a
+count of 0.  After a NULL return, call chttpsvr_req_query_oom(req) to
+tell the two cases apart, or use chttpsvr_req_query_one for a key that
+has one value, since that function returns ccol_not_enough_memory when
+it runs out of memory.
 
-A query string component with a "=" but an empty key half (e.g.
-"?=hello") is a real, retrievable pair: key "" maps to value "hello".
-A genuinely empty component instead (nothing at all between two "&"
-characters, or before a leading/after a trailing one, e.g.
-"?a=1&&b=2" or "?&a=1") is skipped outright rather than parsed as a
-spurious key=""/value="" entry.
+A query-string component that has a "=" but an empty key half, for
+example "?=hello", is a real pair that you can look up: the key ""
+maps to the value "hello".  A completely empty component is different:
+the parser skips it outright instead of reading it as a false entry
+with an empty key and an empty value.  A component is completely empty
+when there is nothing at all between two "&" characters, before a
+leading "&", or after a trailing "&", as in "?a=1&&b=2" and "?&a=1".
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_req_query_one (3),

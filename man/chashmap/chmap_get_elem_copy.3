@@ -5,25 +5,25 @@ chmap_get_elem_copy \- copy the value associated with a key out of a hash map
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chashmap.h>
+#include <ccollections/chashmap.h>
 
 ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair *key_pair,
                                   void *target_buf, size_t target_buf_size);
 .fi
 .SH DESCRIPTION
 .nf
-Searches the map for key_pair and copies the associated value into
-target_buf, copying min(value_size, target_buf_size) bytes so an
-undersized buffer receives a partial copy rather than an error. When
-target_buf_size exceeds the stored value's size, the remaining bytes of
-target_buf are zeroed rather than left untouched. cbmap_get_elem_copy(3)
-takes the stricter approach of requiring an exact size match.
+Searches the map for key_pair and copies min(value_size,
+target_buf_size) bytes of the value into target_buf, so a buffer that is
+too small gets a partial copy instead of an error. When target_buf_size
+is larger than the stored value, the function sets the rest of
+target_buf to zero. cbmap_get_elem_copy(3) is stricter: it needs the
+sizes to match exactly.
 .fi
 .SH PARAMETERS
 .nf
 chm              Hash map to search
 key_pair         Key to look up
-target_buf       Buffer to receive the value copy
+target_buf       Buffer that receives the copy of the value
 target_buf_size  Size of target_buf
 .fi
 .SH RETURN VALUE
@@ -36,8 +36,14 @@ ccol_invalid_args   - Any pointer is NULL, a size is 0, or key_pair's
 .fi
 .SH NOTES
 .nf
+The ptr of a key_pair needs no specified alignment, because the map
+hashes and compares the key bytes through memcpy instead of through a
+pointer cast to the key type. key_pair->ptr can therefore point directly
+at key bytes at any offset in a larger buffer, such as a field in a
+packed network frame or a memory-mapped record, and you do not have to
+copy the key bytes into an aligned local variable first
 O(1) average complexity
-Open-addressing: O(n) worst case for linear probing
+Open addressing: O(n) worst case for linear probing
 Separate chaining: O(n) worst case per bucket, where n is chain length
 Copies min(actual_value_size, target_buf_size) bytes
 Safe to use with an undersized buffer, which receives a partial copy

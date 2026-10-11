@@ -5,38 +5,49 @@ ctpool_shutdown_drain \- graceful shutdown
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadpool.h>
+#include <ccollections/cthreadpool.h>
 
 void ctpool_shutdown_drain(ctpool pool);
 .fi
 .SH DESCRIPTION
 .nf
-Signals the pool to stop accepting new tasks, waits for all queued
-and active tasks to complete, then joins all worker threads. Blocks
-until every worker has exited.
+Tells the pool to accept no new task, waits for every task in the queue
+and every active task to finish, and then joins every worker thread.
+The call blocks until every worker has exited.
 
-After this call returns, no new tasks may be submitted. The pool
-struct can then be freed with ctpool_destroy. Calling
-ctpool_shutdown_drain a second time is a no-op.
+The pool accepts no new task after this call returns, and ctpool_destroy
+can then free the pool struct.
+
+A second call, whether it follows the first one or runs at the same time
+on another thread, does no more shutdown work of its own, but it still
+blocks until the shutdown that is already under way stops. Every caller
+therefore gets the same guarantee: after the call returns, every worker
+thread has exited.
 .fi
 .SH PARAMETERS
 .nf
-pool   Thread pool handle (CTPOOL_INVALID or a stale/already-destroyed handle is a no-op)
+pool   Thread pool handle (CTPOOL_INVALID or a stale/already-destroyed
+       handle is a no-op)
 .fi
 .SH NOTES
 .nf
-Every submit function returns ccol_not_permitted after this call,
-except ctpool_submit_future, whose only failure indication is a NULL
-return.
-Any thread blocked in ctpool_submit on a full bounded queue is woken
-and will receive ccol_not_permitted.
+Every submit function returns ccol_not_permitted after this call, with
+one exception: ctpool_submit_future, which reports a failure only as a
+NULL return.
+The library wakes every thread that blocks in ctpool_submit on a full
+bounded queue, and each of them receives ccol_not_permitted.
 
-Calling ctpool_shutdown_drain on pool from within a task (or that
-task's on_complete callback) currently executing on one of pool's own
-worker threads is a complete no-op: it neither stops accepting new
-tasks nor joins any worker. A worker thread cannot join itself, so
-proceeding could never actually wait for the calling thread to exit,
-only for every other worker.
+A call to ctpool_shutdown_drain on pool from inside a task that runs on
+one of the worker threads of pool, or from the on_complete callback of
+that task, does nothing at all. It neither stops the pool from
+accepting new tasks nor joins any worker, and it does not block. A
+worker thread cannot join itself, so going ahead could never wait for
+the calling thread to exit; it could only wait for every other worker.
+
+A ctpool_shutdown_immediate call can arrive while this call still
+drains. That call then takes over: it discards whatever is still in the
+queue at that moment and cancels the futures of those tasks, and this
+call returns after every worker has exited.
 .fi
 .SH "SEE ALSO"
 .BR ctpool_shutdown_immediate (3),

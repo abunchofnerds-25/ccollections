@@ -1,0 +1,98 @@
+.TH CHMAP_CONSTRUCT_CH_SCOPED 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chmap_construct_ch_scoped \- declare and create a hash map with a custom hashing procedure, destroyed on scope exit
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chashmap.h>
+
+chmap_construct_ch_scoped(hm_name, key_t, val_t, custom_hashing_proc);
+.fi
+.SH DESCRIPTION
+.nf
+Declares a hash map handle named hm_name, together with the companion
+type variables that carry key_t and val_t to every later type-inferred
+macro. The macro then creates a map that hashes its keys with
+custom_hashing_proc instead of with the map's own hashing for key_t, and
+attaches the cleanup attribute, which destroys the map at every exit
+from the enclosing scope, an early return included.
+
+This macro is chmap_construct_ch(3) plus that cleanup attribute, and
+nothing else is different. chmap_construct_scoped(3) is the same macro
+with the map's own hashing, chmap_construct_mp_scoped(3) takes an
+allocator in place of a hashing procedure, and
+chmap_construct_full_scoped(3) takes both.
+.fi
+.SH PARAMETERS
+.nf
+hm_name              Name for the map handle to declare
+key_t                Key type; it tells every later macro how to read a key
+                     and, with val_t, which implementation strategy the map
+                     uses
+val_t                Value type
+custom_hashing_proc  A ccol_hashing_proc_t, or NULL to use the map's own
+                     hashing for key_t
+.fi
+.SH RETURN VALUE
+.nf
+None. This macro declares variables and does not expand to an expression.
+.fi
+.SH "CUSTOM HASHING"
+.nf
+A custom procedure receives a pointer to the key bytes and their length,
+and returns an unsigned long. It must return the same value for two keys
+that the map considers equal; for a char * key, equal means equal
+contents, not an equal pointer.
+
+The return value does not need to avalanche, because the map finalizes
+the value that a custom procedure returns with its own bit-mixing step
+before it reduces the value to a slot or a bucket. A procedure that puts
+all of its entropy in the low bits therefore still spreads across the
+table. The contract is only "any function of the key that respects the
+map's notion of key equality".
+
+The procedure must stay callable for the map's whole lifetime, which here
+ends at the closing brace of the enclosing scope.
+.fi
+.SH NOTES
+.nf
+Stops the program through ccol_fatal_err() if the creation fails
+Needs GCC or Clang, because it uses the cleanup attribute
+Uses the default allocator and CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16)
+buckets
+The map canonicalizes a float or double key before the procedure sees it
+A long double key is the one case where a custom procedure changes key
+handling; chmap_create_full(3) states what such a procedure has to do
+Scope exit destroys the map and clears the handle, so an explicit
+chmap_destroy(3) earlier in the scope stays correct
+The companion type variables follow the scope of the handle, so a
+function that receives the handle needs chmap_redeclare(3) there
+.fi
+.SH WARNINGS
+.nf
+The handle must not outlive its scope. Do not return the handle, and do
+not store it anywhere that outlives the scope: either one hands out a
+handle whose map is freed at the exit from the scope.
+.fi
+.SH EXAMPLES
+.nf
+unsigned long hash_bytes(const void *p, size_t size);
+
+void tally(char **words, size_t n) {
+    chmap_construct_ch_scoped(seen, char *, int, hash_bytes);
+    int one = 1;
+    for (size_t i = 0; i < n; i++) {
+        chmap_insert(seen, words[i], one);
+    }
+}                                     /* seen is destroyed here */
+.fi
+.SH "SEE ALSO"
+.BR chmap_construct_ch (3),
+.BR chmap_construct_scoped (3),
+.BR chmap_construct_mp_scoped (3),
+.BR chmap_construct_full_scoped (3),
+.BR chmap_declare_scoped (3),
+.BR chmap_init_ch (3),
+.BR chmap_redeclare (3),
+.BR chmap_destroy (3)

@@ -5,15 +5,15 @@ clrucache_capacity \- return the maximum capacity of the cache
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <clrucache.h>
+#include <ccollections/clrucache.h>
 
 size_t clrucache_capacity(clru_cache cache);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the maximum number of live entries the cache can hold before
-eviction begins. This is the value supplied as capacity to
-clrucache_create_full() at construction time.
+Returns the maximum number of live entries that the cache can hold
+before eviction starts, which is the value that the caller gives as
+capacity to clrucache_create_full() at construction time.
 .fi
 .SH PARAMETERS
 .nf
@@ -21,19 +21,21 @@ cache  Cache handle.
 .fi
 .SH RETURN VALUE
 .nf
-Capacity (always >= 1 for a valid handle), or 0 if cache is
-CLRU_CACHE_INVALID or a stale (already-destroyed) handle.
+The capacity, which is always >= 1 for a valid handle. It is 0 when
+cache is CLRU_CACHE_INVALID, and 0 when cache is a stale handle that a
+call already destroyed.
 .fi
 .SH NOTES
 .nf
-cache is an opaque VALUE handle, resolved through a library-owned
-slot table before the underlying cache object is touched; a stale
-handle here is an ordinary error, not a fatal one (fatal-on-stale
-is reserved for __clrucache_destroy).
-Takes no lock: the capacity is fixed when the cache is created and
-never written again. It is the total across the cache's segments, which
-is exactly the value passed to the constructor.
-O(1) complexity.
+cache is an opaque VALUE handle, which the library resolves through a
+slot table that it owns before it touches the cache object behind the
+handle. A stale handle here is an ordinary error, not a fatal one;
+only clru_destroy() treats a stale handle as fatal.
+This function takes no lock, because the creation of the cache fixes
+the capacity and nothing writes it again. The capacity is the total
+across the segments of the cache, which is exactly the value that the
+caller gives to the constructor.
+The complexity is O(1).
 .fi
 .SH "SEE ALSO"
 .BR clrucache_size (3),

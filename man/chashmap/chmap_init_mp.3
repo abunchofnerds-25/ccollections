@@ -1,0 +1,70 @@
+.TH CHMAP_INIT_MP 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chmap_init_mp \- create a hash map with a custom allocator into an already declared handle
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chashmap.h>
+
+chmap_init_mp(hm_name, mmgmt_procs);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a hash map that takes all of its memory from mmgmt_procs, and
+assigns it to hm_name. The caller must declare the handle first, with
+chmap_declare(3) or chmap_declare_scoped(3). The key and value types are
+not arguments here: the macro reads them from the companion type variables
+that the declare macro created.
+
+This macro is chmap_init(3) plus an allocator, and the map uses its own
+hashing for the declared key type. chmap_init_ch(3) replaces the hashing
+instead, and chmap_init_full(3) takes both.
+
+The one-step equivalents are chmap_construct_mp(3) and
+chmap_construct_mp_scoped(3).
+.fi
+.SH PARAMETERS
+.nf
+hm_name      The already declared map handle to create the map into
+mmgmt_procs  Pointer to a ccol_memmgmt_procs_t, or NULL for the default
+             allocator
+.fi
+.SH RETURN VALUE
+.nf
+None. This macro expands to a statement and does not expand to an
+expression.
+.fi
+.SH NOTES
+.nf
+Stops the program through ccol_fatal_err() if the creation fails
+All four members of ccol_memmgmt_procs_t must be non-NULL
+The macro copies the procedures into the map, so the caller's own
+ccol_memmgmt_procs_t need not outlive the call; the procedures
+themselves must stay callable for the whole life of the map
+Everything that the map allocates later, its bucket array included,
+comes from these procedures, and everything that the map frees goes
+back to them
+Uses CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets
+.fi
+.SH EXAMPLES
+.nf
+ccol_memmgmt_procs_t procs = {
+    .malloc = my_malloc, .calloc = my_calloc,
+    .realloc = my_realloc, .free = my_free,
+};
+
+chmap_declare(scores, char *, int);
+chmap_init_mp(scores, &procs);
+int score = 42;
+chmap_insert(scores, "alice", score);
+chmap_destroy(scores);
+.fi
+.SH "SEE ALSO"
+.BR chmap_init (3),
+.BR chmap_init_ch (3),
+.BR chmap_init_full (3),
+.BR chmap_declare (3),
+.BR chmap_construct_mp (3),
+.BR chmap_create_full (3),
+.BR chmap_destroy (3)

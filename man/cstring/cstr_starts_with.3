@@ -5,13 +5,13 @@ cstr_starts_with \- check whether the string begins with a prefix
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 cstr_starts_with(s, pfx);
 .fi
 .SH DESCRIPTION
 .nf
-Pass-through wrapper for cstring_starts_with().
+This macro is a pass-through wrapper for cstring_starts_with().
 .fi
 .SH PARAMETERS
 .nf
@@ -20,7 +20,7 @@ pfx   Prefix string
 .fi
 .SH RETURN VALUE
 .nf
-true if the string starts with pfx, false otherwise
+true if the string starts with pfx, false if it does not
 .fi
 .SH "SEE ALSO"
 .BR cstring_starts_with (3),

@@ -5,71 +5,102 @@ chttpsvr_subrouter \- create a sub-router with a path prefix
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 chttpsvr_router *chttpsvr_subrouter(chttpsvr srv, const char *prefix);
 .fi
 .SH DESCRIPTION
 .nf
-Creates a new router under the given path prefix (which must begin with
-\&'/') and attaches it to the server.  Routes registered on the sub-router
-are matched against the portion of the path following the prefix.
+Creates a new router under the given path prefix and attaches it to
+the server.  The prefix must start with \&'/'.  A route registered on
+the sub-router is matched against the part of the path after the
+prefix, and the sub-router owns every path under the prefix; see
+NOTES.
 
-The prefix must not contain consecutive slashes (e.g. "//api" or
-"/a//b").  Such prefixes can never match a valid HTTP path and would
-silently create an unreachable router; chttpsvr_subrouter rejects them
-by returning NULL.
+The prefix must not contain two consecutive slashes, as in "//api" or
+"/a//b".  Such a prefix can never match a valid HTTP path and would
+silently create a router that nothing can reach, so
+chttpsvr_subrouter rejects it and returns NULL.
 
-A trailing slash in prefix is stripped automatically: "/api/v1/" and
-"/api/v1" are therefore equivalent and produce identical routing
+A trailing slash on the prefix is removed automatically, so
+"/api/v1/" and "/api/v1" are equivalent and give the same routing
 behaviour.
 
-The returned pointer is owned by the server and must not be freed by
-the caller.  Every chttpsvr_router_on, chttpsvr_router_on_stream, and
-chttpsvr_router_use call against the returned router validates that
-this server has not been destroyed (including concurrently, from
-another thread) before touching it, so it is safe to hold the returned
-pointer across a chttpsvr_stop/chttpsvr_start restart, and a
-registration call racing a concurrent chttpsvr_destroy of srv simply
-returns ccol_invalid_args rather than touching freed memory.
+The server owns the returned pointer, and the caller must not free
+it.  Every chttpsvr_router_on, chttpsvr_router_on_stream and
+chttpsvr_router_use call on that router first checks that this server
+has not been destroyed, and the check also covers a concurrent destroy
+from another thread, so it is safe to keep the pointer across a
+restart with chttpsvr_stop and chttpsvr_start.  A registration call
+that races a concurrent chttpsvr_destroy of srv returns
+ccol_invalid_args and touches no freed memory.
 
-This function is thread-safe and may be called before or after the
-server is started.
+This function is thread-safe and can be called both before and after
+the server starts.
 .fi
 .SH NOTES
 .nf
-The "/" prefix is a special case.  The trailing-slash strip loop runs
-only when the prefix length exceeds one character, so "/" is retained
-as-is with prefix_len = 1.  A "/" sub-router matches only the exact
-request path "/"; any other path, including one beginning with a
-second slash (e.g. "//foo"), does NOT match and receives 404.
+A mounted prefix owns every path under it.  A path is under a prefix
+when its decoded form (the one that chttpsvr_req_path reports) equals
+the prefix or continues it with a '/': "/admin", "/admin/x/y",
+"/%61dmin/x" and "/admin%2Fx" are all under "/admin", but
+"/administrator" is not.  The most specific mount that owns the path
+handles the request alone, so for "/api/v1/x" a mount of "/api/v1"
+wins over a mount of "/api", and no route of a less specific mount,
+and no root-level route, can answer it.  When none of the routes of
+the owner matches, the owner answers 404 (or 405 when a route of the
+owner matches the path but not the method), and the middleware of the
+owner runs for that rejection just as it runs for its routes.  A path
+under no mount goes to the root router, which holds the routes that
+chttpsvr_register_handler and chttpsvr_register_streaming_handler
+register directly on the server.
 
-Use prefix "/" only when you intend to match only the exact root path
-"/".  To catch all requests regardless of path, register routes directly
-on the server with chttpsvr_register_handler or chttpsvr_register_streaming_handler instead.
+A guard in the middleware of a sub-router therefore covers every path
+under its prefix, whatever any other router registers: a root-level
+pattern such as "/{a}/{b}/{c}" overlaps every three-segment path, yet
+it never answers "/admin/a/b" while "/admin" is mounted.  A mount
+nested under another one, such as "/admin/deep" under "/admin", owns
+the paths under itself, so the middleware of "/admin" does not run for
+them; give the nested mount a guard of its own when it needs one.  Two
+sub-routers on the identical prefix share it: the routes of both can
+answer, the earlier registration first, and the earlier one answers a
+404 or a 405.  Precedence therefore depends only on the prefixes and
+patterns that you register, and never on the order of registration.
+Within one router, the server tries the routes in registration order;
+see chttpsvr_register_handler(3).
 
-Root-router shadowing: routes registered directly on the server via
-chttpsvr_register_handler or chttpsvr_register_streaming_handler (i.e.
-on the root router) are always evaluated before any sub-router.  A
-root-level route whose path AND method both match a request wins
-outright, shadowing a same-path sub-router route completely.  A
-root-level route that matches the same path but a different method
-does not shadow the sub-router: every other root-level route is still
-tried for a same-path, same-method match first, and only once the
-whole root router has been exhausted does matching fall through to
-the sub-router, where a route whose own method matches the request is
-served normally (the same 405-vs-404 priority two same-router routes
-registered under different methods already follow; see
-chttpsvr_register_handler(3)).  To avoid unintentional shadowing, do
-not register root-level routes whose paths overlap with a sub-router's
-prefix and pattern for the same method.
+The server decodes each raw segment on its own before matching it, so
+although "/admin%2Fx" is under "/admin", no route of that mount can
+match it, because a route matches whole segments; the mount answers
+it with a 404.
+
+The "/" prefix is a special case.  The loop that strips a trailing
+slash runs only for a prefix longer than one character, so "/" is kept
+as it is, with prefix_len = 1.  A "/" sub-router owns only the exact
+request path "/": no other path is under it, and the server routes
+every other path, including one that starts with a second slash such
+as "//foo", as if the "/" sub-router did not exist.  Every route on a
+"/" sub-router is therefore reachable only from the exact path "/".
+
+That makes this prefix a trap for a sub-router that carries its own
+middleware: an authenticator or a rate limiter on a "/" sub-router
+does not refuse everything outside "/".  A root-level route, or
+another sub-router, serves any other path normally, and the middleware
+of the "/" sub-router does not run for it.
+
+Use the prefix "/" only when you want to match the exact root path "/"
+and nothing else.  To run a middleware for every request, whatever
+the path, register it globally with chttpsvr_use; to catch every
+request, whatever the path, register routes directly on the server
+with chttpsvr_register_handler or chttpsvr_register_streaming_handler.
 .fi
 .SH RETURN VALUE
 .nf
-Pointer to the new chttpsvr_router on success, or NULL when srv is
-CHTTPSVR_INVALID or a stale/already-destroyed handle, prefix is NULL,
-prefix does not start with '/', prefix contains consecutive slashes,
-or on OOM.
+A pointer to the new chttpsvr_router on success.  NULL when srv is
+CHTTPSVR_INVALID, when srv is a stale handle that has already been
+destroyed, when prefix is NULL, when prefix does not start with '/',
+when prefix contains two consecutive slashes, or when the library
+runs out of memory.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_router_on (3),

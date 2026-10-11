@@ -1,0 +1,137 @@
+name: macOS
+
+# macOS is a supported platform, so this workflow runs on the same triggers
+# as ci.yml: every push to any branch, and every pull request. It is a
+# separate workflow because its jobs run on macOS runners. It also runs by
+# hand (Actions -> macOS -> Run workflow).
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS ${{ matrix.arch }} (Apple clang${{ matrix.mode == 'asan' && ', ASan + UBSan' || matrix.mode == 'tsan' && ', ThreadSanitizer' || '' }})
+    strategy:
+      # One job that fails must not cancel the others: each run must give as
+      # many failures as it can.
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+        # The tsan mode runs the test_tsan targets. The macOS build compiles the
+        # emulated locks, condition variables, semaphore and per-thread state of
+        # common.h, ctlsmodel.h and csock.h, and only this mode runs that code
+        # under ThreadSanitizer on the real system.
+        mode: [plain, asan, tsan]
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+          # AddressSanitizer and UndefinedBehaviorSanitizer, built as the Linux
+          # sanitizer job builds them. LeakSanitizer is not part of it, because
+          # Apple clang does not support it on arm64; the CI job "Linux x86_64
+          # (memtest, macOS code paths)" runs valgrind over the code that only
+          # macOS compiles.
+          - mode: asan
+            extra_cflags: -fsanitize=address,undefined -fno-sanitize-recover=undefined
+    runs-on: ${{ matrix.runner }}
+    env:
+      EXTRA_CFLAGS: ${{ matrix.extra_cflags }}
+    # A test that hangs has no bound inside the process on macOS, because a
+    # bounded join needs pthread_timedjoin_np(), which macOS does not have.
+    # This timeout bounds such a hang; a sanitizer build runs slower.
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install dependencies
+        # The build needs GNU make 4, while macOS ships GNU make 3.81 as make;
+        # Homebrew installs a current one as gmake. OpenSSL comes from Homebrew,
+        # outside the paths that clang searches by default, so CPATH and
+        # LIBRARY_PATH give clang its headers and its libraries. zlib is part of
+        # the macOS SDK.
+        run: |
+          brew install make openssl@3 coreutils pkgconf
+          ssl="$(brew --prefix openssl@3)"
+          echo "CPATH=$ssl/include" >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=$ssl/lib" >> "$GITHUB_ENV"
+          # check_install links a program statically with the flags of
+          # pkg-config, which must find openssl.pc, and Homebrew keeps OpenSSL
+          # out of the default search path of pkg-config.
+          echo "PKG_CONFIG_PATH=$ssl/lib/pkgconfig" >> "$GITHUB_ENV"
+          # The tests make certificates with the openssl command, and the one in
+          # /usr/bin is LibreSSL, so this puts the OpenSSL that the library
+          # links first in PATH for every later step.
+          echo "$ssl/bin" >> "$GITHUB_PATH"
+      - name: Show the toolchain
+        run: |
+          sw_vers
+          uname -m
+          cc --version
+          gmake --version | head -1
+          command -v openssl && openssl version
+      - name: Build the shared library
+        run: gmake
+      - name: Test every module
+        # Every module runs, even after a module fails, so that one run shows
+        # every failure; a plain `gmake test` stops at the first failing module.
+        # gtimeout (coreutils) stops a module that hangs after 30 minutes, so
+        # that one hang does not use the time of the whole job. macOS gives a
+        # process 256 descriptors by default, while some suites open more than
+        # 300 connections at once. The tsan mode runs the test_tsan target of
+        # each module that has one, and the engine-stop binary of chttpserver.
+        run: |
+          ulimit -n 4096
+          failed=""
+          run_target() {
+            echo "::group::$1 $2"
+            if ! gtimeout -k 30s 30m gmake -C "tests/$1" "$2"; then
+              failed="$failed $1:$2"
+            fi
+            echo "::endgroup::"
+          }
+          for dir in tests/*/; do
+            [ -f "$dir/Makefile" ] || continue
+            m="$(basename "$dir")"
+            if [ "${{ matrix.mode }}" = tsan ]; then
+              grep -q '^test_tsan:' "$dir/Makefile" || continue
+              run_target "$m" test_tsan
+            else
+              run_target "$m" test
+            fi
+          done
+          if [ "${{ matrix.mode }}" = tsan ]; then
+            run_target chttpserver test_engine_stop_tsan
+          fi
+          if [ -n "$failed" ]; then
+            echo "Failed modules:$failed"
+            exit 1
+          fi
+          echo "Every module passed."
+      - name: Check the built library
+        # The gates read the dylib and the archive with the nm of the system,
+        # because GNU readelf and nm do not read Mach-O. A sanitizer build
+        # adds runtime symbols, so only the plain build runs them.
+        # check_exit_reachable needs valgrind, which does not run on macOS.
+        if: matrix.mode == 'plain'
+        run: |
+          gmake check_headers
+          gmake check_namespace
+          gmake check_abi
+          gmake check_dso_unload
+      - name: Build the benchmarks and list their cases
+        # The harness is built and listed only, never timed: a shared runner
+        # has far more noise than the changes that the benchmarks must find.
+        if: matrix.mode == 'plain'
+        run: |
+          gmake -C bench
+          ./bench/bench --list | head -5
+      - name: Install, build an application against the install, uninstall
+        # Last, because the install links the library again with the install
+        # name of its temporary prefix.
+        if: matrix.mode == 'plain'
+        run: gmake check_install

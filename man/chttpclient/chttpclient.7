@@ -1,0 +1,246 @@
+.TH CHTTPCLIENT 7 "2026-10-06" "c_collections" "C Collections Library - Overview"
+.SH NAME
+chttpclient \- overview of the HTTP/1.1 client of the C Collections Library
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpclient.h>
+.fi
+.SH DESCRIPTION
+.nf
+chttpclient sends HTTP/1.1 requests and reads the responses, over plain
+TCP, TLS or a Unix domain socket. chttpclient.h includes chttp.h, which
+holds the types that the client shares with the server:
+  - chttp_method_t.
+  - chttp_request_body_t and its CHTTP_*_BODY macros.
+  - chttp_tls_config_t.
+  - The CHTTP_STATUS_* constants.
+  - The base64 helpers and the Basic auth helpers.
+
+Link a program that uses the client with \-lccollections. The library
+itself depends on OpenSSL (libssl and libcrypto), so a link against the
+shared library needs nothing more. For a static link, get the full list
+from pkg-config:
+
+    cc app.c $(pkg-config --cflags --libs --static ccollections)
+
+You can build the library without the client (make
+WITH_CHTTPCLIENT=0); a program that uses the client then does not link.
+.fi
+.SS The client handle
+.nf
+chttpcli is an opaque VALUE handle: a uint64_t, not a pointer. Do not
+cast it to or from a pointer, and do not use it as an address.
+CHTTPCLI_INVALID is 0 and is the chttpcli equivalent of NULL, so
+"if (!cli)" tests whether there is a client.
+
+Each call resolves the handle before it uses the client, so it finds
+and refuses a stale handle (a handle whose client was destroyed). A
+stale handle gives:
+  - ccol_invalid_args from a function.
+  - NULL from a function that returns a future.
+  - A fatal error from chttpclient_destroy.
+A stale handle never causes a read of freed memory.
+
+ccol_create_chttpclient and ccol_create_chttpclient_mp make a client,
+and chttpcli_construct, chttpcli_construct_scoped, chttpcli_declare and
+chttpcli_declare_scoped are wrappers around them. chttpclient_destroy
+destroys a client.
+
+chttp_default_client gives one client for the whole process, which
+chttp_get, chttp_post, chttp_put, chttp_delete, chttp_patch, chttp_do
+and chttp_run_query use. The library owns that client; do not destroy
+it.
+.fi
+.SS Requests
+.nf
+A chttp_request_t holds a method, a URL, a body and a set of headers.
+chttp_request_new and chttp_request_new_mp copy the URL and the body,
+so the caller can free its own buffers immediately. The fields method,
+url, body, expect_continue and prevent_tls_downgrade_on_redirect are
+public; use chttp_request_set_header and chttp_request_get_header to
+set and read the headers. chttp_request_free frees the request.
+.fi
+.SS Responses
+.nf
+chttpcli_response has four public fields:
+
+  status_code  the HTTP status of the final response.
+  body         a heap buffer that ends with a NUL, or NULL.
+  body_len     the number of bytes in body before that NUL.
+  headers      a chmap(char * -> char *) from each lower-case field
+               name to its value.
+
+body is NULL and body_len is 0 in these cases:
+  - A body of zero length, for example a 204, a response to HEAD or a
+    "Content-Length: 0".
+  - All streaming requests, whose body goes to the write callback.
+So before you read body, make sure that body != NULL or body_len > 0,
+even after a success.
+
+When the server sends a name on more than one line, that name maps to
+the values joined with ", ". Set-Cookie is the exception: it maps to
+its first value. See chttpclient_resp_header(3). chttpclient_resp_free
+frees the response. A response does not depend on the client that made
+it, so you can free it before or after chttpclient_destroy.
+
+Each entry point that takes a resp_out sets *resp_out to NULL before it
+does other work, and keeps it NULL on each return that is not a
+success. Because chttpclient_resp_free(NULL) does nothing, a call to it
+after such a request is always safe.
+.fi
+.SS Three ways to run a request
+.nf
+Tier 1 is chttpclient_do and chttpclient_do_streaming. It runs the
+request on the calling thread, which blocks until the request ends. The
+pool size of the client (chttpclient_set_pool_size) sets the maximum
+number of Tier 1 requests that run at the same time; a caller above
+that maximum waits for a slot.
+
+Tier 2 is chttpclient_do_async and chttpclient_do_async_streaming. It
+gives the request to a shared reactor engine and returns a ctpool_future
+immediately; chttpclient_async_result_get waits for the result.
+
+Tier 3 is chttpclient_do_pooled and chttpclient_do_pooled_streaming. It
+submits the request through the same engine and blocks until the
+request ends, with calls of the same shape as those of Tier 1. Many
+callers then share the few threads of the engine instead of each
+request blocking a thread of its own.
+
+Tiers 2 and 3 use one engine for each process, which all clients share.
+It starts on first use and stops automatically when no request is in
+progress and no connection is in the pool. Configure it with
+chttpcli_set_engine_logger, chttpcli_set_engine_mem_mgmt_procs and
+chttpcli_set_engine_num_reactor_threads. It is separate from the
+reactor of chttpserver.
+
+All three tiers apply the same rules to URLs, redirects, headers, TLS,
+"Expect: 100-continue", interim responses and limits, and all three
+give the same result codes.
+.fi
+.SS Connection reuse
+.nf
+After a response on a keep-alive connection, the client keeps that
+connection in an idle pool. The key of the pool is the origin:
+  - "scheme://host:port", where the host comparison ignores case.
+  - "unix://<path>" for a Unix domain socket.
+An HTTPS connection keeps its TLS session, so a later request to the
+same origin does not do DNS, the TCP handshake or the TLS handshake.
+
+The pool has a maximum for each origin and a maximum in total, and an
+idle connection expires after a short time. Above a maximum, the client
+closes a finished connection instead of putting it in the pool.
+
+Before the client reuses a connection from the pool, it checks the
+connection. If the peer closed the connection, or sent data on it while
+it was idle, the client closes that connection and uses a different
+one, at no cost to the caller. Bytes that arrive after a complete
+response answer no request, and the client never reads them as the
+response to the next request.
+
+A reused connection can be dead, and the client can find this only
+after it writes the request. If the client read nothing back on that
+connection, it sends the request one more time, on a new connection.
+The client never does this after it sent a body that a "100 Continue"
+confirmed: the server accepted that body, and a second send could run
+a request that is not idempotent two times.
+
+The client never keeps these connections:
+  - A connection whose response started before the client sent the
+    full request.
+  - A connection whose request had an "Expect: 100-continue" that got
+    a final status as the answer.
+  - A connection whose HTTP/1.0 response has Transfer-Encoding, which
+    RFC 9112 section 6.1 calls faulty framing.
+chttpclient_set_tls closes all idle HTTPS connections of the client,
+because the pool key does not include the TLS settings of a handshake.
+.fi
+.SS Unix domain sockets
+.nf
+A URL of the form "http+unix://<percent-encoded socket path>/path?query"
+reaches a server on a Unix domain socket. This works in all tiers and
+with keep-alive pooling.
+
+Percent-encode each byte of the socket path that is not an RFC 3986
+unreserved character, '/' included. For example, "/run/app.sock"
+becomes "%2Frun%2Fapp.sock".
+
+The Host header is "localhost" by default, as with curl --unix-socket,
+and a request can set its own Host header. A path that is too long for
+sockaddr_un.sun_path gives ccol_http_invalid_url; on Linux, that limit
+is 108 bytes, including the terminating NUL.
+
+There is no "https+unix://", and chttpclient_set_tls has no effect on
+such a request. A URL of this form has no credentials. A redirect can
+never move a request to this transport, or from one socket to a
+different socket; see chttpclient_do(3).
+.fi
+.SS Default request headers
+.nf
+The client adds a value for these headers:
+  - Host.
+  - Accept ("*/*").
+  - User-Agent.
+  - Content-Length and Content-Type, from the body.
+  - Authorization, from credentials in the URL.
+  - Expect, from expect_continue.
+It does not add a header that the request sets (the name comparison
+ignores case), and it sends a header that the request sets exactly as
+given. Only POST, PUT and PATCH have a body; see
+chttp_request_new_mp(3).
+.fi
+.SH NOTES
+.nf
+A TLS connection can renegotiate (TLS 1.2) or get a KeyUpdate
+(TLS 1.3) during a request, and must then read before it can write, or
+write before it can read. Each tier waits for the direction that the
+connection asks for, so such a connection continues to make progress.
+
+The client opens each socket close-on-exec, and also each file that
+its TLS layer reads, so a process that the application starts (system,
+popen, posix_spawn, fork and exec) gets no connection.
+
+The client never changes the disposition of SIGPIPE, and none of its
+writes causes SIGPIPE; see chttpclient_do(3).
+
+There are two supported ways to use fork(2) with the client:
+  - Call fork(2) before you create a client and before the first
+    request of Tier 2 or Tier 3, so that each process makes its own
+    clients.
+  - Call fork(2) and then call exec(3) in the child immediately, as
+    popen and system do. This is supported at all times, whatever the
+    client does.
+A child that continues with no exec(3) while a client from before the
+fork is live is not supported, because fork(2) does not copy the
+threads of the client and its engine.
+
+A process can destroy all clients that used Tier 2 or Tier 3 before it
+forks; the child of that process can then use both tiers, and starts
+its own engine.
+.fi
+.SH "THREAD SAFETY"
+.nf
+Each function that takes a chttpcli is thread-safe: many threads can
+run requests on one client, and change its settings, at the same time.
+
+chttpclient_destroy can run while other threads use the client, and it
+waits for the requests that are in progress. Two destroys of one handle
+that overlap are a fatal error, so the application must serialize the
+destroy, and the destroy must be the last thing that any thread does
+with that handle.
+
+A chttp_request_t and a chttpcli_response have no lock. A thread that
+changes one of them must have exclusive access, and so must a thread
+that reads one of them while a different thread changes it.
+.fi
+.SH "SEE ALSO"
+.BR chttpclient_do (3),
+.BR chttpclient_do_async (3),
+.BR chttpclient_do_pooled (3),
+.BR chttpclient_set_tls (3),
+.BR chttp_request_new (3),
+.BR chttp_default_client (3),
+.BR chttpclient_resp_header (3),
+.BR CHTTP_TLS_DEFAULT (3),
+.BR CHTTP_STATUS (3)

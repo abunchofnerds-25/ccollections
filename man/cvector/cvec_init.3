@@ -1,0 +1,70 @@
+.TH CVEC_INIT 3 "2026-09-20" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cvec_init \- create the vector behind a declared handle (fatal on failure)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cvector.h>
+
+cvec_init(v);
+.fi
+.SH DESCRIPTION
+.nf
+This macro creates a vector through the default allocator and stores it
+in v, which cvec_declare(3) or cvec_declare_scoped(3) must declare first.
+The element size comes from the element type in that declaration, so this
+macro repeats nothing about the type. cvec_init_mp(3) is the form that
+takes an allocator of its own.
+
+cvec_construct(3) puts this step into the declaration. Use the declare
+step and the initialize step separately when the two cannot sit on one
+line, for example when a choice between the default allocator and a
+custom one comes further down the function.
+
+The new vector holds no elements and starts at the minimum capacity of 4.
+The capacity doubles when a push finds the buffer full and halves when the
+element count falls below a quarter of it, but it never falls below that
+minimum of 4.
+.fi
+.SH PARAMETERS
+.nf
+v  Name of the vector variable for the new vector, which must be a plain
+   identifier. cvec_declare(3) or cvec_declare_scoped(3) must declare it
+   first, and its companion type variables must be in scope.
+.fi
+.SH RETURN VALUE
+.nf
+None. The macro expands to a statement, not to an expression.
+.fi
+.SH NOTES
+.nf
+The macro stops the program through ccol_fatal_err() when it cannot
+create the vector, with a message that names v and the error below it.
+To handle a failed creation yourself, use cvector_create(3) directly;
+that function does not stop the program.
+The element size comes from the declared element type, so a handle with
+companion type variables that are out of scope does not compile.
+The macro expands to a do/while block and needs a semicolon at the end of
+the call site.
+The macro evaluates v more than once and pastes v into the names of the
+companion variables, so v must be a plain identifier and never an
+expression.
+Free a vector from this macro with cvec_destroy(3);
+cvec_declare_scoped(3) makes that call automatically at the end of the
+scope.
+.fi
+.SH EXAMPLES
+.nf
+cvec_declare(my_vec, int);
+cvec_init(my_vec);
+cvec_push(my_vec, 42);
+cvec_destroy(my_vec);
+.fi
+.SH "SEE ALSO"
+.BR cvec_init_mp (3),
+.BR cvec_declare (3),
+.BR cvec_declare_scoped (3),
+.BR cvec_construct (3),
+.BR cvec_destroy (3),
+.BR cvector_create (3)

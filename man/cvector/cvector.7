@@ -1,0 +1,80 @@
+.TH CVECTOR 7 "2026-10-06" "c_collections" "C Collections Library - Overview"
+.SH NAME
+CVECTOR \- overview of the cvector dynamic array
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cvector.h>
+.fi
+.SH DESCRIPTION
+.nf
+A cvec is an array of elements of one type that can change its size, with
+the elements contiguous in memory. Access by index is O(1), an append at
+the end is amortized O(1), and a sort is O(n log n) and stable, so
+elements that are equal keep their relative order.
+
+The capacity starts at 4 elements and never goes below 4. When the vector
+is full, the capacity becomes two times larger; when a removal makes the
+vector less than a quarter full, the capacity becomes two times smaller.
+cvec_reserve(3) and cvec_append_array(3) grow the capacity to the next
+power of two at or above the count that they need.
+
+The API has two layers:
+  - The type-inferred macros, for example cvec_construct(3),
+    cvec_push(3), cvec_at(3) and cvec_sort(3). These macros keep the
+    element type with the handle, in companion variables that
+    cvec_declare(3), the construct macros and cvec_redeclare(3)
+    declare. On a hard error, such as a failed allocation, the macros
+    stop the program through ccol_fatal_err().
+  - The raw functions, for example cvector_create_full(3),
+    cvector_push_back(3), cvector_pop_back(3) and cvector_reserve(3),
+    which take elements by pointer and give a failure in their return
+    value.
+
+The element type can be any type: for example an arithmetic type, a
+pointer, a struct, a union, a function pointer type such as
+void (*)(int), or an array type such as char[32].
+.fi
+.SH "OWNERSHIP OF ELEMENTS"
+.nf
+The vector keeps a copy of each element. For an element that is a
+pointer, the vector keeps only the value of the pointer: it never
+follows that address, and it never frees the object at that address.
+cvec_destroy(3) and cvec_reset(3) never free the objects that the
+elements point to, so the caller must free those objects first.
+.fi
+.SH "REFERENCES INTO THE VECTOR"
+.nf
+cvec_data_ptr(3), cvec_at_ptr(3) and the address of a cvec_at(3) element
+point into the backing store, and an operation that can make that store
+larger or smaller moves it. These operations are:
+  - a push
+  - an append
+  - a reserve
+  - a pop
+  - a reset
+  - the destruction.
+After each of these operations, get such a pointer again. You can give
+a value that you read from the vector to cvec_push(3), and a pointer
+into the vector to cvec_append_array(3): both macros read their source
+safely, even when they reallocate the store.
+.fi
+.SH "THREAD SAFETY"
+.nf
+A vector has no internal lock. A caller can share one vector between
+threads, but must then serialize each call that changes the vector
+against all the other calls on that vector.
+.fi
+.SH "SEE ALSO"
+.BR cvec_construct (3),
+.BR cvec_redeclare (3),
+.BR cvec_push (3),
+.BR cvec_at (3),
+.BR cvec_sort (3),
+.BR cvector_create_full (3),
+.BR cvector_push_back (3),
+.BR cvector_begin_iter (3),
+.BR csort_sort (3),
+.BR cstring (7),
+.BR citerators (7)

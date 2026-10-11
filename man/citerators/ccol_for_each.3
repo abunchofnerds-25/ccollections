@@ -5,37 +5,41 @@ ccol_for_each \- iterate over all elements of any supported container
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <citerators.h>   /* or any container header */
+#include <ccollections/citerators.h>   /* or any container header */
 
 ccol_for_each(container, it, { body });
 .fi
 .SH DESCRIPTION
 .nf
-Declares a cmap_iterator* variable named it with RAII cleanup, then
-loops from ccol_begin(container) to NULL using ccol_iter_next().  The
-body is executed once for each element; it gives typed access via
-ccol_iter_key_ptr(it) and ccol_iter_val_ptr(it).
+This macro declares a cmap_iterator* variable named it, with RAII
+cleanup, and then loops from ccol_begin(container) to NULL with
+ccol_iter_next(), running the body once for each element. Inside the
+body, the variable it gives typed access through ccol_iter_key_ptr(it)
+and ccol_iter_val_ptr(it).
 
-The iterator is destroyed automatically when the loop exits, whether
-by reaching the end, by break, or by return.
+The macro destroys the iterator automatically when the loop ends, whether
+the loop reaches the end of the sequence or leaves through a break or a
+return.
 .fi
 .SH PARAMETERS
 .nf
-container  A cvec, chmap, or cbmap variable.
+container  A cvec, chmap or cbmap variable.
 it         Name for the iterator variable.
-body       Compound statement executed per element (passed as variadic
-           argument; commas inside nested function calls are safe).
+body       Compound statement that the macro runs for each element. The
+           macro takes it as a variadic argument, so a comma inside a
+           nested function call is safe.
 .fi
 .SH NOTES
 .nf
-Do NOT modify the container inside the body; insertions and deletions
-invalidate the iterator and produce undefined behaviour.
-Requires GCC or Clang (uses statement expressions and cleanup).
+Do NOT change the container inside the body: an insertion or a deletion
+invalidates the iterator and gives undefined behavior.
+This macro needs GCC or Clang, because it uses statement expressions and
+cleanup.
 .fi
 .SH EXAMPLES
 .nf
 chmap_construct(freq, char*, int);
-/* ... populate ... */
+/* ... fill the map ... */
 ccol_for_each(freq, it, {
     printf("%-12s %d\en", *ccol_iter_key_ptr(it),
                          *ccol_iter_val_ptr(it));

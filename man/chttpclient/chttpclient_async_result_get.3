@@ -1,31 +1,41 @@
 .TH CHTTPCLIENT_ASYNC_RESULT_GET 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-chttpclient_async_result_get \- block until an async request's future is fulfilled and return its typed result
+chttpclient_async_result_get \- block until the future of an async request is fulfilled, then give its typed result
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpclient.h>
+#include <ccollections/chttpclient.h>
 
 chttpcli_async_result_t *chttpclient_async_result_get(ctpool_future *f);
 .fi
 .SH DESCRIPTION
 .nf
-A thin wrapper over ctpool_future_get that casts its void* result to
-chttpcli_async_result_t*.  Safe to call more than once on the same
-future (matching ctpool_future_get's own contract); every call
-after the first returns the same result pointer, still owned by the
-future until freed.
+This is a thin wrapper over ctpool_future_get that casts the void*
+result of that function to chttpcli_async_result_t*. As with
+ctpool_future_get, more than one call on the same future is safe: every
+call after the first gives the same result pointer, which the future
+owns until somebody frees it.
+
+The result has two public fields:
+  - rv holds the code that chttpclient_do gives for the same request.
+  - resp is not NULL only when rv == ccol_success. The caller then owns
+    resp; free it with chttpclient_resp_free before
+    chttpclient_async_result_free.
+For a request from chttpclient_do_async_streaming, a success also fills
+resp, so status_code has the same meaning. But resp->body is NULL,
+resp->body_len is 0 and resp->headers is NULL, because the write
+callback got the body and the client does not keep the headers.
 .fi
 .SH PARAMETERS
 .nf
-f Future returned by chttpclient_do_async or
+f The future from chttpclient_do_async or from
   chttpclient_do_async_streaming.
 .fi
 .SH RETURN VALUE
 .nf
-The result, or NULL if f is NULL or the future was cancelled before
-being fulfilled.
+The result, or NULL if f is NULL or if something cancelled the future
+before it was fulfilled.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_do_async (3),

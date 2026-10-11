@@ -5,15 +5,15 @@ chttpsvr_resp_write_str \- append a string to the response body
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpserver.h>
+#include <ccollections/chttpserver.h>
 
 ccol_retval_t chttpsvr_resp_write_str(chttpsvr_resp *resp,
                                        const char *str);
 .fi
 .SH DESCRIPTION
 .nf
-Equivalent to chttpsvr_resp_write(resp, str, strlen(str)); a NULL resp
-or str returns ccol_invalid_args instead.
+Equivalent to chttpsvr_resp_write(resp, str, strlen(str)), except
+that it returns ccol_invalid_args when resp or str is NULL.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_resp_write (3),

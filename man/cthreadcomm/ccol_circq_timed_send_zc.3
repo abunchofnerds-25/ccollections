@@ -1,43 +1,58 @@
-.TH CCOL_CIRCQ_TIMED_SEND_ZC 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CCOL_CIRCQ_TIMED_SEND_ZC 3 "2026-10-01" "c_collections" "C Collections Library - Functions"
 .SH NAME
-ccol_circq_timed_send_zc \- send with timeout
+ccol_circq_timed_send_zc \- send a message with a timeout
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cthreadcomm.h>
+#include <ccollections/cthreadcomm.h>
 
 ccol_retval_t ccol_circq_timed_send_zc(ccol_circular_queue *cq,
                                    c_message_t *msg,
-                                   struct timespec *timeout);
+                                   uint64_t timeout_us);
 .fi
 .SH DESCRIPTION
 .nf
-Blocks up to the specified timeout waiting for space. If space becomes
-available, sends the message and transfers ownership. If timeout expires
-or sending is disabled, returns with appropriate error code.
+This function blocks and waits for free space for at most the given
+timeout. If free space arrives, the function sends the message and
+transfers the ownership; if the timeout ends, or if sends go off, the
+function returns the matching error code.
 .fi
 .SH PARAMETERS
 .nf
-cq       Circular queue to send to
-msg      Message to send (data ownership transfers on success)
-timeout  Relative timeout duration
+cq          Circular queue to send to
+msg         Message to send. On success the ownership of the data moves to
+            the queue.
+timeout_us  Longest time to wait, in microseconds, from the call. 0
+            does not wait, which makes the call ccol_circq_try_send_zc.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success              - Message sent successfully
-ccol_invalid_args         - cq, msg, or timeout is NULL, or msg
-                            validation fails
-ccol_not_permitted        - Sending has been disabled
-ccol_timed_out            - Timeout expired
-ccol_unexpected_failure   - System error (check errno)
+ccol_success              - The function sent the message
+ccol_invalid_args         - cq or msg is NULL, or the check of msg
+                            fails
+ccol_not_permitted        - Sends on the queue are turned off
+ccol_container_full       - The timeout is 0 and the queue is full
+ccol_timed_out            - The timeout ended
+ccol_unexpected_failure   - The wait failed with an error other than a
+                            timeout; errno holds that error
 .fi
 .SH NOTES
 .nf
-Blocks up to timeout duration
-After waking, rechecks if sending is still enabled
-On failure, caller retains ownership of msg->data
-Uses CLOCK_REALTIME for timeout calculations
+The function blocks for the duration of the timeout at most.
+After the function wakes up, it checks again whether sends are on.
+On failure, the caller keeps the ownership of msg->data.
+A timeout of 0 does not wait: the call then does exactly what
+ccol_circq_try_send_zc does and returns its result, so it gives
+ccol_container_full, not ccol_timed_out, when it cannot proceed at
+once.
+A timeout too large to form a deadline, such as UINT64_MAX, saturates
+to the latest deadline that the clock can hold and in practice waits
+with no end; it never wraps into the past.
+The library measures the timeout against CLOCK_MONOTONIC, so a change
+to the wall clock of the system (by an administrator, by NTP, or by the
+resume of a virtual machine) does not make the timeout longer or
+shorter: the call waits for the duration that the caller gave.
 .fi
 .SH "SEE ALSO"
 .BR ccol_circq_send_zc (3),

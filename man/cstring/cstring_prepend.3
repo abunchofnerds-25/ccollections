@@ -5,7 +5,7 @@ cstring_prepend \- prepend a C string to the beginning
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 ccol_retval_t cstring_prepend(cstr s, const char *str);
 .fi
@@ -16,7 +16,7 @@ in s. Existing content is shifted right to make room.
 .fi
 .SH PARAMETERS
 .nf
-s     String to modify
+s     String to change
 str   C string to prepend (must not be NULL)
 .fi
 .SH RETURN VALUE

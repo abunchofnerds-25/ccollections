@@ -5,52 +5,65 @@ chmap_destroy_with_dtor \- destroy a hash map, running a destructor on every val
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chashmap.h>
+#include <ccollections/chashmap.h>
 
 void chmap_destroy_with_dtor(chmap chm,
-    void (*val_dtor)(cmap_pair *val_pair, void *dtor_ctx),
+    void (*val_dtor)(const cmap_pair *val_pair, void *dtor_ctx),
     void *dtor_ctx);
 .fi
 .SH DESCRIPTION
 .nf
-Behaves like __chmap_destroy(3), except that val_dtor (when non-NULL) is
-invoked once per live entry, passing that entry's own value as a
-cmap_pair, immediately before the entry itself is freed.
+Destroys the map exactly as chmap_destroy(3) does, with one difference:
+when val_dtor is not NULL, this function calls it once for each live
+entry, passing that entry's own value as a cmap_pair, directly before
+it frees the entry.
 
-Unlike enumerating the map with chashmap_begin_iter(3) first and
-destroying it afterward, this function never allocates memory of its
-own: it walks the map's own internal storage directly, the same way
-__chmap_destroy(3) already does internally, with the destructor call
-threaded into that same walk.
+This function never allocates memory of its own. It walks the map's own
+internal storage directly, and the destructor call runs inside that same
+walk, whereas a walk with chashmap_begin_iter(3) followed by a destroy
+does allocate.
 
-Intended for a map whose values are themselves owned pointers to a
-larger structure needing its own recursive teardown (for example, a
-dictionary of dictionaries). Destroying such a map by enumerating it
-via chashmap_begin_iter(3), running a value destructor per entry, and
-only then destroying the (by then already emptied) map has a real gap
-under memory pressure: chashmap_begin_iter(3)'s own small internal
-allocation can itself fail, in which case that approach has no way
-left to reach and free the values it still owns. This function has no
-such gap, since it performs no allocation of its own.
+This function is meant for a map whose values are owned pointers to a
+larger structure that needs its own recursive teardown, for example a
+dictionary of dictionaries. Such a map can also be destroyed by walking
+it with chashmap_begin_iter(3), running a value destructor for each
+entry, and destroying the empty map at the end, but that approach has a
+real gap under memory pressure: the small internal allocation of
+chashmap_begin_iter(3) can itself fail, and then there is no route left
+to reach and free the values that the map still owns. This function has
+no such gap, because it does no allocation of its own.
+
+The cmap_pair that val_dtor receives is the map's own accessor for that
+entry, and its target is const, as in chmap_get_elem_ref(3). A
+destructor reads val_pair->ptr and val_pair->size and then frees
+whatever the value itself owns, usually a pointer copied out of those
+bytes. An assignment to val_pair->ptr or val_pair->size is a compile
+error.
 .fi
 .SH PARAMETERS
 .nf
 chm        Hash map to destroy
-val_dtor   Destructor invoked once per live value before that entry is
-           freed, or NULL to behave identically to __chmap_destroy(3)
+val_dtor   Destructor called once for each live value, before the
+           function frees that entry, or NULL to destroy the map with
+           no callback for each value. Its val_pair parameter is a
+           const cmap_pair *
 dtor_ctx   Opaque pointer forwarded unchanged to every val_dtor call
 .fi
 .SH NOTES
 .nf
 Safe to call with a NULL chm (a no-op)
-Does not NULL the chm handle, matching __chmap_destroy(3)'s own raw,
-internal convention
-val_dtor must not itself mutate chm; the map is mid-teardown for the
-whole duration of this call
-Performs no allocation of its own, so it cannot fail under any memory
-condition that would make chashmap_begin_iter(3) itself fail
+Does not set the chm handle to NULL; use chmap_destroy(3) when the
+handle must be cleared as well
+val_dtor must not change chm itself, because the map is in the middle
+of its teardown for the whole duration of this call
+The accessor describes storage that the map is about to free, and the
+map cannot own a pointer that it did not allocate itself. This is why
+an assignment to either field of the accessor is a compile error, and
+not only a rule to remember
+Does no allocation of its own, so it cannot fail under any memory
+condition that makes chashmap_begin_iter(3) itself fail
 .fi
 .SH "SEE ALSO"
-.BR __chmap_destroy (3),
 .BR chmap_destroy (3),
+.BR chmap_get_elem_ref (3),
 .BR chashmap_begin_iter (3)

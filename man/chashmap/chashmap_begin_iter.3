@@ -1,0 +1,103 @@
+.TH CHASHMAP_BEGIN_ITER 3 "2026-09-20" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chashmap_begin_iter \- create an iterator positioned at a hash map's first entry
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chashmap.h>
+
+cmap_iterator *chashmap_begin_iter(chmap chm, char **err);
+.fi
+.SH DESCRIPTION
+.nf
+Allocates an iterator positioned at the map's first entry. Each step
+gives the key and the value of one entry, which the caller reads with
+the unified accessors ccol_iter_key_ptr(3) and ccol_iter_val_ptr(3).
+The value pointer points at the map's own storage, so a write through
+it updates the stored value in place.
+
+The generic ccol_begin(3) macro selects this function for a chmap, and
+ccol_begin(3) is the ordinary entry point. Call this function directly
+only when the container type is already known and the caller wants the
+error string.
+.fi
+.SH PARAMETERS
+.nf
+chm   Hash map to iterate over, or NULL
+err   Optional pointer that receives an error string on failure, or NULL
+.fi
+.SH RETURN VALUE
+.nf
+Returns a pointer to a newly allocated iterator positioned at the first
+entry.
+Returns NULL with *err set to NULL when there is nothing to iterate
+(chm is NULL or the map holds no entries).
+Returns NULL with *err set to an error string when the iterator itself
+could not be allocated.
+.fi
+.SH "ITERATION ORDER"
+.nf
+The order follows the map's implementation strategy, which
+chmap_create_full(3) describes. With either strategy the order is not
+part of the map's contract, so do not depend on it.
+
+Separate chaining keeps a list of every live entry and links each new
+entry at the head of that list, so the iterator visits the newest
+entry first and works back to the oldest one.
+
+Open addressing has no such list: it walks the slot array from the
+first slot to the last one, so the order follows where each key hashed
+to rather than when the caller inserted it. The hash depends on the
+mode of the map, and the keyed mode depends on a secret of the process,
+so that order changes when the map switches to the keyed mode and then
+differs from one process to the next. See chmap_create_full(3).
+.fi
+.SH NOTES
+.nf
+The function sets *err to NULL at entry, before anything else. To tell
+an empty result apart from a failure, test *err rather than the return
+value
+A NULL chm iterates as an empty map and does not report an error. This
+is a deliberate cross-module contract that cvector_begin_iter(3) and
+cbmap_begin_iter(3) share: the caller can iterate a lazily created map
+field that is still NULL because nothing is in it yet, and no caller
+needs to write its own NULL guard first
+The iterator frees itself when ccol_iter_next(3) steps past the last
+entry and returns NULL. An iteration that stops early must end with
+ccol_iter_destroy(3); alternatively, the caller can declare the
+iterator with ccol_iter_declare(3), so that scope exit destroys it
+The iterator is allocated through the map's own memory management
+procedures. This is why chmap_destroy_with_dtor(3) is the better way
+to destroy a map whose values need a destructor for each entry: that
+function walks the map with no allocation at all, while an iterator
+that does the same work can fail under memory pressure
+An insert into the map, or a removal from it, invalidates an open
+iterator; a change of a value in place through ccol_iter_val_ptr(3)
+does not
+.fi
+.SH EXAMPLES
+.nf
+chmap_construct(scores, char *, int);
+int score = 42;
+chmap_insert(scores, "alice", score);
+
+char *err = NULL;
+ccol_iter_declare(scores, it);
+for (it = chashmap_begin_iter(scores, &err); it; it = ccol_iter_next(it)) {
+    printf("%s = %d\en", *ccol_iter_key_ptr(it),
+                         *ccol_iter_val_ptr(it));
+}
+if (err) {
+    fprintf(stderr, "cannot iterate: %s\en", err);
+}
+chmap_destroy(scores);
+.fi
+.SH "SEE ALSO"
+.BR ccol_begin (3),
+.BR ccol_iter_next (3),
+.BR ccol_iter_destroy (3),
+.BR ccol_iter_declare (3),
+.BR chmap_destroy_with_dtor (3),
+.BR cbmap_begin_iter (3),
+.BR cvector_begin_iter (3)

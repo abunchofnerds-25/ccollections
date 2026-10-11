@@ -5,15 +5,15 @@ ccol_mempool_alloc_entry \- allocate an entry from the pool
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cmempool.h>
+#include <ccollections/cmempool.h>
 
 void *ccol_mempool_alloc_entry(ccol_mempool *mp);
 .fi
 .SH DESCRIPTION
 .nf
-Returns a pointer to an available entry from the pool. If the pool is
-exhausted and fallback is enabled, allocates from the heap. Contents are
-uninitialized.
+Returns a pointer to a free entry from the pool. When the pool is empty
+and the fallback is on, the function allocates from the heap instead. The
+contents of the entry are uninitialized.
 .fi
 .SH PARAMETERS
 .nf
@@ -21,24 +21,27 @@ mp   Memory pool to allocate from
 .fi
 .SH RETURN VALUE
 .nf
-Returns pointer to allocated entry on success
-Returns NULL if pool exhausted and no fallback enabled
+Returns a pointer to the allocated entry on success
+Returns NULL when the pool is empty and the fallback is off
 .fi
 .SH NOTES
 .nf
 O(1) complexity
-Returned memory is uninitialized
-The returned pointer is aligned for any object type, the same guarantee
-malloc() makes, so any object that can be stored in heap memory can be
-stored in a pool entry
-Entry must be freed with ccol_mempool_free_entry()
+The memory that comes back is uninitialized
+The pointer that comes back is aligned for any object type, the same
+guarantee that malloc() makes, so any object that you can store in heap
+memory can go into a pool entry
+The caller must free the entry with ccol_mempool_free_entry()
 
-On a thread-safe pool this draws from a small per-thread cache, reaching
-the shared free list only when that cache needs refilling. A pool too
-small to maintain one, meaning fewer than 8 elements, takes the pool's
-lock on every call instead. See
-ccol_mempool_create(3) for how to size a pool, and for the recommendation
-to measure a candidate configuration rather than assume one.
+On a thread-safe pool this draws from a small cache of the calling
+thread and reaches the shared free list only when that cache needs a
+refill. A pool too small to keep a cache (fewer than 8 elements) takes
+the lock of the pool on every call instead, and so does a thread that
+the pool has no cache left to give: one lock for each call, as on a pool
+without a cache. A refill, and every call that must go past the cache,
+costs one lock. See ccol_mempool_create(3) for how to size a pool; that
+page also asks you to measure a candidate configuration rather than
+assume one.
 .fi
 .SH "THREAD SAFETY"
 .nf

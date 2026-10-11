@@ -5,7 +5,7 @@ cjson_parse_mp, cjson_parse \- parse a null-terminated JSON string into a DOM tr
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cjson.h>
+#include <ccollections/cjson.h>
 
 cjson cjson_parse_mp(const char *json_str, char **err_str,
                      ccol_memmgmt_procs_t *mp);
@@ -15,29 +15,76 @@ static inline cjson cjson_parse(const char *json_str,
 .fi
 .SH DESCRIPTION
 .nf
-Parses json_str using a recursive-descent parser and returns the root
-node of the resulting DOM tree.  All seven JSON value kinds are
-supported: null, boolean, integer (stored as long long), number (double),
-string (UTF-8, owned heap copy), array (cvec of child cjson), and object
-(chmap of char*->cjson).
+Parses json_str and returns the root node of the new DOM tree.
+The parser accepts all seven kinds of JSON value:
+  - null.
+  - boolean.
+  - integer, stored as long long.
+  - number, stored as double.
+  - string, stored as an owned heap copy in UTF-8.
+  - array, stored as an ordered list of child nodes.
+  - object, stored as string keys, each with a child node.
 
-Integer literals with no decimal point or exponent are stored as
-CJSON_INTEGER; all others (including integers that overflow long long)
-as CJSON_FLOAT.  A number literal's decimal-text length is not limited;
-numbers that overflow IEEE 754 double (i.e. strtod returns infinity)
-produce a parse error.
+An object keeps its members in the order of the text; see
+cjson_dictionary_first(3).  When a key appears more than once in one
+object, the last value wins, the member keeps the place of the first
+appearance, and the parser deep-frees every earlier value.  So
+{"a":1,"b":2,"a":3} gives the members a = 3 and then b = 2.
+
+The expected time of a parse stays linear in the number of members
+of an object, even when the document comes from an untrusted peer.  The
+object hashes its keys with a secret seed that the library chooses
+once for each process, and an object whose keys collide anyway
+switches to a hash keyed with a secret 128-bit key, so a peer cannot
+keep a set of keys in one chain.  See chmap_create_full(3).
+
+The parser stores an integer literal with no decimal point and no
+exponent as CJSON_INTEGER, and every other number, including an
+integer that overflows long long, as CJSON_FLOAT.  Because a double
+holds an integer exactly only up to 2^53, an integer literal above
+LLONG_MAX can lose its low digits after a parse and a serialize; most
+JSON libraries do the same with large integers.  There is no limit
+on the length of the decimal text of a number literal, but a number
+that overflows IEEE 754 double (one for which strtod returns
+infinity) gives a parse error.
 
 String escape sequences \e", \e\e, \e/, \eb, \ef, \en, \er, \et, and
-\euXXXX (including surrogate pairs) are decoded to UTF-8.  The escape
-\eu0000 is explicitly rejected with a parse error: cjson
-stores strings as null-terminated char * values and cannot
-represent embedded null bytes.
+\euXXXX (with surrogate pairs) decode to UTF-8.  The parser rejects
+the escape \eu0000 with a parse error: cjson stores a string as a
+null-terminated char * value, so a string cannot hold a null byte
+inside it.
 
-A document nested more than 500 levels deep (arrays and/or objects,
-in any combination) is rejected with a parse error rather than
-recursing further; this bounds worst-case parse-time stack usage
-against a pathologically or maliciously deeply-nested document.
-Ordinary JSON documents never approach this depth.
+RFC 8259 section 8.1 needs JSON text to be UTF-8, so the parser
+refuses, with a parse error, a string or an object key that is not
+well-formed UTF-8; it never repairs one.  It refuses a raw byte
+sequence that is a truncated sequence, a continuation byte with no
+lead byte, an overlong form, an encoded UTF-16 surrogate, a code
+point above U+10FFFF, or a byte from 0xF5 to 0xFF, and a \euXXXX
+escape of a surrogate that is not one half of a high-low pair, such
+as \euD800 at the end of a string or \euDC00 alone.  The message
+names the defect, the bytes as 0xNN or the escape, and the byte
+offset in the input.  Every string that a parsed tree holds is
+therefore well-formed UTF-8, and two keys that differ in their bytes
+always stay two keys.
+
+The parser rejects a document that nests more than 500 levels deep
+with a parse error.  Each array or object is one level, in any
+combination, and a scalar adds none: 500 containers inside one
+another, with any value inside the innermost, parse, and a 501st
+container is refused.  This is a policy limit on which documents the
+library accepts, not a stack limit: the parser walks the nesting with
+an explicit worklist on the heap, so a document at the limit costs
+the same small, fixed amount of native stack as a flat one, and a
+parse is safe on a thread with a small stack.  An ordinary JSON
+document never comes near this depth.
+
+The tree that a parse builds is linear in the length of the input,
+and an empty array or object costs one node.  The densest documents
+(deep chains of one-member objects, or long arrays of one-member
+objects) hold at most about 65 bytes of tree for each byte of input
+on a 64-bit target, so a program that parses input from a peer it
+does not trust bounds the memory of a parse by bounding the length of
+the input.
 
 cjson_parse() is a static inline wrapper that calls
 cjson_parse_mp(json_str, err_str, NULL).
@@ -45,39 +92,55 @@ cjson_parse_mp(json_str, err_str, NULL).
 .SH PARAMETERS
 .nf
 json_str  Null-terminated JSON text.
-err_str   Out-parameter for the parse error message.  On success
-          *err_str is set to NULL.  On failure a heap-allocated
-          null-terminated string, allocated through mp, is stored in
-          *err_str; the caller must free it with
-          cjson_serialize_free_mp() (passing the same mp) when done.
-          Pass NULL to discard the error message.
+err_str   Out-parameter for the parse error message.  On success the
+          function sets *err_str to NULL.  On failure it points
+          *err_str at a null-terminated message that the LIBRARY
+          owns; never free it.  It is not an allocation, and mp
+          never sees it.  The text stays readable until the next
+          FAILING parse on the same thread, which is the lifetime
+          that strerror(3) gives.  The storage is per-thread, so two
+          threads that parse at the same time never overwrite one
+          another's message; copy the text to keep it longer.  Give
+          NULL to throw the error message away.  The message is
+          printable ASCII whatever the input holds: it quotes a
+          printable ASCII byte of the input as it is, and spells
+          any other byte as 0xNN.
 mp        Custom memory management procedures for all nodes in the
           resulting tree, or NULL for the default allocator.
+          The library keeps its own copy of the struct, so the caller
+          may release or reuse the struct once this call returns, but
+          the functions that it names must stay callable until the
+          last node built with them is destroyed.  A process can use
+          at most 64 distinct sets of four functions; a call that
+          would need a 65th fails and returns NULL.
 .fi
 .SH RETURN VALUE
 .nf
-Root cjson node on success.
-NULL on parse failure; if err_str was non-NULL, *err_str holds the
-reason (caller must free it with cjson_serialize_free_mp(), passing
-the same mp).
+The root cjson node on success.
+NULL when the parse fails.  If err_str is not NULL, *err_str then
+holds the reason, a string that belongs to the library and that the
+caller never frees.
 .fi
 .SH NOTES
 .nf
-The caller owns the returned tree and must free it with cjson_destroy().
-The error string (when requested) is allocated through the same mp
-used for the parse; free it with cjson_serialize_free_mp(err, mp)
-(or cjson_serialize_free(err) for the default allocator).
+The caller owns the tree that the function returns and must free it
+with cjson_destroy().
 
-Number parsing always treats '.' as the decimal separator, per RFC 8259,
-regardless of the calling thread's ambient LC_NUMERIC locale setting.
+The caller does NOT own the error string.  One rule covers the err and
+err_str out-parameter of every module in this library: the library owns
+the string and the caller never frees it.  See the note at the top of
+common.h.
+
+The parser always takes '.' as the decimal separator for a number,
+as RFC 8259 asks, whatever the LC_NUMERIC locale of the calling
+thread.
 .fi
-.SH EXAMPLE
+.SH EXAMPLES
 .nf
 char *err = NULL;
 cjson doc = cjson_parse_mp(input, &err, NULL);
 if (!doc) {
     fprintf(stderr, "parse failed: %s\en", err);
-    cjson_serialize_free(err);
     return -1;
 }
 /* use doc ... */
@@ -87,4 +150,5 @@ cjson_destroy(doc);
 .BR cjson_parse_n_mp (3),
 .BR cjson_destroy (3),
 .BR cjson_serialize (3),
-.BR cjson_serialize_free_mp (3)
+.BR cjson_serialize_free_mp (3),
+.BR cjson_dictionary_first (3)

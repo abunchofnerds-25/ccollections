@@ -5,28 +5,33 @@ chttp_request_get_header \- look up a request header by name
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <chttpclient.h>
+#include <ccollections/chttpclient.h>
 
 const char *chttp_request_get_header(const chttp_request_t *req,
                                      const char *name);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the stored value for the named header, or NULL if no such
-header exists.  The lookup is case-insensitive: the supplied name is
-lowercased internally before the lookup is performed.
+This function gives the stored value of the header with the name that
+you give, or NULL if that header is not there. The lookup ignores the
+case of the name: the function makes your name lowercase before the
+lookup.
 
-The returned pointer is valid until the next chttp_request_set_header
-call on this request or until the request is freed.
+The pointer that the function gives back stays valid until the next
+call to chttp_request_set_header on this request, or until somebody
+frees the request.
 .fi
 .SH PARAMETERS
 .nf
-req   Request to query; may be NULL (returns NULL).
-name  Header name; may be NULL (returns NULL).
+req   The request to query. It can be NULL, and the function then
+      gives NULL.
+name  The header name. It can be NULL, and the function then gives
+      NULL.
 .fi
 .SH RETURN VALUE
 .nf
-Pointer to the stored value string, or NULL if not found.
+A pointer to the stored value string, or NULL if the function does not
+find that header.
 .fi
 .SH "SEE ALSO"
 .BR chttp_request_set_header (3)

@@ -5,14 +5,14 @@ cstring_copy \- create an independent copy of a string
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cstring.h>
+#include <ccollections/cstring.h>
 
 cstr cstring_copy(cstr s, char **err);
 .fi
 .SH DESCRIPTION
 .nf
-Allocates a new cstring with the same content as s. The two strings are
-fully independent after the call.
+This function allocates a new cstring with the same content as s; after the
+call, the two strings are fully independent.
 .fi
 .SH PARAMETERS
 .nf
@@ -21,8 +21,9 @@ err   Optional pointer to receive an error string on failure
 .fi
 .SH RETURN VALUE
 .nf
-New cstring on success
-NULL on allocation failure (details written to *err if err is non-NULL)
+A new cstring on success
+NULL when an allocation fails, in which case the function writes the details
+to *err if err is not NULL
 .fi
 .SH NOTES
 .nf

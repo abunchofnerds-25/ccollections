@@ -5,7 +5,7 @@ cjson_dictionary_get \- look up a key in an object node
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cjson.h>
+#include <ccollections/cjson.h>
 
 cjson cjson_dictionary_get(cjson obj, const char *key);
 .fi
@@ -18,5 +18,6 @@ Returns a non-owning reference to the value associated with key.
 Child node, or NULL if the key is absent or obj is not CJSON_DICTIONARY.
 .fi
 .SH "SEE ALSO"
+.BR cjson_dictionary_first (3),
 .BR cjson_dictionary_set (3),
 .BR cjson_dictionary_size (3)

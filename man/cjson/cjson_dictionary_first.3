@@ -1,0 +1,113 @@
+.TH CJSON_DICTIONARY_FIRST 3 "2026-09-29" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cjson_dictionary_first \- start an iteration over the members of an object node
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cjson.h>
+
+typedef struct cjson_dictionary_iter {
+    const char *key;
+    cjson       value;
+    /* private fields, whose names begin with an underscore */
+} cjson_dictionary_iter;
+
+bool cjson_dictionary_first(cjson dict, cjson_dictionary_iter *it);
+.fi
+.SH DESCRIPTION
+.nf
+Fills the cursor it and steps it onto the first member of the object
+node dict; cjson_dictionary_next(3) then steps it onto each later
+member.  After a call that returns true, it->key is the key of the
+member and it->value is its value, a borrowed reference with the
+rules of cjson_dictionary_get(3).
+
+The members come in insertion order, the order in which each key
+first entered the object.  For a parsed document that is the order of
+the members in the text; for an object that the program builds, it
+is the order of the cjson_dictionary_set(3) and cjson_set(3) calls
+that added each key.  Replacing the value of a key keeps its place,
+while a key that the program removes and then sets again goes after
+every other member.  cjson_serialize(3), cjson_serialize_pretty(3)
+and cjson_clone(3) use the same order.
+
+The cursor is a plain struct that the caller owns, usually on its own
+stack.  The iteration allocates nothing and cannot fail, so there is
+nothing to release and the caller can stop at any point.
+.fi
+.SH PARAMETERS
+.nf
+dict  The object node to walk.
+it    The cursor to fill.  It must not be NULL.
+.fi
+.SH RETURN VALUE
+.nf
+true when it now stands on the first member.
+
+false when dict has no members, when dict is NULL, or when dict is
+not a CJSON_DICTIONARY; the function then sets it->key and it->value
+to NULL.  false also when it is NULL.
+.fi
+.SH NOTES
+.nf
+it->key points at the copy of the key that the object stores, and it
+stays valid until that member is removed or the object is destroyed.
+
+The cursor holds the member that the next step reads, which is the
+successor of the member that the last successful call gave.  It
+stays valid across every change to the object that leaves that
+successor in place:
+
+  - the replacement of the value of any member, the current one
+    included, with cjson_dictionary_set(3) or cjson_set(3).  The
+    member keeps its place, so the walk goes on in the same order.
+  - the removal of the current member, or of any member other than
+    the successor.  To remove the current member, pass it->key to
+    cjson_dictionary_remove(3).
+  - the insert of a new key.  The new member goes after every other
+    member, and whether this walk reaches it is unspecified.
+
+The removal of the successor, with cjson_dictionary_remove(3),
+cjson_delete(3) or any other call, invalidates the cursor, and so
+does the destroy of the object.  A later cjson_dictionary_next(3) on
+an invalid cursor is undefined behavior, so start again with
+cjson_dictionary_first() after such a change.
+
+it->key and it->value describe the current member as it was when
+the cursor stepped onto it.  cjson_dictionary_set(3) on the key of
+the current member destroys the old value, so it->value then names
+freed memory; read the new value with cjson_dictionary_get(3) and
+it->key.  cjson_set(3), by contrast, updates the existing node in
+place, so it->value stays the same node.
+.fi
+.SH THREAD SAFETY
+.nf
+A cjson tree is not thread safe, but several threads can walk the
+same object at the same time, each with its own cursor, while no
+thread changes the object.
+.fi
+.SH EXAMPLES
+.nf
+cjson doc = cjson_parse("{\\"b\\":1,\\"a\\":2}", NULL);
+cjson_dictionary_iter it;
+for (bool ok = cjson_dictionary_first(doc, &it); ok;
+     ok = cjson_dictionary_next(&it)) {
+    printf("%s = %lld\\n", it.key, cjson_int_val(it.value));
+}
+/* prints "b = 1" and then "a = 2" */
+
+/* Remove every member whose value is null, in one pass. */
+for (bool ok = cjson_dictionary_first(doc, &it); ok;
+     ok = cjson_dictionary_next(&it)) {
+    if (cjson_type(it.value) == CJSON_NULL)
+        cjson_dictionary_remove(doc, it.key);
+}
+cjson_destroy(doc);
+.fi
+.SH "SEE ALSO"
+.BR cjson_dictionary_next (3),
+.BR cjson_dictionary_get (3),
+.BR cjson_dictionary_remove (3),
+.BR cjson_dictionary_size (3),
+.BR cjson_serialize (3)

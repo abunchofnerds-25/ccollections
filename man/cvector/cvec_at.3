@@ -1,44 +1,47 @@
 .TH CVEC_AT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cvec_at \- access element at index (type-safe, returns reference)
+cvec_at \- access element at index (type-inferred, returns reference)
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
-#include <cvector.h>
+#include <ccollections/cvector.h>
 
 element_ref = cvec_at(v, index);
 .fi
 .SH DESCRIPTION
 .nf
-Type-safe wrapper for cvector_at() that returns the element reference
-(not pointer). Automatically casts to the correct type. Can be used as
-lvalue for assignment.
+This macro is a type-inferred wrapper for cvector_at(). It gives a
+reference to the element rather than a pointer, cast to the correct type
+automatically, so you can use it as an lvalue in an assignment.
 .fi
 .SH PARAMETERS
 .nf
 v      Vector to access
-index  Zero-based index of element
+index  Zero-based index of the element
 .fi
 .SH RETURN VALUE
 .nf
-Returns element reference at index
+Gives the element reference at the index
 .fi
 .SH NOTES
 .nf
-Returns reference, not pointer
-index is evaluated exactly once, so a side-effecting expression
-(e.g. cvec_at(v, i++)) is safe to pass
-Terminates the program via ccol_fatal_err() if index is out of bounds
-Can be used on left side of assignment
-Use cvec_at_ptr for a non-terminating, NULL-on-out-of-bounds alternative
+The macro gives a reference, not a pointer.
+The macro evaluates index exactly once, so an expression with a side
+effect, for example cvec_at(v, i++), is safe to pass.
+The macro stops the program with ccol_fatal_err() when the index is out
+of bounds.
+You can use the macro on the left side of an assignment.
+For an alternative that gives NULL for an index that is out of bounds
+instead of stopping the program, use cvec_at_ptr.
 .fi
 .SH EXAMPLES
 .nf
 cvec_construct(vec, int);
-cvec_push_rvalue(vec, 42);
+cvec_push(vec, 42);
 int val = cvec_at(vec, 0);  // val == 42
-cvec_at(vec, 0) = 5;        // now the first element is 5
+cvec_at(vec, 0) = 5;        // the first element is now 5
+cvec_destroy(vec);
 .fi
 .SH "SEE ALSO"
 .BR cvector_at (3),

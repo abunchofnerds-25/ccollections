@@ -874,6 +874,13 @@ static void _chttpsvr_slot_table_init_globals(void) {
 #endif
 }
 
+#if defined(_CCOL_ATFORK_AT_LOAD)
+/* See _CCOL_ATFORK_AT_LOAD in common.h. */
+__attribute__((constructor)) static void _chttpsvr_atfork_at_load(void) {
+  ccol_call_once(chttpsvr_slot_table.once, _chttpsvr_slot_table_init_globals);
+}
+#endif
+
 /* The lifecycle of a chttpsvr handle has two independent dimensions instead of
  * one linear state machine: the first is start and stop, and the second is a
  * one-shot quiesce latch. A caller can set the CLAIM of that latch at once,
@@ -11713,10 +11720,13 @@ static int _bind_tcp(int family, const struct sockaddr *sa, socklen_t salen,
 }
 
 /* Whether the system lets an IPv6 socket take IPv4 clients. OpenBSD refuses
- * to turn IPV6_V6ONLY off, so it has no dual-stack socket. */
+ * to turn IPV6_V6ONLY off, so it has no dual-stack socket. A socket that
+ * cannot be created for another reason than a missing IPv6 (no descriptor
+ * or no memory left) answers yes, so that the caller reports the error of
+ * its own bind instead of falling back to an IPv4 listener. */
 static bool _ipv6_dual_stack_supported(void) {
   int fd = ccol_socket_nb(AF_INET6, SOCK_STREAM, 0);
-  if (fd < 0) return false;
+  if (fd < 0) return errno != EAFNOSUPPORT && errno != EPROTONOSUPPORT;
   int off = 0;
   bool ok = setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off)) == 0;
   close(fd);

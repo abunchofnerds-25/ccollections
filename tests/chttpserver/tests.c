@@ -64,6 +64,7 @@ SOFTWARE.
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #include <tau/tau.h>
+#include <test_connect.h>
 #include <test_sanitizer.h>
 #pragma GCC diagnostic pop
 
@@ -93,7 +94,7 @@ static chttpsvr g_srv = CHTTPSVR_INVALID;
    REQUIRE_* check in the test can return early, before the final explicit
    close(fd) of the test, and the fd would then leak for the rest of the run
    of this binary; this cleanup prevents that. The function accepts a
-   negative fd without a complaint, because socket() or connect() can fail,
+   negative fd without a complaint, because socket() or test_connect() can fail,
    which matches the close(2) convention, used elsewhere in this file too,
    that an EBADF is harmless to ignore here. */
 static void _close_scoped_fd(int *fd) {
@@ -2947,7 +2948,7 @@ static int _raw_request(const char *method, const char *path,
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
-  if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+  if (test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
     close(fd);
     fd = -1;
     return -1;
@@ -3020,7 +3021,7 @@ static int _raw_request_drip_body(int port, const char *method,
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
-  if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+  if (test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
     close(fd);
     fd = -1;
     return -1;
@@ -3098,7 +3099,7 @@ static int _raw_request_abort_mid_body(uint16_t port, const char *path,
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
-  if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+  if (test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
     close(fd);
     fd = -1;
     return -1;
@@ -3157,7 +3158,7 @@ static int _raw_request_truncate_body_half_close(const char *path,
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
-  if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+  if (test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
     close(fd);
     fd = -1;
     return -1;
@@ -3565,7 +3566,7 @@ TEST(chttpserver, pipelined_bytes_after_rejected_route_not_misparsed) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   /* One write() call sends both requests together, so they arrive together
      in the same read buffer on the server side. The first request hits an
@@ -3610,7 +3611,7 @@ TEST(chttpserver, keep_alive_across_two_requests_on_one_connection) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *req = "GET /hello HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
   char buf[1024];
@@ -3651,7 +3652,7 @@ TEST(chttpserver, pipelined_bodyless_requests_both_answered) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *req =
       "GET /hello HTTP/1.1\r\n"
@@ -3701,7 +3702,7 @@ TEST(chttpserver, pipelined_bytes_after_buffered_body_request_not_lost) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *body = "howdy";
   char req[512];
@@ -3748,7 +3749,7 @@ TEST(chttpserver, pipelined_bytes_after_streaming_body_request_not_lost) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *body = "streamed-and-pipelined";
   char req[512];
@@ -3807,7 +3808,7 @@ TEST(chttpserver, five_pipelined_bodyless_requests_all_answered) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *keepalive_req = "GET /hello HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
   const char *final_req =
@@ -3885,7 +3886,7 @@ TEST(chttpserver, pipelined_malformed_request_after_worker_processed_request) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *req =
       "GET /hello HTTP/1.1\r\n"
@@ -3939,7 +3940,7 @@ TEST(chttpserver, keep_alive_two_consecutive_streaming_requests) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *bodies[2] = {"first-streamed-body",
                            "second-streamed-body-is-longer-than-the-first"};
@@ -3994,7 +3995,7 @@ TEST(chttpserver,
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   /* Declare and send a 64-byte body; the handler only reads the first 8. */
   char body[64];
@@ -4049,7 +4050,7 @@ TEST(chttpserver,
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   char hdr[256];
   int hn = snprintf(hdr, sizeof(hdr),
@@ -4091,7 +4092,7 @@ TEST(chttpserver, stream_read_timeout_reports_ccol_timed_out) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *hdr =
       "POST /stream-error-report-slow HTTP/1.1\r\n"
@@ -4168,7 +4169,7 @@ TEST(chttpserver, client_disconnect_mid_body_does_not_hang_server) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
   /* This read is bounded, not indefinite: when the worker really fails to
      recover, the read times out and the REQUIRE below fails cleanly,
      instead of the whole test binary hanging. */
@@ -4245,7 +4246,7 @@ TEST(chttpserver, expect_100_continue_interim_response_sent_before_body) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
   struct timeval rcvtimeo = {5, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
 
@@ -4311,7 +4312,7 @@ TEST(
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *body = "this-body-must-never-be-read-by-the-server";
   char hdr[256];
@@ -4355,7 +4356,7 @@ TEST(chttpserver, expect_100_continue_not_sent_for_bodyless_streaming_request) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   /* No Content-Length, no Transfer-Encoding: per RFC 7230 SS3.3's
      request-specific framing rule, this is an ordinary, valid, bodyless
@@ -4388,7 +4389,7 @@ TEST(chttpserver, expect_100_continue_not_sent_for_bodyless_buffered_request) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *req =
       "POST /echo-body HTTP/1.1\r\n"
@@ -4436,7 +4437,7 @@ TEST(chttpserver, interim_continue_short_write_buffered_route_forces_close) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
   struct timeval rcvtimeo = {5, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
 
@@ -4496,7 +4497,7 @@ TEST(chttpserver, interim_continue_short_write_streaming_route_forces_close) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
   struct timeval rcvtimeo = {5, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
 
@@ -4566,7 +4567,7 @@ TEST(chttpserver,
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
   /* This bounds the read below. A regression can stop the server from
      asking the hook at all on this path, but the server then sends an
      ordinary "100 Continue" interim line, and the read below still returns
@@ -4654,7 +4655,7 @@ TEST(chttpserver, stream_read_timeout_ms_zero_means_wait_indefinitely) {
      test adds below. */
   struct timeval rcvtimeo = {10, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *body = "delayed-body";
   char hdr[256];
@@ -6413,7 +6414,7 @@ static int _raw_post_fixed_body(int port, const char *path, size_t body_len,
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
-  if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+  if (test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
     close(fd);
     fd = -1;
     return -1;
@@ -6627,7 +6628,7 @@ TEST(chttpserver, malformed_chunked_encoding_forces_connection_close) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   /* "ZZZZ" is not a valid hex chunk-size token, and the parser must reject
      it while it consumes the body on the worker thread, well after the
@@ -6694,7 +6695,7 @@ TEST(chttpserver, oversized_chunk_size_hex_rejected_gracefully) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *req =
       "POST /stream-error-report HTTP/1.1\r\n"
@@ -6746,7 +6747,7 @@ TEST(chttpserver, oversized_content_length_buffered_route_rejected_upfront) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   /* This request declares much more than SMALL_BODY_MAX, which is 64, and
      never sends a single body byte. _setup registers /small-body-echo as a
@@ -6796,7 +6797,7 @@ TEST(chttpserver, chunked_body_with_trailer_headers_handled_once) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *req =
       "POST /stream-error-report HTTP/1.1\r\n"
@@ -6843,7 +6844,7 @@ TEST(chttpserver, buffered_route_trailer_not_visible_via_req_header) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *req =
       "POST /buffered-trailer-echo HTTP/1.1\r\n"
@@ -6886,7 +6887,7 @@ TEST(chttpserver, trailer_cannot_override_a_real_request_header) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *req =
       "POST /identity-header-echo HTTP/1.1\r\n"
@@ -6933,7 +6934,7 @@ TEST(chttpserver, trailer_cannot_turn_a_keep_alive_connection_into_closing) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *first =
       "POST /identity-header-echo HTTP/1.1\r\n"
@@ -6985,7 +6986,7 @@ TEST(chttpserver, htab_in_request_target_rejected) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *req =
       "GET /hello\tx HTTP/1.1\r\n"
@@ -7021,7 +7022,7 @@ static void _raw_request_to_test_server(const char *req, char *buf,
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
   REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
 
   struct timeval rcvtimeo = {5, 0};
@@ -7208,7 +7209,7 @@ TEST(chttpserver, streaming_route_trailer_never_visible_via_req_header) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *req =
       "POST /stream-trailer-visibility HTTP/1.1\r\n"
@@ -7253,7 +7254,7 @@ TEST(chttpserver, negative_content_length_rejected) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *req =
       "POST /hello HTTP/1.1\r\n"
@@ -7300,7 +7301,7 @@ TEST(chttpserver, chunked_not_last_in_transfer_encoding_list_rejected) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *req =
       "POST /hello HTTP/1.1\r\n"
@@ -7349,7 +7350,7 @@ TEST(chttpserver, trailing_comma_in_transfer_encoding_is_still_chunked) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *req =
       "POST /echo-body HTTP/1.1\r\n"
@@ -7391,7 +7392,7 @@ TEST(chttpserver, other_empty_transfer_encoding_elements_are_ignored) {
 
     int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
     REQUIRE_TRUE(fd >= 0);
-    REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+    REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
     REQUIRE_EQ(write(fd, reqs[i], strlen(reqs[i])), (ssize_t)strlen(reqs[i]));
 
     struct timeval rcvtimeo = {5, 0};
@@ -7431,7 +7432,7 @@ TEST(chttpserver, empty_elements_do_not_weaken_the_chunked_refusals) {
 
     int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
     REQUIRE_TRUE(fd >= 0);
-    REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+    REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
     REQUIRE_EQ(write(fd, reqs[i], strlen(reqs[i])), (ssize_t)strlen(reqs[i]));
 
     struct timeval rcvtimeo = {5, 0};
@@ -7466,7 +7467,7 @@ static void *_drip_body_bg_thread(void *arg) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return NULL;
-  if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+  if (test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
     close(fd);
     fd = -1;
     return NULL;
@@ -7731,7 +7732,7 @@ static void *_stall_forever_bg_thread(void *arg) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return NULL;
-  if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+  if (test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
     close(fd);
     fd = -1;
     return NULL;
@@ -8070,7 +8071,7 @@ TEST(chttpserver, restart_races_live_keep_alive_connection_is_safe) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
   /* This bounds each read(2) inside the loop of
      _restart_race_pipeline_thread. That loop already accepts any read or
      write failure and exits on it (see the doc comment of that function),
@@ -8157,7 +8158,7 @@ TEST(chttpserver, max_body_read_duration_exceeded_reports_ccol_timed_out) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
   /* Well clear of the 300ms cap under test; bounds the read loop below in
      case a regression makes the server never respond and never close. */
   struct timeval rcvtimeo = {5, 0};
@@ -8289,7 +8290,7 @@ TEST(chttpserver, max_response_write_duration_exceeded_closes_connection) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *req =
       "GET /large-response HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: "
@@ -8377,7 +8378,7 @@ TEST(chttpserver, max_response_write_duration_disabled_allows_slow_reader) {
      deliberate 5ms naps for a 16 MiB body). */
   struct timeval rcvtimeo = {30, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *req =
       "GET /large-response-slow-ok HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: "
@@ -8448,7 +8449,7 @@ TEST(chttpserver, max_response_write_duration_bounds_rejection_response) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   /* This bounds the read below in case a regression makes this path stop
      consulting the guarded check of the write deadline (the exact regressed
@@ -8604,7 +8605,7 @@ TEST(chttpserver, unix_socket_listen_and_round_trip) {
   memset(&addr, 0, sizeof(addr));
   addr.sun_family = AF_UNIX;
   strncpy(addr.sun_path, sock_path, sizeof(addr.sun_path) - 1);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&addr, sizeof(addr)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&addr, sizeof(addr)), 0);
 
   const char *req =
       "GET /unix-hello HTTP/1.1\r\nHost: localhost\r\nConnection: "
@@ -8665,7 +8666,7 @@ TEST(chttpserver, accepted_tcp_socket_keeps_kernel_buffer_autotuning) {
   memset(&addr, 0, sizeof(addr));
   addr.sun_family = AF_UNIX;
   strncpy(addr.sun_path, sock_path, sizeof(addr.sun_path) - 1);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&addr, sizeof(addr)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&addr, sizeof(addr)), 0);
   const char *req =
       "GET /unix-bufs HTTP/1.1\r\nHost: localhost\r\nConnection: "
       "close\r\n\r\n";
@@ -8726,7 +8727,7 @@ TEST(chttpserver, unix_socket_stale_file_replaced_on_start) {
   memset(&addr, 0, sizeof(addr));
   addr.sun_family = AF_UNIX;
   strncpy(addr.sun_path, sock_path, sizeof(addr.sun_path) - 1);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&addr, sizeof(addr)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&addr, sizeof(addr)), 0);
 
   const char *req =
       "GET /stale-hello HTTP/1.1\r\nHost: localhost\r\nConnection: "
@@ -8785,7 +8786,7 @@ TEST(chttpserver, max_connections_enforced) {
 
   int fd_a _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd_a >= 0);
-  REQUIRE_EQ(connect(fd_a, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd_a, (struct sockaddr *)&sa, sizeof(sa)), 0);
   /* Give the server a moment to accept() fd_a and take the one slot before fd_b
      tries to connect. */
   struct timespec nap = {0, 150000000L}; /* 150ms */
@@ -8801,7 +8802,7 @@ TEST(chttpserver, max_connections_enforced) {
      that this test exists to catch. */
   struct timeval rcvtimeo = {5, 0};
   setsockopt(fd_b, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
-  REQUIRE_EQ(connect(fd_b, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd_b, (struct sockaddr *)&sa, sizeof(sa)), 0);
   const char *req =
       "GET /maxconn-hello HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: "
       "close\r\n\r\n";
@@ -8865,10 +8866,10 @@ TEST(chttpserver, max_connections_at_capacity_does_not_busy_loop) {
 
   int fd_a _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd_a >= 0);
-  REQUIRE_EQ(connect(fd_a, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd_a, (struct sockaddr *)&sa, sizeof(sa)), 0);
   int fd_b _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd_b >= 0);
-  REQUIRE_EQ(connect(fd_b, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd_b, (struct sockaddr *)&sa, sizeof(sa)), 0);
   /* Give the server a moment to accept() both and take the two slots before
      fd_c tries to connect. */
   struct timespec nap = {0, 150000000L}; /* 150ms */
@@ -8884,7 +8885,7 @@ TEST(chttpserver, max_connections_at_capacity_does_not_busy_loop) {
      max_connections_enforced is identical. */
   struct timeval rcvtimeo = {5, 0};
   setsockopt(fd_c, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
-  REQUIRE_EQ(connect(fd_c, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd_c, (struct sockaddr *)&sa, sizeof(sa)), 0);
   const char *req_c =
       "GET /busyloop-hello HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: "
       "close\r\n\r\n";
@@ -9046,7 +9047,7 @@ TEST(chttpserver,
   REQUIRE_TRUE(fd_a >= 0);
   struct timeval rcvtimeo_a = {5, 0};
   setsockopt(fd_a, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo_a, sizeof(rcvtimeo_a));
-  REQUIRE_EQ(connect(fd_a, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd_a, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   /* The server must accept fd_a, fail the allocation of its connection, and
      close it without sending one byte. A read of EOF (0) confirms this. The
@@ -9079,7 +9080,7 @@ TEST(chttpserver,
   REQUIRE_TRUE(fd_b >= 0);
   struct timeval rcvtimeo_b = {5, 0};
   setsockopt(fd_b, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo_b, sizeof(rcvtimeo_b));
-  REQUIRE_EQ(connect(fd_b, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd_b, (struct sockaddr *)&sa, sizeof(sa)), 0);
   const char *req_b =
       "GET /backoff-hello HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: "
       "close\r\n\r\n";
@@ -9163,7 +9164,7 @@ TEST(chttpserver,
   REQUIRE_TRUE(fd_a >= 0);
   struct timeval rcvtimeo_a = {5, 0};
   setsockopt(fd_a, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo_a, sizeof(rcvtimeo_a));
-  REQUIRE_EQ(connect(fd_a, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd_a, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   /* Wait (bounded) for the count of real listener pauses. It goes up only
      after the pause took effect, and the sweep thread of the idle timeout,
@@ -9191,7 +9192,7 @@ TEST(chttpserver,
   REQUIRE_TRUE(fd_b >= 0);
   struct timeval rcvtimeo_b = {5, 0};
   setsockopt(fd_b, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo_b, sizeof(rcvtimeo_b));
-  REQUIRE_EQ(connect(fd_b, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd_b, (struct sockaddr *)&sa, sizeof(sa)), 0);
   const char *req_b =
       "GET /accept-errno-hello HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: "
       "close\r\n\r\n";
@@ -9270,7 +9271,7 @@ TEST(chttpserver, max_header_bytes_exceeded_closes_connection) {
   REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   char padding[300];
   memset(padding, 'a', sizeof(padding) - 1);
@@ -9361,7 +9362,7 @@ TEST(chttpserver, max_header_bytes_exact_boundary) {
     REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
     int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
     REQUIRE_TRUE(fd >= 0);
-    REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+    REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
     REQUIRE_EQ(write(fd, req, (size_t)n), (ssize_t)n);
     struct timeval rcvtimeo = {5, 0};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
@@ -9393,7 +9394,7 @@ TEST(chttpserver, max_header_bytes_exact_boundary) {
     REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
     int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
     REQUIRE_TRUE(fd >= 0);
-    REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+    REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
     REQUIRE_EQ(write(fd, req, (size_t)n), (ssize_t)n);
     struct timeval rcvtimeo = {5, 0};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
@@ -9448,7 +9449,7 @@ TEST(chttpserver, response_write_timeout_closes_slow_reader_connection) {
   REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *req = "GET /big-body HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
   REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
@@ -9536,7 +9537,7 @@ TEST(chttpserver, idle_timeout_closes_unused_connection) {
   REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
   struct timeval rcvtimeo = {5, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
 
@@ -9889,7 +9890,7 @@ TEST(chttpserver, ipv6_only_listener_still_serves_ipv6_traffic) {
   sa.sin6_family = AF_INET6;
   sa.sin6_port = htons((uint16_t)(TEST_PORT + 16));
   REQUIRE_EQ(inet_pton(AF_INET6, "::1", &sa.sin6_addr), 1);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
   /* This bounds the read(2) call below in case a regression makes the server
      never respond and never close, with the same SO_RCVTIMEO guard that
      _raw_request and _read_one_http_response use elsewhere in this file. */
@@ -9951,7 +9952,7 @@ TEST(chttpserver, ipv6_only_blocks_ipv4_mapped_connections) {
   sa6.sin6_family = AF_INET6;
   sa6.sin6_port = htons((uint16_t)(TEST_PORT + 77));
   REQUIRE_EQ(inet_pton(AF_INET6, "::1", &sa6.sin6_addr), 1);
-  REQUIRE_EQ(connect(fd6, (struct sockaddr *)&sa6, sizeof(sa6)), 0);
+  REQUIRE_EQ(test_connect(fd6, (struct sockaddr *)&sa6, sizeof(sa6)), 0);
   struct timeval rcvtimeo = {5, 0};
   setsockopt(fd6, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
   const char *req6 =
@@ -9968,7 +9969,7 @@ TEST(chttpserver, ipv6_only_blocks_ipv4_mapped_connections) {
   /* The real assertion: a PLAIN IPv4 connection to the identical port must be
      refused outright, and not silently accepted by the same listener. With
      IPV6_V6ONLY applied, no socket that IPv4 can reach is bound to this port at
-     all, so connect() itself must fail at once with ECONNREFUSED, and must
+     all, so test_connect() itself must fail at once with ECONNREFUSED, and must
      never merely time out while it waits for a response, as the accepted but
      never routed connection of a regression does. */
   int fd4 _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
@@ -9978,7 +9979,7 @@ TEST(chttpserver, ipv6_only_blocks_ipv4_mapped_connections) {
   sa4.sin_family = AF_INET;
   sa4.sin_port = htons((uint16_t)(TEST_PORT + 77));
   REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa4.sin_addr), 1);
-  int rc = connect(fd4, (struct sockaddr *)&sa4, sizeof(sa4));
+  int rc = test_connect(fd4, (struct sockaddr *)&sa4, sizeof(sa4));
   int connect_errno = errno;
   close(fd4);
   fd4 = -1;
@@ -10018,7 +10019,7 @@ TEST(chttpserver, head_request_suppresses_response_body) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
   struct timeval rcvtimeo = {5, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
 
@@ -10106,7 +10107,7 @@ TEST(chttpserver, head_request_on_rejected_route_still_has_no_body) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
   struct timeval rcvtimeo = {5, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
 
@@ -10187,7 +10188,7 @@ TEST(chttpserver,
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
   struct timeval rcvtimeo = {5, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
 
@@ -10252,7 +10253,7 @@ TEST(chttpserver,
   int fd2 _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd2 >= 0);
   sa.sin_port = htons((uint16_t)(TEST_PORT + 21));
-  REQUIRE_EQ(connect(fd2, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd2, (struct sockaddr *)&sa, sizeof(sa)), 0);
   setsockopt(fd2, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
   const char *req2 =
       "GET /after-carry-oom HTTP/1.1\r\nHost: 127.0.0.1\r\n"
@@ -10313,7 +10314,7 @@ TEST(chttpserver,
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
   struct timeval rcvtimeo = {5, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
 
@@ -10390,7 +10391,7 @@ TEST(
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
   struct timeval rcvtimeo = {5, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
 
@@ -10430,7 +10431,7 @@ TEST(
      shared state. */
   int fd2 _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd2 >= 0);
-  REQUIRE_EQ(connect(fd2, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd2, (struct sockaddr *)&sa, sizeof(sa)), 0);
   setsockopt(fd2, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
   const char *req2 =
       "GET /hdr-oom HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
@@ -10480,7 +10481,7 @@ TEST(
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
   struct timeval rcvtimeo = {5, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
 
@@ -10519,7 +10520,7 @@ TEST(
   /* Usable afterwards too, exactly as in the sibling _on_header test above. */
   int fd2 _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd2 >= 0);
-  REQUIRE_EQ(connect(fd2, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd2, (struct sockaddr *)&sa, sizeof(sa)), 0);
   setsockopt(fd2, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
   const char *req2 =
       "GET /after-path-oom HTTP/1.1\r\nHost: 127.0.0.1\r\n"
@@ -10637,7 +10638,7 @@ TEST(chttpserver, req_query_oom_latches_true_across_later_successful_calls) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
   struct timeval rcvtimeo = {5, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
   REQUIRE_EQ(write(fd, req_line, (size_t)rn), (ssize_t)rn);
@@ -10737,7 +10738,7 @@ TEST(chttpserver, req_query_one_reports_not_enough_memory_not_key_not_found) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
   struct timeval rcvtimeo = {5, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
   REQUIRE_EQ(write(fd, req_line, (size_t)rn), (ssize_t)rn);
@@ -10797,7 +10798,7 @@ TEST(chttpserver, stream_prepare_failure_in_worker_sends_500_not_bare_close) {
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
   struct timeval rcvtimeo = {5, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
 
@@ -10853,7 +10854,7 @@ TEST(chttpserver, stream_prepare_failure_in_worker_sends_500_not_bare_close) {
   int fd2 _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd2 >= 0);
   sa.sin_port = htons((uint16_t)(TEST_PORT + 23));
-  REQUIRE_EQ(connect(fd2, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd2, (struct sockaddr *)&sa, sizeof(sa)), 0);
   setsockopt(fd2, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
   const char *req2 =
       "GET /after-stream-prepare-oom HTTP/1.1\r\nHost: 127.0.0.1\r\n"
@@ -11122,7 +11123,7 @@ TEST(chttpserver,
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *req =
       "GET /explicit-connection-header HTTP/1.1\r\n"
@@ -11165,7 +11166,7 @@ TEST(chttpserver,
 
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   REQUIRE_TRUE(fd >= 0);
-  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  REQUIRE_EQ(test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
   const char *req =
       "GET /explicit-connection-header HTTP/1.0\r\n"
@@ -11505,7 +11506,7 @@ TEST(chttpsvr_handle_lifecycle,
   int fd _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) _destroy_self_restart_test_server_if_live();
   REQUIRE_TRUE(fd >= 0);
-  int connect_rv = connect(fd, (struct sockaddr *)&sa, sizeof(sa));
+  int connect_rv = test_connect(fd, (struct sockaddr *)&sa, sizeof(sa));
   if (connect_rv != 0) {
     close(fd);
     fd = -1;
@@ -11552,7 +11553,7 @@ TEST(chttpsvr_handle_lifecycle,
   int fd2 _ccol_destructor(_close_scoped_fd) = socket(AF_INET, SOCK_STREAM, 0);
   if (fd2 < 0) _destroy_self_restart_test_server_if_live();
   REQUIRE_TRUE(fd2 >= 0);
-  int connect_rv2 = connect(fd2, (struct sockaddr *)&sa, sizeof(sa));
+  int connect_rv2 = test_connect(fd2, (struct sockaddr *)&sa, sizeof(sa));
   if (connect_rv2 != 0) {
     close(fd2);
     fd2 = -1;
@@ -12249,13 +12250,13 @@ TEST(chttpsvr_handle_lifecycle,
     chttpsvr_destroy(srv);
   }
   REQUIRE_TRUE(fd_a >= 0);
-  int connect_rv = connect(fd_a, (struct sockaddr *)&sa, sizeof(sa));
+  int connect_rv = test_connect(fd_a, (struct sockaddr *)&sa, sizeof(sa));
   /* Checked, unlike a bare call that ignores its result:
      _wait_..._entered_for_tests just below blocks on an unbounded
      ccol_cond_var_wait (with no deadline, by design, as for every other caller
-     of this hook, each of which relies on a real connect() that triggered a
-     real dispatch). A failed connect() here means that the listener never
-     dispatches at all, which hangs this test (and, because the hook stays
+     of this hook, each of which relies on a real test_connect() that triggered
+     a real dispatch). A failed test_connect() here means that the listener
+     never dispatches at all, which hangs this test (and, because the hook stays
      armed, every later test in this binary that dispatches a listener) forever
      instead of failing cleanly. */
   if (connect_rv != 0) {
@@ -12398,7 +12399,7 @@ TEST(chttpsvr_handle_lifecycle,
   inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr);
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   bool connected =
-      fd >= 0 && connect(fd, (struct sockaddr *)&sa, sizeof(sa)) == 0;
+      fd >= 0 && test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)) == 0;
   if (!connected) {
     /* No dispatch will ever reach the hook. */
     _chttpsvr_release_listener_dispatch_race_hook_for_tests();
@@ -12515,7 +12516,8 @@ TEST(chttpsvr_handle_lifecycle,
   /* The first request completes and leaves the connection registered with
      the reactor; the second one reaches the slow handler. */
   int fd_a = socket(AF_INET, SOCK_STREAM, 0);
-  bool ok = fd_a >= 0 && connect(fd_a, (struct sockaddr *)&sa, sizeof(sa)) == 0;
+  bool ok =
+      fd_a >= 0 && test_connect(fd_a, (struct sockaddr *)&sa, sizeof(sa)) == 0;
   const char *fast = "GET /route-lifetime-fast HTTP/1.1\r\nHost: x\r\n\r\n";
   const char *slow = "GET /route-lifetime/7 HTTP/1.1\r\nHost: x\r\n\r\n";
   char buf[1024];
@@ -12535,7 +12537,8 @@ TEST(chttpsvr_handle_lifecycle,
   if (ok) {
     _chttpsvr_arm_listener_dispatch_entry_race_hook_for_tests();
     fd_b = socket(AF_INET, SOCK_STREAM, 0);
-    ok = fd_b >= 0 && connect(fd_b, (struct sockaddr *)&sa, sizeof(sa)) == 0;
+    ok = fd_b >= 0 &&
+         test_connect(fd_b, (struct sockaddr *)&sa, sizeof(sa)) == 0;
     if (ok)
       _chttpsvr_wait_listener_dispatch_race_hook_entered_for_tests();
     else
@@ -12806,7 +12809,7 @@ static int _connect_silent(uint16_t port) {
   if (inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr) != 1) return -1;
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
-  if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+  if (test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
     close(fd);
     return -1;
   }
@@ -12939,7 +12942,7 @@ TEST(chttpserver, max_connections_zero_means_unlimited) {
     if (inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr) != 1) break;
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) break;
-    if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+    if (test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
       close(fd);
       break;
     }
@@ -14302,7 +14305,7 @@ static int _sc_connect(int port) {
   setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
   struct timeval sndto = {30, 0};
   setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &sndto, sizeof(sndto));
-  if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+  if (test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
     close(fd);
     return -1;
   }
@@ -14647,7 +14650,7 @@ static int _sc_connect_small_rcvbuf(int port) {
   if (fd < 0) return -1;
   int small = 4096;
   setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &small, sizeof(small));
-  if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+  if (test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
     close(fd);
     return -1;
   }
@@ -16489,7 +16492,7 @@ static int _lc_get_via(const struct sockaddr *sa, socklen_t salen) {
   struct timeval tv = {5, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
   int status = -1;
-  if (connect(fd, sa, salen) == 0 &&
+  if (test_connect(fd, sa, salen) == 0 &&
       _sc_send_str(fd, "GET /lc HTTP/1.1\r\nHost: h\r\n\r\n")) {
     char buf[1024];
     status = _sc_read_response(fd, buf, sizeof(buf), NULL, 5000);

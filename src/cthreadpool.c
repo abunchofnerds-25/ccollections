@@ -187,6 +187,13 @@ static void _ctpool_slot_table_init_globals(void) {
 #endif
 }
 
+#if defined(_CCOL_ATFORK_AT_LOAD)
+/* See _CCOL_ATFORK_AT_LOAD in common.h. */
+__attribute__((constructor)) static void _ctpool_atfork_at_load(void) {
+  ccol_call_once(ctpool_slot_table.once, _ctpool_slot_table_init_globals);
+}
+#endif
+
 /* Not static, and reachable on purpose from other .c files in this library,
  * such as chttpserver.c. Such a file must guarantee that this module registers
  * its own ccol_at_fork() triple BEFORE that file registers its own.

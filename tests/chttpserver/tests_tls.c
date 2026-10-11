@@ -43,6 +43,7 @@ SOFTWARE.
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #include <tau/tau.h>
+#include <test_connect.h>
 #pragma GCC diagnostic pop
 
 TAU_MAIN()
@@ -960,7 +961,8 @@ static bool _raw_tls_client_open(_raw_tls_client_t *c) {
   sa.sin_family = AF_INET;
   sa.sin_port = htons(TLS_TEST_PORT);
   inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr);
-  if (connect(c->fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) return false;
+  if (test_connect(c->fd, (struct sockaddr *)&sa, sizeof(sa)) != 0)
+    return false;
   c->ctx = SSL_CTX_new(TLS_client_method());
   if (!c->ctx) return false;
   c->ssl = SSL_new(c->ctx);
@@ -1213,7 +1215,8 @@ static bool _split_open(_split_tls_client_t *c) {
   sa.sin_family = AF_INET;
   sa.sin_port = htons(TLS_TEST_PORT);
   inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr);
-  if (connect(c->fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) return false;
+  if (test_connect(c->fd, (struct sockaddr *)&sa, sizeof(sa)) != 0)
+    return false;
   fcntl(c->fd, F_SETFL, O_NONBLOCK);
   c->ctx = SSL_CTX_new(TLS_client_method());
   if (!c->ctx) return false;

@@ -5401,6 +5401,13 @@ static void _client_atfork_install(void) {
 }
 #endif
 
+#if defined(_CCOL_ATFORK_AT_LOAD) && CCOL_FORK_SAFETY_REQUIRED
+/* See _CCOL_ATFORK_AT_LOAD in common.h. */
+__attribute__((constructor)) static void _client_atfork_at_load(void) {
+  ccol_call_once(cli_engine_bundler.atfork_once, _client_atfork_install);
+}
+#endif
+
 static void _client_engine_globals_init(void) {
   if (ccol_mutex_init(cli_engine_bundler.mutex) != 0)
     ccol_fatal_err("chttpclient engine: failed to initialize mutex");

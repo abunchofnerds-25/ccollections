@@ -423,6 +423,11 @@ typedef struct clog_shared {
    * the fatal call gets the mutex as soon as the work in hand ends; see
    * _clog_writer_lock(). */
   atomic_uint fatal_waiters;
+#ifdef RUNNING_UNIT_TESTS
+  /* The timeouts of the timed wait of this target's async writer thread;
+   * each one is a wakeup with no job, which flushes the batch buffer. */
+  _Atomic size_t test_writer_timeout_wakeups;
+#endif
 } clog_shared_t;
 
 struct clogger {
@@ -2137,6 +2142,14 @@ static void _clog_tident_register_atfork(void) {
   atomic_store(&_clog_tident_key_live, true);
 }
 
+#if defined(_CCOL_ATFORK_AT_LOAD)
+/* See _CCOL_ATFORK_AT_LOAD in common.h. */
+__attribute__((constructor)) static void _clog_atfork_at_load(void) {
+  ccol_call_once(clog_slot_table.once, _clog_slot_table_init_globals);
+  ccol_call_once(_clog_tident_once, _clog_tident_register_atfork);
+}
+#endif
+
 /* Runs when the library unloads, and at exit. It frees the cache of the
  * calling thread, which no key destructor frees for the thread that ends the
  * process, and deletes the key, whose destructor would otherwise point into
@@ -2517,13 +2530,19 @@ static __attribute__((noinline, cold)) void _clog_consume_own_sigpipe(void) {
   sigemptyset(&set);
   sigaddset(&set, SIGPIPE);
 #if defined(__APPLE__) || defined(__OpenBSD__)
-  /* macOS and OpenBSD have no sigtimedwait(). sigwait() does not block for
-   * a signal that sigpending() reports, because the thread that raised it is
-   * this one. */
+  /* macOS and OpenBSD have no sigtimedwait(), and their sigpending() also
+   * reports a SIGPIPE that is pending for the whole process, which another
+   * thread can take first; a sigwait() for that one would block for ever.
+   * Directing one SIGPIPE at this thread before the sigwait() guarantees
+   * that it has one to take, and neither system queues a second pending
+   * SIGPIPE on a thread, so this takes the one of the failed write. A
+   * SIGPIPE pending for the process stays pending; it was not raised by
+   * this write. */
   sigset_t pending;
   sigemptyset(&pending);
   int sig;
-  while (sigpending(&pending) == 0 && sigismember(&pending, SIGPIPE) == 1)
+  if (sigpending(&pending) == 0 && sigismember(&pending, SIGPIPE) == 1 &&
+      ccol_thread_kill(ccol_get_thread_id(), SIGPIPE) == 0)
     (void)sigwait(&set, &sig);
 #else
   const struct timespec zero = {0, 0};
@@ -2588,13 +2607,31 @@ ccol_retval_t clog_set_sigpipe_policy(clog_sigpipe_policy_t policy) {
  * cannot take the continuation holds up no log call, fatal or otherwise. */
 #define CLOG_SPLIT_RECORD_DRAIN_WAIT_MS 100
 
+/* The events of a poll(2) that waits for room in fd. OpenBSD never wakes a
+ * POLLOUT wait on an anonymous pipe (a FIFO with no device and no inode)
+ * when the reader closes, so a writer whose reader is gone would wait for
+ * ever; asking for POLLIN as well makes the close report POLLHUP. The write
+ * end of a pipe never has data to read, so POLLIN reports nothing else. */
+static short _clog_pollout_events(int fd) {
+#if defined(__OpenBSD__)
+  struct stat st;
+  if (fstat(fd, &st) == 0 && S_ISFIFO(st.st_mode) && st.st_dev == 0 &&
+      st.st_ino == 0)
+    return POLLOUT | POLLIN;
+#else
+  (void)fd;
+#endif
+  return POLLOUT;
+}
+
 /* Waits, after EAGAIN or EWOULDBLOCK, until fd is writable again, without a
  * bound. It gives true when the write should be tried again. It is out of
  * line because it is the only part of the write loop that needs an object
  * in memory, so the loop itself keeps no stack canary on its path of one
  * write per record. */
 static __attribute__((noinline)) bool _clog_wait_writable(int fd) {
-  struct pollfd pfd = {.fd = fd, .events = POLLOUT, .revents = 0};
+  struct pollfd pfd = {
+      .fd = fd, .events = _clog_pollout_events(fd), .revents = 0};
   int pr = poll(&pfd, 1, -1);
   /* An interruption only waits again: an unbounded wait has no time to
    * keep. */
@@ -2856,7 +2893,8 @@ static __attribute__((noinline, cold)) size_t _write_all_bounded(
     } else
 #endif
     {
-      struct pollfd pfd = {.fd = wfd, .events = POLLOUT, .revents = 0};
+      struct pollfd pfd = {
+          .fd = wfd, .events = _clog_pollout_events(wfd), .revents = 0};
       int pr = poll(&pfd, 1, _clog_ms_until(&deadline));
       if (pr < 0) {
         if (errno == EINTR) continue; /* the deadline stays where it is */
@@ -3330,12 +3368,16 @@ static void _clog_test_recover_gate(void) {
     usleep(1000);
 }
 
-/* Counts the timeouts of the timed wait of the async writer thread; each one
- * is a wakeup with no job, which flushes the batch buffer. */
-static _Atomic size_t _clog_test_writer_timeout_wakeups = 0;
-
-size_t clog_test_writer_timeout_wakeups(void) {
-  return atomic_load(&_clog_test_writer_timeout_wakeups);
+/* The timeouts of the timed wait of the async writer thread of the target
+ * behind logger, or 0 for a handle that does not resolve. The count belongs
+ * to the target, so the writer threads of other loggers in the process do
+ * not add to it. */
+size_t clog_test_writer_timeout_wakeups(clog logger) {
+  struct clogger *lg = _clog_resolve(logger);
+  if (!lg) return 0;
+  size_t n = atomic_load(&lg->shared->test_writer_timeout_wakeups);
+  _clog_resolve_unpin(lg);
+  return n;
 }
 
 /*
@@ -6666,7 +6708,7 @@ static void *_clog_writer_thread_main(void *arg) {
      * a wait that timed out: the interval is over. */
     if (rv == ccol_timed_out || rv == ccol_container_empty) {
 #ifdef RUNNING_UNIT_TESTS
-      atomic_fetch_add(&_clog_test_writer_timeout_wakeups, 1);
+      atomic_fetch_add(&sh->test_writer_timeout_wakeups, 1);
 #endif
       _clog_writer_lock(sh);
       /* This is a plain flush, never a settle, because it is one of the retries
@@ -8911,7 +8953,9 @@ static void _clog_fatal_report_loss(clog_shared_t *sh) {
   if (fd >= 0 && fstat(fd, &out) == 0 && out.st_dev == err.st_dev &&
       out.st_ino == err.st_ino)
     return;
-  struct pollfd pfd = {.fd = STDERR_FILENO, .events = POLLOUT, .revents = 0};
+  struct pollfd pfd = {.fd = STDERR_FILENO,
+                       .events = _clog_pollout_events(STDERR_FILENO),
+                       .revents = 0};
   if (poll(&pfd, 1, CLOG_SPLIT_RECORD_DRAIN_WAIT_MS) > 0 &&
       (pfd.revents & POLLOUT)) {
     ssize_t w = write(STDERR_FILENO, msg, sizeof(msg) - 1);

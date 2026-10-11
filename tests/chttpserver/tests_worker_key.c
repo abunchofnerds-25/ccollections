@@ -36,6 +36,7 @@ SOFTWARE.
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #include <tau/tau.h>
+#include <test_connect.h>
 #pragma GCC diagnostic pop
 
 TAU_MAIN()
@@ -80,7 +81,7 @@ static int _get_over_unix(const char *path) {
       "GET /hello HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
   char buf[512] = {0};
   size_t total = 0;
-  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0 &&
+  if (test_connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0 &&
       write(fd, req, strlen(req)) == (ssize_t)strlen(req)) {
     ssize_t r;
     while (total < sizeof(buf) - 1 &&

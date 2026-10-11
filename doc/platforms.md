@@ -54,6 +54,13 @@ resume a TLS 1.3 session, so there every connection that negotiates TLS 1.3
 makes a full handshake; a TLS 1.2 session resumes as it does on the other
 systems.
 
+On OpenBSD a child that `fork()` makes while the parent runs several
+threads must not start threads of its own and then fork again: the C library
+of OpenBSD deadlocks on that second `fork()` once any fork handler is
+registered, and this library registers some. Forking before you create a
+handle, or forking and then calling `exec()`, both work, as on every other
+system; see [Concurrency](concurrency.md#fork).
+
 OpenBSD also runs the exit handlers that a constructor registered (with
 `atexit()`) after the dynamic loader has run the destructors of every shared
 object, and the loader keeps a lock from then until the process ends. Any

@@ -29,6 +29,7 @@ SOFTWARE.
 #include <string.h>
 #include <sys/wait.h>
 #include <tau/tau.h>
+#include <test_connect.h>
 #include <unistd.h>
 TAU_MAIN()  // sets Tau up, and gives the main function
 
@@ -1165,7 +1166,7 @@ TEST(cloexec_gate, every_two_step_creation_uses_the_gate) {
                    getsockname(s, (struct sockaddr *)&addr, &alen) == 0;
   if (listening) {
     cli = socket(AF_INET, SOCK_STREAM, 0);
-    if (cli >= 0) (void)connect(cli, (struct sockaddr *)&addr, alen);
+    if (cli >= 0) (void)test_connect(cli, (struct sockaddr *)&addr, alen);
   }
   struct pollfd pfd = {.fd = s, .events = POLLIN, .revents = 0};
   bool ready = listening && cli >= 0 && poll(&pfd, 1, 5000) == 1;
@@ -1266,45 +1267,67 @@ TEST(cloexec_gate, a_handler_registered_before_the_library_runs_before_gate) {
 /* fork() in the child of a threaded process                                */
 /* ------------------------------------------------------------------------ */
 
+#if defined(__OpenBSD__)
 #include <pthread.h>
+#include <pwd.h>
+#include <signal.h>
+#include <stdatomic.h>
+#include <time.h>
 
-static void *fork_again_idle(void *arg) { return arg; }
+static atomic_bool fork_libc_stop;
 
-/* A process that has started a thread, and that holds the fork handlers that
- * the library registers at load, forks; the child starts a thread and forks
- * again. Every fork returns, and the child reports that through the pipe.
- *
- * This test is non-vacuous on OpenBSD: without the pair of
- * _CCOL_FORK_THREADED_FIX the second fork waits for ever on the lock that the
- * first fork left held, and the alarm ends the child before it writes. */
-TEST(fork, a_child_of_a_threaded_process_can_start_a_thread_and_fork) {
-  pthread_t t;
-  REQUIRE_EQ(pthread_create(&t, NULL, fork_again_idle, NULL), 0);
-  REQUIRE_EQ(pthread_join(t, NULL), 0);
-  int fds[2];
-  REQUIRE_EQ(pipe(fds), 0);
-  pid_t pid = fork();
-  if (pid == 0) {
-    close(fds[0]);
-    alarm(10);
-    pthread_t ct;
-    if (pthread_create(&ct, NULL, fork_again_idle, NULL) != 0) _exit(2);
-    pthread_join(ct, NULL);
-    pid_t g = fork();
-    if (g == 0) _exit(0);
-    if (g > 0 && waitpid(g, NULL, 0) == g) {
-      char ok = 1;
-      if (write(fds[1], &ok, 1) != 1) _exit(3);
-    }
-    _exit(0);
+/* Calls libc functions that take internal locks of libc, until told to stop. */
+static void *fork_libc_spin(void *arg) {
+  (void)arg;
+  time_t now = time(NULL);
+  struct tm tm;
+  while (!atomic_load(&fork_libc_stop)) {
+    localtime_r(&now, &tm);
+    (void)getpwnam("root");
   }
-  close(fds[1]);
-  char byte = 0;
-  ssize_t n = pid > 0 ? read(fds[0], &byte, 1) : -1;
-  close(fds[0]);
-  int status = 0;
-  bool reaped = pid > 0 && waitpid(pid, &status, 0) == pid;
-  REQUIRE_TRUE(reaped);
-  REQUIRE_EQ((int)n, 1);
-  REQUIRE_EQ((int)byte, 1);
+  return NULL;
 }
+
+/* OpenBSD's libc takes its internal locks only while the process is
+ * threaded, and it marks a fork child as not threaded, so a child can use a
+ * function whose lock another thread of the parent held at the fork. The
+ * library loads with fork handlers registered and must leave that mark alone.
+ * Here a thread loops on getpwnam() and localtime_r(), and the main thread
+ * forks children that call both and exit; every child must exit.
+ *
+ * This test is non-vacuous: a fork handler that marks the child as threaded
+ * makes children wait for ever on a lock in getpwnam(), within the first few
+ * dozen forks. */
+TEST(fork, a_child_of_a_threaded_process_can_call_libc_functions_that_lock) {
+  atomic_store(&fork_libc_stop, false);
+  pthread_t t;
+  bool started = pthread_create(&t, NULL, fork_libc_spin, NULL) == 0;
+  int stuck = 0, forked = 0;
+  for (int i = 0; started && i < 200; i++) {
+    pid_t pid = fork();
+    if (pid == 0) {
+      time_t now = time(NULL);
+      struct tm tm;
+      localtime_r(&now, &tm);
+      (void)getpwnam("root");
+      _exit(0);
+    }
+    if (pid < 0) break;
+    forked++;
+    int status = 0;
+    pid_t w = 0;
+    for (int k = 0; k < 500 && (w = waitpid(pid, &status, WNOHANG)) == 0; k++)
+      usleep(10000);
+    if (w == 0) {
+      stuck++;
+      kill(pid, SIGKILL);
+      waitpid(pid, &status, 0);
+    }
+  }
+  atomic_store(&fork_libc_stop, true);
+  if (started) pthread_join(t, NULL);
+  REQUIRE_TRUE(started);
+  REQUIRE_EQ(forked, 200);
+  REQUIRE_EQ(stuck, 0);
+}
+#endif

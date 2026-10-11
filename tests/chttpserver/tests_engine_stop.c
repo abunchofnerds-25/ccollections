@@ -60,6 +60,7 @@ SOFTWARE.
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #include <tau/tau.h>
+#include <test_connect.h>
 #include <test_sanitizer.h>
 #pragma GCC diagnostic pop
 
@@ -3004,7 +3005,7 @@ static int _es_open(uint16_t port, const char *req, size_t body) {
   if (fd < 0) return -1;
   struct timeval tv = {5, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-  if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0 ||
+  if (test_connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0 ||
       write(fd, req, strlen(req)) != (ssize_t)strlen(req)) {
     close(fd);
     return -1;

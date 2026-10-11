@@ -60,7 +60,9 @@ SOFTWARE.
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #include <tau/tau.h>
+#include <test_connect.h>
 #include <test_fds.h>
+#include <test_sanitizer.h>
 #pragma GCC diagnostic pop
 
 TAU_MAIN()
@@ -14346,6 +14348,7 @@ static void _inherited_logger_grandchild(clog inherited, int report_fd) {
  * reason that reaper_spawn_failure_on_a_reactor_thread_does_not_abort
  * gives. That child then forks the grandchild that checks the logger. */
 TEST(async_engine, engine_logger_of_an_inherited_engine_is_closed) {
+  TEST_SKIP_FORK_AGAIN_IN_A_THREADED_CHILD();
   wait_for_async_engine_idle();
   REQUIRE_FALSE(_chttpclient_engine_running_for_tests());
 
@@ -14822,7 +14825,7 @@ static void test_wake_listener(int lfd) {
    * connection to a Unix listener that is shut down. */
   int c = socket(ss.ss_family, SOCK_STREAM, 0);
   if (c >= 0) {
-    (void)connect(c, (struct sockaddr *)&ss, len);
+    (void)test_connect(c, (struct sockaddr *)&ss, len);
     close(c);
   }
   (void)shutdown(lfd, SHUT_RDWR);
@@ -17360,7 +17363,7 @@ static int blackhole_listener(struct sockaddr_in *out, int *filler_out) {
     close(l);
     return -1;
   }
-  (void)connect(f, (struct sockaddr *)out, sizeof(*out));
+  (void)test_connect(f, (struct sockaddr *)out, sizeof(*out));
   struct pollfd p = {.fd = f, .events = POLLOUT, .revents = 0};
   int soerr = 1;
   socklen_t sl = sizeof(soerr);

@@ -55,6 +55,7 @@ SOFTWARE.
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #include <tau/tau.h>
+#include <test_connect.h>
 #include <test_signals.h>
 #pragma GCC diagnostic pop
 
@@ -197,7 +198,7 @@ static int _connect_unix(const char *path) {
   strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
   struct timeval rcvtimeo = {10, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo));
-  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+  if (test_connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
     close(fd);
     return -1;
   }

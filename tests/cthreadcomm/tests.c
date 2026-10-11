@@ -20,6 +20,7 @@
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <tau/tau.h>
+#include <test_connect.h>
 #include <test_fds.h>
 #include <test_sanitizer.h>
 #include <time.h>
@@ -9415,6 +9416,7 @@ static void *fork_safety2_sender_thread(void *arg) {
 TEST(fork_safety,
      fork_does_not_deadlock_with_queue_registered_before_event_loop) {
   TEST_SKIP_FORK_IF_UNSUPPORTED();
+  TEST_SKIP_FORK_AGAIN_IN_A_THREADED_CHILD();
   int result_pipe[2];
   REQUIRE_EQ(pipe(result_pipe), 0);
 
@@ -12362,7 +12364,7 @@ static void derr_run_udp_case(size_t threads, int *refused, int *data,
 
   int cli = ccol_socket_nb(AF_INET, SOCK_DGRAM, 0);
   if (cli < 0) return;
-  if (connect(cli, (struct sockaddr *)&srv_addr, sizeof(srv_addr)) != 0) {
+  if (test_connect(cli, (struct sockaddr *)&srv_addr, sizeof(srv_addr)) != 0) {
     close(cli);
     return;
   }

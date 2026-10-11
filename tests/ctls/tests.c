@@ -46,6 +46,7 @@ SOFTWARE.
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #include <tau/tau.h>
+#include <test_connect.h>
 #pragma GCC diagnostic pop
 
 TAU_MAIN()
@@ -197,6 +198,46 @@ static void _teardown(void) {
   unlink(g_client_key);
   rmdir(g_cert_dir);
 }
+
+#if defined(LIBRESSL_VERSION_NUMBER)
+bool _ctls_rec_track_pending_after_for_tests(const char *const *chunks,
+                                             const int *lens, int count);
+
+/* LibreSSL has no SSL_has_pending(), so the socket BIO follows the record
+ * framing itself. A client hello in the SSLv2 format does not follow that
+ * framing: read as a TLS header, its version bytes give a body length of
+ * 771. The bytes that follow here are 748 bytes of real records, which end
+ * inside a record, so the TLS layer holds a partial record. The tracker must
+ * report pending input there.
+ *
+ * This test is non-vacuous: a tracker that does not give up on a header
+ * whose first byte is not a content type counts the 748 bytes as the rest
+ * of its 771-byte body, ends that body exactly at the end of the input, and
+ * reports nothing pending. */
+TEST(ctls_libressl, framing_tracker_gives_up_on_an_sslv2_hello) {
+  /* An SSLv2 CLIENT-HELLO: a two-byte header with the high bit set, then
+   * type 1, version 3.3, a 3-byte cipher spec and a 16-byte challenge. */
+  static const char v2[28] = {(char)0x80, 0x1c, 0x01, 0x03, 0x03, 0x00, 0x03,
+                              0x00,       0x00, 0x00, 0x10, 0x00, 0x00, 0x2f};
+  /* 748 bytes: two whole application data records of 300 body bytes, and
+   * the first 138 bytes of a third one that announces 300. */
+  static char tail[748];
+  int at = 0;
+  for (int r = 0; r < 3; r++) {
+    tail[at++] = 0x17;
+    tail[at++] = 0x03;
+    tail[at++] = 0x03;
+    tail[at++] = 0x01;
+    tail[at++] = 0x2c; /* 300 */
+    int body = r < 2 ? 300 : 748 - at;
+    for (int i = 0; i < body; i++) tail[at++] = 'x';
+  }
+  const char *chunks[2] = {v2, tail};
+  int lens[2] = {(int)sizeof(v2), at};
+  REQUIRE_EQ(at, 748);
+  REQUIRE_TRUE(_ctls_rec_track_pending_after_for_tests(chunks, lens, 2));
+}
+#endif
 
 /* ========================================================================== */
 /*                          HANDSHAKE DRIVER HELPERS                          */
@@ -1991,8 +2032,8 @@ static void *_stress_client_thread(void *arg) {
   for (int i = 0; i < CTLS_STRESS_ROUNDS && !atomic_load(&g_stress_stop); i++) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) continue;
-    if (connect(fd, (struct sockaddr *)&g_stress_addr, sizeof(g_stress_addr)) !=
-        0) {
+    if (test_connect(fd, (struct sockaddr *)&g_stress_addr,
+                     sizeof(g_stress_addr)) != 0) {
       close(fd);
       continue;
     }
@@ -2139,7 +2180,7 @@ TEST(ctls_stress, concurrent_reconfiguration_under_live_handshakes) {
   /* Reconfiguring a context must not break a handshake already in flight
      against it, so every connection that was accepted and driven to an
      answer is expected to have completed; asserted as a healthy majority
-     rather than as equality, since a client whose connect(2) is refused
+     rather than as equality, since a client whose test_connect(2) is refused
      while the backlog is full is a property of the machine, not of ctls. */
   REQUIRE_GT(client_ok, (long)(CTLS_STRESS_CLIENTS * CTLS_STRESS_ROUNDS / 2));
   REQUIRE_GT(server_ok, (long)(CTLS_STRESS_CLIENTS * CTLS_STRESS_ROUNDS / 2));

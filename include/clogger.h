@@ -960,10 +960,10 @@ void clog_test_hold_compression_recovery(bool hold);
 bool clog_test_compression_recovery_entered(void);
 
 /**
- * @brief Report how many times the timed wait of an async writer thread
- *        ended with no job, since the process started, for a test.
+ * @brief Report how many times the timed wait of the async writer thread of
+ *        the target behind logger ended with no job, for a test.
  */
-size_t clog_test_writer_timeout_wakeups(void);
+size_t clog_test_writer_timeout_wakeups(clog logger);
 
 /**
  * @brief Reset the counter of real rotation attempts (_rotate() calls) to zero,

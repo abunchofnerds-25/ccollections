@@ -83,4 +83,23 @@ SOFTWARE.
     }                                                                     \
   } while (0)
 
+/* The first statement of a test whose forked child starts threads and then
+ * forks again. OpenBSD's fork() leaves the lock of its list of fork handlers
+ * held in a child of a threaded process, so that second fork() waits for
+ * ever there once the child has started a thread; the library does not
+ * support that pattern on OpenBSD (doc/platforms.md). */
+#if defined(__OpenBSD__)
+#define TEST_SKIP_FORK_AGAIN_IN_A_THREADED_CHILD()                         \
+  do {                                                                     \
+    fprintf(stderr,                                                        \
+            "SKIP: on OpenBSD a child of a threaded process cannot start " \
+            "threads and fork again\n");                                   \
+    return;                                                                \
+  } while (0)
+#else
+#define TEST_SKIP_FORK_AGAIN_IN_A_THREADED_CHILD() \
+  do {                                             \
+  } while (0)
+#endif
+
 #endif /* CCOL_TESTS_TEST_SANITIZER_H */

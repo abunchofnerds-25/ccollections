@@ -82,6 +82,7 @@ static void _test_set_thread_name(const char *name) {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #include <tau/tau.h>
+#include <test_connect.h>
 #include <test_fds.h>
 #include <test_sanitizer.h>
 #pragma GCC diagnostic pop
@@ -427,6 +428,63 @@ TEST(lifecycle, writing_to_a_broken_pipe_does_not_crash_the_process) {
 
   clog_close(lg);
   close(pipefd[1]);
+}
+
+typedef struct {
+  clog lg;
+  atomic_bool done;
+} full_pipe_log_ctx;
+
+static void *full_pipe_log_thread(void *arg) {
+  full_pipe_log_ctx *c = (full_pipe_log_ctx *)arg;
+  clog_info(c->lg, "a record that does not fit in the full pipe");
+  atomic_store(&c->done, true);
+  return NULL;
+}
+
+/* A synchronous logger on a non-blocking pipe that is full waits for room,
+ * and the reader then closes. The wait must end, and the log call with it,
+ * on every system. OpenBSD never wakes a wait for POLLOUT on an anonymous
+ * pipe when the reader closes, so the library also asks for POLLIN there.
+ *
+ * This test is non-vacuous: on OpenBSD, without that POLLIN, the log call
+ * waits for ever and the bounded wait below reports it. */
+TEST(lifecycle, a_log_call_on_a_full_pipe_returns_when_the_reader_closes) {
+  int pipefd[2];
+  REQUIRE_EQ(pipe(pipefd), 0);
+  bool nonblocking =
+      fcntl(pipefd[1], F_SETFL, fcntl(pipefd[1], F_GETFL) | O_NONBLOCK) == 0;
+  char chunk[4096];
+  memset(chunk, 'x', sizeof(chunk));
+  while (nonblocking && write(pipefd[1], chunk, sizeof(chunk)) > 0) {
+  }
+  full_pipe_log_ctx ctx = {.lg = clog_open_fd(pipefd[1], CLOG_INFO, NULL)};
+  atomic_init(&ctx.done, false);
+  pthread_t tid;
+  bool started = nonblocking && ctx.lg != CLOG_INVALID &&
+                 pthread_create(&tid, NULL, full_pipe_log_thread, &ctx) == 0;
+  bool returned = false;
+  if (started) {
+    /* The thread is inside the log call, waiting for room, well before
+     * this sleep ends; if it is not there yet, it finds the reader gone and
+     * fails at once, which the assertion accepts as well. */
+    usleep(200000);
+    close(pipefd[0]);
+    pipefd[0] = -1;
+    for (int i = 0; i < 1000 && !atomic_load(&ctx.done); i++) usleep(10000);
+    returned = atomic_load(&ctx.done);
+    if (returned)
+      pthread_join(tid, NULL);
+    else
+      pthread_detach(tid); /* it can never return; the assertion fails */
+  }
+  if (returned && ctx.lg != CLOG_INVALID) clog_close(ctx.lg);
+  if (pipefd[0] >= 0) close(pipefd[0]);
+  if (returned) close(pipefd[1]);
+  REQUIRE_TRUE(nonblocking);
+  REQUIRE_NE(ctx.lg, CLOG_INVALID);
+  REQUIRE_TRUE(started);
+  REQUIRE_TRUE(returned);
 }
 
 /* ========================================================================== */
@@ -6738,6 +6796,17 @@ TEST(async, enqueue_failure_fallback_still_rotates_on_size) {
   cleanup_dir(dir, "app.log");
 }
 
+/* Returns just after the wall clock enters a new second, or after about two
+ * seconds when it never does. Time rotation counts whole seconds from the
+ * second of the open, so a write that lands after the next second boundary
+ * is due under a one-second interval, however soon after the open it comes.
+ * A test that asserts "not rotated yet" right after the open starts here,
+ * which leaves it the whole second for that part. */
+static void wait_for_next_wall_second(void) {
+  time_t start = time(NULL);
+  for (int i = 0; i < 2000 && time(NULL) == start; i++) usleep(1000);
+}
+
 /* This test is a sibling of the test above for the time-based rotation
  * instead of the size-based one: the same enqueue-failure fallback path
  * must obey rotation_interval_us, and not only max_file_size. */
@@ -6760,6 +6829,7 @@ TEST(async, enqueue_failure_fallback_still_rotates_on_time) {
 
   clog_async_cfg_t acfg = {0};
 
+  wait_for_next_wall_second();
   clog lg = clog_open_file_mp(path, CLOG_INFO, &rcfg, &acfg, &procs);
   REQUIRE_NE(lg, CLOG_INVALID);
 
@@ -9384,7 +9454,7 @@ static int open_dgram_pair(int domain, int out[2]) {
     if (out[0] < 0 || out[1] < 0 ||
         bind(out[0], (struct sockaddr *)&a, sizeof(a)) != 0 ||
         getsockname(out[0], (struct sockaddr *)&a, &alen) != 0 ||
-        connect(out[1], (struct sockaddr *)&a, sizeof(a)) != 0) {
+        test_connect(out[1], (struct sockaddr *)&a, sizeof(a)) != 0) {
       if (out[0] >= 0) close(out[0]);
       if (out[1] >= 0) close(out[1]);
       return -1;
@@ -11190,9 +11260,9 @@ TEST(async, flush_interval_above_llong_max_does_not_spin_the_writer) {
 
     clog_info(lg, "size-only flushing %zu", k);
     clog_flush(lg);
-    size_t before = clog_test_writer_timeout_wakeups();
+    size_t before = clog_test_writer_timeout_wakeups(lg);
     usleep(200000);
-    size_t after = clog_test_writer_timeout_wakeups();
+    size_t after = clog_test_writer_timeout_wakeups(lg);
 
     char out[4096];
     drain_pipe(lg, pipefd[0], pipefd[1], out, sizeof(out));

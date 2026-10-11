@@ -117,6 +117,18 @@ SOFTWARE.
 #define CCOL_FORK_SAFETY_REQUIRED 1
 #endif
 
+/* The fork() of OpenBSD takes the lock of its list of fork handlers while the
+ * process is threaded, and in the child it marks the process as not threaded
+ * before the release, so the release does nothing and the lock stays held in
+ * the child. Once that child has started a thread, a pthread_atfork() in it
+ * waits for ever. Each module of the library registers its fork handlers on
+ * its first use, which can be in such a child, so on OpenBSD every module
+ * registers them when the library loads instead, and a child never
+ * registers one. The macro is internal. */
+#if defined(__OpenBSD__)
+#define _CCOL_ATFORK_AT_LOAD 1
+#endif
+
 /* ========================================================================== */
 /*                         THREADING PRIMITIVES                               */
 /* ========================================================================== */
@@ -153,23 +165,6 @@ SOFTWARE.
 void _ccol_cloexec_gate_enter(void);
 void _ccol_cloexec_gate_leave(void);
 void _ccol_cloexec_gate_register(void);
-#pragma GCC visibility pop
-#endif
-
-/* The fork() of OpenBSD takes the lock of its list of fork handlers only
- * while __isthreaded is set, and it clears that flag in the child before the
- * child releases the lock, so the release does nothing there. Once that
- * child starts a thread, its next fork() or pthread_atfork() waits for ever
- * on the lock. fork() takes the lock only when a handler is registered, and
- * the library registers handlers, so the library itself puts every program
- * on that path. On OpenBSD a fork handler pair of the library therefore
- * records the flag in the prepare step and restores it in the child, which
- * makes the release in the child real. ccol_at_fork registers that pair
- * first, one time. The function is internal and not exported. */
-#if defined(__OpenBSD__)
-#define _CCOL_FORK_THREADED_FIX 1
-#pragma GCC visibility push(hidden)
-void _ccol_fork_threaded_fix_register(void);
 #pragma GCC visibility pop
 #endif
 
@@ -562,6 +557,15 @@ static inline int _ccol_semaphore_pipe_post(_ccol_semaphore_s *s) {
 #define ccol_thread_sigmask(how, set, oldset) \
   pthread_sigmask((how), (set), (oldset))
 
+/**
+ * @brief Send the signal sig to the thread that handle identifies (wraps
+ *        pthread_kill)
+ *
+ * It gives 0 on success and an error number on a failure. The translation
+ * unit that uses it includes <signal.h>.
+ */
+#define ccol_thread_kill(handle, sig) pthread_kill((handle), (sig))
+
 /** @brief One-time-initialization guard type (wraps pthread_once_t) */
 #define ccol_once_flag_t pthread_once_t
 
@@ -603,18 +607,11 @@ static inline int _ccol_semaphore_pipe_post(_ccol_semaphore_s *s) {
  * Where the close-on-exec gate exists, this registers the handlers of the
  * gate first, one time. Because the prepare handlers run in the reverse order
  * of their registration, the gate then waits after every other prepare
- * handler of the library, whichever of them registers first. On OpenBSD it
- * also registers the pair that keeps the fork lock of libc usable in a child
- * first, one time (see _CCOL_FORK_THREADED_FIX above). */
+ * handler of the library, whichever of them registers first. */
 #define _ccol_at_fork_raw(prepare, parent, child) \
   pthread_atfork((prepare), (parent), (child))
-#if defined(_CCOL_CLOEXEC_GATE) && defined(_CCOL_FORK_THREADED_FIX)
-#define _ccol_at_fork_first() \
-  (_ccol_cloexec_gate_register(), _ccol_fork_threaded_fix_register())
-#elif defined(_CCOL_CLOEXEC_GATE)
+#if defined(_CCOL_CLOEXEC_GATE)
 #define _ccol_at_fork_first() _ccol_cloexec_gate_register()
-#elif defined(_CCOL_FORK_THREADED_FIX)
-#define _ccol_at_fork_first() _ccol_fork_threaded_fix_register()
 #endif
 #if defined(_ccol_at_fork_first)
 #define ccol_at_fork(prepare, parent, child) \

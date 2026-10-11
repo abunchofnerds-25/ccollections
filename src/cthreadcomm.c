@@ -3578,6 +3578,13 @@ static void _cthreadcomm_register_atfork_once(void) {
 #endif
 }
 
+#if defined(_CCOL_ATFORK_AT_LOAD)
+/* See _CCOL_ATFORK_AT_LOAD in common.h. */
+__attribute__((constructor)) static void _cthreadcomm_atfork_at_load(void) {
+  ccol_call_once(g_cthreadcomm_atfork_once, _cthreadcomm_register_atfork_once);
+}
+#endif
+
 /* This function is not static on purpose: another .c file of this library
  * can reach it, and chttpserver.c does. Such a caller must guarantee that
  * the merged ccol_at_fork() triple of this module registers BEFORE the

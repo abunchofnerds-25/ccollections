@@ -194,18 +194,29 @@ static void _ctls_sock_bio_globals_init(void) {
  * is the default and which this module never changes, the TLS layer asks for
  * the bytes of one record only, and it processes a record in the same call
  * that reads its last byte. So the TLS layer holds a part of a record exactly
- * while the BIO is inside a record: hdr_got is not 0. */
+ * while the BIO is inside a record: hdr_got is not 0.
+ *
+ * A record header starts with a content type from 20 to 24. Any other first
+ * byte, such as the high bit of a client hello in the SSLv2 format, means
+ * that the framing is not the one followed here, so the tracker gives up on
+ * the connection and reports pending input from then on: the caller then
+ * reads until the socket has nothing, which is always safe. */
 typedef struct {
   uint32_t body_left; /* bytes of the body that the BIO has not given yet */
   uint8_t hdr_got;    /* header bytes given, 0 to 5; 5 while in the body */
   uint8_t len_hi;     /* the high byte of the body length */
+  bool lost;          /* the framing could not be followed */
 } _ctls_rec_track_t;
 
 static void _ctls_rec_track_feed(_ctls_rec_track_t *rt, const char *p, int n) {
-  while (n > 0) {
+  while (n > 0 && !rt->lost) {
     if (rt->hdr_got < 5) {
       uint8_t c = (uint8_t)*p++;
       n--;
+      if (rt->hdr_got == 0 && (c < 20 || c > 24)) {
+        rt->lost = true;
+        return;
+      }
       if (rt->hdr_got == 3) rt->len_hi = c;
       if (rt->hdr_got == 4) rt->body_left = (uint32_t)rt->len_hi << 8 | c;
       if (++rt->hdr_got == 5 && rt->body_left == 0) rt->hdr_got = 0;
@@ -218,6 +229,17 @@ static void _ctls_rec_track_feed(_ctls_rec_track_t *rt, const char *p, int n) {
     }
   }
 }
+
+#ifdef RUNNING_UNIT_TESTS
+/* Feeds the given chunks, in order, to a fresh tracker and gives what
+ * ctls_conn_has_pending_input() would answer from the framing alone. */
+bool _ctls_rec_track_pending_after_for_tests(const char *const *chunks,
+                                             const int *lens, int count) {
+  _ctls_rec_track_t rt = {0};
+  for (int i = 0; i < count; i++) _ctls_rec_track_feed(&rt, chunks[i], lens[i]);
+  return rt.hdr_got != 0 || rt.lost;
+}
+#endif
 #endif
 
 static inline int _ctls_sock_bio_fd(BIO *b) {
@@ -2266,7 +2288,8 @@ bool ctls_conn_wants_write(const ctls_conn_t *conn) {
 bool ctls_conn_has_pending_input(const ctls_conn_t *conn) {
   if (!conn || !conn->ssl) return false;
 #if defined(LIBRESSL_VERSION_NUMBER)
-  return SSL_pending(conn->ssl) > 0 || conn->rec_track.hdr_got != 0;
+  return SSL_pending(conn->ssl) > 0 || conn->rec_track.hdr_got != 0 ||
+         conn->rec_track.lost;
 #else
   return SSL_pending(conn->ssl) > 0 || SSL_has_pending(conn->ssl) == 1;
 #endif

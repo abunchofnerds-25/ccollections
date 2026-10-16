@@ -11,52 +11,63 @@ cbmap_construct_mp_scoped(hm_name, key_t, val_t, mmgmt_procs);
 .fi
 .SH DESCRIPTION
 .nf
-Declares an ordered map handle named hm_name, together with the companion
-type variables that carry key_t and val_t to every later type-inferred
-macro, and then creates a map that takes all of its memory from
-mmgmt_procs. The macro also attaches the cleanup attribute, which destroys
-the map on every exit from the enclosing scope, an early return included.
+Declares an ordered map handle named hm_name with the companion type
+variables that carry key_t and val_t to every later type-inferred macro,
+then creates a map that takes all of its memory from mmgmt_procs. The
+handle also gets the cleanup attribute, which destroys the map on every
+exit from the enclosing scope, an early return included.
 
-The macro is cbmap_construct_mp(3) plus that cleanup attribute; nothing else
-differs. cbmap_construct_scoped(3) is the same macro with the default
-allocator, cbmap_construct_cc_scoped(3) takes a comparison procedure in
-place of an allocator, and cbmap_construct_full_scoped(3) takes both.
+Apart from that cleanup attribute it is exactly cbmap_construct_mp(3).
+cbmap_construct_scoped(3) is the same macro with the default allocator,
+cbmap_construct_cc_scoped(3) takes a comparison procedure where this one
+takes an allocator, and cbmap_construct_full_scoped(3) takes both.
 .fi
 .SH PARAMETERS
 .nf
 hm_name      Name for the map handle to declare
-key_t        Key type. It tells every later macro how to read a key, and
-             tells the container which order to give the tree
+key_t        Key type. Every later macro reads a key through it, and the
+             container takes the order of the tree from it
 val_t        Value type. Only the type-inferred macros read it; the
-             library never gives it to the container
+             library never passes it to the container
 mmgmt_procs  Pointer to a ccol_memmgmt_procs_t, or NULL for the default
              allocator
 .fi
 .SH RETURN VALUE
 .nf
-None. This macro declares variables and does not expand to an expression.
+None. The macro declares variables and doesn't expand to an expression.
 .fi
 .SH NOTES
 .nf
-The macro stops the program through ccol_fatal_err() if the creation fails
-The macro needs GCC or Clang, because it uses the cleanup attribute
-All four members of ccol_memmgmt_procs_t must not be NULL, and the
+The macro stops the program through _ccol_fatal_err() if the creation
+fails, and because of the cleanup attribute it needs GCC or Clang.
+
+None of the four members of ccol_memmgmt_procs_t may be NULL, and the
 procedures must stay callable for the whole life of the map, which here
-ends at the closing brace of the enclosing scope
-Everything that the map allocates comes from these procedures, and the
-destruction at the exit of the scope returns all of it to them
-The walk visits the elements in ascending key order, by the order that key_t
-selects, as cbmap_begin_iter(3) and cbmap_create_full(3) describe
+ends at the closing brace of the enclosing scope. Everything the map
+allocates comes from these procedures, and the destruction at the exit of
+the scope gives all of it back to them.
+
+A walk visits the elements in ascending key order, by the order that key_t
+selects, as cbmap_begin_iter(3) and cbmap_create_full(3) describe.
+
 The exit of the scope destroys the map and clears the handle, so an
-explicit cbmap_destroy(3) earlier in the scope stays correct
+explicit cbmap_destroy(3) earlier in the scope is fine too.
+
 The companion type variables follow the scope of the handle, so a function
-that receives the handle needs cbmap_redeclare(3) there
+that receives the handle needs cbmap_redeclare(3) there.
+
+An array key type or value type, such as int[2] or char[16], is a compile
+error, and the message says to wrap the array in a struct. Keys and values
+are copied by assignment and C can't assign an array, so the map would
+otherwise keep the address of the caller's array instead of its elements.
+A struct that holds the array works.
 .fi
 .SH WARNINGS
 .nf
-The handle must not outlive its scope. Do not return it, and do not store
-it in a place that outlives the scope: either action gives out a handle
-whose map the cleanup attribute frees at the exit of the scope.
+The handle must not outlive its scope. Don't return it or store it
+anywhere that lives longer than the scope: the cleanup attribute frees the
+map when the scope exits, and the stored handle would then name a freed
+map.
 .fi
 .SH EXAMPLES
 .nf

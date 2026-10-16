@@ -11,25 +11,46 @@ ccol_retval_t chttpclient_set_request_timeout(chttpcli cli, uint64_t us);
 .fi
 .SH DESCRIPTION
 .nf
-This function sets the maximum time from the call to chttpclient_do to
-the arrival of the last byte of the response body. Give 0 to turn the
-timeout off.
+This function sets the maximum time from the call to chttpclient_do
+until the last byte of the response body arrives. 0 turns the timeout
+off.
 
-chttpclient_do gives ccol_timed_out when a request goes past that
-time.
+chttpclient_do returns ccol_timed_out when a request takes longer than
+that.
 
-Every tier checks this deadline before each read of the response. Once
-it has passed, the request ends with ccol_timed_out, even when the rest
-of the response has already arrived and one more read would complete
-it, while a response that the client finished reading before the
-deadline passed is a success. chttpclient_do, chttpclient_do_async and
-chttpclient_do_pooled, and their streaming forms, give the same result
-for the same timeline.
+Every tier checks the deadline before each read of the response. Once
+the deadline has passed, the request ends with ccol_timed_out, even if
+the rest of the response is already there and one more read would
+finish it. A response that the client finished reading before the
+deadline is a success. chttpclient_do, chttpclient_do_async,
+chttpclient_do_pooled and their streaming forms all give the same
+result for the same timeline.
 
-Every value other than 0 is honoured as a limit, however far away it
-lies: a value too large for the clock to reach, such as UINT64_MAX,
-saturates to the latest deadline that the clock can hold, and never
-wraps into the past.
+A name lookup is a single blocking getaddrinfo() call, and the system
+gives no way to cancel it. chttpclient_do makes that call on the
+calling thread, so when the lookup alone takes longer than this
+timeout, the call skips the connect and returns ccol_timed_out as soon
+as the lookup returns. chttpclient_do_async and chttpclient_do_pooled
+return ccol_timed_out at the deadline itself, and the lookup goes on in
+the background with its result thrown away. A request to an address
+literal or to a unix socket makes no lookup at all.
+
+For chttpclient_do_async and chttpclient_do_pooled, an engine thread
+watches the deadlines and wakes at the earliest deadline among the
+requests in flight, so a request ends within a few milliseconds of its
+deadline however short the timeout is.
+
+That deadline holds even when the engine cannot run the request's work,
+for example while its allocator fails. The request then ends with
+ccol_timed_out at most about 100 ms after the deadline, and its
+connection is closed in the background once the engine can run it
+again. Until that happens, chttpclient_destroy of the client waits for
+it.
+
+Any value other than 0 is honoured as a limit however far away it is:
+a value too large for the clock to reach, such as UINT64_MAX,
+saturates to the latest deadline the clock can hold and never wraps
+into the past.
 .fi
 .SH PARAMETERS
 .nf
@@ -40,7 +61,7 @@ us    The timeout in microseconds. 0 means no timeout.
 .nf
 ccol_success      The client has the new timeout.
 ccol_invalid_args cli is CHTTPCLI_INVALID, or a stale handle of a
-                  client that is already destroyed.
+                  client that has been destroyed.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_set_connect_timeout (3),

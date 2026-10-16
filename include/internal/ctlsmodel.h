@@ -26,24 +26,25 @@ SOFTWARE.
  * (the per-thread cache of cmempool, the pin stripe of cpintable, the date
  * cache of chttpserver and the pipe flag of clogger).
  *
- * initial-exec resolves a thread-local at load time, so an access is one
- * load relative to the thread pointer. It also marks the whole library as
- * needing static thread-local storage, so a dlopen() of it must fit the
- * library's thread-local block into the reserve that the loader keeps for
- * late loads. glibc keeps about 1.6 KiB there, which this library fits, while
- * FreeBSD keeps 128 bytes unless the environment of the program sets
- * LD_STATIC_TLS_EXTRA, and this library needs 384 or more there. The general
- * model is resolved through __tls_get_addr on each access, and a dlopen()
- * never fails for it; it costs the thread-safe path of cmempool a third to
- * two thirds of its throughput (more on FreeBSD), which makes the pool
- * slower than malloc. TLS descriptors (-mtls-dialect=gnu2) recover about a
- * third of that on Linux, and FreeBSD's loader on x86-64 refuses them.
+ * initial-exec resolves a thread-local at load time, so an access is a
+ * single load relative to the thread pointer. But it also marks the whole
+ * library as needing static thread-local storage, and a dlopen() of it then
+ * has to fit the library's thread-local block into the reserve the loader
+ * keeps for late loads. glibc keeps about 1.6 KiB there and we fit, while
+ * FreeBSD keeps 128 bytes unless the program's environment sets
+ * LD_STATIC_TLS_EXTRA, and we need 384 or more there. The general model goes
+ * through __tls_get_addr on every access and a dlopen() never fails for it,
+ * but it costs the thread-safe path of cmempool a third to two thirds of its
+ * throughput (more on FreeBSD), and the pool is then slower than malloc. TLS
+ * descriptors (-mtls-dialect=gnu2) win back about a third of that on Linux,
+ * and FreeBSD's loader on x86-64 refuses them. For a library that programs
+ * link rather than dlopen(), initial-exec is clearly the better default.
  *
- * CCOL_MEMPOOL_DYNAMIC_TLS selects the general model when it is 1 and
- * initial-exec when it is 0. A build that does not set it gets initial-exec
- * with glibc and on FreeBSD, and the general model everywhere else. This file
- * must be included after a header of the C library, because that header is
- * what defines __GLIBC__. */
+ * CCOL_MEMPOOL_DYNAMIC_TLS picks the general model when it is 1 and
+ * initial-exec when it is 0. A build that doesn't set it gets initial-exec
+ * with glibc and on FreeBSD, and the general model everywhere else. Include
+ * this file after a header of the C library, since that header is what
+ * defines __GLIBC__. */
 
 #ifndef CCOL_INTERNAL_CTLSMODEL_H
 #define CCOL_INTERNAL_CTLSMODEL_H
@@ -57,18 +58,18 @@ SOFTWARE.
 #endif
 
 /* macOS releases the thread-local storage (__thread) of an exiting thread
- * before it runs the destructors of pthread keys. A destructor that reads a
- * __thread variable there reads a new, zeroed copy, so state that it must
- * drain is lost. OpenBSD emulates thread-local storage with a pthread key of
- * its own, which keeps the storage of a thread through one round of key
- * destructors and frees it in the next, so a destructor that sets its key
- * again and runs a second round reads a zeroed copy there. Under
- * _CCOL_EMULATE_DARWIN_TLS, every module whose key destructor drains
+ * before it runs the pthread key destructors, so a destructor that reads a
+ * __thread variable there gets a new, zeroed copy and the state it was
+ * supposed to drain is lost. OpenBSD emulates thread-local storage with a
+ * pthread key of its own, which keeps a thread's storage through one round
+ * of key destructors and frees it in the next one, so a destructor that sets
+ * its key again and runs a second round reads a zeroed copy there. Under
+ * _CCOL_EMULATE_DARWIN_TLS every module whose key destructor drains
  * per-thread state keeps that state in a heap block whose pointer is the
- * value of the key, and the destructor drains the block that it receives as
- * its argument. Elsewhere the state stays in __thread variables. The switch
- * is on by itself on macOS and OpenBSD; the test suites of Linux and FreeBSD
- * set it to run that form. */
+ * key's value, and the destructor drains the block it gets as its argument.
+ * Everywhere else the state stays in __thread variables. The switch turns on
+ * by itself on macOS and OpenBSD, and the Linux and FreeBSD test suites set
+ * it to run that form. */
 #if (defined(__APPLE__) || defined(__OpenBSD__)) && \
     !defined(_CCOL_EMULATE_DARWIN_TLS)
 #define _CCOL_EMULATE_DARWIN_TLS 1

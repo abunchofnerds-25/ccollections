@@ -11,8 +11,9 @@ ccol_end
 .fi
 .SH DESCRIPTION
 .nf
-This macro expands to NULL, because every container iterator is equal to
-NULL at the end of the sequence.
+ccol_end expands to NULL. Every container iterator is NULL once it has
+gone past the end of its sequence, so that is the value to compare
+against.
 .fi
 .SH "SEE ALSO"
 .BR ccol_begin (3),

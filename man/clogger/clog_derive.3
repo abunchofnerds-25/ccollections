@@ -12,23 +12,25 @@ clog clog_derive(clog parent);
 .SH DESCRIPTION
 .nf
 Creates a new derived logger that writes to the same file descriptor as
-parent and shares the same log-rotation state and write-serialising lock.
-All writes from parent and every derived logger are therefore serialised
-by that same lock and land in the same destination.
+parent and shares its log-rotation state and its write lock, so the
+writes of parent and of every derived logger are serialised by that one
+lock and land in the same destination.
 
-At the moment of the call, the derived logger gets a snapshot of the
-structured fields and the minimum log level of parent.  From then on
-the two loggers keep fully independent field maps and level settings,
-so adding, removing or changing a field or the level on one logger has
-no effect on the other.
+The derived logger starts with a snapshot of the structured fields and
+the minimum log level that parent has at the moment of the call.  After
+that the two loggers keep fully independent field maps and levels, and
+adding, removing or changing a field or the level on one of them has no
+effect on the other.
 
-When the original logger on a file has log rotation configured, the
-root logger keeps control of it, and a derived logger gets the benefit
-of it transparently.
+When the original logger writes to a file with log rotation configured,
+the rotation belongs to the shared output target.  A write through any
+handle, the root or a derived one, rotates the file once a limit is
+reached, and rotation goes on as long as any handle is open, even after
+the root logger is closed.
 
 Release a derived logger with clog_close() once you do not need it.
-Because the shared backing store uses a refcount, the file below stays
-open until every handle, the root and every derived logger, is closed.
+The shared backing store is refcounted, so the file stays open until
+every handle, the root and every derived logger, is closed.
 .fi
 .SH PARAMETERS
 .nf
@@ -36,25 +38,24 @@ parent  Source logger to derive from.
 .fi
 .SH RETURN VALUE
 .nf
-Returns a new derived logger handle on success.
-Returns CLOG_INVALID if memory allocation fails.
+A new derived logger handle on success, or CLOG_INVALID when a memory
+allocation fails.
 .fi
 .SH NOTES
 .nf
-A derived logger inherits the output format and the syslog facility
-from the shared backing store.  When parent logs asynchronously, the
-derived logger also logs asynchronously, through the same writer
-thread.  The derived logger allocates through the allocator of the
-root logger.  A change to the output format or the syslog facility,
-through any handle, is immediately visible to all handles that write
-to the same fd.
-Thread-safe.  The library synchronises the snapshot of the fields
-against a concurrent clog_set_field(3), clog_remove_field(3) or
-clog_clear_fields(3) call on parent, whatever write is in progress on
-a sibling logger.
+A derived logger takes the output format and the syslog facility from
+the shared backing store.  If parent logs asynchronously, the derived
+logger does too, through the same writer thread, and it allocates
+through the allocator of the root logger.  A change to the output format
+or the syslog facility through any handle is visible at once to every
+handle that writes to the same fd.
+Thread-safe.  The snapshot of the fields is synchronised with a
+concurrent clog_set_field(3), clog_remove_field(3) or
+clog_clear_fields(3) call on parent, whatever write a sibling logger
+has in progress.
 Asserts when parent is CLOG_INVALID, stale or already closed.
 .fi
 .SH "SEE ALSO"
-.BR clog_open_fd_mp (3),
-.BR clog_open_file_mp (3),
+.BR clog_create_from_fd_mp (3),
+.BR clog_create_from_file_mp (3),
 .BR clog_close (3)

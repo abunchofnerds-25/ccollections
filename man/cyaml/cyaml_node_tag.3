@@ -11,30 +11,40 @@ const char *cyaml_node_tag(cyaml node);
 .fi
 .SH DESCRIPTION
 .nf
-Return the YAML tag of node, or NULL when node carries no tag.
+Returns the YAML tag of node, or NULL when node carries no tag.
 
-A node that the parser reads from a document with an explicit tag
-carries the fully resolved tag string here, whether the document wrote
-it as "!!str", a custom "!foo", a shorthand that %TAG resolves, or a
-verbatim tag.  The tag is one of the seven CYAML_TAG_* constants
-(CYAML_TAG_NULL, _BOOL, _INT, _FLOAT, _STR, _SEQ, _MAP) or a custom tag
-string.  A node with no tag returns NULL, and this includes a node
-whose type comes only from implicit core-schema resolution.
+When the parser reads a node that has an explicit tag in the
+document, this gives the fully resolved tag string, whether the
+document wrote it as "!!str", a custom "!foo", a shorthand that %TAG
+resolves, or a verbatim tag.  The tag is one of the seven
+CYAML_TAG_* constants (CYAML_TAG_NULL, _BOOL, _INT, _FLOAT, _STR,
+_SEQ, _MAP) or a custom tag string.  A node with no tag gives NULL,
+and so does a node whose type comes only from implicit core-schema
+resolution.
 
 A dictionary key can never carry a tag, because the keys of this DOM
-are plain strings, not nodes (see cyaml_dictionary_get(3)).  A tag on a
-key in the document types that key exactly as it types a value, and the
-dictionary stores the canonical text of the typed key; there is no
-place to store the tag itself.
+are plain strings and not nodes (see cyaml_dictionary_get(3)).  A tag
+on a key in the document types the key exactly as it would type a
+value, and the dictionary stores the canonical text of the typed
+key, but there is nowhere to keep the tag itself.
+
+The node owns the tag string and the caller must not free it.  The
+pointer is borrowed and stays valid until the node's tag or value is
+set again or the node is destroyed, so any of these ends it: a
+cyaml_node_set_tag(3) on the node, a cyaml_set(3) that reaches the
+node (a new value drops a core tag that doesn't match it), a
+cyaml_list_remove(3), cyaml_dictionary_remove(3) or cyaml_delete(3)
+of the node, a cyaml_dictionary_set(3) that replaces it, and a
+destroy of its tree.  Copy the text if you need it longer.
 .fi
 .SH PARAMETERS
 .nf
-node  DOM node handle.  It can be NULL, in which case the function
+node  A DOM node handle.  It may be NULL, and the function then
       returns NULL.
 .fi
 .SH RETURN VALUE
 .nf
-A borrowed, non-owning tag string, or NULL.
+A borrowed tag string that the caller doesn't own, or NULL.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_node_set_tag (3),

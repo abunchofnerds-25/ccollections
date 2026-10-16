@@ -2,34 +2,31 @@
 #include <common_invariants.h>
 #include <float.h>
 #include <internal/chashkey.h>
+#include <internal/cpow2.h>
+#include <internal/test_helpers/chashmap.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #include <tau/tau.h>
-#pragma GCC diagnostic pop
 
 TAU_MAIN()  // sets up Tau (+ main function)
 
 // HASH_MAP TESTS
 
-extern size_t _ccol_find_nearest_gte_power_of_two(size_t input);
-
 TEST(chash_maps, _ccol_find_nearest_gte_power_of_two) {
   // The input array and the expected output array below are written by hand,
-  // so this test needs no math library.
+  // so the test needs no math library.
   //
   // The doc comment of _ccol_find_nearest_gte_power_of_two in src/common.c
-  // states that its result depends on the architecture: it is capped at the
-  // maximum for the pointer size, and the function gives ccol_invalid_size
-  // once the input goes above the largest power of two that a size_t can
-  // hold. The 64-bit table below tests all the way up to SIZE_MAX on a 64-bit
-  // size_t, but a 32-bit size_t cannot hold several of its literal values (for
-  // example 4294967296 and every value above it), so a 32-bit build
-  // needs its own shorter table, which stops at the 32-bit SIZE_MAX and
-  // moves the boundary-overflow case down to 2^31.
+  // says its result depends on the architecture: it's capped at the maximum
+  // for the pointer size, and the function gives ccol_invalid_size once the
+  // input goes above the largest power of two a size_t can hold. The 64-bit
+  // table below goes all the way up to SIZE_MAX on a 64-bit size_t, but a
+  // 32-bit size_t can't hold several of its literal values (4294967296 and
+  // everything above it, for example), so a 32-bit build needs its own
+  // shorter table, which stops at the 32-bit SIZE_MAX and moves the
+  // boundary-overflow case down to 2^31.
 #if SIZE_MAX == UINT64_MAX
   size_t test_inputs[] = {0,
                           1,
@@ -435,11 +432,11 @@ int get_int_from_string(chashmap *chmap, const char *key, int *val_ptr) {
 }
 
 int get_int_ref_from_string(chashmap *chmap, const char *key, int **val_ptr) {
-  const cmap_pair *tmp_val_pair_ptr = NULL;
+  cmap_pair tmp_val_pair_ptr = {NULL, 0};
   if (chmap_get_elem_ref(chmap,
                          &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
                          &tmp_val_pair_ptr) == 0) {
-    *val_ptr = (int *)tmp_val_pair_ptr->ptr;
+    *val_ptr = (int *)tmp_val_pair_ptr.ptr;
     return 0;
   }
   return -1;
@@ -517,7 +514,7 @@ TEST(chash_maps, insert_values_with_different_sizes) {
   chashmap *chmap = chmap_create(1, ccol_string, ccol_other_types, NULL);
 
   const char *key1 = "key";
-  const cmap_pair *target_pair = NULL;
+  cmap_pair target_pair = {NULL, 0};
 
   {
     struct s1 {
@@ -539,7 +536,7 @@ TEST(chash_maps, insert_values_with_different_sizes) {
             &target_pair),
         ccol_success);
 
-    REQUIRE_EQ(memcmp(target_pair->ptr, &val, sizeof(val)), 0);
+    REQUIRE_EQ(memcmp(target_pair.ptr, &val, sizeof(val)), 0);
 
     REQUIRE_EQ(
         chmap_get_elem_copy(
@@ -574,7 +571,7 @@ TEST(chash_maps, insert_values_with_different_sizes) {
             &target_pair),
         ccol_success);
 
-    REQUIRE_EQ(memcmp(target_pair->ptr, &val, sizeof(val)), 0);
+    REQUIRE_EQ(memcmp(target_pair.ptr, &val, sizeof(val)), 0);
 
     REQUIRE_EQ(
         chmap_get_elem_copy(
@@ -600,7 +597,7 @@ TEST(chash_maps, insert_values_with_different_sizes) {
             &target_pair),
         ccol_success);
 
-    REQUIRE_EQ(memcmp(target_pair->ptr, &val, sizeof(val)), 0);
+    REQUIRE_EQ(memcmp(target_pair.ptr, &val, sizeof(val)), 0);
 
     REQUIRE_EQ(
         chmap_get_elem_copy(
@@ -626,7 +623,7 @@ TEST(chash_maps, insert_values_with_different_sizes) {
             &target_pair),
         ccol_success);
 
-    REQUIRE_EQ(memcmp(target_pair->ptr, &val, sizeof(val)), 0);
+    REQUIRE_EQ(memcmp(target_pair.ptr, &val, sizeof(val)), 0);
 
     REQUIRE_EQ(
         chmap_get_elem_copy(
@@ -652,7 +649,7 @@ TEST(chash_maps, insert_values_with_different_sizes) {
             &target_pair),
         ccol_success);
 
-    REQUIRE_EQ(memcmp(target_pair->ptr, &val, sizeof(val)), 0);
+    REQUIRE_EQ(memcmp(target_pair.ptr, &val, sizeof(val)), 0);
 
     REQUIRE_EQ(
         chmap_get_elem_copy(
@@ -708,9 +705,9 @@ TEST(chash_maps, insertions_with_a_variety_of_key_sizes) {
       ccol_success);
   REQUIRE_EQ(val, target);
 
-  // The C standard only guarantees that a long has 32 bits or more: a long is
-  // 4 bytes on an ILP32 platform such as i386, and 8 bytes on LP64 x86_64, so
-  // this value must fit in the smaller of those two widths to be portable.
+  // The C standard only promises that a long has at least 32 bits: it's 4
+  // bytes on an ILP32 platform such as i386 and 8 bytes on LP64 x86_64, so
+  // to be portable this value must fit in the smaller of the two widths.
   long l = 0x6EEDDBB0L;
   val = 4;
   REQUIRE_EQ(
@@ -752,9 +749,9 @@ typedef struct {
   int sum_of_values;
 } destroy_dtor_ctx_t;
 
-/* This has the same shape as the real use in cyaml.c: the values are pointers
- * to heap memory (here to a plain int) that the destructor must free, exactly
- * as __cyaml_destroy frees a child node. */
+/* The same shape as the real use in cyaml.c: the values are pointers to heap
+ * memory (a plain int here) that the destructor needs to free, just like
+ * __cyaml_destroy frees a child node. */
 static void free_int_ptr_dtor(const cmap_pair *val_pair, void *ctx) {
   destroy_dtor_ctx_t *c = (destroy_dtor_ctx_t *)ctx;
   int *p;
@@ -764,7 +761,7 @@ static void free_int_ptr_dtor(const cmap_pair *val_pair, void *ctx) {
   free(p);
 }
 
-/* An open-addressing map stores a value inline, not a pointer to free, so
+/* An open-addressing map stores a value inline and not a pointer to free, so
  * this destructor only counts and adds, and the test uses it instead of
  * free_int_ptr_dtor. */
 static void count_int_value_dtor(const cmap_pair *val_pair, void *ctx) {
@@ -776,8 +773,8 @@ static void count_int_value_dtor(const cmap_pair *val_pair, void *ctx) {
 }
 
 TEST(chash_maps, destroy_with_dtor_invokes_once_per_value_sc) {
-  /* Separate chaining with string keys, the same shape as the
-   * char* -> pointer dictionaries of cyaml.c. */
+  /* Separate chaining with string keys, the same shape as cyaml.c's
+   * char* -> pointer dictionaries. */
   char *err = NULL;
   chmap m = chmap_create(1, ccol_string, ccol_pointer, &err);
   REQUIRE_NE((void *)m, NULL);
@@ -803,9 +800,9 @@ TEST(chash_maps, destroy_with_dtor_invokes_once_per_value_sc) {
 }
 
 TEST(chash_maps, destroy_with_dtor_invokes_once_per_value_oa) {
-  /* Open-addressing, where the key and the value are both integral: the other
-   * backend, which the test covers for completeness, although cyaml.c itself
-   * never reaches this path, because its dictionary keys are always char*. */
+  /* Open addressing, where the key and the value are both integral: the
+   * other backend, covered for completeness, although cyaml.c itself never
+   * gets to this path since its dictionary keys are always char*. */
   char *err = NULL;
   chmap m = chmap_create(1, ccol_int, ccol_int, &err);
   REQUIRE_NE((void *)m, NULL);
@@ -827,15 +824,12 @@ TEST(chash_maps, destroy_with_dtor_invokes_once_per_value_oa) {
   REQUIRE_EQ(ctx.sum_of_values, expected_sum);
 }
 
-/* destroy_with_dtor_invokes_once_per_value_oa above deletes nothing, so it
- * can never reach the SLOT_DELETED skip of chmap_destroy_with_dtor on the
- * open-addressing backend: every slot that it walks is genuinely empty or
- * live, and never a tombstone. This test deletes half of the keys first, so
- * that the slot array really holds tombstoned slots when
- * chmap_destroy_with_dtor walks it, and confirms that the destructor runs
- * only for the keys that survive, instead of one time for each slot that is
- * occupied or tombstoned. */
-TEST(chash_maps, destroy_with_dtor_skips_oa_tombstones) {
+/* destroy_with_dtor_invokes_once_per_value_oa above deletes nothing. This
+ * test deletes half the keys first, so the backward shift of each delete
+ * empties slots and moves later entries of a cluster back, and then checks
+ * that chmap_destroy_with_dtor runs the destructor exactly once for each key
+ * that survived and never for a slot a delete emptied. */
+TEST(chash_maps, destroy_with_dtor_after_oa_deletes_visits_live_values) {
   char *err = NULL;
   chmap m = chmap_create(1, ccol_int, ccol_int, &err);
   REQUIRE_NE((void *)m, NULL);
@@ -849,9 +843,7 @@ TEST(chash_maps, destroy_with_dtor_skips_oa_tombstones) {
         ccol_success);
   }
 
-  /* Delete the even keys, so their slots become tombstones, which carry
-   * SLOT_OCCUPIED | SLOT_DELETED, and only the values of the odd keys stay
-   * live. */
+  /* Delete the even keys so only the odd keys' values stay live. */
   for (int i = 0; i < 10; i += 2) {
     int key = i;
     REQUIRE_EQ(
@@ -889,8 +881,8 @@ TEST(chash_maps, destroy_with_dtor_null_val_dtor_behaves_like_plain_destroy) {
   REQUIRE_EQ(chmap_insert_elem(m, &(cmap_pair){.ptr = "k", .size = 1},
                                &(cmap_pair){.ptr = &val, .size = sizeof(val)}),
              ccol_success);
-  /* The call must not crash, and it must really free the map; valgrind checks
-   * this under make memtest, and no assertion here checks it. */
+  /* The call must not crash and it should really free the map, which
+   * valgrind checks under make memtest; no assertion here checks it. */
   chmap_destroy_with_dtor(m, NULL, NULL);
 }
 
@@ -910,9 +902,9 @@ TEST(chash_maps, basic_deletions) {
   REQUIRE_EQ(chmap_elem_count(chmap), 0);
 
   REQUIRE_EQ(delete_int_from_string(chmap, "key1"),
-             ccol_key_not_found);  // This must have no side effect
+             ccol_key_not_found);  // and this must have no side effect
   REQUIRE_EQ(delete_int_from_string(chmap, ""),
-             ccol_invalid_args);  // This must have no side effect
+             ccol_invalid_args);  // and this must have no side effect
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key1", 3), ccol_success);
   REQUIRE_EQ(insert_string_to_int(chmap, "key2", 5), ccol_success);
@@ -935,9 +927,9 @@ TEST(chash_maps, basic_deletions) {
   REQUIRE_EQ(chmap_elem_count(chmap), 0);
 
   REQUIRE_EQ(delete_int_from_string(chmap, "key1"),
-             ccol_key_not_found);  // This must have no side effect
+             ccol_key_not_found);  // and this must have no side effect
   REQUIRE_EQ(delete_int_from_string(chmap, ""),
-             ccol_invalid_args);  // This must have no side effect
+             ccol_invalid_args);  // and this must have no side effect
 
   chmap_destroy(chmap);
 }
@@ -965,7 +957,7 @@ TEST(chash_maps, accessing_references) {
   REQUIRE_EQ(get_int_ref_from_string(chmap, "key1", &val_ptr), ccol_success);
   REQUIRE_NE((void *)val_ptr, NULL);
   REQUIRE_EQ(*val_ptr, -3);
-  // A change through the pointer changes the map element directly.
+  // Changing it through the pointer changes the map element directly.
   *val_ptr = 1;
   REQUIRE_EQ(get_int_from_string(chmap, "key1", &tmp), ccol_success);
   REQUIRE_EQ(tmp, 1);
@@ -973,7 +965,7 @@ TEST(chash_maps, accessing_references) {
   REQUIRE_EQ(get_int_ref_from_string(chmap, "key2", &val_ptr), ccol_success);
   REQUIRE_NE((void *)val_ptr, NULL);
   REQUIRE_EQ(*val_ptr, -5);
-  // A change through the pointer changes the map element directly.
+  // Changing it through the pointer changes the map element directly.
   *val_ptr = 7;
   REQUIRE_EQ(get_int_from_string(chmap, "key2", &tmp), ccol_success);
   REQUIRE_EQ(tmp, 7);
@@ -1058,7 +1050,7 @@ TEST(chash_maps, for_each_elem_rd) {
 
   int sum = 0;
 
-  // Add 3 and 5 on top of sum. sum is 8 after the following statement.
+  // Add 3 and 5 on top of sum, so sum is 8 after the next statement.
   ccol_iter_declare(chmap, it);
   for (it = ccol_begin(chmap); it != NULL; it = ccol_iter_next(it)) {
     sum += *ccol_iter_val_ptr(it);
@@ -1074,10 +1066,6 @@ TEST(chash_maps, for_each_elem_rd) {
 
   chmap_destroy(chmap);
 }
-
-extern size_t chmap_get_bucket_arr_size(chashmap *chmap);
-extern size_t chmap_get_elem_count_to_scale_up(chashmap *chmap);
-extern size_t chmap_get_elem_count_to_scale_down(chashmap *chmap);
 
 TEST(chash_maps, scaling) {
   chashmap *chmap = chmap_create(1, ccol_string, ccol_int, NULL);
@@ -1114,14 +1102,14 @@ TEST(chash_maps, scaling) {
   chmap_destroy(chmap);
 }
 
-// oa_insert must check whether the key is already present BEFORE it reads the
-// load factor of the map and possibly rehashes. Without that order, a pure
-// value update for a key that is already present starts a rehash of the whole
-// table, only because earlier, unrelated inserts left the map above
-// its growth threshold, and that rehash makes the chmap_get_elem_ref pointer
-// of every other key invalid, an unwanted side effect. An update of an
-// existing key must never grow the table: only a genuinely new element
-// justifies growth, and an update does not change elem_count.
+// oa_insert has to check whether the key is present already BEFORE it reads
+// the map's load factor and maybe rehashes. Otherwise a pure value update of
+// a key that is already there starts a rehash of the whole table just
+// because earlier, unrelated inserts left the map above its growth
+// threshold, and that rehash invalidates the chmap_get_elem_ref pointer of
+// every other key, which is an unwanted side effect. Updating an existing
+// key must never grow the table: only a really new element justifies growth,
+// and an update doesn't change elem_count.
 TEST(chash_maps, oa_update_of_existing_key_never_triggers_rehash) {
   chmap_construct(hm, int, int);
   REQUIRE_NE((void *)hm, NULL);
@@ -1131,9 +1119,9 @@ TEST(chash_maps, oa_update_of_existing_key_never_triggers_rehash) {
 
   // Insert 12 distinct keys. 16 * 0.70 == 11.2, and the map checks the 12th
   // insert against a count of 11 (the count before that insert), so that
-  // insert does not cross the growth threshold itself. The table
-  // keeps its original capacity and holds a count of 12, a load
-  // factor of 0.75, which is already OVER the threshold, and the table never
+  // insert doesn't cross the growth threshold itself. The table keeps its
+  // original capacity with a count of 12, a load factor of 0.75, which is
+  // already OVER the threshold, and the table never
   // grew.
   for (int i = 0; i < 12; ++i) {
     int val = i * 100;
@@ -1145,20 +1133,20 @@ TEST(chash_maps, oa_update_of_existing_key_never_triggers_rehash) {
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)12);
   REQUIRE_EQ(chmap_get_bucket_arr_size(hm), (size_t)16);
 
-  // Hold a reference into a DIFFERENT key, key 0, across the update below.
+  // Hold a reference to a DIFFERENT key, key 0, across the update below.
   int key0 = 0;
-  const cmap_pair *key0_val_pair = NULL;
+  cmap_pair key0_val_pair = {NULL, 0};
   REQUIRE_EQ(
       chmap_get_elem_ref(hm, &(cmap_pair){.ptr = &key0, .size = sizeof(key0)},
                          &key0_val_pair),
       ccol_success);
-  REQUIRE_NE((void *)key0_val_pair, NULL);
-  void *key0_val_addr_before = key0_val_pair->ptr;
-  int key0_val_before = *(int *)key0_val_pair->ptr;
+  REQUIRE_NE(key0_val_pair.ptr, NULL);
+  void *key0_val_addr_before = key0_val_pair.ptr;
+  int key0_val_before = *(int *)key0_val_pair.ptr;
   REQUIRE_EQ(key0_val_before, 0);
 
-  // Update the value of an EXISTING key, key 5, while the map sits above
-  // its growth threshold. The map must treat this as an update and not as a
+  // Update the value of an EXISTING key, key 5, while the map is above its
+  // growth threshold. The map should treat this as an update and not as a
   // new insert, so it must never rehash.
   int key5 = 5;
   int new_val5 = 999;
@@ -1167,18 +1155,19 @@ TEST(chash_maps, oa_update_of_existing_key_never_triggers_rehash) {
                  &(cmap_pair){.ptr = &new_val5, .size = sizeof(new_val5)}),
              ccol_key_already_present);
 
-  // The element count does not change, because this is an update and not a
-  // new element, and, most important of all, the table must not grow.
+  // The element count stays the same, because this is an update and not a
+  // new element, and above all the table must not grow.
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)12);
   REQUIRE_EQ(chmap_get_bucket_arr_size(hm), (size_t)16);
 
-  // The reference to the value of key 0 must still be valid and point at
-  // exactly the same address, because a rehash would move the whole
-  // val_accessors array, and with it this pointer, to a new allocation.
-  REQUIRE_EQ((void *)key0_val_pair->ptr, key0_val_addr_before);
-  REQUIRE_EQ(*(int *)key0_val_pair->ptr, key0_val_before);
+  // The reference to key 0's value must stay valid and point at exactly
+  // the same address, because a rehash would move the whole slot array, and
+  // with it the value this pointer addresses, to a new
+  // allocation.
+  REQUIRE_EQ((void *)key0_val_pair.ptr, key0_val_addr_before);
+  REQUIRE_EQ(*(int *)key0_val_pair.ptr, key0_val_before);
 
-  // The update itself must take effect.
+  // And the update itself takes effect.
   int retrieved5 = -1;
   REQUIRE_EQ(
       chmap_get_elem_copy(hm, &(cmap_pair){.ptr = &key5, .size = sizeof(key5)},
@@ -1287,8 +1276,8 @@ TEST(chash_maps, declarative_macros) {
     chmap_insert(hm, key, "hello");
     REQUIRE_STREQ(chmap_get(hm, key), "hello");
 
-    // The new string here is not longer than "hello", which is VERY important;
-    // to store a longer string, do a realloc first.
+    // The new string isn't longer than "hello" here, and that matters a lot:
+    // a longer string needs a realloc first.
     strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
     REQUIRE_STREQ(chmap_get(hm, key), "hi!");
 
@@ -1308,8 +1297,8 @@ TEST(chash_maps, declarative_macros) {
     chmap_insert(hm, key, "hello");
     REQUIRE_STREQ(chmap_get(hm, key), "hello");
 
-    // The new string here is not longer than "hello", which is VERY important;
-    // to store a longer string, do a realloc first.
+    // The new string isn't longer than "hello" here, and that matters a lot:
+    // a longer string needs a realloc first.
     strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
     REQUIRE_STREQ(chmap_get(hm, key), "hi!");
 
@@ -1328,8 +1317,8 @@ TEST(chash_maps, declarative_macros) {
     chmap_insert(hm, key, "hello");
     REQUIRE_STREQ(chmap_get(hm, key), "hello");
 
-    // The new string here is not longer than "hello", which is VERY important;
-    // to store a longer string, do a realloc first.
+    // The new string isn't longer than "hello" here, and that matters a lot:
+    // a longer string needs a realloc first.
     strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
     REQUIRE_STREQ(chmap_get(hm, key), "hi!");
 
@@ -1350,8 +1339,8 @@ TEST(chash_maps, declarative_macros) {
     chmap_insert(hm, key, "hello");
     REQUIRE_STREQ(chmap_get(hm, key), "hello");
 
-    // The new string here is not longer than "hello", which is VERY important;
-    // to store a longer string, do a realloc first.
+    // The new string isn't longer than "hello" here, and that matters a lot:
+    // a longer string needs a realloc first.
     strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
     REQUIRE_STREQ(chmap_get(hm, key), "hi!");
 
@@ -1370,8 +1359,8 @@ TEST(chash_maps, constructive_macros) {
     chmap_insert(hm, key, "hello");
     REQUIRE_STREQ(chmap_get(hm, key), "hello");
 
-    // The new string here is not longer than "hello", which is VERY important;
-    // to store a longer string, do a realloc first.
+    // The new string isn't longer than "hello" here, and that matters a lot:
+    // a longer string needs a realloc first.
     strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
     REQUIRE_STREQ(chmap_get(hm, key), "hi!");
 
@@ -1390,8 +1379,8 @@ TEST(chash_maps, constructive_macros) {
     chmap_insert(hm, key, "hello");
     REQUIRE_STREQ(chmap_get(hm, key), "hello");
 
-    // The new string here is not longer than "hello", which is VERY important;
-    // to store a longer string, do a realloc first.
+    // The new string isn't longer than "hello" here, and that matters a lot:
+    // a longer string needs a realloc first.
     strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
     REQUIRE_STREQ(chmap_get(hm, key), "hi!");
 
@@ -1409,8 +1398,8 @@ TEST(chash_maps, constructive_macros) {
     chmap_insert(hm, key, "hello");
     REQUIRE_STREQ(chmap_get(hm, key), "hello");
 
-    // The new string here is not longer than "hello", which is VERY important;
-    // to store a longer string, do a realloc first.
+    // The new string isn't longer than "hello" here, and that matters a lot:
+    // a longer string needs a realloc first.
     strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
     REQUIRE_STREQ(chmap_get(hm, key), "hi!");
 
@@ -1430,8 +1419,8 @@ TEST(chash_maps, constructive_macros) {
     chmap_insert(hm, key, "hello");
     REQUIRE_STREQ(chmap_get(hm, key), "hello");
 
-    // The new string here is not longer than "hello", which is VERY important;
-    // to store a longer string, do a realloc first.
+    // The new string isn't longer than "hello" here, and that matters a lot:
+    // a longer string needs a realloc first.
     strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
     REQUIRE_STREQ(chmap_get(hm, key), "hi!");
 
@@ -1453,7 +1442,7 @@ TEST(chash_maps, iteration) {
   key = 5;
   chmap_insert(hm, key, "there");
 
-  int records[6] = {0};  // Indices 0 to 5, so that 3, 4 and 5 are valid
+  int records[6] = {0};  // indices 0 to 5, so 3, 4 and 5 are valid
   int counter = 0;
   ccol_iter_declare(hm, it);
   for (it = ccol_begin(hm); it != NULL; it = ccol_iter_next(it)) {
@@ -1743,13 +1732,13 @@ TEST(chash_maps, construct_scoped_lifecycle) {
       REQUIRE_EQ(chmap_get(hm, i), i * 100);
     }
     REQUIRE_EQ(chmap_elem_count(hm), 5);
-    // The block end destroys hm automatically: no chmap_destroy is necessary.
+    // hm gets destroyed automatically at the end of the block.
   }
 }
 
-// chmap_get_elem_copy must check its output buffer parameters before it
-// dereferences them; without that check, a NULL target_buf or a
-// target_buf_size of 0 leaves the caller no way to find the error.
+// chmap_get_elem_copy must check its output buffer parameters before
+// dereferencing them, because otherwise a NULL target_buf or a
+// target_buf_size of 0 leaves the caller no way of finding the error.
 TEST(chash_maps, get_elem_copy_rejects_null_buf_and_zero_size) {
   chashmap *chmap = chmap_create(1, ccol_string, ccol_int, NULL);
   REQUIRE_NE((void *)chmap, NULL);
@@ -1763,7 +1752,7 @@ TEST(chash_maps, get_elem_copy_rejects_null_buf_and_zero_size) {
              ccol_invalid_args);
   REQUIRE_EQ(chmap_get_elem_copy(chmap, &key, &val, 0), ccol_invalid_args);
 
-  // Confirm that the map still works correctly after the rejected calls
+  // Check that the map keeps working after the rejected calls
   REQUIRE_EQ(chmap_get_elem_copy(chmap, &key, &val, sizeof(int)), ccol_success);
   REQUIRE_EQ(val, 42);
 
@@ -1771,11 +1760,11 @@ TEST(chash_maps, get_elem_copy_rejects_null_buf_and_zero_size) {
 }
 
 // chmap_iter_key_ptr and chmap_iter_val_ptr must expand the iterator name
-// that the caller gives as a macro parameter, and never use a
-// hardcoded 'it'. Every other test in this file names its iterator 'it', so
-// no other test can tell the two apart; this test gives the iterator a
-// different name on purpose, so that a macro body that reaches for 'it'
-// directly fails to compile here.
+// the caller passes as a macro parameter and never use a hardcoded 'it'.
+// Every other test in this file calls its iterator 'it', so none of them can
+// tell the two apart, and this test gives the iterator a different name on
+// purpose so that a macro body reaching for 'it' directly fails to compile
+// here.
 TEST(chash_maps, iterator_with_non_default_variable_name) {
   // SC backend (char* -> int)
   {
@@ -1828,26 +1817,26 @@ TEST(chash_maps, iterator_with_non_default_variable_name) {
   }
 }
 
-// A controlled calloc that simulates an out-of-memory condition inside
-// oa_rehash, without affecting the creation or the destruction of a map.
+// A controlled calloc that simulates running out of memory inside oa_rehash,
+// without affecting the creation or the destruction of a map.
 static bool g_calloc_fail = false;
 static void *controlled_calloc(size_t nmemb, size_t size) {
   if (g_calloc_fail) return NULL;
   return calloc(nmemb, size);
 }
 
-// A controlled malloc that simulates an out-of-memory condition inside
+// A controlled malloc that simulates running out of memory inside
 // sc_reset_val_of_llist_node, without affecting the creation of a map, the
-// first inserts, or the destruction.
+// first inserts or the destruction.
 static bool g_malloc_fail = false;
 static void *controlled_malloc(size_t size) {
   if (g_malloc_fail) return NULL;
   return malloc(size);
 }
 
-// A controlled realloc that simulates an out-of-memory condition on the
+// A controlled realloc that simulates running out of memory on the
 // heap-to-heap update path of sc_reset_val_of_llist_node, without affecting
-// the creation of a map, the first inserts, or the allocation of a node.
+// the creation of a map, the first inserts or the allocation of a node.
 static bool g_realloc_fail = false;
 static void *controlled_realloc(void *ptr, size_t size) {
   if (g_realloc_fail) return NULL;
@@ -1855,12 +1844,12 @@ static void *controlled_realloc(void *ptr, size_t size) {
 }
 
 // A real realloc can shrink a block or grow it in place, but this one always
-// allocates a fresh block and frees the original one, so it moves the
-// allocation on every call, deterministically. That makes the
-// heap-to-heap update path of sc_reset_val_of_llist_node reliable to test
-// when the source pointer aliases the block that the realloc moves, because a
-// real realloc can keep the same address for a small change of size, and a
-// use-after-free read of the original block then goes unnoticed.
+// allocates a fresh block and frees the original, so it moves the allocation
+// on every call, deterministically. That makes the heap-to-heap update path
+// of sc_reset_val_of_llist_node reliable to test when the source pointer
+// aliases the block the realloc moves, because a real realloc can keep the
+// same address for a small size change, and a use-after-free read of the
+// original block would then go unnoticed.
 static void *force_moving_realloc(void *ptr, size_t size) {
   void *new_block = malloc(size);
   if (!new_block) return NULL;
@@ -1868,30 +1857,29 @@ static void *force_moving_realloc(void *ptr, size_t size) {
   return new_block;
 }
 
-// A probe can wrap all the way around and find no slot that is truly empty;
-// oa_insert must then reuse a tombstone slot (a deleted slot), and
-// must not report ccol_container_full. That tombstone reuse path after the
-// loop is reachable only when all 16 slots are live or tombstoned, a state
-// that in turn needs the calloc of the rehash to fail with an out-of-memory
-// condition, which this test simulates.
-TEST(chash_maps, oa_tombstone_reuse_after_full_probe_wrap) {
+// While every allocation fails, a table that has filled all 16 of its slots
+// can't grow. A delete then gives its slot back at once, so a later
+// insert finds room in the same table and doesn't report ccol_container_full
+// or ccol_not_enough_memory. The failing calloc of this test keeps every
+// rehash from running.
+TEST(chash_maps, oa_deletes_free_slots_while_growth_fails) {
   ccol_memmgmt_procs_t mp = {.malloc = malloc,
                              .free = free,
                              .calloc = controlled_calloc,
                              .realloc = realloc};
 
-  // Use the minimum capacity of 16, so the shrink guard of oa_delete,
-  // capacity > minimum_allowed_bucket_array_size, never fires:
-  // tombstones accumulate, and no rehash clears them.
+  // Use the minimum capacity of 16, so oa_delete's shrink guard,
+  // capacity > minimum_allowed_bucket_array_size, never fires and the
+  // deletes below keep the same table.
   char *err = NULL;
   chashmap *hm = chmap_create_mp(1, ccol_int, ccol_int, &mp, &err);
   REQUIRE_NE((void *)hm, NULL);
 
-  // Make every later calloc call fail, so a rehash can never enlarge the map.
-  // The inserts of k0 to k15 succeed all the same: the load-factor check
-  // (count+deleted)/16 > 0.70 fires from key 12 onwards, but the failed
-  // rehash leaves the original 16-slot array in place, so the probe
-  // finds empty slots.
+  // Make every later calloc call fail, so a rehash can never enlarge the
+  // map. The inserts of k0 to k15 succeed anyway: the load-factor check
+  // count/16 > 0.70 fires from key 12 on, but the failed rehash leaves the
+  // original 16-slot array in place, so the probe finds empty
+  // slots.
   g_calloc_fail = true;
   for (int i = 0; i < 16; i++) {
     int val = i * 10;
@@ -1903,7 +1891,7 @@ TEST(chash_maps, oa_tombstone_reuse_after_full_probe_wrap) {
   REQUIRE_EQ(chmap_elem_count(hm), 16);
 
   // Delete 10 keys. No calloc runs here, because at the minimum capacity the
-  // shrink check in oa_delete does not fire, so these slots become tombstones
+  // shrink check in oa_delete doesn't fire, so each delete empties its slot
   // in place.
   for (int i = 0; i < 10; i++) {
     REQUIRE_EQ(
@@ -1912,12 +1900,9 @@ TEST(chash_maps, oa_tombstone_reuse_after_full_probe_wrap) {
   }
   REQUIRE_EQ(chmap_elem_count(hm), 6);
 
-  // All 16 slots are live (6 of them) or tombstoned (10 of them), so an
-  // insert of key 16 fires the load check, because (6+10)/16 == 1.0 > 0.70.
-  // The map then tries to rehash, the calloc fails, and the map stays
-  // unchanged; the probe visits every slot and finds no empty one, so the
-  // insert must land in the first tombstone slot that the probe recorded,
-  // and must not give ccol_container_full.
+  // Six slots are live and ten are empty, so the load of 7/16 after
+  // inserting key 16 stays under 0.70, no rehash is tried, and the probe
+  // lands on one of the slots the deletes gave back.
   int new_key = 16, new_val = 160;
   REQUIRE_EQ(chmap_insert_elem(
                  hm, &(cmap_pair){.ptr = &new_key, .size = sizeof(new_key)},
@@ -1937,14 +1922,14 @@ TEST(chash_maps, oa_tombstone_reuse_after_full_probe_wrap) {
 }
 
 // An opportunistic grow-on-insert rehash can fail because calloc never
-// recovers from an out-of-memory condition, and the probe can then find the
-// table genuinely full: every slot is live, and no tombstone is available,
-// as the test deletes nothing. oa_insert must not report ccol_container_full
-// in that case, a code indistinguishable from the real architectural
-// ccol_max_elem_count of the map, when the true cause is a
-// failed allocation; oa_insert must report ccol_not_enough_memory instead,
-// which is what the documented contract of chmap_insert_elem promises:
-// "ccol_not_enough_memory when an allocation fails".
+// recovers from running out of memory, and the probe can then find the
+// table really full, every slot live, since the test deletes nothing.
+// oa_insert must not report ccol_container_full in that case, a code you
+// couldn't tell from the map's real architectural ccol_max_elem_count, when
+// the true cause is a failed allocation. It should report
+// ccol_not_enough_memory instead, which is what chmap_insert_elem's
+// documented contract promises: "ccol_not_enough_memory when an allocation
+// fails".
 TEST(chash_maps, oa_insert_sustained_oom_reports_not_enough_memory) {
   ccol_memmgmt_procs_t mp = {.malloc = malloc,
                              .free = free,
@@ -1955,14 +1940,14 @@ TEST(chash_maps, oa_insert_sustained_oom_reports_not_enough_memory) {
   chashmap *hm = chmap_create_mp(1, ccol_int, ccol_int, &mp, &err);
   REQUIRE_NE((void *)hm, NULL);
 
-  // Make every later calloc call fail so the table can never grow.
+  // Make every later calloc call fail, so the table can never grow.
   g_calloc_fail = true;
 
-  // Fill the table completely (16 keys into a 16-slot table), with no
-  // deletions at all, so no tombstones ever exist to fall back on. Every one
-  // of these succeeds: several of them try a rehash again, and fail,
-  // after the load factor crosses 0.70, but the first 16-slot array still has
-  // empty slots for the probe to land on.
+  // Fill the table completely (16 keys into a 16-slot table) without any
+  // deletes, so no slot is ever given back. Every insert succeeds: several of
+  // them try a rehash again and fail once the load factor is past 0.70, but
+  // the first 16-slot array still has empty slots for the probe to land
+  // on.
   for (int i = 0; i < 16; i++) {
     int val = i;
     REQUIRE_EQ(
@@ -1973,10 +1958,10 @@ TEST(chash_maps, oa_insert_sustained_oom_reports_not_enough_memory) {
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)16);
   REQUIRE_EQ(chmap_get_bucket_arr_size(hm), (size_t)16);
 
-  // One more, genuinely new key: the load factor check fires, and the rehash
-  // fails because calloc is still turned off, so the probe finds the table
-  // completely full, with no empty slot and no tombstone. The map must report
-  // this as an allocation failure, not as a false "container full".
+  // One more, really new key: the load factor check fires and the rehash
+  // fails because calloc is still off, so the probe finds the table
+  // completely full with no empty slot. The map has to report this as an
+  // allocation failure and not as a false "container full".
   int overflow_key = 16, overflow_val = 1600;
   REQUIRE_EQ(
       chmap_insert_elem(
@@ -1987,8 +1972,8 @@ TEST(chash_maps, oa_insert_sustained_oom_reports_not_enough_memory) {
 
   g_calloc_fail = false;
 
-  // With the allocator restored, the very same insert must succeed by
-  // actually growing the table.
+  // With the allocator back, the very same insert succeeds by really
+  // growing the table.
   REQUIRE_EQ(
       chmap_insert_elem(
           hm, &(cmap_pair){.ptr = &overflow_key, .size = sizeof(overflow_key)},
@@ -2000,11 +1985,11 @@ TEST(chash_maps, oa_insert_sustained_oom_reports_not_enough_memory) {
   chmap_destroy(hm);
 }
 
-// In the OA backend, map->val_size must stay one single value for the whole
-// life of the map: oa_create() fixes it when it creates the map, and no later
-// insert ever derives it again. Without this, a caller can empty a map with
-// repeated deletes, fill it again, and silently corrupt the value size that
-// val_accessors reports.
+// In the OA backend map->val_size must stay one single value for the whole
+// life of the map: oa_create() fixes it when it creates the map and no later
+// insert derives it again. Otherwise a caller could empty a map with
+// repeated deletes, fill it again and silently corrupt the value size that
+// chmap_get_elem_ref reports.
 TEST(chash_maps, oa_repopulate_after_full_delete) {
   chmap_construct(hm, int, int);
   REQUIRE_NE((void *)hm, NULL);
@@ -2020,7 +2005,7 @@ TEST(chash_maps, oa_repopulate_after_full_delete) {
   }
   REQUIRE_EQ(chmap_elem_count(hm), 0);
 
-  // Repopulate and verify all values survive correctly
+  // Fill it again and check that every value survives
   for (int i = 0; i < 20; ++i) {
     int val = i * 100;
     chmap_insert(hm, i, val);
@@ -2035,10 +2020,10 @@ TEST(chash_maps, oa_repopulate_after_full_delete) {
 }
 
 TEST(chash_maps, sc_large_key_and_large_value) {
-  // Keys and values larger than INLINE_STORAGE_THRESHOLD (23 bytes) take the
-  // heap-allocation path in sc_create_llist_node.  This test verifies that
-  // the happy path works correctly and that the node is properly attached to
-  // the insertion-order list after both allocations succeed.
+  // Keys and values bigger than INLINE_STORAGE_THRESHOLD (23 bytes) take the
+  // heap-allocation path in sc_create_llist_node. This checks that the happy
+  // path works and that the node gets attached to the insertion-order list
+  // once both allocations have succeeded.
   chmap_construct(hm, char *, char *);
 
   // 24-byte key (just over the 23-byte SSO limit), 24-byte value.
@@ -2069,7 +2054,7 @@ TEST(chash_maps, sc_large_key_and_large_value) {
   REQUIRE_STREQ(chmap_get(hm, k2), val2);
   REQUIRE_STREQ(chmap_get(hm, k3), val3);
 
-  // Verify iteration visits all three entries exactly once.
+  // The iteration visits all three entries exactly once.
   size_t visited = 0;
   ccol_iter_declare(hm, it);
   for (it = ccol_begin(hm); it != NULL; it = ccol_iter_next(it)) {
@@ -2080,15 +2065,15 @@ TEST(chash_maps, sc_large_key_and_large_value) {
   chmap_destroy(hm);
 }
 
-// A char*-keyed map always uses separate chaining, and stores any scalar
-// value type that fits inline (<= 23 bytes, the SSO threshold) directly
-// inside the chmap_entry of the node. chmap_get, chmap_get_ptr and the
-// iterator accessors cast a pointer into that storage straight to the type of
-// the value and dereference it, so the storage must be naturally
-// aligned for that type. This test covers a double (8-byte alignment) and a
-// struct whose own alignment requirement is 8 bytes, through chmap_get_ptr,
-// because that macro gives back a pointer for a change in place, not only
-// a copy of the value.
+// A char*-keyed map always uses separate chaining and stores any scalar value
+// type that fits inline (<= 23 bytes, the SSO threshold) right inside the
+// node's chmap_entry. chmap_get, chmap_get_ptr and the iterator accessors
+// cast a pointer into that storage straight to the value type and
+// dereference it, so the storage has to be naturally aligned for that type.
+// This covers a double (8-byte alignment) and a struct whose own alignment
+// requirement is 8 bytes, through chmap_get_ptr, because that macro hands
+// back a pointer for changing the value in place, rather than a copy of
+// it.
 TEST(chash_maps, sc_inline_value_alignment) {
   {
     chmap_construct(hm, char *, double);
@@ -2134,17 +2119,17 @@ TEST(chash_maps, sc_inline_value_alignment) {
   }
 }
 
-// long double needs 16-byte alignment on this platform, because
-// _Alignof(long double) == 16, which is stricter than every other case that
+// long double needs 16-byte alignment on this platform, since
+// _Alignof(long double) == 16, stricter than any other case
 // sc_inline_value_alignment covers above. chashmap.h documents that the
-// open-addressing backend excludes long double, because it can be more than 8
-// bytes, so any chashmap with a long double key or value always takes
-// this separate-chaining path with SSO inline storage. This test covers all
-// three direct-cast accessors that read inline storage without a memcpy:
+// open-addressing backend leaves out long double because it can be more
+// than 8 bytes, so any chashmap with a long double key or value always takes
+// this separate-chaining path with SSO inline storage. The test covers all
+// three direct-cast accessors that read inline storage without a memcpy,
 // chmap_get_ptr, chmap_get, and the iterator accessors ccol_iter_key_ptr and
-// ccol_iter_val_ptr, each a separate code path that can dereference a
+// ccol_iter_val_ptr, each a separate code path that could dereference a
 // misaligned pointer. Without _Alignas(max_align_t) on the key_storage and
-// val_storage members of chmap_entry, these fail under -fsanitize=undefined
+// val_storage members of chmap_entry they fail under -fsanitize=undefined
 // with "load of misaligned address ... which requires 16 byte alignment".
 TEST(chash_maps, sc_inline_long_double_alignment) {
   // long double as a value (paired with a char* key -> separate chaining).
@@ -2175,28 +2160,27 @@ TEST(chash_maps, sc_inline_long_double_alignment) {
   }
 
   // long double as a key (paired with an int value -> separate chaining,
-  // since long double is not integral-for-open-addressing purposes either).
+  // since long double doesn't count as integral for open addressing either).
   {
     chmap_construct(hm, long double, int);
 
     // Key equality and the hash here are bitwise over the full sizeof(long
-    // double), as for any other key type that is not a
-    // string and that the map does not canonicalize (see sc_compare_keys and
-    // hash_key_data in chashmap.c). On this platform the 16-byte
-    // representation of a long double carries real padding bits, because only
-    // about 80 bits are significant, and a plain scalar in automatic storage
-    // does not reliably leave those padding bytes defined after the compiler
-    // optimizes it, even after a memset: the compiler can treat a later
-    // whole-object assignment as a reason to drop the earlier memset, since the
-    // padding bits are not part of the "value" of the object for the abstract
-    // machine. valgrind reports exactly this at the real -O3 flags of the
-    // root Makefile: a memset, and then an assignment into a long double in
-    // automatic storage, still leaves padding bytes undefined. An object with
-    // static storage duration and a constant initializer does not have this
-    // problem, because the compiler builds its full, fixed-width byte
-    // representation one time, so every byte is deterministic, the padding
-    // included. This is a property of how you build a fully defined long double
-    // bit pattern in portable C, not of the real target of this test, which is
+    // double), as for any other non-string key type the map doesn't
+    // canonicalize (see sc_compare_keys and hash_key_data in chashmap.c). On
+    // this platform a long double's 16-byte representation has real padding
+    // bits, because only about 80 bits are significant, and a plain scalar in
+    // automatic storage doesn't reliably keep those padding bytes defined
+    // once the compiler optimizes it, not even after a memset: the compiler
+    // may take a later whole-object assignment as a reason to drop the
+    // earlier memset, since for the abstract machine the padding bits aren't
+    // part of the object's "value". valgrind reports exactly this with the
+    // root Makefile's real -O3 flags: a memset followed by an assignment into
+    // an automatic long double still leaves padding bytes undefined. An
+    // object with static storage duration and a constant initializer doesn't
+    // have this problem, because the compiler builds its full fixed-width
+    // byte representation once, so every byte is deterministic, padding
+    // included. That's a matter of how you build a fully defined long double
+    // bit pattern in portable C, and not of this test's real target, which is
     // the alignment of the inline storage in chmap_entry.
     static long double k = 2.5L;
     int val = 7;
@@ -2216,20 +2200,20 @@ TEST(chash_maps, sc_inline_long_double_alignment) {
   }
 }
 
-/* The type-inferred macros give their private copy of a caller expression the
-   DECLARED key type or value type of the map, so the copy is a plain C
-   assignment and converts. A copy of typeof(key) instead would put the RAW
-   BYTES of the caller expression into the map whenever the two types happen
-   to share a width. Nothing else in the library can see that: the widths
+/* The type-inferred macros give their private copy of a caller expression
+   the map's DECLARED key or value type, so the copy is a plain C assignment
+   and converts. Copying into typeof(key) instead would put the RAW BYTES of
+   the caller expression into the map whenever the two types happen to have
+   the same width, and nothing else in the library could see it: the widths
    match, so every size check passes, and no compiler diagnostic fires at any
-   optimization level. cvec_push() already works this way, and these tests
+   optimization level. cvec_push() works this way already, and these tests
    pin the same rule for chmap. */
 
 TEST(chash_maps, value_converts_to_the_declared_type_and_is_not_reinterpreted) {
   chmap_construct(hm, char *, int);
   float f = 1.5f;
   chmap_insert(hm, "k", f);
-  /* The converted value is 1. The bit pattern of 1.5f read as an int is
+  /* The converted value is 1. The bits of 1.5f read as an int give
      1069547520, which is what a raw byte copy would store. */
   REQUIRE_EQ(chmap_get(hm, "k"), 1);
   chmap_destroy(hm);
@@ -2238,7 +2222,7 @@ TEST(chash_maps, value_converts_to_the_declared_type_and_is_not_reinterpreted) {
 TEST(chash_maps, key_converts_to_the_declared_type_and_stays_findable) {
   /* A float key of 2.0f in an int-keyed map is the worse half of the same
      bug. A raw byte copy stores the bit pattern 1073741824, and no int
-     lookup can ever reach that entry again. */
+     lookup could ever reach that entry again. */
   chmap_construct(hm, int, int);
   float fk = 2.0f;
   int v = 7;
@@ -2252,10 +2236,10 @@ TEST(chash_maps, key_converts_to_the_declared_type_and_stays_findable) {
 }
 
 TEST(chash_maps, narrower_value_widens_to_the_declared_type) {
-  /* A short that goes into an int-valued map becomes an int, so the stored
-     pair is always sizeof(ValT) bytes wide. Without the conversion the
-     separate-chaining backend accepts a two-byte value, reports success, and
-     the value-size guard of chmap_get() then stops the process on the first
+  /* A short going into an int-valued map becomes an int, so the stored pair
+     is always sizeof(ValT) bytes wide. Without the conversion the
+     separate-chaining backend accepts a two-byte value and reports success,
+     and chmap_get()'s value-size guard then stops the process on the first
      READ, at a call site that did nothing wrong. */
   chmap_construct(hm, char *, int);
   short sv = -1;
@@ -2263,7 +2247,7 @@ TEST(chash_maps, narrower_value_widens_to_the_declared_type) {
   REQUIRE_EQ(chmap_get(hm, "k"), -1);
   chmap_destroy(hm);
 
-  /* The same, on the open-addressing backend. */
+  /* The same on the open-addressing backend. */
   chmap_construct(oa, int, int);
   short sv2 = -3;
   chmap_insert(oa, 1, sv2);
@@ -2289,9 +2273,9 @@ TEST(chash_maps, rvalue_key_and_value_accepted) {
 }
 
 TEST(chash_maps, array_key_and_string_literal_key_agree) {
-  /* The character-pointer arm of the copy decays an array to a pointer. A
-     char buf[] key and a string literal with the same content must therefore
-     reach the same entry. */
+  /* The character-pointer arm of the copy decays an array to a pointer, so a
+     char buf[] key and a string literal with the same content reach
+     the same entry. */
   chmap_construct(hm, char *, int);
   char buf[64];
   snprintf(buf, sizeof(buf), "shared");
@@ -2305,10 +2289,10 @@ TEST(chash_maps, array_key_and_string_literal_key_agree) {
 }
 
 TEST(chash_maps, raw_layer_rejects_a_value_of_the_wrong_declared_width) {
-  /* chmap_insert_elem() takes a pair that the caller built by hand. A value
-     whose width disagrees with the declared value type must be refused by
-     the INSERT, on both backends. Without the check on the separate-chaining
-     side, the insert reports success and chmap_get() stops the process later
+  /* chmap_insert_elem() takes a pair the caller built by hand. A value whose
+     width doesn't match the declared value type must be refused by the
+     INSERT, on both backends. Without the check on the separate-chaining
+     side the insert reports success, and chmap_get() stops the process later
      at an unrelated call site, with a message that blames the reader. */
   char *err = NULL;
   short bad = -1;
@@ -2334,8 +2318,8 @@ TEST(chash_maps, raw_layer_rejects_a_value_of_the_wrong_declared_width) {
   REQUIRE_EQ((int)chmap_insert_elem(sc, &kp_s, &vp_good), (int)ccol_success);
   __chmap_destroy(sc);
 
-  /* A value type with no fixed width is never checked. Every entry of a
-     string-valued map legitimately carries its own size. */
+  /* A value type with no fixed width is never checked, because every entry
+     of a string-valued map legitimately carries its own size. */
   chmap str =
       chmap_create_full(16, ccol_string, ccol_string, NULL, NULL, NULL, &err);
   REQUIRE_NE((void *)str, NULL);
@@ -2348,8 +2332,8 @@ TEST(chash_maps, raw_layer_rejects_a_value_of_the_wrong_declared_width) {
 }
 
 TEST(chash_maps, char_type_variants_as_string_keys) {
-  // signed char * (= int8_t *) must route through the string path and behave
-  // identically to char * for all map operations.
+  // signed char * (= int8_t *) should go through the string path and behave
+  // exactly like char * for every map operation.
   {
     chmap_construct(hm, signed char *, int);
 
@@ -2363,7 +2347,7 @@ TEST(chash_maps, char_type_variants_as_string_keys) {
     REQUIRE_EQ(chmap_get(hm, k1), 10);
     REQUIRE_EQ(chmap_get(hm, k2), 20);
 
-    // char * with identical string content must find the same entries.
+    // A char * with the same string content finds the same entries.
     char *ck1 = "hello";
     char *ck2 = "world";
     REQUIRE_EQ(chmap_get(hm, ck1), 10);
@@ -2375,7 +2359,7 @@ TEST(chash_maps, char_type_variants_as_string_keys) {
     chmap_destroy(hm);
   }
 
-  // unsigned char * (= uint8_t *); identical check.
+  // unsigned char * (= uint8_t *), the same check.
   {
     chmap_construct(hm, unsigned char *, int);
 
@@ -2449,16 +2433,16 @@ TEST(chash_maps, re_enabled_local_chm_macros) {
   chmap_destroy(hm);
 }
 
-// SC backend iteration is reverse-insertion-order (most-recently inserted
-// element first) because attach_node_to_dllist prepends new nodes.
-// Verify that the documented behaviour holds: inserting alpha, beta, gamma
-// produces the traversal order gamma -> beta -> alpha.
+// The SC backend iterates in reverse insertion order (the most recently
+// inserted element first), because attach_node_to_dllist prepends new nodes.
+// We check the documented behaviour: inserting alpha, beta, gamma gives the
+// traversal order gamma -> beta -> alpha.
 TEST(chash_maps, sc_reverse_insertion_order_iteration) {
   chmap_construct(hm, char *, int);
   REQUIRE_NE((void *)hm, NULL);
 
-  // chmap_insert requires lvalue arguments; string literals are lvalues in C
-  // but integer literals are not; use variables.
+  // The values go through named variables here only to keep the expected
+  // order readable; chmap_insert takes a literal just as well.
   int v1 = 1, v2 = 2, v3 = 3, v100 = 100;
   chmap_insert(hm, "alpha", v1);
   chmap_insert(hm, "beta", v2);
@@ -2477,7 +2461,7 @@ TEST(chash_maps, sc_reverse_insertion_order_iteration) {
   }
   REQUIRE_EQ(idx, 3);
 
-  // Updating a value must not change the element's position in the traversal.
+  // Updating a value must not move the element in the traversal.
   chmap_insert(hm, "alpha", v100);
 
   idx = 0;
@@ -2485,7 +2469,7 @@ TEST(chash_maps, sc_reverse_insertion_order_iteration) {
     REQUIRE_TRUE(idx < 3);
     REQUIRE_STREQ(*ccol_iter_key_ptr(it), expected_keys[idx]);
     if (idx == 2) {
-      REQUIRE_EQ(*ccol_iter_val_ptr(it), 100);  // alpha updated
+      REQUIRE_EQ(*ccol_iter_val_ptr(it), 100);  // alpha was updated
     } else {
       REQUIRE_EQ(*ccol_iter_val_ptr(it), expected_vals[idx]);
     }
@@ -2496,8 +2480,8 @@ TEST(chash_maps, sc_reverse_insertion_order_iteration) {
   chmap_destroy(hm);
 }
 
-// chmap_reset(map, 0) must clear all elements but retain the current bucket
-// array size.  This exercises the zero-argument path in both oa_reset and the
+// chmap_reset(map, 0) has to clear every element but keep the current bucket
+// array size. This exercises the zero-argument path in oa_reset and in the
 // public chmap_reset dispatcher.
 TEST(chash_maps, oa_reset_zero_preserves_capacity) {
   chmap_construct(hm, int, int);
@@ -2511,12 +2495,12 @@ TEST(chash_maps, oa_reset_zero_preserves_capacity) {
 
   size_t capacity_before = chmap_get_bucket_arr_size(hm);
 
-  // Pass 0: keep current size.
+  // Passing 0 keeps the current size.
   REQUIRE_EQ(chmap_reset(hm, 0), ccol_success);
   REQUIRE_EQ(chmap_elem_count(hm), 0);
   REQUIRE_EQ(chmap_get_bucket_arr_size(hm), capacity_before);
 
-  // Elements inserted after reset must work correctly.
+  // Elements inserted after the reset work as usual.
   for (int i = 0; i < 10; ++i) {
     int val = i * 13;
     chmap_insert(hm, i, val);
@@ -2529,10 +2513,10 @@ TEST(chash_maps, oa_reset_zero_preserves_capacity) {
   chmap_destroy(hm);
 }
 
-// chmap_get_elem_copy must copy only min(val_size, target_buf_size) bytes
-// when the caller provides a buffer smaller than the stored value.  No crash,
-// no out-of-bounds write, and the partial data must match the leading bytes of
-// the original value.
+// chmap_get_elem_copy copies only min(val_size, target_buf_size) bytes
+// when the caller's buffer is smaller than the stored value. No crash, no
+// out-of-bounds write, and the partial data matches the leading bytes
+// of the original value.
 TEST(chash_maps, get_elem_copy_partial_buffer) {
   chashmap *hm = chmap_create(1, ccol_string, ccol_other_types, NULL);
   REQUIRE_NE((void *)hm, NULL);
@@ -2551,7 +2535,7 @@ TEST(chash_maps, get_elem_copy_partial_buffer) {
                  &(cmap_pair){.ptr = &v, .size = sizeof(v)}),
              ccol_success);
 
-  // Buffer for only the first two fields.
+  // A buffer for only the first two fields.
   struct {
     int a;
     int b;
@@ -2568,12 +2552,12 @@ TEST(chash_maps, get_elem_copy_partial_buffer) {
 }
 
 // sc_reset_val_of_llist_node must not write NULL into the val_storage union
-// before it checks the return value of malloc: val_storage.ptr and
-// val_storage.inline_data share the same memory, so such a write
-// zeroes the first sizeof(void*) bytes of the old inline value, which
-// corrupts the value when the allocation fails, while val_is_inline stays
-// true. After a failed update from inline to heap, the first inline value
-// must still be intact.
+// before checking malloc's return value: val_storage.ptr and
+// val_storage.inline_data share the same memory, so such a write zeroes the
+// first sizeof(void*) bytes of the old inline value, which corrupts the
+// value when the allocation fails while val_is_inline stays true. After a
+// failed update from inline to heap, the first inline value must be
+// intact.
 TEST(chash_maps, sc_value_update_inline_to_heap_oom_resilience) {
   ccol_memmgmt_procs_t mp = {.malloc = controlled_malloc,
                              .free = free,
@@ -2591,17 +2575,17 @@ TEST(chash_maps, sc_value_update_inline_to_heap_oom_resilience) {
                  &(cmap_pair){.ptr = small_val, .size = sizeof(small_val)}),
              ccol_success);
 
-  // Confirm the inline value is readable.
-  const cmap_pair *vp = NULL;
+  // Check that the inline value is readable.
+  cmap_pair vp = {NULL, 0};
   REQUIRE_EQ(
       chmap_get_elem_ref(
           hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)}, &vp),
       ccol_success);
-  REQUIRE_EQ(vp->size, (size_t)4);
-  REQUIRE_EQ(memcmp(vp->ptr, small_val, 4), 0);
+  REQUIRE_EQ(vp.size, (size_t)4);
+  REQUIRE_EQ(memcmp(vp.ptr, small_val, 4), 0);
 
-  // Attempt to update with a heap-requiring value (>23 bytes) while malloc
-  // fails; the update must be rejected gracefully.
+  // Try to update with a value that needs the heap (>23 bytes) while malloc
+  // fails, and expect the update to be rejected cleanly.
   unsigned char large_val[30];
   memset(large_val, 0xAB, sizeof(large_val));
   g_malloc_fail = true;
@@ -2611,21 +2595,21 @@ TEST(chash_maps, sc_value_update_inline_to_heap_oom_resilience) {
              ccol_not_enough_memory);
   g_malloc_fail = false;
 
-  // The original 4-byte inline value must be intact.
-  vp = NULL;
+  // The original 4-byte inline value is intact.
+  vp = (cmap_pair){NULL, 0};
   REQUIRE_EQ(
       chmap_get_elem_ref(
           hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)}, &vp),
       ccol_success);
-  REQUIRE_EQ(vp->size, (size_t)4);
-  REQUIRE_EQ(memcmp(vp->ptr, small_val, 4), 0);
+  REQUIRE_EQ(vp.size, (size_t)4);
+  REQUIRE_EQ(memcmp(vp.ptr, small_val, 4), 0);
 
   chmap_destroy(hm);
 }
 
-// ccol_begin on an empty map must return NULL for both the SC backend
-// (string key) and the OA backend (int key). This covers the two early-out
-// paths in chashmap_begin_iter.
+// ccol_begin on an empty map returns NULL for the SC backend (string
+// key) and for the OA backend (int key). This covers the two early-out paths
+// of chashmap_begin_iter.
 TEST(chash_maps, empty_map_iteration) {
   {
     chmap_construct(hm, char *, int);
@@ -2642,28 +2626,28 @@ TEST(chash_maps, empty_map_iteration) {
   }
 }
 
-// chashmap_begin_iter(NULL, ...) must behave the same as an empty map: it
-// must return NULL, must not touch err, and must not assert. Other code in
-// this codebase depends on this contract, so it is more than permissive
-// behaviour. For example, request.headers_begin_empty_returns_null in
+// chashmap_begin_iter(NULL, ...) has to behave like an empty map: return
+// NULL, leave err alone and not assert. Other code in this codebase depends
+// on that contract, so it's more than just permissive behaviour. For
+// example, request.headers_begin_empty_returns_null in
 // tests/chttpclient/tests.c iterates an internal chmap field of a
-// chttp_request_t with ccol_begin and chashmap_begin_iter, a field that stays
-// NULL until the first header is set. Several call sites in chttpclient.c,
-// clogger.c, ctls.c and cthreadcomm.c also hand such an optional chmap
-// straight to chashmap_begin_iter.
+// chttp_request_t with ccol_begin and chashmap_begin_iter, and that field
+// stays NULL until the first header is set. Several call sites in
+// chttpclient.c, clogger.c, ctls.c and cthreadcomm.c hand such an optional
+// chmap straight to chashmap_begin_iter as well.
 TEST(chash_maps, begin_iter_null_map_returns_null_like_empty) {
   chmap null_map = NULL;
-  char *err = (char *)0x1; /* poison value: must be reset to NULL, not left */
+  char *err = (char *)0x1; /* poison value, must be reset to NULL */
   REQUIRE_EQ((void *)chashmap_begin_iter(null_map, &err), NULL);
   REQUIRE_EQ((void *)err, NULL);
 
-  // NULL for err itself must also be tolerated (it's documented as optional).
+  // A NULL err is tolerated too (it's documented as optional).
   REQUIRE_EQ((void *)chashmap_begin_iter(null_map, NULL), NULL);
 }
 
-// chmap_reset with a non-zero new_bucket_array_size must resize the internal
-// slot array on the OA backend, clear all elements, and allow correct
-// insertions and lookups afterwards.
+// chmap_reset with a non-zero new_bucket_array_size should resize the
+// internal slot array on the OA backend, clear every element, and allow
+// correct inserts and lookups afterwards.
 TEST(chash_maps, oa_reset_with_new_size) {
   chmap_construct(hm, int, int);
   REQUIRE_NE((void *)hm, NULL);
@@ -2692,9 +2676,9 @@ TEST(chash_maps, oa_reset_with_new_size) {
 
 // An SC-backend entry can hold its value on the heap, because the value is
 // more than 23 bytes, and an update can then give it a new value that fits
-// inline, because the new value is 23 bytes or less. The map must free the old
-// heap buffer, the node must change to inline storage, and a reader must then
-// get the new value with the correct size.
+// inline, at 23 bytes or less. The map must free the old heap buffer, the
+// node switches to inline storage, and a reader then gets the new
+// value with the right size.
 TEST(chash_maps, sc_value_update_heap_to_inline) {
   chashmap *hm = chmap_create(1, ccol_string, ccol_other_types, NULL);
   REQUIRE_NE((void *)hm, NULL);
@@ -2714,21 +2698,21 @@ TEST(chash_maps, sc_value_update_heap_to_inline) {
                  &(cmap_pair){.ptr = small_val, .size = sizeof(small_val)}),
              ccol_key_already_present);
 
-  const cmap_pair *vp = NULL;
+  cmap_pair vp = {NULL, 0};
   REQUIRE_EQ(
       chmap_get_elem_ref(
           hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)}, &vp),
       ccol_success);
-  REQUIRE_EQ(vp->size, (size_t)4);
-  REQUIRE_EQ(memcmp(vp->ptr, small_val, 4), 0);
+  REQUIRE_EQ(vp.size, (size_t)4);
+  REQUIRE_EQ(memcmp(vp.ptr, small_val, 4), 0);
 
   chmap_destroy(hm);
 }
 
 // An SC-backend entry holds its value on the heap, and an update gives it
-// another value that also needs the heap, but realloc fails.
-// sc_reset_val_of_llist_node must then put the first pointer back and
-// leave the old value fully intact.
+// another value that needs the heap too, but realloc fails.
+// sc_reset_val_of_llist_node then puts the first pointer back and
+// leaves the old value fully intact.
 TEST(chash_maps, sc_value_update_heap_to_heap_oom) {
   ccol_memmgmt_procs_t mp = {.malloc = malloc,
                              .free = free,
@@ -2755,26 +2739,26 @@ TEST(chash_maps, sc_value_update_heap_to_heap_oom) {
              ccol_not_enough_memory);
   g_realloc_fail = false;
 
-  const cmap_pair *vp = NULL;
+  cmap_pair vp = {NULL, 0};
   REQUIRE_EQ(
       chmap_get_elem_ref(
           hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)}, &vp),
       ccol_success);
-  REQUIRE_EQ(vp->size, (size_t)30);
-  REQUIRE_EQ(memcmp(vp->ptr, large_val1, 30), 0);
+  REQUIRE_EQ(vp.size, (size_t)30);
+  REQUIRE_EQ(memcmp(vp.ptr, large_val1, 30), 0);
 
   chmap_destroy(hm);
 }
 
-// A value pointer can alias the current heap storage of the entry itself:
-// for example, a caller reads a pointer for one key with chmap_get_elem_ref,
-// chmap_get_ptr or chmap_get, and then inserts a value from that pointer, for
-// that same key. The map must read that value correctly, although a
-// change to an inline-sized value frees that same heap buffer as part of the
+// A value pointer can alias the entry's own current heap storage, for
+// example when a caller reads a pointer for one key with chmap_get_elem_ref,
+// chmap_get_ptr or chmap_get and then inserts a value from that pointer for
+// the same key. The map needs to read that value correctly, although a change
+// to an inline-sized value frees that very heap buffer as part of the
 // update, so sc_reset_val_of_llist_node must not free the buffer first and
-// copy from it after. That order is a use-after-free read, which valgrind and
-// AddressSanitizer report, and the value assertion below also fails whenever
-// something changes the freed block before the read ends.
+// copy from it afterwards. That order is a use-after-free read, which
+// valgrind and AddressSanitizer report, and the value assertion below also
+// fails whenever something changes the freed block before the read ends.
 TEST(chash_maps, sc_value_update_self_referential_heap_to_inline) {
   chashmap *hm = chmap_create(1, ccol_string, ccol_other_types, NULL);
   REQUIRE_NE((void *)hm, NULL);
@@ -2789,45 +2773,45 @@ TEST(chash_maps, sc_value_update_self_referential_heap_to_inline) {
                  &(cmap_pair){.ptr = large_val, .size = sizeof(large_val)}),
              ccol_success);
 
-  const cmap_pair *vp = NULL;
+  cmap_pair vp = {NULL, 0};
   REQUIRE_EQ(
       chmap_get_elem_ref(
           hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)}, &vp),
       ccol_success);
-  void *heap_storage = vp->ptr;
+  void *heap_storage = vp.ptr;
 
   unsigned char expected[4];
   memcpy(expected, heap_storage, sizeof(expected));
 
-  // Re-insert using the map's own current heap storage as the source,
+  // Insert again with the map's own current heap storage as the source,
   // shrinking to a size that fits inline.
   REQUIRE_EQ(chmap_insert_elem(
                  hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
                  &(cmap_pair){.ptr = heap_storage, .size = sizeof(expected)}),
              ccol_key_already_present);
 
-  vp = NULL;
+  vp = (cmap_pair){NULL, 0};
   REQUIRE_EQ(
       chmap_get_elem_ref(
           hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)}, &vp),
       ccol_success);
-  REQUIRE_EQ(vp->size, sizeof(expected));
-  REQUIRE_EQ(memcmp(vp->ptr, expected, sizeof(expected)), 0);
+  REQUIRE_EQ(vp.size, sizeof(expected));
+  REQUIRE_EQ(memcmp(vp.ptr, expected, sizeof(expected)), 0);
 
   chmap_destroy(hm);
 }
 
-// A caller can grow an inline value and use the current inline storage of the
-// map as the source, and the map must not corrupt the source bytes before it
-// reads them. Because the val_storage union physically overlaps the inline
-// byte array, sc_reset_val_of_llist_node must not write the new heap
-// pointer into that union before it copies from it: that order corrupts the
-// first bytes of the value that the caller gets back, and no sanitizer is
-// needed to see it. The new size here is exactly 24 bytes, which is
-// INLINE_STORAGE_THRESHOLD + 1, so the read stays fully inside the bounds
-// of the inline array, and the expected result is fully deterministic:
-// the first 4 bytes, and then the zero bytes that calloc gave the node
-// and that nothing ever overwrote.
+// A caller can grow an inline value and use the map's current inline
+// storage as the source, and the map must not corrupt the source bytes
+// before reading them. The val_storage union physically overlaps the inline
+// byte array, so sc_reset_val_of_llist_node must not write the new heap
+// pointer into that union before copying from it, because that order
+// corrupts the first bytes of the value the caller gets back, and you don't
+// need a sanitizer to see it. The new size here is exactly 24 bytes,
+// INLINE_STORAGE_THRESHOLD + 1, so the read stays fully inside the inline
+// array and the expected result is fully deterministic: the first 4 bytes,
+// then the zero bytes calloc gave the node and nothing ever
+// overwrote.
 TEST(chash_maps, sc_value_update_self_referential_inline_to_heap) {
   chashmap *hm = chmap_create(1, ccol_string, ccol_other_types, NULL);
   REQUIRE_NE((void *)hm, NULL);
@@ -2839,12 +2823,12 @@ TEST(chash_maps, sc_value_update_self_referential_inline_to_heap) {
                  &(cmap_pair){.ptr = small_val, .size = sizeof(small_val)}),
              ccol_success);
 
-  const cmap_pair *vp = NULL;
+  cmap_pair vp = {NULL, 0};
   REQUIRE_EQ(
       chmap_get_elem_ref(
           hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)}, &vp),
       ccol_success);
-  void *inline_storage = vp->ptr;
+  void *inline_storage = vp.ptr;
 
   unsigned char expected[24] = {0};
   memcpy(expected, small_val, sizeof(small_val));
@@ -2854,24 +2838,24 @@ TEST(chash_maps, sc_value_update_self_referential_inline_to_heap) {
                  &(cmap_pair){.ptr = inline_storage, .size = sizeof(expected)}),
              ccol_key_already_present);
 
-  vp = NULL;
+  vp = (cmap_pair){NULL, 0};
   REQUIRE_EQ(
       chmap_get_elem_ref(
           hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)}, &vp),
       ccol_success);
-  REQUIRE_EQ(vp->size, sizeof(expected));
-  REQUIRE_EQ(memcmp(vp->ptr, expected, sizeof(expected)), 0);
+  REQUIRE_EQ(vp.size, sizeof(expected));
+  REQUIRE_EQ(memcmp(vp.ptr, expected, sizeof(expected)), 0);
 
   chmap_destroy(hm);
 }
 
-// A caller can shrink a heap value and use the current heap storage of the
-// map as the source; if realloc moves the block, the map must not read from
-// the block that realloc frees. force_moving_realloc always frees the first
-// allocation and returns a new one, whereas a real realloc can shrink a block
-// in place, which hides the stale read, so force_moving_realloc turns
-// such a read into a use-after-free that valgrind and AddressSanitizer
-// always detect.
+// A caller can shrink a heap value and use the map's current heap storage
+// as the source, and if realloc moves the block the map must not read from
+// the block realloc frees. force_moving_realloc always frees the first
+// allocation and returns a new one, while a real realloc can shrink a block
+// in place and hide the stale read, so force_moving_realloc turns such a
+// read into a use-after-free that valgrind and AddressSanitizer always
+// catch.
 TEST(chash_maps, sc_value_update_self_referential_heap_to_heap) {
   ccol_memmgmt_procs_t mp = {.malloc = malloc,
                              .free = free,
@@ -2890,38 +2874,38 @@ TEST(chash_maps, sc_value_update_self_referential_heap_to_heap) {
                  &(cmap_pair){.ptr = large_val, .size = sizeof(large_val)}),
              ccol_success);
 
-  const cmap_pair *vp = NULL;
+  cmap_pair vp = {NULL, 0};
   REQUIRE_EQ(
       chmap_get_elem_ref(
           hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)}, &vp),
       ccol_success);
-  void *heap_storage = vp->ptr;
+  void *heap_storage = vp.ptr;
 
   unsigned char expected[30];
   memcpy(expected, heap_storage, sizeof(expected));
 
   // Still > INLINE_STORAGE_THRESHOLD, so this stays on the heap-to-heap
-  // (realloc) path rather than switching to inline storage.
+  // (realloc) path and doesn't switch to inline storage.
   REQUIRE_EQ(chmap_insert_elem(
                  hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
                  &(cmap_pair){.ptr = heap_storage, .size = sizeof(expected)}),
              ccol_key_already_present);
 
-  vp = NULL;
+  vp = (cmap_pair){NULL, 0};
   REQUIRE_EQ(
       chmap_get_elem_ref(
           hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)}, &vp),
       ccol_success);
-  REQUIRE_EQ(vp->size, sizeof(expected));
-  REQUIRE_EQ(memcmp(vp->ptr, expected, sizeof(expected)), 0);
+  REQUIRE_EQ(vp.size, sizeof(expected));
+  REQUIRE_EQ(memcmp(vp.ptr, expected, sizeof(expected)), 0);
 
   chmap_destroy(hm);
 }
 
 // A companion to the three self-referential update tests above: an exact
-// self-copy, where the size does not change and the value pointer aliases the
-// current storage of the entry byte for byte, must also leave the value
-// correct, both for an inline entry and for a heap
+// self-copy, where the size stays the same and the value pointer aliases the
+// entry's current storage byte for byte, also leaves the value right,
+// for an inline entry and for a heap
 // entry.
 TEST(chash_maps, sc_value_update_self_referential_same_size) {
   chashmap *hm = chmap_create(1, ccol_string, ccol_other_types, NULL);
@@ -2936,7 +2920,7 @@ TEST(chash_maps, sc_value_update_self_referential_same_size) {
           &(cmap_pair){.ptr = small_val, .size = sizeof(small_val)}),
       ccol_success);
 
-  const cmap_pair *vp = NULL;
+  cmap_pair vp = {NULL, 0};
   REQUIRE_EQ(chmap_get_elem_ref(hm,
                                 &(cmap_pair){.ptr = (void *)key_inline,
                                              .size = strlen(key_inline)},
@@ -2945,16 +2929,16 @@ TEST(chash_maps, sc_value_update_self_referential_same_size) {
   REQUIRE_EQ(chmap_insert_elem(hm,
                                &(cmap_pair){.ptr = (void *)key_inline,
                                             .size = strlen(key_inline)},
-                               &(cmap_pair){.ptr = vp->ptr, .size = vp->size}),
+                               &(cmap_pair){.ptr = vp.ptr, .size = vp.size}),
              ccol_key_already_present);
 
-  vp = NULL;
+  vp = (cmap_pair){NULL, 0};
   REQUIRE_EQ(chmap_get_elem_ref(hm,
                                 &(cmap_pair){.ptr = (void *)key_inline,
                                              .size = strlen(key_inline)},
                                 &vp),
              ccol_success);
-  REQUIRE_EQ(memcmp(vp->ptr, small_val, sizeof(small_val)), 0);
+  REQUIRE_EQ(memcmp(vp.ptr, small_val, sizeof(small_val)), 0);
 
   const char *key_heap = "h";
   unsigned char large_val[30];
@@ -2967,7 +2951,7 @@ TEST(chash_maps, sc_value_update_self_referential_same_size) {
           &(cmap_pair){.ptr = large_val, .size = sizeof(large_val)}),
       ccol_success);
 
-  vp = NULL;
+  vp = (cmap_pair){NULL, 0};
   REQUIRE_EQ(
       chmap_get_elem_ref(
           hm, &(cmap_pair){.ptr = (void *)key_heap, .size = strlen(key_heap)},
@@ -2976,38 +2960,38 @@ TEST(chash_maps, sc_value_update_self_referential_same_size) {
   REQUIRE_EQ(
       chmap_insert_elem(
           hm, &(cmap_pair){.ptr = (void *)key_heap, .size = strlen(key_heap)},
-          &(cmap_pair){.ptr = vp->ptr, .size = vp->size}),
+          &(cmap_pair){.ptr = vp.ptr, .size = vp.size}),
       ccol_key_already_present);
 
-  vp = NULL;
+  vp = (cmap_pair){NULL, 0};
   REQUIRE_EQ(
       chmap_get_elem_ref(
           hm, &(cmap_pair){.ptr = (void *)key_heap, .size = strlen(key_heap)},
           &vp),
       ccol_success);
-  REQUIRE_EQ(memcmp(vp->ptr, large_val, sizeof(large_val)), 0);
+  REQUIRE_EQ(memcmp(vp.ptr, large_val, sizeof(large_val)), 0);
 
   chmap_destroy(hm);
 }
 
-// A caller can insert a value again for a key that is already present, using
-// a pointer from chmap_get_elem_ref or chmap_get_ptr for that exact key
-// as the source of the insert, and this must not corrupt the stored value.
-// This test is the mirror of the sc_value_update_self_referential_* group
-// above, for the existing-key update path of the open-addressing backend,
-// which is a plain memcpy in place into the val_data field of the slot and
-// needs an alias guard to stay correct. The test reaches it through the raw
-// chmap_insert_elem function layer, not through the type-inferred macros,
-// because those macros always copy through a local on the stack, so they can
-// never alias storage that the map owns in this way.
+// A caller can insert a value again for a key that is already there, using a
+// pointer from chmap_get_elem_ref or chmap_get_ptr for that same key as the
+// insert's source, and that must not corrupt the stored value. This is the
+// mirror of the sc_value_update_self_referential_* group above, for the
+// open-addressing backend's existing-key update path, which is a plain
+// in-place memcpy into the slot's val_data field and needs an alias guard to
+// stay correct. The test gets there through the raw chmap_insert_elem
+// function layer and not through the type-inferred macros, because those
+// always copy through a local on the stack and so can never alias storage
+// the map owns this way.
 TEST(chash_maps, oa_value_update_self_referential_same_size) {
   chashmap *hm = chmap_create(1, ccol_int, ccol_long_long, NULL);
   REQUIRE_NE((void *)hm, NULL);
 
   int key = 7;
-  /* long long, and not long: a long is only 4 bytes on ILP32 (for example on
-   * i386), too narrow to hold this 8-byte bit pattern at all, while a long
-   * long is reliably 8 bytes on every mainstream platform that this library
+  /* long long and not long, because a long is only 4 bytes on ILP32 (i386
+   * for example), too narrow to hold this 8-byte bit pattern at all, while a
+   * long long is reliably 8 bytes on every mainstream platform this library
    * targets. tests/clrucache/tests.c uses a long long for the same
    * "distinctive 8-byte bit pattern" need. */
   long long val = 0x1122334455667788LL;
@@ -3016,29 +3000,29 @@ TEST(chash_maps, oa_value_update_self_referential_same_size) {
                         &(cmap_pair){.ptr = &val, .size = sizeof(val)}),
       ccol_success);
 
-  const cmap_pair *vp = NULL;
+  cmap_pair vp = {NULL, 0};
   REQUIRE_EQ(chmap_get_elem_ref(
                  hm, &(cmap_pair){.ptr = &key, .size = sizeof(key)}, &vp),
              ccol_success);
   REQUIRE_EQ(
       chmap_insert_elem(hm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
-                        &(cmap_pair){.ptr = vp->ptr, .size = vp->size}),
+                        &(cmap_pair){.ptr = vp.ptr, .size = vp.size}),
       ccol_key_already_present);
 
-  vp = NULL;
+  vp = (cmap_pair){NULL, 0};
   REQUIRE_EQ(chmap_get_elem_ref(
                  hm, &(cmap_pair){.ptr = &key, .size = sizeof(key)}, &vp),
              ccol_success);
   long long got;
-  memcpy(&got, vp->ptr, sizeof(got));
+  memcpy(&got, vp.ptr, sizeof(got));
   REQUIRE_EQ(got, val);
 
   chmap_destroy(hm);
 }
 
-// Verify that a custom hashing function is correctly wired through the OA
-// backend (int->int, both key and value are integral, so OA is selected).
-// All CRUD operations and iteration must work under the custom hasher.
+// Check that a custom hashing function is wired through the OA backend
+// (int->int, key and value both integral, so OA gets picked). Every CRUD
+// operation and the iteration work under the custom hasher.
 TEST(chash_maps, oa_custom_hashing) {
   ccol_hashing_proc_t ch = &custom_int_key_hasher;
   chmap_construct_ch(hm, int, int, ch);
@@ -3074,11 +3058,11 @@ TEST(chash_maps, oa_custom_hashing) {
   chmap_destroy(hm);
 }
 
-// FNV-1a over exactly ptr[0..size), the shape that a hash function for a
-// binary key of variable length needs: it must hash two keys that share
-// a prefix but have different lengths, such as "ab" and "abc", to different
-// values, without depending on a NUL terminator, or on any other
-// outside convention, to find where the key ends.
+// FNV-1a over exactly ptr[0..size), the shape a hash function for a binary
+// key of variable length needs: it must hash two keys that share a prefix
+// but have different lengths, like "ab" and "abc", to different values,
+// without relying on a NUL terminator or any other outside convention to
+// find where the key ends.
 static unsigned long fnv1a_key_hasher(const void *ptr, size_t size) {
   const unsigned char *b = (const unsigned char *)ptr;
   unsigned long h = 2166136261UL;
@@ -3087,10 +3071,10 @@ static unsigned long fnv1a_key_hasher(const void *ptr, size_t size) {
 }
 
 // Check that the map passes the size parameter to the custom hash callback
-// correctly. The map here uses separate chaining with a string key, whose
-// length varies, so two keys that share a prefix but differ in length must
-// hash independently, and the map must store them and find them
-// independently too.
+// correctly. The map uses separate chaining with a string key, whose length
+// varies, so two keys that share a prefix but differ in length must hash
+// independently, and the map has to store and find them independently
+// too.
 TEST(chash_maps, sc_custom_hashing_with_variable_length_key) {
   ccol_hashing_proc_t ch = &fnv1a_key_hasher;
   chmap_construct_ch(hm, char *, int, ch);
@@ -3108,8 +3092,8 @@ TEST(chash_maps, sc_custom_hashing_with_variable_length_key) {
   chmap_destroy(hm);
 }
 
-// chmap_insert_elem, chmap_get_elem_ref, and chmap_delete_elem must return
-// ccol_invalid_args when passed NULL pointers or a zero-size key/value.
+// chmap_insert_elem, chmap_get_elem_ref and chmap_delete_elem return
+// ccol_invalid_args for NULL pointers or a zero-size key/value.
 TEST(chash_maps, insert_and_ref_invalid_args) {
   chmap_construct(hm, char *, int);
   REQUIRE_NE((void *)hm, NULL);
@@ -3134,7 +3118,7 @@ TEST(chash_maps, insert_and_ref_invalid_args) {
              ccol_invalid_args);
   REQUIRE_EQ(chmap_insert_elem(hm, &valid_key, NULL), ccol_invalid_args);
 
-  const cmap_pair *out = NULL;
+  cmap_pair out = {NULL, 0};
   REQUIRE_EQ(chmap_get_elem_ref(hm, &key_null_ptr, &out), ccol_invalid_args);
   REQUIRE_EQ(chmap_get_elem_ref(hm, &key_zero_size, &out), ccol_invalid_args);
   REQUIRE_EQ(chmap_get_elem_ref(hm, NULL, &out), ccol_invalid_args);
@@ -3148,9 +3132,9 @@ TEST(chash_maps, insert_and_ref_invalid_args) {
   chmap_destroy(hm);
 }
 
-// chmap_get_ptr on the OA backend must return a pointer that a caller can
-// write through, so that a later chmap_get call shows the new value. This
-// test also confirms that the macro returns NULL for a key that is absent.
+// chmap_get_ptr on the OA backend has to return a pointer the caller can
+// write through, so a later chmap_get call sees the new value. The test also
+// checks that the macro returns NULL for an absent key.
 TEST(chash_maps, oa_get_ptr_in_place_modification) {
   chmap_construct(hm, int, int);
   REQUIRE_NE((void *)hm, NULL);
@@ -3168,19 +3152,19 @@ TEST(chash_maps, oa_get_ptr_in_place_modification) {
   *p = 999;
   REQUIRE_EQ(chmap_get(hm, k1), 999);
 
-  // Other entries must be unaffected.
+  // The other entries must not be affected.
   REQUIRE_EQ(chmap_get(hm, k2), 200);
   REQUIRE_EQ(chmap_get(hm, k3), 300);
 
-  // Absent key returns NULL.
+  // An absent key gives NULL.
   int absent = 99;
   REQUIRE_EQ((void *)chmap_get_ptr(hm, absent), (void *)NULL);
 
   chmap_destroy(hm);
 }
 
-// chmap_construct_scoped must automatically destroy an SC-backend map
-// (char* -> int) when the enclosing block exits, without a manual
+// chmap_construct_scoped should destroy an SC-backend map (char* -> int)
+// automatically when the enclosing block exits, without a manual
 // chmap_destroy.
 TEST(chash_maps, sc_construct_scoped_lifecycle) {
   {
@@ -3196,12 +3180,12 @@ TEST(chash_maps, sc_construct_scoped_lifecycle) {
     REQUIRE_EQ(chmap_get(hm, "alpha"), 10);
     REQUIRE_EQ(chmap_get(hm, "beta"), 20);
     REQUIRE_EQ(chmap_get(hm, "gamma"), 30);
-    // hm is automatically destroyed at end of block (no chmap_destroy needed)
+    // hm gets destroyed automatically at the end of the block, no chmap_destroy
   }
 }
 
-// ccol_for_each must visit every element exactly once on the SC backend
-// (char* -> int).  for_each_macro already covers the OA backend (int -> int).
+// ccol_for_each visits every element exactly once on the SC backend
+// (char* -> int). for_each_macro covers the OA backend (int -> int) already.
 TEST(chash_maps, sc_for_each_macro) {
   chmap_construct(hm, char *, int);
   REQUIRE_NE((void *)hm, NULL);
@@ -3225,7 +3209,7 @@ TEST(chash_maps, sc_for_each_macro) {
   chmap_destroy(hm);
 }
 
-// chmap_get_elem_copy must work correctly on the OA backend (int -> int).
+// chmap_get_elem_copy needs to work on the OA backend (int -> int) too, since
 // get_elem_copy_partial_buffer only covers the SC backend (ccol_other_types).
 TEST(chash_maps, oa_get_elem_copy) {
   chmap_construct(hm, int, int);
@@ -3259,11 +3243,11 @@ TEST(chash_maps, oa_get_elem_copy) {
   chmap_destroy(hm);
 }
 
-// This test deletes entries from an OA-backend map whose capacity is at the
-// minimum of 64 slots, where no rehash runs, so nothing clears the tombstones.
-// The iterator must then skip the tombstone slots and visit only
-// the live entries that are left.
-TEST(chash_maps, oa_iterator_skips_tombstones) {
+// Deletes entries from an OA-backend map whose capacity is at the minimum,
+// where no rehash runs, so each delete's backward shift works inside the same
+// table. The iterator then visits exactly the live entries that are
+// left, wherever the shift moved them.
+TEST(chash_maps, oa_iterator_visits_only_live_entries_after_deletes) {
   chmap_construct(hm, int, int);
   REQUIRE_NE((void *)hm, NULL);
 
@@ -3273,8 +3257,8 @@ TEST(chash_maps, oa_iterator_skips_tombstones) {
   }
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)5);
 
-  // Delete keys 2 and 4.  Capacity stays at the 64-slot minimum so no rehash
-  // fires and the deleted slots remain as tombstones in the slot array.
+  // Delete keys 2 and 4. The capacity stays at its minimum, so no rehash
+  // runs.
   int del1 = 2, del2 = 4, absent = 99;
   ccol_retval_t r = chmap_remove(hm, del1);
   REQUIRE_EQ(r, ccol_success);
@@ -3282,7 +3266,7 @@ TEST(chash_maps, oa_iterator_skips_tombstones) {
   REQUIRE_EQ(r, ccol_success);
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)3);
 
-  // chmap_remove on a key that was never inserted must return
+  // chmap_remove of a key that was never inserted returns
   // ccol_key_not_found.
   r = chmap_remove(hm, absent);
   REQUIRE_EQ(r, ccol_key_not_found);
@@ -3301,9 +3285,9 @@ TEST(chash_maps, oa_iterator_skips_tombstones) {
   chmap_destroy(hm);
 }
 
-// chmap_reset(hm, 0) must clear all the elements on the SC backend, which a
-// char* key selects, and keep the current size of the bucket array: the
-// same behaviour that oa_reset_zero_preserves_capacity checks for the
+// chmap_reset(hm, 0) should clear every element on the SC backend, which a
+// char* key selects, and keep the bucket array's current size, the same
+// behaviour oa_reset_zero_preserves_capacity checks for the
 // OA backend.
 TEST(chash_maps, sc_reset_zero_preserves_capacity) {
   chashmap *hm = chmap_create(1, ccol_string, ccol_int, NULL);
@@ -3337,10 +3321,10 @@ TEST(chash_maps, sc_reset_zero_preserves_capacity) {
   chmap_destroy(hm);
 }
 
-// float and double satisfy is_type_integral (size <= 8 bytes), so the OA
-// backend is selected for float->int and double->int maps.  This exercises
-// the integer hash path for ccol_float and ccol_double keys, along with
-// full CRUD and iteration.
+// float and double satisfy is_type_integral (size <= 8 bytes), so float->int
+// and double->int maps get the OA backend. This exercises the integer hash
+// path for ccol_float and ccol_double keys, with full CRUD and
+// iteration.
 TEST(chash_maps, oa_float_and_double_keys) {
   {
     chmap_construct(hm, float, int);
@@ -3397,12 +3381,12 @@ TEST(chash_maps, oa_float_and_double_keys) {
   }
 }
 
-// Negative zero and positive zero are `==` in C, but they have different
-// object representations, and key equality in this map is otherwise bitwise
-// (see canonicalize_key_pair_if_needed in chashmap.c), so the map
-// canonicalizes a signed zero on the way in, and the two zeroes become one
-// single key. This holds for the OA backend, which an int value selects, and
-// for the SC backend, which a char* value selects.
+// Negative zero and positive zero are `==` in C but have different object
+// representations, and key equality in this map is otherwise bitwise (see
+// canonicalize_key_pair_if_needed in chashmap.c), so the map canonicalizes a
+// signed zero on the way in and the two zeroes become a single key. That
+// holds for the OA backend, which an int value selects, and for the SC
+// backend, which a char* value selects.
 TEST(chash_maps, float_double_keys_negative_zero_canonicalized) {
   {
     // OA backend: float -> int
@@ -3445,8 +3429,8 @@ TEST(chash_maps, float_double_keys_negative_zero_canonicalized) {
   }
 
   {
-    // SC backend: double key, char* value (char* value forces separate
-    // chaining regardless of the key type).
+    // SC backend: double key, char* value (a char* value forces separate
+    // chaining whatever the key type is).
     chmap_construct(hm, double, char *);
 
     double neg_zero = -0.0;
@@ -3460,12 +3444,12 @@ TEST(chash_maps, float_double_keys_negative_zero_canonicalized) {
   }
 }
 
-// NaN is never `==` to anything, not even to itself, but a hash map still
-// needs a reflexive key-equality relation to be usable at all. Key equality
-// for a floating-point key in this map is bitwise, apart from the signed-zero
-// canonicalization above, so the map always finds a NaN key again by
-// the exact bit pattern of the insert, and two NaN keys with different
-// payloads stay two separate keys.
+// NaN is never `==` to anything, not even itself, but a hash map still needs
+// a reflexive key-equality relation to be usable at all. For a
+// floating-point key, key equality in this map is bitwise apart from the
+// signed-zero canonicalization above, so the map always finds a NaN key again
+// by the exact bit pattern it was inserted with, and two NaN keys with
+// different payloads stay two separate keys.
 TEST(chash_maps, float_double_nan_keys_bitwise_identity) {
   {
     chmap_construct(hm, double, int);
@@ -3494,29 +3478,29 @@ TEST(chash_maps, float_double_nan_keys_bitwise_identity) {
   }
 }
 
-// A float is exactly 4 bytes and a double is exactly 8 bytes, with no
-// padding, but the in-memory representation of a long double is different,
-// because it carries padding bits that the platform defines: on this platform
-// it is 80-bit x87 extended precision in a 16-byte slot, which leaves 6
-// padding bytes that the C standard says nothing about. Key equality and the
-// hash for a long double are therefore value-based (see hash_long_double_value
-// and long_double_keys_equal in chashmap.c). Two variables can hold the same
-// numeric value and come from completely different code paths, so their
-// padding bits can differ and are not deterministic, and the map must still
-// find them as the same key. This is the same idea as the -0.0 and 0.0
-// unification that float_double_keys_negative_zero_canonicalized covers for
-// float and double, but for a long double the mechanism is a native
-// floating-point comparison of values, not a canonicalization of bytes,
-// because this library cannot zero the padding bits of a long double in a
-// portable way. The comment on sc_inline_long_double_alignment gives the
-// measured basis for that constraint.
+// A float is exactly 4 bytes and a double exactly 8, with no padding, but a
+// long double's in-memory representation is different because it has
+// platform-defined padding bits: on this platform it's 80-bit x87 extended
+// precision in a 16-byte slot, which leaves 6 padding bytes the C standard
+// says nothing about. So key equality and the hash for a long double are
+// value-based (see hash_long_double_value and long_double_keys_equal in
+// chashmap.c). Two variables can hold the same numeric value and come from
+// completely different code paths, so their padding bits can differ and
+// aren't deterministic, and the map still has to find them as the same key.
+// This follows the same idea as the -0.0 and 0.0 unification that
+// float_double_keys_negative_zero_canonicalized covers for float and double,
+// but for a long double the mechanism is a native floating-point comparison
+// of values and not a canonicalization of bytes, because this library can't
+// zero a long double's padding bits portably. The comment on
+// sc_inline_long_double_alignment gives the measured basis for that
+// constraint.
 TEST(chash_maps, long_double_keys_padding_insensitive_equality) {
   chmap_construct(hm, long double, int);
 
-  // Two long double variables hold the exact same numeric value, but two
-  // different code paths build them (a literal and a computation at run
-  // time), which is the case that this test covers: only their significant
-  // value bits must be identical, while their padding bits can
+  // Two long double variables hold exactly the same numeric value but are
+  // built by two different code paths (a literal and a run-time
+  // computation), which is the case this test covers: only their significant
+  // value bits are identical, and their padding bits may
   // differ.
   long double a = 3.0L;
   volatile long double one = 1.0L, two = 2.0L;
@@ -3529,30 +3513,30 @@ TEST(chash_maps, long_double_keys_padding_insensitive_equality) {
   REQUIRE_NE((void *)chmap_get_ptr(hm, b), (void *)NULL);
   REQUIRE_EQ(chmap_get(hm, b), 111);
 
-  // A padding region that this test pokes on purpose must not change the key
-  // that the map finds. The test builds a raw byte buffer that holds the same
-  // value, forces every trailing padding byte to a nonzero pattern, and
-  // then confirms that the raw chmap_insert_elem and chmap_get_elem_ref layer
-  // treats that buffer as the same key that an ordinary, clean variable
-  // with the same value gives.
+  // A padding region the test pokes on purpose must not change which key the
+  // map finds. The test builds a raw byte buffer holding the same value,
+  // forces every trailing padding byte to a nonzero pattern, and then checks
+  // that the raw chmap_insert_elem and chmap_get_elem_ref layer treats that
+  // buffer as the same key an ordinary clean variable with the same value
+  // gives.
   //
-  // The guard is LDBL_MANT_DIG == 64, and not a bare `sizeof(long double) >
+  // The guard is LDBL_MANT_DIG == 64 and not a bare `sizeof(long double) >
   // 10`, because LDBL_MANT_DIG == 64 names the x87 80-bit extended-precision
   // layout: 1 explicit sign bit, 15 exponent bits and 64 explicit mantissa
   // bits, 10 significant bytes padded out to a sizeof(long double) of 12 or 16
-  // with bytes that nothing uses. On aarch64 the long double is IEEE
-  // binary128 and LDBL_MANT_DIG is 113, as on any other binary128 platform,
-  // where the long double has a sizeof(long double) of 16 too, but EVERY
-  // one of those 16 bytes is significant, so no padding region is left to
-  // poke at all. A poke of bytes 10 to 15 there does more than fail to show
-  // the padding insensitivity that this test wants to show: it corrupts the
-  // mantissa and exponent bits of the value into a completely different
-  // number, and `poked_value` reads back as -nan instead of 3.0. A bare size
-  // check lets that through, and the test then fails falsely; the failure
-  // is not a defect in the long-double key comparison of this library:
-  // chashmap.c compares long double keys by numeric VALUE, with a plain
-  // memcpy and then an ==, over the whole object, and never inspects a
-  // padding byte, so it does not depend on this assumption.
+  // with bytes nothing uses. On aarch64 the long double is IEEE binary128 and
+  // LDBL_MANT_DIG is 113, as on any other binary128 platform, where
+  // sizeof(long double) is 16 as well but EVERY one of those 16 bytes is
+  // significant, so there's no padding region left to poke. Poking bytes 10
+  // to 15 there does more than fail to show the padding insensitivity this
+  // test wants to show: it corrupts the value's mantissa and exponent bits
+  // into a completely different number, and `poked_value` reads back as -nan
+  // instead of 3.0. A bare size check would let that through and the test
+  // would fail falsely, and the failure wouldn't be a defect in this
+  // library's long-double key comparison: chashmap.c compares long double
+  // keys by numeric VALUE, with a plain memcpy and then an ==, over the whole
+  // object, and never looks at a padding byte, so it never relies on this
+  // assumption.
   if (LDBL_MANT_DIG == 64) {
     unsigned char poked[sizeof(long double)];
     memcpy(poked, &a, sizeof(a));
@@ -3564,22 +3548,22 @@ TEST(chash_maps, long_double_keys_padding_insensitive_equality) {
     REQUIRE_EQ(a, poked_value);
 
     cmap_pair poked_key = {.ptr = poked, .size = sizeof(long double)};
-    const cmap_pair *out = NULL;
+    cmap_pair out = {NULL, 0};
     REQUIRE_EQ(chmap_get_elem_ref(hm, &poked_key, &out), ccol_success);
     int found;
-    memcpy(&found, out->ptr, sizeof(found));
+    memcpy(&found, out.ptr, sizeof(found));
     REQUIRE_EQ(found, 111);
   }
 
-  // A genuinely distinct value must not be conflated with it.
+  // A really different value must not be mixed up with it.
   long double c = 3.0001L;
   REQUIRE_EQ((void *)chmap_get_ptr(hm, c), (void *)NULL);
 
   chmap_destroy(hm);
 }
 
-// -0.0L and 0.0L are `==` in C, exactly like -0.0 and 0.0, and the long
-// double key equality of this map unifies them, the same behaviour that
+// -0.0L and 0.0L are `==` in C exactly like -0.0 and 0.0, and this map's
+// long double key equality unifies them, the same behaviour
 // float_double_keys_negative_zero_canonicalized checks for float and double.
 // See the sibling comment above, and the dedicated zero branch in
 // hash_long_double_value.
@@ -3603,20 +3587,19 @@ TEST(chash_maps, long_double_keys_negative_zero_unified) {
   chmap_destroy(hm);
 }
 
-// The map separates NaN keys of type float and double by their exact bit
-// pattern (see float_double_nan_keys_bitwise_identity above), but every NaN
-// long double is different: they all collapse into one single key, and the
-// map reads no payload byte and no padding byte to decide this. This
-// difference from the float and double policy is deliberate, and the padding
-// of a long double forces it: in practice the padding bytes of a NaN
-// long double are genuine uninitialized memory, as `long double n = NAN;` never
-// writes them, so a read of them with memcmp is a real hazard on its own, and
-// not only a source of non-determinism, and so is a hash of them;
-// valgrind reports such a read as a use of uninitialized memory.
-// hash_long_double_value and long_double_keys_equal both test isnan() before
-// they touch any raw byte, and the long double comparator of cbstmap collapses
-// every NaN into one key for the same reason; see the doc comment on
-// cmp_float_val in cbstmap.c.
+// The map tells float and double NaN keys apart by their exact bit pattern
+// (see float_double_nan_keys_bitwise_identity above), but long double NaNs
+// are different: they all collapse into one single key, and the map reads no
+// payload byte and no padding byte to decide that. The difference from the
+// float and double policy is on purpose and the long double's padding forces
+// it, because in practice the padding bytes of a NaN long double really are
+// uninitialized memory, since `long double n = NAN;` never writes them. So
+// reading them with memcmp is a real hazard in itself, not just a source of
+// non-determinism, and so is hashing them, and valgrind reports such a read
+// as a use of uninitialized memory. hash_long_double_value and
+// long_double_keys_equal both test isnan() before touching any raw byte, and
+// cbstmap's long double comparator collapses every NaN into one key for the
+// same reason; see the doc comment on cmp_float_val in cbstmap.c.
 TEST(chash_maps, long_double_nan_keys_collapse_to_one_key) {
   chmap_construct(hm, long double, int);
 
@@ -3629,8 +3612,8 @@ TEST(chash_maps, long_double_nan_keys_collapse_to_one_key) {
 
   unsigned char other_nan_bytes[sizeof(long double)];
   memcpy(other_nan_bytes, &nan_key, sizeof(nan_key));
-  // Flip the lowest bit of the significand: the first byte on a
-  // little-endian target, the last one on a big-endian target.
+  // Flip the lowest bit of the significand, which is the first byte on a
+  // little-endian target and the last one on a big-endian target.
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
   other_nan_bytes[sizeof(other_nan_bytes) - 1] ^= 0x01;
 #else
@@ -3640,8 +3623,8 @@ TEST(chash_maps, long_double_nan_keys_collapse_to_one_key) {
   memcpy(&other_nan, other_nan_bytes, sizeof(other_nan));
   REQUIRE_TRUE(isnan(other_nan));
 
-  // A different NaN payload is still found as (and overwrites) the same
-  // single NaN key, unlike float/double's distinct-payload policy.
+  // A different NaN payload is found as (and overwrites) the same single NaN
+  // key, unlike float/double's distinct-payload policy.
   int v2 = 1000;
   chmap_insert(hm, other_nan, v2);
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)1);
@@ -3651,12 +3634,12 @@ TEST(chash_maps, long_double_nan_keys_collapse_to_one_key) {
   chmap_destroy(hm);
 }
 
-// A caller must be able to use both signs of infinity as keys, so
-// hash_long_double_value has a dedicated branch for them. It needs that
-// branch, because the exponent output of frexpl is unspecified for an
-// infinite input, and a conversion of an infinite value to an integer type is
-// undefined behavior. The two infinities must also stay separate from
-// each other, and separate from every finite key.
+// A caller has to be able to use both infinities as keys, so
+// hash_long_double_value has a dedicated branch for them. It needs one
+// because frexpl's exponent output is unspecified for an infinite input and
+// converting an infinite value to an integer type is undefined behavior. The
+// two infinities must also stay apart from each other and from every
+// finite key.
 TEST(chash_maps, long_double_infinity_keys) {
   chmap_construct(hm, long double, int);
 
@@ -3676,28 +3659,27 @@ TEST(chash_maps, long_double_infinity_keys) {
   chmap_destroy(hm);
 }
 
-// This test is the mirror of sc_float_key_size_mismatch_returns_invalid_args:
-// a long double key also gets an exact-size check in the raw
-// chmap_insert_elem, chmap_get_elem_ref and chmap_delete_elem layer, the
-// check key_size_matches_type_if_fixed_width, which is needed because
+// The mirror of sc_float_key_size_mismatch_returns_invalid_args: a long
+// double key gets an exact-size check in the raw chmap_insert_elem,
+// chmap_get_elem_ref and chmap_delete_elem layer too,
+// key_size_matches_type_if_fixed_width, which is needed because
 // hash_long_double_value and long_double_keys_equal both trust key_size to be
-// exactly sizeof(long double) and read that many bytes every time. The map
-// must therefore reject a buffer from the caller that is too small, before
-// either function reads past the end of that buffer. The size
-// of a key type of genuinely variable length is trusted; the size of this one
-// is not.
+// exactly sizeof(long double) and always read that many bytes. So the map has
+// to reject a caller buffer that is too small before either function reads
+// past its end. The size of a key type of really variable length is trusted,
+// this one's isn't.
 TEST(chash_maps, long_double_key_size_mismatch_returns_invalid_args) {
   chmap_construct(hm, long double, int);
   REQUIRE_NE((void *)hm, NULL);
 
-  // The size below is one byte short of sizeof(long double), not a
-  // hardcoded sizeof(double), because the size of a long double depends on
-  // the platform and the ABI (see the "long double memory layout" portability
-  // note of this codebase). On armhf a long double has no extended precision
-  // at all and is bit for bit the same as a double, so sizeof(double) IS
-  // the correct, exact size there, which would make this buffer valid by
-  // accident instead of too small. One byte short is wrong on every platform
-  // by construction.
+  // The size below is one byte short of sizeof(long double) and not a
+  // hardcoded sizeof(double), because a long double's size depends on the
+  // platform and the ABI (see this codebase's "long double memory layout"
+  // portability note). On armhf a long double has no extended precision at
+  // all and is bit for bit the same as a double, so sizeof(double) IS the
+  // exact right size there, which would make this buffer valid by accident
+  // instead of too small. One byte short is wrong on every platform by
+  // construction.
   size_t tiny_size = sizeof(long double) - 1;
   uint8_t *tiny_key_buf = (uint8_t *)malloc(tiny_size);
   REQUIRE_NE((void *)tiny_key_buf, NULL);
@@ -3710,11 +3692,11 @@ TEST(chash_maps, long_double_key_size_mismatch_returns_invalid_args) {
   REQUIRE_EQ(chmap_insert_elem(hm, &bad_key, &val_pair), ccol_invalid_args);
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)0);
 
-  const cmap_pair *out = NULL;
+  cmap_pair out = {NULL, 0};
   REQUIRE_EQ(chmap_get_elem_ref(hm, &bad_key, &out), ccol_invalid_args);
   REQUIRE_EQ(chmap_delete_elem(hm, &bad_key), ccol_invalid_args);
 
-  // A correctly-sized key must still work normally afterwards.
+  // A correctly sized key keeps working afterwards.
   long double good_key = 1.0L;
   chmap_insert(hm, good_key, val);
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)1);
@@ -3724,9 +3706,9 @@ TEST(chash_maps, long_double_key_size_mismatch_returns_invalid_args) {
   chmap_destroy(hm);
 }
 
-// char, short, and long long all satisfy is_type_integral (size <= 8 bytes),
-// so the OA backend is selected.  These types exercise hash paths not covered
-// by the existing int / size_t / void* tests.
+// char, short and long long all satisfy is_type_integral (size <= 8 bytes),
+// so the OA backend gets picked. These types exercise hash paths the
+// existing int / size_t / void* tests don't cover.
 TEST(chash_maps, oa_char_and_short_and_long_long_keys) {
   {
     chmap_construct(hm, char, int);
@@ -3799,11 +3781,11 @@ TEST(chash_maps, oa_char_and_short_and_long_long_keys) {
   }
 }
 
-// The scalar `signed char` maps to ccol_signed_char, which is not the same as
-// ccol_char, and its typedef int8_t maps there too. Both must still satisfy
-// is_type_integral and get_type_size in the same way as ccol_char, so the map
-// selects the OA backend here too, and a negative value must hash
-// correctly and come back correctly.
+// The scalar `signed char` maps to ccol_signed_char, which isn't the same as
+// ccol_char, and its typedef int8_t maps there too. Both must
+// satisfy is_type_integral and get_type_size the same way ccol_char does, so
+// the map picks the OA backend here as well, and a negative value needs to
+// hash correctly and come back correctly.
 TEST(chash_maps, oa_signed_char_and_int8_t_keys) {
   {
     chmap_construct(hm, signed char, int);
@@ -3851,8 +3833,8 @@ TEST(chash_maps, oa_signed_char_and_int8_t_keys) {
   }
 }
 
-// SC backend with both key and value as strings.  Verifies insert, update,
-// get, iteration, and delete for char*->char* maps.
+// SC backend with both key and value as strings. Checks insert, update, get,
+// iteration and delete for char*->char* maps.
 TEST(chash_maps, sc_string_to_string) {
   chmap_construct(hm, char *, char *);
   REQUIRE_NE((void *)hm, NULL);
@@ -3875,7 +3857,7 @@ TEST(chash_maps, sc_string_to_string) {
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)3);
   REQUIRE_STREQ(chmap_get(hm, k2), "green");
 
-  // All three entries must be visited exactly once.
+  // Expect all three entries to be visited exactly once.
   int count = 0;
   ccol_iter_declare(hm, it);
   for (it = ccol_begin(hm); it != NULL; it = ccol_iter_next(it)) {
@@ -3883,7 +3865,7 @@ TEST(chash_maps, sc_string_to_string) {
   }
   REQUIRE_EQ(count, 3);
 
-  // Delete one entry and confirm absence.
+  // Delete one entry and check that it's gone.
   REQUIRE_EQ(chmap_remove(hm, k1), ccol_success);
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)2);
   REQUIRE_EQ((void *)chmap_get_ptr(hm, k1), (void *)NULL);
@@ -3891,11 +3873,11 @@ TEST(chash_maps, sc_string_to_string) {
   chmap_destroy(hm);
 }
 
-// An early break out of an iteration loop must not leak the iterator.
-// This test covers two paths: the SC backend depends on the RAII
-// _ccol_destructor to free the iterator when its block exits, and the OA
-// backend calls ccol_iter_destroy directly before the break. The map must be
-// fully intact after each early exit.
+// Breaking out of an iteration loop early must not leak the iterator. The
+// test covers two paths: the SC backend relies on the RAII _ccol_destructor
+// to free the iterator when its block exits, and the OA backend calls
+// ccol_iter_destroy directly before the break. The map must be fully
+// intact after each early exit.
 TEST(chash_maps, ccol_iter_early_exit) {
   // SC backend: RAII cleanup on scope exit
   {
@@ -3914,7 +3896,7 @@ TEST(chash_maps, ccol_iter_early_exit) {
       ccol_iter_declare(hm, it);
       for (it = ccol_begin(hm); it != NULL; it = ccol_iter_next(it)) {
         if (++visited == 2) break;
-        // it is freed automatically by _ccol_destructor when this block exits
+        // _ccol_destructor frees it automatically when this block exits
       }
     }
     REQUIRE_EQ(visited, 2);
@@ -3937,7 +3919,7 @@ TEST(chash_maps, ccol_iter_early_exit) {
     ccol_iter_declare(hm, it);
     for (it = ccol_begin(hm); it != NULL; it = ccol_iter_next(it)) {
       if (++visited == 2) {
-        ccol_iter_destroy(it);  // explicit destroy; RAII then no-ops on NULL
+        ccol_iter_destroy(it);  // explicit destroy, and then RAII sees NULL
         break;
       }
     }
@@ -3948,9 +3930,9 @@ TEST(chash_maps, ccol_iter_early_exit) {
   }
 }
 
-// void* keys are typed as ccol_pointer and satisfy is_type_integral + size<=8,
-// so the OA backend is selected.  This test exercises the integer hash path
-// for ccol_pointer keys in hash_key_data, along with full CRUD and
+// void* keys are typed as ccol_pointer and satisfy is_type_integral +
+// size<=8, so the OA backend gets picked. This exercises hash_key_data's
+// integer hash path for ccol_pointer keys, with full CRUD and
 // iteration.
 TEST(chash_maps, void_ptr_keys_oa_backend) {
   chmap_construct(hm, void *, int);
@@ -3986,12 +3968,12 @@ TEST(chash_maps, void_ptr_keys_oa_backend) {
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)2);
   REQUIRE_EQ((void *)chmap_get_ptr(hm, k1), (void *)NULL);
 
-  // Removing an absent key must return ccol_key_not_found.
+  // Removing an absent key returns ccol_key_not_found.
   void *absent = (void *)0xDEAD;
   r = chmap_remove(hm, absent);
   REQUIRE_EQ(r, ccol_key_not_found);
 
-  // Iterate remaining two entries and verify aggregate values.
+  // Iterate the two entries that are left and check the aggregate values.
   int sum = 0, count = 0;
   ccol_iter_declare(hm, it);
   for (it = ccol_begin(hm); it != NULL; it = ccol_iter_next(it)) {
@@ -4121,9 +4103,9 @@ TEST(chash_maps, chmap_as_a_struct_field_two_levels_access_via_ptr) {
 
 // This hash forces every key into the same bucket with exactly the same
 // stored hash_val, so the hash_val pre-check in sc_find_in_llist and
-// sc_delete_from_llist can never stop the search early, and every
-// lookup must fall through to the full memcmp on every candidate in the
-// chain to find the right one.
+// sc_delete_from_llist can never end the search early, and every lookup has
+// to fall through to the full memcmp on every candidate in the chain to find
+// the right one.
 static unsigned long constant_struct_key_hasher(const void *ptr, size_t size) {
   (void)ptr;
   (void)size;
@@ -4136,8 +4118,8 @@ TEST(chash_maps, sc_struct_key_full_hash_collision_still_resolves_correctly) {
 
   // helper_struct has 2 bytes of padding after b, so the code below does a
   // memset first and then sets each field on its own, because a whole-struct
-  // assignment from a compound literal copies the uninitialised padding of
-  // that literal back in. With a memset, the memcmp in sc_compare_keys never
+  // assignment from a compound literal copies the literal's uninitialised
+  // padding back in. With the memset, the memcmp in sc_compare_keys never
   // reads an uninitialised padding byte.
   helper_struct k1, k2, k3, k4;
   memset(&k1, 0, sizeof(k1));
@@ -4175,8 +4157,8 @@ TEST(chash_maps, sc_struct_key_full_hash_collision_still_resolves_correctly) {
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)3);
   REQUIRE_EQ((void *)chmap_get_ptr(hm, k3), (void *)NULL);
 
-  // The rest of the (still fully-colliding) chain must resolve correctly
-  // after a deletion from the middle of it.
+  // The rest of the (still fully colliding) chain resolves correctly
+  // after a delete from the middle of it.
   REQUIRE_EQ(chmap_get(hm, k1), 100);
   REQUIRE_EQ(chmap_get(hm, k2), 999);
   REQUIRE_EQ(chmap_get(hm, k4), 400);
@@ -4188,19 +4170,15 @@ TEST(chash_maps, sc_struct_key_full_hash_collision_still_resolves_correctly) {
 // INVARIANT TESTS (randomized operation sequences)
 // ========================================================================
 
-extern size_t chmap_get_bucket_arr_size(chashmap *chmap);
-extern size_t chmap_get_elem_count_to_scale_up(chashmap *chmap);
-
 #define INVARIANTS_KEY_RANGE 200
 
-// This test runs random inserts and removes against an int->int map, which
-// uses the open-addressing backend, and the same operations against a
-// shadow reference model, a plain array indexed by key. After every operation
-// it checks two things: elem_count never goes above the
-// capacity or above the scale-up threshold, and chmap_get_ptr gives back
-// the exact shadow value for every key that the shadow model holds, and
-// NULL for every key that the shadow model does not hold. The map and the
-// reference model must never disagree.
+// Random inserts and removes against an int->int map, which uses the
+// open-addressing backend, and the same operations against a shadow
+// reference model, a plain array indexed by key. After every operation it
+// checks two things: elem_count never goes above the capacity or above the
+// scale-up threshold, and chmap_get_ptr gives back the exact shadow value
+// for every key the shadow model holds and NULL for every key it doesn't.
+// The map and the reference model must never disagree.
 TEST(chash_maps, oa_invariants_random_ops) {
   ccol_invariants_rng_t rng;
   uint64_t seed = CCOL_INVARIANTS_DEFAULT_SEED;
@@ -4240,15 +4218,15 @@ TEST(chash_maps, oa_invariants_random_ops) {
     }
     REQUIRE_EQ(chmap_elem_count(hm), shadow_count);
     REQUIRE_TRUE(chmap_elem_count(hm) <= chmap_get_bucket_arr_size(hm));
-    // The load-factor check in oa_insert runs BEFORE the insert ends, using
-    // the count from before the insert, so one insert can push
-    // elem_count one element past the threshold that starts a resize, and the
-    // pre-check of the next operation then fires. The real invariant
-    // therefore gives a tolerance of one element here, not a strict <=.
-    // oa_insert in src/chashmap.c needs that tolerance; it is not a hedge: a
-    // stricter form of this assertion, without the +1, fails against the
-    // current library, a failure that shows the design of the load-factor
-    // check before the insert, not a defect in the library.
+    // oa_insert's load-factor check runs BEFORE the insert finishes, with the
+    // count from before the insert, so one insert can push elem_count one
+    // element past the threshold that starts a resize, and the next
+    // operation's pre-check then fires. So the real invariant allows one
+    // element of tolerance here, not a strict <=. oa_insert in
+    // src/chashmap.c needs that tolerance, it isn't a hedge: a stricter form
+    // of this assertion, without the +1, fails against the current library,
+    // and that failure shows the design of the pre-insert load-factor check,
+    // not a defect in the library.
     REQUIRE_TRUE(chmap_elem_count(hm) <=
                  chmap_get_elem_count_to_scale_up(hm) + 1);
   }
@@ -4256,10 +4234,10 @@ TEST(chash_maps, oa_invariants_random_ops) {
   chmap_destroy(hm);
 }
 
-// This test uses the same reference model as oa_invariants_random_ops, but
-// the key is a char*, which selects the separate-chaining backend, and it
-// also cross-checks against a manual walk of the public iterator, not only
-// against chmap_elem_count.
+// The same reference model as oa_invariants_random_ops, but the key is a
+// char*, which picks the separate-chaining backend, and it also cross-checks
+// against a manual walk of the public iterator, not only against
+// chmap_elem_count.
 TEST(chash_maps, sc_invariants_random_ops) {
   ccol_invariants_rng_t rng;
   uint64_t seed = CCOL_INVARIANTS_DEFAULT_SEED;
@@ -4302,7 +4280,7 @@ TEST(chash_maps, sc_invariants_random_ops) {
     }
     REQUIRE_EQ(chmap_elem_count(hm), shadow_count);
 
-    // Cross-check against a manual walk of the public iterator too.
+    // Cross-check against a manual walk of the public iterator as well.
     size_t iter_count = 0;
     ccol_iter_declare(hm, it);
     for (it = ccol_begin(hm); it != NULL; it = ccol_iter_next(it)) {
@@ -4319,14 +4297,13 @@ TEST(chash_maps, sc_invariants_random_ops) {
 // open-addressing size-mismatch validation)
 // ========================================================================
 
-// chmap_reset() must still destroy every existing element when the requested
-// new_bucket_array_size is too large to honor, that is, when
-// _ccol_find_nearest_gte_power_of_two rounds such a size above
-// ccol_max_elem_count. This path must not return ccol_not_enough_memory at
-// once without any change to the map, because that behaviour contradicts the
-// documented contract of chmap_reset, which says "All elements are
-// destroyed regardless of return value" and "ccol_not_enough_memory if resize
-// fails (elements still cleared)".
+// chmap_reset() must destroy every existing element even when the
+// requested new_bucket_array_size is too big to honor, that is when
+// _ccol_find_nearest_gte_power_of_two rounds it above ccol_max_elem_count.
+// This path must not return ccol_not_enough_memory at once without touching
+// the map, because that would go against chmap_reset's documented contract,
+// which says "All elements are destroyed regardless of return value" and
+// "ccol_not_enough_memory if resize fails (elements still cleared)".
 TEST(chash_maps, reset_with_oversized_size_still_clears_elements) {
   // OA backend
   {
@@ -4343,11 +4320,11 @@ TEST(chash_maps, reset_with_oversized_size_still_clears_elements) {
 
     REQUIRE_EQ(chmap_reset(hm, SIZE_MAX), ccol_not_enough_memory);
     REQUIRE_EQ(chmap_elem_count(hm), (size_t)0);
-    // The requested size could not be honored, so the capacity is left
-    // unchanged (equivalent to passing 0), but every element is still gone.
+    // The requested size couldn't be honored, so the capacity stays as it
+    // was (the same as passing 0), but every element is gone.
     REQUIRE_EQ(chmap_get_bucket_arr_size(hm), capacity_before);
 
-    // The map remains fully usable afterwards.
+    // And the map is fully usable afterwards.
     for (int i = 0; i < 10; ++i) {
       int val = i * 13;
       chmap_insert(hm, i, val);
@@ -4394,13 +4371,13 @@ TEST(chash_maps, reset_with_oversized_size_still_clears_elements) {
   }
 }
 
-// chmap_insert_elem, chmap_get_elem_ref and chmap_delete_elem must reject a
-// key or a value whose size is not exactly the fixed key_size or val_size of
-// the open-addressing backend, even when the pointer is
-// not NULL and the size is not zero. insert_and_ref_invalid_args covers only
-// the separate-chaining backend, which a char* key selects, and
-// only the NULL and zero-size cases, so this test is the only one that
-// covers key_size_matches_type_if_fixed_width and oa_val_size_matches.
+// chmap_insert_elem, chmap_get_elem_ref and chmap_delete_elem have to reject
+// a key or a value whose size isn't exactly the open-addressing backend's
+// fixed key_size or val_size, even when the pointer isn't NULL and the size
+// isn't zero. insert_and_ref_invalid_args only covers the separate-chaining
+// backend, which a char* key picks, and only the NULL and zero-size cases,
+// so this is the only test that covers key_size_matches_type_if_fixed_width
+// and oa_val_size_matches.
 TEST(chash_maps, oa_size_mismatch_returns_invalid_args) {
   chmap_construct(hm, int, int);
   REQUIRE_NE((void *)hm, NULL);
@@ -4421,37 +4398,36 @@ TEST(chash_maps, oa_size_mismatch_returns_invalid_args) {
   REQUIRE_EQ(chmap_insert_elem(hm, &good_key, &good_val), ccol_success);
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)1);
 
-  const cmap_pair *out = NULL;
+  cmap_pair out = {NULL, 0};
   REQUIRE_EQ(chmap_get_elem_ref(hm, &bad_key, &out), ccol_invalid_args);
   REQUIRE_EQ(chmap_delete_elem(hm, &bad_key), ccol_invalid_args);
 
-  // The valid entry must still be present and intact after every rejection.
+  // The valid entry is there and intact after every rejection.
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)1);
   REQUIRE_EQ(chmap_get(hm, key), 100);
 
   chmap_destroy(hm);
 }
 
-// The key-size check must apply to every backend, and not only to the
+// The key-size check has to apply to every backend and not only to the
 // open-addressing one through oa_key_size_matches, because hash_key_data()
-// dispatches on key_type alone: for any numeric key type of fixed width it
-// reads a FIXED number of bytes from the key pointer of the caller (the
-// sizeof of the matching C type), and ignores key_pair->size
-// completely when it decides how many bytes to read. A separate-chaining map
-// can also have an integral key type, whenever that key type
-// goes with a value type that is not integral; an int->char* map is such a
-// case, because a char* value forces separate chaining whatever the key type
-// is. Such a map therefore needs its own rejection of a key_pair whose
-// declared size is smaller than the true size of its key type; without that
-// rejection, chmap_insert_elem, chmap_get_elem_ref and chmap_delete_elem
-// silently read past the end of that buffer whenever the buffer
-// of the caller is smaller than the true size of that type. This test
-// allocates a heap buffer of exactly 2
-// bytes for a key that the map declares as an int, which is 4 bytes, so
-// valgrind and AddressSanitizer catch a read of even one byte past that
-// buffer directly, and not only through a wrong return value.
+// dispatches on key_type alone: for any fixed-width numeric key type it
+// reads a FIXED number of bytes from the caller's key pointer (the sizeof of
+// the matching C type) and completely ignores key_pair->size when deciding
+// how many bytes to read. A separate-chaining map can have an integral key
+// type too, whenever that key type goes with a non-integral value type; an
+// int->char* map is such a case, because a char* value forces separate
+// chaining whatever the key type is. So such a map needs its own rejection
+// of a key_pair whose declared size is smaller than its key type's real
+// size, otherwise chmap_insert_elem, chmap_get_elem_ref and
+// chmap_delete_elem silently read past the end of the caller's buffer
+// whenever it's smaller than that type's real size. The test allocates a
+// heap buffer of exactly 2
+// bytes for a key the map declares as an int, which is 4 bytes, so valgrind
+// and AddressSanitizer catch a read of even one byte past that buffer
+// directly and not only through a wrong return value.
 TEST(chash_maps, sc_integral_key_size_mismatch_returns_invalid_args) {
-  // int key + char* value forces the separate-chaining backend even though
+  // An int key + char* value forces the separate-chaining backend although
   // the key type itself is integral.
   chmap_construct(hm, int, char *);
   REQUIRE_NE((void *)hm, NULL);
@@ -4467,11 +4443,11 @@ TEST(chash_maps, sc_integral_key_size_mismatch_returns_invalid_args) {
   REQUIRE_EQ(chmap_insert_elem(hm, &bad_key, &val), ccol_invalid_args);
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)0);
 
-  const cmap_pair *out = NULL;
+  cmap_pair out = {NULL, 0};
   REQUIRE_EQ(chmap_get_elem_ref(hm, &bad_key, &out), ccol_invalid_args);
   REQUIRE_EQ(chmap_delete_elem(hm, &bad_key), ccol_invalid_args);
 
-  // A correctly-sized key must still work normally afterwards.
+  // A correctly sized key should keep working afterwards.
   int good_key = 5;
   chmap_insert(hm, good_key, "hello");
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)1);
@@ -4481,18 +4457,18 @@ TEST(chash_maps, sc_integral_key_size_mismatch_returns_invalid_args) {
   chmap_destroy(hm);
 }
 
-// This is the same hazard, but through the float and double canonicalization
-// path of canonicalize_key_pair_if_needed, which must check that
-// key_pair->size is exactly the true size (4 bytes for a float and 8 bytes
-// for a double) instead of trusting any size of 8 bytes or less and copying
-// that many bytes out of the pointer of the caller. Without that check, a
-// float-keyed separate-chaining map that a caller gives a key_pair claiming
-// a size of 8, as if the key were a double, backed by an allocation of
-// exactly 4 bytes, reads 4 bytes past the end of that
+// The same hazard, but through the float and double canonicalization path of
+// canonicalize_key_pair_if_needed, which needs to check that key_pair->size is
+// exactly the real size (4 bytes for a float, 8 for a double) instead of
+// trusting any size of 8 bytes or less and copying that many bytes out of
+// the caller's pointer. Without that check, a float-keyed separate-chaining
+// map that a caller hands a key_pair claiming a size of 8, as if the key
+// were a double, backed by an allocation of exactly 4 bytes, reads 4 bytes
+// past the end of that
 // allocation.
 TEST(chash_maps, sc_float_key_size_mismatch_returns_invalid_args) {
-  // float key + char* value forces the separate-chaining backend even
-  // though the key type itself is integral (fixed-width numeric).
+  // A float key + char* value forces the separate-chaining backend although
+  // the key type itself is integral (fixed-width numeric).
   chmap_construct(hm, float, char *);
   REQUIRE_NE((void *)hm, NULL);
 
@@ -4507,11 +4483,11 @@ TEST(chash_maps, sc_float_key_size_mismatch_returns_invalid_args) {
   REQUIRE_EQ(chmap_insert_elem(hm, &bad_key, &val), ccol_invalid_args);
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)0);
 
-  const cmap_pair *out = NULL;
+  cmap_pair out = {NULL, 0};
   REQUIRE_EQ(chmap_get_elem_ref(hm, &bad_key, &out), ccol_invalid_args);
   REQUIRE_EQ(chmap_delete_elem(hm, &bad_key), ccol_invalid_args);
 
-  // A correctly-sized key must still work normally afterwards.
+  // A correctly sized key has to keep working afterwards.
   float good_key = 1.0f;
   chmap_insert(hm, good_key, "world");
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)1);
@@ -4522,24 +4498,24 @@ TEST(chash_maps, sc_float_key_size_mismatch_returns_invalid_args) {
 }
 
 // The ccol_short, ccol_int, ccol_long and ccol_long_long branches of
-// hash_key_data must read the key with a memcpy and never dereference
-// a cast pointer, such as *(uint32_t*)key_ptr, as the ccol_float, ccol_double
-// and ccol_pointer branches of the same function already do. A
-// dereference of a pointer to a multi-byte type that is not naturally aligned
-// for that type is undefined behavior, and can also fault on a
-// strict-alignment architecture. A caller reaches this through the raw
-// chmap_insert_elem, chmap_get_elem_ref and chmap_delete_elem function layer,
-// whose cmap_pair.ptr member carries no alignment guarantee of
-// its own, unlike the type-inferred macros, which always take the
-// address of a local variable, which is naturally aligned. This test drives
-// the raw API directly, with key pointers that a plain byte buffer
-// makes misaligned on purpose, and never uses the address of a member of a
-// packed struct, because that itself fires -Waddress-of-packed-member under
-// the -Werror of this project. The relaxed-alignment ISA of this platform
-// never gives a wrong VALUE for this; it shows only as undefined behavior
-// under -fsanitize=undefined, or on a strict-alignment architecture, so the
-// role of this test is to keep the misaligned access covered for that
-// sanitizer. It also asserts that the ordinary round trip still succeeds.
+// hash_key_data must read the key with a memcpy and never dereference a
+// cast pointer such as *(uint32_t*)key_ptr, the same way the ccol_float,
+// ccol_double and ccol_pointer branches of that function do. Dereferencing
+// a pointer to a multi-byte type that isn't naturally aligned for that type
+// is undefined behavior, and it can fault on a strict-alignment architecture
+// too. A caller gets there through the raw chmap_insert_elem,
+// chmap_get_elem_ref and chmap_delete_elem function layer, whose
+// cmap_pair.ptr member has no alignment guarantee of its own, unlike the
+// type-inferred macros, which always take the address of a local variable
+// that is naturally aligned. The test drives the raw API directly with key
+// pointers that a plain byte buffer misaligns on purpose, and never takes
+// the address of a packed struct member, because that by itself fires
+// -Waddress-of-packed-member under this project's -Werror. This platform's
+// relaxed-alignment ISA never gives a wrong VALUE here, it only shows up as
+// undefined behavior under -fsanitize=undefined or on a strict-alignment
+// architecture, so the test's job is to keep the misaligned access covered
+// for that sanitizer. It also asserts that the ordinary round trip
+// succeeds.
 TEST(chash_maps, oa_misaligned_key_pointers_hash_correctly) {
   unsigned char raw[64];
   memset(raw, 0, sizeof(raw));
@@ -4568,13 +4544,13 @@ TEST(chash_maps, oa_misaligned_key_pointers_hash_correctly) {
                    &(cmap_pair){.ptr = &val, .size = sizeof(val)}),
                ccol_success);
 
-    const cmap_pair *out = NULL;
+    cmap_pair out = {NULL, 0};
     REQUIRE_EQ(
         chmap_get_elem_ref(
             hm, &(cmap_pair){.ptr = raw + 1, .size = sizeof(s_val)}, &out),
         ccol_success);
     int got;
-    memcpy(&got, out->ptr, sizeof(got));
+    memcpy(&got, out.ptr, sizeof(got));
     REQUIRE_EQ(got, 111);
 
     REQUIRE_EQ(chmap_delete_elem(
@@ -4594,13 +4570,13 @@ TEST(chash_maps, oa_misaligned_key_pointers_hash_correctly) {
                    &(cmap_pair){.ptr = &val, .size = sizeof(val)}),
                ccol_success);
 
-    const cmap_pair *out = NULL;
+    cmap_pair out = {NULL, 0};
     REQUIRE_EQ(
         chmap_get_elem_ref(
             hm, &(cmap_pair){.ptr = raw + 3, .size = sizeof(i_val)}, &out),
         ccol_success);
     int got;
-    memcpy(&got, out->ptr, sizeof(got));
+    memcpy(&got, out.ptr, sizeof(got));
     REQUIRE_EQ(got, 222);
 
     REQUIRE_EQ(chmap_delete_elem(
@@ -4620,13 +4596,13 @@ TEST(chash_maps, oa_misaligned_key_pointers_hash_correctly) {
                    &(cmap_pair){.ptr = &val, .size = sizeof(val)}),
                ccol_success);
 
-    const cmap_pair *out = NULL;
+    cmap_pair out = {NULL, 0};
     REQUIRE_EQ(
         chmap_get_elem_ref(
             hm, &(cmap_pair){.ptr = raw + 5, .size = sizeof(l_val)}, &out),
         ccol_success);
     int got;
-    memcpy(&got, out->ptr, sizeof(got));
+    memcpy(&got, out.ptr, sizeof(got));
     REQUIRE_EQ(got, 333);
 
     REQUIRE_EQ(chmap_delete_elem(
@@ -4646,13 +4622,13 @@ TEST(chash_maps, oa_misaligned_key_pointers_hash_correctly) {
                    &(cmap_pair){.ptr = &val, .size = sizeof(val)}),
                ccol_success);
 
-    const cmap_pair *out = NULL;
+    cmap_pair out = {NULL, 0};
     REQUIRE_EQ(
         chmap_get_elem_ref(
             hm, &(cmap_pair){.ptr = raw + 9, .size = sizeof(ll_val)}, &out),
         ccol_success);
     int got;
-    memcpy(&got, out->ptr, sizeof(got));
+    memcpy(&got, out.ptr, sizeof(got));
     REQUIRE_EQ(got, 444);
 
     REQUIRE_EQ(chmap_delete_elem(
@@ -4664,11 +4640,11 @@ TEST(chash_maps, oa_misaligned_key_pointers_hash_correctly) {
   }
 }
 
-// sc_set_scaling_limits must compute the exact "(bucket_count + 1) * 1.5" /
-// "(bucket_count + 1) / 8" formulas chashmap.h documents for the
-// separate-chaining backend. The off-by-a-fraction "bucket_count * 1.5" /
-// "bucket_count / 8" pair is not what the header promises, and the exact
-// thresholds asserted below are the ones that tell the two apart.
+// sc_set_scaling_limits should compute exactly the "(bucket_count + 1) * 1.5"
+// / "(bucket_count + 1) / 8" formulas chashmap.h documents for the
+// separate-chaining backend. The "bucket_count * 1.5" / "bucket_count / 8"
+// pair, off by a fraction, isn't what the header promises, and the exact
+// thresholds asserted below are what tell the two apart.
 TEST(chash_maps, sc_scaling_thresholds_match_documented_formula) {
   chashmap *hm = chmap_create(16, ccol_string, ccol_int, NULL);
   REQUIRE_NE((void *)hm, NULL);
@@ -4682,18 +4658,18 @@ TEST(chash_maps, sc_scaling_thresholds_match_documented_formula) {
   chmap_destroy(hm);
 }
 
-// The shrink step of sc_scale must not have a guard of bucket_arr_size >=
+// sc_scale's shrink step must not have a guard of bucket_arr_size >=
 // (scale_factor * minimum_allowed_bucket_array_size), which is 64. A bucket
-// array can land off the "minimum_allowed_bucket_array_size * 4^k" lineage:
-// a size of 32 is such a value, and any initial_bucket_array_size between 16
-// and 64 reaches it directly. With that guard, such an array can never shrink
-// again, not even after a caller deletes every element, because 32
-// / 4 == 8, which is below the documented floor of 16: the guard 32 >= 64 is
-// false, so the code skips the shrink completely instead of clamping to 16,
-// and the map stays at double the documented minimum bucket count forever.
+// array can land off the "minimum_allowed_bucket_array_size * 4^k" lineage,
+// a size of 32 is one, and any initial_bucket_array_size between 16 and 64
+// gets there directly. With that guard such an array could never shrink
+// again, not even after a caller deletes every element, because 32 / 4 ==
+// 8, which is below the documented floor of 16: the guard 32 >= 64 is false,
+// so the code skips the shrink completely instead of clamping to 16, and the
+// map stays at double the documented minimum bucket count forever.
 TEST(chash_maps, sc_bucket_array_shrinks_to_minimum_from_off_lineage_size) {
-  // _ccol_find_nearest_gte_power_of_two rounds 20 up to 32. A size of 32 is not
-  // on the 16 * 4^k lineage that the automatic 4x and 0.25x scaling produces.
+  // _ccol_find_nearest_gte_power_of_two rounds 20 up to 32, and 32 isn't on
+  // the 16 * 4^k lineage the automatic 4x and 0.25x scaling produces.
   chashmap *hm = chmap_create(20, ccol_string, ccol_int, NULL);
   REQUIRE_NE((void *)hm, NULL);
   REQUIRE_EQ(chmap_get_bucket_arr_size(hm), (size_t)32);
@@ -4712,12 +4688,12 @@ TEST(chash_maps, sc_bucket_array_shrinks_to_minimum_from_off_lineage_size) {
     REQUIRE_EQ(delete_int_from_string(hm, key_buf), ccol_success);
   }
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)3);
-  // Without the clamp this stays at 32 forever; the 32 / 4 == 8 undershoot
-  // is clamped up to the documented floor instead.
+  // Without the clamp this would stay at 32 forever. The 32 / 4 == 8
+  // undershoot gets clamped up to the documented floor instead.
   REQUIRE_EQ(chmap_get_bucket_arr_size(hm), (size_t)16);
 
-  // Deleting the rest must not misbehave at the floor, and the map must
-  // remain fully usable afterwards.
+  // Deleting the rest must not misbehave at the floor, and the map should be
+  // fully usable afterwards.
   for (int i = 2; i < 5; ++i) {
     snprintf(key_buf, sizeof(key_buf), "key%d", i);
     REQUIRE_EQ(delete_int_from_string(hm, key_buf), ccol_success);
@@ -4733,18 +4709,17 @@ TEST(chash_maps, sc_bucket_array_shrinks_to_minimum_from_off_lineage_size) {
   chmap_destroy(hm);
 }
 
-// oa_reset() makes two internal allocations. If either one fails, oa_reset()
-// must not return ccol_not_enough_memory without any change to the map, and
-// must not leave every element that was there before intact, because that
-// behaviour contradicts the documented contract of chmap_reset, which says "All
-// elements are destroyed regardless of return value" and
-// "ccol_not_enough_memory if resize fails (elements still cleared)". The test
-// reset_with_oversized_size_still_clears_elements covers only the SIZE_MAX
-// pre-check of chmap_reset, which falls back to "keep current
-// capacity", goes around the real allocation calls of oa_reset
-// completely, and always succeeds. This test instead forces a genuine
-// calloc failure at a fully legitimate requested size, with the same
-// fault-injecting allocator as
+// oa_reset() makes two internal allocations. If either fails, oa_reset()
+// must not return ccol_not_enough_memory without touching the map and leave
+// every earlier element in place, because that would go against
+// chmap_reset's documented contract, which says "All elements are destroyed
+// regardless of return value" and "ccol_not_enough_memory if resize fails
+// (elements still cleared)". reset_with_oversized_size_still_clears_elements
+// only covers chmap_reset's SIZE_MAX pre-check, which falls back to "keep
+// current capacity", skips oa_reset's real allocation calls completely and
+// always succeeds. This test forces a real calloc failure at a perfectly
+// legitimate requested size instead, with the same fault-injecting allocator
+// as
 // oa_insert_sustained_oom_reports_not_enough_memory.
 TEST(chash_maps, oa_reset_allocation_failure_still_clears_elements) {
   ccol_memmgmt_procs_t mp = {.malloc = malloc,
@@ -4767,17 +4742,17 @@ TEST(chash_maps, oa_reset_allocation_failure_still_clears_elements) {
   size_t capacity_before = chmap_get_bucket_arr_size(hm);
 
   // A perfectly legitimate resize request (not chmap_reset's own "too big"
-  // pre-filter case), but every calloc call now fails.
+  // pre-filter case), but now every calloc call fails.
   g_calloc_fail = true;
   REQUIRE_EQ(chmap_reset(hm, 64), ccol_not_enough_memory);
   g_calloc_fail = false;
 
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)0);
-  // The requested capacity could not be honored, so the map keeps its old
-  // capacity, but every element must still be gone.
+  // The requested capacity couldn't be honored, so the map keeps its old
+  // capacity, but every element is gone.
   REQUIRE_EQ(chmap_get_bucket_arr_size(hm), capacity_before);
 
-  // The map remains fully usable afterwards.
+  // And the map is fully usable afterwards.
   for (int i = 0; i < 10; ++i) {
     int k = 100 + i;
     int val = i * 7;
@@ -4805,19 +4780,19 @@ static int chmap_hash_size_cmp(const void *a, const void *b) {
   return (x > y) - (x < y);
 }
 
-/* Two distinct long double values must not collapse to one hash.
+/* Two distinct long double values must not collapse into one hash.
  *
- * The scale step inside the value hash puts the significant bits at the top of
- * a 64-bit intermediate, so a mantissa with 32 or fewer significant bits has a
- * zero low half; an integer, a half and a third are such values, and so is
- * almost every number that anyone stores. Narrowing that intermediate to
- * size_t before it is hashed drops exactly the bits that tell such keys
- * apart, and the hash then depends on the exponent alone. In a hash map that
- * only makes a chain longer, but in anything that divides a fixed budget by
- * the hash, it throws data away.
+ * The scale step inside the value hash puts the significant bits at the top
+ * of a 64-bit intermediate, so a mantissa with 32 or fewer significant bits
+ * has a zero low half; an integer, a half and a third are such values, and
+ * so is almost any number people store. Narrowing that intermediate to
+ * size_t before hashing it drops exactly the bits that tell such keys apart,
+ * and the hash then depends on the exponent alone. In a hash map that only
+ * makes a chain longer, but in anything that divides a fixed budget by the
+ * hash it throws data away.
  *
- * On a 32-bit build, a narrowing of the intermediate makes 4096 distinct keys
- * produce 13 distinct hashes. */
+ * On a 32-bit build, narrowing the intermediate makes 4096 distinct keys
+ * give 13 distinct hashes. */
 TEST(chmap_hash, distinct_long_doubles_do_not_share_one_hash) {
   enum { N = 4096 };
   size_t *hashes = (size_t *)malloc(N * sizeof(*hashes));
@@ -4828,7 +4803,7 @@ TEST(chmap_hash, distinct_long_doubles_do_not_share_one_hash) {
     hashes[i] = ccol_chmap_hash_key(&v, sizeof(v), ccol_long_double);
   }
 
-  /* Counted by sorting, so the check is O(n log n) rather than quadratic. */
+  /* Counted by sorting, so the check is O(n log n) and not quadratic. */
   qsort(hashes, N, sizeof(*hashes), chmap_hash_size_cmp);
   size_t distinct = 1;
   for (int i = 1; i < N; i++) {
@@ -4836,33 +4811,27 @@ TEST(chmap_hash, distinct_long_doubles_do_not_share_one_hash) {
   }
   free(hashes);
 
-  /* A good 64-bit hash over 4096 keys collides only a few times, and the bound
-   * below is far under that number while being far above the 13 distinct
-   * hashes that a cast which truncates produces. */
+  /* A good 64-bit hash over 4096 keys collides only a few times, and the
+   * bound below is far under that while being far above the 13 distinct
+   * hashes a truncating cast produces. */
   REQUIRE_GT(distinct, (size_t)4000);
 }
 
-/* The convention this suite already uses for reaching a RUNNING_UNIT_TESTS-only
- * accessor in the module under test. */
-extern unsigned long long chashmap_oa_probe_steps_for_tests(void);
-extern void chashmap_reset_oa_probe_steps_for_tests(void);
-
-/* chmap_reset accepts any power of two up to the architectural ceiling on the
- * element count, and the separate-chaining backend turns that count into a
- * byte count by multiplying it by the width of a pointer. At the top of the
- * range that product overflows size_t, and a product that wraps to zero is
- * the dangerous one: realloc can then free the block and return NULL, and
- * the recovery path after that writes through a pointer that the allocator
- * already took back.
+/* chmap_reset accepts any power of two up to the architectural ceiling on
+ * the element count, and the separate-chaining backend turns that count into
+ * a byte count by multiplying it by a pointer's width. At the top of the
+ * range the product overflows size_t, and a product that wraps to zero is
+ * the dangerous one, because realloc may then free the block and return
+ * NULL, and the recovery path after that writes through a pointer the
+ * allocator has already taken back.
  *
- * The count below makes the wrapped product ZERO, not merely too large to
+ * The count below makes the wrapped product ZERO and not merely too big to
  * satisfy. A count that wraps to a huge number fails cleanly at the
- * allocator, so it passes against the code with no guard and tests
+ * allocator, so it would pass against the unguarded code and test
  * nothing.
  *
- * This test is non-vacuous: without the guard, AddressSanitizer reports a
- * heap-use-after-free write inside the reset, and an ordinary build corrupts
- * the heap silently. */
+ * Without the guard AddressSanitizer reports a heap-use-after-free write
+ * inside the reset, and an ordinary build silently corrupts the heap. */
 TEST(chashmap_reset, a_bucket_count_whose_byte_size_wraps_is_refused) {
   chmap_construct(m, char *, int);
   int v = 1;
@@ -4873,11 +4842,11 @@ TEST(chashmap_reset, a_bucket_count_whose_byte_size_wraps_is_refused) {
   size_t wraps_to_zero = ((size_t)1 << (sizeof(size_t) * 8 - 2)) + 1;
   ccol_retval_t r = chmap_reset(m, wraps_to_zero);
 
-  /* The map must still be usable, which is what proves the bucket array was
-     not freed underneath it. Through the raw function layer, not the macro
-     one: the macro calls ccol_fatal_err on a hard error, so a regression that
-     left the map broken here would abort the whole binary and destroy every
-     other suite's result instead of failing this one assertion. */
+  /* The map has to stay usable, which is what proves the bucket array wasn't
+     freed under it. We go through the raw function layer and not the macros,
+     because a macro calls _ccol_fatal_err on a hard error, so a regression
+     that left the map broken here would abort the whole binary and wipe out
+     every other suite's result instead of failing this one assertion. */
   int again = 7;
   const char *k = "beta";
   cmap_pair kp = {(void *)k, strlen(k) + 1};
@@ -4895,16 +4864,16 @@ TEST(chashmap_reset, a_bucket_count_whose_byte_size_wraps_is_refused) {
 }
 
 /* The keys here have low bits that are all zero, the shape of aligned
- * addresses and of identifiers scaled by a power of two. The hash of this map
- * for an integral key ends in a multiply, whose mixing lands in the high
- * bits, and the index comes from the top of the hash.
+ * addresses and of identifiers scaled by a power of two. For an integral key
+ * this map's hash ends in a multiply, whose mixing lands in the high bits,
+ * and the index comes from the top of the hash.
  *
- * A hash whose low bits depend only on the low bits of the key, such as a bare
- * multiply, read through a mask over its low bits, makes this insert loop take
- * 6254142 probes, against a bound of 40960. The bound counts probes for each
- * operation and names no constant that the implementation owns, so it cannot
- * follow a change to the hash without notice, unlike an assertion written in
- * terms of the macros of the module itself, which can. */
+ * A hash whose low bits depend only on the key's low bits, like a bare
+ * multiply, read through a mask over its low bits, makes this insert loop
+ * take 6254142 probes against a bound of 40960. The bound counts probes per
+ * operation and names no constant the implementation owns, so it can't
+ * silently follow a change to the hash, unlike an assertion written in
+ * terms of the module's own macros, which could. */
 TEST(chashmap_open_addressing,
      low_bit_constant_keys_do_not_collapse_the_table) {
   enum { N = 4096, STRIDE = 4096 };
@@ -4930,34 +4899,34 @@ TEST(chashmap_open_addressing,
   size_t stored = chmap_elem_count(m);
   chmap_destroy(m);
 
-  /* Every key is distinct, so all of them must be present however they were
-     distributed; this separates a distribution failure from a correctness one.
-   */
+  /* Every key is distinct, so all of them must be present however they
+     were distributed, which separates a distribution failure from a
+     correctness one. */
   REQUIRE_EQ(stored, (size_t)N);
   REQUIRE_EQ(acc, (long long)N * (N - 1) / 2);
 
-  /* A table kept under its maximum load factor probes a small constant number
-     of slots per operation on average. Ten is far above what any reasonable
-     spread produces here and far below the hundreds a collapsed table needs. */
-  /* Cast for the assertion macro's own printer, which has no case for
-     unsigned long long; the values here are far inside long long's range. */
+  /* A table kept under its maximum load factor probes a small constant
+     number of slots per operation on average. Ten is far above what any
+     reasonable spread gives here and far below the hundreds a collapsed
+     table needs. */
+  /* Cast for the assertion macro's printer, which has no case for unsigned
+     long long; the values here are far inside long long's range. */
   REQUIRE_LT((long long)insert_probes, (long long)N * 10);
   REQUIRE_LT((long long)lookup_probes, (long long)N * 10);
 }
 
 /* A 64-bit key is often two 32-bit fields packed together, (a << 32) | b,
- * for a pair of coordinates or of identifiers. On a 32-bit target size_t is
- * narrower than such a key, so the hash must still depend on all 64 bits in a
- * way that separates the two halves. The grid below holds every pair with
- * both halves under GRID; with a hash that folds the halves together by an
- * exclusive or, only GRID distinct hashes exist for GRID * GRID keys.
+ * for a pair of coordinates or identifiers. On a 32-bit target size_t is
+ * narrower than such a key, so the hash must depend on all 64 bits in a
+ * way that keeps the two halves apart. The grid below holds every pair with
+ * both halves under GRID, and with a hash that folds the halves together by
+ * an exclusive or there are only GRID distinct hashes for GRID * GRID keys.
  *
  * The suite runs natively and on the i386 and armhf jobs, and only a 32-bit
- * build can tell the two hashes apart. This test is non-vacuous there:
- * with the halves folded before the multiply, a -m32 build takes about 65
- * probes per insert on both open-addressing grids and builds chains of length
- * GRID (128) in the separate-chaining map, against bounds of 10 and 16. */
-extern size_t chashmap_sc_longest_chain_for_tests(chmap chm);
+ * build can tell the two hashes apart. That matters here: with the
+ * halves folded before the multiply, a -m32 build takes about 65 probes
+ * per insert on both open-addressing grids and builds chains of length GRID
+ * (128) in the separate-chaining map, against bounds of 10 and 16. */
 
 enum { PACKED_GRID = 128 };
 
@@ -4999,7 +4968,7 @@ TEST(chashmap_hash, packed_pair_double_keys_spread_over_the_table) {
   for (uint64_t x = 0; x < PACKED_GRID; x++) {
     for (uint64_t y = 1; y <= PACKED_GRID; y++) {
       /* A high half under 2^11 keeps the exponent field zero, so every key
-         is a distinct finite double (a subnormal) and none is a zero. */
+         is a distinct finite double (a subnormal) and none of them is zero. */
       uint64_t bits = (x << 32) | y;
       double k;
       memcpy(&k, &bits, sizeof(k));
@@ -5032,23 +5001,23 @@ TEST(chashmap_hash, packed_pair_64_bit_keys_spread_over_the_chains) {
   chmap_destroy(m);
 
   REQUIRE_EQ(stored, (size_t)PACKED_GRID * PACKED_GRID);
-  /* 16384 keys at the map's load factor: a chain of a well spread hash stays
+  /* 16384 keys at the map's load factor: with a well spread hash a chain stays
      in single digits, and a hash that folds the halves gives GRID. */
   REQUIRE_LE(longest, (size_t)16);
 }
 
-/* The hash of a caller can put its entropy anywhere (an identity hash over
- * dense integer keys is the ordinary shape of that), so the map must spread
- * such a hash before it derives an index. This test is the custom-hash
- * counterpart of low_bit_constant_keys_do_not_collapse_the_table, and needs
- * its own case because the hash of a caller goes around every hash that the
- * module computes itself.
+/* A caller's hash can put its entropy anywhere (an identity hash over dense
+ * integer keys is the ordinary shape of that), so the map has to spread such
+ * a hash before deriving an index from it. This is the custom-hash
+ * counterpart of low_bit_constant_keys_do_not_collapse_the_table, and it
+ * needs its own case because a caller's hash bypasses every hash the module
+ * computes itself.
  *
- * This test is not vacuous: without the finalizer over the result of a custom
- * hash, every key here lands in one slot, the probe count goes quadratic, and
- * this bound catches that by two orders of magnitude. The other custom-hash
- * tests cannot catch it, because they store three keys, and three keys in
- * one slot cost three probes. */
+ * Take away the finalizer over a custom hash's result and every key here
+ * lands in one slot, the probe count goes quadratic, and this
+ * bound catches that by two orders of magnitude. The other custom-hash tests
+ * can't catch it, because they store three keys, and three keys in one slot
+ * cost three probes. */
 static unsigned long low_bit_entropy_hasher(const void *key_ptr,
                                             size_t key_size) {
   (void)key_size;
@@ -5063,10 +5032,10 @@ TEST(chashmap_hash, custom_hash_with_low_bit_entropy_does_not_collapse) {
   REQUIRE_NE((void *)m, NULL);
 
   chashmap_reset_oa_probe_steps_for_tests();
-  /* The outcome is captured rather than asserted here: an assertion inside this
-     loop returns from the test with the map still allocated, which memtest then
-     reports as a leak on top of whatever actually failed. Every check runs
-     after the destroy below. */
+  /* We capture the outcome instead of asserting here, because an assertion in
+     this loop would return from the test with the map still allocated, and
+     memtest would report that as a leak on top of whatever really failed.
+     Every check runs after the destroy below. */
   bool all_inserted = true;
   for (int i = 0; i < N; i++) {
     cmap_pair k = {&i, sizeof(i)};
@@ -5079,9 +5048,9 @@ TEST(chashmap_hash, custom_hash_with_low_bit_entropy_does_not_collapse) {
   long long acc = 0;
   for (int i = 0; i < N; i++) {
     cmap_pair k = {&i, sizeof(i)};
-    const cmap_pair *out = NULL;
-    if (chmap_get_elem_ref(m, &k, &out) == ccol_success && out)
-      acc += *(int *)out->ptr;
+    cmap_pair out = {NULL, 0};
+    if (chmap_get_elem_ref(m, &k, &out) == ccol_success && out.ptr)
+      acc += *(int *)out.ptr;
   }
   unsigned long long lookup_probes = chashmap_oa_probe_steps_for_tests();
 
@@ -5089,9 +5058,9 @@ TEST(chashmap_hash, custom_hash_with_low_bit_entropy_does_not_collapse) {
   __chmap_destroy(m);
 
   REQUIRE_TRUE(all_inserted);
-  /* Every key is distinct, so all of them must be present and readable however
-     they were distributed; that separates a distribution failure from a
-     correctness one. */
+  /* Every key is distinct, so all of them should be present and readable
+     however they were distributed, which separates a distribution failure
+     from a correctness one. */
   REQUIRE_EQ(stored, (size_t)N);
   REQUIRE_EQ(acc, (long long)N * (N - 1) / 2);
   REQUIRE_LT((long long)insert_probes, (long long)N * 10);
@@ -5103,10 +5072,10 @@ TEST(chashmap_hash, custom_hash_with_low_bit_entropy_does_not_collapse) {
 /* ========================================================================== */
 
 /* Counts every allocation the map makes, so a test can tell which insert grew
-   the table without asking the map anything. An open-addressing map allocates
-   on a rehash and on nothing else, which makes an allocation during an insert
-   an exact, implementation-independent marker for "the table was rebuilt
-   underneath this call". */
+   the table without asking the map anything. An open-addressing map only
+   allocates on a rehash, so an allocation during an insert is an exact,
+   implementation-independent marker for "the table was rebuilt under this
+   call". */
 static long g_grow_probe_allocs = 0;
 static void *_grow_probe_malloc(size_t n) {
   g_grow_probe_allocs++;
@@ -5121,21 +5090,22 @@ static void *_grow_probe_realloc(void *p, size_t n) {
   return realloc(p, n);
 }
 
-/* An insert that grows the table probes twice over: once against the table it
-   was handed, and again against the rebuilt one, because the first probe's
-   index and mask mean nothing once the capacity has changed. Both probes visit
-   at least one slot, so such an insert can never account for fewer than two.
-   That floor follows from two tables being probed rather than from any value
-   the module owns, which is what keeps it from moving with the code it checks.
+/* An insert that grows the table probes twice, once against the table it was
+   handed and again against the rebuilt one, because the first probe's index
+   and mask mean nothing once the capacity has changed. Both probes visit at
+   least one slot, so such an insert can never account for fewer than two.
+   That floor comes from two tables being probed and not from any value the
+   module owns, which is what keeps it from moving along with the code it
+   checks.
 
-   The probe counter exists to catch a hash whose spread collapses (see
+   The probe counter is there to catch a hash whose spread collapses (see
    low_bit_constant_keys_do_not_collapse_the_table), and it can only do that
-   over the whole of an operation; a grow-path probe left out of it is a
-   quadratic scan the guard cannot see.
+   over the whole of an operation, so a grow-path probe left out of it would
+   be a quadratic scan the guard can't see.
 
-   This test is non-vacuous: without the grow path's own count, six of the nine
-   growing inserts below report a single probe step and it fails on the first
-   of them. */
+   If the grow path didn't keep its own count, six of the nine growing
+   inserts below would report a single probe step, and the test fails on the
+   first of them. */
 TEST(chashmap_open_addressing, a_growing_insert_counts_both_of_its_probes) {
   enum { N = 4000 };
   g_grow_probe_allocs = 0;
@@ -5178,8 +5148,8 @@ TEST(chashmap_open_addressing, a_growing_insert_counts_both_of_its_probes) {
   REQUIRE_TRUE(all_inserted);
   REQUIRE_EQ(stored, (size_t)N);
 
-  /* Without at least one grow there is nothing here to check, so the count is
-     asserted rather than assumed. */
+  /* Without at least one grow there's nothing to check here, so we assert
+     the count instead of assuming it. */
   REQUIRE_GT(growing_inserts, 0);
   REQUIRE_EQ(undercounted_growing_inserts, 0);
   REQUIRE_EQ((long long)worst_growing_probe_count, 0LL);
@@ -5190,17 +5160,17 @@ TEST(chashmap_open_addressing, a_growing_insert_counts_both_of_its_probes) {
 /* ------------------------------------------------------------------------- */
 
 /* A compound literal written as a macro argument has automatic storage
-   duration bounded by the block it is instantiated in, so the type-inferred
-   macros must bind the caller's expression in their own block before it reaches
-   any nested one. Without that, the literal is created inside
+   duration limited to the block it's instantiated in, so the type-inferred
+   macros must bind the caller's expression in their own block before it
+   reaches any nested one. Otherwise the literal gets created inside
    _populate_cmap_pair's own inner block, dies when that block closes, and the
    insert below copies out of a dead stack slot.
 
-   These tests are non-vacuous at the optimization level this suite builds at:
-   without the binding, gcc -O3 reuses the slot and the first one reads 64
-   instead of 12345 while the rest fail to find the key at all. The defect is
-   diagnosed regardless of compiler under AddressSanitizer, which reports it as
-   a stack-use-after-scope read inside the insert. */
+   These tests do catch that at the optimization level this suite builds at:
+   without the binding gcc -O3 reuses the slot, the first one reads 64 instead
+   of 12345 and the rest don't find the key at all. Under AddressSanitizer the
+   defect is diagnosed whatever the compiler, as a stack-use-after-scope read
+   inside the insert. */
 TEST(chmap_macro_arg_lifetime, a_compound_literal_value_survives_the_insert) {
   chmap_construct_scoped(hm, int, int);
 
@@ -5234,18 +5204,18 @@ TEST(chmap_macro_arg_lifetime, a_compound_literal_key_survives_every_lookup) {
   REQUIRE_NE((void *)found, NULL);
   if (found) REQUIRE_EQ(*found, 900);
 
-  /* chmap_get() runs only once chmap_get_ptr() has shown the key is
-     present: an absent key is what a regression here produces, and
-     chmap_get answers one with ccol_fatal_err, which would abort the
-     whole binary and every other suite's result in the same run. */
+  /* chmap_get() only runs once chmap_get_ptr() has shown the key is there,
+     because an absent key is what a regression here produces, and chmap_get
+     answers one with _ccol_fatal_err, which would abort the whole binary and
+     every other suite's result in the same run. */
   REQUIRE_EQ(chmap_get(hm, (int){7}), 900);
 
   REQUIRE_EQ(chmap_remove(hm, (int){7}), ccol_success);
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)0);
 }
 
-/* The separate-chaining backend, reached by any value type wider than eight
-   bytes, copies the value out of the same dead slot. */
+/* The separate-chaining backend, which any value type wider than eight bytes
+   gets, copies the value out of the same dead slot. */
 typedef struct {
   long a;
   long b;
@@ -5253,8 +5223,8 @@ typedef struct {
   long d;
 } chmap_lifetime_wide_value;
 
-/* The literal is written behind a macro so its commas do not split the
-   chmap_insert() argument list; it is substituted, and so instantiated,
+/* The literal is written behind a macro so its commas don't split the
+   chmap_insert() argument list. It's substituted, and so instantiated,
    exactly where writing it inline would put it. */
 #define CHMAP_LIFETIME_WIDE_LITERAL \
   (chmap_lifetime_wide_value){.a = 11, .b = 22, .c = 33, .d = 44}
@@ -5279,18 +5249,18 @@ TEST(chmap_macro_arg_lifetime, a_compound_literal_struct_value_survives) {
 /* String value references                                                    */
 /* ------------------------------------------------------------------------- */
 
-/* A string-valued map owns the bytes it stores and keeps its own {ptr, size}
-   accessor for the entry in step with them. The only char* object in the map is
-   that accessor's own ptr field, so chmap_get_ptr() can only hand back its
-   address, and storing a different char* through it would leave the size
-   describing the previous string. The macro therefore yields a pointer whose
-   target is const-qualified for a string-valued map, which makes that store a
-   compile error.
+/* A map with string values owns the bytes it stores and keeps its own
+   {ptr, size} accessor for the entry in step with them. The only char* object
+   in the map is that accessor's own ptr field, so chmap_get_ptr() can only
+   hand back its address, and storing a different char* through it would
+   leave the size describing the old string. So for a string-valued map the
+   macro gives a pointer to a const-qualified target, which turns that store
+   into a compile error.
 
-   The check is on the result's TYPE rather than on any runtime effect, because
-   the guarantee is exactly that the offending store never compiles. _Generic's
-   controlling expression is not evaluated, so the map is not touched by it.
-   Without the const the first association below does not match and the test
+   We check the result's TYPE and not some run-time effect, because the
+   guarantee is exactly that the bad store never compiles. The controlling
+   expression of _Generic isn't evaluated, so it doesn't touch the map.
+   Without the const, the first association below doesn't match and the test
    reports 0. */
 TEST(chmap_string_value_ref, get_ptr_on_a_string_map_is_not_writable) {
   chmap_construct_scoped(hm, char *, char *);
@@ -5305,8 +5275,8 @@ TEST(chmap_string_value_ref, get_ptr_on_a_string_map_is_not_writable) {
              1);
 }
 
-/* The const is confined to the string case: every other value type keeps the
-   writable pointer chmap_get_ptr() exists to provide. */
+/* The const only applies to the string case, and every other value type
+   keeps the writable pointer that chmap_get_ptr() is there to provide. */
 TEST(chmap_string_value_ref, get_ptr_on_a_non_string_map_stays_writable) {
   chmap_construct_scoped(hm, char *, int);
 
@@ -5327,7 +5297,7 @@ TEST(chmap_string_value_ref, get_ptr_on_a_non_string_map_stays_writable) {
 }
 
 /* Reading the stored char*, and editing the bytes it points at within the
-   stored length, both stay available; only replacing the pointer does not. */
+   stored length, are both available; only replacing the pointer isn't. */
 TEST(chmap_string_value_ref, a_string_reference_reads_and_edits_in_place) {
   chmap_construct_scoped(hm, char *, char *);
 
@@ -5341,7 +5311,7 @@ TEST(chmap_string_value_ref, a_string_reference_reads_and_edits_in_place) {
     (*found)[0] = 'j';
     REQUIRE_STREQ(chmap_get(hm, key), "jello");
 
-    /* The accessor's own size never falls out of step with the bytes it
+    /* The accessor's own size never gets out of step with the bytes it
        describes, so a copy-out reads exactly the stored string. */
     char buf[16] = {0};
     cmap_pair key_pair = {.ptr = key, .size = sizeof(key)};
@@ -5351,30 +5321,28 @@ TEST(chmap_string_value_ref, a_string_reference_reads_and_edits_in_place) {
   }
 }
 
-/* The raw function layer carries the same rule as the macro layer, and carries
-   it for every value type rather than only for strings: chmap_get_elem_ref()
-   reports the map's own accessor through a const cmap_pair **, so
-   val_pair->ptr and val_pair->size can be read and the bytes ptr describes can
-   be edited in place, while assigning to either field is a compile error.
-   tests/chashmap/compile_probe.sh asserts the rejected half, which is a
-   property of the type that no run-time test can observe; this pins the half
-   that must keep working. */
-TEST(chmap_elem_ref_accessor, the_const_accessor_still_reads_and_edits_bytes) {
+/* chmap_get_elem_ref() fills a cmap_pair that belongs to the caller, so
+   val_pair.ptr and val_pair.size can be read and the bytes ptr describes can
+   be edited in place, for a string value like for any other.
+   tests/chashmap/compile_probe.sh pins the signature, a property of the type
+   that no run-time test can see, and this test pins the reads and the
+   edits. */
+TEST(chmap_elem_ref_accessor, the_filled_pair_reads_and_edits_bytes) {
   chmap_construct_scoped(hm, char *, char *);
 
   char key[] = "k";
   chmap_insert(hm, key, "hello");
 
   cmap_pair key_pair = {.ptr = key, .size = sizeof(key)};
-  const cmap_pair *val_pair = NULL;
+  cmap_pair val_pair = {NULL, 0};
   REQUIRE_EQ(chmap_get_elem_ref(hm, &key_pair, &val_pair), ccol_success);
-  REQUIRE_NE((void *)val_pair, NULL);
-  if (!val_pair) return;
+  REQUIRE_NE(val_pair.ptr, NULL);
+  if (!val_pair.ptr) return;
 
-  REQUIRE_EQ(val_pair->size, sizeof("hello"));
-  REQUIRE_STREQ((const char *)val_pair->ptr, "hello");
+  REQUIRE_EQ(val_pair.size, sizeof("hello"));
+  REQUIRE_STREQ((const char *)val_pair.ptr, "hello");
 
-  ((char *)val_pair->ptr)[0] = 'j';
+  ((char *)val_pair.ptr)[0] = 'j';
   REQUIRE_STREQ(chmap_get(hm, key), "jello");
 
   char buf[8] = {0};
@@ -5383,8 +5351,8 @@ TEST(chmap_elem_ref_accessor, the_const_accessor_still_reads_and_edits_bytes) {
   REQUIRE_STREQ(buf, "jello");
 }
 
-/* The accessor is per entry, so a reference held for one key is not disturbed
-   by looking any other key up, and several may be held at once. */
+/* The accessor is per entry, so a reference held for one key isn't disturbed
+   by looking up any other key, and you can hold several at once. */
 TEST(chmap_elem_ref_accessor, references_for_distinct_keys_are_independent) {
   chmap_construct_scoped(hm, int, int);
 
@@ -5396,26 +5364,178 @@ TEST(chmap_elem_ref_accessor, references_for_distinct_keys_are_independent) {
   int first = 7, second = 41;
   cmap_pair first_key = {.ptr = &first, .size = sizeof(first)};
   cmap_pair second_key = {.ptr = &second, .size = sizeof(second)};
-  const cmap_pair *first_ref = NULL;
-  const cmap_pair *second_ref = NULL;
+  cmap_pair first_ref = {NULL, 0};
+  cmap_pair second_ref = {NULL, 0};
 
   REQUIRE_EQ(chmap_get_elem_ref(hm, &first_key, &first_ref), ccol_success);
   REQUIRE_EQ(chmap_get_elem_ref(hm, &second_key, &second_ref), ccol_success);
-  REQUIRE_NE((void *)first_ref, (void *)second_ref);
+  REQUIRE_NE(first_ref.ptr, second_ref.ptr);
 
   for (int i = 0; i < 64; i++) {
     int other = i;
     cmap_pair other_key = {.ptr = &other, .size = sizeof(other)};
-    const cmap_pair *ignored = NULL;
+    cmap_pair ignored = {NULL, 0};
     (void)chmap_get_elem_ref(hm, &other_key, &ignored);
   }
 
-  REQUIRE_EQ(*(const int *)first_ref->ptr, 21);
-  REQUIRE_EQ(*(const int *)second_ref->ptr, 123);
+  REQUIRE_EQ(*(const int *)first_ref.ptr, 21);
+  REQUIRE_EQ(*(const int *)second_ref.ptr, 123);
 
-  *(int *)first_ref->ptr = 999;
-  REQUIRE_EQ(*(const int *)first_ref->ptr, 999);
-  REQUIRE_EQ(*(const int *)second_ref->ptr, 123);
+  *(int *)first_ref.ptr = 999;
+  REQUIRE_EQ(*(const int *)first_ref.ptr, 999);
+  REQUIRE_EQ(*(const int *)second_ref.ptr, 123);
+}
+
+/* Checks chmap_get_elem_ref()'s contract on one map whose keys 0 to 99 hold
+ * the value key * 3: a hit fills the caller's pair with the stored value's
+ * address and size, writing through ptr changes what chmap_get() reads, two
+ * results held at once point at their own values, and a miss gives
+ * ccol_key_not_found with the pair set to {NULL, 0} over a poison value.
+ * Every outcome is recorded first and the caller asserts on it after the map
+ * is destroyed. */
+typedef struct {
+  ccol_retval_t hit_r, miss_r;
+  size_t hit_size;
+  bool ptr_in_map, write_seen, pair_one_kept, pair_two_kept, distinct;
+  void *miss_ptr;
+  size_t miss_size;
+} elem_ref_outcome;
+
+static elem_ref_outcome elem_ref_contract_on(chmap m) {
+  chmap_redeclare(m, int, long);
+  elem_ref_outcome o;
+  memset(&o, 0, sizeof(o));
+  for (int i = 0; i < 100; i++) {
+    long v = (long)i * 3;
+    chmap_insert(m, i, v);
+  }
+  int k1 = 17, k2 = 83, absent = 1000;
+  cmap_pair kp1 = {&k1, sizeof(k1)}, kp2 = {&k2, sizeof(k2)};
+  cmap_pair kpa = {&absent, sizeof(absent)};
+  cmap_pair one = {(void *)0x1, 12345}, two = {(void *)0x1, 12345};
+  o.hit_r = chmap_get_elem_ref(m, &kp1, &one);
+  ccol_retval_t r2 = chmap_get_elem_ref(m, &kp2, &two);
+  if (o.hit_r == ccol_success && r2 == ccol_success) {
+    o.hit_size = one.size;
+    long *direct = chmap_get_ptr(m, k1);
+    o.ptr_in_map = direct == one.ptr;
+    o.distinct = one.ptr != two.ptr;
+    *(long *)one.ptr = 4242;
+    o.write_seen = chmap_get(m, k1) == 4242;
+    o.pair_one_kept = *(const long *)one.ptr == 4242;
+    o.pair_two_kept = *(const long *)two.ptr == 83L * 3;
+  }
+  cmap_pair miss = {(void *)0x1, 12345};
+  o.miss_r = chmap_get_elem_ref(m, &kpa, &miss);
+  o.miss_ptr = miss.ptr;
+  o.miss_size = miss.size;
+  return o;
+}
+
+/* Whether m is an open-addressing map, since only such a map has a home slot
+ * for a key. */
+static bool elem_ref_map_is_oa(chmap m) {
+  int k = 0;
+  return chashmap_oa_home_slot_for_tests(m, &k, sizeof(k)) != SIZE_MAX;
+}
+
+static unsigned long elem_ref_int_hash(const void *ptr, size_t size) {
+  int v;
+  (void)size;
+  memcpy(&v, ptr, sizeof(v));
+  return (unsigned long)(unsigned)v;
+}
+
+static bool elem_ref_int_eq(const void *a, size_t a_size, const void *b,
+                            size_t b_size) {
+  return a_size == b_size && memcmp(a, b, a_size) == 0;
+}
+
+#define REQUIRE_ELEM_REF_CONTRACT(o)            \
+  do {                                          \
+    REQUIRE_EQ((o).hit_r, ccol_success);        \
+    REQUIRE_EQ((o).hit_size, sizeof(long));     \
+    REQUIRE_TRUE((o).ptr_in_map);               \
+    REQUIRE_TRUE((o).distinct);                 \
+    REQUIRE_TRUE((o).write_seen);               \
+    REQUIRE_TRUE((o).pair_one_kept);            \
+    REQUIRE_TRUE((o).pair_two_kept);            \
+    REQUIRE_EQ((o).miss_r, ccol_key_not_found); \
+    REQUIRE_EQ((o).miss_ptr, NULL);             \
+    REQUIRE_EQ((o).miss_size, (size_t)0);       \
+  } while (0)
+
+TEST(chmap_elem_ref_accessor, the_pair_contract_holds_on_open_addressing) {
+  chmap m = chmap_create(16, ccol_int, ccol_long, NULL);
+  REQUIRE_NE((void *)m, NULL);
+  bool oa = elem_ref_map_is_oa(m);
+  elem_ref_outcome o = elem_ref_contract_on(m);
+  chmap_destroy(m);
+  REQUIRE_TRUE(oa);
+  REQUIRE_ELEM_REF_CONTRACT(o);
+}
+
+TEST(chmap_elem_ref_accessor, the_pair_contract_holds_on_separate_chaining) {
+  /* A custom equality proc always picks separate chaining. */
+  chmap m = chmap_create_full(16, ccol_int, ccol_long, NULL, elem_ref_int_hash,
+                              elem_ref_int_eq, NULL);
+  REQUIRE_NE((void *)m, NULL);
+  bool oa = elem_ref_map_is_oa(m);
+  elem_ref_outcome o = elem_ref_contract_on(m);
+  chmap_destroy(m);
+  REQUIRE_FALSE(oa);
+  REQUIRE_ELEM_REF_CONTRACT(o);
+}
+
+/* Every refused call with a val_pair sets it to {NULL, 0}. */
+TEST(chmap_elem_ref_accessor, a_refused_call_empties_the_pair) {
+  chmap_construct_scoped(m, int, int);
+  chmap_insert(m, 1, 2);
+  short wrong = 1;
+  int k = 1;
+  cmap_pair bad = {&wrong, sizeof(wrong)};
+  cmap_pair null_ptr = {NULL, sizeof(int)};
+  cmap_pair good = {&k, sizeof(k)};
+  cmap_pair a = {(void *)0x1, 12345}, b = {(void *)0x1, 12345},
+            c = {(void *)0x1, 12345}, d = {(void *)0x1, 12345};
+  REQUIRE_EQ(chmap_get_elem_ref(m, &bad, &a), ccol_invalid_args);
+  REQUIRE_EQ(chmap_get_elem_ref(m, &null_ptr, &b), ccol_invalid_args);
+  REQUIRE_EQ(chmap_get_elem_ref(m, NULL, &c), ccol_invalid_args);
+  REQUIRE_EQ(chmap_get_elem_ref(NULL, &good, &d), ccol_invalid_args);
+  REQUIRE_EQ(a.ptr, NULL);
+  REQUIRE_EQ(a.size, (size_t)0);
+  REQUIRE_EQ(b.ptr, NULL);
+  REQUIRE_EQ(b.size, (size_t)0);
+  REQUIRE_EQ(c.ptr, NULL);
+  REQUIRE_EQ(c.size, (size_t)0);
+  REQUIRE_EQ(d.ptr, NULL);
+  REQUIRE_EQ(d.size, (size_t)0);
+}
+
+/* For a map with string values chmap_get_ptr() points at the char* the node
+   keeps, so two calls for one key give the same address, and the internal
+   lookup behind it refuses an open-addressing map, which has no node. */
+TEST(chmap_elem_ref_accessor, get_ptr_of_a_string_value_points_into_the_node) {
+  chmap_construct(m, int, char *);
+  chmap_insert(m, 1, "hello");
+  char *const *first = chmap_get_ptr(m, 1);
+  char *const *second = chmap_get_ptr(m, 1);
+  char *const *absent = chmap_get_ptr(m, 2);
+  bool same = first && first == second;
+  chmap_destroy(m);
+
+  chmap_construct(oa, int, int);
+  chmap_insert(oa, 1, 2);
+  int k = 1;
+  cmap_pair kp = {&k, sizeof(k)};
+  const cmap_pair *acc = (const cmap_pair *)&kp; /* a poison value */
+  ccol_retval_t oa_r = _chmap_get_val_accessor(oa, &kp, &acc);
+  chmap_destroy(oa);
+
+  REQUIRE_TRUE(same);
+  REQUIRE_EQ((void *)absent, NULL);
+  REQUIRE_EQ(oa_r, ccol_invalid_args);
+  REQUIRE_EQ((void *)acc, NULL);
 }
 
 /* ========================================================================== */
@@ -5423,9 +5543,9 @@ TEST(chmap_elem_ref_accessor, references_for_distinct_keys_are_independent) {
 /* ========================================================================== */
 
 /* An allocator that overwrites every block with a poison pattern before it
- * frees it, so that a read of freed memory gives the poison instead of the
- * stale value, and a use after free through a stale pointer faults in an
- * ordinary run without depending on a sanitizer to show. */
+ * frees it, so reading freed memory gives the poison and not the stale
+ * value, and a use after free through a stale pointer faults in an ordinary
+ * run without needing a sanitizer to show up. */
 typedef union {
   size_t size;
   max_align_t align;
@@ -5473,11 +5593,11 @@ static ccol_memmgmt_procs_t *chmap_life_poison_procs(void) {
 }
 
 /* A loop that leaves early keeps its iterator live until the end of the
- * scope of ccol_iter_declare, so destroying the map inside that scope must
- * leave the iterator freeable: the scope-exit cleanup frees it after the map
- * and its allocator record are gone. Both backends are covered. This test is
- * non-vacuous: an iterator that frees itself through the map reads the
- * poisoned map struct at scope exit and faults. */
+ * ccol_iter_declare scope, so destroying the map inside that scope has to
+ * leave the iterator freeable, because the scope-exit cleanup frees it after
+ * the map and its allocator record are gone. Both backends are covered. An
+ * iterator that freed itself through the map would read the poisoned map
+ * struct at scope exit and fault. */
 TEST(iterator_lifetime, break_then_destroy_then_scope_exit_open_addressing) {
   int seen = 0;
   {
@@ -5527,8 +5647,6 @@ TEST(iterator_lifetime, break_then_destroy_then_scope_exit_default_allocator) {
 /*          OPEN ADDRESSING: CHURN REBUILDS IN PLACE, AND NEVER THRASHES      */
 /* ========================================================================== */
 
-unsigned long long chashmap_oa_rehashes_for_tests(void);
-
 typedef struct {
   unsigned long long rehashes;
   size_t capacity_changes;
@@ -5539,7 +5657,7 @@ typedef struct {
 
 /* A sliding window of `window` live keys: every step inserts the next key
  * and removes the oldest one, so the live count never changes and the table
- * has no reason to change its capacity at all. */
+ * has no reason at all to change its capacity. */
 static chmap_churn_result chmap_churn_window(long window, long steps) {
   chmap_churn_result res = {0, 0, SIZE_MAX, 0, true};
   chmap_construct(m, long, long);
@@ -5571,10 +5689,10 @@ static chmap_churn_result chmap_churn_window(long window, long steps) {
 }
 
 /* A delete moves the later entries of its cluster back and leaves no
- * deleted-slot marker, so the live count alone decides every resize. A
- * window whose live count never changes therefore never rebuilds, and keeps
- * one capacity. This test is non-vacuous: with deleted-slot markers that the
- * grow trigger counts, every window rebuilds its table repeatedly. */
+ * deleted-slot marker, so only the live count decides a resize, and a window
+ * whose live count never changes never rebuilds and keeps one capacity.
+ * With deleted-slot markers that the grow trigger counts, every window would
+ * rebuild its table again and again, and the capacity check fails. */
 TEST(oa_churn, a_sliding_window_never_rebuilds_the_table) {
   static const long windows[] = {1000, 4200, 6000, 11000};
   const long steps = 100000;
@@ -5597,7 +5715,7 @@ TEST(oa_churn, pure_insert_growth_and_pure_delete_shrink_are_unchanged) {
   unsigned long long shrink = chashmap_oa_rehashes_for_tests() - r0;
   size_t cap_empty = chmap_get_bucket_arr_size(m);
   chmap_destroy(m);
-  /* 16 -> 262144 is 14 doublings; the delete path halves 14 times. */
+  /* 16 -> 262144 is 14 doublings, and the delete path halves 14 times. */
   REQUIRE_EQ(cap_full, (size_t)262144);
   REQUIRE_EQ((size_t)grow, (size_t)14);
   REQUIRE_EQ(cap_empty, (size_t)16);
@@ -5606,8 +5724,8 @@ TEST(oa_churn, pure_insert_growth_and_pure_delete_shrink_are_unchanged) {
 
 TEST(oa_churn, a_steady_live_count_never_resizes) {
   /* 60 live keys in 128 slots, churned through 5000 inserts and deletes.
-   * Nothing but the live count may drive a resize, so the table must stay at
-   * 128 slots after every single operation. */
+   * Only the live count may drive a resize, so the table stays at 128
+   * slots after every single operation. */
   chmap_construct(m, int, int);
   for (int k = 0; k < 60; k++) chmap_insert(m, k, k);
   size_t cap = chmap_get_bucket_arr_size(m);
@@ -5657,8 +5775,8 @@ static bool chmap_padded_eq(const void *a, size_t as, const void *b,
   return x.tag == y.tag && x.id == y.id;
 }
 
-/* A key built by field assignment over storage that holds a garbage byte
- * pattern, so that two keys with the same fields differ in their padding. */
+/* A key built by field assignment over storage holding a garbage byte
+ * pattern, so two keys with the same fields differ in their padding. */
 static chmap_padded_key chmap_padded_make(char tag, long id,
                                           unsigned char garbage) {
   chmap_padded_key k;
@@ -5684,18 +5802,18 @@ TEST(key_equality, a_padded_key_is_found_whatever_its_padding_holds) {
     int *v = chmap_get_ptr(m, k);
     if (!v || *v != i) all_found = false;
   }
-  /* An insert with different padding updates the one entry. */
+  /* An insert with different padding updates the single entry. */
   chmap_padded_key upd = chmap_padded_make('a', 0, 0x11);
   chmap_insert(m, upd, -7);
   size_t count_after_update = chmap_elem_count(m);
   chmap_padded_key probe = chmap_padded_make('a', 0, 0xEE);
   int updated = chmap_get(m, probe);
-  /* A delete with yet another padding removes it. */
+  /* And a delete with yet another padding removes it. */
   chmap_padded_key del = chmap_padded_make('a', 0, 0x77);
   cmap_pair kp;
   _populate_cmap_pair(&kp, del);
   ccol_retval_t del_r = chmap_delete_elem(m, &kp);
-  const cmap_pair *after_del = NULL;
+  cmap_pair after_del = {NULL, 0};
   ccol_retval_t get_r = chmap_get_elem_ref(m, &kp, &after_del);
   /* A field that differs is a different key. */
   chmap_padded_key other = chmap_padded_make('b', 0, 0xAB);
@@ -5732,7 +5850,7 @@ static bool chmap_mod100_eq(const void *a, size_t as, const void *b,
   return x % 100 == y % 100;
 }
 
-/* The procedure also governs a map whose types would otherwise select open
+/* The procedure also rules a map whose types would otherwise pick open
  * addressing: here two ids are one key when they agree modulo 100. */
 TEST(key_equality, an_integral_key_type_honours_the_procedure) {
   chmap_construct_full(m, int, int, NULL, chmap_mod100_hash, chmap_mod100_eq);
@@ -5762,11 +5880,11 @@ TEST(key_equality, an_equality_proc_without_a_hashing_proc_is_refused) {
   REQUIRE_TRUE(has_err);
 }
 
-/* With no procedure, a key with padding is compared byte for byte. Through
- * the raw functions, the map reads exactly the bytes of the object that the
- * caller hands it, so a key object that the caller zeroes and then fills in
- * is found again, unlike a struct returned by value, whose padding does not
- * survive the return. */
+/* With no procedure a key with padding is compared byte for byte. Through
+ * the raw functions the map reads exactly the bytes of the object the caller
+ * hands it, so a key object the caller zeroes and then fills in is found
+ * again, unlike a struct returned by value, whose padding doesn't survive the
+ * return. */
 TEST(key_equality, a_zeroed_padded_key_works_through_the_raw_functions) {
   chmap_construct(m, chmap_padded_key, int);
   bool all_inserted = true;
@@ -5786,9 +5904,9 @@ TEST(key_equality, a_zeroed_padded_key_works_through_the_raw_functions) {
     k.tag = 'x';
     k.id = i;
     cmap_pair kp = {.ptr = &k, .size = sizeof(k)};
-    const cmap_pair *vp = NULL;
-    if (chmap_get_elem_ref(m, &kp, &vp) != ccol_success || !vp ||
-        *(const int *)vp->ptr != i) {
+    cmap_pair vp = {NULL, 0};
+    if (chmap_get_elem_ref(m, &kp, &vp) != ccol_success || !vp.ptr ||
+        *(const int *)vp.ptr != i) {
       all_found = false;
     }
   }
@@ -5804,8 +5922,8 @@ TEST(key_equality, a_zeroed_padded_key_works_through_the_raw_functions) {
 #endif
 
 #ifdef CHMAP_TEST_COMPILER_CLEARS_PADDING
-/* Fills the stack below the caller with a non-zero pattern, so that a copy
- * which leaves its padding untouched shows it as non-zero bytes. */
+/* Fills the stack below the caller with a non-zero pattern, so a copy that
+ * leaves its padding untouched shows it as non-zero bytes. */
 static __attribute__((noinline)) void chmap_padded_dirty_stack(void) {
   volatile unsigned char buf[4096];
   for (size_t i = 0; i < sizeof(buf); i++) buf[i] = 0xAB;
@@ -5824,11 +5942,11 @@ static __attribute__((noinline)) int *chmap_padded_macro_lookup(chmap m,
 }
 #endif
 
-/* Where the compiler offers __builtin_clear_padding, the macros clear the
+/* Where the compiler has __builtin_clear_padding, the macros clear the
  * padding of their own copy of the key, so a key needs no procedure and no
- * zeroing, whatever the compiler does with the padding of a struct copy. This
- * test is non-vacuous under GCC: without the clearing, the stored keys carry
- * the stack pattern in their padding and the lookups miss. */
+ * zeroing whatever the compiler does with a struct copy's padding. Under GCC
+ * it catches a missing clear: without it the stored keys carry the stack
+ * pattern in their padding and the lookups miss. */
 TEST(key_equality, the_macros_clear_the_padding_of_their_key_copy) {
 #ifdef CHMAP_TEST_COMPILER_CLEARS_PADDING
   chmap_construct(m, chmap_padded_key, int);
@@ -5873,14 +5991,13 @@ TEST(insert_or_get, an_absent_key_is_inserted_and_a_present_one_is_untouched) {
   cmap_pair kp = {.ptr = (void *)k, .size = strlen(k) + 1};
   cmap_pair vp1 = {.ptr = &v1, .size = sizeof(v1)};
   cmap_pair vp2 = {.ptr = &v2, .size = sizeof(v2)};
-  const cmap_pair *existing = (const cmap_pair *)&kp; /* a poison value */
+  cmap_pair existing = {(void *)0x1, 12345}; /* a poison value */
   ccol_retval_t r1 = ccol_chmap_insert_or_get_elem(m, &kp, &vp1, &existing);
-  const cmap_pair *after_insert = existing;
-  long inserted_seen = after_insert ? *(const long *)after_insert->ptr : -1;
-  existing = (const cmap_pair *)&kp;
+  long inserted_seen = existing.ptr ? *(const long *)existing.ptr : -1;
+  existing = (cmap_pair){(void *)0x1, 12345};
   ccol_retval_t r2 = ccol_chmap_insert_or_get_elem(m, &kp, &vp2, &existing);
-  long seen = existing ? *(const long *)existing->ptr : -1;
-  size_t seen_size = existing ? existing->size : 0;
+  long seen = existing.ptr ? *(const long *)existing.ptr : -1;
+  size_t seen_size = existing.ptr ? existing.size : 0;
   long stored = chmap_get(m, "alpha");
   size_t count = chmap_elem_count(m);
   chmap_destroy(m);
@@ -5893,8 +6010,8 @@ TEST(insert_or_get, an_absent_key_is_inserted_and_a_present_one_is_untouched) {
   REQUIRE_EQ(count, (size_t)1);
 }
 
-/* The use that the entry point exists for: a value that owns a heap object,
- * where the caller frees the old object and stores the new pointer in place. */
+/* What the entry point is there for: a value that owns a heap object, where
+ * the caller frees the old object and stores the new pointer in place. */
 TEST(insert_or_get, an_owning_pointer_value_is_replaced_in_one_pass) {
   enum { N = 300 };
   chmap_construct(m, char *, void *);
@@ -5907,13 +6024,13 @@ TEST(insert_or_get, an_owning_pointer_value_is_replaced_in_one_pass) {
       *child = round * 1000 + i;
       cmap_pair kp = {.ptr = key, .size = strlen(key) + 1};
       cmap_pair vp = {.ptr = &child, .size = sizeof(child)};
-      const cmap_pair *existing = NULL;
+      cmap_pair existing = {NULL, 0};
       ccol_retval_t r = ccol_chmap_insert_or_get_elem(m, &kp, &vp, &existing);
       if (r == ccol_key_already_present) {
         void *old;
-        memcpy(&old, existing->ptr, sizeof(old));
+        memcpy(&old, existing.ptr, sizeof(old));
         free(old);
-        memcpy((void *)existing->ptr, &child, sizeof(child));
+        memcpy((void *)existing.ptr, &child, sizeof(child));
         replaced++;
       }
     }
@@ -5938,20 +6055,20 @@ TEST(insert_or_get, each_call_costs_one_probe_pass_on_open_addressing) {
   int k = 777, v = -1;
   cmap_pair kp = {.ptr = &k, .size = sizeof(k)};
   cmap_pair vp = {.ptr = &v, .size = sizeof(v)};
-  const cmap_pair *ref = NULL;
+  cmap_pair ref = {NULL, 0};
   chashmap_reset_oa_probe_steps_for_tests();
   ccol_retval_t rg = chmap_get_elem_ref(m, &kp, &ref);
   unsigned long long get_probes = chashmap_oa_probe_steps_for_tests();
-  const cmap_pair *existing = NULL;
+  cmap_pair existing = {NULL, 0};
   chashmap_reset_oa_probe_steps_for_tests();
   ccol_retval_t ri = ccol_chmap_insert_or_get_elem(m, &kp, &vp, &existing);
   unsigned long long upsert_probes = chashmap_oa_probe_steps_for_tests();
-  bool same_slot = existing == ref;
+  bool same_slot = existing.ptr == ref.ptr && existing.size == ref.size;
   int stored = chmap_get(m, 777);
   chmap_destroy(m);
 
-  /* An absent key: the same insert into two maps of identical content costs
-   * the same probes through either entry point. */
+  /* An absent key: the same insert into two maps with identical content
+   * costs the same probes through either entry point. */
   chmap_construct(a, int, int);
   chmap_construct(b, int, int);
   for (int i = 0; i < 1000; i++) {
@@ -5964,7 +6081,7 @@ TEST(insert_or_get, each_call_costs_one_probe_pass_on_open_addressing) {
   chashmap_reset_oa_probe_steps_for_tests();
   ccol_retval_t ra = chmap_insert_elem(a, &nkp, &nvp);
   unsigned long long insert_probes = chashmap_oa_probe_steps_for_tests();
-  const cmap_pair *none = NULL;
+  cmap_pair none = {NULL, 0};
   chashmap_reset_oa_probe_steps_for_tests();
   ccol_retval_t rb = ccol_chmap_insert_or_get_elem(b, &nkp, &nvp, &none);
   unsigned long long upsert_new_probes = chashmap_oa_probe_steps_for_tests();
@@ -5979,37 +6096,37 @@ TEST(insert_or_get, each_call_costs_one_probe_pass_on_open_addressing) {
   REQUIRE_EQ(stored, 777);
   REQUIRE_EQ(ra, ccol_success);
   REQUIRE_EQ(rb, ccol_success);
-  REQUIRE_NE((void *)none, NULL);
+  REQUIRE_NE(none.ptr, NULL);
   REQUIRE_EQ((size_t)upsert_new_probes, (size_t)insert_probes);
   REQUIRE_EQ(got_b, 9);
 }
 
-TEST(insert_or_get, a_rejected_call_leaves_the_out_parameter_null) {
+TEST(insert_or_get, a_rejected_call_leaves_the_out_parameter_empty) {
   chmap_construct(m, int, int);
   int k = 1, v = 2;
   short wrong = 3;
   cmap_pair kp = {.ptr = &k, .size = sizeof(k)};
   cmap_pair bad_kp = {.ptr = &wrong, .size = sizeof(wrong)};
   cmap_pair vp = {.ptr = &v, .size = sizeof(v)};
-  const cmap_pair *existing = (const cmap_pair *)&kp; /* a poison value */
+  cmap_pair existing = {(void *)0x1, 12345}; /* a poison value */
   ccol_retval_t r_bad =
       ccol_chmap_insert_or_get_elem(m, &bad_kp, &vp, &existing);
-  const cmap_pair *after_bad = existing;
   ccol_retval_t r_null = ccol_chmap_insert_or_get_elem(m, &kp, &vp, NULL);
   size_t count = chmap_elem_count(m);
   chmap_destroy(m);
   REQUIRE_EQ(r_bad, ccol_invalid_args);
-  REQUIRE_EQ((void *)after_bad, NULL);
+  REQUIRE_EQ(existing.ptr, NULL);
+  REQUIRE_EQ(existing.size, (size_t)0);
   REQUIRE_EQ(r_null, ccol_invalid_args);
   REQUIRE_EQ(count, (size_t)0);
 }
 
 /* Inserts every key with a placeholder value, then writes the real value
- * through the slot that the same call returned. Because the loop crosses
- * several grows, including grows that the insert of the key itself triggers,
- * the slot must be the one of the rebuilt table. Returns true when every key
- * reads back its written value and every call reported the slot of its own
- * entry. */
+ * through the slot the same call returned. The loop crosses several grows,
+ * including ones the key's own insert triggers, so the slot must be the
+ * rebuilt table's. Returns true when every key reads back the value written
+ * to it and every call reported its own entry's
+ * slot. */
 static bool chmap_upsert_write_through(chmap m, int n, bool *saw_grow) {
   *saw_grow = false;
   bool ok = true;
@@ -6020,29 +6137,30 @@ static bool chmap_upsert_write_through(chmap m, int n, bool *saw_grow) {
     cmap_pair kp = {.ptr = &key, .size = sizeof(key)};
     cmap_pair vp = {.ptr = &placeholder, .size = sizeof(placeholder)};
     size_t cap_before = chmap_get_bucket_arr_size(m);
-    const cmap_pair *slot = NULL;
+    cmap_pair slot = {NULL, 0};
     if (ccol_chmap_insert_or_get_elem(m, &kp, &vp, &slot) != ccol_success ||
-        !slot || slot->size != sizeof(long)) {
+        !slot.ptr || slot.size != sizeof(long)) {
       ok = false;
       continue;
     }
     if (chmap_get_bucket_arr_size(m) != cap_before) *saw_grow = true;
-    memcpy((void *)slot->ptr, &real, sizeof(real));
-    const cmap_pair *ref = NULL;
-    if (chmap_get_elem_ref(m, &kp, &ref) != ccol_success || ref != slot) {
+    memcpy((void *)slot.ptr, &real, sizeof(real));
+    cmap_pair ref = {NULL, 0};
+    if (chmap_get_elem_ref(m, &kp, &ref) != ccol_success ||
+        ref.ptr != slot.ptr || ref.size != slot.size) {
       ok = false;
     }
   }
   for (int i = 0; i < n; i++) {
     long key = (long)i * 13 + 1;
     cmap_pair kp = {.ptr = &key, .size = sizeof(key)};
-    const cmap_pair *ref = NULL;
+    cmap_pair ref = {NULL, 0};
     long v = 0;
     if (chmap_get_elem_ref(m, &kp, &ref) != ccol_success) {
       ok = false;
       continue;
     }
-    memcpy(&v, ref->ptr, sizeof(v));
+    memcpy(&v, ref.ptr, sizeof(v));
     if (v != key * 7) ok = false;
   }
   return ok;
@@ -6078,7 +6196,7 @@ static bool chmap_upsert_eq_long(const void *a, size_t as, const void *b,
 
 TEST(insert_or_get, the_slot_of_a_new_key_is_writable_on_separate_chaining) {
   /* A key equality procedure makes a long-to-long map use separate
-   * chaining, so the same helper exercises the other backend. */
+   * chaining, so the same helper exercises the other backend too. */
   char *err = NULL;
   chmap m =
       chmap_create_full(16, ccol_long, ccol_long, NULL, chmap_upsert_hash_long,
@@ -6096,11 +6214,6 @@ TEST(insert_or_get, the_slot_of_a_new_key_is_writable_on_separate_chaining) {
 /* ========================================================================== */
 /*               OPEN ADDRESSING: BACKWARD-SHIFT DELETION                     */
 /* ========================================================================== */
-
-size_t chashmap_oa_home_slot_for_tests(chmap chm, const void *key_ptr,
-                                       size_t key_size);
-bool chashmap_oa_check_invariants_for_tests(chmap chm);
-unsigned long long chashmap_oa_shift_moves_for_tests(void);
 
 /* The first n keys, from start upward, whose home slot in m is home. */
 static long bs_keys_with_home(chmap m, size_t home, size_t n, long start,
@@ -6126,7 +6239,7 @@ static bool bs_all_present(chmap m, const long *keys, const bool *present,
 
 /* Builds one cluster from a list of home slots, then deletes one key at a
  * time in the given order, checking every key and the structure after each
- * delete. Gives false at the first failure. */
+ * delete. Returns false at the first failure. */
 static bool bs_cluster_case(const size_t *homes, size_t n,
                             const size_t *delete_order) {
   chmap m = chmap_create(64, ccol_long, ccol_long, NULL);
@@ -6139,7 +6252,7 @@ static bool bs_cluster_case(const size_t *homes, size_t n,
     present[i] = true;
   }
   /* 20 filler keys far from the cluster keep the load above the shrink
-   * threshold, so the capacity stays at 64 throughout. */
+   * threshold, so the capacity stays at 64 the whole time. */
   long filler[20];
   bool filler_present[20];
   long fnext = 1000000;
@@ -6178,7 +6291,7 @@ TEST(backward_shift, deletes_at_the_head_middle_and_tail_of_a_cluster) {
 TEST(backward_shift, a_cluster_that_wraps_past_the_last_slot) {
   /* Four keys home at 62 and three at 63 fill slots 62 to 63 and 0 to 4, and
    * two keys home at 0 and one at 2 land after them, so every key past slot
-   * 63 has a home slot before the start of the array. */
+   * 63 has its home slot before the start of the array. */
   static const size_t homes[] = {62, 62, 63, 62, 63, 0, 62, 63, 2, 0};
   static const size_t orders[3][10] = {{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
                                        {9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
@@ -6189,8 +6302,8 @@ TEST(backward_shift, a_cluster_that_wraps_past_the_last_slot) {
 }
 
 TEST(backward_shift, an_entry_never_moves_before_its_home_slot) {
-  /* Keys home at 40, 40, 42, 42, 44: deleting the second key of home 40
-   * must leave the keys of home 42 at or after slot 42, although the gap at
+  /* Keys home at 40, 40, 42, 42, 44: deleting the second key of home 40 has
+   * to leave the home-42 keys at or after slot 42, even though the gap at
    * slot 41 is before them. */
   static const size_t homes[] = {40, 40, 42, 42, 44, 41};
   static const size_t order_a[] = {1, 0, 5, 2, 3, 4};
@@ -6203,9 +6316,9 @@ TEST(backward_shift, an_entry_never_moves_before_its_home_slot) {
  * that most keys home in a narrow band that wraps past the last slot of a
  * 64-slot table, which makes long clusters. The first phase keeps the live
  * count between the shrink and the grow thresholds, so the capacity stays at
- * 64; the second phase lets the table grow and shrink. After every delete,
- * every key of the pool must be found with its value or be absent, and every
- * probe sequence must be intact. */
+ * 64, and the second phase lets the table grow and shrink. After every
+ * delete, every key of the pool has to be found with its value or be absent,
+ * and every probe sequence must be intact. */
 TEST(backward_shift, a_randomized_differential_run_against_a_reference) {
   enum { POOL = 160 };
   chmap m = chmap_create(64, ccol_long, ccol_long, NULL);
@@ -6260,7 +6373,7 @@ TEST(backward_shift, a_randomized_differential_run_against_a_reference) {
       if (chmap_elem_count(m) != live) ok = false;
     }
     if (phase == 1) {
-      /* Drain the table, which also shrinks it, checking each delete. */
+      /* Drain the table, which shrinks it too, checking each delete. */
       for (size_t i = 0; i < POOL && ok; i++) {
         if (!present[i]) continue;
         ok = chmap_remove(m, keys[i]) == ccol_success;
@@ -6308,27 +6421,13 @@ TEST(backward_shift, a_delete_in_a_cluster_moves_entries_and_one_alone_none) {
 /*     HASH FLOODING: SECRET SEEDS, AND THE KEYED MODE THAT A FLOOD SELECTS   */
 /* ========================================================================== */
 
-extern void chashmap_sip_state_for_tests(uint64_t k0, uint64_t k1,
-                                         uint64_t sip_v[4]);
-extern uint64_t chashmap_siphash13_for_tests(const uint64_t sip_v[4],
-                                             const void *key_ptr,
-                                             size_t key_size);
-extern size_t chashmap_byte_hash_for_tests(const uint64_t sip_v[4],
-                                           const void *key_ptr,
-                                           size_t key_size);
-extern void chashmap_hash_secret_for_tests(chmap chm, uint64_t out[6]);
-extern void chashmap_fallback_hash_key_for_tests(uint64_t out[4]);
-extern size_t chashmap_sc_longest_chain_for_tests(chmap chm);
-extern size_t chashmap_sc_stored_hash_for_tests(chmap chm, const void *key_ptr,
-                                                size_t key_size);
-
 enum { FLOOD_KEYS = 600, FLOOD_KEY_LEN = 24, FLOOD_TOP_BITS = 10 };
 
 /* Fills keys with FLOOD_KEYS distinct strings whose byte hash under the
- * SipHash key (0, 0) has its top FLOOD_TOP_BITS bits clear. That is what a
- * party who knows the key computes offline: with at most 2^FLOOD_TOP_BITS
- * buckets, every one of those keys lands in bucket 0 of a map that hashes
- * with that key. */
+ * SipHash key (0, 0) has its top FLOOD_TOP_BITS bits clear, which is what
+ * somebody who knows the key computes offline: with at most
+ * 2^FLOOD_TOP_BITS buckets, every one of those keys lands in bucket 0 of a
+ * map that hashes with that key. */
 static void flood_keys_for_key_zero(char (*keys)[FLOOD_KEY_LEN]) {
   const unsigned shift = (unsigned)(sizeof(size_t) * 8 - FLOOD_TOP_BITS);
   uint64_t zero_state[4];
@@ -6353,11 +6452,9 @@ static bool hash_secret_is_zero(const uint64_t secret[6]) {
 }
 
 /* Fills keys with FLOOD_KEYS distinct strings whose XXH64 under the seed 0,
- * the byte hash of the fast mode for a party who guesses the seed, has its
- * top FLOOD_TOP_BITS bits clear. */
+ * the fast mode's byte hash for somebody who guesses the seed, has its top
+ * FLOOD_TOP_BITS bits clear. */
 static void flood_keys_for_xxh_seed_zero(char (*keys)[FLOOD_KEY_LEN]) {
-  extern uint64_t chashmap_xxh64_for_tests(const void *key_ptr, size_t key_size,
-                                           uint64_t seed);
   unsigned long long ctr = 0;
   for (size_t got = 0; got < FLOOD_KEYS;) {
     char k[FLOOD_KEY_LEN];
@@ -6373,14 +6470,12 @@ static void flood_keys_for_xxh_seed_zero(char (*keys)[FLOOD_KEY_LEN]) {
   }
 }
 
-/* The fast byte hash is XXH64 with a secret seed, so keys that a party
- * computes for a seed that it guesses spread over the buckets as any other
- * keys do, and the map has no reason to switch. This test is non-vacuous:
- * with a byte_seed of 0, all 600 keys share bucket 0 and the map switches at
- * the twenty-first. */
+/* The fast byte hash is XXH64 with a secret seed, so keys somebody computes
+ * for a seed they guessed spread over the buckets like any other keys, and
+ * the map has no reason to switch. Set byte_seed to 0 and the test fails:
+ * all 600 keys share bucket 0 and the map switches at the twenty-first. */
 TEST(hash_seed, keys_that_collide_for_a_guessed_xxh_seed_stay_fast_and_spread) {
   static char keys[FLOOD_KEYS][FLOOD_KEY_LEN];
-  extern bool chashmap_is_keyed_for_tests(chmap chm);
   flood_keys_for_xxh_seed_zero(keys);
   chmap m = chmap_create(16, ccol_string, ccol_int, NULL);
   bool all_inserted = true;
@@ -6401,13 +6496,12 @@ TEST(hash_seed, keys_that_collide_for_a_guessed_xxh_seed_stay_fast_and_spread) {
 }
 
 /* The keyed mode hashes a byte key with SipHash-1-3 under a secret 128-bit
- * key, so keys that a party computes for the known key (0, 0) spread over the
- * buckets of a keyed map. This test is non-vacuous: with the keyed byte hash
- * keyed by the constant key (0, 0), all 600 keys share one bucket and the
- * longest chain is 600. */
+ * key, so keys somebody computes for the known key (0, 0) spread over a keyed
+ * map's buckets. If the keyed byte hash were keyed by the constant key
+ * (0, 0) instead, all 600 keys would share one bucket and the longest chain
+ * would be 600. */
 TEST(hash_seed, keys_that_collide_for_a_known_key_spread_over_the_buckets) {
   static char keys[FLOOD_KEYS][FLOOD_KEY_LEN];
-  extern ccol_retval_t chashmap_switch_to_keyed_for_tests(chmap chm);
   flood_keys_for_key_zero(keys);
   chmap m = chmap_create(16, ccol_string, ccol_int, NULL);
   chmap_redeclare(m, char *, int);
@@ -6425,24 +6519,21 @@ TEST(hash_seed, keys_that_collide_for_a_known_key_spread_over_the_buckets) {
   chmap_destroy(m);
   REQUIRE_TRUE(all_inserted);
   /* The premise: the table is small enough that the key (0, 0) puts every
-   * key in bucket 0. */
+   * key into bucket 0. */
   REQUIRE_LE(buckets, (size_t)1 << FLOOD_TOP_BITS);
-  /* 600 keys over 1024 buckets: the longest chain of a random hash is about
-   * 5. 16 leaves a wide margin and is far below the 600 of a known key. */
+  /* 600 keys over 1024 buckets: a random hash's longest chain is about 5,
+   * and 16 leaves a wide margin while being far below a known key's 600. */
   REQUIRE_LE(longest, (size_t)16);
   REQUIRE_FALSE(hash_secret_is_zero(secret));
 }
 
-/* Every map of the process, of either backend, reads one secret. A fast map
- * stores XXH64 under byte_seed, and a keyed map stores the hash that
- * ccol_chmap_hash_key gives, SipHash-1-3 under the secret key, whichever map
- * it is. clrucache depends on ccol_chmap_hash_key to route a key to the
- * segment whose map owns it, so that hash must not depend on the mode of
- * any map. */
+/* Every map in the process, of either backend, reads one secret. A fast map
+ * stores XXH64 under byte_seed, and a keyed map stores the hash
+ * ccol_chmap_hash_key gives, SipHash-1-3 under the secret key, whatever map it
+ * is. clrucache relies on ccol_chmap_hash_key to route a key to the segment
+ * whose map owns it, so that hash must not depend on any map's
+ * mode. */
 TEST(hash_seed, every_map_and_ccol_chmap_hash_key_share_one_secret) {
-  extern uint64_t chashmap_xxh64_for_tests(const void *key_ptr, size_t key_size,
-                                           uint64_t seed);
-  extern ccol_retval_t chashmap_switch_to_keyed_for_tests(chmap chm);
   chmap a = chmap_create(16, ccol_string, ccol_int, NULL);
   chmap b = chmap_create(1024, ccol_string, ccol_long, NULL);
   chmap c = chmap_create(16, ccol_long, ccol_long, NULL);
@@ -6488,8 +6579,8 @@ TEST(hash_seed, every_map_and_ccol_chmap_hash_key_share_one_secret) {
 }
 
 /* The key that stands in for getrandom(2) mixes clocks and addresses, so it
- * is neither a constant nor the same on two calls, and its three words
- * differ. */
+ * isn't a constant, it differs between two calls, and its three words
+ * differ from each other. */
 TEST(hash_seed, the_fallback_key_is_not_a_constant) {
   uint64_t s1[4], s2[4];
   chashmap_fallback_hash_key_for_tests(s1);
@@ -6504,7 +6595,7 @@ TEST(hash_seed, the_fallback_key_is_not_a_constant) {
 }
 
 /* SipHash-c-d written byte by byte from the specification, with no word
- * loads, as an independent reference for the implementation of the map. */
+ * loads, as an independent reference for the map's implementation. */
 static uint64_t sip_ref_rotl(uint64_t x, unsigned b) {
   return (x << b) | (x >> (64u - b));
 }
@@ -6561,13 +6652,13 @@ static uint64_t sip_test_rand(uint64_t *s) {
   return z ^ (z >> 31);
 }
 
-/* The reference is first held to the published SipHash-2-4 vectors of the
- * specification (key 00..0f; the empty input, and the 15 bytes 00..0e), and
- * to the published SipHash-1-3 vector of the empty input under the same key.
- * The byte hash of the map must then equal the reference with one
- * compression round and three finalization rounds for every length from 0 to
- * 130, at four alignments, under random keys. The lengths cover every tail
- * length of the word loop several times over. */
+/* The reference is first held to the specification's published SipHash-2-4
+ * vectors (key 00..0f; the empty input and the 15 bytes 00..0e), and to the
+ * published SipHash-1-3 vector of the empty input under the same key. The
+ * map's byte hash then equals the reference with one compression round
+ * and three finalization rounds for every length from 0 to 130, at four
+ * alignments, under random keys. The lengths cover every tail length of the
+ * word loop several times over. */
 TEST(hash_seed, the_byte_hash_is_siphash_1_3) {
   unsigned char key[16];
   static unsigned char msg[140];
@@ -6603,18 +6694,18 @@ TEST(hash_seed, the_byte_hash_is_siphash_1_3) {
   REQUIRE_EQ(mismatches, (size_t)0);
 }
 
-/* A pair of 24-byte keys that the XXH64 byte hash maps to one full 64-bit
- * hash whatever its seed is. A 24-byte input takes the short path of XXH64:
+/* A pair of 24-byte keys that the XXH64 byte hash maps to the same full
+ * 64-bit hash whatever the seed. A 24-byte input takes XXH64's short path:
  * for each 8-byte word w, h = rotl(h ^ round(w), 27) * P1 + P4, where
  * round(w) = rotl(w * P2, 31) * P1 is a bijection of w that anybody can
- * invert. The words of the keys are chosen through that inverse, so that the
- * first word of b contributes the value of a with bit 36 flipped and the
- * second word of b contributes the value of a with bit 63 flipped. After the
- * first word, the rotation by 27 moves the flipped bit to bit 63, and a
- * multiply by an odd number keeps a difference of 2^63 as it is, so h differs
- * in bit 63 alone. The second word flips bit 63 back. From then on the two
- * states are equal, and the seed, which only sets the starting state, plays
- * no part. A keyed pseudorandom function has no such pair. */
+ * invert. The keys' words are picked through that inverse so that b's first
+ * word contributes a's value with bit 36 flipped and b's second word
+ * contributes a's value with bit 63 flipped. After the first word, the
+ * rotation by 27 moves the flipped bit to bit 63, and multiplying by an odd
+ * number keeps a difference of 2^63 as it is, so h differs in bit 63 alone.
+ * The second word flips bit 63 back. From then on the two states are equal,
+ * and the seed, which only sets the starting state, plays no part. A keyed
+ * pseudorandom function has no such pair. */
 static uint64_t xxh_pair_inv(uint64_t a) {
   uint64_t x = a;
   for (int i = 0; i < 6; i++) x *= 2 - a * x;
@@ -6622,7 +6713,7 @@ static uint64_t xxh_pair_inv(uint64_t a) {
 }
 
 /* XXH64 reads its input as little-endian 64-bit words on every target, so a
- * key that is built from chosen words stores each one in that byte order. */
+ * key built from chosen words stores each one in that byte order. */
 static uint64_t xxh_le_word(uint64_t w) {
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
   return __builtin_bswap64(w);
@@ -6655,13 +6746,10 @@ static void xxh_seed_free_pair(xxh_pair_key *a, xxh_pair_key *b) {
 /* The pair collides under XXH64 for every seed, so a fast map stores one
  * hash for both, and the keyed mode separates them: SipHash-1-3 under many
  * random keys never maps them to one hash. A set of such keys is what the
- * detection of the fast mode exists for; see adaptive_hash. This test is
- * non-vacuous: with XXH64 as the byte hash of the keyed mode, the switched
- * map stores one hash for both keys. */
+ * fast mode's detection is there for; see adaptive_hash. With XXH64 as the
+ * keyed mode's byte hash the switched map would store one hash for both
+ * keys, and the check fails. */
 TEST(hash_seed, a_seed_independent_xxh64_collision_is_split_by_the_keyed_mode) {
-  extern uint64_t chashmap_xxh64_for_tests(const void *key_ptr, size_t key_size,
-                                           uint64_t seed);
-  extern ccol_retval_t chashmap_switch_to_keyed_for_tests(chmap chm);
   xxh_pair_key a, b;
   xxh_seed_free_pair(&a, &b);
   chmap m = chmap_create(16, ccol_other_types, ccol_int, NULL);
@@ -6678,9 +6766,9 @@ TEST(hash_seed, a_seed_independent_xxh64_collision_is_split_by_the_keyed_mode) {
   size_t hb = chashmap_sc_stored_hash_for_tests(m, &b, sizeof(b));
   chmap_destroy(m);
 
-  /* Under many random seeds, XXH64 maps the pair to one hash every time; under
-     many random keys of SipHash, the pair collides no more often than any
-     other pair: never, in practice, for a full hash. */
+  /* Under many random seeds XXH64 maps the pair to one hash every time,
+     while under many random SipHash keys the pair collides no more often than
+     any other pair, which for a full hash means never in practice. */
   uint64_t rng = 777;
   size_t collisions = 0, xxh_collisions = 0;
   for (int t = 0; t < 2000; t++) {
@@ -6708,21 +6796,21 @@ TEST(hash_seed, a_seed_independent_xxh64_collision_is_split_by_the_keyed_mode) {
   REQUIRE_EQ(collisions, (size_t)0);
 }
 
-/* The integer flood families below are what a party who knows a public
- * multiplicative hash computes offline. M is the Fibonacci constant, the
- * odd 64-bit multiplier nearest 2^64 / phi; with k * M as the hash, which is
+/* The integer flood families below are what somebody who knows a public
+ * multiplicative hash computes offline. M is the Fibonacci constant, the odd
+ * 64-bit multiplier nearest 2^64 / phi, and with k * M as the hash, which is
  * the fast hash of a fixed-width key:
  * - i * M^-1 hashes to i, so every key has the top bits of a small number
  *   and all of them share home slot 0;
  * - i * F for a large Fibonacci number F makes F * M nearly a multiple of
  *   2^64, so the keys pile up in a few dense clusters;
- * - i * 32 is a set that varies only in a fixed group of bit positions.
+ * - i * 32 is a set that only varies in a fixed group of bit positions.
  *   An exclusive or with a seed only translates such a set, so its
  *   clustering under (k ^ seed) * M is the same for every seed.
  * Each set switches a map to the keyed mode, whose seeded mixer has none of
- * these structures. Each test inserts the keys and then looks every one of
- * them up, and bounds the probes for each operation, which a random function
- * of the keys keeps between 1 and 3 at the load of this map. */
+ * these structures. Each test inserts the keys, looks every one of them up
+ * again, and bounds the probes per operation, which a random function of the
+ * keys keeps between 1 and 3 at this map's load. */
 enum { INT_FLOOD_KEYS = 20000 };
 
 static uint64_t int_flood_key(int family, uint64_t i) {
@@ -6761,8 +6849,7 @@ static void int_flood_probe_counts(int family, unsigned long long *inserts,
   chmap_destroy(m);
 }
 
-/* This test is non-vacuous: without the detection, the keys i * M^-1 take
- * 10001.6 probes for each insert. */
+/* Without the detection the keys i * M^-1 take 10001.6 probes per insert. */
 TEST(hash_seed, inverse_multiplier_integer_keys_do_not_share_a_slot) {
   unsigned long long ins = 0, look = 0;
   bool ok = false;
@@ -6772,8 +6859,8 @@ TEST(hash_seed, inverse_multiplier_integer_keys_do_not_share_a_slot) {
   REQUIRE_LT((long long)look, (long long)INT_FLOOD_KEYS * 3);
 }
 
-/* This test is non-vacuous: without the detection, the multiples of the
- * Fibonacci number 1346269 take 9892 probes for each lookup. */
+/* This one catches a missing detection too: the multiples of the Fibonacci
+ * number 1346269 then take 9892 probes per lookup. */
 TEST(hash_seed, fibonacci_stride_integer_keys_do_not_cluster) {
   unsigned long long ins = 0, look = 0;
   bool ok = false;
@@ -6783,10 +6870,9 @@ TEST(hash_seed, fibonacci_stride_integer_keys_do_not_cluster) {
   REQUIRE_LT((long long)look, (long long)INT_FLOOD_KEYS * 3);
 }
 
-/* This test is non-vacuous: without the window, which is what switches the
- * map for this set, the keys i * 32 take 5.4 probes for each lookup and 5.7
- * for each insert, and (k ^ seed) * M keeps that clustering for every
- * seed. */
+/* The window is what switches the map for this set. Without it the keys
+ * i * 32 take 5.4 probes per lookup and 5.7 per insert, and (k ^ seed) * M
+ * keeps that clustering for every seed. */
 TEST(hash_seed, keys_in_a_fixed_group_of_bits_do_not_cluster) {
   unsigned long long ins = 0, look = 0;
   bool ok = false;
@@ -6797,9 +6883,8 @@ TEST(hash_seed, keys_in_a_fixed_group_of_bits_do_not_cluster) {
 }
 
 /* The same keys in a separate-chaining map, which an integral key with a
- * string value selects. This test is non-vacuous: without the detection,
- * every key i * M^-1 goes into bucket 0 and the longest chain holds all
- * 20000 keys. */
+ * string value picks. A map without the detection puts every key i * M^-1
+ * into bucket 0, and its longest chain holds all 20000 keys. */
 TEST(hash_seed, inverse_multiplier_integer_keys_spread_over_the_chains) {
   chmap_construct(m, unsigned long long, char *);
   for (uint64_t i = 0; i < INT_FLOOD_KEYS; i++) {
@@ -6812,10 +6897,10 @@ TEST(hash_seed, inverse_multiplier_integer_keys_spread_over_the_chains) {
   REQUIRE_LE(longest, (size_t)16);
 }
 
-/* The inverse of the murmur3 finalizer, which is public and unseeded, and
- * which finalizes a custom hash in the fast mode. Keys mapped through it come
- * out of that finalizer as 0, 1, 2, ..., so with a custom identity hash every
- * one of them gets the top bits of a small number. */
+/* The inverse of the murmur3 finalizer, which is public and unseeded and
+ * finalizes a custom hash in the fast mode. Keys mapped through it come out
+ * of that finalizer as 0, 1, 2, ..., so with a custom identity hash every one
+ * of them gets the top bits of a small number. */
 static size_t murmur_fmix_inverse(size_t h) {
 #if SIZE_MAX == UINT64_MAX
   h ^= h >> 33;
@@ -6844,9 +6929,9 @@ static unsigned long identity_ulong_hasher(const void *key_ptr,
 }
 
 /* The keys share home slot 0 under the fast finalizer, so the map switches
- * to the keyed mode, which finalizes the custom hash with the secret. This
- * test is non-vacuous: without the detection, every key lands in home slot 0
- * and each insert takes 10001.6 probes. */
+ * to the keyed mode, which finalizes the custom hash with the secret. Drop
+ * the detection and every key lands in home slot 0, with 10001.6 probes per
+ * insert. */
 TEST(hash_seed, a_custom_hash_is_finalized_with_the_secret) {
   char *err = NULL;
   chmap m = chmap_create_full(16, ccol_unsigned_long, ccol_unsigned_long, NULL,
@@ -6939,8 +7024,8 @@ TEST(insert_or_get_entry, refuses_open_addressing_and_null_out_parameters) {
   REQUIRE_EQ(r_null_map, ccol_invalid_args);
 }
 
-/* Collects the keys of m from the oldest entry to the newest one into out,
- * joined by ','. */
+/* Collects m's keys from the oldest entry to the newest into out, joined by
+ * ','. */
 static void ordered_keys(chmap m, char *out, size_t cap) {
   out[0] = '\0';
   const cmap_pair *k, *v;
@@ -7008,8 +7093,8 @@ TEST(ordered_entries, walk_in_insertion_order_through_replace_delete_resize) {
   REQUIRE_TRUE(ccol_chmap_oldest_entry(NULL) == NULL);
 }
 
-/* The successor that entry_read gives survives a delete of the entry just
- * read, which is what lets a caller remove members while it walks. */
+/* The successor entry_read gives survives deleting the entry just read,
+ * which is what lets a caller remove members while it walks. */
 TEST(ordered_entries, the_successor_survives_a_delete_of_the_current_entry) {
   chmap m = chmap_create(16, ccol_string, ccol_int, NULL);
   chmap_redeclare(m, char *, int);
@@ -7038,17 +7123,17 @@ TEST(ordered_entries, the_successor_survives_a_delete_of_the_current_entry) {
 #include <sys/wait.h>
 #include <unistd.h>
 
-/* The name of an environment variable that no test environment sets, so that
- * getenv() gives NULL for it, which is the ordinary way a NULL character
- * pointer reaches these macros. */
+/* The name of an environment variable no test environment sets, so getenv()
+ * gives NULL for it, which is the ordinary way a NULL character pointer
+ * reaches these macros. */
 #define CHMAP_NULL_TEST_UNSET_VAR "CCOL_CHMAP_TEST_SURELY_UNSET_VARIABLE"
 
-/* How a forked child ended, reported through a pipe: the byte that the probe
- * returned, or a code for a signal. The exit status alone is not used,
- * because valgrind replaces the exit status of a child that exits with memory
- * still reachable. A probe that dereferences NULL dies with SIGSEGV and
- * writes nothing, so this reports it as a crash instead of taking the whole
- * test binary down with it. */
+/* How a forked child ended, reported through a pipe: the byte the probe
+ * returned, or a code for a signal. We don't use the exit status alone,
+ * because valgrind overrides the exit status of a child that exits with
+ * memory still reachable. A probe that dereferences NULL dies with SIGSEGV
+ * and writes nothing, so this reports it as a crash instead of taking the
+ * whole test binary down with it. */
 enum { chmap_null_probe_crashed = 250, chmap_null_probe_aborted = 251 };
 
 static int chmap_null_run_probe(int (*probe)(void)) {
@@ -7130,7 +7215,7 @@ static int chmap_null_probe_get_key(void) {
   return v == 1;
 }
 
-/* An int value map with a string value type runs the value through the same
+/* An int-keyed map with a string value type runs the value through the same
  * pair builder as a string key. */
 static int chmap_null_probe_insert_value_int_key(void) {
   unsetenv(CHMAP_NULL_TEST_UNSET_VAR);
@@ -7140,13 +7225,12 @@ static int chmap_null_probe_insert_value_int_key(void) {
   return 1;
 }
 
-/* A NULL character pointer is not a string: the pair that the macros build
- * for it has no bytes, so the raw layer answers ccol_invalid_args, and each
- * macro reports that in its documented way: chmap_get_ptr() gives NULL,
+/* A NULL character pointer isn't a string. The pair the macros build for it
+ * has no bytes, so the raw layer answers ccol_invalid_args, and each macro
+ * reports that in its documented way: chmap_get_ptr() gives NULL,
  * chmap_remove() returns the code, and chmap_insert() and chmap_get() stop
- * the program with it. This test is non-vacuous: without the NULL test in
- * _populate_cmap_pair(), every one of these probes dies with SIGSEGV inside
- * strlen(). */
+ * the program with it. If _populate_cmap_pair() lost its NULL test, every
+ * one of these probes would die with SIGSEGV inside strlen(). */
 TEST(chmap_null_char_ptr, get_ptr_of_a_null_key_gives_null) {
   REQUIRE_EQ(chmap_null_run_probe(chmap_null_probe_get_ptr_key), 1);
 }
@@ -7176,9 +7260,9 @@ TEST(chmap_null_char_ptr, get_of_a_null_key_is_fatal) {
 /* Binary keys                                                                */
 /* ------------------------------------------------------------------------ */
 
-/* A fixed-size digest wrapped in a struct is a binary key through the typed
- * macros: the map hashes and compares all 32 bytes, embedded zero bytes
- * included, and a character pointer never enters the picture. */
+/* Through the typed macros a fixed-size digest wrapped in a struct is a
+ * binary key: the map hashes and compares all 32 bytes, embedded zero bytes
+ * included, and no character pointer is involved at all. */
 typedef struct {
   unsigned char b[32];
 } chmap_test_digest;
@@ -7212,9 +7296,9 @@ TEST(chmap_binary_keys, a_digest_struct_key_compares_every_byte) {
   REQUIRE_EQ(vc, 2);
 }
 
-/* A binary key of a length that only the caller knows goes through the raw
+/* A binary key whose length only the caller knows goes through the raw
  * layer, with that length in cmap_pair.size, where every byte counts,
- * embedded zero bytes included, so keys that share a prefix up to a zero byte
+ * embedded zero bytes included, so keys sharing a prefix up to a zero byte
  * stay distinct. */
 TEST(chmap_binary_keys, a_raw_layer_key_with_embedded_zeros) {
   chmap m = chmap_create(16, ccol_other_types, ccol_int, NULL);
@@ -7236,13 +7320,13 @@ TEST(chmap_binary_keys, a_raw_layer_key_with_embedded_zeros) {
   unsigned char probe[16];
   memcpy(probe, k2, sizeof(probe));
   cmap_pair pp = {probe, sizeof(probe)};
-  const cmap_pair *out = NULL;
+  cmap_pair out = {NULL, 0};
   ccol_retval_t rg = chmap_get_elem_ref(m, &pp, &out);
-  int got = (rg == ccol_success && out) ? *(const int *)out->ptr : -1;
+  int got = (rg == ccol_success && out.ptr) ? *(const int *)out.ptr : -1;
   cmap_pair pp3 = {k3, sizeof(k3)};
-  const cmap_pair *out3 = NULL;
+  cmap_pair out3 = {NULL, 0};
   ccol_retval_t rg3 = chmap_get_elem_ref(m, &pp3, &out3);
-  int got3 = (rg3 == ccol_success && out3) ? *(const int *)out3->ptr : -1;
+  int got3 = (rg3 == ccol_success && out3.ptr) ? *(const int *)out3.ptr : -1;
   chmap_destroy(m);
   REQUIRE_EQ(r1, ccol_success);
   REQUIRE_EQ(r2, ccol_success);
@@ -7252,10 +7336,10 @@ TEST(chmap_binary_keys, a_raw_layer_key_with_embedded_zeros) {
   REQUIRE_EQ(got3, 3);
 }
 
-/* chmap_destroy evaluates its argument once, so a walk backwards over an
- * array with `chmap_destroy(a[--k])` destroys and clears every map. This test
- * is non-vacuous: a macro that evaluates its argument twice destroys only
- * every second map and clears the others without destroying them. */
+/* chmap_destroy evaluates its argument once, so walking an array backwards
+ * with `chmap_destroy(a[--k])` destroys and clears every map. A macro that
+ * evaluated its argument twice would destroy only every second map and clear
+ * the others without destroying them. */
 TEST(chmap_macros, destroy_evaluates_its_argument_once) {
   chmap maps[2] = {chmap_create(8, ccol_int, ccol_int, NULL),
                    chmap_create(8, ccol_int, ccol_int, NULL)};
@@ -7274,10 +7358,10 @@ TEST(chmap_macros, destroy_evaluates_its_argument_once) {
 
 #include <internal/cprocsintern.h>
 
-/* An allocator that counts the blocks and the bytes that the map holds,
- * keeping the size of each block in a header in front of it so that a free
- * knows what it gives back. g_fp.fail_at, when not 0, makes the allocation
- * with that 1-based index fail, and every one after it succeed. */
+/* An allocator that counts the blocks and the bytes the map holds, keeping
+ * each block's size in a header in front of it so a free knows what it gives
+ * back. g_fp.fail_at, when it isn't 0, makes the allocation with that
+ * 1-based index fail, and every one after it succeed. */
 typedef struct {
   long blocks;
   long bytes;
@@ -7326,7 +7410,7 @@ static void *fp_realloc(void *p, size_t n) {
 static void fp_reset(void) { memset(&g_fp, 0, sizeof(g_fp)); }
 
 /* The sizes below hold on a 64-bit target whose max_align_t is 16 bytes,
- * such as x86-64 and aarch64; on any other target the tests check only the
+ * like x86-64 and aarch64. On any other target the tests only check the
  * block counts and the relations between the byte counts. */
 static bool fp_lp64_16(void) {
   return sizeof(void *) == 8 && sizeof(size_t) == 8 &&
@@ -7341,11 +7425,11 @@ static ccol_retval_t fp_insert_str(chmap m, const char *k, const void *v,
 }
 
 /* A separate-chaining map with the default first bucket array is a single
- * block (the map, its 16 buckets and its copy of the procs), and an entry
- * whose key and value fit inline is one block of 112 bytes on a 64-bit target.
- * This test is non-vacuous: a map whose state, bucket array and procs copy
- * are allocations of their own holds four blocks and 304 bytes before its
- * first entry, and an entry of 160 bytes fails the per-entry size. */
+ * block (the map, its 16 buckets and its procs copy), and an entry whose key
+ * and value fit inline is one block of 112 bytes on a 64-bit target. Were
+ * the map's state, bucket array and procs copy allocations of their own, it
+ * would hold four blocks and 304 bytes before its first entry, and an entry
+ * of 160 bytes fails the per-entry size. */
 TEST(footprint, a_separate_chaining_map_is_one_block_and_an_entry_is_one) {
   fp_reset();
   ccol_memmgmt_procs_t mp = {.malloc = fp_malloc,
@@ -7360,7 +7444,7 @@ TEST(footprint, a_separate_chaining_map_is_one_block_and_an_entry_is_one) {
   ccol_retval_t r1 =
       m ? fp_insert_str(m, "k", &v, sizeof(v)) : ccol_unexpected_failure;
   long one_blocks = g_fp.blocks, one_bytes = g_fp.bytes;
-  /* A key of 24 bytes or more is kept in a buffer of its own. */
+  /* A key of 24 bytes or more lives in a buffer of its own. */
   const char *long_key = "a key that is longer than the inline storage";
   ccol_retval_t r2 =
       m ? fp_insert_str(m, long_key, &v, sizeof(v)) : ccol_unexpected_failure;
@@ -7383,11 +7467,11 @@ TEST(footprint, a_separate_chaining_map_is_one_block_and_an_entry_is_one) {
   REQUIRE_EQ(left, 0L);
 }
 
-/* An open-addressing map is two blocks: the map with its copy of the procs,
- * and its table, which holds the slots, the value accessors and the
- * metadata, so inserts below the growth load allocate nothing. This test is
- * non-vacuous: a map whose state, procs copy, slots and accessors are
- * allocations of their own holds five blocks. */
+/* An open-addressing map is two blocks, the map with its procs copy and its
+ * table, which holds the slots, the value accessors and the metadata, so
+ * inserts below the growth load allocate nothing. The block count catches a
+ * map whose state, procs copy, slots and accessors were allocations of their
+ * own, because that map would hold five blocks. */
 TEST(footprint, an_open_addressing_map_is_two_blocks) {
   fp_reset();
   ccol_memmgmt_procs_t mp = {.malloc = fp_malloc,
@@ -7412,17 +7496,55 @@ TEST(footprint, an_open_addressing_map_is_two_blocks) {
   REQUIRE_EQ(eight_blocks, 2L);
   REQUIRE_EQ(eight_bytes, empty_bytes);
   if (fp_lp64_16()) {
-    /* 104 for the map, 32 for the procs, 16 * (16 + 16 + 1) for the table. */
-    REQUIRE_EQ(empty_bytes, 664L);
+    /* 104 for the map, 32 for the procs, 16 * (16 + 1) for the table. */
+    REQUIRE_EQ(empty_bytes, 408L);
   }
   REQUIRE_EQ(left, 0L);
 }
 
-/* A procs pointer that ccol_procs_intern() gave lives for the whole process,
- * so the map keeps it instead of a copy; any other procs struct is copied,
+/* An open-addressing map's table is one block of 17 bytes per slot, a
+ * 16-byte slot (two 8-byte words) and one metadata byte, and nothing else.
+ * The test grows a map from 16 slots to a known larger capacity and divides
+ * the growth of the allocated bytes by the growth of the capacity, which
+ * leaves out the map's own block, so the check holds at every width. A
+ * table that also kept a {ptr, size} accessor per slot would measure 33
+ * bytes per slot on LP64 and 25 on ILP32 and fail it. */
+TEST(footprint, an_open_addressing_table_is_17_bytes_per_slot) {
+  fp_reset();
+  ccol_memmgmt_procs_t mp = {.malloc = fp_malloc,
+                             .free = fp_free,
+                             .calloc = fp_calloc,
+                             .realloc = fp_realloc};
+  chmap m = chmap_create_mp(16, ccol_long, ccol_long, &mp, NULL);
+  size_t cap0 = m ? chmap_get_bucket_arr_size(m) : 0;
+  long bytes0 = g_fp.bytes;
+  bool inserted = m != NULL;
+  /* 700 keys stay below the growth load (0.70) of 1024 slots and above that
+   * of 512, so the table ends up at exactly 1024 slots. */
+  for (long i = 0; inserted && i < 700; i++) {
+    cmap_pair kp = {&i, sizeof(i)};
+    cmap_pair vp = {&i, sizeof(i)};
+    inserted = chmap_insert_elem(m, &kp, &vp) == ccol_success;
+  }
+  size_t cap1 = m ? chmap_get_bucket_arr_size(m) : 0;
+  long bytes1 = g_fp.bytes;
+  long blocks1 = g_fp.blocks;
+  if (m) chmap_destroy(m);
+  long left = g_fp.blocks;
+
+  REQUIRE_TRUE(inserted);
+  REQUIRE_EQ(cap0, (size_t)16);
+  REQUIRE_EQ(cap1, (size_t)1024);
+  REQUIRE_EQ(blocks1, 2L);
+  REQUIRE_EQ(bytes1 - bytes0, (long)(cap1 - cap0) * 17L);
+  REQUIRE_EQ(left, 0L);
+}
+
+/* A procs pointer from ccol_procs_intern() lives as long as the process, so
+ * the map keeps it instead of a copy, while any other procs struct is copied,
  * so the caller may change or drop its own struct right after the create.
- * This test is non-vacuous: a map that copies every procs struct holds the
- * same bytes for both maps. */
+ * A map that copied every procs struct would hold the same bytes for both
+ * maps, which the test tells apart. */
 TEST(footprint, interned_procs_are_kept_and_other_procs_are_copied) {
   fp_reset();
   ccol_memmgmt_procs_t mp = {.malloc = fp_malloc,
@@ -7439,8 +7561,8 @@ TEST(footprint, interned_procs_are_kept_and_other_procs_are_copied) {
                                      ccol_string, ccol_pointer, interned, NULL)
                    : NULL;
   long kept_bytes = g_fp.bytes - copied_bytes;
-  /* The copy is the map's own: the caller's struct can change after the
-   * create, and the map still allocates and frees through the copy. */
+  /* The copy belongs to the map, so the caller's struct can change after the
+   * create and the map keeps allocating and freeing through the copy. */
   ccol_memmgmt_procs_t original = mp;
   mp.malloc = NULL;
   mp.free = NULL;
@@ -7463,7 +7585,7 @@ TEST(footprint, interned_procs_are_kept_and_other_procs_are_copied) {
   REQUIRE_EQ(left, 0L);
 }
 
-/* Inserts "key_<i>" for i in [from, to) and records whether all succeeded. */
+/* Inserts "key_<i>" for i in [from, to), recording whether every one worked. */
 static bool fp_insert_range(chmap m, int from, int to) {
   for (int i = from; i < to; i++) {
     char k[32];
@@ -7478,9 +7600,9 @@ static bool fp_lookup_range(chmap m, int from, int to) {
     char k[32];
     snprintf(k, sizeof(k), "key_%d", i);
     cmap_pair kp = {.ptr = k, .size = strlen(k) + 1};
-    const cmap_pair *vp = NULL;
-    if (chmap_get_elem_ref(m, &kp, &vp) != ccol_success || !vp ||
-        vp->size != sizeof(int) || memcmp(vp->ptr, &i, sizeof(i)) != 0) {
+    cmap_pair vp = {NULL, 0};
+    if (chmap_get_elem_ref(m, &kp, &vp) != ccol_success || !vp.ptr ||
+        vp.size != sizeof(int) || memcmp(vp.ptr, &i, sizeof(i)) != 0) {
       return false;
     }
   }
@@ -7531,10 +7653,10 @@ static bool fp_orders_match(chmap m, int from, int to) {
 /* A compact map starts with 4 buckets inside its block, grows to 16 at its
  * seventh entry and from there follows the sizes and thresholds of a map
  * that started at 16. Every key, the oldest-first cursor and the iterator
- * survive each growth, and a delete never shrinks the map below 16. This test
- * is non-vacuous: a compact map that starts at 16 buckets fails the first
- * size, and one whose first bucket array is an allocation of its own fails
- * the block count. */
+ * survive each growth, and a delete never shrinks the map below 16. A
+ * compact map that started at 16 buckets would fail the first size, and one
+ * whose first bucket array was an allocation of its own would fail the block
+ * count. */
 TEST(footprint, a_compact_map_grows_from_four_buckets) {
   fp_reset();
   ccol_memmgmt_procs_t mp = {.malloc = fp_malloc,
@@ -7605,10 +7727,10 @@ TEST(footprint, a_compact_map_grows_from_four_buckets) {
 }
 
 /* A compact map that stays at four buckets never rebuilds them: a long run
- * of inserts and deletes that keeps five or six entries allocates
- * nothing but its entries. This test is non-vacuous: a shrink check that let
- * the map leave four buckets, or a growth check that fired below seven
- * entries, makes the bucket array an allocation and fails the count. */
+ * of inserts and deletes that keeps five or six entries allocates nothing
+ * but its entries. A shrink check that let the map leave four buckets, or a
+ * growth check that fired below seven entries, would make the bucket array an
+ * allocation and fail the count. */
 TEST(footprint, a_steady_window_on_a_compact_map_never_resizes) {
   fp_reset();
   ccol_memmgmt_procs_t mp = {.malloc = fp_malloc,
@@ -7635,18 +7757,18 @@ TEST(footprint, a_steady_window_on_a_compact_map_never_resizes) {
   REQUIRE_TRUE(ok);
   REQUIRE_EQ(size, (size_t)4);
   REQUIRE_EQ(count, (size_t)5);
-  /* One allocation for each insert, and nothing else. */
+  /* One allocation per insert and nothing else. */
   REQUIRE_EQ(calls, steps);
   REQUIRE_EQ(blocks, 1L + (long)count);
   REQUIRE_EQ(left, 0L);
 }
 
 /* A map that started with its bucket array in its block takes that array
- * back when it shrinks to its first size, by a delete or by a reset, and a
- * reset that cannot allocate leaves it empty, usable and at its old size.
- * This test is non-vacuous: a map that allocates a new array for the shrink
- * holds one block more than its entries after it, and a reset that
- * reallocates the array in the block corrupts the heap. */
+ * back when it shrinks to its first size, through a delete or a reset, and a
+ * reset that can't allocate leaves it empty, usable and at its old size. If
+ * the shrink allocated a new array the map would hold one block more than
+ * its entries afterwards, and a reset that reallocated the array in the
+ * block would corrupt the heap. */
 TEST(footprint, the_block_array_is_taken_back_on_a_shrink_and_a_reset) {
   fp_reset();
   ccol_memmgmt_procs_t mp = {.malloc = fp_malloc,
@@ -7658,7 +7780,7 @@ TEST(footprint, the_block_array_is_taken_back_on_a_shrink_and_a_reset) {
   bool ok = m && fp_insert_range(m, 0, 25);
   size_t grown = ok ? chmap_get_bucket_arr_size(m) : 0;
   long grown_blocks = g_fp.blocks;
-  /* (64 + 1) / 8 is 8: the delete that leaves 7 entries shrinks to 16. */
+  /* (64 + 1) / 8 is 8, so the delete that leaves 7 entries shrinks to 16. */
   ok = ok && fp_delete_range(m, 0, 18);
   size_t shrunk = ok ? chmap_get_bucket_arr_size(m) : 0;
   long shrunk_blocks = g_fp.blocks;
@@ -7708,11 +7830,11 @@ TEST(footprint, the_block_array_is_taken_back_on_a_shrink_and_a_reset) {
 
 /* Every allocation that creating a map or an entry makes can fail, and each
  * failure leaves nothing allocated behind. An entry whose key and value both
- * need a buffer of their own is three allocations, and a failure of the last
- * one must free the key buffer and the node and nothing else. This test is
- * non-vacuous: a node teardown that read the storage of a value it never
- * allocated frees an invalid pointer, and one that skipped the key buffer
- * leaks it. */
+ * need a buffer of their own is three allocations, and when the last one
+ * fails the key buffer and the node have to be freed and nothing else. Both
+ * mistakes show up: a node teardown that read the storage of a value it never
+ * allocated would free an invalid pointer, and one that skipped the key
+ * buffer would leak it. */
 TEST(footprint, every_allocation_failure_leaves_nothing_behind) {
   ccol_memmgmt_procs_t mp = {.malloc = fp_malloc,
                              .free = fp_free,
@@ -7776,13 +7898,12 @@ TEST(footprint, every_allocation_failure_leaves_nothing_behind) {
   REQUIRE_EQ(inserts_failed, 3);
 }
 
-/* A value moves between the inline storage of its entry and a buffer of its
- * own as its size crosses the inline limit of 23 bytes, and the entry frees
- * the buffer exactly when the value leaves it. The sizes walk across the
- * limit from both sides. This test is non-vacuous: an entry that decided
- * where its value lives from anything but the size of the value, or that
- * placed the limit one byte off, frees a buffer it does not own or leaks
- * one. */
+/* A value moves between its entry's inline storage and a buffer of its own
+ * as its size crosses the inline limit of 23 bytes, and the entry frees the
+ * buffer exactly when the value leaves it. The sizes walk across the limit
+ * from both sides, so an entry that decided where its value lives from
+ * anything but the value's size, or that put the limit one byte off, would
+ * free a buffer it doesn't own or leak one. */
 TEST(footprint, a_value_moves_between_inline_and_heap_storage) {
   fp_reset();
   ccol_memmgmt_procs_t mp = {.malloc = fp_malloc,
@@ -7790,9 +7911,9 @@ TEST(footprint, a_value_moves_between_inline_and_heap_storage) {
                              .calloc = fp_calloc,
                              .realloc = fp_realloc};
   chmap m = chmap_create_mp(16, ccol_string, ccol_string, &mp, NULL);
-  /* String lengths, without the terminator, of each value in turn. */
+  /* The string lengths, without the terminator, of each value in turn. */
   static const size_t lens[] = {7, 22, 23, 47, 22, 23, 23, 7};
-  /* The blocks of the entry after each value: 1 inline, 2 with a buffer. */
+  /* The entry's blocks after each value: 1 inline, 2 with a buffer. */
   static const long want[] = {1, 1, 2, 2, 1, 2, 2, 1};
   enum { STEPS = sizeof(lens) / sizeof(lens[0]) };
   long base = g_fp.blocks;
@@ -7807,11 +7928,11 @@ TEST(footprint, a_value_moves_between_inline_and_heap_storage) {
     ok = r == ccol_success || r == ccol_key_already_present;
     blocks[i] = g_fp.blocks - base;
     cmap_pair kp = {.ptr = "key", .size = 4};
-    const cmap_pair *vp = NULL;
+    cmap_pair vp = {NULL, 0};
     same[i] = ok && chmap_get_elem_ref(m, &kp, &vp) == ccol_success &&
-              vp->size == lens[i] + 1 && memcmp(vp->ptr, val, vp->size) == 0;
+              vp.size == lens[i] + 1 && memcmp(vp.ptr, val, vp.size) == 0;
   }
-  /* A new entry places its value by the same limit: 23 bytes inline, 24
+  /* A new entry places its value by the same limit, 23 bytes inline and 24
    * bytes in a buffer. */
   char v23[23], v24[24];
   memset(v23, 'x', sizeof(v23));
@@ -7840,12 +7961,11 @@ TEST(footprint, a_value_moves_between_inline_and_heap_storage) {
 }
 
 /* An allocator that hands out adjacent blocks from one arena, with no header
- * between them, and records every live block in a table. Because nothing is
- * ever reused, the blocks of one map sit back to back in the order in which
- * the map asks for them. A block starts at the next multiple of 16 bytes,
- * except an array of pointers from calloc, which needs and gets only the
- * alignment of a pointer, so it can start right where the block before it
- * ends. */
+ * between them, and records every live block in a table. Nothing is ever
+ * reused, so one map's blocks sit back to back in the order the map asks for
+ * them. A block starts at the next multiple of 16 bytes, except an array of
+ * pointers from calloc, which only needs and gets a pointer's alignment, so
+ * it can start right where the block before it ends. */
 enum { ARENA_BYTES = 1 << 16, ARENA_BLOCKS = 256 };
 static _Alignas(16) unsigned char g_arena[ARENA_BYTES];
 static size_t g_arena_used;
@@ -7911,13 +8031,13 @@ static void *arena_realloc(void *p, size_t n) {
   return q;
 }
 
-/* A map that holds neither a bucket array nor a procs copy in its block
- * ends where its struct ends, and an allocator with no headers can place its
- * separate bucket array exactly there. The map must still free that array
- * on a resize, a reset and a destroy. This test is non-vacuous: a map that
- * compares its bucket array against the address right after its struct
- * whether or not its block holds an array there takes the separate array
- * for part of the block, and leaks it and every array that replaces it. */
+/* A map that holds neither a bucket array nor a procs copy in its block ends
+ * where its struct ends, and an allocator without headers can put its
+ * separate bucket array exactly there. The map must free that array on a
+ * resize, a reset and a destroy. A map that compared its bucket array with
+ * the address right after its struct, whether or not its block holds an
+ * array there, would take the separate array for part of the block and leak
+ * it and every array that replaces it. */
 TEST(footprint, a_bucket_array_right_after_the_block_is_still_freed) {
   memset(g_arena_live, 0, sizeof(g_arena_live));
   g_arena_used = 0;
@@ -7929,8 +8049,8 @@ TEST(footprint, a_bucket_array_right_after_the_block_is_still_freed) {
                              .realloc = arena_realloc};
   ccol_memmgmt_procs_t *interned = NULL;
   ccol_retval_t ri = ccol_procs_intern(&mp, &interned);
-  /* 64 buckets is above the size that a block holds, and the interned procs
-   * need no copy, so the block is the struct alone. */
+  /* 64 buckets is above the size a block holds, and the interned procs need
+   * no copy, so the block is just the struct. */
   chmap m = interned ? chmap_create_full(64, ccol_string, ccol_int, interned,
                                          NULL, NULL, NULL)
                      : NULL;
@@ -7959,35 +8079,14 @@ TEST(footprint, a_bucket_array_right_after_the_block_is_still_freed) {
 /*        ADAPTIVE HASHING: FAST UNTIL A WRITER SEES A FLOOD, THEN KEYED      */
 /* ========================================================================== */
 
-extern bool chashmap_is_keyed_for_tests(chmap chm);
-extern ccol_retval_t chashmap_switch_to_keyed_for_tests(chmap chm);
-extern size_t chashmap_oa_probe_span_for_tests(chmap chm);
-extern size_t chashmap_oa_insert_cap_for_tests(size_t capacity);
-extern uint32_t chashmap_oa_window_bound_for_tests(size_t start_count,
-                                                   size_t capacity);
-extern uint32_t chashmap_sc_window_bound_for_tests(size_t start_count,
-                                                   size_t bucket_count);
-extern uint32_t chashmap_window_bound_of_for_tests(chmap chm);
-extern uint32_t chashmap_insert_window_for_tests(chmap chm);
-extern unsigned long long chashmap_retries_for_tests(void);
-extern unsigned long long chashmap_retry_failures_for_tests(void);
-extern unsigned long long chashmap_retry_failed_work_for_tests(void);
-extern void chashmap_last_failed_retry_for_tests(size_t *work, size_t *count,
-                                                 size_t *capacity);
-extern uint64_t chashmap_xxh64_for_tests(const void *key_ptr, size_t key_size,
-                                         uint64_t seed);
-extern unsigned long long chashmap_sc_node_visits_for_tests(void);
-extern void chashmap_reset_sc_node_visits_for_tests(void);
-extern unsigned long long chashmap_oa_shift_steps_for_tests(void);
-
 /* The Fibonacci multiplier of the fast hash of a fixed-width key. */
 static const uint64_t ah_fib = 0x9E3779B97F4A7C15ULL;
 
 /* The unsigned long long key that the fast hash puts in home slot `home` of a
  * table of 2^log2 slots or buckets, because its product with the multiplier
- * has home in its top log2 bits. t, below 2^(64 - log2), makes keys that share
- * that home slot. The same key works on a 32-bit target, where the fast hash
- * of a 64-bit key is the upper word of the same product. */
+ * has home in its top log2 bits. t, below 2^(64 - log2), makes keys that
+ * share that home slot. The same key works on a 32-bit target, where the
+ * fast hash of a 64-bit key is the upper word of the same product. */
 static unsigned long long ah_key_for_home(uint64_t home, unsigned log2,
                                           uint64_t t) {
   return (unsigned long long)(((home << (64 - log2)) + t) *
@@ -8010,9 +8109,10 @@ static ccol_retval_t ah_put_u64(chmap m, unsigned long long k,
 
 static bool ah_get_u64(chmap m, unsigned long long k, unsigned long long *v) {
   cmap_pair kp = {&k, sizeof(k)};
-  const cmap_pair *out = NULL;
-  if (chmap_get_elem_ref(m, &kp, &out) != ccol_success || !out) return false;
-  memcpy(v, out->ptr, sizeof(*v));
+  cmap_pair out = {NULL, 0};
+  if (chmap_get_elem_ref(m, &kp, &out) != ccol_success || !out.ptr)
+    return false;
+  memcpy(v, out.ptr, sizeof(*v));
   return true;
 }
 
@@ -8031,8 +8131,8 @@ static ccol_retval_t ah_put_u64_sc(chmap m, unsigned long long k) {
 
 static bool ah_has_u64(chmap m, unsigned long long k) {
   cmap_pair kp = {&k, sizeof(k)};
-  const cmap_pair *out = NULL;
-  return chmap_get_elem_ref(m, &kp, &out) == ccol_success && out;
+  cmap_pair out = {NULL, 0};
+  return chmap_get_elem_ref(m, &kp, &out) == ccol_success && out.ptr;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -8097,7 +8197,7 @@ static uint64_t ah_xxh64_ref(const unsigned char *in, size_t len,
   return h;
 }
 
-/* The xxHash library itself (0.8.3) produced the vectors, from the sanity
+/* The vectors come from the xxHash library itself (0.8.3), from the sanity
  * buffer of its own test suite, where byte i is the top byte of a 32-bit
  * generator that starts at 2654435761 and squares itself. */
 static const struct {
@@ -8152,7 +8252,7 @@ static const struct {
     {222, 0x9e3779b97f4a7c15ULL, 0xd8d4bbe7f21f52cdULL},
 };
 
-/* The fast byte hash of the map must be XXH64: the published vectors, "abc",
+/* The map's fast byte hash is XXH64: the published vectors, "abc",
  * and the byte-wise reference for every length from 0 to 130 at four
  * alignments under random seeds, which covers every tail of the stripe loop
  * and of the word loops. */
@@ -8201,9 +8301,9 @@ TEST(adaptive_hash, the_fast_byte_hash_is_xxh64) {
 /*                          THE THRESHOLDS                                  */
 /* ------------------------------------------------------------------------ */
 
-/* The window bounds are computed in integers, and must stay within a small
- * margin of the real-valued bounds that they implement, at every load and
- * for both sizes of open-addressing table: 256 * (5 * E(a) + 0.5) from 4096
+/* The window bounds are computed in integers and must stay within a small
+ * margin of the real-valued bounds they implement, at every load and for
+ * both sizes of open-addressing table: 256 * (5 * E(a) + 0.5) from 4096
  * slots, 256 * (6 * E(a) + 0.5) below, with E(a) = (1 / (1 - a)^2 - 1) / 2,
  * and 256 * (4.5 * lambda + 0.5) for separate chaining. a and lambda are the
  * loads of the count at the start of the window plus 256 inserts, capped at
@@ -8241,23 +8341,23 @@ TEST(adaptive_hash, the_integer_window_bounds_match_the_real_valued_ones) {
       checked++;
     }
   }
-  /* Spot values of the real-valued bounds, independent of both. */
+  /* Spot values of the real-valued bounds, independent of both forms. */
   /* The judged load is (2^19 + 256) / 2^20 = 0.500244, where
    * 256 * (5 * E(a) + 0.5) = 2050.5. */
   uint32_t at_half =
       chashmap_oa_window_bound_for_tests((size_t)1 << 19, (size_t)1 << 20);
   REQUIRE_GT(checked, (size_t)20000);
-  /* The integer forms truncate a 16.16 load and divide once: well under one
-   * part in a hundred, and one count of 256 at the smallest bound. */
+  /* The integer forms truncate a 16.16 load and divide once, which is well
+   * under one part in a hundred, and one count of 256 at the smallest bound. */
   REQUIRE_LT(worst_oa, 0.01);
   REQUIRE_LT(worst_sc, 0.01);
   REQUIRE_GE(at_half, (uint32_t)2045);
   REQUIRE_LE(at_half, (uint32_t)2051);
 }
 
-/* The cap on one open-addressing insert: 24 slots for each doubling of the
+/* The cap on a single open-addressing insert: 24 slots per doubling of the
  * table up to 4096 slots, and 288 from there on. The values are literals, so
- * that a change of either constant fails here. */
+ * a change of either constant fails here. */
 TEST(adaptive_hash, the_insert_cap_grows_with_the_table_up_to_4096_slots) {
   REQUIRE_EQ(chashmap_oa_insert_cap_for_tests(16), (size_t)96);
   REQUIRE_EQ(chashmap_oa_insert_cap_for_tests(512), (size_t)216);
@@ -8283,7 +8383,7 @@ TEST(adaptive_hash, every_map_starts_fast) {
   REQUIRE_TRUE(oa_fast);
   REQUIRE_TRUE(sc_fast);
   REQUIRE_TRUE(compact_fast);
-  /* A table of 16 slots: the span is the whole table. */
+  /* With a table of 16 slots the span is the whole table. */
   REQUIRE_EQ(span, (size_t)16);
 }
 
@@ -8328,9 +8428,8 @@ static unsigned long long ah_ordinary_key(int family, uint64_t i) {
 }
 
 /* Ordinary integer key sets, which the fast hash spreads well, never switch
- * either backend, and cost few probes. This test is non-vacuous: with the
- * window bound at E(a) for each insert in place of 5 * E(a), an ordinary set
- * switches. */
+ * either backend and cost few probes. Lower the window bound to E(a) per
+ * insert instead of 5 * E(a) and an ordinary set switches. */
 TEST(adaptive_hash, ordinary_integer_sets_never_switch) {
   enum { OA_KEYS = 100000, SC_KEYS = 30000 };
   int oa_switched = 0, sc_switched = 0, missing = 0;
@@ -8398,8 +8497,8 @@ static void ah_string_key(int family, uint64_t i, char *buf, size_t size) {
 }
 
 /* Ordinary string key sets (paths, UUIDs, hexadecimal identifiers, field
- * names) never switch a map. This test is non-vacuous: with the chain cap at
- * 2 nodes in place of 20, they switch. */
+ * names) never switch a map, although they would with a chain cap of 2
+ * nodes instead of 20. */
 TEST(adaptive_hash, ordinary_string_sets_never_switch) {
   enum { KEYS = 50000 };
   int switched = 0, missing = 0;
@@ -8416,9 +8515,9 @@ TEST(adaptive_hash, ordinary_string_sets_never_switch) {
     for (uint64_t i = 0; i < KEYS; i++) {
       ah_string_key(f, i, key, sizeof(key));
       cmap_pair kp = {key, strlen(key) + 1};
-      const cmap_pair *out = NULL;
+      cmap_pair out = {NULL, 0};
       if (chmap_get_elem_ref(m, &kp, &out) != ccol_success ||
-          *(const int *)out->ptr != (int)i) {
+          *(const int *)out.ptr != (int)i) {
         missing++;
       }
     }
@@ -8429,8 +8528,8 @@ TEST(adaptive_hash, ordinary_string_sets_never_switch) {
   REQUIRE_EQ(switched, 0);
 }
 
-/* The maps of a parsed JSON document: many small compact maps whose keys are
- * field names, none of which switches. */
+/* The maps of a parsed JSON document, lots of small compact maps whose keys
+ * are field names, and none of them switches. */
 TEST(adaptive_hash, compact_json_shaped_maps_never_switch) {
   enum { MAPS = 2000 };
   int switched = 0, failed = 0;
@@ -8447,7 +8546,7 @@ TEST(adaptive_hash, compact_json_shaped_maps_never_switch) {
       void *v = NULL;
       cmap_pair kp = {key, strlen(key) + 1};
       cmap_pair vp = {&v, sizeof(v)};
-      const cmap_pair *slot = NULL;
+      cmap_pair slot = {NULL, 0};
       ccol_retval_t r = ccol_chmap_insert_or_get_elem(m, &kp, &vp, &slot);
       if (r != ccol_success && r != ccol_key_already_present) failed++;
     }
@@ -8458,11 +8557,11 @@ TEST(adaptive_hash, compact_json_shaped_maps_never_switch) {
   REQUIRE_EQ(switched, 0);
 }
 
-/* A map that churns at its highest load, with random keys and with a sliding
+/* A map churning at its highest load, with random keys and with a sliding
  * window of sequential keys, 150000 deletes and 150000 inserts in each
- * workload, never switches and never resizes. This test is non-vacuous: with a
- * cap of 8 slots for each doubling in place of 24, the random churn of the
- * open-addressing map switches. */
+ * workload, never switches and never resizes. With a cap of 8 slots per
+ * doubling instead of 24 the random churn of the open-addressing map would
+ * switch. */
 TEST(adaptive_hash, churn_at_the_highest_load_never_switches) {
   enum { ROUNDS = 150000, CAP = 16384, LIVE = 11468 };
   int switched = 0, failed = 0;
@@ -8489,7 +8588,7 @@ TEST(adaptive_hash, churn_at_the_highest_load_never_switches) {
     chmap_destroy(m);
   }
   /* Separate chaining at its highest load: 4096 buckets hold 6144 entries,
-   * one below the count at which they grow. */
+   * one below the count where they grow. */
   char key[96];
   for (int sliding = 0; sliding < 2; sliding++) {
     enum { SC_BUCKETS = 4096, SC_LIVE = 6144 };
@@ -8520,17 +8619,17 @@ TEST(adaptive_hash, churn_at_the_highest_load_never_switches) {
   REQUIRE_EQ(switched, 0);
 }
 
-/* The number of inserts of a new key in the current window of a fast map. */
+/* How many inserts of a new key the current window of a fast map holds. */
 static unsigned ah_window_inserts(chmap m) {
   return (unsigned)((chashmap_insert_window_for_tests(m) - 0x80000000u) >> 23);
 }
 
-/* A window can hold a bulk delete, after which the load is far below the
- * load at which most of its inserts ran. The window is judged at the highest
- * load that it can have reached, so a map of random keys at its highest load
- * that loses three fifths of its entries just before a window ends does not
- * switch. This test is non-vacuous: judged at the load at the end of the
- * window, these windows switch the map. */
+/* A window can contain a bulk delete, after which the load is far below the
+ * one most of its inserts ran at. The window is judged at the highest load it
+ * can have reached, so a map of random keys at its highest load that loses
+ * three fifths of its entries just before a window ends doesn't switch.
+ * Judged at the load at the end of the window, these windows would switch
+ * the map. */
 TEST(adaptive_hash, a_bulk_delete_inside_a_window_does_not_switch) {
   enum { CAP = 16384, LIVE = 11468, CYCLES = 12 };
   chmap m =
@@ -8547,8 +8646,8 @@ TEST(adaptive_hash, a_bulk_delete_inside_a_window_does_not_switch) {
       if (ah_put_u64(m, ah_mix(next), next) != ccol_success) failed++;
       next++;
     }
-    /* Delete three fifths of the entries; the load stays above one quarter,
-     * so the table does not shrink. */
+    /* Delete three fifths of the entries. The load stays above one quarter,
+     * so the table doesn't shrink. */
     uint64_t drop = (next - oldest) * 3 / 5;
     for (uint64_t d = 0; d < drop; d++) {
       if (ah_del_u64(m, ah_mix(oldest++)) != ccol_success) failed++;
@@ -8582,7 +8681,7 @@ enum { AH_FLOOD_KEYS = 20000 };
 
 /* Inserts AH_FLOOD_KEYS keys of the generator into a fresh open-addressing
  * map, then looks every one up, and reports the insert at which the map
- * switched (0 when it did not) and the probes for each lookup after the
+ * switched (0 if it didn't) and the probes per lookup after the
  * fill. */
 typedef unsigned long long (*ah_gen_t)(uint64_t i);
 
@@ -8615,8 +8714,8 @@ static ah_flood_result ah_flood_oa(ah_gen_t gen, size_t keys) {
   return res;
 }
 
-/* The same in an unsigned long long to char * map, which separate chaining
- * holds; the cost is the nodes that a lookup visits. */
+/* The same with an unsigned long long to char * map, which separate chaining
+ * holds, where the cost is the nodes a lookup visits. */
 static ah_flood_result ah_flood_sc(ah_gen_t gen, size_t keys) {
   ah_flood_result res = {0, 0, true};
   chmap m = chmap_create(16, ccol_unsigned_long_long, ccol_string, NULL);
@@ -8645,12 +8744,11 @@ static unsigned long long ah_fibonacci_stride(uint64_t i) {
   return (unsigned long long)(i * 1346269ULL);
 }
 
-/* Keys i * M^-1 for the multiplier M of the fast hash all hash to the top
- * bits of a small number and share home slot 0, so both backends switch within
- * the first few hundred inserts, and afterwards a lookup costs what a random
- * function costs. This test is non-vacuous: without the detection, an
- * open-addressing lookup costs 10000.5 probes and the longest chain holds all
- * 20000 keys. */
+/* Keys i * M^-1 for the fast hash's multiplier M all hash to the top bits of
+ * a small number and share home slot 0, so both backends switch within the
+ * first few hundred inserts, and after that a lookup costs what a random
+ * function costs. Without the detection an open-addressing lookup would
+ * cost 10000.5 probes and the longest chain would hold all 20000 keys. */
 TEST(adaptive_hash, inverse_fibonacci_integers_switch_then_spread) {
   ah_flood_result oa = ah_flood_oa(ah_inverse_fibonacci, AH_FLOOD_KEYS);
   ah_flood_result sc = ah_flood_sc(ah_inverse_fibonacci, AH_FLOOD_KEYS);
@@ -8665,8 +8763,8 @@ TEST(adaptive_hash, inverse_fibonacci_integers_switch_then_spread) {
 }
 
 /* The multiples of the Fibonacci number 1346269 pile up in a few dense
- * clusters under the fast hash. This test is non-vacuous: without the
- * detection, an open-addressing lookup costs 9892.2 probes. */
+ * clusters under the fast hash, and a map that never detects it pays
+ * 9892.2 probes per open-addressing lookup. */
 TEST(adaptive_hash, fibonacci_stride_integers_switch_then_spread) {
   ah_flood_result oa = ah_flood_oa(ah_fibonacci_stride, AH_FLOOD_KEYS);
   ah_flood_result sc = ah_flood_sc(ah_fibonacci_stride, AH_FLOOD_KEYS);
@@ -8686,14 +8784,13 @@ static unsigned long long ah_stride_48(uint64_t i) { return i * 48; }
 static unsigned long long ah_stride_96(uint64_t i) { return i * 96; }
 static unsigned long long ah_shift_16(uint64_t i) { return i << 16; }
 
-/* Some strides cluster under a Fibonacci multiply: their products with the
- * multiplier fall into few runs of home slots. Such a set switches once the
- * table is large enough for the clusters to cost more than the bound, and
- * then spreads at least as well as a random function, keyed or, after a
- * growth past the clustering size, fast again. This test is non-vacuous:
- * without the
- * detection, every one of these sets stays fast, and the open-addressing
- * inserts cost from 4.7 to 17.4 probes each. */
+/* Some strides cluster under a Fibonacci multiply, because their products
+ * with the multiplier fall into a few runs of home slots. Such a set switches
+ * once the table is big enough for the clusters to cost more than the bound,
+ * and then spreads at least as well as a random function, keyed, or fast
+ * again after a growth past the clustering size. Without the detection
+ * every one of these sets stays fast and the open-addressing inserts cost
+ * from 4.7 to 17.4 probes each. */
 TEST(adaptive_hash, clustered_strides_switch_early) {
   static const ah_gen_t oa_sets[] = {ah_stride_24, ah_stride_32, ah_stride_48,
                                      ah_stride_96, ah_shift_16};
@@ -8717,9 +8814,9 @@ TEST(adaptive_hash, clustered_strides_switch_early) {
   REQUIRE_LT(worst, 2.5);
 }
 
-/* Multiples of 65536 in a table of 2^20 slots cost 44.7 probes for each
- * lookup under the fast hash, so the map switches, and a lookup then costs
- * what a random function costs at the same load. */
+/* Multiples of 65536 in a table of 2^20 slots cost 44.7 probes per lookup
+ * under the fast hash, so the map switches, and a lookup then costs what a
+ * random function costs at the same load. */
 TEST(adaptive_hash, stride_65536_in_a_million_slot_table_switches) {
   enum { KEYS = 734000 };
   chmap m = chmap_create((size_t)1 << 20, ccol_unsigned_long_long,
@@ -8744,15 +8841,15 @@ TEST(adaptive_hash, stride_65536_in_a_million_slot_table_switches) {
   REQUIRE_LT(probes, 2.5);
 }
 
-/* The 128-byte keys of a multicollision of XXH64 that holds for every seed.
+/* The 128-byte keys of an XXH64 multicollision that holds for every seed.
  * Each of the eight lanes of the two pairs of 32-byte stripes takes one of
- * three choices, where a round of a lane is acc = rotl(acc + w * P2, 31) * P1.
- * The second and third choices add 2^63 to acc + w * P2 through the first
+ * three choices, where one round of a lane is acc = rotl(acc + w * P2, 31) *
+ * P1. The second and third choices add 2^63 to acc + w * P2 through the first
  * word, which after the rotation is plus or minus 2^30 depending on one bit
- * of acc, and cancel one of those two signs through the second word. For any
- * seed, the first choice and exactly one of the other two therefore leave the
- * lane in the same state. The 6561 keys hash to 256 values, and 256 of them
- * share one hash, whatever the seed is. */
+ * of acc, and cancel one of those two signs through the second word. So for
+ * any seed the first choice and exactly one of the other two leave the lane
+ * in the same state. The 6561 keys hash to 256 values, and 256 of them share
+ * one hash, whatever the seed is. */
 typedef struct {
   uint64_t w[16];
 } ah_xxh_key;
@@ -8784,14 +8881,14 @@ static int ah_u64_cmp(const void *a, const void *b) {
   return (x > y) - (x < y);
 }
 
-/* The multicollision switches a map within the first two hundred keys, and the
- * keyed map then holds the 6561 keys in short chains. The first 81 keys vary
- * only the first four lanes and fall into classes of at most 16 keys; the fifth
- * lane doubles the classes, at key 82 or at key 163 depending on the seed, and
- * a class then reaches the chain cap of 20. The premise is checked first: under
- * three seeds, the keys hash to 256 values with 256 keys in the largest class.
- * This test is non-vacuous: without the detection, the longest chain holds 256
- * keys. */
+/* The multicollision switches a map within the first two hundred keys, and
+ * the keyed map then holds the 6561 keys in short chains. The first 81 keys
+ * only vary the first four lanes and fall into classes of at most 16 keys;
+ * the fifth lane doubles the classes, at key 82 or key 163 depending on the
+ * seed, and a class then reaches the chain cap of 20. We check the premise
+ * first: under three seeds the keys hash to 256 values with 256 keys in the
+ * biggest class. A map that didn't detect them would end with a chain of
+ * 256 keys. */
 TEST(adaptive_hash, a_seed_independent_xxh64_multicollision_switches) {
   enum { KEYS = 6561 };
   uint64_t *hashes = (uint64_t *)malloc(KEYS * sizeof(uint64_t));
@@ -8834,9 +8931,9 @@ TEST(adaptive_hash, a_seed_independent_xxh64_multicollision_switches) {
   for (unsigned i = 0; ok && i < KEYS; i++) {
     ah_xxh_multicollision_key(i, &key);
     cmap_pair kp = {&key, sizeof(key)};
-    const cmap_pair *out = NULL;
+    cmap_pair out = {NULL, 0};
     if (chmap_get_elem_ref(m, &kp, &out) != ccol_success ||
-        *(const int *)out->ptr != (int)i) {
+        *(const int *)out.ptr != (int)i) {
       ok = false;
     }
   }
@@ -8853,12 +8950,11 @@ TEST(adaptive_hash, a_seed_independent_xxh64_multicollision_switches) {
   REQUIRE_LT(visits, 2.0);
 }
 
-/* A custom hash is finalized with the murmur3 finalizer in the fast mode, a
+/* In the fast mode a custom hash is finalized with the murmur3 finalizer, a
  * public bijection, so keys that come out of the identity custom hash as the
  * inverse images of 0, 1, 2, ... under it share home slot 0. Both backends
- * switch, and the keyed mode then finalizes with the seeded mixer. This test
- * is non-vacuous: without the detection, an open-addressing insert costs
- * 10001.6 probes. */
+ * switch, and the keyed mode then finalizes with the seeded mixer. Leave
+ * the detection out and an open-addressing insert costs 10001.6 probes. */
 static unsigned long ah_identity_hash(const void *key_ptr, size_t key_size) {
   (void)key_size;
   unsigned long k;
@@ -8893,9 +8989,9 @@ TEST(adaptive_hash, a_custom_hash_flood_switches) {
   for (size_t i = 0; i < KEYS; i++) {
     unsigned long k = (unsigned long)murmur_fmix_inverse(i);
     cmap_pair kp = {&k, sizeof(k)};
-    const cmap_pair *out = NULL;
+    cmap_pair out = {NULL, 0};
     if (chmap_get_elem_ref(oa, &kp, &out) != ccol_success ||
-        *(const unsigned long *)out->ptr != (unsigned long)i) {
+        *(const unsigned long *)out.ptr != (unsigned long)i) {
       ok = false;
     }
     if (chmap_get_elem_ref(sc, &kp, &out) != ccol_success) ok = false;
@@ -8913,11 +9009,11 @@ TEST(adaptive_hash, a_custom_hash_flood_switches) {
   REQUIRE_LT(sc_visits, 2.0);
 }
 
-/* Strings whose XXH64 under the seed of the process shares its top bits: the
- * flood that a party who learned the seed computes. The map switches at the
- * twenty-first of them, and the keyed map spreads them. This test is
- * non-vacuous: without the chain cap the map switches only when the first
- * window ends, and without the detection the longest chain holds all 600
+/* Strings whose XXH64 under the process's seed shares its top bits, the
+ * flood that somebody who learned the seed would compute. The map switches
+ * at the twenty-first of them and the keyed map spreads them. The test isn't
+ * vacuous: without the chain cap the map only switches when the first window
+ * ends, and without the detection the longest chain holds all 600
  * keys. */
 TEST(adaptive_hash, a_string_chain_flood_switches) {
   enum { KEYS = 600, KEY_LEN = 24, TOP_BITS = 10 };
@@ -8959,10 +9055,10 @@ TEST(adaptive_hash, a_string_chain_flood_switches) {
 /*                        CHURN AT A CHOSEN COST                            */
 /* ------------------------------------------------------------------------ */
 
-/* Builds a fast open-addressing map of 2^13 slots at load 0.49 whose keys sit
- * in their own even home slots, outside [hole_lo, hole_hi), and then a run of
- * `run` keys with the consecutive home slots run_home, run_home + 1, ..., all
- * of whose inserts have displacement 0. Gives NULL when anything fails. */
+/* Builds a fast open-addressing map of 2^13 slots at load 0.49 whose keys
+ * sit in their own even home slots outside [hole_lo, hole_hi), and then a
+ * run of `run` keys with the consecutive home slots run_home, run_home + 1,
+ * ..., all inserted with displacement 0. Returns NULL when anything fails. */
 static chmap ah_oa_with_run(uint64_t hole_lo, uint64_t hole_hi,
                             uint64_t run_home, uint64_t run) {
   enum { LOG2 = 13 };
@@ -8985,11 +9081,11 @@ static chmap ah_oa_with_run(uint64_t hole_lo, uint64_t hole_hi,
   return m;
 }
 
-/* An insert and a delete that repeat with a displacement of 24 every time:
+/* An insert and a delete repeated with a displacement of 24 every time,
  * below the deep-insert path at 32 and far below the cap, so only the window
- * sees it. At a load of about one half the bound is about 9.5 for each
- * insert, and the map switches within two windows. This test is non-vacuous:
- * without the window judgement the map stays fast through every round. */
+ * sees it. At a load of about one half the bound is about 9.5 per insert,
+ * and the map switches within two windows. If the window didn't judge,
+ * the map would stay fast through every round. */
 TEST(adaptive_hash, churn_at_displacement_24_switches_within_two_windows) {
   enum { ROUNDS = 2000 };
   chmap m = ah_oa_with_run(1000, 1200, 1024, 24);
@@ -9015,9 +9111,9 @@ TEST(adaptive_hash, churn_at_displacement_24_switches_within_two_windows) {
   REQUIRE_LE(switched_at, (size_t)512);
 }
 
-/* The same churn with a displacement of 340, above the cap of 288 of a table
- * of 8192 slots: the first such insert switches the map. This test is
- * non-vacuous: without the cap check it takes the window to switch. */
+/* The same churn with a displacement of 340, above the cap of 288 for a
+ * table of 8192 slots, so the first such insert switches the map. The test
+ * isn't vacuous: without the cap check it takes the window to switch. */
 TEST(adaptive_hash, churn_at_displacement_340_switches_at_once) {
   chmap m = ah_oa_with_run(1000, 1500, 1000, 340);
   REQUIRE_NE((void *)m, NULL);
@@ -9034,9 +9130,9 @@ TEST(adaptive_hash, churn_at_displacement_340_switches_at_once) {
   REQUIRE_TRUE(ok);
 }
 
-/* Builds a fast separate-chaining map of 1024 buckets that holds `fillers`
- * keys, at most two in each bucket outside bucket 500, and a chain of
- * `chain` keys in bucket 500. */
+/* Builds a fast separate-chaining map of 1024 buckets holding `fillers`
+ * keys, at most two per bucket outside bucket 500, and a chain of `chain`
+ * keys in bucket 500. */
 static chmap ah_sc_with_chain(uint64_t fillers, uint64_t chain) {
   enum { LOG2 = 10 };
   chmap m = chmap_create((size_t)1 << LOG2, ccol_unsigned_long_long,
@@ -9063,8 +9159,8 @@ static chmap ah_sc_with_chain(uint64_t fillers, uint64_t chain) {
   return m;
 }
 
-/* Churn of one key into a chain of `chain` nodes; gives the round at which
- * the map switched, or 0. */
+/* Churns one key into a chain of `chain` nodes and returns the round at
+ * which the map switched, or 0. */
 static size_t ah_sc_chain_churn(chmap m, uint64_t rounds, bool *ok) {
   for (uint64_t r = 0; r < rounds; r++) {
     unsigned long long k = ah_key_for_home(500, 10, 5000 + r);
@@ -9077,9 +9173,9 @@ static size_t ah_sc_chain_churn(chmap m, uint64_t rounds, bool *ok) {
 }
 
 /* A new key that meets 18 nodes is below the chain cap of 20, so only the
- * window sees this churn; at a load of about one entry for each bucket it
- * switches within two windows. This test is non-vacuous: without the window
- * judgement the map stays fast. */
+ * window sees this churn, and at a load of about one entry per bucket it
+ * switches within two windows. Take the window's judgement away and the map
+ * stays fast. */
 TEST(adaptive_hash, churn_at_chain_18_switches_within_two_windows) {
   chmap m = ah_sc_with_chain(1000, 18);
   REQUIRE_NE((void *)m, NULL);
@@ -9091,10 +9187,9 @@ TEST(adaptive_hash, churn_at_chain_18_switches_within_two_windows) {
   REQUIRE_LE(at, (size_t)512);
 }
 
-/* A chain of 8 at the highest load, 1.5 entries for each bucket, where the
- * bound is about 7.25 nodes for each insert: the map switches within two
- * windows. This test is non-vacuous: without the window judgement the map
- * stays fast. */
+/* A chain of 8 at the highest load, 1.5 entries per bucket, where the bound
+ * is about 7.25 nodes per insert, so the map switches within two windows.
+ * Here too the map stays fast when the window doesn't judge. */
 TEST(adaptive_hash, churn_at_chain_8_switches_within_two_windows) {
   chmap m = ah_sc_with_chain(1527, 8);
   REQUIRE_NE((void *)m, NULL);
@@ -9108,11 +9203,11 @@ TEST(adaptive_hash, churn_at_chain_8_switches_within_two_windows) {
   REQUIRE_LE(at, (size_t)512);
 }
 
-/* One insert whose displacement is above the cap switches the map at once;
- * one whose displacement equals the cap does not, and widens probe_span to
- * cover it. Checked at 1024 slots, where the cap is 240, and at 65536 slots,
- * where it is 288. This test is non-vacuous: without the cap check no single
- * insert switches a map. */
+/* A single insert whose displacement is above the cap switches the map at
+ * once, and one whose displacement equals the cap doesn't but widens
+ * probe_span to cover it. Checked at 1024 slots, where the cap is 240, and
+ * at 65536 slots, where it's 288. Without the cap check no single insert
+ * would switch a map. */
 TEST(adaptive_hash, a_deep_insert_past_the_cap_switches_small_and_large) {
   static const unsigned log2s[] = {10, 16};
   bool ok = true;
@@ -9154,13 +9249,13 @@ TEST(adaptive_hash, a_deep_insert_past_the_cap_switches_small_and_large) {
 /* ------------------------------------------------------------------------ */
 
 /* A run of 5000 keys with consecutive home slots: every insert lands in its
- * home slot, so nothing switches the map, and the run is as long as an
- * attacker wants. A lookup or a delete of an absent key whose home slot is in
- * the run, and the backward-shift walk of a delete inside it, stop after
- * probe_span slots. This test is non-vacuous: without the bound on the
- * lookup, the absent lookups below take 7.8 million probes, and so do the
- * absent deletes without the bound on the delete search; without the bound
- * on the walk, the 100 deletes inside the run take 390000 steps. */
+ * home slot, so nothing switches the map, and the run can be as long as an
+ * attacker likes. A lookup or delete of an absent key whose home slot is in
+ * the run, and a delete's backward-shift walk inside it, stop after
+ * probe_span slots. Each bound is checked: without the one on the lookup
+ * the absent lookups below take 7.8 million probes, the absent deletes take
+ * as many without the bound on the delete search, and without the bound on
+ * the walk the 100 deletes inside the run take 390000 steps. */
 TEST(adaptive_hash, lookups_and_deletes_stay_within_probe_span) {
   enum { LOG2 = 14, RUN = 5000, ABSENT = 2000 };
   chmap m = chmap_create((size_t)1 << LOG2, ccol_unsigned_long_long,
@@ -9207,16 +9302,16 @@ TEST(adaptive_hash, lookups_and_deletes_stay_within_probe_span) {
   /* Each absent key walks the whole span, inside the run. */
   REQUIRE_EQ(lookup_probes, (unsigned long long)ABSENT * 32);
   REQUIRE_EQ(delete_probes, (unsigned long long)ABSENT * 32);
-  /* Each walk examines at most span - 1 slots past the hole. */
+  /* Each walk looks at most at span - 1 slots past the hole. */
   REQUIRE_LE(walk_steps, 100ULL * 31);
 }
 
-/* A shrink of an open-addressing table merges clusters: keys in consecutive
- * home slots of the large table share home slots in pairs in the small one.
- * When that makes a displacement above the cap of the new table, the shrink
- * builds it with the keyed hash. This test is non-vacuous: without the
- * check of the rebuilt table, the map stays fast with a displacement of
- * 2000 and a probe_span to match. */
+/* Shrinking an open-addressing table merges clusters, because keys in
+ * consecutive home slots of the big table share home slots in pairs in the
+ * small one. When that makes a displacement above the new table's cap, the
+ * shrink builds it with the keyed hash. Skip the check of the rebuilt table
+ * and the map stays fast with a displacement of 2000 and a probe_span to
+ * match. */
 TEST(adaptive_hash, an_open_addressing_shrink_that_merges_clusters_switches) {
   enum { LOG2 = 14, RUN = 4000, FILLERS = 200 };
   chmap m = chmap_create((size_t)1 << LOG2, ccol_unsigned_long_long,
@@ -9249,12 +9344,11 @@ TEST(adaptive_hash, an_open_addressing_shrink_that_merges_clusters_switches) {
   REQUIRE_LE(span, (size_t)288);
 }
 
-/* A shrink of a separate-chaining map merges the chains of four neighbouring
+/* Shrinking a separate-chaining map merges the chains of four neighbouring
  * buckets. Five keys in each of buckets 400 to 403 of 1024 meet at most four
  * nodes on insert, and merge into one chain of 20 when the array shrinks to
- * 256 buckets: the shrink switches the map. This test is non-vacuous:
- * without the measure of the merged chains, the map stays fast with a chain
- * of 20. */
+ * 256 buckets, so the shrink switches the map. A shrink that didn't measure
+ * the merged chains would leave the map fast with a chain of 20. */
 TEST(adaptive_hash, a_separate_chaining_shrink_that_merges_chains_switches) {
   enum { LOG2 = 10, FILLERS = 600 };
   chmap m = chmap_create(16, ccol_unsigned_long_long, ccol_string, NULL);
@@ -9300,13 +9394,12 @@ TEST(adaptive_hash, a_separate_chaining_shrink_that_merges_chains_switches) {
 /*                       THE SWITCH KEEPS EVERYTHING                        */
 /* ------------------------------------------------------------------------ */
 
-/* A separate-chaining map switches in place: every entry, its value, the
- * address of its value and of its key accessor, the insertion order that the
- * oldest-first cursor walks, the newest-first order of the iterator, and an
- * iterator that is part way through, all survive. Keys are 128-byte structs:
- * 3000 random ones, then the multicollision family switches the map. This
- * test is non-vacuous: a switch that leaves a node out of the buckets fails
- * the lookups. */
+/* A separate-chaining map switches in place, and everything survives: every
+ * entry, its value, the address of its value and of its key accessor, the
+ * insertion order the oldest-first cursor walks, the iterator's newest-first
+ * order and an iterator that is part way through. The keys are 128-byte
+ * structs, 3000 random ones, and then the multicollision family switches the
+ * map. A switch that left a node out of the buckets fails the lookups. */
 TEST(adaptive_hash, the_switch_keeps_every_separate_chaining_entry) {
   enum { HONEST = 3000, FLOOD = 300 };
   chmap m = chmap_create(16, ccol_other_types, ccol_int, NULL);
@@ -9339,7 +9432,7 @@ TEST(adaptive_hash, the_switch_keeps_every_separate_chaining_entry) {
     if (chmap_insert_elem(m, &kp, &vp) != ccol_success) ok = false;
   }
   bool keyed = chashmap_is_keyed_for_tests(m);
-  /* The iterator goes on with the older half, newest first. */
+  /* The iterator carries on with the older half, newest first. */
   unsigned expect = HONEST / 2;
   while (it) {
     expect--;
@@ -9352,9 +9445,9 @@ TEST(adaptive_hash, the_switch_keeps_every_separate_chaining_entry) {
   /* Every honest entry keeps its accessors and its value. */
   for (unsigned i = 0; i < HONEST; i++) {
     cmap_pair kp = {&keys[i], sizeof(keys[i])};
-    const cmap_pair *out = NULL;
+    cmap_pair out = {NULL, 0};
     if (chmap_get_elem_ref(m, &kp, &out) != ccol_success ||
-        out != val_refs[i] || *(const int *)out->ptr != (int)i) {
+        out.ptr != val_refs[i]->ptr || *(const int *)out.ptr != (int)i) {
       ok = false;
     }
     const cmap_pair *ks = NULL, *vs = NULL;
@@ -9393,7 +9486,7 @@ TEST(adaptive_hash, the_switch_keeps_every_separate_chaining_entry) {
 }
 
 /* An open-addressing map switches by building a new table: every entry and
- * value survives, an iteration visits each key once, and deletes work. */
+ * value survives, an iteration visits each key once and deletes work. */
 TEST(adaptive_hash, the_switch_keeps_every_open_addressing_entry) {
   enum { HONEST = 5000, FLOOD = 600 };
   chmap m =
@@ -9441,8 +9534,8 @@ TEST(adaptive_hash, the_switch_keeps_every_open_addressing_entry) {
   REQUIRE_EQ(left, (size_t)FLOOD);
 }
 
-/* A compact map, the kind that a JSON or YAML parser makes for every
- * object, switches on a flood and keeps its insertion order. */
+/* A compact map, the kind a JSON or YAML parser makes for every object,
+ * switches on a flood and keeps its insertion order. */
 TEST(adaptive_hash, a_compact_map_switches_and_keeps_its_order) {
   enum { KEYS = 400 };
   chmap m = ccol_chmap_create_compact(ccol_other_types, ccol_int, NULL, NULL);
@@ -9454,9 +9547,9 @@ TEST(adaptive_hash, a_compact_map_switches_and_keeps_its_order) {
     int v = (int)i;
     cmap_pair kp = {&key, sizeof(key)};
     cmap_pair vp = {&v, sizeof(v)};
-    const cmap_pair *slot = NULL;
+    cmap_pair slot = {NULL, 0};
     if (ccol_chmap_insert_or_get_elem(m, &kp, &vp, &slot) != ccol_success ||
-        *(const int *)slot->ptr != (int)i) {
+        *(const int *)slot.ptr != (int)i) {
       ok = false;
     }
   }
@@ -9481,9 +9574,10 @@ TEST(adaptive_hash, a_compact_map_switches_and_keeps_its_order) {
 
 /* A keyed map stays keyed across a reset and a shrink, which keep the mode,
  * and across growths whose fast attempts all fail, because the flood that
- * switched it collides under the fast hash at every size; it keeps spreading
- * that flood. A growth of a keyed map whose keys spread under the fast hash
- * returns to it; see honest_strides_return_to_the_fast_hash_after_growing. */
+ * switched it collides under the fast hash at every size, and it keeps
+ * spreading that flood. When a keyed map whose keys spread under the fast
+ * hash grows, it goes back to it; see
+ * honest_strides_return_to_the_fast_hash_after_growing. */
 TEST(adaptive_hash, a_keyed_map_stays_keyed_across_reset_grow_and_shrink) {
   enum { KEYS = 6000 };
   chmap oa =
@@ -9540,16 +9634,16 @@ TEST(adaptive_hash, a_keyed_map_stays_keyed_across_reset_grow_and_shrink) {
   REQUIRE_TRUE(keyed_after_shrink);
   REQUIRE_GT(oa_grown, oa_shrunk);
   REQUIRE_GT(sc_grown, sc_shrunk);
-  /* A random function costs 2.6 to 3.1 probes for each insert here, the
-   * growth included; the flood under the fast hash costs thousands. */
+  /* A random function costs 2.6 to 3.1 probes per insert here, the growth
+   * included, while the flood costs thousands under the fast hash. */
   REQUIRE_LT(grow_probes, 4.0);
 }
 
-/* A reset restarts the insert window: the walks that the window held before
- * the reset do not count toward the window after it. This test is
- * non-vacuous: without the restart, the first insert after the reset ends a
- * window of 255 inserts with displacements 0 to 254 against the bound of an
- * empty table, and switches the map. */
+/* A reset restarts the insert window, so the walks the window held before
+ * the reset don't count toward the window after it. Without the restart,
+ * the first insert after the reset ends a window of 255
+ * inserts with displacements 0 to 254 against an empty table's bound, and
+ * switches the map. */
 TEST(adaptive_hash, a_reset_restarts_the_window) {
   chmap m = chmap_create(8192, ccol_unsigned_long_long, ccol_unsigned_long_long,
                          NULL);
@@ -9572,10 +9666,10 @@ TEST(adaptive_hash, a_reset_restarts_the_window) {
   REQUIRE_EQ(in_window, 1u);
 }
 
-/* Key identity does not depend on the mode. -0.0 and 0.0 are one key and a
+/* Key identity doesn't depend on the mode. -0.0 and 0.0 are one key and a
  * long double is one key whatever its padding, before and after a switch,
- * and ccol_chmap_hash_key gives the hash that a keyed map stores, whatever
- * the mode of any map is. */
+ * and ccol_chmap_hash_key gives the hash a keyed map stores, whatever mode
+ * any map is in. */
 TEST(adaptive_hash, key_identity_does_not_depend_on_the_mode) {
   chmap d = chmap_create(16, ccol_double, ccol_int, NULL);
   chmap l = chmap_create(16, ccol_long_double, ccol_int, NULL);
@@ -9646,8 +9740,8 @@ static void *ah_realloc(void *p, size_t n) {
 
 /* The scenario of the next test: a table of 1024 slots with a run of 241
  * keys in consecutive home slots, then two inserts at the start of the run,
- * each past the cap of 240. Reports whether the map is keyed, and whether
- * every key that the calls reported as inserted is there. */
+ * each past the cap of 240. Reports whether the map is keyed and whether
+ * every key the calls reported as inserted is there. */
 static void ah_deep_scenario(long fail_at, bool *created, bool *keyed,
                              bool *intact, long *allocations) {
   ccol_memmgmt_procs_t mp = {.malloc = ah_malloc,
@@ -9688,9 +9782,9 @@ static void ah_deep_scenario(long fail_at, bool *created, bool *keyed,
 
 /* Each allocation of the scenario fails in turn. A failed creation fails
  * cleanly, and a failed switch leaves the map fast and correct: the insert
- * that asked for it succeeds, and the next insert past the cap switches. This
- * test is non-vacuous: a failed switch that marks the map keyed while its
- * table still holds the fast hash fails the intact check. */
+ * that asked for it succeeds and the next insert past the cap switches. A
+ * failed switch that marked the map keyed while its table held the fast
+ * hash would fail the intact check. */
 TEST(adaptive_hash, a_switch_that_cannot_allocate_keeps_the_map_correct) {
   bool created = false, keyed = false, intact = false;
   long allocations = 0;
@@ -9698,7 +9792,7 @@ TEST(adaptive_hash, a_switch_that_cannot_allocate_keeps_the_map_correct) {
   REQUIRE_TRUE(created);
   REQUIRE_TRUE(keyed);
   REQUIRE_TRUE(intact);
-  /* The map block, the table, and the one block of the switch. */
+  /* The map block, the table, and the switch's one block. */
   REQUIRE_EQ(allocations, 3L);
   int failed_creations = 0, recovered = 0, broken = 0;
   for (long f = 0; f < allocations; f++) {
@@ -9716,22 +9810,22 @@ TEST(adaptive_hash, a_switch_that_cannot_allocate_keeps_the_map_correct) {
   REQUIRE_EQ(recovered, 1);
 }
 
-/* A rebuild restarts the insert window, so a window never mixes the bound of
- * one table with the inserts of another. A table of 8192 slots ends a window at
- * a load of one quarter, where the bound of the next window is about 2.8 for
- * each insert, and then shrinks to 4096 slots at a load of one half, where it
- * is about 11.1. A churn at displacement 4 that follows is ordinary there and
- * does not switch the map. This test is non-vacuous: without the restart, the
- * window that the shrink interrupts keeps the bound of the large table and the
- * churn switches the map. */
+/* A rebuild restarts the insert window, so a window never mixes one table's
+ * bound with another table's inserts. A table of 8192 slots ends a window at
+ * a load of one quarter, where the next window's bound is about 2.8 per
+ * insert, and then shrinks to 4096 slots at a load of one half, where it's
+ * about 11.1. A churn at displacement 4 after that is ordinary there and
+ * doesn't switch the map. Without the restart, the
+ * window the shrink interrupts would keep the big table's bound and the
+ * churn would switch the map. */
 TEST(adaptive_hash, a_shrink_restarts_the_open_addressing_window) {
   enum { LOG2 = 13 };
   chmap m = chmap_create((size_t)1 << LOG2, ccol_unsigned_long_long,
                          ccol_unsigned_long_long, NULL);
   REQUIRE_NE((void *)m, NULL);
   bool ok = true;
-  /* Fillers in the slots 4k of the large table, which are the even home
-   * slots 2k of the small one, leaving homes 200 to 299 of the small table
+  /* Fillers in the big table's slots 4k, which are the small table's even
+   * home slots 2k, leaving the small table's homes 200 to 299
    * free. */
   for (uint64_t k = 0; ok && k < 2048; k++) {
     if (k >= 100 && k < 150) continue;
@@ -9776,12 +9870,12 @@ TEST(adaptive_hash, a_shrink_restarts_the_open_addressing_window) {
 }
 
 /* The same for separate chaining: a map of 1024 buckets ends a window at a
- * quarter of an entry for each bucket, where the bound of the next window is
- * about 2.75 nodes for each insert, and then shrinks to 256 buckets, where the
- * window that starts is judged at the highest load, 1.5, and its bound is about
- * 7.2. A churn into a chain of 4 nodes is ordinary there. This test is
- * non-vacuous: without the restart, the window that the shrink interrupts keeps
- * the bound of the large array and the churn switches the map. */
+ * quarter of an entry per bucket, where the next window's bound is about
+ * 2.75 nodes per insert, and then shrinks to 256 buckets, where the window
+ * that starts is judged at the highest load, 1.5, with a bound of about 7.2.
+ * A churn into a chain of 4 nodes is ordinary there. As with open
+ * addressing, a window that the shrink interrupts and doesn't restart would
+ * keep the big array's bound, and the churn would switch the map. */
 TEST(adaptive_hash, a_shrink_restarts_the_separate_chaining_window) {
   enum { LOG2 = 10 };
   chmap m = chmap_create((size_t)1 << LOG2, ccol_unsigned_long_long,
@@ -9835,13 +9929,12 @@ static unsigned ah_log2_of(size_t capacity) {
 }
 
 /* Strides that cluster under the Fibonacci multiply at some table sizes on
- * the way up switch a map at a small size, and spread again in a larger
+ * the way up switch a map at a small size and spread again in a bigger
  * table. The growth that reaches that size makes its fast attempt, the
  * attempt fills the table, and the map ends fast, with a lookup that costs
- * one probe, against 1.31 probes for a random function at the same load (a
- * keyed table costs that). The premise is checked: every set switched on
- * the way. This test is non-vacuous: without the fast attempt every set
- * stays keyed. */
+ * one probe against 1.31 probes for a random function at the same load
+ * (which is what a keyed table costs). We check the premise that every set
+ * switched on the way. With no fast attempt every set would stay keyed. */
 TEST(adaptive_hash, honest_strides_return_to_the_fast_hash_after_growing) {
   static const ah_gen_t oa_sets[] = {ah_stride_24, ah_stride_32, ah_stride_48,
                                      ah_stride_96};
@@ -9892,10 +9985,10 @@ TEST(adaptive_hash, honest_strides_return_to_the_fast_hash_after_growing) {
   REQUIRE_LT(worst, 1.05);
 }
 
-/* The work of every failed fast attempt, against the bound that the
- * attempt documents: an open-addressing attempt inspects at most
- * 2 * count + 353 slots (cap + 65, with a cap of at most 288), and a
- * separate-chaining attempt hashes and walks at most 2 * count + 83 nodes. */
+/* The work of every failed fast attempt against the bound the attempt
+ * documents: an open-addressing attempt looks at most at 2 * count + 353
+ * slots (cap + 65, with a cap of at most 288), and a separate-chaining
+ * attempt hashes and walks at most 2 * count + 83 nodes. */
 typedef struct {
   unsigned long long attempts, failures, failed_work, seen_failures;
   size_t growths, last_capacity;
@@ -9937,12 +10030,12 @@ static void ah_watch_end(ah_attempt_watch *w) {
 
 /* A flood that collides under the fast hash at every size switches the map,
  * and every growth after the switch makes a fast attempt that fails within
- * its bound: the map ends keyed, the failed attempts cost at most a few
- * probes or node visits for each insert in all, and a lookup costs what a
- * random function costs. This test is non-vacuous: without the abort of a
- * failed attempt, an attempt over the inverse-Fibonacci flood fills the
- * whole table with the fast hash, a number of probes quadratic in the count
- * that breaks the bound at the first growth. */
+ * its bound: the map ends keyed, all the failed attempts together cost at
+ * most a few probes or node visits per insert, and a lookup costs what a
+ * random function costs. If a failed attempt didn't abort, an attempt over
+ * the inverse-Fibonacci flood would fill the whole table
+ * with the fast hash, a number of probes quadratic in the count that breaks
+ * the bound at the first growth. */
 static void ah_flood_across_growths(ah_gen_t gen, bool sc, size_t keys,
                                     ah_attempt_watch *w, bool *keyed,
                                     double *lookup) {
@@ -9997,11 +10090,11 @@ TEST(adaptive_hash, integer_floods_stay_keyed_across_growths_within_bounds) {
   }
 }
 
-/* The seed-independent multicollision of XXH64 keeps 256 keys on one hash
+/* The seed-independent XXH64 multicollision keeps 256 keys on one hash
  * whatever the size, so every growth of the keyed map makes a fast attempt
- * that a chain of 20 ends within its bound, and the map ends keyed. This test
- * is non-vacuous: without the chain measure of the attempt the map ends fast
- * with a chain of 256. */
+ * that a chain of 20 ends within its bound, and the map ends keyed. An
+ * attempt that didn't measure its chains would leave the map fast with a
+ * chain of 256. */
 TEST(adaptive_hash, an_xxh64_multicollision_stays_keyed_across_growths) {
   enum { KEYS = 6561 };
   chmap m = chmap_create(16, ccol_other_types, ccol_int, NULL);
@@ -10021,9 +10114,9 @@ TEST(adaptive_hash, an_xxh64_multicollision_stays_keyed_across_growths) {
   for (unsigned i = 0; i < KEYS; i++) {
     ah_xxh_multicollision_key(i, &key);
     cmap_pair kp = {&key, sizeof(key)};
-    const cmap_pair *out = NULL;
+    cmap_pair out = {NULL, 0};
     if (chmap_get_elem_ref(m, &kp, &out) != ccol_success ||
-        *(const int *)out->ptr != (int)i) {
+        *(const int *)out.ptr != (int)i) {
       w.ok = false;
     }
   }
@@ -10038,7 +10131,7 @@ TEST(adaptive_hash, an_xxh64_multicollision_stays_keyed_across_growths) {
   REQUIRE_LE(longest, (size_t)12);
 }
 
-/* Inserts random keys until the capacity of m doubles (open addressing) or
+/* Inserts random keys until m's capacity doubles (open addressing) or
  * quadruples (separate chaining). */
 static void ah_grow_with_random(chmap m, bool sc, uint64_t *next, bool *ok) {
   size_t cap = chmap_get_bucket_arr_size(m);
@@ -10048,13 +10141,13 @@ static void ah_grow_with_random(chmap m, bool sc, uint64_t *next, bool *ok) {
   }
 }
 
-/* The open-addressing churn of a chosen displacement, across growths: at
+/* The open-addressing churn of a chosen displacement, across growths. At
  * each size the attack places a run of `run` keys with consecutive home
- * slots under the fast hash and then inserts and deletes one more key with
- * the home slot of the start of the run, until the map is keyed. Random keys
- * then grow the table, and the growth makes its fast attempt. Gives the
- * largest number of attack inserts that any round needed, the rounds that
- * started fast, and whether the map ended keyed. */
+ * slots under the fast hash, then inserts and deletes one more key with the
+ * home slot of the run's start until the map is keyed. Random keys then grow
+ * the table, and the growth makes its fast attempt. Returns the largest
+ * number of attack inserts any round needed, the rounds that started fast,
+ * and whether the map ended keyed. */
 static void ah_oa_churn_across_growths(uint64_t run, unsigned rounds,
                                        size_t *worst, unsigned *fast_rounds,
                                        bool *keyed_end, ah_attempt_watch *w) {
@@ -10104,8 +10197,7 @@ static void ah_oa_churn_across_growths(uint64_t run, unsigned rounds,
  * 340, above the cap of 288: after every growth that brings the map back to
  * the fast hash, the resumed attack switches it again within its run plus
  * two windows, every failed attempt stays within its bound, and the map ends
- * keyed. This test is non-vacuous: without the fast attempt no round after
- * the first starts fast. */
+ * keyed. Without the fast attempt no round after the first starts fast. */
 TEST(adaptive_hash, churn_attacks_switch_again_after_every_fast_growth) {
   static const uint64_t runs[] = {24, 340};
   for (size_t t = 0; t < 2; t++) {
@@ -10124,13 +10216,13 @@ TEST(adaptive_hash, churn_attacks_switch_again_after_every_fast_growth) {
   }
 }
 
-/* The separate-chaining churn into a chain of 18, below the chain cap, across
- * growths: at each size a chain of 18 keys under the fast hash, then rounds
- * that insert and delete one more key of that bucket until the map is keyed;
- * random keys then grow the bucket array. After every growth that brings the
- * map back to the fast hash, the resumed attack switches it again within two
- * windows, and the map ends keyed. This test is non-vacuous: without the fast
- * attempt no round after the first starts fast. */
+/* The separate-chaining churn into a chain of 18, below the chain cap,
+ * across growths: at each size a chain of 18 keys under the fast hash, then
+ * rounds that insert and delete one more key of that bucket until the map is
+ * keyed, and then random keys grow the bucket array. After every growth that
+ * brings the map back to the fast hash, the resumed attack switches it again
+ * within two windows, and the map ends keyed. Here as well, a growth with no
+ * fast attempt means no round after the first starts fast. */
 TEST(adaptive_hash, chain_churn_switches_again_after_every_fast_growth) {
   chmap m = ah_sc_with_chain(1000, 0);
   REQUIRE_NE((void *)m, NULL);
@@ -10175,15 +10267,15 @@ TEST(adaptive_hash, chain_churn_switches_again_after_every_fast_growth) {
   REQUIRE_TRUE(keyed);
 }
 
-/* The fast attempt of a separate-chaining growth relinks in place, whether
- * it fills the bucket array or fails: every entry, its value, the address of
- * its value and of its key accessor, the oldest-first order, the
- * newest-first order of an iterator that is part way through, and deletes
- * all survive. Keys are 128-byte structs: random ones grow a map that the
- * test switched, and the attempt succeeds; then the multicollision family
- * grows it again, switches it, and the next attempt fails. This test is
- * non-vacuous: an attempt that leaves a node out of the buckets, or that
- * keeps the fast hash of a node after it fails, fails the lookups. */
+/* A separate-chaining growth's fast attempt relinks in place, whether it
+ * fills the bucket array or fails, and everything survives: every entry, its
+ * value, the address of its value and of its key accessor, the oldest-first
+ * order, the newest-first order of an iterator that is part way through, and
+ * deletes. The keys are 128-byte structs: random ones grow a map the test
+ * switched, and the attempt succeeds, then the multicollision family grows
+ * it again, switches it, and the next attempt fails. The lookups catch an
+ * attempt that left a node out of the buckets, or kept a node's fast hash
+ * after it failed. */
 TEST(adaptive_hash, a_fast_attempt_keeps_every_separate_chaining_entry) {
   enum { HONEST = 3000, FLOOD = 3300 };
   chmap m = chmap_create(16, ccol_other_types, ccol_int, NULL);
@@ -10201,7 +10293,7 @@ TEST(adaptive_hash, a_fast_attempt_keeps_every_separate_chaining_entry) {
       ah_xxh_multicollision_key(i - HONEST, &keys[i]);
     }
   }
-  /* 600 honest keys, a switch, then the rest of the honest keys grow it. */
+  /* 600 honest keys, a switch, and then the rest of the honest keys grow it. */
   unsigned long long attempts0 = chashmap_retries_for_tests();
   unsigned long long failures0 = chashmap_retry_failures_for_tests();
   bool fast_after_grow = false, keyed_after_flood = false;
@@ -10227,7 +10319,7 @@ TEST(adaptive_hash, a_fast_attempt_keeps_every_separate_chaining_entry) {
   keyed_after_flood = chashmap_is_keyed_for_tests(m);
   unsigned long long attempts = chashmap_retries_for_tests() - attempts0;
   unsigned long long failures = chashmap_retry_failures_for_tests() - failures0;
-  /* The iterator goes on with the older 300, newest first. */
+  /* The iterator carries on with the older 300, newest first. */
   unsigned expect = 300;
   while (it) {
     expect--;
@@ -10239,9 +10331,9 @@ TEST(adaptive_hash, a_fast_attempt_keeps_every_separate_chaining_entry) {
   if (expect != 0) ok = false;
   for (unsigned i = 0; i < HONEST + FLOOD; i++) {
     cmap_pair kp = {&keys[i], sizeof(keys[i])};
-    const cmap_pair *out = NULL;
+    cmap_pair out = {NULL, 0};
     if (chmap_get_elem_ref(m, &kp, &out) != ccol_success ||
-        out != val_refs[i] || *(const int *)out->ptr != (int)i) {
+        out.ptr != val_refs[i]->ptr || *(const int *)out.ptr != (int)i) {
       ok = false;
     }
     const cmap_pair *ks = NULL, *vs = NULL;
@@ -10270,7 +10362,7 @@ TEST(adaptive_hash, a_fast_attempt_keeps_every_separate_chaining_entry) {
   }
   for (unsigned i = 1; i < HONEST + FLOOD; i += 2) {
     cmap_pair kp = {&keys[i], sizeof(keys[0])};
-    const cmap_pair *out = NULL;
+    cmap_pair out = {NULL, 0};
     if (chmap_get_elem_ref(m, &kp, &out) != ccol_success) ok = false;
   }
   size_t left = chmap_elem_count(m);
@@ -10286,12 +10378,12 @@ TEST(adaptive_hash, a_fast_attempt_keeps_every_separate_chaining_entry) {
 }
 
 /* The open-addressing counterpart: a switched table grows with random keys
- * and its fast attempt fills the new table; the inverse-Fibonacci flood then
- * switches it again and the next attempt fails. After each growth every
- * entry and value is there, an iteration visits each key once, the
- * invariants hold (every key within probe_span of its home slot), and
- * deletes work. This test is non-vacuous: an attempt that fails and leaves
- * the fast hash in a table marked keyed fails the lookups. */
+ * and its fast attempt fills the new table, then the inverse-Fibonacci flood
+ * switches it again and the next attempt fails. After each growth every entry
+ * and value is there, an iteration visits each key once, the invariants hold
+ * (every key within probe_span of its home slot) and deletes work. The test
+ * isn't vacuous: an attempt that failed and left the fast hash in a table
+ * marked keyed would fail the lookups. */
 TEST(adaptive_hash, a_fast_attempt_keeps_every_open_addressing_entry) {
   enum { HONEST = 5000, FLOOD = 12000 };
   chmap m =
@@ -10354,13 +10446,13 @@ TEST(adaptive_hash, a_fast_attempt_keeps_every_open_addressing_entry) {
 
 /* A keyed map grows while each of its allocations fails in turn: the map
  * switches through the test hook at its eighth key, and inserts then grow it
- * several times. A growth that cannot allocate leaves the map keyed at its
- * size, and the insert that asked for it still succeeds or reports the
- * failure; the next insert asks again. After every insert, every key that an
- * insert reported as inserted is there with its value, and the map ends grown
- * and fast. This test is non-vacuous: an attempt that marks the map fast
- * before its block exists loses the keys until the next growth, which the
- * check after every insert sees. */
+ * several times. A growth that can't allocate leaves the map keyed at its
+ * size, the insert that asked for it still succeeds or reports the failure,
+ * and the next insert asks again. After every insert, every key an insert
+ * reported as inserted is there with its value, and the map ends up grown
+ * and fast. An attempt that marked the map fast before its block existed
+ * would lose the keys until the next growth, which the check after every
+ * insert catches. */
 enum { AH_RETRY_ALLOC_KEYS = 120 };
 
 static bool ah_retry_alloc_keys_intact(chmap m, bool sc, const bool *inserted,
@@ -10368,14 +10460,14 @@ static bool ah_retry_alloc_keys_intact(chmap m, bool sc, const bool *inserted,
   for (uint64_t i = 0; i < upto; i++) {
     unsigned long long k = ah_mix(i);
     cmap_pair kp = {&k, sizeof(k)};
-    const cmap_pair *out = NULL;
+    cmap_pair out = {NULL, 0};
     bool present = chmap_get_elem_ref(m, &kp, &out) == ccol_success;
     if (present != inserted[i]) return false;
     if (!present) continue;
     char v[24];
     snprintf(v, sizeof(v), "v%llu", (unsigned long long)i);
-    if (sc ? strcmp((const char *)out->ptr, v) != 0
-           : *(const unsigned long long *)out->ptr != i) {
+    if (sc ? strcmp((const char *)out.ptr, v) != 0
+           : *(const unsigned long long *)out.ptr != i) {
       return false;
     }
   }
@@ -10401,7 +10493,7 @@ static void ah_retry_alloc_scenario(bool sc, long fail_at, bool *created,
     bool inserted[AH_RETRY_ALLOC_KEYS] = {false};
     for (uint64_t i = 0; i < AH_RETRY_ALLOC_KEYS; i++) {
       if (i == 8) {
-        /* A switch that cannot allocate leaves the map fast; ask again. */
+        /* A switch that can't allocate leaves the map fast, so ask again. */
         while (chashmap_switch_to_keyed_for_tests(m) != ccol_success) {
         }
       }
@@ -10450,4 +10542,196 @@ TEST(adaptive_hash, a_keyed_growth_that_cannot_allocate_keeps_the_map_correct) {
     REQUIRE_EQ(broken, 0);
     REQUIRE_EQ(keyed_end, 0);
   }
+}
+
+/*
+ * The allocation-free walk gives every live entry exactly once, for both
+ * backends, after deletes and growth, and gives nothing for an empty or a
+ * NULL map.
+ */
+TEST(chmap_walk, every_live_entry_once_on_both_backends) {
+  chmap_construct(oa, int, long long);
+  chmap_construct(sc, char *, int);
+  enum { N = 500 };
+  char names[N][16];
+  for (int i = 0; i < N; i++) {
+    chmap_insert(oa, i, (long long)i * 3);
+    snprintf(names[i], sizeof(names[i]), "k%d", i);
+    chmap_insert(sc, names[i], i);
+  }
+  for (int i = 0; i < N; i += 3) {
+    chmap_remove(oa, i);
+    chmap_remove(sc, names[i]);
+  }
+  bool seen_oa[N] = {false}, seen_sc[N] = {false};
+  int n_oa = 0, n_sc = 0, bad = 0;
+  ccol_chmap_walk w1 = {0};
+  const void *k;
+  const void *v;
+  while (ccol_chmap_walk_next(oa, &w1, &k, &v)) {
+    int key;
+    long long val;
+    memcpy(&key, k, sizeof(key));
+    memcpy(&val, v, sizeof(val));
+    if (key < 0 || key >= N || key % 3 == 0 || seen_oa[key] ||
+        val != (long long)key * 3)
+      bad++;
+    else
+      seen_oa[key] = true;
+    n_oa++;
+  }
+  bool oa_done_again = !ccol_chmap_walk_next(oa, &w1, &k, &v);
+  ccol_chmap_walk w2 = {0};
+  int prev = -1;
+  while (ccol_chmap_walk_next(sc, &w2, &k, &v)) {
+    int key = atoi((const char *)k + 1);
+    int val;
+    memcpy(&val, v, sizeof(val));
+    /* A separate-chaining map is walked oldest first. */
+    if (key <= prev || key % 3 == 0 || seen_sc[key] || val != key)
+      bad++;
+    else
+      seen_sc[key] = true;
+    prev = key;
+    n_sc++;
+  }
+  chmap_construct(empty, int, int);
+  ccol_chmap_walk w3 = {0}, w4 = {0};
+  bool empty_gives = ccol_chmap_walk_next(empty, &w3, &k, &v);
+  bool null_gives = ccol_chmap_walk_next(NULL, &w4, &k, &v);
+  int expected = N - (N + 2) / 3;
+  chmap_destroy(oa);
+  chmap_destroy(sc);
+  chmap_destroy(empty);
+  REQUIRE_EQ(bad, 0);
+  REQUIRE_EQ(n_oa, expected);
+  REQUIRE_EQ(n_sc, expected);
+  REQUIRE_TRUE(oa_done_again);
+  REQUIRE_FALSE(empty_gives);
+  REQUIRE_FALSE(null_gives);
+}
+
+/* An allocator that fills every block with 0xA5 when it frees it, so reading
+ * freed memory gives a wrong value in an ordinary run as well as a report
+ * under valgrind or AddressSanitizer. */
+#define CHMAP_POISON_HDR ((size_t)16)
+static void *chmap_poison_malloc(size_t n) {
+  unsigned char *p = malloc(n + CHMAP_POISON_HDR);
+  if (!p) return NULL;
+  memcpy(p, &n, sizeof(n));
+  return p + CHMAP_POISON_HDR;
+}
+static void chmap_poison_free(void *ptr) {
+  if (!ptr) return;
+  unsigned char *p = (unsigned char *)ptr - CHMAP_POISON_HDR;
+  size_t n;
+  memcpy(&n, p, sizeof(n));
+  memset(ptr, 0xA5, n);
+  free(p);
+}
+static void *chmap_poison_calloc(size_t count, size_t size) {
+  if (size && count > SIZE_MAX / size) return NULL;
+  void *p = chmap_poison_malloc(count * size);
+  if (p) memset(p, 0, count * size);
+  return p;
+}
+static void *chmap_poison_realloc(void *ptr, size_t n) {
+  void *q = chmap_poison_malloc(n);
+  if (!q) return NULL;
+  if (ptr) {
+    size_t old;
+    memcpy(&old, (unsigned char *)ptr - CHMAP_POISON_HDR, sizeof(old));
+    memcpy(q, ptr, old < n ? old : n);
+    chmap_poison_free(ptr);
+  }
+  return q;
+}
+static ccol_memmgmt_procs_t chmap_poison_procs = {
+    chmap_poison_malloc, chmap_poison_free, chmap_poison_calloc,
+    chmap_poison_realloc};
+
+/* Copies a value from one key to a new key through the raw layer, passing
+ * the pair chmap_get_elem_ref fills for the source key as the value pair,
+ * and inserts a value the map stores as a new key, passing that same pair as
+ * the key pair too. Every insert that crosses the growth load frees the block
+ * holding the bytes the pair points at, so the insert has to read them before
+ * the growth. When the grow path reads key_pair or val_pair after the
+ * rebuild, the copied values
+ * read back as 0xA5 bytes and the keys land in the wrong slots (valgrind and
+ * AddressSanitizer report the read of freed memory). */
+TEST(oa_aliasing, an_insert_that_grows_reads_pairs_that_point_into_the_map) {
+  chmap m =
+      chmap_create_mp(16, ccol_long, ccol_long, &chmap_poison_procs, NULL);
+  REQUIRE_NE((void *)m, NULL);
+  long k0 = 0, v0 = 4242;
+  cmap_pair kp0 = {&k0, sizeof(k0)}, vp0 = {&v0, sizeof(v0)};
+  bool ok = chmap_insert_elem(m, &kp0, &vp0) == ccol_success;
+  size_t cap0 = chmap_get_bucket_arr_size(m);
+  /* Copy the value of key 0 to keys 1 .. 3999. */
+  for (long k = 1; ok && k < 4000; k++) {
+    cmap_pair src = {NULL, 0};
+    ok = chmap_get_elem_ref(m, &kp0, &src) == ccol_success;
+    cmap_pair kp = {&k, sizeof(k)};
+    if (ok) ok = chmap_insert_elem(m, &kp, &src) == ccol_success;
+  }
+  /* Key k holds k + 1000000, and we insert that stored value as a key with
+   * the filled pair itself as both the key pair and the value pair. */
+  for (long k = 1; ok && k < 4000; k++) {
+    long nv = k + 1000000;
+    cmap_pair kp = {&k, sizeof(k)}, vp = {&nv, sizeof(nv)};
+    ok = chmap_insert_elem(m, &kp, &vp) == ccol_key_already_present;
+  }
+  for (long k = 1; ok && k < 4000; k++) {
+    cmap_pair kp = {&k, sizeof(k)};
+    cmap_pair stored = {NULL, 0};
+    ok = chmap_get_elem_ref(m, &kp, &stored) == ccol_success;
+    if (ok) ok = chmap_insert_elem(m, &stored, &stored) == ccol_success;
+  }
+  bool all_found = ok;
+  for (long k = 1; all_found && k < 4000; k++) {
+    long key = k + 1000000;
+    cmap_pair kp = {&key, sizeof(key)};
+    cmap_pair v = {NULL, 0};
+    if (chmap_get_elem_ref(m, &kp, &v) != ccol_success ||
+        *(const long *)v.ptr != key)
+      all_found = false;
+  }
+  size_t count = chmap_elem_count(m);
+  size_t cap1 = chmap_get_bucket_arr_size(m);
+  chmap_destroy(m);
+  REQUIRE_TRUE(ok);
+  REQUIRE_TRUE(all_found);
+  REQUIRE_EQ(count, (size_t)7999);
+  REQUIRE_GT(cap1, cap0);
+}
+
+/* The same aliasing for a 4-byte key and value, and through the insert that
+ * also hands back the value slot. */
+TEST(oa_aliasing, an_insert_or_get_that_grows_reads_pairs_into_the_map) {
+  chmap m = chmap_create_mp(16, ccol_int, ccol_int, &chmap_poison_procs, NULL);
+  REQUIRE_NE((void *)m, NULL);
+  int k0 = 0, v0 = 77;
+  cmap_pair kp0 = {&k0, sizeof(k0)}, vp0 = {&v0, sizeof(v0)};
+  bool ok = chmap_insert_elem(m, &kp0, &vp0) == ccol_success;
+  for (int k = 1; ok && k < 3000; k++) {
+    cmap_pair src = {NULL, 0};
+    cmap_pair slot = {NULL, 0};
+    ok = chmap_get_elem_ref(m, &kp0, &src) == ccol_success;
+    cmap_pair kp = {&k, sizeof(k)};
+    if (ok) {
+      ok = ccol_chmap_insert_or_get_elem(m, &kp, &src, &slot) == ccol_success &&
+           slot.ptr && *(const int *)slot.ptr == 77;
+    }
+  }
+  bool all_found = ok;
+  for (int k = 0; all_found && k < 3000; k++) {
+    cmap_pair kp = {&k, sizeof(k)};
+    cmap_pair v = {NULL, 0};
+    if (chmap_get_elem_ref(m, &kp, &v) != ccol_success ||
+        *(const int *)v.ptr != 77)
+      all_found = false;
+  }
+  chmap_destroy(m);
+  REQUIRE_TRUE(ok);
+  REQUIRE_TRUE(all_found);
 }

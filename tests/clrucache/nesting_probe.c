@@ -22,13 +22,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* Compile-time probe: every public macro of this header nests inside the
- * argument of another public macro, and inside its own argument, under
- * -Wshadow -Werror. The value macros name their temporaries uniquely for each
- * expansion, so no nested expansion declares a local that hides one of the
- * enclosing expansion. Without that, each nesting below is a -Wshadow error
- * in the build of a caller. The Makefile compiles this file with
- * -fsyntax-only; nothing here runs. */
+/* Compile-time probe: every public macro of this header must nest inside the
+ * argument of another public macro, and inside its own argument, under -Wshadow
+ * -Werror. The value macros give their temporaries a unique name for each
+ * expansion, so a nested expansion never declares a local that hides one of the
+ * enclosing expansion. Without that, every nesting below is a -Wshadow error in
+ * a caller's build. The Makefile compiles this file with -fsyntax-only and
+ * nothing here runs. */
 
 #include <chashmap.h>
 #include <clrucache.h>
@@ -45,4 +45,31 @@ void clru_nesting_probe(void) {
   chmap_insert(m, 1, ((void)clru_get(c, chmap_get(m, 1), &got), got));
   chmap_destroy(m);
   clru_destroy(c);
+}
+
+/* A const value type, a const struct value type and a const char * key type.
+ * clru_get() copies each value into a temporary of the unqualified value type,
+ * so the copy compiles, and so does assigning it to a plain variable of that
+ * type. */
+struct clru_probe_pt {
+  int x, y;
+};
+void clru_const_value_probe(void);
+void clru_const_value_probe(void) {
+  clru_construct(ci, int, const int, 4, NULL, NULL, NULL);
+  int got = 0;
+  (void)clru_set(ci, 1, 7);
+  (void)clru_get(ci, 1, &got);
+  clru_destroy(ci);
+  clru_construct(cs, int, const struct clru_probe_pt, 4, NULL, NULL, NULL);
+  struct clru_probe_pt pt = {1, 2};
+  (void)clru_set(cs, 1, pt);
+  (void)clru_get(cs, 1, &pt);
+  clru_destroy(cs);
+  clru_construct(cc, const char *, const char *, 4, NULL, NULL, NULL);
+  const char *s = NULL;
+  (void)clru_set(cc, "k", "v");
+  (void)clru_get(cc, "k", &s);
+  free((void *)s);
+  clru_destroy(cc);
 }

@@ -11,9 +11,9 @@ cmap_iterator *ccol_iter_next(it);
 .fi
 .SH DESCRIPTION
 .nf
-This macro moves the iterator on to the next element by calling the
-_next_fn callback of the iterator. At the end of the sequence, the macro
-destroys the iterator automatically and gives NULL.
+ccol_iter_next moves the iterator to the next element by calling its
+_next_fn callback. At the end of the sequence it destroys the iterator
+and returns NULL. The argument is evaluated exactly once.
 .fi
 .SH PARAMETERS
 .nf
@@ -26,8 +26,8 @@ The new value of the iterator, or NULL after the last element.
 .fi
 .SH NOTES
 .nf
-The iterator is destroyed when ccol_iter_next() gives NULL, so do not call
-ccol_iter_destroy() on it after that.
+Once ccol_iter_next() has returned NULL the iterator is already
+destroyed, so do not call ccol_iter_destroy() on it after that.
 .fi
 .SH "SEE ALSO"
 .BR ccol_begin (3),

@@ -15,14 +15,15 @@ ccol_retval_t chttpclient_do_pooled_streaming(chttpcli cli,
 .fi
 .SH DESCRIPTION
 .nf
-This is a thin wrapper over chttpclient_do_async_streaming, with the
-same call shape as chttpclient_do_streaming. write_fn runs on one of
-the reactor threads of the engine, not on the thread of the caller; see
-the documentation of chttpclient_do_async_streaming for the two rules
-that follow from this: write_fn must not block, and it must not call
-back into the engine. The thread that runs write_fn is the only
-difference between this function and chttpclient_do_streaming, whose
-callback runs on the thread of the caller.
+This is a thin wrapper over chttpclient_do_async_streaming that takes
+the same arguments as chttpclient_do_streaming. write_fn runs on one of
+the engine's reactor threads and not on the caller's thread, so the two
+rules of chttpclient_do_async_streaming apply: write_fn must not block,
+and it must not call back into the engine. That thread is the only
+difference from chttpclient_do_streaming, whose callback runs on the
+caller's thread. Calling chttpclient_destroy on any client (cli or
+another one) from inside write_fn is a fatal error, because write_fn
+runs on an engine thread; see chttpclient_destroy(3).
 .fi
 .SH PARAMETERS
 .nf
@@ -30,17 +31,17 @@ cli             The client handle. It must not be CHTTPCLI_INVALID.
 req             The request to run. It must not be NULL.
 write_fn        The callback that gets each chunk. It must not be
                 NULL.
-write_ctx       An opaque context pointer. The client gives it to
-                write_fn without a change.
-status_code_out It gets the HTTP status code after a call that
+write_ctx       An opaque context pointer that the client passes to
+                write_fn unchanged.
+status_code_out Receives the HTTP status code when the call
                 succeeds. It can be NULL.
 .fi
 .SH RETURN VALUE
 .nf
-The same codes as chttpclient_do_pooled, with one difference: the
-function never gives ccol_msg_too_large, because
-chttpclient_set_max_response_body_size has no effect on this streaming
-path.
+The same codes as chttpclient_do_pooled, except that this function
+never returns ccol_msg_too_large, because
+chttpclient_set_max_response_body_size has no effect on a streaming
+request.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_do_streaming (3),

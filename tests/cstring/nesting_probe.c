@@ -22,13 +22,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* Compile-time probe: every public macro of this header nests inside the
- * argument of another public macro, and inside its own argument, under
- * -Wshadow -Werror. The value macros name their temporaries uniquely for each
- * expansion, so no nested expansion declares a local that hides one of the
- * enclosing expansion. Without that, each nesting below is a -Wshadow error
- * in the build of a caller. The Makefile compiles this file with
- * -fsyntax-only; nothing here runs. */
+/* Compile-time probe that every public macro of this header nests inside
+ * the argument of another public macro, and inside its own argument, under
+ * -Wshadow -Werror. Each expansion of a value macro names its temporaries
+ * uniquely, so a nested expansion never declares a local that hides one of
+ * the outer expansion, and without that each nesting below would be a
+ * -Wshadow error in a caller's build. The Makefile only compiles this file
+ * with -fsyntax-only, nothing here runs. */
 
 #include <cstring.h>
 

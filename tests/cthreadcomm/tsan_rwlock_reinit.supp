@@ -1,25 +1,25 @@
 # Suppresses one ThreadSanitizer report in the child of one fork test.
 #
 # The child of fork() initializes event_loop_slot_table.rwlock again instead
-# of unlocking it: glibc's rwlock records the thread ID of its writer, and the
+# of unlocking it. glibc's rwlock records the thread ID of its writer and the
 # one thread of the child has a new ID, so a plain unlock there releases
 # nothing (see _cthreadcomm_atfork_release_impl in src/cthreadcomm.c). The
-# init itself produces no report: _ccol_rw_lock_reinit_in_child() of
-# src/common.c tells ThreadSanitizer that the lock is released before it
+# init itself gives no report, because _ccol_rw_lock_reinit_in_child_impl()
+# of src/common.c tells ThreadSanitizer that the lock is released before it
 # initializes it again.
 #
-# What remains is a "thread leak" that ThreadSanitizer reports when the child
+# What's left is a "thread leak" that ThreadSanitizer reports when the child
 # of fork_safety.fork_does_not_inherit_a_write_locked_event_loop_slot_table
 # exits. The test starts a "holder" thread that write-locks the slot table
-# across the fork(), and the parent joins that thread unconditionally, before
-# every REQUIRE_* that can return early. fork() copies only the calling
-# thread, so the holder never exists in the child, and the child never joins
-# it; ThreadSanitizer nevertheless counts the record of the thread that the
-# child inherited. Without this file the suite gives exactly this one report,
-# with GCC and with Clang.
+# across the fork(), and the parent joins that thread unconditionally,
+# before every REQUIRE_* that can return early. fork() copies only the
+# calling thread, so the holder never exists in the child and the child
+# never joins it, but ThreadSanitizer counts the thread record that the
+# child inherited anyway. Without this file the suite gives exactly this one
+# report, with GCC and with Clang.
 #
-# The anchor is the test function, the only frame of the "created by" stack
-# that is always resolved: a bare pthread_create has no frame of this library
-# to anchor on. A wider anchor could hide a real thread leak elsewhere in this
-# suite.
+# The anchor is the test function, because it's the only frame of the
+# "created by" stack that is always resolved (a bare pthread_create has no
+# frame of this library to anchor on). A wider anchor could hide a real
+# thread leak somewhere else in this suite.
 thread:_TAU_TEST_FUNC_fork_safety_fork_does_not_inherit_a_write_locked_event_loop_slot_table

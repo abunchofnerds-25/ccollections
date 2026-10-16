@@ -1,43 +1,42 @@
 #!/bin/sh
-# This script fails when a library source file, or an installed header, has
-# coverage below MIN_COVERAGE percent of its instrumented lines.
+# Fails when a library source file or an installed header has coverage below
+# MIN_COVERAGE percent of its instrumented lines.
 #
-# The script takes the file list from src/*.c, include/*.h and
-# include/internal/*.h on disk instead of from the contents of the tracefile.
-# A file that no test suite compiles makes no tracefile entry, so a check that
-# read the contents of the report would skip that file without a word, and you
-# could not tell that from a pass. Reading the directory makes that case a
-# failure instead.
+# The file list comes from src/*.c, include/*.h and include/internal/*.h on
+# disk, not from the tracefile. A file that no test suite compiles has no
+# tracefile entry at all, so a check that only read the report would skip it
+# silently and you couldn't tell that from a pass. Listing the directory turns
+# that case into a failure.
 #
-# Run this from the root of the repository, after `make coverage_site`;
+# Run this from the root of the repository after `make coverage_site`;
 # `make coverage_check` and CI both use it.
 #
 # CCOL_DISABLED_SOURCES can hold a space-separated list of source paths that
 # this build left out on purpose (see the WITH_* switches in the root
-# Makefile). Those files are still on disk, so without this list the directory
-# scan below would report each one as compiled by no suite, which is exactly
-# the failure that the scan exists to report for a file that fell out by
-# accident. An explicit list keeps the check useful for every other file.
+# Makefile). Those files are on disk anyway, so without this list the directory
+# scan below would report each of them as compiled by no suite, which is the
+# very failure the scan is there to catch for a file that fell out by accident.
+# Naming them explicitly keeps the check meaningful for every other file.
 set -eu
 
 MIN_COVERAGE=80
 CCOL_DISABLED_SOURCES="${CCOL_DISABLED_SOURCES:-}"
 
-# These are the modules with no unit tests of their own. Any coverage that they
-# show comes by chance from the suite of another module, so a threshold on them
-# would measure that other suite instead of them.
+# Modules with no unit tests of their own. Whatever coverage they show comes by
+# chance from another module's suite, so a threshold on them would really be
+# measuring that other suite.
 #
-# cdebuglog is a diagnostic buffer that you turn on yourself to help find a
-# timing problem that is hard to reproduce. It is not part of the shipped
-# library at all: a suite compiles it only when that suite adds it to its own
-# SRC_FILES, for the length of one investigation.
+# cdebuglog is a diagnostic buffer you turn on yourself while chasing a timing
+# problem that is hard to reproduce. It isn't part of the shipped library: a
+# suite compiles it only when it adds it to its own SRC_FILES for the length
+# of one investigation.
 #
-# Add a file here only when it truly has no unit tests; a file that the
-# directory of another module tests does not belong here. For example, there
-# is no tests/chttp1_parser/ directory, but tests/chttp1_parser is not in this
-# list, because tests/chttpclient/tests_parser.c exercises src/chttp1_parser.c
-# directly and the threshold applies to it in the same way as to any other
-# file.
+# Only add a file here when it really has no unit tests; a file tested from
+# another module's directory doesn't belong here. There is no
+# tests/chttp1_parser/ directory, for example, but tests/chttp1_parser isn't in
+# this list because tests/chttpclient/tests_parser.c exercises
+# src/chttp1_parser.c directly, so the threshold applies to it like to any
+# other file.
 NOT_UNIT_TESTED="
 src/cdebuglog.c
 include/internal/cdebuglog.h
@@ -50,9 +49,9 @@ INFO="${1:-coverage_site/library.info}"
 	exit 2
 }
 
-# The files that this build left out go into the same list as the files with no
-# unit tests, because in both cases the file is on disk and its absence from
-# the report is correct.
+# Files this build left out go into the same list as the files with no unit
+# tests, since in both cases the file is on disk and it's correct that the
+# report doesn't have it.
 EXCLUDED="$NOT_UNIT_TESTED
 $(printf '%s\n' $CCOL_DISABLED_SOURCES)"
 

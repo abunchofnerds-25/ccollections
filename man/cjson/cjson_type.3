@@ -11,8 +11,8 @@ cjson_node_type_t cjson_type(cjson node);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the cjson_node_type_t tag of node.
-Returns CJSON_NULL safely when node is NULL.
+Returns the cjson_node_type_t tag of node.  A NULL node is safe to
+pass and gives CJSON_NULL.
 .fi
 .SH "SEE ALSO"
 .BR cjson_bool_val (3),

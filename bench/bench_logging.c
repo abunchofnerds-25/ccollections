@@ -26,17 +26,16 @@
  * @file bench_logging.c
  * @brief Benchmarks for clogger.
  *
- * Every case writes to /dev/null, so each figure describes the formatting, the
- * lock and the write path, and not the speed of the filesystem that holds this
- * repository.
+ * Every case writes to /dev/null, so each figure describes the formatting,
+ * the lock and the write path, and not the speed of whatever filesystem
+ * holds this repository.
  *
- * These cases cover three things. The first is the output format, because
- * logfmt, JSON and syslog do measurably different amounts of formatting work.
- * The second is synchronous against asynchronous, which is the difference
- * between a write by the calling thread and a handover of the record to the
- * writer thread. The third is the suppressed case, where the logger discards a
- * record below its own level: the price a program pays for the debug logging
- * that it has turned off.
+ * The cases cover three things. One is the output format, since logfmt, JSON
+ * and syslog do measurably different amounts of formatting work. Another is
+ * synchronous against asynchronous, the difference between the calling thread
+ * writing and handing the record over to the writer thread. The last is the
+ * suppressed case, where the logger drops a record below its own level,
+ * which is what a program pays for debug logging it has turned off.
  */
 
 #include <clogger.h>
@@ -49,8 +48,8 @@
 
 #define BENCH_LOG_N 50000
 
-/* See the note on the thread count of the cache benchmarks. These cases are
- * loops over the records, with no fixed cost to spread out, so a shorter
+/* See the note on the thread count in the cache benchmarks. These cases are
+ * loops over the records with no fixed cost to spread out, so a shorter
  * repetition measures the same cost and leaves room for many more
  * repetitions. */
 #define BENCH_LOG_MT_N 5000
@@ -75,7 +74,7 @@ static log_state_t *log_make(clog_format_t fmt, const clog_async_cfg_t *async) {
     free(st);
     return NULL;
   }
-  st->logger = clog_open_fd(st->fd, CLOG_INFO, async);
+  st->logger = clog_create_from_fd(st->fd, CLOG_INFO, async);
   if (st->logger == CLOG_INVALID) {
     log_teardown(st);
     return NULL;
@@ -110,8 +109,8 @@ static void log_write_run(void *state, size_t n) {
 }
 
 /* The asynchronous writer thread is still draining the queue when the loop
- * ends, so the flush is inside the measurement. Without it, this case would
- * report only the cost of the handover to the queue, and it would look better
+ * ends, so the flush is inside the measurement. Without it this case would
+ * only report the cost of the handover to the queue, and it would look better
  * the further the writer thread fell behind. */
 static void log_write_async_run(void *state, size_t n) {
   log_state_t *st = state;
@@ -122,12 +121,12 @@ static void log_write_async_run(void *state, size_t n) {
   bench_sink(&st->logger);
 }
 
-/* This is the caller half of the asynchronous path, with no flush: what the
- * logging thread itself pays to hand a record over. The harness reports it
- * beside the case above, which includes the flush, because the two answer
- * different questions. On its own, the case with the flush reads as
- * asynchronous logging that is slower than synchronous logging, while what it
- * really shows is that the total work is larger and the share of the caller is
+/* The caller half of the asynchronous path, with no flush: what the logging
+ * thread itself pays to hand a record over. It's reported next to the case
+ * above, which includes the flush, because the two answer different
+ * questions. Taken alone, the case with the flush looks like asynchronous
+ * logging being slower than synchronous logging, while what it really shows
+ * is that the total work is bigger and the caller's share of it is
  * smaller. */
 static void log_write_async_caller_run(void *state, size_t n) {
   log_state_t *st = state;
@@ -137,8 +136,8 @@ static void log_write_async_caller_run(void *state, size_t n) {
   bench_sink(&st->logger);
 }
 
-/* CLOG_DEBUG is below the CLOG_INFO threshold of this logger, so the logger
- * discards every one of these records. */
+/* CLOG_DEBUG is below this logger's CLOG_INFO threshold, so the logger drops
+ * every one of these records. */
 static void log_suppressed_run(void *state, size_t n) {
   log_state_t *st = state;
   for (size_t i = 0; i < n; i++)
@@ -147,8 +146,8 @@ static void log_suppressed_run(void *state, size_t n) {
   bench_sink(&st->logger);
 }
 
-/* One logger, many threads, which is how a logger is actually used: the whole
- * point of these cases is the contention on the shared write path. */
+/* One logger and many threads, which is how a logger really gets used, and
+ * the contention on the shared write path is the whole point of these cases. */
 BENCH_MT_SETUP(log_logfmt_setup)
 BENCH_MT_SETUP(log_async_setup)
 

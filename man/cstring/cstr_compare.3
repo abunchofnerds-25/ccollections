@@ -11,7 +11,7 @@ cstr_compare(s, str);
 .fi
 .SH DESCRIPTION
 .nf
-This macro is a pass-through wrapper for cstring_compare().
+This macro just forwards its arguments to cstring_compare().
 .fi
 .SH PARAMETERS
 .nf
@@ -20,8 +20,8 @@ str   C string to compare against
 .fi
 .SH RETURN VALUE
 .nf
-A negative value if s < str, zero if they are equal, a positive value if
-s > str
+A negative value if s < str, zero if the two are equal and a positive
+value if s > str
 .fi
 .SH "SEE ALSO"
 .BR cstring_compare (3),

@@ -11,9 +11,9 @@ ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair *key_pair);
 .fi
 .SH DESCRIPTION
 .nf
-Removes the key-value pair with the specified key from the hash map and
-frees the memory of both the key and the value. The map shrinks
-automatically when its load factor falls below a threshold.
+Removes the key-value pair with the given key from the hash map and
+frees the memory of both the key and the value. When the load factor
+falls below a threshold, the map shrinks.
 .fi
 .SH PARAMETERS
 .nf
@@ -22,39 +22,39 @@ key_pair   Key to remove
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success        - Key removed successfully
-ccol_invalid_args   - chm or key_pair is NULL or key size is 0; also
-                      returned when key_pair->size does not exactly
-                      match the byte size of the key type, for any
-                      fixed-width numeric key type (char, short, int,
-                      long, long long, their unsigned counterparts,
-                      float, double, long double, or a pointer type),
-                      regardless of which backend the map uses
-ccol_key_not_found  - Key does not exist in map
+ccol_success        - The key was removed
+ccol_invalid_args   - chm or key_pair is NULL or the key size is 0,
+                      or key_pair->size is not exactly the byte size
+                      of the key type for any fixed-width numeric key
+                      type (char, short, int, long, long long, their
+                      unsigned counterparts, float, double, long
+                      double, or a pointer type), whichever backend
+                      the map uses
+ccol_key_not_found  - The key is not in the map
 .fi
 .SH NOTES
 .nf
-The ptr of a key_pair needs no specified alignment, because the map
-hashes and compares the key bytes through memcpy instead of through a
-pointer cast to the key type. key_pair->ptr can therefore point directly
-at key bytes at any offset in a larger buffer, such as a field in a
-packed network frame or a memory-mapped record, and you do not have to
-copy the key bytes into an aligned local variable first
+key_pair->ptr needs no particular alignment, because the map hashes and
+compares the key bytes through memcpy, never through a pointer cast to the
+key type. So it can point straight at key bytes at any offset in a larger
+buffer, such as a field of a packed network frame or a memory-mapped
+record, and you don't have to copy them into an aligned local variable
+first
 Average O(1) complexity
 Frees the memory of the key and of the value
 Open addressing: shrinks when the load factor < 0.25 (scale 0.5x). A
 grow on insert always leaves the live load above 0.25, so a delete
-never shrinks straight back a table that an insert just grew
+never shrinks a table straight back after an insert has grown it
 Open addressing: the delete moves the later entries of the same
 cluster back into the gap (backward-shift deletion) and leaves no
 marker for a deleted slot. Entries of that cluster can change slot, so
-every reference that chmap_get_elem_ref(3) or chmap_get_ptr(3) gave
-is invalid after the delete, as after any change to the map
+every pointer from chmap_get_elem_ref(3) or chmap_get_ptr(3) is
+invalid after the delete, as after any other change to the map
 Separate chaining: shrinks when elem_count < (bucket_count + 1) / 8 (scale 0.25x)
-For a float or double key, see chmap_construct(3) for the map's
-key equality contract (bitwise, except -0.0 canonicalized to 0.0)
-For a long double key, see chmap_construct(3) for the map's key
-equality contract (value-based, unlike every other key type)
+For a float or double key, chmap_construct(3) gives the key equality
+contract (bitwise, except that -0.0 becomes 0.0)
+For a long double key, chmap_construct(3) gives the key equality contract
+(by value, unlike every other key type)
 .fi
 .SH "SEE ALSO"
 .BR chmap_remove (3),

@@ -1,28 +1,21 @@
 # cyaml: read, change and write YAML
 
-`cyaml` parses YAML 1.2 into a tree of nodes that you can read and change;
-`cyaml` then writes the tree back as YAML. If you know [cjson](cjson.md), you
-already know most of `cyaml`: the node types, the path macros, the ownership
-rules and the dictionary cursor are the same, with a `cyaml_` prefix.
+`cyaml` parses YAML 1.2 into a tree of nodes that you can read and change,
+and then writes the tree back as YAML. If you know [cjson](cjson.md) you
+know most of `cyaml` already, since the node types, the path macros, the
+ownership rules and the dictionary cursor are the same with a `cyaml_`
+prefix.
 
-Use `cyaml` for files that people write by hand, such as service
-configuration, deployment manifests, CI pipelines and test fixtures. `cyaml`
-supports the YAML features that these files usually rely on:
+It's meant for files that people write by hand: service configuration,
+deployment manifests, CI pipelines, test fixtures. The YAML features those
+files lean on are all there, block and flow style, comments, strings over
+several lines, anchors and aliases, merge keys (`<<`), tags and streams of
+more than one document.
 
-- block style and flow style,
-- comments,
-- strings on more than one line,
-- anchors and aliases,
-- merge keys (`<<`),
-- tags,
-- streams of more than one document.
-
-Use a different tool in two cases:
-
-- You must process a YAML stream that is much larger than memory while it
-  arrives.
-- You need YAML 1.1 behavior, where `yes` and `on` are booleans. `cyaml`
-  follows YAML 1.2, in which `yes` and `on` are strings.
+Two cases need a different tool. One is a YAML stream much larger than
+memory that you have to process while it arrives. The other is YAML 1.1
+behavior, where `yes` and `on` are booleans; `cyaml` follows YAML 1.2, in
+which they are strings.
 
 ```c
 #include <ccollections/cyaml.h>
@@ -68,7 +61,7 @@ int main(void) {
 }
 ```
 
-Build the example with `-std=gnu11` and link it with `-lccollections`:
+Build with `-std=gnu11` and link with `-lccollections`:
 
 ```sh
 gcc -std=gnu11 first.c -lccollections -o first
@@ -88,18 +81,22 @@ hosts:
 tls: true
 ```
 
-The output has no comment, because comments are not part of the tree. The keys keep their source order, and the new key comes last.
+The comment is gone from the output, because comments aren't part of the
+tree. The keys keep their source order and the new key comes last.
 
 ## How YAML values become nodes
 
-Each value is a `cyaml` handle, and `cyaml_type()` tells you which type it
+Every value is a `cyaml` handle, and `cyaml_type()` tells you which type it
 holds: `CYAML_NULL`, `CYAML_BOOL`, `CYAML_INTEGER` (a `long long`),
 `CYAML_FLOAT` (a `double`), `CYAML_STRING`, `CYAML_LIST` or
-`CYAML_DICTIONARY`. You read a scalar with `cyaml_bool_val`, `cyaml_int_val`,
-`cyaml_double_val` or `cyaml_str_val`.
+`CYAML_DICTIONARY`. A scalar is read with `cyaml_bool_val`, `cyaml_int_val`,
+`cyaml_double_val` or `cyaml_str_val`. The text that `cyaml_str_val` and
+`cyaml_node_tag` return belongs to the node and stays valid until the node's
+value or tag is set again or the node is destroyed, so copy it if you need
+it longer.
 
-A quoted scalar is always a string, while the type of an unquoted scalar
-comes from the YAML 1.2 core schema:
+A quoted scalar is always a string. For an unquoted one the type comes from
+the YAML 1.2 core schema:
 
 | You write | You get |
 |---|---|
@@ -109,19 +106,26 @@ comes from the YAML 1.2 core schema:
 | `3.14`, `1e3`, `.inf`, `-.inf`, `.nan` | `CYAML_FLOAT` |
 | all other text, for example `yes`, `on`, `1.2.3` | `CYAML_STRING` |
 
-So when a value must stay text, put quotes around it: `version: '1.10'` is
-the string `1.10`, but `version: 1.10` is the float 1.1. A tag does the same
-job: `zip: !!str 01234`.
+A float too large for a `double`, `1e400` for example, is an infinity, and
+a decimal integer too large for a `long long` is a float. The hex and octal
+forms follow the strict core schema, which means a lowercase `0x` or `0o`,
+then digits and no sign. `-0x1` and `+0o7` are therefore strings, and so is
+an unsigned hex or octal literal above `LLONG_MAX` such as
+`0x8000000000000000`.
 
-As in cjson, the value readers stop the program when the type is wrong or the
-node is `NULL`, so call `cyaml_type()` first whenever the input decides the
-shape of the data.
+When a value has to stay text, put quotes around it. `version: '1.10'` is
+the string `1.10`, but `version: 1.10` is the float 1.1. A tag does the
+same job: `zip: !!str 01234`.
+
+Like in cjson, the value readers stop the program when the type is wrong or
+the node is `NULL`, so call `cyaml_type()` first whenever the input decides
+the shape of the data.
 
 ## Paths, changes and deletes
 
 Paths work as in cjson: `"server.port"`, `"hosts.#0"`, and `\.` for a dot
 inside a key. `cyaml_get` returns `NULL` when any part of the path is
-missing, and the node it returns is borrowed.
+missing, and the node it gives you is borrowed.
 
 ```c
 cyaml_set(doc, "server.port", 9090);        /* CYAML_INTEGER */
@@ -132,19 +136,22 @@ cyaml_set(doc, "server.proxy", NULL);       /* CYAML_NULL */
 cyaml_delete(doc, "server.debug");
 ```
 
-The same rules as in cjson apply:
+The rules are the cjson ones. The parent of a new key has to exist, a list
+index has to be inside the list and a string has to be valid UTF-8.
+`cyaml_set` and `cyaml_delete` return `ccol_invalid_args`, at any position
+in the path, for a malformed component (an empty one, a bad `#N` on a list,
+or one that isn't valid UTF-8) and for a path whose shape can't apply to the
+tree (a scalar in the middle, a name on a list). `ccol_key_not_found` only
+means that a well-formed name or index is absent.
 
-- The parent of a new key must exist.
-- A list index must be within the range of the list.
-- A string must be valid UTF-8.
+YAML has infinities and NaN, which JSON doesn't, so `cyaml_set` accepts
+them.
 
-Unlike JSON, YAML has infinities and NaN, so `cyaml_set` accepts them.
-
-Building a tree in code also works as in cjson. `cyaml_create_*` makes
-nodes, and `cyaml_list_push` and `cyaml_dictionary_set` attach them and take
-ownership. Only `ccol_invalid_args` gives the child back to you; after any
-other failure, the library has already freed it. The calls refuse a borrowed
-node, so attach a `cyaml_clone()` of it instead:
+Building a tree in code is the same as in cjson too. `cyaml_create_*` makes
+nodes, and `cyaml_list_push` and `cyaml_dictionary_set` attach them and
+take ownership. Only `ccol_invalid_args` gives the child back to you, and
+after any other failure the library has already freed it. A borrowed node is
+refused, so attach a `cyaml_clone()` of it instead:
 
 ```c
 cyaml borrowed = cyaml_dictionary_get(doc, "defaults");
@@ -152,27 +159,25 @@ cyaml_dictionary_set(other, "defaults", borrowed);              /* refused */
 cyaml_dictionary_set(other, "defaults", cyaml_clone(borrowed)); /* correct */
 ```
 
-There is one difference: cjson detects an attempt to attach a node below one
-of its own descendants, but cyaml does not. Never attach the root of a tree
+One thing differs. cjson notices when you try to attach a node below one of
+its own descendants and cyaml doesn't, so never attach the root of a tree
 inside that same tree.
 
 A dictionary keeps insertion order, and `cyaml_dictionary_first` and
-`cyaml_dictionary_next` walk through it with a cursor, just as in cjson.
+`cyaml_dictionary_next` walk it with a cursor the same way as in cjson.
 
 ## Keys are text
 
-A dictionary maps string keys to nodes. When a document writes a key that is
-not a plain string, cyaml stores a canonical text for it, so every spelling
-of the same value gives the same key:
+A dictionary maps string keys to nodes. When a document writes a key that
+isn't a plain string, cyaml stores a canonical text for it, so every
+spelling of the same value ends up as the same key. `null:`, `~:` and an
+empty key all give the key `null`, `0x10:` and `16:` both give `16`, `3.10:`
+gives `3.1` (the shortest text of the same `double`) and `1.0:` gives `1`.
+A quoted key (`"3.10":`) keeps its text exactly.
 
-- `null:`, `~:` and an empty key all give the key `null`.
-- `0x10:` and `16:` both give `16`.
-- `3.10:` gives `3.1` (the shortest text of the same `double`), and `1.0:`
-  gives `1`.
-- A quoted key (`"3.10":`) keeps its text exactly.
-
-To look up such a key, use its canonical text: `cyaml_get(doc, "3\\.1")`. A
-list or a mapping used as a key becomes its flow-style text.
+You look such a key up by its canonical text, as in
+`cyaml_get(doc, "3\\.1")`. A list or a mapping used as a key becomes its
+flow-style text.
 
 ## Anchors and aliases
 
@@ -183,23 +188,30 @@ base: &b {x: 1}
 copy: *b
 ```
 
-Each alias becomes an independent deep copy, so after
-`cyaml_set(doc, "copy.x", 2)` the tree is `{base: {x: 1}, copy: {x: 2}}`.
-The serializers write the full copies instead of anchors.
+Every alias becomes an independent deep copy, so after
+`cyaml_set(doc, "copy.x", 2)` the tree is `{base: {x: 1}, copy: {x: 2}}`,
+and the serializers write the full copies instead of anchors. For a
+configuration file that's usually what you want, because a change to one
+copy can't show up in the other.
+
+The anchor itself copies nothing. A large anchored list that no alias names
+costs exactly what it would cost without the anchor. Only an alias pays, for
+its own copy, and those copies count against the alias expansion limit
+described under "Strict input" below.
 
 ## Merge keys
 
-A `<<` key merges one mapping, or a list of mappings, into the mapping that
-contains it, with these rules:
+A `<<` key merges one mapping, or a list of mappings, into the mapping
+that contains it. A key the mapping writes itself wins over a merged key. A
+mapping can hold several `<<` keys and every one of them merges, with the
+later one winning between two of them, as in PyYAML, while in a list of
+sources an earlier source wins over a later one. The `<<` entry itself
+doesn't appear in the parsed tree, and the merged members take the position
+of the first `<<` key that brings them in. A quoted `"<<"` key is an
+ordinary member and sits beside the merged members. The full rules are in
+[cyaml(7)](../man/cyaml/cyaml.7).
 
-- A key that the mapping writes itself wins over a merged key.
-- In a list of sources, an earlier source wins over a later one.
-- The `<<` entry does not appear in the parsed tree; the merged members take
-  its position in the key order.
-
-[cyaml(7)](../man/cyaml/cyaml.7) gives the full rules.
-
-The typical use is a set of environments that share default values:
+The usual case is a set of environments that share default values:
 
 ```c
 /* Per-environment settings that share their defaults through an anchor
@@ -277,15 +289,25 @@ workers  = 16
 version  = "1.10"
 ```
 
-Because `workers` comes from the mapping itself, it wins over the default
-value and keeps its own position after the merged members.
+`workers` comes from the mapping itself, so it wins over the default and
+keeps its own position after the merged members.
 
 ## Tags
 
 A tag goes in front of a value. The core-schema tags (`!!str`, `!!int`,
-`!!float`, `!!bool`, `!!null`) set the type, while every other tag is a
-label that your program can read with `cyaml_node_tag()` and set with
-`cyaml_node_set_tag()`.
+`!!float`, `!!bool`, `!!null`) set the type, and any other tag is a label
+your program can read with `cyaml_node_tag()` and set with
+`cyaml_node_set_tag()`. A bare `!` is the non-specific tag, which makes a
+plain scalar a string (`! 42` is the string "42") and isn't kept on the
+node.
+
+The text of a tag may only hold URI characters, ASCII letters and digits
+and `-#;/?:@&=+$,_.!~*'()[]`, and the suffix of a shorthand tag such as
+`!!str` or `!e!name` may not hold `!`, `,`, `[` or `]` on top of that. Any
+other character, a space, `{`, `}` and everything outside ASCII included,
+has to be written as a percent escape (`!<a%20b>` is the tag "a b"). The
+escapes of a `%TAG` prefix are decoded too, so `!e!a` under
+`%TAG !e! tag:x%21,` gives the same tag, "tag:x!,a", as `!<tag:x%21,a>`.
 
 ```c
 #include <stdio.h>
@@ -340,20 +362,18 @@ secret: !<!vault> abc123
 password: !<!vault> s3cret
 ```
 
-The output shows three rules of the serializer:
-
-- It writes a custom tag in its full `!<...>` form.
-- It leaves out a core tag when quotes already keep the type.
-- It quotes `on` and `yes`, so that YAML 1.1 readers such as PyYAML also
-  read them as strings.
+You can see how the serializer behaves here. It writes a custom tag in its
+full `!<...>` form, leaves out a core tag when quotes already keep the type,
+and quotes `on` and `yes` so that YAML 1.1 readers such as PyYAML read them
+as strings too.
 
 ## More than one document in a stream
 
-A stream can hold several documents separated by `---`. For such input,
+A stream can hold several documents separated by `---`. For such input
 `cyaml_parse` returns a `CYAML_LIST` whose elements are the roots of the
-documents; for a single document, `cyaml_parse` returns that document's
-root. `cyaml_serialize_stream` writes such a list back with a `---` before
-each document. An anchor defined in one document is not available in the next.
+documents, and for a single document it returns that document's root.
+`cyaml_serialize_stream` writes such a list back with a `---` before each
+document. An anchor defined in one document isn't available in the next.
 
 ## Example: edit Kubernetes manifests
 
@@ -453,39 +473,58 @@ spec:
 | `cyaml_serialize_flow` | flow style on one line: `{a: 1, b: [x, y]}` |
 | `cyaml_serialize_stream` | a list as a stream of `---` documents |
 
-Each function returns a string, or `NULL` when there is not enough memory;
-free the string with `cyaml_serialize_free`. Parsing the output always gives
-the same tree back, and common YAML 1.1 tools read it the same way too,
-because:
-
-- the serializer quotes strings that look like other types,
-- a float always contains a `.`, and
-- every character that YAML does not allow raw is written as an escape.
+Each function returns a string, or `NULL` when there isn't enough memory,
+and you free the string with `cyaml_serialize_free`. Parsing the output
+always gives the same tree back, and common YAML 1.1 tools read it the same
+way, since strings that look like other types are quoted, a float always
+contains a `.`, and every character YAML doesn't allow raw is written as an
+escape.
 
 ## Strict input
 
-`cyaml` refuses input that YAML 1.2 does not allow instead of repairing it.
-A parse fails, with a message that gives the line and the column, on any of
-these:
+`cyaml` refuses input that YAML 1.2 doesn't allow instead of repairing it.
+We chose that on purpose, so a mistake in a hand-written file shows up as an
+error and not as a wrong value. A parse fails on any of these:
 
 - invalid UTF-8;
 - a control character that YAML does not allow raw (write it as an escape in
   a double-quoted string instead, for example `"\x01"`);
 - a tab in the indentation (a tab after the indentation, as in
   `key:\tvalue`, is allowed);
-- a tag whose text does not match its type, for example `!!int abc`;
-- collections nested more than 500 levels deep.
+- a tag whose text does not match its type, for example `!!int abc`, or a
+  number with whitespace in front of it, such as `!!int " 42"` or
+  `!!float "\v3.5"`;
+- an alias whose anchor is not defined before it (the message gives the
+  offset of the `*`);
+- a plain scalar that starts with `]`, `}` or `,` outside a flow collection
+  (`a: ]`), and a `[` or `{` inside a flow plain scalar (`[a{b]`); quote
+  such text instead;
+- a tag that holds a character outside the URI set (see "Tags" above);
+- a `%YAML` directive with a major version other than 1, and a `%` with no
+  directive name after it;
+- more than 500 nested collections on one path (scalars, tags and anchors
+  take no level; an alias counts the collections that it copies, a list or
+  mapping used as a key counts below the mapping that holds the key, and
+  each document of a stream of several documents may nest 499, because the
+  list that holds them is one more).
 
-An error message is always printable ASCII, so it is safe to log. A parse
-also limits the number of nodes and bytes it creates, and a separate fixed
-limit caps the data that anchors and merge keys can copy, so a small hostile
-document (a "billion laughs") cannot use up all the memory. See
-[cyaml_parse(3)](../man/cyaml/cyaml_parse.3) for all the rules and numbers.
+For invalid UTF-8 and for a character YAML doesn't allow raw, the message
+gives the line and the column, both counted from 1. Most other messages,
+like the ones for a tab in the indentation and for the nesting limit, give
+a byte offset into the input ("at position 4") instead, and a few, like the
+one for `!!int abc`, quote the offending text with no position. An error
+message is always printable ASCII, so it's safe to log.
+
+A parse also limits the number of nodes and bytes it creates, and a
+separate fixed limit caps the data that aliases and merge keys can copy, so
+a small hostile document (a "billion laughs") can't use up all the memory.
+All the rules and numbers are in [cyaml_parse(3)](../man/cyaml/cyaml_parse.3).
 
 ## Example: change JSON into YAML
 
-Because the two modules use the same shape of tree, a converter is a short
-recursive walk. Note how each attachment handles the two kinds of failure.
+The two modules use the same shape of tree, so a converter is a short
+recursive walk. Look at how each attach handles the two kinds of failure;
+that part is easy to get wrong and worth copying as it is.
 
 ```c
 /* Convert a JSON document into YAML by walking one tree while building
@@ -574,35 +613,37 @@ env:
 version: "1.10"
 ```
 
-`version` keeps its quotes, so a parser reads it back as a string.
+`version` keeps its quotes, which makes a parser read it back as a string.
 
 ## Custom allocators
 
-As in cjson, every function that makes nodes has an `_mp` variant. Each node
-remembers its allocator, so `cyaml_destroy` needs no extra argument. Release
-a serialized string through `cyaml_serialize_free_mp` with the procs of the
-root. See [Memory management](memory.md).
+Every function that makes nodes has an `_mp` variant, as in cjson. Each
+node remembers its allocator, so `cyaml_destroy` needs no extra argument,
+and a serialized string goes back through `cyaml_serialize_free_mp` with the
+procs of the root. See [Memory management](memory.md).
 
 ## Good to know
 
-- **Borrowed and owned nodes.** Nodes from `cyaml_get`, `cyaml_list_get`,
-  `cyaml_dictionary_get` and the cursor are borrowed: do not destroy them,
-  and clone them before you attach them to another container.
-- **After a failed attach, free the child only on `ccol_invalid_args`.**
-  When a list push or a dictionary set returns any other error, the library
-  has already freed the child, so do not free it again.
-- **Do not attach a node below one of its own descendants.** cyaml does not
-  detect this cycle (cjson does), and a later destroy, clone or serialize of
-  that tree has undefined behavior.
-- **Quote values that must stay strings,** such as versions (`'1.10'`), ZIP
-  codes and telephone numbers.
-- **Before C23, write `(bool)true`, not `true`,** with `cyaml_set`.
-- **The tree does not keep comments,** so a parse followed by a serialize
-  removes them.
-- **cyaml does not report a key that occurs two times.** The tree silently
-  keeps the last value, so do not rely on a YAML parser to catch such keys.
-- **One tree, one writer.** Many threads can read a tree as long as no
-  thread changes it. See [Concurrency](concurrency.md).
+Nodes from `cyaml_get`, `cyaml_list_get`, `cyaml_dictionary_get` and the
+cursor are borrowed. Don't destroy them, and clone them before you attach
+them to another container. After a failed attach, free the child only on
+`ccol_invalid_args`; when a list push or a dictionary set returns any other
+error, the library has already freed it.
+
+Never attach a node below one of its own descendants. cyaml doesn't detect
+that cycle (cjson does), and a later destroy, clone or serialize of the tree
+has undefined behavior.
+
+Quote values that must stay strings, like versions (`'1.10'`), ZIP codes
+and telephone numbers, and before C23 pass `(bool)true` to `cyaml_set`, not
+`true`.
+
+The tree keeps no comments, so a parse followed by a serialize drops them.
+A key that occurs twice isn't reported either; the tree silently keeps the
+last value, so don't count on a YAML parser to catch duplicate keys.
+
+Many threads can read a tree as long as no thread changes it (see
+[Concurrency](concurrency.md)).
 
 ## Reference
 

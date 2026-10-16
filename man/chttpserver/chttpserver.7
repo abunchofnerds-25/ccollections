@@ -1,0 +1,176 @@
+.TH CHTTPSERVER 7 "2026-10-14" "c_collections" "C Collections Library - Overview"
+.SH NAME
+chttpserver \- overview of the chttpsvr HTTP/1.1 server
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpserver.h>
+.fi
+.SH DESCRIPTION
+.nf
+A chttpsvr serves HTTP/1.1 over plain TCP, over TLS or on a Unix
+domain socket. It routes each request by method and path pattern, with
+named path parameters, middleware chains and sub-routers that own a
+path prefix. A route either gets the whole body in memory
+(chttpsvr_register_handler(3)) or reads the body as it arrives
+(chttpsvr_register_streaming_handler(3)).
+
+You usually create the server (chttpsvr_create(3) or
+chttpsvr_construct(3)), register routes and middleware, start it with
+a chttpsvr_config_t (chttpsvr_start(3)), wait with
+chttpsvr_engine_wait(3) and then destroy it (chttpsvr_destroy(3)).
+.fi
+.SS "Handles"
+.nf
+chttpsvr is an opaque value handle and not a pointer, and
+CHTTPSVR_INVALID (0) means no server. The library checks every handle
+before it touches the server, so a call through an invalid or
+destroyed handle fails cleanly. A destroy of a stale handle, a second
+destroy that races the first, and a destroy from a handler or a
+middleware of the same server stop the process.
+
+A sub-router (chttpsvr_subrouter(3)) belongs to its server. A
+chttpsvr_req and a chttpsvr_resp belong to one request, and they and
+every pointer that a chttpsvr_req_* function gives you are valid only
+while the handler or middleware call runs.
+.fi
+.SS "The engine"
+.nf
+All the servers of a process share one reactor, the engine. The first
+chttpsvr_start(3) starts it, and the destroy of the last running
+server starts its teardown, which finishes on a background thread
+after the destroy returns. chttpsvr_engine_wait(3) blocks until the
+engine has stopped completely. Call it before main() returns, before
+dlclose(3) of the library, and before you release an allocator that
+chttpsvr_set_engine_mem_mgmt_procs(3) installed.
+chttpsvr_engine_stop(3) asks the running engine to drain and stop. It
+is the only async-signal-safe function of this module, and it is the
+safe way for a handler to shut its own server down.
+.fi
+.SS "Threads"
+.nf
+The reactor only accepts connections and parses request heads, and it
+never runs application code. A buffered route runs on the worker pool
+of its server and a streaming route on a separate streaming pool, so
+a slow streaming client can take up at most the streaming pool. Both
+kinds of handler, and every middleware, may block.
+
+No thread waits for a slow client of a buffered route. A body that
+stops arriving, or a response that meets a full socket, parks its
+connection without a thread, and any free worker continues it later.
+A request that finds the worker queue full gets 503 with Retry-After.
+.fi
+.SS "Limits and rejections"
+.nf
+A malformed or unsupported request is refused before any middleware
+or handler sees it, for example with 505 for an HTTP major version
+other than 1, 400 for an invalid Host and 501 for a transfer coding
+other than chunked. The limits of chttpsvr_config_t bound the header
+size, the body size, the memory that bodies hold, the time and the
+rate of each transfer, and the number of connections, and every
+duration field is a uint64_t count of microseconds. After a rejection
+the server lingers for at most 2 seconds before it closes the
+connection, so that a client which is still sending its body reads
+the response instead of a reset.
+.fi
+.SS "Routing"
+.nf
+The most specific mounted prefix that owns a path handles the request
+on its own. Its middleware runs for every path under it, and a path
+that none of its routes matches gets its 404 or 405. Inside one
+router the routes are tried in the order you registered them. A
+CHTTP_GET route also serves HEAD. Each router caps its middleware
+chain at 32 entries. Paths and parameter values are percent-decoded
+and their dot segments are kept, so never use one as a file name
+without checking it.
+.fi
+.SS "Ownership and memory"
+.nf
+A server, its routes and its pools come from the allocator of
+chttpsvr_create_mp(3), and the engine uses the allocator of
+chttpsvr_set_engine_mem_mgmt_procs(3). The server derives its own
+logger from the clog handle that the create receives, and that handle
+stays the caller's. chttpsvr_destroy(3) frees everything the server
+owns except about 100 bytes for each sub-router, which stay until the
+process exits so that a sub-router pointer is always safe to pass.
+The library never frees a value that chttpsvr_req_set_context(3)
+attaches to a request.
+.fi
+.SS "Signals"
+.nf
+The library installs no signal handler and never changes the
+disposition of SIGPIPE. Every write to a connection uses MSG_NOSIGNAL,
+so a client that goes away ends only its own connection.
+.fi
+.SS "fork(2)"
+.nf
+Fork before you create and start any server, so that each process
+builds its own, or call exec() right after fork(). A child that keeps
+running without exec() while a server from before the fork is live is
+not supported. See ccollections(7).
+.fi
+.SH "THREAD SAFETY"
+.nf
+Every function that takes a server handle may be called from any
+thread, and routes and middleware may be registered before or after
+the server starts. A handler must not destroy, stop or restart its
+own server, and it must not call chttpsvr_engine_wait(3); it calls
+chttpsvr_engine_stop(3) and returns instead. chttpsvr_stop(3) is not
+async-signal-safe. A chttpsvr_req and a chttpsvr_resp are used only
+on the thread that runs their handler.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_create (3),
+.BR chttpsvr_create_mp (3),
+.BR chttpsvr_declare (3),
+.BR chttpsvr_declare_scoped (3),
+.BR chttpsvr_construct (3),
+.BR chttpsvr_construct_scoped (3),
+.BR chttpsvr_destroy (3),
+.BR CHTTPSVR_CONFIG_DEFAULT (3),
+.BR chttpsvr_start (3),
+.BR chttpsvr_stop (3),
+.BR chttpsvr_is_running (3),
+.BR chttpsvr_bound_port (3),
+.BR chttpsvr_bound_address (3),
+.BR chttpsvr_engine_stop (3),
+.BR chttpsvr_engine_wait (3),
+.BR chttpsvr_set_engine_logger (3),
+.BR chttpsvr_set_engine_mem_mgmt_procs (3),
+.BR chttpsvr_set_engine_num_reactor_threads (3),
+.BR chttpsvr_register_handler (3),
+.BR chttpsvr_register_streaming_handler (3),
+.BR chttpsvr_use (3),
+.BR chttpsvr_subrouter (3),
+.BR chttpsvr_router_on (3),
+.BR chttpsvr_router_on_stream (3),
+.BR chttpsvr_router_use (3),
+.BR chttpsvr_req_method (3),
+.BR chttpsvr_req_path (3),
+.BR chttpsvr_req_header (3),
+.BR chttpsvr_req_param (3),
+.BR chttpsvr_req_query (3),
+.BR chttpsvr_req_query_one (3),
+.BR chttpsvr_req_raw_query (3),
+.BR chttpsvr_req_query_oom (3),
+.BR chttpsvr_req_body (3),
+.BR chttpsvr_req_read (3),
+.BR chttpsvr_req_stream_error (3),
+.BR chttpsvr_req_set_context (3),
+.BR chttpsvr_req_context (3),
+.BR chttpsvr_req_peer_cert_verified (3),
+.BR chttpsvr_req_peer_cert_der (3),
+.BR chttpsvr_req_peer_cert_sha256 (3),
+.BR chttpsvr_req_peer_cert_subject (3),
+.BR chttpsvr_resp_set_status (3),
+.BR chttpsvr_resp_set_header (3),
+.BR chttpsvr_resp_add_header (3),
+.BR chttpsvr_resp_write (3),
+.BR chttpsvr_resp_write_str (3),
+.BR chttpsvr_resp_printf (3),
+.BR chttpsvr_resp_write_json (3),
+.BR chttp (7),
+.BR chttpclient (7),
+.BR clogger (7),
+.BR ccollections (7)

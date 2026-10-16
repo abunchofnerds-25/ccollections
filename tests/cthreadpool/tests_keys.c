@@ -23,11 +23,11 @@ SOFTWARE.
 */
 
 /* Pool creation in a process that has no thread-specific key left to give.
- * The workers of a pool record themselves on a key of this module, and that
- * key is what lets a task that destroys its own pool fail loudly instead of
- * freeing the pool under its own worker, so a pool that cannot have the key
- * must not be created. The key is created once for each process, so this
- * runs in a binary of its own: no other ctpool call may come first. */
+ * A pool's workers record themselves on a key of this module, and that key
+ * is what makes a task that destroys its own pool fail loudly instead of
+ * freeing the pool under its own worker. A pool that can't get the key must
+ * therefore not be created at all. The key is created once per process, so
+ * this runs in its own binary where no other ctpool call comes first. */
 
 #include <cthreadpool.h>
 #include <pthread.h>
@@ -49,11 +49,11 @@ static void noop_task(void *arg) { (void)arg; }
 enum { MAX_TEST_KEYS = 65536 };
 static pthread_key_t exhausted[MAX_TEST_KEYS];
 
-/* This test is non-vacuous: when the pool ignores the failure to create its
- * key, the create succeeds, and its workers set their pool on whatever key
- * the unset key variable names. That is a key of another component, here the
- * key that this test created first, and its destructor then receives the pool
- * at the exit of each worker. */
+/* If the pool ignored the failure to create its key, the create would
+ * succeed and the workers would set their pool on whatever key the unset
+ * key variable happens to name. That is somebody else's key (here the one
+ * this test created first), and its destructor would get the pool when each
+ * worker exits. */
 TEST(ctpool_worker_key, create_fails_cleanly_when_no_key_is_left) {
   pthread_key_t app_key;
   int app_key_ok = pthread_key_create(&app_key, app_destructor) == 0;
@@ -61,8 +61,8 @@ TEST(ctpool_worker_key, create_fails_cleanly_when_no_key_is_left) {
   while (n < MAX_TEST_KEYS && pthread_key_create(&exhausted[n], NULL) == 0) n++;
 
   char *err = NULL;
-  ctpool p = ccol_create_cthread_pool(1, 0, &err);
-  /* ctpool_destroy clears the handle, so the outcome is kept first. */
+  ctpool p = ctpool_create(1, 0, &err);
+  /* ctpool_destroy clears the handle, so we keep the outcome first. */
   int created = p != CTPOOL_INVALID;
   if (created) {
     ctpool_submit(p, noop_task, NULL, NULL);
@@ -70,11 +70,11 @@ TEST(ctpool_worker_key, create_fails_cleanly_when_no_key_is_left) {
     ctpool_destroy(p);
   }
 
-  /* The keys come back, but the failure stays: the module does not retry
-   * the creation of its key in this process. */
+  /* The keys are free again but the failure stays, because the module
+   * doesn't try to create its key a second time in this process. */
   for (int i = 0; i < n; i++) pthread_key_delete(exhausted[i]);
   char *err_again = NULL;
-  ctpool again = ccol_create_cthread_pool(1, 0, &err_again);
+  ctpool again = ctpool_create(1, 0, &err_again);
   int created_again = again != CTPOOL_INVALID;
   if (created_again) ctpool_destroy(again);
   if (app_key_ok) pthread_key_delete(app_key);

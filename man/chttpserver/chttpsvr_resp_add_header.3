@@ -13,21 +13,22 @@ ccol_retval_t chttpsvr_resp_add_header(chttpsvr_resp *resp,
 .fi
 .SH DESCRIPTION
 .nf
-Adds one "name:value" field line to the response, after every field
-that is already set.  Unlike chttpsvr_resp_set_header(3), it keeps any
-existing fields of the same name, so a response can carry, for
-example, two Set-Cookie lines.  The fields go on the wire in the order
-of the calls.
+Adds one "name:value" field line to the response, after all the
+fields already set.  Where chttpsvr_resp_set_header(3) replaces, this
+function keeps the existing fields of the same name, so a response
+can carry two Set-Cookie lines, for example.  The fields go on the
+wire in the order of the calls.
 
-It validates name and value exactly as chttpsvr_resp_set_header(3)
-does, with the same results: name must be a non-empty RFC 7230 token,
-value must contain no CR byte and no LF byte, "Transfer-Encoding" is
-refused, and a "Content-Length" value must be a number.
+name and value are validated exactly as chttpsvr_resp_set_header(3)
+validates them, with the same results.  name must be a non-empty
+RFC 7230 token, value must hold no byte below 0x20 other than the tab
+and no 0x7F, "Transfer-Encoding" is refused, and a "Content-Length"
+value must be a number.
 
-Three names carry at most one field in any response: "Connection",
-"Content-Length" and "Date".  For those three, this function behaves
-like chttpsvr_resp_set_header(3) and replaces the value; see that page
-for how the server treats each of them.
+"Connection", "Content-Length" and "Date" carry at most one field in
+any response.  For these names the function acts like
+chttpsvr_resp_set_header(3) and replaces the value; that page says
+how the server treats each of them.
 .fi
 .SH RETURN VALUE
 .nf

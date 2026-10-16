@@ -1,0 +1,128 @@
+.TH CMEMPOOL 7 "2026-10-14" "c_collections" "C Collections Library - Overview"
+.SH NAME
+cmempool \- overview of the fixed-size and ranged memory pools
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cmempool.h>
+.fi
+.SH DESCRIPTION
+.nf
+cmempool has two kinds of memory pool:
+  - A ccol_mempool holds a fixed number of entries of one size and
+    hands them out and takes them back in O(1) time through a free
+    list. ccol_mempool_create(3) takes its block from an allocator,
+    and ccol_mempool_create_from_preallocated_buffer(3) builds it in a
+    buffer that the caller owns, which you declare with the right size
+    through CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER(3).
+  - A ccol_r_mempool, the ranged pool, holds one fixed-size pool (a
+    tier) for each power of two between a smallest and a largest size,
+    and serves each request from the smallest tier that fits it. Each
+    tier holds half the entries of the tier below it.
+    ccol_r_mempool_create(3),
+    ccol_r_mempool_create_from_preallocated_buffer(3) and
+    CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(3) create one, and
+    ccol_r_mempool_realloc_entry(3) resizes an entry.
+.fi
+.SS "Entries"
+.nf
+Every entry a pool hands out, a fallback entry included, is aligned
+for any object type, which is the same guarantee that malloc(3) gives.
+The stride between entries is the element size rounded up to 16 bytes,
+and then up to a power of two unless the library was built with
+CCOL_MEMPOOL_COMPACT_LAYOUT=1. A new entry is uninitialized, except
+when it comes from one of the calloc forms.
+
+An entry goes back to the pool it came from, and the free call names
+that pool. The pool decides from the address alone whether the entry
+is its own before it reads anything through it, so an entry of another
+pool, an address the pool never handed out and a double free all end
+in an assertion that stops the process.
+.fi
+.SS "Running out of entries"
+.nf
+A ccol_mempool created with fallback_to_dynamic_memory allocates from
+its allocator when it has no free entry left, so an allocation fails
+only when the system is out of memory. Without the fallback an empty
+pool returns NULL. A ranged pool takes a fallback policy instead.
+With ccol_fallback_disabled it tries each larger tier and then returns
+NULL. With ccol_fallback_at_first_exhaustion it goes to the heap as
+soon as the tier that fits the request is empty, and with
+ccol_fallback_at_last_exhaustion it tries every larger tier first and
+goes to the heap only after all of them are empty.
+.fi
+.SS "Ownership and lifetime"
+.nf
+ccol_mempool_destroy(3) and ccol_r_mempool_destroy(3) free the pool
+and set the handle to NULL. Every fallback entry must be freed before
+the destroy, or the destroy asserts. For a pool built in a
+preallocated buffer the destroy frees only the pool structure, and the
+buffer stays the caller's.
+
+A pool calls its allocator for its fallback entries and for its own
+bookkeeping of them while it holds its own lock (when it has one), so
+an allocator that is built on a pool must draw from a different pool.
+A pool that threads share can call the free function of its allocator
+after its destroy returns, even after main() returns, because each
+thread's cache is freed later by that thread; ccol_mempool_destroy(3)
+has the details. A pool created with single_threaded has no such tail.
+.fi
+.SS "Capacity"
+.nf
+ccol_mempool_total_capacity(3) reports how many entries the pool
+promises, and ccol_mempool_used_count(3) how many callers hold right
+now. A thread-safe pool of 8 entries or more keeps a small cache of
+entries for each thread, and allocates a reserve above its count so
+that the promised count stays available to every thread. An entry
+leaves a thread's cache with no lock held, so concurrent callers can
+hold a few entries more than the promised count for a short time, but
+never more than that count plus the reserve. All of that memory is
+allocated when the pool is created and nothing grows at run time.
+.fi
+.SH NOTES
+.nf
+A translation unit that declares a buffer with
+CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER(3) must be built with the same
+CCOL_MEMPOOL_COMPACT_LAYOUT setting as the library. If the two
+disagree, the link fails with an error that names the expected setting.
+
+Which sizes, tier count and single_threaded setting work best depends
+on how the program allocates; ccol_mempool_create(3) and
+ccol_r_mempool_create(3) explain the trade-offs.
+.fi
+.SH "THREAD SAFETY"
+.nf
+A pool created with single_threaded set has no lock, and only one
+thread at a time may use it. Any other pool can be used by many
+threads at once. A pool that keeps a cache for each thread takes no
+lock on its common allocate and free path, and an entry that one
+thread allocated can be freed by another one. Each tier of a ranged
+pool has its own lock. Two threads must not free the same entry, and
+no thread may use a pool while another thread destroys it.
+.fi
+.SH "SEE ALSO"
+.BR ccol_mempool_create (3),
+.BR ccol_mempool_create_from_preallocated_buffer (3),
+.BR CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER (3),
+.BR ccol_mempool_alloc_entry (3),
+.BR ccol_mempool_calloc_entry (3),
+.BR ccol_mempool_free_entry (3),
+.BR ccol_mempool_destroy (3),
+.BR ccol_mempool_total_capacity (3),
+.BR ccol_mempool_used_count (3),
+.BR ccol_mempool_dynamic_allocs_count (3),
+.BR ccol_mempool_allocated_bytes (3),
+.BR ccol_r_mempool_create (3),
+.BR ccol_r_mempool_create_from_preallocated_buffer (3),
+.BR CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER (3),
+.BR ccol_r_mempool_alloc_entry (3),
+.BR ccol_r_mempool_calloc_entry (3),
+.BR ccol_r_mempool_realloc_entry (3),
+.BR ccol_r_mempool_free_entry (3),
+.BR ccol_r_mempool_destroy (3),
+.BR ccol_r_mempool_total_capacity (3),
+.BR ccol_r_mempool_used_count (3),
+.BR ccol_r_mempool_dynamic_allocs_count (3),
+.BR ccol_r_mempool_allocated_bytes (3),
+.BR ccollections (7)

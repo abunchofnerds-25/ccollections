@@ -13,10 +13,9 @@ ccol_retval_t ccol_circq_timed_send_zc(ccol_circular_queue *cq,
 .fi
 .SH DESCRIPTION
 .nf
-This function blocks and waits for free space for at most the given
-timeout. If free space arrives, the function sends the message and
-transfers the ownership; if the timeout ends, or if sends go off, the
-function returns the matching error code.
+Works like ccol_circq_send_zc(), but waits for free space for at most
+timeout_us microseconds. When the timeout ends, or sends are turned
+off while it waits, the call returns the matching error code.
 .fi
 .SH PARAMETERS
 .nf
@@ -28,9 +27,10 @@ timeout_us  Longest time to wait, in microseconds, from the call. 0
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success              - The function sent the message
-ccol_invalid_args         - cq or msg is NULL, or the check of msg
-                            fails
+ccol_success              - The message was sent
+ccol_invalid_args         - cq or msg is NULL, msg->data is NULL
+                            while msg->size is not 0, or msg->data
+                            is not NULL while msg->size is 0
 ccol_not_permitted        - Sends on the queue are turned off
 ccol_container_full       - The timeout is 0 and the queue is full
 ccol_timed_out            - The timeout ended
@@ -39,20 +39,22 @@ ccol_unexpected_failure   - The wait failed with an error other than a
 .fi
 .SH NOTES
 .nf
-The function blocks for the duration of the timeout at most.
-After the function wakes up, it checks again whether sends are on.
-On failure, the caller keeps the ownership of msg->data.
-A timeout of 0 does not wait: the call then does exactly what
-ccol_circq_try_send_zc does and returns its result, so it gives
-ccol_container_full, not ccol_timed_out, when it cannot proceed at
-once.
+The call never blocks for longer than the timeout, and each time it
+wakes up it checks again whether sends are on. If the call fails,
+msg->data still belongs to the caller.
+
+With a timeout of 0 the call doesn't wait at all. It does exactly what
+ccol_circq_try_send_zc does and returns that result, so a full queue
+gives ccol_container_full and not ccol_timed_out.
+
 A timeout too large to form a deadline, such as UINT64_MAX, saturates
-to the latest deadline that the clock can hold and in practice waits
-with no end; it never wraps into the past.
-The library measures the timeout against CLOCK_MONOTONIC, so a change
-to the wall clock of the system (by an administrator, by NTP, or by the
-resume of a virtual machine) does not make the timeout longer or
-shorter: the call waits for the duration that the caller gave.
+to the latest deadline the clock can hold, which in practice means
+waiting with no end. It never wraps around into the past.
+
+The timeout is measured on CLOCK_MONOTONIC. Changes to the system's
+wall clock (made by an administrator, by NTP, or by resuming a virtual
+machine) don't make it longer or shorter, and the call waits for the
+duration that the caller gave.
 .fi
 .SH "SEE ALSO"
 .BR ccol_circq_send_zc (3),

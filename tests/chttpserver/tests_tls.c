@@ -27,6 +27,7 @@ SOFTWARE.
 #include <chttpserver.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <internal/test_helpers/chttpserver.h>
 #include <netinet/in.h>
 #include <openssl/ssl.h>
 #include <poll.h>
@@ -37,22 +38,17 @@ SOFTWARE.
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <tau/tau.h>
+#include <test_connect.h>
 #include <time.h>
 #include <unistd.h>
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
-#include <tau/tau.h>
-#include <test_connect.h>
-#pragma GCC diagnostic pop
-
 TAU_MAIN()
 
-/* The test clients of this binary write to the server with plain write(2),
- * and the server can close a connection while one of them writes. Because
- * the library leaves the disposition of SIGPIPE to the application, this
- * binary ignores it itself; tests_sigpipe.c covers the library under the
- * default disposition. */
+/* The test clients of this binary write to the server with plain write(2), and
+ * the server can close a connection while one of them is writing. The library
+ * leaves the SIGPIPE disposition to the application, so this binary ignores it
+ * itself; tests_sigpipe.c covers the library under the default disposition. */
 __attribute__((constructor)) static void _ignore_sigpipe_for_test_writes(void) {
   signal(SIGPIPE, SIG_IGN);
 }
@@ -60,27 +56,25 @@ __attribute__((constructor)) static void _ignore_sigpipe_for_test_writes(void) {
 /* ========================================================================== */
 /*     REAL TLS HANDSHAKE COVERAGE (dedicated binary; see Makefile)           */
 /*                                                                            */
-/* tests/chttpserver/tests.c covers only the validation of the TLS          */
-/* arguments (see serve_tls_zero_port_rejected_before_tls_init there),      */
-/* but a real handshake needs a valid certificate and key pair. So this     */
-/* suite generates a real, throwaway self-signed pair at startup with the   */
-/* `openssl` CLI, starts a real TLS chttpsvr listener, and drives a         */
-/* real HTTPS request through that listener with chttpclient. The build     */
-/* compiles this file into its own binary, tests_tls, separate from the     */
-/* tests binary of tests.c (see the Makefile in this same directory), so    */
-/* a broken openssl CLI or a bad certificate fails only this suite and      */
-/* not the rest of the chttpserver tests. Since ctls itself never aborts    */
-/* the process on bad TLS input, the split only isolates the layout of      */
-/* the tests; it is not there to contain a failure mode that aborts the     */
-/* process.                                                                 */
+/* tests/chttpserver/tests.c only covers the validation of the TLS arguments  */
+/* (see serve_tls_zero_port_rejected_before_tls_init there), and a real       */
+/* handshake needs a valid certificate and key pair. So this suite generates  */
+/* a real, throwaway self-signed pair at startup with the `openssl` CLI,      */
+/* starts a real TLS chttpsvr listener and drives a real HTTPS request        */
+/* through it with chttpclient. The build compiles this file into a binary of */
+/* its own, tests_tls, apart from the tests binary of tests.c (see the        */
+/* Makefile in this directory), so a broken openssl CLI or a bad certificate  */
+/* fails only this suite and not the rest of the chttpserver tests. ctls      */
+/* itself never aborts the process on bad TLS input, so the split is only     */
+/* about how the tests are laid out and isn't there to contain a failure that */
+/* aborts the process.                                                        */
 /* ========================================================================== */
 
 #define TLS_TEST_PORT 18790
 #define BASE_URL "https://127.0.0.1:18790"
-/* The same server, addressed by a name that the CN=127.0.0.1 of the
- * certificate does NOT cover, which drives the verification of the host
- * name. Both /etc/hosts entries for "localhost" resolve to this same
- * loopback server. */
+/* The same server, addressed by a name that the certificate's CN=127.0.0.1 does
+ * NOT cover, which exercises the host name verification. Both /etc/hosts
+ * entries for "localhost" resolve to this same loopback server. */
 #define BASE_URL_MISMATCHED_HOST "https://localhost:18790"
 
 static clog g_test_logger = CLOG_INVALID;
@@ -101,7 +95,7 @@ static void _hello_tls_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   chttpsvr_resp_write_str(resp, "Hello, TLS!");
 }
 
-/* Answers with the length of the body that it received, as decimal text. */
+/* Answers with the length of the body it got, as decimal text. */
 static void _body_len_tls_handler(chttpsvr_req *req, chttpsvr_resp *resp,
                                   void *ctx) {
   (void)ctx;
@@ -110,27 +104,27 @@ static void _body_len_tls_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   chttpsvr_resp_printf(resp, "len=%zu", len);
 }
 
-/* This function generates a throwaway self-signed certificate and key pair
-   in a fresh directory that mkdtemp() makes, using the openssl CLI. It
-   returns 0 on success and -1 on any failure (a missing openssl binary, an
-   exit status that is not zero, and so on). A caller must read -1 as "this
-   environment could not verify the TLS integration", and must not assume
-   that a partial or invalid certificate file given to ctls_ctx_cert_add
-   would itself be fatal: ctls never aborts the process on bad TLS input
-   (see the notes of the ctls module), it simply fails the handshake. */
+/* Generates a throwaway self-signed certificate and key pair with the openssl
+   CLI, in a fresh directory made by mkdtemp(). Returns 0 on success and -1 on
+   any failure (no openssl binary, a non-zero exit status and so on). A caller
+   must read -1 as "this environment couldn't verify the TLS integration", and
+   must not assume that a partial or invalid certificate file given to
+   ctls_ctx_cert_add would be fatal: ctls never aborts the process on
+   bad TLS input (see the notes of the ctls module), it just fails the
+   handshake. */
 static int _openssl_selfsigned(const char *key_path, const char *cert_path,
                                const char *cn, const char *san) {
   char cmd[1024];
   int cn_len;
   if (san) {
-    /* A subjectAltName iPAddress entry is what secures a real certificate
-     * for an IP address, per RFC 6125; the old fallback that matches on the
-     * CN does not. The verification that ctls.c makes on the connect side
-     * does not use that fallback for a target that is an IP literal: it
-     * calls X509_VERIFY_PARAM_set1_ip_asc for such a target, and
-     * X509_VERIFY_PARAM_set1_host otherwise. Without this entry, the host
-     * name tests below would only match a CN string by coincidence instead
-     * of validating a real certificate for an IP address. */
+    /* Per RFC 6125, what secures a real certificate for an IP address is a
+     * subjectAltName iPAddress entry, not the old fallback that matches on the
+     * CN. The verification ctls.c does on the connect side doesn't use that
+     * fallback for a target that is an IP literal: it calls
+     * X509_VERIFY_PARAM_set1_ip_asc for such a target and
+     * X509_VERIFY_PARAM_set1_host otherwise. Without this entry the host name
+     * tests below would only match a CN string by luck instead of validating a
+     * real certificate for an IP address. */
     cn_len = snprintf(cmd, sizeof(cmd),
                       "openssl req -x509 -newkey rsa:2048 -nodes "
                       "-keyout '%s' -out '%s' -days 1 -subj '/CN=%s' "
@@ -175,17 +169,16 @@ static int _generate_self_signed_cert(void) {
   if (_openssl_selfsigned(g_key_path, g_cert_path, "127.0.0.1",
                           "IP:127.0.0.1") != 0)
     return -1;
-  /* This is the identity certificate of the client for the mutual TLS
-   * smoke test. It is self-signed and the server in this suite never
-   * trusts it, so it only has to be a well-formed certificate and key pair;
-   * with it, the path in ctls_ctx_cert_add that loads a certificate runs
-   * from end to end on real files, while the set_tls_deep_copies_strings
-   * test of chttpclient uses fake paths that do not exist. */
+  /* The client's identity certificate for the mutual TLS smoke test. It's
+   * self-signed and the server of this suite never trusts it, so all it needs
+   * is to be a well-formed certificate and key pair. With it, the certificate
+   * loading path of ctls_ctx_cert_add runs end to end on real files, while
+   * chttpclient's set_tls_deep_copies_strings test uses fake paths that don't
+   * exist. */
   if (_openssl_selfsigned(g_client_key_path, g_client_cert_path,
                           "chttpclient-test-client", NULL) != 0)
     return -1;
-  /* A second client identity that no mutual TLS server of this suite
-   * trusts. */
+  /* A second client identity that no mutual TLS server of this suite trusts. */
   if (_openssl_selfsigned(g_other_key_path, g_other_cert_path,
                           "chttpclient-untrusted-client", NULL) != 0)
     return -1;
@@ -208,17 +201,16 @@ static void _teardown(void) {
     __chttpsvr_destroy(g_tls_srv);
     g_tls_srv = CHTTPSVR_INVALID;
   }
-  /* __chttpsvr_destroy releases the shared-engine reference of this server,
-   * but it does not wait synchronously for the shared ccol_event_loop
-   * reactor of chttpserver to stop. chttpsvr_engine_wait() blocks until
-   * that reactor stops, which this file needs so that the library reclaims
-   * the logger that the engine holds (g_engine_logger in chttpserver.c,
-   * which chttpsvr_set_engine_logger installs) before this atexit handler
-   * returns. This call does nothing when the generation of the TLS
-   * certificate above failed and nothing ever started a server. */
+  /* __chttpsvr_destroy releases this server's shared-engine reference, but it
+   * doesn't wait synchronously for chttpserver's shared ccol_event_loop reactor
+   * to stop. chttpsvr_engine_wait() blocks until that reactor stops, which this
+   * file needs so that the library gets back the logger the engine holds
+   * (g_engine_logger in chttpserver.c, installed by chttpsvr_set_engine_logger)
+   * before this atexit handler returns. The call does nothing when generating
+   * the TLS certificate above failed and no server was ever started. */
   /* On OpenBSD this exit handler runs while the dynamic loader holds a lock
-   * that the join of the reaper of the engine needs, so the wait never
-   * returns there; see _teardown in tests.c. The reactor can then still run
+   * that joining the engine's reaper needs, so the wait would never return
+   * there (see _teardown in tests.c). The reactor may then still be running
    * when the process ends, so the logger stays open too. */
 #if !defined(__OpenBSD__)
   chttpsvr_engine_wait();
@@ -233,7 +225,7 @@ static void _teardown(void) {
 __attribute__((constructor)) static void _setup(void) {
   char *err = NULL;
 
-  g_test_logger = clog_open_fd(2, CLOG_INFO, NULL);
+  g_test_logger = clog_create_from_fd(2, CLOG_INFO, NULL);
   if (!g_test_logger) {
     fprintf(stderr, "FATAL: could not create test logger\n");
     exit(1);
@@ -250,7 +242,7 @@ __attribute__((constructor)) static void _setup(void) {
   }
   g_cert_ready = true;
 
-  g_tls_srv = ccol_create_chttpsvr(g_test_logger, &err);
+  g_tls_srv = chttpsvr_create(g_test_logger, &err);
   if (!g_tls_srv) {
     fprintf(stderr, "FATAL: could not create chttpsvr: %s\n",
             err ? err : "(unknown)");
@@ -276,12 +268,11 @@ __attribute__((constructor)) static void _setup(void) {
     exit(1);
   }
 
-  /* Registered here, after chttpsvr_start, only so that g_tls_srv is
-     assigned by the time _teardown() (which stops and destroys it) can run.
-     The shared ccol_event_loop engine has no atexit-based teardown of its
-     own to race (see the doc comment of chttpsvr_engine_wait(): teardown
-     runs on an explicitly joined reaper thread, not in a process-exit
-     hook). */
+  /* Registered here, after chttpsvr_start, only so that g_tls_srv is set by the
+     time _teardown() (which stops and destroys it) can run. The shared
+     ccol_event_loop engine has no atexit-based teardown of its own to race with
+     (see the doc comment of chttpsvr_engine_wait(): the teardown runs on a
+     reaper thread that is explicitly joined, not in a process-exit hook). */
   atexit(_teardown);
 }
 
@@ -290,10 +281,10 @@ __attribute__((constructor)) static void _setup(void) {
 /* ========================================================================== */
 
 TEST(chttpserver_tls, handshake_succeeds_when_ca_is_trusted) {
-  /* This is real end-to-end coverage: a client that trusts the self-signed
-     certificate of this suite, through a ca_bundle_path that points directly
-     at that certificate, must finish a real TLS handshake and get the
-     response that the test expects. */
+  /* Real end-to-end coverage: a client that trusts this suite's self-signed
+     certificate, through a ca_bundle_path pointing straight at that
+     certificate, has to finish a real TLS handshake and get the expected
+     response. */
   if (!g_cert_ready) {
     fprintf(stderr,
             "SKIP: no self-signed cert available in this "
@@ -302,7 +293,7 @@ TEST(chttpserver_tls, handshake_succeeds_when_ca_is_trusted) {
   }
 
   chttpcli cli _ccol_destructor(___chttpclient_destroy) =
-      ccol_create_chttpclient(NULL);
+      chttpclient_create(NULL);
   REQUIRE_TRUE(cli != CHTTPCLI_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
@@ -310,7 +301,7 @@ TEST(chttpserver_tls, handshake_succeeds_when_ca_is_trusted) {
   REQUIRE_EQ(chttpclient_set_tls(cli, &tls), ccol_success);
 
   chttp_request_t *req =
-      chttp_request_new(CHTTP_GET, BASE_URL "/hello", NULL, NULL);
+      chttp_request_create(CHTTP_GET, BASE_URL "/hello", NULL, NULL);
   REQUIRE_TRUE(req != NULL);
 
   chttpcli_response *resp = NULL;
@@ -318,9 +309,9 @@ TEST(chttpserver_tls, handshake_succeeds_when_ca_is_trusted) {
   chttp_request_free(req);
 
   /* Every check on the contents of resp is captured into a local first, and
-     resp is freed unconditionally right after, before any REQUIRE_* that
-     could otherwise return early and leak it (unlike cli above, resp has no
-     RAII destructor of its own). */
+     resp is freed right after no matter what, before any REQUIRE_* that could
+     return early and leak it (unlike cli above, resp has no RAII destructor of
+     its own). */
   bool resp_present = resp != NULL;
   int status_code = resp_present ? resp->status_code : -1;
   bool body_present = resp_present && resp->body != NULL;
@@ -335,10 +326,10 @@ TEST(chttpserver_tls, handshake_succeeds_when_ca_is_trusted) {
 }
 
 TEST(chttpserver_tls, handshake_fails_when_ca_is_untrusted) {
-  /* A client that uses the default trust store (no ca_bundle_path override)
-     must reject our self-signed cert. This proves that the server performs
-     a real, verifiable TLS handshake instead of, for example, only checking
-     that the certificate files exist and then skipping verification. */
+  /* A client that uses the default trust store (no ca_bundle_path override) has
+     to reject our self-signed cert. That shows the server does a real,
+     verifiable TLS handshake and doesn't, for example, just check that the
+     certificate files exist and then skip verification. */
   if (!g_cert_ready) {
     fprintf(stderr,
             "SKIP: no self-signed cert available in this "
@@ -347,17 +338,17 @@ TEST(chttpserver_tls, handshake_fails_when_ca_is_untrusted) {
   }
 
   chttp_request_t *req =
-      chttp_request_new(CHTTP_GET, BASE_URL "/hello", NULL, NULL);
+      chttp_request_create(CHTTP_GET, BASE_URL "/hello", NULL, NULL);
   REQUIRE_TRUE(req != NULL);
 
   chttpcli_response *resp = NULL;
   ccol_retval_t rv = chttpclient_do(chttp_default_client(), req, &resp);
   chttp_request_free(req);
 
-  /* resp is freed unconditionally before any REQUIRE_* that could return
-     early and leak it, exactly as in handshake_succeeds_when_ca_is_trusted
-     above. This includes the regression path that this test exists to
-     catch (verification silently bypassed), where resp would be non-NULL. */
+  /* resp is freed before any REQUIRE_* that could return early and leak it, no
+     matter what, just as in handshake_succeeds_when_ca_is_trusted above. That
+     includes the regression this test is here to catch (verification silently
+     bypassed), where resp would be non-NULL. */
   bool resp_present = resp != NULL;
   if (resp_present) chttpclient_resp_free(resp);
 
@@ -366,14 +357,13 @@ TEST(chttpserver_tls, handshake_fails_when_ca_is_untrusted) {
 }
 
 TEST(chttpserver_tls, hostname_mismatch_rejected_by_default) {
-  /* This connects to the same server through "localhost", a name that
-     resolves to the same loopback address but does NOT match the
-     CN=127.0.0.1 of the certificate. The hostname check stays at its
-     default, which is on. This drives the client-side wiring in ctls.c that
-     verifies the host name (the X509_VERIFY_PARAM_set1_host call of
-     ctls_conn_create_client). Because ca_bundle_path makes the CA trusted,
-     any rejection here can only come from the check of the host name, and
-     not from an issuer that nothing trusts. */
+  /* Connects to the same server through "localhost", a name that resolves to
+     the same loopback address but does NOT match the certificate's
+     CN=127.0.0.1, with the hostname check left at its default, which is on.
+     This exercises the client-side host name verification in ctls.c (the
+     X509_VERIFY_PARAM_set1_host call of ctls_conn_create_client).
+     ca_bundle_path makes the CA trusted, so a rejection here can only come from
+     the host name check and not from an issuer nobody trusts. */
   if (!g_cert_ready) {
     fprintf(stderr,
             "SKIP: no self-signed cert available in this "
@@ -382,14 +372,14 @@ TEST(chttpserver_tls, hostname_mismatch_rejected_by_default) {
   }
 
   chttpcli cli _ccol_destructor(___chttpclient_destroy) =
-      ccol_create_chttpclient(NULL);
+      chttpclient_create(NULL);
   REQUIRE_TRUE(cli != CHTTPCLI_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.ca_bundle_path = g_cert_path;
   REQUIRE_EQ(chttpclient_set_tls(cli, &tls), ccol_success);
 
-  chttp_request_t *req = chttp_request_new(
+  chttp_request_t *req = chttp_request_create(
       CHTTP_GET, BASE_URL_MISMATCHED_HOST "/hello", NULL, NULL);
   REQUIRE_TRUE(req != NULL);
 
@@ -397,10 +387,9 @@ TEST(chttpserver_tls, hostname_mismatch_rejected_by_default) {
   ccol_retval_t rv = chttpclient_do(cli, req, &resp);
   chttp_request_free(req);
 
-  /* resp is freed unconditionally before any REQUIRE_* that could return
-     early and leak it. This includes the regression path that this test
-     exists to catch (hostname verification silently bypassed), where resp
-     would be non-NULL. */
+  /* resp is freed before any REQUIRE_* that could return early and leak it, no
+     matter what. That includes the regression this test is here to catch
+     (hostname verification silently bypassed), where resp would be non-NULL. */
   bool resp_present = resp != NULL;
   if (resp_present) chttpclient_resp_free(resp);
 
@@ -409,11 +398,11 @@ TEST(chttpserver_tls, hostname_mismatch_rejected_by_default) {
 }
 
 TEST(chttpserver_tls, hostname_mismatch_allowed_when_hostname_check_skipped) {
-  /* The same mismatched-hostname connection as above, with the hostname
-     check explicitly skipped and the chain pinned to g_cert_path. The
-     handshake must succeed, which proves that insecure_skip_hostname_check
-     gates only the hostname match and that the chain verification it
-     leaves in place accepts this certificate. */
+  /* The same mismatched-hostname connection as above, but with the hostname
+     check explicitly skipped and the chain pinned to g_cert_path. The handshake
+     needs to succeed, which shows that insecure_skip_hostname_check gates only
+     the hostname match and that the chain verification it leaves in place
+     accepts this certificate. */
   if (!g_cert_ready) {
     fprintf(stderr,
             "SKIP: no self-signed cert available in this "
@@ -422,7 +411,7 @@ TEST(chttpserver_tls, hostname_mismatch_allowed_when_hostname_check_skipped) {
   }
 
   chttpcli cli _ccol_destructor(___chttpclient_destroy) =
-      ccol_create_chttpclient(NULL);
+      chttpclient_create(NULL);
   REQUIRE_TRUE(cli != CHTTPCLI_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
@@ -430,7 +419,7 @@ TEST(chttpserver_tls, hostname_mismatch_allowed_when_hostname_check_skipped) {
   tls.insecure_skip_hostname_check = true;
   REQUIRE_EQ(chttpclient_set_tls(cli, &tls), ccol_success);
 
-  chttp_request_t *req = chttp_request_new(
+  chttp_request_t *req = chttp_request_create(
       CHTTP_GET, BASE_URL_MISMATCHED_HOST "/hello", NULL, NULL);
   REQUIRE_TRUE(req != NULL);
 
@@ -439,9 +428,9 @@ TEST(chttpserver_tls, hostname_mismatch_allowed_when_hostname_check_skipped) {
   chttp_request_free(req);
 
   /* Every check on the contents of resp is captured into a local first, and
-     resp is freed unconditionally right after, before any REQUIRE_* that
-     could otherwise return early and leak it (unlike cli above, resp has no
-     RAII destructor of its own). */
+     resp is freed right after no matter what, before any REQUIRE_* that could
+     return early and leak it (unlike cli above, resp has no RAII destructor of
+     its own). */
   bool resp_present = resp != NULL;
   int status_code = resp_present ? resp->status_code : -1;
   bool body_present = resp_present && resp->body != NULL;
@@ -456,13 +445,13 @@ TEST(chttpserver_tls, hostname_mismatch_allowed_when_hostname_check_skipped) {
 }
 
 TEST(chttpserver_tls, client_presents_certificate_mtls_smoke) {
-  /* mTLS smoke test: the client presents its own certificate/key pair. Because
-     the server in this suite neither requires nor verifies a client
-     certificate, this does not prove server-side enforcement. It proves that
-     the cert_path/key_path plumbing of chttpclient through ctls_ctx_cert_add
-     loads a real cert+key pair correctly, unlike the fake nonexistent paths
-     that the set_tls_deep_copies_strings test of chttpclient uses, and does not
-     break a normal handshake. */
+  /* mTLS smoke test: the client presents its own certificate/key pair. The
+     server of this suite neither requires nor verifies a client certificate, so
+     this doesn't prove any server-side enforcement. What it proves is that
+     chttpclient's cert_path/key_path plumbing through ctls_ctx_cert_add loads a
+     real cert+key pair correctly (unlike the fake, nonexistent paths of
+     chttpclient's set_tls_deep_copies_strings test) and doesn't break a normal
+     handshake. */
   if (!g_cert_ready) {
     fprintf(stderr,
             "SKIP: no self-signed cert available in this "
@@ -471,7 +460,7 @@ TEST(chttpserver_tls, client_presents_certificate_mtls_smoke) {
   }
 
   chttpcli cli _ccol_destructor(___chttpclient_destroy) =
-      ccol_create_chttpclient(NULL);
+      chttpclient_create(NULL);
   REQUIRE_TRUE(cli != CHTTPCLI_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
@@ -481,7 +470,7 @@ TEST(chttpserver_tls, client_presents_certificate_mtls_smoke) {
   REQUIRE_EQ(chttpclient_set_tls(cli, &tls), ccol_success);
 
   chttp_request_t *req =
-      chttp_request_new(CHTTP_GET, BASE_URL "/hello", NULL, NULL);
+      chttp_request_create(CHTTP_GET, BASE_URL "/hello", NULL, NULL);
   REQUIRE_TRUE(req != NULL);
 
   chttpcli_response *resp = NULL;
@@ -489,9 +478,9 @@ TEST(chttpserver_tls, client_presents_certificate_mtls_smoke) {
   chttp_request_free(req);
 
   /* Every check on the contents of resp is captured into a local first, and
-     resp is freed unconditionally right after, before any REQUIRE_* that
-     could otherwise return early and leak it (unlike cli above, resp has no
-     RAII destructor of its own). */
+     resp is freed right after no matter what, before any REQUIRE_* that could
+     return early and leak it (unlike cli above, resp has no RAII destructor of
+     its own). */
   bool resp_present = resp != NULL;
   int status_code = resp_present ? resp->status_code : -1;
   bool body_present = resp_present && resp->body != NULL;
@@ -508,11 +497,11 @@ TEST(chttpserver_tls, client_presents_certificate_mtls_smoke) {
 /* ========================================================================== */
 /*   Mutual TLS                                                               */
 /*                                                                            */
-/* A server whose chttp_tls_config_t names a ca_bundle_path trusts the      */
-/* self-signed client certificate of this suite, which is its own CA. Each  */
-/* test starts such a server of its own and drives one request with a       */
-/* client that presents the trusted identity, an untrusted one, or none.    */
-/* The handler answers with what chttpsvr_req_peer_cert_verified reports.   */
+/* A server whose chttp_tls_config_t names a ca_bundle_path trusts this       */
+/* suite's self-signed client certificate, which is its own CA. Each test     */
+/* starts such a server of its own and drives one request with a client that  */
+/* presents the trusted identity, an untrusted one, or nothing. The handler   */
+/* answers with what chttpsvr_req_peer_cert_verified reports.                 */
 /* ========================================================================== */
 
 static void _peer_cert_handler(chttpsvr_req *req, chttpsvr_resp *resp,
@@ -522,10 +511,10 @@ static void _peer_cert_handler(chttpsvr_req *req, chttpsvr_resp *resp,
                        chttpsvr_req_peer_cert_verified(req) ? 1 : 0);
 }
 
-/* Starts a mutual TLS server on port. It returns CHTTPSVR_INVALID on any
+/* Starts a mutual TLS server on port, and returns CHTTPSVR_INVALID on any
    failure. */
 static chttpsvr _mtls_server(uint16_t port, bool client_cert_optional) {
-  chttpsvr srv = ccol_create_chttpsvr(g_test_logger, NULL);
+  chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
   if (srv == CHTTPSVR_INVALID) return CHTTPSVR_INVALID;
   chttpsvr_register_handler(srv, CHTTP_GET, "/peer", _peer_cert_handler, NULL);
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
@@ -544,17 +533,17 @@ static chttpsvr _mtls_server(uint16_t port, bool client_cert_optional) {
   return srv;
 }
 
-/* Sends GET /peer to 127.0.0.1:port over TLS, trusting the server
-   certificate of this suite and presenting cert_path and key_path when they
-   are not NULL. It returns the result of chttpclient_do and, on success,
-   stores the status and the body in *status_out and body_out. */
+/* Sends GET /peer to 127.0.0.1:port over TLS, trusting this suite's server
+   certificate and presenting cert_path and key_path when they aren't NULL.
+   Returns the result of chttpclient_do and, on success, stores the status and
+   the body in *status_out and body_out. */
 static ccol_retval_t _mtls_get(uint16_t port, const char *cert_path,
                                const char *key_path, int *status_out,
                                char *body_out, size_t body_cap) {
   *status_out = -1;
   body_out[0] = '\0';
   chttpcli cli _ccol_destructor(___chttpclient_destroy) =
-      ccol_create_chttpclient(NULL);
+      chttpclient_create(NULL);
   if (cli == CHTTPCLI_INVALID) return ccol_not_enough_memory;
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.ca_bundle_path = g_cert_path;
@@ -564,7 +553,7 @@ static ccol_retval_t _mtls_get(uint16_t port, const char *cert_path,
   if (rv != ccol_success) return rv;
   char url[128];
   snprintf(url, sizeof(url), "https://127.0.0.1:%u/peer", (unsigned)port);
-  chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+  chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   if (!req) return ccol_not_enough_memory;
   chttpcli_response *resp = NULL;
   rv = chttpclient_do(cli, req, &resp);
@@ -578,9 +567,9 @@ static ccol_retval_t _mtls_get(uint16_t port, const char *cert_path,
 }
 
 TEST(chttpserver_tls, mtls_refuses_a_client_without_a_certificate) {
-  /* A ca_bundle_path requires a client certificate by default, so a client
-     that presents none never reaches the handler. This test is non-vacuous:
-     a server that only requests a certificate answers "verified=0". */
+  /* A ca_bundle_path requires a client certificate by default, so a client that
+     presents none never gets to the handler. A server that only requested a
+     certificate would answer "verified=0". */
   if (!g_cert_ready) {
     fprintf(stderr, "SKIP: no self-signed cert available\n");
     return;
@@ -597,8 +586,8 @@ TEST(chttpserver_tls, mtls_refuses_a_client_without_a_certificate) {
 }
 
 TEST(chttpserver_tls, mtls_accepts_and_reports_a_verified_client) {
-  /* A client that presents a certificate that the bundle trusts is served,
-     and the handler sees it as verified, in both modes. */
+  /* A client presenting a certificate that the bundle trusts is served and the
+     handler sees it as verified, in both modes. */
   if (!g_cert_ready) {
     fprintf(stderr, "SKIP: no self-signed cert available\n");
     return;
@@ -620,9 +609,9 @@ TEST(chttpserver_tls, mtls_accepts_and_reports_a_verified_client) {
 }
 
 TEST(chttpserver_tls, mtls_refuses_a_certificate_from_another_ca) {
-  /* A client certificate that does not verify against the bundle fails the
-     handshake in both modes; client_cert_optional relaxes only the absence
-     of a certificate. */
+  /* A client certificate that doesn't verify against the bundle fails the
+     handshake in both modes, because client_cert_optional relaxes only the case
+     of a missing certificate. */
   if (!g_cert_ready) {
     fprintf(stderr, "SKIP: no self-signed cert available\n");
     return;
@@ -642,10 +631,10 @@ TEST(chttpserver_tls, mtls_refuses_a_certificate_from_another_ca) {
 }
 
 TEST(chttpserver_tls, mtls_optional_accepts_an_anonymous_client_unverified) {
-  /* With client_cert_optional, a client that presents nothing is served and
-     the handler sees it as not verified. Non-vacuous: an accessor that
-     reports the verify result alone answers "verified=1" here, because
-     OpenSSL reports X509_V_OK for a peer that sent nothing. */
+  /* With client_cert_optional a client that presents nothing is served and the
+     handler sees it as not verified. An accessor that reported the verify
+     result alone would answer "verified=1" here, because OpenSSL reports
+     X509_V_OK for a peer that sent nothing. */
   if (!g_cert_ready) {
     fprintf(stderr, "SKIP: no self-signed cert available\n");
     return;
@@ -663,14 +652,14 @@ TEST(chttpserver_tls, mtls_optional_accepts_an_anonymous_client_unverified) {
 }
 
 TEST(chttpserver_tls, peer_cert_verified_is_false_without_mutual_tls) {
-  /* A TLS server with no ca_bundle_path verifies nobody, so a client that
-     presents a certificate there is still reported as not verified. */
+  /* A TLS server with no ca_bundle_path verifies nobody, so a client presenting
+     a certificate there is still reported as not verified. */
   if (!g_cert_ready) {
     fprintf(stderr, "SKIP: no self-signed cert available\n");
     return;
   }
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      ccol_create_chttpsvr(g_test_logger, NULL);
+      chttpsvr_create(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   REQUIRE_EQ(chttpsvr_register_handler(srv, CHTTP_GET, "/peer",
                                        _peer_cert_handler, NULL),
@@ -695,26 +684,25 @@ TEST(chttpserver_tls, peer_cert_verified_is_false_without_mutual_tls) {
 /* ========================================================================== */
 /*   TLS config failures must never be silently swallowed                     */
 /*                                                                            */
-/* Ordinary testing reaches neither of the gaps below: chttpsvr_start       */
-/* must not silently start the server as plain, unencrypted                 */
-/* HTTP when cfg.tls is not NULL and only one of cert_path and              */
-/* key_path is set, and it must not silently ignore the return value of     */
-/* ctls_ctx_trust for ca_bundle_path, which would leave a CA bundle that    */
-/* is bad, or that nothing can read, in place while the server runs TLS,    */
-/* so it would not enforce the client certificate of mutual TLS that the    */
-/* caller asked for. Either gap would return ccol_success, and a caller     */
-/* would have no way to notice, so chttpsvr_start reports a real error in   */
-/* both cases instead. The tests below pin that behaviour directly.         */
+/* Ordinary testing reaches neither of the two gaps below. chttpsvr_start     */
+/* must not quietly start the server as plain, unencrypted HTTP when cfg.tls  */
+/* isn't NULL and only one of cert_path and key_path is set. It also must not */
+/* ignore the return value of ctls_ctx_trust for ca_bundle_path, which would  */
+/* leave a bad or unreadable CA bundle in place while the server runs TLS, so */
+/* the mutual TLS client certificate the caller asked for wouldn't be         */
+/* enforced. Either gap would return ccol_success with no way for the caller  */
+/* to notice, so chttpsvr_start reports a real error in both cases instead,   */
+/* and the tests below pin that directly.                                     */
 /* ========================================================================== */
 
 TEST(chttpserver_tls, start_rejects_cert_path_without_key_path) {
-  /* A cert_path on its own, with key_path left at NULL, is never a valid
-     configuration, and the library must reject it before it tries any TLS
-     work at all. So this test needs no real certificate file and no
-     g_cert_ready gate. */
+  /* A cert_path on its own, with key_path left NULL, is never a valid
+     configuration, and the library rejects it before trying any TLS work
+     at all. So this test needs no real certificate file and no g_cert_ready
+     gate. */
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      ccol_create_chttpsvr(g_test_logger, &err);
+      chttpsvr_create(g_test_logger, &err);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
@@ -731,10 +719,10 @@ TEST(chttpserver_tls, start_rejects_cert_path_without_key_path) {
 }
 
 TEST(chttpserver_tls, start_rejects_key_path_without_cert_path) {
-  /* This mirrors the test above, with the two fields swapped. */
+  /* The test above with the two fields swapped. */
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      ccol_create_chttpsvr(g_test_logger, &err);
+      chttpsvr_create(g_test_logger, &err);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
@@ -751,20 +739,19 @@ TEST(chttpserver_tls, start_rejects_key_path_without_cert_path) {
 }
 
 TEST(chttpserver_tls, start_rejects_ca_bundle_path_without_cert_key_pair) {
-  /* A ca_bundle_path set while cert_path/key_path are both left NULL must
-     not be silently ignored. The TLS setup block looks at ca_bundle_path
-     only inside the branch gated on both cert_path AND key_path being
-     non-NULL, so ignoring it would start the server as plain, unencrypted
-     HTTP on a port that the caller believed was HTTPS with mutual-TLS client
-     verification enabled. This is exactly how a caller configures custom-CA
-     verification on the client side (chttpclient_set_tls, mirroring the
-     --cacert of curl), so a caller who reuses that same mental model on the
-     server side makes a realistic mistake, not a contrived one. The test
-     needs no real certificate files and no g_cert_ready gate, since this
-     must be rejected before any TLS work is attempted. */
+  /* A ca_bundle_path set while cert_path/key_path are both NULL must not be
+     silently ignored. The TLS setup block only looks at ca_bundle_path inside
+     the branch gated on cert_path AND key_path both being non-NULL, so ignoring
+     it would start the server as plain, unencrypted HTTP on a port the caller
+     believed was HTTPS with mutual-TLS client verification. It's exactly how
+     you configure custom-CA verification on the client side
+     (chttpclient_set_tls, like curl's --cacert), so a caller who carries the
+     same mental model over to the server makes a realistic mistake and not a
+     contrived one. The test needs no real certificate files and no g_cert_ready
+     gate, because this must be rejected before any TLS work is tried. */
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      ccol_create_chttpsvr(g_test_logger, &err);
+      chttpsvr_create(g_test_logger, &err);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
@@ -778,8 +765,8 @@ TEST(chttpserver_tls, start_rejects_ca_bundle_path_without_cert_key_pair) {
 
   REQUIRE_EQ(chttpsvr_start(srv, &cfg), ccol_invalid_args);
 
-  /* The rejected start must not leave a live listener behind: a second,
-     plain HTTP start on the identical port must succeed cleanly. */
+  /* The rejected start must not leave a listener behind, so a second, plain
+     HTTP start on the very same port must succeed cleanly. */
   chttpsvr_config_t plain_cfg = CHTTPSVR_CONFIG_DEFAULT;
   plain_cfg.host = "127.0.0.1";
   plain_cfg.port = TLS_TEST_PORT + 4;
@@ -789,20 +776,19 @@ TEST(chttpserver_tls, start_rejects_ca_bundle_path_without_cert_key_pair) {
 }
 
 TEST(chttpserver_tls, start_rejects_tls_config_with_no_cert_or_key) {
-  /* A cfg->tls that is set while cert_path/key_path/ca_bundle_path are ALL
-     left NULL must not be silently ignored (none of the individual pairing
-     checks fires when everything is simply absent), because that would start
-     the server as plain, unencrypted HTTP on a port that the caller believed
-     was HTTPS. CHTTP_TLS_DEFAULT (chttp.h) has exactly this shape (no path
-     at all) and is documented as shared, verification-on defaults for both
-     chttpclient and chttpserver, so a caller who reaches for it here and
-     forgets to also set cert_path/key_path afterward makes a realistic
-     mistake, not a contrived one. The test needs no real certificate files
-     and no g_cert_ready gate, since this must be rejected before any TLS
-     work is attempted. */
+  /* A cfg->tls set while cert_path/key_path/ca_bundle_path are ALL NULL must
+     not be silently ignored (none of the individual pairing checks fires when
+     everything is simply missing), because that would start the server as
+     plain, unencrypted HTTP on a port the caller believed was HTTPS.
+     CHTTP_TLS_DEFAULT (chttp.h) has exactly this shape, with no path at all,
+     and is documented as shared, verification-on defaults for both chttpclient
+     and chttpserver, so a caller who reaches for it here and forgets to set
+     cert_path/key_path afterwards makes a realistic mistake and not a contrived
+     one. The test needs no real certificate files and no g_cert_ready gate,
+     because this is rejected before any TLS work is tried. */
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      ccol_create_chttpsvr(g_test_logger, &err);
+      chttpsvr_create(g_test_logger, &err);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
@@ -813,8 +799,8 @@ TEST(chttpserver_tls, start_rejects_tls_config_with_no_cert_or_key) {
 
   REQUIRE_EQ(chttpsvr_start(srv, &cfg), ccol_invalid_args);
 
-  /* The rejected start must not leave a live listener behind: a second,
-     plain HTTP start on the identical port must succeed cleanly. */
+  /* The rejected start must not leave a listener behind, so a second, plain
+     HTTP start on the very same port has to succeed cleanly. */
   chttpsvr_config_t plain_cfg = CHTTPSVR_CONFIG_DEFAULT;
   plain_cfg.host = "127.0.0.1";
   plain_cfg.port = TLS_TEST_PORT + 5;
@@ -824,14 +810,14 @@ TEST(chttpserver_tls, start_rejects_tls_config_with_no_cert_or_key) {
 }
 
 TEST(chttpserver_tls, start_rejects_a_ca_bundle_holding_no_certificate) {
-  /* A readable CA bundle that parses to no certificate at all must fail the
+  /* A readable CA bundle that parses to no certificate at all should fail the
      start instead of configuring an empty trust store. Under
      client_cert_optional an empty store rejects a client that presents a
-     certificate but accepts one that presents none, and in the default mode
-     it rejects every client: either way, the listener would come up with a
-     trust store that is not the one the caller asked for. The test needs a
-     real cert/key pair to get past ctls_ctx_cert_add and reach the
-     ca_bundle_path handling. */
+     certificate but accepts one that presents none, and in the default mode it
+     rejects every client, so either way the listener would come up with a trust
+     store that isn't what the caller asked for. The test needs a real cert/key
+     pair to get past ctls_ctx_cert_add and reach the ca_bundle_path handling.
+ */
   if (!g_cert_ready) {
     fprintf(stderr,
             "SKIP: no self-signed cert available in this "
@@ -853,7 +839,7 @@ TEST(chttpserver_tls, start_rejects_a_ca_bundle_holding_no_certificate) {
 
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      ccol_create_chttpsvr(g_test_logger, &err);
+      chttpsvr_create(g_test_logger, &err);
   if (srv == CHTTPSVR_INVALID) {
     unlink(bundle);
     REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
@@ -871,8 +857,8 @@ TEST(chttpserver_tls, start_rejects_a_ca_bundle_holding_no_certificate) {
 
   ccol_retval_t started = chttpsvr_start(srv, &cfg);
 
-  /* The failed start must not leave a live listener behind: a second,
-     plain HTTP start on the identical port must succeed cleanly. */
+  /* The failed start must not leave a listener behind, so a second, plain HTTP
+     start on the very same port needs to succeed cleanly. */
   chttpsvr_config_t plain_cfg = CHTTPSVR_CONFIG_DEFAULT;
   plain_cfg.host = "127.0.0.1";
   plain_cfg.port = TLS_TEST_PORT + 6;
@@ -881,16 +867,49 @@ TEST(chttpserver_tls, start_rejects_a_ca_bundle_holding_no_certificate) {
   chttpsvr_destroy(srv);
   unlink(bundle);
 
-  REQUIRE_EQ(started, ccol_unexpected_failure);
+  REQUIRE_EQ(started, ccol_http_tls_cert_load_failed);
   REQUIRE_EQ(reused, ccol_success);
 }
 
+TEST(chttpserver_tls, start_reports_a_certificate_that_cannot_be_loaded) {
+  /* A certificate path that names no file and a key that doesn't match the
+     certificate both make chttpsvr_start report ccol_http_tls_cert_load_failed,
+     the TLS layer's code, and leave the server able to start again. */
+  if (!g_cert_ready) {
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this "
+            "environment\n");
+    return;
+  }
+  char *err = NULL;
+  chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
+      chttpsvr_create(g_test_logger, &err);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
+  tls.cert_path = "/nonexistent/server.pem";
+  tls.key_path = g_key_path;
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TLS_TEST_PORT + 7;
+  cfg.tls = &tls;
+  ccol_retval_t missing = chttpsvr_start(srv, &cfg);
+  tls.cert_path = g_key_path;
+  ccol_retval_t not_a_cert = chttpsvr_start(srv, &cfg);
+  chttpsvr_config_t plain_cfg = CHTTPSVR_CONFIG_DEFAULT;
+  plain_cfg.host = "127.0.0.1";
+  plain_cfg.port = TLS_TEST_PORT + 7;
+  ccol_retval_t plain = chttpsvr_start(srv, &plain_cfg);
+  REQUIRE_EQ(missing, ccol_http_tls_cert_load_failed);
+  REQUIRE_EQ(not_a_cert, ccol_http_tls_cert_load_failed);
+  REQUIRE_EQ(plain, ccol_success);
+}
+
 TEST(chttpserver_tls, start_rejects_unloadable_ca_bundle_path) {
-  /* A genuinely valid cert/key pair, but a ca_bundle_path that cannot be
-     loaded: chttpsvr_start must fail instead of silently starting the server
-     without the mutual-TLS enforcement that the caller asked for. The test
-     needs a real cert/key pair to get past ctls_ctx_cert_add and reach the
-     ca_bundle_path handling that it targets. */
+  /* A perfectly valid cert/key pair but a ca_bundle_path that can't be loaded:
+     chttpsvr_start fails instead of silently starting the server without
+     the mutual-TLS enforcement the caller asked for. The test needs a real
+     cert/key pair to get past ctls_ctx_cert_add and reach the ca_bundle_path
+     handling it is about. */
   if (!g_cert_ready) {
     fprintf(stderr,
             "SKIP: no self-signed cert available in this "
@@ -900,7 +919,7 @@ TEST(chttpserver_tls, start_rejects_unloadable_ca_bundle_path) {
 
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      ccol_create_chttpsvr(g_test_logger, &err);
+      chttpsvr_create(g_test_logger, &err);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
@@ -912,10 +931,10 @@ TEST(chttpserver_tls, start_rejects_unloadable_ca_bundle_path) {
   cfg.port = TLS_TEST_PORT + 3;
   cfg.tls = &tls;
 
-  REQUIRE_EQ(chttpsvr_start(srv, &cfg), ccol_unexpected_failure);
+  REQUIRE_EQ(chttpsvr_start(srv, &cfg), ccol_http_tls_cert_load_failed);
 
-  /* The failed start must not leave a live listener behind: a second,
-     plain HTTP start on the identical port must succeed cleanly. */
+  /* The failed start must not leave a listener behind, so a second, plain HTTP
+     start on the very same port must succeed cleanly. */
   chttpsvr_config_t plain_cfg = CHTTPSVR_CONFIG_DEFAULT;
   plain_cfg.host = "127.0.0.1";
   plain_cfg.port = TLS_TEST_PORT + 3;
@@ -928,9 +947,9 @@ TEST(chttpserver_tls, start_rejects_unloadable_ca_bundle_path) {
 /*          PIPELINED INPUT THAT THE TLS LAYER ALREADY HOLDS                  */
 /* ========================================================================== */
 
-/* A raw OpenSSL client on a blocking socket with a receive timeout, so
- * that the test controls exactly how many bytes go into each TLS record,
- * which no HTTP client API offers. */
+/* A raw OpenSSL client on a blocking socket with a receive timeout, so the test
+ * controls exactly how many bytes go into each TLS record, which no HTTP client
+ * API lets you do. */
 typedef struct {
   SSL_CTX *ctx;
   SSL *ssl;
@@ -971,7 +990,7 @@ static bool _raw_tls_client_open(_raw_tls_client_t *c) {
 }
 
 /* Writes all of buf. Each SSL_write call of at most 16384 bytes is one TLS
- * record, so a buffer of that size or less arrives as a single record. */
+ * record, so a buffer of that size or smaller arrives as a single record. */
 static bool _raw_tls_write_all(_raw_tls_client_t *c, const char *buf,
                                size_t len) {
   size_t off = 0;
@@ -984,7 +1003,7 @@ static bool _raw_tls_write_all(_raw_tls_client_t *c, const char *buf,
   return true;
 }
 
-/* Reads until the peer closes, the receive timeout fires, or out fills.
+/* Reads until the peer closes, the receive timeout fires or out is full.
  * Returns the number of bytes read. */
 static size_t _raw_tls_read_until_close(_raw_tls_client_t *c, char *out,
                                         size_t cap) {
@@ -1005,13 +1024,13 @@ static size_t _count_occurrences(const char *hay, const char *needle) {
 }
 
 TEST(chttpserver_tls, pipelined_requests_in_one_record_are_all_answered) {
-  /* 70 GET requests of about 440 bytes each make about 30 KB, which the
-   * client sends as two TLS records of 16 KB and 14 KB. The server reads
-   * 8 KB at a time, so once it has read into the second record, the socket
-   * is empty while the rest of that record sits inside the TLS layer, where
-   * epoll(7) cannot see it. Every request must still be answered promptly,
-   * without any further byte from the client. The last request asks for a
-   * close, so the reply stream ends with an EOF. */
+  /* 70 GET requests of about 440 bytes each make about 30 KB, which the client
+   * sends as two TLS records of 16 KB and 14 KB. The server reads 8 KB at a
+   * time, so once it has read into the second record the socket is empty while
+   * the rest of that record sits inside the TLS layer, where epoll(7) can't see
+   * it. Every request still has to be answered promptly without one more byte
+   * from the client. The last request asks for a close, so the reply stream
+   * ends with an EOF. */
   if (!g_cert_ready) return;
   enum { N_REQ = 70 };
   char pad[380];
@@ -1045,8 +1064,8 @@ TEST(chttpserver_tls, pipelined_requests_in_one_record_are_all_answered) {
 
 TEST(chttpserver_tls, body_and_next_request_in_the_tls_buffer_are_served) {
   /* One record holds the headers of a POST, its 9000-byte body and a second
-   * request. The server reads 8 KB of it first, so most of the body and all
-   * of the second request are inside the TLS layer when the POST reaches
+   * request. The server reads 8 KB of it first, so most of the body and all of
+   * the second request are inside the TLS layer by the time the POST reaches
    * its worker. */
   if (!g_cert_ready) return;
   static char msg[12000];
@@ -1086,17 +1105,13 @@ TEST(chttpserver_tls, body_and_next_request_in_the_tls_buffer_are_served) {
 /*                    SLOW CLIENTS OVER TLS                                   */
 /* ========================================================================== */
 
-extern size_t _chttpsvr_parked_count_for_tests(chttpsvr h, int kind);
-extern size_t _chttpsvr_pool_active_for_tests(chttpsvr h, bool streaming);
-extern size_t _chttpsvr_park_count_for_tests(void);
-
 static long long _tls_now_ms(void) {
   struct timespec t;
   clock_gettime(CLOCK_MONOTONIC, &t);
   return (long long)t.tv_sec * 1000LL + t.tv_nsec / 1000000L;
 }
 
-/* Polls a counter of the server until it reaches want, for 5 s at most. */
+/* Polls a server counter until it reaches want, for at most 5 s. */
 static bool _tls_wait_parked_bodies(chttpsvr h, size_t want) {
   long long deadline = _tls_now_ms() + 5000;
   while (_chttpsvr_parked_count_for_tests(h, 1) < want) {
@@ -1108,9 +1123,9 @@ static bool _tls_wait_parked_bodies(chttpsvr h, size_t want) {
 }
 
 TEST(chttpserver_tls, slow_tls_bodies_park_and_hold_no_worker_thread) {
-  /* The TLS twin of slow_clients.slow_bodies_park_and_hold_no_worker_thread
-   * in tests.c: four TLS clients stop in the middle of their bodies, the
-   * connections park with no thread, and a fresh request is served. */
+  /* The TLS twin of slow_clients.slow_bodies_park_and_hold_no_worker_thread in
+   * tests.c: four TLS clients stop in the middle of their bodies, the
+   * connections park without a thread, and a fresh request is served. */
   if (!g_cert_ready) return;
   enum { N = 4 };
   _raw_tls_client_t c[N];
@@ -1141,7 +1156,7 @@ TEST(chttpserver_tls, slow_tls_bodies_park_and_hold_no_worker_thread) {
   memset(rest, 'r', 990);
   for (int i = 0; i < N; i++) {
     if (opened && _raw_tls_write_all(&c[i], rest, 990)) {
-      /* The head and the body of the response can arrive in two records. */
+      /* The head and the body of the response can come in two records. */
       char buf[1024];
       size_t got = 0;
       for (int tries = 0; tries < 8 && got < sizeof(buf) - 1; tries++) {
@@ -1164,9 +1179,9 @@ TEST(chttpserver_tls, slow_tls_bodies_park_and_hold_no_worker_thread) {
   REQUIRE_EQ(completed, N);
 }
 
-/* A TLS client whose records the test writes to the socket itself, so that
- * it can stop in the middle of one. Reads go through the socket, while
- * writes go into a memory BIO that _split_flush moves to the socket. */
+/* A TLS client whose records the test writes to the socket itself, so it can
+ * stop in the middle of one. Reads go through the socket, while writes go into
+ * a memory BIO that _split_flush moves to the socket. */
 typedef struct {
   SSL_CTX *ctx;
   SSL *ssl;
@@ -1239,8 +1254,8 @@ static bool _split_open(_split_tls_client_t *c) {
   }
 }
 
-/* Reads one TLS response, for timeout_ms at most, and returns true when it
- * holds needle. */
+/* Reads one TLS response, for at most timeout_ms, and returns true when it
+ * contains needle. */
 static bool _split_read_has(_split_tls_client_t *c, const char *needle,
                             int timeout_ms) {
   char buf[4096];
@@ -1266,19 +1281,19 @@ static bool _split_read_has(_split_tls_client_t *c, const char *needle,
 }
 
 TEST(chttpserver_tls, a_record_split_on_the_wire_still_wakes_the_reader) {
-  /* A parked body asks the kernel to wake the reactor only once enough of
-   * it is queued (SO_RCVLOWAT). The plaintext count that the framing still
-   * expects is a safe mark while OpenSSL holds no part of a record, because
-   * a record never carries fewer bytes on the wire than the plaintext
-   * inside it; it is NOT safe once OpenSSL has read only part of a record.
+  /* A parked body asks the kernel to wake the reactor only once enough of it is
+   * queued (SO_RCVLOWAT). The plaintext count that the framing still expects is
+   * a safe mark while OpenSSL holds no part of a record, because a record never
+   * carries fewer bytes on the wire than the plaintext inside it. It is NOT
+   * safe once OpenSSL has read only part of a record.
    *
-   * Here the 5000-byte body travels in one record, and the client sends all
-   * but its last 10 bytes: enough to reach the mark of 5000 and wake the
-   * reactor, but not enough to decrypt anything. The server reads the
+   * Here the 5000-byte body travels in one record, and the client sends all of
+   * it except the last 10 bytes. That is enough to reach the mark of 5000 and
+   * wake the reactor but not enough to decrypt anything. The server reads the
    * partial record into OpenSSL and parks again with the whole body still
-   * expected, and the last 10 bytes must still wake it. Non-vacuous: a mark
-   * of 5000 there, taken from the plaintext alone, waits for 5000 bytes
-   * that never come, and the response does not arrive within its bound. */
+   * expected, and the last 10 bytes still have to wake it. A mark of 5000
+   * there, taken from the plaintext alone, waits for 5000 bytes that never
+   * come, and the response doesn't arrive within its bound. */
   if (!g_cert_ready) return;
   _split_tls_client_t c = {.fd = -1};
   bool opened = _split_open(&c);
@@ -1297,8 +1312,8 @@ TEST(chttpserver_tls, a_record_split_on_the_wire_still_wakes_the_reader) {
   size_t record = staged ? BIO_ctrl_pending(c.wbio) : 0;
   size_t parks1 = _chttpsvr_park_count_for_tests();
   bool partial = staged && record > 5010 && _split_flush(&c, record - 10);
-  /* The reactor wakes on the partial record, a worker reads it into
-   * OpenSSL, and the connection parks a second time. */
+  /* The reactor wakes on the partial record, a worker reads it into OpenSSL,
+   * and the connection parks a second time. */
   bool second_park = false;
   long long deadline = _tls_now_ms() + 5000;
   while (partial && !second_park && _tls_now_ms() < deadline) {
@@ -1318,10 +1333,7 @@ TEST(chttpserver_tls, a_record_split_on_the_wire_still_wakes_the_reader) {
   REQUIRE_TRUE(answered);
 }
 
-extern void _chttpsvr_force_short_response_write_for_tests(size_t n);
-extern void _chttpsvr_set_date_override_for_tests(int64_t sec);
-
-/* Sends req and reads one whole response over c; returns its length, or 0. */
+/* Sends req and reads one whole response over c. Returns its length, or 0. */
 static size_t _tls_exchange(_raw_tls_client_t *c, const char *req, char *buf,
                             size_t cap) {
   if (!_raw_tls_write_all(c, req, strlen(req))) return 0;
@@ -1343,9 +1355,9 @@ static size_t _tls_exchange(_raw_tls_client_t *c, const char *req, char *buf,
 
 TEST(chttpserver_tls, a_tls_write_cut_inside_the_head_or_the_body_resumes) {
   /* The TLS twin of slow_clients.a_write_cut_inside_the_head_or_the_body_
-   * resumes_intact in tests.c: a response write that stops inside the head
-   * or inside the body resumes from the exact byte, and the client receives
-   * the same bytes as from one write. */
+   * resumes_intact in tests.c: a response write that stops inside the head or
+   * inside the body resumes from the exact byte, and the client receives the
+   * same bytes as from a single write. */
   if (!g_cert_ready) return;
   _chttpsvr_set_date_override_for_tests(1700000000);
   const char *get = "GET /hello HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
@@ -1369,11 +1381,9 @@ TEST(chttpserver_tls, a_tls_write_cut_inside_the_head_or_the_body_resumes) {
   REQUIRE_EQ(intact, 2);
 }
 
-extern size_t _chttpsvr_linger_count_for_tests(void);
-
-/* The counter of lingering closes moves on the thread that closes, which
-   can run just after the client has already seen the end of the stream,
-   so a test waits for it, for 5 s at most. */
+/* The counter of lingering closes moves on the closing thread, which can run
+   just after the client has already seen the end of the stream, so a test waits
+   for it, for at most 5 s. */
 static bool _linger_count_passes(size_t before) {
   for (int i = 0; i < 5000; i++) {
     if (_chttpsvr_linger_count_for_tests() > before) return true;
@@ -1385,11 +1395,11 @@ static bool _linger_count_passes(size_t before) {
 
 TEST(chttpserver_tls, a_refused_upload_ends_with_close_notify_and_no_reset) {
   /* The TLS twin of lingering_close.a_refused_upload_gets_its_response_and_
-   * an_orderly_end in tests.c. The server refuses an upload with 404 and
-   * never reads its body, and the client reads the whole response, then the
-   * close_notify of the server, and then an orderly end of the TCP stream.
-   * Non-vacuous: a close with the unread body in the socket sends a reset,
-   * which the read after the close_notify reports as ECONNRESET. */
+   * an_orderly_end in tests.c. The server refuses an upload with 404 and never
+   * reads its body, and the client reads the whole response, then the server's
+   * close_notify and then an orderly end of the TCP stream. Closing with the
+   * unread body still in the socket would send a reset, which the read after
+   * the close_notify reports as ECONNRESET. */
   if (!g_cert_ready) return;
   size_t lingers = _chttpsvr_linger_count_for_tests();
   _raw_tls_client_t c = {.fd = -1};
@@ -1428,16 +1438,15 @@ TEST(chttpserver_tls, a_refused_upload_ends_with_close_notify_and_no_reset) {
 /* ========================================================================== */
 /*   Revocation lists, unreadable paths and the identity of a client          */
 /*                                                                            */
-/* These tests drive ctls directly over a socketpair, and chttpserver over   */
-/* real connections. A small PKI that the openssl CLI makes at the first     */
-/* use holds a root CA, an intermediate CA, client certificates that each    */
-/* of them issued, a revoked client certificate, a revoked server            */
-/* certificate, and a CRL of each CA.                                        */
+/* These tests drive ctls directly over a socketpair and chttpserver over     */
+/* real connections. A small PKI that the openssl CLI makes on first use      */
+/* holds a root CA, an intermediate CA, a client certificate issued by each   */
+/* of them, a revoked client certificate, a revoked server certificate and a  */
+/* CRL of each CA.                                                            */
 /* ========================================================================== */
 
 #include <internal/ctls.h>
-
-SSL *_ctls_conn_ssl_for_tests(ctls_conn_t *conn);
+#include <internal/test_helpers/ctls.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/x509.h>
@@ -1448,46 +1457,21 @@ SSL *_ctls_conn_ssl_for_tests(ctls_conn_t *conn);
 static char g_pki_dir[400];
 static int g_pki_state = 0; /* 0 untried, 1 ready, -1 failed */
 
-static const char *const g_pki_files[] = {"gen.sh",
-                                          "ext.cnf",
-                                          "root.cnf",
-                                          "root.idx",
-                                          "root.idx.attr",
-                                          "root.idx.old",
-                                          "inter.cnf",
-                                          "inter.idx",
-                                          "inter.idx.attr",
-                                          "inter.idx.old",
-                                          "root.key",
-                                          "root.crt",
-                                          "root.crl",
-                                          "inter.key",
-                                          "inter.csr",
-                                          "inter.crt",
-                                          "inter.crl",
-                                          "good.key",
-                                          "good.csr",
-                                          "good.crt",
-                                          "revoked.key",
-                                          "revoked.csr",
-                                          "revoked.crt",
-                                          "ileaf.key",
-                                          "ileaf.csr",
-                                          "ileaf.crt",
-                                          "rsrv.key",
-                                          "rsrv.csr",
-                                          "rsrv.crt",
-                                          "b_root_crl.pem",
-                                          "b_inter_crl_only.pem",
-                                          "b_both_crl.pem",
-                                          "b_no_crl.pem",
-                                          "b_crl_only.pem",
-                                          "fifo",
-                                          "02.pem",
-                                          "03.pem",
-                                          "04.pem",
-                                          "05.pem",
-                                          "06.pem"};
+static const char *const g_pki_files[] = {
+    "gen.sh",         "ext.cnf",        "root.cnf",
+    "root.idx",       "root.idx.attr",  "root.idx.attr.old",
+    "root.idx.old",   "inter.cnf",      "inter.idx",
+    "inter.idx.attr", "inter.idx.old",  "root.key",
+    "root.csr",       "root.crt",       "root.crl",
+    "inter.key",      "inter.csr",      "inter.crt",
+    "inter.crl",      "good.key",       "good.csr",
+    "good.crt",       "revoked.key",    "revoked.csr",
+    "revoked.crt",    "ileaf.key",      "ileaf.csr",
+    "ileaf.crt",      "rsrv.key",       "rsrv.csr",
+    "rsrv.crt",       "b_root_crl.pem", "b_inter_crl_only.pem",
+    "b_both_crl.pem", "b_no_crl.pem",   "b_crl_only.pem",
+    "fifo",           "02.pem",         "03.pem",
+    "04.pem",         "05.pem",         "06.pem"};
 
 static void _pki_remove(void) {
   if (!g_pki_dir[0]) return;
@@ -1512,9 +1496,10 @@ static const char g_pki_script[] =
     "keyUsage=keyCertSign,cRLSign\\n[cli]\\nextendedKeyUsage=clientAuth\\n"
     "[srv]\\nextendedKeyUsage=serverAuth\\nsubjectAltName=DNS:srv.test\\n'"
     " > ext.cnf\n"
-    "openssl req -x509 -newkey rsa:2048 -nodes -keyout root.key -out root.crt"
-    " -days 2 -subj /CN=crl-root -addext basicConstraints=critical,CA:TRUE"
-    " -addext keyUsage=keyCertSign,cRLSign\n"
+    "openssl req -newkey rsa:2048 -nodes -keyout root.key -out root.csr"
+    " -subj /CN=crl-root\n"
+    "openssl x509 -req -in root.csr -signkey root.key -days 2"
+    " -extfile ext.cnf -extensions ca_ext -out root.crt\n"
     "mkca root\n"
     "leaf() {\n"
     "  openssl req -newkey rsa:2048 -nodes -keyout $1.key -out $1.csr"
@@ -1538,8 +1523,8 @@ static const char g_pki_script[] =
     "cat root.crt inter.crt > b_no_crl.pem\n"
     "cat root.crl > b_crl_only.pem\n";
 
-/* Makes the PKI once. It gives false when the openssl CLI is missing or
-   fails, and the tests that need the PKI then skip. */
+/* Makes the PKI once. Returns false when the openssl CLI is missing or fails,
+   and the tests that need the PKI then skip. */
 static bool _pki_ready(void) {
   if (g_pki_state != 0) return g_pki_state > 0;
   g_pki_state = -1;
@@ -1570,8 +1555,8 @@ static const char *_pki(const char *name) {
 }
 
 /* Drives a ctls server connection and a ctls client connection over a
-   socketpair to the end of their handshakes. It returns true when both
-   finished, and leaves both connections to the caller. */
+   socketpair to the end of their handshakes. Returns true when both finished,
+   and leaves both connections to the caller. */
 typedef struct {
   int fds[2];
   ctls_conn_t *server;
@@ -1614,8 +1599,8 @@ static void _tls_pair_close(_tls_pair_t *p) {
 }
 
 /* Runs one handshake of a server that trusts bundle against a client that
-   presents cert and key (none when cert is NULL). It reports whether the
-   handshake finished and the verify result of the server. */
+   presents cert and key (nothing when cert is NULL). Reports whether the
+   handshake finished, and the server's verify result. */
 static bool _crl_handshake(const char *bundle, const char *cert,
                            const char *key, long *verify_out) {
   *verify_out = -1;
@@ -1642,11 +1627,11 @@ static bool _crl_handshake(const char *bundle, const char *cert,
 }
 
 TEST(tls_crl, a_revoked_client_certificate_is_refused) {
-  /* A CA bundle that holds a CRL enforces it: the handshake of a client
-     whose certificate that CRL revokes fails with X509_V_ERR_CERT_REVOKED,
-     and a client certificate of the same CA that it does not revoke still
-     verifies. Non-vacuous: with the CRL loaded but not enforced, the revoked
-     client verifies and the handshake succeeds. */
+  /* A CA bundle that holds a CRL enforces it. The handshake of a client whose
+     certificate the CRL revokes fails with X509_V_ERR_CERT_REVOKED, and a
+     client certificate of the same CA that isn't revoked still verifies.
+     With the CRL loaded but not enforced, the revoked client would verify and
+     the handshake would succeed. */
   if (!g_cert_ready || !_pki_ready()) {
     fprintf(stderr, "SKIP: no PKI available\n");
     return;
@@ -1664,14 +1649,13 @@ TEST(tls_crl, a_revoked_client_certificate_is_refused) {
 }
 
 TEST(tls_crl, every_ca_of_the_chain_needs_a_crl) {
-  /* With a CRL in the bundle, every certificate of the chain below the
-     trust anchor needs a CRL of its issuer. A bundle that holds the CRL of
-     the intermediate CA and none of the root refuses a client of the
-     intermediate, with X509_V_ERR_UNABLE_TO_GET_CRL; the same bundle with
-     both CRLs accepts it, and a bundle with no CRL at all checks nothing.
-     Non-vacuous: a check of the leaf alone (X509_V_FLAG_CRL_CHECK without
-     X509_V_FLAG_CRL_CHECK_ALL) accepts the client with only the CRL of the
-     intermediate. */
+  /* With a CRL in the bundle, every certificate of the chain below the trust
+     anchor needs a CRL from its issuer. A bundle with the intermediate CA's CRL
+     and none of the root's refuses a client of the intermediate with
+     X509_V_ERR_UNABLE_TO_GET_CRL, the same bundle with both CRLs accepts it,
+     and a bundle with no CRL at all checks nothing. Checking only the leaf
+     (X509_V_FLAG_CRL_CHECK without X509_V_FLAG_CRL_CHECK_ALL) would accept the
+     client with only the intermediate's CRL. */
   if (!g_cert_ready || !_pki_ready()) {
     fprintf(stderr, "SKIP: no PKI available\n");
     return;
@@ -1693,9 +1677,8 @@ TEST(tls_crl, every_ca_of_the_chain_needs_a_crl) {
 }
 
 TEST(tls_crl, a_client_refuses_a_revoked_server_certificate) {
-  /* A client whose CA bundle holds a CRL refuses a server whose certificate
-     that CRL revokes. Non-vacuous: without enforcement the handshake
-     succeeds. */
+  /* A client whose CA bundle holds a CRL refuses a server whose certificate the
+     CRL revokes. Without enforcement the handshake would succeed. */
   if (!g_cert_ready || !_pki_ready()) {
     fprintf(stderr, "SKIP: no PKI available\n");
     return;
@@ -1723,15 +1706,14 @@ TEST(tls_crl, a_client_refuses_a_revoked_server_certificate) {
 }
 
 TEST(tls_crl, a_server_refuses_a_revoked_client_through_chttpsvr) {
-  /* The same rule through the public configuration: a ca_bundle_path that
-     holds a CRL refuses a client that it revokes, and serves one that it
-     does not. */
+  /* The same rule through the public configuration: a ca_bundle_path holding a
+     CRL refuses a client that it revokes, and serves one that it doesn't. */
   if (!g_cert_ready || !_pki_ready()) {
     fprintf(stderr, "SKIP: no PKI available\n");
     return;
   }
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      ccol_create_chttpsvr(g_test_logger, NULL);
+      chttpsvr_create(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   REQUIRE_EQ(chttpsvr_register_handler(srv, CHTTP_GET, "/peer",
                                        _peer_cert_handler, NULL),
@@ -1762,7 +1744,7 @@ TEST(tls_crl, a_server_refuses_a_revoked_client_through_chttpsvr) {
 }
 
 TEST(tls_crl, a_bundle_of_nothing_but_crls_is_refused) {
-  /* A CRL names no trust anchor, so a bundle of CRLs alone configures no
+  /* A CRL names no trust anchor, so a bundle with only CRLs configures no
      issuer and is refused like an empty one. */
   if (!g_cert_ready || !_pki_ready()) {
     fprintf(stderr, "SKIP: no PKI available\n");
@@ -1798,11 +1780,11 @@ static void *_fifo_trust_thread(void *arg) {
 }
 
 TEST(tls_files, a_fifo_path_fails_at_once_and_never_blocks) {
-  /* A CA bundle or a certificate path that names a FIFO with no writer is
-     refused at once with ccol_http_tls_cert_load_failed. Non-vacuous: an
-     open that waits blocks in open(2) until a writer appears, and this test
-     then finds the call still running after 5 s. The test afterwards opens
-     the FIFO for writing itself, so that a blocked call ends either way. */
+  /* A CA bundle or certificate path naming a FIFO without a writer is refused
+     right away with ccol_http_tls_cert_load_failed. An open that waits blocks
+     in open(2) until a writer shows up, and the test then finds the call still
+     running after 5 s. Afterwards the test opens the FIFO for writing itself,
+     so a blocked call ends either way. */
   if (!g_cert_ready || !_pki_ready()) {
     fprintf(stderr, "SKIP: no PKI available\n");
     return;
@@ -1822,8 +1804,8 @@ TEST(tls_files, a_fifo_path_fails_at_once_and_never_blocks) {
       nanosleep(&nap, NULL);
     }
   }
-  /* Unblocks an open that waits for a writer, and then a read that waits
-     for data, until the call ends. */
+  /* Unblocks an open that waits for a writer, and then a read that waits for
+     data, until the call ends. */
   while (!atomic_load(&f.done)) {
     int w = open(fifo, O_WRONLY | O_NONBLOCK);
     if (w >= 0) close(w);
@@ -1841,8 +1823,8 @@ TEST(tls_files, a_fifo_path_fails_at_once_and_never_blocks) {
 
 /* ----- the identity of a verified client ----- */
 
-/* Reads the first certificate of a PEM file into its DER encoding, its
-   SHA-256 digest and its RFC 2253 subject. */
+/* Reads the first certificate of a PEM file into its DER encoding, its SHA-256
+   digest and its RFC 2253 subject. */
 static bool _expected_identity(const char *pem_path, unsigned char **der_out,
                                int *der_len_out, unsigned char sha[32],
                                char *subject, size_t subject_cap) {
@@ -1877,8 +1859,8 @@ static bool _expected_identity(const char *pem_path, unsigned char **der_out,
 
 TEST(tls_identity, a_verified_client_has_its_der_digest_and_subject) {
   /* The server sees the exact certificate of a verified client: its DER
-     encoding, its SHA-256 fingerprint, and its subject in RFC 2253 form with
-     the comma inside a value escaped. Each call gives the same answer. */
+     encoding, its SHA-256 fingerprint and its subject in RFC 2253 form with the
+     comma inside a value escaped. Every call gives the same answer. */
   if (!g_cert_ready || !_pki_ready()) {
     fprintf(stderr, "SKIP: no PKI available\n");
     return;
@@ -1945,14 +1927,13 @@ static bool _identity_is_empty(ctls_conn_t *conn) {
 }
 
 TEST(tls_identity, nothing_is_reported_without_a_verified_certificate) {
-  /* A connection whose peer has no verified certificate reports no
-     identity at all. That covers an anonymous client of a server that only
-     asks for a certificate; a client that presents a certificate to a
-     server with no trust store, which verifies nothing; and the client side
-     of a connection whose context has no trust store, which sees the
-     certificate of the server and verifies nothing either. A NULL
-     connection reports none. Non-vacuous: accessors that report the
-     certificate of the peer whether or not it verified report one in the
+  /* A connection whose peer has no verified certificate reports no identity at
+     all. That covers an anonymous client of a server that only asks for a
+     certificate, a client presenting a certificate to a server with no trust
+     store (which verifies nothing), and the client side of a connection whose
+     context has no trust store, which sees the server's certificate and doesn't
+     verify it either. A NULL connection reports none. Accessors that reported
+     the peer's certificate whether or not it verified would report one in the
      third case. */
   if (!g_cert_ready || !_pki_ready()) {
     fprintf(stderr, "SKIP: no PKI available\n");
@@ -2005,10 +1986,10 @@ TEST(tls_identity, nothing_is_reported_without_a_verified_certificate) {
     _tls_pair_open(&p, s4, c4, NULL);
     done4 = p.done;
     if (done4) {
-      /* LibreSSL names the call that takes a reference without the 1, and
-       * OpenSSL 3 deprecates that name. */
+      /* LibreSSL and OpenSSL 1.1.1 spell the call that takes a reference
+       * without the 1, and OpenSSL 3 deprecates that name. */
       SSL *cs = _ctls_conn_ssl_for_tests(p.client);
-#if defined(LIBRESSL_VERSION_NUMBER)
+#if defined(LIBRESSL_VERSION_NUMBER) || OPENSSL_VERSION_NUMBER < 0x30000000L
       X509 *peer = SSL_get_peer_certificate(cs);
 #else
       X509 *peer = SSL_get1_peer_certificate(cs);
@@ -2038,10 +2019,10 @@ TEST(tls_identity, nothing_is_reported_without_a_verified_certificate) {
   REQUIRE_TRUE(empty4);
 }
 
-/* Drives a ctls server connection and a raw OpenSSL client, which offers
-   *sess when it is not NULL and gets the session of this connection back.
-   It reports the DER length and the subject that the server sees, and
-   whether the server resumed. */
+/* Drives a ctls server connection and a raw OpenSSL client, which offers *sess
+ * when it isn't NULL and gets this connection's session back. Reports the DER
+ * length and the subject that the server sees, and whether the server resumed.
+ */
 static bool _identity_resume_connect(ctls_ctx_t *server_ctx,
                                      SSL_CTX *client_ctx, SSL_SESSION **sess,
                                      size_t *der_len, char *subject,
@@ -2108,10 +2089,10 @@ static bool _identity_resume_connect(ctls_ctx_t *server_ctx,
 }
 
 TEST(tls_identity, a_resumed_session_reports_the_same_identity) {
-  /* A client that resumes its session presents no certificate on the wire;
-     the server still reports the identity that the original handshake
-     verified, for TLS 1.2 and TLS 1.3. LibreSSL resumes no TLS 1.3 session,
-     so there only TLS 1.2 is checked. */
+  /* A client that resumes its session presents no certificate on the wire, but
+     the server still reports the identity that the original handshake verified,
+     for TLS 1.2 and TLS 1.3. LibreSSL resumes no TLS 1.3 session, so there we
+     check only TLS 1.2. */
   if (!g_cert_ready || !_pki_ready()) {
     fprintf(stderr, "SKIP: no PKI available\n");
     return;
@@ -2153,7 +2134,7 @@ TEST(tls_identity, a_resumed_session_reports_the_same_identity) {
   REQUIRE_EQ(failed, 0);
 }
 
-/* Answers with what the identity accessors of chttpserver report. */
+/* Answers with what chttpserver's identity accessors report. */
 static void _identity_handler(chttpsvr_req *req, chttpsvr_resp *resp,
                               void *ctx) {
   (void)ctx;
@@ -2171,10 +2152,10 @@ static void _identity_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 }
 
 TEST(tls_identity, a_handler_sees_the_identity_of_its_client) {
-  /* Through chttpserver: a verified client is reported with the length of
-     its certificate, its fingerprint and its subject; under
+  /* Through chttpserver: a verified client is reported with the length of its
+     certificate, its fingerprint and its subject, and under
      client_cert_optional an anonymous client is reported with none of them,
-     ccol_key_not_found, and a digest buffer left all zeroes. */
+     ccol_key_not_found and a digest buffer left all zeroes. */
   if (!g_cert_ready || !_pki_ready()) {
     fprintf(stderr, "SKIP: no PKI available\n");
     return;
@@ -2198,7 +2179,7 @@ TEST(tls_identity, a_handler_sees_the_identity_of_its_client) {
            0);
 
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      ccol_create_chttpsvr(g_test_logger, NULL);
+      chttpsvr_create(g_test_logger, NULL);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   REQUIRE_EQ(chttpsvr_register_handler(srv, CHTTP_GET, "/peer",
                                        _identity_handler, NULL),
@@ -2229,7 +2210,7 @@ TEST(tls_identity, a_handler_sees_the_identity_of_its_client) {
 }
 
 TEST(tls_identity, null_arguments_report_nothing) {
-  /* The accessors refuse NULL arguments without a crash. */
+  /* The accessors refuse NULL arguments without crashing. */
   size_t len = 7;
   unsigned char sha[CHTTPSVR_PEER_CERT_SHA256_LEN];
   memset(sha, 0xAB, sizeof(sha));

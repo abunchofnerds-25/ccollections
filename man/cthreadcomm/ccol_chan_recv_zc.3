@@ -11,13 +11,12 @@ ccol_retval_t ccol_chan_recv_zc(ccol_channel *ch, c_message_t *target_buf);
 .fi
 .SH DESCRIPTION
 .nf
-The function picks the correct queue itself, from the thread that
-calls it:
-- The owner thread receives from the ccol_workers_to_owner queue
-- A worker thread receives from the ccol_owner_to_workers queue
-
-The function blocks until a message arrives and then transfers the
-ownership.
+Receives a message from the channel, waiting as long as it takes for
+one to arrive. The queue is chosen from the thread that calls it: the
+owner thread receives from the ccol_workers_to_owner queue and any
+other thread receives from the ccol_owner_to_workers queue. The
+message's data is handed over without a copy, so its ownership moves to
+the caller.
 .fi
 .SH PARAMETERS
 .nf
@@ -27,15 +26,17 @@ target_buf  Buffer that gets the message together with the ownership
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success       - The function received a message. The caller must free
+ccol_success       - A message was received. The caller must free
                      target_buf->data.
 ccol_invalid_args  - ch or target_buf is NULL
 .fi
 .SH NOTES
 .nf
-The function blocks until a message arrives in the chosen queue.
-The function picks the direction itself from the ID of the thread.
-The caller gets the ownership of target_buf->data and must free it.
+The call blocks until a message arrives in the chosen queue. The
+direction is decided from the ID of the calling thread, which is
+compared with the ID of the owner that the channel took at creation.
+target_buf->data belongs to the caller after a successful call, and the
+caller must free it.
 .fi
 .SH "SEE ALSO"
 .BR ccol_chan_try_recv_zc (3),

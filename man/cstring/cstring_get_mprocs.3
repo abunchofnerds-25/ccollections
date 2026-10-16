@@ -11,8 +11,8 @@ ccol_memmgmt_procs_t *cstring_get_mprocs(cstr s);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the custom memory management procedures that were supplied when the
-string was created. Returns NULL if the string is using the default
+This function returns the custom memory management procedures that the
+string was created with, or NULL when the string uses the default
 malloc/free allocators.
 .fi
 .SH PARAMETERS
@@ -21,10 +21,12 @@ s   String to query
 .fi
 .SH RETURN VALUE
 .nf
-Pointer to memory management procedures, or NULL if using defaults
+A pointer to the memory management procedures, or NULL for the defaults
 .fi
 .SH NOTES
 .nf
+The structure belongs to the library and stays valid until the string is
+destroyed. Do not free it yourself, and do not use it after the destroy
 Asserts if s is NULL
 .fi
 .SH "SEE ALSO"

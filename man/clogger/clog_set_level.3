@@ -7,36 +7,44 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/clogger.h>
 
-void clog_set_level(clog logger, clog_level_t level);
+ccol_retval_t clog_set_level(clog logger, clog_level_t level);
 .fi
 .SH DESCRIPTION
 .nf
-Updates the minimum severity level, so a later call that carries a
-level strictly below the new minimum is silently discarded.  The change
-takes effect at once and every thread that shares the logger sees it.
+Sets the minimum severity level, and a later call whose level is
+strictly below the new minimum is silently discarded.  The change takes
+effect at once and every thread that shares the logger sees it.
 .fi
 .SH PARAMETERS
 .nf
 logger  Logger handle.
 level   New minimum level (CLOG_TRACE through CLOG_OFF).
-        Use CLOG_OFF to suppress all output except CLOG_FATAL.
+        CLOG_OFF suppresses all output except CLOG_FATAL.
+        A value that clog_level_t does not name, such as -3 or
+        12, is refused and the level stays as it is.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success       The minimum level is set.
+ccol_invalid_args  clog_level_t does not name level.  The level stays
+                   as it is.
 .fi
 .SH NOTES
 .nf
-CLOG_FATAL bypasses this filter entirely and is always written,
-whatever the current minimum level is.
-When a log call on a different thread runs at the same time as this
-call, the minimum that applies to that log call can be the old one or
-the new one.  On an async logger, a record that is in the queue when
-the change takes effect is written.
-Thread-safe.  The minimum level is an atomic value that belongs to each
-logger and is separate from the lock that serialises the writes and
-the rotation for the shared output target, so a change to the level of
-one logger never contends with a write in progress on a sibling logger
-that shares the same target.
+CLOG_FATAL skips this filter completely and is always written, whatever
+the minimum level is.
+A log call that runs on another thread at the same time as this call
+can get either the old minimum or the new one.  On an async logger, a
+record that is already in the queue when the change takes effect is
+written.
+Thread-safe.  Each logger keeps its minimum level in an atomic value of
+its own, apart from the lock that serialises the writes and the rotation
+of the shared output target, so changing the level of one logger never
+contends with a write that a sibling logger on the same target has in
+progress.
 Asserts when logger is CLOG_INVALID, stale or already closed.
 .fi
 .SH "SEE ALSO"
 .BR clog_get_level (3),
-.BR clog_open_fd_mp (3),
-.BR clog_open_file_mp (3)
+.BR clog_create_from_fd_mp (3),
+.BR clog_create_from_file_mp (3)

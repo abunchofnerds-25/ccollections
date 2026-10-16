@@ -1,0 +1,177 @@
+.TH CCOL_EVENT_LOOP_CREATE_MP 3 "2026-07-12" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccol_event_loop_create_mp \- create a persistent event loop
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadcomm.h>
+
+ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
+                        size_t num_lock_stripes, size_t num_reactor_threads,
+                        ccol_memmgmt_procs_t *mmgmt_procs, char **err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a persistent kernel event queue (an epoll(7) instance on
+Linux, a kqueue(2) on FreeBSD) and starts the thread or threads that
+drive it at once. ccol_select() builds a fresh epoll instance on
+every call and tears it down once a selectable is ready, but the epoll
+instance and the threads of a ccol_event_loop live as long as the
+handle does, and ccol_event_loop_add, ccol_event_loop_modify and
+ccol_event_loop_remove change its registrations one at a time.
+
+Exactly ONE dedicated thread calls epoll_wait, whatever the value of
+num_reactor_threads; there is never a second one. With
+num_reactor_threads == 1 that thread polls and also runs every callback
+inline. A larger value starts the same single poller thread plus
+(num_reactor_threads - 1) separate dispatch worker threads that run the
+callbacks. Either way the loop uses exactly num_reactor_threads OS
+threads in total, and all of them are ready to work when this call
+returns, the same way a ctpool_create() pool is ready the moment you
+get the handle.
+
+With num_reactor_threads > 1 the loop enforces two correctness
+properties that a single thread gets for free, since it is the only
+caller. The callbacks of one registration never run at the same time
+as each other, and a read registration and a write registration on the
+same fd never run at the same time either. The second rule goes further
+than "no self-concurrency": two callbacks that share state across both
+directions of one fd (one TLS connection object, for example) need no
+lock of their own.
+
+The loop never collects a second dispatch for a registration while an
+earlier one is queued or running, so application code can call
+ccol_event_loop_modify from inside a callback that is in flight. That
+is a supported and common pattern, and it never races with a second
+dispatch of the same registration collected at the same moment. The
+same design also gives the caller an identity token, described in
+ccol_event_loop_reg_generation(3).
+
+A registration is built from the same ccol_selectable type that
+ccol_select uses, with the builders ccol_selectable_from_fd,
+ccol_selectable_from_circq, ccol_selectable_from_dynq and
+ccol_selectable_from_chan. Like ccol_select, ccol_event_loop never does
+the receive or the send itself for any type of selectable; the callback
+always does it. ccol_event_loop_add(3) explains why.
+
+Inside the library each registered fd is backed by one persistent entry
+in the epoll interest list. Both directions share that entry, because
+epoll_ctl keys its interest list by fd and not by an (fd, direction)
+pair. Each queue or ccol_channel selectable gets its own bridge
+eventfd(2), which stays linked into the queue's waiter list for good,
+unlike the temporary waiter nodes that ccol_select() makes on each
+call.
+
+The registry of fds and registrations is lock-striped. It holds
+num_lock_stripes independent (mutex, chmap) pairs, and each pair guards
+its own subset of the registrations. A real fd is handled by exactly
+one stripe for its whole lifetime, and so is the private bridge eventfd
+of a queue or ccol_channel registration, so no operation ever needs the
+lock of more than one stripe. A value of 1 uses a single lock (one
+mutex and one chmap, plus one more array indirection). A larger value
+lets ccol_event_loop_add, ccol_event_loop_remove and
+ccol_event_loop_modify calls for different fds or registrations run in
+parallel instead of queuing up behind one lock, at the cost of
+num_lock_stripes mutexes and chmaps allocated up front.
+.fi
+.SH PARAMETERS
+.nf
+max_events_per_wait  Size of the poller thread's event batch buffer,
+                      from 1 to INT_MAX inclusive, and small enough
+                      that max_events_per_wait times the size of one
+                      kernel event record (struct epoll_event on
+                      Linux, struct kevent on FreeBSD) fits in a
+                      size_t. The value is passed as the int event
+                      count of epoll_wait(2) or kevent(2), and the
+                      poller's events buffer is sized from it.
+num_lock_stripes     Number of independent lock stripes for the
+                      registry of fds and entries, at least 1 and
+                      with no upper bound. With 1 there is a single
+                      shared lock.
+num_reactor_threads  Total number of OS threads the loop uses for
+                      polling and dispatching, at least 1. With 1, a
+                      single thread polls and dispatches inline; any
+                      larger value gives exactly one dedicated poller
+                      thread plus (num_reactor_threads - 1) dispatch
+                      worker threads.
+mmgmt_procs          Custom memory management procedures, or NULL for
+                      the default malloc and free.
+err_str               Optional pointer that gets an error string on a
+                      failure. Pass NULL to ignore it.
+.fi
+.SH RETURN VALUE
+.nf
+A new ccol_event_loop handle on success.
+
+CCOL_EVENT_LOOP_INVALID on failure. The causes are: max_events_per_wait
+is 0, larger than INT_MAX, or overflows size_t when multiplied by the
+size of one kernel event record; num_lock_stripes is 0;
+num_reactor_threads is 0; mmgmt_procs is malformed because it sets some
+but not all of malloc, calloc, realloc and free; an allocation failed;
+epoll_create1(2) (kqueue(2) on FreeBSD), eventfd(2) or
+pthread_create(3) failed; the process had no thread-specific key left
+for the two keys that every loop's dispatch uses (they are created once
+per process and never retried); the library's process-exit destructors
+have run and the last loop is gone, for example in an application
+destructor that runs after them; or no handle slot could be allocated.
+In that last case the poller thread, and the dispatch pool if the
+configuration made one, are stopped again before the call returns.
+.fi
+.SH NOTES
+.nf
+The handle is an opaque VALUE and not a pointer. Do not cast it to or
+from void*, and do not use it as an address. Compare it with
+CCOL_EVENT_LOOP_INVALID; that value is 0, so a test such as if (!loop)
+is correct as well. Every call resolves the handle before it touches
+the loop, so a stale or destroyed handle is refused and never
+dereferenced.
+
+This page names the epoll(7) calls and flags of the Linux build. On
+FreeBSD the same reactor runs on kqueue(2) and behaves the same way:
+level-triggered reporting, one-shot re-arming when a dispatch pool
+exists, and the same delivery of errors and hang-ups.
+
+A process can hold several independent ccol_event_loop instances. Each
+has its own epoll instance, its own reactor threads and its own array
+of lock stripes, and shares no global state with the others, so
+num_lock_stripes and num_reactor_threads really are per-instance
+settings.
+
+Only one thread ever blocks in epoll_wait, whatever num_reactor_threads
+is. If several threads called epoll_wait on the same instance, one
+ready event could wake all of them, which is a thundering herd inside
+the kernel. EPOLLEXCLUSIVE doesn't help, because it applies to one fd
+registered in several SEPARATE epoll instances, not to many threads
+sharing one instance. Such wake-ups add dispatch latency even to a
+single connection that nothing else competes for.
+
+fork(2) and ccol_event_loop can be combined in two supported ways:
+fork(2) before you create a loop, or create one and then call fork(2)
+followed at once by exec(3). A process that keeps running with no
+exec(3) after the fork, while a loop it created before the fork is
+live, is not supported.
+
+As a defense in depth beyond that rule, a fresh call from any thread
+(ccol_event_loop_create_mp, _add, _remove, _modify, _pause, _resume and
+_destroy) never hangs on a lock, in the parent or in a freshly forked
+child, because some other thread held that lock at the instant of the
+fork. That thread may not exist in the child, since fork(2) duplicates
+only the calling thread.
+
+This does nothing for a loop that is already live across the fork. The
+child gets no copy of its poller and dispatch threads, so an inherited
+loop cannot dispatch anything there. Treat it as inert in the child:
+calling ccol_event_loop_destroy on it is safe, but it can't be used for
+any more dispatch.
+.fi
+.SH THREAD SAFETY
+.nf
+Safe to call while other threads work on unrelated ccol_event_loop
+instances. There is no handle yet for any other call to race with.
+.fi
+.SH "SEE ALSO"
+.BR ccol_event_loop_create (3),
+.BR ccol_event_loop_add (3),
+.BR ccol_event_loop_shutdown (3),
+.BR ccol_event_loop_destroy (3)

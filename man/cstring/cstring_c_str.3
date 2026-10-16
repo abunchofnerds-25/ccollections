@@ -12,20 +12,20 @@ const char *cstring_c_str(cstr s);
 .SH DESCRIPTION
 .nf
 Returns a read-only pointer to the internal null-terminated buffer.
-The pointer becomes invalid after any mutating operation on the string
-that may reallocate the buffer; see NOTES for the exact list.
+The pointer becomes invalid after any operation that changes the
+string and may reallocate the buffer; NOTES gives the exact list.
 
-This function is the recommended bridge when using a cstr with chashmap
-or cbstmap. Those containers understand char * keys (with content-based
-hashing and comparison) but have no special handling for the cstr type.
-Extract the C string first and pass it as the key:
+Use this function to pass a cstr to chashmap or cbstmap.  Those
+containers understand char * keys, which they hash and compare by
+content, but they have no special handling for the cstr type, so take
+the C string out first and pass that as the key:
 
     char *k = (char *)cstring_c_str(my_cstr);
     chmap_insert(map, k, value);
 
-The map copies the string content into its own storage immediately, so
-the cstr can be mutated or destroyed afterwards without affecting the
-map entry.
+The map copies the content of the string into its own storage at
+once, so you can change or destroy the cstr afterwards and the map
+entry stays as it is.
 .fi
 .SH PARAMETERS
 .nf
@@ -33,12 +33,12 @@ s   String to query
 .fi
 .SH RETURN VALUE
 .nf
-Pointer to null-terminated character data
+A pointer to the null-terminated character data
 .fi
 .SH NOTES
 .nf
-Pointer is invalidated by any call that may reallocate (append, prepend,
-insert, set, replace, reserve, reset)
+Any call that may reallocate makes the pointer invalid: append, prepend,
+insert, set, replace, reserve and reset
 Asserts if s is NULL
 .fi
 .SH "SEE ALSO"

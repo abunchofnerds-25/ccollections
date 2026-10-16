@@ -1,0 +1,69 @@
+.TH CLOG_ERROR 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+clog_error \- emit a log line at ERROR level with a backtrace
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/clogger.h>
+
+clog_error(clog lg, const char *fmt, ...);
+.fi
+.SH DESCRIPTION
+.nf
+Writes a log line at CLOG_ERROR level and picks up __FILE__, __LINE__
+and __func__ for you.  After the structured log line it appends a
+stack backtrace as continuation lines indented by a tab:
+
+  ts=... level=ERROR src=file.c:42 func=handle msg="db timeout"
+  \et#0 ./myapp(handle+0x1a) [0x7f...]
+  \et#1 ./myapp(main+0x42) [0x7f...]
+
+A continuation line does not start with "ts=", which lets a log
+aggregator group it with the ERROR record above it.
+
+Backtrace frames 0 and 1 belong to the logger itself and are skipped, so
+frame #0 is the caller of clog_error.  A backtrace has at most 64
+frames.
+
+The binary must be linked with -rdynamic for the symbols to resolve.
+The capture itself can fail, on a platform with no execinfo.h or when an
+allocation fails for a moment while symbol names are resolved.  The
+logger then writes the log line as usual and appends one
+"\et#error backtrace unavailable" continuation line in place of the
+frames, so you can see that the backtrace is missing.
+.fi
+.SH PARAMETERS
+.nf
+lg     Logger handle (clog).
+fmt    printf-style format string.
+\&...    Format arguments (optional).
+.fi
+.SH NOTES
+.nf
+clog_error does NOT stop the process; use clog_fatal when you want the
+process to stop.
+The shared write lock covers the backtrace write as well, so the
+backtrace and its log line always appear together, even when several
+threads log at the same time.
+When memory stays short for a while, or the content of a record leaves
+little room before the internal buffer cap, a backtrace frame that
+cannot be formatted is left out, while a shorter frame after it can
+still go out.  An incomplete frame is never written, so every line that
+goes out is a complete, well-formed record.  When not a single frame
+fits, one "\et#error backtrace unavailable" continuation line takes
+their place, the same marker that a failed capture gives.  Under the
+same pressure in CLOG_FMT_JSON mode the backtrace can fail to fit at
+all, and a "bt_error":"unavailable" key then takes the place of "bt",
+so the omission is visible there too.
+.fi
+.SH EXAMPLES
+.nf
+clog_error(lg, "failed to open %s: %s", path, strerror(errno));
+clog_error(lg, "unexpected state %d in FSM", state);
+.fi
+.SH "SEE ALSO"
+.BR clog_alert (3),
+.BR clog_fatal (3),
+.BR clog_warn (3),
+.BR clog_create_from_fd_mp (3)

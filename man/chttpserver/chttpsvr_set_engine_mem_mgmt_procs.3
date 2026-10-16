@@ -11,34 +11,33 @@ ccol_retval_t chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
 .fi
 .SH DESCRIPTION
 .nf
-Routes every allocation of the shared ccol_event_loop reactor (the
-construction of the reactor and the records it keeps for each
-connection registration) through the malloc, free, calloc and realloc
-that mp holds, in the same way as the memory management procs that
-every other module in this library accepts.  Calling it with NULL
-restores the default allocator.
+Sends every allocation of the shared ccol_event_loop reactor through
+the malloc, free, calloc and realloc that mp holds.  That covers the
+construction of the reactor and the record it keeps for each
+connection registration, and it works like the memory management
+procs that every other module of the library accepts.  A NULL mp
+puts the default allocator back.
 
-Each chttpsvr instance uses its own allocator for its own connections
-and requests, which you set with ccol_create_chttpsvr_mp under the
-usual _mp convention.  This function is separate from that allocator
-and affects only the construction of the one shared reactor.
+Each chttpsvr instance has its own allocator for its own connections
+and requests, which you give to chttpsvr_create_mp by the usual _mp
+convention.  This function is separate from that allocator and only
+affects the construction of the one shared reactor.
 
-You can call this function only before the first chttpsvr_start call
-in the process, because once the reactor has allocated memory with one
-set of procs, swapping to a different malloc and free pair corrupts
-the heap.  You can call it again after the reactor has stopped
-completely (that is, after chttpsvr_engine_wait returns) and before
-the next chttpsvr_start.
+You can call it only before the first chttpsvr_start of the process.
+Once the reactor has allocated memory with one set of procs, a switch
+to another malloc and free pair corrupts the heap.  It may be called
+again after the reactor has stopped completely, which means after
+chttpsvr_engine_wait returns, and before the next chttpsvr_start.
 
-When mp is not NULL, all four function pointers (malloc, free, calloc
-and realloc) must be set.
+When mp is not NULL, all four function pointers (malloc, free,
+calloc and realloc) must be set.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success on success.
 ccol_invalid_args when mp is not NULL but has a NULL function pointer.
-ccol_not_permitted when the reactor is already running; stop it
-                  first in that case.
+ccol_not_permitted when the reactor is already running.  Stop it
+                  first.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_set_engine_logger (3),

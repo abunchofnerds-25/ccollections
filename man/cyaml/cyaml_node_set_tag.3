@@ -11,11 +11,11 @@ ccol_retval_t cyaml_node_set_tag(cyaml node, const char *tag);
 .fi
 .SH DESCRIPTION
 .nf
-Attach a tag to node, replace the tag of node, or clear it.  The node
+Attaches a tag to node, replaces node's tag, or clears it.  The node
 makes its own copy of tag.
 
-This function sets metadata only; it never changes the type or the
-value that node already has.
+Only the metadata changes.  The function never changes the type or
+the value that node has.
 
 A core-schema tag names exactly one node type:
 
@@ -27,53 +27,53 @@ A core-schema tag names exactly one node type:
   CYAML_TAG_SEQ    -> CYAML_LIST
   CYAML_TAG_MAP    -> CYAML_DICTIONARY
 
-The function refuses a core-schema tag on a node of any other type
-with ccol_invalid_args and leaves the node untouched, because
+A core-schema tag on a node of any other type is refused with
+ccol_invalid_args and the node is left untouched, because
 cyaml_parse(3) would refuse such a pairing or read it back as a
-different type.  A caller that wants a string node must construct one
-with cyaml_create_string(3) and then tag it.  A custom tag, which is
+different type.  If you want a string node, you have to build one
+with cyaml_create_string(3) and then tag it.  A custom tag, meaning
 any tag other than those seven, is valid on a node of any type.
 
-A custom tag that you set here survives a later cyaml_set(3) call on
-the same node, while a core-schema tag survives such a call only while
-it still names the type of the node: cyaml_set(3) drops a core-schema
-tag that the new value no longer matches.  cyaml_serialize(3) and
+A custom tag set here survives a later cyaml_set(3) call on the same
+node.  A core-schema tag survives such a call only as long as it
+names the node's type, since cyaml_set(3) drops a core-schema tag
+that the new value doesn't match.  cyaml_serialize(3) and
 cyaml_serialize_flow(3) write a custom tag in its fully resolved
-verbatim form and omit a core-schema tag, because implicit typing
-restores the type of its node with no help.
+verbatim form and leave a core-schema tag out, because implicit
+typing gives its node the right type without it.
 
-A tag must be well-formed UTF-8: the function refuses one that is not
-with ccol_invalid_args and leaves the tag that node already has
-untouched.  It accepts any other string that is not empty as a tag,
-including a string that holds a character which the URI characters of
-YAML 1.2 do not allow literally in the serialized output, such as a
-\&'>', a line break, a '%', a space, a control character or any
-non-ASCII character.  The serializer writes each byte of such a
-character as a percent escape, so a second parse of the tag gives
-exactly the string that you set here.
+A tag must be well-formed UTF-8.  One that is not is refused with
+ccol_invalid_args, and node keeps the tag it has.  Any other
+non-empty string is accepted as a tag, even one with a character
+that the URI characters of YAML 1.2 don't allow literally in the
+serialized output, such as a \&'>', a line break, a '%', a space, a
+control character or any non-ASCII character.  The serializer writes
+each byte of such a character as a percent escape, so parsing the
+tag again gives exactly the string you set here.
 
-The empty string is not a valid tag: the function rejects it with
-ccol_invalid_args and leaves the tag that node already has untouched.
-Because the serializer writes a custom tag in its verbatim "!<...>"
-form and cyaml_parse(3) does not accept "!<>", an empty tag would give
-a document that this library cannot parse again.  Pass NULL to clear a
-tag.
+The empty string is not a valid tag.  It is refused with
+ccol_invalid_args, and node keeps the tag it has.  The
+serializer writes a custom tag in its verbatim "!<...>" form and
+cyaml_parse(3) doesn't accept "!<>", so an empty tag would give a
+document that this library cannot parse again.  Pass NULL to clear a
+tag.  "!" alone is the non-specific tag, which no node carries, so it
+is refused with ccol_invalid_args too.
 .fi
 .SH PARAMETERS
 .nf
-node  Target node of any type.  For NULL, the function reports
+node  The target node, of any type.  For NULL the function reports
       ccol_invalid_args and changes nothing.
-tag   New tag string, which the node copies.  It must be well-formed
-      UTF-8 and must not be the empty string.  NULL clears the tag that
-      the node has.
+tag   The new tag string, which the node copies.  It must be
+      well-formed UTF-8 and must not be the empty string.  NULL
+      clears the node's tag.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success.  The function returns ccol_invalid_args when node is
-NULL, when tag is the empty string, when tag is not well-formed UTF-8,
-or when tag is a core-schema tag that does not name the type of node,
-and ccol_not_enough_memory on an allocation failure.  On every failure
-it leaves the tag that node already has untouched.
+ccol_success on success.  ccol_invalid_args when node is NULL, when
+tag is the empty string or "!", when tag is not well-formed UTF-8,
+or when tag is a core-schema tag that doesn't name node's type, and
+ccol_not_enough_memory when an allocation fails.  On every failure
+node keeps the tag it has.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_node_tag (3),

@@ -11,17 +11,16 @@ chmap_construct_mp_scoped(hm_name, key_t, val_t, mmgmt_procs);
 .fi
 .SH DESCRIPTION
 .nf
-Declares a hash map handle named hm_name, together with the companion
-type variables that carry key_t and val_t to every later type-inferred
-macro. The macro then creates a map that takes all of its memory from
-mmgmt_procs, and attaches the cleanup attribute, which destroys the map
-at every exit from the enclosing scope, an early return included.
+Declares a hash map handle named hm_name, along with the companion type
+variables that pass key_t and val_t on to every later type-inferred
+macro, and creates a map that takes all of its memory from mmgmt_procs.
+The handle gets the cleanup attribute, which destroys the map on every
+exit from the enclosing scope, an early return included.
 
-This macro is chmap_construct_mp(3) plus that cleanup attribute, and
-nothing else is different. chmap_construct_scoped(3) is the same macro
-with the default allocator, chmap_construct_ch_scoped(3) takes a hashing
-procedure in place of an allocator, and chmap_construct_full_scoped(3)
-takes both.
+The cleanup attribute is the only difference from chmap_construct_mp(3).
+chmap_construct_scoped(3) is the same macro with the default allocator,
+chmap_construct_ch_scoped(3) takes a hashing procedure instead of an
+allocator, and chmap_construct_full_scoped(3) takes both.
 .fi
 .SH PARAMETERS
 .nf
@@ -34,27 +33,32 @@ mmgmt_procs  Pointer to a ccol_memmgmt_procs_t, or NULL for the default
 .fi
 .SH RETURN VALUE
 .nf
-None. This macro declares variables and does not expand to an expression.
+None. The macro declares variables and is not an expression.
 .fi
 .SH NOTES
 .nf
-Stops the program through ccol_fatal_err() if the creation fails
+Stops the program through _ccol_fatal_err() if the creation fails
 Needs GCC or Clang, because it uses the cleanup attribute
 All four members of ccol_memmgmt_procs_t must be non-NULL, and the
 procedures must stay callable for the whole life of the map, which here
 ends at the closing brace of the enclosing scope
-Everything that the map allocates comes from these procedures, and the
-destruction at scope exit gives all of it back to them
-Scope exit destroys the map and clears the handle, so an explicit
-chmap_destroy(3) earlier in the scope stays correct
-The companion type variables follow the scope of the handle, so a
-function that receives the handle needs chmap_redeclare(3) there
+Everything the map allocates comes from these procedures, and the
+destroy at scope exit gives all of it back to them
+Leaving the scope destroys the map and clears the handle, so an explicit
+chmap_destroy(3) earlier in the scope is fine as well
+The companion type variables live in the scope of the handle, so a
+function that receives the handle needs chmap_redeclare(3) inside it
+An array key or value type, such as int[2] or char[16], is a compile
+error, and the message says to wrap the array in a struct. The macros copy
+a key or a value by assignment and C cannot assign an array, so the map
+would store the address of the caller's array instead of its elements. A
+struct that holds the array works
 .fi
 .SH WARNINGS
 .nf
-The handle must not outlive its scope. Do not return the handle, and do
-not store it anywhere that outlives the scope: either one hands out a
-handle whose map is freed at the exit from the scope.
+The handle must not outlive its scope. Do not return it and do not store
+it anywhere that outlives the scope, because either way you hand out a
+handle whose map is freed when the scope exits.
 .fi
 .SH EXAMPLES
 .nf

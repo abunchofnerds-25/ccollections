@@ -11,8 +11,15 @@ ccol_retval_t ccol_chan_disable_sending(ccol_channel *ch, ccol_channel_direction
 .fi
 .SH DESCRIPTION
 .nf
-This function stops all new sends on the given direction and wakes
-every thread that blocks inside a send on that direction.
+Refuses every new send on the given direction and wakes every thread
+that is blocked inside a send on that direction.
+
+From then on the queue of that direction counts as ready for a write
+selectable of ccol_select() and for a write registration of a
+ccol_event_loop, the same way a pipe whose reader has gone is ready for
+POLLOUT. The send that the waiter makes after that wake returns
+ccol_not_permitted at once. ccol_circq_disable_sending(3) has the
+details.
 .fi
 .SH PARAMETERS
 .nf
@@ -22,14 +29,13 @@ d    Direction that gets sends turned off (ccol_owner_to_workers or
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success       - The function turned sends off
+ccol_success       - Sends are off
 ccol_invalid_args  - ch is NULL, or d is not valid
 .fi
 .SH NOTES
 .nf
-The function wakes every blocked sender on the given direction and
-does not change the other direction. ccol_chan_enable_sending() turns
-sends on again.
+Only the given direction changes; the other one keeps its state. To
+turn sends back on, call ccol_chan_enable_sending().
 .fi
 .SH "SEE ALSO"
 .BR ccol_chan_enable_sending (3)

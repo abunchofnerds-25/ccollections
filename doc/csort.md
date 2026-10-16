@@ -1,22 +1,19 @@
 # csort: stable sorting
 
-`csort` is the library's sort. It is a mergesort, which gives it three
-useful properties:
+`csort` is the sort that the rest of the library uses. It's an iterative,
+bottom-up mergesort, so it is stable: if Ada and Chen both score 91 and Ada
+comes first, she is still first after the sort, which `qsort` doesn't
+promise. It runs in O(n log n) whatever the input looks like, and since it
+works with loops instead of recursion a very large input can't overflow the
+stack either.
 
-- **It is stable.** Equal elements keep their original order. If Ada and Chen
-  both score 91 and Ada comes first, Ada also comes first after the sort.
-  The C library's `qsort` makes no such guarantee.
-- **It is O(n log n) for every input.** No input can make it slow.
-- **It does not recurse.** It works bottom-up with loops, so even a very large
-  input cannot overflow the stack.
+What you pay for this is a temporary buffer as large as the data (O(n)
+extra memory), which the sort allocates and frees on every call.
 
-The price is a temporary buffer as large as the data (O(n) extra memory),
-which the sort allocates and frees on every call.
-
-Most of the time you use `csort` through a vector, with `cvec_sort` or
+Most of the time you reach `csort` through a vector, with `cvec_sort` or
 `cvector_sort_with_comparison_proc` (see the [cvector guide](cvector.md)).
-Call `csort_sort` directly to sort a plain C array, or any other storage that
-you can index, such as a ring buffer.
+You call `csort_sort` yourself when you want to sort a plain C array, or any
+other storage you can index, a ring buffer for example.
 
 ```c
 #include <ccollections/csort.h>
@@ -43,15 +40,15 @@ int main(void) {
 }
 ```
 
-`cvec_sort` picks a comparison from the element type, which works for every
-integer and floating-point type, for enums and for `char *` strings. For a
-struct, write a comparator and call `cvector_sort_with_comparison_proc`.
+`cvec_sort` picks the comparison from the element type. That works for every
+integer type, for `bool` (`false` before `true`), for every floating-point
+type, for enums and for `char *` strings. A struct needs a comparator of
+your own, which you pass to `cvector_sort_with_comparison_proc`.
 
 ## Write a comparator
 
-A comparator has the same form as the one `qsort` takes: it receives
-pointers to two elements and returns a negative number, zero or a positive
-number.
+A comparator looks exactly like the one `qsort` takes. It gets pointers to
+two elements and returns a negative number, zero or a positive number.
 
 ```c
 int by_price(const void *a, const void *b) {
@@ -60,15 +57,16 @@ int by_price(const void *a, const void *b) {
 }
 ```
 
-The `(x > y) - (x < y)` form is safer than `x - y`, because the `x - y`
-form overflows for large integers and does not work for floating point. To sort in descending
-order, swap `x` and `y`.
+Write `(x > y) - (x < y)` and not `x - y`. The subtraction looks shorter,
+but it overflows for large integers and gives wrong answers for floating
+point, so it isn't worth the saving. If you want a descending order, swap
+`x` and `y`.
 
 ## Sort a plain array
 
-`csort_sort` does not assume that the elements sit in a C array. Instead,
-you give it a *getter*: a function that returns a pointer to the element at a
-given index. For an ordinary array, the getter is one line:
+`csort_sort` doesn't assume the elements sit in a C array. You give it a
+*getter* instead, a function that returns a pointer to the element at a
+given index, and for an ordinary array that getter is one line:
 
 ```c
 #include <stdio.h>
@@ -111,16 +109,15 @@ The arguments are:
    allocator (see [Memory management](memory.md)).
 
 `csort_sort` returns `true` on success. It returns `false` only when it
-cannot sort, either because it cannot allocate the temporary buffer or
-because the sizes are out of range, and in that case the collection is left
-unchanged. When there are two or more elements, the getter and the
-comparator must not be `NULL`.
+can't sort at all, because the temporary buffer can't be allocated or the
+sizes are out of range, and then the collection is left as it was. With two
+or more elements the getter and the comparator must not be `NULL`.
 
 ## The default comparisons
 
-`csort_get_default_comparison_proc(x)` returns the comparison that
-`cvec_sort` uses for the type of `x`. It looks only at the type and never
-evaluates `x`, and you can pass the result to `csort_sort` yourself:
+`csort_get_default_comparison_proc(x)` gives you the comparison that
+`cvec_sort` would use for the type of `x`. It only looks at the type and
+never evaluates `x`, and you can hand the result to `csort_sort` yourself:
 
 ```c
 static void *long_at(void *collection, size_t index) {
@@ -134,16 +131,14 @@ if (!csort_sort(ids, 3, sizeof(ids[0]), long_at,
 }
 ```
 
-It returns `NULL` for a type that has no default comparison, such as a
-struct or a fixed-size `char` array like `char name[16]`.
+For a type that has no default comparison, a struct or a fixed-size `char`
+array like `char name[16]`, it returns `NULL`.
 
-Two rules make the default comparisons safe for messy data:
-
-- **Floating point:** a NaN sorts after every number and compares equal only
-  to another NaN, so a NaN never disturbs the order of the real numbers.
-- **Strings:** a `NULL` `char *` sorts before every string and compares equal
-  only to another `NULL`, so you can sort a list of optional names without
-  special code.
+The default comparisons are meant to cope with messy data. A NaN sorts
+after every number and is equal only to another NaN, so it never disturbs
+the order of the real numbers around it. A `NULL` `char *` sorts before
+every string and is equal only to another `NULL`, which means you can sort a
+list of optional names without any special code.
 
 ```c
 #include <math.h>
@@ -178,10 +173,9 @@ int main(void) {
 
 ## Example: a print queue by priority
 
-Urgent jobs print first, and jobs with the same priority must print in the
-order in which they arrived. Because the sort is stable, a comparator on the
-priority alone is enough; there is no need for a second comparison on the
-arrival time.
+Urgent jobs print first, and jobs with the same priority have to print in
+the order they arrived. Since the sort is stable, comparing the priority
+alone is enough and you don't need a second comparison on the arrival time.
 
 ```c
 #include <stdio.h>
@@ -219,14 +213,14 @@ int main(void) {
 ```
 
 `invoice.pdf` prints before `contract.pdf`, and the three jobs with
-priority 1 keep their order.
+priority 1 come out in the order they went in.
 
 ## Example: sort by two keys
 
-Stability also lets you sort by more than one key at no extra cost: sort by
-the minor key first, then by the major key, and the second sort keeps the
-order of the first within each group. This program lists employees by
-department, and by name within each department.
+Stability also gives you sorting by several keys for free. Sort by the minor
+key first and then by the major key, and the second sort keeps the order of
+the first one inside each group. The program below lists employees by
+department, and by name inside each department.
 
 ```c
 #include <stdio.h>
@@ -267,11 +261,11 @@ int main(void) {
 
 ## Example: sort a ring buffer in place
 
-Thanks to the getter, `csort_sort` can work on storage that is not a simple
-array. A ring buffer keeps its oldest element at `head` and wraps around from
-the end of its array to the start. A getter that maps a logical index to a
-slot index lets the sort put the elements in order where they are, without
-copying them out first.
+Because of the getter, `csort_sort` can work on storage that isn't a simple
+array. A ring buffer keeps its oldest element at `head` and wraps from the
+end of its array back to the start, so a getter that maps a logical index
+to a slot lets the sort order the elements where they are, without copying
+them out first.
 
 ```c
 #include <stdio.h>
@@ -313,20 +307,24 @@ int main(void) {
 
 ## Good to know
 
-- **The default comparisons do not treat a `char` array field as a
-  string.** A struct with a `char name[16]` member needs your own
-  comparator, and so does a vector of `char[16]`; for these types
-  `cvec_sort` does not compile.
-- **`char *` is a string.** A vector of `char *`, `unsigned char *` or
-  `uint8_t *` sorts by `strcmp`. If those pointers point to binary buffers,
-  write a comparator that compares the data correctly.
-- **The sort allocates memory.** Every call allocates a temporary buffer the
-  size of the data. If that allocation fails, the vector macros stop the
-  program, while `csort_sort` returns `false`.
-- **The pointers that the getter returns must stay valid** for the whole
-  sort.
+A `char` array field is not a string for the default comparisons. A
+struct with a `char name[16]` member needs your own comparator, and so does
+a vector of `char[16]`; `cvec_sort` doesn't compile for those types.
+
+On the other hand every `char *` is a string, and this one is easy to
+miss. A vector of `char *`, `unsigned char *` or `uint8_t *` sorts with
+`strcmp`, so if those pointers point to binary buffers you have to write a
+comparator that compares the data properly.
+
+Every call allocates a temporary buffer the size of the data. When that
+allocation fails the vector macros stop the program, while `csort_sort`
+returns `false`, so code that has to survive a failed allocation should call
+`csort_sort`. And the pointers your getter returns must stay valid for the
+whole sort.
 
 ## Reference
+
+Overview: [csort(7)](../man/csort/csort.7)
 
 [csort_sort(3)](../man/csort/csort_sort.3),
 [csort_get_default_comparison_proc(3)](../man/csort/csort_get_default_comparison_proc.3),

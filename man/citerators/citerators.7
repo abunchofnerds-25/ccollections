@@ -11,23 +11,20 @@ C Collections (libccollections, \-lccollections)
 .fi
 .SH DESCRIPTION
 .nf
-citerators is one iteration API for cvec, chmap and cbmap. cvector.h,
-chashmap.h and cbstmap.h each include it, so a translation unit that
-includes one of those container headers has the full API and needs no
-other #include.
+citerators is a single iteration API shared by cvec, chmap and cbmap.
+cvector.h, chashmap.h and cbstmap.h each include it, so including any one
+of those headers gives you the whole API with no other #include.
 
-ccol_for_each(3) is the usual form: it declares the iterator, walks the
-container and destroys the iterator when the loop ends. You can also
-write your own loop:
-  - Declare the iterator with ccol_iter_declare(3).
-  - Start it with ccol_begin(3).
-  - Move it to the next element with ccol_iter_next(3).
-ccol_iter_key_ptr(3) and ccol_iter_val_ptr(3) give typed pointers to
-the current key and the current value.
+Most code uses ccol_for_each(3), which declares the iterator, walks the
+container and destroys the iterator when the loop ends. If you want to
+write the loop yourself, declare the iterator with ccol_iter_declare(3),
+start it with ccol_begin(3) and move it on with ccol_iter_next(3).
+ccol_iter_key_ptr(3) and ccol_iter_val_ptr(3) give typed pointers to the
+current key and value.
 
-ccol_begin(3) selects the begin function of the container from its type
-at compile time, and a container of any other type is a compile error. A
-container handle that is NULL iterates as an empty container.
+ccol_begin(3) picks the begin function of the container from its type at
+compile time, and any type other than the three containers is a compile
+error. A NULL container handle iterates as an empty container.
 .fi
 .SH "KEYS AND VALUES"
 .nf
@@ -40,25 +37,24 @@ cbmap of K, V    const K *                   V *, or V const * when V
 .fi
 .SH "ORDER"
 .nf
-The iteration walks a cvec by index, from 0 up, and a cbmap in ascending
-key order. A chmap has no defined order; chashmap_begin_iter(3)
-describes it.
+A cvec is walked by index from 0 up and a cbmap in ascending key order.
+A chmap has no defined order; chashmap_begin_iter(3) describes what it
+does.
 .fi
 .SH "LIFETIME"
 .nf
 When ccol_iter_next(3) moves past the last element, it destroys the
-iterator and gives NULL. A loop can stop before the last element, and
-the iterator is then live until ccol_iter_destroy(3) or until the end of
-the scope of ccol_iter_declare(3). The key pointer and the value pointer
-are valid only while the iterator is on that element and the container
-does not change. An insert into the container or a removal from it
-during an iteration makes the iterator invalid, and the behavior is
-then undefined.
+iterator and returns NULL. If a loop stops earlier, the iterator stays
+live until ccol_iter_destroy(3) or until the end of the scope of
+ccol_iter_declare(3). The key and value pointers are valid only while the
+iterator is on that element and the container does not change. Inserting
+into the container or removing from it during an iteration invalidates
+the iterator, and the behavior is undefined from then on.
 .fi
 .SH NOTES
 .nf
-The macros use GNU C statement expressions and the cleanup attribute,
-so they need GCC or Clang.
+The macros use GNU C statement expressions and the cleanup attribute, so
+they need GCC or Clang.
 .fi
 .SH "SEE ALSO"
 .BR ccol_for_each (3),

@@ -23,10 +23,11 @@ SOFTWARE.
 */
 
 /*
- * The build makes this file WITHOUT -D_FILE_OFFSET_BITS=64 (see the Makefile
- * of this directory), while every other translation unit in this suite and
- * the library itself use that flag. This file therefore sees <clogger.h> the
- * way an application with ordinary default flags sees it.
+ * The build compiles this file WITHOUT -D_FILE_OFFSET_BITS=64 (see the
+ * Makefile of this directory), although the library and every other
+ * translation unit in this suite use that flag, so this file sees
+ * <clogger.h> the way an application built with ordinary default flags
+ * sees it.
  */
 
 #include "consumer_view.h"
@@ -58,5 +59,5 @@ clog clogger_consumer_open_rotating(const char *path, int64_t max_file_size,
       .max_rotated_files = max_rotated_files,
       .compress_rotated = false,
   };
-  return clog_open_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
+  return clog_create_from_file_mp(path, CLOG_INFO, &cfg, NULL, NULL);
 }

@@ -1,0 +1,139 @@
+.TH CCOL_DETERMINE_CCOL_DATA_TYPE 3 "2026-10-14" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccol_determine_ccol_data_type, ccol_data_type \- the data type enumerator
+that matches the type of an expression
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/common.h>
+
+typedef enum ccollections_data_type {
+  ccol_char = 0,
+  ccol_short = 1,
+  ccol_int = 2,
+  ccol_long = 3,
+  ccol_long_long = 4,
+  ccol_unsigned_char = 5,
+  ccol_unsigned_short = 6,
+  ccol_unsigned_int = 7,
+  ccol_unsigned_long = 8,
+  ccol_unsigned_long_long = 9,
+  ccol_float = 10,
+  ccol_double = 11,
+  ccol_long_double = 12,
+  ccol_pointer = 13,
+  ccol_string = 14,
+  ccol_other_types = 15,
+  ccol_signed_char = 16,
+} ccol_data_type;
+
+ccol_data_type ccol_determine_ccol_data_type(data);
+.fi
+.SH DESCRIPTION
+.nf
+ccol_data_type names the type of the keys or the values of a map or a
+cache. chmap_create(3), chmap_create_mp(3), chmap_create_ch(3) and
+chmap_create_full(3) take one for the keys (key_type) and one for the
+values (val_type). cbmap_create(3), cbmap_create_mp(3),
+cbmap_create_ch(3) and cbmap_create_full(3) take one for the keys, and
+clrucache_create_full(3) takes one for the keys and one for the values.
+The enumerator decides how the container stores, compares and hashes an
+element, and which width a cmap_pair of a fixed-width type must carry
+(see ccol_fixed_width_data_type_size(3)).
+
+ccol_determine_ccol_data_type() returns the enumerator that matches the
+type of data. It looks only at the type, at compile time, so the result
+does not depend on the value that data holds. A caller of the raw create
+functions uses it to get the right value. The type-inferred construct
+macros, such as chmap_construct(3) and cbmap_construct(3), apply the
+same rule to their declared types, so a map made through either layer
+treats its elements the same way.
+
+The enumerators stand for the C types below, and each one also covers
+the const-qualified spelling of its type:
+
+  ccol_char                char
+  ccol_signed_char         signed char (int8_t on the usual platforms)
+  ccol_unsigned_char       unsigned char (uint8_t)
+  ccol_short               short
+  ccol_unsigned_short      unsigned short
+  ccol_int                 int
+  ccol_unsigned_int        unsigned int
+  ccol_long                long
+  ccol_unsigned_long       unsigned long
+  ccol_long_long           long long
+  ccol_unsigned_long_long  unsigned long long
+  ccol_float               float
+  ccol_double              double
+  ccol_long_double         long double
+  ccol_string              char *, signed char *, unsigned char * and
+                           their const forms, and an array of any of
+                           these character types: a NUL-terminated
+                           string whose size includes the NUL
+  ccol_pointer             any other object or function pointer, stored
+                           as the pointer value itself
+  ccol_other_types         a struct, a union, _Bool, and every other
+                           type that the list above does not name;
+                           such an element is stored, compared and
+                           hashed as its bytes
+
+A plain char has its own enumerator, apart from signed char and unsigned
+char, because whether a plain char is signed is up to the platform.
+signed char has its own one so that its comparison is signed on every
+platform.
+
+The fixed-width integer types of <stdint.h> map to the enumerator of the
+standard type that the platform defines them as. int64_t, for example,
+is ccol_long on LP64 Linux and ccol_long_long on i386. An enum type maps
+to the integer type that the compiler makes it compatible with.
+.fi
+.SH PARAMETERS
+.nf
+data   The expression whose type the macro looks at. It is never
+       evaluated, so an rvalue or a variable that holds no value yet
+       is fine.
+.fi
+.SH RETURN VALUE
+.nf
+The ccol_data_type enumerator that matches the type of data, as given
+in the table above, or ccol_other_types for any type that the table does
+not name.
+.fi
+.SH NOTES
+.nf
+The macro is a GNU statement expression, so a translation unit that uses
+it needs GCC or Clang with the GNU extensions (-std=gnu11, for example).
+Merely including common.h does not need them.
+
+A character pointer always means a NUL-terminated string. For a key made
+of binary bytes, use a fixed-size struct (ccol_other_types), or the raw
+*_elem functions with an explicit size in the cmap_pair.
+.fi
+.SH EXAMPLES
+.nf
+#include <stdint.h>
+#include <ccollections/chashmap.h>
+
+int main(void) {
+  char *err = NULL;
+  uint64_t key_sample = 0;
+  const char *val_sample = NULL;
+  chmap m = chmap_create(16,
+                         ccol_determine_ccol_data_type(key_sample),
+                         ccol_determine_ccol_data_type(val_sample),
+                         &err);
+  if (!m)
+    return 1;
+  chmap_destroy(m);
+  return 0;
+}
+.fi
+.SH "SEE ALSO"
+.BR ccol_fixed_width_data_type_size (3),
+.BR chmap_create (3),
+.BR chmap_create_full (3),
+.BR cbmap_create (3),
+.BR cbmap_create_full (3),
+.BR clrucache_create_full (3),
+.BR ccollections (7)

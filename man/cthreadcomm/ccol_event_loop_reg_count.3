@@ -11,11 +11,12 @@ size_t ccol_event_loop_reg_count(ccol_event_loop loop);
 .fi
 .SH DESCRIPTION
 .nf
-This function returns the number of live registrations, that is, of
-ccol_event_loop_add() calls that nothing has removed yet, and not the
-number of entries in the epoll interest list. One fd with both
-directions registered counts as 2, because two independent
-ccol_event_reg handles back that fd, although they share one entry.
+Returns the number of live registrations, meaning
+ccol_event_loop_add() calls whose registration has not been removed
+yet. It does not count entries in the epoll interest list, so one fd
+registered for both directions counts as 2: two independent
+ccol_event_reg handles stand behind it, even though they share one
+entry.
 .fi
 .SH PARAMETERS
 .nf
@@ -23,16 +24,16 @@ loop  ccol_event_loop to query.
 .fi
 .SH RETURN VALUE
 .nf
-Returns the count of the registrations on success, or (size_t)-1 when
-loop is CCOL_EVENT_LOOP_INVALID, or a handle that is stale or that
-something already destroyed.
+The number of registrations, or (size_t)-1 when loop is
+CCOL_EVENT_LOOP_INVALID, a stale handle, or a handle that has already
+been destroyed.
 .fi
 .SH THREAD SAFETY
 .nf
-Safe to call at the same time as ccol_event_loop_add(), as
-ccol_event_loop_remove(), and as a dispatch on any reactor thread. It
-returns a consistent snapshot: a single atomic load, which cannot
-tear, with no lock that protects the value.
+Safe to call at the same time as ccol_event_loop_add(),
+ccol_event_loop_remove() and a dispatch on any reactor thread. The
+value is a consistent snapshot read with a single atomic load, which
+cannot tear, and no lock is taken.
 .fi
 .SH "SEE ALSO"
 .BR ccol_event_loop_add (3),

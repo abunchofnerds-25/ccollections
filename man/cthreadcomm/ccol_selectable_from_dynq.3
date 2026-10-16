@@ -11,20 +11,22 @@ ccol_selectable_from_dynq(q, dir);
 .fi
 .SH DESCRIPTION
 .nf
-This macro builds a ccol_selectable value, a tagged union whose type
-here is ccol_selectable_dynq, that wraps the ccol_dynamic_queue
-pointer that you give, with the direction that you give.
+Builds a ccol_selectable value (a tagged union, here of type
+ccol_selectable_dynq) that wraps the given ccol_dynamic_queue pointer
+with the given direction.
 
   ccol_select_read; wait for at least one message to arrive (read-wait)
-  ccol_select_write; wait until sending is enabled and the queue holds
-                     fewer than ccol_max_elem_count messages, the same
-                     ceiling ccol_dynmq_send_zc() itself enforces
+  ccol_select_write; wait until the queue holds fewer than
+                     ccol_max_elem_count messages, the same ceiling
+                     ccol_dynmq_send_zc() itself enforces, or until
+                     sends on the queue are turned off
 
-A ccol_dynamic_queue is unbounded in practice, so the library always
-treats it as writable for as long as writes are turned on. You need
-ccol_select_write on a ccol_dynamic_queue in one case only: after a
-call to ccol_dynmq_disable_sending(), when the caller must know when
-the queue becomes writable again.
+In practice a ccol_dynamic_queue has no bound, so the write direction
+is nearly always ready at once. A queue whose sends were turned off
+with ccol_dynmq_disable_sending() is ready too, the same way a pipe
+whose reader has gone is ready for POLLOUT, and the
+ccol_dynmq_send_zc() that the caller makes next returns
+ccol_not_permitted.
 .fi
 .SH PARAMETERS
 .nf
@@ -48,6 +50,9 @@ ccol_select_va(&idx,
 /* on ccol_success, claim the message with ccol_dynmq_try_recv_zc(dq, ...)
    or ccol_circq_try_recv_zc(q0, ...), for whichever selectable idx
    points at */
+
+ccol_dynamic_queue_destroy(dq);
+ccol_circular_queue_destroy(q0);
 .fi
 .SH "SEE ALSO"
 .BR ccol_select (3),

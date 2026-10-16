@@ -18,9 +18,9 @@ ccol_r_mempool *ccol_r_mempool_create(
 .fi
 .SH DESCRIPTION
 .nf
-Creates a ranged memory pool that manages many fixed-size pools,
-organized by power-of-2 sizes, and selects the right sub-pool for each
-allocation request.
+Creates a ranged memory pool, which manages several fixed-size pools
+of power-of-2 sizes and picks the right one for each allocation
+request.
 .fi
 .SH PARAMETERS
 .nf
@@ -28,7 +28,7 @@ smallest_size_power_of_two              Exponent for smallest pool size
 largest_size_power_of_two               Exponent for largest pool size
 number_of_smallest_size_elems_power_of_two  Exponent for smallest pool count
 fb_policy                               Fallback policy for an empty pool
-single_threaded                         If true, do not lock
+single_threaded                         If true, take no lock
 mmgmt_procs                             Custom memory management, or NULL
 err                                     Optional pointer that receives an error string
 .fi
@@ -42,77 +42,75 @@ Returns NULL on failure
 Each sub-pool has half the elements of the size before it
 The smallest size that the pool accepts is 16 bytes (power = 4)
 Example: smallest=4 (16 bytes), largest=6 (64 bytes), count=8 (256 elems)
-  This creates three pools: 16 bytes (256 elems), 32 bytes (128), and
-  64 bytes (64)
+  gives three pools: 16 bytes (256 elems), 32 bytes (128) and 64 bytes
+  (64)
 Fallback policies:
-  - ccol_fallback_disabled: Tries each larger pool in sequence, and
-    returns NULL when all of them are empty too
-  - ccol_fallback_at_first_exhaustion: When the pool that fits the
-    request has no free entries, that pool gives the memory from the
-    heap; the request never goes to a larger pool
-  - ccol_fallback_at_last_exhaustion: Tries each larger pool in
-    sequence, and uses the heap only when all the pools that can serve
-    the request are empty
+  - ccol_fallback_disabled: tries each larger pool in turn, and returns
+    NULL when all of them are empty too
+  - ccol_fallback_at_first_exhaustion: when the pool that fits the
+    request has no free entry, that pool takes the memory from the
+    heap, and the request never goes to a larger pool
+  - ccol_fallback_at_last_exhaustion: tries each larger pool in turn,
+    and goes to the heap only when every pool that can serve the
+    request is empty
 Each sub-pool calls the functions of mmgmt_procs for its dynamic
 fallback entries, and for its own bookkeeping of them, in the middle of
-an update of its own state, with its lock held when it has one. Those
-functions must therefore not call back into this same ranged pool: with
-a lock the call can deadlock, and without one it corrupts that state. An
+an update of its own state and with its lock held when it has one.
+Those functions must not call back into the same ranged pool: with a
+lock the call can deadlock, and without one it corrupts that state. An
 allocator built on a pool must draw from a different pool
 
 Sizing for performance:
 
 Each sub-pool has its own size, so the 8-element floor that
-ccol_mempool_create(3) describes applies to each tier, not to the pool
-as a whole. Because each tier holds half the elements of the tier below
-it, the largest few element sizes have the fewest entries and are the
-first to fall under that floor. A tier with fewer than 8 elements takes
+ccol_mempool_create(3) describes applies to each tier and not to the
+pool as a whole. Since each tier holds half the elements of the tier
+below it, the largest element sizes have the fewest entries and are the
+first to drop under that floor. A tier with fewer than 8 elements takes
 its lock on every allocation and every free.
 
-A higher number_of_smallest_size_elems_power_of_two lifts every tier at
-once, which makes it the simplest way to keep the tiers with large
-elements above the floor. A narrower range between
-smallest_size_power_of_two and largest_size_power_of_two has the same
-effect, because it produces fewer tiers to divide the elements between.
+A higher number_of_smallest_size_elems_power_of_two raises every tier
+at once, so it is the simplest way to keep the tiers of large elements
+above the floor. A narrower range between smallest_size_power_of_two
+and largest_size_power_of_two does the same, because there are fewer
+tiers to share the elements.
 
-Every tier that receives a cache allocates a reserve of its own, so the
-memory of a ranged pool can exceed the sum of its nominal tier sizes by
-up to half, and by proportionally less for a tier large enough for its
-caches to reach maximum depth. The library allocates that memory when it
-creates the pool, so nothing grows at run time.
-ccol_r_mempool_total_capacity() reports the nominal count of a tier, and
-a tier moves up to a larger tier, or falls back, once that count runs
-out. The one exception is the same one that
-ccol_mempool_total_capacity(3) describes: an entry leaves the cache of a
-thread with no lock held, and so with no count to consult, so concurrent
-callers can hold a few entries more than the nominal count of a tier at
-one time, for a short time, but never more than that count plus the
-reserve of the tier.
+Every tier that gets a cache allocates a reserve of its own, so the
+memory of a ranged pool can be up to half again the sum of its nominal
+tier sizes, and proportionally less for a tier large enough for its
+caches to reach their maximum depth. That memory is allocated when the
+pool is created and nothing grows at run time.
+ccol_r_mempool_total_capacity() reports the nominal count of a tier,
+and once that count runs out the request moves up to a larger tier or
+falls back. The one exception is the one that
+ccol_mempool_total_capacity(3) describes: an entry leaves a thread's
+cache with no lock held, so there is no count to consult, and
+concurrent callers can hold a few entries more than a tier's nominal
+count for a short time, but never more than that count plus the tier's
+reserve.
 
 The best range, tier count and single_threaded setting depend on the
-size distribution of the allocations of the program, which no default
-can predict, so measure rather than assume. "make bench" in the source
-tree runs these pools beside the system allocator, on the current
-machine.
+sizes the program allocates, which no default can predict, so measure
+instead of guessing. "make bench" in the source tree runs these pools
+beside the system allocator on the current machine.
 .fi
 .SH "THREAD SAFETY"
 .nf
-Thread-safe when single_threaded is false. Each sub-pool carries its own
-lock, so allocations for different size classes never contend with one
-another, and inside a tier large enough to keep a cache for each thread
-the common path takes no lock at all.
+Thread-safe when single_threaded is false. Each sub-pool has its own
+lock, so allocations of different size classes never contend with each
+other, and inside a tier that is large enough to keep a cache for each
+thread the common path takes no lock at all.
 
-An entry in the cache of a thread returns to its tier when that thread
-exits. A destroy of the pool does not return such an entry; it frees the
-whole block of each tier, those entries included, and cuts every thread
-cache loose without reading it. The thread that owns a cache writes its
-contents with no synchronization, so reading those contents from the
-thread that destroys the pool would be a data race. The small allocation
-of a cache is a separate matter: the library frees it at the next
-allocation of its owning thread from any pool, at the exit of that
-thread, or at process exit, and the pool can force none of these three.
-A program that needs its allocator to see every free should join such
-threads before it destroys the pool.
+An entry in a thread's cache goes back to its tier when that thread
+exits. A destroy of the pool doesn't give such an entry back. It frees
+the whole block of each tier, those entries included, and cuts every
+thread cache loose without reading it, because the thread that owns a
+cache writes it with no synchronization and reading it from the
+destroying thread would be a data race. The small allocation of the
+cache itself is freed at the owning thread's next allocation from any
+pool, when that thread exits, or at process exit, and the pool can
+force none of these three. A program that needs its allocator to see
+every free should join such threads before it destroys the pool.
 .fi
 .SH "SEE ALSO"
 .BR ccol_r_mempool_create_from_preallocated_buffer (3),

@@ -1,0 +1,33 @@
+.TH CHTTPSVR_CREATE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_create \- create an HTTP server with the default allocator
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpserver.h>
+
+chttpsvr chttpsvr_create(clog cl, char **err_str);
+.fi
+.SH DESCRIPTION
+.nf
+An inline wrapper around chttpsvr_create_mp that passes NULL as
+mprocs.
+
+cl may be CLOG_INVALID.  The rules for the logger are on the
+chttpsvr_create_mp page.
+.fi
+.SH RETURN VALUE
+.nf
+A valid chttpsvr handle on success, or CHTTPSVR_INVALID on failure.
+.fi
+.SH NOTES
+.nf
+At exit, the library's destructor releases its table of server
+handles once no server is left.  A call made after that point, for
+example from a later destructor or atexit handler of the
+application, returns CHTTPSVR_INVALID with an error string, and every
+other function treats any handle it receives as invalid.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_create_mp (3)

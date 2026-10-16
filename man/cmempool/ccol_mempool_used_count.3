@@ -11,11 +11,11 @@ size_t ccol_mempool_used_count(ccol_mempool *mp);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the number of pool-owned elements that the pool holds out to
-callers now. An element that sits in the cache of a thread has left the
-shared free list, but the pool gave it to nobody, so the call does not
-count it as used. It does not count a dynamic fallback entry either; see
-ccol_mempool_dynamic_allocs_count(3) for those.
+Returns the number of pool-owned elements that callers hold at the
+moment. An element sitting in a thread's cache has left the shared free
+list, but the pool gave it to nobody, so it doesn't count as used. A
+dynamic fallback entry isn't counted either;
+ccol_mempool_dynamic_allocs_count(3) reports those.
 .fi
 .SH PARAMETERS
 .nf
@@ -23,27 +23,30 @@ mp                        Memory pool to query (must not be NULL)
 .fi
 .SH RETURN VALUE
 .nf
-Returns the number of elements in use now
+Returns the number of elements in use at the moment
 .fi
 .SH NOTES
 .nf
-The count is exact whenever the pool is quiet. If other threads allocate
-or free while this call runs, the result is a snapshot that can already
-be stale when the call returns, which is inherent in a count of
-something that moves.
+The count is exact whenever the pool is quiet. If other threads
+allocate or free while the call runs, the result is a snapshot that
+can be stale by the time the call returns, as any count of something
+that keeps moving is.
 
-On a quiet pool the result never exceeds
+On a quiet pool the result never goes above
 ccol_mempool_total_capacity(). Under concurrent allocation on a pool
-with a cache for each thread, it can sit a few entries above that for a
+with a cache for each thread it can be a few entries above that for a
 short time, but never above the physical slot count that
-ccol_mempool_allocated_bytes(3) reports. See
-ccol_mempool_total_capacity(3) for why.
+ccol_mempool_allocated_bytes(3) reports. ccol_mempool_total_capacity(3)
+explains why.
+
+A NULL mp is a fatal error: the call prints a message and ends the
+process with abort(), in every build.
 .fi
 .SH "THREAD SAFETY"
 .nf
 Thread-safe when the pool was created with single_threaded = false.
-The call takes the lock of the pool and walks the cache of each thread,
-which makes it a cold-path call: do not use it inside a hot loop.
+The call takes the pool's lock and walks the cache of each thread, so
+it belongs on a cold path; don't use it inside a hot loop.
 .fi
 .SH "SEE ALSO"
 .BR ccol_mempool_total_capacity (3),

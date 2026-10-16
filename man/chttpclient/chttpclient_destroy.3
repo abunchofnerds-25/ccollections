@@ -11,26 +11,46 @@ chttpclient_destroy(cli)
 .fi
 .SH DESCRIPTION
 .nf
-This macro waits for every request that is in flight to finish, then
-frees every resource and sets cli to CHTTPCLI_INVALID.
+This macro waits until every request in flight has finished, then frees
+every resource and sets cli to CHTTPCLI_INVALID.
 
-"Every request that is in flight" covers all three tiers: a synchronous
-chttpclient_do or chttpclient_do_streaming call that still runs on
-another thread, and a request from chttpclient_do_async,
+"Every request in flight" covers all three tiers: a synchronous
+chttpclient_do or chttpclient_do_streaming call running on another
+thread, and a request from chttpclient_do_async,
 chttpclient_do_async_streaming, chttpclient_do_pooled or
-chttpclient_do_pooled_streaming, which counts while the shared reactor
-engine still works on it. A connection that sits idle in the pool does
-not count. This macro is safe even when nothing has waited yet on a
-ctpool_future from chttpclient_do_async or from
+chttpclient_do_pooled_streaming for as long as the shared reactor
+engine is working on it. An idle connection in the pool does not
+count. The macro is safe even if nobody has waited yet on a
+ctpool_future from chttpclient_do_async or
 chttpclient_do_async_streaming.
 
-cli must be a handle that is live now, or CHTTPCLI_INVALID, which is a
-silent no-op. Three other kinds of value are a FATAL ERROR: a stale
-handle that an earlier call already destroyed, a stale handle that
-another thread destroys at this same moment, and a forged value or
-garbage. For each of them the macro calls abort() and raises SIGABRT,
-because that is safer than the risk of a silent double free or of a
-use-after-free.
+cli must be a live handle, or CHTTPCLI_INVALID, which is a silent
+no-op. Three other kinds of value are a FATAL ERROR: a stale handle that an
+earlier call destroyed, a stale handle that another thread is
+destroying at the same moment, and a forged or garbage value. In each
+of those cases the macro calls abort() and raises SIGABRT, which is
+safer than risking a silent double free or a use-after-free.
+
+Destroying cli from inside a request of that same client is a FATAL
+ERROR too. A call on cli from the write_fn of chttpclient_do_streaming,
+chttpclient_do_async_streaming or chttpclient_do_pooled_streaming would
+wait for ever for the very request that runs it, so the macro calls
+abort() instead, with a message that names the misuse.
+
+Destroying ANY client on an async engine thread, that is, from the
+write_fn of chttpclient_do_async_streaming or
+chttpclient_do_pooled_streaming, is also a FATAL ERROR. The destroy
+waits for that client's Tier 2 and Tier 3 requests and for the
+teardown of its idle connections, and the engine threads are the ones
+that run that work. With one or two reactor threads, the thread that
+would do the work is the one that waits, so the destroy would never
+return. Destroying another client from the write_fn of
+chttpclient_do_streaming, which runs on the caller's thread, is an
+ordinary destroy.
+
+When the last client that used Tier 2 or Tier 3 is destroyed, the
+engine stops on its own thread, and chttpcli_engine_wait waits for
+that to finish.
 .fi
 .SH PARAMETERS
 .nf
@@ -38,10 +58,12 @@ cli   An lvalue of the type chttpcli.
 .fi
 .SH NOTES
 .nf
-The macro evaluates cli exactly once. It must be a modifiable lvalue,
-such as a variable or an element of an array, so an expression with a
-side effect, such as handles[i++], destroys and clears one element.
+The macro evaluates cli exactly once. cli must be a modifiable lvalue,
+such as a variable or an array element, and an expression with a side
+effect such as handles[i++] destroys and clears exactly one element.
 .fi
 .SH "SEE ALSO"
-.BR ccol_create_chttpclient (3),
+.BR chttpclient_create (3),
+.BR chttpcli_engine_wait (3),
+.BR chttpclient_do_streaming (3),
 .BR chttp_default_client (3)

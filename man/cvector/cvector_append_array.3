@@ -11,9 +11,8 @@ bool cvector_append_array(cvec v, const void *arr_ptr, size_t elem_count);
 .fi
 .SH DESCRIPTION
 .nf
-This function appends an array of elements to the end of the vector,
-reserving more capacity automatically when the vector needs space for all
-the elements.
+Appends an array of elements to the end of the vector, reserving more
+capacity when the vector needs room for all of them.
 .fi
 .SH PARAMETERS
 .nf
@@ -24,34 +23,34 @@ elem_count  Number of elements in the array
 .fi
 .SH RETURN VALUE
 .nf
-Gives true on success
-Gives false when:
+true on success.
+false when:
   - the new total count overflows or is more than ccol_max_elem_count
   - the memory allocation fails
   - arr_ptr aliases the backing buffer of v and elem_count reads past
-    the end of the reservation of that buffer
+    the end of that buffer's reservation
 .fi
 .SH NOTES
 .nf
-The function appends all the elements or none of them.
-The function reserves more capacity automatically when this is
-necessary.
-The function copies the elements into the vector.
+Either all the elements are appended or none are. The elements are copied
+into the vector, and more capacity is reserved automatically when needed.
 The function asserts when v is NULL.
+
 arr_ptr can safely point into the backing buffer of v, for example a
-pointer from cvector_data_ptr(3) or from cvector_at(3); a capacity
-growth that this call starts does not invalidate such a pointer.
-The source range and the destination range can overlap, for example
-when an arr_ptr aliases the buffer of v and its elem_count reads past
-the current element count of the vector, into capacity that the vector
-reserved already. The copy is safe when the ranges overlap.
-A source range that aliases must stay inside the reserved capacity of v.
-The call gives false, and leaves v unchanged, in one case: an arr_ptr
-that points into the backing buffer of v with an elem_count that reads
-past the end of the reservation of that buffer. Only a source range that
-aliases can have this bound, because an array of the caller has no
-extent that this function can see, as is true for every C array that a
-caller passes as a bare pointer.
+pointer from cvector_data_ptr(3) or cvector_at(3); a capacity growth
+started by this call doesn't invalidate it.
+
+The source and destination ranges may overlap, for example when arr_ptr
+aliases the buffer of v and elem_count reads past the current element
+count into capacity that the vector has already reserved. The copy is safe
+in that case, but a source range that aliases must stay inside the
+reserved capacity of v. The one case where the call returns false and
+leaves v unchanged for this reason is an arr_ptr into the backing buffer
+of v with an elem_count that reads past the end of that buffer's
+reservation. Only an aliasing source range can be checked this way,
+because a caller's own array has no extent that the function can see, as
+with any C array passed as a bare pointer.
+
 The cvec_append_array(3) macro evaluates elem_count exactly once, on the
 failure path too, so an expression with a side effect is safe to pass.
 .fi

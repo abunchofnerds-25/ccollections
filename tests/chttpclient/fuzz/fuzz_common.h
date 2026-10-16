@@ -23,20 +23,19 @@ SOFTWARE.
 */
 
 /*
- * The shared driver for the two libFuzzer harnesses of chttp1_parser,
- * fuzz_chttp1_request.c and fuzz_chttp1_response.c. This is not a public
- * header of this library; it lives only under this fuzz/ directory.
+ * The driver that the two libFuzzer harnesses of chttp1_parser share,
+ * fuzz_chttp1_request.c and fuzz_chttp1_response.c. It isn't a public header of
+ * the library and it only lives under this fuzz/ directory.
  *
- * It feeds a fuzz input to a parser that is already initialized, in chunks
- * of random size, which exercises the class of fragmentation at a byte
- * boundary. The tests_parser.c suite of this parser already treats that
- * class as valuable; see its assert_fragmented_matches_oneshot helper.
+ * It feeds a fuzz input to a parser that is already initialized, in chunks of
+ * random size, so the fuzzer also hits the bugs that only show up when a
+ * message is cut at some byte boundary. tests_parser.c already cares about that
+ * class of bug, see its assert_fragmented_matches_oneshot helper.
  *
- * The chunk boundaries come from the bytes of the input itself, through a
- * small PRNG in the style of splitmix64, so they are the same every time and
- * never come from real randomness or from the clock. libFuzzer needs two
- * runs of the same input to reach the same code path, and a crash must be
- * reproducible from its saved input file alone.
+ * The chunk boundaries are taken from the bytes of the input itself, through a
+ * small splitmix64 style PRNG, and never from real randomness or the clock.
+ * libFuzzer needs two runs of the same input to take the same code path, and a
+ * crash must be reproducible from its saved input file alone.
  */
 
 #ifndef FUZZ_COMMON_H
@@ -59,23 +58,21 @@ static void fuzz_rng_seed(const uint8_t *data, size_t size) {
   uint64_t seed = 0;
   size_t n = size < sizeof(seed) ? size : sizeof(seed);
   for (size_t i = 0; i < n; i++) seed = (seed << 8) | data[i];
-  /* A seed of zero makes every later fuzz_rng_next() call return 0 for
-   * ever, which is the degenerate fixed point of splitmix64, so this code
-   * falls back to a fixed seed that is not zero. The derived seed is really
-   * zero only for a rare, short input. */
+  /* splitmix64 has a degenerate fixed point at zero, where every later
+   * fuzz_rng_next() call returns 0 for ever, so we fall back to a fixed seed
+   * that isn't zero. The derived seed is really zero only for a rare, short
+   * input. */
   fuzz_rng_state = seed ? seed : 0x9E3779B97F4A7C15ULL;
 }
 
 /*
- * This feeds all of data[0..size) to the parser, across chunks of random
- * size.
+ * Feeds all of data[0..size) to the parser, in chunks of random size.
  *
- * It obeys the contract of CHTTP1_HEADERS_ONLY, which belongs to request
- * mode alone: chttp1_parser_consumed() reports how much of the chunk that
- * the code JUST FED went to the header block, and whatever is left over is
- * real, valid body bytes that the code must feed instead of discarding them.
- * The bytes left over after a pause in response mode, which CHTTP1_PAUSED
- * reports, are different.
+ * It follows the contract of CHTTP1_HEADERS_ONLY, which only request mode has:
+ * chttp1_parser_consumed() tells how much of the chunk we JUST FED went into
+ * the header block, and what is left over is real body bytes that we have to
+ * feed instead of throwing them away. The leftover bytes after a response mode
+ * pause (CHTTP1_PAUSED) are a different thing.
  */
 static void fuzz_feed_fragmented(chttp1_parser_t *parser, const uint8_t *data,
                                  size_t size) {
@@ -97,10 +94,9 @@ static void fuzz_feed_fragmented(chttp1_parser_t *parser, const uint8_t *data,
       pos = chunk_start + chttp1_parser_consumed(parser);
       continue;
     }
-    /* The code reaches here for CHTTP1_PAUSED (the message is complete),
-     * for CHTTP1_ERROR, or for CHTTP1_USER. For all three, the documented
-     * contract of chttp1_parser_execute says that no more feeding is valid
-     * on this parser. */
+    /* We get here for CHTTP1_PAUSED (the message is complete), CHTTP1_ERROR or
+     * CHTTP1_USER, and for all three the documented contract of
+     * chttp1_parser_execute says the parser can't be fed any more. */
     break;
   }
 }

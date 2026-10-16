@@ -11,20 +11,20 @@ ValT *ccol_iter_val_ptr(it);            /* ValT const * for a char pointer */
 .fi
 .SH DESCRIPTION
 .nf
-This macro gives a typed pointer to the value of the element that the
-iterator is currently on. A change through this pointer also changes the
-container below it.
+ccol_iter_val_ptr returns a typed pointer to the value of the element
+that the iterator is on. Writing through it changes the element in the
+container.
 
-For a value type that is a character pointer, the target carries a const
-qualifier: the caller reads the stored string and can edit its bytes in
-place inside the stored length, but does not replace the string. A map
-can name only one such object, its own accessor slot, and the companion
-size field of that slot describes the string that the slot currently
-points at. A stored pointer that the map did not allocate and did not
-size leaves that size describing a different string, so the next read of
-the element runs past the end of the new string. To store a different
-string, use the insert operation of the owning container. Every other
-value type names the element itself, and the caller can write through it.
+When the value type is a character pointer, the target is const
+qualified. You can read the stored string and edit its bytes in place
+within the stored length, but you do not replace the string. The pointer
+names the map's own accessor slot, whose companion size field describes
+the string the slot points at. If you store a pointer there that the map
+did not allocate and did not size, that size describes a different
+string and the next read of the element runs past the end of the new
+one. To store a different string, use the insert operation of the owning
+container. For every other value type the pointer names the element
+itself and you can write through it.
 .fi
 .SH PARAMETERS
 .nf
@@ -33,14 +33,14 @@ it   Iterator variable that ccol_iter_declare() declares, or an iterator
 .fi
 .SH RETURN VALUE
 .nf
-ValT* to the current element, or ValT const* when ValT is a character
-pointer.
+A ValT* to the current element, or a ValT const* when ValT is a
+character pointer.
 .fi
 .SH NOTES
 .nf
-The pointer stays valid only while the iterator is alive and the
-container stays unchanged.
-This macro uses a GNU C statement expression, so it needs GCC or Clang.
+The pointer is valid only while the iterator is alive and the container
+does not change.
+The macro uses a GNU C statement expression, so it needs GCC or Clang.
 .fi
 .SH "SEE ALSO"
 .BR ccol_iter_key_ptr (3),

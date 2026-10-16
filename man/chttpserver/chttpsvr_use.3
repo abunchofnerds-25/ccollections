@@ -16,82 +16,67 @@ Appends a middleware function to the global middleware chain.  For
 every request, a global middleware runs before the middleware of each
 router and before the route handler.
 
-fn receives a next callback; calling next continues the chain.  A
-middleware that never calls next stops the chain there, and the server
-sends the response as it stands.
+fn receives a next callback, and calling next continues the chain.
+A middleware that never calls next stops the chain there, and the
+server sends the response as it stands.
+
+A middleware hands what it found (an authenticated user, a trace
+identifier) to the middleware after it and to the handler with
+chttpsvr_req_set_context(3), and they read it with
+chttpsvr_req_context(3).  The values belong to one request and can be
+read until the chain returns, so a middleware can also read what the
+handler stored once its call to next returns.
 
 A global middleware also runs for a request that the server rejects
-before a handler can run, so a rate limiter, a per-peer ban list or an
-access log written as a middleware sees that traffic too.  Three
-rejections run the chain:
+before a handler can run, so a rate limiter, a per-peer ban list or
+an access log written as a middleware sees that traffic too.  These
+three rejections run the chain:
   - A 404, when no route matched the path.
   - A 405, when no route matched the method.
   - A 413, when the declared Content-Length is above max_body_size.
 For a 404 or a 405 of a path under a mounted prefix, the chain is the
 global chain plus the chain of the sub-router that owns the path (see
-chttpsvr_subrouter(3)); for a 404 or a 405 of any other path, it is
-the global chain only.  Because the server decides a 413 after a route
-has matched, a 413 runs the full effective chain of that request,
-including the sub-router middleware.
+chttpsvr_subrouter(3)).  For a 404 or a 405 of any other path it is
+the global chain only.  The server decides a 413 after a route has
+matched, so a 413 runs the full chain of that request, sub-router
+middleware included.
 
-No handler is reached in these cases, so a chain that runs to its end
-sends the rejection response as it stands, while a middleware that
-does not call next answers the request itself, exactly as it would
-for a matched route.  The request has a method, a path, headers and a
-query string to read, but no path parameters, because no pattern
-captured any, and the server never reads its body, so
-chttpsvr_req_param returns NULL and chttpsvr_req_read returns -1.  In
-both cases the server closes the connection after the response.
+No handler is reached in these cases.  A chain that runs to its end
+sends the rejection response as it stands, and a middleware that
+doesn't call next answers the request itself, exactly as for a
+matched route.  The request has a method, a path, headers and a query
+string to read, but no path parameters, since no pattern captured
+any, and the server never reads its body, so chttpsvr_req_param
+returns NULL and chttpsvr_req_read returns -1.  In both cases the
+server closes the connection after the response.
 
 A response that a middleware produces for such a request is sent as
-an internally generated rejection, so the small unconditional ceiling
-on the write duration, described under
-max_response_write_duration_us in CHTTPSVR_CONFIG_DEFAULT(3), applies
-to it.  Keep such a response small, as a rejection response would
-be.
+a rejection that the server generated, so the small unconditional
+ceiling on the write duration described under
+max_response_write_duration_us in CHTTPSVR_CONFIG_DEFAULT(3) applies
+to it.  Keep such a response as small as a rejection would be.
 
-Three rejections run no middleware, by design:
-  - A 500 comes from an allocation failure in the server, and
-    application code that allocates more memory is the wrong answer
-    to memory pressure.
-  - A 503 means that the worker pool is full, so more application
-    work must not start.
-  - The server decides a 501 or a 505 before it routes the request:
-    a 501 for a method token outside the seven chttp_method_t names
-    or for a transfer coding that it does not implement, and a 505
-    for an HTTP version whose major number is not 1.  There is
-    therefore no routed request for a middleware to see.
-The server also sends a rejection without middleware in two further
+These rejections run no middleware:
+  - A 500 comes from an allocation failure in the server, and more
+    application code that allocates memory is the wrong answer to
+    memory pressure.
+  - A 503 means that the worker pool is full, so no more application
+    work may start.
+  - A 501 or a 505 is decided before the request is routed: a 501 for
+    a method token outside the seven chttp_method_t names or for a
+    transfer coding that the server does not implement, and a 505 for
+    an HTTP version whose major number is not 1.  There is no routed
+    request for a middleware to see.
+The server also sends a rejection without middleware in two more
 cases:
-  - Its rejection thread pool is full or shutting down, and the
-    server must write the response inline; this limits how much
+  - Its rejection thread pool is full or shutting down and the server
+    has to write the response inline, which limits how much
     application code a flood of rejected requests can start.
-  - The server cannot allocate the decoded path of the request,
-    because the server guarantees every middleware a readable
-    chttpsvr_req_path(3).
+  - The server can't allocate the decoded path of the request, since
+    it guarantees every middleware a readable chttpsvr_req_path(3).
 
-This function is thread-safe and can be called both before and after
+The function is thread-safe and may be called both before and after
 the server starts.
-.fi
-.SH NOTES
-.nf
-Each router, both the root router (which holds the global middleware)
-and each sub-router, caps its own middleware chain at 32 entries.
-This cap is applied at REGISTRATION time: chttpsvr_use and
-chttpsvr_router_use return ccol_not_permitted, and add no entry, on
-the call that would take that one router above the cap of 32 entries.
-
-At dispatch time a separate combined cap of 32 applies to the
-effective chain of one request, which is the global middleware plus
-the middleware of the router that matched.  Because each side of that
-sum can hold up to 32 entries on its own, the combined count can
-exceed 32 even though neither router reached its own cap at
-registration time; the server then answers the affected request with
-HTTP 500.
-
-You can register the same path and method more than once, and each
-registration returns ccol_success, but under a first-one-wins policy
-the server only ever calls the FIRST handler that you registered.
 .fi
 .SH RETURN VALUE
 .nf
@@ -103,6 +88,27 @@ ccol_not_enough_memory when an allocation fails.
 ccol_not_permitted when the middleware chain of the root router is
 already at the cap of 32 entries.
 .fi
+.SH NOTES
+.nf
+Each router, the root router (which holds the global middleware) and
+every sub-router alike, caps its own middleware chain at 32 entries.
+The cap is applied at REGISTRATION time: chttpsvr_use and
+chttpsvr_router_use return ccol_not_permitted and add nothing on the
+call that would take that router above 32 entries.
+
+At dispatch time a separate combined cap of 32 applies to the chain
+of one request, which is the global middleware plus the middleware of
+the router that matched.  Each side of that sum can hold up to 32
+entries, so the combined count can go above 32 even though
+neither router reached its own cap when you registered; the server
+then answers the affected request with HTTP 500.
+
+You may register the same path and method more than once, and each
+registration returns ccol_success, but the first one wins: the
+server only ever calls the FIRST handler that you registered.
+.fi
 .SH "SEE ALSO"
 .BR chttpsvr_register_handler (3),
-.BR chttpsvr_router_use (3)
+.BR chttpsvr_router_use (3),
+.BR chttpsvr_req_set_context (3),
+.BR chttpsvr_req_context (3)

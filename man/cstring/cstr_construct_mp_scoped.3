@@ -11,9 +11,9 @@ cstr_construct_mp_scoped(s, initial, mprocs);
 .fi
 .SH DESCRIPTION
 .nf
-This macro combines cstr_declare_scoped() and cstr_init_mp() into one
-statement. The string is destroyed automatically, through the custom memory
-management procedures, when the variable leaves its scope.
+This macro does cstr_declare_scoped() and cstr_init_mp() in one
+statement. Once the variable leaves its scope the string is destroyed
+automatically, through the same custom memory management procedures.
 .fi
 .SH PARAMETERS
 .nf

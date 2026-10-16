@@ -7,50 +7,57 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/clogger.h>
 
-void clog_set_format(clog logger, clog_format_t fmt);
+ccol_retval_t clog_set_format(clog logger, clog_format_t fmt);
 .fi
 .SH DESCRIPTION
 .nf
-Updates the output format of the shared backing store.  Because the
-shared store holds the format, and not the struct of each logger, the
-change is at once visible to every logger handle that writes to the
-same file descriptor: the root logger and every derived logger.
+Updates the output format of the shared backing store.  The format
+lives in the shared store and not in the struct of each logger, so
+the change is visible at once to every logger handle that writes to
+the same file descriptor, the root logger and every derived logger.
 
 There are three formats.
 
   CLOG_FMT_LOGFMT (0)
-    The default.  The library writes every record as one logfmt line:
+    The default.  Every record is one logfmt line:
       ts=<ISO-8601-UTC> level=<L> proc=<name>(<pid>):<tname>(<tid>)
       src=<file>:<line> func=<fn> [fields] msg=<text>
     clog_error, clog_alert and clog_fatal append backtrace
-    continuation lines, each indented by a tab, after the main record.
+    continuation lines after the main record, each indented by a tab.
     In proc, <tname> and <tid> are the name and the ID of the thread
-    that wrote the record; each thread reads them once, the first time
-    that it logs, and ccol_set_thread_name(3) renames a thread and
-    updates that name.
+    that wrote the record.  Each thread reads them once, the first
+    time it logs, and ccol_set_thread_name(3) renames a thread and
+    updates that name.  A value or a message that holds a space, an
+    '=', a '"', a backslash, a control character or a byte that is
+    not well-formed UTF-8 goes in double quotes.  A control character
+    becomes \en, \er, \et or \exNN, a C1 control (U+0080 to U+009F)
+    becomes \eu0080 to \eu009f, and each byte that is not part of a
+    well-formed UTF-8 sequence becomes U+FFFD, so every record is
+    valid UTF-8.
 
   CLOG_FMT_JSON (1)
-    The library writes every record as one NDJSON object followed by
-    a newline:
+    The library writes each record as one NDJSON object followed by a
+    newline:
       {"ts":"...","level":"...","proc":"name(pid):tname(tid)",
        "src":"file:N","func":"...", [fields,] "msg":"..."}
-    A structured field becomes a top-level JSON key.  For
-    clog_error, clog_alert and clog_fatal, the library
-    embeds the backtrace as a "bt" array of strings inside the same
-    JSON object.  Before it embeds a string value (the message, and
-    the key and the value of every field), it checks that value as
-    UTF-8 and replaces a byte or a sequence of bytes that is not
-    well-formed UTF-8, one invalid byte at a time, with the Unicode
-    replacement character (U+FFFD).  So a message or a field value
-    built from arbitrary or binary data can never make a record with
-    invalid Unicode content.
+    Each structured field becomes a top-level JSON key.  For
+    clog_error, clog_alert and clog_fatal the library embeds the
+    backtrace as a "bt" array of strings inside the same JSON object.
+    Before it embeds a string value (the message, and the key and the
+    value of every field), it checks that value as UTF-8 and replaces
+    a byte or a sequence of bytes that is not well-formed UTF-8, one
+    invalid byte at a time, with the Unicode replacement character
+    (U+FFFD).  It writes a control character, the C1 controls U+0080
+    to U+009F included, as a \euNNNN escape (\en, \er and \et for
+    those three).  So a message or a field value built from arbitrary
+    or binary data can never give a record with invalid Unicode
+    content.
 
   CLOG_FMT_SYSLOG (2)
-    The RFC 5424 syslog format, offered only by a logger that sits on
-    an fd (one from clog_open_fd or clog_open_fd_mp).  A call to
-    clog_set_format() with CLOG_FMT_SYSLOG on a logger that sits on a
-    file does nothing and reports nothing; the format stays as it
-    was.
+    The RFC 5424 syslog format, which only a logger on an fd offers
+    (one from clog_create_from_fd or clog_create_from_fd_mp).  On a
+    logger that sits on a file, clog_set_format() with CLOG_FMT_SYSLOG
+    returns ccol_invalid_args and the format stays as it is.
 
     The library writes each record as one line:
       <PRI>1 TIMESTAMP HOSTNAME APP-NAME PID MSGID [ccol ...] MSG\en
@@ -79,36 +86,39 @@ There are three formats.
       MSG        = the formatted message text
 
     In MSG, and in every value of proc, src, func and a field, the
-    library escapes a control character (a literal newline and a
-    carriage return included) with a backslash, as \en, \er, \et or
-    \exNN.  It writes a backslash itself as \e\e, so the escaped text
-    reads back unambiguously: a real newline appears as \en, and the
-    two characters '\e' and 'n' appear as \e\en.  logfmt uses the same
-    scheme for its own values.  A value of proc, src, func or a field
-    is an SD-PARAM-VALUE, which RFC 5424 requires to be UTF-8, so the
+    library escapes a control character, a literal newline and a
+    carriage return included, with a backslash as \en, \er, \et or
+    \exNN, and a C1 control (U+0080 to U+009F) as \eu0080 to
+    \eu009f.  It writes a backslash itself as \e\e, so the escaped
+    text reads back without ambiguity: a real newline appears as \en,
+    and the two characters '\e' and 'n' appear as \e\en.  logfmt uses
+    the same scheme for its own values.  In MSG and in every
+    SD-PARAM-VALUE (the values of proc, src, func and the fields), the
     library passes a well-formed UTF-8 sequence through unchanged and
     replaces each byte that is not part of one with U+FFFD, as the
-    JSON format does.  MSG carries no byte order mark, so it is the
-    MSG-ANY form of RFC 5424: a receiver must not assume that its
-    bytes are UTF-8, and the library passes them through apart from
-    the escapes above.  HOSTNAME and APP-NAME can hold no byte that
-    needs this escape, because the filter above takes both down to
-    PRINTUSASCII.  Together this guarantees that the content of a
-    record can never split that record across several lines.
+    JSON format does, because RFC 5424 requires an SD-PARAM-VALUE to
+    be UTF-8.  MSG carries no byte order mark, so it is the MSG-ANY
+    form of RFC 5424, whose bytes a receiver must not assume to be
+    UTF-8, even though the library writes only valid UTF-8 there.
+    HOSTNAME and APP-NAME can hold no byte that needs this escape,
+    because the filter above takes both down to PRINTUSASCII.  So the
+    content of a record can never split that record across several
+    lines.
 
-    clog_set_facility() controls the facility, which defaults to
+    clog_set_facility() sets the facility, which defaults to
     CLOG_SYSLOG_USER.  The library writes a backtrace (which
-    clog_error, clog_alert and clog_fatal produce) as
-    separate syslog messages, one for each frame, and each message
-    carries the same PRI, TIMESTAMP and MSGID as the original record.
-    The library escapes the text of a frame with a backslash in the
-    same way as MSG.  Every frame shares the TIMESTAMP of the original
-    record instead of carrying its own write time, which is what lets
-    a reader match a record with its own backtrace frames.
+    clog_error, clog_alert and clog_fatal produce) as separate syslog
+    messages, one for each frame, and each of them carries the same
+    PRI, TIMESTAMP and MSGID as the original record.  The MSG of a
+    frame message is "#<n> " followed by the text of frame n, escaped
+    with a backslash in the same way as MSG.  Every frame shares the
+    TIMESTAMP of the original record instead of carrying its own write
+    time, and that is what lets a reader match a record with its own
+    backtrace frames.
 
     Connect the fd to a syslog daemon before you call
     clog_set_format(); on Linux that is usually a SOCK_DGRAM Unix
-    socket at /dev/log.  Keep each message under 2 KiB, to stay inside
+    socket at /dev/log.  Keep each message under 2 KiB to stay inside
     the usual datagram limits of syslogd.
 .fi
 .SH PARAMETERS
@@ -116,17 +126,24 @@ There are three formats.
 logger  Logger handle.
 fmt     CLOG_FMT_LOGFMT, CLOG_FMT_JSON, or CLOG_FMT_SYSLOG.
 .fi
+.SH RETURN VALUE
+.nf
+ccol_success       The format is set.
+ccol_invalid_args  clog_format_t does not name fmt (such as 9), or fmt
+                   is CLOG_FMT_SYSLOG and the logger sits on a file.
+                   The format stays as it is, and clog_get_format(3)
+                   keeps reporting it.
+.fi
 .SH NOTES
 .nf
-Thread-safe: the mutex of the shared backing store protects it.
-CLOG_FMT_SYSLOG on a logger that sits on a file does nothing and
-reports nothing.
+Thread-safe, because the mutex of the shared backing store protects the
+call.
 Asserts when logger is CLOG_INVALID, stale or already closed.
 .fi
 .SH "SEE ALSO"
 .BR clog_get_format (3),
 .BR clog_set_facility (3),
-.BR clog_open_fd_mp (3),
-.BR clog_open_file_mp (3),
+.BR clog_create_from_fd_mp (3),
+.BR clog_create_from_file_mp (3),
 .BR clog_derive (3),
 .BR ccol_set_thread_name (3)

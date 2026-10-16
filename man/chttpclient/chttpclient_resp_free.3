@@ -11,16 +11,15 @@ void chttpclient_resp_free(chttpcli_response *resp);
 .fi
 .SH DESCRIPTION
 .nf
-This function frees the buffer of the response body, the map of the
-response headers, and the response struct itself. A call with NULL is
-safe.
+This function frees the body buffer, the header map and the response
+struct itself. Passing NULL is safe.
 .fi
 .SH NOTES
 .nf
-A response carries its own copy of the allocator procs of the client
-that made it and does not refer to that client, so you can free a
-response before or after chttpclient_destroy of the client. The
-functions that a custom allocator names must still be callable.
+A response keeps its own copy of the allocator procs of the client that
+made it and holds no reference to that client, so you can free it before
+or after the client is destroyed with chttpclient_destroy. The functions
+of a custom allocator must be callable at the time of that free.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_resp_header_count (3),

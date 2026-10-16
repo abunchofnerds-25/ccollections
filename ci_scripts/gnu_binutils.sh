@@ -1,10 +1,10 @@
 # Sourced by the gates that read ELF files. It sets READELF and NM to the GNU
-# binutils tools, whose options and output the gates parse. On Linux these are
-# simply readelf and nm, while FreeBSD's readelf and nm come from elftoolchain
-# and take other options; there the binutils package installs the GNU tools
-# under /usr/local/bin. A READELF or NM from the environment wins. When no GNU
-# tool is found, the gate stops with a message, because a gate that cannot
-# read its artifact must fail and never pass.
+# binutils tools, since the gates parse their options and output. On Linux
+# that's just readelf and nm, but FreeBSD's own readelf and nm come from
+# elftoolchain and take other options, so there we use the GNU tools that the
+# binutils package puts under /usr/local/bin. A READELF or NM from the
+# environment wins. If no GNU tool is found the gate stops with a message,
+# because a gate that can't read its artifact has to fail, never pass.
 
 ccol_find_gnu_tool() {
 	# $1 is the tool name, $2 the value from the environment.

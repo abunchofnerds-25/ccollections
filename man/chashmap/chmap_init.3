@@ -12,17 +12,17 @@ chmap_init(hm_name);
 .SH DESCRIPTION
 .nf
 Creates a hash map with the default allocator and the map's own hashing,
-and assigns it to hm_name. The caller must declare the handle first, with
+and assigns it to hm_name. The handle has to be declared first, with
 chmap_declare(3) or chmap_declare_scoped(3). The key and value types are
-not arguments here: the macro reads them from the companion type variables
-that the declare macro created.
+not arguments, because the macro reads them from the companion type
+variables that the declare macro created.
 
-This is the create half of a declare-then-create pair, for a handle declared
-in one place and created in another; chmap_construct(3) creates the same
-map in one step for the common case where both happen together.
+It is the create half of a declare-then-create pair, for a handle that
+is declared in one place and created in another. When both happen
+together, chmap_construct(3) creates the same map in one step.
 
-The map picks its implementation strategy from the declared key and value
-types, as chmap_create_full(3) describes.
+The map picks its implementation from the declared key and value types,
+as chmap_create_full(3) describes.
 .fi
 .SH PARAMETERS
 .nf
@@ -30,19 +30,18 @@ hm_name  The already declared map handle to create the map into
 .fi
 .SH RETURN VALUE
 .nf
-None. This macro expands to a statement and does not expand to an
-expression.
+None. The macro expands to a statement and is not an expression.
 .fi
 .SH NOTES
 .nf
-Stops the program through ccol_fatal_err() if the creation fails; call
-chmap_create(3) directly when the caller must handle a failure instead of
-the failure being fatal
+Stops the program through _ccol_fatal_err() if the creation fails; call
+chmap_create(3) directly when a failure has to be handled instead of
+being fatal
 Uses CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets
-An assignment over a handle that already holds a map leaks that map, so
-destroy the old map with chmap_destroy(3) first
-chmap_destroy(3) destroys the handle; this is not needed for a handle
-that chmap_declare_scoped(3) declared
+Assigning over a handle that already holds a map leaks that map, so
+destroy the old one with chmap_destroy(3) first
+chmap_destroy(3) destroys the handle, which a handle declared with
+chmap_declare_scoped(3) doesn't need
 .fi
 .SH EXAMPLES
 .nf

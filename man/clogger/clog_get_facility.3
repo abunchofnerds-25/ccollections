@@ -11,7 +11,8 @@ clog_syslog_facility_t clog_get_facility(clog logger);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the syslog facility currently stored on the shared backing store.
+Returns the syslog facility that the shared backing store holds at the
+moment of the call.
 .fi
 .SH PARAMETERS
 .nf
@@ -19,11 +20,12 @@ logger  Logger handle.
 .fi
 .SH RETURN VALUE
 .nf
-Current facility code.
+The current facility code.
 .fi
 .SH NOTES
 .nf
-Thread-safe: the mutex of the shared backing store protects it.
+Thread-safe, because the mutex of the shared backing store protects the
+call.
 Asserts when logger is CLOG_INVALID, stale or already closed.
 .fi
 .SH "SEE ALSO"

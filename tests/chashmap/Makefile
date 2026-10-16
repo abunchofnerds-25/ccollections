@@ -14,17 +14,19 @@ LFLAGS = $(CCOL_PLATFORM_LIBS)
 build:
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)
 
-# compile_probe.sh checks a guarantee that the type system makes and that no
-# run-time test can see: you cannot assign through the accessor that
-# cbmap_get_elem_ref()/chmap_get_elem_ref() gives back. The probe runs under
-# both gcc and clang, because a diagnostic is a property of the compiler.
+# compile_probe.sh checks a guarantee that comes from the type system, which no
+# run-time test can see: you can't assign through an accessor the map hands out
+# (a destructor argument, an iterator pair, the stored char* that
+# chmap_get_ptr() reaches), and chmap_get_elem_ref() fills a cmap_pair that
+# belongs to the caller. The probe runs under both gcc and clang, since a
+# diagnostic depends on the compiler.
 compile_probe:
 	sh ./compile_probe.sh
 
-# nesting_probe.c nests the public macros of this module inside their own
-# arguments and inside those of other modules. -Wshadow makes any local that
-# a nested expansion hides a hard error, which only the compiler can report,
-# so the probe is compiled and never run.
+# nesting_probe.c nests this module's public macros inside their own arguments
+# and inside those of other modules. -Wshadow turns any local that a nested
+# expansion hides into a hard error, and only the compiler can report that, so
+# the probe is compiled but never run.
 nesting_probe:
 	$(CC) $(INCLUDES) $(DEFINITIONS) -std=gnu11 -Wall -Wextra -Wshadow -Werror \
 		-fsyntax-only nesting_probe.c
@@ -35,12 +37,12 @@ test: build compile_probe nesting_probe
 memtest: build
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 --child-silent-after-fork=yes ./tests
 
-# --ignore-errors negative: the coverage counters of gcov are plain, non-atomic
-# increments, so they can race when instrumented code runs on more than one
-# thread, and the race can then give a false negative hit count. This affects
-# more than one module and also happens inside a glibc header; it is a limit
-# of the gcov instrumentation, not a defect in the logic of this library. See
-# the identical flag in tests/chttpclient/Makefile for the full reason.
+# --ignore-errors negative is there because gcov's coverage counters are
+# plain, non-atomic increments, so instrumented code running on more than one
+# thread at a time can race on them and end up with a negative hit count that
+# isn't real. It happens in more than one module and inside a glibc header as
+# well; it's a limit of the gcov instrumentation, not a bug in the library's
+# logic. tests/chttpclient/Makefile has the same flag with the full reason.
 generate_coverage_report:
 	$(CC)  $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
@@ -52,14 +54,14 @@ generate_coverage_report:
 
 all: build test memtest generate_coverage_report
 
-# The steps of `all` rebuild and run the same object files and binaries: the
-# coverage step rebuilds them with instrumentation, and the test and memtest
-# steps run the binaries that the build step links. Under make -j those steps
-# would overlap and link or run a half-rebuilt mix. .NOTPARALLEL runs the
-# prerequisites of `all` one after another, in the order listed, while the
-# work inside each step still runs in parallel. A make older than 4.4 ignores
-# the prerequisite list and runs this whole Makefile serially, which is also
-# correct.
+# The steps of `all` rebuild and run the same object files and binaries. The
+# coverage step rebuilds them with instrumentation, and test and memtest run
+# the binaries that the build step links, so under make -j the steps would
+# overlap and link or run a half-rebuilt mix. .NOTPARALLEL runs the
+# prerequisites of `all` one after another in the order listed, while the work
+# inside each step still runs in parallel. A make older than 4.4 ignores the
+# prerequisite list and runs the whole Makefile serially, which is correct
+# too.
 .NOTPARALLEL: all
 
 clean:

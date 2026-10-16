@@ -11,81 +11,78 @@ ccol_retval_t cjson_dictionary_set(cjson obj, const char *key, cjson child);
 .fi
 .SH DESCRIPTION
 .nf
-Sets or replaces the value for key in obj.  If a previous child is
-already under key, the library stores the new child first and
-deep-frees the previous child only after the new child is safely in
-place, so a failed insert never leaves the slot dangling.  On success
-the object owns child and the caller must not free it.
+Sets the value for key in obj, or replaces it.  When a child is
+already stored under key, the library deep-frees it and puts the new
+child in its place in one step that cannot fail, so a failed insert
+never leaves the slot dangling.  On success the object owns child and
+the caller must not free it.
 
-The object keeps its members in insertion order: a new key goes after
-every other member, and a replacement keeps the place of the key.  See
+Members stay in insertion order: a new key goes after every other
+member, and a replaced key keeps its place.  See
 cjson_dictionary_first(3).
 
-One return code carries one ownership rule, the same rule as for
+Each return code carries one ownership rule, the same as for
 cjson_list_push:
 
-  ccol_invalid_args always means that the call rejected its arguments
-  and touched nothing: child is exactly as it was before the call, and
-  the caller still owns it, or the container that it is already
-  attached to still owns it.  That owner must still destroy it.
+  ccol_invalid_args always means that the call refused its arguments
+  and touched nothing.  child is exactly as it was before the call,
+  and whoever owned it before (the caller, or the container it is
+  attached to) owns it and has to destroy it.
 
-  Every other non-success code (ccol_not_enough_memory,
-  ccol_container_full) always means that ownership moved to this
-  call, which has already deep-freed child, so a second free of child
-  is a double free.
+  Any other code that is not ccol_success (ccol_not_enough_memory,
+  ccol_container_full) always means that ownership passed to this
+  call and the call has deep-freed child, so freeing child again is
+  a double free.
 
-child must not already be attached to a list parent or to a
-dictionary parent, with one exception: the caller can pass back the
-exact node that is already stored under key, for example
-cjson_dictionary_set(obj, k, cjson_dictionary_get(obj, k)).  This is a
-harmless no-op that returns ccol_success and does not change obj.
+child must not be attached to a list or dictionary parent, with one
+exception: you can pass back the exact node that is stored under key,
+as in cjson_dictionary_set(obj, k, cjson_dictionary_get(obj, k)).
+That call does nothing, returns ccol_success and leaves obj as it is.
 
-These are the ccol_invalid_args rejections: child is NULL; child is
-already attached somewhere else, under a different key or in another
-container; child is obj itself; obj is NULL or is not a
-CJSON_DICTIONARY; key is NULL or is not valid UTF-8.  There is one
-more rejection: obj is already reachable when you descend from child.
-Attaching child would then make obj a new ancestor of child while obj
-stays a descendant of child, which is a cycle.
+These are the cases that give ccol_invalid_args: child is NULL; child
+is attached somewhere else, under another key or in another
+container; child is obj itself; obj is NULL or not a
+CJSON_DICTIONARY; key is NULL or not valid UTF-8.  One more case is
+refused: obj is reachable when you descend from child.  Attaching
+child would then make obj a new ancestor of child while obj is also a
+descendant of child, which is a cycle.
 
-The library cannot always complete that last check when memory is
-low.  Rather than take the risk of an undetected cycle, it then
-returns ccol_not_enough_memory, and this call deep-frees child in the
-same way as when the insert itself fails for lack of memory.
+When memory is low the library cannot always finish that last check.
+It doesn't risk an undetected cycle in that case: it returns
+ccol_not_enough_memory, and the call deep-frees child just as it does
+when the insert itself runs out of memory.
 
-The expected time of a set, a get and a remove is constant, also when
-an untrusted peer chooses the keys.  The object hashes its keys with a
-secret seed that the library chooses one time for each process, and if
-the keys collide, it changes to a hash keyed with
-a secret 128-bit key; see cjson_parse(3).
+A set, a get and a remove take constant expected time, also when an
+untrusted peer chooses the keys.  The object hashes its keys with a
+secret seed that the library picks once per process, and when keys
+collide it switches to a hash keyed with a secret 128-bit key; see
+cjson_parse(3).
 
-Every key that the tree holds is valid UTF-8, which is what lets
-cjson_serialize() write the key out unchanged.  The library refuses a
-key that is not valid UTF-8 instead of storing it; see
-cjson_create_string(3) for the same rule on string values.
+Every key in the tree is valid UTF-8, and that is what lets
+cjson_serialize() write keys out unchanged.  A key that is not valid
+UTF-8 is refused instead of stored; cjson_create_string(3) applies
+the same rule to string values.
 .fi
 .SH PARAMETERS
 .nf
-obj    Target dictionary node (must be CJSON_DICTIONARY).
-key    Null-terminated key string, which must be valid UTF-8.  The
-       library stores a copy of it.
-child  Value node; must not already be attached elsewhere, and must
-       not already contain obj in its own subtree (see above).
+obj    The target node, which must be a CJSON_DICTIONARY.
+key    Null-terminated key, which must be valid UTF-8.  The library
+       stores a copy of it.
+child  The value node.  It must not be attached anywhere else and
+       must not contain obj in its own subtree (see above).
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success, ccol_invalid_args, ccol_not_enough_memory, or
-ccol_container_full if obj has already reached its maximum element
-count.
+ccol_container_full when obj has reached its maximum element count.
 .fi
 .SH NOTES
 .nf
 A node that cjson_get(), cjson_list_get() or cjson_dictionary_get()
-returns is a borrowed reference into a tree that already exists, not
-a new node that the caller owns.  Never give such a node as child,
-unless it is the value that is already stored under key (see above).
-Use cjson_clone() first to get an independent copy, which is safe to
-store somewhere else.
+returns is a borrowed reference into an existing tree, and the caller
+doesn't own it.  Never pass such a node as child, unless it is the
+value stored under key (see above).  Call cjson_clone() first to get
+an independent copy that is safe to store somewhere else.
 .fi
 .SH "SEE ALSO"
 .BR cjson_dictionary_get (3),

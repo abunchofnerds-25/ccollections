@@ -11,25 +11,31 @@ void chttpsvr_resp_set_status(chttpsvr_resp *resp, int status_code);
 .fi
 .SH DESCRIPTION
 .nf
-Sets the HTTP status code for the response; the default is 200.
+Sets the HTTP status code of the response.  The default is 200.
 
-The library stores status_code exactly as given and does no checking
-here.  When the server sends the response, a value outside the valid
-HTTP status-code range of 100 to 999 goes on the wire as 500 Internal
-Server Error instead, although the stored value itself does not
-change.
+The value is stored exactly as given, with no check here.  When the
+server sends the response, a value outside the range of final status
+codes, 200 to 999, goes on the wire as 500 Internal Server Error,
+although the stored value stays what you set.  A 1xx falls in that
+case too: it is an interim status (RFC 9110 15.2), and a client that
+got one as the response would keep waiting for a final status.  The
+server writes the interim "100 Continue" itself.
 .fi
 .SH NOTES
 .nf
-A status_code of 1xx (informational), 204 or 304 drops the response
-body on the wire, including whatever chttpsvr_resp_write,
+With a status_code of 204, 205 or 304 the response body is dropped on
+the wire, including anything that chttpsvr_resp_write,
 chttpsvr_resp_write_str, chttpsvr_resp_printf or
-chttpsvr_resp_write_json has already written, because RFC 9110 6.4.1,
-15.2.1 and 15.4.5 forbid all three of these codes from ever carrying a
-body.  None of the three gets an automatic Content-Length header,
-though a 304 carries the one that the handler set, if any.  A 1xx also
-gets no automatic Date header.  See the NOTES section of
-chttpsvr_resp_write(3).
+chttpsvr_resp_write_json has already written, since RFC 9110 6.4.1,
+15.3.6 and 15.4.5 forbid a body for these codes.  A 205 carries
+"content-length:0", a 204 carries no Content-Length, and a 304
+carries the one that the handler set, if it set one.  See the NOTES
+section of chttpsvr_resp_write(3).
+
+The status line carries the reason phrase that the IANA HTTP Status
+Code Registry gives the code, such as "Reset Content" for 205, and
+"Unknown" for a code the registry does not list.  Clients ignore the
+phrase.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_resp_set_header (3),

@@ -1,13 +1,13 @@
 INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
 SRC_FILE_PREFIX = cthreadcomm
-# chashmap.c is a transitive dependency, because the internal fd registry of
-# ccol_event_loop (int fd -> event_entry*) uses a chmap. cthreadpool.c is a
-# transitive dependency too, because the dispatch_pool of ccol_event_loop
-# (num_reactor_threads > 1) is a ctpool. cvector.c is also necessary, because
-# ccol_event_loop has its own generation-tagged handle slot table: a cvec of
-# slots plus a cvec free-index stack. csort.c comes in through cvector.c,
-# whose sort runs on the mergesort of csort.
+# chashmap.c is pulled in indirectly because the internal fd registry of
+# ccol_event_loop (int fd -> event_entry*) is a chmap. cthreadpool.c comes in
+# the same way, since the dispatch_pool of ccol_event_loop
+# (num_reactor_threads > 1) is a ctpool. cvector.c is needed as well, because
+# ccol_event_loop has its own generation-tagged handle slot table, a cvec of
+# slots plus a cvec free-index stack. csort.c comes in through cvector.c, whose
+# sort is the mergesort of csort.
 SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c \
             ../../src/chashmap.c ../../src/cthreadpool.c \
             ../../src/cvector.c ../../src/csort.c ../../src/common.c \
@@ -25,10 +25,10 @@ LFLAGS = -lpthread $(CCOL_PLATFORM_LIBS)
 
 # tests_keys uses up every thread-specific key of the process before the
 # first ccol_event_loop call, so it needs a process of its own too.
-# tests_exit_order runs in a process of its own, because it checks the
-# exit-time destructor order of a whole process: an application destructor
-# that runs after the destructors of cthreadcomm and that, at that point,
-# owns live queues and a live loop. Its source comes first on the link line, which puts its
+# tests_exit_order runs in a process of its own because it checks the exit-time
+# destructor order of a whole process: an application destructor that runs
+# after the destructors of cthreadcomm and still owns live queues and a live
+# loop at that point. Its source is first on the link line, which puts its
 # destructor last in the .fini_array walk.
 build: build_main build_exit_order build_keys
 
@@ -41,9 +41,9 @@ build_exit_order:
 build_keys:
 	$(CC) $(CFLAGS) tests_keys.c $(SRC_FILES) -o tests_keys $(LFLAGS)
 
-# This is a separate ThreadSanitizer build that stays out of the default
-# -Werror build. TSan instrumentation and -O3 do not work well together, and
-# this build is also a different verification mode that runs separately.
+# A separate ThreadSanitizer build, kept out of the default -Werror build. TSan
+# instrumentation and -O3 don't get along well, and this is also a different
+# verification mode that runs on its own.
 build_tsan:
 	$(CC) $(TSAN_CFLAGS) $(ALL_SRC_FILES) -o tests_tsan $(LFLAGS) -fsanitize=thread $(CCOL_TSAN_EXTRA_SRC)
 
@@ -54,17 +54,16 @@ test: build
 
 # die_after_fork=0: the ccol_event_loop_handle_lifecycle tests of this suite
 # fork and create new pthreads in the child; the test_tsan target of
-# tests/chttpclient/Makefile has a longer comment on the exact TSan mechanism.
+# tests/chttpclient/Makefile explains the exact TSan mechanism at more length.
 # This module destroys its ccol_event_loop instances between tests, so the
-# parent is single-threaded at fork() time and the option is not load-bearing
-# here, while it is load-bearing for the persistent, process-wide reactors of
-# chttpclient and chttpserver. The option is set for consistency across all
-# three suites that fork and then start new threads, and it also protects
-# against a future test that makes this parent multi-threaded at fork time.
-# suppressions=tsan_rwlock_reinit.supp: one "thread leak" that
-# ThreadSanitizer reports in the child of one fork test, for a thread that the
-# parent joins. The comment in that file gives the reason and the independent
-# reproduction.
+# parent is single-threaded when it calls fork() and the option doesn't carry
+# any weight here, while it does for the persistent, process-wide reactors of
+# chttpclient and chttpserver. We set it anyway so the three suites that fork
+# and then start new threads are consistent, and so a later test that leaves
+# this parent multi-threaded at fork time is covered too.
+# suppressions=tsan_rwlock_reinit.supp: one "thread leak" that ThreadSanitizer
+# reports in the child of one fork test, for a thread that the parent joins.
+# The comment in that file gives the reason and the independent reproduction.
 test_tsan: build_tsan
 	TSAN_OPTIONS="die_after_fork=0 suppressions=tsan_rwlock_reinit.supp" ./tests_tsan
 
@@ -73,12 +72,12 @@ memtest: build
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 --child-silent-after-fork=yes ./tests_exit_order
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 ./tests_keys
 
-# --ignore-errors negative: the coverage counters of gcov are plain, non-atomic
-# increments, so they can race when instrumented code runs concurrently and
-# then produce a false negative hit count. This affects more than one module
-# and also happens inside a glibc header; it is a limitation of the gcov
-# instrumentation, not a defect in the logic of this library.
-# tests/chttpclient/Makefile uses the same flag and gives the full reason.
+# --ignore-errors negative is there because gcov's coverage counters are
+# plain, non-atomic increments, so instrumented code running on more than one
+# thread at a time can race on them and end up with a negative hit count that
+# isn't real. It happens in more than one module and inside a glibc header as
+# well; it's a limit of the gcov instrumentation, not a bug in the library's
+# logic. tests/chttpclient/Makefile has the same flag with the full reason.
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
@@ -90,14 +89,14 @@ generate_coverage_report:
 
 all: build build_tsan test test_tsan memtest generate_coverage_report
 
-# The steps of `all` rebuild and run the same object files and binaries: the
-# coverage step rebuilds them with instrumentation, and the test and memtest
-# steps run the binaries that the build step links. Under make -j those steps
-# would overlap and link or run a half-rebuilt mix. .NOTPARALLEL runs the
-# prerequisites of `all` one after another, in the order listed, while the
-# work inside each step still runs in parallel. A make older than 4.4 ignores
-# the prerequisite list and runs this whole Makefile serially, which is also
-# correct.
+# The steps of `all` rebuild and run the same object files and binaries. The
+# coverage step rebuilds them with instrumentation, and test and memtest run
+# the binaries that the build step links, so under make -j the steps would
+# overlap and link or run a half-rebuilt mix. .NOTPARALLEL runs the
+# prerequisites of `all` one after another in the order listed, while the work
+# inside each step still runs in parallel. A make older than 4.4 ignores the
+# prerequisite list and runs the whole Makefile serially, which is correct
+# too.
 .NOTPARALLEL: all
 
 clean:

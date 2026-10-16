@@ -11,9 +11,9 @@ element_ref = cvec_at(v, index);
 .fi
 .SH DESCRIPTION
 .nf
-This macro is a type-inferred wrapper for cvector_at(). It gives a
-reference to the element rather than a pointer, cast to the correct type
-automatically, so you can use it as an lvalue in an assignment.
+Type-inferred wrapper for cvector_at(). It gives a reference to the
+element, already of the right type, rather than a pointer, so you can use
+it as an lvalue in an assignment.
 .fi
 .SH PARAMETERS
 .nf
@@ -22,18 +22,18 @@ index  Zero-based index of the element
 .fi
 .SH RETURN VALUE
 .nf
-Gives the element reference at the index
+A reference to the element at the index.
 .fi
 .SH NOTES
 .nf
-The macro gives a reference, not a pointer.
-The macro evaluates index exactly once, so an expression with a side
-effect, for example cvec_at(v, i++), is safe to pass.
-The macro stops the program with ccol_fatal_err() when the index is out
-of bounds.
-You can use the macro on the left side of an assignment.
-For an alternative that gives NULL for an index that is out of bounds
-instead of stopping the program, use cvec_at_ptr.
+What you get is a reference, not a pointer, and you can put it on the
+left side of an assignment.
+
+index is evaluated exactly once, so an expression with a side effect, for
+example cvec_at(v, i++), is safe to pass.
+
+An index that is out of bounds stops the program with _ccol_fatal_err().
+If you'd rather get NULL for such an index, use cvec_at_ptr.
 .fi
 .SH EXAMPLES
 .nf

@@ -11,7 +11,7 @@ size_t cbmap_elem_count(cbmap cbm);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the number of key-value pairs that the BST map currently stores.
+Returns how many key-value pairs the BST map stores right now.
 .fi
 .SH PARAMETERS
 .nf
@@ -19,12 +19,11 @@ cbm  BST map to query
 .fi
 .SH RETURN VALUE
 .nf
-Returns the number of elements in the map
+The number of elements in the map.
 .fi
 .SH NOTES
 .nf
-O(1) complexity
-The function asserts if cbm is NULL
+O(1). The function asserts if cbm is NULL.
 .fi
 .SH "SEE ALSO"
 .BR cbmap_insert_elem (3),

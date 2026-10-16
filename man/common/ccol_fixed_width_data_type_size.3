@@ -11,34 +11,33 @@ size_t ccol_fixed_width_data_type_size(ccol_data_type type);
 .fi
 .SH DESCRIPTION
 .nf
-Returns sizeof() of the C type that the enumerator stands for, for every
-ccol_data_type that names one specific C type. ccol_string,
-ccol_other_types, and any value that the function does not recognize
-return 0: a key or a value of those types can correctly have any size,
-so there is no one width to report.
+For every ccol_data_type that names one specific C type, this returns
+sizeof() of that type. ccol_string, ccol_other_types and any value the
+function doesn't recognize return 0, since a key or a value of those
+types can legitimately have any size and there is no single width to
+report.
 
-A key_pair must carry this width for a key type of a fixed width,
-because every chmap entry point and every cbmap entry point that takes
-such a pair needs that width. Code that builds a cmap_pair by hand can
-call this function to give the pair the correct size.
+For a fixed-width key type, a key_pair must carry exactly this width,
+because every chmap and cbmap entry point that takes such a pair
+requires it. Code that builds a cmap_pair by hand can call this function
+to give the pair the right size.
 .fi
 .SH PARAMETERS
 .nf
-type   The data type enumerator to size
+type   The data type enumerator whose size you want
 .fi
 .SH RETURN VALUE
 .nf
-Returns sizeof() of the C type that matches the enumerator
-Returns 0 if the type has no fixed width, which is the case for
-ccol_string, ccol_other_types, and any value that the function does
-not recognize
+sizeof() of the C type that matches the enumerator, or 0 when the type
+has no fixed width, which is the case for ccol_string, ccol_other_types
+and any value that the function does not recognize.
 .fi
 .SH NOTES
 .nf
 common.h defines this as a static inline function, so the library
-exports no symbol for it
-The width is the sizeof() of this platform, so it changes with the ABI
-for long, for a pointer, and for long double
+exports no symbol for it.
+The width is the sizeof() of the platform you build for, so for long, a
+pointer and long double it changes with the ABI.
 .fi
 .SH EXAMPLES
 .nf

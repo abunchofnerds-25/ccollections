@@ -11,9 +11,9 @@ ccol_retval_t ccol_circq_try_send_zc(ccol_circular_queue *cq, c_message_t *msg);
 .fi
 .SH DESCRIPTION
 .nf
-This function tries to send the message immediately. If the queue is
-full, it returns ccol_container_full immediately; on success it
-transfers the ownership of msg->data.
+Puts the message into the queue if there is room, and returns
+ccol_container_full at once when the queue is full. On success the
+ownership of msg->data moves to the queue.
 .fi
 .SH PARAMETERS
 .nf
@@ -23,15 +23,17 @@ msg  Message to send. On success the ownership of the data moves to the
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success         - The function sent the message
-ccol_invalid_args    - cq or msg is NULL, or the check of msg fails
+ccol_success         - The message was sent
+ccol_invalid_args    - cq or msg is NULL, msg->data is NULL while
+                       msg->size is not 0, or msg->data is not NULL
+                       while msg->size is 0
 ccol_not_permitted   - Sends on the queue are turned off
 ccol_container_full  - The queue is full
 .fi
 .SH NOTES
 .nf
-The function never blocks.
-On failure, the caller keeps the ownership of msg->data.
+This call never blocks. On failure the caller keeps the ownership of
+msg->data.
 .fi
 .SH "SEE ALSO"
 .BR ccol_circq_send_zc (3),

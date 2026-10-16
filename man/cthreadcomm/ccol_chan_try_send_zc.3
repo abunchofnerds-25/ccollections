@@ -11,9 +11,8 @@ ccol_retval_t ccol_chan_try_send_zc(ccol_channel *ch, c_message_t *msg);
 .fi
 .SH DESCRIPTION
 .nf
-This function tries to send the message immediately through the queue
-that the channel picks itself, and returns immediately if that queue is
-full.
+Puts the message into the queue that the channel picks for the calling
+thread if there is room, and returns at once when that queue is full.
 .fi
 .SH PARAMETERS
 .nf
@@ -23,15 +22,17 @@ msg  Message to send. On success the ownership of the data moves to the
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success         - The function sent the message
-ccol_invalid_args    - ch or msg is NULL, or the check of msg fails
+ccol_success         - The message was sent
+ccol_invalid_args    - ch or msg is NULL, msg->data is NULL while
+                       msg->size is not 0, or msg->data is not NULL
+                       while msg->size is 0
 ccol_not_permitted   - Sends on the chosen direction are turned off
 ccol_container_full  - The chosen queue is full
 .fi
 .SH NOTES
 .nf
-The function never blocks.
-The function picks the direction itself from the ID of the thread.
+This call never blocks. The direction comes from the ID of the
+calling thread, as described in ccol_chan_send_zc(3).
 .fi
 .SH "SEE ALSO"
 .BR ccol_chan_send_zc (3),

@@ -12,15 +12,15 @@ cvector_sort_with_comparison_proc(v, comparison_proc);
 .SH DESCRIPTION
 .nf
 Sorts the vector in place through the csort library with a custom
-comparison function, which must obey the standard comparator convention
-of returning a value <0, a value 0, or a value >0.
+comparison function, which follows the standard comparator convention of
+returning a value <0, 0 or >0.
 
-This macro is the supported way to sort a vector whose element type has
-no default comparison procedure, that is, the element types that
-cvec_sort refuses to compile: bool, a struct, a union, a pointer to
-anything other than char, and a fixed-size char array. This macro also
-sorts a type that does have a default comparison procedure, in which case
-the given comparison procedure defines the order.
+This is the supported way to sort a vector whose element type has no
+default comparison procedure, that is the element types for which
+cvec_sort refuses to compile: a struct, a union, a pointer to anything
+other than char, and a fixed-size char array. It sorts a type that does
+have a default comparison procedure as well, and then the procedure you
+pass defines the order.
 .fi
 .SH PARAMETERS
 .nf
@@ -30,20 +30,21 @@ comparison_proc   Comparison function for sorting. The macro evaluates it
 .fi
 .SH NOTES
 .nf
-Sorts in place with a stable mergesort algorithm
-O(n log n) time complexity, O(n) space complexity
-Asserts if v is NULL
-Uses the stable mergesort of csort, and moves the elements inside the
-backing array directly, with no call for each element access
-Calls ccol_fatal_err() if comparison_proc is NULL. A comparison procedure
-comes here from the caller's own expression, whose value is in general
-not known before the program runs, so this check is a run-time check.
-The element-type check of cvec_sort is a compile-time _Static_assert
-instead, and a cvec_sort call never reaches this diagnostic
-Calls ccol_fatal_err() if the allocation of the internal temporary buffer
-of the sort fails, as every other type-inferred macro in cvector.h that
-changes a vector does (cvec_push, cvec_reserve, cvec_append_array and
-the others). The vector stays completely unsorted in that case
+The sort is the stable, in-place mergesort of csort, which moves the
+elements inside the backing array directly with no call per element
+access. It takes O(n log n) time and O(n) space. Asserts if v is NULL.
+
+A NULL comparison_proc makes it call _ccol_fatal_err(). The comparison
+procedure comes from the caller's own expression, whose value in general
+isn't known before the program runs, so this is a run-time check. The
+element-type check of cvec_sort is a compile-time _Static_assert
+instead, and a cvec_sort call never gets to this diagnostic.
+
+If the internal temporary buffer of the sort can't be allocated, the
+macro calls _ccol_fatal_err(), as every other type-inferred macro in
+cvector.h that changes a vector does (cvec_push, cvec_reserve,
+cvec_append_array and the others). The vector is then left completely
+unsorted.
 .fi
 .SH EXAMPLES
 .nf

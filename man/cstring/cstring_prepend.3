@@ -11,8 +11,8 @@ ccol_retval_t cstring_prepend(cstr s, const char *str);
 .fi
 .SH DESCRIPTION
 .nf
-Inserts the null-terminated C string str before all existing characters
-in s. Existing content is shifted right to make room.
+This function inserts the null-terminated C string str in front of all
+the characters of s, moving the existing content right to make room.
 .fi
 .SH PARAMETERS
 .nf
@@ -21,10 +21,10 @@ str   C string to prepend (must not be NULL)
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success              - Prepend succeeded
+ccol_success              - The prepend succeeded
 ccol_invalid_args         - str is NULL
-ccol_container_full       - Result would overflow size_t
-ccol_not_enough_memory    - Reallocation failed
+ccol_container_full       - The result would overflow a size_t
+ccol_not_enough_memory    - The reallocation failed
 .fi
 .SH NOTES
 .nf

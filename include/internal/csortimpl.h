@@ -29,18 +29,17 @@ SOFTWARE.
  * @brief INTERNAL ONLY. The contiguous-array mergesort that cvector uses for
  *        its own sort.
  *
- * No program uses this library through this function: a user reaches it
- * through cvec_sort and cvector_sort_with_comparison_proc, never through this
- * name.
+ * No program calls this function by this name; a user gets to it through
+ * cvec_sort and cvector_sort_with_comparison_proc.
  *
- * This header is internal, so it carries no visibility block, make install
- * does not install it, and its symbol is absent from the dynamic symbol table
- * of the shared library.
+ * Since the header is internal it carries no visibility block, make install
+ * leaves it out, and its symbol isn't in the dynamic symbol table of the
+ * shared library.
  */
 
 #include <common.h>
 #if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L
-#include <stdbool.h> /* C23 has bool, true and false as keywords */
+#include <stdbool.h> /* bool, true and false are keywords in C23 */
 #endif
 #include <stddef.h>
 
@@ -48,10 +47,10 @@ SOFTWARE.
  * @brief Stable sort of an array whose element i sits at
  *        base + i * elem_size
  *
- * The limits, the return value and the order of the result are those of
- * ___csort_merge_sort(), for the same length, element size, comparator and
- * allocator. The function reads and writes each element directly, so it
- * makes no call for each element access.
+ * For the same length, element size, comparator and allocator, the limits,
+ * the return value and the order of the result are the same as those of
+ * ___csort_merge_sort(). The difference is that this function reads and
+ * writes the elements directly, so there's no call per element access.
  *
  * @param base First byte of the array. NULL, and a length of 0 or 1, give
  *             true and do nothing.
@@ -68,10 +67,3 @@ SOFTWARE.
 bool _csort_merge_sort_contiguous(void *base, size_t length, size_t elem_size,
                                   ccol_comparison_proc_t comparison_proc,
                                   ccol_memmgmt_procs_t *mprocs);
-
-#ifdef RUNNING_UNIT_TESTS
-/* The number of sorts that took the contiguous path and allocated a buffer,
- * across the process. A test uses it to prove that cvec_sort reaches this
- * path. */
-unsigned long long _csort_contiguous_sorts_for_tests(void);
-#endif

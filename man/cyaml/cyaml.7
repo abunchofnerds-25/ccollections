@@ -3,11 +3,12 @@
 cyaml \- overview of the YAML 1.2 parser, serializer and DOM
 .SH DESCRIPTION
 .nf
-cyaml parses YAML text into a tree of nodes, which a program can read
-and change, and then writes the tree back as YAML.  Each node has an
-opaque cyaml handle.  cyaml_parse(3) describes the input that the
-parser accepts and the limits that it applies; this page gives the
-rules of the YAML language that are not specific to one function.
+cyaml parses YAML text into a tree of nodes that a program can read
+and change, and writes the tree back out as YAML.  Each node is
+reached through an opaque cyaml handle.  cyaml_parse(3) describes
+which input the parser accepts and what limits it applies, and this
+page gives the rules of the YAML language that don't belong to one
+function.
 .fi
 .SH "NODE TYPES"
 .nf
@@ -21,175 +22,226 @@ cyaml_type(3) gives the type of a node, as a cyaml_node_type_t:
   CYAML_LIST         a sequence of child nodes
   CYAML_DICTIONARY   a mapping from a string key to a child node
 
-The keys of a dictionary are plain strings, not nodes.  When the
-document writes a key as a number, a boolean, null or a collection, the
-dictionary keeps that key as canonical text.  See cyaml_parse(3).
+Dictionary keys are plain strings and not nodes.  When the document
+writes a key as a number, a boolean, null or a collection, the
+dictionary keeps it as canonical text.  See cyaml_parse(3).
 .fi
 .SH "IMPLICIT TYPING"
 .nf
-The parser gives a type to a plain (unquoted, untagged) scalar with the
-YAML 1.2 core schema:
+A plain (unquoted, untagged) scalar gets its type from the YAML 1.2
+core schema:
 
   ~, null, Null, NULL, or empty          CYAML_NULL
   true, True, TRUE                       CYAML_BOOL (true)
   false, False, FALSE                    CYAML_BOOL (false)
   decimal integer, 0x hex, 0o octal      CYAML_INTEGER
   decimal float, exponent notation       CYAML_FLOAT
-  .inf, -.inf, .nan (any case)           CYAML_FLOAT
+  .inf, .Inf, .INF, with an optional
+    + or - sign                          CYAML_FLOAT
+  .nan, .NaN, .NAN                       CYAML_FLOAT
   anything else                          CYAML_STRING
 
-Under YAML 1.2, yes, no, on and off are strings.  An integer literal
-that is outside the range of a long long becomes a CYAML_FLOAT, or a
-CYAML_STRING if it is not a float either; it never wraps.  A
-single-quoted or double-quoted scalar is always a string, whatever its
-text.  A tag can override all these rules; see TAGS.
+Under YAML 1.2, yes, no, on and off are strings, and so are other
+spellings of the special floats such as .INf, inf and nan.  A decimal
+float is a float whatever its magnitude, so a value too large for a
+double, such as 1e400 or -1.0e400, is an infinity, and a value too
+small for one becomes the nearest subnormal double or zero.  The
+explicit !!float tag reads its text the same way.  A decimal integer
+literal outside the range of a long long becomes a CYAML_FLOAT (an
+infinity when it is too large for a double as well), and it never
+wraps.  The hex and octal forms follow the strict core schema: "0x"
+followed by hex digits and "0o" followed by octal digits, with a
+lowercase x or o and no sign.  So -0x1, +0x10 and -0o7 are strings,
+and so is an unsigned hex or octal literal above LLONG_MAX such as
+0x8000000000000000, because neither form has a float reading, and an
+explicit !!int or !!float tag refuses such text.  A single-quoted or
+double-quoted scalar is always a string, whatever its text.  A tag
+can override all of these rules; see TAGS.
 .fi
 .SH "TAGS"
 .nf
-A tag attaches to its node.  It can be !!str, a custom !foo, a %TAG
+A tag belongs to its node.  It can be !!str, a custom !foo, a %TAG
 shorthand, or a verbatim !<...>, and cyaml_node_tag(3) gives it back
 in fully resolved form.  There are five scalar core-schema tags:
 !!null, !!bool, !!int, !!float and !!str.  Each one forces its type on
-a scalar of any style, replacing the type that the text alone gives;
-for example, "!!str 42" is the string "42".  !!bool, !!int and !!float
-examine the text of their scalar, and the parse fails if the text does
-not match, while !!null accepts any text.  A custom tag forces no type,
-so the node keeps its implicit type.
+a scalar of any style, in place of the type that the text alone
+would give, so "!!str 42" is the string "42".  !!bool, !!int and
+!!float check the text of their scalar and the parse fails when it
+doesn't match, while !!null accepts any text.  A custom tag forces no
+type, so the node keeps its implicit type.  A bare "!" is the
+non-specific tag: a plain scalar under it is a string whatever its
+text ("! 42" is the string "42"), a collection keeps its kind, and no
+node carries the tag.  A written tag that resolves to "!" alone, such
+as "!<!>", is a parse error.
 
-A tag on a dictionary key gives a type to the key in the same way, and
-the dictionary keeps the canonical text of the typed key but not the
-tag.  The serializers write a custom tag in its verbatim !<...> form,
-and never in a %TAG shorthand.  They do not write a core-schema tag,
+The text of a written tag follows YAML 1.2 sections 5.6 and 6.9.1.
+The content of a verbatim tag and the prefix of a %TAG directive may
+hold only URI characters: ASCII letters and digits and the
+punctuation -#;/?:@&=+$,_.!~*'()[].  The suffix of a shorthand tag
+may hold the same set without '!', ',', '[' and ']'.  Any other byte,
+such as a space, '{', '<', a quote or a byte of a character outside
+ASCII, is a parse error that names it, so write it as a percent
+escape ("!<a%20b>" is the tag "a b").  The percent escapes of a
+verbatim tag, a shorthand suffix and a %TAG prefix are all decoded
+the same way, so "!e!a" under the prefix "tag:x%21," and
+"!<tag:x%21,a>" are both the tag "tag:x!,a".
+
+A tag on a dictionary key types the key the same way, and the
+dictionary keeps the canonical text of the typed key but not the
+tag.  The serializers write a custom tag in its verbatim !<...> form
+and never as a %TAG shorthand.  They don't write a core-schema tag,
 because implicit typing gives the same type again; see
 cyaml_serialize(3).  cyaml_node_set_tag(3) and cyaml_set(3) keep a
-core-schema tag only while it names the type of its node.
+core-schema tag only as long as it names the type of its node.
 .fi
 .SH "SUPPORTED YAML"
 .nf
 Block mappings, with implicit keys ("key: value") and explicit keys
-("? key" then ": value"), which one mapping can mix in any sequence.
-The ':' of an explicit value has this function only when a space, a
-tab, a line end or the end of input comes after it, so ":name: value"
-is an ordinary entry whose key is ":name".  An implicit key is on one
-line, while an explicit key can continue on several lines.
+("? key" then ": value"), which one mapping can mix in any order.
+The ':' of an explicit value counts as one only when a space, a tab,
+a line end or the end of input follows it, so ":name: value" is an
+ordinary entry whose key is ":name".  An implicit key sits on one
+line, but an explicit key can continue over several lines.
 
 Block sequences ("- item").  A sequence can be the value of a mapping
-key, and it can then have the same indentation as that key.
+key, and it may then have the same indentation as that key.
 
 Flow mappings ("{a: 1, b: 2}").  A bare key with no ':' gives a null
-value, and so does a ':' with no value.  The parser accepts an
-explicit "? key: value" entry, whose key can continue on several
-lines.
+value, and so does a ':' with no value.  An explicit "? key: value"
+entry is accepted, and its key can continue over several lines.
 
 Flow sequences ("[a, b, c]").  A "key: value" pair in a flow sequence
-is a mapping with one entry, so "[foo: bar]" is equal to
-"[{foo: bar}]".  The parser accepts an explicit "[? key: value]" entry.
+is a mapping with one entry, so "[foo: bar]" equals "[{foo: bar}]".
+An explicit "[? key: value]" entry is accepted.
 
 Plain, single-quoted and double-quoted scalars, each of which can
-continue on several lines: a line break becomes a space, and a blank
-line becomes a newline.  A single-quoted scalar has no escapes, and in
-it '' is one quote.  A double-quoted scalar accepts all YAML escapes,
-and \euXXXX too.
+continue over several lines: a line break becomes a space, and a
+blank line becomes a newline.  A plain scalar never starts with an
+indicator character, so "a: ]" and "- ,x" are parse errors outside a
+flow collection.  Inside a flow collection a plain scalar ends at
+every flow indicator, so "[a{b]" is a parse error, and such text has
+to be quoted.  A single-quoted scalar has no escapes, and '' in it is
+one quote.  A double-quoted scalar accepts all YAML escapes, \euXXXX
+included.
 
 Literal (|) and folded (>) block scalars, with the chomping indicators
 |+ (keep), |- (strip) and | (clip, the default).
 
 Anchors, aliases, tags and merge keys.  See below.
 
-The %YAML directive, which can occur at most one time in each document
-and which the parser examines against the MAJOR.MINOR grammar.
+The %YAML directive, which may appear at most once in each document
+and which is checked against the MAJOR.MINOR grammar.  A major
+version other than 1 is a parse error, and any minor version is
+accepted and read as YAML 1.2.  A '%' with no directive name after it
+is a parse error, and a directive with an unknown name is ignored.
 
-The %TAG directive, whose prefixes apply to the document that declares
-them.
+The %TAG directive, whose prefixes apply to the document that
+declares them.
 
 Documents with "---" and "..." markers, and streams of several
 documents.  See cyaml_parse(3).
 
 Comments, from '#' to the end of the line.
 
-A cyaml string, anchor or tag cannot contain a null byte, because each
-of them is a null-terminated C string, so encode such data, for
-example as base64.  The parser does not decode a !!binary tag.
+A cyaml string, anchor or tag cannot contain a null byte, because
+each of them is a null-terminated C string, so encode such data
+first, as base64 for example.  The parser doesn't decode a !!binary
+tag.
 .fi
 .SH "ANCHORS AND ALIASES"
 .nf
 "&name" on a node, a mapping key included, makes that node an anchor,
-and "*name" later in the same document refers to that node.  The
-parser replaces each alias with an independent deep copy of the
-anchored node, so the tree has no shared nodes: a change to the copy
-has no effect on the original, and a change to the original has no
-effect on the copy.  An anchor applies only in its own document of a
-stream.  A node can have at most one anchor and one tag, in either
-sequence, and an alias can have no anchor and no tag.
+and "*name" later in the same document refers to it.  The parser
+replaces each alias with an independent deep copy of the anchored
+node, so the tree has no shared nodes, and changing the copy doesn't
+affect the original or the other way round.  Registering an anchor
+copies nothing.  An anchored node that no alias names costs the same
+as without the anchor, and each alias pays only for its own copy.
+An anchor applies only within its own document of a stream.  A node
+can have at most one anchor and one tag, in either order, and an
+alias can have neither.
 
-Each copy that an alias or a merge key makes counts against a fixed
-expansion limit, so a small document cannot expand into a tree of
+Every copy that an alias or a merge key makes counts against a fixed
+expansion limit, so a small document cannot grow into a tree of
 unlimited size.  cyaml_parse(3) gives the numbers.
 .fi
 .SH "MERGE KEYS"
 .nf
-A mapping entry with the key "<<" merges other mappings into its own
-mapping.  The key is a merge key in two cases:
+A mapping entry with the key "<<" merges other mappings into the
+mapping that holds it.  The key is a merge key in two cases:
   - It is a plain scalar with no tag.
   - It has the core merge tag, plain or quoted.  The core merge tag is
     !!merge, a %TAG shorthand of it, or the verbatim
     !<tag:yaml.org,2002:merge>.
 A "<<" that is quoted and has no tag is an ordinary key, and so is a
-"<<" with a different tag, such as !!str.  This rule applies in all
-notations:
+"<<" with any other tag, such as !!str.  The rule is the same in every
+notation:
   - block mappings and flow mappings
   - implicit keys and explicit keys
   - the one-entry mapping of a "- <<: value" or "[<<: value]" sequence
     entry.
 
 The value of a merge key is one mapping or a sequence of mappings,
-usually aliases; a different value is a parse error.
+usually aliases; any other value is a parse error.
 
-The parser copies the members of each source into the mapping and then
-removes the "<<" entry.  The precedence rules are:
+A mapping can hold several merge keys, and the parser expands all of
+them.  A merge key never becomes a member of the mapping, so it never
+replaces another merge key, and an ordinary "<<" member (a quoted or
+tagged "<<") stays a member beside the merged ones, before or after
+them.
+
+The parser copies the members of each source into the mapping, with
+the precedence rules of PyYAML:
 
   - A key that the mapping defines itself always keeps its own value,
-    whether it comes before or after the "<<" entry.
-  - For a sequence of sources, an earlier source has priority over a
-    later source.
+    whether it comes before or after the merge keys.
+  - Of two merge keys, the later one wins over the earlier one.
+  - In a sequence of sources, an earlier source wins over a later
+    source.
 
-The merged members go in the place of the "<<" entry in the member
-order of the mapping, after the explicit members before "<<" and
-before the explicit members after "<<".  The parser adds them source
-by source, each source in its own member order.  For example:
+The merged members go in the place of the first merge key that brings
+their key, after the explicit members in front of that merge key and
+before the explicit members behind it.  The parser adds them source by
+source, each source in its own member order.  For example:
 
     defaults: &d {timeout: 30, retries: 3}
     service:
       <<: *d
       timeout: 60
 
-gives service the members retries: 3 and then timeout: 60.
+gives service the members retries: 3 and then timeout: 60, and
+
+    m:
+      p: 0
+      <<: {x: 1, y: 2}
+      q: 1
+      <<: {y: 3, z: 4}
+
+gives m the members p: 0, x: 1, y: 3, q: 1 and z: 4.
 .fi
 .SH "DUPLICATE KEYS"
 .nf
-The parser accepts a key that occurs more than one time in a mapping:
-the last value becomes the value of the key, and the key keeps the
-place of its first occurrence.  The parser frees the earlier value
-without reporting it.  Common YAML parsers do the same, but YAML 1.2
-does not require it, so a program must not expect that a YAML parser
-finds a duplicate key.
+A key that appears more than once in a mapping is accepted.  The last
+value becomes the key's value and the key keeps the place of its
+first occurrence, and the earlier value is freed without any report.
+Common YAML parsers do the same, but YAML 1.2 doesn't require it, so
+a program must not expect a YAML parser to find a duplicate key.
 .fi
 .SH "OWNERSHIP"
 .nf
 cyaml_parse(3), cyaml_clone(3) and the cyaml_create_*(3) functions
 give a tree that the caller owns and frees with cyaml_destroy(3).
 cyaml_get(3), cyaml_list_get(3), cyaml_dictionary_get(3) and the
-dictionary cursor give borrowed references, and the tree keeps the
-ownership of these nodes.  cyaml_list_push(3) and
-cyaml_dictionary_set(3) take the child; their pages give the one
-return code that leaves the child with the caller.
+dictionary cursor give borrowed references, and the tree keeps
+owning those nodes.  cyaml_list_push(3) and cyaml_dictionary_set(3)
+take the child, and their pages name the one return code that leaves
+it with the caller.
 .fi
 .SH "THREAD SAFETY"
 .nf
 A tree is not thread safe, but several threads can read one tree at
-the same time while no thread changes it.  Separate trees are
-independent, so separate threads can parse and serialize at the same
-time.
+the same time as long as no thread changes it.  Separate trees are
+independent, so separate threads can parse and serialize at once.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_parse (3),

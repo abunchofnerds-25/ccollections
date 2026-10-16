@@ -22,14 +22,23 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
+#include <citerators.h>
 #include <common.h>
 #include <internal/cgrowbuf.h>
+#include <internal/cpow2.h>
+#include <internal/cprocsintern.h>
 #include <internal/cstrutil.h>
+#include <internal/test_helpers/common.h>
+#include <internal/test_helpers/cprocsintern.h>
+#include <poll.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <tau/tau.h>
 #include <test_connect.h>
+#include <time.h>
 #include <unistd.h>
 TAU_MAIN()  // sets Tau up, and gives the main function
 
@@ -61,12 +70,11 @@ static void reset_counters(void) {
   g_free_count = 0;
 }
 
-/* One shared instance, which a function returns a pointer to, so that a
- * caller does not take the address of a local or a global variable
- * directly. A literal &some_local_var at the macro call site triggers
- * -Waddress ("the address of X will always evaluate as true"); with this
- * function, a call to _ccol_mem_alloc, _ccol_mem_free or ccol_scoped_ptr_mp
- * does not trigger it. */
+/* One shared instance that a function hands out a pointer to, so the caller
+ * never takes the address of a local or a global directly. A literal
+ * &some_local_var at the macro call site triggers -Waddress ("the address of
+ * X will always evaluate as true"), and going through this function keeps
+ * _ccol_mem_alloc, _ccol_mem_free and ccol_scoped_ptr_mp calls quiet. */
 static ccol_memmgmt_procs_t g_counting_procs_storage = {
     .malloc = _counting_malloc,
     .calloc = _counting_calloc,
@@ -86,9 +94,9 @@ TEST(scoped_ptr, default_allocator_frees_on_scope_exit) {
     REQUIRE_NE((void *)buf, NULL);
     strcpy(buf, "hello");
   }
-  /* There is no counting hook for the default allocator, so `make memtest`
-   * confirms separately that there is no leak and no double free. This test
-   * exists to check that the macro form without _mp compiles and runs
+  /* The default allocator has no counting hook, so `make memtest` is what
+   * confirms there is no leak and no double free. This test is only here to
+   * check that the macro form without _mp compiles and runs
    * correctly. */
 }
 
@@ -123,8 +131,8 @@ TEST(scoped_ptr, only_final_value_is_freed_on_reassignment) {
     ccol_scoped_ptr_mp(buf, int, mp);
     buf = _ccol_mem_alloc(mp, sizeof(int));
     REQUIRE_NE((void *)buf, NULL);
-    /* Assigning a new value to buf without first freeing the earlier value is
-     * the documented warning of the macro, which the macro does not solve. */
+    /* Assigning a new value to buf without freeing the old one first is the
+     * macro's documented warning, and the macro doesn't solve it for you. */
     _ccol_mem_free(mp, buf);
     buf = _ccol_mem_alloc(mp, sizeof(int) * 2);
     REQUIRE_NE((void *)buf, NULL);
@@ -218,10 +226,7 @@ TEST(scoped_ptr, early_return_from_multiple_paths_still_frees) {
 /*                  _ccol_find_nearest_gte_power_of_two */
 /* ========================================================================== */
 
-/* common.c declares this, but common.h does not. chashmap sizes every table
- * that it allocates with it. */
-extern size_t _ccol_find_nearest_gte_power_of_two(size_t input);
-
+/* chashmap sizes every table it allocates with this function. */
 TEST(power_of_two, exact_powers_return_themselves) {
   for (volatile unsigned bit = 0; bit < 20; bit++) {
     size_t v = (size_t)1 << bit;
@@ -230,9 +235,9 @@ TEST(power_of_two, exact_powers_return_themselves) {
 }
 
 TEST(power_of_two, values_round_up_to_the_next_power) {
-  /* One value below and one value above each power exercise both directions
-   * of the binary search, as well as its early exit for "the entry before
-   * this one is smaller, so this is the answer". */
+  /* One value below and one above each power exercise both directions of the
+   * binary search, plus its early exit for "the entry before this one is
+   * smaller, so this is the answer". */
   for (volatile unsigned bit = 2; bit < 20; bit++) {
     size_t v = (size_t)1 << bit;
     REQUIRE_EQ(_ccol_find_nearest_gte_power_of_two(v - 1), v);
@@ -241,14 +246,14 @@ TEST(power_of_two, values_round_up_to_the_next_power) {
 }
 
 TEST(power_of_two, small_inputs_clamp_to_one) {
-  /* Every value at or below the first table entry returns that entry. */
+  /* Any value at or below the first table entry gives that entry. */
   REQUIRE_EQ(_ccol_find_nearest_gte_power_of_two(0), (size_t)1);
   REQUIRE_EQ(_ccol_find_nearest_gte_power_of_two(1), (size_t)1);
 }
 
 TEST(power_of_two, above_the_representable_maximum_is_invalid) {
-  /* The table stops at the largest power of two that a size_t can hold, so
-   * there is no answer for a value above it. */
+  /* The table ends at the largest power of two a size_t can hold, so a value
+   * above it has no answer. */
   size_t top = ((size_t)1) << (sizeof(size_t) * 8 - 1);
   REQUIRE_EQ(_ccol_find_nearest_gte_power_of_two(top), top);
   REQUIRE_EQ(_ccol_find_nearest_gte_power_of_two(top + 1), ccol_invalid_size);
@@ -259,17 +264,16 @@ TEST(power_of_two, above_the_representable_maximum_is_invalid) {
 /*                         ccol_growbuf_t */
 /* ========================================================================== */
 
-/* A reallocator that refuses once the test arms it, which drives the
- * out-of-memory latch of the buffer on purpose instead of waiting for a
- * real allocation failure. */
+/* A reallocator that refuses once the test arms it, so we can drive the
+ * buffer's out-of-memory latch on purpose instead of waiting for a real
+ * allocation failure. */
 static bool g_growbuf_refuse_realloc = false;
-/* Counts the round trips to the allocator that one operation makes, so that
- * a test can assert that a refused request never reached the allocator. An
- * assertion on the count rather than on the outcome separates two cases:
- * "the code rejected the size before the call" and "the allocator got an
- * absurd size and said no". Only the first case is safe, because an
- * instrumented allocator stops the process on a request that plain malloc
- * only refuses. */
+/* Counts how many times one operation goes to the allocator, so a test can
+ * assert that a refused request never reached it. Asserting on the count
+ * rather than on the outcome tells apart "the code rejected the size before
+ * the call" and "the allocator got an absurd size and said no". Only the
+ * first one is safe, because an instrumented allocator stops the process on
+ * a request that plain malloc just refuses. */
 static size_t g_growbuf_alloc_calls = 0;
 static void *_growbuf_malloc(size_t n) {
   g_growbuf_alloc_calls++;
@@ -343,9 +347,9 @@ TEST(growbuf, append_c_and_append_cstr_accumulate_in_order) {
 }
 
 TEST(growbuf, append_cstr_treats_null_as_an_empty_append) {
-  /* The documentation says that this is tolerated, not undefined, so a caller
-   * can pass on the buf field of another buffer, whose init or append can
-   * fail and leave the field NULL. */
+  /* The documentation says this is tolerated and not undefined, so a caller
+   * can pass on the buf field of another buffer whose init or append failed
+   * and left it NULL. */
   ccol_growbuf_t b;
   ccol_growbuf_init(&b, growbuf_procs());
   ccol_growbuf_append_cstr(&b, "x");
@@ -361,15 +365,15 @@ TEST(growbuf, a_failed_grow_latches_oom_and_every_later_append_is_a_no_op) {
   ccol_growbuf_init(&b, growbuf_procs());
   ccol_growbuf_append_cstr(&b, "kept");
 
-  /* An append that still fits inside the first capacity succeeds before the
-   * buffer tries to grow, so the length to compare against is the length at
-   * the moment the latch trips, not the length before the loop. */
+  /* An append that still fits in the first capacity succeeds before the
+   * buffer tries to grow, so the length to compare against is the one at the
+   * moment the latch trips and not the one before the loop. */
   g_growbuf_refuse_realloc = true;
   for (int i = 0; i < 64; i++) ccol_growbuf_append_cstr(&b, "0123456789abcdef");
   bool latched = b.oom;
   size_t len_before = b.len;
-  /* Once latched, the buffer stays latched: an append after the failure must
-   * not start to write again, even when the allocator recovers. */
+  /* Once latched the buffer stays latched, so an append after the failure
+   * must not start writing again even if the allocator recovers. */
   g_growbuf_refuse_realloc = false;
   ccol_growbuf_append_cstr(&b, "ignored");
   bool still_latched = b.oom;
@@ -382,7 +386,7 @@ TEST(growbuf, a_failed_grow_latches_oom_and_every_later_append_is_a_no_op) {
 }
 
 TEST(growbuf, destroy_on_an_oom_buffer_is_safe) {
-  /* b.buf can correctly be NULL here, and destroy must tolerate that. */
+  /* b.buf can legitimately be NULL here and destroy has to tolerate it. */
   ccol_growbuf_t b;
   ccol_growbuf_init(&b, growbuf_procs());
   g_growbuf_refuse_realloc = true;
@@ -393,16 +397,16 @@ TEST(growbuf, destroy_on_an_oom_buffer_is_safe) {
   REQUIRE_TRUE(latched);
 }
 
-/* The size that an append needs is len + n + 1. These tests pin that the
- * buffer decides whether that size is representable before it computes the
- * size. Only the boundary is evidence of that, because a test with an
- * ordinary length passes whether the check is present or absent.
+/* The size an append needs is len + n + 1, and these tests pin that the
+ * buffer checks whether that size is representable before computing it.
+ * Only the boundary can show that, since a test with an ordinary length
+ * passes whether the check is there or not.
  *
- * These tests are not vacuous. Code that forms the sum first makes it wrap
- * to a value at or below the current capacity, so no growth happens and
- * the memcpy runs with the enormous n of the caller. Such code stops this
- * test under _FORTIFY_SOURCE and segfaults the next test, and
- * AddressSanitizer reports it as negative-size-param. */
+ * Both tests catch the bug. Code that forms the sum first makes it wrap to
+ * a value at or below the current capacity, so nothing grows and memcpy
+ * runs with the caller's enormous n. Under _FORTIFY_SOURCE that stops this
+ * test and segfaults the next one, and AddressSanitizer reports it as
+ * negative-size-param. */
 TEST(growbuf, append_of_an_unrepresentable_length_latches_oom_without_copying) {
   ccol_growbuf_t b;
   ccol_growbuf_init(&b, growbuf_procs());
@@ -417,9 +421,9 @@ TEST(growbuf, append_of_an_unrepresentable_length_latches_oom_without_copying) {
 }
 
 TEST(growbuf, append_of_an_unrepresentable_length_counts_existing_content) {
-  /* Once the buffer holds some content, len + n + 1 wraps for an n that is
-   * much smaller than SIZE_MAX, so the check must use the space that is
-   * left, not n alone. */
+  /* Once the buffer holds some content, len + n + 1 wraps for an n much
+   * smaller than SIZE_MAX, so the check must use the space left and not n
+   * alone. */
   ccol_growbuf_t b;
   ccol_growbuf_init(&b, growbuf_procs());
   ccol_growbuf_append_cstr(&b, "ab");
@@ -434,13 +438,13 @@ TEST(growbuf, append_of_an_unrepresentable_length_counts_existing_content) {
 }
 
 TEST(growbuf, append_of_the_largest_representable_length_refuses_cleanly) {
-  /* SIZE_MAX - 1 is one below the boundary: len + n + 1 is then exactly
-   * SIZE_MAX and does not wrap. The representability check passes it, and the
-   * doubling guard of the growth step refuses it. This test pins that standing
-   * property rather than the representability check, and it passes either way;
-   * it is here because the boundary has a meaning only when a test covers the
-   * value on each side of it. It does pin one thing: the allocator never sees a
-   * request of this size, because such a request stops an instrumented
+  /* SIZE_MAX - 1 sits one below the boundary, where len + n + 1 is exactly
+   * SIZE_MAX and doesn't wrap. The representability check lets it through
+   * and the growth step's doubling guard refuses it. So this test pins that
+   * guard and not the representability check, and it passes either way; it's
+   * here because a boundary only means something when a test covers the
+   * value on each side of it. It does pin one thing: the allocator never gets
+   * a request of this size, since such a request stops an instrumented
    * allocator instead of giving NULL. */
   ccol_growbuf_t b;
   ccol_growbuf_init(&b, growbuf_procs());
@@ -455,10 +459,10 @@ TEST(growbuf, append_of_the_largest_representable_length_refuses_cleanly) {
 }
 
 TEST(growbuf, init_hint_of_an_unrepresentable_size_latches_oom) {
-  /* The store that a hint asks for is hint + 1 bytes, which is not
-   * representable at SIZE_MAX. Code that forms it wraps to 0, the 64-byte
-   * floor then wins, and the code reports success on a buffer whose size is
-   * nothing like the one that the caller asked for. */
+  /* A hint asks for a store of hint + 1 bytes, which isn't representable at
+   * SIZE_MAX. Code that forms it wraps to 0, the 64-byte floor wins, and the
+   * code reports success on a buffer whose size has nothing to do with what
+   * the caller asked for. */
   ccol_growbuf_t b;
   g_growbuf_alloc_calls = 0;
   ccol_growbuf_init_hint(&b, growbuf_procs(), SIZE_MAX);
@@ -470,13 +474,13 @@ TEST(growbuf, init_hint_of_an_unrepresentable_size_latches_oom) {
 }
 
 TEST(growbuf, append_of_zero_bytes_leaves_the_buffer_terminated) {
-  /* An append of zero bytes is complete and never touches the copy path, so
-   * a caller can pass the NULL that the wrapper for a NUL-terminated string
-   * already tolerates. That NULL never reaches memcpy, whose pointers must be
-   * valid even for a length of zero.
+  /* An append of zero bytes is already complete and never goes near the copy
+   * path, so the caller can pass the NULL that the wrapper for a
+   * NUL-terminated string tolerates. That NULL never reaches memcpy, whose
+   * pointers must be valid even for a length of zero.
    *
-   * This test is not vacuous under UndefinedBehaviorSanitizer, which is
-   * where it matters: code that lets the call through reports "null pointer
+   * Under UndefinedBehaviorSanitizer, which is where it matters, the test
+   * catches the defect: code that lets the call through reports "null pointer
    * passed as argument 2, which is declared to never be null". A build with
    * no instrumentation passes either way. */
   ccol_growbuf_t b;
@@ -494,13 +498,13 @@ TEST(growbuf, append_of_zero_bytes_leaves_the_buffer_terminated) {
 /*                  ccol_retval_to_str / data type size / key dump */
 /* ========================================================================== */
 
-/* ccol_retval_t pins an explicit numeric value on every enumerator, and
- * call sites that test for ccol_success == 0 depend on that value directly.
- * The table below asserts the value and the spelling together. A new
- * enumerator anywhere except at the end quietly renumbers every later
- * enumerator; with this table, such a change fails here, while without it
- * the change shows up as an unrelated module reporting a retval that it
- * never returns. */
+/* ccol_retval_t gives every enumerator an explicit numeric value, and call
+ * sites that test for ccol_success == 0 depend on that value directly. The
+ * table below asserts the value and the spelling together. A new enumerator
+ * anywhere but at the end silently renumbers every enumerator after it, and
+ * with this table such a change fails here, while without it the change
+ * would show up as some unrelated module reporting a retval it never
+ * returns. */
 static const struct {
   ccol_retval_t value;
   int expected_number;
@@ -553,8 +557,8 @@ TEST(retval, an_out_of_range_value_reports_unknown) {
 }
 
 TEST(data_type, fixed_width_sizes_match_the_underlying_types) {
-  /* The test drives this through a volatile variable, so that the switch
-   * runs instead of being folded into a constant at each call site. */
+  /* We go through a volatile variable so the switch really runs instead of
+   * being folded into a constant at each call site. */
   volatile ccol_data_type t;
   t = ccol_char;
   REQUIRE_EQ(ccol_fixed_width_data_type_size(t), sizeof(char));
@@ -589,17 +593,17 @@ TEST(data_type, fixed_width_sizes_match_the_underlying_types) {
 }
 
 TEST(data_type, variable_width_types_report_zero) {
-  /* A string and an opaque blob have no width that a caller can assume. */
+  /* A string and an opaque blob have no width a caller can assume. */
   volatile ccol_data_type t = ccol_string;
   REQUIRE_EQ(ccol_fixed_width_data_type_size(t), (size_t)0);
   t = ccol_other_types;
   REQUIRE_EQ(ccol_fixed_width_data_type_size(t), (size_t)0);
 }
 
-/* _ccol_dump_key_to_stderr runs inside the fatal-error path that chmap and
- * cbmap take before ccol_fatal_err(), so a fault in it turns a diagnostic
- * into a second crash on top of the first one. Capturing stderr is what
- * lets a test assert on it at all. */
+/* _ccol_dump_key_to_stderr runs on the fatal-error path that chmap and cbmap
+ * take before _ccol_fatal_err(), so a fault in it would turn a diagnostic
+ * into a second crash on top of the first one. We capture stderr so a test
+ * can assert on it at all. */
 static bool dump_key_capture(const void *data, size_t size, char *out,
                              size_t out_size) {
   char path[] = "/tmp/ccol_dumpkeyXXXXXX";
@@ -629,8 +633,8 @@ static bool dump_key_capture(const void *data, size_t size, char *out,
 }
 
 TEST(strdup, a_string_is_copied_into_storage_the_caller_owns) {
-  /* The copy is independent of the source: a write over the source after the
-   * call must not change the copy. */
+  /* The copy doesn't depend on the source, so writing over the source after
+   * the call must leave the copy as it was. */
   char src[16] = "hello";
   char *copy = ccol_strdup(NULL, src);
   memset(src, 'x', sizeof(src) - 1);
@@ -642,13 +646,13 @@ TEST(strdup, a_string_is_copied_into_storage_the_caller_owns) {
 }
 
 TEST(strdup, a_null_input_yields_null_rather_than_reading_through_it) {
-  /* The documentation says that this is tolerated, not undefined, so a
-   * caller can pass on a string that another allocation failed to make, and
-   * check it once at the end.
+  /* The documentation says this is tolerated and not undefined, so a caller
+   * can pass on a string that another allocation failed to make and check
+   * it once at the end.
    *
-   * This test is not vacuous: without the guard, this call reaches
-   * strlen(NULL), which AddressSanitizer reports as a SEGV on a null
-   * dereference and an ordinary build turns into a crash. */
+   * Without the guard the call reaches strlen(NULL), which AddressSanitizer
+   * reports as a SEGV on a null dereference and an ordinary build turns into
+   * a crash. */
   REQUIRE_TRUE(ccol_strdup(NULL, NULL) == NULL);
 }
 
@@ -687,7 +691,7 @@ TEST(dump_key, a_partial_second_row_is_padded_and_still_labelled) {
   REQUIRE_TRUE(dump_key_capture(key, sizeof(key), buf, sizeof(buf)));
   REQUIRE_NE((void *)strstr(buf, "00000000"), (void *)NULL);
   REQUIRE_NE((void *)strstr(buf, "00000010"), (void *)NULL);
-  /* The short last row pads its hex columns to keep the sidebar in line. */
+  /* The short last row pads its hex columns so the sidebar lines up. */
   REQUIRE_NE((void *)strstr(buf, "|qrst|"), (void *)NULL);
 }
 
@@ -699,29 +703,29 @@ TEST(dump_key, unprintable_bytes_render_as_dots) {
 }
 
 /* The check on the order of the fork-prepare handlers (see
- * ccol_atfork_module_t). Every module that registers a prepare handler holds
- * its own locks from that handler until after the fork, so the locks of the
- * handlers nest in the order in which the handlers run, and one consistent
- * order across every fork is what keeps that nesting acyclic. The order is
- * a property of the registration order rather than of anything inside one
- * handler, which is why a check is better than a claim in a comment.
+ * _ccol_atfork_module_t). Every module that registers a prepare handler holds
+ * its own locks from that handler until after the fork, so the handlers'
+ * locks nest in the order the handlers run, and keeping that order the same
+ * across every fork is what keeps the nesting acyclic. The order comes from
+ * the registration order and not from anything inside one handler, so a
+ * check is worth more than a claim in a comment.
  *
- * This test runs in a forked child, because a violation is deliberately
- * fatal: a build that inverts the order must stop instead of continuing
- * into a nesting that no reader has reasoned about.
+ * The test runs in a forked child because a violation is fatal on purpose:
+ * a build that inverts the order must stop rather than go on into a
+ * nesting nobody has reasoned about.
  *
- * This test is not vacuous: recording the same pair in one order and then
- * in the other order is what makes the child abort, and a build whose
- * recorder accepted both orders would exit 0 here. */
+ * Recording the same pair in one order and then in the other is what makes
+ * the child abort, and a build whose recorder accepted both orders would
+ * exit 0 here. */
 TEST(atfork_order, an_inverted_prepare_handler_order_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
-    _ccol_atfork_order_record(ccol_atfork_module_clogger);
-    _ccol_atfork_order_record(ccol_atfork_module_cthreadcomm);
+    _ccol_atfork_order_record(_ccol_atfork_module_clogger);
+    _ccol_atfork_order_record(_ccol_atfork_module_cthreadcomm);
     _ccol_atfork_order_reset();
-    /* The opposite order, as a second fork makes it. */
-    _ccol_atfork_order_record(ccol_atfork_module_cthreadcomm);
-    _ccol_atfork_order_record(ccol_atfork_module_clogger);
+    /* The opposite order, the way a second fork would make it. */
+    _ccol_atfork_order_record(_ccol_atfork_module_cthreadcomm);
+    _ccol_atfork_order_record(_ccol_atfork_module_clogger);
     _exit(0); /* reached only if the recorder took the inversion */
   }
   REQUIRE_NE(pid, -1);
@@ -735,15 +739,15 @@ TEST(atfork_order, an_inverted_prepare_handler_order_is_fatal) {
 }
 
 /* Recording the same pair in the same order across two forks is the
- * ordinary case, and the recorder must accept it, which is why the check
- * above cannot pass by refusing everything. */
+ * ordinary case and the recorder accepts it, which is why the check
+ * above can't pass by just refusing everything. */
 TEST(atfork_order, a_repeated_consistent_order_is_accepted) {
   pid_t pid = fork();
   if (pid == 0) {
     for (int fork_round = 0; fork_round < 3; fork_round++) {
-      _ccol_atfork_order_record(ccol_atfork_module_clogger);
-      _ccol_atfork_order_record(ccol_atfork_module_cthreadcomm);
-      _ccol_atfork_order_record(ccol_atfork_module_cthreadpool);
+      _ccol_atfork_order_record(_ccol_atfork_module_clogger);
+      _ccol_atfork_order_record(_ccol_atfork_module_cthreadcomm);
+      _ccol_atfork_order_record(_ccol_atfork_module_cthreadpool);
       _ccol_atfork_order_reset();
     }
     _exit(0);
@@ -754,39 +758,39 @@ TEST(atfork_order, a_repeated_consistent_order_is_accepted) {
   pid_t reaped = waitpid(pid, &status, 0);
 
   REQUIRE_EQ(reaped, pid);
-  /* This checks WIFEXITED only, and deliberately not WEXITSTATUS(status) ==
-     0 as well. Under valgrind, --errors-for-leak-kinds=all reports the
-     inherited process image of every forked child as still reachable, and
-     --error-exitcode then replaces the status of the child, so the exit code
-     says nothing about what the child did. WIFEXITED is the part that
-     carries the meaning here: a recorder that rejected this consistent
-     order would abort, which makes WIFEXITED false. */
+  /* We only check WIFEXITED here and not WEXITSTATUS(status) == 0 too.
+     Under valgrind, --errors-for-leak-kinds=all reports the inherited process
+     image of every forked child as still reachable and --error-exitcode then
+     overrides the child's status, so the exit code tells us nothing about
+     what the child did. WIFEXITED is the part that carries meaning: a
+     recorder that rejected this consistent order would abort, and WIFEXITED
+     would be false. */
   REQUIRE_TRUE(WIFEXITED(status));
 }
 
-/* A handler that joins the order between two forks, because the program
- * uses its module for the first time, runs first in the fork after that. Its
- * pairs with every later handler of that fork must be recorded, so that a
- * later fork in which it runs after one of them is refused.
+/* When the program uses a module for the first time between two forks, its
+ * handler joins the order and runs first in the next fork. Its pairs with
+ * every later handler of that fork need to be recorded, so that a later fork
+ * where it runs after one of them gets refused.
  *
- * This test is non-vacuous: a recorder that starts a new sequence only when
- * a handler runs again, instead of at the explicit reset, records the
- * newcomer after the handlers of the previous fork, never records that it ran
- * before them, and lets the inverted third fork through with exit 0. */
+ * The test isn't vacuous: a recorder that starts a new sequence only when a
+ * handler runs again, instead of at the explicit reset, records the newcomer
+ * after the previous fork's handlers, never records that it ran before them,
+ * and lets the inverted third fork through with exit 0. */
 TEST(atfork_order, a_handler_that_joins_later_is_ordered_against_the_rest) {
   pid_t pid = fork();
   if (pid == 0) {
-    _ccol_atfork_order_record(ccol_atfork_module_clogger);
-    _ccol_atfork_order_record(ccol_atfork_module_cthreadcomm);
+    _ccol_atfork_order_record(_ccol_atfork_module_clogger);
+    _ccol_atfork_order_record(_ccol_atfork_module_cthreadcomm);
     _ccol_atfork_order_reset();
     /* cthreadpool joins and runs first. */
-    _ccol_atfork_order_record(ccol_atfork_module_cthreadpool);
-    _ccol_atfork_order_record(ccol_atfork_module_clogger);
-    _ccol_atfork_order_record(ccol_atfork_module_cthreadcomm);
+    _ccol_atfork_order_record(_ccol_atfork_module_cthreadpool);
+    _ccol_atfork_order_record(_ccol_atfork_module_clogger);
+    _ccol_atfork_order_record(_ccol_atfork_module_cthreadcomm);
     _ccol_atfork_order_reset();
     /* clogger before cthreadpool contradicts the fork above. */
-    _ccol_atfork_order_record(ccol_atfork_module_clogger);
-    _ccol_atfork_order_record(ccol_atfork_module_cthreadpool);
+    _ccol_atfork_order_record(_ccol_atfork_module_clogger);
+    _ccol_atfork_order_record(_ccol_atfork_module_cthreadpool);
     _exit(0); /* reached only if the recorder took the inversion */
   }
   REQUIRE_NE(pid, -1);
@@ -799,24 +803,24 @@ TEST(atfork_order, a_handler_that_joins_later_is_ordered_against_the_rest) {
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
-/* A real fork() ends the sequence through the handlers that the recorder
- * registers, with no call from the test. The child below records one order,
- * forks, and records the opposite order in the parent side of that fork,
- * which must abort.
+/* A real fork() ends the sequence through the handlers the recorder
+ * registers, without any call from the test. The child below records one
+ * order, forks, and records the opposite order on the parent side of that
+ * fork, which must abort.
  *
- * This test is non-vacuous: without the registered reset, the second
- * sequence continues the first one, both handlers are already in it, and
- * the process exits 0. */
+ * Without the registered reset the second sequence would continue the
+ * first one, both handlers would already be in it, and the process would
+ * exit 0. */
 TEST(atfork_order, a_real_fork_starts_a_new_sequence) {
   pid_t pid = fork();
   if (pid == 0) {
-    _ccol_atfork_order_record(ccol_atfork_module_clogger);
-    _ccol_atfork_order_record(ccol_atfork_module_cthreadcomm);
+    _ccol_atfork_order_record(_ccol_atfork_module_clogger);
+    _ccol_atfork_order_record(_ccol_atfork_module_cthreadcomm);
     pid_t inner = fork();
     if (inner == 0) _exit(0);
     if (inner > 0) (void)waitpid(inner, NULL, 0);
-    _ccol_atfork_order_record(ccol_atfork_module_cthreadcomm);
-    _ccol_atfork_order_record(ccol_atfork_module_clogger);
+    _ccol_atfork_order_record(_ccol_atfork_module_cthreadcomm);
+    _ccol_atfork_order_record(_ccol_atfork_module_clogger);
     _exit(0); /* reached only if no reset ran at the fork */
   }
   REQUIRE_NE(pid, -1);
@@ -833,9 +837,9 @@ TEST(atfork_order, a_real_fork_starts_a_new_sequence) {
 /*                       PUBLIC MACRO HYGIENE                                 */
 /* ========================================================================== */
 
-/* An allocator that always gives the same address, so that a test can
- * assert the exact pointer that an allocation macro makes instead of only
- * checking that the pointer is non-NULL. */
+/* An allocator that always hands out the same address, so a test can assert
+ * the exact pointer an allocation macro produces instead of only checking
+ * that it isn't NULL. */
 static char ccol_hyg_buffer[256];
 
 static void *ccol_hyg_malloc(size_t size) {
@@ -860,13 +864,12 @@ static void ccol_hyg_free(void *ptr) { (void)ptr; }
 
 TEST(macro_hygiene, an_allocation_macro_composes_with_a_surrounding_operator) {
   /* The conditional operator binds more loosely than a cast or an addition,
-   * so an allocation macro whose body is not fully parenthesised lets an
-   * operator outside it bind to one arm alone: the cast lands on the procs
-   * pointer, and the offset attaches to the arm that the code does not take.
-   * Both arms have the type void *, and -Wpointer-arith is in neither -Wall
-   * nor -Wextra, so nothing reports it. This test is not vacuous: without the
-   * parentheses the offset quietly disappears, and the pointer compares
-   * equal to the base. */
+   * so if an allocation macro's body isn't fully parenthesised, an operator
+   * outside it binds to one arm only: the cast lands on the procs pointer and
+   * the offset sticks to the arm that isn't taken. Both arms are void * and
+   * -Wpointer-arith is in neither -Wall nor -Wextra, so nothing reports it.
+   * Drop the parentheses and the offset silently disappears, so the pointer
+   * compares equal to the base. */
   ccol_memmgmt_procs_t procs = {.malloc = ccol_hyg_malloc,
                                 .calloc = ccol_hyg_calloc,
                                 .realloc = ccol_hyg_realloc,
@@ -882,37 +885,37 @@ TEST(macro_hygiene, an_allocation_macro_composes_with_a_surrounding_operator) {
   char *offset_realloc = (char *)_ccol_mem_realloc(mp, ccol_hyg_buffer, 32) + 4;
   REQUIRE_EQ((void *)offset_realloc, (void *)(ccol_hyg_buffer + 4));
 
-  /* The free of this allocator does nothing, and it is called through the
-   * procs directly: through _ccol_mem_free, Clang sees the default free()
-   * arm of the macro applied to a static buffer and rejects the call with
-   * -Wfree-nonheap-object, although that arm never runs here. */
+  /* This allocator's free does nothing, and we call it through the procs
+   * directly, because through _ccol_mem_free Clang sees the macro's default
+   * free() arm applied to a static buffer and rejects the call with
+   * -Wfree-nonheap-object, even though that arm never runs here. */
   mp->free(ccol_hyg_buffer);
 }
 
 TEST(macro_hygiene, ccol_typed_cmp_does_not_capture_caller_identifiers) {
-  /* Each temporary that this macro declares is in scope from the end of its
-   * own declarator, so a temporary named like a realistic caller variable
-   * captures the argument of that caller: the argument resolves to the
-   * object that the macro has just declared. This test is not vacuous: with
-   * temporaries named var1 and var2, the first comparison answers 0 instead
-   * of -1, and no compiler reports it. */
+  /* Every temporary this macro declares is in scope from the end of its own
+   * declarator, so a temporary named like a realistic caller variable
+   * captures that caller's argument: the argument resolves to the object the
+   * macro just declared. This test notices: with temporaries named var1
+   * and var2 the first comparison gives 0 instead of -1, and no compiler
+   * says a word. */
   int var1 = 5, var2 = 7;
   int a = 5, b = 7;
-  REQUIRE_EQ(ccol_typed_cmp(&var1, &var2, int), -1);
-  REQUIRE_EQ(ccol_typed_cmp(&a, &b, int), -1);
-  REQUIRE_EQ(ccol_typed_cmp(&var2, &var1, int), 1);
-  REQUIRE_EQ(ccol_typed_cmp(&var1, &var1, int), 0);
+  REQUIRE_EQ(_ccol_typed_cmp(&var1, &var2, int), -1);
+  REQUIRE_EQ(_ccol_typed_cmp(&a, &b, int), -1);
+  REQUIRE_EQ(_ccol_typed_cmp(&var2, &var1, int), 1);
+  REQUIRE_EQ(_ccol_typed_cmp(&var1, &var1, int), 0);
 }
 
 TEST(macro_hygiene, type_introspection_does_not_capture_caller_identifiers) {
-  /* The same mechanism, through the _Generic helpers that every container
-   * creation macro uses. Without this check, a caller variable named like
-   * one of their temporaries selects the default arm, which reports an
-   * integral value as a value that is not integral. */
+  /* Same mechanism, through the _Generic helpers that every container
+   * creation macro uses. Without this check a caller variable named like one
+   * of their temporaries picks the default arm, which reports an integral
+   * value as not integral. */
   int result = 42;
   int plain = 42;
-  REQUIRE_TRUE(ccol_is_integral_type(result));
-  REQUIRE_TRUE(ccol_is_integral_type(plain));
+  REQUIRE_TRUE(_ccol_is_integral_type(result));
+  REQUIRE_TRUE(_ccol_is_integral_type(plain));
   REQUIRE_EQ(ccol_determine_ccol_data_type(result),
              ccol_determine_ccol_data_type(plain));
   char *_ptr = "hello";
@@ -926,9 +929,9 @@ TEST(macro_hygiene, type_introspection_does_not_capture_caller_identifiers) {
 /*          CHARACTER POINTER VERSUS CHARACTER ARRAY CLASSIFICATION           */
 /* ========================================================================== */
 
-/* Pointers whose own object is const. The address of such an object has a
- * type like const char *const *, a shape that a classifier built on the
- * type of &(data) cannot recognize. */
+/* Pointers whose own object is const. Taking the address of such an object
+ * gives a type like const char *const *, which a classifier built on the
+ * type of &(data) can't recognize. */
 static const char *const ccol_cls_const_name = "const-name";
 static const signed char *const ccol_cls_const_signed =
     (const signed char *)"signed";
@@ -939,14 +942,14 @@ TEST(char_classification, a_qualified_char_pointer_is_a_pointer_not_an_array) {
   char *const cp = "char-const";
   unsigned char *volatile vp = (unsigned char *)"volatile";
   signed char *const volatile cvp = (signed char *)"cv";
-  REQUIRE_FALSE(ccol_is_char_array(ccol_cls_const_name));
-  REQUIRE_FALSE(ccol_is_char_array(ccol_cls_const_signed));
-  REQUIRE_FALSE(ccol_is_char_array(ccol_cls_const_unsigned));
-  REQUIRE_FALSE(ccol_is_char_array(cp));
-  REQUIRE_FALSE(ccol_is_char_array(vp));
-  REQUIRE_FALSE(ccol_is_char_array(cvp));
-  REQUIRE_TRUE(ccol_is_char_ptr(ccol_cls_const_name));
-  REQUIRE_TRUE(ccol_is_char_ptr(cp));
+  REQUIRE_FALSE(_ccol_is_char_array(ccol_cls_const_name));
+  REQUIRE_FALSE(_ccol_is_char_array(ccol_cls_const_signed));
+  REQUIRE_FALSE(_ccol_is_char_array(ccol_cls_const_unsigned));
+  REQUIRE_FALSE(_ccol_is_char_array(cp));
+  REQUIRE_FALSE(_ccol_is_char_array(vp));
+  REQUIRE_FALSE(_ccol_is_char_array(cvp));
+  REQUIRE_TRUE(_ccol_is_char_ptr(ccol_cls_const_name));
+  REQUIRE_TRUE(_ccol_is_char_ptr(cp));
   REQUIRE_EQ((int)ccol_determine_ccol_data_type(ccol_cls_const_name),
              (int)ccol_string);
   REQUIRE_STREQ((const char *)ccol_cls_const_signed, "signed");
@@ -957,23 +960,23 @@ TEST(char_classification, every_char_array_form_is_still_an_array) {
   const char c_arr[6] = "const";
   signed char s_arr[4] = {'s', 'g', 'n', 0};
   const unsigned char u_arr[4] = {'u', 'n', 's', 0};
-  REQUIRE_TRUE(ccol_is_char_array(plain));
-  REQUIRE_TRUE(ccol_is_char_array(c_arr));
-  REQUIRE_TRUE(ccol_is_char_array(s_arr));
-  REQUIRE_TRUE(ccol_is_char_array(u_arr));
-  REQUIRE_TRUE(ccol_is_char_array("literal"));
+  REQUIRE_TRUE(_ccol_is_char_array(plain));
+  REQUIRE_TRUE(_ccol_is_char_array(c_arr));
+  REQUIRE_TRUE(_ccol_is_char_array(s_arr));
+  REQUIRE_TRUE(_ccol_is_char_array(u_arr));
+  REQUIRE_TRUE(_ccol_is_char_array("literal"));
   char *p = plain;
   const char *cp = c_arr;
-  REQUIRE_FALSE(ccol_is_char_array(p));
-  REQUIRE_FALSE(ccol_is_char_array(cp));
+  REQUIRE_FALSE(_ccol_is_char_array(p));
+  REQUIRE_FALSE(_ccol_is_char_array(cp));
   int not_a_string = 3;
-  REQUIRE_FALSE(ccol_is_char_array(not_a_string));
+  REQUIRE_FALSE(_ccol_is_char_array(not_a_string));
 }
 
 TEST(char_classification, populate_pair_reads_the_string_of_a_const_pointer) {
-  /* A pair built from a const-qualified pointer object must address the
-   * string, not the pointer object itself; measured with strlen, the pointer
-   * object gives a size that depends on its address bytes. */
+  /* A pair built from a const-qualified pointer object should address the
+   * string and not the pointer object, because measured with strlen the
+   * pointer object gives a size that depends on its address bytes. */
   cmap_pair pair = {0};
   _populate_cmap_pair(&pair, ccol_cls_const_name);
   REQUIRE_EQ(pair.ptr, (void *)ccol_cls_const_name);
@@ -995,16 +998,104 @@ TEST(char_classification, populate_pair_reads_the_string_of_a_const_pointer) {
   _populate_cmap_pair(&pair4, arr);
   REQUIRE_EQ(pair4.ptr, (void *)arr);
   REQUIRE_EQ(pair4.size, strlen("array") + 1);
+
+  unsigned char *volatile vp = (unsigned char *)"volatile";
+  cmap_pair pair5 = {0};
+  _populate_cmap_pair(&pair5, vp);
+  REQUIRE_EQ(pair5.ptr, (void *)vp);
+  REQUIRE_EQ(pair5.size, strlen("volatile") + 1);
+
+  const char *null_str = NULL;
+  cmap_pair pair6 = {(void *)arr, 99};
+  _populate_cmap_pair(&pair6, null_str);
+  REQUIRE_EQ(pair6.ptr, (void *)NULL);
+  REQUIRE_EQ(pair6.size, (size_t)0);
+}
+
+/* Two levels, like every public value macro has, where the outer one passes
+ * its argument on to an implementation macro. */
+#define CCOL_TEST_POP_SIZE(x, k, p) CCOL_TEST_POP_SIZE_IMPL((x), k, p)
+#define CCOL_TEST_POP_SIZE_IMPL(x, k, p) \
+  ({                                     \
+    __typeof__(x) k = (x);               \
+    cmap_pair p = {0};                   \
+    _populate_cmap_pair(&p, k);          \
+    p.size;                              \
+  })
+
+TEST(char_classification, populate_pair_nests_inside_another_macro_argument) {
+  /* _populate_cmap_pair() has no diagnostic pragma in it, so a macro that
+   * uses it can take another macro that uses it as its argument, which is
+   * the shape of chmap_get_ptr(m, chmap_get(m, k)). It also guards this:
+   * with a _Pragma in _populate_cmap_pair(), GCC 10 moves the pragma in front
+   * of the outer macro, into the middle of this declaration, and fails with
+   * "expected expression before '#pragma'". */
+  const char *const s = "nested";
+  size_t size = CCOL_TEST_POP_SIZE(
+      CCOL_TEST_POP_SIZE(s, inner_k, inner_p) ? s : s, outer_k, outer_p);
+  REQUIRE_EQ(size, strlen("nested") + 1);
+}
+
+#undef CCOL_TEST_POP_SIZE_IMPL
+#undef CCOL_TEST_POP_SIZE
+
+/* A struct with padding between its members. */
+struct ccol_unqual_probe {
+  char c;
+  int i;
+};
+
+TEST(unqual_type, drops_top_level_qualifiers_and_keeps_array_types) {
+  /* Each declaration below is a compile-time check that a temporary of the
+   * unqualified type is assignable and that an array type keeps its size, on
+   * every supported compiler including GCC 10. */
+  const struct ccol_unqual_probe cs = {1, 2};
+  _ccol_unqual_type(cs) s;
+  s = cs;
+  _Static_assert(__builtin_types_compatible_p(_ccol_unqual_type(cs),
+                                              struct ccol_unqual_probe),
+                 "a const struct gives the struct");
+
+  const char *const cp = "text";
+  _ccol_unqual_type(cp) p;
+  p = cp;
+  _Static_assert(
+      __builtin_types_compatible_p(_ccol_unqual_type(cp), const char *),
+      "a const pointer to const char gives a pointer to const char");
+
+  const volatile _Bool cvb = 1;
+  _ccol_unqual_type(cvb) b;
+  b = cvb;
+  _Static_assert(sizeof(b) == sizeof(_Bool), "a bool stays a bool");
+
+  void (*const fp)(void) = NULL;
+  _ccol_unqual_type(fp) f;
+  f = fp;
+
+  const char carr[5] = "abcd";
+  char arr[16] = "array";
+  _Static_assert(sizeof(_ccol_unqual_type(carr)) == 5,
+                 "an array type keeps its size");
+  _Static_assert(sizeof(_ccol_unqual_type(arr)) == 16,
+                 "an array type keeps its size");
+
+  REQUIRE_EQ(s.c, 1);
+  REQUIRE_EQ(s.i, 2);
+  REQUIRE_STREQ(p, "text");
+  REQUIRE_TRUE(b);
+  REQUIRE_TRUE(f == NULL);
+  REQUIRE_STREQ(carr, "abcd");
+  REQUIRE_STREQ(arr, "array");
 }
 
 /* ------------------------------------------------------------------------ */
-/* ccol_fatal_err                                                             */
+/* _ccol_fatal_err */
 /* ------------------------------------------------------------------------ */
 
 #include <signal.h>
 
-/* Runs ccol_fatal_err() in a forked child whose stderr is a pipe and gives
- * back what the child wrote, and whether it died of SIGABRT. */
+/* Runs _ccol_fatal_err() in a forked child whose stderr is a pipe, and gives
+ * back what the child wrote and whether it died of SIGABRT. */
 static bool fatal_err_capture(int which, char *out, size_t out_size) {
   int fds[2];
   if (pipe(fds) != 0) return false;
@@ -1014,9 +1105,9 @@ static bool fatal_err_capture(int which, char *out, size_t out_size) {
     dup2(fds[1], STDERR_FILENO);
     close(fds[1]);
     if (which == 0) {
-      ccol_fatal_err("a message with no argument");
+      _ccol_fatal_err("a message with no argument");
     } else {
-      ccol_fatal_err("n=%d s=%s", 42, "text");
+      _ccol_fatal_err("n=%d s=%s", 42, "text");
     }
     _exit(0);
   }
@@ -1038,9 +1129,9 @@ static bool fatal_err_capture(int which, char *out, size_t out_size) {
   return WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT;
 }
 
-/* The macro appends an empty string for a trailing %s so that it never needs
- * an empty variadic list. The text that reaches stderr is exactly the format
- * of the caller, with no argument and with arguments. */
+/* The macro appends an empty string for a trailing %s, so it never needs an
+ * empty variadic list. What reaches stderr is exactly the caller's format,
+ * with and without arguments. */
 TEST(fatal_err, prints_the_message_of_the_caller_and_aborts) {
   char text0[512], text1[512];
   bool aborted0 = fatal_err_capture(0, text0, sizeof(text0));
@@ -1066,9 +1157,6 @@ TEST(fatal_err, prints_the_message_of_the_caller_and_aborts) {
 #include <sys/socket.h>
 #include <time.h>
 
-extern atomic_ulong _ccol_cloexec_gate_enters_for_tests;
-extern atomic_ulong _ccol_cloexec_gate_leaves_for_tests;
-
 typedef struct {
   _Atomic int forked;
   pid_t pid;
@@ -1083,13 +1171,13 @@ static void *gate_forker(void *arg) {
   return NULL;
 }
 
-/* A fork() cannot return while a thread is inside the gate, because the
- * fork-prepare handler of the gate waits for the read side, so the check
- * after the wait can never see a fork that returned while the gate was
- * held, however slow the machine is.
+/* A fork() can't return while a thread is inside the gate, because the
+ * gate's fork-prepare handler waits for the read side. So the check after
+ * the wait can never see a fork that returned while the gate was held, no
+ * matter how slow the machine is.
  *
- * This test is non-vacuous: without the fork-prepare handler of the gate,
- * the fork returns at once and forked_inside is 1. */
+ * Without the gate's fork-prepare handler the fork returns at once and
+ * forked_inside is 1. */
 TEST(cloexec_gate, fork_waits_while_a_descriptor_is_inside_the_gate) {
   gate_fork_ctx c;
   atomic_init(&c.forked, 0);
@@ -1112,7 +1200,7 @@ TEST(cloexec_gate, fork_waits_while_a_descriptor_is_inside_the_gate) {
   REQUIRE_TRUE(WIFEXITED(status));
 }
 
-/* Gives true when fd is closed on exec and, if nonblock, non-blocking. */
+/* True when fd is closed on exec and, if nonblock is set, non-blocking. */
 static bool gate_fd_flags_ok(int fd, bool nonblock) {
   int fd_flags = fcntl(fd, F_GETFD);
   int fl_flags = fcntl(fd, F_GETFL);
@@ -1120,7 +1208,7 @@ static bool gate_fd_flags_ok(int fd, bool nonblock) {
          (!nonblock || (fl_flags & O_NONBLOCK));
 }
 
-/* The counts of entries and exits of the gate since a mark. */
+/* How many times the gate was entered and left since a mark. */
 typedef struct {
   unsigned long enters;
   unsigned long leaves;
@@ -1138,12 +1226,11 @@ static bool gate_used_once(gate_mark before) {
 }
 
 /* Every call that creates a descriptor in two steps enters the gate once and
- * leaves it once, on success and on failure, and gives a descriptor that is
- * closed on exec.
+ * leaves it once, on success and on failure alike, and gives a descriptor
+ * that is closed on exec.
  *
- * This test is non-vacuous: a creation site that skips the gate leaves both
- * counts unchanged, and a failure path that skips the exit leaves the
- * entries one ahead. */
+ * A creation site that skips the gate leaves both counts unchanged, and a
+ * failure path that skips the exit leaves the entries one ahead. */
 TEST(cloexec_gate, every_two_step_creation_uses_the_gate) {
 #if defined(_CCOL_EMULATE_DARWIN_SOCK)
   gate_mark m = gate_mark_now();
@@ -1209,13 +1296,13 @@ TEST(cloexec_gate, every_two_step_creation_uses_the_gate) {
   REQUIRE_TRUE(bad_pair_gated);
 #endif
 #if defined(_CCOL_EMULATE_DARWIN_SYNC)
-  ccol_semaphore_t sem;
+  _ccol_semaphore_t sem;
   gate_mark sm = gate_mark_now();
-  bool sem_made = ccol_semaphore_init(sem, 1) == 0;
+  bool sem_made = _ccol_semaphore_init(sem, 1) == 0;
   bool sem_gated = gate_used_once(sm);
   bool sem_flags = sem_made && gate_fd_flags_ok(sem.fd[0], false) &&
-                   gate_fd_flags_ok(sem.fd[1], false);
-  if (sem_made) ccol_semaphore_destroy(sem);
+                   gate_fd_flags_ok(sem.fd[1], true);
+  if (sem_made) _ccol_semaphore_destroy(sem);
   REQUIRE_TRUE(sem_made);
   REQUIRE_TRUE(sem_gated);
   REQUIRE_TRUE(sem_flags);
@@ -1223,10 +1310,9 @@ TEST(cloexec_gate, every_two_step_creation_uses_the_gate) {
 }
 /* A fork-prepare handler that the library registers before its own
  * constructor runs. The constructor below has priority 101, so on the ELF
- * systems it runs before every constructor of the default priority, the one of
- * the gate in common.c included. macOS does not order constructors by
- * priority, so there it is an ordinary constructor. */
-extern bool _ccol_cloexec_gate_prepared_for_tests;
+ * systems it runs before every default-priority constructor, including the
+ * gate's one in common.c. macOS doesn't order constructors by priority, so
+ * there it's just an ordinary constructor. */
 static _Atomic int gate_early_handler_saw_gate = -1;
 
 static void gate_early_prepare(void) {
@@ -1241,17 +1327,17 @@ __attribute__((constructor(101)))
 #endif
 static void
 gate_register_early_handler(void) {
-  (void)ccol_at_fork(gate_early_prepare, NULL, NULL);
+  (void)_ccol_at_fork(gate_early_prepare, NULL, NULL);
 }
 
-/* A handler that ccol_at_fork registers runs before the prepare handler of
- * the gate, even when it registers before the constructor of the gate runs.
- * In the other order a fork() can wait for a lock whose holder waits to enter
+/* A handler that _ccol_at_fork registers runs before the gate's prepare
+ * handler even when it registers before the gate's constructor runs. In the
+ * other order a fork() could wait for a lock whose holder is waiting to enter
  * the gate.
  *
- * This test is non-vacuous on the ELF systems: when ccol_at_fork does not
- * register the gate first, the gate registers after this handler, its prepare
- * handler runs first, and the handler sees it. */
+ * On the ELF systems this catches it: if _ccol_at_fork didn't
+ * register the gate first, the gate would register after this handler, its
+ * prepare handler would run first, and the handler would see it. */
 TEST(cloexec_gate, a_handler_registered_before_the_library_runs_before_gate) {
   atomic_store(&gate_early_handler_saw_gate, -1);
   pid_t pid = fork();
@@ -1276,7 +1362,7 @@ TEST(cloexec_gate, a_handler_registered_before_the_library_runs_before_gate) {
 
 static atomic_bool fork_libc_stop;
 
-/* Calls libc functions that take internal locks of libc, until told to stop. */
+/* Calls libc functions that take libc's internal locks until told to stop. */
 static void *fork_libc_spin(void *arg) {
   (void)arg;
   time_t now = time(NULL);
@@ -1288,16 +1374,15 @@ static void *fork_libc_spin(void *arg) {
   return NULL;
 }
 
-/* OpenBSD's libc takes its internal locks only while the process is
- * threaded, and it marks a fork child as not threaded, so a child can use a
- * function whose lock another thread of the parent held at the fork. The
- * library loads with fork handlers registered and must leave that mark alone.
- * Here a thread loops on getpwnam() and localtime_r(), and the main thread
- * forks children that call both and exit; every child must exit.
+/* OpenBSD's libc only takes its internal locks while the process is threaded
+ * and it marks a fork child as not threaded, so a child can use a function
+ * whose lock another parent thread held at the fork. The library loads with
+ * fork handlers registered and must leave that mark alone. Here a thread
+ * loops on getpwnam() and localtime_r() while the main thread forks children
+ * that call both and exit, and every child is expected to exit.
  *
- * This test is non-vacuous: a fork handler that marks the child as threaded
- * makes children wait for ever on a lock in getpwnam(), within the first few
- * dozen forks. */
+ * A fork handler that marks the child as threaded makes children wait for
+ * ever on a lock in getpwnam() within the first few dozen forks. */
 TEST(fork, a_child_of_a_threaded_process_can_call_libc_functions_that_lock) {
   atomic_store(&fork_libc_stop, false);
   pthread_t t;
@@ -1331,3 +1416,370 @@ TEST(fork, a_child_of_a_threaded_process_can_call_libc_functions_that_lock) {
   REQUIRE_EQ(stuck, 0);
 }
 #endif
+
+/* ========================================================================== */
+/*                              ITERATORS                                     */
+/* ========================================================================== */
+
+static cmap_iterator *iter_probe_seen;
+static cmap_iterator *iter_probe_its[2];
+static int iter_probe_picks;
+
+/* Hands out the next iterator of iter_probe_its and counts the call. */
+static cmap_iterator *iter_probe_pick(void) {
+  return iter_probe_its[iter_probe_picks++];
+}
+
+static cmap_iterator *iter_probe_next(cmap_iterator *it) {
+  iter_probe_seen = it;
+  return NULL;
+}
+
+/* ccol_iter_next() evaluates its argument exactly once, like every public
+ * macro. The argument here is a call with a side effect, so a macro that
+ * names it twice makes two calls and hands the callback the wrong iterator.
+ * With the expansion ((it)->_next_fn(it)) it fails, because that makes two
+ * picks and hands the callback the second iterator. */
+TEST(iterators, iter_next_evaluates_its_argument_once) {
+  static cmap_iterator a = {.key_pair = NULL,
+                            .val_pair = NULL,
+                            ._next_fn = iter_probe_next,
+                            ._free_fn = NULL,
+                            ._direct_ptr = false};
+  static cmap_iterator b;
+  b = a;
+  iter_probe_its[0] = &a;
+  iter_probe_its[1] = &b;
+  iter_probe_picks = 0;
+  iter_probe_seen = NULL;
+  cmap_iterator *next = ccol_iter_next(iter_probe_pick());
+  REQUIRE_EQ(iter_probe_picks, 1);
+  REQUIRE_EQ((void *)iter_probe_seen, (void *)&a);
+  REQUIRE_EQ((void *)next, NULL);
+}
+
+/* ========================================================================== */
+/*                              SEMAPHORE                                     */
+/* ========================================================================== */
+
+/* The checks that the child of semaphore.posts_without_a_waiter_never_block
+ * runs, each failure with its own exit status. */
+static int semaphore_post_child(void) {
+  _ccol_semaphore_t sem;
+  if (_ccol_semaphore_init(sem, 0) != 0) return 10;
+  for (int i = 0; i < 100000; i++) {
+    if (_ccol_semaphore_post(sem) != 0) return 11;
+  }
+  /* A count the posts left behind still wakes a waiter. */
+  if (_ccol_semaphore_wait(sem) != 0) return 12;
+#if defined(_CCOL_EMULATE_DARWIN_SYNC)
+  /* Every failed wait sets errno. Once the write end is gone the pipe ends
+   * after the bytes it holds, and a wait on an empty, ended pipe
+   * fails. */
+  int flags = fcntl(sem.fd[0], F_GETFL);
+  if (flags < 0 || fcntl(sem.fd[0], F_SETFL, flags | O_NONBLOCK) != 0)
+    return 13;
+  char drain[4096];
+  while (read(sem.fd[0], drain, sizeof(drain)) > 0) {
+  }
+  if (fcntl(sem.fd[0], F_SETFL, flags) != 0) return 14;
+  close(sem.fd[1]);
+  sem.fd[1] = open("/dev/null", O_WRONLY | O_CLOEXEC);
+  if (sem.fd[1] < 0) return 15;
+  errno = 0;
+  if (_ccol_semaphore_wait(sem) != -1 || errno != EINVAL) return 16;
+#endif
+  _ccol_semaphore_destroy(sem);
+  return 0;
+}
+
+/* A post never waits, just like sem_post(3), however many posts no waiter
+ * has consumed. chttpsvr_engine_stop() posts from a signal handler, where a
+ * blocked post would hang the process. The child makes 100000 posts with no
+ * waiter, far more than a pipe holds, and must report within the bound.
+ * Under _CCOL_EMULATE_DARWIN_SYNC it catches both mistakes: with a write end
+ * that blocks, the child stops in its first post past the pipe's capacity
+ * and the bound runs out, and with a wait that fails without setting errno
+ * the child reports 16. */
+TEST(semaphore, posts_without_a_waiter_never_block) {
+  /* The child reports through a pipe because valgrind overrides a forked
+   * child's exit status. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  pid_t pid = fork();
+  if (pid == 0) {
+    close(pfd[0]);
+    unsigned char code = (unsigned char)semaphore_post_child();
+    ssize_t wr;
+    do {
+      wr = write(pfd[1], &code, 1);
+    } while (wr < 0 && errno == EINTR);
+    _exit(0);
+  }
+  close(pfd[1]);
+  int code = -1;
+  if (pid > 0) {
+    struct pollfd p = {.fd = pfd[0], .events = POLLIN};
+    int pr;
+    do {
+      pr = poll(&p, 1, 30000);
+    } while (pr < 0 && errno == EINTR);
+    unsigned char got = 0;
+    ssize_t r = -1;
+    if (pr > 0) {
+      do {
+        r = read(pfd[0], &got, 1);
+      } while (r < 0 && errno == EINTR);
+    }
+    if (r == 1)
+      code = got;
+    else
+      kill(pid, SIGKILL);
+    int status = 0;
+    waitpid(pid, &status, 0);
+  }
+  close(pfd[0]);
+  REQUIRE_GT(pid, 0);
+  REQUIRE_EQ(code, 0);
+}
+
+/* ========================================================================== */
+/*                         ALLOCATOR PROCS INTERN TABLE                       */
+/* ========================================================================== */
+
+#define INTERN_RACE_THREADS 16
+
+typedef struct {
+  ccol_memmgmt_procs_t *procs;
+  atomic_int *arrived;
+  atomic_bool *go;
+  ccol_memmgmt_procs_t *got;
+  ccol_retval_t rv;
+} intern_race_arg;
+
+static void intern_race_pause(void) {
+  struct timespec ts = {0, 100000L};
+  nanosleep(&ts, NULL);
+}
+
+static void *intern_race_worker(void *p) {
+  intern_race_arg *a = p;
+  atomic_fetch_add(a->arrived, 1);
+  while (!atomic_load(a->go)) intern_race_pause();
+  /* Every thread interns its own struct, so equal pointers come from equal
+   * contents and not from one shared address. */
+  ccol_memmgmt_procs_t mine = *a->procs;
+  a->rv = ccol_procs_intern(&mine, &a->got);
+  return NULL;
+}
+
+/* Many threads that use one content for the first time at the same moment
+ * all get the same pointer, and the content takes exactly one slot. The
+ * claim delay holds the first claimer between its claim and its copy while
+ * every other thread reaches that slot. A lookup that skips a slot being
+ * written fails it, since it hands the threads several pointers and takes
+ * a slot for each of them. */
+TEST(procs_intern, a_burst_of_first_uses_of_one_content_takes_one_slot) {
+  /* Function pointers nothing ever calls, different from every content that
+   * another test interns. */
+  ccol_memmgmt_procs_t content = {(ccol_malloc_t)(uintptr_t)0x7a11000,
+                                  (ccol_free_t)(uintptr_t)0x7a11010,
+                                  (ccol_calloc_t)(uintptr_t)0x7a11020,
+                                  (ccol_realloc_t)(uintptr_t)0x7a11030};
+  size_t before = _ccol_procs_intern_used_for_tests();
+  atomic_int arrived = 0;
+  atomic_bool go = false;
+  intern_race_arg args[INTERN_RACE_THREADS];
+  pthread_t tids[INTERN_RACE_THREADS];
+  int created = 0;
+  for (int i = 0; i < INTERN_RACE_THREADS; i++) {
+    args[i] = (intern_race_arg){&content, &arrived, &go, NULL, ccol_success};
+    if (pthread_create(&tids[i], NULL, intern_race_worker, &args[i]) != 0)
+      break;
+    created++;
+  }
+  while (atomic_load(&arrived) < created) intern_race_pause();
+  atomic_store(&_ccol_procs_intern_claim_delay_us_for_tests, 20000u);
+  atomic_store(&go, true);
+  for (int i = 0; i < created; i++) pthread_join(tids[i], NULL);
+  atomic_store(&_ccol_procs_intern_claim_delay_us_for_tests, 0u);
+  size_t after = _ccol_procs_intern_used_for_tests();
+
+  int failed = 0, distinct = 0;
+  for (int i = 0; i < created; i++) {
+    if (args[i].rv != ccol_success || args[i].got == NULL) failed++;
+    if (args[i].got != args[0].got) distinct++;
+  }
+  bool same_content = args[0].got != NULL &&
+                      args[0].got->malloc == content.malloc &&
+                      args[0].got->free == content.free &&
+                      args[0].got->calloc == content.calloc &&
+                      args[0].got->realloc == content.realloc;
+  _ccol_procs_intern_truncate_for_tests(before);
+
+  REQUIRE_EQ(created, INTERN_RACE_THREADS);
+  REQUIRE_EQ(failed, 0);
+  REQUIRE_EQ(distinct, 0);
+  REQUIRE_TRUE(same_content);
+  REQUIRE_EQ(after, before + 1);
+}
+
+/* A burst of first uses of many different contents fills one slot per
+ * content, so the table holds CCOL_PROCS_INTERN_CAPACITY of them. */
+TEST(procs_intern,
+     a_burst_of_first_uses_of_distinct_contents_fills_one_slot_each) {
+  size_t before = _ccol_procs_intern_used_for_tests();
+  ccol_memmgmt_procs_t contents[INTERN_RACE_THREADS];
+  for (int i = 0; i < INTERN_RACE_THREADS; i++) {
+    /* Two threads share each content, so a content races with itself and
+     * with the others. */
+    uintptr_t base = 0x7b22000 + (uintptr_t)(i / 2) * 0x100;
+    contents[i] = (ccol_memmgmt_procs_t){
+        (ccol_malloc_t)base, (ccol_free_t)(base + 0x10),
+        (ccol_calloc_t)(base + 0x20), (ccol_realloc_t)(base + 0x30)};
+  }
+  atomic_int arrived = 0;
+  atomic_bool go = false;
+  intern_race_arg args[INTERN_RACE_THREADS];
+  pthread_t tids[INTERN_RACE_THREADS];
+  int created = 0;
+  for (int i = 0; i < INTERN_RACE_THREADS; i++) {
+    args[i] =
+        (intern_race_arg){&contents[i], &arrived, &go, NULL, ccol_success};
+    if (pthread_create(&tids[i], NULL, intern_race_worker, &args[i]) != 0)
+      break;
+    created++;
+  }
+  while (atomic_load(&arrived) < created) intern_race_pause();
+  atomic_store(&_ccol_procs_intern_claim_delay_us_for_tests, 2000u);
+  atomic_store(&go, true);
+  for (int i = 0; i < created; i++) pthread_join(tids[i], NULL);
+  atomic_store(&_ccol_procs_intern_claim_delay_us_for_tests, 0u);
+  size_t after = _ccol_procs_intern_used_for_tests();
+
+  int wrong = 0;
+  for (int i = 0; i < created; i++) {
+    const ccol_memmgmt_procs_t *g = args[i].got;
+    if (args[i].rv != ccol_success || g == NULL ||
+        g->malloc != contents[i].malloc || g->free != contents[i].free ||
+        g->calloc != contents[i].calloc || g->realloc != contents[i].realloc)
+      wrong++;
+    /* The partner thread of the same content got the same pointer. */
+    if ((i & 1) && g != args[i - 1].got) wrong++;
+  }
+  _ccol_procs_intern_truncate_for_tests(before);
+
+  REQUIRE_EQ(created, INTERN_RACE_THREADS);
+  REQUIRE_EQ(wrong, 0);
+  REQUIRE_EQ(after, before + INTERN_RACE_THREADS / 2);
+}
+
+/* ---- A timed wait with a deadline at the end of time ------------------- */
+
+#include <internal/cdeadline.h>
+
+typedef struct {
+  _ccol_mutex_t m;
+  _ccol_cond_var_t c;
+  bool done;
+} far_wait_ctx;
+
+static void *far_wait_signaller(void *arg) {
+  far_wait_ctx *x = (far_wait_ctx *)arg;
+  struct timespec ts = {0, 100000000L};
+  nanosleep(&ts, NULL);
+  _ccol_mutex_lock(x->m);
+  x->done = true;
+  _ccol_cond_var_signal(x->c);
+  _ccol_mutex_unlock(x->m);
+  return NULL;
+}
+
+/* A timed wait on a CLOCK_MONOTONIC condition variable whose deadline is at
+ * the end of time (which is what every "no limit" timeout of the library
+ * gives) blocks until it's signalled, at every width of time_t. For a build
+ * with _CCOL_EMULATE_DARWIN_SYNC and a 32-bit time_t this test matters:
+ * if the emulated wait added its remaining time to the realtime clock
+ * without saturating, the sum would wrap into the past, every wait would
+ * return ETIMEDOUT at once, and the loop below would wake thousands of times
+ * instead of once or twice. */
+TEST(cond_var, a_wait_until_the_end_of_time_blocks) {
+  far_wait_ctx x = {.done = false};
+  _ccol_cond_var_attr_t a;
+  REQUIRE_EQ(_ccol_mutex_init(x.m), 0);
+  REQUIRE_EQ(_ccol_cond_var_attr_init(a), 0);
+  REQUIRE_EQ(_ccol_cond_var_attr_setclock(a, CLOCK_MONOTONIC), 0);
+  REQUIRE_EQ(_ccol_cond_var_init_ca(x.c, a), 0);
+  (void)_ccol_cond_var_attr_destroy(a);
+  struct timespec deadline;
+  ccol_deadline_after_us(UINT64_MAX, &deadline);
+  pthread_t t;
+  int created = pthread_create(&t, NULL, far_wait_signaller, &x);
+  int wakes = 0;
+  _ccol_mutex_lock(x.m);
+  while (created == 0 && !x.done && wakes < 100000) {
+    (void)_ccol_cond_var_timedwait(x.c, x.m, deadline);
+    wakes++;
+  }
+  _ccol_mutex_unlock(x.m);
+  if (created == 0) pthread_join(t, NULL);
+  _ccol_cond_var_destroy(x.c);
+  _ccol_mutex_destroy(x.m);
+  REQUIRE_EQ(created, 0);
+  REQUIRE_LT(wakes, 10);
+}
+
+#define _CCOL_C_LOCALE_COUNT_USERS_FOR_TESTS 1
+#include <internal/cnumlocale.h>
+#include <stdio.h>
+
+typedef struct {
+  _Atomic int stage; /* 1 in the scope, 2 may leave, 3 left */
+  char text[32];
+} _cnl_user_t;
+
+static void *_cnl_user_thread(void *arg) {
+  _cnl_user_t *u = (_cnl_user_t *)arg;
+  ccol_c_locale_scope_t scope = ccol_c_locale_enter();
+  atomic_store(&u->stage, 1);
+  for (int i = 0; i < 5000 && atomic_load(&u->stage) != 2; i++) usleep(1000);
+  snprintf(u->text, sizeof(u->text), "%.1f", 1.5);
+  ccol_c_locale_leave(scope);
+  atomic_store(&u->stage, 3);
+  return NULL;
+}
+
+/*
+ * The destructor of the "C" locale object keeps the object while another
+ * thread is inside a scope, so that thread carries on with a live locale,
+ * and an enter after the destructor switches nothing. A destructor that
+ * frees the object whatever the users count says would fail here: it
+ * keeps nothing, so the thread formats under a freed locale, and valgrind
+ * reports it where the C library allocates the object.
+ */
+TEST(c_locale, the_destructor_keeps_an_object_that_a_scope_still_uses) {
+  _cnl_user_t u = {.stage = 0};
+  pthread_t t;
+  bool started = pthread_create(&t, NULL, _cnl_user_thread, &u) == 0;
+  for (int i = 0; started && i < 5000 && atomic_load(&u.stage) != 1; i++)
+    usleep(1000);
+  bool in_scope = started && atomic_load(&u.stage) == 1;
+  _ccol_c_locale_fini();
+  bool kept = _ccol_c_locale_kept != (locale_t)0;
+  ccol_c_locale_scope_t late = ccol_c_locale_enter();
+  bool late_switched = late.switched;
+  ccol_c_locale_leave(late);
+  atomic_store(&u.stage, 2);
+  if (started) pthread_join(t, NULL);
+  size_t users = atomic_load(&_ccol_c_locale_users);
+  if (_ccol_c_locale_kept) {
+    freelocale(_ccol_c_locale_kept);
+    _ccol_c_locale_kept = (locale_t)0;
+  }
+  REQUIRE_TRUE(started);
+  REQUIRE_TRUE(in_scope);
+  REQUIRE_TRUE(kept);
+  REQUIRE_FALSE(late_switched);
+  REQUIRE_EQ(users, (size_t)0);
+  REQUIRE_STREQ(u.text, "1.5");
+}

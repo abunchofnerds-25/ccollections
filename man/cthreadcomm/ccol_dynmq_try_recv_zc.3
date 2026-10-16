@@ -12,21 +12,20 @@ ccol_retval_t ccol_dynmq_try_recv_zc(ccol_dynamic_queue *dq,
 .fi
 .SH DESCRIPTION
 .nf
-This function tries to remove the message at the head of the dynamic queue
-and to give it back in target_buf. If the queue is empty, the call returns
-ccol_container_empty immediately; it never waits for a message.
+Removes the message at the head of the dynamic queue and gives it back
+in target_buf. When the queue is empty the call returns
+ccol_container_empty at once; it never waits for a message.
 
-On success, the ownership of the data pointer of the message moves to the
-caller: target_buf->data is the pointer that the sender gave, and
-target_buf->size is its size in bytes. The caller is the one that frees
-the data after it finishes with it. The library copies no bytes; only
-the pointer and its size move. Because a sender can put a message into
-the queue with a NULL data pointer and a size of zero, and such a
-message arrives in the same way, target_buf->data can legitimately be
-NULL with target_buf->size at 0, so check it before you dereference it.
+On success the message's data pointer belongs to the caller:
+target_buf->data is the pointer the sender gave and target_buf->size is
+its size in bytes, and the caller frees the data when done with it. No
+bytes are copied, only the pointer and its size move. A sender can put
+a message with a NULL data pointer and a size of zero into the queue,
+and it arrives the same way, so target_buf->data can legitimately be
+NULL with target_buf->size at 0. Check it before you dereference it.
 
-On every failure, the function does not change target_buf, and the queue
-keeps everything that it held.
+On any failure target_buf is left unchanged, and the queue keeps
+everything it held.
 
 Use this receive call immediately after a callback from ccol_select(),
 ccol_select_timed(), or an ccol_event_loop reports that a dynamic queue
@@ -42,22 +41,20 @@ target_buf  Buffer that gets the message together with the ownership
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success         - The function received a message. The caller owns
+ccol_success         - A message was received. The caller owns
                        target_buf->data and must free it.
 ccol_invalid_args    - dq or target_buf is NULL
-ccol_container_empty - The queue is empty; the function does not change
-                       target_buf.
+ccol_container_empty - The queue is empty; target_buf is left
+                       unchanged.
 .fi
 .SH NOTES
 .nf
-The function never blocks.
-The function succeeds while sends on the queue are off, because turning
-sends off only stops new messages from entering the queue; a receive
-gets the messages that the queue already holds.
-A receive that succeeds wakes one write-direction waiter on this queue,
-which is a ccol_select() call, a ccol_select_timed() call, or an
-ccol_event_loop registration.
-The function is thread-safe.
+This call never blocks. It works while sends on the queue are off,
+because turning sends off only keeps new messages out, and a receive
+still gets the ones the queue already holds. A successful receive wakes
+one write-direction waiter on the queue (a ccol_select() call, a
+ccol_select_timed() call or a ccol_event_loop registration). The
+function is thread-safe.
 .fi
 .SH "SEE ALSO"
 .BR ccol_dynmq_recv_zc (3),

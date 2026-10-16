@@ -14,17 +14,17 @@ char *chttp_base64_encode_mp(ccol_memmgmt_procs_t *mp,
 .SH DESCRIPTION
 .nf
 This function encodes len bytes of data as standard RFC 4648 base64,
-which uses the '+' and '/' alphabet with '=' padding.  This is the
-variant that RFC 7617 Basic auth needs and that HTTP uses everywhere.
+with the '+' and '/' alphabet and '=' padding.  That is the variant
+that RFC 7617 Basic auth needs and the one HTTP uses everywhere.
 .fi
 .SH PARAMETERS
 .nf
 mp       A custom allocator, or NULL for malloc/free.
 data     The buffer to encode. It can be NULL only if len is 0.
 len      The number of bytes in data.
-out_len  Optional; it gets the length of the string that the
-         function gives back, not counting the terminating NUL.
-         Give NULL to ignore it.
+out_len  Optional. It receives the length of the returned string,
+         without the terminating NUL. Pass NULL if you don't need
+         it.
 .fi
 .SH RETURN VALUE
 .nf

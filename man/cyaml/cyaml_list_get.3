@@ -11,11 +11,12 @@ cyaml cyaml_list_get(cyaml seq, size_t index);
 .fi
 .SH DESCRIPTION
 .nf
-Return a non-owning reference to the child at position index in seq.
+Returns the child at position index of seq.  The list keeps owning
+the child, so the reference is borrowed.
 .fi
 .SH RETURN VALUE
 .nf
-The child node, or NULL when index is out of bounds or when seq is not a
+The child node, or NULL when index is out of bounds or seq is not a
 CYAML_LIST.
 .fi
 .SH "SEE ALSO"

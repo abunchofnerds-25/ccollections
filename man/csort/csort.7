@@ -1,0 +1,93 @@
+.TH CSORT 7 "2026-10-14" "c_collections" "C Collections Library - Overview"
+.SH NAME
+csort \- overview of the csort stable mergesort
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/csort.h>
+.fi
+.SH DESCRIPTION
+.nf
+csort sorts any collection that you can index: a C array, a cvector, a
+ring buffer or a container of your own. It is an iterative, bottom-up
+mergesort, so there is no recursion and a large input cannot overflow
+the stack.
+
+csort_sort(3) does the sorting. It reaches the elements through a getter
+function that gives a pointer to the element at an index, and it orders
+them with a comparison function that has the contract of qsort(3). If you
+don't want to write the comparison yourself,
+csort_get_default_comparison_proc(3) picks the one that the library
+provides for the type of an expression.
+
+cvec_sort(3) and cvector_sort_with_comparison_proc(3) run the same
+mergesort directly on the contiguous buffer of a vector.
+.fi
+.SS "Guarantees"
+.nf
+The sort is stable, so elements that compare equal keep their relative
+order. It takes O(n log n) time whatever the input, and it allocates one
+temporary merge buffer of length * elem_size bytes once it has checked
+that product for an overflow.
+
+The elements don't have to be contiguous. The sort reads and writes each
+element through the pointer that the getter gives, and each of those
+pointers must stay valid for the whole sort.
+
+A call either sorts the whole collection or leaves it completely
+unchanged, because every check that can fail runs before the first
+element moves. Those checks are a length above the maximum element count
+of the library (2^63 on a 64-bit size_t), an mprocs that is not NULL but
+does not hold all four of malloc, free, calloc and realloc, an overflow
+of length * elem_size, and a failed allocation of the merge buffer.
+.fi
+.SS "Default comparisons"
+.nf
+csort_get_default_comparison_proc(3) knows every standard integral
+type, bool (false before true), float, double and long double, an
+enumerated type (through the integer type it is compatible with), and a
+pointer to any character type, which it compares as a NUL-terminated
+string. For every other type it gives NULL, a fixed-size char array
+included, and you have to write your own comparison for such an element.
+
+An integral type compares three-way, as (a > b) - (a < b). A NaN is
+greater than every value that is not NaN and equal only to another NaN,
+so a floating-point sort is always a real total order. A NULL string
+comes before every string that is not NULL. Plain char, signed char and
+unsigned char each have a comparison of their own, which keeps a signed
+comparison signed on every platform.
+
+Every default comparison reads its two operands byte by byte, so the
+address of an operand needs neither the alignment nor the effective type
+of the element.
+.fi
+.SS "Errors"
+.nf
+csort_sort(3) gives true on success, and also for a call that has
+nothing to do: a NULL collection, a length of 0 or 1, or an elem_size of
+0. It gives false for each of the failures listed above. A NULL getter
+or a NULL comparison function, for a collection that is not NULL and has
+2 or more elements, is a programming error, and the call asserts and
+stops the process.
+.fi
+.SS "Memory management"
+.nf
+The merge buffer comes from the mprocs that you pass, or from malloc(3)
+and free(3) when mprocs is NULL, and the sort frees it before it
+returns.
+.fi
+.SH "THREAD SAFETY"
+.nf
+csort keeps no state between calls and takes no lock, so several
+threads can sort different collections at the same time. You must make
+sure that no other thread changes a collection while it is being
+sorted. The getter and the comparison function run on the calling
+thread.
+.fi
+.SH "SEE ALSO"
+.BR csort_sort (3),
+.BR csort_get_default_comparison_proc (3),
+.BR cvec_sort (3),
+.BR cvector_sort_with_comparison_proc (3),
+.BR ccollections (7)

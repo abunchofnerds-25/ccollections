@@ -11,12 +11,33 @@ ccol_retval_t chttpclient_set_connect_timeout(chttpcli cli, uint64_t us);
 .fi
 .SH DESCRIPTION
 .nf
-This function sets the maximum time for the phase of the TCP
-connection, which for HTTPS also covers the TLS handshake. Give 0 to
-turn the timeout off, which is the default. Every other value is
-honoured as a limit, however far away it lies: a value too large for
-the clock to reach, such as UINT64_MAX, saturates to the latest
-deadline that the clock can hold, and never wraps into the past.
+This function sets the maximum time that the TCP connect phase may
+take, and for HTTPS that phase includes the TLS handshake. 0 turns the
+timeout off, which is the default. Any other value is honoured as a
+limit however far away it is: a value too large for the clock to
+reach, such as UINT64_MAX, saturates to the latest deadline the clock
+can hold and never wraps into the past.
+
+A name lookup is a single blocking getaddrinfo() call, and the system
+gives no way to cancel it. chttpclient_do makes that call on the
+calling thread, so when the lookup alone takes longer than this
+timeout, the call skips the connect and returns ccol_timed_out as soon
+as the lookup returns. chttpclient_do_async and chttpclient_do_pooled
+return ccol_timed_out at the deadline itself, and the lookup goes on in
+the background with its result thrown away. A request to an address
+literal or to a unix socket makes no lookup at all.
+
+For chttpclient_do_async and chttpclient_do_pooled, an engine thread
+watches the deadlines and wakes at the earliest deadline among the
+requests in flight, so a request ends within a few milliseconds of its
+deadline however short the timeout is.
+
+That deadline holds even when the engine cannot run the request's work,
+for example while its allocator fails. The request then ends with
+ccol_timed_out at most about 100 ms after the deadline, and its
+connection is closed in the background once the engine can run it
+again. Until that happens, chttpclient_destroy of the client waits for
+it.
 .fi
 .SH PARAMETERS
 .nf
@@ -27,7 +48,7 @@ us    The timeout in microseconds. 0 means no timeout.
 .nf
 ccol_success      The client has the new timeout.
 ccol_invalid_args cli is CHTTPCLI_INVALID, or a stale handle of a
-                  client that is already destroyed.
+                  client that has been destroyed.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_set_request_timeout (3)

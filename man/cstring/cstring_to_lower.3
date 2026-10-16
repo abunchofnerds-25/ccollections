@@ -1,6 +1,6 @@
 .TH CSTRING_TO_LOWER 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-cstring_to_lower \- convert all characters to lowercase in-place
+cstring_to_lower \- convert the ASCII letters to lowercase in-place
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -11,7 +11,8 @@ void cstring_to_lower(cstr s);
 .fi
 .SH DESCRIPTION
 .nf
-Applies tolower() to every character of the string in place.
+This function turns every ASCII upper-case letter of the string into lower
+case, in place, and leaves every other byte as it is.
 .fi
 .SH PARAMETERS
 .nf
@@ -19,9 +20,9 @@ s   String to change
 .fi
 .SH NOTES
 .nf
-The function changes only the ASCII characters reliably: for a
-non-ASCII byte, the behaviour of tolower() depends on the current
-locale
+Only the bytes 'A' to 'Z' change, and the locale plays no part, so the
+result is the same in every locale (a Turkish one included). A byte above
+0x7F never changes, which keeps a UTF-8 string valid UTF-8
 Asserts if s is NULL
 .fi
 .SH "SEE ALSO"

@@ -1,26 +1,25 @@
 .vscode/
 .project
 obj/
-# These are build products. Each pattern starts with a slash, which ties it to
-# the root of the repository, so the patterns describe only what a `make` in
-# the root makes. Without that slash a pattern matches at every level, and
-# libccollections.so.* would then also hide the committed ABI baselines under
-# abi/.
+# Build products. Every pattern here starts with a slash, which ties it to the
+# root of the repository, so it only matches what a `make` in the root makes.
+# Drop the slash and the pattern matches at every level, and then
+# libccollections.so.* would also hide the ABI baselines we commit under abi/.
 /libccollections.so
-# The shared objects with a version in the name: libccollections.so.<ABI> and
+# The versioned shared objects, libccollections.so.<ABI> and
 # libccollections.so.<VERSION>
 /libccollections.so.*
 /libccollections.a
-# The build makes this file from ccollections.pc.in and puts the prefix and the
-# version into it. Only the .in template is under version control.
+# Generated from ccollections.pc.in with the prefix and the version filled in.
+# Only the .in template is committed.
 /ccollections.pc
 /ccollections.pc.tmp
 tests/*/tests
 tests/*/tests_*
 !tests/*/tests_*.*
 tests/*/coverage/
-# The merged coverage report that `make coverage_site` makes. You can read it
-# in a browser.
+# The merged coverage report of `make coverage_site`, for reading in a
+# browser.
 coverage_site/
 tests/*/fuzz_*
 tests/*/crash-*
@@ -28,12 +27,11 @@ tests/*/oom-*
 tests/*/timeout-*
 __pycache__/
 tests/cyaml/differential/cyaml_to_json
-# libFuzzer finds new corpus entries and writes them back into the corpus
-# directory that you give it, naming each one with a plain hash and no
-# extension. Commit only the seed files that somebody took out on purpose:
-# the *.bin files, and the *.yaml files for the document corpus of cyaml. The
-# path corpus of cyaml carries a NUL inside each input, so its seeds are *.bin
-# like the matching corpus of cjson.
+# libFuzzer writes every new corpus entry it finds back into the corpus
+# directory, named by a plain hash with no extension. We only commit the seeds
+# we picked on purpose: the *.bin files, plus the *.yaml files of cyaml's
+# document corpus. cyaml's path corpus has a NUL inside each input, so its
+# seeds are *.bin, like the matching cjson corpus.
 tests/chttpclient/fuzz/corpus_request/*
 !tests/chttpclient/fuzz/corpus_request/*.bin
 tests/chttpclient/fuzz/corpus_response/*
@@ -58,24 +56,24 @@ main
 .envrc
 massif.out.*
 
-# The build identity stamp of each suite. It holds the compiler and the flags
-# that the build used for the objects.
+# Each suite's build identity stamp, which records the compiler and the flags
+# its objects were built with.
 tests/*/.build-flags
 
-# These are the build products of the benchmarks. baseline.json is not under
-# version control, on purpose: it records absolute times for one machine, so a
-# comparison of a run against a baseline from other hardware reports a
-# difference that has nothing to do with a change to the library.
+# Benchmark build products. baseline.json stays out of version control on
+# purpose: it holds absolute times for one machine, and a run compared with a
+# baseline from other hardware reports differences that have nothing to do
+# with the library.
 /bench/bench
 /bench/baseline.json
 /bench/.build-flags
 
-# The build identity stamp for the consumer view translation unit of clogger
+# The build identity stamp of clogger's consumer view translation unit
 tests/*/.build-flags-consumer
 
-# The hardening-flag probe of the root Makefile and of tests/hardening.mk
-# writes these while it asks the compiler what it supports, and removes them
-# again. An interrupted build can leave one behind.
+# The hardening-flag probe of the root Makefile and tests/hardening.mk writes
+# these while it asks the compiler what it supports, and removes them again,
+# but an interrupted build can leave one behind.
 .ccol_probe.c
 .ccol_probe.o
 

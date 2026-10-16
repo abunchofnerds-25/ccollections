@@ -1,0 +1,37 @@
+.TH CLOG_INFO 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+clog_info \- emit a log line at INFO level
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/clogger.h>
+
+clog_info(clog lg, const char *fmt, ...);
+.fi
+.SH DESCRIPTION
+.nf
+Writes a log line at CLOG_INFO level and picks up __FILE__, __LINE__
+and __func__ for you.  It appends no backtrace.
+
+For a production service, INFO is the minimum level we recommend as the
+default.
+.fi
+.SH PARAMETERS
+.nf
+lg     Logger handle (clog).
+fmt    printf-style format string.
+\&...    Format arguments (optional).
+.fi
+.SH EXAMPLES
+.nf
+clog_info(lg, "server started on port %d", port);
+clog_info(lg, "request handled in %ldms", elapsed_ms);
+.fi
+.SH "SEE ALSO"
+.BR clog_trace (3),
+.BR clog_debug (3),
+.BR clog_warn (3),
+.BR clog_error (3),
+.BR clog_alert (3),
+.BR clog_fatal (3)

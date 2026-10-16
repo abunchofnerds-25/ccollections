@@ -1,4 +1,4 @@
-.TH CLOG_SET_FIELD 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CLOG_SET_FIELD 3 "2026-10-13" "c_collections" "C Collections Library - Functions"
 .SH NAME
 clog_set_field \- attach or update a persistent structured field
 .SH LIBRARY
@@ -7,68 +7,82 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/clogger.h>
 
-void clog_set_field(clog logger, const char *key, const char *value);
+ccol_retval_t clog_set_field(clog logger, const char *key,
+                             const char *value);
 .fi
 .SH DESCRIPTION
 .nf
-Attaches key with value as a persistent field, which then appears in
-every later log line that this logger writes, between the func= and
-msg= tokens:
+Attaches key with value as a persistent field.  The field then appears
+in every later log line of this logger, between the func= and msg=
+tokens:
 
   ts=... level=INFO proc=prog(pid):tname(tid) src=... func=... key=value msg=...
 
-The library copies both key and value internally, so the caller can
-free or change them after this call without the logger noticing.
+Both key and value are copied, so you can free or change your own copies
+after the call and the logger won't notice.
 
-A key that already exists gets the new value; otherwise the field set
-takes a new field.
+If the key already exists it gets the new value, and otherwise a new
+field is added.  A call that fails changes nothing: a new key is not
+added and an existing key keeps its value.
 
 Every character of a key must be a printable US-ASCII character
-(0x21-0x7e), and the characters '=', ']', '"' and '\e\e' are not
-allowed.  The library silently ignores a key that is empty, or that
-holds one of those forbidden characters, whitespace, an ASCII control
-character, or any byte that is not ASCII.  It also ignores a key that
-names one of the fixed tokens that every log line already carries (ts,
-level, proc, src, func, msg, bt and bt_error), because such a key would
-make a duplicate key= token in logfmt, a duplicate JSON key, or a
-duplicate RFC 5424 SD-PARAM-NAME inside one SD-ELEMENT.
+(0x21-0x7e) other than '=', ']', '"' and '\e\e'.  A key is refused when
+it is NULL or empty, or when it holds one of those forbidden characters,
+whitespace, an ASCII control character or any byte that is not ASCII.
+A key is refused as well when it names one of the fixed tokens that
+every log line already carries (ts, level, proc, src, func, msg, bt and
+bt_error), because it would make a duplicate key= token in logfmt, a
+duplicate JSON key, or a duplicate RFC 5424 SD-PARAM-NAME inside one
+SD-ELEMENT.
 
-When a value holds a space, an '=', a '"', a '\e\e' or an ASCII control
-character, the library double-quotes that value in the output and
-escapes those characters with a backslash:
+A value that holds a space, an '=', a '"', a '\e\e', a control character
+or a byte that is not well-formed UTF-8 is double-quoted in the logfmt
+output, and those characters are escaped with a backslash:
   - '"' -> \e"
   - '\e\e' -> \e\e
-  - control chars -> \en, \er, \et, or \exNN
+  - ASCII control chars -> \en, \er, \et, or \exNN
+  - C1 controls (U+0080 to U+009F) -> \eu0080 to \eu009f
+  - a byte that is not part of a well-formed UTF-8 sequence -> U+FFFD
 
-The exact syntax of an escape differs by output format (see
-clog_set_format(3)): JSON uses \euNNNN Unicode escapes, and RFC 5424
-syslog escapes a '"', a '\e\e' and a ']' as well as a control
-character.
-When the output format is CLOG_FMT_JSON or CLOG_FMT_SYSLOG and a value
-holds text that is not well-formed UTF-8, the library replaces each
-invalid byte with the Unicode replacement character (U+FFFD) instead of
-embedding the byte raw, because JSON text must be valid Unicode and RFC
-5424 requires an SD-PARAM-VALUE to be UTF-8.
+The exact escape syntax depends on the output format (see
+clog_set_format(3)).  JSON uses \euNNNN Unicode escapes, and RFC 5424
+syslog escapes a '"', a '\e\e' and a ']' besides a control character.
+In every format, each byte of a value that is not well-formed UTF-8 is
+replaced with the Unicode replacement character (U+FFFD) instead of
+going out raw, so every record is valid UTF-8, which JSON text and an
+RFC 5424 SD-PARAM-VALUE both require.  Every format also escapes a C1
+control, because a terminal can read it as the start of a control
+sequence.
 An RFC 5424 SD-PARAM-NAME longer than 32 characters becomes its first
-23 characters, then a '~', and then a hash of the full key in 8 hex
-digits, instead of a bare prefix of 32 characters, so two different
-long keys that share a prefix get different SD-PARAM-NAMEs.
-In every format the library always neutralizes a control character,
-including a literal newline and a carriage return, so a field value can
-never split one record across several lines.
+23 characters, a '~', and a hash of the full key in 8 hex digits,
+instead of a plain 32-character prefix, so two different long keys with
+the same prefix get different SD-PARAM-NAMEs.
+In every format a control character is always neutralized, a literal
+newline and a carriage return included, so a field value can never
+split one record over several lines.
 .fi
 .SH PARAMETERS
 .nf
 logger  Logger handle.
-key     Field name. Copied internally. Silently ignored if empty,
-        invalid, or one of the reserved names listed above.
-value   Field value. Copied internally. May be arbitrary text.
+key     Field name, copied by the call.  It must follow the rules
+        above.
+value   Field value, copied by the call.  It must not be NULL, and
+        it may be any text.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success            The field is set.
+ccol_invalid_args       key or value is NULL, or key is empty, holds
+                        a character that is not allowed, or names a
+                        fixed token.  Nothing changes.
+ccol_not_enough_memory  The copy of the key or the value cannot be
+                        allocated.  Nothing changes.
 .fi
 .SH NOTES
 .nf
-Thread-safe: protected by the per-logger mutex.
-Every emitted line visits each attached field once; keep the field
-count small if logging is a hot path.
+Thread-safe, because the mutex of the logger protects the call.
+Every line that goes out visits each attached field once, so keep the
+number of fields small if logging is on a hot path.
 Asserts when logger is CLOG_INVALID, stale or already closed.
 .fi
 .SH "SEE ALSO"

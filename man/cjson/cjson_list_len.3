@@ -12,8 +12,21 @@ size_t cjson_dictionary_size(cjson node);
 .fi
 .SH DESCRIPTION
 .nf
-Return the element count of an array or object node respectively.
-Both call ccol_fatal_err() if the type of the node does not match.
+cjson_list_len() returns the number of child nodes of a CJSON_LIST
+node, and cjson_dictionary_size() the number of key-value pairs of a
+CJSON_DICTIONARY node.  Both call _ccol_fatal_err() when node is NULL
+and when node is not of the type that the function reads.
+.fi
+.SH PARAMETERS
+.nf
+node  A CJSON_LIST node for cjson_list_len(), or a CJSON_DICTIONARY
+      node for cjson_dictionary_size().
+.fi
+.SH RETURN VALUE
+.nf
+The number of elements or keys, which is 0 for an empty list or
+dictionary.  Neither function returns when node is NULL or of the
+wrong type.
 .fi
 .SH "SEE ALSO"
 .BR cjson_list_get (3),

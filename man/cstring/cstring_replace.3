@@ -12,10 +12,11 @@ ccol_retval_t cstring_replace(cstr s, const char *needle,
 .fi
 .SH DESCRIPTION
 .nf
-Replaces every non-overlapping occurrence of needle in s with replacement.
-The result is built into a fresh buffer and then swapped in, so replacement
-may safely contain needle without causing infinite loops. When needle is not
-found the function succeeds without modifying s.
+This function replaces every non-overlapping occurrence of needle in s
+with replacement. It builds the result in a fresh buffer and swaps that
+buffer in, so replacement may contain needle without any risk of an
+endless loop. When needle is not found the call succeeds and s does not
+change.
 .fi
 .SH PARAMETERS
 .nf
@@ -25,14 +26,15 @@ replacement    Substitute string (must not be NULL)
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success              - Replace succeeded (including when needle not found)
-ccol_invalid_args         - needle is NULL/empty, or replacement is NULL
-ccol_container_full       - Result would overflow size_t
-ccol_not_enough_memory    - Buffer allocation failed
+ccol_success              - The replace succeeded, also when needle was
+                            not found
+ccol_invalid_args         - needle is NULL or empty, or replacement is NULL
+ccol_container_full       - The result would overflow a size_t
+ccol_not_enough_memory    - The buffer allocation failed
 .fi
 .SH NOTES
 .nf
-Matching is non-overlapping and proceeds left-to-right
+Matches never overlap, and the search goes from left to right
 Asserts if s is NULL
 .fi
 .SH "SEE ALSO"

@@ -1,0 +1,52 @@
+.TH CHTTPSVR_IS_RUNNING 3 "2026-10-13" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_is_running \- report whether a server listens
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpserver.h>
+
+ccol_retval_t chttpsvr_is_running(chttpsvr srv, bool *running_out);
+.fi
+.SH DESCRIPTION
+.nf
+Stores in *running_out whether srv listens.  A server listens from
+the moment a successful chttpsvr_start returns until its stop begins,
+whether that stop comes from chttpsvr_stop, chttpsvr_engine_stop or
+chttpsvr_destroy.  A server that was never started, one whose start
+failed, and one that is in the middle of a start or a stop do not
+listen.
+
+The answer is a snapshot, and another thread can start or stop the
+server right after the call returns.
+.fi
+.SH PARAMETERS
+.nf
+srv           The server handle.
+running_out   Receives true when the server listens and false
+              otherwise.  It receives false on every failure.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success       *running_out holds the answer.
+ccol_invalid_args  srv is CHTTPSVR_INVALID or a stale handle, or
+                   running_out is NULL.
+.fi
+.SH THREAD SAFETY
+.nf
+Safe to call from any thread, including a handler or a middleware of
+srv, while a start or a stop of srv runs.
+.fi
+.SH EXAMPLES
+.nf
+bool running = false;
+if (chttpsvr_is_running(srv, &running) == ccol_success && !running)
+  chttpsvr_start(srv, &cfg);
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_start (3),
+.BR chttpsvr_stop (3),
+.BR chttpsvr_bound_port (3),
+.BR chttpsvr_bound_address (3),
+.BR chttpsvr_engine_stop (3)

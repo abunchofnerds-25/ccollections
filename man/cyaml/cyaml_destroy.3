@@ -11,22 +11,22 @@ cyaml_destroy(node);
 .fi
 .SH DESCRIPTION
 .nf
-When node is not NULL, this macro frees the whole DOM subtree under node
-recursively, freeing each node with the allocator that the node stores,
-and then sets node to NULL.
+When node is not NULL, the macro frees the whole DOM subtree under
+node, each node with the allocator that it stores, and then sets
+node to NULL.
 
-The macro frees the children of a list, the values of a dictionary and
-the string copies, all recursively.  A second destroy of the same handle
-is safe, because the macro sets the variable to NULL after it frees the
-subtree.
+Everything below node goes: the children of each list, the values of
+each dictionary and the string copies.  Destroying the same handle a
+second time is safe, because the variable is NULL after the first
+destroy.
 
-For this reason node must be an assignable lvalue: you cannot give a
-plain NULL literal or any other expression that is not an lvalue.
+That is also why node must be an assignable lvalue.  You cannot pass
+a plain NULL literal or any other expression that is not an lvalue.
 .fi
 .SH PARAMETERS
 .nf
-node  cyaml variable to destroy.  The macro sets the variable itself
-      to NULL.
+node  The cyaml variable to destroy.  The macro sets the variable
+      itself to NULL.
 .fi
 .SH NOTES
 .nf

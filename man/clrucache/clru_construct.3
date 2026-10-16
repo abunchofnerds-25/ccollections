@@ -11,19 +11,29 @@ clru_construct(name, KeyT, ValT, capacity, getter, setter, evict_cb);
 .fi
 .SH DESCRIPTION
 .nf
-Puts clru_declare() and clru_init() together into a single statement.
-This is the most common way to create an LRU cache, and it calls
-ccol_fatal_err() when the creation fails.
+clru_declare() and clru_init() in a single statement. This is the
+usual way to create an LRU cache, and it calls _ccol_fatal_err() when
+the creation fails.
 .fi
 .SH PARAMETERS
 .nf
 name      Variable name for the cache handle
 KeyT      Key type
 ValT      Value type
-capacity  The maximum number of live entries before eviction
+capacity  The total number of live entries; see
+          clrucache_create_full(3). It must be greater than 0
 getter    Remote getter callback, or NULL
 setter    Remote setter callback, or NULL
 evict_cb  Eviction callback, or NULL
+.fi
+.SH NOTES
+.nf
+An array key type or value type, such as int[2] or char[16], is a
+compile error, and the message says to wrap the array in a struct. The
+macros copy a key or a value by assignment, C cannot assign an array,
+and without the error the cache would store the address of the
+caller's array instead of its elements. A struct that holds the
+array works.
 .fi
 .SH EXAMPLES
 .nf

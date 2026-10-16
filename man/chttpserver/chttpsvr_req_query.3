@@ -12,37 +12,42 @@ const char **chttpsvr_req_query(chttpsvr_req *req, const char *key,
 .fi
 .SH DESCRIPTION
 .nf
-Parses the query string lazily on the first call, then returns a
-NULL-terminated array of every URL-decoded value that belongs to key.
-Each key of the query string is URL-decoded and compared with key as
-given, as url.Values of the Go net/url package does, so pass the
-decoded form: "a b" finds both a+b and a%20b, while "a%20b" finds
-neither.  The count is stored in count_out when count_out is not
-NULL.  The function returns NULL when the key is absent.
+Parses the query string lazily on the first call and returns a
+NULL-terminated array of all the URL-decoded values of key.  Each key
+of the query string is URL-decoded and then compared with key as you
+give it, in the same way as url.Values of the Go net/url package, so
+pass the decoded form: "a b" finds both a+b and a%20b, but "a%20b"
+finds neither.  When count_out is not NULL the count goes into it.
+For an absent key the function returns NULL.
 
-The value strings that the array elements point to stay valid for the
-duration of the handler call, but the array itself is a scratch buffer
-for this one request that every call to chttpsvr_req_query reuses, so
-copy out the pointers you need before you make another call to
-chttpsvr_req_query on the same request.
+A key=value pair whose key or value has a malformed percent-escape,
+such as a=%zz, or an escape that decodes to a NUL byte, such as
+a=%00, is left out as if the query string did not contain it.  Read
+chttpsvr_req_raw_query(3) if you need to see such a pair.
+
+The value strings that the array points to are valid until the
+handler call returns.  The array itself is a scratch buffer of this
+request that every chttpsvr_req_query call reuses, so copy the
+pointers you need before you call chttpsvr_req_query again on the
+same request.
 .fi
 .SH NOTES
 .nf
-This function cannot distinguish an out-of-memory failure, which can
-happen while the query string is parsed or while the result array
-grows, from a genuine "key is absent" result: both give NULL and a
-count of 0.  After a NULL return, call chttpsvr_req_query_oom(req) to
-tell the two cases apart, or use chttpsvr_req_query_one for a key that
-has one value, since that function returns ccol_not_enough_memory when
-it runs out of memory.
+The function can't tell a lack of memory, while the query string is
+parsed or while the result array grows, from a key that is really
+absent: both give NULL and a count of 0.  After a NULL, call
+chttpsvr_req_query_oom(req) to find out which one it was, or use
+chttpsvr_req_query_one for a key with one value, since that function
+returns ccol_not_enough_memory when it runs out of memory.
 
-A query-string component that has a "=" but an empty key half, for
-example "?=hello", is a real pair that you can look up: the key ""
-maps to the value "hello".  A completely empty component is different:
-the parser skips it outright instead of reading it as a false entry
-with an empty key and an empty value.  A component is completely empty
-when there is nothing at all between two "&" characters, before a
-leading "&", or after a trailing "&", as in "?a=1&&b=2" and "?&a=1".
+A component of the query string that has a "=" with an empty key in
+front of it, for example "?=hello", is a real pair that you can look
+up: the key "" maps to the value "hello".  A completely empty
+component is different, and the parser skips it instead of reading it
+as an entry with an empty key and an empty value.  A component is
+completely empty when there is nothing at all between two "&"
+characters, before a leading "&" or after a trailing "&", as in
+"?a=1&&b=2" and "?&a=1".
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_req_query_one (3),

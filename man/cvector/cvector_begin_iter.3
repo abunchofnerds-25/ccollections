@@ -11,17 +11,16 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err);
 .fi
 .SH DESCRIPTION
 .nf
-Allocates an iterator positioned at element 0 that walks the vector in
-index order. The key of the iterator is the zero-based index of the
-element, and its value is the element itself. The caller reads both with
-the unified accessors ccol_iter_key_ptr(3) and ccol_iter_val_ptr(3),
-which give typed pointers straight into the backing buffer of the
-vector, so a write through the value pointer updates the element in
-place.
+Allocates an iterator at element 0 that walks the vector in index order.
+The iterator's key is the zero-based index of the element and its value is
+the element itself. You read both with the common accessors
+ccol_iter_key_ptr(3) and ccol_iter_val_ptr(3), which give typed pointers
+straight into the vector's backing buffer, so writing through the value
+pointer updates the element in place.
 
-The generic ccol_begin(3) macro selects this function for a cvec and is
-the ordinary entry point. Call this function directly only when the
-container type is already known and the caller wants the error string.
+The usual entry point is the generic ccol_begin(3) macro, which picks
+this function for a cvec. Call it directly only when the container type
+is already known and you want the error string.
 .fi
 .SH PARAMETERS
 .nf
@@ -30,29 +29,31 @@ err   Optional pointer to receive an error string on failure, or NULL
 .fi
 .SH RETURN VALUE
 .nf
-Returns a pointer to a newly allocated iterator positioned at the first
-element.
-Returns NULL when there is nothing to iterate (v is NULL or the vector
-holds no elements), with *err set to NULL.
-Returns NULL with *err set to an error string when the iterator itself
-could not be allocated.
+A pointer to a newly allocated iterator at the first element.
+NULL with *err set to NULL when there is nothing to iterate (v is NULL or
+the vector holds no elements).
+NULL with *err set to an error string when the iterator itself couldn't
+be allocated.
 .fi
 .SH NOTES
 .nf
-The function sets *err to NULL at entry, before anything else. To tell
-an empty result apart from a failure, test *err, not the return value
-A NULL v iterates as an empty vector instead of reporting an error. This
-is a deliberate cross-module contract that chashmap_begin_iter(3) and
-cbmap_begin_iter(3) share: the caller can iterate a lazily created
-container field that is still NULL because nothing is in it yet, and no
-caller needs to write its own NULL guard first
+The function sets *err to NULL on entry, before anything else. To tell an
+empty result from a failure, test *err rather than the return value.
+
+A NULL v iterates as an empty vector instead of being reported as an
+error. This contract is shared across modules with chashmap_begin_iter(3)
+and cbmap_begin_iter(3): a lazily created container field that is still
+NULL because nothing has been put in it can be iterated as it is, and no
+caller needs its own NULL guard first.
+
 The iterator frees itself when ccol_iter_next(3) steps past the last
-element and returns NULL. An iteration that stops early must end with
-ccol_iter_destroy(3), or the caller can declare the iterator with
-ccol_iter_declare(3), so that scope exit destroys it
-The iterator comes from the vector's own memory management procedures
-Every operation that inserts, removes or resizes invalidates the
-iterator
+element and returns NULL. An iteration that stops early has to end with
+ccol_iter_destroy(3), or you can declare the iterator with
+ccol_iter_declare(3) so that the exit of the scope destroys it.
+
+The iterator is allocated through the vector's own memory management
+procedures. Any operation that inserts, removes or resizes invalidates
+it.
 .fi
 .SH EXAMPLES
 .nf

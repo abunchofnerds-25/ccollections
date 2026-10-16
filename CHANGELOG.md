@@ -1,35 +1,35 @@
 # Changelog
 
-This file records every important change to this project. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the version
-numbers follow the compatibility rules in `doc/compatibility.md`.
+This file records every important change to this project. It follows the
+format of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
+version numbers follow the compatibility rules in `doc/compatibility.md`.
 
-Entries are grouped by the kind of change, in this order: `Added`, `Changed`,
+Entries are grouped by the kind of change in this order: `Added`, `Changed`,
 `Deprecated`, `Removed`, `Fixed`, `Security`. A `Changed` or `Removed` entry
-that changes the Application Binary Interface (ABI) names the ABI version
-that it required.
+that changes the Application Binary Interface (ABI) names the ABI version it
+needed.
 
 ## 1.0.0 - unreleased
 
-This is the first release with a stable, supported interface. Because there
-is no earlier release, the text below describes what `1.0.0` contains rather
-than what changed.
+This is the first release with a stable, supported interface. There is no
+earlier release to compare with, so the text below describes what `1.0.0`
+contains and not what changed.
 
-The SONAME of the shared library is `libccollections.so.1`. Every later `1.x`
-release keeps that SONAME and stays compatible with this release at both the
-source level and the binary level.
+The SONAME of the shared library is `libccollections.so.1`. Every later
+`1.x` release keeps that SONAME and stays compatible with this one at the
+source level and at the binary level.
 
 ### Added
 
-- One unit for time across the whole public API: every timeout, deadline,
+- One unit of time for the whole public API. Every timeout, deadline,
   interval and duration is a `uint64_t` count of microseconds, and its name
   ends in `_us`. That covers the timed calls of `cthreadcomm` and
   `cthreadpool`, `ccol_select_timed()`, `chttpclient_set_connect_timeout()`
   and `chttpclient_set_request_timeout()`, every duration of
   `chttpsvr_config_t`, and `flush_interval_us` and `rotation_interval_us` of
-  `clogger`. No public signature takes a `struct timespec` or a `time_t`, so
-  an application and the library never have to agree on the width of
-  `time_t`. A value too large to form a deadline saturates and never wraps
+  `clogger`. No public signature takes a `struct timespec` or a `time_t`,
+  so an application and the library never need to agree on the width of
+  `time_t`. A value too large to make a deadline saturates and never wraps
   into the past.
 - Containers: `cvector`, a dynamic array; `chashmap`, a hash map that uses
   open addressing for integral key and value types and separate chaining for
@@ -42,29 +42,34 @@ source level and the binary level.
   - An open-addressing `chashmap` deletes by backward shift and leaves no
     marker for a deleted slot, so only live entries decide a resize, and a
     steady stream of inserts and deletes never rebuilds the table.
+  - `chmap_get_elem_ref()` and `cbmap_get_elem_ref()` fill a `cmap_pair`
+    that the caller owns with the location and the size of the stored value,
+    so an open-addressing `chashmap` keeps no accessor for each slot and its
+    table takes 17 bytes for each slot.
   - `cvec_sort()` sorts the backing array in place.
   - `cvec_push()` accepts each expression whose type converts to the element
     type: a variable, a literal, a computed value, or a struct value that a
     function returns.
   - An iterator that a loop leaves early can outlive its container until the
-    end of its scope: the scope-exit cleanup frees it without reading the
-    container.
+    end of its scope, because the scope-exit cleanup frees it without reading
+    the container.
   - `cvec_find()`, `cvec_sort()` and `csort_get_default_comparison_proc()`
     treat a character pointer that is itself `const` or `volatile`, such as
     `const char *const`, as a string.
 - Strings and algorithms: `cstring`, a dynamic string; and `csort`, an
   iterative bottom-up mergesort. Its floating-point comparators put NaN
-  above each other value, and make NaN equal only to NaN.
-- Memory: `cmempool`, which gives you a fixed-size pool and a ranged pool,
-  each built either from a heap allocation or from a preallocated buffer that
-  you supply. A pool can fall back to dynamic allocation when it is empty,
-  and it detects corruption and double frees. Every entry is aligned for any
+  above every other value and make NaN equal only to NaN, and its `bool`
+  comparator puts `false` before `true`, so `cvec_sort()` sorts a vector of
+  `bool`.
+- Memory: `cmempool`, with a fixed-size pool and a ranged pool, each built
+  either from a heap allocation or from a preallocated buffer that you give
+  it. A pool can fall back to dynamic allocation when it runs empty, and it
+  detects corruption and double frees. Every entry is aligned for any
   object type, the same guarantee that `malloc()` makes.
-- Concurrency: `cthreadcomm`, which gives you circular queues, dynamic queues,
-  channels, and a persistent `epoll(7)` reactor; `cthreadpool`, which gives
-  you a bounded or an unbounded task queue, completion callbacks, and futures;
-  and `clrucache`, a thread-safe LRU cache with an optional remote getter and
-  setter.
+- Concurrency: `cthreadcomm` with circular queues, dynamic queues, channels
+  and a persistent `epoll(7)` reactor, `cthreadpool` with a bounded or an
+  unbounded task queue, completion callbacks and futures, and `clrucache`, a
+  thread-safe LRU cache with an optional remote getter and setter.
   - A `ccol_event_loop` callback can run the documented drain, remove and
     destroy sequence for a different watched queue or channel, whatever
     `num_reactor_threads` is.
@@ -77,7 +82,7 @@ source level and the binary level.
     selectable, the documented receive and send calls are
     `ccol_circq_try_recv_zc()` and `ccol_circq_try_send_zc()` on `sel->cq`.
   - Every timed call of `cthreadcomm` and `cthreadpool` takes its timeout as
-    a `uint64_t` count of microseconds. A timeout of 0 does not wait: the
+    a `uint64_t` count of microseconds. A timeout of 0 doesn't wait, and the
     call does exactly what its `try_` variant does. A timeout too large to
     form a deadline, such as `UINT64_MAX`, waits with no end instead of
     wrapping into the past. Each one measures its deadline on
@@ -135,12 +140,13 @@ source level and the binary level.
   - `cyaml` quotes every string that a YAML 1.1 reader (PyYAML, libyaml,
     Ruby Psych) would misread, and a byte order mark is accepted only before
     a document; one inside a document is a parse error.
-  - Nesting depth counts containers: 500 nested containers are accepted and
-    a 501st is refused, the same in parse, serialize and clone. A `cjson`
-    parse error message is always printable ASCII.
-- Logging: `clogger`, which writes logfmt, JSON or RFC 5424 syslog output and
-  also gives you log rotation, derived loggers and optional asynchronous
-  batching. Rotation retention always keeps the newest generations, and at
+  - Nesting depth counts containers. 500 nested containers are accepted and
+    a 501st is refused, the same in parse, serialize and clone, and an alias
+    or merge whose copy would go deeper is a parse error, so every tree that
+    parses also serializes and clones. A `cjson` parse error message is
+    always printable ASCII.
+- Logging: `clogger`, which writes logfmt, JSON or RFC 5424 syslog output,
+  with log rotation, derived loggers and optional asynchronous batching. Rotation retention always keeps the newest generations, and at
   most `max_rotated_files + 1` generations stay on disk. Compression runs on
   a background thread of each logger, so neither a logging call nor the
   asynchronous writer ever waits for gzip; `clog_close()` and a fatal record
@@ -154,9 +160,30 @@ source level and the binary level.
   names what was lost, so a destination that fails permanently never makes
   the batch grow without bound. Each thread reads its process ID, thread ID
   and thread name once, so a record costs no system call for them.
+  `clog_set_level()`, `clog_set_format()`, `clog_set_facility()` and
+  `clog_set_field()` return a `ccol_retval_t`. The first three return
+  `ccol_invalid_args` for a value that their enum does not name, and
+  `clog_set_format()` also for `CLOG_FMT_SYSLOG` on a file logger; the
+  setting then stays as it is. `clog_set_field()` returns
+  `ccol_invalid_args` for a `NULL`, empty, malformed or reserved key and for
+  a `NULL` value, and `ccol_not_enough_memory` when its copy cannot be
+  allocated, which leaves the fields unchanged.
+  `clog_set_signal_policy()` chooses what the library may do about SIGPIPE
+  and SIGXFSZ. Under the default, `CLOG_SIGNALS_AUTO`, no write of a logger
+  ends the process through either signal: a write to a broken pipe or socket
+  fails with EPIPE, and a logger on a regular file at the file size limit of
+  the process (`ulimit -f`, or `LimitFSIZE=` of systemd) gets EFBIG and
+  repairs its file once there is room. `CLOG_SIGNALS_UNTOUCHED` leaves both
+  signals to the application.
 - `ccol_set_thread_name()`, which renames the calling thread and makes its
   next `clogger` record carry the new name.
 - Every module accepts allocation functions that the caller supplies.
+- Every function that creates a handle is named `<module>_create...`, like
+  `chmap_create_full()`, `ctpool_create_mp()`, `chttpsvr_create_mp()`,
+  `chttpclient_create_mp()`, `chttp_request_create_mp()`,
+  `clog_create_from_fd_mp()`, `clog_create_from_file_mp()` and
+  `ccol_event_loop_create_mp()`. A form that ends in `_mp` takes an
+  allocator table, and the same name without `_mp` passes `NULL`.
 - Networking: `chttpclient`, which speaks HTTP/1.1 over TLS or plain text in a
   synchronous, an asynchronous, and a pooled-synchronous form; and
   `chttpserver`, which speaks HTTP/1.1 with method and pattern routing, named
@@ -213,6 +240,19 @@ source level and the binary level.
     port of the scheme, verifies a fully qualified host name with a trailing
     dot, and shares pooled connections between spellings of a host that
     differ only in letter case.
+  - `chttpsvr_is_running()`, `chttpsvr_bound_port()` and
+    `chttpsvr_bound_address()` report whether a server runs and the address
+    that its listener is bound to; `CHTTPSVR_BOUND_ADDRESS_MAX` bytes hold
+    every address. A port of 0 binds an ephemeral port that the system
+    chooses again at every start.
+  - `chttpsvr_req_set_context()` and `chttpsvr_req_context()` attach a value
+    to a request under a key compared by address, as Go's
+    `context.WithValue` does, so a middleware can hand what it found to the
+    later middleware and the handler.
+  - `chttpcli_engine_wait()` blocks until the shared engine of the
+    asynchronous and pooled client tiers has stopped completely, so a
+    program knows when the engine allocator and the engine logger may be
+    released.
 - The readable, writable and error callbacks of a `ccol_event_loop` receive
   their own registration handle, so a callback that runs before
   `ccol_event_loop_add()` has returned can remove or pause itself.
@@ -222,7 +262,10 @@ source level and the binary level.
 - The `on_complete` callback of every `ctpool` submit takes a `bool ran`
   argument and runs exactly once for every accepted task, with `ran` false
   for a task that `ctpool_shutdown_immediate()` discards, so it can always
-  release what the task owns.
+  release what the task owns. `ctpool_submit_future()` stores the reason for
+  a `NULL` return in its `rv_out` argument, with the same codes that
+  `ctpool_submit()` returns, and `ctpool_try_submit_future()` and
+  `ctpool_timed_submit_future()` return that code.
 - An asynchronous `clogger` target delivers its queued records when the
   process calls `exit()` or returns from `main` without `clog_close()`, and a
   compressed generation is written under a temporary name and published only
@@ -238,8 +281,13 @@ source level and the binary level.
   another logger's output has stopped draining; the exit drain bounds every
   wait, including writes to pipes and sockets. A rotated log file keeps the
   mode, owner and group of the file it replaces.
-- `ccol_mutex_timedlock()` and `ccol_rw_lock_timedwrlock()`: timed lock
-  wrappers in the set of thread-primitive wrappers of `common.h`.
+- Every name that an installed header declares only for the library's own
+  use starts with an underscore, so a reader can tell at once that it isn't
+  part of the API. That covers the thread-primitive wrappers of `common.h`
+  (`_ccol_mutex_t` and the rest of that family), the default allocator
+  wrappers, the type introspection helpers other than
+  `ccol_determine_ccol_data_type()`, `_CCOL_ERR_STR()`, and the test hooks of
+  `cthreadcomm.h`, `clogger.h` and `cstring.h`.
 - A `ccol_event_loop` registration that has no `on_error` handler receives an
   error or a hang-up of its descriptor through its read or write handler, as
   libevent and libuv deliver it, so a connected UDP socket keeps receiving
@@ -247,10 +295,10 @@ source level and the binary level.
 - Packaging: a shared library with a version and a SONAME, a static archive,
   `pkg-config` metadata that the build generates, support for `PREFIX`,
   `DESTDIR`, `LIBDIR`, `INCLUDEDIR`, `MANDIR` and `PKGCONFIGDIR` in
-  `make install`, and 521 manual pages (510 in section 3 and 11 in section 7).
+  `make install`, and 534 manual pages (517 in section 3 and 17 in section 7).
   The public headers install into `include/ccollections/` and include each
   other by relative name, and an application writes
-  `#include <ccollections/NAME.h>`, so a header of the same name in the
+  `#include <ccollections/NAME.h>`, so a header with the same name in the
   application never collides with one of the library's.
 - `make check_namespace`, which stops the build when any of these items has
   no namespace prefix: an exported symbol, a public macro, a public typedef, an
@@ -258,31 +306,36 @@ source level and the binary level.
 - `make check_abi`, which compares the exported ABI against the committed
   baseline under `abi/` and fails on an addition that nobody recorded and on
   any removal.
+- `make check_layout`, which compares the size, the alignment and every
+  member offset of each public struct and union, as the clang of the system
+  reports them, with the LP64 record in `abi/public_layout.lp64`, so macOS
+  and OpenBSD, where the structural ABI comparison cannot run, check the
+  layouts too.
 - `make check_filenames`, which refuses a name under `include/` or `man/`
   that `make install` and `make uninstall` would paste onto the installation
   directory as a shell pattern rather than as one literal path, because such
   a name makes those recipes reach files that belong to other packages.
-- `make bench`, a benchmark suite for the modules whose run-time cost is worth
-  watching. It keeps a baseline for each machine and detects regressions
-  against it, and where uthash, GLib, jansson and libyaml are installed, it
-  can also compare against them.
+- `make bench`, a benchmark suite for the modules whose run-time cost is
+  worth watching. It keeps a baseline for each machine and detects
+  regressions against it, and where uthash, GLib, jansson and libyaml are
+  installed it compares against them too.
 - `CCOL_FORK_SAFETY_REQUIRED`, a compile-time switch for the fork protection
   that `cthreadpool`, `cthreadcomm`, `clogger` and `chttpserver` build on
   `pthread_atfork()`.
 - `CCOL_MEMPOOL_COMPACT_LAYOUT`, a compile-time switch that gives you a stride
-  the library does not round up to a power of two, at the cost of a little
-  speed on every `cmempool` allocation and release. Because it is part of the
-  interface between an application and the library, a disagreement between
-  the two sides gives a link error, not a pool of the wrong size.
+  the library doesn't round up to a power of two, at the cost of a little
+  speed on every `cmempool` allocation and release. It is part of the
+  interface between an application and the library, so if the two sides
+  disagree you get a link error and not a pool of the wrong size.
 - `CCOL_MEMPOOL_DYNAMIC_TLS`, a compile-time switch that selects the general
   thread-local storage model instead of initial-exec for the library's
   thread-local fast paths. Use it when you must `dlopen()` the library into a
   process whose static thread-local block is already full.
 - `WITH_CJSON`, `WITH_CYAML`, `WITH_CLOGGER`, `WITH_CHTTPCLIENT` and
   `WITH_CHTTPSERVER`, build switches that leave a module out of the library.
-  With both HTTP modules off, the library does not need OpenSSL; with
-  `clogger` also off, it does not need zlib. A reduced build is not interchangeable
-  with a full build at the ABI level.
+  With both HTTP modules off the library doesn't need OpenSSL, and with
+  `clogger` off as well it doesn't need zlib. A reduced build isn't
+  interchangeable with a full build at the ABI level.
 - `chttpclient` connects to a host with several addresses by racing them
   (Happy Eyeballs, RFC 8305) in every tier: the families alternate, the next
   address starts after 250 ms or at once on a failure, and the connect timeout
@@ -308,16 +361,16 @@ source level and the binary level.
 - The build uses `-fstack-protector-strong`, `-fstack-clash-protection`,
   `-D_FORTIFY_SOURCE=3`, and RELRO with BIND_NOW. It also uses
   `-fvisibility=hidden`, so that the set of exported symbols equals the
-  declared public API and nothing else. The build probes each hardening flag
-  against the compiler and the target and passes only the flags that this
-  pair really implements; `make hardening_report` prints the result, so a
-  flag that a toolchain cannot provide is visible instead of silently
+  declared public API and nothing else. The build tries each hardening flag
+  against the compiler and the target and only passes the flags that this
+  pair really implements. `make hardening_report` prints the result, so a
+  flag that a toolchain can't provide shows up instead of silently going
   missing.
 - The `cjson` parser, the `cyaml` parser, the HTTP/1.1 parser and the URL and
   redirect layer of `chttpclient` are fuzzed continuously, as a blocking job
-  on every push and every pull request. The URL target also
-  asserts, on every input, that a redirect can never move a request from a
-  network transport onto an AF_UNIX socket.
+  on every push and every pull request. The URL target also asserts on every
+  input that a redirect can never move a request from a network transport
+  onto an AF_UNIX socket.
 - The HTTP server never lets a slow client hold a worker thread of a buffered
   route. A body that stops arriving, or a response that meets a full socket,
   parks its connection with no thread, and any free worker continues it once
@@ -340,10 +393,10 @@ source level and the binary level.
   constant turns a setting off: `CHTTPSVR_NO_RATE_FLOOR`,
   `CHTTPSVR_NO_MEMORY_CAP`, `CHTTPSVR_NO_DEADLINE` and
   `CHTTPSVR_STREAMING_POOL_OFF`.
-- The HTTP server holds a request to the `Host` rule of RFC 7230 section 5.4.
-  More than one `Host` header, and an HTTP/1.1 request with none, each get
-  `400 Bad Request`. Two `Host` lines are what let a front-end forward one
-  authority while the back-end reads another.
+- The HTTP server holds a request to the `Host` rule of RFC 7230 section
+  5.4. More than one `Host` header, and an HTTP/1.1 request with none, each
+  get `400 Bad Request`, because two `Host` lines are what lets a front-end
+  forward one authority while the back-end reads another.
 - The HTTP server accepts a request-target only in origin-form, which begins
   with `/`, or in absolute-form with the `http` or `https` scheme. Every other
   target gets `400 Bad Request` before any middleware runs, so
@@ -364,22 +417,24 @@ source level and the binary level.
   through the declared key type and value type of the container. They never
   copy the raw bytes of an expression of another type that happens to share a
   width.
-- A zero-initialised `chttp_tls_config_t` is the strict configuration. It
-  verifies the certificate chain of the server and matches its hostname. Both
-  relaxations are named for what turning them on gives up,
-  `insecure_skip_verify` and `insecure_skip_hostname_check`, so a caller
-  cannot reach a weaker setting by writing less than they meant to.
+- A zero-initialised `chttp_tls_config_t` is the strict configuration,
+  which verifies the certificate chain of the server and matches its
+  hostname. Both relaxations, `insecure_skip_verify` and
+  `insecure_skip_hostname_check`, are named for what turning them on gives
+  up, so a caller can't end up with a weaker setting by writing less than
+  they meant to.
   `chttpclient_set_tls()` refuses `insecure_skip_verify` beside a
   `ca_bundle_path`, because that pair states two incompatible policies.
-- A redirect can never add the `http+unix` transport to a chain and can never
-  re-point it at another socket. That rule is unconditional. Without it, any
-  http or https server gets a request-forgery primitive against every local
-  socket the calling process can reach.
-- `chttp_request_t.prevent_tls_downgrade_on_redirect` refuses a redirect that would take
-  a chain from `https` to `http`, and reports `ccol_http_invalid_url` without
-  opening the plaintext connection. It defaults to false, so such a redirect
-  is followed unless a caller asks otherwise; that matches curl and the Go
-  `net/http` client. An upgrade from `http` to `https` is always followed.
+- A redirect can never add the `http+unix` transport to a chain and can
+  never point it at another socket, and that rule is unconditional. Without
+  it, any http or https server would get a request-forgery primitive against
+  every local socket the calling process can reach.
+- `chttp_request_t.prevent_tls_downgrade_on_redirect` refuses a redirect
+  that would take a chain from `https` to `http` and reports
+  `ccol_http_invalid_url` without opening the plaintext connection. It
+  defaults to false, so such a redirect is followed unless a caller asks
+  otherwise, which matches curl and the Go `net/http` client. An upgrade
+  from `http` to `https` is always followed.
 - On a redirect, `chttpclient` follows the rules of curl for the headers that
   the caller set. A hop whose scheme, host or port differs from the original
   request carries none of the caller's `Authorization`, `Cookie`, `Cookie2`
@@ -392,11 +447,11 @@ source level and the binary level.
   `Location` alike, so a space in a `Location` cannot split the request
   line. An existing `%XX` escape is kept, and a `%` that two hex digits do not
   follow is `ccol_http_invalid_url`.
-- The `cyaml` parser refuses a raw C0 control byte, DEL included, in an anchor
-  name, an alias name and a tag token, as it does in scalar content.
-  Each of those is stored as a NUL-terminated string, so a raw NUL inside one
-  would end it early: two anchors that differ only after such a byte would
-  collapse into one name, and an alias would then resolve to the wrong node.
+- The `cyaml` parser refuses a raw C0 control byte, DEL included, in an
+  anchor name, an alias name and a tag token, as it does in scalar content.
+  Each of those is stored as a NUL-terminated string, and a raw NUL inside
+  one would end it early, so two anchors that differ only after such a byte
+  would collapse into one name and an alias would resolve to the wrong node.
 - `chashmap` hashes in two modes. Every map starts in a fast mode: a
   Fibonacci multiply for integral, floating-point and pointer keys, XXH64
   with a secret seed that each process chooses at random for every key type
@@ -413,10 +468,10 @@ source level and the binary level.
   insert even when every growth fails, and a map that returns to the fast
   mode switches again within two windows of 256 inserts if the attack
   resumes. A lookup or a delete never examines more slots than the largest
-  displacement in the table. A JSON object or a YAML mapping from an untrusted peer
-  therefore cannot make `cjson_parse()` or `cyaml_parse()` take quadratic
-  time, and neither can integer keys that a map or a cache takes from a
-  request.
+  displacement in the table. So a JSON object or a YAML mapping from an
+  untrusted peer can't make `cjson_parse()` or `cyaml_parse()` take
+  quadratic time, and neither can integer keys that a map or a cache takes
+  from a request.
 - A `chttpserver` whose TLS configuration names a `ca_bundle_path` requires
   every client to present a certificate that the bundle verifies. The field
   `client_cert_optional` of `chttp_tls_config_t` turns that into a request
@@ -431,13 +486,14 @@ source level and the binary level.
   of the chain below its trust anchor needs a CRL of its issuer in the
   bundle, and a revoked certificate, a missing CRL or an expired CRL fails
   the handshake.
-- A certificate, key or CA bundle path must name a regular file. A FIFO, a
-  terminal or any other special file fails at once with
+- A certificate, key or CA bundle path has to name a regular file. A FIFO,
+  a terminal or any other special file fails at once with
   `ccol_http_tls_cert_load_failed` and never blocks the caller.
 - The `cjson` parser refuses a string that is not well-formed UTF-8 and a
   `\u` escape of a surrogate that is not one half of a pair, with an error
   that names the bytes and the position. Nothing is replaced with U+FFFD, so
-  two keys that differ in the input can never become one key in the tree.
+  two keys that are different in the input can never become one key in the
+  tree.
 - The `cyaml` parser stops building the canonical text of a collection key
   at its 64 KiB limit, so a key built from many aliases costs at most that
   much before it is refused. Every `cyaml` error message is printable ASCII:
@@ -465,6 +521,6 @@ source level and the binary level.
   body before any byte of it is sent, in every tier. A pooled connection
   with input that nobody asked for is never reused. An upload over TLS waits
   on the socket while the server holds a partial record, and never spins.
-- `chttp_base64_decode_mp()` refuses a final group whose unused bits are not
+- `chttp_base64_decode_mp()` refuses a final group whose unused bits aren't
   zero, so each decoded value has exactly one encoding.
 - See `SECURITY.md` for how to report a vulnerability.

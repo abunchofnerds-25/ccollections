@@ -1,6 +1,6 @@
 .TH CSTR_TO_LOWER 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cstr_to_lower \- convert all characters to lowercase in-place
+cstr_to_lower \- convert the ASCII letters to lowercase in-place
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -11,7 +11,7 @@ cstr_to_lower(s);
 .fi
 .SH DESCRIPTION
 .nf
-This macro is a pass-through wrapper for cstring_to_lower().
+This macro just forwards its argument to cstring_to_lower().
 .fi
 .SH PARAMETERS
 .nf

@@ -26,20 +26,20 @@
  * @file bench_serialization.c
  * @brief Benchmarks for cjson and cyaml.
  *
- * Each parser gets one document, which the harness builds once at startup and
- * every case shares, so the comparison between the two formats uses the same
- * content. Each document is a nested structure of objects, arrays, strings and
- * numbers instead of a flat list, because the cost of a parser is in its
- * recursion and in the growth of its containers.
+ * Each parser gets one document, built once at startup and shared by every
+ * case, so the two formats are compared on the same content. Each document is
+ * a nested structure of objects, arrays, strings and numbers and not a flat
+ * list, because a parser's cost lies in its recursion and in growing its
+ * containers.
  *
- * The harness reports a time for each document and not for each byte, so the
- * figure follows the document size constant in this file, which every case and
- * every third-party comparison uses.
+ * Times are reported per document and not per byte, so the figure follows
+ * the document size constant in this file, which every case and every
+ * third-party comparison uses.
  *
- * Where jansson or libyaml is on the machine, the harness measures each one on
- * exactly the same bytes. Both build a DOM of their own, so the comparison is
- * between similar amounts of work, which would not be true of a parser that
- * streams or that calls back into the application.
+ * Where jansson or libyaml is installed, each one is measured on exactly the
+ * same bytes. Both build a DOM of their own, so the comparison is between
+ * similar amounts of work, which wouldn't be true of a parser that streams or
+ * calls back into the application.
  */
 
 #include <cjson.h>
@@ -58,10 +58,10 @@
 #include <yaml.h>
 #endif
 
-/* This is the number of records in the generated document. It is large enough
- * that the cost of one call does not decide the figure, and small enough that
- * one repetition stays in the range of milliseconds and the whole suite
- * finishes in an acceptable time. */
+/* The number of records in the generated document. It's big enough that the
+ * cost of a single call doesn't decide the figure, and small enough that one
+ * repetition stays in the millisecond range and the whole suite finishes in
+ * reasonable time. */
 #define BENCH_DOC_RECORDS 200
 
 typedef struct {
@@ -78,15 +78,15 @@ typedef struct {
 /* Document generation                                                       */
 /* ------------------------------------------------------------------------ */
 
-/* snprintf reports the length that it would have written, not the length that
- * it wrote, so do not add its return value straight onto an offset: as soon as
- * anything truncates, that offset goes past the end of the buffer, and the
- * expression for the space that is left wraps to a very large size_t, which
- * tells the next call that it may write far past the end. Every append below
- * goes through this helper instead, which refuses a truncation instead of
- * absorbing it. This file builds these documents from a record count that it
- * chooses itself, so a buffer that does not fit is a sizing mistake in this
- * file and not something that a measurement should continue past. */
+/* snprintf reports the length it would have written and not the length it
+ * wrote, so don't add its return value straight onto an offset: as soon as
+ * anything truncates, the offset goes past the end of the buffer, and the
+ * expression for the remaining space wraps to a huge size_t that tells the
+ * next call it may write far past the end. Every append below goes through
+ * this helper instead, which refuses a truncation instead of absorbing it.
+ * This file builds these documents from a record count it picks itself, so a
+ * buffer that doesn't fit is a sizing mistake in this file and not something
+ * a measurement should carry on past. */
 __attribute__((format(printf, 4, 5))) static size_t doc_append(
     char *buf, size_t cap, size_t off, const char *fmt, ...) {
   if (off >= cap) bench_die("document buffer overflow");
@@ -200,10 +200,10 @@ static void cjson_parse_run(void *state, size_t n) {
     char *err = NULL;
     cjson d = cjson_parse(st->text, &err);
     if (!d) {
-      /* This stops the run instead of returning quietly. The harness divides
+      /* This stops the run instead of quietly returning. The harness divides
        * the measured time by the full count, so an early return reports part
-       * of the work at the full price, and a parse that fails also costs much
-       * less than a parse that works. */
+       * of the work at the full price, and a failing parse also costs much
+       * less than one that works. */
       bench_die("cjson parse failed");
     }
     bench_sink(d);
@@ -278,9 +278,9 @@ static void cyaml_serialize_run(void *state, size_t n) {
 
 #ifdef BENCH_HAVE_JANSSON
 /* The serialize arm's fixture: the same bytes every other case in this group
- * uses, parsed into jansson's own DOM so that what is timed below is the
- * serializer alone, exactly as cjson_dom_setup does for the case this is
- * compared against. */
+ * uses, parsed into jansson's own DOM so that only the serializer is timed
+ * below, just as cjson_dom_setup does for the case this one is compared
+ * with. */
 static void *jansson_dom_setup(size_t n) {
   doc_state_t *st = json_text_setup(n);
   if (!st) return NULL;
@@ -293,17 +293,17 @@ static void *jansson_dom_setup(size_t n) {
   return st;
 }
 
-/* Both flags exist to make the two sides emit the same bytes, since a
- * serializer's cost tracks how much it writes.
+/* Both flags are there to make the two sides emit the same bytes, since a
+ * serializer's cost follows how much it writes.
  *
- * JSON_COMPACT matches cjson_serialize's own output shape: jansson's default
- * puts a space after every comma and colon, and cjson emits no gratuitous
+ * JSON_COMPACT matches the shape of cjson_serialize's output: by default
+ * jansson puts a space after every comma and colon, and cjson emits no extra
  * whitespace. JSON_REAL_PRECISION(15) matches how cjson renders a double,
- * which tries 15 significant digits and only widens to 17 when that fails to
- * round-trip; jansson's default is a flat 17, so 33.33 comes back out as
- * 33.329999999999998. Without it jansson is timed producing about 8 percent
- * more bytes than cjson on this document, and the ratio reports that
- * difference as speed. */
+ * trying 15 significant digits and only widening to 17 when that doesn't
+ * round-trip, while jansson's default is a flat 17, so 33.33 comes back out
+ * as 33.329999999999998. Without it jansson would be timed producing about 8
+ * percent more bytes than cjson on this document, and the ratio would report
+ * that difference as speed. */
 static void jansson_serialize_run(void *state, size_t n) {
   doc_state_t *st = state;
   for (size_t i = 0; i < n; i++) {
@@ -321,10 +321,10 @@ static void jansson_parse_run(void *state, size_t n) {
   for (size_t i = 0; i < n; i++) {
     json_error_t err;
     json_t *root = json_loads(st->text, 0, &err);
-    /* Fatal, exactly as the c_collections arms are: the harness divides the
-     * elapsed time by the full count either way, and a parse that fails is far
-     * cheaper than one that works, so a quiet stop reports a flattering figure
-     * for the library this one is compared against. */
+    /* Fatal, exactly like the c_collections arms: the harness divides the
+     * elapsed time by the full count either way, and a failing parse is far
+     * cheaper than one that works, so a quiet stop would report a flattering
+     * figure for the library this one is compared with. */
     if (!root) bench_die("jansson parse failed");
     bench_sink(root);
     json_decref(root);
@@ -333,9 +333,9 @@ static void jansson_parse_run(void *state, size_t n) {
 #endif
 
 #ifdef BENCH_HAVE_YAML
-/* libyaml has no DOM of its own in the sense cyaml does; its document API is
- * the closest equivalent, so that is what is measured rather than the raw
- * event stream, which would be comparing a tokenizer against a tree builder. */
+/* libyaml has no DOM of its own in the sense cyaml does, and its document API
+ * is the closest equivalent, so that's what we measure and not the raw event
+ * stream, which would compare a tokenizer with a tree builder. */
 static void libyaml_parse_run(void *state, size_t n) {
   doc_state_t *st = state;
   for (size_t i = 0; i < n; i++) {
@@ -360,15 +360,15 @@ static void libyaml_parse_run(void *state, size_t n) {
 
 #define BENCH_DOC_N 2000
 
-/* The multi-threaded variants parse a tenth as many documents per repetition.
- * Each thread works on its own copy of the tree, so the per-repetition cost
- * scales with the thread count, and the smaller count keeps a repetition short
- * enough that the sampler collects a useful number of them. */
+/* The multi-threaded variants parse a tenth as many documents per
+ * repetition. Each thread works on its own copy of the tree, so the cost per
+ * repetition scales with the thread count, and the smaller count keeps a
+ * repetition short enough for the sampler to collect a useful number. */
 #define BENCH_DOC_MT_N 200
 
-/* cjson and cyaml hold no internal locks by design. Concurrent use means one
- * document tree per thread, which is the realistic shape (a request handler
- * parsing its own payload) and the only valid one. */
+/* cjson and cyaml have no internal locks by design. Using them concurrently
+ * means one document tree per thread, which is the realistic shape (a request
+ * handler parsing its own payload) and the only valid one. */
 BENCH_MT_SETUP(json_text_setup)
 BENCH_MT_SETUP(cjson_dom_setup)
 BENCH_MT_SETUP(yaml_text_setup)

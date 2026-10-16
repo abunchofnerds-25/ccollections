@@ -11,23 +11,23 @@ ccol_selectable_from_circq(q, dir);
 .fi
 .SH DESCRIPTION
 .nf
-This macro builds a ccol_selectable value, a tagged union whose type
-here is ccol_selectable_circq, that wraps the ccol_circular_queue
-pointer that you give, with the direction that you give.
+Builds a ccol_selectable value (a tagged union, here of type
+ccol_selectable_circq) that wraps the given ccol_circular_queue pointer
+with the given direction.
 
   ccol_select_read; wait for at least one message to arrive (read-wait)
-  ccol_select_write; wait until the queue has room for a send (write-wait)
+  ccol_select_write; wait until the queue has room for a send, or until
+                     its sends are turned off (write-wait)
 
-This macro expands to a compound literal, so it costs nothing at run
-time beyond the load of the pointer.
+The macro expands to a compound literal, so at run time it costs no
+more than loading the pointer.
 
-ccol_select() only reports readiness for either direction; it never
-consumes or reserves anything itself, so the caller must then make the
-call itself: ccol_circq_try_recv_zc() when the read direction wins,
-and ccol_circq_try_send_zc() when the write direction wins. Because
-ccol_select() claims nothing and reserves nothing, there is a
-time-of-check to time-of-use gap, the same as the one in POSIX
-select(2).
+For either direction ccol_select() only reports readiness. It never
+takes or reserves anything, so the caller has to make the call itself:
+ccol_circq_try_recv_zc() when the read direction wins, and
+ccol_circq_try_send_zc() when the write direction wins. Since nothing
+is claimed or reserved, there is a time-of-check to time-of-use gap,
+the same one as in POSIX select(2).
 .fi
 .SH PARAMETERS
 .nf
@@ -56,6 +56,9 @@ ccol_select_va(&idx,
 ccol_select_va(&idx,
     ccol_selectable_from_circq(q0, ccol_select_write),
     ccol_selectable_from_circq(q1, ccol_select_read));
+
+ccol_circular_queue_destroy(q0);
+ccol_circular_queue_destroy(q1);
 .fi
 .SH "SEE ALSO"
 .BR ccol_select (3),

@@ -11,30 +11,28 @@ ccol_for_each(container, it, { body });
 .fi
 .SH DESCRIPTION
 .nf
-This macro declares a cmap_iterator* variable named it, with RAII
-cleanup, and then loops from ccol_begin(container) to NULL with
-ccol_iter_next(), running the body once for each element. Inside the
-body, the variable it gives typed access through ccol_iter_key_ptr(it)
-and ccol_iter_val_ptr(it).
+ccol_for_each declares a cmap_iterator* named it with RAII cleanup, then
+walks from ccol_begin(container) to NULL with ccol_iter_next() and runs
+the body once for each element. Inside the body you get typed access to
+the element through ccol_iter_key_ptr(it) and ccol_iter_val_ptr(it).
 
-The macro destroys the iterator automatically when the loop ends, whether
-the loop reaches the end of the sequence or leaves through a break or a
-return.
+The iterator is destroyed when the loop ends, whether the loop runs to
+the end of the sequence or leaves through a break or a return.
 .fi
 .SH PARAMETERS
 .nf
 container  A cvec, chmap or cbmap variable.
 it         Name for the iterator variable.
-body       Compound statement that the macro runs for each element. The
-           macro takes it as a variadic argument, so a comma inside a
-           nested function call is safe.
+body       Compound statement to run for each element. The macro takes
+           it as a variadic argument, so a comma inside a nested function
+           call is safe.
 .fi
 .SH NOTES
 .nf
-Do NOT change the container inside the body: an insertion or a deletion
-invalidates the iterator and gives undefined behavior.
-This macro needs GCC or Clang, because it uses statement expressions and
-cleanup.
+Do NOT change the container inside the body. An insertion or a deletion
+invalidates the iterator and the behavior is undefined.
+The macro uses statement expressions and the cleanup attribute, so it
+needs GCC or Clang.
 .fi
 .SH EXAMPLES
 .nf

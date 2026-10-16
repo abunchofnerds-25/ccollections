@@ -14,23 +14,25 @@ ccol_retval_t chttpsvr_router_on(chttpsvr_router *router,
 .fi
 .SH DESCRIPTION
 .nf
-Works like chttpsvr_register_handler, but registers the route on a
-sub-router.  Every rule that chttpsvr_register_handler describes
-applies here as well: the rules for routing, for the leading slash,
-for a trailing slash, for two consecutive slashes, for the characters
-of a parameter name, for a parameter name that appears twice, and for
-thread safety.  CHTTP_ANY is also supported as the method argument.
+The same as chttpsvr_register_handler, except that the route goes on
+a sub-router.  All the rules of chttpsvr_register_handler apply here
+too: routing, the leading slash, a trailing slash, two consecutive
+slashes, the characters of a parameter name, a parameter name that
+appears twice, and thread safety.  CHTTP_ANY works as the method
+argument as well.
 
-This function first checks that the server that owns router has not
-been destroyed, and the check also covers a concurrent destroy from
-another thread: a call that races a chttpsvr_destroy of the owning
-server returns ccol_invalid_args and touches no freed memory.
+The function first checks that the server that owns router has not
+been destroyed.  That check also holds against a destroy running on
+another thread at the same time: a call that races a chttpsvr_destroy
+of the owning server returns ccol_invalid_args and touches no freed
+memory.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success on success.
-ccol_invalid_args when router, pattern or fn is NULL; when pattern
-                  does not start with '/'; when pattern has two
+ccol_invalid_args when router, pattern or fn is NULL; when method is
+                  not one of the seven methods or CHTTP_ANY; when
+                  pattern does not start with '/'; when pattern has two
                   consecutive slashes or a trailing slash; when a
                   {name} segment contains a character outside
                   [A-Za-z0-9_]; when the same {name} appears more than

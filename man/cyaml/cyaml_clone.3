@@ -11,35 +11,39 @@ cyaml cyaml_clone(cyaml node);
 .fi
 .SH DESCRIPTION
 .nf
-Copy node and all of its descendants.  The clone uses the same allocator
-as the source tree and carries over unchanged the tag of each node that
-has one (see cyaml_node_tag(3)), and every dictionary of the clone
-keeps the member order of its source (see cyaml_dictionary_first(3)).
-A change to the clone does not affect the original, and a change to the
-original does not affect the clone.
+Copies node and all of its descendants.  The clone uses the same
+allocator as the source tree, keeps the tag of every node that has
+one (see cyaml_node_tag(3)), and every dictionary of the clone keeps
+the member order of its source (see cyaml_dictionary_first(3)).
+Changing the clone doesn't affect the original, and changing the
+original doesn't affect the clone.
 
-node need not come from cyaml_parse*().  A tree that the caller builds
-directly with cyaml_create_list_mp(3) and cyaml_dictionary_set(3) obeys
-the same 500-level nesting limit that cyaml_parse*(3) applies at parse
-time, and cyaml_serialize(3) and cyaml_serialize_flow(3) apply that same
-limit on their own.  This function refuses a tree that is nested deeper
-than the limit and returns NULL for it.  Because it walks the source
-with an explicit worklist instead of by recursion, the call stack that
-it needs is a constant that does not grow with the nesting depth: the
-limit bounds the work of one call, not the stack that the caller must
-give.
+node doesn't have to come from cyaml_parse*().  A tree that the
+caller builds directly with cyaml_create_list_mp(3) and
+cyaml_dictionary_set(3) has the same nesting limit that
+cyaml_parse*(3) applies at parse time, and cyaml_serialize(3),
+cyaml_serialize_flow(3) and cyaml_serialize_stream(3) apply exactly
+that limit as well: a tree may nest at most 500 containers (lists
+and dictionaries) on any path, counting the root when it is a
+container, and scalars and tags take no level.  So every tree that a
+parse gives can be cloned.  A tree that nests more containers than
+that is refused and the function returns NULL for it.  The source is
+walked with an explicit worklist instead of by recursion, so the
+call stack it needs is constant and doesn't grow with the nesting
+depth.  The limit bounds the work of one call, not the stack the
+caller has to provide.
 .fi
 .SH PARAMETERS
 .nf
-node  Root of the subtree to copy.  The function accepts NULL, in which
-      case it returns NULL.
+node  Root of the subtree to copy.  NULL is accepted and gives
+      NULL.
 .fi
 .SH RETURN VALUE
 .nf
-Root of the new tree, which the caller owns, or NULL when the function
-runs out of memory or when node is nested more than 500 levels deep.
-The caller cannot tell the two causes apart, because this function has
-no separate error-string channel.
+The root of the new tree, which the caller owns, or NULL when the
+function runs out of memory or node nests more than 500 containers.
+This function has no error string, so the caller cannot tell the two
+causes apart.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_destroy (3),

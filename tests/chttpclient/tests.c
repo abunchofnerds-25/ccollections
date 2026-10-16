@@ -17340,9 +17340,9 @@ TEST(async_deadline, a_connect_that_starts_as_the_sweep_judges_it_ends) {
   _chttp_set_addr_override_for_tests(addrs, lens, 1);
   _chttp_set_silent_addr_for_tests((const struct sockaddr *)&hole,
                                    sizeof(hole));
-  /* The lookup lasts three sweep ticks, so one tick finds the hop before its
-   * connect starts even under valgrind, which slows the sweep thread down; the
-   * connect still starts before its 400 ms deadline. */
+  /* While the hold is armed, the lookup waits after its delay until a sweep
+   * tick has caught the hop before its connect, so the test doesn't depend on
+   * a tick landing inside the delay; a slow runner can sleep past it. */
   _chttp_set_name_lookup_delay_ms_for_tests(300);
   _chttp_sweep_fd_wait_arm_for_tests();
   chttpcli_construct(cli);
@@ -20819,6 +20819,11 @@ TEST(engine_wait, the_module_destructor_initializes_nothing_unused) {
       dup2(null_fd, STDERR_FILENO);
     }
     execl(self, self, "--filter=no_test_has_this_name", (char *)NULL);
+    /* The copy couldn't start at all. Under qemu-user with no binfmt handler
+     * the host kernel can't run this guest binary, so say so with 'E' and
+     * let the parent skip instead of reporting a missing 'x'. */
+    ssize_t w = write(p[1], "E", 1);
+    (void)w;
     _exit(127);
   }
   close(p[1]);
@@ -20838,7 +20843,14 @@ TEST(engine_wait, the_module_destructor_initializes_nothing_unused) {
   bool reached_exit = memchr(got, 'x', n) != NULL;
   bool says_yes = memchr(got, 'Y', n) != NULL;
   bool says_no = memchr(got, 'N', n) != NULL;
+  bool exec_failed = memchr(got, 'E', n) != NULL;
   REQUIRE_GT(pid, 0);
+  if (exec_failed) {
+    fprintf(stderr,
+            "SKIP: this binary can't re-execute itself here (qemu-user "
+            "without binfmt, for example)\n");
+    return;
+  }
   REQUIRE_TRUE(reached_exit);
   if (!says_yes && !says_no) {
     fprintf(stderr, "SKIP: this build runs no destructors at exit\n");

@@ -879,15 +879,17 @@ endif
 # it declares, so you couldn't link against an installed copy anyway; these
 # headers stay in the source tree and out of the install. The directory itself
 # is the boundary, so the wildcard below needs no list of names and a new
-# header there stays out of the install by itself.
-INTERNAL_HEADER_FILES = $(wildcard $(INCLUDE_DIR)/internal/*.h)
-PUBLIC_HEADER_FILES = $(filter-out $(INTERNAL_HEADER_FILES),$(HEADER_FILES))
+# header there stays out of the install by itself. The filter matches the
+# directory prefix and not a wildcard of one level, so the headers of a
+# subdirectory such as internal/test_helpers/ stay out too.
+INTERNAL_HEADER_FILES = $(filter $(INCLUDE_DIR)/internal/%,$(HEADER_FILES))
+PUBLIC_HEADER_FILES = $(filter-out $(INCLUDE_DIR)/internal/%,$(HEADER_FILES))
 # Every header this project can install, whatever the WITH_* switches say.
 # The uninstall target reads this list and not the filtered one above, because
 # an uninstall run with different switches from the install would otherwise
 # skip the headers its own switches leave out and leave them behind, declaring
 # symbols the library doesn't have.
-ALL_PUBLIC_HEADER_FILES = $(filter-out $(INTERNAL_HEADER_FILES),\
+ALL_PUBLIC_HEADER_FILES = $(filter-out $(INCLUDE_DIR)/internal/%,\
                             $(wildcard $(INCLUDE_DIR)/*.h))
 
 # The man/<module>/*.3 pages document the functions and their companion

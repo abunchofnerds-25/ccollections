@@ -17713,9 +17713,12 @@ TEST(lingering_close, a_close_after_the_response_lingers_on_unread_bytes) {
 TEST(listeners, a_tcp_listener_does_not_turn_on_fast_open) {
   /* TCP Fast Open lets a SYN carry request bytes that a retransmission can
      replay, so the server leaves it off. The test finds the listening socket
-     among the process's descriptors by its port. A listener that set
+     among the process's descriptors by its port, and tells it from an
+     accepted socket on the same port by getpeername(), which fails only on a
+     socket with no peer. SO_ACCEPTCONN would say the same thing more
+     directly, but macOS refuses that option. A listener that set
      TCP_FASTOPEN would report a queue length above 0. */
-#if defined(TCP_FASTOPEN) && defined(SO_ACCEPTCONN)
+#if defined(TCP_FASTOPEN)
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   chttpsvr srv = _sc_server(_LC_PORT + 42, &cfg);
   int found = 0, qlen_seen = -1;
@@ -17726,10 +17729,9 @@ TEST(listeners, a_tcp_listener_does_not_turn_on_fast_open) {
     if (ss.ss_family != AF_INET) continue;
     struct sockaddr_in *sin = (struct sockaddr_in *)&ss;
     if (ntohs(sin->sin_port) != _LC_PORT + 42) continue;
-    int acc = 0;
-    socklen_t al = sizeof(acc);
-    if (getsockopt(fd, SOL_SOCKET, SO_ACCEPTCONN, &acc, &al) != 0 || !acc)
-      continue;
+    struct sockaddr_storage peer;
+    socklen_t pl = sizeof(peer);
+    if (getpeername(fd, (struct sockaddr *)&peer, &pl) == 0) continue;
     int q = -1;
     socklen_t ql = sizeof(q);
     if (getsockopt(fd, IPPROTO_TCP, TCP_FASTOPEN, &q, &ql) == 0) qlen_seen = q;

@@ -137,10 +137,13 @@ run_for_compiler() {
     return 0
   fi
   compilers_used=$((compilers_used + 1))
-  case "$cc" in
-    *gcc*) EXTRA_CFLAGS=$GCC_EXTRA_CFLAGS ;;
-    *) EXTRA_CFLAGS="" ;;
-  esac
+  # Ask the compiler what it is instead of trusting its name: on macOS `gcc`
+  # is Apple clang, which refuses the GCC-only warnings as unknown options.
+  if printf '' | "$cc" -dM -E -x c - 2>/dev/null | grep -q '__clang__'; then
+    EXTRA_CFLAGS=""
+  else
+    EXTRA_CFLAGS=$GCC_EXTRA_CFLAGS
+  fi
   echo "== $cc =="
 
   # Element types with no default comparison procedure must not compile.

@@ -3100,6 +3100,13 @@ void _chttp_set_name_lookup_delay_ms_for_tests(unsigned ms) {
   atomic_store(&g_name_lookup_delay_ms_for_tests, ms);
 }
 
+/* True from _chttp_sweep_fd_wait_arm_for_tests() until a sweep tick catches
+ * the armed hop before its connect (see _sweep_fd_wait_for_tests). While it's
+ * set, a name lookup waits for that tick after its delay, with a bound, so the
+ * test never depends on a 100 ms tick landing inside the delay; on a slow
+ * runner a sleep can end too late for that. */
+static _Atomic bool g_sweep_fd_wait_pending_for_tests = false;
+
 /* White-box count of the name lookups started by all tiers (address
  * literals never count). */
 static _Atomic unsigned long g_name_lookups_for_tests = 0;
@@ -3125,6 +3132,10 @@ static ccol_retval_t _addr_list_resolve_for_target(ccol_memmgmt_procs_t *mp,
                           (long)(delay_ms % 1000) * 1000000L};
     while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
     }
+    struct timespec tick = {0, 1000000};
+    for (int i = 0; i < 5000 && atomic_load(&g_sweep_fd_wait_pending_for_tests);
+         i++)
+      nanosleep(&tick, NULL);
   }
   const chttp_addr_list_t *ov = atomic_load(&g_addr_list_override_for_tests);
   if (ov) {
@@ -8181,6 +8192,7 @@ static void _sweep_fd_wait_for_tests(chttp_async_ctx_t *node) {
       node->state != CHTTP_ASYNC_CONNECTING || atomic_load(&node->race) ||
       !atomic_exchange(&g_sweep_fd_wait_armed_for_tests, false))
     return;
+  atomic_store(&g_sweep_fd_wait_pending_for_tests, false);
   struct timespec ts = {0, 1000000};
   int i = 0;
   for (; i < 2000 && !atomic_load(&node->reg); i++) nanosleep(&ts, NULL);
@@ -8198,12 +8210,14 @@ static void _sweep_fd_wait_for_tests(chttp_async_ctx_t *node) {
 
 void _chttp_sweep_fd_wait_arm_for_tests(void) {
   atomic_store(&g_sweep_fd_wait_held_for_tests, false);
+  atomic_store(&g_sweep_fd_wait_pending_for_tests, true);
   atomic_store(&g_sweep_fd_wait_armed_for_tests, true);
 }
 
 /* Tells whether the sweep did wait as described above, and disarms it. */
 bool _chttp_sweep_fd_wait_held_for_tests(void) {
   atomic_store(&g_sweep_fd_wait_armed_for_tests, false);
+  atomic_store(&g_sweep_fd_wait_pending_for_tests, false);
   return atomic_load(&g_sweep_fd_wait_held_for_tests);
 }
 

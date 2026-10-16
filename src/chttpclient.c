@@ -3107,6 +3107,13 @@ void _chttp_set_name_lookup_delay_ms_for_tests(unsigned ms) {
  * runner a sleep can end too late for that. */
 static _Atomic bool g_sweep_fd_wait_pending_for_tests = false;
 
+/* Defined with the deadline sweep further down. The wait above uses them to
+ * ask for a walk at once instead of waiting for the sweep's next planned
+ * instant, which a slow runner (ThreadSanitizer on macOS arm64 among them)
+ * can push past any fixed bound. */
+static uint64_t _monotonic_now_ns(void);
+static void _client_deadline_note_ns(uint64_t at_ns);
+
 /* White-box count of the name lookups started by all tiers (address
  * literals never count). */
 static _Atomic unsigned long g_name_lookups_for_tests = 0;
@@ -3134,8 +3141,10 @@ static ccol_retval_t _addr_list_resolve_for_target(ccol_memmgmt_procs_t *mp,
     }
     struct timespec tick = {0, 1000000};
     for (int i = 0; i < 5000 && atomic_load(&g_sweep_fd_wait_pending_for_tests);
-         i++)
+         i++) {
+      _client_deadline_note_ns(_monotonic_now_ns());
       nanosleep(&tick, NULL);
+    }
   }
   const chttp_addr_list_t *ov = atomic_load(&g_addr_list_override_for_tests);
   if (ov) {

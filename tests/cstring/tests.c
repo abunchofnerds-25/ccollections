@@ -2791,6 +2791,7 @@ static bool cstr_set_turkish_ctype(const char *dir) {
   for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
     if (setlocale(LC_CTYPE, names[i]) && toupper('i') == 0xDD) return true;
   }
+#if defined(__GLIBC__)
   char cmd[512];
   snprintf(cmd, sizeof(cmd),
            "localedef -i tr_TR -f ISO-8859-9 %s/tr_TR.ISO-8859-9 "
@@ -2800,6 +2801,13 @@ static bool cstr_set_turkish_ctype(const char *dir) {
   if (setenv("LOCPATH", dir, 1) != 0) return false;
   return setlocale(LC_CTYPE, "tr_TR.ISO-8859-9") && toupper('i') == 0xDD &&
          tolower('I') == 0xFD;
+#else
+  /* Only glibc loads a locale from LOCPATH, so a private build is no use
+   * here, and setting the variable would only leave the C library's
+   * environment blocks reachable at exit. */
+  (void)dir;
+  return false;
+#endif
 }
 
 /* The case functions fold ASCII letters only, whatever the locale. Under a
@@ -2831,7 +2839,9 @@ TEST(cstring_case, folds_ascii_letters_only_under_a_turkish_locale) {
     cstring_destroy(t);
   }
   setlocale(LC_CTYPE, "C");
+#if defined(__GLIBC__)
   unsetenv("LOCPATH");
+#endif
   char cmd[128];
   snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
   int rm_status = system(cmd);
@@ -2875,6 +2885,11 @@ TEST(cstring_trim, trims_the_six_ascii_white_space_bytes_only) {
  * running under one afterwards. It writes a small locale definition into
  * dir, builds it with localedef(1) and loads it from there through LOCPATH. */
 static bool cstr_set_wide_space_ctype(const char *dir) {
+#if !defined(__GLIBC__)
+  /* Only glibc loads a locale from LOCPATH; see cstr_set_turkish_ctype. */
+  (void)dir;
+  return false;
+#else
   char path[256];
   snprintf(path, sizeof(path), "%s/def", dir);
   FILE *f = fopen(path, "w");
@@ -2904,6 +2919,7 @@ static bool cstr_set_wide_space_ctype(const char *dir) {
   if (setenv("LOCPATH", dir, 1) != 0) return false;
   return setlocale(LC_CTYPE, "xx_XX.ISO-8859-1") && isspace(0xA0) &&
          isspace(0x85);
+#endif
 }
 
 /* cstring_trim only removes ASCII white space, whatever the locale. Under a
@@ -2936,7 +2952,9 @@ TEST(cstring_trim,
     cstring_destroy(b);
   }
   setlocale(LC_CTYPE, "C");
+#if defined(__GLIBC__)
   unsetenv("LOCPATH");
+#endif
   char cmd[128];
   snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
   int rm_status = system(cmd);

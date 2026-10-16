@@ -192,12 +192,12 @@ Bug reports are always welcome. If you'd like to become a direct contributor, pl
 
 ## Authors
 
-This library started as a hobby project on Danis Ozdemir's PC and grew into what it is over around five years. As the license says, the authors are a bunch of nerds, so it won't surprise anyone that they have a deep respect for [**Dennis Ritchie**](https://en.wikipedia.org/wiki/Dennis_Ritchie) and [**Ken Thompson**](https://en.wikipedia.org/wiki/Ken_Thompson), whose work on C and Unix is the foundation that modern computing is built on. This project is a small tribute to them.
+This library started as a hobby project on Danis Ozdemir's PC and grew into its current form over around five years. As the license says, the authors are a bunch of nerds, so it won't surprise anyone that they have a deep respect for [**Dennis Ritchie**](https://en.wikipedia.org/wiki/Dennis_Ritchie) and [**Ken Thompson**](https://en.wikipedia.org/wiki/Ken_Thompson), whose work on C and Unix is the foundation that modern computing is built on. This project is a small tribute to them.
 
 - [**Danis Ozdemir**](https://www.linkedin.com/in/danis-o-4a0a8841/)
 - [**Fikri Kahraman**](https://www.linkedin.com/in/fikrikahraman/)
 
-In addition to the names listed above, the authors made extensive use of [**Claude**](https://claude.ai) while writing the documentation for this library. Like most software engineers, they don't particularly enjoy writing docs. They also started experimenting with it as a potential contributor, especially for maintenance work after the library's first release.
+In addition to the names listed above, the authors used [**Claude**](https://claude.ai) for generating the documentation for this library. Like most software engineers, they don't particularly enjoy writing docs. They also started experimenting with it as a potential contributor, especially for the maintenance work after the library's first release.
 
 ---
 

@@ -17741,7 +17741,7 @@ TEST(listeners, a_tcp_listener_does_not_turn_on_fast_open) {
   REQUIRE_EQ(found, 1);
   REQUIRE_EQ(qlen_seen, 0);
 #else
-  (void)tau;
+  fprintf(stderr, "SKIP: this system has no TCP_FASTOPEN to check\n");
 #endif
 }
 
@@ -19646,17 +19646,24 @@ static char *_tr_locale_enter(void) {
   const char *old_ctype = setlocale(LC_CTYPE, NULL);
   char *saved_ctype = old_ctype ? strdup(old_ctype) : NULL;
   if (!saved_ctype) return NULL;
+#if defined(__GLIBC__)
+  /* Only glibc reads LOCPATH. Elsewhere setenv() would change nothing about
+   * locale loading and still leave the C library's environment blocks
+   * reachable at exit, which the memtest of musl reports. */
   const char *old_path = getenv("LOCPATH");
   char *saved_path = old_path ? strdup(old_path) : NULL;
   setenv("LOCPATH", "tests_locale", 1);
+#endif
   bool entered = setlocale(LC_CTYPE, "tr_TR.UTF-8") != NULL ||
                  setlocale(LC_CTYPE, "tr_TR.utf8") != NULL;
+#if defined(__GLIBC__)
   if (saved_path) {
     setenv("LOCPATH", saved_path, 1);
     free(saved_path);
   } else {
     unsetenv("LOCPATH");
   }
+#endif
   /* The locale really must fold 'I' differently, or the tests prove nothing.
    */
   if (entered && strncasecmp("I", "i", 1) == 0) {

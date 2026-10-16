@@ -7000,6 +7000,10 @@ static void fd_half_close_fill(ccol_event_loop loop, ccol_event_reg reg,
 TEST(fd_half_close, a_writer_on_a_full_half_closed_socket_does_not_spin) {
   int sv[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+  /* macOS ignores MSG_DONTWAIT on a send and honours only the socket's own
+   * flag, so without O_NONBLOCK both fill loops below block on the full
+   * buffer for ever there. */
+  REQUIRE_EQ(fcntl(sv[0], F_SETFL, fcntl(sv[0], F_GETFL) | O_NONBLOCK), 0);
   static char chunk[16384];
   while (send(sv[0], chunk, sizeof(chunk), MSG_DONTWAIT) > 0) {
   }

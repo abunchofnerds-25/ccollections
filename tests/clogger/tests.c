@@ -285,13 +285,15 @@ static bool _clog_test_read_proc_file(pid_t pid, const char *name, char *buf,
 
 /* Diagnostics only. Dumps everything the host kernel's /proc has to say
  * about pid, and about each thread of pid, after a bounded wait for that
- * process has timed out.
+ * process has timed out, and then the stack of every thread (see
+ * _clog_test_dump_child_stacks). On a system with no /proc only the stacks
+ * are printed. wait_child_bounded calls it before it kills a child.
  *
- * It exists for async.fatal_drains_queue_before_writing_and_terminating (see
- * that test's comment). The cause of that test's rare CI-only hang isn't
- * confirmed: the cthreadcomm fork() tests carry the qemu-user fd_trans_lock
- * signature, but this hang doesn't reproduce in 15 direct attempts against
- * the same qemu-user version.
+ * async.fatal_drains_queue_before_writing_and_terminating also calls it
+ * directly (see that test's comment). The cause of that test's rare CI-only
+ * hang isn't confirmed: the cthreadcomm fork() tests carry the qemu-user
+ * fd_trans_lock signature, but this hang doesn't reproduce in 15 direct
+ * attempts against the same qemu-user version.
  *
  * If the hang happens again, this dump is what answers it. Look for State:
  * S together with a real /proc/<pid>/syscall entry and a broad SigBlk mask
@@ -316,12 +318,21 @@ static bool _clog_test_read_proc_file(pid_t pid, const char *name, char *buf,
  *
  * The function reads status, wchan, syscall and stat one at a time, so one
  * file that's missing or unreadable doesn't suppress the others. */
+static void _clog_test_dump_child_stacks(pid_t pid);
+
 static void _clog_test_dump_stuck_child_diagnostics(pid_t pid) {
   char buf[4096];
   fprintf(stderr,
           "[STUCK_CHILD_DIAG] parent pid=%d timed out waiting for child "
-          "pid=%d; dumping /proc diagnostics\n",
+          "pid=%d; dumping diagnostics\n",
           (int)getpid(), (int)pid);
+  char proc_dir[32];
+  snprintf(proc_dir, sizeof(proc_dir), "/proc/%d", (int)pid);
+  if (access(proc_dir, F_OK) != 0) {
+    fprintf(stderr, "[STUCK_CHILD_DIAG] no %s on this system\n", proc_dir);
+    _clog_test_dump_child_stacks(pid);
+    return;
+  }
 
   static const char *const files[] = {"status", "wchan", "syscall", "stat"};
   for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
@@ -353,6 +364,42 @@ static void _clog_test_dump_stuck_child_diagnostics(pid_t pid) {
     }
     closedir(td);
   }
+  fflush(stderr);
+  _clog_test_dump_child_stacks(pid);
+}
+
+/* Diagnostics only. Prints the stack of every thread of pid with whatever
+ * sampler the system has: sample(1) on macOS, which ships with the OS and
+ * needs no debugger entitlement for a process of the same user, gdb on
+ * Linux, lldb otherwise, and procstat -kk for the kernel side on FreeBSD.
+ * It tells a child that is stuck (the same frames in a lock or a wait) from
+ * one that is only slow, which no exit status can. Every sampler runs under
+ * timeout(1) (gtimeout from coreutils on macOS) where one is installed, so
+ * an attach that hangs can't hang the test binary. A sampler that is
+ * missing or refused prints its own error, and the test goes on to kill the
+ * child as before. The output goes to stderr with the rest of the dump. */
+static void _clog_test_dump_child_stacks(pid_t pid) {
+  char cmd[1024];
+  snprintf(cmd, sizeof(cmd),
+           "{ p=%d; t=''; "
+           "if command -v timeout >/dev/null 2>&1; then t='timeout 60'; "
+           "elif command -v gtimeout >/dev/null 2>&1; then t='gtimeout 60'; "
+           "fi; "
+           "if command -v sample >/dev/null 2>&1; then $t sample $p 1; "
+           "elif command -v gdb >/dev/null 2>&1; then "
+           "$t gdb -p $p -batch -nx -ex 'thread apply all bt'; "
+           "elif command -v lldb >/dev/null 2>&1; then "
+           "$t lldb --batch -p $p -o 'thread backtrace all'; "
+           "else echo 'no stack sampler (sample, gdb or lldb) found'; fi; "
+           "if command -v procstat >/dev/null 2>&1; then procstat -kk $p; fi; "
+           "} 1>&2 2>&1",
+           (int)pid);
+  fprintf(stderr, "[STUCK_CHILD_DIAG] thread stacks of pid=%d:\n", (int)pid);
+  fflush(stdout);
+  fflush(stderr);
+  int rc = system(cmd);
+  fprintf(stderr, "[STUCK_CHILD_DIAG] stack sampler finished (status %d)\n",
+          rc);
   fflush(stderr);
 }
 
@@ -12423,12 +12470,15 @@ static long collect_seq_records(const char *dir, int threads, int per,
 }
 
 /* Waits for the child pid for at most bound_ms. Kills a child that doesn't
- * finish, and returns false in that case. */
+ * finish, and returns false in that case. Before the kill it dumps what the
+ * child is doing, thread stacks included, so a CI log shows whether the
+ * child was stuck or only slow. */
 static bool wait_child_bounded(pid_t pid, int bound_ms, int *status) {
   for (int waited = 0; waited < bound_ms; waited += 10) {
     if (waitpid(pid, status, WNOHANG) == pid) return true;
     usleep(10000);
   }
+  _clog_test_dump_stuck_child_diagnostics(pid);
   kill(pid, SIGKILL);
   waitpid(pid, status, 0);
   return false;

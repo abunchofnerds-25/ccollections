@@ -18084,12 +18084,13 @@ static char *cyaml_test_alias_doc(size_t n, bool as_map, size_t m,
   char *anchored = as_map ? cyaml_test_nest("&x ", "{k: ", n, "1", "}", "")
                           : cyaml_test_nest("&x ", "[", n, "", "]", "");
   if (!anchored) return NULL;
-  char *head = (char *)malloc(strlen(anchored) + 16);
+  size_t head_size = strlen(anchored) + 16;
+  char *head = (char *)malloc(head_size);
   if (!head) {
     free(anchored);
     return NULL;
   }
-  sprintf(head, "a: %s\nb: ", anchored);
+  snprintf(head, head_size, "a: %s\nb: ", anchored);
   free(anchored);
   char *doc = cyaml_test_nest(head, "[", m, use, "]", "\n");
   free(head);

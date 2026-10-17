@@ -1,37 +1,38 @@
 #!/bin/sh
-# Every installed header must compile ON ITS OWN, under a strict -std=c11 with
-# -pedantic-errors, with -Wall -Wextra -Werror, under both compilers.
+# Every installed header has to compile ON ITS OWN, under a strict -std=c11
+# with -pedantic-errors and -Wall -Wextra -Werror, with both compilers.
 #
-# "On its own" catches a header that only works because some other header came
-# first. "Strict c11" catches a header that expands a GNU extension at file
-# scope: the macros of this library use statement expressions and __typeof__,
-# so code that USES them needs -std=gnu11, but a caller who merely INCLUDES a
-# header must not be forced into that mode. -pedantic-errors turns every
-# construct that ISO C11 does not allow, such as `, ##__VA_ARGS__` or an empty
-# translation unit, into an error, so that a header stays includable from a
-# project that builds with -pedantic.
+# Compiling it on its own catches a header that only works because some other
+# header came first. Strict c11 catches a header that expands a GNU extension
+# at file scope: our macros use statement expressions and __typeof__, so code
+# that USES them needs -std=gnu11, but a caller who just INCLUDES a header
+# mustn't be forced into that mode. -pedantic-errors makes every construct ISO
+# C11 doesn't allow (`, ##__VA_ARGS__`, an empty translation unit, ...) an
+# error, so a header stays includable from a project built with -pedantic, and
+# -Wredundant-decls catches a function that two installed headers both
+# declare, which breaks a caller building with that warning and -Werror.
 #
-# The script compiles each header in two layouts.
+# Each header is compiled in two layouts.
 #
-# The source tree: -Iinclude and #include <NAME.h>, the way the library and
-# its test suites include the headers.
+# The source tree: -Iinclude and #include <NAME.h>, which is how the library
+# and its test suites include the headers.
 #
-# The installed layout: the headers in STAGE/include/ccollections/, as
-# `make install` lays them out, reached the way an application reaches them:
-# -ISTAGE/include and #include <ccollections/NAME.h>. Beside it sits an
-# application directory that holds a header of its own for every public name
+# The installed layout: the headers in STAGE/include/ccollections/ as
+# `make install` lays them out, reached the way an application reaches them,
+# with -ISTAGE/include and #include <ccollections/NAME.h>. Next to it there is
+# an application directory with a header of its own for every public name
 # (common.h, cstring.h, ...). Each probe compiles twice, with that directory
-# first and last on the command line, and in each order the probe must get the
-# library copy through
-# <ccollections/NAME.h> and its own copy through <NAME.h>:
-#   - an application header that a library header reaches fails with #error,
-#     because only the probe itself sets the macro that the application
+# first and then last on the command line, and in both orders the probe has to
+# get the library copy through <ccollections/NAME.h> and its own copy through
+# <NAME.h>:
+#   - if a library header reaches an application header, that one fails with
+#     #error, because only the probe itself sets the macro the application
 #     headers require;
-#   - a library header that the probe's own <NAME.h> reaches instead of the
-#     application copy leaves the marker of the application copy undefined,
-#     and the probe fails with #error.
-# This pins the property that the install relies on: an application may have
-# its own common.h, and neither side ever gets the other's.
+#   - if the probe's own <NAME.h> reaches a library header instead of the
+#     application copy, the application copy's marker stays undefined and the
+#     probe fails with #error.
+# That's the property the install depends on: an application can have its own
+# common.h and neither side ever picks up the other's.
 #
 # Usage: check_public_headers_standalone.sh
 #
@@ -42,7 +43,7 @@ INCLUDE_DIR=include
 TMPDIR_=$(mktemp -d) || exit 1
 trap 'rm -rf "$TMPDIR_"' EXIT
 
-STRICT="-std=c11 -pedantic-errors -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64"
+STRICT="-std=c11 -pedantic-errors -Wall -Wextra -Wredundant-decls -Werror -D_FILE_OFFSET_BITS=64"
 
 fail=0
 checked=0
@@ -84,10 +85,10 @@ compile() {
 	checked=$((checked + 1))
 }
 
-# installed_probe <output.c> <header names...>: a translation unit that
-# includes the library headers from the installed layout, then every
-# application header of a public name, and checks that each one of those is
-# the application copy.
+# installed_probe <output.c> <header names...>: writes a translation unit that
+# includes the library headers from the installed layout, then the application
+# header for every public name, and checks that each of those really is the
+# application copy.
 installed_probe() {
 	_out="$1"
 	shift
@@ -125,7 +126,7 @@ for cc in ${CCOL_HEADER_CHECK_CCS:-gcc clang}; do
 			"$TMPDIR_/inst.c" -I"$STAGE" -I"$APP"
 	done
 
-	# All of them together, in one translation unit, must also work.
+	# All of them together in one translation unit have to work too.
 	: > "$TMPDIR_/all.c"
 	for hdr in $headers; do
 		echo "#include <$(basename "$hdr")>" >> "$TMPDIR_/all.c"
@@ -141,8 +142,8 @@ for cc in ${CCOL_HEADER_CHECK_CCS:-gcc clang}; do
 		"$TMPDIR_/inst_all.c" -I"$STAGE" -I"$APP"
 done
 
-# A run that compiled nothing must not report success. Without this, a missing
-# compiler or an empty glob passes in silence.
+# A run that compiled nothing must not report success, otherwise a missing
+# compiler or an empty glob would pass silently.
 if [ "$checked" -eq 0 ]; then
 	echo "check_public_headers_standalone: examined no header at all; refusing" \
 		"to report success." >&2

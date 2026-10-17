@@ -14,31 +14,31 @@ ccol_retval_t chttpclient_do_pooled(chttpcli cli,
 .SH DESCRIPTION
 .nf
 This is a thin wrapper over chttpclient_do_async that submits the
-request to the shared engine and blocks until the request finishes. It
-gives back the same ccol_retval_t and uses the same resp_out call shape
-as chttpclient_do, but the connect, the write and the read run on the
-reactor threads of the engine instead of on the thread of the caller.
-Many callers across many chttpcli handles share one small reactor
-thread pool of a fixed size, whereas with chttpclient_do each caller
-blocks its own OS thread for the whole request.
+request to the shared engine and blocks until it finishes. It returns
+the same ccol_retval_t and takes resp_out the same way as
+chttpclient_do, but the connect, the write and the read run on the
+engine's reactor threads and not on the caller's thread. Any number of
+callers on any number of chttpcli handles share one small, fixed-size
+reactor thread pool, while with chttpclient_do every caller ties up its
+own OS thread for the whole request.
 .fi
 .SH PARAMETERS
 .nf
 cli      The client handle. It must not be CHTTPCLI_INVALID.
 req      The request to run. It must not be NULL.
-resp_out It must not be NULL. The function sets it to NULL at once,
-         and if the call succeeds, it then gets the response: the
-         same *resp_out contract as in chttpclient_do.
+resp_out It must not be NULL. The function sets it to NULL first and
+         stores the response there if the call succeeds, with the
+         same *resp_out contract as chttpclient_do.
 .fi
 .SH RETURN VALUE
 .nf
-The same result codes as chttpclient_do. An allocation that fails,
+The same result codes as chttpclient_do. A failed allocation, whether
 before the request reaches the engine or while the engine runs it,
-gives ccol_not_enough_memory. An engine that fails to start gives the
-code of that failure, which is ccol_not_enough_memory or
+gives ccol_not_enough_memory. If the engine fails to start, you get the
+code of that failure, ccol_not_enough_memory or
 ccol_unexpected_failure. A bad URL, a TLS failure, a connection
-failure, a transfer error, a timeout and too many redirects each give
-the same specific code that chttpclient_do uses.
+failure, a transfer error, a timeout and too many redirects each return
+the same specific code that chttpclient_do uses for them.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_do (3),

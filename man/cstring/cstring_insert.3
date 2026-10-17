@@ -11,10 +11,10 @@ ccol_retval_t cstring_insert(cstr s, size_t pos, const char *str);
 .fi
 .SH DESCRIPTION
 .nf
-Inserts the null-terminated C string str at position pos within s.
-Characters at positions >= pos are shifted right to make room. pos == 0
-is equivalent to cstring_prepend(); pos == length is equivalent to
-cstring_append().
+This function inserts the null-terminated C string str at position pos of
+s, and the characters at positions >= pos move right to make room. A pos
+of 0 does the same as cstring_prepend(), and a pos equal to the length
+does the same as cstring_append().
 .fi
 .SH PARAMETERS
 .nf
@@ -24,10 +24,10 @@ str   C string to insert (must not be NULL)
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success              - Insert succeeded
+ccol_success              - The insert succeeded
 ccol_invalid_args         - str is NULL, or pos > length
-ccol_container_full       - Result would overflow size_t
-ccol_not_enough_memory    - Reallocation failed
+ccol_container_full       - The result would overflow a size_t
+ccol_not_enough_memory    - The reallocation failed
 .fi
 .SH NOTES
 .nf

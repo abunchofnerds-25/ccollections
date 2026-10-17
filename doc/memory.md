@@ -1,12 +1,12 @@
 # Memory management
 
 Every allocation that c_collections makes goes through a table of four
-functions, and you can replace those functions with your own. This guide
-shows how to plug in your own allocator, what that allocator must promise
-and how long it must stay available. It ends with two realistic allocators:
-a per-request arena and a memory pool.
+functions, and you can replace them with your own. This guide shows how you
+plug in your own allocator, what it has to promise and how long it has to
+stay around, and it ends with two realistic allocators, a per-request arena
+and a memory pool.
 
-You do not need this guide to use the library. If you pass nothing (or
+You don't need any of this to use the library. If you pass nothing (or
 `NULL`), each module uses the standard `malloc`, `calloc`, `realloc` and
 `free`.
 
@@ -21,27 +21,26 @@ typedef struct ccol_memmgmt_procs_t {
 } ccol_memmgmt_procs_t;
 ```
 
-Every module that allocates memory accepts a pointer to such a table when it
+Every module that allocates memory takes a pointer to such a table when it
 creates an object:
 
 | Module | Form that takes a table |
 |---|---|
 | `cvector`, `chashmap`, `cbstmap`, `cstring` | `cvec_construct_mp`, `chmap_construct_mp`, `cbmap_construct_mp`, `cstr_construct_mp` (and the related `_init_mp`, `_scoped` and `_full` forms) |
 | `cjson`, `cyaml` | `cjson_parse_mp`, `cjson_create_*_mp`, and the same forms for `cyaml` |
-| `cthreadcomm` | `ccol_circular_queue_create_with_mprocs` and the other `_with_mprocs` constructors |
+| `cthreadcomm` | `ccol_circular_queue_create_mp` and the other `_create_mp` constructors |
 | `cmempool` | an argument of `ccol_mempool_create` and `ccol_r_mempool_create` |
-| `clrucache`, `clogger`, `cthreadpool`, `chttpclient`, `chttpserver` | `clrucache_create_full`, `clog_open_file_mp`, `ccol_create_cthread_pool_mp`, `ccol_create_chttpclient_mp`, `ccol_create_chttpsvr_mp` |
+| `clrucache`, `clogger`, `cthreadpool`, `chttpclient`, `chttpserver` | `clrucache_create_full`, `clog_create_from_file_mp`, `ctpool_create_mp`, `chttpclient_create_mp`, `chttpsvr_create_mp` |
 
-`NULL` always means the standard functions, and a form without `_mp` is the
-same call with `NULL`.
+A form without `_mp` is the same call with `NULL`.
 
-An object frees all of its memory through the table that it received at
-creation, which is why destroy calls never take an allocator argument.
+An object frees all its memory through the table it got when it was
+created, and that's why destroy calls never take an allocator argument.
 
 ## A first custom allocator
 
-This allocator forwards each call to the standard functions and counts the
-calls, which lets you check that your program gives back all the memory it
+This allocator passes each call on to the standard functions and counts
+the calls, so you can check that your program gives back all the memory it
 takes:
 
 ```c
@@ -106,70 +105,79 @@ while alive: 5 blocks, 13 calls
 after destroy: 0 blocks
 ```
 
-(The exact counts can change between versions of the library, but the block
-count always returns to zero.)
+(The exact counts can change between versions of the library, but the
+block count always goes back to zero.)
 
 ## What your functions must promise
 
-**Behave exactly like the standard functions.** All four pointers must be
-non-NULL, and these cases must work as they do in the C library:
+Your functions have to behave exactly like the standard ones. All four
+pointers must be non-NULL, and `malloc(0)`, `realloc(NULL, n)`, `free(NULL)`
+and a failed allocation (which gives NULL) must work the way they do in the
+C library.
 
-- `malloc(0)`
-- `realloc(NULL, n)`
-- `free(NULL)`
-- a failed allocation, which gives NULL
-
-**This includes the alignment.** Every block from `malloc`, `calloc` and
-`realloc` must be aligned for any object type, that is, to
+That covers the alignment too. Every block from `malloc`, `calloc` and
+`realloc` must be aligned for any object type, which means
 `_Alignof(max_align_t)` (16 bytes on x86-64 and aarch64), because the
-containers place entries that need this alignment at the start of a block.
-An arena or a pool that hands out smaller pieces must round each piece up.
+containers put entries that need this alignment at the start of a block. An
+arena or a pool that hands out smaller pieces has to round each piece up.
 
-**Be thread-safe when the object is thread-safe.** A queue, a thread pool, a
-logger or a cache calls your functions from whichever thread does the work,
-so give such an object only a table whose functions are safe for concurrent
-calls.
+When the object is thread-safe, your functions have to be as well. A queue,
+a thread pool, a logger or a cache calls your functions from whatever
+thread does the work, so only give such an object a table whose functions
+are safe for concurrent calls.
 
 ## How long the allocator must live
 
-For every module except `cmempool`, the last call to your functions happens
-before the object's destroy returns. This means that:
+For every module except `cmempool`, the last call to your functions
+happens before the object's destroy returns. So the functions have to keep
+working until you have destroyed every object that uses them, and the table
+itself (the `ccol_memmgmt_procs_t` struct) has to stay valid for the same
+time unless the module keeps its own copy. `clrucache`, `cjson` and `cyaml`
+do keep a copy, so with them you can release the struct as soon as the call
+that creates the object returns. A `static` table like the ones in these
+examples is the easy way out.
 
-- The **functions** must keep working until you have destroyed every object
-  that uses them.
-- The **table itself** (the `ccol_memmgmt_procs_t` struct) must stay valid
-  for that same time, unless the module keeps its own copy. `clrucache`,
-  `cjson` and `cyaml` do keep a copy, so for them you can release the struct
-  as soon as the call that creates the object returns. A `static` table, as
-  in the examples here, is the easy solution.
+A `cmempool` pool that threads share is an exception. Such a pool keeps a
+small cache for each thread that uses it, and when you destroy the pool it
+marks those caches as dead, but it can't free them while their threads can
+still use them. The library frees each cache later instead, when its thread
+next needs a cache for a different pool, when that thread exits, or when
+the process exits. A thread that does none of these can keep a dead cache
+for the whole life of the process, which means the pool's allocator can run
+after `ccol_mempool_destroy` returns, and even after `main` returns. That
+only matters for an allocator that stops working at a known point, like an
+arena that you free at the end of `main`. For such a pool, either give it an
+allocator that lives as long as the process, or create it with
+`single_threaded` set so it keeps no per-thread caches, or join the threads
+that used it.
 
-**The exception: a `cmempool` pool that threads share.** Such a pool keeps a
-small cache for each thread that uses it. When you destroy the pool, it
-marks these caches as dead, but it cannot free them while their threads can
-use them, so the library frees each cache later:
+The engine of the HTTP client is the second exception. The client runs
+Tiers 2 and 3 on one engine for the whole process, and
+`chttpcli_set_engine_mem_mgmt_procs()` gives that engine your allocator.
+The engine stops on a thread of its own after the last client that used
+those tiers lets go of it, so it can call your functions after
+`chttpclient_destroy()` returns. Keep them working until
+`chttpcli_engine_wait()` returns after you destroy the last client (that
+call blocks until the engine has stopped). The default client of
+`chttp_default_client()` can hold the engine through its idle connections
+until the library's exit handler destroys it, so a process that uses the
+default client for Tiers 2 and 3 must keep the engine allocator working
+until it exits.
 
-- when its thread next needs a cache for a different pool
-- when that thread exits
-- when the process exits
-
-A thread that does none of these things can keep a dead cache for the whole
-life of the process. As a result, the pool's allocator can run after
-`ccol_mempool_destroy` returns, and even after `main` returns. This matters
-only for an allocator that stops working at a known point, such as an arena
-that you free at the end of `main`. For such a pool, do one of the
-following:
-
-- Give the pool an allocator that lives as long as the process.
-- Create the pool with `single_threaded` set, so that it keeps no per-thread
-  caches.
-- Join the threads that used the pool.
+The engine logger of `chttpcli_set_engine_logger()` and the allocator of
+the logger you give it follow the same rule, because the engine writes
+through that logger while it runs. Once `chttpcli_engine_wait()` has
+returned, `chttpcli_set_engine_logger(CLOG_INVALID)` releases it and the
+engine makes no more calls through it. While an engine runs, that release is
+refused with `ccol_not_permitted`.
 
 ## A per-request arena
 
 An arena turns each allocation into a pointer increment and frees all the
-memory of a batch of work in one step. This loop works like a simple server:
-it gives each "request" a map that lives in the arena, destroys the map, and
-then resets the arena:
+memory of a batch of work in one step, so it's a good fit whenever a group
+of objects dies together, like the work of one request. This loop works like
+a simple server. It gives each "request" a map that lives in the arena,
+destroys the map and then resets the arena:
 
 ```c
 #include <stddef.h>
@@ -180,9 +188,8 @@ then resets the arena:
 #include <ccollections/chashmap.h>
 
 /* A bump arena: an allocation is a pointer increment, free does nothing,
- * and one step releases the whole arena. Each block has a header that holds
- * its size (for realloc). The header is exactly one max_align_t wide, so
- * every block that the arena returns is aligned for any object type. */
+ * and one step releases the whole arena. Each block has a header, exactly
+ * one max_align_t wide, that holds its size (for realloc). */
 typedef union { max_align_t align; size_t size; } arena_hdr;
 
 static struct { char *base; size_t cap, used; } arena;
@@ -251,26 +258,23 @@ int main(void) {
 }
 ```
 
-Notes on this design:
+The header in front of each block is one `max_align_t` wide, so every
+block is aligned for any object type, and without it the containers would
+read memory that isn't correctly aligned. `free` does nothing because the
+memory comes back when you reset the arena, so you must destroy every
+container that uses the arena *before* you reset or release it.
 
-- The header in front of each block is one `max_align_t` wide, so every
-  block is aligned for any object type. Without this header, the containers
-  would read memory that is not correctly aligned.
-- `free` does nothing; the memory comes back when you reset the arena.
-  Destroy every container that uses the arena **before** you reset or
-  release it.
-- The table has no context argument, so the arena is a global variable. If
-  many threads do this at the same time, use one arena per thread (with
-  `_Thread_local`).
-- Do not use an arena of this kind for a `cmempool` pool that threads share,
-  for the reason given in the section above.
+The table has no context argument, so the arena has to be a global
+variable. If many threads do this at the same time, give each thread its own
+arena (with `_Thread_local`). And don't use an arena like this for a
+`cmempool` pool that threads share, for the reason in the section above.
 
 ## Driving a container from a memory pool
 
-`cmempool` itself can serve as the allocator of another container. A ranged
-pool has tiers whose sizes are powers of two and picks the right tier for
-each request, which makes it a good match for an ordered map, which stores
-one small node per entry:
+`cmempool` can be the allocator of another container too. A ranged pool
+has tiers whose sizes are powers of two and picks the right tier for each
+request, so it fits an ordered map well, since that stores one small node
+per entry:
 
 ```c
 #include <stdint.h>
@@ -321,39 +325,36 @@ int main(void) {
 }
 ```
 
-Points to watch:
-
-- A ranged pool supplies only sizes up to its largest tier (here 4096
-  bytes). A container whose arrays grow beyond that size, such as a large
-  hash map or a long vector, needs a larger top tier or a different
-  allocator.
-- The fallback policy decides what happens when a tier runs out of entries.
-  With `ccol_fallback_at_last_exhaustion`, the pool borrows from the heap
-  only when all tiers are empty, and it frees such blocks just like any
-  other entry.
-- Destroy the container first and the pool last.
+A ranged pool only gives out sizes up to its largest tier (4096 bytes
+here), so a container whose arrays grow past that, like a large hash map or
+a long vector, needs a bigger top tier or a different allocator. The
+fallback policy decides what happens when a tier runs out of entries. With
+`ccol_fallback_at_last_exhaustion` the pool only borrows from the heap when
+all tiers are empty, and it frees such blocks just like any other entry.
+Destroy the container first and the pool last.
 
 The [cmempool guide](cmempool.md) explains how to choose tier sizes and
 fallback policies.
 
 ## Pitfalls
 
-- **Misaligned blocks.** A home-made allocator that returns blocks with only
-  8-byte alignment on a 64-bit machine causes undefined behavior. Round to
-  `_Alignof(max_align_t)`.
-- **Releasing the allocator too early.** Destroy every object that uses it
-  first, and remember that shared `cmempool` pools can call it later.
-- **Mixed allocators.** When a container hands you memory to free, such as a
-  serialized string, release it with the matching function of the module
-  (for example `cjson_serialize_free_mp`), so that the memory goes back to
-  the right allocator.
-- **Functions that are not thread-safe behind a thread-safe object.** A
-  queue, a thread pool, a logger or an HTTP object calls your functions from
-  many threads, so they must be safe for concurrent calls.
-- **An allocator that calls into its own pool.** A `cmempool` pool can call
-  its allocator while it holds its own lock, so that allocator must never
-  allocate from the same pool or free into it (for a ranged pool, this
-  includes every tier). Doing so causes a deadlock or a corrupted pool.
+A home-made allocator that returns blocks with only 8-byte alignment on a
+64-bit machine causes undefined behavior, so round to
+`_Alignof(max_align_t)`.
+
+Don't release the allocator too early. Destroy every object that uses it
+first, and keep in mind that shared `cmempool` pools can call it later, and
+so can the engine of the HTTP client until `chttpcli_engine_wait()`
+returns.
+
+When a container gives you memory to free, a serialized string for example,
+release it with the matching function of the module (such as
+`cjson_serialize_free_mp`) so the memory goes back to the right allocator.
+
+A `cmempool` pool can call its allocator while it holds its own lock, so
+that allocator must never allocate from the same pool or free into it (for a
+ranged pool that means any of its tiers). If it does, you get a deadlock or
+a corrupted pool.
 
 ## Reference
 
@@ -365,9 +366,11 @@ fallback policies.
 [cstr_construct_mp(3)](../man/cstring/cstr_construct_mp.3),
 [cjson_parse_mp(3)](../man/cjson/cjson_parse_mp.3),
 [cjson_serialize_free_mp(3)](../man/cjson/cjson_serialize_free_mp.3),
-[ccol_circular_queue_create_with_mprocs(3)](../man/cthreadcomm/ccol_circular_queue_create_with_mprocs.3),
+[ccol_circular_queue_create_mp(3)](../man/cthreadcomm/ccol_circular_queue_create_mp.3),
 [clrucache_create_full(3)](../man/clrucache/clrucache_create_full.3),
-[ccol_create_cthread_pool_mp(3)](../man/cthreadpool/ccol_create_cthread_pool_mp.3),
+[ctpool_create_mp(3)](../man/cthreadpool/ctpool_create_mp.3),
+[chttpcli_set_engine_mem_mgmt_procs(3)](../man/chttpclient/chttpcli_set_engine_mem_mgmt_procs.3),
+[chttpcli_engine_wait(3)](../man/chttpclient/chttpcli_engine_wait.3),
 [ccol_mempool_create(3)](../man/cmempool/ccol_mempool_create.3),
 [ccol_mempool_destroy(3)](../man/cmempool/ccol_mempool_destroy.3),
 [ccol_r_mempool_create(3)](../man/cmempool/ccol_r_mempool_create.3),

@@ -11,21 +11,21 @@ ccol_retval_t cjson_dictionary_remove(cjson obj, const char *key);
 .fi
 .SH DESCRIPTION
 .nf
-Removes the entry identified by key from the object node obj and
-recursively frees the associated value subtree.  The other members
-keep their order.
+Removes the member with the given key from the object node obj and
+frees its value together with everything below it.  The remaining
+members keep their order.
 
 A walk with cjson_dictionary_first(3) and cjson_dictionary_next(3)
 may remove the member that its cursor stands on, for example with
-cjson_dictionary_remove(obj, it.key), and then continue.  Removing the
-member after it, which the cursor reads next, invalidates the cursor;
-removing any other member does not.
+cjson_dictionary_remove(obj, it.key), and then go on.  Removing the
+member after it, the one the cursor reads next, invalidates the
+cursor, but removing any other member doesn't.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success        - entry removed and freed.
-ccol_invalid_args   - obj is NULL or not CJSON_DICTIONARY.
-ccol_key_not_found  - key does not exist in the object.
+ccol_success        - the member was removed and freed.
+ccol_invalid_args   - obj or key is NULL, or obj is not a CJSON_DICTIONARY.
+ccol_key_not_found  - the object has no such key.
 .fi
 .SH "SEE ALSO"
 .BR cjson_dictionary_set (3),

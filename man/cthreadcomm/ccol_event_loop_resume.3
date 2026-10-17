@@ -11,31 +11,27 @@ ccol_retval_t ccol_event_loop_resume(ccol_event_loop loop, ccol_event_reg reg);
 .fi
 .SH DESCRIPTION
 .nf
-This function works on an fd only: a call on a registration that comes
-from a queue selectable or a ccol_channel selectable returns
-ccol_invalid_args, the same restriction that ccol_event_loop_modify
-has.
+Works only on fd registrations. A registration made from a queue or a
+ccol_channel selectable gives ccol_invalid_args, the same restriction
+that ccol_event_loop_modify has.
 
-This function recomputes the combined epoll interest mask of the fd so
-that the mask includes reg again. This is an ordinary EPOLL_CTL_MOD
-call when the fd is in the epoll interest set of the kernel, which is
-the case when the other direction on the same fd is live and not
-paused, and an EPOLL_CTL_ADD call when ccol_event_loop_pause removed
-the fd from that set completely because every direction was paused.
-The direction of reg, its generation and what it adds to
-ccol_event_loop_reg_count all stay as they were before the pause: this
-call only reverses what ccol_event_loop_pause did to the interest
-mask.
+Recomputes the fd's combined epoll interest mask with reg included
+again. That is an ordinary EPOLL_CTL_MOD call when the fd is in
+the kernel's epoll interest set, which happens when the other direction
+on the fd is live and not paused, and an EPOLL_CTL_ADD call when
+ccol_event_loop_pause took the fd out of the set because every
+direction was paused. reg's direction, its generation and its share of
+ccol_event_loop_reg_count stay as they were before the pause; the call
+only undoes what ccol_event_loop_pause did to the interest mask.
 
-The call also arms again a reg that the loop stopped watching because
-an event reached it that none of its handlers can take (see
+It also re-arms a reg that the loop stopped watching because an event
+reached it that none of its handlers can take (see
 ccol_event_loop_add(3)).
 
-A resume of a reg that is neither paused nor stopped in that way (a
-reg that nothing ever paused, or one that something already resumed)
-succeeds and does nothing. This mirrors the "already in the state that
-you ask for" behaviour of ccol_event_loop_modify; it is deliberate and
-not an error.
+Resuming a reg that is neither paused nor stopped that way (one that
+was never paused, or was already resumed) succeeds and does nothing, on
+purpose. It matches how ccol_event_loop_modify treats a request for the
+state that a registration is already in.
 .fi
 .SH PARAMETERS
 .nf
@@ -44,23 +40,23 @@ reg   Registration to resume.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success        The function resumed reg, or reg was not paused.
-ccol_invalid_args   loop is CCOL_EVENT_LOOP_INVALID, or a handle that
-                    is stale, or one that something already destroyed;
-                    or reg is CCOL_EVENT_REG_INVALID, or it fails to
+ccol_success        reg is resumed, or it was not paused.
+ccol_invalid_args   loop is CCOL_EVENT_LOOP_INVALID, a stale handle,
+                    or a handle that has already been destroyed;
+                    or reg is CCOL_EVENT_REG_INVALID or fails to
                     resolve for another reason; or reg is a
-                    registration for a queue or for a ccol_channel. A
-                    reg that fails to resolve covers a removal at the
-                    same time, for example when something closes the
-                    connection while the caller believes that it owns
-                    a paused registration to resume.
+                    registration for a queue or a ccol_channel. A reg
+                    that fails to resolve includes one removed at the
+                    same time, for example when the connection is
+                    closed while the caller thinks it still owns a
+                    paused registration to resume.
 .fi
 .SH THREAD SAFETY
 .nf
-Safe to call at the same time as ccol_event_loop_remove(), and from
-inside a callback that runs on one of the reactor threads. A caller
-commonly calls it from a thread other than the one that paused reg;
-see the EXAMPLES section of ccol_event_loop_pause(3).
+Safe to call at the same time as ccol_event_loop_remove(), and from a
+callback running on one of the reactor threads. It is common to call it
+from a different thread than the one that paused reg, as in the
+EXAMPLES section of ccol_event_loop_pause(3).
 .fi
 .SH "SEE ALSO"
 .BR ccol_event_loop_pause (3),

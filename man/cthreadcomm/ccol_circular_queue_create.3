@@ -11,42 +11,40 @@ ccol_circular_queue_create(max_size, err_str);
 .fi
 .SH DESCRIPTION
 .nf
-This macro creates a queue with a fixed size, built on a circular
-buffer. A send blocks while the queue is full and waits for free space.
-The macro uses the standard malloc and free for memory management.
+Creates a fixed-size queue on top of a circular buffer. A send on a
+full queue blocks until there is free space. Memory comes from the
+standard malloc and free.
 
-This macro is the short form of ccol_circular_queue_create_with_mprocs()
-with NULL memory management procedures.
+It is the same as calling ccol_circular_queue_create_mp() with NULL
+memory management procedures.
 .fi
 .SH PARAMETERS
 .nf
-max_size  Maximum number of messages that the queue can hold. The value
-          must be from 1 to SIZE_MAX / sizeof(c_message_t), and the
-          macro refuses a larger value: one array of
-          max_size * sizeof(c_message_t) bytes holds the queue, and a
-          larger value makes that computation overflow.
+max_size  Maximum number of messages that the queue can hold, from 1
+          to SIZE_MAX / sizeof(c_message_t). A larger value is
+          refused, because the queue lives in one array of
+          max_size * sizeof(c_message_t) bytes and that product would
+          overflow.
 err_str   Optional pointer that gets an error string on failure
 .fi
 .SH RETURN VALUE
 .nf
-On success, the macro gives a pointer to the new circular queue.
-On failure, it gives NULL.
+A pointer to the new circular queue, or NULL on failure.
 .fi
 .SH NOTES
 .nf
-All operations on this queue are thread-safe.
-You must destroy the queue with ccol_circular_queue_destroy() after you
-finish with it.
-There are two supported ways to combine fork(2) with this queue: call
-fork(2) before you create the queue, or create the queue, then call
-fork(2) and immediately call exec(3). One pattern is not supported: a
-program that continues to run with no exec(3) in between while a queue
-from before the fork is live. On top of that rule, the library adds a
-defense in depth: the child never inherits a lock in the locked state
-from another thread that held it at the instant of the fork.  Because
-the queue also owns no thread of its own, a queue that a child inherits
-in that way stays fully usable.
+All operations on this queue are thread-safe. When you are done with
+the queue, destroy it with ccol_circular_queue_destroy().
+
+fork(2) and this queue can be combined in two supported ways: call
+fork(2) before you create the queue, or create it and then call fork(2)
+followed at once by exec(3). A program that keeps running with no
+exec(3) after the fork while a queue from before the fork is live is
+not supported. As a defense in depth beyond that rule, the child never
+inherits a lock that another thread held, in the locked state, at the
+instant of the fork. The queue owns no thread of its own either, so a
+queue that a child inherits this way stays fully usable.
 .fi
 .SH "SEE ALSO"
-.BR ccol_circular_queue_create_with_mprocs (3),
+.BR ccol_circular_queue_create_mp (3),
 .BR ccol_circular_queue_destroy (3)

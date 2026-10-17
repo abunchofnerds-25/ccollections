@@ -12,35 +12,32 @@ ccol_event_loop_create(max_events_per_wait, num_lock_stripes,
 .fi
 .SH DESCRIPTION
 .nf
-This macro is a short form of ccol_event_loop_create_with_mprocs()
-with mmgmt_procs = NULL, which selects the standard malloc and free.
+The same as ccol_event_loop_create_mp() with mmgmt_procs = NULL,
+which selects the standard malloc and free.
 .fi
 .SH PARAMETERS
 .nf
-max_events_per_wait  Size of the epoll_wait batch buffer that the
-                      poller thread uses. It must be between 1 and
-                      INT_MAX, both ends included, and small enough
-                      that max_events_per_wait *
-                      sizeof(struct epoll_event) does not overflow
-                      size_t. It bounds how many ready events one
-                      epoll_wait call drains, not how many
-                      registrations the loop can hold.
+max_events_per_wait  Size of the epoll_wait batch buffer of the
+                      poller thread, from 1 to INT_MAX inclusive, and
+                      small enough that max_events_per_wait *
+                      sizeof(struct epoll_event) fits in a size_t. It
+                      limits how many ready events one epoll_wait call
+                      drains, not how many registrations the loop can
+                      hold.
 num_lock_stripes     Number of independent lock stripes for the
-                      registry of the fds and the entries. It must be
-                      >= 1; a value of 1 means a single shared lock.
-                      Pass a larger value to lower the contention
-                      between ccol_event_loop_add,
-                      ccol_event_loop_remove and
-                      ccol_event_loop_modify. That contention grows when
-                      threads use many different fds and registrations
-                      at the same time.
-num_reactor_threads  Total number of OS threads that this loop uses
-                      for its own poll work and dispatch work. It must
-                      be >= 1. Whatever this value is, exactly one
-                      dedicated thread ever calls epoll_wait on the
-                      shared epoll instance. A value of 1 means that
-                      the same thread also dispatches every callback
-                      inline, while a larger value adds
+                      registry of fds and entries, at least 1. With 1
+                      there is a single shared lock. A larger value
+                      lowers the contention between
+                      ccol_event_loop_add, ccol_event_loop_remove and
+                      ccol_event_loop_modify, which grows when threads
+                      work on many different fds and registrations at
+                      the same time.
+num_reactor_threads  Total number of OS threads the loop uses for
+                      polling and dispatching, at least 1. Whatever
+                      the value, exactly one dedicated thread calls
+                      epoll_wait on the shared epoll instance. With 1
+                      that thread also dispatches every callback
+                      inline; a larger value adds
                       (num_reactor_threads - 1) separate dispatch
                       worker threads.
 err_str               Optional pointer that gets an error string on a
@@ -48,22 +45,20 @@ err_str               Optional pointer that gets an error string on a
 .fi
 .SH RETURN VALUE
 .nf
-Returns a new ccol_event_loop handle on success.
-Returns CCOL_EVENT_LOOP_INVALID on a failure, which has one of these
-causes: an argument is invalid; an allocation failed;
-epoll_create1, eventfd or pthread_create failed; the process had no
-thread-specific key left for the dispatch of a loop; the process-exit
-destructors of the library have run and the last loop is gone; or the
-library could not allocate a handle slot. See
-ccol_event_loop_create_with_mprocs(3).
+A new ccol_event_loop handle on success, or CCOL_EVENT_LOOP_INVALID
+when an argument is invalid, an allocation failed, epoll_create1,
+eventfd or pthread_create failed, the process had no thread-specific
+key left for the dispatch of a loop, the library's process-exit
+destructors have run and the last loop is gone, or no handle slot
+could be allocated. ccol_event_loop_create_mp(3) has the details.
 .fi
 .SH NOTES
 .nf
-Every background reactor thread of the ccol_event_loop that this macro
-returns is running by the time that the call returns. Destroy the
-loop with ccol_event_loop_destroy() after you finish with it.
+All of the loop's background reactor threads are already running when
+the call returns. When you are done with the loop, destroy it with
+ccol_event_loop_destroy().
 .fi
 .SH "SEE ALSO"
-.BR ccol_event_loop_create_with_mprocs (3),
+.BR ccol_event_loop_create_mp (3),
 .BR ccol_event_loop_destroy (3),
 .BR ccol_event_loop_add (3)

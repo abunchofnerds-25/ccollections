@@ -1,28 +1,29 @@
 #!/bin/sh
-# Compile-time probe for the rule that governs every cmap_pair the map hands
-# back: cbmap_get_elem_ref()'s out-parameter and the key_pair/val_pair an
-# iterator carries.
+# Compile-time probe for the rule behind every cmap_pair accessor that the
+# map hands out: the key_pair/val_pair an iterator carries, and the stored
+# char* that cbmap_get_ptr() reaches for a map with string values. It also
+# pins the signature of cbmap_get_elem_ref(), which fills a cmap_pair that the
+# caller owns and hands out no accessor.
 #
-# The map keeps one {ptr, size} accessor per entry and reports its address
-# through all three. The two fields describe one another: size describes the
-# string or object ptr currently points at, and the bytes themselves belong to
-# the map. Assigning to either field leaves the other describing something
-# else, so the next read of that entry (a get_elem_copy, an iterator,
-# cbmap_get) walks the wrong length; and a pointer the map did not allocate is
-# one it cannot own.
+# The map keeps one {ptr, size} accessor per entry and gives its address out
+# through those surfaces. The two fields belong together: size is the length
+# of the string or object that ptr points at, and the bytes belong to the map.
+# If you assign to one field, the other describes something else, so the next
+# read of that entry (a get_elem_copy, an iterator, cbmap_get) walks the wrong
+# length, and a pointer the map didn't allocate is one it can't own.
 #
-# Each of those surfaces therefore names the accessor through a const
-# cmap_pair *, which makes those assignments a compile error while leaving
-# every legitimate use (read ptr and size, write to the bytes ptr addresses
-# within size) available. This script asserts exactly that, under every
-# compiler it is given, because the guarantee is a property of the type and no
-# run-time test can observe it.
+# So each of those surfaces names the accessor through a const cmap_pair *,
+# which turns those assignments into a compile error but keeps every
+# legitimate use available (reading ptr and size, writing the bytes that ptr
+# addresses within size). This script checks exactly that under every
+# compiler it is given, since the guarantee is a property of the type and no
+# run-time test can see it.
 #
-# A reject case additionally has to fail for the RIGHT reason: a probe that
-# happens to be rejected over an unrelated mistake (a missing companion type
-# variable, a typo) examines nothing while reading as a pass. Every reject
-# case therefore carries the diagnostic it expects, matched against the
-# compiler's own output, and a rejection that does not match is a failure.
+# A reject case also has to fail for the RIGHT reason. A probe that happens
+# to be rejected over an unrelated mistake (a missing companion type
+# variable, a typo) checks nothing but reads as a pass, so every reject case
+# carries the diagnostic it expects, matched against the compiler's own
+# output, and a rejection that doesn't match counts as a failure.
 #
 # Usage: ./compile_probe.sh [compiler ...]   (default: GCC and clang)
 
@@ -30,14 +31,14 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # The in-tree headers by default. CCOL_PROBE_INCLUDE_DIR points the probe at
-# another header tree instead, which is how its own non-vacuity is checked:
-# the guarantee lives in the headers, so the way to confirm a case can fail is
-# to run it against a copy of them with the qualifier removed.
+# another header tree, and that's how we check the probe itself isn't
+# vacuous: the guarantee lives in the headers, so to confirm a case can fail
+# you run it against a copy of them with the qualifier removed.
 INCLUDE_DIR=${CCOL_PROBE_INCLUDE_DIR:-"$SCRIPT_DIR/../../include"}
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-# The GCC of the default list: gcc, or else the newest versioned gccNN in
+# The GCC of the default list is gcc, or else the newest versioned gccNN in
 # PATH (FreeBSD installs GCC only under a versioned name such as gcc14).
 probe_gcc() {
   if command -v gcc > /dev/null 2>&1; then
@@ -52,18 +53,18 @@ probe_gcc() {
 COMPILERS=${*:-"$(probe_gcc) clang"}
 FLAGS="-std=gnu11 -Wall -Wextra -Werror -fsyntax-only -I$INCLUDE_DIR"
 
-# A reject case matches the compiler's own wording, so the compiler is run in
-# the C locale: GCC quotes identifiers with plain apostrophes there and with
-# typographic quotes elsewhere.
+# A reject case matches the compiler's own wording, so we run the compiler in
+# the C locale. GCC quotes identifiers with plain apostrophes there and with
+# typographic quotes in other locales.
 LC_ALL=C
 export LC_ALL
 
 failures=0
 checks=0
 
-# Diagnostics shared by several cases. GCC names the member being assigned;
-# Clang names the const-qualified object the member is reached through, so
-# each pattern carries both spellings.
+# Diagnostics shared by several cases. GCC names the member being assigned
+# while Clang names the const-qualified object the member is reached
+# through, so each pattern carries both spellings.
 ASSIGN_PTR="assignment of member 'ptr' in read-only object|cannot assign to .* with const-qualified type"
 ASSIGN_SIZE="assignment of member 'size' in read-only object|cannot assign to .* with const-qualified type"
 
@@ -137,36 +138,53 @@ EOF
 
 # -------------------------------------------------------------------------
 # cbmap_get_elem_ref()
+#
+# The function fills a cmap_pair that belongs to the caller. That pair is the
+# caller's own copy, so changing its fields changes nothing in the map, and
+# the bytes that ptr addresses may be read and written within size.
 # -------------------------------------------------------------------------
 
-probe 'plain cmap_pair * out-parameter' reject \
-"incompatible pointer type|discards qualifiers in nested pointer types" '
-  cmap_pair *vp = NULL;
+probe 'the address of a const cmap_pair * out-parameter' reject \
+"incompatible pointer type|discards qualifiers" '
+  const cmap_pair *vp = NULL;
+  (void)vp;
   (void)cbmap_get_elem_ref(m, kp, &vp);'
 
-probe 'assigning to the accessor pointer' reject "$ASSIGN_PTR" '
-  const cmap_pair *vp = NULL;
-  if (cbmap_get_elem_ref(m, kp, &vp) == ccol_success) vp->ptr = replacement;'
-
-probe 'assigning to the accessor size' reject "$ASSIGN_SIZE" '
-  const cmap_pair *vp = NULL;
-  if (cbmap_get_elem_ref(m, kp, &vp) == ccol_success) vp->size = 1;'
-
-probe 'reading the accessor and its bytes' accept - '
-  const cmap_pair *vp = NULL;
+probe 'reading the filled pair and its bytes' accept - '
+  cmap_pair vp;
   if (cbmap_get_elem_ref(m, kp, &vp) == ccol_success) {
-    unsigned char first = *(const unsigned char *)vp->ptr;
-    size_t stored = vp->size;
+    unsigned char first = *(const unsigned char *)vp.ptr;
+    size_t stored = vp.size;
     (void)first;
     (void)stored;
   }'
 
-probe 'writing the bytes the accessor describes' accept - '
-  const cmap_pair *vp = NULL;
+probe 'writing the bytes the filled pair describes' accept - '
+  cmap_pair vp;
   if (cbmap_get_elem_ref(m, kp, &vp) == ccol_success) {
-    memset(vp->ptr, 0, vp->size);
-    *(unsigned char *)vp->ptr = 7u;
+    memset(vp.ptr, 0, vp.size);
+    *(unsigned char *)vp.ptr = 7u;
   }'
+
+probe 'changing the fields of the caller own pair' accept - '
+  cmap_pair vp;
+  if (cbmap_get_elem_ref(m, kp, &vp) == ccol_success) {
+    vp.ptr = replacement;
+    vp.size = 1;
+  }'
+
+probe 'replacing a stored string through cbmap_get_ptr' reject \
+"assignment of read-only location|read-only variable is not assignable" '
+  cbmap_redeclare(m, int, char *);
+  int key = 1;
+  char *const *sptr = cbmap_get_ptr(m, key);
+  if (sptr) *sptr = replacement;'
+
+probe 'editing a stored string through cbmap_get_ptr' accept - '
+  cbmap_redeclare(m, int, char *);
+  int key = 1;
+  char *const *sptr = cbmap_get_ptr(m, key);
+  if (sptr) (*sptr)[0] = 0;'
 
 probe 'in-place update through cbmap_get_ptr' accept - '
   cbmap_redeclare(m, int, int);
@@ -175,28 +193,28 @@ probe 'in-place update through cbmap_get_ptr' accept - '
   if (slot) *slot = 2;'
 
 # -------------------------------------------------------------------------
-# cbstmap has no cbmap_destroy_with_dtor(); chashmap alone offers an
-# allocation-free destroy-with-callback walk, so there is no sibling of
-# chmap_destroy_with_dtor()'s accessor rule to assert here. The two modules
-# are parallel everywhere else, so that difference is stated rather than left
-# to be discovered and "harmonised". If such a function is ever added to
-# cbstmap, its callback takes a const cmap_pair * and the three cases
-# tests/chashmap/compile_probe.sh carries for it belong here too.
+# cbstmap has no cbmap_destroy_with_dtor(). Only chashmap offers an
+# allocation-free destroy-with-callback walk, so there is nothing here like
+# the accessor rule of chmap_destroy_with_dtor() to check. The two modules are
+# parallel everywhere else, which is why we write the difference down instead
+# of leaving it for somebody to find and "harmonise". If cbstmap ever gets
+# such a function, its callback takes a const cmap_pair * and the three cases
+# that tests/chashmap/compile_probe.sh carries for it belong here too.
 # -------------------------------------------------------------------------
 
 # -------------------------------------------------------------------------
 # cmap_iterator
 #
-# ccol_iter_key_ptr()/ccol_iter_val_ptr() are const-correct on their own, so
-# these cases reach the iterator's key_pair/val_pair members directly, which
-# is the way around them. What the members address is the container's own
-# accessor for the current entry, so the rule that governs it is the same one.
+# ccol_iter_key_ptr()/ccol_iter_val_ptr() are const-correct by themselves,
+# so these cases go around them and reach the iterator's key_pair/val_pair
+# members directly. Those members address the container's own accessor for
+# the current entry, so the same rule applies to them.
 #
-# The consequence is more direct here than it is for chashmap, whose accessor
-# is a field derived from the entry: a cbstmap iterator's val_pair IS the
-# node's authoritative pair, and destroy_bmap_node() releases the value
-# through it. A pointer stored there is one the map never allocated and then
-# frees at teardown, while the buffer it did allocate leaks.
+# The damage is more direct here than for chashmap, whose accessor is a field
+# derived from the entry. A cbstmap iterator's val_pair IS the node's
+# authoritative pair and destroy_bmap_node() releases the value through it,
+# so a pointer stored there is one the map never allocated but frees at
+# teardown, while the buffer it did allocate leaks.
 # -------------------------------------------------------------------------
 
 probe 'an iterator assigning to val_pair->ptr' reject "$ASSIGN_PTR" '
@@ -229,6 +247,118 @@ probe 'iterating, reading keys and editing values' accept - '
   }
   ccol_for_each(m, each, { total += *ccol_iter_val_ptr(each); });
   (void)total;'
+
+# -------------------------------------------------------------------------
+# Array key and value types
+#
+# The macros copy a key or a value through a temporary of the declared type,
+# and C can't assign an array, so an array type would reach the map as a
+# pointer to the caller's array and the map would store the address instead
+# of the elements. That's why every macro that declares the companion type
+# variables refuses an array key type and an array value type, with a message
+# that says to wrap the array in a struct. The accept cases pin that the
+# refusal stays narrow: const types, pointer types, function pointer types
+# and struct types that hold an array all compile.
+# -------------------------------------------------------------------------
+
+ARRAY_KEY="cbmap: an array key type is not supported; wrap the array in a struct"
+ARRAY_VAL="cbmap: an array value type is not supported; wrap the array in a struct"
+
+probe 'cbmap_construct with an int[2] key' reject "$ARRAY_KEY" '
+  (void)m;
+  cbmap_construct(a, int[2], int);
+  cbmap_destroy(a);'
+
+probe 'cbmap_construct with an int[2] value' reject "$ARRAY_VAL" '
+  (void)m;
+  cbmap_construct(a, int, int[2]);
+  cbmap_destroy(a);'
+
+probe 'cbmap_construct with a char[16] value' reject "$ARRAY_VAL" '
+  (void)m;
+  cbmap_construct(a, int, char[16]);
+  cbmap_destroy(a);'
+
+probe 'cbmap_construct with a const char[16] key' reject "$ARRAY_KEY" '
+  (void)m;
+  cbmap_construct(a, const char[16], int);
+  cbmap_destroy(a);'
+
+probe 'cbmap_construct_scoped with an array value' reject "$ARRAY_VAL" '
+  (void)m;
+  cbmap_construct_scoped(a, int, int[2]);'
+
+probe 'cbmap_construct_mp with an array key' reject "$ARRAY_KEY" '
+  (void)m;
+  cbmap_construct_mp(a, int[2], int, NULL);
+  cbmap_destroy(a);'
+
+probe 'cbmap_construct_mp_scoped with an array value' reject "$ARRAY_VAL" '
+  (void)m;
+  cbmap_construct_mp_scoped(a, int, int[2], NULL);'
+
+probe 'cbmap_construct_full with an array value' reject "$ARRAY_VAL" '
+  (void)m;
+  cbmap_construct_full(a, int, int[2], NULL, NULL);
+  cbmap_destroy(a);'
+
+probe 'cbmap_construct_full_scoped with an array key' reject "$ARRAY_KEY" '
+  (void)m;
+  cbmap_construct_full_scoped(a, int[2], int, NULL, NULL);'
+
+probe 'cbmap_declare with an array value' reject "$ARRAY_VAL" '
+  (void)m;
+  cbmap_declare(a, int, int[2]);
+  cbmap_init(a);
+  cbmap_destroy(a);'
+
+probe 'cbmap_declare_scoped with an array key' reject "$ARRAY_KEY" '
+  (void)m;
+  cbmap_declare_scoped(a, int[2], int);
+  cbmap_init(a);'
+
+probe 'cbmap_redeclare with an array value' reject "$ARRAY_VAL" '
+  cbmap_redeclare(m, int, char[16]);'
+
+probe 'cbmap_redeclare with an array key' reject "$ARRAY_KEY" '
+  cbmap_redeclare(m, int[2], int);'
+
+probe 'cbmap_redeclare with an array typedef value' reject "$ARRAY_VAL" '
+  typedef int ccol_probe_pair[2];
+  cbmap_redeclare(m, int, ccol_probe_pair);'
+
+probe 'cbmap_construct_cc with an array value' reject "$ARRAY_VAL" '
+  (void)m;
+  cbmap_construct_cc(a, int, int[2], NULL);
+  cbmap_destroy(a);'
+
+probe 'cbmap_construct_cc_scoped with an array key' reject "$ARRAY_KEY" '
+  (void)m;
+  cbmap_construct_cc_scoped(a, int[2], int, NULL);'
+
+probe 'scalar, const, pointer and struct types still compile' accept - '
+  struct ccol_probe_wrapped { int v[2]; };
+  typedef void (*ccol_probe_fn)(void);
+  (void)m;
+  cbmap_construct(a, int, int);
+  cbmap_destroy(a);
+  cbmap_construct(b, const int, const double);
+  cbmap_destroy(b);
+  cbmap_construct(c, char *, const char *);
+  cbmap_destroy(c);
+  cbmap_construct(d, int, struct ccol_probe_wrapped);
+  struct ccol_probe_wrapped w = {{1, 2}};
+  cbmap_insert(d, 1, w);
+  cbmap_destroy(d);
+  cbmap_construct(e, int, ccol_probe_fn);
+  cbmap_destroy(e);
+  cbmap_construct(f, unsigned char *, void *);
+  cbmap_destroy(f);
+  cbmap_construct_scoped(g, long, struct ccol_probe_wrapped);
+  cbmap_declare(h, int, int);
+  cbmap_init(h);
+  cbmap_destroy(h);
+  cbmap_redeclare(m, int, int);'
 
 if [ "$checks" -eq 0 ]; then
   echo 'compile_probe: FAIL  no compiler was available to run any check'

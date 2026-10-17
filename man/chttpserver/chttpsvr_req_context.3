@@ -1,0 +1,44 @@
+.TH CHTTPSVR_REQ_CONTEXT 3 "2026-10-13" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_req_context \- read a value that a middleware attached to a request
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpserver.h>
+
+void *chttpsvr_req_context(const chttpsvr_req *req, const void *key);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the value that chttpsvr_req_set_context attached to req under
+key.  Keys are compared by address and nothing else.  The values can
+be read until the chain of the request returns; see
+chttpsvr_req_set_context(3) for that lifetime.
+.fi
+.SH PARAMETERS
+.nf
+req   The request.
+key   The key, compared by address.
+.fi
+.SH RETURN VALUE
+.nf
+The value attached under key.  NULL when req or key is NULL, when no
+value is attached under key, and also when the stored value is NULL.
+.fi
+.SH THREAD SAFETY
+.nf
+Call it only on the thread that runs the chain of the request, and
+only while that chain runs.  It takes no lock.
+.fi
+.SH EXAMPLES
+.nf
+static const char trace_key;
+
+const char *trace = chttpsvr_req_context(req, &trace_key);
+if (trace) chttpsvr_resp_set_header(resp, "x-trace-id", trace);
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_req_set_context (3),
+.BR chttpsvr_use (3),
+.BR chttpsvr_router_use (3)

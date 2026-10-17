@@ -12,28 +12,29 @@ const char *chttpsvr_req_header(const chttpsvr_req *req,
 .fi
 .SH DESCRIPTION
 .nf
-Returns the value of the request header called name, or NULL when that
-header is absent.  The lookup is case-insensitive, and when a header
-appears more than once the last value is returned.
+Returns the value of the request header called name, or NULL when the
+request has no such header.  The name is compared without regard to
+case, and for a header that appears more than once you get the last
+value.
 
-The pointer stays valid for the duration of the handler call.
+The pointer is valid until the handler call returns.
 .fi
 .SH NOTES
 .nf
 The trailer fields of a chunked request body (RFC 7230 4.1.2) are not
-request headers, and this function never returns one: it answers only
-from the header block of the request, so a trailer field of any name
-reads as absent, on buffered and streaming routes alike.
+request headers, and this function never returns one.  It answers
+only from the header block of the request, so on buffered and
+streaming routes alike a trailer field of any name reads as absent.
 
 Trailer fields arrive after the server has routed the request and
-after the middleware has run, and on a buffered route also after the
-server has read the header block.  Indexing trailers alongside headers
-would therefore let a client add a trailer that displaces a header set
-by an upstream proxy (such as X-Forwarded-For, or the identity header
-of an authentication gateway) on a request the server has already
-committed to.  This server has no trailer accessor at all; a
-deployment that needs trailer semantics should terminate the trailers
-in front of this server.
+the middleware has run, and on a buffered route also after the
+server has read the header block.  If trailers were indexed together
+with the headers, a client could send a trailer that replaces a
+header set by an upstream proxy (such as X-Forwarded-For, or the
+identity header of an authentication gateway) on a request that the
+server has already committed to.  The server has no accessor for
+trailers at all, and a deployment that needs trailer semantics should
+terminate the trailers in front of it.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_req_method (3),

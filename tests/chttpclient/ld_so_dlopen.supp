@@ -1,27 +1,28 @@
-# Suppressions for reachable memory held by the glibc dynamic linker (ld.so)
-# when a name lookup that needs DNS makes glibc load an NSS service module
-# (libnss_dns.so.2, libnss_mdns4_minimal.so.2, ...). The chain is
-# __nss_module_load -> module_load -> _dl_open, and it is reproducible with
-# nothing but a getaddrinfo(3) call on a name the hosts file does not answer:
-# such a program leaks the same seven reachable records this suite's own
-# tests binary does.
+# Suppressions for reachable memory that the glibc dynamic linker (ld.so)
+# holds when a name lookup that needs DNS makes glibc load an NSS service
+# module (libnss_dns.so.2, libnss_mdns4_minimal.so.2, ...). The chain is
+# __nss_module_load -> module_load -> _dl_open, and you can reproduce it with
+# nothing but a getaddrinfo(3) call on a name that the hosts file doesn't
+# answer: such a program leaks the same seven reachable records as this
+# suite's own tests binary.
 #
-# These blocks are ld.so's internal bookkeeping (link_map structures, strdup'd
-# library path strings from the ld.so cache lookup, and symbol-version tables)
-# and are intentionally kept live until process exit: glibc loads NSS modules
-# through its own private loader (__libc_dlopen_mode) and never calls a
-# matching dlclose-equivalent. They are not leaks.
+# These blocks are ld.so's internal bookkeeping (link_map structures,
+# strdup'd library path strings from the ld.so cache lookup, and
+# symbol-version tables), and they stay live until process exit on purpose:
+# glibc loads NSS modules through its own private loader
+# (__libc_dlopen_mode) and never calls a matching dlclose-equivalent. They
+# aren't leaks.
 #
-# Two rules cover every variant, split only by which allocator ld.so reaches
-# for. Both are exercised: the malloc rule covers the cache-lookup path
-# strings and _dl_new_object's own link_map allocation, the calloc rule covers
-# _dl_new_object's larger zeroed object block and _dl_check_map_versions's
-# version tables.
+# Two rules cover every variant, split only by which allocator ld.so uses,
+# and both are exercised. The malloc rule covers the cache-lookup path
+# strings and _dl_new_object's own link_map allocation, and the calloc rule
+# covers _dl_new_object's larger zeroed object block and
+# _dl_check_map_versions's version tables.
 #
-# Each rule requires _dl_open itself in the stack, which is what keeps them
-# from reaching anything this project allocates: these test binaries link the
-# library statically, so no code of this project's ever runs underneath a
-# dynamic-linker open.
+# Each rule requires _dl_open itself in the stack, and that keeps them away
+# from anything we allocate: these test binaries link the library
+# statically, so none of our code ever runs underneath a dynamic-linker
+# open.
 
 {
    ld_so_dlopen_reachable_malloc

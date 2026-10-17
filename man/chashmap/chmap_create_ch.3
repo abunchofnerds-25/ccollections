@@ -13,20 +13,20 @@ chmap chmap_create_ch(size_t initial_bucket_array_size,
 .fi
 .SH DESCRIPTION
 .nf
-Creates a hash map that hashes its keys with the supplied procedure. It is
-a thin inline wrapper over chmap_create_full(3) that passes NULL for the
+Creates a hash map that hashes its keys with the given procedure. It is a
+thin inline wrapper over chmap_create_full(3) that passes NULL for the
 memory management procedures, so the map uses the default allocator.
 
-The map picks its implementation strategy from the key and value types, as
-chmap_create_full(3) describes; supplying a hashing procedure does not
-change that choice.
+The map picks its implementation from the key and value types, as
+chmap_create_full(3) describes, and a hashing procedure does not change
+that choice.
 .fi
 .SH "CUSTOM HASHING"
 .nf
-The procedure receives the key bytes and their length, and returns an
-unsigned long. It must return the same value for two keys that the map
-considers equal; for a char * key, equal means equal contents, not an
-equal pointer.
+The procedure gets the key bytes and their length and returns an
+unsigned long. It must return the same value for any two keys that the
+map considers equal, and for a char * key equal means equal contents,
+not an equal pointer.
 
 The length is the size that the map stores for that key:
   - For a char * key: strlen + 1.
@@ -34,20 +34,23 @@ The length is the size that the map stores for that key:
     or a struct): the sizeof() of the type.
   - For a key that goes through the raw layer, for example
     chmap_insert_elem(3): cmap_pair.size.
-The procedure therefore needs no terminator and no rule of its own to
-find the end of a key, and it can hash a binary key whose length is
-known only at run time.
+So the procedure needs no terminator and no rule of its own to find the
+end of a key, and it can hash a binary key whose length is known only at
+run time.
 
-The return value does not need to avalanche, because the map finalizes
-the value that the procedure returns with its own bit-mixing step before
-it reduces the value to a bucket or a slot. A procedure that puts all of
-its entropy in the low bits (a sum, a small identifier, a truncated
-checksum) therefore still distributes correctly, and the contract is
-simply any function of the key that respects equality.
+The result doesn't have to avalanche. The map runs whatever the
+procedure returns through its own bit-mixing step before reducing it to
+a bucket or a slot, so a procedure that keeps all of its entropy in the
+low bits (a sum, a small identifier, a truncated checksum) still
+distributes well. The contract is simply any function of the key that
+respects equality.
 .fi
 .SH PARAMETERS
 .nf
-initial_bucket_array_size  Initial capacity hint
+initial_bucket_array_size  Initial number of buckets. A value of 0 is
+                           refused and the call fails; a value from 1
+                           to 16 gives 16 buckets, and a larger value is
+                           rounded up to the next power of two
 key_type                   Key type, as a ccol_data_type
 val_type                   Value type, as a ccol_data_type
 custom_hashing_proc        Hashing procedure, or NULL to use the map's own
@@ -62,8 +65,8 @@ NULL on failure, with *err set to an error string when err is non-NULL.
 .fi
 .SH NOTES
 .nf
-Failure is reported rather than fatal; the chmap_construct_ch(3) macro
-layer calls ccol_fatal_err() instead
+A failure is reported, not fatal; the chmap_construct_ch(3) macro layer
+calls _ccol_fatal_err() instead
 .fi
 .SH "SEE ALSO"
 .BR chmap_create (3),

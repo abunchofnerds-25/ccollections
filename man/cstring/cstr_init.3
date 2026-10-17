@@ -11,9 +11,9 @@ cstr_init(s, initial);
 .fi
 .SH DESCRIPTION
 .nf
-This macro calls cstring_create() to initialise the cstr variable s with
-the initial content that you give. You must declare s first. It calls
-ccol_fatal_err() if the creation fails.
+This macro initialises the cstr variable s with the content you give,
+through cstring_create(). You must declare s first. If the creation
+fails, the macro calls _ccol_fatal_err().
 .fi
 .SH PARAMETERS
 .nf
@@ -23,8 +23,8 @@ initial  Initial content (C string or NULL for empty string)
 .fi
 .SH NOTES
 .nf
-This macro calls ccol_fatal_err() when an allocation fails; call
-cstring_create() directly when you want to handle an error yourself
+A failed allocation ends in _ccol_fatal_err(). If you want to handle an
+error yourself, call cstring_create() directly
 .fi
 .SH EXAMPLES
 .nf

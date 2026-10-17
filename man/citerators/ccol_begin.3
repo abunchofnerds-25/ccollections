@@ -11,15 +11,14 @@ cmap_iterator *ccol_begin(container);
 .fi
 .SH DESCRIPTION
 .nf
-This macro gives an iterator at the first element of container. It
-selects the correct begin_iter function at compile time, through _Generic
-on the type of container. The supported types are cvec, chmap and cbmap;
-a container of any other type, a void * included, is a compile error.
+ccol_begin returns an iterator on the first element of container. The
+begin_iter function to call is picked at compile time with _Generic on
+the type of container. The supported types are cvec, chmap and cbmap, and
+a container of any other type (a void * included) is a compile error.
 
-When the container is empty, the macro gives NULL and no error. A
-container handle that is NULL iterates as an empty container, so the
-macro also gives NULL for it, and no error.
-It calls ccol_fatal_err() when an allocation fails.
+An empty container gives NULL and no error. A NULL container handle
+iterates as an empty container, so it gives NULL and no error as well. If
+an allocation fails, the macro calls _ccol_fatal_err().
 .fi
 .SH PARAMETERS
 .nf
@@ -27,12 +26,14 @@ container  A cvec, chmap or cbmap variable.
 .fi
 .SH RETURN VALUE
 .nf
-cmap_iterator* at the first element, or NULL when the container is empty.
+A cmap_iterator* on the first element, or NULL when the container is
+empty.
 .fi
 .SH NOTES
 .nf
-Use ccol_iter_declare(container, it) before a call to ccol_begin in a for
-loop, because that macro gives you typed accessors for the iterator.
+Declare the iterator with ccol_iter_declare(container, it) before you
+call ccol_begin in a for loop, since that declaration is what gives you
+typed accessors for it.
 .fi
 .SH EXAMPLES
 .nf

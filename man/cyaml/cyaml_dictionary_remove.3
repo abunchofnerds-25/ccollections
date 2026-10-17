@@ -11,18 +11,18 @@ ccol_retval_t cyaml_dictionary_remove(cyaml map, const char *key);
 .fi
 .SH DESCRIPTION
 .nf
-Remove the entry with this key from the dictionary node map and free
-the value subtree of that entry recursively.  The other members keep
-their order.  A cyaml_dictionary_iter cursor stays valid across the
-removal of any member except the one that its next step reads (the
-successor of the member it stands on), so removing the current member
-during a walk is allowed, while removing that successor invalidates
-the cursor.  See cyaml_dictionary_first(3).
+Removes the member with this key from the dictionary node map and
+frees its value together with everything below it.  The remaining
+members keep their order.  A cyaml_dictionary_iter cursor survives
+the removal of any member except the one its next step reads (the
+successor of the member it stands on).  So a walk may remove its
+current member, but removing that successor invalidates the cursor.
+See cyaml_dictionary_first(3).
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success        - the function removed and freed the entry.
-ccol_invalid_args   - map is NULL, or map is not CYAML_DICTIONARY.
+ccol_success        - the member was removed and freed.
+ccol_invalid_args   - map is NULL, or map is not a CYAML_DICTIONARY.
 ccol_key_not_found  - the dictionary holds no such key.
 .fi
 .SH "SEE ALSO"

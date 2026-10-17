@@ -19,29 +19,27 @@ typedef struct ccol_memmgmt_procs_t {
 .fi
 .SH DESCRIPTION
 .nf
-All the other public headers include common.h, which holds the types and
-the rules that all the modules of the library share. This page gives
-those rules once, and the page of each function gives only the
-differences.
+Every other public header includes common.h, which holds the types and
+rules that all modules of the library share. This page states those
+rules once, and the page of each function only describes where that
+function differs from them.
 .fi
 .SS "Two layers: typed macros and raw functions"
 .nf
-Each container module has two layers:
-  - The type-inferred macros, such as chmap_insert(3) and cvec_push(3),
-    take values of the declared types and call ccol_fatal_err() when an
-    operation fails.
-  - The raw functions below them, such as chmap_insert_elem(3), take
-    cmap_pair arguments and give a ccol_retval_t. A raw function never
-    stops the process on a failure that it can report.
-Use the raw layer when a failure is an expected result that the caller
-handles.
+Each container module comes in two layers. The type-inferred macros,
+such as chmap_insert(3) and cvec_push(3), take values of the declared
+types and call _ccol_fatal_err() when an operation fails. Below them are
+the raw functions, such as chmap_insert_elem(3), which take cmap_pair
+arguments and return a ccol_retval_t. A raw function never stops the
+process on a failure that it can report, so it is the layer to use when
+a failure is an expected result that you handle yourself.
 .fi
 .SS "Return codes"
 .nf
-ccol_retval_t is zero for success and negative for a failure. Each
-enumerator has an explicit value, and the values do not change within
-one major version, so a comparison with 0 is as correct as a comparison
-with ccol_success:
+ccol_retval_t is zero for success and negative for a failure. Every
+enumerator has an explicit value that does not change within a major
+version, so comparing with 0 is as correct as comparing with
+ccol_success:
 
   ccol_success                             0
   ccol_not_enough_memory                  -1
@@ -63,124 +61,129 @@ with ccol_success:
   ccol_http_connection_failed            -17
   ccol_unexpected_failure                -18
 
-The page of each function gives the codes that the function can
-return, and what each code means for that function.
-ccol_retval_to_str(3) gives the name of a code as a string.
+The page of each function lists the codes it can return and what each
+one means for that function. ccol_retval_to_str(3) gives the name of a
+code as a string.
+.fi
+.SS "Error strings"
+.nf
+Many calls report the cause of a failure through an out-parameter named
+err or err_str. The library owns every such string and the caller must
+never free it. Most modules hand out a string literal, which is valid for
+the whole life of the process. cjson and cyaml hand out a pointer into a
+buffer of the calling thread, since their message names a position in
+the input. That text is valid until the next failing call of the same
+kind on the same thread, so copy it if you need it later. An
+out-parameter that the caller does own is never named err, and its page
+names the function that frees it.
 .fi
 .SS "Fatal errors"
 .nf
-A programming error is fatal. Examples of programming errors are:
-  - a NULL where the call needs a valid handle
-  - an index that is out of bounds
-  - a stale handle
-  - a missing key given to a _get macro.
-A failure inside a typed macro, such as a failed allocation in
-chmap_insert(3), is also fatal. In these cases the library calls
-ccol_fatal_err(), which writes two lines to stderr in this form:
+A programming error is fatal: a NULL where the call needs a valid
+handle, an index out of bounds, a stale handle, or a missing key given
+to a _get macro. So is a failure inside a typed macro, such as a failed
+allocation in chmap_insert(3). In all of these cases the library calls
+_ccol_fatal_err(), which writes two lines like these to stderr:
 
   <file>:<line>: fatal: <message>
   <file>:<line>: ccol_assert failed: false
 
-It then stops the process with abort(3), which raises SIGABRT. Neither
-NDEBUG nor any other compilation setting changes this: the checks are
-part of the contract, and the compiler never removes them. Before the
-fatal line, the map macros also write a hex dump of the key that
-caused the failure.
+and then stops the process with abort(3), which raises SIGABRT. NDEBUG
+and every other compilation setting leave this alone, since the checks
+are part of the contract and are never compiled out. The map macros
+also write a hex dump of the key that caused the failure before the
+fatal line.
 .fi
 .SS "Custom memory management"
 .nf
-Each module that allocates memory accepts a ccol_memmgmt_procs_t * when
-it creates an object, through the *_mp, *_with_mprocs or *_full form of
-the constructor; for cmempool, it is an argument of the constructor
-itself. A NULL pointer selects the standard malloc(3), calloc(3),
-realloc(3) and free(3), and so does a form of the constructor that
-takes no table.
+Every module that allocates memory accepts a ccol_memmgmt_procs_t * when
+it creates an object, through the *_mp or *_full form of the
+constructor (for cmempool it is an argument of the constructor itself).
+A NULL pointer selects the standard malloc(3), calloc(3), realloc(3) and
+free(3), and so does a constructor form that takes no table.
 
-A table that is not NULL must hold four functions that are not NULL,
-and each function must operate exactly as its standard counterpart,
-alignment included: each block that malloc, calloc and realloc return
-must have the alignment for any object type. That alignment is
-_Alignof(max_align_t), which is 16 bytes on x86-64 and aarch64. The
-containers put entries that need that alignment at the start of a
-block, so with a block of smaller alignment each access to such an
-entry is undefined behavior. An arena or pool allocator can give
+A table that is not NULL must hold four non-NULL functions, and each one
+must behave exactly like its standard counterpart, alignment included.
+Every block that malloc, calloc and realloc return must be aligned for
+any object type, which is _Alignof(max_align_t), 16 bytes on x86-64 and
+aarch64. The containers put entries that need that alignment at the
+start of a block, so with a less aligned block every access to such an
+entry is undefined behavior. An arena or pool allocator may hand out
 smaller blocks, so such an allocator must round each block up.
 
-An object frees all its memory through the same table, so a destroy
-needs no allocator argument. The functions must stay valid until the
-last call to them; for all the modules except cmempool, that last call
-occurs before the destroy of the object returns. Also keep the
-ccol_memmgmt_procs_t struct valid until that destroy, unless the object
-keeps its own copy of the struct, which the page of its constructor
-tells you. clrucache, cjson and cyaml keep a copy, so for them you can
-release the struct after the creating call returns.
+An object frees all its memory through the same table, which is why a
+destroy takes no allocator argument. The functions must stay valid
+until the last call to them, and for every module except cmempool that
+last call happens before the destroy of the object returns. Keep the
+ccol_memmgmt_procs_t struct itself valid until that destroy too, unless
+the object keeps its own copy of the struct, which the page of its
+constructor tells you. clrucache, cjson and cyaml keep a copy, so with
+them you can release the struct once the creating call has returned.
 
-A ccol_mempool or ccol_r_mempool that threads share is an exception:
-its allocator can run after ccol_mempool_destroy() returns, and after
-main() returns. See ccol_mempool_destroy(3).
+The exception is a ccol_mempool or ccol_r_mempool that threads share.
+Its allocator can run after ccol_mempool_destroy() returns, and even
+after main() returns; see ccol_mempool_destroy(3).
 
-The library calls the functions of a table from the thread that does
-the operation, so a table for a thread-safe object must hold
-thread-safe functions.
+The functions of a table are called from the thread that does the
+operation, so a table for a thread-safe object must hold thread-safe
+functions.
 .fi
 .SS "Timeouts and durations"
 .nf
-In the public API, each timeout, deadline, interval and duration is a
-uint64_t count of microseconds, and the name of each such parameter or
-field ends in _us. No public signature takes a struct timespec, a
-time_t or a long count of time, so the width of time_t in an
-application does not have to match the width in the library.
+Every timeout, deadline, interval and duration of the public API is a
+uint64_t count of microseconds, and the name of every such parameter or
+field ends in _us. No public signature takes a struct timespec, a time_t
+or a long count of time, so the width of time_t in an application
+doesn't have to match the width in the library.
 
-The library changes a timeout into an absolute deadline on
-CLOCK_MONOTONIC, so a change of the wall clock never makes a wait
-longer or shorter. The arithmetic uses 64 bits on all targets and
-saturates: a value that is too large for a deadline, for example
-UINT64_MAX, becomes the latest deadline that the clock can hold, and
-it never wraps into a deadline in the past. Where a system call takes
-a larger unit of time, the library rounds the remaining time up, so a
-wait never stops before its deadline.
+A timeout is turned into an absolute deadline on CLOCK_MONOTONIC, so a
+change of the wall clock never makes a wait longer or shorter. The
+arithmetic is 64 bits on every target and saturates: a value too large
+for a deadline, UINT64_MAX for example, becomes the latest deadline the
+clock can hold and never wraps into one in the past. Where a system call
+takes a coarser unit of time, the remaining time is rounded up, so a
+wait never ends before its deadline.
 
 For the timed calls of cthreadcomm and cthreadpool, a timeout of 0 does
-not wait: the call does exactly what its try_ variant does and gives
-the result of that variant, for example ccol_container_full or
-ccol_container_empty, and never ccol_timed_out. The untimed call waits
-without a limit. For all the other fields, the page of the field tells
-what 0 means: no limit, or the default.
+not wait. The call does exactly what its try_ variant does and returns
+that variant's result, ccol_container_full or ccol_container_empty for
+example, and never ccol_timed_out. The untimed call waits without a
+limit. For every other field, the field's page says what 0 means: no
+limit, or the default.
 .fi
 .SH NOTES
 .nf
-To give a compile-time switch to the build of the library, use
-EXTRA_CFLAGS, for example: make EXTRA_CFLAGS="-DNAME=VALUE".
+Compile-time switches go to the build of the library through
+EXTRA_CFLAGS, for example make EXTRA_CFLAGS="-DNAME=VALUE".
 
 CCOL_FORK_SAFETY_REQUIRED (default 1)
     With 1, the build includes the pthread_atfork() handlers of
     cthreadpool, cthreadcomm, clogger, chttpserver and chttpclient,
-    which prevent a fork() from giving the child one of their internal
-    locks in a locked state. With 0, the build leaves them out, and no
-    fork() of the process pays their cost; the setting has no other
-    effect on thread safety. With 0, the caller must not call fork()
-    while a different thread can hold one of those locks. A program
-    that never calls fork() is safe with either setting, and so is a
-    program that calls fork() only in the two supported patterns
-    below.
+    which keep a fork() from handing the child one of their internal
+    locks in a locked state. With 0 they are left out and no fork() of
+    the process pays for them; the setting changes nothing else about
+    thread safety. With 0, the caller must not call fork() while
+    another thread can hold one of those locks. A program that never
+    calls fork() is safe with either setting, and so is one that calls
+    fork() only in the two supported patterns below.
 
 CCOL_MEMPOOL_COMPACT_LAYOUT (default 0)
     Selects the compact entry layout of cmempool. A translation unit
     that declares a buffer with
     CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER(3) must use the same
-    setting as the library; otherwise the link fails with an undefined
+    setting as the library, or the link fails with an undefined
     reference. See that page.
 
 CCOL_MEMPOOL_DYNAMIC_TLS
     With 1, the per-thread fast paths of the library use the general
     thread-local storage model, so dlopen(3) of the library always
-    succeeds. With 0, they use the initial-exec model. When the build
-    does not set it, it is 0 with glibc and on FreeBSD, and 1 on all
-    other systems. It changes no interface.
+    succeeds. With 0 they use the initial-exec model. If the build
+    doesn't set it, it is 0 with glibc and on FreeBSD and 1 on every
+    other system. It changes no interface.
 .fi
 .SH WARNINGS
 .nf
-The library supports only two ways to use fork(2) with a cthreadpool,
+There are only two supported ways to use fork(2) with a cthreadpool,
 cthreadcomm, clogger, chttpserver or chttpclient handle:
 
   1. Call fork() before you create the handle, so that each process
@@ -188,29 +191,27 @@ cthreadcomm, clogger, chttpserver or chttpclient handle:
   2. Create the handle, then call fork() and immediately call exec(3)
      in the child.
 
-The library does not support a child that continues without exec()
-while a handle from before the fork() is live. fork() does not copy
-the threads that these handles need, so a handle from the parent
-cannot do work in the child, and you cannot make it operate again
-there.
+A child that carries on without exec() while a handle from before the
+fork() is live is not supported. fork() does not copy the threads that
+these handles need, so a handle from the parent can do no work in the
+child, and there is no way to make it work there again.
 
-Each descriptor that the library creates is closed on exec, so a
-child that calls exec() keeps none of them. On macOS, a socket, an
-accepted socket and a pipe take two calls to become closed on exec,
-and a fork() of another thread waits until both calls are done, which
-takes some microseconds. posix_spawn(3) runs no fork handler, so it
-does not wait. On macOS, a program that calls posix_spawn() while
-another thread can create a socket through the library gives the
-POSIX_SPAWN_CLOEXEC_DEFAULT flag to posix_spawnattr_setflags(3), and
-names with posix_spawn_file_actions_addinherit_np(3) each descriptor
-that the child must keep. This wait does not depend on
-CCOL_FORK_SAFETY_REQUIRED.
+Every descriptor the library creates is closed on exec, so a child that
+calls exec() keeps none of them. On macOS a socket, an accepted socket
+and a pipe take two calls to become closed on exec, and a fork() from
+another thread waits a few microseconds until both calls are done. This
+wait does not depend on CCOL_FORK_SAFETY_REQUIRED. posix_spawn(3) runs
+no fork handler, so it does not wait. On macOS, a program that calls
+posix_spawn() while another thread can create a socket through the
+library must pass the POSIX_SPAWN_CLOEXEC_DEFAULT flag to
+posix_spawnattr_setflags(3), and name each descriptor that the child
+must keep with posix_spawn_file_actions_addinherit_np(3).
 .fi
 .SH "THREAD SAFETY"
 .nf
-A component that moves data between threads, or that gives a shared
-service, has its own synchronisation; a component for data work in one
-thread has none.
+A component that moves data between threads, or that provides a shared
+service, does its own synchronisation. A component for data work inside
+one thread does none.
 
 No internal locks (put a lock around a shared instance yourself):
   cvector, chashmap, cbstmap, cstring, cjson, cyaml
@@ -221,12 +222,12 @@ Internal synchronisation (several threads can call at the same time):
   ccol_event_loop, clrucache, clogger, cthreadpool, chttpclient,
   chttpserver
 
-Independent objects of a module without locks share no state, so two
+Separate objects of a module without locks share no state, so two
 threads can each use their own object. The pages of the synchronised
-modules give the few calls that a caller must serialise, for example
-two destroys of one handle.
+modules list the few calls that the caller must serialise, two destroys
+of one handle for example.
 
-The pthread wrappers of common.h (ccol_mutex_t and the others) are for
+The pthread wrappers of common.h (_ccol_mutex_t and the rest) exist for
 the portability of the library itself and are not part of the API. Use
 pthreads or C11 <threads.h> to protect your own data.
 .fi
@@ -260,4 +261,11 @@ int main(void) {
 .BR ccol_fixed_width_data_type_size (3),
 .BR ccol_mempool_destroy (3),
 .BR CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER (3),
-.BR citerators (7)
+.BR ccol_determine_ccol_data_type (3),
+.BR citerators (7),
+.BR chttp (7),
+.BR chttpserver (7),
+.BR clrucache (7),
+.BR cmempool (7),
+.BR csort (7),
+.BR cthreadpool (7)

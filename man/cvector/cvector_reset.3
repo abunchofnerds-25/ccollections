@@ -12,9 +12,8 @@ void cvector_reset(cvec v);
 .SH DESCRIPTION
 .nf
 Removes every element from the vector and then tries to shrink the
-capacity back to the minimum of 4 elements. When the reallocation fails,
-the capacity stays the same, but the element count becomes 0 all the
-same.
+capacity back to the minimum of 4 elements. If that reallocation fails the
+capacity stays as it was, but the element count becomes 0 anyway.
 .fi
 .SH PARAMETERS
 .nf
@@ -22,12 +21,11 @@ v    Vector to reset
 .fi
 .SH NOTES
 .nf
-The element count becomes 0
-The capacity goes back to the minimum (4) when the reallocation
-succeeds
-Does not free the elements one by one; the caller must do this first
-when it is necessary
-Asserts if v is NULL
+The element count becomes 0, and the capacity goes back to the minimum
+(4) when the reallocation succeeds.
+
+The elements are not freed one by one; the caller has to do that first
+when it is needed. Asserts if v is NULL.
 .fi
 .SH "SEE ALSO"
 .BR cvec_reset (3),

@@ -11,16 +11,15 @@ void *chttp_base64_decode(const char *b64_input, size_t *out_len);
 .fi
 .SH DESCRIPTION
 .nf
-This is a static inline wrapper around chttp_base64_decode_mp() that
-gives NULL for the memory management procedures, so the function uses
-malloc and free.
+This is a static inline wrapper that calls chttp_base64_decode_mp()
+with NULL memory management procedures, so it allocates with malloc.
 .fi
 .SH PARAMETERS
 .nf
 b64_input  The NUL-terminated base64 string to decode. It must not
            be NULL.
-out_len    Optional; it gets the decoded byte length. Give NULL to
-           ignore it.
+out_len    Optional. It receives the number of decoded bytes. Pass
+           NULL if you don't need it.
 .fi
 .SH RETURN VALUE
 .nf

@@ -1,0 +1,68 @@
+.TH CLOG_ALERT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+clog_alert \- emit a log line at ALERT level with a backtrace
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/clogger.h>
+
+clog_alert(clog lg, const char *fmt, ...);
+.fi
+.SH DESCRIPTION
+.nf
+Writes a log line at CLOG_ALERT level and picks up __FILE__, __LINE__
+and __func__ for you.  After the structured log line it appends a
+stack backtrace, the same way clog_error() does:
+
+  ts=... level=ALERT src=file.c:42 func=handle msg="disk full"
+  \et#0 ./myapp(handle+0x1a) [0x7f...]
+  \et#1 ./myapp(main+0x42) [0x7f...]
+
+ALERT maps to RFC 5424 syslog severity 1, "alert; action must be taken
+immediately".  In CLOG_FMT_SYSLOG mode each backtrace frame goes out as
+a separate syslog message with the same PRI, TIMESTAMP and MSGID as the
+original record.
+
+In the order of clog_level_t, ALERT sits between ERROR (severity 3) and
+FATAL (severity 0).  It is meant for a condition that an operator has
+to look at right away but that does not have to stop the process.
+.fi
+.SH PARAMETERS
+.nf
+lg     Logger handle (clog).
+fmt    printf-style format string.
+\&...    Format arguments (optional).
+.fi
+.SH NOTES
+.nf
+clog_alert does NOT stop the process, and neither does clog_error; use
+clog_fatal when the process must stop.
+A backtrace needs the binary to be linked with -rdynamic.  The capture
+itself can fail, on a platform with no execinfo.h or when an allocation
+fails for a moment while symbol names are resolved.  The logger then
+writes one "backtrace unavailable" marker line in place of the frames
+(a marker record in CLOG_FMT_SYSLOG mode), so you can see that the
+backtrace is missing.
+The shared write lock covers the backtrace write as well, so the
+backtrace always follows its log line without anything in between.
+When memory stays short for a while, or the content of a record leaves
+little room before the internal buffer cap, a backtrace frame that
+cannot be formatted is left out, while a shorter frame after it can
+still go out.  An incomplete frame is never written, so every line that
+goes out is a complete, well-formed record.  When not a single frame
+fits, one "backtrace unavailable" marker line takes their place (a
+marker record in CLOG_FMT_SYSLOG mode), the same marker that a failed
+capture gives.  Under the same pressure in CLOG_FMT_JSON mode the
+backtrace can fail to fit at all, and a "bt_error":"unavailable" key
+then takes the place of "bt", so the omission is visible there too.
+.fi
+.SH EXAMPLES
+.nf
+clog_alert(lg, "primary database unreachable, failing over");
+clog_alert(lg, "disk usage at %d%%, writes may fail soon", pct);
+.fi
+.SH "SEE ALSO"
+.BR clog_error (3),
+.BR clog_fatal (3),
+.BR clog_create_from_fd_mp (3)

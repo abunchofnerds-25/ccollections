@@ -22,18 +22,20 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* memrchr() is a GNU extension, which cstring_rfind() uses. */
+/* cstring_rfind() uses memrchr(), which is a GNU extension. */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
 
 #include <cstring.h>
-#include <ctype.h>
+#include <internal/cascii.h>
 #include <internal/cpow2.h>
+#include <internal/cprocsintern.h>
+#include <internal/test_helpers/cstring.h>
 
-/* memrchr() is in glibc and FreeBSD's libc, but not in macOS's, where a
- * backward scan takes its place; _CCOL_EMULATE_DARWIN_MEMRCHR selects that
- * scan elsewhere, for the test suites. */
+/* glibc and FreeBSD's libc have memrchr() but macOS's libc doesn't, so there
+ * a backward scan takes its place. _CCOL_EMULATE_DARWIN_MEMRCHR selects that
+ * scan on other systems too, for the test suites. */
 #if defined(__APPLE__) || defined(_CCOL_EMULATE_DARWIN_MEMRCHR)
 static const void *_cstring_memrchr(const void *s, int c, size_t n) {
   const unsigned char *p = (const unsigned char *)s + n;
@@ -56,50 +58,53 @@ struct cstring {
   ccol_memmgmt_procs_t *m_procs;
 };
 
+/* The copy of the caller's procs sits right after the struct in the same
+ * block, so it needs no allocation of its own. */
+_Static_assert(sizeof(struct cstring) % _Alignof(ccol_memmgmt_procs_t) == 0,
+               "the procs copy after struct cstring must be aligned");
+
 /* ========================================================================== */
 /*                         INTERNAL HELPERS                                   */
 /* ========================================================================== */
 
-/* Frees the character buffer and the container struct, in the same order as
- * __cvector_destroy: the code must read the free function pointer before it
- * frees the allocator struct that holds that pointer. */
+/* Frees the character buffer and the block of the container struct. With a
+ * custom allocator m_procs points either at an interned procs struct or at
+ * the copy in the tail of that block, so we read the free function pointer
+ * before freeing the block. */
 void __cstring_destroy(cstr s) {
   if (s) {
     _ccol_mem_free(s->m_procs, s->data);
 
     if (s->m_procs) {
       ccol_free_t free_func = s->m_procs->free;
-      free_func(s->m_procs);
       free_func(s);
     } else {
-      ccol_mem_free(s);
+      _ccol_default_mem_free(s);
     }
   }
 }
 
-/* True when a size_t can hold length + 1, where the extra 1 is the room for
- * the null terminator. A call site computes a buffer capacity as length + 1
- * before it gives that capacity to _ccol_find_nearest_gte_power_of_two(),
- * and every such call site must make this check first. The overflow
- * detection of that function works on the length + 1 value that the caller
- * has already computed, not on length itself, so a length of exactly
- * SIZE_MAX silently wraps length + 1 to 0 before that check runs. A capacity
- * of 0 always passes the "the capacity is already enough" fast path of
- * cstring_grow_to(), because 0 <= any real capacity. Without this check, the
- * wrap reports success, the code allocates nothing, and the caller then
- * reads or writes far past the real, small buffer. No real allocation can
- * reach this length, because a string that fills the full address space
- * cannot exist, but the check is explicit so that the code does not depend
- * on that fact. */
+/* True when length + 1 fits in a size_t, the extra 1 being room for the null
+ * terminator. Call sites compute a buffer capacity as length + 1 before they
+ * pass it to _ccol_find_nearest_gte_power_of_two(), and every one of them
+ * must make this check first. That function's overflow detection works on
+ * the length + 1 value the caller has already computed, not on length
+ * itself, so a length of exactly SIZE_MAX silently wraps length + 1 to 0
+ * before the check there even runs. And a capacity of 0 always takes the
+ * "capacity is already enough" fast path of cstring_grow_to(), because
+ * 0 <= any real capacity. Without this check the wrap reports success,
+ * nothing gets allocated, and the caller then reads or writes far past the
+ * real, small buffer. No real allocation can get to this length since a
+ * string filling the whole address space can't exist, but the check is
+ * explicit so the code doesn't depend on that. */
 static bool cstring_length_fits_with_terminator(size_t length) {
   return length != ccol_invalid_size;
 }
 
-/* Grows the character buffer to at least needed_capacity bytes. This
- * function rounds the new size up to the nearest power of two, which
- * amortises the cost of later allocations, with cstring_minimum_capacity as
- * the smallest new size. The function does nothing if the current capacity
- * is already enough. */
+/* Grows the character buffer to at least needed_capacity bytes. The new size
+ * is rounded up to the nearest power of two to amortise later allocations,
+ * and it's never below cstring_minimum_capacity. Nothing happens when the
+ * current capacity is already enough. */
 static bool cstring_grow_to(cstr s, size_t needed_capacity) {
   if (needed_capacity <= s->capacity) {
     return true;
@@ -124,11 +129,11 @@ static bool cstring_grow_to(cstr s, size_t needed_capacity) {
   return true;
 }
 
-/* Cleanup helper for the error path: it walks the vector of cstr pointers
+/* Cleanup helper for the error path. It walks the vector of cstr pointers
  * that cstring_split builds, destroys each cstr, and then destroys the
- * vector. A failure in the middle of a split must roll back every token that
- * the code has allocated up to that point, and this helper does that roll
- * back, so the caller always gets either a complete result or NULL. */
+ * vector. A split that fails halfway must roll back every token allocated
+ * so far, which is what this helper does, so the caller always gets either
+ * a complete result or NULL. */
 static void destroy_cstr_vector(cvec v) {
   if (!v) {
     return;
@@ -147,37 +152,45 @@ static void destroy_cstr_vector(cvec v) {
 /*                         CREATION / DESTRUCTION                             */
 /* ========================================================================== */
 
-/* Allocates and initialises a new cstr that holds the init_len bytes at
- * initial. initial can be NULL when init_len is 0, and the bytes must hold
- * no null byte. The capacity is the next power of two above init_len + 1,
- * and at least cstring_minimum_capacity, so the buffer is allocated once at
- * its final size. On failure this function frees every resource that it has
- * allocated up to that point and returns NULL. cstring_create_full(),
- * cstring_substring() and cstring_split() build every new cstr through it. */
+/* Allocates and initialises a new cstr holding the init_len bytes at
+ * initial. initial may be NULL when init_len is 0, and the bytes must not
+ * contain a null byte. The capacity is the next power of two above
+ * init_len + 1 and at least cstring_minimum_capacity, so the buffer gets
+ * allocated once at its final size. On failure everything allocated so far
+ * is freed and we return NULL. cstring_create_full(), cstring_substring()
+ * and cstring_split() build every new cstr through this function. An
+ * interned procs pointer is kept as it is, because the interned copy lives
+ * for the whole process; any other procs struct is copied into the tail of
+ * the cstr's own block. */
 static cstr cstring_create_from_span(const char *initial, size_t init_len,
                                      ccol_memmgmt_procs_t *m_procs,
                                      char **err) {
-  if (!ccol_verify_memmgmt_procs(m_procs, err)) {
+  if (!_ccol_verify_memmgmt_procs(m_procs, err)) {
     return NULL;
   }
 
-  cstr s = (cstr)_ccol_mem_calloc(m_procs, 1, sizeof(cstring));
+  bool copy_procs = m_procs && !ccol_procs_is_interned(m_procs);
+  cstr s = (cstr)_ccol_mem_calloc(
+      m_procs, 1,
+      sizeof(cstring) + (copy_procs ? sizeof(ccol_memmgmt_procs_t) : 0));
   if (!s) {
     if (err) {
-      *err = CCOL_ERR_STR("failed to allocate cstring container");
+      *err = _CCOL_ERR_STR("failed to allocate cstring container");
     }
     return NULL;
   }
 
-  if (!ccol_populate_mem_mgmt_procs(s, m_procs, err)) {
-    _ccol_mem_free(m_procs, s);
-    return NULL;
+  if (copy_procs) {
+    s->m_procs = (ccol_memmgmt_procs_t *)(s + 1);
+    memcpy(s->m_procs, m_procs, sizeof(ccol_memmgmt_procs_t));
+  } else {
+    s->m_procs = m_procs;
   }
 
   if (!cstring_length_fits_with_terminator(init_len)) {
     __cstring_destroy(s);
     if (err) {
-      *err = CCOL_ERR_STR("initial string too large");
+      *err = _CCOL_ERR_STR("initial string too large");
     }
     return NULL;
   }
@@ -185,7 +198,7 @@ static cstr cstring_create_from_span(const char *initial, size_t init_len,
   if (init_cap == ccol_invalid_size) {
     __cstring_destroy(s);
     if (err) {
-      *err = CCOL_ERR_STR("initial string too large");
+      *err = _CCOL_ERR_STR("initial string too large");
     }
     return NULL;
   }
@@ -197,7 +210,7 @@ static cstr cstring_create_from_span(const char *initial, size_t init_len,
   if (!s->data) {
     __cstring_destroy(s);
     if (err) {
-      *err = CCOL_ERR_STR("failed to allocate cstring data buffer");
+      *err = _CCOL_ERR_STR("failed to allocate cstring data buffer");
     }
     return NULL;
   }
@@ -215,19 +228,19 @@ static cstr cstring_create_from_span(const char *initial, size_t init_len,
   return s;
 }
 
-/* Allocates and initialises a new cstr whose first content comes from the
- * C string initial, which can be NULL for an empty string. */
+/* Allocates and initialises a new cstr whose initial content comes from the
+ * C string initial, which may be NULL for an empty string. */
 cstr cstring_create_full(const char *initial, ccol_memmgmt_procs_t *m_procs,
                          char **err) {
   return cstring_create_from_span(initial, initial ? strlen(initial) : 0,
                                   m_procs, err);
 }
 
-/* Returns the custom allocator that the cstr holds, or NULL when the cstr
- * uses the default malloc/free. */
+/* Returns the cstr's custom allocator, or NULL when it uses the default
+ * malloc/free. */
 ccol_memmgmt_procs_t *cstring_get_mprocs(cstr s) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   return s->m_procs;
 }
@@ -236,32 +249,30 @@ ccol_memmgmt_procs_t *cstring_get_mprocs(cstr s) {
 /*                         QUERY FUNCTIONS                                    */
 /* ========================================================================== */
 
-/* Returns the number of bytes in the string, without the null terminator.
- * The library keeps the length up to date after each operation, so this
- * function is O(1). */
+/* Returns the number of bytes in the string without the null terminator.
+ * The length is kept up to date by every operation, so this is O(1). */
 size_t cstring_length(cstr s) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   return s->length;
 }
 
 /* Returns a read-only pointer to the null-terminated character buffer. Any
- * operation that changes the string, such as append or insert, makes the
+ * operation that changes the string (append, insert and so on) makes the
  * pointer invalid. */
 const char *cstring_c_str(cstr s) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   return s->data;
 }
 
-/* Returns the character at position idx, or '\0' if idx is out of range.
- * Unlike a direct index into an array, an access out of the bounds is not
- * fatal here. */
+/* Returns the character at idx, or '\0' if idx is out of range. Unlike
+ * indexing an array directly, an out-of-bounds access isn't fatal here. */
 char cstring_at(cstr s, size_t idx) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   if (idx >= s->length) {
     return '\0';
@@ -269,10 +280,10 @@ char cstring_at(cstr s, size_t idx) {
   return s->data[idx];
 }
 
-/* Returns true when the string holds zero characters. */
+/* True when the string has zero characters. */
 bool cstring_is_empty(cstr s) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   return s->length == 0;
 }
@@ -281,23 +292,26 @@ bool cstring_is_empty(cstr s) {
 /*                         MODIFICATION FUNCTIONS                             */
 /* ========================================================================== */
 
-/* Appends str to the end of the string, growing the buffer when it needs
- * more room. An empty str is valid, and the function then does nothing. The
- * overflow check on new_len covers the unlikely case where the combined
- * length wraps a size_t.
+/* Appends str to the end of the string and grows the buffer when it needs
+ * more room. An empty str is valid and then nothing happens. The overflow
+ * check on new_len covers the unlikely case where the combined length wraps
+ * a size_t.
  *
  * The function starts on a 64-byte boundary. On an append that needs no
  * growth, the hot path branches forward to the short block that copies the
- * bytes, stores the new length and returns. That block must sit inside one
- * 64-byte line: a start offset of 32 or 48 bytes splits it across two lines,
- * and every append then costs about 45 percent more, with the same
- * instructions. Without the alignment the offset depends on the size of the
- * code that the linker places ahead of this function, so an unrelated edit
- * anywhere in the library could move it into the slow position. */
+ * bytes, stores the new length and returns, and that block needs to sit in
+ * one 64-byte line. With a start offset of 32 or 48 bytes it splits across
+ * two lines, and then every append costs about 45 percent more with exactly
+ * the same instructions. Without the alignment the offset would depend on
+ * the size of whatever code the linker puts ahead of this function, so an
+ * unrelated edit anywhere in the library could push it into the slow
+ * position. Keep the attribute, and after any change to this function or
+ * to the compiler check with objdump that the block still fits in one
+ * line. */
 __attribute__((aligned(64))) ccol_retval_t cstring_append(cstr s,
                                                           const char *str) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   if (!str) {
     return ccol_invalid_args;
@@ -313,9 +327,9 @@ __attribute__((aligned(64))) ccol_retval_t cstring_append(cstr s,
     return ccol_container_full;
   }
 
-  /* str can alias s->data. Save the offset before the grow, because realloc
+  /* str may alias s->data. We save the offset before growing, since realloc
    * can move the buffer, and then compute the pointer again from the new
-   * base address. */
+   * base. */
   ptrdiff_t alias_off =
       (str >= s->data && str < s->data + s->capacity) ? (str - s->data) : -1;
 
@@ -334,13 +348,12 @@ __attribute__((aligned(64))) ccol_retval_t cstring_append(cstr s,
   return ccol_success;
 }
 
-/* Prepends str to the front of the string. The function moves the old
- * content to the right with memmove before it writes the new prefix. The
- * buffer grows first when it needs more room, so memmove always works on
- * valid memory. */
+/* Prepends str to the front of the string. The old content is moved right
+ * with memmove before the new prefix is written. The buffer grows first if
+ * it needs more room, so the memmove always works on valid memory. */
 ccol_retval_t cstring_prepend(cstr s, const char *str) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   if (!str) {
     return ccol_invalid_args;
@@ -356,9 +369,9 @@ ccol_retval_t cstring_prepend(cstr s, const char *str) {
     return ccol_container_full;
   }
 
-  /* str can alias s->data. Save the offset before the grow, because realloc
-   * can move the buffer. The memmove also moves any alias at an offset > 0
-   * to the right by str_len, so such an alias needs a second correction. */
+  /* str may alias s->data. We save the offset before growing, since realloc
+   * can move the buffer. The memmove also shifts any alias at an offset > 0
+   * right by str_len, so such an alias needs a second correction. */
   ptrdiff_t alias_off =
       (str >= s->data && str < s->data + s->capacity) ? (str - s->data) : -1;
 
@@ -382,12 +395,12 @@ ccol_retval_t cstring_prepend(cstr s, const char *str) {
   return ccol_success;
 }
 
-/* Inserts str at the byte position pos; a pos that equals s->length is
- * equivalent to cstring_append. The buffer grows before the memmove, so the
- * move into the new space is always safe. */
+/* Inserts str at byte position pos; pos == s->length is the same as
+ * cstring_append. The buffer grows before the memmove, so moving into the
+ * new space is always safe. */
 ccol_retval_t cstring_insert(cstr s, size_t pos, const char *str) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   if (!str || pos > s->length) {
     return ccol_invalid_args;
@@ -403,9 +416,9 @@ ccol_retval_t cstring_insert(cstr s, size_t pos, const char *str) {
     return ccol_container_full;
   }
 
-  /* str can alias s->data. Save the offset before the grow, because realloc
-   * can move the buffer. The memmove also moves any alias at an offset > pos
-   * to the right by str_len, so such an alias needs a second correction. */
+  /* str may alias s->data. We save the offset before growing, since realloc
+   * can move the buffer. The memmove also shifts any alias at an offset > pos
+   * right by str_len, so such an alias needs a second correction. */
   ptrdiff_t alias_off =
       (str >= s->data && str < s->data + s->capacity) ? (str - s->data) : -1;
 
@@ -423,24 +436,24 @@ ccol_retval_t cstring_insert(cstr s, size_t pos, const char *str) {
     str = s->data + alias_off + str_len;
   }
 
-  /* When alias_off <= pos, the source region [alias_off, alias_off+str_len)
-   * can overlap the destination region [pos, pos+str_len) with dst > src.
-   * Because memcpy copies forward, it corrupts the data in that case, while
-   * memmove handles the overlap safely. */
+  /* When alias_off <= pos, the source [alias_off, alias_off+str_len) can
+   * overlap the destination [pos, pos+str_len) with dst > src. memcpy copies
+   * forward and would corrupt the data then, while memmove handles the
+   * overlap safely. */
   memmove(s->data + pos, str, str_len);
   s->length = new_len;
 
   return ccol_success;
 }
 
-/* Overwrites the full string content with str and drops the old content.
- * The memcpy also copies the null terminator, str_len + 1 bytes in total,
- * and the capacity check includes that byte. As in the other functions that
- * change the string, str can alias s->data, which is why the code saves the
- * offset before a possible realloc. */
+/* Overwrites the whole content with str and drops the old content. The
+ * memcpy copies the null terminator as well, str_len + 1 bytes in total, and
+ * the capacity check counts that byte. Like in the other functions that
+ * change the string, str may alias s->data, which is why the offset is
+ * saved before a possible realloc. */
 ccol_retval_t cstring_set(cstr s, const char *str) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   if (!str) {
     return ccol_invalid_args;
@@ -468,15 +481,15 @@ ccol_retval_t cstring_set(cstr s, const char *str) {
   return ccol_success;
 }
 
-/* Clears the string content and tries to shrink the buffer back to
- * cstring_minimum_capacity. The function always sets the length to zero; if
- * the reallocation fails, the buffer keeps its old capacity. A string that
- * is already at the smallest capacity skips the reallocation call, because
- * there is nothing to shrink. That is the common case, because a new string
- * and a string after a reset are both at that capacity. */
+/* Clears the content and tries to shrink the buffer back to
+ * cstring_minimum_capacity. The length is always set to zero, and if the
+ * reallocation fails the buffer keeps its old capacity. A string already at
+ * the smallest capacity skips the reallocation since there's nothing to
+ * shrink, and that's the common case: a new string and a string after a
+ * reset are both at that capacity. */
 void cstring_reset(cstr s) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
 
   if (s->capacity != cstring_minimum_capacity) {
@@ -493,12 +506,12 @@ void cstring_reset(cstr s) {
   s->data[0] = '\0';
 }
 
-/* Makes sure that the buffer holds at least min_capacity bytes, growing it
- * when it needs more room. The function silently clamps a request below
- * cstring_minimum_capacity up to that value. */
+/* Makes sure the buffer holds at least min_capacity bytes and grows it when
+ * needed. A request below cstring_minimum_capacity is silently raised to
+ * that value. */
 bool cstring_reserve(cstr s, size_t min_capacity) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
 
   size_t needed = min_capacity < cstring_minimum_capacity
@@ -507,52 +520,58 @@ bool cstring_reserve(cstr s, size_t min_capacity) {
   return cstring_grow_to(s, needed);
 }
 
-/* Converts every character to upper case in-place. The C standard needs the
- * cast to unsigned char before the call to toupper: without it, the
- * behaviour is undefined when char is signed and the value is negative,
- * which is what a non-ASCII byte gives. */
+/* Turns every ASCII lower-case letter into upper case in place and leaves
+ * every other byte alone. The folding is ASCII only and ignores the locale.
+ * toupper() maps a byte by the process's LC_CTYPE, so the same string would
+ * convert differently under a Turkish locale, say, or a single-byte locale
+ * with accented letters, and a byte of a multi-byte UTF-8 character could
+ * change. A string function whose result depends on the locale is a bug
+ * waiting for the first user outside the C locale, so we don't call it. */
 void cstring_to_upper(cstr s) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   for (size_t i = 0; i < s->length; i++) {
-    s->data[i] = (char)toupper((unsigned char)s->data[i]);
+    s->data[i] = (char)ccol_ascii_toupper((unsigned char)s->data[i]);
   }
 }
 
-/* Converts every character to lower case in-place. The cast to unsigned
- * char is necessary here for the same reason as in cstring_to_upper. */
+/* Turns every ASCII upper-case letter into lower case in place and leaves
+ * every other byte alone, in every locale, for the same reason as in
+ * cstring_to_upper. */
 void cstring_to_lower(cstr s) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   for (size_t i = 0; i < s->length; i++) {
-    s->data[i] = (char)tolower((unsigned char)s->data[i]);
+    s->data[i] = (char)ccol_ascii_tolower((unsigned char)s->data[i]);
   }
 }
 
-/* Removes the whitespace at the start and at the end of the string,
- * in-place. The function trims the end first, because there it only moves
- * the null terminator backwards and needs no memory move; the whitespace at
- * the start then needs a memmove. */
+/* Removes the ASCII white space (space, '\t', '\n', '\v', '\f' and '\r')
+ * at both ends of the string, in place and whatever the locale. We trim the
+ * end first because that only moves the null terminator back and needs no
+ * memory move; the white space at the start then needs a memmove. */
 void cstring_trim(cstr s) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   if (s->length == 0) {
     return;
   }
 
-  /* Trim the whitespace at the end first, which is cheaper because it only
-   * moves the null terminator. */
-  while (s->length > 0 && isspace((unsigned char)s->data[s->length - 1])) {
+  /* Trim the end first; it's cheaper since it only moves the null
+   * terminator. */
+  while (s->length > 0 &&
+         ccol_ascii_isspace((unsigned char)s->data[s->length - 1])) {
     s->length--;
   }
   s->data[s->length] = '\0';
 
-  /* Trim the whitespace at the start. */
+  /* Now trim the start. */
   size_t start = 0;
-  while (start < s->length && isspace((unsigned char)s->data[start])) {
+  while (start < s->length &&
+         ccol_ascii_isspace((unsigned char)s->data[start])) {
     start++;
   }
   if (start > 0) {
@@ -562,22 +581,21 @@ void cstring_trim(cstr s) {
 }
 
 /* Computes the new length of a string of orig_length bytes after a replace
- * that puts an rlen-byte replacement in the place of count non-overlapping
- * occurrences of an nlen-byte needle. The function detects an overflow of a
- * size_t both in the multiplication (rlen - nlen) * count and in the final
- * addition. count must be > 0, because the caller handles the case of zero
- * occurrences itself.
+ * that puts an rlen-byte replacement in place of count non-overlapping
+ * occurrences of an nlen-byte needle. It catches a size_t overflow both in
+ * the multiplication (rlen - nlen) * count and in the final addition. count
+ * must be > 0, because the caller deals with zero occurrences itself.
  *
- * This arithmetic is its own function rather than inline in
+ * The arithmetic is a function of its own rather than inline in
  * cstring_replace() so that a test can drive it directly. Reaching these
- * overflow guards through cstring_replace() itself needs real strings of
- * several gigabytes, such as a source string of several gigabytes that
- * holds one character many times, plus a replacement string of several
- * gigabytes, which is not practical for a normal test run. */
+ * overflow guards through cstring_replace() would take real strings of
+ * several gigabytes, for example a multi-gigabyte source string holding one
+ * character many times plus a multi-gigabyte replacement, which isn't
+ * practical in a normal test run. */
 static ccol_retval_t compute_replace_new_length(size_t orig_length, size_t nlen,
                                                 size_t rlen, size_t count,
                                                 size_t *new_len_out) {
-  ccol_assert(count > 0);
+  _ccol_assert(count > 0);
 
   if (rlen >= nlen) {
     size_t added = (rlen - nlen) * count;
@@ -585,42 +603,39 @@ static ccol_retval_t compute_replace_new_length(size_t orig_length, size_t nlen,
       return ccol_container_full;
     }
     size_t new_len = orig_length + added;
-    /* The value new_len == orig_length + added can land on exactly SIZE_MAX.
-     * Such a value is never "less than orig_length", which is the wraparound
-     * that the first check below catches, but the caller of
-     * cstring_replace() still needs a size_t that holds new_len + 1 for the
-     * null terminator. This code must therefore reject that exact value too,
-     * not only a real wraparound past it. */
+    /* new_len == orig_length + added can come out at exactly SIZE_MAX. That
+     * value is never "less than orig_length", which is the wraparound the
+     * first check below catches, but the caller of cstring_replace() still
+     * needs new_len + 1 to fit in a size_t for the null terminator. So we
+     * reject that exact value too, not only a real wraparound past it. */
     if (new_len < orig_length ||
         !cstring_length_fits_with_terminator(new_len)) {
       return ccol_container_full;
     }
     *new_len_out = new_len;
   } else {
-    /* Unlike the growth branch above, this branch needs no guard against an
-     * overflow or an underflow, for this reason. The code found count
-     * occurrences of an nlen-byte needle in a string of orig_length bytes,
-     * and those occurrences do not overlap, because the loop that counts
-     * them in cstring_replace() moves forward by nlen after each match. The
-     * relation count * nlen <= orig_length therefore always holds, and it
-     * also bounds count * (nlen - rlen), which is not larger than
-     * count * nlen. So the subtraction below can never underflow and the
-     * multiplication in the middle can never overflow, for every input that
-     * a caller gives to this function. */
+    /* Unlike the growth branch above, this branch needs no overflow or
+     * underflow guard. We found count occurrences of an nlen-byte needle in
+     * a string of orig_length bytes, and they don't overlap, because the
+     * counting loop in cstring_replace() moves forward by nlen after each
+     * match. So count * nlen <= orig_length always holds, and it also bounds
+     * count * (nlen - rlen), which can't be larger than count * nlen. The
+     * subtraction below therefore never underflows and the multiplication
+     * in the middle never overflows, for any input a caller can give. */
     *new_len_out = orig_length - (nlen - rlen) * count;
   }
 
   return ccol_success;
 }
 
-/* Replaces all the occurrences of needle with replacement, in-place. The
- * function first counts the total number of occurrences, so that it can
- * allocate one new buffer of exactly the size that it needs before it
- * builds the new content. This keeps the number of reallocations at one. */
+/* Replaces every occurrence of needle with replacement, in place. We count
+ * all the occurrences first, so we can allocate one new buffer of exactly
+ * the right size before building the new content, which keeps it at a
+ * single reallocation. */
 ccol_retval_t cstring_replace(cstr s, const char *needle,
                               const char *replacement) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   if (!needle || needle[0] == '\0' || !replacement) {
     return ccol_invalid_args;
@@ -641,7 +656,7 @@ ccol_retval_t cstring_replace(cstr s, const char *needle,
     return ccol_success;
   }
 
-  /* Compute the new length, which also checks for an overflow. */
+  /* Compute the new length; this checks for an overflow too. */
   size_t new_len;
   ccol_retval_t len_rv =
       compute_replace_new_length(s->length, nlen, rlen, count, &new_len);
@@ -674,7 +689,7 @@ ccol_retval_t cstring_replace(cstr s, const char *needle,
     dst += rlen;
     src = found + nlen;
   }
-  /* Copy the rest of the string, with the null terminator. */
+  /* Copy the rest of the string, null terminator included. */
   size_t tail = strlen(src);
   memcpy(dst, src, tail + 1);
 
@@ -690,13 +705,12 @@ ccol_retval_t cstring_replace(cstr s, const char *needle,
 /*                         SEARCH AND COMPARISON                              */
 /* ========================================================================== */
 
-/* Compares the cstr against a C string with strcmp, in lexicographic order.
- * Returns 1 when str is NULL, which means that the cstr is the greater one,
- * following the convention that a non-null value is greater than a null
- * value. */
+/* Compares the cstr with a C string using strcmp, in lexicographic order.
+ * A NULL str gives 1, meaning the cstr is the greater one, following the
+ * convention that a non-null value is greater than a null one. */
 int cstring_compare(cstr s, const char *str) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   if (!str) {
     return 1;
@@ -704,11 +718,11 @@ int cstring_compare(cstr s, const char *str) {
   return strcmp(s->data, str);
 }
 
-/* Returns true when the content of the cstr is byte-for-byte identical to
- * str, and false when str is NULL, which counts as not equal. */
+/* True when the cstr's content is byte for byte the same as str. A NULL str
+ * counts as not equal and gives false. */
 bool cstring_equals(cstr s, const char *str) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   if (!str) {
     return false;
@@ -716,12 +730,11 @@ bool cstring_equals(cstr s, const char *str) {
   return strcmp(s->data, str) == 0;
 }
 
-/* Returns true when the string begins with prefix. The function rejects a
- * prefix that is longer than the string immediately, with no call to
- * strncmp. */
+/* True when the string begins with prefix. A prefix longer than the string
+ * is rejected immediately without calling strncmp. */
 bool cstring_starts_with(cstr s, const char *prefix) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   if (!prefix) {
     return false;
@@ -733,12 +746,12 @@ bool cstring_starts_with(cstr s, const char *prefix) {
   return strncmp(s->data, prefix, plen) == 0;
 }
 
-/* Returns true when the string ends with suffix. The function compares the
- * tail of the string, which starts at s->data + s->length - slen, with
- * strncmp, so it needs no temporary copy. */
+/* True when the string ends with suffix. The tail of the string, starting at
+ * s->data + s->length - slen, is compared with strncmp, so no temporary copy
+ * is needed. */
 bool cstring_ends_with(cstr s, const char *suffix) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   if (!suffix) {
     return false;
@@ -751,11 +764,10 @@ bool cstring_ends_with(cstr s, const char *suffix) {
 }
 
 /* Returns the byte offset of the first occurrence of needle, or
- * ccol_invalid_size when the function does not find needle. The function
- * delegates the work to strstr. */
+ * ccol_invalid_size when needle isn't there. strstr does the actual work. */
 size_t cstring_find(cstr s, const char *needle) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   if (!needle) {
     return ccol_invalid_size;
@@ -770,24 +782,24 @@ size_t cstring_find(cstr s, const char *needle) {
 #ifdef RUNNING_UNIT_TESTS
 /* Counts the cstring_rfind() calls that hand the search over to
  * cstring_rfind_linear(). A white-box test uses it to prove that its inputs
- * reach that path, both with the table on the stack and with the table on
- * the heap. This counter is not part of the public API. */
+ * reach that path, with the table on the stack and with the table on the
+ * heap. It isn't part of the public API. */
 unsigned long cstring_rfind_linear_count_for_tests = 0;
 #endif
 
-/* The largest needle whose failure table cstring_rfind_linear() keeps on the
- * stack; a longer needle takes its table from the allocator of the string. */
+/* The longest needle whose failure table cstring_rfind_linear() keeps on the
+ * stack. A longer needle gets its table from the string's allocator. */
 #define CSTRING_RFIND_STACK_TABLE_LEN 128
 
-/* Returns the start of the rightmost occurrence of needle that lies wholly
- * inside hay[0, limit), or ccol_invalid_size when there is none. This is the
- * Knuth-Morris-Pratt search run from right to left: the pattern is the
- * needle read backward, and the scan reads hay backward from limit. The
- * failure table has one entry for each byte of the needle, so the search
- * costs O(limit + nlen) whatever the text and the needle hold.
+/* Returns the start of the rightmost occurrence of needle that lies entirely
+ * inside hay[0, limit), or ccol_invalid_size when there's none. It's the
+ * Knuth-Morris-Pratt search run right to left: the pattern is the needle
+ * read backward, and the scan reads hay backward from limit. The failure
+ * table has one entry per needle byte, so the search costs O(limit + nlen)
+ * whatever the text and the needle contain.
  *
- * *table_ok is set to false, and nothing is searched, when the table does
- * not fit on the stack and the allocator refuses it. */
+ * When the table doesn't fit on the stack and the allocator refuses it,
+ * *table_ok is set to false and nothing is searched. */
 static __attribute__((noinline)) size_t cstring_rfind_linear(
     const char *hay, size_t limit, const char *needle, size_t nlen,
     ccol_memmgmt_procs_t *m_procs, bool *table_ok) {
@@ -808,8 +820,8 @@ static __attribute__((noinline)) size_t cstring_rfind_linear(
   }
   *table_ok = true;
 
-  /* The pattern byte k is needle[tail - k]. fail[k] is the length of the
-   * longest proper border of the first k + 1 pattern bytes. */
+  /* Pattern byte k is needle[tail - k]. fail[k] is the length of the longest
+   * proper border of the first k + 1 pattern bytes. */
   const size_t tail = nlen - 1;
   fail[0] = 0;
   size_t k = 0;
@@ -823,8 +835,8 @@ static __attribute__((noinline)) size_t cstring_rfind_linear(
     fail[q] = k;
   }
 
-  /* j pattern bytes are matched: hay[i, i + j) equals the last j bytes of
-   * the needle. */
+  /* j pattern bytes are matched, meaning hay[i, i + j) equals the last j
+   * bytes of the needle. */
   size_t found = ccol_invalid_size;
   size_t j = 0;
   for (size_t i = limit; i-- > 0;) {
@@ -844,7 +856,7 @@ static __attribute__((noinline)) size_t cstring_rfind_linear(
   return found;
 }
 
-/* The state of one backward scan of cstring_rfind(). */
+/* State of one backward scan of cstring_rfind(). */
 typedef struct {
   const char *hay;
   size_t length;
@@ -855,12 +867,12 @@ typedef struct {
   ccol_memmgmt_procs_t *m_procs;
 } cstring_rfind_scan;
 
-/* Tests the candidate that starts at st, whose first and last bytes already
- * equal those of the needle. Returns true, and stores the answer in
- * *result, when the answer of the whole search is settled: either st
- * matches, or the scan has spent its budget and cstring_rfind_linear()
- * answered for every start below st. Returns false when the scan must go on
- * below st. */
+/* Tests the candidate starting at st, whose first and last bytes already
+ * match those of the needle. Returns true and stores the answer in *result
+ * once the answer of the whole search is settled, which is when st matches
+ * or when the scan has used up its budget and cstring_rfind_linear() has
+ * answered for every start below st. Returns false when the scan has to go
+ * on below st. */
 static inline bool cstring_rfind_candidate(cstring_rfind_scan *sc, size_t st,
                                            size_t *result) {
   if (memcmp(sc->hay + st + 1, sc->needle + 1, sc->nlen - 2) == 0) {
@@ -876,20 +888,20 @@ static inline bool cstring_rfind_candidate(cstring_rfind_scan *sc, size_t st,
       *result = r;
       return true;
     }
-    /* No memory for the table, so finish with the scan, which is always
+    /* No memory for the table, so we finish with the scan, which is always
      * correct. */
     sc->budget = false;
   }
   return false;
 }
 
-/* 16 bytes that the compiler handles as one vector register where the
- * target has one. */
+/* 16 bytes that the compiler treats as one vector register where the target
+ * has one. */
 typedef unsigned char cstring_bytes16 __attribute__((vector_size(16)));
 
-/* The 16 candidate starts [b, b + 16) whose filter lanes are set in hit, from
- * the highest down. Returns true when the answer is settled, as
- * cstring_rfind_candidate() does. */
+/* Tests the candidate starts in [b, b + 16) whose filter lanes are set in
+ * hit, from the highest one down. Returns true when the answer is settled,
+ * as cstring_rfind_candidate() does. */
 static inline bool cstring_rfind_block(cstring_rfind_scan *sc, size_t b,
                                        cstring_bytes16 hit, size_t *result) {
   unsigned char lanes[16];
@@ -909,17 +921,17 @@ static inline bool cstring_bytes16_any(cstring_bytes16 v) {
   return (halves[0] | halves[1]) != 0;
 }
 
-/* The length below which cstring_rfind() searches forward with strstr()
- * instead of scanning backward. Measured against the forward search, the
- * backward scan wins from about 100 bytes when the match is near the end,
- * breaks even at about 256 bytes when it is in the middle, and loses by a
- * few nanoseconds up to about 1 KiB when there is no match at all. */
+/* Below this length cstring_rfind() searches forward with strstr() instead
+ * of scanning backward. Measured against the forward search, the backward
+ * scan wins from about 100 bytes when the match is near the end, breaks
+ * even at about 256 bytes when it's in the middle, and loses by a few
+ * nanoseconds up to about 1 KiB when there's no match at all. */
 #define CSTRING_RFIND_SHORT 256
 
 /* The backward vector scan of cstring_rfind() for a string of at least
- * CSTRING_RFIND_SHORT bytes. It is a separate function so that only the
- * calls that scan backward pay for its stack frame and vector setup, and
- * the short path never does. */
+ * CSTRING_RFIND_SHORT bytes. It's a separate function so that only the calls
+ * that scan backward pay for its stack frame and its vector setup; the short
+ * path never does. */
 static __attribute__((noinline)) size_t
 cstring_rfind_backward(cstr s, const char *needle) {
   size_t nlen = strlen(needle);
@@ -948,9 +960,9 @@ cstring_rfind_backward(cstr s, const char *needle) {
   const cstring_bytes16 vlast = (cstring_bytes16){0} + last;
   size_t result;
 
-  /* Every start position below pos is still to be tested. The main loop
-   * filters 64 positions for each test of its result, and only when that
-   * test fires does the 16-position loop below it look at the block lane by
+  /* Every start position below pos is still untested. The main loop
+   * filters 64 positions per test of its result, and only when that test
+   * fires does the 16-position loop under it go through the block lane by
    * lane. */
   size_t pos = s->length - tail;
   while (pos >= 16) {
@@ -976,7 +988,7 @@ cstring_rfind_backward(cstr s, const char *needle) {
         continue;
       }
     }
-    /* The 16 positions below pos, lane by lane when any of them passes. */
+    /* The 16 positions below pos, lane by lane once any of them passes. */
     size_t b = pos - 16;
     cstring_bytes16 f, l;
     memcpy(&f, sc.hay + b, sizeof(f));
@@ -998,37 +1010,37 @@ cstring_rfind_backward(cstr s, const char *needle) {
 }
 
 /* Returns the byte offset of the last occurrence of needle, or
- * ccol_invalid_size when the function does not find needle. Overlapping
- * occurrences count, so rfind("ababa", "aba") is 2.
+ * ccol_invalid_size when needle isn't found. Overlapping occurrences count,
+ * so rfind("ababa", "aba") is 2.
  *
  * A string shorter than CSTRING_RFIND_SHORT is searched forward with
- * strstr(). A longer one is scanned from the end toward its start, so the
- * first match that the scan meets is the answer and the bytes to its left
- * are never read. A one-byte needle is one memrchr(). A longer needle is
- * filtered with 16-byte vector compares: one compare tests the first byte of
- * the needle against 16 start positions, and another tests the last byte
- * against the 16 positions nlen - 1 further on. Only a position that passes
- * both is compared in full. A text needs both bytes of the needle, at the
- * right distance, to stop the filter, so ordinary text passes through it at
+ * strstr(). A longer one is scanned from the end towards the start, so the
+ * first match the scan meets is the answer and the bytes to its left are
+ * never read. A one-byte needle is a single memrchr(). A longer needle goes
+ * through a filter of 16-byte vector compares: one compare tests the
+ * needle's first byte against 16 start positions, and another tests its last
+ * byte against the 16 positions nlen - 1 further on. Only a position that
+ * passes both gets a full compare. To stop the filter a text needs both
+ * needle bytes at the right distance, so ordinary text goes through it at
  * the speed of the two compares.
  *
  * The filter alone costs O(n * m) on a text and a needle built to agree on
- * long runs, such as a needle "aa...aba...a" in a text of 'a' bytes. The
- * function therefore charges nlen for every candidate that fails the full
- * compare, and once the charge exceeds four times the bytes that the scan
- * has passed, it hands the rest of the string to cstring_rfind_linear(),
- * which is O(n + m). So the scan does O(n) work before any hand-over, and an
- * ordinary text never pays for the table. A cstr holds no null byte before
- * its terminator, so the search covers exactly s->data[0, s->length). */
+ * long runs, like a needle "aa...aba...a" in a text of 'a' bytes. So every
+ * candidate that fails the full compare is charged nlen, and once the charge
+ * goes over four times the bytes the scan has passed, the rest of the string
+ * goes to cstring_rfind_linear(), which is O(n + m). That way the scan does
+ * O(n) work before any hand-over, and an ordinary text never pays for the
+ * table. A cstr holds no null byte before its terminator, so the search
+ * covers exactly s->data[0, s->length). */
 size_t cstring_rfind(cstr s, const char *needle) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   if (!needle) {
     return ccol_invalid_size;
   }
-  /* A long string goes straight to the backward scan, with nothing saved
-   * here that it would have to restore first. */
+  /* A long string goes straight to the backward scan, and there's nothing
+   * saved here that it would have to restore first. */
   if (s->length >= CSTRING_RFIND_SHORT) {
     return cstring_rfind_backward(s, needle);
   }
@@ -1040,11 +1052,12 @@ size_t cstring_rfind(cstr s, const char *needle) {
         (const char *)_cstring_memrchr(s->data, needle[0], s->length);
     return p ? (size_t)(p - s->data) : ccol_invalid_size;
   }
-  /* Below CSTRING_RFIND_SHORT, the fixed cost of the backward vector scan
-   * exceeds a forward search with the SIMD strstr() of the C library. That
+  /* Below CSTRING_RFIND_SHORT the fixed cost of the backward vector scan is
+   * more than a forward search with the C library's SIMD strstr(). That
    * search steps past each match, so its cost grows with the number of
-   * matches, which is bounded on a string this short. A needle longer than
-   * the string matches nowhere, which strstr() reports by itself. */
+   * matches, and on a string this short that number is bounded. A needle
+   * longer than the string matches nowhere, and strstr() reports that by
+   * itself. */
   size_t last = ccol_invalid_size;
   const char *ptr = s->data;
   const char *found;
@@ -1059,46 +1072,45 @@ size_t cstring_rfind(cstr s, const char *needle) {
 /*                    SUBSTRING, COPY AND SPLIT                               */
 /* ========================================================================== */
 
-/* Creates a new cstr that holds at most length bytes, starting at the byte
- * offset start. If start is past the end of the string, the function returns
- * an empty cstr rather than an error. The function clamps the real length to
- * the number of bytes that are left, and allocates the buffer of the result
- * once, at its final size. */
+/* Creates a new cstr with at most length bytes starting at byte offset
+ * start. A start past the end of the string gives an empty cstr rather than
+ * an error. The real length is clamped to the bytes that are left, and the
+ * result's buffer is allocated once at its final size. */
 cstr cstring_substring(cstr s, size_t start, size_t length, char **err) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
 
   if (start >= s->length) {
     return cstring_create_from_span(NULL, 0, s->m_procs, err);
   }
 
-  size_t actual_len = ccol_min(length, s->length - start);
+  size_t actual_len = _ccol_min(length, s->length - start);
   return cstring_create_from_span(s->data + start, actual_len, s->m_procs, err);
 }
 
-/* Creates an independent deep copy of s, with the same content and the same
+/* Creates an independent deep copy of s with the same content and the same
  * allocator. */
 cstr cstring_copy(cstr s, char **err) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   return cstring_create_full(s->data, s->m_procs, err);
 }
 
 /* Splits the string at every occurrence of delimiter and returns a cvec of
- * cstr tokens. The result always holds at least one token: the tail after
- * the last delimiter, which can be empty. Each token is allocated once, at
- * its final size. On any allocation failure, destroy_cstr_vector destroys
- * every token that the function has made up to that point, and the function
- * returns NULL, so the caller gets either a complete result or nothing. */
+ * cstr tokens. The result always holds at least one token, the tail after
+ * the last delimiter, which may be empty. Each token is allocated once at
+ * its final size. On any allocation failure destroy_cstr_vector destroys
+ * every token made so far and we return NULL, so the caller gets either a
+ * complete result or nothing. */
 cvec cstring_split(cstr s, const char *delimiter, char **err) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   if (!delimiter || delimiter[0] == '\0') {
     if (err) {
-      *err = CCOL_ERR_STR("delimiter must be a non-empty string");
+      *err = _CCOL_ERR_STR("delimiter must be a non-empty string");
     }
     return NULL;
   }
@@ -1126,7 +1138,7 @@ cvec cstring_split(cstr s, const char *delimiter, char **err) {
       __cstring_destroy(part);
       destroy_cstr_vector(result);
       if (err) {
-        *err = CCOL_ERR_STR("failed to push split token into result vector");
+        *err = _CCOL_ERR_STR("failed to push split token into result vector");
       }
       return NULL;
     }
@@ -1134,7 +1146,7 @@ cvec cstring_split(cstr s, const char *delimiter, char **err) {
     current = found + dlen;
   }
 
-  /* The last token, which is empty when the string ends with the delimiter. */
+  /* The last token; it's empty when the string ends with the delimiter. */
   cstr last = cstring_create_from_span(
       current, s->length - (size_t)(current - s->data), s->m_procs, err);
   if (!last) {
@@ -1147,7 +1159,8 @@ cvec cstring_split(cstr s, const char *delimiter, char **err) {
     __cstring_destroy(last);
     destroy_cstr_vector(result);
     if (err) {
-      *err = CCOL_ERR_STR("failed to push last split token into result vector");
+      *err =
+          _CCOL_ERR_STR("failed to push last split token into result vector");
     }
     return NULL;
   }
@@ -1164,27 +1177,26 @@ cvec cstring_split(cstr s, const char *delimiter, char **err) {
 
 #ifdef RUNNING_UNIT_TESTS
 /* Exposes the internal buffer capacity to the white-box unit tests, which
- * check the thresholds of the grow step and that the library keeps the
- * smallest capacity. This function is not part of the public API. */
-size_t cstring_get_capacity(cstr s) {
+ * check the grow thresholds and that the smallest capacity is kept. Not part
+ * of the public API. */
+size_t _cstring_get_capacity(cstr s) {
   if (!s) {
-    ccol_assert(false);
+    _ccol_assert(false);
   }
   return s->capacity;
 }
 
-/* Exposes cstring_length_fits_with_terminator() to the white-box unit
- * tests; the comment on that function explains why the check exists. This
- * function is not part of the public API. */
-bool cstring_length_fits_with_terminator_for_tests(size_t length) {
+/* Exposes cstring_length_fits_with_terminator() to the white-box unit tests;
+ * the comment on that function explains why the check exists. Not part of
+ * the public API. */
+bool _cstring_length_fits_with_terminator_for_tests(size_t length) {
   return cstring_length_fits_with_terminator(length);
 }
 
-/* Exposes the internal length arithmetic of cstring_replace(), which checks
- * for an overflow, to the white-box unit tests. The comment on
- * compute_replace_new_length() explains why this function is necessary. This
- * function is not part of the public API. */
-ccol_retval_t cstring_replace_compute_new_length_for_tests(
+/* Exposes the overflow-checked length arithmetic of cstring_replace() to the
+ * white-box unit tests. The comment on compute_replace_new_length() explains
+ * why this is needed. Not part of the public API. */
+ccol_retval_t _cstring_replace_compute_new_length_for_tests(
     size_t orig_length, size_t nlen, size_t rlen, size_t count,
     size_t *new_len_out) {
   return compute_replace_new_length(orig_length, nlen, rlen, count,

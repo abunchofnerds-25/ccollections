@@ -12,17 +12,16 @@ char *chttp_base64_encode(const void *data, size_t len,
 .fi
 .SH DESCRIPTION
 .nf
-This is a static inline wrapper around chttp_base64_encode_mp() that
-gives NULL for the memory management procedures, so the function uses
-malloc and free.
+This is a static inline wrapper that calls chttp_base64_encode_mp()
+with NULL memory management procedures, so it allocates with malloc.
 .fi
 .SH PARAMETERS
 .nf
 data     The buffer to encode. It can be NULL only if len is 0.
 len      The number of bytes in data.
-out_len  Optional; it gets the length of the string that the
-         function gives back, not counting the terminating NUL.
-         Give NULL to ignore it.
+out_len  Optional. It receives the length of the returned string,
+         without the terminating NUL. Pass NULL if you don't need
+         it.
 .fi
 .SH RETURN VALUE
 .nf

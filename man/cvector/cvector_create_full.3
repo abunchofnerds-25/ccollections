@@ -13,30 +13,28 @@ cvec cvector_create_full(size_t elem_size,
 .fi
 .SH DESCRIPTION
 .nf
-Creates a new vector container that stores elements of the given size,
-with every memory management option set by the caller. The vector
-controls its capacity by itself.
+Creates a new vector for elements of the given size, with every memory
+management option set by the caller. The vector manages its capacity by
+itself.
 .fi
 .SH PARAMETERS
 .nf
 elem_size     Size of each element in bytes (must be > 0, and must not
               exceed SIZE_MAX / 4)
-mmgmt_procs   Custom memory management procedures, or NULL for
+mmgmt_procs   Custom memory management procedures, or NULL for the
               default malloc/free
-err           Optional pointer to receive error string on failure
+err           Optional pointer that receives an error string on failure
 .fi
 .SH RETURN VALUE
 .nf
-Returns a pointer to the new vector on success
-Returns NULL on failure, which includes an elem_size of 0 and an
-elem_size that makes the allocation of the first 4-element backing
-buffer overflow
+A pointer to the new vector on success.
+NULL on failure, which includes an elem_size of 0 and an elem_size large
+enough that allocating the first 4-element backing buffer overflows.
 .fi
 .SH NOTES
 .nf
-The first capacity is 4 elements
-Capacity scaling: 2x when full, 0.5x when less than 1/4 full
-Minimum capacity: 4 elements
+The first capacity is 4 elements, which is also the minimum. The capacity
+doubles when the vector is full and halves when it is less than 1/4 full.
 .fi
 .SH "SEE ALSO"
 .BR cvector_create (3),

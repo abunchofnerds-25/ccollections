@@ -30,10 +30,10 @@ SOFTWARE.
 #include <signal.h>
 #include <time.h>
 
-/* Consumes every SIGPIPE that is pending for the calling thread or for the
- * process. SIGPIPE must be blocked. macOS and OpenBSD have no
- * sigtimedwait(); there sigwait() takes the signal, and it does not block,
- * because the loop calls it only while sigpending() reports the signal. */
+/* Takes every SIGPIPE that is pending for the calling thread or for the
+ * process, and SIGPIPE has to be blocked when you call it. macOS and OpenBSD
+ * have no sigtimedwait(), so there sigwait() takes the signal; it doesn't
+ * block because the loop only calls it while sigpending() reports one. */
 static inline void test_consume_pending_sigpipe(void) {
   sigset_t set;
   sigemptyset(&set);

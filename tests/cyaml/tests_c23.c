@@ -22,11 +22,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* The value macros of cyaml.h, compiled as C23 (-std=gnu2x). The classifier
- * of cyaml_set() maps the type of the C23 nullptr to CYAML_NULL, and the C23
- * `true` has the type bool, so it stores a CYAML_BOOL with no cast. The main
- * suite compiles as C11, where neither holds, which is why these tests live
- * in a binary of their own. */
+/* The value macros of cyaml.h compiled as C23 (-std=gnu2x). The classifier of
+ * cyaml_set() maps the type of the C23 nullptr to CYAML_NULL, and since the C23
+ * `true` has the type bool it stores a CYAML_BOOL with no cast. Neither holds
+ * in C11, which the main suite compiles as, so these tests get their own
+ * binary. */
 
 #include <cyaml.h>
 #include <tau/tau.h>
@@ -36,8 +36,8 @@ TAU_MAIN()
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ > 201710L && \
     ((defined(__clang__) && __clang_major__ >= 16) ||          \
      (!defined(__clang__) && defined(__GNUC__) && __GNUC__ >= 13))
-/* This test is non-vacuous: without the nullptr association, cyaml_set()
- * refuses nullptr with ccol_invalid_args and the leaf keeps its value. */
+/* Without the nullptr association this fails, because cyaml_set()
+ * refuses nullptr with ccol_invalid_args and the leaf keeps its old value. */
 TEST(c23, nullptr_sets_the_leaf_to_null) {
   cyaml doc = cyaml_parse("{\"k\": 1}", NULL);
   ccol_retval_t rv =
@@ -59,8 +59,8 @@ TEST(c23, true_stores_a_bool) {
   REQUIRE_TRUE(is_bool);
 }
 #else
-/* A compiler without nullptr and without the C23 `true`: the binary still
- * checks that a NULL sets the leaf to CYAML_NULL. */
+/* For a compiler that has neither nullptr nor the C23 `true`, the binary
+ * checks at least that a NULL sets the leaf to CYAML_NULL. */
 TEST(c23, null_sets_the_leaf_to_null) {
   cyaml doc = cyaml_parse("{\"k\": 1}", NULL);
   ccol_retval_t rv = doc ? cyaml_set(doc, "k", NULL) : ccol_not_enough_memory;

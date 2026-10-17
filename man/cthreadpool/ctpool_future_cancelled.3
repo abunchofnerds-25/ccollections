@@ -11,9 +11,9 @@ bool ctpool_future_cancelled(ctpool_future *f);
 .fi
 .SH DESCRIPTION
 .nf
-Returns true if the task associated with this future was discarded
-by ctpool_shutdown_immediate before it could execute. In that case
-ctpool_future_get returns NULL and ctpool_future_done returns true.
+Returns true if ctpool_shutdown_immediate discarded the task of this
+future before it could run. In that case ctpool_future_get returns
+NULL and ctpool_future_done returns true.
 .fi
 .SH PARAMETERS
 .nf

@@ -11,13 +11,13 @@ size_t ccol_dynmq_msg_count(ccol_dynamic_queue *dq);
 .fi
 .SH DESCRIPTION
 .nf
-This function gives the number of messages that the queue holds at the
-moment of the call. It reads the count under the lock of the queue, so
-the count is a consistent snapshot and not a torn read.
+Returns the number of messages that the queue holds at the moment of
+the call. The count is read under the queue's lock, so it is a
+consistent value and never a torn read.
 
-A dynamic queue grows on demand and has no fixed capacity, so only two
-things bound this count: the messages that the producers sent, and the
-messages that the consumers did not receive yet.
+A dynamic queue grows on demand and has no fixed capacity, so the count
+depends only on how many messages the producers have sent and the
+consumers have not received yet.
 .fi
 .SH PARAMETERS
 .nf
@@ -25,20 +25,18 @@ dq   Dynamic queue to ask
 .fi
 .SH RETURN VALUE
 .nf
-On success, the function gives the message count; it gives
-ccol_invalid_size if dq is NULL.
+The message count, or ccol_invalid_size if dq is NULL.
 .fi
 .SH NOTES
 .nf
-The function is O(1).
-The function is thread-safe.
+The call is O(1) and thread-safe.
 .fi
 .SH WARNINGS
 .nf
-The value is a snapshot: another thread can send or receive the instant
-that this call returns, so do not use the value to decide that a later
-receive does not block. Use ccol_dynmq_try_recv_zc() when you want a
-receive that does not block.
+The value is only a snapshot, because another thread can send or
+receive right after the call returns. Do not use it to decide that a
+later receive won't block; if you need a receive that doesn't block,
+call ccol_dynmq_try_recv_zc().
 .fi
 .SH "SEE ALSO"
 .BR ccol_dynmq_send_zc (3),

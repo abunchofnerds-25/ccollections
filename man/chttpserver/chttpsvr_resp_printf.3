@@ -12,17 +12,17 @@ ccol_retval_t chttpsvr_resp_printf(chttpsvr_resp *resp,
 .fi
 .SH DESCRIPTION
 .nf
-Formats fmt and the variadic arguments by the printf rules and appends
-the result to the response body, which is equivalent to formatting
-into a temporary string and passing it to chttpsvr_resp_write_str.
-Short output goes through a small internal stack buffer; longer output
-falls back to a temporary heap allocation of exactly the size of the
-formatted text, which is freed before the function returns.  Repeated
-calls append to the same response body, as with
-chttpsvr_resp_write_str.
+Formats fmt and the variadic arguments with the printf rules and
+appends the result to the response body.  The effect is the same as
+formatting into a temporary string and passing that string to
+chttpsvr_resp_write_str.  Short output is built in a small stack
+buffer inside the library, and longer output in a temporary heap
+allocation of exactly the size of the formatted text, which is freed
+before the function returns.  Each call appends to the same response
+body, as chttpsvr_resp_write_str does.
 
-The compiler checks the format string through the GCC attribute
-__attribute__((format(printf, 2, 3))).
+The format string is checked by the compiler through the GCC
+attribute __attribute__((format(printf, 2, 3))).
 .fi
 .SH RETURN VALUE
 .nf

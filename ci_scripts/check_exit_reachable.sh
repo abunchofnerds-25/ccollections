@@ -1,24 +1,22 @@
 #!/bin/sh
-# This script makes sure that a program which links the shared library, and
-# uses only a small part of it, has no memory of the library allocated at its
-# exit.
+# Checks that a program which links the shared library, and uses only a small
+# part of it, has none of the library's memory still allocated when it exits.
 #
-# Each __attribute__((destructor)) of the library runs at exit for the full
+# Every __attribute__((destructor)) of the library runs at exit for the whole
 # shared object, whatever parts of it the program used. A destructor that
-# makes new state while the process exits (for example a lazy initialization,
-# or a registration in another module) allocates memory that nothing frees,
-# because the destructor of the module that owns that memory can have run
-# before it. An application that runs valgrind with --errors-for-leak-kinds=all
-# (as the test suites of this project do) then gets errors that its own code
-# did not cause.
+# creates new state while the process exits (a lazy initialization, say, or a
+# registration in another module) allocates memory that nothing frees, because
+# the destructor of the module owning that memory may have run before it. An
+# application running valgrind with --errors-for-leak-kinds=all (as our test
+# suites do) then gets errors its own code didn't cause.
 #
-# The test suites cannot see this: each suite compiles the library sources that
-# it needs directly into its own binary, so its destructors are a different
-# set, in a different order, from those of the shared object. This check
-# instead links a real consumer against the built shared object.
+# The test suites can't see this. Each suite compiles the library sources it
+# needs straight into its own binary, so its set of destructors, and their
+# order, differ from those of the shared object. That's why this check links a
+# real consumer against the built shared object instead.
 #
-# Run this script from the root of the repository, after `make`;
-# `make check_exit_reachable` and CI use it.
+# Run it from the root of the repository after `make`; `make
+# check_exit_reachable` and CI call it.
 set -eu
 
 SO="${1:-}"
@@ -33,17 +31,17 @@ CC="${CC:-cc}"
 dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT INT TERM
 
-# The linker finds the library through its own directory, in the same way as
+# The linker finds the library in its own directory, the same way
 # -lccollections finds an installed copy, and the programs include the headers
 # as <ccollections/x.h>.
 mkdir -p "$dir/inc"
 ln -s "$(pwd)/include" "$dir/inc/ccollections"
 libdir=$(cd "$(dirname "$SO")" && pwd)
 
-# There is one consumer for each shape:
-# - A program that uses only one container, which shows a destructor that
-#   initializes its module while the process exits.
-# - A program that uses no module, which checks the bare link.
+# One consumer for each shape:
+# - a program that uses one container only, which catches a destructor that
+#   initializes its module while the process exits;
+# - a program that uses no module at all, which checks the bare link.
 cat >"$dir/vector_only.c" <<'EOF'
 #include <ccollections/cvector.h>
 int main(void) {
@@ -60,13 +58,13 @@ EOF
 
 failed=0
 for prog in vector_only nothing; do
-  # --no-as-needed keeps the library loaded in the program that calls none
-  # of its functions; if the linker removed the library, that case would
-  # check nothing.
+  # --no-as-needed keeps the library loaded in the program that calls none of
+  # its functions. If the linker dropped the library, that case would check
+  # nothing.
   "$CC" -std=gnu11 -I"$dir/inc" "$dir/$prog.c" -L"$libdir" \
     -Wl,--no-as-needed -lccollections -o "$dir/$prog"
-  # The check is correct only when the program loads the library, so the
-  # script makes sure that it does.
+  # The check only means something when the program really loads the library,
+  # so we verify that first.
   if ! LD_LIBRARY_PATH="$libdir" ldd "$dir/$prog" | grep -q libccollections; then
     echo "check_exit_reachable: $prog does not load the library" >&2
     exit 2

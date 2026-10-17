@@ -29,9 +29,9 @@
  * @brief INTERNAL ONLY. Allocator-aware string helpers that this library's
  *        own modules share.
  *
- * Nothing here is part of the public interface, because no program uses
- * libccollections through these helpers. This is why the library never
- * installs this header, which also carries no visibility block.
+ * None of this is public interface, since no program uses libccollections
+ * through these helpers. That's why the library never installs this header
+ * and the header carries no visibility block.
  */
 
 #include <common.h>
@@ -40,14 +40,14 @@
 /**
  * @brief A strdup variant that uses the custom memory management procs
  *
- * This function copies the input string with the custom memory allocation
- * function and returns the copy.
+ * Copies the input string with the custom allocation function and returns
+ * the copy.
  *
  * @param mp Pointer to the custom memory management procs
- * @param input The input string. A NULL input gives a NULL result, and the
- * function does not call strlen(NULL), which is undefined behavior. This lets
- * a caller pass on a string that another allocation already failed to make,
- * so the caller makes one check at the end instead of a check at each step.
+ * @param input The input string. A NULL input gives a NULL result and we
+ * never call strlen(NULL), which is undefined behavior. So a caller can pass
+ * on a string that an earlier allocation failed to make and check once at the
+ * end, instead of checking after every step.
  * @return The pointer to the new buffer that holds the copy of input. The
  * result is NULL if input is NULL, or if the memory allocation fails.
  *
@@ -59,7 +59,7 @@
 static inline __attribute__((always_inline)) char *ccol_strdup(
     ccol_memmgmt_procs_t *mp, const char *input) {
   if (!input) return NULL;
-  size_t len = strlen(input) + 1;  // The '\0' at the end
+  size_t len = strlen(input) + 1;  // Room for the closing '\0'
   char *result = (char *)_ccol_mem_alloc(mp, len * sizeof(char));
   if (result) {
     memcpy(result, input, len);

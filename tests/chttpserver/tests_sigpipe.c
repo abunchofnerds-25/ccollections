@@ -22,18 +22,18 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* This binary runs with the default disposition of SIGPIPE, which ends the
- * process. It must stay a binary of its own: the other binaries of this
- * directory ignore SIGPIPE for the whole process, and an ignored SIGPIPE is
- * discarded when it is raised, so a write that raises it is invisible there.
+/* This binary runs with SIGPIPE at its default disposition, which ends the
+ * process, and it should stay a binary of its own because the other binaries of
+ * this directory ignore SIGPIPE for the whole process. An ignored SIGPIPE is
+ * thrown away when it is raised, so a write that raises it can't be seen there.
  *
- * It checks two things: that the server leaves the disposition of SIGPIPE
- * as the application set it, and that no write of the server raises SIGPIPE
- * when the peer is gone. Each write test blocks SIGPIPE around the operation
- * and then asks whether one is pending, so a failure is one failed test
- * instead of a dead binary. A write(2) or writev(2) to a socket whose peer has
- * closed raises SIGPIPE for the writing thread; send(2) and sendmsg(2) with
- * MSG_NOSIGNAL do not.
+ * It checks two things: that the server leaves the SIGPIPE disposition the way
+ * the application set it, and that no write of the server raises SIGPIPE when
+ * the peer is gone. Each write test blocks SIGPIPE around the operation and
+ * then asks whether one is pending, so a failure is one failed test and not a
+ * dead binary. A write(2) or writev(2) to a socket whose peer has closed raises
+ * SIGPIPE for the writing thread, while send(2) and sendmsg(2) with
+ * MSG_NOSIGNAL don't.
  */
 
 #include <chttpserver.h>
@@ -49,15 +49,11 @@ SOFTWARE.
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <time.h>
-#include <unistd.h>
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #include <tau/tau.h>
 #include <test_connect.h>
 #include <test_signals.h>
-#pragma GCC diagnostic pop
+#include <time.h>
+#include <unistd.h>
 
 TAU_MAIN()
 
@@ -78,8 +74,8 @@ static void _block_sigpipe(sigset_t *old) {
   pthread_sigmask(SIG_BLOCK, &set, old);
 }
 
-/* Reports whether a SIGPIPE is pending for the calling thread or for the
- * process, and consumes it if so. The signal must be blocked. */
+/* Tells whether a SIGPIPE is pending for the calling thread or for the process,
+ * and consumes it if so. The signal must be blocked. */
 static bool _take_pending_sigpipe(void) {
   sigset_t pending;
   sigemptyset(&pending);
@@ -95,9 +91,9 @@ static void _sleep_ms(long ms) {
 }
 
 /* A connected pair where fds[1] is already closed, so every write to fds[0]
- * meets a peer that is gone. The pair is made the way the server makes the
- * socket of a connection (ccol_accept_nb): non-blocking, closed on exec, and
- * on a system without MSG_NOSIGNAL carrying SO_NOSIGPIPE. */
+ * meets a peer that's gone. The pair is made the same way the server makes a
+ * connection's socket (ccol_accept_nb): non-blocking, closed on exec, and with
+ * SO_NOSIGPIPE on a system that has no MSG_NOSIGNAL. */
 static bool _pair_with_closed_peer(int *fd) {
   int fds[2];
   if (ccol_socketpair_nb(AF_UNIX, SOCK_STREAM, 0, fds) != 0) return false;
@@ -107,12 +103,12 @@ static bool _pair_with_closed_peer(int *fd) {
 }
 
 TEST(chttpsvr_sigpipe, the_binary_runs_with_the_default_disposition) {
-  /* Every other test here is vacuous under an ignored SIGPIPE. */
+  /* Every other test in this file is vacuous if SIGPIPE is ignored. */
   REQUIRE_TRUE(_sigpipe_has_default_disposition());
 }
 
 /* chttp1_stream_write() is the single-buffer write of every plaintext
-   connection, the 100-continue interim line included. */
+   connection, including the 100-continue interim line. */
 TEST(chttpsvr_sigpipe, a_stream_write_to_a_closed_peer_raises_no_sigpipe) {
   REQUIRE_TRUE(_sigpipe_has_default_disposition());
   int fd = -1;
@@ -133,7 +129,7 @@ TEST(chttpsvr_sigpipe, a_stream_write_to_a_closed_peer_raises_no_sigpipe) {
   REQUIRE_EQ(err, EPIPE);
 }
 
-/* chttp1_stream_writev2() is the gather write of every plaintext response,
+/* chttp1_stream_writev2() is the gather write of every plaintext response, with
    head and body together. */
 TEST(chttpsvr_sigpipe, a_gather_write_to_a_closed_peer_raises_no_sigpipe) {
   REQUIRE_TRUE(_sigpipe_has_default_disposition());
@@ -165,8 +161,8 @@ static atomic_int g_client_gone;
 static atomic_int g_probe_ran;
 static atomic_int g_probe_saw_sigpipe;
 
-/* Holds the response back until the client has closed, so that the write of
-   the response meets a peer that is gone. */
+/* Holds the response back until the client has closed, so the write of the
+   response meets a peer that's gone. */
 static void _slow_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
   (void)req;
   (void)ctx;
@@ -178,9 +174,9 @@ static void _slow_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
 }
 
 /* The server runs one worker thread, so this handler runs on the thread that
-   wrote the response of _slow_handler, after that write. Because the worker
-   inherits the blocked SIGPIPE of the thread that started the server, a
-   SIGPIPE that the write raised is still pending here. */
+   wrote _slow_handler's response, after that write. The worker inherits the
+   blocked SIGPIPE of the thread that started the server, so a SIGPIPE raised by
+   the write is still pending here. */
 static void _probe_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
   (void)req;
   (void)ctx;
@@ -230,11 +226,11 @@ TEST(chttpsvr_sigpipe,
   char host_buf[96];
   snprintf(host_buf, sizeof(host_buf), "unix://%s", sock_path);
 
-  /* Every thread that the server starts inherits this mask. */
+  /* Every thread the server starts inherits this mask. */
   sigset_t old;
   _block_sigpipe(&old);
 
-  chttpsvr srv = ccol_create_chttpsvr(CLOG_INVALID, NULL);
+  chttpsvr srv = chttpsvr_create(CLOG_INVALID, NULL);
   bool created = srv != CHTTPSVR_INVALID;
   bool default_after_create = _sigpipe_has_default_disposition();
   bool registered =

@@ -15,16 +15,16 @@ build:
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)
 
 # tests_destroy_macros checks the destroy, free and release macros of every
-# public header on their own. It defines the functions that those macros call
-# as recording stubs, so it links none of the library. -Wshadow makes a
-# temporary that one expansion hides in another a hard error.
+# public header by themselves. It defines the functions those macros call as
+# recording stubs, so it doesn't link any of the library. -Wshadow makes a
+# temporary that one expansion hides inside another a hard error.
 build_destroy_macros:
 	$(CC) $(CFLAGS) -Wshadow tests_destroy_macros.c -o tests_destroy_macros $(LFLAGS)
 
 # pedantic_probe.c includes the container headers under -std=c11
-# -pedantic-errors. Whether a header uses a GNU extension at inclusion time is
-# a property of the compiler, and clang reports cases that gcc accepts, so the
-# probe runs under $(CC) and under clang when it is installed.
+# -pedantic-errors. Whether a header needs a GNU extension just to be included
+# depends on the compiler, and clang reports cases that gcc accepts, so the
+# probe runs under $(CC) and also under clang when it's installed.
 PEDANTIC_PROBE_FLAGS = -I../../include -std=c11 -pedantic-errors -Wall -Wextra \
 	-Werror -D_FILE_OFFSET_BITS=64 -fsyntax-only
 pedantic_probe:
@@ -41,12 +41,12 @@ memtest: build build_destroy_macros
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 --child-silent-after-fork=yes ./tests
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 --child-silent-after-fork=yes ./tests_destroy_macros
 
-# --ignore-errors negative: the coverage counters of gcov are plain, non-atomic
-# increments, so instrumented code that runs concurrently can race on them and
-# produce a false negative hit count. This affects more than one module and
-# also happens inside a glibc header; it is a limit of the gcov
-# instrumentation, not a defect in the logic of this library. See the
-# identical flag in tests/chttpclient/Makefile for the full reason.
+# --ignore-errors negative is there because gcov's coverage counters are
+# plain, non-atomic increments, so instrumented code running on more than one
+# thread at a time can race on them and end up with a negative hit count that
+# isn't real. It happens in more than one module and inside a glibc header as
+# well; it's a limit of the gcov instrumentation, not a bug in the library's
+# logic. tests/chttpclient/Makefile has the same flag with the full reason.
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
@@ -58,14 +58,14 @@ generate_coverage_report:
 
 all: build test memtest generate_coverage_report
 
-# The steps of `all` rebuild and run the same object files and binaries: the
-# coverage step rebuilds them with instrumentation, and the test and memtest
-# steps run the binaries that the build step links. Under make -j those steps
-# would overlap and link or run a half-rebuilt mix. .NOTPARALLEL runs the
-# prerequisites of `all` one after another, in the order listed, while the
-# work inside each step still runs in parallel. A make older than 4.4 ignores
-# the prerequisite list and runs this whole Makefile serially, which is also
-# correct.
+# The steps of `all` rebuild and run the same object files and binaries. The
+# coverage step rebuilds them with instrumentation, and test and memtest run
+# the binaries that the build step links, so under make -j the steps would
+# overlap and link or run a half-rebuilt mix. .NOTPARALLEL runs the
+# prerequisites of `all` one after another in the order listed, while the work
+# inside each step still runs in parallel. A make older than 4.4 ignores the
+# prerequisite list and runs the whole Makefile serially, which is correct
+# too.
 .NOTPARALLEL: all
 
 clean:

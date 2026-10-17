@@ -28,43 +28,44 @@
  * @file cprocsintern.h
  * @brief INTERNAL ONLY. A process-lifetime copy of a caller's allocator procs.
  *
- * A module whose objects keep an allocator pointer for their whole life, and
- * that cannot afford a copy of the procs struct in each object, stores the
- * pointer that ccol_procs_intern() gives back instead of the pointer of the
- * caller. The caller's struct can then live on the stack of a helper that
- * returns, or be freed, while the objects built with it are still in use.
+ * Some modules have objects that keep an allocator pointer for their whole
+ * life and can't afford a copy of the procs struct in every object. Those
+ * store the pointer that ccol_procs_intern() gives back, not the caller's
+ * pointer, so the caller's struct is free to live on the stack of a helper
+ * that returns, or to be freed, while the objects built with it are in use.
  *
- * Nothing here is part of the public interface. The library never installs
- * this header, and the header carries no visibility block.
+ * None of this is public interface. The library never installs this header
+ * and it has no visibility block.
  */
 
 #include <common.h>
 
 /**
- * The number of distinct procs contents that the process can intern. A procs
- * struct holds four function pointers and nothing else, so the number of
- * distinct contents is bounded by the allocator function sets that the
- * program contains, which is a handful in any realistic program. Every
- * interned copy lives in static storage for the life of the process, so the
- * table needs no allocation and nothing ever frees it.
+ * How many distinct procs contents the process can intern. A procs struct is
+ * four function pointers and nothing more, so the number of distinct
+ * contents can't exceed the allocator function sets the program has, which
+ * is a handful in any realistic program. Every interned copy sits in static
+ * storage for the life of the process, so the table never allocates and
+ * nothing ever frees it.
  */
 #define CCOL_PROCS_INTERN_CAPACITY 64
 
 /**
  * Gives back a pointer, valid for the life of the process, to a copy of the
  * struct that mp points at. Two calls with the same four function pointers
- * give back the same pointer, whichever struct object they came from, so
- * a pointer comparison of two interned values is a content comparison. A
- * pointer that this function gave back is accepted as input and returned
- * unchanged. mp == NULL gives NULL, which selects the default allocator
- * everywhere.
+ * get the same pointer back whichever struct object they came from, so
+ * comparing two interned pointers compares their contents. A pointer that
+ * this function gave back is accepted as input and returned unchanged.
+ * mp == NULL gives NULL, which selects the default allocator everywhere.
  *
- * The lookup takes no lock: a published copy never changes, and the table
- * fills from its first slot, so a lookup reads the published prefix with
- * acquire loads and stops at the first empty slot. Only the first use of a
- * new content writes. Two threads that make the first use of one content at
- * the same moment can each take a slot for it, which costs one slot and
- * nothing else, because each copy is complete and correct.
+ * The lookup takes no lock. A published copy never changes and the table
+ * fills up from its first slot, so a lookup reads the published prefix with
+ * acquire loads and stops at the first empty slot, and only the first use of
+ * a new content writes anything. When a lookup meets a slot that another
+ * thread is still writing it waits for that copy before moving on. That way
+ * each content takes exactly one slot even when many threads use it for the
+ * first time at the same moment, and the table holds
+ * CCOL_PROCS_INTERN_CAPACITY distinct contents.
  *
  * @param mp  The caller's procs, or NULL.
  * @param out Receives the interned pointer, or NULL for mp == NULL.
@@ -76,16 +77,8 @@ ccol_retval_t ccol_procs_intern(ccol_memmgmt_procs_t *mp,
 
 /**
  * Gives true when mp is a pointer that ccol_procs_intern() gave back, which
- * stays valid for the life of the process. An object that keeps an allocator
- * pointer can then keep mp itself instead of a copy of the struct. NULL and
- * any pointer outside the table give false.
+ * is valid for the life of the process, so an object that keeps an allocator
+ * pointer can keep mp itself rather than a copy of the struct. NULL and any
+ * pointer outside the table give false.
  */
 bool ccol_procs_is_interned(const ccol_memmgmt_procs_t *mp);
-
-#ifdef RUNNING_UNIT_TESTS
-/* The number of slots that hold a copy. */
-size_t _ccol_procs_intern_used_for_tests(void);
-/* Empties every slot from index keep onward. A test calls it only while no
- * object holds a pointer into those slots. */
-void _ccol_procs_intern_truncate_for_tests(size_t keep);
-#endif /* RUNNING_UNIT_TESTS */

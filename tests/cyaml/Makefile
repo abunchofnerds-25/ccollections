@@ -21,10 +21,10 @@ build: tests_locale
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)
 
 # The number_locale tests need a locale whose decimal point is ','. They use
-# an installed one when there is one, and this private copy otherwise. The
-# step is best effort: without localedef (macOS has none) or the de_DE locale
-# source, the directory stays empty and those tests use an installed locale
-# or print that they skipped.
+# an installed one if there is one and this private copy otherwise. The step is
+# best effort: without localedef (macOS has none) or the de_DE locale source
+# the directory stays empty, and those tests use an installed locale or print
+# that they skipped.
 tests_locale:
 	mkdir -p tests_locale
 	@if command -v localedef >/dev/null 2>&1; then \
@@ -33,31 +33,39 @@ tests_locale:
 	fi
 
 # Standalone differential-testing helper (see differential/compare_pyyaml.py).
-# It is not part of build, test, memtest or all; run it by hand.
+# It isn't part of build, test, memtest or all, you run it by hand.
 build_differential:
 	$(CC) $(CFLAGS) differential/cyaml_to_json.c $(SRC_FILES) \
 		-o differential/cyaml_to_json $(LFLAGS) -lm
 
-# A separate binary that checks the accept and reject behavior of
-# cyaml_parse_n against the vendored YAML Test Suite snapshot
-# (yaml-test-suite/), following the "additional tests_<suffix>.c binary in
-# an existing directory" convention of this project. It stays separate from
-# tests.c because it needs that vendored corpus on disk at a relative path,
-# which no other case in this directory needs.
+# A separate binary that checks what cyaml_parse_n accepts and rejects against
+# the vendored YAML Test Suite snapshot (yaml-test-suite/), following this
+# project's convention of an extra tests_<suffix>.c binary in an existing
+# directory. It's kept apart from tests.c because it needs that vendored corpus
+# on disk at a relative path, and nothing else in this directory does.
 build_spec_suite:
 	$(CC) $(CFLAGS) tests_spec_suite.c $(SRC_FILES) -o tests_spec_suite $(LFLAGS)
 
 
-# Convenience aliases, so that the name of a binary that this suite produces
-# also works as a target. Each alias builds that binary, while `make test`
-# builds and runs every one of them and stays the normal entry point.
+# Convenience aliases, so the name of each binary this suite builds also works
+# as a target. An alias only builds its binary, while `make test` builds and
+# runs all of them and is the normal entry point.
 .PHONY: tests_spec_suite
 tests_spec_suite: build_spec_suite
 
-# tests_c23.c compiles the value macros of this module as C23, where
-# nullptr exists and `true` has the type bool; the main suite is C11 and can
-# observe neither. The library sources build with the same flags, so the
-# binary also shows that they compile as C23.
+# tests_keys.c uses up every thread-specific key of the process before the
+# first cyaml call, so no thread's node pool can ever arm its key. The key is
+# created once per process, so this case needs a process of its own.
+build_keys:
+	$(CC) $(CFLAGS) tests_keys.c $(SRC_FILES) -o tests_keys $(LFLAGS)
+
+.PHONY: tests_keys
+tests_keys: build_keys
+
+# tests_c23.c compiles this module's value macros as C23, where nullptr exists
+# and `true` has the type bool; the main suite is C11 and sees neither. The
+# library sources are built with the same flags, so the binary also shows that
+# they compile as C23.
 C23_CFLAGS = $(subst -std=gnu11,-std=gnu2x,$(CFLAGS))
 build_c23:
 	$(CC) $(C23_CFLAGS) tests_c23.c $(SRC_FILES) -o tests_c23 $(LFLAGS)
@@ -65,54 +73,54 @@ build_c23:
 .PHONY: tests_c23
 tests_c23: build_c23
 
-# nesting_probe.c nests the value macro of this module inside its own
-# argument. -Wshadow makes any local that a nested expansion hides a hard
-# error, which only the compiler can report, so the probe is compiled and
-# never run.
+# nesting_probe.c nests this module's value macro inside its own argument.
+# -Wshadow turns any local that a nested expansion hides into a hard error, and
+# only the compiler can report that, so the probe is compiled but never run.
 nesting_probe:
 	$(CC) $(INCLUDES) $(DEFINITIONS) -std=gnu11 -Wall -Wextra -Wshadow -Werror \
 		-fsyntax-only nesting_probe.c
 
-test: build build_spec_suite build_c23 nesting_probe
+test: build build_spec_suite build_c23 build_keys nesting_probe
 	./tests
 	./tests_spec_suite
 	./tests_c23
+	./tests_keys
 
-# libFuzzer harness for cyaml_parse_n. It needs clang, because libFuzzer is
-# a Clang and LLVM feature that GCC does not have. Run
-# ./fuzz_cyaml [corpus_dir] [-max_total_time=N] with the other flags that the
-# libFuzzer docs list; a bare `./fuzz_cyaml fuzz/corpus` mutates and grows
-# the seed corpus that this repository holds.
-# This target is .PHONY because a fuzz/ directory (the seed corpus) already
-# exists on disk, and without .PHONY, Make treats a bare `fuzz` target as
-# already satisfied and skips the recipe.
+# libFuzzer harness for cyaml_parse_n. It needs clang, because libFuzzer is a
+# Clang and LLVM feature that GCC doesn't have. Run
+# ./fuzz_cyaml [corpus_dir] [-max_total_time=N] with any other flags from the
+# libFuzzer docs; a bare `./fuzz_cyaml fuzz/corpus` mutates and grows the seed
+# corpus kept in this repository.
+# The target is .PHONY because a fuzz/ directory (the seed corpus) exists on
+# disk, and without .PHONY Make would take a bare `fuzz` target as already
+# satisfied and skip the recipe.
 .PHONY: fuzz fuzz_path
 fuzz:
 	$(FUZZ_CC) $(FUZZ_CFLAGS) $(FUZZ_SRC_FILES) -o fuzz_cyaml $(LFLAGS)
 
 # The dot-separated path grammar that cyaml_get, cyaml_set and cyaml_delete
-# read is a second parser, which MUTATES the DOM that the first one built and
-# which fuzz_cyaml never reaches. This is the counterpart of the fuzz_path
-# target of tests/cjson/Makefile, and it is .PHONY for the same reason as
-# `fuzz` above: fuzz/corpus_path already exists on disk, so Make would
-# otherwise read a bare `fuzz_path` as already satisfied. Run
+# read is a second parser, it MUTATES the DOM that the first one built, and
+# fuzz_cyaml never gets there. It's the counterpart of the fuzz_path target of
+# tests/cjson/Makefile and it's .PHONY for the same reason as `fuzz` above:
+# fuzz/corpus_path exists on disk, so Make would otherwise take a bare
+# `fuzz_path` as already satisfied. Run
 # ./fuzz_cyaml_path fuzz/corpus_path [-max_total_time=N].
 fuzz_path:
 	$(FUZZ_CC) $(FUZZ_CFLAGS) fuzz/fuzz_cyaml_path.c $(SRC_FILES) \
 		-o fuzz_cyaml_path $(LFLAGS)
 
-memtest: build build_spec_suite build_c23
-	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 ./tests
+memtest: build build_spec_suite build_c23 build_keys
+	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 --child-silent-after-fork=yes ./tests
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 ./tests_spec_suite
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 ./tests_c23
+	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 ./tests_keys
 
-# --ignore-errors negative: the coverage counters of gcov are plain,
-# non-atomic increments, so they can race when instrumented code runs
-# concurrently and then give a negative hit count that is not real. This
-# affects more than one module and also code inside a glibc header; it is a
-# limitation of the gcov instrumentation, not a defect in the logic of this
-# library. See the identical flag in tests/chttpclient/Makefile for the full
-# rationale.
+# --ignore-errors negative is there because gcov's coverage counters are
+# plain, non-atomic increments, so instrumented code running on more than one
+# thread at a time can race on them and end up with a negative hit count that
+# isn't real. It happens in more than one module and inside a glibc header as
+# well; it's a limit of the gcov instrumentation, not a bug in the library's
+# logic. tests/chttpclient/Makefile has the same flag with the full reason.
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
@@ -124,18 +132,18 @@ generate_coverage_report:
 
 all: build test memtest generate_coverage_report
 
-# The steps of `all` rebuild and run the same object files and binaries: the
-# coverage step rebuilds them with instrumentation, and the test and memtest
-# steps run the binaries that the build step links. Under make -j those steps
-# would overlap and link or run a half-rebuilt mix. .NOTPARALLEL runs the
-# prerequisites of `all` one after another, in the order listed, while the
-# work inside each step still runs in parallel. A make older than 4.4 ignores
-# the prerequisite list and runs this whole Makefile serially, which is also
-# correct.
+# The steps of `all` rebuild and run the same object files and binaries. The
+# coverage step rebuilds them with instrumentation, and test and memtest run
+# the binaries that the build step links, so under make -j the steps would
+# overlap and link or run a half-rebuilt mix. .NOTPARALLEL runs the
+# prerequisites of `all` one after another in the order listed, while the work
+# inside each step still runs in parallel. A make older than 4.4 ignores the
+# prerequisite list and runs the whole Makefile serially, which is correct
+# too.
 .NOTPARALLEL: all
 
 clean:
-	rm -rf tests tests_spec_suite tests_c23 tests_locale fuzz_cyaml fuzz_cyaml_path coverage *.gcno *.gcda *.gcov *.c.info \
+	rm -rf tests tests_spec_suite tests_c23 tests_keys tests_locale fuzz_cyaml fuzz_cyaml_path coverage *.gcno *.gcda *.gcov *.c.info \
 		differential/cyaml_to_json
 
 default: build

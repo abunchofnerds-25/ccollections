@@ -11,12 +11,14 @@ void chttp_request_free(chttp_request_t *req);
 .fi
 .SH DESCRIPTION
 .nf
-This function frees the copy of the URL, the copy of the body data,
-the copy of content_type, the map of the headers and the request
-struct itself, and also the private copy of mprocs, if the library
-allocated one.
+This function frees the request's copies of the URL, the body data and
+content_type, its header map, the request struct itself, and the
+private copy of mprocs if the library made one. The URL and body
+copies are freed with the request's allocator, so the url and body
+fields must hold the same pointers that chttp_request_create_mp put
+there; see chttp_request_create_mp(3).
 
-A call with NULL is safe.
+Passing NULL is safe.
 .fi
 .SH "SEE ALSO"
-.BR chttp_request_new_mp (3)
+.BR chttp_request_create_mp (3)

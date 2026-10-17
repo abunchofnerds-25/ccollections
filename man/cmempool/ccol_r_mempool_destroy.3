@@ -11,9 +11,9 @@ ccol_r_mempool_destroy(rmp);
 .fi
 .SH DESCRIPTION
 .nf
-Frees every resource of the ranged memory pool, every sub-pool included.
-For a pool that was created from a preallocated buffer, this macro does
-not free the buffer itself.
+Frees every resource of the ranged memory pool, all its sub-pools
+included. For a pool created from a preallocated buffer the macro
+doesn't free the buffer itself.
 .fi
 .SH PARAMETERS
 .nf
@@ -21,18 +21,19 @@ rmp  Ranged memory pool to destroy. The macro sets it to NULL
 .fi
 .SH NOTES
 .nf
-It is safe to call this macro with a NULL pointer
-For a preallocated pool, the caller owns the lifetime of the buffer
+Calling the macro with a NULL pointer is safe
+For a preallocated pool, the buffer's lifetime is the caller's business
 
 The macro evaluates rmp exactly once. It must be a modifiable lvalue,
-such as a variable or an element of an array, so an expression with a
-side effect, such as handles[i++], destroys and clears one element.
+such as a variable or an element of an array, so with an expression
+that has a side effect, such as handles[i++], it destroys and clears
+one element.
 .fi
 .SH WARNINGS
 .nf
-A pointer from the dynamic fallback that nobody freed causes an
-assertion failure, so free every allocated entry before you destroy the
-pool.
+A pointer from the dynamic fallback that was never freed makes the
+destroy fail an assertion, so free every allocated entry before you
+destroy the pool.
 .fi
 .SH "SEE ALSO"
 .BR ccol_r_mempool_create (3),

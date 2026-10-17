@@ -1,6 +1,6 @@
 .TH CHMAP_GET_ELEM_REF 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-chmap_get_elem_ref \- get reference to value by key
+chmap_get_elem_ref \- get the location and the size of the value of a key
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -9,61 +9,84 @@ C Collections (libccollections, \-lccollections)
 
 ccol_retval_t chmap_get_elem_ref(chmap chm,
                                   const cmap_pair *key_pair,
-                                  const cmap_pair **val_pair);
+                                  cmap_pair *val_pair);
 .fi
 .SH DESCRIPTION
 .nf
-Gets a reference to the value that belongs to the given key. The
-reference points at internal storage, through which the caller can read
-the value and change its bytes in place.
+Finds the value stored for the given key and fills the caller's
+cmap_pair with its location and size. val_pair->ptr points at the
+stored value bytes inside the map and val_pair->size is the size of the
+stored value, so you can read the value through val_pair->ptr and change
+its bytes in place within val_pair->size.
 
-The out-parameter is a const cmap_pair **, so the caller's own variable
-must be a const cmap_pair *; the address of a plain cmap_pair * does
-not compile.
+The cmap_pair is yours and the map keeps no reference to it. Changing
+val_pair->ptr or val_pair->size only changes that copy, never the stored
+value; use chmap_insert_elem(3) to replace a value.
 .fi
 .SH PARAMETERS
 .nf
 chm        Hash map to search
 key_pair   Key to look up
-val_pair   Address of a const cmap_pair * that receives the reference
+val_pair   The caller's cmap_pair, which the function fills
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success        - Key found, *val_pair points to value
-ccol_invalid_args   - chm, key_pair, or val_pair is NULL or key size is 0;
-                      also returned when key_pair->size does not exactly
-                      match the byte size of the key type, for any
-                      fixed-width numeric key type (char, short, int, long,
-                      long long, their unsigned counterparts, float,
-                      double, long double, or a pointer type), regardless
-                      of which backend the map uses
-ccol_key_not_found  - Key does not exist in map
+ccol_success        - The key was found; val_pair->ptr points at the
+                      value and val_pair->size is its size
+ccol_invalid_args   - chm, key_pair or val_pair is NULL or the key size
+                      is 0, or key_pair->size is not exactly the byte
+                      size of the key type for any fixed-width numeric
+                      key type (char, short, int, long, long long, their
+                      unsigned counterparts, float, double, long double,
+                      or a pointer type), whichever backend the map uses
+ccol_key_not_found  - The key is not in the map
+On every failure, if val_pair is not NULL, val_pair->ptr is set to NULL
+and val_pair->size to 0.
 .fi
 .SH NOTES
 .nf
-The ptr of a key_pair needs no specified alignment, because the map
-hashes and compares the key bytes through memcpy instead of through a
-pointer cast to the key type. key_pair->ptr can therefore point directly
-at key bytes at any offset in a larger buffer, such as a field in a
-packed network frame or a memory-mapped record, and you do not have to
-copy the key bytes into an aligned local variable first
-The cmap_pair is the map's own accessor for that entry: it describes
-the value but is not a part of it, and its target is const. The caller
-can therefore read through val_pair->ptr and write to the bytes that it
-points at, inside val_pair->size, but an assignment to val_pair->ptr or
-to val_pair->size itself is a compile error, because the two fields
-describe one another and the map cannot own a pointer that it did not
-allocate. Use chmap_insert_elem(3) to replace a value
+key_pair->ptr needs no particular alignment, because the map hashes and
+compares the key bytes through memcpy, never through a pointer cast to the
+key type. So it can point straight at key bytes at any offset in a larger
+buffer, such as a field of a packed network frame or a memory-mapped
+record, and you don't have to copy them into an aligned local variable
+first
+Do not free val_pair->ptr, because the value bytes belong to the map
 Average O(1) complexity
-The reference stays valid until the next insert, delete or resize. A
-lookup for a different key never invalidates it, so the caller can hold
-references for different keys at the same time
+val_pair->ptr is valid until the next insert, delete or resize. A
+lookup of another key never invalidates it, so you can hold results for
+different keys at once, each in its own cmap_pair
 val_pair->ptr is correctly aligned for any value type, with both
 internal backends
-For a float or double key, see chmap_construct(3) for the map's
-key equality contract (bitwise, except -0.0 canonicalized to 0.0)
-For a long double key, see chmap_construct(3) for the map's key
-equality contract (value-based, unlike every other key type)
+For a float or double key, chmap_construct(3) gives the key equality
+contract (bitwise, except that -0.0 becomes 0.0)
+For a long double key, chmap_construct(3) gives the key equality contract
+(by value, unlike every other key type)
+.fi
+.SH EXAMPLES
+.nf
+#include <ccollections/chashmap.h>
+#include <stdio.h>
+
+int main(void) {
+  chmap m = chmap_create(16, ccol_int, ccol_long, NULL);
+  if (!m) return 1;
+
+  int key = 7;
+  long value = 70;
+  cmap_pair kp = {.ptr = &key, .size = sizeof(key)};
+  cmap_pair vp = {.ptr = &value, .size = sizeof(value)};
+  chmap_insert_elem(m, &kp, &vp);
+
+  cmap_pair found;
+  if (chmap_get_elem_ref(m, &kp, &found) == ccol_success) {
+    *(long *)found.ptr += 1;  /* change the stored value in place */
+    printf("%ld (%zu bytes)\en", *(const long *)found.ptr, found.size);
+  }
+
+  chmap_destroy(m);
+  return 0;
+}
 .fi
 .SH "SEE ALSO"
 .BR chmap_get (3),

@@ -11,11 +11,11 @@ clru_redeclare(name, KeyT, ValT);
 .fi
 .SH DESCRIPTION
 .nf
-The type-dispatching macros clru_get() and clru_set() need hidden
-companion variables, which clru_declare() and clru_construct() create.
-When you pass a clru_cache handle to another function, those companion
-variables are absent there; clru_redeclare() creates them again, so
-that every type-inferred macro works correctly in the new scope.
+The type-dispatching macros clru_get() and clru_set() need the hidden
+companion variables that clru_declare() and clru_construct() create.
+Once you pass a clru_cache handle to another function those variables
+don't exist there, and clru_redeclare() creates them again so that
+every type-inferred macro works in the new scope.
 .fi
 .SH PARAMETERS
 .nf
@@ -25,16 +25,23 @@ ValT  Value type. It must match the type of the construction
 .fi
 .SH NOTES
 .nf
-Always call clru_redeclare() before you call clru_get() or clru_set() in
-a new scope; a missing call is the most common error when a cache
-crosses a function boundary.
-The name argument must be a simple identifier, because the macro pastes
-it into the names of the companion variables. It cannot be a different
-expression, such as the struct member ga->cache: copy such a handle
-into a local variable, then redeclare that local variable:
+Always call clru_redeclare() before clru_get() or clru_set() in a new
+scope; a missing call is the most common mistake when a cache crosses
+a function boundary.
+The name argument must be a plain identifier, because the macro pastes
+it into the names of the companion variables. Any other expression,
+such as the struct member ga->cache, cannot be used, so copy such a
+handle into a local variable and redeclare that variable:
 
     clru_cache c = ga->cache;
     clru_redeclare(c, int, double);
+
+An array key type or value type, such as int[2] or char[16], is a
+compile error whose message tells you to wrap the array in a struct.
+The macros copy a key or a value by assignment and C cannot assign an
+array, so without that error the cache would store the address of the
+caller's array instead of its elements. A struct that holds the array
+works.
 .fi
 .SH EXAMPLES
 .nf

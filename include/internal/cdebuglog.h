@@ -26,33 +26,34 @@ SOFTWARE.
 #define CDEBUGLOG_H
 
 /*
- * cdebuglog: an opt-in in-RAM diagnostic log buffer that only a
- * RUNNING_UNIT_TESTS build can use. It helps you find a CI failure that is
- * difficult to reproduce and sensitive to timing (an intermittent hang, a
- * race that only shows itself under qemu-user emulation, and similar cases).
+ * cdebuglog: an opt-in diagnostic log buffer in RAM that only a
+ * RUNNING_UNIT_TESTS build can use. It's meant for the CI failures that are
+ * hard to reproduce and sensitive to timing, like an intermittent hang or a
+ * race that only shows up under qemu-user emulation.
  *
- * A plain fprintf(stderr, ...) debug print costs a real write(2) syscall at
- * that moment, because stderr is unbuffered by default. Under an emulator
- * such as qemu-user, each such syscall pays a real, measurable translation
- * cost, and that cost can itself disturb the exact timing that you
- * investigate. This module instead appends formatted lines to a fixed-size,
- * process-wide, lock-free in-RAM buffer, and writes the whole buffer to
- * stderr in one write() call, or in a small number of them, at explicit
- * points that the caller chooses.
+ * A plain fprintf(stderr, ...) debug print costs a real write(2) syscall on
+ * the spot, because stderr is unbuffered by default. Under an emulator such
+ * as qemu-user every one of those syscalls pays a measurable translation
+ * cost, and that cost can disturb the very timing you are looking at. So
+ * this module appends the formatted lines to a fixed-size buffer in RAM that
+ * the whole process shares, and writes the buffer to stderr in one write()
+ * call (or a few of them) at points that the caller picks.
  *
- * This is not part of the default build of the library, on purpose: the src
+ * It isn't part of the default build of the library on purpose. The src
  * wildcard sweep of the root Makefile excludes it, and every declaration
  * below compiles to nothing unless BOTH RUNNING_UNIT_TESTS and
- * CDEBUGLOG_ENABLED are defined. It is scaffolding for work on one specific
- * issue, not a feature of the shipped library or of an ordinary test build.
+ * CDEBUGLOG_ENABLED are defined. Think of it as scaffolding for chasing one
+ * specific issue, not as a feature of the shipped library or of an ordinary
+ * test build, and take it out of the suite again once the issue is
+ * understood.
  *
- * RUNNING_UNIT_TESTS alone does not turn it on, because every test suite
+ * Defining RUNNING_UNIT_TESTS doesn't turn it on, because every test suite
  * Makefile in this repository defines that macro unconditionally. The second,
- * narrower macro protects a call site in a widely-linked production file
- * (src/clogger.c, src/cthreadcomm.c); without it, every OTHER test suite that
- * links that file must also link src/cdebuglog.c, although most of those
- * suites have no interest in this tool. A module or a test suite that wants
- * to use this tool does two things:
+ * narrower macro protects the call sites in widely linked production files
+ * (src/clogger.c, src/cthreadcomm.c). Without it every OTHER test suite that
+ * links one of those files would also have to link src/cdebuglog.c, and
+ * most of them have no use for this tool. A module or a test suite that
+ * wants the tool does two things:
  *  1. it adds src/cdebuglog.c to its own build explicitly (see, for example,
  *     the SRC_FILES of tests/clogger/Makefile or of
  *     tests/cthreadcomm/Makefile), and
@@ -65,26 +66,26 @@ SOFTWARE.
 #include <stddef.h>
 
 /**
- * @brief Appends one formatted line to the shared in-RAM diagnostic buffer.
- *        It does not write the line out immediately.
+ * @brief Appends one formatted line to the shared diagnostic buffer in RAM.
+ *        The line isn't written out immediately.
  *
- * The fmt of the caller must contain its own "\n" at the end. This module
- * does one write() for each flush instead of one write() for each line. This
- * function is lock-free: one atomic fetch-add reserves a region of the
- * backing buffer for each writer, and those regions never overlap. This is
- * why a call is safe from a signal handler as well as from ordinary code, and
- * why concurrent calls from many threads are also safe.
+ * The caller's fmt must carry its own "\n" at the end. We do one write()
+ * per flush instead of one per line. A short lock makes copying a line and
+ * flushing exclusive, so many threads can call this at once and a flush
+ * never writes a half-copied line. Calling it from a signal handler isn't
+ * safe though, because the handler can interrupt a thread that holds that
+ * lock.
  *
- * The function quietly drops a line that overflows the fixed backing buffer,
- * which prevents a torn write and an overlapping write. A caller that flushes
- * often (see cdebuglog_flush() below) makes such a drop very improbable.
+ * A line that doesn't fit in the fixed backing buffer is dropped silently.
+ * Since the buffer is flushed whenever it passes an eighth of its size, a
+ * drop needs a burst of several MB between two calls.
  *
- * The first call in a process registers a flush at process exit with
- * atexit(), which covers an ordinary end of the process that does not bypass
- * atexit(). A process can also stop with _exit(), with abort(), or from an
- * uncaught signal, and atexit() handlers do not run on any of those paths. A
- * caller in that situation must call cdebuglog_flush() explicitly at the
- * correct point; without that call, the content is lost quietly.
+ * The first call in a process registers a flush at exit with atexit(), which
+ * covers any ordinary end of the process that doesn't bypass atexit(). A
+ * process can also end with _exit(), with abort() or from an uncaught
+ * signal, and no atexit() handler runs on those paths. A caller in that
+ * situation must call cdebuglog_flush() itself at the right point, or the
+ * content is lost without a word.
  */
 __attribute__((format(printf, 1, 2))) void cdebuglog_write(const char *fmt,
                                                            ...);
@@ -93,13 +94,9 @@ __attribute__((format(printf, 1, 2))) void cdebuglog_write(const char *fmt,
  * @brief Flushes every byte in the buffer to stderr with one write() call,
  *        and then resets the buffer.
  *
- * This function uses only a raw write(2), never stdio, so a call from a
- * signal handler is also safe. There is a race with a writer that reserves a
- * region while this function runs: a line that arrives in the middle of a
- * flush can appear in two parts, one in this output and one in the next
- * output, and it can also be corrupt. This is an accepted, bounded risk,
- * because the instrumentation is only a best-effort diagnostic and no test
- * assertion depends on it.
+ * It only uses a raw write(2), never stdio, and it takes the same lock as
+ * cdebuglog_write(), so each line goes out whole within one flush. Same as
+ * cdebuglog_write(), it must not be called from a signal handler.
  */
 void cdebuglog_flush(void);
 

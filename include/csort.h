@@ -26,49 +26,48 @@ SOFTWARE.
 
 #include "common.h"
 
-/* Everything declared from here to the end of this header is part of the
- * public Application Binary Interface (ABI) of libccollections, and the
- * shared library exports all of it. Because the library is built with
- * -fvisibility=hidden, a function or object that is not inside one of these
- * blocks stays internal to the library: it is absent from the dynamic symbol
- * table, the application that links against the library cannot interpose
- * it, and a symbol with the same name in that application cannot collide
- * with it. */
+/* Everything this header declares from here to the end belongs to the public
+ * Application Binary Interface (ABI) of libccollections, and the shared
+ * library exports all of it. The library is built with -fvisibility=hidden,
+ * so a function or an object outside these blocks stays internal: it isn't
+ * in the dynamic symbol table, an application linking against the library
+ * can't interpose it, and a symbol of the same name in that application
+ * can't collide with it. */
 #pragma GCC visibility push(default)
 
 /**
  * @file csort.h
  * @brief Generic sort library with an iterative mergesort
  *
- * This header gives a type-generic sort facility with:
- * - An iterative mergesort algorithm (a stable sort, with no recursion)
- * - O(n log n) worst-case time complexity
- * - O(n) space complexity for the temporary buffer
+ * A type-generic sort with:
+ * - An iterative mergesort (stable, no recursion)
+ * - O(n log n) worst-case time
+ * - O(n) space for the temporary buffer
  * - Default comparison functions for all the standard C types
  * - Support for a custom comparison function
  * - Support for custom memory management
  * - Type-inferred selection of the comparison function with _Generic
  *
- * Because the library works through function pointers, it can sort any
- * type of collection: an array, a vector or a custom container. The caller
- * must give a getter function and a comparison function.
+ * Everything goes through function pointers, so it can sort any kind of
+ * collection (an array, a vector or a custom container) as long as the
+ * caller gives a getter function and a comparison function.
  *
- * The mergesort is iterative (bottom-up) rather than recursive, which makes
- * it safe for a large set of data, because the stack cannot overflow.
+ * The mergesort is iterative (bottom-up) and not recursive, so a large data
+ * set can't overflow the stack.
  */
 
 /**
  * @brief Function pointer type that gets an element from a collection
  *
- * A getter function hides the details of how a collection stores its
- * elements, so the sort algorithm can work with any type of collection.
+ * The getter hides how a collection stores its elements, so the sort can
+ * work with any kind of collection.
  *
- * @param collection Pointer to the collection that the library sorts
+ * @param collection Pointer to the collection being sorted
  * @param index Zero-based index of the element to get
  *
  * @return Pointer to the element at the given index
  *
- * @note The pointer must stay valid for the whole sort operation
+ * @note The pointer must stay valid for the whole sort
  * @note For a C array: return &array[index]
  * @note For a vector: return cvector_at(vec, index)
  *
@@ -79,7 +78,7 @@ SOFTWARE.
  *     return &((int*)collection)[index];
  * }
  *
- * // For a vector (cvector.h has this one already)
+ * // For a vector (cvector.h already has this one)
  * void *vector_getter(void *collection, size_t index) {
  *     return cvector_at((cvec)collection, index);
  * }
@@ -95,20 +94,19 @@ typedef void *(*csort_item_getter_proc_t)(void *collection, size_t index);
  * @brief Default comparison function for C strings. Do not call it
  *        directly.
  *
- * The leading underscore marks this function as internal: reach it through
- * csort_get_default_comparison_proc(), which selects it from the type of
- * its argument. The name and the signature can change in any release.
+ * The leading underscore marks it as internal. Get to it through
+ * csort_get_default_comparison_proc(), which picks it from the type of its
+ * argument. Its name and signature may change in any release.
  *
- * This function compares two stored string pointers with strcmp(). Both
- * arguments must be pointers to char pointers (char**).
+ * Compares two stored string pointers with strcmp(). Both arguments must be
+ * pointers to char pointers (char**).
  *
- * A stored pointer can be NULL. NULL comes before every string that is not
- * NULL, including the empty string, and NULL is equal only to another NULL.
- * This keeps the result a real total order over the whole char* type, so a
- * collection that holds NULL elements sorts and searches without any
- * special handling by the caller. The function also answers a NULL needle
- * without dereferencing it. Without that rule, a NULL element reaches
- * strcmp() as a null pointer.
+ * A stored pointer can be NULL. NULL sorts before every non-NULL string, the
+ * empty string included, and is equal only to another NULL. That keeps the
+ * result a real total order over the whole char* type, so a collection with
+ * NULL elements sorts and searches without any special handling by the
+ * caller, and a NULL needle is answered without being dereferenced. Without
+ * this rule a NULL element would reach strcmp() as a null pointer.
  *
  * @param first Pointer to the first char*, that is a char**. It must not be
  * NULL itself, because it is the address of the stored pointer.
@@ -119,10 +117,9 @@ typedef void *(*csort_item_getter_proc_t)(void *collection, size_t index);
  * equal, including when both are NULL; a positive value when
  * *first > *second.
  *
- * @note The function follows strcmp() for a pair of strings that are not
- * NULL
- * @note A string that is not NULL must be null-terminated
- * @note NULL is the least value, and the function never dereferences it.
+ * @note For two non-NULL strings it behaves like strcmp()
+ * @note A non-NULL string must be null-terminated
+ * @note NULL is the least value and is never dereferenced.
  *
  * @see strcmp
  */
@@ -132,55 +129,52 @@ int _csort_default_string_comparison_proc(const void *first,
 /**
  * @brief The internal mergesort. Do not call it directly.
  *
- * This function is an iterative (bottom-up) mergesort with no recursion, so
- * the stack cannot overflow. The algorithm uses a temporary buffer, which
- * it allocates with the memory management procedures that the caller gives.
+ * An iterative (bottom-up) mergesort without recursion, so the stack can't
+ * overflow. It uses a temporary buffer that it allocates with the memory
+ * management procedures the caller gives.
  *
  * Properties of the algorithm:
- * - A stable sort, which keeps the relative order of equal elements.
- * - O(n log n) time complexity in every case: worst, average and best
- * - O(n) space complexity for the temporary merge buffer
- * - An iterative algorithm, with no recursion and no concern about the
- *   depth of the stack
+ * - Stable: equal elements keep their relative order.
+ * - O(n log n) time in every case: worst, average and best
+ * - O(n) space for the temporary merge buffer
+ * - Iterative, so there is no recursion and no stack depth to worry about
  *
  * @param col Pointer to the collection to sort
  * @param length Number of elements in the collection
  * @param elem_size Size of each element in bytes
  * @param getter_proc Function that gets the element at an index (required).
  * @param comparison_proc Function that compares two elements (required).
- * @param mprocs Memory management procedures for the allocation of the
- * buffer. NULL selects the default procedures.
+ * @param mprocs Memory management procedures used to allocate the buffer.
+ * NULL selects the default procedures.
  *
- * @return true when the function sorts the whole collection, and also for
- * the trivial cases, which have nothing to do: a col of NULL, a length of 0
- * or 1, and an elem_size of 0. The function gives false when length is more
- * than ccol_max_elem_count, when mprocs is not NULL and does not hold all
- * four function pointers, when it cannot allocate the temporary merge
- * buffer, and when length * elem_size overflows size_t. In each of these
- * cases the collection stays completely unchanged, because no merge pass
- * has started.
+ * @return true when the whole collection is sorted, and also for the
+ * trivial cases that have nothing to do: a col of NULL, a length of 0 or 1,
+ * and an elem_size of 0. false when length is more than
+ * ccol_max_elem_count, when mprocs is not NULL and doesn't hold all four
+ * function pointers, when the temporary merge buffer can't be allocated,
+ * and when length * elem_size overflows size_t. In each of these cases the
+ * collection is left completely unchanged, because no merge pass has
+ * started.
  *
- * @note Use the csort_sort() macro instead of calling this function
- * directly.
- * @note The function asserts when getter_proc or comparison_proc is NULL,
- * but not when col is NULL or when length is 0 or 1: the trivial-success
- * path then gives true and looks at neither procedure.
- * @note The function gives true immediately when length is 0 or 1
- * @note The function gives true immediately when elem_size is 0, without
- * calling getter_proc or comparison_proc and without allocating a temporary
- * buffer: an element of size zero has no bytes for those procedures to
- * read, and no bytes for a merge pass to move.
- * @note The function rejects a length that is more than ccol_max_elem_count
- * (2^63 on a 64-bit size_t), the same cap that every other container in
- * this library has, for example cvector and chashmap. The cap exists so
- * that the internal count of bottom-up merge passes can never overflow.
- * @note An mprocs that is not NULL must hold malloc, free, calloc and
- * realloc, which is the same contract that ccol_memmgmt_procs_t itself
- * documents. The function rejects an incomplete mprocs with false, directly
- * before it allocates the temporary buffer and never in the middle of a
- * sort.
- * @note The function allocates a temporary buffer of (length * elem_size)
- * bytes, after first checking this multiplication for an overflow.
+ * @note Use the csort_sort() macro instead of calling this directly.
+ * @note It asserts when getter_proc or comparison_proc is NULL, except when
+ * col is NULL or length is 0 or 1: then the trivial-success path gives true
+ * without looking at either procedure.
+ * @note A length of 0 or 1 gives true at once
+ * @note An elem_size of 0 gives true immediately, without calling
+ * getter_proc or comparison_proc and without allocating a temporary buffer,
+ * since a zero-size element has no bytes for those procedures to read and
+ * none for a merge pass to move.
+ * @note A length above ccol_max_elem_count (2^63 on a 64-bit size_t) is
+ * rejected. Every other container in this library, cvector and chashmap for
+ * example, has the same cap, and it is there so the internal count of
+ * bottom-up merge passes can never overflow.
+ * @note A non-NULL mprocs must hold malloc, free, calloc and realloc, the
+ * same contract that ccol_memmgmt_procs_t itself documents. An incomplete
+ * mprocs is rejected with false right before the temporary buffer is
+ * allocated, never in the middle of a sort.
+ * @note The temporary buffer is (length * elem_size) bytes, and that
+ * multiplication is checked for overflow first.
  *
  * @see csort_sort
  */
@@ -196,10 +190,10 @@ bool ___csort_merge_sort(void *col, size_t length, size_t elem_size,
 /**
  * @brief Sort a collection with mergesort
  *
- * This macro sorts any type of collection in place with an iterative
- * mergesort algorithm. The collection can be a C array, a vector or any
- * custom container, as long as the caller gives a suitable getter function
- * and a suitable comparison function.
+ * Sorts any kind of collection in place with an iterative mergesort. The
+ * collection can be a C array, a vector or any custom container, as long as
+ * the caller gives a suitable getter function and a suitable comparison
+ * function.
  *
  * @param col Pointer to the collection to sort
  * @param length Number of elements in the collection
@@ -207,23 +201,23 @@ bool ___csort_merge_sort(void *col, size_t length, size_t elem_size,
  * @param getter_proc Function that gets the element at an index
  * @param comparison_proc Function that compares two elements
  * @param mprocs Memory management procedures. NULL selects the default
- * malloc and free; an mprocs that is not NULL must hold all four of malloc,
- * free, calloc and realloc.
+ * malloc and free; a non-NULL mprocs must hold all four of malloc, free,
+ * calloc and realloc.
  *
- * @return true on success. A length of zero or one, and an elem_size of 0,
- * are also a success, because they have nothing to do. The macro gives
- * false when length is more than ccol_max_elem_count, when mprocs is not
- * NULL and is incomplete, when it cannot allocate the temporary merge
- * buffer, and when length * elem_size overflows size_t. The collection
- * stays completely unchanged in each of these cases.
+ * @return true on success. A length of zero or one and an elem_size of 0
+ * count as success too, since there's nothing to do. false when length is
+ * more than ccol_max_elem_count, when mprocs is not NULL and is incomplete,
+ * when the temporary merge buffer can't be allocated, and when
+ * length * elem_size overflows size_t. In each of these cases the
+ * collection is left completely unchanged.
  *
- * @note This macro is a wrapper around ___csort_merge_sort
- * @note getter_proc and comparison_proc must both be non-NULL for a col
- * that is not NULL and has a length of 2 or more, even when elem_size is 0
- * and the macro calls neither of them. Only a col of NULL, or a length of 0
- * or 1, lets a call give no real procedures. A call that breaks this rule
- * asserts and aborts the process instead of giving false.
- * @note The sort is stable: it keeps the order of equal elements.
+ * @note It's a wrapper around ___csort_merge_sort
+ * @note getter_proc and comparison_proc must both be non-NULL for a
+ * non-NULL col with a length of 2 or more, even when elem_size is 0 and
+ * neither of them gets called. Only a col of NULL, or a length of 0 or 1,
+ * lets a call pass no real procedures. Breaking this rule asserts and aborts
+ * the process instead of giving false.
+ * @note The sort is stable: equal elements keep their order.
  * @note Time complexity: O(n log n) in every case
  * @note Space complexity: O(n) for the temporary merge buffer
  *
@@ -237,16 +231,15 @@ bool ___csort_merge_sort(void *col, size_t length, size_t elem_size,
  *            NULL);
  *
  * // Sort a cvec directly with csort_sort(). cvec_sort() and
- * // cvector_sort_with_comparison_proc() do this for you already. Use
- * // those macros, unless you need this raw interface.
- * // getter_proc must have exactly the signature of
- * // csort_item_getter_proc_t, which is void *(*)(void *, size_t). The
- * // first parameter of cvector_at() is a cvec and not a void *. You
- * // therefore cannot cast cvector_at() to csort_item_getter_proc_t and
- * // pass it as it is. A call through such a cast pointer is undefined
- * // behavior (C11 6.3.2.3p8). This is true although cvec and void * have
- * // the same representation on every mainstream ABI. A small adapter with
- * // the exact signature closes this hole.
+ * // cvector_sort_with_comparison_proc() already do this for you, so use
+ * // them unless you need this raw interface.
+ * // getter_proc must have exactly the csort_item_getter_proc_t signature,
+ * // void *(*)(void *, size_t). cvector_at() takes a cvec as its first
+ * // parameter, not a void *, so you can't cast it to
+ * // csort_item_getter_proc_t and pass it as is. Calling through such a
+ * // cast pointer is undefined behavior (C11 6.3.2.3p8), even though cvec
+ * // and void * have the same representation on every mainstream ABI. A
+ * // small adapter with the exact signature avoids the problem.
  * void *my_vec_getter(void *collection, size_t index) {
  *   return cvector_at((cvec)collection, index);
  * }
@@ -274,8 +267,7 @@ bool ___csort_merge_sort(void *col, size_t length, size_t elem_size,
 /**
  * @brief Internal macro that builds the name of a comparison procedure
  *
- * This macro makes the full function name of the comparison procedure for
- * one type.
+ * Makes the full function name of the comparison procedure for one type.
  *
  * @param name Type suffix for the comparison function
  *
@@ -287,8 +279,8 @@ bool ___csort_merge_sort(void *col, size_t length, size_t elem_size,
 /**
  * @brief Internal macro that declares a default comparison procedure
  *
- * This macro makes the declaration of a function that compares two elements
- * of the given type and obeys the standard comparator convention.
+ * Declares a function that compares two elements of the given type and
+ * follows the standard comparator convention.
  *
  * @param type C type, for example int, float or char
  * @param name Type suffix for the function name, for example int, float or
@@ -298,7 +290,7 @@ bool ___csort_merge_sort(void *col, size_t length, size_t elem_size,
   int ___csort__get_default_integral_comparison_proc_name(name)(       \
       const void *first, const void *second)
 
-/* Declare the default comparison procedures for all the standard types */
+/* Default comparison procedures for all the standard types */
 
 /** @brief Compare two char values */
 ___csort__declare_default_integral_comparison_proc(char, char);
@@ -337,36 +329,36 @@ ___csort__declare_default_integral_comparison_proc(unsigned long,
 ___csort__declare_default_integral_comparison_proc(unsigned long long,
                                                    unsigned_long_long);
 
+/** @brief Compare two bool values: false comes before true */
+int _csort_default_bool_comparison_proc(const void *first, const void *second);
+
 /**
  * @brief Compare two float values
- * @note NaN is greater than every value that is not NaN, and equal only to
- * another NaN, so the result is always a real total order, even when one
- * or both operands are NaN. The note on
- * _csort_default_double_comparison_proc explains why this matters for a
- * merge-sort comparator.
+ * @note NaN is greater than every non-NaN value and equal only to another
+ * NaN, so the result is always a real total order, even when one or both
+ * operands are NaN. The note on _csort_default_double_comparison_proc
+ * explains why a merge-sort comparator needs that.
  */
 ___csort__declare_default_integral_comparison_proc(float, float);
 
 /**
  * @brief Compare two double values
- * @note NaN is greater than every value that is not NaN, and equal only to
- * another NaN. The native `<` and `>` of IEEE 754 are both false when one
- * operand is NaN, so a simple comparator reports NaN as "equal" to
- * everything, including two unrelated values that are not NaN and merely
- * sit on the two sides of the NaN in the collection. The
- * take-left-or-take-right decision of csort_merge needs a real strict weak
- * ordering from comparison_proc, so a false "equal" verdict corrupts the
- * relative order of the elements around the NaN instead of only leaving the
- * position of the NaN unspecified. The key comparator of cbstmap for float,
- * double and long double works in the same way.
+ * @note NaN is greater than every non-NaN value and equal only to another
+ * NaN. IEEE 754's native `<` and `>` are both false when one operand is NaN,
+ * so a naive comparator reports NaN as "equal" to everything, even to two
+ * unrelated non-NaN values that just sit on either side of the NaN in the
+ * collection. csort_merge decides between the left and the right element
+ * from comparison_proc and needs a real strict weak ordering for that, so a
+ * false "equal" corrupts the relative order of the elements around the NaN
+ * and not only the NaN's own position. The cbstmap key comparator for
+ * float, double and long double works the same way.
  */
 ___csort__declare_default_integral_comparison_proc(double, double);
 
 /**
  * @brief Compare two long double values
- * @note NaN is greater than every value that is not NaN, and equal only to
- * another NaN, for the same reason as in
- * _csort_default_double_comparison_proc.
+ * @note NaN is greater than every non-NaN value and equal only to another
+ * NaN, for the same reason as in _csort_default_double_comparison_proc.
  */
 ___csort__declare_default_integral_comparison_proc(long double, long_double);
 
@@ -379,39 +371,37 @@ ___csort__declare_default_integral_comparison_proc(long double, long_double);
 /**
  * @brief Get the default comparison function for a type
  *
- * This macro uses C11 _Generic to select the correct comparison function
- * automatically from the type of the variable that the caller gives. It
- * supports all the standard integral types, all the floating-point types
- * and C strings.
+ * Uses C11 _Generic to pick the right comparison function from the type of
+ * the variable you pass. All the standard integral types, all the
+ * floating-point types and C strings are supported.
  *
- * The macro looks at the type of the given expression at compile time and
- * gives the matching comparison function pointer. The comparison functions
- * obey the standard C comparator convention: each one gives a value less
- * than 0, equal to 0, or more than 0.
+ * The type of the expression is looked at during compilation and the
+ * matching comparison function pointer comes back. The comparison functions
+ * follow the standard C comparator convention and give a value less than 0,
+ * equal to 0 or greater than 0.
  *
  * @param x Variable or expression whose type decides the comparison
  * function.
  *
- * @return Function pointer to the correct comparison function, or NULL for
- * a type that the macro does not support.
+ * @return Function pointer to the right comparison function, or NULL for a
+ * type that isn't supported.
  *
  * @note Supported signed types: char, signed char, short, int, long, long
  *       long
  * @note Supported unsigned types: unsigned char, unsigned short, unsigned
  *       int, unsigned long, unsigned long long
  * @note Supported floating types: float, double, long double
- * @note Supported string types: char* and const char*. These must be real
- * pointer variables or pointer expressions. The string comparator that the
- * macro gives puts a stored NULL before every string that is not NULL, and
- * that NULL is equal only to another NULL.
- * @note The macro gives NULL for a type that it does not support, such as a
- * fixed-size char array (char[N]). The comment below explains why this
- * type needs an explicit check: ccol_is_char_ptr() alone does not exclude
- * it.
- * @note The macro supports every const variant and every variant that is
- * not const
- * @note The macro uses the ccol_is_integral_type(), ccol_is_char_ptr() and
- * ccol_is_char_array() macros from common.h
+ * @note bool (_Bool) is supported too: false comes before true
+ * @note Supported string types: char* and const char*. They must be real
+ * pointer variables or pointer expressions. The string comparator you get
+ * puts a stored NULL before every non-NULL string, and that NULL is equal
+ * only to another NULL.
+ * @note An unsupported type, like a fixed-size char array (char[N]), gives
+ * NULL. The comment below explains why that type needs an explicit check:
+ * _ccol_is_char_ptr() alone doesn't exclude it.
+ * @note Every const and non-const variant is supported
+ * @note It relies on the _ccol_is_integral_type(), _ccol_is_char_ptr() and
+ * _ccol_is_char_array() macros of common.h
  *
  * Example usage:
  * @code
@@ -434,58 +424,54 @@ ___csort__declare_default_integral_comparison_proc(long double, long_double);
  * @see csort_sort
  * @see cvec_sort (it uses this macro)
  */
-/* The local below that holds the result is deliberately named
- * __csort_gdcp_result. A name that a caller can also give to its own
- * argument variable, such as "comparison_proc", is not safe here, because
- * of the declarator-scope rules of C. If a caller writes
- * csort_get_default_comparison_proc(comparison_proc) with an argument
- * variable of exactly that name, each use of (x) inside this statement
- * expression resolves to the new local of this macro, which is always NULL,
- * instead of to the real variable of the caller: the scope of the local
- * starts directly after its own declarator, which is before the expansion
- * of (x). The same hazard sets the names of the internal locals in
- * cvec_push. A name that belongs only to the internal result of this macro
- * is the standard defence against this hazard of a non-hygienic macro, and
- * common.h uses the same defence for the same reason:
- * ccol_scoped_ptr_release gives its internal temporary the name
- * __ccol_released_ptr.
+/* The local that holds the result below is called __csort_gdcp_result on
+ * purpose. A name that a caller could also give its own argument variable,
+ * like "comparison_proc", isn't safe here because of C's declarator scope
+ * rules. If a caller writes csort_get_default_comparison_proc(comparison_proc)
+ * with an argument variable of exactly that name, every (x) inside this
+ * statement expression resolves to the macro's new local, which is always
+ * NULL, and not to the caller's real variable: the local's scope starts
+ * right after its own declarator, and that is before (x) is expanded. The
+ * same hazard decides the names of cvec_push's internal locals. Giving the
+ * internal result a name that only this macro uses is the standard defence
+ * against this hazard of non-hygienic macros, and common.h does the same
+ * thing for the same reason (ccol_scoped_ptr_release names its internal
+ * temporary __ccol_released_ptr).
  *
- * The ccol_is_char_ptr((x)) branch below also checks
- * ccol_is_char_array((x)), because ccol_is_char_ptr((x)) alone is not
+ * The _ccol_is_char_ptr((x)) branch below also checks
+ * _ccol_is_char_array((x)), because _ccol_is_char_ptr((x)) alone isn't
  * enough:
  * - C11 6.5.1.1p2 and 6.3.2.1p3 apply the ordinary array-to-pointer decay
  *   to the controlling expression of a _Generic selection.
  * - So a real fixed-size array x, such as a `char name[64]` field, also
  *   matches the `char *:` and `const char *:` associations of
- *   ccol_is_char_ptr after the decay.
- * - Without a guard, the macro identifies such an array as a string and
- *   gives _csort_default_string_comparison_proc for it.
- * - The contract of that comparator requires that first and second point
- *   to a stored char* VALUE: it dereferences one pointer level with
- *   *(const char **)first, and does not expect the inline bytes of an
- *   array.
- * - csort_merge would then call that comparator on the real bytes of the
- *   array, and the comparator reads the first sizeof(char*) bytes as a
- *   pointer value and dereferences it. That is undefined behavior, not
- *   merely an incorrect sort order.
+ *   _ccol_is_char_ptr once it decays.
+ * - Without a guard, the macro would take such an array for a string and
+ *   give _csort_default_string_comparison_proc for it.
+ * - That comparator's contract needs first and second to point to a stored
+ *   char* VALUE. It dereferences one pointer level with
+ *   *(const char **)first and doesn't expect the array's inline bytes.
+ * - csort_merge would then call that comparator on the array's real bytes,
+ *   and it would read the first sizeof(char*) bytes as a pointer and
+ *   dereference it. That's undefined behavior, not just a wrong sort
+ *   order.
  *
- * ccol_is_char_array() reads only the type of x, so an rvalue x, such as a
- * cast, works as well as an lvalue, and a char pointer that has its own
- * qualifier, such as `const char *const`, is identified as a pointer. An
- * array goes to the NULL result for an unsupported type, which this macro
- * documents for each other type that it does not know, so the exclusion
- * adds no new comparator semantics. The default comparators of this module
- * are for an element that IS a scalar, a char pointer or a numeric value,
- * not for an element whose content IS a byte buffer. A caller with
- * fixed-size string fields has a full alternative:
- * cvector_sort_with_comparison_proc() or csort_sort() with an explicit
- * comparator that the caller writes. The char[N] field examples in
- * doc/csort.md use that shape. */
-#if defined __clang__
+ * _ccol_is_char_array() only reads the type of x, so an rvalue x like a cast
+ * works as well as an lvalue, and a char pointer with its own qualifier,
+ * like `const char *const`, is recognised as a pointer. An array goes to the
+ * NULL result for an unsupported type, which is what this macro documents
+ * for every other type it doesn't know, so the exclusion adds no new
+ * comparator semantics. This module's default comparators are meant for an
+ * element that IS a scalar, a char pointer or a numeric value, not for one
+ * whose content IS a byte buffer. A caller with fixed-size string fields
+ * has a complete alternative in cvector_sort_with_comparison_proc() or
+ * csort_sort() with an explicit comparator of its own; the char[N] field
+ * examples in doc/csort.md are written that way. */
+#if defined(_CCOL_CLANG_GENERIC_ASSOC_WARNING)
 #define csort_get_default_comparison_proc(x)                                             \
   ({                                                                                     \
     ccol_comparison_proc_t __csort_gdcp_result = NULL;                                   \
-    if (ccol_is_integral_type((x))) {                                                    \
+    if (_ccol_is_integral_type((x))) {                                                   \
       _Pragma("GCC diagnostic push");                                                    \
       _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\"");            \
       __csort_gdcp_result = _Generic((x),                                                \
@@ -540,8 +526,14 @@ ___csort__declare_default_integral_comparison_proc(long double, long_double);
                                          long_double),                                   \
           default: NULL);                                                                \
       _Pragma("GCC diagnostic pop");                                                     \
-    } else if (ccol_is_char_ptr((x)) && !ccol_is_char_array((x))) {                      \
+    } else if (_ccol_is_char_ptr((x)) && !_ccol_is_char_array((x))) {                    \
       __csort_gdcp_result = _csort_default_string_comparison_proc;                       \
+    } else {                                                                             \
+      _Pragma("GCC diagnostic push");                                                    \
+      _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\"");            \
+      if (_Generic((x), _Bool: 1, const _Bool: 1, default: 0))                           \
+        __csort_gdcp_result = _csort_default_bool_comparison_proc;                       \
+      _Pragma("GCC diagnostic pop");                                                     \
     }                                                                                    \
     __csort_gdcp_result;                                                                 \
   })
@@ -549,7 +541,7 @@ ___csort__declare_default_integral_comparison_proc(long double, long_double);
 #define csort_get_default_comparison_proc(x)                                             \
   ({                                                                                     \
     ccol_comparison_proc_t __csort_gdcp_result = NULL;                                   \
-    if (ccol_is_integral_type((x))) {                                                    \
+    if (_ccol_is_integral_type((x))) {                                                   \
       __csort_gdcp_result = _Generic((x),                                                \
           char: ___csort__get_default_integral_comparison_proc_name(char),               \
           signed char: ___csort__get_default_integral_comparison_proc_name(              \
@@ -601,8 +593,10 @@ ___csort__declare_default_integral_comparison_proc(long double, long_double);
           const long double: ___csort__get_default_integral_comparison_proc_name(        \
                                          long_double),                                   \
           default: NULL);                                                                \
-    } else if (ccol_is_char_ptr((x)) && !ccol_is_char_array((x))) {                      \
+    } else if (_ccol_is_char_ptr((x)) && !_ccol_is_char_array((x))) {                    \
       __csort_gdcp_result = _csort_default_string_comparison_proc;                       \
+    } else if (_Generic((x), _Bool: 1, const _Bool: 1, default: 0)) {                    \
+      __csort_gdcp_result = _csort_default_bool_comparison_proc;                         \
     }                                                                                    \
     __csort_gdcp_result;                                                                 \
   })
@@ -611,41 +605,39 @@ ___csort__declare_default_integral_comparison_proc(long double, long_double);
 /**
  * @brief Compile-time predicate: does this type have a default comparator?
  *
- * This macro expands to an integer constant expression whose value is 1
- * when csort_get_default_comparison_proc(x) gives a real comparison
- * procedure for the type of x, and 0 when that macro gives NULL. The
- * compiler evaluates the whole expression but never evaluates x itself.
- * The result works inside a _Static_assert, so a caller can reject an
- * unsupported element type at compile time instead of finding a NULL
- * comparator at run time.
+ * Expands to an integer constant expression that is 1 when
+ * csort_get_default_comparison_proc(x) gives a real comparison procedure
+ * for the type of x, and 0 when that macro gives NULL. The whole expression
+ * is evaluated by the compiler, but x itself never is. The result works
+ * inside a _Static_assert, so a caller can reject an unsupported element
+ * type at compile time instead of finding a NULL comparator at run time.
  *
  * @param x An expression of the type to test
  *
- * @return 1 when the type has a default comparison procedure, and 0 in
- * every other case
+ * @return 1 when the type has a default comparison procedure, 0 otherwise
  *
- * @note The macro looks only at the type of x and evaluates neither x nor
- * the address of x, so an lvalue that comes from a null pointer is fine.
- * The container macros use that shape, where a companion pointer carries
- * the type and nothing dereferences that pointer.
- * @note The association lists are an exact copy of the lists of
- * csort_get_default_comparison_proc, so the two always agree, and a change
- * to one of them is a change to both.
- * @note This macro is a bare _Generic chain that does not use the
- * ccol_is_integral_type(), ccol_is_char_ptr() and ccol_is_char_array()
- * macros of common.h, because those macros expand to a statement expression
- * under Clang, and a statement expression is not a constant expression, so
- * it cannot appear inside a _Static_assert.
- * @note A qualified type selects the association of its unqualified type:
- * the controlling expression of a _Generic selection gets an lvalue
- * conversion, so this macro needs no const associations.
- * @note The last clause excludes a fixed-size array. An array decays to a
- * pointer as the controlling expression of the second _Generic, so without
- * the last clause, `char name[64]` becomes a string. That clause compares
- * the undecayed type of x against its decayed pointer type and ignores the
- * top-level qualifiers of x, so a char pointer that is itself const, such
- * as `const char *const`, is a string, while a char array of any
- * qualification is not.
+ * @note Only the type of x is looked at; neither x nor its address is
+ * evaluated, so an lvalue that comes from a null pointer is fine. The
+ * container macros use exactly that, a companion pointer that carries the
+ * type and is never dereferenced.
+ * @note The association lists are an exact copy of those of
+ * csort_get_default_comparison_proc, so the two always agree, and changing
+ * one of them means changing both.
+ * @note It's a bare _Generic chain and doesn't use the
+ * _ccol_is_integral_type(), _ccol_is_char_ptr() and _ccol_is_char_array()
+ * macros of common.h. Under Clang those expand to a statement expression,
+ * which isn't a constant expression and so can't go inside a
+ * _Static_assert.
+ * @note A qualified type selects the association of its unqualified type,
+ * because the controlling expression of a _Generic selection goes through
+ * lvalue conversion, so no const associations are needed.
+ * @note The last clause excludes a fixed-size array. As the controlling
+ * expression of the second _Generic an array decays to a pointer, so
+ * without the last clause `char name[64]` would count as a string. That
+ * clause compares the undecayed type of x with its decayed pointer type and
+ * ignores x's top-level qualifiers, so a char pointer that is itself const,
+ * like `const char *const`, is a string, while a char array of any
+ * qualification isn't.
  *
  * @see csort_get_default_comparison_proc
  * @see cvec_sort
@@ -666,6 +658,7 @@ ___csort__declare_default_integral_comparison_proc(long double, long_double);
        float: 1,                                \
        double: 1,                               \
        long double: 1,                          \
+       _Bool: 1,                                \
        default: 0) ||                           \
    (_Generic((x),                               \
         char *: 1,                              \

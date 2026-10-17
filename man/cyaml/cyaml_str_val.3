@@ -11,20 +11,24 @@ const char *cyaml_str_val(cyaml node);
 .fi
 .SH DESCRIPTION
 .nf
-Return a read-only pointer to the null-terminated string that node
-stores.  The function calls ccol_fatal_err() when node is NULL, and it
-calls ccol_fatal_err() as well when node is not of type CYAML_STRING.
+Returns a read-only pointer to the null-terminated string that node
+stores.  The function calls _ccol_fatal_err() when node is NULL and
+when node is not of type CYAML_STRING.
 
-The node owns the returned pointer, which becomes invalid when the
-caller destroys the node or changes its value with cyaml_set().
+The node owns the string, so the caller must not free the pointer.
+It is borrowed and stays valid until the node gets a new value or is
+destroyed, so any of these ends it: a cyaml_set(3) that reaches the
+node, a cyaml_list_remove(3), cyaml_dictionary_remove(3) or
+cyaml_delete(3) of the node, a cyaml_dictionary_set(3) that replaces
+it, and a destroy of its tree.  Copy the text if you need it longer.
 .fi
 .SH PARAMETERS
 .nf
-node  CYAML_STRING node.
+node  A CYAML_STRING node.
 .fi
 .SH RETURN VALUE
 .nf
-A pointer to the internal string buffer.
+A pointer to the node's own string buffer.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_type (3),

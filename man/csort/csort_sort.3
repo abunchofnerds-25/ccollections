@@ -12,10 +12,9 @@ bool sorted = csort_sort(collection, length, elem_size, getter_proc,
 .fi
 .SH DESCRIPTION
 .nf
-This generic sort macro sorts any collection, whether an array, a vector
-or a custom container, with an iterative mergesort algorithm. The caller
-must give a getter function and a comparison function.
-
+csort_sort sorts any collection, an array, a vector or a container of
+your own, with an iterative mergesort. You give it a getter function to
+reach the elements and a comparison function to order them.
 .fi
 .SH PARAMETERS
 .nf
@@ -25,39 +24,39 @@ elem_size       Size of each element in bytes
 getter_proc     Function of type
                 void *(*)(void *collection, size_t index) that gives
                 a pointer to the storage of the element at an index.
-                The sort reads and writes each element through such
-                a pointer, so the elements do not have to be
-                contiguous: a ring buffer, or any other storage with
-                an index, is correct. Each pointer must stay valid
-                for the full sort.
+                The sort reads and writes each element through that
+                pointer, so the elements don't have to be contiguous
+                and a ring buffer, or any other indexed storage, is
+                fine. Each pointer must stay valid for the whole
+                sort.
 comparison_proc Function of type int (*)(const void *, const void *)
                 that compares two elements and gives a value less
-                than 0, 0, or more than 0, as for qsort(3).
+                than 0, 0, or more than 0, like for qsort(3).
 mprocs          Memory management procedures, or NULL for the default
                 ones. An mprocs that is not NULL must hold all four of
                 malloc, free, calloc and realloc.
 .fi
 .SH RETURN VALUE
 .nf
-Gives true on success, including the trivial cases that have nothing to
-do: a NULL collection, a length of 0 or 1, and an elem_size of 0.
+Gives true on success, and also in the trivial cases where there is
+nothing to do: a NULL collection, a length of 0 or 1, and an elem_size
+of 0.
 Gives false when length is more than the maximum element count of the
 library, when mprocs is not NULL and does not hold all four of malloc,
-free, calloc and realloc, when the internal temporary merge buffer
-cannot be allocated, or when length * elem_size overflows size_t. The
-collection stays completely unchanged in each of these cases.
+free, calloc and realloc, when the temporary merge buffer cannot be
+allocated, or when length * elem_size overflows size_t. In each of these
+cases the collection stays completely unchanged.
 .fi
 .SH NOTES
 .nf
-A stable sort, which keeps the relative order of equal elements
-O(n log n) time complexity in every case
-O(n) space complexity for the temporary merge buffer
-An iterative algorithm, with no recursion
+The sort is stable, so equal elements keep their relative order. It
+takes O(n log n) time in every case and O(n) space for the temporary
+merge buffer, and it is iterative, with no recursion.
 
 Neither getter_proc nor comparison_proc may be NULL when collection is
-not NULL and length is 2 or more. This holds even when elem_size is 0,
-although the macro then calls neither of them; only a NULL collection, or
-a length of 0 or 1, lets a call give no real procedures. A call that
+not NULL and length is 2 or more. That holds even when elem_size is 0,
+although the macro then calls neither of them; only a NULL collection or
+a length of 0 or 1 lets a call pass no real procedures. A call that
 breaks this rule asserts and aborts the process instead of giving false.
 .fi
 .SH EXAMPLES

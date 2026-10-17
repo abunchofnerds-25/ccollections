@@ -11,9 +11,8 @@ ccol_retval_t ccol_chan_try_recv_zc(ccol_channel *ch, c_message_t *target_buf);
 .fi
 .SH DESCRIPTION
 .nf
-This function tries to receive a message immediately from the queue
-that the channel picks itself, and returns immediately if that queue is
-empty.
+Takes a message from the queue that the channel picks for the calling
+thread, if one is there, and returns at once when that queue is empty.
 .fi
 .SH PARAMETERS
 .nf
@@ -22,15 +21,15 @@ target_buf  Buffer that gets the message
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success         - The function received a message. The caller must
-                       free target_buf->data.
+ccol_success         - A message was received. The caller must free
+                       target_buf->data.
 ccol_invalid_args    - ch or target_buf is NULL
 ccol_container_empty - The chosen queue is empty
 .fi
 .SH NOTES
 .nf
-The function never blocks.
-The function picks the direction itself from the ID of the thread.
+This call never blocks. The direction comes from the ID of the
+calling thread, as described in ccol_chan_recv_zc(3).
 .fi
 .SH "SEE ALSO"
 .BR ccol_chan_recv_zc (3),

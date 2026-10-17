@@ -26,18 +26,18 @@
  * @file bench_concurrency.c
  * @brief Benchmarks for cthreadpool and the cthreadcomm message primitives.
  *
- * Every queue type gets two shapes. The round trip on one thread sends and
- * receives on that thread, so it reports the bookkeeping and the lock of the
- * primitive itself, with no contention and no block at all. The pair of a
- * producer and a consumer reports what the same primitive costs under real
- * contention, where a sender and a receiver must hand over through the
- * condition variable. That is the number that matters for a real pipeline, and
- * it is the one that a change to the scheduling moves.
+ * Every queue type gets two shapes. The single-thread round trip sends and
+ * receives on one thread, so it reports the primitive's own bookkeeping and
+ * lock, with no contention and no blocking at all. The producer and consumer
+ * pair reports what the same primitive costs under real contention, where a
+ * sender and a receiver have to hand over through the condition variable.
+ * That's the number that matters for a real pipeline, and it's the one a
+ * scheduling change moves.
  *
- * These cases reuse their messages instead of allocating a new one each time.
- * A send gives ownership to the queue and a receive gives it back, so the same
- * buffer can go round for ever, which keeps the allocator out of a measurement
- * that is about the queue.
+ * These cases reuse their messages instead of allocating a new one each
+ * time. A send hands ownership to the queue and a receive gives it back, so
+ * the same buffer can go round for ever, which keeps the allocator out of a
+ * measurement that is about the queue.
  */
 
 #include <cthreadcomm.h>
@@ -56,15 +56,15 @@
 
 #define BENCH_QUEUE_N 200000
 
-/* The queue forms with contention use a shorter repetition, for the same
- * reason as the cache benchmarks: a pair of a send and a receive is a cost for
- * each operation, with no fixed cost around it, so many short repetitions
- * describe the distribution much better than ten long ones.
+/* The contended queue forms use a shorter repetition, for the same reason as
+ * the cache benchmarks: a send and receive pair is a per-operation cost with
+ * no fixed cost around it, so many short repetitions describe the
+ * distribution much better than ten long ones.
  *
  * The thread pool forms keep the full count. Their repetition ends with a
- * drain of the queue, which is a fixed cost for each repetition and not for
- * each task, so a shorter repetition would raise the figure for each task and
- * make it impossible to compare with the case that uses one thread. */
+ * drain of the queue, which is a fixed cost per repetition and not per task,
+ * so a shorter repetition would raise the per-task figure and make it
+ * impossible to compare with the single-threaded case. */
 #define BENCH_QUEUE_MT_N 20000
 #define BENCH_POOL_N 100000
 #define BENCH_QUEUE_CAPACITY 1024
@@ -78,10 +78,10 @@ typedef struct {
   atomic_size_t counter;
 } pool_state_t;
 
-/* The body of the task does almost nothing, on purpose: these cases measure
- * what it costs to get work to a worker and to record that the work is done,
- * and real work inside the task would only add something that the pool does
- * not control. */
+/* The task body does almost nothing on purpose. These cases measure what it
+ * costs to get work to a worker and record that the work is done, and real
+ * work inside the task would only add something the pool doesn't
+ * control. */
 static void pool_task(void *arg) {
   pool_state_t *st = arg;
   atomic_fetch_add_explicit(&st->counter, 1, memory_order_relaxed);
@@ -100,7 +100,7 @@ static void *pool_setup_n(size_t workers) {
   pool_state_t *st = calloc(1, sizeof(*st));
   if (!st) return NULL;
   atomic_init(&st->counter, 0);
-  st->pool = ccol_create_cthread_pool(workers, 0, NULL);
+  st->pool = ctpool_create(workers, 0, NULL);
   if (st->pool == CTPOOL_INVALID) {
     free(st);
     return NULL;
@@ -121,17 +121,17 @@ static void *pool_setup_4(size_t n) {
 static void pool_submit_run(void *state, size_t n) {
   pool_state_t *st = state;
   for (size_t i = 0; i < n; i++) {
-    /* The code checks this for the same reason as every other allocation in
-     * this harness: a submit that fails costs much less than a submit that
-     * queues the task, so a loop with no check keeps measuring and reports the
-     * failure as speed. */
+    /* Checked for the same reason as every other allocation in this harness:
+     * a failing submit costs much less than one that queues the task, so an
+     * unchecked loop would keep measuring and report the failure as
+     * speed. */
     if (ctpool_submit(st->pool, pool_task, st, NULL) != ccol_success)
       bench_die("ctpool_submit failed");
   }
-  /* The wait is inside the timed region, on purpose, because a submit that
-   * only puts the task on the queue is half of the operation. If the clock
-   * stopped before the queue drained, the reported number would get better
-   * whenever the pool became slower at running the work. */
+  /* The wait sits inside the timed region on purpose, because a submit that
+   * only queues the task is half the operation. If the clock stopped before
+   * the queue drained, the reported number would get better whenever the pool
+   * got slower at running the work. */
   ctpool_wait(st->pool);
   bench_sink(&st->counter);
 }
@@ -150,23 +150,23 @@ typedef struct {
 
 #define BENCH_MSG_SIZE 64
 
-/* A destroy of a queue that still holds messages is a caller error, and the
- * library stops the process on it. Every message here carries a buffer that
- * the state owns instead of an allocation of its own, so to drain means to
- * discard the pointers, not to free them. A case can stop early, for example
- * when a thread could not start or when a send succeeded and its receive never
+/* Destroying a queue that still holds messages is a caller error and the
+ * library stops the process on it. Every message here carries a buffer the
+ * state owns instead of its own allocation, so draining means dropping the
+ * pointers, not freeing them. A case can stop early, for example when a
+ * thread couldn't start or when a send went through and its receive never
  * ran, and such a case leaves exactly those messages behind. Without this
- * drain, the harness would stop the process on the one path that it was
- * written to survive. */
+ * drain the harness would stop the process on the very path it was written to
+ * survive. */
 static void q_drain(q_state_t *st) {
   c_message_t out = {0};
-  /* There is no arm for a channel here. A channel routes by the identity of
-   * the thread, so the teardown thread cannot receive from the side that its
-   * peer sent into, and no arm is needed: the one case that uses a channel
-   * sends exactly as many messages as its peer receives and stops the process
-   * on every other result, so the channel is always empty at the destroy. A
-   * case that changes this must drain the channel from the thread of the peer,
-   * before that thread exits. */
+  /* There's no channel arm here. A channel routes by thread identity, so the
+   * teardown thread can't receive from the side its peer sent into, and no
+   * arm is needed anyway: the one case that uses a channel sends exactly as
+   * many messages as its peer receives and stops the process on any other
+   * result, so the channel is always empty at the destroy. A case that changes
+   * that has to drain the channel from the peer's thread before that thread
+   * exits. */
   if (st->cq) {
     while (ccol_circq_try_recv_zc(st->cq, &out) == ccol_success) {
     }
@@ -255,9 +255,9 @@ static void circq_roundtrip_run(void *state, size_t n) {
       bench_die("circular queue receive failed");
     msg = out;
   }
-  /* The payload comes back out of the last receive, so the code sets the
-   * pointer of the state to the buffer that it owns at this point, and the
-   * teardown frees exactly one buffer in both cases. */
+  /* The payload comes back out of the last receive, so we point the state's
+   * pointer at the buffer it owns at this point, and teardown frees exactly
+   * one buffer either way. */
   st->payload = msg.data;
   bench_sink(st->payload);
 }
@@ -277,13 +277,13 @@ static void dynq_roundtrip_run(void *state, size_t n) {
   bench_sink(st->payload);
 }
 
-/* A channel carries messages in both directions and routes by the identity of
- * the thread: the thread that creates a channel sends into the direction of
- * the other side and receives from it, so one thread cannot send a message and
- * then receive that same message. This case therefore always needs a second
- * thread, and it is a pair of a producer and a consumer by construction, not
- * by choice. The thread that creates the channel here is the thread that ran
- * the setup, which is the same thread that runs this function. */
+/* A channel carries messages both ways and routes by thread identity: the
+ * thread that creates a channel sends towards the other side and receives
+ * from it, so one thread can't send a message and then receive that same
+ * message. So this case always needs a second thread, and it's a producer and
+ * consumer pair by construction, not by choice. The thread that creates the
+ * channel here is the one that ran setup, which is also the thread running
+ * this function. */
 typedef struct {
   ccol_channel *ch;
   size_t n;
@@ -305,11 +305,11 @@ static void chan_pc_run(void *state, size_t n) {
   chan_arg_t arg = {.ch = st->ch, .n = n};
   pthread_t peer;
   /* This stops the run instead of returning early. A return would give the
-   * harness the time that this function took with no work in it, which the
-   * harness records as a real sample and reports as a remarkable figure. After
-   * this point the send loop must not stop early either, because the peer
-   * waits for exactly n messages, and a producer that stopped early would
-   * leave the join below waiting for ever. */
+   * harness the time this function took with no work in it, which the harness
+   * would record as a real sample and report as a remarkable figure. After this
+   * point the send loop mustn't stop early either, because the peer waits for
+   * exactly n messages, and a producer that stopped early would leave the join
+   * below waiting for ever. */
   if (pthread_create(&peer, NULL, chan_peer_consumer, &arg) != 0)
     bench_die("channel peer thread could not be started");
   for (size_t i = 0; i < n; i++) {
@@ -320,7 +320,7 @@ static void chan_pc_run(void *state, size_t n) {
   pthread_join(peer, NULL);
 }
 
-/* --- producer and consumer, genuinely contending ------------------------- */
+/* --- producer and consumer, really contending ---------------------------- */
 
 typedef struct {
   ccol_circular_queue *cq;
@@ -328,26 +328,25 @@ typedef struct {
   void *seed_payload;
 } pc_arg_t;
 
-/* Neither side may stop early without a report. A producer that leaves its
- * loop early blocks the consumer on a receive that nothing will ever satisfy,
- * and a consumer that leaves its loop early blocks the producer on a queue
- * that nothing will ever drain; in both cases the join below waits for ever.
+/* Neither side may stop early without saying so. A producer that leaves its
+ * loop early blocks the consumer on a receive nothing will ever satisfy, and a
+ * consumer that leaves its loop early blocks the producer on a queue nothing
+ * will ever drain, and either way the join below waits for ever.
  *
- * The only bounded receive and the only bounded send that this module offers
- * compute an absolute deadline for each call, so using them in the steady
- * state would put a read of the clock inside the loop under measurement.
- * Instead, the steady state keeps the fast calls that block and stops the
- * process on every result that it does not expect.
+ * The only bounded receive and bounded send this module offers compute an
+ * absolute deadline per call, so using them in the steady state would put a
+ * clock read inside the measured loop. So the steady state keeps the fast
+ * blocking calls and stops the process on every result it doesn't expect.
  *
- * ccol_not_permitted is the one exception: it is how a deliberate
- * ccol_circq_disable_sending reaches a producer that is blocked, and
- * circq_pc_run uses exactly that mechanism to unwind when the consumer never
+ * ccol_not_permitted is the one exception, because that's how a deliberate
+ * ccol_circq_disable_sending reaches a blocked producer, and circq_pc_run uses
+ * exactly that to unwind when the consumer never
  * started. */
 static void *pc_producer(void *arg) {
   pc_arg_t *a = arg;
-  /* Every message carries the same buffer, and the consumer frees nothing, so
-   * no allocation happens inside the measured loop. A fresh allocation per
-   * message would measure the allocator rather than the queue. */
+  /* Every message carries the same buffer and the consumer frees nothing, so
+   * nothing gets allocated inside the measured loop. A fresh allocation per
+   * message would measure the allocator and not the queue. */
   for (size_t i = 0; i < a->n; i++) {
     c_message_t msg = {.data = a->seed_payload, .size = BENCH_MSG_SIZE};
     ccol_retval_t r = ccol_circq_send_zc(a->cq, &msg);
@@ -373,22 +372,22 @@ static void circq_pc_run(void *state, size_t n) {
   pc_arg_t arg = {.cq = st->cq, .n = n, .seed_payload = st->payload};
   pthread_t prod, cons;
 
-  /* The code starts the producer first, which is what makes the failure path
-   * recoverable. If the producer itself cannot start, nothing runs and there is
-   * nothing to unwind. If the consumer cannot start, the producer already runs
-   * and blocks as soon as it fills the queue, so the code must wake it
-   * deliberately. disable_sending wakes the senders that are blocked, and only
-   * the senders, as its own documentation says clearly; the producer then
-   * treats the ccol_not_permitted that it gets as a clean stop. A join without
-   * that wake-up waits for ever instead of merely being slow. */
+  /* The producer starts first, which is what makes the failure path
+   * recoverable. If the producer itself can't start, nothing runs and there's
+   * nothing to unwind. If the consumer can't start, the producer is already
+   * running and blocks as soon as it fills the queue, so we have to wake it on
+   * purpose. disable_sending wakes the blocked senders, and only the senders,
+   * as its documentation says clearly, and the producer then treats the
+   * ccol_not_permitted it gets as a clean stop. A join without that wake-up
+   * would wait for ever, not just be slow. */
   if (pthread_create(&prod, NULL, pc_producer, &arg) != 0)
     bench_die("producer thread could not be started");
   if (pthread_create(&cons, NULL, pc_consumer, &arg) != 0) {
     ccol_circq_disable_sending(st->cq);
     pthread_join(prod, NULL);
-    /* The code unwinds first and then stops the run: it must wake the producer
-     * and join it before anything else happens, and reporting the time that
-     * this took as a measurement would be worse than stopping. */
+    /* Unwind first and only then stop the run: the producer has to be woken
+     * and joined before anything else happens, and reporting the time that
+     * took as a measurement would be worse than stopping. */
     bench_die("consumer thread could not be started");
   }
   pthread_join(prod, NULL);
@@ -449,10 +448,10 @@ static void *glib_pool_setup(size_t n) {
   (void)n;
   glib_conc_state_t *st = calloc(1, sizeof(*st));
   if (!st) return NULL;
-  /* Exclusive, so this pool owns four dedicated worker threads, which is what
-     the pool it is compared against is created with. A non-exclusive pool
-     dispatches through GLib's shared global pool instead, so the two would not
-     be running the same number of workers on the same work. */
+  /* Exclusive, so this pool owns four dedicated worker threads, which is how
+     the pool it's compared with is created. A non-exclusive pool dispatches
+     through GLib's shared global pool instead, and the two wouldn't be running
+     the same number of workers on the same work. */
   st->tp = g_thread_pool_new(glib_pool_task, st, 4, TRUE, NULL);
   if (!st->tp) {
     free(st);
@@ -461,23 +460,23 @@ static void *glib_pool_setup(size_t n) {
   return st;
 }
 
-/* Drains by waiting for every task to have run, which is what ctpool_wait does
+/* Drains by waiting until every task has run, which is what ctpool_wait does
  * on the other side of this comparison, and leaves the pool standing.
- * g_thread_pool_free(wait=TRUE) would also drain, but it returns and joins the
- * worker threads as well, so the arm would be timed doing a teardown the arm it
- * is compared against does not do. */
+ * g_thread_pool_free(wait=TRUE) would drain too, but it also joins the worker
+ * threads before returning, so this arm would be timed doing a teardown the
+ * arm it's compared with doesn't do. */
 static void glib_pool_submit_run(void *state, size_t n) {
   glib_conc_state_t *st = state;
   for (size_t i = 0; i < n; i++)
     g_thread_pool_push(st->tp, GINT_TO_POINTER(1), NULL);
-  /* Parked on a short sleep rather than a spin, for the reason this project's
-     own drain loops give: under an instrumented run one thread executes at a
-     time, and a yield-spin burns whole quanta the worker it waits for needs. */
-  /* Bounded. A push that was silently dropped would otherwise leave this
-     spinning for the life of the process rather than failing, which is the
-     shape of hang this project's own lessons single out: a wait on a flag only
-     another thread can set needs a ceiling. Ten seconds is far past any honest
-     completion of this workload and far short of a CI timeout. */
+  /* Parked on a short sleep and not a spin, for the reason this project's own
+     drain loops give: under an instrumented run one thread runs at a time, and
+     a yield-spin burns whole quanta the worker it waits for needs. */
+  /* Bounded. A push that got silently dropped would otherwise leave this
+     spinning for the life of the process instead of failing, the kind of hang
+     where a wait on a flag only another thread can set needs a ceiling. Ten
+     seconds is far past any honest completion of this workload and far short
+     of a CI timeout. */
   double deadline = bench_now_ns() + 10e9;
   while ((size_t)g_atomic_int_get(&st->counter) < n) {
     if (bench_now_ns() > deadline)
@@ -496,24 +495,24 @@ static void glib_pool_submit_run(void *state, size_t n) {
 /* Multi-threaded variants                                                   */
 /* ------------------------------------------------------------------------ */
 
-/* One pool, several submitting threads, and as many workers as submitters.
- * Scaling both together is what asks whether the pool as a whole scales: a
- * fixed worker count would cap throughput no matter how the submission path
- * behaved, and the figure would describe the cap rather than the pool. */
+/* One pool, several submitting threads and as many workers as submitters.
+ * Scaling both together is what asks whether the pool as a whole scales,
+ * because a fixed worker count would cap throughput however the submission
+ * path behaved, and the figure would describe the cap and not the pool. */
 static void *pool_setup_workers_mt(size_t n, unsigned threads) {
   (void)n;
   return pool_setup_n(threads);
 }
 
-/* The shared-pool variant submits and does not drain, which is why it is named
- * for submission alone rather than sharing the single-threaded cases' name.
- * ctpool_wait documents that no other thread may be submitting while it runs,
- * and on an unbounded queue a concurrent submitter can block it indefinitely;
- * every thread here is submitting into the one pool, so calling it would both
- * break that contract and measure the wrong thing, since the first thread to
- * finish submitting would be timed waiting out every other thread's work. What
- * this case reports is the cost of getting a task into a pool several threads
- * are feeding at once. The queue is drained by teardown, outside the clock. */
+/* The shared-pool variant submits without draining, which is why it's named
+ * for submission alone and doesn't share the single-threaded cases' name.
+ * ctpool_wait documents that no other thread may submit while it runs, and on
+ * an unbounded queue a concurrent submitter can block it indefinitely. Every
+ * thread here submits into the one pool, so calling it would break that
+ * contract and measure the wrong thing as well, since the first thread to
+ * finish submitting would be timed waiting out every other thread's work.
+ * What this case reports is the cost of getting a task into a pool that
+ * several threads feed at once. Teardown drains the queue outside the clock. */
 static void pool_submit_only_run(void *state, size_t n) {
   pool_state_t *st = state;
   for (size_t i = 0; i < n; i++) {
@@ -524,16 +523,16 @@ static void pool_submit_only_run(void *state, size_t n) {
   bench_sink(&st->counter);
 }
 
-/* The queues are internally locked, so their threads share one queue. Each
- * thread owns one payload buffer and has at most one message outstanding, so
- * the queue never holds more than one message per thread and a receiver that
- * is waiting always has a sender ahead of it.
+/* The queues lock internally, so their threads share one queue. Each thread
+ * owns one payload buffer and has at most one message outstanding, so the
+ * queue never holds more than one message per thread and a waiting receiver
+ * always has a sender ahead of it.
  *
  * The buffers move between threads: a zero-copy send hands ownership to the
- * queue and a receive takes ownership of whatever comes out, which need not be
- * what this thread put in. The set of buffers is conserved, so each thread
- * parks whatever it ends up holding in its own slot and teardown frees all of
- * them. */
+ * queue and a receive takes ownership of whatever comes out, which doesn't
+ * have to be what this thread put in. The set of buffers is conserved, so
+ * each thread parks whatever it ends up holding in its own slot and teardown
+ * frees all of them. */
 typedef struct {
   q_state_t *q;
   void **payloads;
@@ -545,7 +544,7 @@ static void q_mt_teardown(void *state) {
   for (size_t i = 0; i < st->payload_count; i++) free(st->payloads[i]);
   free(st->payloads);
   if (st->q) {
-    /* The shared q_state_t's own payload is already accounted for above. */
+    /* The shared q_state_t's own payload is counted above already. */
     st->q->payload = NULL;
     q_teardown(st->q);
   }
@@ -697,10 +696,10 @@ void bench_register_concurrency(void) {
                             .run = glib_asyncq_roundtrip_run,
                             .teardown = glib_conc_teardown,
                             .n = BENCH_QUEUE_N});
-  /* The same shape against GLib's own queue: one queue, every thread pushing
-   * and popping. It answers whether a shared blocking queue behaves this way
-   * for any implementation or only for this one, which is not something the
-   * single-threaded comparison can settle. */
+  /* The same shape against GLib's own queue, one queue with every thread
+   * pushing and popping. It answers whether a shared blocking queue behaves
+   * like this in any implementation or only in this one, which the
+   * single-threaded comparison can't settle. */
   bench_add_mt(&(bench_case_t){.group = "cthreadcomm",
                                .name = "circular_queue_roundtrip",
                                .vs = "GAsyncQueue",

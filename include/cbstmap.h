@@ -27,36 +27,36 @@ SOFTWARE.
 #include "citerators.h"
 #include "common.h"
 
-/* Everything that this header declares from here to its end is part of the
- * public Application Binary Interface (ABI) of libccollections, and the shared
- * library exports all of it. Because the library itself is built with
- * -fvisibility=hidden, a function or an object must be covered by one of
- * these blocks: if no block covers it, it stays internal to the library and
- * is absent from the dynamic symbol table, so the application that links
- * against the library cannot interpose it, and cannot collide with it through
- * a symbol of the same name. */
+/* Everything this header declares from here to its end belongs to the
+ * public Application Binary Interface (ABI) of libccollections, and the
+ * shared library exports all of it. The library is built with
+ * -fvisibility=hidden, so a function or an object has to be inside one of
+ * these blocks to be exported. Anything outside them stays internal and
+ * isn't in the dynamic symbol table, so an application linking against the
+ * library can't interpose it or collide with it through a symbol of the same
+ * name. */
 #pragma GCC visibility push(default)
 
 /**
  * @file cbstmap.h
  * @brief Self-balancing binary search tree map (AVL tree) with sorted keys
  *
- * Gives an ordered map that uses an AVL tree. The map has these properties:
- * - It balances its own height with rotations
- * - Every operation is iterative, with no recursion, so the stack is safe
- * - Insert, delete and search operations are O(log n)
+ * An ordered map built on an AVL tree, with these properties:
+ * - It keeps its own height balanced with rotations
+ * - Every operation is iterative, without recursion, so the stack is safe
+ * - Insert, delete and search are O(log n)
  * - In-order iteration gives the keys in sorted order
- * - The caller can give a custom comparison function
- * - Type-inferred macros do the common operations, for signed, unsigned,
+ * - The caller can pass a custom comparison function
+ * - Type-inferred macros do the common operations for signed, unsigned,
  *   floating-point and string key types
  *
  * Key characteristics:
  * - The AVL tree keeps the balance factor |height(left) - height(right)| <= 1
- * - The tree uses single and double rotations to balance itself
- * - The tree keeps the keys in sorted order (ascending)
+ * - It balances itself with single and double rotations
+ * - The keys are kept in ascending sorted order
  * - The iterator walks the tree in order (left, root, right)
- * - All tree operations are iterative and use fixed-size stacks, with no
- *   recursion and no heap memory to walk or balance the tree
+ * - All tree operations are iterative and use fixed-size stacks, so walking
+ *   and balancing the tree needs neither recursion nor heap memory
  * - The default comparison is a signed or unsigned integer comparison for
  *   integers, a numeric comparison for floating-point types, a
  *   strcmp-equivalent comparison for strings, and a raw memcmp for any other
@@ -77,11 +77,11 @@ typedef cbinarymap *cbmap;
  * @brief Create a balanced BST map with full customization
  *
  * Creates a new self-balancing binary search tree map with the key type,
- * custom memory management and custom comparison function that the caller
- * gives.
+ * the custom memory management and the custom comparison function you
+ * pass.
  *
- * @param key_type Type of the keys that the map stores (it selects the
- * default comparison strategy)
+ * @param key_type Type of the keys the map stores (it picks the default
+ * comparison strategy)
  * @param mmgmt_procs Custom memory management procedures, or NULL for the
  * default malloc/free
  * @param custom_comparison_proc Custom comparison function, or NULL for the
@@ -91,25 +91,25 @@ typedef cbinarymap *cbmap;
  * @return Pointer to the new BST map, or NULL on failure
  *
  * @note Default comparison for ccol_char: native `char` comparison, signed
- * or unsigned to match the `char` type of this platform
+ * or unsigned to match this platform's `char` type
  * @note Default comparison for ccol_signed_char and for
- * short/int/long/long_long: a correct signed integer comparison, which does
- * not depend on the `char` signedness of this platform. Note that
- * ccol_signed_char is a scalar `signed char` or its typedef `int8_t`, while
- * a `signed char *` string key is ccol_string
+ * short/int/long/long_long: a correct signed integer comparison that doesn't
+ * depend on this platform's `char` signedness. ccol_signed_char is a scalar
+ * `signed char` or its typedef `int8_t`, while a `signed char *` string key
+ * is ccol_string
  * @note Default comparison for the unsigned integer types and ccol_pointer:
  * a correct unsigned integer comparison
  * @note Default comparison for ccol_float/double/long_double: a correct
- * floating-point comparison, in which a NaN key sorts as greater than every
- * non-NaN key and equal to every other NaN key. This total order is well
- * defined, so the caller can find, update and delete a NaN key, and a NaN
- * key never collides with an unrelated key
+ * floating-point comparison where a NaN key sorts greater than every
+ * non-NaN key and equal to every other NaN key. That total order is well
+ * defined, so a NaN key can be found, updated and deleted, and it never
+ * collides with an unrelated key
  * @note Default comparison for ccol_string: lexicographic byte comparison
- * @note For ccol_other_types (for example a struct key type) the default
- * comparison, used when the caller gives no custom_comparison_proc, is a raw
- * memcmp of the representation. That memcmp compares indeterminate padding
- * bytes, and it compares each pointer member by address, not by the object
- * that the pointer points at, so give custom_comparison_proc for a struct key
+ * @note For ccol_other_types (a struct key type, for example) the default
+ * comparison, used when no custom_comparison_proc is given, is a raw memcmp
+ * of the representation. That memcmp compares indeterminate padding bytes,
+ * and it compares each pointer member by address and not by the object it
+ * points at, so give a custom_comparison_proc for a struct key
  * @note A custom comparison gets void* pointers to the key data
  * @note The map keeps the AVL balance: abs(height(left) - height(right)) <= 1
  * @note All operations are O(log n) for a balanced tree
@@ -128,10 +128,10 @@ cbmap cbmap_create_full(ccol_data_type key_type,
 /**
  * @brief Create a BST map with default settings
  *
- * Convenience wrapper for cbmap_create_full() that uses the default memory
+ * Convenience wrapper for cbmap_create_full() with the default memory
  * management and the default comparison for the key type.
  *
- * @param key_type Type of the keys that the map stores
+ * @param key_type Type of the keys the map stores
  * @param err Optional pointer that receives an error string on failure
  *
  * @return Pointer to the new BST map, or NULL on failure
@@ -144,10 +144,10 @@ cbmap_create(ccol_data_type key_type, char **err) {
 /**
  * @brief Create a BST map with custom memory management
  *
- * Convenience wrapper for cbmap_create_full() that uses custom memory
- * management and the default comparison.
+ * Convenience wrapper for cbmap_create_full() with custom memory management
+ * and the default comparison.
  *
- * @param key_type Type of the keys that the map stores
+ * @param key_type Type of the keys the map stores
  * @param mmgmt_procs Custom memory management procedures
  * @param err Optional pointer that receives an error string on failure
  *
@@ -161,18 +161,18 @@ static inline __attribute__((always_inline)) cbmap cbmap_create_mp(
 /**
  * @brief Create a BST map with custom comparison function
  *
- * Convenience wrapper for cbmap_create_full() that uses a custom comparison
+ * Convenience wrapper for cbmap_create_full() with a custom comparison
  * function and the default memory management.
  *
- * @param key_type Type of the keys that the map stores
+ * @param key_type Type of the keys the map stores
  * @param custom_comparison_proc Custom comparison function
  * @param err Optional pointer that receives an error string on failure
  *
  * @return Pointer to the new BST map, or NULL on failure
  *
- * @note custom_comparison_proc sets only the order of the keys; key_type
- * sets the width that the map expects for a fixed-width key and the
- * alignment of each stored key.
+ * @note custom_comparison_proc only decides the order of the keys. key_type
+ * decides the width the map expects for a fixed-width key and the alignment
+ * of each stored key.
  */
 static inline __attribute__((always_inline)) cbmap
 cbmap_create_ch(ccol_data_type key_type,
@@ -187,13 +187,13 @@ cbmap_create_ch(ccol_data_type key_type,
 /**
  * @brief Get the number of elements in the map
  *
- * Returns the number of key-value pairs that the BST map stores now.
+ * Returns how many key-value pairs the BST map holds right now.
  *
  * @param cbm BST map to query
  *
  * @return Number of elements in the map
  *
- * @note The function asserts if cbm is NULL
+ * @note It asserts if cbm is NULL
  * @note O(1) complexity
  */
 size_t cbmap_elem_count(cbmap cbm);
@@ -201,17 +201,17 @@ size_t cbmap_elem_count(cbmap cbm);
 /**
  * @brief Clear all elements from the map
  *
- * Removes all the key-value pairs from the map with an iterative post-order
- * walk of the tree. The map becomes empty, but the caller can go on using it.
+ * Removes every key-value pair with an iterative post-order walk of the
+ * tree. The map ends up empty and the caller can keep using it.
  *
  * @param cbm BST map to reset
  *
  * @return ccol_success on success
  *
  * @note O(n) complexity
- * @note The function destroys all the nodes and frees the keys and the values
- * @note The map structure stays valid, so the caller can use it again
- * @note The function asserts if cbm is NULL
+ * @note All the nodes are destroyed and the keys and values freed
+ * @note The map structure stays valid, so it can be used again
+ * @note It asserts if cbm is NULL
  *
  * @see cbmap_destroy
  */
@@ -220,9 +220,9 @@ ccol_retval_t cbmap_reset(cbmap cbm);
 /**
  * @brief Insert or update a key-value pair
  *
- * Inserts a new key-value pair into the BST, or updates the value if the key
- * is already in the map, and then balances the tree again with AVL rotations
- * to keep the height balance. The insert is iterative and uses an explicit
+ * Inserts a new key-value pair into the BST, or updates the value when the
+ * key is already there, and then rebalances the tree with AVL rotations to
+ * keep the heights balanced. The insert is iterative and uses an explicit
  * stack.
  *
  * @param cbm BST map to insert into
@@ -230,30 +230,34 @@ ccol_retval_t cbmap_reset(cbmap cbm);
  * @param val_pair Value to insert (ptr and size must be valid)
  *
  * @return ccol_success on success
- * @return ccol_key_already_present if the key is already in the map; the
- * function updates its value correctly and does not change the key itself
+ * @return ccol_key_already_present if the key is already in the map; its
+ * value is updated correctly and the key itself isn't changed
  * @return ccol_container_full if the map holds ccol_max_elem_count elements
  * @return ccol_not_enough_memory if an allocation fails
- * @return ccol_invalid_args in three cases: key_pair or val_pair is NULL;
- * one of the two pairs has a NULL ptr and a non-zero size; or the key_pair
- * size does not match the size of a fixed-width key type (see
- * ccol_fixed_width_data_type_size)
+ * @return ccol_invalid_args in four cases: key_pair or val_pair is NULL;
+ * one of the two pairs has a NULL ptr and a non-zero size; the key_pair
+ * size doesn't match the size of a fixed-width key type (see
+ * ccol_fixed_width_data_type_size); or the map has ccol_string keys and the
+ * key_pair size is 0
  *
- * @note O(log n) in the average case and in the worst case, because of the
- * balance work
- * @note A size of 0 is correct for the key or the value, with or without a
- * ptr, and stores an empty key or an empty value. Note that
- * chmap_insert_elem rejects a key or a value of size zero
- * @note The function copies the key data and the value data instead of
- * pointing at the data of the caller
- * @note If the key is already in the map, the function updates only the
- * value and does not change the key
- * @note If the update changes the size of the value, the function allocates
- * new memory for it
- * @note The function balances the tree from the bottom up after the insert
- * @note The function uses single or double rotations as needed (left, right,
+ * @note O(log n) in the average case and in the worst case, thanks to the
+ * balancing
+ * @note A size of 0 is fine for the value, and for the key of a map with
+ * ccol_other_types keys, with or without a ptr, and it stores an empty value
+ * or an empty key. A string key (ccol_string) counts its terminating NUL, so
+ * its size is at least 1, and a key of size 0 on such a map is
+ * ccol_invalid_args, as in chmap_insert_elem. chmap_insert_elem also
+ * rejects a zero-size value, and a zero-size key of any type
+ * @note The key data and the value data are copied; the map doesn't point
+ * at the caller's data
+ * @note If the key is already there, only the value is updated and the key
+ * isn't changed
+ * @note If the update changes the value's size, new memory is allocated for
+ * it
+ * @note The tree is rebalanced bottom-up after the insert
+ * @note Single or double rotations are used as needed (left, right,
  * left-right, right-left)
- * @note The function asserts if cbm is NULL
+ * @note It asserts if cbm is NULL
  *
  * @see cbmap_get_elem_copy
  * @see cbmap_get_elem_ref
@@ -265,26 +269,27 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
 /**
  * @brief Get a copy of the value associated with a key
  *
- * Copies the value of the given key into the buffer of the caller, after a
- * binary search through the tree.
+ * Finds the key with a binary search through the tree and copies its value
+ * into the caller's buffer.
  *
  * @param cbm BST map to search
  * @param key_pair Key to look up
  * @param target_buf Buffer that receives the copy of the value
  * @param target_buf_size Size of the target buffer
  *
- * @return ccol_success if the function finds the key and copies the value
- * @return ccol_invalid_args in five cases: key_pair is NULL; key_pair has a
+ * @return ccol_success if the key is found and the value copied
+ * @return ccol_invalid_args in six cases: key_pair is NULL; key_pair has a
  * NULL ptr and a non-zero size; target_buf is NULL with a non-zero
- * target_buf_size; the buffer size does not match the size of the value; or
- * the key_pair size does not match the size of a fixed-width key type (see
- * ccol_fixed_width_data_type_size)
+ * target_buf_size; the buffer size doesn't match the size of the value;
+ * the key_pair size doesn't match the size of a fixed-width key type (see
+ * ccol_fixed_width_data_type_size); or the map has ccol_string keys and the
+ * key_pair size is 0
  * @return ccol_key_not_found if the key is not in the map
  *
- * @note O(log n) complexity, because the function does a binary search
- * @note The two sizes must match exactly, while chmap_get_elem_copy does
- * not need an exact match
- * @note The function asserts if cbm is NULL
+ * @note O(log n) complexity, since it's a binary search
+ * @note The two sizes must match exactly, whereas chmap_get_elem_copy
+ * doesn't need an exact match
+ * @note It asserts if cbm is NULL
  *
  * @see cbmap_get_elem_ref
  * @see cbmap_insert_elem
@@ -293,71 +298,85 @@ ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
                                   void *target_buf, size_t target_buf_size);
 
 /**
- * @brief Get a reference to the value associated with a key
+ * @brief Get the location and the size of the value associated with a key
  *
- * Gets a pointer to the value pair structure of the given key, which stays
+ * Fills the caller's cmap_pair with the location and the size of the value
+ * stored for the given key: val_pair->ptr points at the value bytes inside
+ * the map, and val_pair->size is the stored value's size. You can read those
+ * bytes and change them in place within val_pair->size. The pointer stays
  * valid until an insert or a delete changes the map.
  *
  * @param cbm BST map to search
  * @param key_pair Key to look up
- * @param val_pair Output parameter that receives the pointer to the value
- * pair
+ * @param val_pair A cmap_pair of the caller that the function fills
  *
- * @return ccol_success if the function finds the key
+ * @return ccol_success if the key is found
  * @return ccol_key_not_found if the key is not in the map
- * @return ccol_invalid_args in three cases: key_pair or val_pair is NULL;
- * key_pair has a NULL ptr and a non-zero size; or the key_pair size does not
+ * @return ccol_invalid_args in four cases: key_pair or val_pair is NULL;
+ * key_pair has a NULL ptr and a non-zero size; the key_pair size doesn't
  * match the size of a fixed-width key type (see
- * ccol_fixed_width_data_type_size)
+ * ccol_fixed_width_data_type_size); or the map has ccol_string keys and the
+ * key_pair size is 0
  *
- * @note O(log n) complexity, because the function does a binary search
- * @note An insert or a delete makes the returned pointer invalid
- * @note Do not free the returned pointer, because the map owns it
- * @note The returned cmap_pair is the accessor of the map for that entry: it
- * describes the value and is not part of the value. Its target is
- * const-qualified: the caller can read through val_pair->ptr and write to the
- * bytes that it points at, within val_pair->size, but an assignment to
- * val_pair->ptr or to val_pair->size is a compile error. The pointer and the
- * size describe one another, and the map cannot own a pointer that it did not
- * allocate. To replace a value, call cbmap_insert_elem()
- * @note The out-parameter is a const cmap_pair **, which is why the caller
- * must declare its own variable as const cmap_pair *: the address of a plain
- * cmap_pair * does not compile
- * @note The function asserts if cbm is NULL
+ * @note On every failure with a non-NULL val_pair, val_pair->ptr is set to
+ * NULL and val_pair->size to 0
+ * @note O(log n) complexity, since it's a binary search
+ * @note An insert or a delete makes val_pair->ptr invalid. A lookup never
+ * does, so you can hold results for different keys at the same time
+ * @note The cmap_pair belongs to the caller and the map keeps no reference
+ * to it. Don't free val_pair->ptr, the map owns the value bytes. Changing
+ * val_pair->ptr or val_pair->size only changes the caller's copy, never the
+ * stored value. To replace a value, call cbmap_insert_elem()
+ * @note It asserts if cbm is NULL
  *
  * @see cbmap_get_elem_copy
  * @see cbmap_insert_elem
  */
 ccol_retval_t cbmap_get_elem_ref(cbmap cbm, const cmap_pair *key_pair,
-                                 const cmap_pair **val_pair);
+                                 cmap_pair *val_pair);
+
+/**
+ * @brief Get the accessor that the map keeps for the value of a key
+ * (internal function)
+ *
+ * The string arm of cbmap_get_ptr() needs the address of the char* object
+ * that the map stores for the value, and that object is this accessor's ptr
+ * field. On every failure with a non-NULL val_accessor, *val_accessor is set
+ * to NULL. It asserts if cbm is NULL.
+ *
+ * @warning Do not call this function directly. Use the cbmap_get_ptr() macro
+ */
+ccol_retval_t _cbmap_get_val_accessor(cbmap cbm, const cmap_pair *key_pair,
+                                      const cmap_pair **val_accessor);
 
 /**
  * @brief Delete a key-value pair from the map
  *
- * Removes the given key and its value from the BST and then balances the
- * tree again with AVL rotations. The delete is iterative and uses an
- * explicit stack.
+ * Removes the given key and its value from the BST and then rebalances the
+ * tree with AVL rotations. The delete is iterative and uses an explicit
+ * stack.
  *
- * A node with two children gets one of these two replacements:
- * - The minimum of the right subtree, when the right side is deeper than the
- *   left side or the two sides have the same height
+ * A node with two children is replaced by one of these two:
+ * - The minimum of the right subtree, when the right side is deeper than
+ *   the left side or both sides have the same height
  * - The maximum of the left subtree, when the left side is deeper
  *
  * @param cbm BST map to delete from
  * @param key_pair Key to delete
  *
- * @return ccol_success if the function finds the key and deletes it
+ * @return ccol_success if the key is found and deleted
  * @return ccol_key_not_found if the key is not in the map
- * @return ccol_invalid_args in three cases: key_pair is NULL; key_pair has a
- * NULL ptr and a non-zero size; or the key_pair size does not match the size
- * of a fixed-width key type (see ccol_fixed_width_data_type_size)
+ * @return ccol_invalid_args in four cases: key_pair is NULL; key_pair has a
+ * NULL ptr and a non-zero size; the key_pair size doesn't match the size
+ * of a fixed-width key type (see ccol_fixed_width_data_type_size); or the
+ * map has ccol_string keys and the key_pair size is 0
  *
- * @note O(log n) complexity for the search and the balance work
- * @note The function frees the memory of the key and of the value
- * @note The function balances the tree from the bottom up after the delete
- * @note For a node with two children, the function detaches the extreme node
+ * @note O(log n) complexity for the search and the rebalancing
+ * @note The memory of the key and of the value is freed
+ * @note The tree is rebalanced bottom-up after the delete
+ * @note For a node with two children, the extreme node is detached
  * iteratively
- * @note The function asserts if cbm is NULL
+ * @note It asserts if cbm is NULL
  *
  * @see cbmap_insert_elem
  * @see cbmap_reset
@@ -368,35 +387,9 @@ ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair *key_pair);
 /*                         BST MAP ITERATION                                  */
 /* ========================================================================== */
 
-/**
- * @brief Begin in-order iteration over the BST map
- *
- * Creates an iterator at the leftmost node, which holds the smallest key.
- * The iterator walks the keys in sorted order (ascending), walking the tree
- * in order (left, root, right).
- *
- * @param cbm BST map to iterate over
- * @param err Optional pointer that receives an error string on failure
- *
- * @return Pointer to the iterator, or NULL if the map is empty or if an
- * allocation fails
- *
- * @note The iterator walks the keys in sorted order, in an in-order walk
- * @note The iterator uses a stack to keep the path through the tree
- * @note The caller must destroy the iterator with cbmap_iter_destroy()
- * @note A change to the map during the walk makes the iterator invalid
- * @note The function treats a NULL cbm in the same way as an empty map: it
- * returns NULL, and this is not an error. The library does this on purpose,
- * so that a map field that stays uninitialized because the caller has put
- * nothing into it can be iterated directly, with no NULL guard of the
- * caller's own first
- * @note The function returns NULL if the map is empty; this is not an error
- *
- * @see cbmap_begin (macro wrapper)
- * @see cbmap_iter_next
- * @see cbmap_iter_destroy
- */
-cmap_iterator *cbmap_begin_iter(cbmap cbm, char **err);
+/* cbmap_begin_iter() is declared in citerators.h, which this header
+ * includes, since that header's ccol_begin() macro needs all three iterator
+ * functions in every translation unit that uses it. */
 
 void __cbmap_iterator_destroy(cmap_iterator *iter);
 
@@ -416,25 +409,24 @@ void __cbmap_destroy(cbmap cbm);
 /**
  * @brief Destroy a BST map and set pointer to NULL
  *
- * Frees all the resources of the BST map, including all the keys, all the
- * values and all the tree nodes, with an iterative post-order walk of the
- * tree.
+ * Frees everything the BST map owns, all the keys, values and tree nodes,
+ * with an iterative post-order walk of the tree.
  *
  * @param cbm BST map to destroy (the macro sets it to NULL)
  *
- * @note A call with NULL is safe
- * @note The macro frees all the key data and all the value data
- * @note The macro walks the tree in post-order, with no recursion
- * @note The macro evaluates cbm exactly once, and cbm must be a modifiable
- * lvalue, such as a variable or an element of an array
+ * @note Calling it with NULL is safe
+ * @note All the key data and value data is freed
+ * @note The tree is walked in post-order, without recursion
+ * @note cbm is evaluated exactly once, and it must be a modifiable lvalue,
+ * such as a variable or an element of an array
  */
 #define cbmap_destroy(cbm)      \
   _ccol_cbmap_destroy_impl(cbm, \
                            _ccol_uniq(__ccol_cbmap_destroy_slot, __COUNTER__))
 
 /* Internal: the body of cbmap_destroy. slot is a name from _ccol_uniq(), so
- * the macro nests inside the argument of another destroy macro and stays
- * -Wshadow clean. The argument is evaluated exactly once. */
+ * the macro can nest inside the argument of another destroy macro and still
+ * be -Wshadow clean. The argument is evaluated exactly once. */
 #define _ccol_cbmap_destroy_impl(cbm, slot) \
   do {                                      \
     __typeof__(cbm) *slot = &(cbm);         \
@@ -447,7 +439,7 @@ void __cbmap_destroy(cbmap cbm);
  *
  * @param cbm Pointer to BST map pointer
  *
- * @note The _ccol_destructor attribute uses this function
+ * @note Used by the _ccol_destructor attribute
  * @warning Do not call this function directly
  */
 static inline void ___cbmap_destroy(cbmap *cbm) {
@@ -464,8 +456,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /**
  * @brief Turn on the type-inferred macros for an existing BST map
  *
- * Declares the type variables that the type-inferred macros need, for a BST
- * map that another scope created.
+ * Declares the type variables the type-inferred macros need, for a BST map
+ * that was created in another scope.
  *
  * @param hm_name BST map variable name
  * @param key_t Key type
@@ -481,6 +473,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @endcode
  */
 #define cbmap_redeclare(hm_name, key_t, val_t)                              \
+  _ccol_refuse_array_types("cbmap", key_t, val_t);                          \
   __typeof__(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) = \
       NULL;                                                                 \
   __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) = NULL
@@ -488,19 +481,20 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /**
  * @brief Declare an uninitialized BST map variable
  *
- * Declares a BST map variable together with the type variables that the
- * type-inferred macros need. The caller must initialize the map before use.
+ * Declares a BST map variable together with the type variables the
+ * type-inferred macros need. The map has to be initialized before use.
  *
  * @param hm_name BST map variable name
  * @param key_t Key type
  * @param val_t Value type
  *
- * @note The caller must initialize the map with cbmap_init*() before use
+ * @note Initialize the map with cbmap_init*() before using it
  *
  * @see cbmap_init
  * @see cbmap_construct
  */
 #define cbmap_declare(hm_name, key_t, val_t)                              \
+  _ccol_refuse_array_types("cbmap", key_t, val_t);                        \
   __typeof__(key_t) *hm_name##__ccol_key_type_var                         \
       __attribute__((unused)); /* deliberately not initialized to NULL */ \
   __typeof__(val_t) *hm_name##__ccol_val_type_var                         \
@@ -508,6 +502,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
   cbmap hm_name                /* deliberately not initialized to NULL */
 
 #define cbmap_declare_scoped(hm_name, key_t, val_t)                         \
+  _ccol_refuse_array_types("cbmap", key_t, val_t);                          \
   __typeof__(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) = \
       NULL;                                                                 \
   __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) = \
@@ -517,118 +512,117 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /**
  * @brief Initialize a BST map with defaults
  *
- * Initializes a BST map that the caller declared before, with the default
- * settings and with the key type taken from the type variable.
+ * Initializes a BST map declared earlier, with the default settings and the
+ * key type taken from the type variable.
  *
  * @param hm_name BST map variable to initialize
  *
- * @note The macro stops the program on failure
- * @note The macro uses the default memory management
- * @note The macro finds the key type by itself (signedness, float, string,
+ * @note It stops the program on failure
+ * @note It uses the default memory management
+ * @note It works out the key type (signedness, float, string,
  * struct)
  *
  * @see cbmap_declare
  * @see cbmap_construct
  */
-#define cbmap_init(hm_name)                                                  \
-  do {                                                                       \
-    char *__ccol_cbmap_err = NULL;                                           \
-    hm_name = cbmap_create_full(                                             \
-        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,  \
-        NULL, &__ccol_cbmap_err);                                            \
-    if (!hm_name) {                                                          \
-      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
-                     __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
-    }                                                                        \
+#define cbmap_init(hm_name)                                                   \
+  do {                                                                        \
+    char *__ccol_cbmap_err = NULL;                                            \
+    hm_name = cbmap_create_full(                                              \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,   \
+        NULL, &__ccol_cbmap_err);                                             \
+    if (!hm_name) {                                                           \
+      _ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
+                      __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
+    }                                                                         \
   } while (0)
 
 /**
  * @brief Initialize a BST map with custom memory management
  *
- * Initializes a BST map that the caller declared before, with custom memory
- * management.
+ * Initializes a BST map declared earlier, with custom memory management.
  *
  * @param hm_name BST map variable to initialize
  * @param mmgmt_procs Custom memory management procedures
  *
- * @note The macro stops the program on failure
- * @note The macro finds the key type by itself (signedness, float, string,
+ * @note It stops the program on failure
+ * @note It works out the key type (signedness, float, string,
  * struct)
  */
-#define cbmap_init_mp(hm_name, mmgmt_procs)                                  \
-  do {                                                                       \
-    char *__ccol_cbmap_err = NULL;                                           \
-    hm_name = cbmap_create_full(                                             \
-        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),        \
-        (mmgmt_procs), NULL, &__ccol_cbmap_err);                             \
-    if (!hm_name) {                                                          \
-      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
-                     __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
-    }                                                                        \
+#define cbmap_init_mp(hm_name, mmgmt_procs)                                   \
+  do {                                                                        \
+    char *__ccol_cbmap_err = NULL;                                            \
+    hm_name = cbmap_create_full(                                              \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
+        (mmgmt_procs), NULL, &__ccol_cbmap_err);                              \
+    if (!hm_name) {                                                           \
+      _ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
+                      __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
+    }                                                                         \
   } while (0)
 
 /**
  * @brief Initialize a BST map with custom comparison
  *
- * Initializes a BST map that the caller declared before, with a custom
- * comparison function.
+ * Initializes a BST map declared earlier, with a custom comparison
+ * function.
  *
  * @param hm_name BST map variable to initialize
  * @param custom_comparison_proc Custom comparison function
  *
- * @note The macro stops the program on failure
- * @note The macro uses the default memory management
+ * @note It stops the program on failure
+ * @note It uses the default memory management
  */
-#define cbmap_init_cc(hm_name, custom_comparison_proc)                       \
-  do {                                                                       \
-    char *__ccol_cbmap_err = NULL;                                           \
-    hm_name = cbmap_create_full(                                             \
-        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,  \
-        (custom_comparison_proc), &__ccol_cbmap_err);                        \
-    if (!hm_name) {                                                          \
-      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
-                     __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
-    }                                                                        \
+#define cbmap_init_cc(hm_name, custom_comparison_proc)                        \
+  do {                                                                        \
+    char *__ccol_cbmap_err = NULL;                                            \
+    hm_name = cbmap_create_full(                                              \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,   \
+        (custom_comparison_proc), &__ccol_cbmap_err);                         \
+    if (!hm_name) {                                                           \
+      _ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
+                      __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
+    }                                                                         \
   } while (0)
 
 /**
  * @brief Initialize a BST map with full customization
  *
- * Initializes a BST map that the caller declared before, with custom memory
- * management and a custom comparison.
+ * Initializes a BST map declared earlier, with custom memory management and
+ * a custom comparison.
  *
  * @param hm_name BST map variable to initialize
  * @param mmgmt_procs Custom memory management procedures
  * @param custom_comparison_proc Custom comparison function
  *
- * @note The macro stops the program on failure
+ * @note It stops the program on failure
  */
-#define cbmap_init_full(hm_name, mmgmt_procs, custom_comparison_proc)        \
-  do {                                                                       \
-    char *__ccol_cbmap_err = NULL;                                           \
-    hm_name = cbmap_create_full(                                             \
-        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),        \
-        (mmgmt_procs), (custom_comparison_proc), &__ccol_cbmap_err);         \
-    if (!hm_name) {                                                          \
-      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
-                     __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
-    }                                                                        \
+#define cbmap_init_full(hm_name, mmgmt_procs, custom_comparison_proc)         \
+  do {                                                                        \
+    char *__ccol_cbmap_err = NULL;                                            \
+    hm_name = cbmap_create_full(                                              \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
+        (mmgmt_procs), (custom_comparison_proc), &__ccol_cbmap_err);          \
+    if (!hm_name) {                                                           \
+      _ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
+                      __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
+    }                                                                         \
   } while (0)
 
 /**
  * @brief Declare and initialize a BST map with defaults
  *
- * Declares and initializes a BST map in one step, with the default settings.
+ * Declares and initializes a BST map in one step with the default settings.
  *
  * @param hm_name BST map variable name
  * @param key_t Key type
  * @param val_t Value type
  *
- * @note The macro stops the program on failure
- * @note The macro finds the key type by itself (signedness, float, string,
+ * @note It stops the program on failure
+ * @note It works out the key type (signedness, float, string,
  * struct)
- * @note For a struct key_t, the macro uses a raw memcmp order (see
- * cbmap_create_full), so use cbmap_construct_cc for a struct key type
+ * @note A struct key_t gets a raw memcmp order (see cbmap_create_full), so
+ * use cbmap_construct_cc for a struct key type
  *
  * Example:
  * @code
@@ -644,44 +638,46 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * cbmap_destroy(sorted_map);
  * @endcode
  */
-#define cbmap_construct(hm_name, key_t, val_t)                               \
-  __typeof__(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) =  \
-      NULL;                                                                  \
-  __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =  \
-      NULL;                                                                  \
-  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;     \
-  do {                                                                       \
-    char *__ccol_cbmap_err = NULL;                                           \
-    hm_name = cbmap_create_full(                                             \
-        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,  \
-        NULL, &__ccol_cbmap_err);                                            \
-    if (!hm_name) {                                                          \
-      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
-                     __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
-    }                                                                        \
+#define cbmap_construct(hm_name, key_t, val_t)                                \
+  _ccol_refuse_array_types("cbmap", key_t, val_t);                            \
+  __typeof__(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) =   \
+      NULL;                                                                   \
+  __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
+      NULL;                                                                   \
+  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;      \
+  do {                                                                        \
+    char *__ccol_cbmap_err = NULL;                                            \
+    hm_name = cbmap_create_full(                                              \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,   \
+        NULL, &__ccol_cbmap_err);                                             \
+    if (!hm_name) {                                                           \
+      _ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
+                      __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
+    }                                                                         \
   } while (0)
 
-#define cbmap_construct_scoped(hm_name, key_t, val_t)                        \
-  __typeof__(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) =  \
-      NULL;                                                                  \
-  __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =  \
-      NULL;                                                                  \
-  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                   \
-  do {                                                                       \
-    char *__ccol_cbmap_err = NULL;                                           \
-    hm_name = cbmap_create_full(                                             \
-        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,  \
-        NULL, &__ccol_cbmap_err);                                            \
-    if (!hm_name) {                                                          \
-      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
-                     __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
-    }                                                                        \
+#define cbmap_construct_scoped(hm_name, key_t, val_t)                         \
+  _ccol_refuse_array_types("cbmap", key_t, val_t);                            \
+  __typeof__(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) =   \
+      NULL;                                                                   \
+  __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
+      NULL;                                                                   \
+  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                    \
+  do {                                                                        \
+    char *__ccol_cbmap_err = NULL;                                            \
+    hm_name = cbmap_create_full(                                              \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,   \
+        NULL, &__ccol_cbmap_err);                                             \
+    if (!hm_name) {                                                           \
+      _ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
+                      __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
+    }                                                                         \
   } while (0)
 
 /**
  * @brief Declare and initialize a BST map with custom memory management
  *
- * Declares and initializes a BST map in one step, with custom memory
+ * Declares and initializes a BST map in one step with custom memory
  * management.
  *
  * @param hm_name BST map variable name
@@ -689,46 +685,48 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @param val_t Value type
  * @param mmgmt_procs Custom memory management procedures
  *
- * @note The macro stops the program on failure
+ * @note It stops the program on failure
  */
-#define cbmap_construct_mp(hm_name, key_t, val_t, mmgmt_procs)               \
-  __typeof__(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) =  \
-      NULL;                                                                  \
-  __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =  \
-      NULL;                                                                  \
-  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;     \
-  do {                                                                       \
-    char *__ccol_cbmap_err = NULL;                                           \
-    hm_name = cbmap_create_full(                                             \
-        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),        \
-        (mmgmt_procs), NULL, &__ccol_cbmap_err);                             \
-    if (!hm_name) {                                                          \
-      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
-                     __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
-    }                                                                        \
+#define cbmap_construct_mp(hm_name, key_t, val_t, mmgmt_procs)                \
+  _ccol_refuse_array_types("cbmap", key_t, val_t);                            \
+  __typeof__(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) =   \
+      NULL;                                                                   \
+  __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
+      NULL;                                                                   \
+  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;      \
+  do {                                                                        \
+    char *__ccol_cbmap_err = NULL;                                            \
+    hm_name = cbmap_create_full(                                              \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
+        (mmgmt_procs), NULL, &__ccol_cbmap_err);                              \
+    if (!hm_name) {                                                           \
+      _ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
+                      __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
+    }                                                                         \
   } while (0)
 
-#define cbmap_construct_mp_scoped(hm_name, key_t, val_t, mmgmt_procs)        \
-  __typeof__(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) =  \
-      NULL;                                                                  \
-  __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =  \
-      NULL;                                                                  \
-  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                   \
-  do {                                                                       \
-    char *__ccol_cbmap_err = NULL;                                           \
-    hm_name = cbmap_create_full(                                             \
-        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),        \
-        (mmgmt_procs), NULL, &__ccol_cbmap_err);                             \
-    if (!hm_name) {                                                          \
-      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
-                     __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
-    }                                                                        \
+#define cbmap_construct_mp_scoped(hm_name, key_t, val_t, mmgmt_procs)         \
+  _ccol_refuse_array_types("cbmap", key_t, val_t);                            \
+  __typeof__(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) =   \
+      NULL;                                                                   \
+  __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
+      NULL;                                                                   \
+  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                    \
+  do {                                                                        \
+    char *__ccol_cbmap_err = NULL;                                            \
+    hm_name = cbmap_create_full(                                              \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
+        (mmgmt_procs), NULL, &__ccol_cbmap_err);                              \
+    if (!hm_name) {                                                           \
+      _ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
+                      __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
+    }                                                                         \
   } while (0)
 
 /**
  * @brief Declare and initialize a BST map with custom comparison
  *
- * Declares and initializes a BST map in one step, with a custom comparison
+ * Declares and initializes a BST map in one step with a custom comparison
  * function.
  *
  * @param hm_name BST map variable name
@@ -736,47 +734,49 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @param val_t Value type
  * @param custom_comparison_proc Custom comparison function
  *
- * @note The macro stops the program on failure
+ * @note It stops the program on failure
  */
-#define cbmap_construct_cc(hm_name, key_t, val_t, custom_comparison_proc)    \
-  __typeof__(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) =  \
-      NULL;                                                                  \
-  __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =  \
-      NULL;                                                                  \
-  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;     \
-  do {                                                                       \
-    char *__ccol_cbmap_err = NULL;                                           \
-    hm_name = cbmap_create_full(                                             \
-        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,  \
-        (custom_comparison_proc), &__ccol_cbmap_err);                        \
-    if (!hm_name) {                                                          \
-      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
-                     __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
-    }                                                                        \
+#define cbmap_construct_cc(hm_name, key_t, val_t, custom_comparison_proc)     \
+  _ccol_refuse_array_types("cbmap", key_t, val_t);                            \
+  __typeof__(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) =   \
+      NULL;                                                                   \
+  __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
+      NULL;                                                                   \
+  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;      \
+  do {                                                                        \
+    char *__ccol_cbmap_err = NULL;                                            \
+    hm_name = cbmap_create_full(                                              \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,   \
+        (custom_comparison_proc), &__ccol_cbmap_err);                         \
+    if (!hm_name) {                                                           \
+      _ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
+                      __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
+    }                                                                         \
   } while (0)
 
-#define cbmap_construct_cc_scoped(hm_name, key_t, val_t,                     \
-                                  custom_comparison_proc)                    \
-  __typeof__(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) =  \
-      NULL;                                                                  \
-  __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =  \
-      NULL;                                                                  \
-  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                   \
-  do {                                                                       \
-    char *__ccol_cbmap_err = NULL;                                           \
-    hm_name = cbmap_create_full(                                             \
-        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,  \
-        (custom_comparison_proc), &__ccol_cbmap_err);                        \
-    if (!hm_name) {                                                          \
-      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
-                     __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
-    }                                                                        \
+#define cbmap_construct_cc_scoped(hm_name, key_t, val_t,                      \
+                                  custom_comparison_proc)                     \
+  _ccol_refuse_array_types("cbmap", key_t, val_t);                            \
+  __typeof__(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) =   \
+      NULL;                                                                   \
+  __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
+      NULL;                                                                   \
+  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                    \
+  do {                                                                        \
+    char *__ccol_cbmap_err = NULL;                                            \
+    hm_name = cbmap_create_full(                                              \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,   \
+        (custom_comparison_proc), &__ccol_cbmap_err);                         \
+    if (!hm_name) {                                                           \
+      _ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
+                      __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
+    }                                                                         \
   } while (0)
 
 /**
  * @brief Declare and initialize a BST map with full customization
  *
- * Declares and initializes a BST map in one step, with custom memory
+ * Declares and initializes a BST map in one step with custom memory
  * management and a custom comparison.
  *
  * @param hm_name BST map variable name
@@ -785,42 +785,44 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @param mmgmt_procs Custom memory management procedures
  * @param custom_comparison_proc Custom comparison function
  *
- * @note The macro stops the program on failure
+ * @note It stops the program on failure
  */
-#define cbmap_construct_full(hm_name, key_t, val_t, mmgmt_procs,             \
-                             custom_comparison_proc)                         \
-  __typeof__(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) =  \
-      NULL;                                                                  \
-  __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =  \
-      NULL;                                                                  \
-  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;     \
-  do {                                                                       \
-    char *__ccol_cbmap_err = NULL;                                           \
-    hm_name = cbmap_create_full(                                             \
-        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),        \
-        (mmgmt_procs), (custom_comparison_proc), &__ccol_cbmap_err);         \
-    if (!hm_name) {                                                          \
-      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
-                     __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
-    }                                                                        \
+#define cbmap_construct_full(hm_name, key_t, val_t, mmgmt_procs,              \
+                             custom_comparison_proc)                          \
+  _ccol_refuse_array_types("cbmap", key_t, val_t);                            \
+  __typeof__(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) =   \
+      NULL;                                                                   \
+  __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
+      NULL;                                                                   \
+  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;      \
+  do {                                                                        \
+    char *__ccol_cbmap_err = NULL;                                            \
+    hm_name = cbmap_create_full(                                              \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
+        (mmgmt_procs), (custom_comparison_proc), &__ccol_cbmap_err);          \
+    if (!hm_name) {                                                           \
+      _ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
+                      __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
+    }                                                                         \
   } while (0)
 
-#define cbmap_construct_full_scoped(hm_name, key_t, val_t, mmgmt_procs,      \
-                                    custom_comparison_proc)                  \
-  __typeof__(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) =  \
-      NULL;                                                                  \
-  __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =  \
-      NULL;                                                                  \
-  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                   \
-  do {                                                                       \
-    char *__ccol_cbmap_err = NULL;                                           \
-    hm_name = cbmap_create_full(                                             \
-        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),        \
-        (mmgmt_procs), (custom_comparison_proc), &__ccol_cbmap_err);         \
-    if (!hm_name) {                                                          \
-      ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
-                     __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
-    }                                                                        \
+#define cbmap_construct_full_scoped(hm_name, key_t, val_t, mmgmt_procs,       \
+                                    custom_comparison_proc)                   \
+  _ccol_refuse_array_types("cbmap", key_t, val_t);                            \
+  __typeof__(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) =   \
+      NULL;                                                                   \
+  __typeof__(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) =   \
+      NULL;                                                                   \
+  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                    \
+  do {                                                                        \
+    char *__ccol_cbmap_err = NULL;                                            \
+    hm_name = cbmap_create_full(                                              \
+        ccol_determine_ccol_data_type(*hm_name##__ccol_key_type_var),         \
+        (mmgmt_procs), (custom_comparison_proc), &__ccol_cbmap_err);          \
+    if (!hm_name) {                                                           \
+      _ccol_fatal_err("Failed to create BST map '%s': %s", #hm_name,          \
+                      __ccol_cbmap_err ? __ccol_cbmap_err : "unknown error"); \
+    }                                                                         \
   } while (0)
 
 /* ========================================================================== */
@@ -830,29 +832,29 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 /**
  * @brief Insert a key-value pair (type-inferred)
  *
- * Type-inferred wrapper for cbmap_insert_elem(), which builds the cmap_pair
- * for the key and the cmap_pair for the value from the expressions of the
- * caller and calls ccol_fatal_err() on failure.
+ * Type-inferred wrapper for cbmap_insert_elem(). It builds the key's and the
+ * value's cmap_pair from the caller's expressions and calls
+ * _ccol_fatal_err() on failure.
  *
- * The macro converts key and val to the declared key type and the declared
- * value type of the map, in the same way as a plain C assignment, and stores
- * the converted copies; it never reinterprets the bytes of an expression of
- * another type, and an expression that has no implicit conversion to the
- * declared type is a compile error. A character-pointer key type or value
- * type keeps the pointer type of the expression instead, so a const char *
- * needs no cast.
+ * key and val are converted to the map's declared key and value types the
+ * same way a plain C assignment converts them, and the converted copies are
+ * stored. The bytes of an expression of another type are never
+ * reinterpreted, and an expression with no implicit conversion to the
+ * declared type is a compile error. A character-pointer key or value type
+ * keeps the pointer type of the expression instead, so a const char * needs
+ * no cast.
  *
  * @param hm_name BST map to insert into
  * @param key Key to insert
  * @param val Value for that key
  *
- * @note The macro stops the program on failure
- * @note The macro takes the address of the key and of the value by itself
- * @note The macro handles a value type and a string type correctly
- * @note The map balances the tree again after the insert
+ * @note It stops the program on failure
+ * @note It takes the address of the key and of the value for you
+ * @note It handles value types and string types correctly
+ * @note The tree is rebalanced after the insert
  *
- * @note A NULL key or value of a character-pointer type is not a string, so
- * the macro stops the program with ccol_invalid_args for it
+ * @note A NULL key or value of a character-pointer type isn't a string, so
+ * the program stops with ccol_invalid_args for it
  *
  * @see cbmap_insert_elem
  * @see cbmap_get
@@ -867,49 +869,49 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
       _ccol_uniq(__ccol_cbmap_insert_vp, __COUNTER__),      \
       _ccol_uniq(__ccol_cbmap_insert_r, __COUNTER__))
 
-/* The public macro above names every temporary of this body with
- * _ccol_uniq(), so the macro nests inside the argument of any
- * public macro, itself included. */
+/* The public macro above names all the temporaries of this body with
+ * _ccol_uniq(), so it can nest inside the argument of any public macro,
+ * itself included. */
 #define _ccol_cbmap_insert_impl(                                              \
     hm_name, key, __ccol_cbmap_val, __ccol_cbmap_key_tmp,                     \
     __ccol_cbmap_val_tmp, __ccol_cbmap_kp, __ccol_cbmap_vp, __ccol_cbmap_r)   \
   do {                                                                        \
-    /* Each temporary below holds a private copy of the expression that the   \
+    /* Each temporary below holds a private copy of the expression the        \
      * caller wrote. _ccol_declared_or_own_type() gives that copy the         \
-     * DECLARED key type or value type of the tree, so the initialization is  \
-     * a plain C assignment and it converts the value through the conversion  \
-     * rules of the compiler. cvec_push() and chmap_insert() use the same     \
-     * construct for the same reason.                                         \
+     * DECLARED key or value type of the tree, so the initialization is a     \
+     * plain C assignment and the value goes through the compiler's           \
+     * conversion rules. cvec_push() and chmap_insert() do the same thing     \
+     * for the same reason.                                                   \
      *                                                                        \
-     * A temporary of __typeof__(key) instead would copy the RAW BYTES of the \
-     * caller expression into the tree whenever the two types happen to have  \
-     * the same width. A float that goes into a cbmap_construct(m, char *,    \
-     * int) would store the bit pattern of that float, and a later            \
-     * cbmap_get() would report 1069547520 for 1.5f. A key is worse: a float  \
-     * key of 2.0f in an int-keyed tree is then unreachable by any int        \
-     * lookup for the life of the tree. The widths match, so no size check    \
-     * anywhere can see it, and no compiler diagnostic fires at any           \
-     * optimization level. An expression whose type has no implicit           \
-     * conversion to the declared type is a compile error here instead.       \
+     * With a temporary of __typeof__(key) we would copy the RAW BYTES of the \
+     * caller's expression into the tree whenever the two types happen to be  \
+     * the same width. A float going into a cbmap_construct(m, char *, int)   \
+     * would store the float's bit pattern, and a later cbmap_get() would     \
+     * report 1069547520 for 1.5f. For a key it's worse: a float key of 2.0f  \
+     * in an int-keyed tree could never be reached by any int lookup for the  \
+     * rest of the tree's life. The widths match, so no size check anywhere   \
+     * can see it, and no compiler diagnostic fires at any optimization       \
+     * level. Here, an expression whose type has no implicit conversion to    \
+     * the declared type is a compile error instead.                          \
      *                                                                        \
      * A narrower expression is the other half of the same rule. A short      \
-     * that goes into an int-valued tree becomes an int here, so the node     \
-     * always holds exactly sizeof(ValT) bytes. Without the conversion the    \
-     * node would hold two bytes, the insert would report success, and the    \
-     * value-size check of cbmap_get() would stop the process later, at an    \
+     * going into an int-valued tree becomes an int here, so the node always  \
+     * holds exactly sizeof(ValT) bytes. Without the conversion the node      \
+     * would hold two bytes, the insert would report success, and the         \
+     * value-size check of cbmap_get() would stop the process later at some   \
      * unrelated call site that did nothing wrong.                            \
      *                                                                        \
-     * A declared type that is a character pointer keeps the type of the      \
-     * caller expression instead; read _ccol_declared_or_own_type() in        \
-     * common.h for why that case must not convert.                           \
+     * A declared character-pointer type keeps the type of the caller's       \
+     * expression instead; _ccol_declared_or_own_type() in common.h explains  \
+     * why that case must not convert.                                        \
      *                                                                        \
-     * The copy also settles the lifetime question that                       \
-     * _populate_cmap_pair() raises. That helper takes the address of its     \
-     * argument from inside one of its own nested blocks, so a compound       \
-     * literal that the caller writes would be created there and would die    \
-     * with that block. These temporaries hold their own copy for the whole   \
-     * call instead. The macro still evaluates the expression of the caller   \
-     * exactly once, and an rvalue is as acceptable as an lvalue.             \
+     * The copy also settles the lifetime question that _populate_cmap_pair() \
+     * raises. That helper takes the address of its argument inside one of    \
+     * its own nested blocks, so a compound literal written by the caller     \
+     * would be created there and die with that block, whereas these          \
+     * temporaries keep their copy for the whole call. The caller's           \
+     * expression is still evaluated exactly once, and an rvalue is just as   \
+     * acceptable as an lvalue.                                               \
      */                                                                       \
     _ccol_declared_or_own_type(hm_name##__ccol_key_type_var, (key))           \
         __ccol_cbmap_key_tmp = (key);                                         \
@@ -921,12 +923,11 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     cmap_pair *__ccol_cbmap_vp = &(cmap_pair){};                              \
     _populate_cmap_pair(__ccol_cbmap_kp, __ccol_cbmap_key_tmp);               \
     _populate_cmap_pair(__ccol_cbmap_vp, __ccol_cbmap_val_tmp);               \
-    /* A pair with no pointer comes only from a NULL character pointer,       \
-     * which is not a string. The raw layer of this module accepts a pair     \
-     * of size 0 as an empty key or value, so the macro refuses it here,      \
-     * with the code that chmap_insert() reports for the same argument.       \
-     * For every other type the pointer is the address of a temporary and     \
-     * the test folds away. */                                                \
+    /* A pair without a pointer can only come from a NULL character pointer,  \
+     * which isn't a string. This module's raw layer accepts a size-0 value   \
+     * as an empty value, so the macro refuses it here with the same code     \
+     * chmap_insert() reports for that argument. For every other type the     \
+     * pointer is the address of a temporary and the test folds away. */      \
     ccol_retval_t __ccol_cbmap_r =                                            \
         (!__ccol_cbmap_kp->ptr || !__ccol_cbmap_vp->ptr)                      \
             ? ccol_invalid_args                                               \
@@ -934,28 +935,29 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     if (__ccol_cbmap_r != ccol_success &&                                     \
         __ccol_cbmap_r != ccol_key_already_present) {                         \
       _ccol_dump_key_to_stderr(__ccol_cbmap_kp->ptr, __ccol_cbmap_kp->size);  \
-      ccol_fatal_err("cbmap_insert('%s'): r: %d (%s)", #hm_name,              \
-                     __ccol_cbmap_r, ccol_retval_to_str(__ccol_cbmap_r));     \
+      _ccol_fatal_err("cbmap_insert('%s'): r: %d (%s)", #hm_name,             \
+                      __ccol_cbmap_r, ccol_retval_to_str(__ccol_cbmap_r));    \
     }                                                                         \
   } while (0)
 
 /**
  * @brief Remove a key-value pair (type-inferred)
  *
- * Type-inferred wrapper for cbmap_delete_elem() that returns the result code.
+ * Type-inferred wrapper for cbmap_delete_elem() that returns the result
+ * code.
  *
  * @param hm_name BST map to remove from
  * @param key Key to remove
  *
- * @return ccol_success if the macro removes the key, or ccol_key_not_found
- * if the key is not in the map
+ * @return ccol_success if the key is removed, or ccol_key_not_found if the
+ * key is not in the map
  *
- * @note The macro does not stop the program on ccol_key_not_found
- * @note The macro frees the memory of the key and of the value
- * @note The map balances the tree again after the delete
+ * @note It doesn't stop the program on ccol_key_not_found
+ * @note The memory of the key and of the value is freed
+ * @note The tree is rebalanced after the delete
  *
- * @note A NULL key of a character-pointer type is not a string, so the
- * macro returns ccol_invalid_args for it
+ * @note A NULL key of a character-pointer type isn't a string, so it gives
+ * ccol_invalid_args for it
  *
  * @see cbmap_delete_elem
  * @see cbmap_insert
@@ -966,15 +968,15 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
       _ccol_uniq(__ccol_cbmap_remove_kp, __COUNTER__),                      \
       _ccol_uniq(__ccol_cbmap_remove_r, __COUNTER__))
 
-/* The public macro above names every temporary of this body with
- * _ccol_uniq(), so the macro nests inside the argument of any
- * public macro, itself included. */
+/* The public macro above names all the temporaries of this body with
+ * _ccol_uniq(), so it can nest inside the argument of any public macro,
+ * itself included. */
 #define _ccol_cbmap_remove_impl(hm_name, key, __ccol_cbmap_key_tmp,          \
                                 __ccol_cbmap_kp, __ccol_cbmap_r)             \
   ({                                                                         \
-    /* The temporary carries the DECLARED key type of the tree.              \
-     * See cbmap_insert() for why the lookup key goes through a              \
-     * conversion and not through a raw byte copy. */                        \
+    /* The temporary has the tree's DECLARED key type. See cbmap_insert()    \
+     * for why the lookup key goes through a conversion and not a raw byte   \
+     * copy. */                                                              \
     _ccol_declared_or_own_type(hm_name##__ccol_key_type_var, (key))          \
         __ccol_cbmap_key_tmp = (key);                                        \
     _ccol_clear_padding(&__ccol_cbmap_key_tmp);                              \
@@ -990,23 +992,23 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @brief Get value by key (type-inferred, returns value)
  *
  * Type-inferred wrapper for cbmap_get_elem_ref() that returns the value
- * itself. It calls ccol_fatal_err() if the key is not in the map, and also
- * calls ccol_fatal_err() if the two sizes do not match.
+ * itself. It calls _ccol_fatal_err() when the key is not in the map, and
+ * also when the two sizes don't match.
  *
  * @param hm_name BST map to search
  * @param key Key to look up
  *
  * @return The value of that key
  *
- * @note The macro stops the program if the key is not in the map
- * @note The macro stops the program if the size of the stored value does not
- * match the size of the declared value type
- * @note The macro returns the value, not a pointer
- * @note For a string, the macro returns the char* itself
+ * @note It stops the program if the key is not in the map
+ * @note It stops the program if the stored value's size doesn't match the
+ * size of the declared value type
+ * @note It returns the value, not a pointer
+ * @note For a string it returns the char* itself
  * @note The search takes O(log n) time
  *
- * @note A NULL key of a character-pointer type is not a string, so the
- * macro stops the program with ccol_invalid_args for it
+ * @note A NULL key of a character-pointer type isn't a string, so the
+ * program stops with ccol_invalid_args for it
  *
  * @see cbmap_get_ptr
  * @see cbmap_insert
@@ -1019,24 +1021,23 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
                        _ccol_uniq(__ccol_cbmap_get_vp, __COUNTER__),      \
                        _ccol_uniq(__ccol_cbmap_get_r, __COUNTER__))
 
-/* The public macro above names every temporary of this body with
- * _ccol_uniq(), so the macro nests inside the argument of any
- * public macro, itself included. */
+/* The public macro above names all the temporaries of this body with
+ * _ccol_uniq(), so it can nest inside the argument of any public macro,
+ * itself included. */
 #define _ccol_cbmap_get_impl(hm_name, key, __ccol_cbmap_key_tmp,               \
                              __ccol_cbmap_val, __ccol_cbmap_kp,                \
                              __ccol_cbmap_vp, __ccol_cbmap_r)                  \
   ({                                                                           \
-    /* The temporary carries the DECLARED key type of the tree. See            \
-     * cbmap_insert() for why the lookup key goes through a conversion and     \
-     * not through a raw byte copy. A key that the tree stored through that    \
-     * conversion is only ever found again by a lookup that makes the same     \
-     * one. */                                                                 \
+    /* The temporary has the tree's DECLARED key type. See cbmap_insert()      \
+     * for why the lookup key goes through a conversion and not a raw byte     \
+     * copy. A key the tree stored through that conversion can only be         \
+     * found again by a lookup that makes the same conversion. */              \
     _ccol_declared_or_own_type(hm_name##__ccol_key_type_var, (key))            \
         __ccol_cbmap_key_tmp = (key);                                          \
     _ccol_clear_padding(&__ccol_cbmap_key_tmp);                                \
     __typeof__(*hm_name##__ccol_val_type_var) *__ccol_cbmap_val = NULL;        \
     cmap_pair *__ccol_cbmap_kp = &(cmap_pair){};                               \
-    const cmap_pair *__ccol_cbmap_vp = NULL;                                   \
+    cmap_pair __ccol_cbmap_vp = {NULL, 0};                                     \
     _populate_cmap_pair(__ccol_cbmap_kp, __ccol_cbmap_key_tmp);                \
     ccol_retval_t __ccol_cbmap_r =                                             \
         !__ccol_cbmap_kp->ptr                                                  \
@@ -1044,46 +1045,45 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
             : cbmap_get_elem_ref(hm_name, __ccol_cbmap_kp, &__ccol_cbmap_vp);  \
     if (__ccol_cbmap_r != ccol_success) {                                      \
       _ccol_dump_key_to_stderr(__ccol_cbmap_kp->ptr, __ccol_cbmap_kp->size);   \
-      ccol_fatal_err("cbmap_get('%s'): r: %d (%s)", #hm_name, __ccol_cbmap_r,  \
-                     ccol_retval_to_str(__ccol_cbmap_r));                      \
+      _ccol_fatal_err("cbmap_get('%s'): r: %d (%s)", #hm_name, __ccol_cbmap_r, \
+                      ccol_retval_to_str(__ccol_cbmap_r));                     \
     }                                                                          \
-    if (ccol_is_char_ptr(*hm_name##__ccol_val_type_var)) {                     \
-      __ccol_cbmap_val = (__typeof__(*hm_name##__ccol_val_type_var) *)&(       \
-          __ccol_cbmap_vp->ptr);                                               \
-    } else if (__ccol_cbmap_vp->size != sizeof(*__ccol_cbmap_val)) {           \
-      ccol_fatal_err(                                                          \
+    if (_ccol_is_char_ptr(*hm_name##__ccol_val_type_var)) {                    \
+      __ccol_cbmap_val =                                                       \
+          (__typeof__(*hm_name##__ccol_val_type_var) *)&(__ccol_cbmap_vp.ptr); \
+    } else if (__ccol_cbmap_vp.size != sizeof(*__ccol_cbmap_val)) {            \
+      _ccol_fatal_err(                                                         \
           "cbmap_get('%s'): value size mismatch - stored: %lu bytes, "         \
           "requested: %lu bytes; wrong type or missing cbmap_redeclare()?",    \
-          #hm_name, (unsigned long)__ccol_cbmap_vp->size,                      \
+          #hm_name, (unsigned long)__ccol_cbmap_vp.size,                       \
           (unsigned long)sizeof(*__ccol_cbmap_val));                           \
     } else {                                                                   \
       __ccol_cbmap_val =                                                       \
-          (__typeof__(*hm_name##__ccol_val_type_var) *)(__ccol_cbmap_vp->ptr); \
+          (__typeof__(*hm_name##__ccol_val_type_var) *)(__ccol_cbmap_vp.ptr);  \
     }                                                                          \
     *__ccol_cbmap_val;                                                         \
   })
 
-/* Gives p without a change for every value type but a string; for a map with
- * string values, it gives a pointer whose target is const-qualified.
+/* Gives p unchanged for every value type except a string; for a map with
+ * string values it gives a pointer to a const-qualified target.
  *
  * A map that stores strings owns the bytes and keeps its own {ptr, size}
  * accessor for the node in step with those bytes. The only char* object in
- * the whole map is the ptr field of that accessor, which is why
- * cbmap_get_ptr() can only give back the address of that field for a map
- * with string values. A store of a different char* through that address
- * replaces the pointer while the size goes on describing the older string,
- * and it hands the map a pointer that the map does not own and whose
- * lifetime the map cannot control. Without the const,
- * cbmap_get_elem_copy() and every read of an iterator value then walk the
- * new buffer, which can be much shorter, for the length of the older string.
+ * the whole map is that accessor's ptr field, so for a map with string
+ * values cbmap_get_ptr() can only give back the address of that field.
+ * Storing a different char* through that address replaces the pointer while
+ * the size still describes the old string, and it hands the map a pointer
+ * it doesn't own and whose lifetime it can't control. Without the const,
+ * cbmap_get_elem_copy() and every read of an iterator value would then walk
+ * the new buffer, possibly much shorter, for the length of the old string.
  * AddressSanitizer reports a global-buffer-overflow read of the old length
  * on the first such read.
  *
- * The const makes that store a compile error. The caller can read the
- * stored char* through the returned pointer, and can write to the string
- * bytes that it points at, within the stored length. To replace a string
- * value, call cbmap_insert(), which frees the old bytes and then copies the
- * new bytes into storage that the map owns. */
+ * The const turns that store into a compile error. The caller can read the
+ * stored char* through the returned pointer and write to the string bytes
+ * it points at, within the stored length. To replace a string value, call
+ * cbmap_insert(), which frees the old bytes and copies the new ones into
+ * storage the map owns. */
 #define _ccol_cbmap_value_ptr_result(hm_name, p)                               \
   _Generic(*hm_name##__ccol_val_type_var,                                      \
       char *: (__typeof__(*hm_name##__ccol_val_type_var) const *)(p),          \
@@ -1100,33 +1100,33 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @brief Get pointer to value by key (type-inferred, returns pointer or NULL)
  *
  * Type-inferred wrapper for cbmap_get_elem_ref() that returns a pointer to
- * the value, or NULL if the key is not in the map. Note that cbmap_get()
- * stops the program in that case, while this macro does not.
+ * the value, or NULL if the key is not in the map. cbmap_get() stops the
+ * program in that case, this macro doesn't.
  *
  * @param hm_name BST map to search
  * @param key Key to look up
  *
  * @return Pointer to the value, or NULL if the key is not in the map
  *
- * @note The macro returns NULL if the key is not in the map, and does not
- * stop the program
- * @note The macro stops the program if the size of the value does not match
- * the size of the type
- * @note The macro returns a pointer to the value, so the caller can change
- * the value in place
+ * @note It returns NULL if the key is not in the map and doesn't stop the
+ * program
+ * @note It stops the program if the size of the value doesn't match the
+ * size of the type
+ * @note It returns a pointer to the value, so the caller can change the
+ * value in place
  * @note An insert or a delete makes the pointer invalid
- * @note For a char* value type, the target of the pointer is const-qualified
- * (char *const *): the caller can read the stored string and edit its bytes
- * in place, within the stored length, but a replacement of the pointer
- * itself is a compile error. The map owns the string bytes and keeps its own
- * accessor in step with them, so a replacement of the pointer would leave
- * the length of the accessor describing the older string. To replace a
- * string value, call cbmap_insert(), which frees the old bytes and copies
- * the new bytes into storage that the map owns
+ * @note For a char* value type the pointer's target is const-qualified
+ * (char *const *): you can read the stored string and edit its bytes in
+ * place within the stored length, but replacing the pointer itself is a
+ * compile error. The map owns the string bytes and keeps its own accessor in
+ * step with them, so replacing the pointer would leave the accessor's length
+ * describing the old string. To replace a string value, call
+ * cbmap_insert(), which frees the old bytes and copies the new ones into
+ * storage the map owns
  * @note The search takes O(log n) time
  *
- * @note A NULL key of a character-pointer type is not a string, so the
- * macro gives NULL for it
+ * @note A NULL key of a character-pointer type isn't a string, so it gives
+ * NULL for it
  *
  * @see cbmap_get
  * @see cbmap_get_elem_ref
@@ -1158,48 +1158,59 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
       _ccol_uniq(__ccol_cbmap_get_ptr_val, __COUNTER__),                     \
       _ccol_uniq(__ccol_cbmap_get_ptr_kp, __COUNTER__),                      \
       _ccol_uniq(__ccol_cbmap_get_ptr_vp, __COUNTER__),                      \
+      _ccol_uniq(__ccol_cbmap_get_ptr_acc, __COUNTER__),                     \
       _ccol_uniq(__ccol_cbmap_get_ptr_r, __COUNTER__))
 
-/* The public macro above names every temporary of this body with
- * _ccol_uniq(), so the macro nests inside the argument of any
- * public macro, itself included. */
-#define _ccol_cbmap_get_ptr_impl(hm_name, key, __ccol_cbmap_key_tmp,          \
-                                 __ccol_cbmap_val, __ccol_cbmap_kp,           \
-                                 __ccol_cbmap_vp, __ccol_cbmap_r)             \
-  ({                                                                          \
-    /* The temporary carries the DECLARED key type of the tree. See           \
-     * cbmap_insert() for why the lookup key goes through a conversion and    \
-     * not through a raw byte copy. A key that the tree stored through that   \
-     * conversion is only ever found again by a lookup that makes the same    \
-     * one. */                                                                \
-    _ccol_declared_or_own_type(hm_name##__ccol_key_type_var, (key))           \
-        __ccol_cbmap_key_tmp = (key);                                         \
-    _ccol_clear_padding(&__ccol_cbmap_key_tmp);                               \
-    __typeof__(*hm_name##__ccol_val_type_var) *__ccol_cbmap_val = NULL;       \
-    cmap_pair *__ccol_cbmap_kp = &(cmap_pair){};                              \
-    const cmap_pair *__ccol_cbmap_vp = NULL;                                  \
-    _populate_cmap_pair(__ccol_cbmap_kp, __ccol_cbmap_key_tmp);               \
-    ccol_retval_t __ccol_cbmap_r =                                            \
-        !__ccol_cbmap_kp->ptr                                                 \
-            ? ccol_invalid_args                                               \
-            : cbmap_get_elem_ref(hm_name, __ccol_cbmap_kp, &__ccol_cbmap_vp); \
-    if (__ccol_cbmap_r == ccol_success) {                                     \
-      if (ccol_is_char_ptr(*hm_name##__ccol_val_type_var)) {                  \
-        __ccol_cbmap_val = (__typeof__(*hm_name##__ccol_val_type_var) *)&(    \
-            __ccol_cbmap_vp->ptr);                                            \
-      } else if (__ccol_cbmap_vp->size != sizeof(*__ccol_cbmap_val)) {        \
-        ccol_fatal_err(                                                       \
-            "cbmap_get_ptr('%s'): value size mismatch - stored: %lu bytes, "  \
-            "requested: %lu bytes; wrong type or missing cbmap_redeclare()?", \
-            #hm_name, (unsigned long)__ccol_cbmap_vp->size,                   \
-            (unsigned long)sizeof(*__ccol_cbmap_val));                        \
-      } else {                                                                \
-        __ccol_cbmap_val =                                                    \
-            (__typeof__(*hm_name##__ccol_val_type_var) *)(__ccol_cbmap_vp     \
-                                                              ->ptr);         \
-      }                                                                       \
-    }                                                                         \
-    _ccol_cbmap_value_ptr_result(hm_name, __ccol_cbmap_val);                  \
+/* The public macro above names all the temporaries of this body with
+ * _ccol_uniq(), so it can nest inside the argument of any public macro,
+ * itself included. */
+#define _ccol_cbmap_get_ptr_impl(                                           \
+    hm_name, key, __ccol_cbmap_key_tmp, __ccol_cbmap_val, __ccol_cbmap_kp,  \
+    __ccol_cbmap_vp, __ccol_cbmap_acc, __ccol_cbmap_r)                      \
+  ({                                                                        \
+    /* The temporary has the tree's DECLARED key type. See cbmap_insert()   \
+     * for why the lookup key goes through a conversion and not a raw byte  \
+     * copy. A key the tree stored through that conversion can only be      \
+     * found again by a lookup that makes the same conversion. */           \
+    _ccol_declared_or_own_type(hm_name##__ccol_key_type_var, (key))         \
+        __ccol_cbmap_key_tmp = (key);                                       \
+    _ccol_clear_padding(&__ccol_cbmap_key_tmp);                             \
+    __typeof__(*hm_name##__ccol_val_type_var) *__ccol_cbmap_val = NULL;     \
+    cmap_pair *__ccol_cbmap_kp = &(cmap_pair){};                            \
+    /* The lookup fills this pair on every path and the macro only reads it \
+     * after a success, so it needs no initializer. */                      \
+    cmap_pair __ccol_cbmap_vp;                                              \
+    const cmap_pair *__ccol_cbmap_acc = NULL;                               \
+    ccol_retval_t __ccol_cbmap_r;                                           \
+    _populate_cmap_pair(__ccol_cbmap_kp, __ccol_cbmap_key_tmp);             \
+    if (__ccol_cbmap_kp->ptr &&                                             \
+        _ccol_is_char_ptr(*hm_name##__ccol_val_type_var)) {                 \
+      /* The entry's only char* object is the ptr field of the accessor the \
+       * map keeps for it, so the result points there. */                   \
+      __ccol_cbmap_r = _cbmap_get_val_accessor(hm_name, __ccol_cbmap_kp,    \
+                                               &__ccol_cbmap_acc);          \
+      if (__ccol_cbmap_r == ccol_success) {                                 \
+        __ccol_cbmap_val = (__typeof__(*hm_name##__ccol_val_type_var) *)&(  \
+            __ccol_cbmap_acc->ptr);                                         \
+      }                                                                     \
+    } else if (__ccol_cbmap_kp->ptr) {                                      \
+      __ccol_cbmap_r =                                                      \
+          cbmap_get_elem_ref(hm_name, __ccol_cbmap_kp, &__ccol_cbmap_vp);   \
+      if (__ccol_cbmap_r == ccol_success) {                                 \
+        if (__ccol_cbmap_vp.size != sizeof(*__ccol_cbmap_val)) {            \
+          _ccol_fatal_err(                                                  \
+              "cbmap_get_ptr('%s'): value size mismatch - stored: %lu "     \
+              "bytes, requested: %lu bytes; wrong type or missing "         \
+              "cbmap_redeclare()?",                                         \
+              #hm_name, (unsigned long)__ccol_cbmap_vp.size,                \
+              (unsigned long)sizeof(*__ccol_cbmap_val));                    \
+        }                                                                   \
+        __ccol_cbmap_val =                                                  \
+            (__typeof__(*hm_name##__ccol_val_type_var) *)(__ccol_cbmap_vp   \
+                                                              .ptr);        \
+      }                                                                     \
+    }                                                                       \
+    _ccol_cbmap_value_ptr_result(hm_name, __ccol_cbmap_val);                \
   })
 
 #pragma GCC visibility pop

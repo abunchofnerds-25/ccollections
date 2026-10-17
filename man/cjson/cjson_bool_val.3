@@ -14,14 +14,34 @@ const char *cjson_str_val(cjson node);
 .fi
 .SH DESCRIPTION
 .nf
-Each function returns the value that node holds, and calls
-ccol_fatal_err() when the type of the node does not match.
+Each function returns the value that node holds.  It calls
+_ccol_fatal_err() when node is NULL, and also when node is not of the
+type that the function reads: CJSON_BOOL for cjson_bool_val(),
+CJSON_INTEGER for cjson_int_val(), CJSON_FLOAT for cjson_double_val()
+and CJSON_STRING for cjson_str_val().
 
-cjson_str_val() returns a pointer to the copy of the string inside the
-node; the caller must not free that pointer.  The string is always
-well-formed UTF-8, whatever built the tree: the parser refuses a
-document whose strings are not UTF-8, and cjson_create_string(3) and
-cjson_set(3) refuse a string from the caller that is not UTF-8.
+cjson_str_val() returns a pointer to the node's own copy of the
+string, and the caller must not free it.  The pointer is borrowed and
+stays valid until the node gets a new value or is destroyed, so any
+of these ends it: a cjson_set(3) that reaches the node, a
+cjson_list_remove(3), cjson_dictionary_remove(3) or cjson_delete(3)
+of the node, a cjson_dictionary_set(3) that replaces it, and a
+destroy of its tree.  Copy the text if you need it longer.  The
+string is always well-formed UTF-8 whatever built the tree, because
+the parser refuses a document whose strings are not UTF-8, and
+cjson_create_string(3) and cjson_set(3) refuse such a string from
+the caller.
+.fi
+.SH PARAMETERS
+.nf
+node  A node of the type that the function reads.
+.fi
+.SH RETURN VALUE
+.nf
+cjson_bool_val() returns the bool, cjson_int_val() the long long and
+cjson_double_val() the double.  cjson_str_val() returns a pointer to
+the string inside the node, borrowed as described above.  When node
+is NULL or of the wrong type, none of the functions returns.
 .fi
 .SH "SEE ALSO"
 .BR cjson_type (3),

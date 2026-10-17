@@ -12,13 +12,13 @@ value_ptr = cbmap_get_ptr(hm_name, key);
 .SH DESCRIPTION
 .nf
 Type-inferred wrapper for cbmap_get_elem_ref() that returns a pointer to
-the value, or NULL if the key is not in the map. Note that cbmap_get()
-stops the program in that case, while this macro does not.
+the value, or NULL when the key is not in the map. cbmap_get() stops the
+program in that case and this macro doesn't.
 
-The lookup key goes through the DECLARED key type of the tree, in the
-same way as in cbmap_insert(3), so a key that the tree stored through
-that conversion is only ever found again by a lookup that makes the same
-one. A literal and a computed expression are both accepted.
+The lookup key is converted through the DECLARED key type of the tree,
+just as cbmap_insert(3) converts it, so a key stored through that
+conversion is found again only by a lookup that makes the same
+conversion. Both a literal and a computed expression are accepted.
 .fi
 .SH PARAMETERS
 .nf
@@ -27,26 +27,28 @@ key      Key to look up
 .fi
 .SH RETURN VALUE
 .nf
-Returns a pointer to the value if the key is in the map
-Returns NULL if the key is not in the map
-Returns NULL if key is a NULL character pointer, which is not a string
+A pointer to the value if the key is in the map.
+NULL if the key is not in the map.
+NULL if key is a NULL character pointer, which is not a string.
 .fi
 .SH NOTES
 .nf
-The macro stops the program if the size of the value does not match the
-size of the type
-The macro returns a pointer to the value, so the caller can change the
-value in place
-An insert or a delete makes the pointer invalid
-For a char* value type, the target of the pointer is const-qualified
-(char *const *): the caller can read the stored string and edit the bytes
-of that string in place, within the stored length, but a replacement of
-the pointer itself is a compile error. The map owns the string bytes and
-keeps its own accessor in step with them, and a replacement of the
-pointer would leave the length of the accessor describing the older
-string. To replace a string value, use cbmap_insert(3), which frees the
-old bytes and copies the new bytes into storage that the map owns.
-The search takes O(log n) time
+The macro stops the program if the size of the value doesn't match the
+size of the type.
+
+Because it returns a pointer to the value, the caller can change the
+value in place. An insert or a delete makes the pointer invalid.
+
+For a char* value type the target of the pointer is const-qualified
+(char *const *). You can read the stored string and edit its bytes in
+place within the stored length, but replacing the pointer itself is a
+compile error. The map owns the string bytes and keeps its own accessor in
+step with them, and a replaced pointer would leave the accessor's length
+describing the older string. To replace a string value use
+cbmap_insert(3), which frees the old bytes and copies the new ones into
+storage that the map owns.
+
+The search takes O(log n) time.
 .fi
 .SH EXAMPLES
 .nf

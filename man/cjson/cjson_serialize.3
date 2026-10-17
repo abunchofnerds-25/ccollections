@@ -11,52 +11,49 @@ char *cjson_serialize(cjson node);
 .fi
 .SH DESCRIPTION
 .nf
-Walks the DOM tree under node and makes a compact JSON string with
-no whitespace.  A NULL node gives the string "null".
+Walks the DOM tree under node and writes it as a compact JSON string
+with no whitespace.  A NULL node gives the string "null".
 
-The serializer writes the members of each object in insertion order,
-which cjson_dictionary_first(3) describes, and the elements of each
-array in their index order, so the output for one tree is the same on
-every call and in every process.  A document that parses and
-serializes again keeps the order of its members.
+Object members come out in insertion order (see
+cjson_dictionary_first(3)) and array elements in index order, so one
+tree gives the same output on every call and in every process.  A
+document that is parsed and serialized again keeps the order of its
+members.
 
-The serializer writes a double as the shortest decimal form that
-reads back as the same value, and that form holds up to 17 significant
-digits.  It always uses '.' as the decimal separator, as RFC 8259
-asks, whatever the LC_NUMERIC locale of the calling thread.  It
-writes an integer with %lld, and a double that is not finite (Inf and
-NaN) as "null".
+A double is written in the shortest decimal form that reads back as
+the same value, which has at most 17 significant digits.  The
+decimal separator is always '.', as RFC 8259 asks, whatever the
+LC_NUMERIC locale of the calling thread.  An integer is written with
+%lld, and a double that is not finite (Inf and NaN) as "null".
 
-The output is always valid JSON text.  Every string that a tree
-holds, whether a value or an object key, is well-formed UTF-8; see
-cjson_parse(3) and cjson_create_string(3) for how the library checks
-this wherever bytes enter a tree.  The serializer therefore writes
-string content unchanged and adds only the escapes that JSON itself
-needs.
+The output is always valid JSON text.  Every string in a tree, value
+or object key, is well-formed UTF-8, because the library checks that
+wherever bytes enter a tree (see cjson_parse(3) and
+cjson_create_string(3)).  So the serializer writes string content
+unchanged and adds only the escapes that JSON itself needs.
 
-The serializer refuses a subtree that nests more than 500 levels
-deep and returns NULL for it.  Each array or object is one level, in
-any combination, and a scalar adds none.  The limit is the same as
-the limit of the parser; only the construction API, through
-cjson_list_push() and cjson_dictionary_set(), can build a deeper
-tree, because that API has no depth bound while a parsed document
-does.  This is a policy limit, not a guess about the stack size of
-the calling thread: the serializer walks the nesting with an explicit
-worklist on the heap, so a tree at the limit costs the same small,
-fixed amount of native stack as a flat one.  An ordinary tree never
-comes near this depth.
+A subtree that nests more than 500 levels deep is refused and the
+function returns NULL for it.  Each array or object counts as one
+level, in any combination, and a scalar adds none.  The parser has
+the same limit, and only the construction API (cjson_list_push() and
+cjson_dictionary_set()) can build a deeper tree, since it has no
+depth bound of its own.  The limit is a policy and has nothing to do
+with the stack size of the calling thread: the serializer walks the
+nesting with an explicit worklist on the heap, so a tree at the
+limit uses the same small, fixed amount of native stack as a flat
+one.  An ordinary tree never comes near this depth.
 .fi
 .SH RETURN VALUE
 .nf
-A null-terminated string on the heap on success.
-NULL when the allocation fails, or when node nests more than 500
+On success, a null-terminated string on the heap.
+NULL when an allocation fails or when node nests more than 500
 levels deep.
-The string comes from the allocator of the root node.  The caller
-frees it with cjson_serialize_free() when the default allocator
-created the tree, and with cjson_serialize_free_mp() and the same
-allocator when a custom allocator created the tree.  Calling
-cjson_serialize_free() on a buffer from a custom allocator gives that
-buffer to plain free(), which never allocated it.
+The string comes from the root node's allocator.  When the default
+allocator built the tree, the caller frees it with
+cjson_serialize_free(), and when a custom allocator built it, with
+cjson_serialize_free_mp() and that same allocator.  Calling
+cjson_serialize_free() on a buffer from a custom allocator hands it
+to plain free(), which never allocated it.
 .fi
 .SH "SEE ALSO"
 .BR cjson_serialize_pretty (3),

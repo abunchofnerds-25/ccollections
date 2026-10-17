@@ -1,0 +1,126 @@
+.TH CLOG_FATAL 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+clog_fatal \- emit a log line at FATAL level with a backtrace, then terminate the process
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/clogger.h>
+
+clog_fatal(clog lg, const char *fmt, ...);
+.fi
+.SH DESCRIPTION
+.nf
+Writes a structured log line at CLOG_FATAL severity, appends a full
+stack backtrace, and then stops the calling process with
+exit(EXIT_FAILURE).  The macro never returns to the caller.
+
+exit() runs the exit drain of the library (see clog_create_from_fd_mp(3)),
+which delivers what every other async logger still holds and lets every
+gzip compression that a rotation of any logger in the process has queued
+finish, including one that the fatal record itself can trigger, so no
+rotated file is left as a half-written \&.gz file beside its source.
+One budget of 5 seconds bounds that drain, and the drain takes the lock
+of a logger only when that logger has a queue or a compression to drain.
+A thread of another logger that blocks for ever (inside a write to a
+pipe that nobody reads, for example) therefore never keeps the process
+from stopping.
+
+The same budget, counted from the start of the first fatal call of the
+process, bounds the fatal record itself.  On an async logger the drain
+of its own queue and batch ends by then, and so does every write of the
+record to an output that is not a regular file (a pipe, a FIFO, a
+socket, a terminal).  If such an output takes nothing more in that time,
+for example a full pipe whose reader stopped reading, the record is
+lost: one line on stderr says so, unless stderr is that same output, and
+the process stops anyway.  A write to a regular file waits on the disk
+and not on a reader, and it has no bound.  The exit drain that follows
+shares the deadline, so one budget bounds the whole stop.  While a fatal
+call waits for the logger, the writer thread of an async logger takes
+on no new work, and that wait may run up to 100 milliseconds past the
+budget so that a write in progress on the logger can end and hand the
+logger over.
+
+clog_fatal is the one clog_<level> macro that goes past the min_level
+filter of the logger.  The log line and the backtrace are always
+written, whatever the minimum level of the logger is (CLOG_OFF
+included), so nothing can silently hide the reason for the stop.
+
+The log line and the backtrace are written inside the shared write
+lock, so they always appear together in the output, even when other
+threads log at the same time.
+
+In CLOG_FMT_JSON mode the backtrace goes into the JSON object as an
+inline "bt" array, as it does for clog_error and clog_alert.  In logfmt
+mode it follows the main record as continuation lines indented by a
+tab.  In CLOG_FMT_SYSLOG mode each frame is a separate syslog message
+that carries the same PRI, TIMESTAMP and MSGID as the main record.
+.fi
+.SH PARAMETERS
+.nf
+lg     Logger handle (clog).
+fmt    printf-style format string.
+\&...    Format arguments (optional).
+.fi
+.SH NOTES
+.nf
+A backtrace needs the binary to be linked with -rdynamic.  The capture
+itself can fail, on a platform with no execinfo.h or when an allocation
+fails for a moment while symbol names are resolved.  The process still
+stops, and the logger writes one "backtrace unavailable" marker line in
+place of the frames (a marker record in CLOG_FMT_SYSLOG mode), so you
+can see that the backtrace is missing.
+When memory stays short for a while, or the content of a record leaves
+little room before the internal buffer cap, a backtrace frame that
+cannot be formatted is left out the same way, while a shorter frame
+after it can still go out.  An incomplete frame is never written, so
+every line that goes out is a complete, well-formed record.  When not a
+single frame fits, the same "backtrace unavailable" marker takes their
+place.  Under the same pressure in CLOG_FMT_JSON mode the backtrace can
+fail to fit at all, and a "bt_error":"unavailable" key then takes the
+place of "bt", so the omission is visible there too.
+
+On an async logger, clog_fatal first drains everything that earlier
+calls already queued, so a message that the application logged moments
+before the fatal one reaches the log instead of dying in the queue.
+Then the macro writes the fatal record itself synchronously.  Nothing on
+that path waits without a bound, and a drain request that the queue
+cannot accept is skipped instead of waited on.  The batch of the writer
+thread can hold bytes that an earlier write could not deliver (see
+clog_create_from_fd_mp(3)).  Those bytes get one bounded attempt, and
+after that the library gives up on them: it repairs the framing that a
+split record left open and, ahead of the fatal record, writes a "log
+record truncated: undelivered batch dropped (records=<n> bytes=<m>):
+the process stopped" record for the whole records it gives up on.  A
+descriptor that will not take them never holds up the stop.
+
+The fatal record is written on the calling thread.  When the logger
+writes to a pipe whose reader is gone, that write fails with EPIPE and
+the process still ends through exit(EXIT_FAILURE), because under the
+default CLOG_SIGNALS_AUTO policy the library first sets SIGPIPE to
+SIG_IGN if its disposition is SIG_DFL at that point.  When the logger
+writes to a regular file at the file size limit of the process, the
+write fails with EFBIG and the process also ends through
+exit(EXIT_FAILURE), since under CLOG_SIGNALS_AUTO the open of the file
+already set SIGXFSZ to SIG_IGN if its disposition was SIG_DFL.  Under
+CLOG_SIGNALS_UNTOUCHED the disposition that the application set
+decides.  See clog_set_signal_policy(3).
+
+clog_fatal ends the process at once, so logger handles that are still
+open are not freed one by one; the operating system reclaims every
+resource when the program exits.
+.fi
+.SH EXAMPLES
+.nf
+if (!recovered)
+    clog_fatal(lg, "unrecoverable state: %s", reason);  /* exits */
+
+if (balance < 0)
+    clog_fatal(lg, "invariant violated at step %d", step);  /* exits */
+.fi
+.SH "SEE ALSO"
+.BR clog_alert (3),
+.BR clog_error (3),
+.BR clog_create_from_fd_mp (3),
+.BR clog_create_from_file_mp (3),
+.BR clog_set_signal_policy (3)

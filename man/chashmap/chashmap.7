@@ -9,61 +9,65 @@ C Collections (libccollections, \-lccollections)
 .fi
 .SH DESCRIPTION
 .nf
-A chmap maps keys to values, and an insert, a lookup and a delete each
-take O(1) time on average. At creation, the map selects one of two
-implementation strategies:
-  - Open addressing, when the key and the value are both integral types
-    of eight bytes or less (long double is not included).
-  - Separate chaining, for all other combinations, and also for a map
-    that has a custom key equality procedure.
-Both strategies give the same API. chmap_create_full(3) describes the
-selection, the hashing and the resistance to hash flooding.
+A chmap maps keys to values, and an insert, a lookup and a delete take
+O(1) time on average. When the map is created it picks one of two
+implementations. It uses open addressing when the key and the value are
+both integral types of eight bytes or less (long double does not count),
+and separate chaining for every other combination and for any map with a
+custom key equality procedure. The API is the same either way, and
+chmap_create_full(3) describes the selection, the hashing and how the map
+resists hash flooding.
 
-The API has two layers:
-  - The type-inferred macros, for example chmap_construct(3),
-    chmap_insert(3), chmap_get(3), chmap_get_ptr(3) and chmap_remove(3),
-    keep the key type and the value type with the handle. On a hard
-    error, they stop the program through ccol_fatal_err().
-  - The raw functions, chmap_create_full(3), chmap_insert_elem(3),
-    chmap_get_elem_ref(3), chmap_get_elem_copy(3) and
-    chmap_delete_elem(3), take each key and each value as a cmap_pair
-    and return a ccol_retval_t.
+The API has two layers. The type-inferred macros, such as
+chmap_construct(3), chmap_insert(3), chmap_get(3), chmap_get_ptr(3) and
+chmap_remove(3), keep the key type and the value type with the handle,
+and on a hard error they stop the program through _ccol_fatal_err(). The
+raw functions, chmap_create_full(3), chmap_insert_elem(3),
+chmap_get_elem_ref(3), chmap_get_elem_copy(3) and chmap_delete_elem(3),
+take every key and value as a cmap_pair and return a ccol_retval_t.
 .fi
 .SH "OWNERSHIP OF KEYS AND VALUES"
 .nf
-The map keeps a copy of each key and each value: an insert copies the
-bytes of the key and of the value into storage that the map owns, and
-an update frees the old value.
+The map keeps its own copy of every key and value. An insert copies the
+bytes of the key and the value into storage the map owns, and an update
+frees the old value.
 
-A char * key or value is a NUL-terminated string, and the map copies
-the contents of the string together with its terminator. The caller
-keeps its own string and can change or free it as soon as the insert
-returns, without any effect on the map.
+A char * key or value is a NUL-terminated string, and the map copies its
+contents together with the terminator. Your own string is yours again as
+soon as the insert returns, so you can change or free it without
+affecting the map.
 
-Some calls give back a string pointer: chmap_get(3), chmap_get_ptr(3),
-chmap_get_elem_ref(3) and an iterator. That pointer points into the
-storage of the map, so do not free it. It is valid until the next
-insert, delete, reset or resize of the map, or until the map is
-destroyed. To replace a stored string, insert the key again.
+chmap_get(3), chmap_get_ptr(3), chmap_get_elem_ref(3) and an iterator
+give back string pointers into the map's storage, which you must not
+free. Such a pointer is valid until the next insert, delete, reset or
+resize of the map, or until the map is destroyed. To replace a stored
+string, insert the key again.
 
-The map keeps a value of any other pointer type, for example a
-struct point *, as the pointer itself: it does not copy, follow or free
-the object at that address. The caller owns that object and must free
-it before or during the destroy of the map; chmap_destroy_with_dtor(3)
-runs a destructor on each value during the destroy.
+A value of any other pointer type, a struct point * for example, is
+kept as the pointer itself. The map does not copy, follow or free the
+object at that address. That object belongs to the caller and must be
+freed before or during the destroy of the map, and
+chmap_destroy_with_dtor(3) can run a destructor on each value during
+the destroy for that purpose.
+
+An array type such as int[2] or char[16] cannot be the key or value type
+of the type-inferred macros. It is a compile error, and the message says
+to wrap the array in a struct: C cannot assign an array, so the map
+would store the address of the caller's array instead of its elements. A
+struct that holds the array works.
 .fi
 .SH "REFERENCES INTO THE MAP"
 .nf
 A pointer from chmap_get_ptr(3) or chmap_get_elem_ref(3) is valid until
-the map changes, which an insert, a delete, a reset and a resize do. A
-lookup does not make a pointer invalid, so the caller can keep pointers
-to many values at the same time. Each such pointer is aligned for the
-value type, with both strategies.
+the map changes, which means an insert, a delete, a reset or a resize. A
+lookup invalidates nothing, so you can hold pointers to many values at
+once. With both implementations each such pointer is aligned for the
+value type.
 .fi
 .SH "THREAD SAFETY"
 .nf
-A map has no internal lock. A caller can share one map between threads,
-but must then serialize each call that changes the map against all
+A map has no internal lock. You can share one map between threads, but
+then every call that changes the map must be serialized against all
 other calls on that map.
 .fi
 .SH "SEE ALSO"

@@ -29,11 +29,11 @@ SOFTWARE.
 #include <time.h>
 
 /* A seeded pseudo random number generator (PRNG) that several test suites
- * share for the invariant tests that run a random sequence of operations. It
- * is not part of the library; only the tests use it. The seed is fixed instead
- * of coming from the OS on purpose: when a test fails,
- * ccol_invariants_print_seed prints the seed, so you can hardcode it and
- * reproduce exactly the same sequence of operations. */
+ * share for their invariant tests, the ones that run a random sequence of
+ * operations. Only the tests use it, the library doesn't. The seed is fixed
+ * and doesn't come from the OS, because when a test fails
+ * ccol_invariants_print_seed prints it and you can hardcode it to replay
+ * exactly the same sequence of operations. */
 typedef struct {
   uint64_t state;
 } ccol_invariants_rng_t;
@@ -43,8 +43,8 @@ static inline void ccol_invariants_seed(ccol_invariants_rng_t *rng,
   rng->state = seed;
 }
 
-/* splitmix64: small, free of dependencies and good enough to drive a
- * sequence of test operations, but not for cryptography. */
+/* splitmix64: small, with no dependencies, and good enough to drive a
+ * sequence of test operations (it's not meant for cryptography). */
 static inline uint64_t ccol_invariants_next_u64(ccol_invariants_rng_t *rng) {
   uint64_t z = (rng->state += 0x9E3779B97F4A7C15ULL);
   z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
@@ -58,9 +58,9 @@ static inline uint64_t ccol_invariants_next_bounded(ccol_invariants_rng_t *rng,
   return ccol_invariants_next_u64(rng) % bound;
 }
 
-/* The fixed default seed, which a test uses unless it chooses its own. Every
- * run prints its seed, not only a run that fails, so a seed is always visible
- * in the test output. */
+/* The fixed default seed that a test uses unless it picks its own. Every run
+ * prints its seed, a passing one too, so the seed is always there in the
+ * test output. */
 #define CCOL_INVARIANTS_DEFAULT_SEED 0xC0FFEEULL
 
 static inline void ccol_invariants_print_seed(const char *test_name,

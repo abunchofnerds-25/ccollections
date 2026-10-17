@@ -11,21 +11,20 @@ cvec_construct_scoped(v, type);
 .fi
 .SH DESCRIPTION
 .nf
-This macro declares a vector variable named v that holds elements of the
-given type, creates the vector, and adds a cleanup handler that destroys
-the vector when control leaves the scope around it. The macro is
-cvec_construct(3) plus that cleanup handler, with one more difference:
-this macro initializes the hidden type marker variables, which the other
-type-dispatching macros read, to NULL, while cvec_construct(3)
-deliberately leaves them indeterminate. Everything else that
-cvec_construct(3) documents holds here unchanged, including the stop of
-the program through ccol_fatal_err() for a failed creation.
+Declares a vector variable named v that holds elements of the given type,
+creates the vector, and adds a cleanup handler that destroys the vector
+when control leaves the surrounding scope. It is cvec_construct(3) plus
+that cleanup handler, with one more difference: the hidden type marker
+variables, which the other type-dispatching macros read, are initialized
+to NULL here, while cvec_construct(3) leaves them indeterminate on
+purpose. Everything else cvec_construct(3) documents holds here as well,
+including the stop of the program through _ccol_fatal_err() on a failed
+creation.
 
-The destruction happens on every exit from the scope: the closing brace,
-a return, a break, a continue, or a goto out of the block. Because the
-macro sets the variable to NULL as it destroys the vector, nothing is
-freed twice when you also call cvec_destroy() before the end of the
-scope.
+The vector is destroyed on every exit from the scope: the closing brace, a
+return, a break, a continue or a goto out of the block. The variable is
+set to NULL as the vector is destroyed, so calling cvec_destroy() before
+the end of the scope as well frees nothing twice.
 .fi
 .SH PARAMETERS
 .nf
@@ -34,19 +33,21 @@ type  Element type, for example int, double or struct foo
 .fi
 .SH NOTES
 .nf
-The macro stops the program through ccol_fatal_err() when an allocation
+The macro stops the program through _ccol_fatal_err() when an allocation
 fails.
-The macro is built on __attribute__((cleanup)), so it needs GCC or Clang.
-On a toolchain that does not have that attribute, use cvec_construct(3)
-with an explicit cvec_destroy().
-Because the macro expands to a declaration, it belongs among the
-statements of a block and cannot be the body of an if or a loop without
-braces.
-The vector must not live longer than its scope: do not return v, and do
-not store it anywhere that code reads after the end of the block.
-When the vector holds pointers to heap buffers, the macro does not free
-the elements one by one, so free the element data before you leave the
-scope.
+
+It is built on __attribute__((cleanup)) and so needs GCC or Clang. On a
+toolchain without that attribute, use cvec_construct(3) with an explicit
+cvec_destroy().
+
+The macro expands to a declaration, so it goes among the statements of a
+block and can't be the body of an if or a loop without braces.
+
+The vector must not outlive its scope: don't return v, and don't store it
+anywhere that code reads after the end of the block.
+
+If the vector holds pointers to heap buffers, the elements are not freed
+one by one, so free the element data before leaving the scope.
 .fi
 .SH EXAMPLES
 .nf

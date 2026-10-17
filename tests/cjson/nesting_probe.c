@@ -23,11 +23,11 @@ SOFTWARE.
 */
 
 /* Compile-time probe: cjson_set nests inside its own argument, and inside the
- * argument of another public macro, under -Wshadow -Werror. The macro names
- * its temporaries uniquely for each expansion, so no nested expansion
- * declares a local that hides one of the enclosing expansion. Without that,
- * each nesting below is a -Wshadow error in the build of a caller. The
- * Makefile compiles this file with -fsyntax-only; nothing here runs. */
+ * argument of another public macro, under -Wshadow -Werror. Every expansion
+ * gives its temporaries unique names, so a nested expansion never declares
+ * a local that hides one of the enclosing expansion's. Without that, each
+ * nesting below would be a -Wshadow error in a caller's build. The Makefile
+ * compiles this file with -fsyntax-only and nothing here runs. */
 
 #include <cjson.h>
 

@@ -12,27 +12,32 @@ void clog_close(clog logger);
 .SH DESCRIPTION
 .nf
 Releases every resource that the logger owns:
-  - When the logger sits on a file and this is the last handle that
-    shares that file, this call closes the file descriptor.  While
-    another handle (the root or a derived logger) is open, the fd stays
-    open and the call lowers the refcount of the file.
-    A handle that a second clog_open_file_mp(3) of the same rotating
-    file returns shares that file in the same way.
-  - When async logging is on (see clog_open_fd_mp(3)) and this is the
+  - For a logger on a file, the call closes the file descriptor when
+    this is the last handle that shares the file.  While another
+    handle (the root or a derived logger) is open, the fd stays open
+    and the call only lowers the refcount of the file.  A handle that
+    a second clog_create_from_file_mp(3) of the same rotating file
+    returns shares the file the same way.
+  - With async logging on (see clog_create_from_fd_mp(3)) and this the
     last handle, the call drains everything that is already queued and
     joins the writer thread before it releases the output (and, for a
-    logger on a file, closes the file descriptor).  That
-    drain is the last delivery attempt of the logger: what it cannot
-    deliver has no later retry, so the call writes a "log record
+    logger on a file, closes the file descriptor).  That drain is the
+    last delivery attempt of the logger and nothing is retried after
+    it, so whatever it cannot deliver is replaced by a "log record
     truncated: undelivered batch dropped (records=<n> bytes=<m>): the
-    logger closed" record in its place.
+    logger closed" record.
+    The one exception is a logger whose drain at exit(3), or at a
+    CLOG_FATAL call, gave up because its writer thread did not answer
+    in time.  Closing such a logger, from a destructor for example,
+    neither waits for that thread nor joins it, and the logger is left
+    in place for the end of the process.
   - When the logger compresses its rotated files (see
-    clog_open_file_mp(3)) and this is the last handle, the call waits
-    until every compression that a rotation queued has finished, and
-    then stops the compression thread.  By the time that the call
-    returns, every rotated file of the logger is therefore compressed,
-    or left whole and uncompressed after a failed compression.
-  - It frees every key=value field that the logger holds.
+    clog_create_from_file_mp(3)) and this is the last handle, the call
+    waits until every compression that a rotation queued has finished
+    and then stops the compression thread.  So by the time the call
+    returns, every rotated file of the logger is compressed, or left
+    whole and uncompressed after a failed compression.
+  - It frees every key=value field of the logger.
   - It frees the internal write buffer.
   - It frees the state of this handle, and frees the shared backing
     store only when it releases the last handle.
@@ -45,18 +50,21 @@ logger  Logger handle to close.
 .fi
 .SH NOTES
 .nf
-Do not call clog_close() while another thread is making any call with
-that same handle: a log_* macro, clog_set_level, clog_set_field and
-the functions beside it, clog_derive, or another clog_close().  The
-caller must make sure that every other use of a handle has stopped
-before it closes that handle.  This rule does not cover a close that
-runs at the same time as a sibling handle that keeps logging (the root
-against a derived logger, or two derived loggers).  Such a close is
-safe, because the sibling is a different handle that is open.
-For a logger that sits on an fd, from clog_open_fd_mp, this call does
-NOT close the file descriptor; the caller must do that.
-Asserts when logger is CLOG_INVALID, stale or already closed.
+Do not call clog_close() while another thread makes any call with the
+same handle: a clog_<level> macro, clog_set_level, clog_set_field and
+the functions next to it, clog_derive, or another clog_close().  You
+must make sure that every other use of a handle has stopped before you
+close it.  This rule does not cover a sibling handle that keeps logging
+while one handle closes (the root against a derived logger, or two
+derived loggers); that close is safe, because the sibling is a
+different handle and it is open.
+For a logger on an fd, from clog_create_from_fd_mp, this call does NOT
+close the file descriptor; you have to do that yourself.
+Asserts when logger is CLOG_INVALID, stale or already closed.  The
+destructor of the library releases the table of loggers at the end of
+the process, so a close from a destructor that runs after it finds
+every handle stale and reports the same error.
 .fi
 .SH "SEE ALSO"
-.BR clog_open_fd_mp (3),
-.BR clog_open_file_mp (3)
+.BR clog_create_from_fd_mp (3),
+.BR clog_create_from_file_mp (3)

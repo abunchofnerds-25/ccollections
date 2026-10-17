@@ -13,12 +13,12 @@ value_ptr = chmap_get_ptr(hm_name, key);
 .nf
 Type-inferred wrapper for chmap_get_elem_ref() that returns a pointer to
 the value, or NULL when the map does not hold the key. Unlike chmap_get(),
-it does not stop the program for a key that is not there.
+a missing key does not stop the program.
 
-The lookup key goes through the DECLARED key type of the map, in the
-same way as in chmap_insert(3), so a key that the map stored through
-that conversion is only ever found again by a lookup that makes the
-same conversion. Both a literal and a computed expression are accepted.
+The lookup key is converted through the DECLARED key type of the map,
+the same way chmap_insert(3) converts it, so a key stored through that
+conversion is only found again by a lookup that makes the same
+conversion. A literal and a computed expression both work.
 .fi
 .SH PARAMETERS
 .nf
@@ -27,34 +27,32 @@ key      Key to look up
 .fi
 .SH RETURN VALUE
 .nf
-Returns a pointer to the value if the key is found
-Returns NULL if the key is not found
+A pointer to the value if the key is found, or NULL if it is not
 .fi
 .SH NOTES
 .nf
 Returns NULL when the map does not hold the key (it does not stop the
 program)
-Returns NULL when key is a NULL character pointer, which is not a
-string
+Returns NULL when key is a NULL character pointer, since that is not
+a string
 Stops the program when the size of the value does not match the size
 of the type
-Returns a pointer to the value, so that the caller can change the
-value in place
+Returns a pointer to the value, so you can change the value in place
 The pointer is correctly aligned for the type of the value, with both
 internal backends
 A later insert, delete or resize invalidates the pointer
 For a char* value type, the target of the pointer is const
-(char *const *). The caller can read the stored string and edit its
-bytes in place, inside the stored length, but replacing the pointer
-itself is a compile error: the map owns the string bytes and keeps its
-own accessor in step with them, so a replaced pointer would leave the
-length of the accessor describing the earlier string. Call
-chmap_insert(3) to replace a string value; it frees the old bytes and
-copies the new ones into storage that the map owns
-For a float or double key, see chmap_construct(3) for the map's
-key equality contract (bitwise, except -0.0 canonicalized to 0.0)
-For a long double key, see chmap_construct(3) for the map's key
-equality contract (value-based, unlike every other key type)
+(char *const *). You can read the stored string and edit its bytes in
+place within the stored length, but replacing the pointer itself is a
+compile error. The map owns the string bytes and keeps its own accessor
+in step with them, so after a replaced pointer the accessor's length
+would describe the earlier string. To replace a string value call
+chmap_insert(3), which frees the old bytes and copies the new ones into
+storage that the map owns
+For a float or double key, chmap_construct(3) gives the key equality
+contract (bitwise, except that -0.0 becomes 0.0)
+For a long double key, chmap_construct(3) gives the key equality contract
+(by value, unlike every other key type)
 .fi
 .SH EXAMPLES
 .nf

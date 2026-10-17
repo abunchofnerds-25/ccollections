@@ -12,26 +12,25 @@ const char *chttp_request_get_header(const chttp_request_t *req,
 .fi
 .SH DESCRIPTION
 .nf
-This function gives the stored value of the header with the name that
-you give, or NULL if that header is not there. The lookup ignores the
-case of the name: the function makes your name lowercase before the
-lookup.
+This function returns the stored value of the named header, or NULL if
+the request has no such header. The lookup ignores case, because the
+function lowercases your name before it looks it up.
 
-The pointer that the function gives back stays valid until the next
-call to chttp_request_set_header on this request, or until somebody
-frees the request.
+The returned pointer stays valid until the next call to
+chttp_request_set_header on this request, or until the request is
+freed.
 .fi
 .SH PARAMETERS
 .nf
-req   The request to query. It can be NULL, and the function then
-      gives NULL.
-name  The header name. It can be NULL, and the function then gives
-      NULL.
+req   The request to query. It can be NULL, in which case the
+      function returns NULL.
+name  The header name. It can be NULL, in which case the function
+      returns NULL.
 .fi
 .SH RETURN VALUE
 .nf
-A pointer to the stored value string, or NULL if the function does not
-find that header.
+A pointer to the stored value string, or NULL if the header is not
+there.
 .fi
 .SH "SEE ALSO"
 .BR chttp_request_set_header (3)

@@ -11,10 +11,10 @@ ccol_retval_t ccol_dynmq_recv_zc(ccol_dynamic_queue *dq, c_message_t *target_buf
 .fi
 .SH DESCRIPTION
 .nf
-This function blocks until a message arrives in the dynamic queue, then
-removes the message at the head and transfers the ownership of its data
-pointer to the caller in target_buf. The caller must free
-target_buf->data after it finishes with the data.
+Waits until the dynamic queue holds a message, then removes the
+message at the head and hands it over in target_buf without copying
+the data. The data pointer then belongs to the caller, who must free
+target_buf->data when done with it.
 .fi
 .SH PARAMETERS
 .nf
@@ -24,17 +24,15 @@ target_buf  Buffer that gets the message together with the ownership
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success        - The function received a message. The caller must
-                      free target_buf->data.
+ccol_success        - A message was received. The caller must free
+                      target_buf->data.
 ccol_invalid_args   - dq or target_buf is NULL
 .fi
 .SH NOTES
 .nf
-The function blocks with no time limit while it waits for a message.
-The function stays blocked while sends on the queue are off, and it
-  unblocks after a call turns sends on again and a message arrives.
-The caller gets the ownership of target_buf->data and must free it.
-The function is thread-safe.
+The wait has no time limit. Turning sends off doesn't wake a waiting
+receiver: it stays blocked until sends are turned on again and a
+message arrives. The function is thread-safe.
 .fi
 .SH "SEE ALSO"
 .BR ccol_dynmq_try_recv_zc (3),

@@ -12,16 +12,16 @@ void clog_flush(clog logger);
 .SH DESCRIPTION
 .nf
 Blocks the calling thread until write(2) has accepted every record that
-was queued through logger (or through a sibling handle that
-shares the same target below) at the moment of this call, together
-with whatever a partly filled aggregation buffer holds.
+was in the queue of logger (or of a sibling handle on the same target)
+when the call started, together with whatever sits in a partly filled
+aggregation buffer.
 
-For a synchronous logger, which is one created with no clog_async_cfg_t
-(see clog_open_fd_mp(3) and clog_open_file_mp(3)), this call does
-nothing and returns at once.
+On a synchronous logger, one created with no clog_async_cfg_t (see
+clog_create_from_fd_mp(3) and clog_create_from_file_mp(3)), the call
+does nothing and returns at once.
 
-This call does not promise to cover a record that another thread
-submits at the same time as this call, or strictly after it.
+A record that another thread submits at the same time as this call, or
+after it, is not guaranteed to be covered.
 .fi
 .SH PARAMETERS
 .nf
@@ -33,25 +33,25 @@ None.
 .fi
 .SH NOTES
 .nf
-It is safe to call this on any open handle at any time, including at
-the same time as an ordinary log_*() call on the same handle or on a
-sibling handle.
-On a rare allocation failure, the async queue below can fail to accept
-the flush request.  This function then returns at once instead of
-blocking on an acknowledgment that will never arrive.
+You can call this on any open handle at any time, even while an
+ordinary clog_<level>() call runs on the same handle or on a sibling
+handle.
+On a rare allocation failure the async queue can refuse the flush
+request, and the function then returns at once instead of waiting for
+an acknowledgment that would never come.
 In a forked child, a logger whose async mode has fallen back to
-synchronous logging (see clog_open_fd_mp(3)) does nothing here: the
-call behaves exactly as it does on a synchronous logger.
-When a write stops early with an error that a later attempt can
-outlast, such as ENOSPC, the bytes that it did not take stay in the
-aggregation buffer and the next flush offers them again, so this call
-can return while part of what it flushed is pending.  After any other
-write error, such as EPIPE, the flush drops those bytes and writes a
-record that names the loss.  See clog_open_fd_mp(3) for both rules and
-for what they promise about the framing of a record.
+synchronous logging (see clog_create_from_fd_mp(3)) does nothing here,
+exactly like a synchronous logger.
+When a write stops early with an error that a later attempt can get
+past, such as ENOSPC, the bytes it did not take stay in the aggregation
+buffer and the next flush offers them again, so this call can return
+while part of what it flushed is still pending.  After any other write
+error, such as EPIPE, the flush drops those bytes and writes a record
+that names the loss.  clog_create_from_fd_mp(3) describes both rules and
+what they promise about the framing of a record.
 Asserts when logger is CLOG_INVALID, stale or already closed.
 .fi
 .SH "SEE ALSO"
-.BR clog_open_fd_mp (3),
-.BR clog_open_file_mp (3),
+.BR clog_create_from_fd_mp (3),
+.BR clog_create_from_file_mp (3),
 .BR clog_close (3)

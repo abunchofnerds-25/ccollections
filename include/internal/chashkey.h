@@ -27,21 +27,21 @@
  * @brief INTERNAL ONLY. The hash that gives the map's own idea of key
  *        identity.
  *
- * chashmap does not treat a key as an opaque run of bytes for every type that
- * it accepts. It hashes and compares a long double by value, because on an
- * Application Binary Interface (ABI) where that type carries padding, those
- * bytes are often not initialized, and it changes -0.0 to 0.0 for a float and
- * for a double. A module that has to agree with the map on which keys are the
- * same key therefore cannot hash the bytes of the key itself; it must ask the
- * map.
+ * chashmap doesn't treat a key as an opaque run of bytes for every type it
+ * accepts. A long double is hashed and compared by value, because on an
+ * Application Binary Interface (ABI) where that type carries padding those
+ * bytes are often not initialized, and -0.0 becomes 0.0 for a float and for
+ * a double. So a module that has to agree with the map about which keys are
+ * the same key can't just hash the key bytes; it must ask the map.
  *
- * clrucache is such a module: a segmented cache picks a segment from the key,
- * and each segment is its own map. Two keys that the map treats as one key
- * must go to the same segment, or the cache holds two entries for one key.
+ * clrucache is one such module. A segmented cache picks a segment from the
+ * key and each segment is its own map, so two keys that the map sees as one
+ * key must land in the same segment, otherwise the cache ends up with two
+ * entries for one key.
  *
- * This header is internal and carries no visibility block: make install
- * excludes it, and its symbol is absent from the dynamic symbol table of the
- * shared library.
+ * The header is internal and has no visibility block: make install leaves it
+ * out, and its symbol isn't in the dynamic symbol table of the shared
+ * library.
  */
 
 #ifndef CCOL_CHASHKEY_H
@@ -53,22 +53,22 @@
 /**
  * @brief Hash a key exactly as chashmap hashes it with no custom hashing proc.
  *
- * Two keys that the map treats as equal get equal hashes here, also when
+ * Two keys that the map treats as equal get equal hashes here, even when
  * their representations differ in ways that the map ignores on purpose. The
- * hash is the one of the keyed mode of a map, keyed with the secrets of the
- * process, whatever the mode of any map is: a map that has switched to the
- * keyed mode stores this value for the key, a map in the fast mode stores a
- * different one, and the value differs from one process to the next. Key
- * identity does not depend on the mode, so the answer to which keys are the
- * same key is the same in both. For a fixed-width type, this function reads
- * only as many bytes as the width of key_type, so the caller must first check
- * key_size against ccol_fixed_width_data_type_size().
+ * hash is the one of a map's keyed mode, keyed with the process secrets,
+ * whatever mode any map is in. A map that switched to the keyed mode stores
+ * this value for the key, a map in the fast mode stores a different one, and
+ * the value is different from one process to the next. Key identity doesn't
+ * depend on the mode, so which keys are the same key comes out the same in
+ * both. For a fixed-width type only as many bytes as the width of key_type
+ * are read, so the caller must check key_size against
+ * ccol_fixed_width_data_type_size() first.
  *
  * @param key_ptr  Key bytes.
- * @param key_size Size of the key. The function never reads the bytes that
- *                 come after the width of the key type, but it uses this value
- *                 for a float key, for a double key and for a key that has no
- *                 fixed width, so the value must match the type.
+ * @param key_size Size of the key. Bytes after the width of the key type are
+ *                 never read, but the value is used for a float key, a
+ *                 double key and a key with no fixed width, so it must match
+ *                 the type.
  * @param key_type The declared key type that the caller made the map with.
  */
 size_t ccol_chmap_hash_key(const void *key_ptr, size_t key_size,

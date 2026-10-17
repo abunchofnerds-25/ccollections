@@ -12,20 +12,19 @@ void cyaml_serialize_free(char *s);
 .fi
 .SH DESCRIPTION
 .nf
-Free a buffer returned by cyaml_serialize(), cyaml_serialize_flow() or
-cyaml_serialize_stream().  cyaml_serialize_free() is an inline wrapper
-that passes NULL for mp.
+Frees a buffer that cyaml_serialize(), cyaml_serialize_flow() or
+cyaml_serialize_stream() returned.  cyaml_serialize_free() is an
+inline wrapper that passes NULL for mp.
 
-The mp argument must match the allocator that was active when the
-library created the DOM tree, that is, the mp that the caller gave to
-cyaml_parse_mp() or to a create function.  Passing the wrong allocator
-here is undefined behaviour.
+mp must match the allocator that built the DOM tree, which is the mp
+the caller gave to cyaml_parse_mp() or to a create function.  Passing
+the wrong allocator here is undefined behaviour.
 .fi
 .SH PARAMETERS
 .nf
-s    String to free.  It can be NULL, in which case the function does
+s    The string to free.  It may be NULL, and the function then does
      nothing.
-mp   Allocator for the free, or NULL for the default.
+mp   The allocator that frees it, or NULL for the default.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_serialize (3),

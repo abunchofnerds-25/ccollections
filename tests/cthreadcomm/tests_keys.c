@@ -23,12 +23,12 @@ SOFTWARE.
 */
 
 /* ccol_event_loop creation in a process that has no thread-specific key left
- * to give. The dispatch of a loop records the running loop and the running
- * queue on two keys of this module, which is what lets a callback that
- * destroys its own loop or its own queue fail loudly instead of freeing it
- * under its own dispatch, so a loop that cannot have those keys must not be
- * created. The keys are created once for each process, so this runs in a
- * binary of its own: no other ccol_event_loop call may come first. */
+ * to give. A loop's dispatch records the running loop and the running queue
+ * on two keys of this module, and that's what lets a callback that destroys
+ * its own loop or its own queue fail loudly instead of freeing it under its
+ * own dispatch, so a loop that can't have those keys must not be created.
+ * The keys are created once per process, which is why this runs in a binary
+ * of its own: no other ccol_event_loop call may come first. */
 
 #include <cthreadcomm.h>
 #include <pthread.h>
@@ -40,10 +40,10 @@ TAU_MAIN()
 enum { MAX_TEST_KEYS = 65536 };
 static pthread_key_t exhausted[MAX_TEST_KEYS];
 
-/* This test is non-vacuous: when the loop ignores the failure to create its
- * keys, the create succeeds, and its dispatch sets the running loop and queue
- * on whatever key the unset key variables name, which is a key of another
- * component. */
+/* If the loop ignored the failure to create its keys, the create would
+ * succeed and its dispatch would set the running loop and queue on whatever
+ * key the unset key variables name, which belongs to another component, so
+ * this test catches that. */
 TEST(ccol_event_loop_keys, create_fails_cleanly_when_no_key_is_left) {
   int n = 0;
   while (n < MAX_TEST_KEYS && pthread_key_create(&exhausted[n], NULL) == 0) n++;
@@ -53,7 +53,7 @@ TEST(ccol_event_loop_keys, create_fails_cleanly_when_no_key_is_left) {
   int created = loop != CCOL_EVENT_LOOP_INVALID;
   if (created) ccol_event_loop_destroy(loop);
 
-  /* A queue needs no key: it works here, and its destroy is safe. */
+  /* A queue needs no key, so it works here and its destroy is safe. */
   ccol_circular_queue *cq = ccol_circular_queue_create(4, NULL);
   int queue_ok = cq != NULL;
   if (cq) {
@@ -63,8 +63,8 @@ TEST(ccol_event_loop_keys, create_fails_cleanly_when_no_key_is_left) {
     ccol_circular_queue_destroy(cq);
   }
 
-  /* With the keys given back, creation keeps failing, because the module
-   * does not retry the creation of its keys in this process. */
+  /* Giving the keys back doesn't help. Creation keeps failing because the
+   * module doesn't retry the creation of its keys in this process. */
   for (int i = 0; i < n; i++) pthread_key_delete(exhausted[i]);
   char *err_again = NULL;
   ccol_event_loop again = ccol_event_loop_create(8, 1, 1, &err_again);

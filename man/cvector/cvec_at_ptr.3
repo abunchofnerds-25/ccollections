@@ -11,10 +11,9 @@ element_ptr = cvec_at_ptr(v, index);
 .fi
 .SH DESCRIPTION
 .nf
-This macro is a type-inferred wrapper for cvector_at() that gives a
-pointer to the element, cast to the correct type automatically, or NULL
-when the index is out of bounds. Unlike cvec_at, it does not stop the
-program for such an index.
+Type-inferred wrapper for cvector_at() that gives a pointer to the
+element, already of the right type, or NULL when the index is out of
+bounds. Unlike cvec_at, it doesn't stop the program for such an index.
 .fi
 .SH PARAMETERS
 .nf
@@ -23,14 +22,14 @@ index  Zero-based index of the element
 .fi
 .SH RETURN VALUE
 .nf
-Gives a pointer to the element at the index
-Gives NULL when the index is out of bounds
+A pointer to the element at the index, or NULL when the index is out of
+bounds.
 .fi
 .SH NOTES
 .nf
-The macro gives NULL when the index is out of bounds; it does not stop
-the program.
-The pointer stays valid only until the size of the vector changes.
+An index out of bounds gives NULL and doesn't stop the program.
+
+The pointer is valid only until the size of the vector changes.
 .fi
 .SH EXAMPLES
 .nf

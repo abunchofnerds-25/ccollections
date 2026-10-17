@@ -11,8 +11,8 @@ cstr_destroy(s);
 .fi
 .SH DESCRIPTION
 .nf
-This macro is a type-inferred alias for cstring_destroy(). It destroys the
-string and sets the pointer to NULL.
+This macro is the type-inferred form of cstring_destroy(). It destroys
+the string and then sets the pointer to NULL.
 .fi
 .SH PARAMETERS
 .nf
@@ -21,7 +21,7 @@ s   cstr lvalue to destroy, such as a variable or an element of an
 .fi
 .SH NOTES
 .nf
-A call with a NULL pointer is safe and does nothing
+Calling it with a NULL pointer is safe and does nothing
 .fi
 .SH "SEE ALSO"
 .BR cstring_destroy (3)

@@ -1,6 +1,6 @@
 .TH CSTR_TO_UPPER 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cstr_to_upper \- convert all characters to uppercase in-place
+cstr_to_upper \- convert the ASCII letters to uppercase in-place
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -11,7 +11,7 @@ cstr_to_upper(s);
 .fi
 .SH DESCRIPTION
 .nf
-This macro is a pass-through wrapper for cstring_to_upper().
+This macro just forwards its argument to cstring_to_upper().
 .fi
 .SH PARAMETERS
 .nf

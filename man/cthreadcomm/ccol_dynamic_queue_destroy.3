@@ -11,20 +11,21 @@ ccol_dynamic_queue_destroy(dq);
 .fi
 .SH DESCRIPTION
 .nf
-This macro frees all the resources of the queue and then sets the queue
-pointer to NULL.
+Frees everything the queue holds and then sets the queue pointer to
+NULL.
 
-ccol_event_loop_remove() does not wait for a callback that it already
-gave to a reactor thread, so such a callback can be inside this queue
-when the removal returns. This call blocks until every one of those
-callbacks finishes with the queue, and only then frees the queue. This
-is what makes the documented teardown sequence (drain, remove, destroy)
-safe as written.
+ccol_event_loop_remove() doesn't wait for a callback that it has
+already handed to a reactor thread, so such a callback can still be
+working inside this queue when the removal returns. This call blocks
+until every one of those callbacks is done with the queue and only then
+frees it, which is what makes the documented teardown order (drain,
+remove, destroy) safe as written.
 
-A callback that the loop runs for a different registration can run this
+A callback that the loop runs for a different registration can run that
 whole sequence for this queue, with any num_reactor_threads. A dispatch
-that the loop collected for it but did not start yet does not hold the
-destroy up, and it never runs its callback after the removal.
+that the loop collected for the removed registration but did not start
+yet doesn't hold the destroy up, and it never runs its callback after
+the removal.
 .fi
 .SH PARAMETERS
 .nf
@@ -34,33 +35,36 @@ dq   Dynamic queue to destroy. The macro sets it to NULL.
 .nf
 You can call this with a NULL pointer.
 
-The macro evaluates dq exactly once. It must be a modifiable lvalue,
-such as a variable or an element of an array, so an expression with a
-side effect, such as handles[i++], destroys and clears one element.
+dq is evaluated exactly once and must be a modifiable lvalue, such as
+a variable or an array element. An expression with a side effect, such
+as handles[i++], therefore destroys and clears a single element.
 .fi
 .SH WARNINGS
 .nf
-Messages that stay in the queue cause an assertion failure, so drain
-the queue before you destroy it. The destroy counts the messages only
-after every callback that the removal left running has finished, and a
-write callback that was already running when ccol_event_loop_remove()
-returned can send, so that message causes the assertion failure too.
-When a write registration watches the queue, remove it, wait for its
-on_removed callback, and only then drain and destroy the queue.
-A watcher on this queue also causes an assertion failure. A watcher is a
-ccol_select() call, a ccol_select_timed() call, or an ccol_event_loop
-registration (ccol_selectable_from_dynq). Without that assertion, the
-waiter would stay linked and point to the mutex of this queue, which
-the destroy is about to free.
-Call ccol_event_loop_remove() before you destroy the queue, or let
-every ccol_select() call and every ccol_select_timed() call that
-watches the queue return first.
-Do not call this from inside an ccol_event_loop callback that dispatches
-this queue: the destroy would wait for that same callback. This is a
-caller error, and the program stops through ccol_fatal_err().
-Do not hold an application lock across this call if one of these
-callbacks takes that lock, because the destroy waits for the callback
-while the callback waits for the lock.
+A message left in the queue causes an assertion failure, so drain the
+queue before you destroy it. The messages are counted only after every
+callback that the removal left running has finished, and a write
+callback that was still running when ccol_event_loop_remove() returned
+can send, so its message fails the assertion too. When a write
+registration watches the queue, remove it, wait for its on_removed
+callback, and only then drain and destroy the queue.
+
+A watcher on this queue causes an assertion failure as well. A watcher
+is a ccol_select() call, a ccol_select_timed() call or a
+ccol_event_loop registration (ccol_selectable_from_dynq). Without the
+assertion the waiter would stay linked and keep pointing at the mutex
+of this queue, which the destroy is about to free.
+
+Call ccol_event_loop_remove() first, or let every ccol_select() and
+ccol_select_timed() call that watches the queue return.
+
+Do not call this from inside a ccol_event_loop callback that dispatches
+this queue, because the destroy would wait for that very callback. It
+is a caller error, and the program stops through _ccol_fatal_err().
+
+Do not hold an application lock across this call when one of those
+callbacks takes the same lock: the destroy waits for the callback while
+the callback waits for the lock.
 .fi
 .SH "SEE ALSO"
 .BR ccol_dynamic_queue_create (3)

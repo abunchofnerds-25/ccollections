@@ -1,6 +1,6 @@
 .TH CBMAP_GET_ELEM_REF 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-cbmap_get_elem_ref \- get reference to value by key
+cbmap_get_elem_ref \- get the location and the size of the value of a key
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -9,59 +9,87 @@ C Collections (libccollections, \-lccollections)
 
 ccol_retval_t cbmap_get_elem_ref(cbmap cbm,
                                   const cmap_pair *key_pair,
-                                  const cmap_pair **val_pair);
+                                  cmap_pair *val_pair);
 .fi
 .SH DESCRIPTION
 .nf
-Gets a reference to the value of the given key. The reference points into
-the internal storage, and the caller can read the value through it and
-also change the bytes of the value in place.
+Finds the value of the given key and fills the caller's cmap_pair with its
+location and size: val_pair->ptr points at the stored value bytes inside
+the map and val_pair->size is the size of the stored value. The caller can
+read the value through val_pair->ptr and change its bytes in place, within
+val_pair->size.
 
-The out-parameter is a const cmap_pair **, so the caller must declare its
-own variable as const cmap_pair *; the address of a plain cmap_pair * does
-not compile.
+The cmap_pair belongs to the caller and the map keeps no reference to it.
+Changing val_pair->ptr or val_pair->size changes only that copy, never the
+stored value; to replace a value, use cbmap_insert_elem(3).
 .fi
 .SH PARAMETERS
 .nf
 cbm        BST map to search
 key_pair   Key to look up
-val_pair   Address of a const cmap_pair * that receives the reference
+val_pair   A cmap_pair of the caller that the function fills
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success        - The function found the key, and *val_pair points
-                      to the value
+ccol_success        - The key was found; val_pair->ptr points at the
+                      value and val_pair->size is its size
 ccol_key_not_found  - The key is not in the map
 ccol_invalid_args   - key_pair or val_pair is NULL, key_pair carries a
-                      NULL ptr with a non-zero size, or the size of
-                      key_pair does not match the size of a fixed-width
-                      key type (see cbmap_create_full(3))
+                      NULL ptr with a non-zero size, the size of
+                      key_pair doesn't match the size of a fixed-width
+                      key type (see cbmap_create_full(3)), or the map
+                      has ccol_string keys and the size of key_pair
+                      is 0
+On every failure, when val_pair is not NULL, the function sets
+val_pair->ptr to NULL and val_pair->size to 0.
 .fi
 .SH NOTES
 .nf
-The ptr of a key_pair needs no particular alignment, because the
-comparison reads the key bytes with memcpy and never through a pointer
-cast to the key type. A caller can therefore point key_pair->ptr straight
-at key bytes that sit at an arbitrary offset inside a larger buffer, such
-as a field sliced out of a packed network frame or a memory-mapped
-record, without copying them into an aligned local first.
-The returned cmap_pair is the accessor of the map for that element: it
-describes the value and is not part of the value. Its target is
-const-qualified, so an assignment to val_pair->ptr or to val_pair->size
-is a compile error. The caller can read through val_pair->ptr and write
-to the bytes that it points at, within val_pair->size. The pointer and
-the size describe one another, and the map cannot own a pointer that it
-did not allocate. To replace a value, use cbmap_insert_elem(3).
-O(log n) complexity
-The reference stays valid until the next insert or delete
-The function asserts if cbm is NULL
-The function reports a NULL key_pair or a NULL val_pair as
-ccol_invalid_args, which matches chmap_get_elem_ref(3)
-A key_pair whose ptr is NULL and whose size is not zero promises bytes
-that it has no storage for, so the function reports it as
-ccol_invalid_args too
-A key_pair of size zero is correct, with a ptr or without one, and looks
-up the empty key
+Since the comparison reads key bytes with memcpy and never through a
+pointer cast to the key type, the ptr of a key_pair can have any
+alignment. You can point key_pair->ptr directly at key bytes at an
+arbitrary offset in a larger buffer, for example a field sliced out of a
+packed network frame or a memory-mapped record, without copying them into
+an aligned local.
+
+Don't free val_pair->ptr; the map owns the value bytes.
+
+The lookup is O(log n). val_pair->ptr stays valid until the next insert or
+delete. A lookup never invalidates it, so you can hold results for
+different keys at the same time, each in its own cmap_pair.
+
+The function asserts if cbm is NULL. A NULL key_pair or val_pair is
+reported as ccol_invalid_args, as chmap_get_elem_ref(3) does, and so is a
+key_pair whose ptr is NULL while its size is not zero, because it promises
+bytes that it has no storage for.
+
+On a map with ccol_other_types keys a key_pair of size zero is valid, with
+or without a ptr, and looks up the empty key.
+.fi
+.SH EXAMPLES
+.nf
+#include <ccollections/cbstmap.h>
+#include <stdio.h>
+
+int main(void) {
+  cbmap m = cbmap_create(ccol_int, NULL);
+  if (!m) return 1;
+
+  int key = 7;
+  long value = 70;
+  cmap_pair kp = {.ptr = &key, .size = sizeof(key)};
+  cmap_pair vp = {.ptr = &value, .size = sizeof(value)};
+  cbmap_insert_elem(m, &kp, &vp);
+
+  cmap_pair found;
+  if (cbmap_get_elem_ref(m, &kp, &found) == ccol_success) {
+    *(long *)found.ptr += 1;  /* change the stored value in place */
+    printf("%ld (%zu bytes)\en", *(const long *)found.ptr, found.size);
+  }
+
+  cbmap_destroy(m);
+  return 0;
+}
 .fi
 .SH "SEE ALSO"
 .BR cbmap_get (3),

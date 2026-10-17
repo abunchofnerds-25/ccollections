@@ -1,15 +1,15 @@
 # Benchmark results
 
-This file holds two recorded runs of `bench/`, kept here so that the figures
-quoted in this repository name the machine that produced them. They describe
-that machine and nothing more general. [bench/README.md](README.md) explains
-how to take your own figures and how large a difference must be before you can
+This file keeps two recorded runs of `bench/`, so that the figures quoted
+in this repository name the machine they came from. They describe that
+machine and nothing more general. [bench/README.md](README.md) explains how
+to take your own figures and how big a difference has to be before you can
 believe it.
 
-The two full runs were taken ninety seconds apart on a machine that was running
-nothing else, and this file reports both runs for every comparison, because a
-single column would hide how much of each figure comes from the hardware rather
-than from the code.
+The two full runs were taken ninety seconds apart on a machine that was
+running nothing else. This file reports both runs for every comparison,
+because a single column would hide how much of each figure comes from the
+hardware and how much from the code.
 
 --------------------------------------------------------------------------
 
@@ -30,28 +30,28 @@ than from the code.
 
 Comparison libraries: uthash 2.3.0, GLib 2.84.4, Jansson 2.14, libyaml 0.2.5.
 
-The harness pinned each worker to one logical CPU per physical core, taking
-whole cores before sibling threads and using only the performance cores, so no
-worker ran on an efficiency core. Six physical performance cores carry twelve
-threads, which means a case that asks for more than six workers puts two
-workers on some pairs of sibling threads: each four-thread case has cores to
-itself, while the eight-thread and twelve-thread cases share cores. Threads
-that a case starts for itself, such as the workers of a thread pool or the
-writer thread of an asynchronous logger, may run on any of the performance
-cores.
+The harness pinned each worker to one logical CPU per physical core. It
+took whole cores before sibling threads and only used the performance cores,
+so no worker ran on an efficiency core. Six physical performance cores carry
+twelve threads, so a case that asks for more than six workers puts two
+workers on some pairs of sibling threads: each four-thread case has its
+cores to itself, while the eight-thread and twelve-thread cases share cores.
+Threads that a case starts for itself, like the workers of a thread pool or
+the writer thread of an asynchronous logger, may run on any of the
+performance cores.
 
 The package was at 60 degrees Celsius when the first run started and at 82
-degrees when it ended; the second run started at 48 degrees and ended at 78.
-Heat is one reason why a figure moves between two runs, but it does not explain
-the largest movements here: of the five rows that move more than 10 percent,
-three were slower in the second run and two were faster.
+degrees when it ended, and the second run went from 48 degrees to 78. Heat is
+one reason why a figure moves between two runs, but it doesn't explain the
+largest movements here, because of the five rows that move more than 10
+percent, three were slower in the second run and two were faster.
 
 --------------------------------------------------------------------------
 
 ## Against other libraries
 
-A number below 1.00 means that this library took less time. The table shows
-both runs, and where the two runs disagree, the disagreement is the result.
+A number below 1.00 means that this library took less time. The table
+shows both runs, and where they disagree, the disagreement is the result.
 Read the text below the table before you take any row as a comparison of two
 equal things.
 
@@ -81,106 +81,111 @@ equal things.
 | cjson | `serialize_document` | 132,338 ns | 239,474 ns (jansson) | **0.55x** | **0.54x** |
 | cyaml | `parse_document` | 709,862 ns | 831,864 ns (libyaml) | **0.85x** | **0.88x** |
 
-Every ratio is below 1.00 in both runs, with two exceptions. The `cbstmap`
-insert against `GTree` reads 1.06 and 1.04, while its lookup reads 0.98 and
-0.96. `circular_queue_roundtrip_4t` reads 0.88 in run 1 and 1.28 in run 2
-because this library's arm moved 32 percent between the two runs, so that row
-shows no difference larger than that movement. `alloc_free_64b_4t` reads 0.95
-and 0.65 for the opposite reason: its `malloc` arm moved 40 percent, more than
-any other row.
+Every ratio is below 1.00 in both runs except two. The `cbstmap` insert
+against `GTree` reads 1.06 and 1.04, while its lookup reads 0.98 and 0.96.
+`circular_queue_roundtrip_4t` reads 0.88 in run 1 and 1.28 in run 2 because
+this library's arm moved 32 percent between the two runs, so that row shows
+no difference bigger than that movement. `alloc_free_64b_4t` reads 0.95 and
+0.65 for the opposite reason, since its `malloc` arm moved 40 percent, more
+than any other row.
 
 --------------------------------------------------------------------------
 
 ## What the comparison rows do and do not compare
 
-A row in brackets is another library doing the nearest equivalent thing, not the identical thing. Where the two sides really differ, this list
-names the difference without correcting it, because a correction would measure
-something that neither library does. The differences do not all point the same
-way: the first two below cost this library time that it would not otherwise
-spend, and the last two save it time that the other side spends.
+A row in brackets is another library doing the nearest equivalent thing,
+which isn't always the identical thing. Where the two sides really differ,
+this list names the difference and doesn't correct for it, because a
+correction would measure something that neither library does. The
+differences don't all point the same way: the first two below cost this
+library time it wouldn't spend otherwise, and the last two save it time that
+the other side spends.
 
-The allocation counts below come from a counting allocator that wraps `malloc`,
-`calloc`, `realloc` and `free` and counts only inside the body that the harness
-times, using the same 100000 keys that the benchmark draws (99998 of them
-distinct).
+The allocation counts below come from a counting allocator that wraps
+`malloc`, `calloc`, `realloc` and `free` and only counts inside the body that
+the harness times, with the same 100000 keys that the benchmark draws (99998
+of them distinct).
 
-- `GHashTable` and `GTree` store the benchmark's keys and values AS POINTERS,
-  and the caller keeps ownership of them, whereas this library copies both into
-  its own storage. Those rows therefore charge this library for a copy that the
-  other side does not make. On the tree rows, node allocation is NOT part of
-  that difference: over 100000 inserts, `GTree` allocates one node per distinct
-  key, 99998 in all, and `cbstmap` allocates the same number, so the two differ
-  by the copy alone. `GHashTable` is the one that allocates almost nothing per
-  entry: 15 allocations and 42 reallocations over the same inserts.
-- The uthash rows allocate their entry nodes once, in the untimed setup. On the
-  integer-key rows this costs neither side anything per entry: over the same
-  100000 inserts, `chashmap` makes 14 allocations and uthash makes 13, all of
-  them from table growth inside the timed loop rather than from per-entry work.
-  On the string-key rows the difference is real. A string key selects the
-  separate chaining backend, which allocates one chain node per new key inside
-  the clock (100005 allocations over 100000 inserts, or 1.00 per insert), while
-  uthash makes 13 on the same row, so those rows charge this library for an
-  allocation that uthash does not pay.
-- `GAsyncQueue` is a linked queue that allocates one node per push, measured at
-  one allocation and one free per round trip. The harness reports it against
-  `circular_queue_roundtrip`, a preallocated ring that allocates nothing at
-  all, measured at zero allocations over 100000 round trips.
+- `GHashTable` and `GTree` store the benchmark's keys and values AS
+  POINTERS and the caller keeps ownership of them, while this library copies
+  both into its own storage, so those rows charge this library for a copy
+  the other side doesn't make. On the tree rows node allocation is NOT part
+  of that difference. Over 100000 inserts `GTree` allocates one node per
+  distinct key, 99998 in all, and `cbstmap` allocates the same number, so
+  the two only differ by the copy. `GHashTable` is the one that allocates
+  almost nothing per entry, 15 allocations and 42 reallocations over the
+  same inserts.
+- The uthash rows allocate their entry nodes once, in the untimed setup. On
+  the integer-key rows that costs neither side anything per entry: over the
+  same 100000 inserts `chashmap` makes 14 allocations and uthash makes 13,
+  all of them from table growth inside the timed loop and none from
+  per-entry work. On the string-key rows the difference is real. A string
+  key selects the separate chaining backend, which allocates one chain node
+  per new key inside the clock (100005 allocations over 100000 inserts, or
+  1.00 per insert), while uthash makes 13 on the same row, so those rows
+  charge this library for an allocation that uthash doesn't pay.
+- `GAsyncQueue` is a linked queue that allocates one node per push,
+  measured at one allocation and one free per round trip. The harness
+  reports it against `circular_queue_roundtrip`, a preallocated ring that
+  allocates nothing at all (zero allocations measured over 100000 round
+  trips).
 - The `[malloc]` rows for `cmempool` get their memory inside the timed loop,
-  while the pool allocates its backing block in the setup, so the pool's pages
-  fault in outside the clock and malloc's pages fault in inside it.
+  while the pool allocates its backing block in the setup, so the pool's
+  pages fault in outside the clock and malloc's pages fault in inside it.
 
-Two comparisons are like for like: `cjson` against jansson, and `cyaml` against
-libyaml. In both, each side parses the same bytes into a DOM of its own and owns
-what it builds. The jansson serialize row also sets jansson's real number
-precision to the same 15 significant digits that `cjson` uses, so both sides
-write the same 26018 bytes for the benchmark document. With its default of 17
-digits, jansson writes 28228 bytes, about 8 percent more, and the cost of a
-serializer follows how much it writes.
+Two comparisons are like for like, `cjson` against jansson and `cyaml`
+against libyaml. In both, each side parses the same bytes into a DOM of its
+own and owns what it builds. The jansson serialize row also sets jansson's
+real number precision to the same 15 significant digits that `cjson` uses,
+so both sides write the same 26018 bytes for the benchmark document. With
+its default of 17 digits jansson writes 28228 bytes, about 8 percent more,
+and the cost of a serializer follows how much it writes.
 
 --------------------------------------------------------------------------
 
 ## How much of this is the hardware
 
-The harness measured every case above twice, in two whole runs ninety seconds
-apart, with nothing else on the machine. "Movement" below is the difference
-between the two runs of a case as a percentage of the smaller of the two, so
-every figure in this section can be recomputed from the table under "Every
-case". That table has 134 rows, counting the comparison arms. Across all of
-them, the movement between the two runs has a median of 1.2 percent, a 75th
-percentile of 2.8 percent, a 90th percentile of 5.7 percent and a maximum of
-40.4 percent, and two rows are above 30 percent.
+The harness measured every case above twice, in two whole runs ninety
+seconds apart, with nothing else on the machine. "Movement" below is the
+difference between the two runs of a case as a percentage of the smaller of
+the two, so you can recompute every figure in this section from the table
+under "Every case". That table has 134 rows, counting the comparison arms.
+Across all of them the movement between the two runs has a median of 1.2
+percent, a 75th percentile of 2.8 percent, a 90th percentile of 5.7 percent
+and a maximum of 40.4 percent, and two rows are above 30 percent.
 
-A difference smaller than the movement of its case is not a difference. Five
-rows move more than 10 percent: four of them run with four or more threads,
-and the fifth, `clogger/write_logfmt_async_caller_side` at 19.4 percent, hands
-each record to a writer thread of its own. No other row moves more than 6.2
-percent. The largest movement is the `malloc` arm of
+A difference smaller than the movement of its case isn't a difference. Five
+rows move more than 10 percent. Four of them run with four or more threads,
+and the fifth, `clogger/write_logfmt_async_caller_side` at 19.4 percent,
+hands each record to a writer thread of its own. No other row moves more
+than 6.2 percent. The largest movement is the `malloc` arm of
 `cmempool/alloc_free_64b_4t`, at 2.13 ns in run 1 and 2.99 ns in run 2,
-followed by `cthreadcomm/circular_queue_roundtrip_4t` at 31.6 percent and its
-8-thread case at 16.1 percent. A case ends when its slowest worker ends, so its
-figure belongs to whichever worker got the smallest share of the package power
-budget that the whole run competes for; above six workers, it also belongs to
-whichever pair of workers shares the execution resources of one core.
+then `cthreadcomm/circular_queue_roundtrip_4t` at 31.6 percent and its
+8-thread case at 16.1 percent. A case ends when its slowest worker ends, so
+its figure belongs to whichever worker got the smallest share of the package
+power budget that the whole run competes for, and above six workers it also
+belongs to whichever pair of workers shares the execution resources of one
+core.
 
-Movement is not the only way a case can be unsteady, and it is not always the
-larger of the two numbers. The `spread` column of the table below goes above
-30 percent on five cases, yet the two runs of every one of them agree within 4
-percent: `clogger/suppressed_below_level_12t` has a spread of 68.0 percent
-against a movement of 3.8 percent, `cvector/push_int_growing_12t` has 51.6
-against 0.8, `cstring/append_8_bytes_12t` has 42.5 against 0.6,
-`cvector/access_random` has 33.3 against 1.7, and
+Movement isn't the only way a case can be unsteady, and it isn't always the
+bigger of the two numbers. The `spread` column of the table below goes above
+30 percent on five cases, and yet the two runs of every one of them agree
+within 4 percent: `clogger/suppressed_below_level_12t` has a spread of 68.0
+percent against a movement of 3.8 percent, `cvector/push_int_growing_12t`
+has 51.6 against 0.8, `cstring/append_8_bytes_12t` has 42.5 against 0.6,
+`cvector/access_random` has 33.3 against 1.7 and
 `cmempool/alloc_free_64b_12t` has 32.1 against 2.2. A case whose two runs
 agree can still land anywhere inside its spread on a third run, so a
-difference must be larger than the larger of the two columns, not merely
-larger than the movement.
+difference has to be bigger than the larger of the two columns, not just
+bigger than the movement.
 
 --------------------------------------------------------------------------
 
 ## Every case
 
-This table holds both runs, in the order in which the harness reports them.
-`spread` is the p90-to-p10 sample range of run 1 as a percentage of the median
-of run 1.
+This table has both runs, in the order the harness reports them. `spread`
+is the p90-to-p10 sample range of run 1 as a percentage of the median of
+run 1.
 
 | group | case | run 1 ns | run 2 ns | spread | rate (run 1) |
 |---|---|---|---|---|---|

@@ -1,6 +1,6 @@
 .TH CSTR_RESERVE 3 "2026-09-28" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cstr_reserve \- reserve capacity, and call ccol_fatal_err() on failure
+cstr_reserve \- reserve capacity, and call _ccol_fatal_err() on failure
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -11,8 +11,8 @@ cstr_reserve(s, cap);
 .fi
 .SH DESCRIPTION
 .nf
-This macro calls cstring_reserve() and then calls ccol_fatal_err() if
-cstring_reserve() returns false.
+This macro calls cstring_reserve(), and when that call returns false it
+calls _ccol_fatal_err().
 .fi
 .SH PARAMETERS
 .nf
@@ -22,8 +22,8 @@ cap   Minimum number of bytes to reserve (with the null terminator)
 .SH NOTES
 .nf
 The macro evaluates cap exactly once, so the failure message reports the
-capacity that the call used
-Call cstring_reserve() directly when you want to handle an error yourself
+capacity that the call really used.
+If you want to handle an error yourself, call cstring_reserve() directly.
 .fi
 .SH "SEE ALSO"
 .BR cstring_reserve (3)

@@ -11,36 +11,34 @@ uint64_t ccol_event_loop_reg_generation(ccol_event_loop loop, ccol_event_reg reg
 .fi
 .SH DESCRIPTION
 .nf
-This function returns a value that only grows and that is unique
-across one loop. reg belongs to an fd, or to the bridge of a queue or
-of a ccol_channel, and the library mints the value one time, when it
-first registers that fd, on the new-entry path of
-ccol_event_loop_add(). Every registration on that same fd shares the
-value for as long as the fd lives. This includes a call to
-ccol_event_loop_modify(), because a flip of the direction keeps the
-same fd and the same connection below it, and it includes a read
-registration and a write registration on the same fd, which share one
-generation because they stand for one logical connection.
+Returns a value that only grows and is unique within one loop. reg
+belongs to an fd, or to the bridge of a queue or a ccol_channel, and the
+value is minted once, when ccol_event_loop_add() first registers that
+fd and creates its entry. Every registration on that fd shares the
+value for as long as the fd lives. That includes ccol_event_loop_modify()
+calls, since flipping the direction keeps the same fd and the same
+connection behind it, and it includes a read and a write registration
+on the same fd, which share one generation because they stand for one
+logical connection.
 
-This value exists for the defensive bookkeeping of a caller across the
-reuse of an fd. A caller that holds a connection object across several
-asynchronous steps can stamp that object with the generation that it
-reads right after ccol_event_loop_add() returns, and later compare
-that stamp with a fresh read. The comparison shows whether the caller
-reasons about the same logical connection, or whether something closed
-the fd number and an unrelated new connection has taken it.
+The value is for a caller's own defensive bookkeeping when fd numbers
+get reused. A caller that keeps a connection object across several
+asynchronous steps can stamp it with the generation read right after
+ccol_event_loop_add() returns and compare that stamp with a fresh read
+later on. A mismatch means that the fd number was closed and an
+unrelated new connection has taken it, not the logical connection the
+caller had in mind.
 
-Basic correctness does not need the generation: the dispatch path of
-ccol_event_loop always checks that a registration is live before it
-calls any callback, whether or not a caller ever calls this function.
-With more than one reactor thread, the single poller thread collects
-readiness, and a separate dispatch worker thread runs the callback
-after that. A registration can disappear between the collect step and
-the process step of one batch, because something removes it or a
-brand new registration reuses its fd; the loop then safely skips it at
-dispatch time, never dispatches it wrongly, and never causes a
-use-after-free. The return value of this function is only for the
-bookkeeping of the application, on top of that guarantee.
+Basic correctness doesn't depend on the generation. The dispatch path
+always checks that a registration is live before it calls a callback,
+whether or not anybody calls this function. With more than one reactor
+thread, the single poller thread collects readiness and a separate
+dispatch worker runs the callback afterwards, so a registration can
+disappear between those two steps of a batch, because it was removed or
+a brand new registration reused its fd. The loop then skips it safely
+at dispatch time, never dispatches it wrongly and never causes a
+use-after-free. The generation only adds application bookkeeping on
+top of that guarantee.
 .fi
 .SH PARAMETERS
 .nf
@@ -49,28 +47,25 @@ reg   Registration to query.
 .fi
 .SH RETURN VALUE
 .nf
-Returns the generation value.
-Returns 0 when reg is CCOL_EVENT_REG_INVALID, or when reg fails to
-resolve for another reason, such as an earlier removal, and it also
-returns 0 when loop is CCOL_EVENT_LOOP_INVALID, or a handle that is
-stale or that something already destroyed. 0 is never a valid
-generation for a real registration, because the counter starts at 1.
+The generation value. 0 when reg is CCOL_EVENT_REG_INVALID or fails
+to resolve for another reason, such as an earlier removal, and also
+when loop is CCOL_EVENT_LOOP_INVALID, a stale handle, or a handle that
+has already been destroyed. A real registration never has generation 0,
+because the counter starts at 1.
 .fi
 .SH NOTES
 .nf
-Safe to call at any time on any ccol_event_reg value that
-ccol_event_loop_add ever returned for this loop, including a value
-that something already removed, either earlier on this thread or on
-another thread that races this call. The library resolves reg against
-the registration table of loop before it dereferences anything, so it
-always finds a handle that is stale, or that something already
-removed, and reports generation 0; it never causes a use-after-free.
+You can call it at any time with any ccol_event_reg value that
+ccol_event_loop_add ever returned for this loop, even one that has been
+removed, earlier on this thread or by another thread racing with this
+call. reg is resolved against loop's registration table before anything
+is dereferenced, so a stale or removed handle is always caught and
+reported as generation 0, never as a use-after-free.
 .fi
 .SH THREAD SAFETY
 .nf
-Safe to call from any thread, at any time, including at the same time
-as a dispatch, as ccol_event_loop_modify(), or as
-ccol_event_loop_remove().
+Safe to call from any thread at any time, including while a dispatch,
+a ccol_event_loop_modify() or a ccol_event_loop_remove() runs.
 .fi
 .SH EXAMPLES
 .nf

@@ -13,46 +13,47 @@ void chttpsvr_stop(chttpsvr srv);
 .nf
 Removes the listener socket that chttpsvr_start registered from the
 shared reactor and closes it.  For a Unix domain socket listener it
-then removes the socket file, but only while its path still names the
-socket that this server created.  It returns at once; the shared
-reactor and every other registered listener keep running unaffected.
+then removes the socket file, but only while the path still names the
+socket that this server created.  The call returns at once, and the
+shared reactor and every other registered listener keep running.
 
-It is idempotent: calling chttpsvr_stop on a server that never
-started, or on one that has already stopped, does nothing.
+Calling it again changes nothing: on a server that never started, or
+that has already stopped, chttpsvr_stop does nothing.
 
-It silently does nothing when srv is CHTTPSVR_INVALID or a stale
-handle that has already been destroyed.
+It also does nothing, without any error, when srv is CHTTPSVR_INVALID
+or a stale handle of a server that has already been destroyed.
 
-Connections that the server accepted before this call keep running;
-the server does not close them.  A request in progress continues until
-it completes, and a keep-alive connection continues to be served,
-request after request, for as long as the client keeps it open, until
-the idle timeout closes it as it would on a running server.  This
-holds even across a later restart with chttpsvr_start on the same
-handle, which then serves such a connection under its new
-configuration.  chttpsvr_destroy waits for such in-flight requests to
-drain completely, and closes every remaining idle connection, before
-it frees the resources of the server.
+Connections that the server accepted before this call stay open, and
+the server does not close them.  A request in progress runs until it
+completes, and a keep-alive connection is served request after
+request for as long as the client keeps it open, until the idle
+timeout closes it as on a running server.  That is true across a
+later restart of the same handle with chttpsvr_start as well, and the
+restarted server serves such a connection under its new
+configuration.  chttpsvr_destroy waits for these in-flight requests
+to drain completely and closes every idle connection that is left
+before it frees the resources of the server.
 
 It is safe to call this function with CHTTPSVR_INVALID (0).
 
-It can run concurrently with a chttpsvr_start call that restarts the
-same handle on a different thread: rather than racing this call, the
-restart waits for the teardown of the old listener here to finish
-completely and then binds a new one.
+It may run at the same time as a chttpsvr_start that restarts the
+same handle on another thread.  The restart doesn't race this call:
+it waits until the old listener is completely torn down here and then
+binds a new one.
 .fi
 .SH WARNINGS
 .nf
 This function is synchronous and NOT async-signal-safe.  Do not call
-it directly from a signal handler; use chttpsvr_engine_stop() there
-instead.  It takes internal locks that the interrupted thread may
-already hold, for example inside chttpsvr_start() or
-chttpsvr_destroy(), in which case the calling thread deadlocks itself.
-For a signal-driven shutdown hook, use chttpsvr_engine_stop(): only
-that function is documented as async-signal-safe, because it moves
-all of this work off the interrupted thread.
+it from a signal handler; call chttpsvr_engine_stop() there.  It
+takes internal locks that the interrupted thread may already hold,
+for example inside chttpsvr_start() or chttpsvr_destroy(), and the
+calling thread then deadlocks on itself.  For a shutdown hook driven
+by a signal use chttpsvr_engine_stop(), the only function that is
+documented as async-signal-safe, because it moves all of this work
+off the interrupted thread.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_start (3),
+.BR chttpsvr_is_running (3),
 .BR chttpsvr_engine_stop (3),
 .BR chttpsvr_engine_wait (3)

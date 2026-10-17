@@ -11,32 +11,30 @@ ccol_retval_t cvector_push_back(cvec v, const void *new_elem);
 .fi
 .SH DESCRIPTION
 .nf
-Adds a new element to the end of the vector, which doubles its capacity
-by itself when it is full. The function copies the element into the
-vector with an assignment that the library selects from the element
-size.
+Adds a new element at the end of the vector, which doubles its capacity by
+itself when it is full. The element is copied in with an assignment that
+the library picks from the element size.
 .fi
 .SH PARAMETERS
 .nf
 v         Vector to append to
-new_elem  Pointer to element to append (must not be NULL)
+new_elem  Pointer to the element to append (must not be NULL)
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success          - Element successfully appended
+ccol_success          - The element was appended
 ccol_invalid_args     - new_elem is NULL
-ccol_container_full   - Vector has reached ccol_max_elem_count
-ccol_not_enough_memory - Capacity expansion failed
+ccol_container_full   - The vector has reached ccol_max_elem_count
+ccol_not_enough_memory - Growing the capacity failed
 .fi
 .SH NOTES
 .nf
-Amortized O(1) complexity
-The function copies the element into the vector
-The capacity doubles when the vector is full (2x scaling factor)
-Asserts if v is NULL
+Amortized O(1). The element is copied into the vector, and a full vector
+doubles its capacity. Asserts if v is NULL.
+
 new_elem can safely point into the backing buffer of v, for example a
-pointer from cvector_data_ptr(3) or from cvector_at(3); a capacity
-growth that this call starts does not invalidate such a pointer
+pointer from cvector_data_ptr(3) or cvector_at(3); a capacity growth
+started by this call doesn't invalidate it.
 .fi
 .SH "SEE ALSO"
 .BR cvector_pop_back (3),

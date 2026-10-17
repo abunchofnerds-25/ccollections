@@ -1,0 +1,101 @@
+.TH CHTTP 7 "2026-10-14" "c_collections" "C Collections Library - Overview"
+.SH NAME
+chttp \- overview of the HTTP types that chttpclient and chttpserver share
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttp.h>
+.fi
+.SH DESCRIPTION
+.nf
+chttp.h holds the parts that the HTTP client and the HTTP server
+share.  chttpclient.h and chttpserver.h both include it, so you only
+include it yourself when your code needs these types without either
+module.  It gives:
+  - chttp_method_t, the HTTP methods, and chttp_method_str(3), which
+    gives the uppercase name of a method;
+  - the CHTTP_STATUS_* status codes (CHTTP_STATUS(3));
+  - chttp_tls_config_t, the TLS configuration of both modules, and
+    CHTTP_TLS_DEFAULT(3);
+  - chttp_request_body_t, the body of a client request, with
+    CHTTP_NO_BODY(3), CHTTP_BODY(3), CHTTP_JSON_BODY(3),
+    CHTTP_TEXT_BODY(3) and CHTTP_FORM_BODY(3);
+  - base64 helpers (chttp_base64_encode_mp(3),
+    chttp_base64_decode_mp(3)) and the RFC 7617 Basic auth helper
+    chttp_basic_auth_mp(3).
+.fi
+.SS "Methods"
+.nf
+chttp_method_t names the seven methods GET, POST, PUT, DELETE, PATCH,
+HEAD and OPTIONS, plus CHTTP_ANY. CHTTP_ANY is a wildcard for server
+routes and matches any of the seven. It is never the method of a real
+request, and chttp_request_create_mp(3) refuses it for a client
+request.
+.fi
+.SS "TLS configuration"
+.nf
+A chttp_tls_config_t whose bytes are all zero is the strict
+configuration, and CHTTP_TLS_DEFAULT(3) is that same value with a
+name. Every field that weakens a check is named for what it gives up
+(insecure_skip_verify, insecure_skip_hostname_check,
+client_cert_optional), so a struct that you fill only partly never
+verifies less than you asked for. On a client, the defaults verify the
+server's certificate chain against ca_bundle_path or the system trust
+store, and match the host of the request against that certificate. On
+a server, a ca_bundle_path requires every client to present a
+certificate that verifies against it, unless client_cert_optional is
+set. Each module ignores the fields that only the other one uses.
+
+cert_path, key_path and ca_bundle_path must each name a regular file of
+at most 16 MB. A ca_bundle_path must hold at least one CA certificate.
+When it also holds a certificate revocation list, every certificate of
+the peer's chain below its trust anchor needs a CRL of its issuer in
+the bundle, and that CRL must not be past its next update time.
+.fi
+.SS "Ownership"
+.nf
+A chttp_request_body_t does not own its bytes. chttp_request_create_mp(3)
+copies them, so you can free the source as soon as that call returns.
+
+chttp_base64_encode_mp(3), chttp_base64_decode_mp(3) and
+chttp_basic_auth_mp(3) return a new buffer that the caller owns. Free
+it with the free function of the allocator you passed, or with free(3)
+if you passed NULL. The forms without _mp use malloc(3). All of them
+return NULL when the allocation fails or the input is not valid.
+.fi
+.SS "Strict input"
+.nf
+The decoder refuses malformed input and never tries to repair it. That
+covers an invalid character, padding in the wrong place, nonzero
+padding bits and a length that is not a multiple of 4. The decoded
+bytes can contain NUL bytes, so take their length from out_len and
+never from strlen(3).
+chttp_basic_auth_mp(3) refuses a user name with a colon in it, because
+the receiver splits the decoded text at its first colon. It also
+refuses a user name or a password with a control character in it,
+which RFC 7617 forbids in both.
+.fi
+.SH "THREAD SAFETY"
+.nf
+The functions of chttp.h work only on their arguments and keep no
+state, so any thread can call any of them at any time.
+.fi
+.SH "SEE ALSO"
+.BR chttp_method_str (3),
+.BR CHTTP_STATUS (3),
+.BR CHTTP_TLS_DEFAULT (3),
+.BR CHTTP_NO_BODY (3),
+.BR CHTTP_BODY (3),
+.BR CHTTP_JSON_BODY (3),
+.BR CHTTP_TEXT_BODY (3),
+.BR CHTTP_FORM_BODY (3),
+.BR chttp_base64_encode (3),
+.BR chttp_base64_encode_mp (3),
+.BR chttp_base64_decode (3),
+.BR chttp_base64_decode_mp (3),
+.BR chttp_basic_auth (3),
+.BR chttp_basic_auth_mp (3),
+.BR chttpclient (7),
+.BR chttpserver (7),
+.BR ccollections (7)

@@ -12,45 +12,43 @@ const char *chttpclient_resp_header(const chttpcli_response *resp,
 .fi
 .SH DESCRIPTION
 .nf
-This function gives the value of the response header with the name
-that you give, or NULL if that header is not there. The lookup ignores
-the case of the name: the response stores each header name in
-lowercase, and the function makes your name lowercase before the
-lookup.
+This function returns the value of the named response header, or NULL
+if the response has no such header. The lookup ignores case, because
+the response stores every header name in lowercase and the function
+lowercases your name before it looks it up.
 
-A server can send one header name on several lines. For such a name
-the function gives the combined value that RFC 9110 section 5.3
-defines: every value in the order of the wire, joined with ", ".
-Set-Cookie is the one exception, because RFC 9110 section 5.3 and RFC
-6265 section 3 forbid that combination for it (a cookie value can
-itself hold a comma), so for "set-cookie" the function gives the first
-occurrence. chttpclient_resp_header_count and
-chttpclient_resp_header_at give every occurrence separately. The
-headers map of the response holds the same value for each name.
+A server can send the same header name on several lines. For such a
+name the function returns the combined value that RFC 9110 section 5.3
+defines, which is every value in wire order joined with ", ".
+Set-Cookie is the only exception: RFC 9110 section 5.3 and RFC 6265
+section 3 forbid combining it (a cookie value can hold a comma of its
+own), so for "set-cookie" you get the first occurrence.
+chttpclient_resp_header_count and chttpclient_resp_header_at give you
+each occurrence separately. The response's headers map holds the same
+value for each name as this function returns.
 
-The pointer that the function gives back stays valid until a call to
-chttpclient_resp_free.
+The returned pointer stays valid until chttpclient_resp_free is
+called.
 .fi
 .SH PARAMETERS
 .nf
-resp  The response to query. It can be NULL, and the function then
-      gives NULL.
-name  The header name. It can be NULL, and the function then gives
-      NULL.
+resp  The response to query. It can be NULL, in which case the
+      function returns NULL.
+name  The header name. It can be NULL, in which case the function
+      returns NULL.
 .fi
 .SH RETURN VALUE
 .nf
-A pointer to the value string of the header, or NULL if the function
-does not find that header.
+A pointer to the header's value string, or NULL if the header is not
+there.
 .fi
 .SH NOTES
 .nf
-The map behind this function comes from the header block of the
-response alone. A chunked response body can carry trailer fields (RFC
-7230 4.1.2), which the client parses and validates, but they are not
-response headers. A trailer field with any name therefore reads as
-absent here, and such a field cannot replace a header that the server
-really sent.
+The map behind this function is built from the response's header block
+only. A chunked body can carry trailer fields (RFC 7230 4.1.2), which
+the client parses and validates, but those are not response headers.
+So a trailer field of any name reads as absent here, and it can never
+replace a header that the server actually sent.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_resp_header_count (3),

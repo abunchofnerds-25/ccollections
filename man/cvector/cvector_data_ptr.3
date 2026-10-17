@@ -11,22 +11,22 @@ void *cvector_data_ptr(cvec v);
 .fi
 .SH DESCRIPTION
 .nf
-Returns a pointer to the internal contiguous data array. Useful for
-passing vector data to C APIs that expect arrays.
+Returns a pointer to the vector's internal contiguous data array, which is
+handy for passing the data to C APIs that expect an array.
 .fi
 .SH PARAMETERS
 .nf
-v    Vector to get data pointer from
+v    Vector to get the data pointer from
 .fi
 .SH RETURN VALUE
 .nf
-Returns pointer to internal data array
+A pointer to the internal data array.
 .fi
 .SH NOTES
 .nf
-Pointer becomes invalid after vector is resized
-Pointer points to capacity elements, but only elem_count are valid
-Asserts if v is NULL
+The pointer becomes invalid once the vector is resized. It points at
+capacity elements, but only elem_count of them are valid. The function
+asserts if v is NULL.
 .fi
 .SH "SEE ALSO"
 .BR cvec_data_ptr (3),

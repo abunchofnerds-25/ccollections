@@ -11,14 +11,13 @@ chttpcli_declare_scoped(name)
 .fi
 .SH DESCRIPTION
 .nf
-This macro declares a chttpcli variable called name and uses the
-cleanup attribute of GCC to destroy it automatically: when name goes
-out of the scope, whatever path leaves the scope, the library destroys
-the handle in the same way as chttpclient_destroy.
+This macro declares a chttpcli variable called name with the GCC
+cleanup attribute, so the handle is destroyed automatically when name
+goes out of scope, whichever path leaves the scope. The cleanup
+destroys it the same way chttpclient_destroy does.
 
-The macro sets the variable to CHTTPCLI_INVALID. To stop the cleanup
-call, set the variable to CHTTPCLI_INVALID again before the exit of the
-scope.
+The variable starts as CHTTPCLI_INVALID. To skip the cleanup call, set
+it back to CHTTPCLI_INVALID before the scope ends.
 .fi
 .SH "SEE ALSO"
 .BR chttpcli_construct_scoped (3),

@@ -11,23 +11,24 @@ clru_init(name, capacity, getter, setter, evict_cb);
 .fi
 .SH DESCRIPTION
 .nf
-Calls clrucache_create_full() and assigns the result to name, taking
-the key type and the value type from the companion variables that
-clru_declare() creates. It calls ccol_fatal_err() when the creation
+Calls clrucache_create_full() and assigns the result to name, with the
+key type and the value type taken from the companion variables that
+clru_declare() created. It calls _ccol_fatal_err() when the creation
 fails.
 .fi
 .SH PARAMETERS
 .nf
 name       Cache variable. Declare it with clru_declare or
            clru_declare_scoped first
-capacity   The maximum number of live entries before eviction
+capacity   The total number of live entries; see
+           clrucache_create_full(3). It must be greater than 0
 getter     Remote getter callback, or NULL
 setter     Remote setter callback, or NULL
 evict_cb   Eviction callback, or NULL
 .fi
 .SH NOTES
 .nf
-This macro calls ccol_fatal_err() when an allocation fails, so call
+The macro calls _ccol_fatal_err() when an allocation fails, so call
 clrucache_create_full() directly when you must handle an error
 yourself.
 .fi

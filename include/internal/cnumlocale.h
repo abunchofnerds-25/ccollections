@@ -30,38 +30,45 @@ SOFTWARE.
  *        locale, for number conversions that must not follow LC_NUMERIC.
  *
  * JSON (RFC 8259 sec. 6) and YAML 1.2 (the core schema) both write the
- * decimal point of a number as the ASCII '.', whatever the locale of the host
- * process is, while strtod() and the "%g" conversions of the printf family
+ * decimal point of a number as an ASCII '.' whatever the locale of the host
+ * process is, but strtod() and the "%g" conversions of the printf family
  * follow the radix character of the active LC_NUMERIC category (see strtod(3)
- * and printf(3)). So when a process calls setlocale() or uselocale() and
- * moves to a locale with ',' as its decimal point, strtod() stops at the '.'
- * of "1.5" without reporting an error, and "%g" writes "0,25", which no
- * parser of either format reads as a number.
+ * and printf(3)). So once a process calls setlocale() or uselocale() and
+ * moves to a locale whose decimal point is ',', strtod() stops at the '.' of
+ * "1.5" without reporting any error, and "%g" writes "0,25", which no parser
+ * of either format reads as a number.
  *
  * ccol_c_locale_enter() moves the calling thread to the "C" locale with
- * uselocale(), and ccol_c_locale_leave() puts back the locale that was
- * active immediately before. Unlike setlocale(), uselocale() changes the
- * locale of one thread only and never changes what another thread sees. The
- * scope nests: each enter saves its own predecessor, so a recursive or
- * nested scope restores correctly.
+ * uselocale(), and ccol_c_locale_leave() puts back whatever locale was active
+ * just before. Unlike setlocale(), uselocale() changes the locale of one
+ * thread only and never what another thread sees. Scopes nest, since each
+ * enter saves its own predecessor, so a recursive or nested scope restores
+ * correctly.
  *
- * The "C" locale_t object is created once, lazily, under a ccol_once_flag_t.
- * Because the state below has internal linkage, every translation unit that
- * includes this header holds its own flag and its own object, which keeps
- * the helper out of the exported symbol set and out of the static archive
- * namespace. A destructor frees the object at the exit of the process. It
- * clears the published pointer first, so an enter that runs after it (from
- * the destructor of another shared object, for example) finds no object and
- * leaves the locale of the thread alone instead of reading freed memory.
- * glibc and musl both give back their built-in, static "C" object for this
- * request, and freelocale() on it frees nothing.
+ * We create the "C" locale_t object once, lazily, under a _ccol_once_flag_t.
+ * The state below has internal linkage, so every translation unit that
+ * includes this header gets its own flag and its own object, and the helper
+ * stays out of the exported symbol set and out of the namespace of the static
+ * archive. A destructor frees the object at process exit. It clears the
+ * published pointer first, so an enter that runs after it (from the
+ * destructor of another shared object, for example) finds no object and
+ * leaves the thread's locale alone instead of reading freed memory.
+ * glibc and musl both hand back their built-in, static "C" object for this
+ * request, and freelocale() on it frees nothing. Every other C library
+ * allocates the object, and another thread can still be inside a scope when
+ * the process exits, so there every scope counts itself in a users count and
+ * the destructor frees the object only when that count is zero. The increment
+ * of an enter comes before its load of the pointer and the destructor's clear
+ * comes before its load of the count, all sequentially consistent, so either
+ * the enter sees no object or the destructor sees the user. An object that a
+ * scope still uses at exit stays allocated.
  *
- * When the "C" object cannot be created at all (a broken locale installation
- * in the C library), enter reports that it switched nothing, and the
- * conversions run under whatever locale is already active.
+ * If the "C" object can't be created at all (a broken locale installation in
+ * the C library), enter reports that it switched nothing and the conversions
+ * run under whatever locale is already active.
  *
- * This header is internal: it carries no visibility block, and make install
- * does not install it.
+ * The header is internal, so it has no visibility block and make install
+ * leaves it out.
  */
 
 #ifndef CCOL_CNUMLOCALE_H
@@ -83,8 +90,16 @@ typedef struct {
   bool switched;
 } ccol_c_locale_scope_t;
 
-static ccol_once_flag_t _ccol_c_locale_once = CCOL_ONCE_INIT;
+static _ccol_once_flag_t _ccol_c_locale_once = _CCOL_ONCE_INIT;
 static _Atomic(locale_t) _ccol_c_locale_obj;
+/* _CCOL_C_LOCALE_COUNT_USERS_FOR_TESTS lets a Linux test build the count
+ * too. */
+#if !defined(__linux__) || defined(_CCOL_C_LOCALE_COUNT_USERS_FOR_TESTS)
+#define _CCOL_C_LOCALE_COUNTS_USERS 1
+static _Atomic size_t _ccol_c_locale_users;
+/* The object that the destructor couldn't free, kept reachable here. */
+static locale_t _ccol_c_locale_kept;
+#endif
 
 static void _ccol_c_locale_init(void) {
   atomic_store_explicit(&_ccol_c_locale_obj,
@@ -93,28 +108,49 @@ static void _ccol_c_locale_init(void) {
 }
 
 __attribute__((destructor)) static void _ccol_c_locale_fini(void) {
+#ifdef _CCOL_C_LOCALE_COUNTS_USERS
+  locale_t loc = atomic_exchange(&_ccol_c_locale_obj, (locale_t)0);
+  if (!loc) return;
+  if (atomic_load(&_ccol_c_locale_users) == 0)
+    freelocale(loc);
+  else
+    _ccol_c_locale_kept = loc;
+#else
   locale_t loc = atomic_exchange_explicit(&_ccol_c_locale_obj, (locale_t)0,
                                           memory_order_acq_rel);
   if (loc) freelocale(loc);
+#endif
 }
 
-/* Move the calling thread to the "C" locale until the matching
+/* Moves the calling thread to the "C" locale until the matching
  * ccol_c_locale_leave(). */
 static inline ccol_c_locale_scope_t ccol_c_locale_enter(void) {
   ccol_c_locale_scope_t scope = {(locale_t)0, false};
-  ccol_call_once(_ccol_c_locale_once, _ccol_c_locale_init);
+  _ccol_call_once(_ccol_c_locale_once, _ccol_c_locale_init);
+#ifdef _CCOL_C_LOCALE_COUNTS_USERS
+  atomic_fetch_add(&_ccol_c_locale_users, 1);
+  locale_t loc = atomic_load(&_ccol_c_locale_obj);
+  if (!loc) {
+    atomic_fetch_sub(&_ccol_c_locale_users, 1);
+    return scope;
+  }
+#else
   locale_t loc =
       atomic_load_explicit(&_ccol_c_locale_obj, memory_order_acquire);
-  if (loc) {
-    scope.prev = uselocale(loc);
-    scope.switched = true;
-  }
+  if (!loc) return scope;
+#endif
+  scope.prev = uselocale(loc);
+  scope.switched = true;
   return scope;
 }
 
-/* Put back the locale that the matching ccol_c_locale_enter() replaced. */
+/* Puts back the locale that the matching ccol_c_locale_enter() replaced. */
 static inline void ccol_c_locale_leave(ccol_c_locale_scope_t scope) {
-  if (scope.switched) uselocale(scope.prev);
+  if (!scope.switched) return;
+  uselocale(scope.prev);
+#ifdef _CCOL_C_LOCALE_COUNTS_USERS
+  atomic_fetch_sub(&_ccol_c_locale_users, 1);
+#endif
 }
 
 #endif /* CCOL_CNUMLOCALE_H */

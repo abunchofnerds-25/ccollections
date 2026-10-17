@@ -1,6 +1,6 @@
 .TH CSTR_APPEND 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cstr_append \- append a C string, and call ccol_fatal_err() on failure
+cstr_append \- append a C string, and call _ccol_fatal_err() on failure
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -11,8 +11,8 @@ cstr_append(s, str);
 .fi
 .SH DESCRIPTION
 .nf
-This macro calls cstring_append() and then calls ccol_fatal_err() if the
-return value is not ccol_success.
+This macro calls cstring_append(), and when that call gives anything
+other than ccol_success it calls _ccol_fatal_err().
 .fi
 .SH PARAMETERS
 .nf
@@ -21,7 +21,7 @@ str   C string to append (must not be NULL)
 .fi
 .SH NOTES
 .nf
-Call cstring_append() directly when you want to handle an error yourself
+If you want to handle an error yourself, call cstring_append() directly.
 .fi
 .SH "SEE ALSO"
 .BR cstring_append (3),

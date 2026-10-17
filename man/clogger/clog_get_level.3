@@ -11,7 +11,8 @@ clog_level_t clog_get_level(clog logger);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the current minimum severity level of the logger.
+Returns the minimum severity level that the logger has at the moment of
+the call.
 .fi
 .SH PARAMETERS
 .nf
@@ -19,15 +20,15 @@ logger  Logger handle.
 .fi
 .SH RETURN VALUE
 .nf
-Current minimum level.
+The current minimum level.
 .fi
 .SH NOTES
 .nf
-Thread-safe.  The minimum level is an atomic value that belongs to each
-logger and is separate from the lock that serialises the writes and
-the rotation for the shared output target, so a read of the level of
-one logger never contends with a write in progress on a sibling logger
-that shares the same target.
+Thread-safe.  Each logger keeps its minimum level in an atomic value of
+its own, apart from the lock that serialises the writes and the rotation
+of the shared output target, so reading the level of one logger never
+contends with a write that a sibling logger on the same target has in
+progress.
 Asserts when logger is CLOG_INVALID, stale or already closed.
 .fi
 .SH "SEE ALSO"

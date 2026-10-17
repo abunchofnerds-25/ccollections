@@ -13,117 +13,117 @@ ccol_retval_t chttpsvr_register_handler(chttpsvr srv, chttp_method_t method,
 .fi
 .SH DESCRIPTION
 .nf
-Registers fn on the root router as the handler for requests that
-match method and pattern.  pattern is made of segments separated by a
-forward slash, and a segment of the form {name} is a named path
+Registers fn on the root router as the handler for the requests that
+match method and pattern.  pattern is a list of segments separated by
+forward slashes, and a segment of the form {name} is a named path
 parameter.
 
-A method of CHTTP_ANY registers a wildcard route that matches any of
-the seven real HTTP methods (CHTTP_GET, CHTTP_POST, CHTTP_PUT,
+With a method of CHTTP_ANY the route is a wildcard that matches any
+of the seven real HTTP methods (CHTTP_GET, CHTTP_POST, CHTTP_PUT,
 CHTTP_DELETE, CHTTP_PATCH, CHTTP_HEAD and CHTTP_OPTIONS) on the given
-pattern; the handler can call chttpsvr_req_method to get the method
-that really arrived.  Registration order sets the priority: a route
-for one method registered before a CHTTP_ANY route on the same
-pattern wins for its own method, and the CHTTP_ANY route catches
-every other one of the seven.
+pattern, and the handler can call chttpsvr_req_method to find out
+which method really arrived.  Registration order sets the priority:
+a route for one method that you register before a CHTTP_ANY route on
+the same pattern wins for its own method, and the CHTTP_ANY route
+catches the other six.
 
-A route registered for CHTTP_GET also serves HEAD requests for the
-same path, as RFC 9110 section 9.3.2 requires.  The handler runs
-exactly as it does for GET, and the server sends the headers of the
-response, including content-length whenever the handler wrote a body,
-without the body.  A route registered explicitly for CHTTP_HEAD or
-for CHTTP_ANY on that same path wins over this fallback, in whichever
-order you register the two, so a path that must answer HEAD
-differently from GET can do so.  A path registered for neither GET
-nor HEAD still answers 405 to a HEAD request.
+A route for CHTTP_GET also serves HEAD requests for the same path, as
+RFC 9110 section 9.3.2 requires.  The handler runs exactly as it does
+for GET, and the server sends the headers of the response without the
+body, content-length included whenever the handler wrote a body.  A
+route registered explicitly for CHTTP_HEAD or for CHTTP_ANY on the
+same path wins over this fallback, whichever of the two you register
+first, so a path that must answer HEAD differently from GET can do
+so.  A path that has a route for neither GET nor HEAD answers 405 to
+a HEAD request.
 
-CHTTP_ANY is a placeholder for registration time alone and is never
-the method of a request that really arrives.  A request whose method
-the server does not recognize at all (a WebDAV verb such as PROPFIND,
-a verb such as TRACE or CONNECT, or a custom verb) never reaches any
-handler, including one registered with CHTTP_ANY: the server rejects
-it with 501 Not Implemented before routing runs, and even before it
-parses the path.  See chttpsvr_req_method(3) for the guarantee that
-this gives a handler.
+CHTTP_ANY exists only for registration and is never the method of a
+request that really arrives.  A request whose method the server does
+not recognize at all (a WebDAV verb such as PROPFIND, a verb such as
+TRACE or CONNECT, or a custom verb) never reaches a handler, one
+registered with CHTTP_ANY included: the server rejects it with 501
+Not Implemented before routing runs, and even before it parses the
+path.  chttpsvr_req_method(3) describes the guarantee that a handler
+gets from this.
 
-pattern must start with '/'; a pattern that does not is rejected at
-once with ccol_invalid_args.
+pattern must start with '/', and a pattern that does not is rejected
+at once with ccol_invalid_args.
 
-The name inside a {name} segment must contain only characters from
+The name inside a {name} segment may contain only characters from
 [A-Za-z0-9_].  A name with any other character, such as a space, a
 hyphen or a dot, is rejected with ccol_invalid_args, because
 chttpsvr_req_param could never look it up.  A pattern that uses the
-same {name} more than once, for example /a/{id}/b/{id}, is also
-rejected with ccol_invalid_args, because nothing could reach the value
-that the second one captures: chttpsvr_req_param always returns the
-FIRST name that matches.
+same {name} more than once, for example /a/{id}/b/{id}, is rejected
+with ccol_invalid_args too, because the value that the second one
+captures could never be reached: chttpsvr_req_param always returns
+the FIRST name that matches.
 
-The values of path segments (literal segments and captured parameters
-alike) are decoded by the path rules of RFC 3986: a percent-encoded
-sequence such as %20 is decoded, but a '+' stays a literal '+'.  This
-matches the decoded path that chttpsvr_req_path returns.  It differs
-from the decoding of a query string, which follows
-application/x-www-form-urlencoded and reads a '+' as a space; that
-convention applies only to chttpsvr_req_query and
-chttpsvr_req_query_one, not to a path parameter.
+The values of path segments, literal segments and captured parameters
+alike, are decoded by the path rules of RFC 3986, so a percent-encoded
+sequence such as %20 is decoded but a '+' stays a literal '+'.  That
+matches the decoded path that chttpsvr_req_path returns.  A query
+string is decoded differently, by the application/x-www-form-urlencoded
+rules where a '+' reads as a space, but that applies only to
+chttpsvr_req_query and chttpsvr_req_query_one and never to a path
+parameter.
 
 A mounted prefix owns every path under it, and the most specific mount
-that owns a path handles the request alone; see
-chttpsvr_subrouter(3).  The routes that this function registers sit on
-the root router, which handles only paths under no mount, so a
-root-level pattern never answers a path under a mount, and never
-skips the middleware of that mount, however broad it is and whenever
-you registered it.  Registration order plays no part in this.  Within
-one router, the server tries the routes in registration order.
+that owns a path handles the request alone; see chttpsvr_subrouter(3).
+The routes that this function registers sit on the root router, which
+handles only the paths under no mount.  So a root-level pattern never
+answers a path under a mount and never skips the middleware of that
+mount, however broad the pattern is and whenever you registered it;
+registration order plays no part in this.  Inside one router the
+server tries the routes in registration order.
 
-The router scans every registered route for a match on the path and
-the method, so you can register more than one method for the same
-path, and every one of them is reachable, whatever the registration
-order.  When at least one route matches the path but none matches the
-method, the server answers 405 with an Allow header, as RFC 9110
-section 15.5.6 requires, listing every method that a route of the
-handling router accepts for the path, in the order GET, HEAD, POST,
-PUT, DELETE, PATCH, OPTIONS; HEAD is in the list wherever a CHTTP_GET
-route serves it.  When no route matches the path, it answers 404.
-For a path under a mount, the owning sub-router answers the 404 or
-the 405, and its middleware runs for it.  A request whose method the
-server does not recognize at all is rejected even earlier, with 501,
-before any route matching runs; see the notes on CHTTP_ANY above.
+The router looks at every registered route for a match on the path
+and the method, so you can register several methods for the same
+path and every one of them is reachable, whatever order you register
+them in.  When at least one route matches the path but none matches
+the method, the server answers 405 with an Allow header, as RFC 9110
+section 15.5.6 requires.  The header lists every method that a route
+of the handling router accepts for the path, in the order GET, HEAD,
+POST, PUT, DELETE, PATCH, OPTIONS, and HEAD is in it wherever a
+CHTTP_GET route serves it.  When no route matches the path, the
+answer is 404.  For a path under a mount, the owning sub-router gives
+the 404 or the 405 and its middleware runs for it.  A request whose
+method the server does not recognize at all is rejected earlier than
+that, with 501, before any route matching runs; see the notes on
+CHTTP_ANY above.
 
-Path matching also checks the percent-encoded sequences: a request
+Path matching checks the percent-encoded sequences as well.  A request
 with an invalid encoding in any path segment does not match the route
 and gets a 404, whatever methods you registered for that pattern.
 The bad segment can be a literal one, for example /bad%ZZusers/{id}
 against /users/{id}, or a captured {name} parameter, for example
 /users/bad%ZZvalue against /users/{id}.  A percent-encoded sequence
-that decodes to a literal NUL byte (%00) also counts as an invalid
-encoding, rather than being decoded and compared as it is.
+that decodes to a NUL byte (%00) counts as an invalid encoding too,
+and is not decoded and compared as it is.
 
 You can register the same pair of method and pattern more than once,
-and each call succeeds and returns ccol_success, but under a
-first-one-wins policy the server only ever calls the FIRST handler
-that you registered.
+and each call succeeds with ccol_success, but the first one wins: the
+server only ever calls the FIRST handler that you registered.
 
 A pattern with two consecutive slashes, for example /foo//bar, is
 rejected at registration time, and so is one with a trailing slash,
-for example /foo/.  Nor does the server treat a trailing slash on a
-request path as equivalent: a request for /users/42/ does not match
-the pattern /users/{id}, and since a pattern itself must not end
-in '/', you cannot register the trailing-slash form as a route of its
-own.  If the server must accept such a path, normalize it before it
-reaches the server.
+for example /foo/.  The server does not treat a trailing slash on a
+request path as equivalent either, so a request for /users/42/ does
+not match the pattern /users/{id}, and since a pattern must not end
+in '/' you cannot register the trailing-slash form as a route of its
+own.  If the server has to accept such a path, normalize it before
+it reaches the server.
 
-The handler runs on a thread of the worker pool of the server once
-the whole body has arrived, and chttpsvr_req_body then returns it.  No
-thread waits for a slow client in the meantime: a body that stops
+The handler runs on a thread of the worker pool of the server once the
+whole body has arrived, and chttpsvr_req_body then returns that body.
+No thread waits for a slow client in the meantime: a body that stops
 arriving parks its connection without a thread, and any free worker
-continues it later.  The thread that runs the handler can therefore
-differ from the one that began to read the body, and a handler must
-not assume thread affinity across requests.  A response that meets a
-full socket parks in the same way after the handler returns.  See
-"Slow clients" in chttpsvr_start(3).
+continues it later.  So the thread that runs the handler can be a
+different one from the thread that began to read the body, and a
+handler must not assume thread affinity across requests.  A response
+that meets a full socket parks in the same way after the handler
+returns.  See "Slow clients" in chttpsvr_start(3).
 
-This function is thread-safe and can be called at any time, even
+This function is thread-safe and you can call it at any time, also
 while another thread runs chttpsvr_destroy on the same server; a call
 that races such a destroy returns ccol_invalid_args and touches no
 freed memory.
@@ -132,10 +132,11 @@ freed memory.
 .nf
 ccol_success on success.
 ccol_invalid_args when srv is CHTTPSVR_INVALID or a stale handle that
-                  has already been destroyed; when pattern or fn is
-                  NULL; when pattern does not start with '/'; when
-                  pattern has two consecutive slashes or a trailing
-                  slash; when a {name} segment contains a character
+                  was destroyed; when method is neither one of the
+                  seven methods nor CHTTP_ANY; when pattern or fn is
+                  NULL; when pattern does not start with '/', has two
+                  consecutive slashes or has a trailing slash; when a
+                  segment of the form {name} contains a character
                   outside [A-Za-z0-9_]; or when the same {name}
                   appears more than once.
 ccol_not_enough_memory when an allocation fails.
@@ -143,4 +144,5 @@ ccol_not_enough_memory when an allocation fails.
 .SH "SEE ALSO"
 .BR chttpsvr_register_streaming_handler (3),
 .BR chttpsvr_use (3),
-.BR chttpsvr_subrouter (3)
+.BR chttpsvr_subrouter (3),
+.BR chttpsvr_req_context (3)

@@ -11,7 +11,7 @@ cstr_c_str(s);
 .fi
 .SH DESCRIPTION
 .nf
-This macro is a pass-through wrapper for cstring_c_str().
+This macro just forwards its argument to cstring_c_str().
 .fi
 .SH PARAMETERS
 .nf
@@ -23,7 +23,7 @@ A pointer to the null-terminated character data
 .fi
 .SH NOTES
 .nf
-Any operation that changes the string makes the pointer invalid
+The pointer becomes invalid as soon as any operation changes the string
 .fi
 .SH "SEE ALSO"
 .BR cstring_c_str (3),

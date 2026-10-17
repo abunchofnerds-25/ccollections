@@ -1,0 +1,115 @@
+# The layout of every public struct and union on an LP64 target:
+# size, alignment, and the offset, nesting depth and name of every
+# member. ci_scripts/check_public_layout.sh writes this file with
+# --update and compares the layout of the system against it.
+record struct c_message_t sizeof=16 align=8
+  0 1 data
+  8 1 size
+record struct ccol_event_handlers sizeof=32 align=8
+  0 1 on_readable
+  8 1 on_writable
+  16 1 on_error
+  24 1 on_removed
+record struct ccol_memmgmt_procs_t sizeof=32 align=8
+  0 1 malloc
+  8 1 free
+  16 1 calloc
+  24 1 realloc
+record struct ccol_selectable sizeof=16 align=8
+  0 1 type
+  4 1 dir
+  8 1 (anonymous)
+  8 2 cq
+  8 2 dq
+  8 2 fd
+record struct chttp_request sizeof=80 align=8
+  0 1 method
+  8 1 url
+  16 1 body
+  16 2 data
+  24 2 len
+  32 2 content_type
+  40 1 headers__ccol_key_type_var
+  48 1 headers__ccol_val_type_var
+  56 1 headers
+  64 1 _m_procs
+  72 1 expect_continue
+  73 1 prevent_tls_downgrade_on_redirect
+record struct chttp_request_body sizeof=24 align=8
+  0 1 data
+  8 1 len
+  16 1 content_type
+record struct chttp_tls_config sizeof=32 align=8
+  0 1 cert_path
+  8 1 key_path
+  16 1 ca_bundle_path
+  24 1 insecure_skip_verify
+  25 1 insecure_skip_hostname_check
+  26 1 client_cert_optional
+record struct chttpcli_async_result sizeof=24 align=8
+  0 1 rv
+  8 1 resp
+  16 1 _m_procs
+record struct chttpcli_response sizeof=64 align=8
+  0 1 status_code
+  8 1 body
+  16 1 body_len
+  24 1 headers__ccol_key_type_var
+  32 1 headers__ccol_val_type_var
+  40 1 headers
+  48 1 _m_procs
+  56 1 _field_lines
+record struct chttpsvr_config sizeof=176 align=8
+  0 1 host
+  8 1 port
+  16 1 max_body_size
+  24 1 read_timeout_us
+  32 1 idle_timeout_us
+  40 1 stream_read_timeout_us
+  48 1 max_body_read_duration_us
+  56 1 response_write_timeout_us
+  64 1 max_response_write_duration_us
+  72 1 max_header_read_duration_us
+  80 1 max_header_bytes
+  88 1 max_connections
+  96 1 tls
+  104 1 worker_thread_count
+  112 1 worker_queue_capacity
+  120 1 enable_keepalive
+  121 1 enable_reuseport
+  122 1 ipv6_only
+  124 1 min_transfer_rate_bps
+  128 1 min_transfer_rate_grace_us
+  136 1 max_partial_body_memory
+  144 1 body_memory_wait_timeout_us
+  152 1 streaming_thread_count
+  160 1 streaming_queue_capacity
+  168 1 streaming_queue_timeout_us
+record struct cjson_dictionary_iter sizeof=24 align=8
+  0 1 key
+  8 1 value
+  16 1 _cjson_next
+record struct clog_async_cfg sizeof=24 align=8
+  0 1 queue_size
+  8 1 flush_buffer_size
+  16 1 flush_interval_us
+record struct clog_rotation_cfg sizeof=40 align=8
+  0 1 size_rotation_enabled
+  8 1 max_file_size
+  16 1 time_rotation_enabled
+  24 1 rotation_interval_us
+  32 1 max_rotated_files
+  36 1 compress_rotated
+record struct cmap_iterator sizeof=40 align=8
+  0 1 key_pair
+  8 1 val_pair
+  16 1 _next_fn
+  24 1 _free_fn
+  32 1 _direct_ptr
+record struct cmap_pair sizeof=16 align=8
+  0 1 ptr
+  8 1 size
+record struct cyaml_dictionary_iter sizeof=24 align=8
+  0 1 key
+  8 1 value
+  16 1 _cyaml_next

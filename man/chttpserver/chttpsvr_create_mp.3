@@ -1,0 +1,104 @@
+.TH CHTTPSVR_CREATE_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_create_mp \- create an HTTP server with a custom allocator
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpserver.h>
+
+chttpsvr chttpsvr_create_mp(ccol_memmgmt_procs_t *mprocs,
+                            clog cl,
+                            char **err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Allocates and initializes a new chttpsvr handle with the memory
+management procedures you give it, and creates a root router with an
+empty prefix.
+
+mprocs may be NULL, and the function then uses the default system
+allocator.
+
+cl decides the logger of the server, and it may be CLOG_INVALID:
+
+- cl == CLOG_INVALID: the server creates its own internal logger,
+  which writes only FATAL messages to stderr.
+- cl != CLOG_INVALID: the server derives a new logger from cl (see
+  clog_derive) and tags it with the field component=http-server.
+  The server uses and manages the derived logger, while the caller's
+  cl handle doesn't change and stays the caller's.  When cl is
+  closed, or was never a valid handle, the function fails: it sets
+  err_str to "the parent logger is not open" and returns
+  CHTTPSVR_INVALID.  It does not end the process, which clog_derive
+  does for such a handle.
+
+Either way, internal or derived, the server closes its own logger
+when the server is destroyed.
+
+On failure the function returns CHTTPSVR_INVALID and, when err_str
+is not NULL, sets err_str to a static diagnostic string.
+
+chttpsvr is an opaque value handle (a uint64_t) and not a pointer.
+Before the library uses the server, it resolves the handle through a
+table of its own and checks a generation.  Do not cast the handle to
+or from a pointer.  Compare it with CHTTPSVR_INVALID, which is 0, so
+a truth test such as if (!srv) works too.  A call with the handle of
+a destroyed server is refused, and fatal where chttpsvr_destroy(3)
+says so, but it never leads to a use-after-free.
+
+You can run more than one process that serves traffic with this
+library in two supported ways.  The first is to fork(2) before the
+process creates and starts any server, so that each process, parent
+and child alike, calls chttpsvr_create_mp and chttpsvr_start by
+itself and builds its own server from scratch.  The second is a
+fork(2) followed at once by an exec(3), which is what popen, system
+and launching a subprocess from a request handler do.  That is fully
+supported whether or not a server runs at that moment, because the
+program that exec(3) starts replaces the process image completely
+and never touches what this library left behind.  A process that
+keeps running with no exec(3) in between, while a server it created
+before the fork is still live, is not a supported pattern.
+
+On top of that the library has one defense-in-depth measure.  A new
+call to chttpsvr_create_mp, chttpsvr_start, chttpsvr_stop,
+chttpsvr_destroy, chttpsvr_register_handler,
+chttpsvr_register_streaming_handler, chttpsvr_use or
+chttpsvr_subrouter never hangs on a lock that another thread held at
+the instant of the fork, a thread that may not exist any more
+because fork(2) duplicates only the calling thread.  This holds for a
+call from any thread, in the parent and in a newly forked child that
+has not called exec(3).  It also covers a fork in the middle of a
+start, a stop or a destroy of that exact handle, and a fork in the
+middle of a shutdown of the whole shared engine driven by
+chttpsvr_engine_stop().
+
+That measure does not change anything for a server that is live and
+running work when such a fork happens, and such a server is
+explicitly out of scope.  Its reactor threads, worker-pool threads
+and idle-timeout-sweep threads are not carried over into the child,
+so a started server that the child inherits can't accept new
+connections or process in-flight work there.  chttpsvr_stop()
+followed by chttpsvr_start() on that handle in the child doesn't
+bring it back either: the call reports ccol_success, but the server
+still cannot serve, because it reuses the engine reference it held
+before the fork instead of building a new one.  A caller that wants
+none of this protection can compile it out with
+-DCCOL_FORK_SAFETY_REQUIRED=0.
+.fi
+.SH RETURN VALUE
+.nf
+A valid chttpsvr handle on success, or CHTTPSVR_INVALID on failure.
+.fi
+.SH NOTES
+.nf
+At exit, the library's destructor releases its table of server
+handles once no server is left.  A call made after that point, for
+example from a later destructor or atexit handler of the
+application, returns CHTTPSVR_INVALID with an error string, and every
+other function treats any handle it receives as invalid.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_create (3),
+.BR chttpsvr_start (3),
+.BR clog_derive (3)

@@ -11,8 +11,7 @@ cstr cstring_create(const char *initial, char **err);
 .fi
 .SH DESCRIPTION
 .nf
-Convenience wrapper around cstring_create_full() that uses the default
-malloc/free allocators.
+This is cstring_create_full() with the default malloc/free allocators.
 .fi
 .SH PARAMETERS
 .nf
@@ -21,12 +20,12 @@ err       Optional pointer to receive an error string on failure
 .fi
 .SH RETURN VALUE
 .nf
-Returns pointer to newly created cstring on success
-Returns NULL on failure (details written to *err if err is non-NULL)
+A pointer to the new cstring on success
+NULL on failure, with the details written to *err when err is not NULL
 .fi
 .SH NOTES
 .nf
-Equivalent to cstring_create_full(initial, NULL, err)
+The call is the same as cstring_create_full(initial, NULL, err)
 .fi
 .SH "SEE ALSO"
 .BR cstring_create_full (3),

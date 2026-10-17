@@ -12,31 +12,29 @@ ctpool_construct(name, num_threads, queue_capacity);
 .SH DESCRIPTION
 .nf
 Declares a ctpool variable called name and initialises it with
-ccol_create_cthread_pool(), calling ccol_fatal_err() if the creation
-fails.
+ctpool_create(), and calls _ccol_fatal_err() if the creation fails.
 
 queue_capacity selects the queue mode:
   0                       ->  unbounded queue. submit never blocks on
                                capacity, and the only failure is a
                                lack of memory.
   N > 0                   ->  bounded queue of capacity N. submit
-                               blocks when the queue is full, while
-                               try_submit does not block and returns
-                               ccol_container_full.
+                               blocks when the queue is full, and
+                               try_submit returns ccol_container_full
+                               instead of blocking.
 .fi
 .SH PARAMETERS
 .nf
 name            Variable name for the pool handle.
 num_threads     Number of worker threads to create (must be >= 1).
 queue_capacity  Maximum pending tasks (0 for unbounded). The macro
-                calls ccol_fatal_err() for ccol_invalid_size, as for
-                every other failure of the creation.
+                calls _ccol_fatal_err() for ccol_invalid_size, as it
+                does for every other failure of the creation.
 .fi
 .SH NOTES
 .nf
-This macro calls ccol_fatal_err() on failure; call
-ccol_create_cthread_pool() directly if you must handle an error
-gracefully.
+The macro calls _ccol_fatal_err() on failure, so call ctpool_create()
+directly if you must handle an error gracefully.
 .fi
 .SH EXAMPLES
 .nf
@@ -55,7 +53,7 @@ ctpool_destroy(pool2);
 .SH "SEE ALSO"
 .BR ctpool_construct_scoped (3),
 .BR ctpool_declare (3),
-.BR ccol_create_cthread_pool (3),
+.BR ctpool_create (3),
 .BR ctpool_submit (3),
 .BR ctpool_shutdown_drain (3),
 .BR ctpool_destroy (3)

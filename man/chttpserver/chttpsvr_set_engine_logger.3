@@ -11,43 +11,68 @@ ccol_retval_t chttpsvr_set_engine_logger(clog cl);
 .fi
 .SH DESCRIPTION
 .nf
-Derives a child logger from cl, adds the field
-component=http-server-engine to it, and installs it as the diagnostics
-logger of the shared reactor.  It closes the logger derived by an
-earlier call and, when there is one, the fallback logger of a running
-engine.
+When cl is not CLOG_INVALID, the function derives a child logger from
+cl, adds the field component=http-server-engine to it and installs it
+as the diagnostics logger of the shared reactor.  It closes the
+logger that an earlier call derived and, if a running engine has one,
+the fallback logger of that engine.
 
-The reactor logs to this handle at exactly three points: a TLS
-handshake failure, a listen-socket bind failure, and each pass of the
-idle-timeout sweep that closes one or more connections.  When no
-logger from this function is in place as the engine starts, the engine
-installs a fallback logger automatically, which writes to fd 2 at
+The reactor logs to this handle in exactly three places: a failed TLS
+handshake, a failed bind of the listen socket, and each pass of the
+idle-timeout sweep that closes one or more connections.  If no logger
+from this function is in place when the engine starts, the engine
+installs a fallback logger of its own.  That logger writes to fd 2 at
 level CLOG_FATAL, like the internal stderr-only, FATAL-only logger of
-ccol_create_chttpsvr.  All three diagnostic points above log below
-CLOG_FATAL, so the min_level of that fallback logger filters every one
-of them out, and the fallback logger is silent in practice.  Use this
-function to install a more informative logger.
+chttpsvr_create.  All three diagnostics above log below CLOG_FATAL,
+so the min_level of the fallback logger filters every one of them out
+and in practice it writes nothing.  Install a more useful logger with
+this function.
 
-You can call this function at any time: before the first
-chttpsvr_start, while the reactor is already running, and after a
-full engine stop.  The child logger serves the currently running
-reactor, if there is one, and every reactor that a later
-chttpsvr_start brings up after a full engine stop, until another call
-of this function replaces it.
+You can call it at any time: before the first chttpsvr_start, while
+the reactor runs, and after a full engine stop.  The child logger
+serves the reactor that is running now, if there is one, and every
+reactor that a later chttpsvr_start brings up after a full engine
+stop, until another call of this function replaces it.
 
-cl must not be CLOG_INVALID.  The library owns the derived child
-logger and closes it when another call replaces it, or at process
-exit or library unload when no engine is running at that point; the
-caller must not close it.  The caller keeps ownership of cl and may
-close cl at any time, because the child logger is a handle of its own
-and keeps the destination of cl open for as long as it lives.
+The derived child logger belongs to the library.  It is closed when
+another call replaces it, when a call with CLOG_INVALID releases it,
+or at process exit or library unload; if an engine is still running
+at that point, the engine closes it when it stops.  The caller must
+not close it.  cl stays the caller's, and the caller may close it at
+any time, because the child logger is a handle of its own and keeps
+the destination of cl open for as long as it lives.
+
+A call with CLOG_INVALID releases the engine logger.  The child
+logger is closed at once, and the next engine that starts uses the
+fallback logger.  While an engine runs, the release is refused with
+ccol_not_permitted, because the engine logs through that logger, so
+make the call after chttpsvr_engine_wait() has returned.  A release
+with no logger installed does nothing and succeeds.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success on success.
-ccol_invalid_args when cl is CLOG_INVALID.
+ccol_success on success, including a release when no logger is
+                  installed.
+ccol_not_permitted when cl is CLOG_INVALID and an engine runs.
+ccol_invalid_args when cl is not CLOG_INVALID but is closed or
+                  stale; nothing changes, and the engine keeps the
+                  logger that it had.
 ccol_not_enough_memory when the child logger cannot be
                   allocated.
+.fi
+.SH NOTES
+.nf
+The child logger allocates and frees through the allocator of cl.
+An application that destroys that allocator before the process exits
+must release the engine logger with CLOG_INVALID first.  Otherwise
+the library closes the child logger at process exit through an
+allocator that is gone.
+
+When cl writes to a file descriptor that the application opened, as
+a logger from clog_create_from_fd does, the descriptor stays the
+application's, and the child logger writes to it until it is closed.
+Keep the descriptor open while the engine logger is installed, and
+release the engine logger before you close the descriptor.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_start (3),

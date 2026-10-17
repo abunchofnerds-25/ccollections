@@ -11,10 +11,10 @@ bool cstring_reserve(cstr s, size_t min_capacity);
 .fi
 .SH DESCRIPTION
 .nf
-Makes sure that the internal buffer has room for min_capacity bytes or
-more, counting the null terminator. The function rounds the requested
-size up to the nearest power of two (minimum 16), and it does nothing
-when the current capacity is already large enough.
+This function makes sure that the internal buffer has room for at least
+min_capacity bytes, the null terminator included. The requested size is
+rounded up to the nearest power of two (at least 16), and when the
+capacity is already large enough the function does nothing.
 .fi
 .SH PARAMETERS
 .nf
@@ -24,8 +24,7 @@ min_capacity   Minimum number of bytes to reserve (including null terminator)
 .SH RETURN VALUE
 .nf
 true on success, and also when the capacity was already large enough
-false when the reallocation fails, or when the requested size is too
-large
+false when the reallocation fails or the requested size is too large
 .fi
 .SH NOTES
 .nf

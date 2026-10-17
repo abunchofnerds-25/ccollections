@@ -11,9 +11,9 @@ bool ctpool_future_done(ctpool_future *f);
 .fi
 .SH DESCRIPTION
 .nf
-Returns true if the associated task has finished (or was cancelled)
-without blocking. Returns false if the task is still pending or
-executing.
+Tells you, without blocking, whether the task of the future has
+finished (or was cancelled). It returns false while the task is still
+pending or running.
 .fi
 .SH PARAMETERS
 .nf

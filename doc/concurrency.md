@@ -1,14 +1,14 @@
 # Concurrency and fork()
 
-This guide explains which parts of c_collections you can share between
-threads and which parts you must protect yourself. It also explains how to
-combine the library with `fork()`.
+This guide is about which parts of c_collections you can share between
+threads and which parts you have to protect yourself, and about using the
+library together with `fork()`.
 
 ## The rule in one sentence
 
-**A component that moves data between threads, or that provides a shared
-service, has its own locks; a component meant for data work inside one
-thread has none.**
+A component that moves data between threads, or that gives a shared service,
+has its own locks, and a component that is meant for data work inside one
+thread has none.
 
 | No internal locks | Internally synchronised |
 |---|---|
@@ -16,9 +16,9 @@ thread has none.**
 
 ## Unguarded containers
 
-The containers have no locks, and this is intentional. A lock inside each
-call would not make your code safe, because real code combines calls. Look
-at the most common map pattern:
+The containers have no locks on purpose. A lock inside each call wouldn't
+make your code safe, because real code combines calls. Take the most common
+map pattern:
 
 ```c
 /* Thread 1 */
@@ -29,26 +29,22 @@ if (chmap_get_ptr(map, key) == NULL)
 chmap_insert(map, key, other_value);
 ```
 
-Even if each call were atomic, the lookup and the insert would race. Thread
-safety is only useful at the level of your logical operation, so that is
-where the lock belongs. Use whichever primitive suits your program, for
-example a pthread mutex, a read-write lock or C11 `<threads.h>`.
+Even if each call were atomic, the lookup and the insert would still race.
+Thread safety only helps at the level of your logical operation, so that's
+where the lock goes, and you can use whatever primitive suits your program:
+a pthread mutex, a read-write lock or C11 `<threads.h>`.
 
-Two things are always safe without a lock:
-
-- Using **separate** containers from separate threads, because two instances
-  share no state.
-- Parsing two **independent** JSON or YAML documents on two threads at the
-  same time, because each parse writes its error message into storage that
-  belongs to its own thread.
-
-You need a lock for a container, a string or a DOM tree when two threads use
-it and at least one of them writes to it.
+Using separate containers from separate threads is always safe without a
+lock, because two instances share no state. So is parsing two independent
+JSON or YAML documents on two threads at the same time, because each parse
+writes its error message into storage that belongs to its own thread. You
+need a lock for a container, a string or a DOM tree when two threads use it
+and at least one of them writes to it.
 
 ### Example: a thread pool filling a shared map
 
-The pool is thread-safe, so `main` submits tasks without a lock. The map is
-not, so the tasks lock a mutex around the whole check-and-act sequence:
+The pool is thread-safe, so `main` submits tasks without a lock. The map
+isn't, so the tasks lock a mutex around the whole check-and-act sequence:
 
 ```c
 #include <pthread.h>
@@ -58,8 +54,7 @@ not, so the tasks lock a mutex around the whole check-and-act sequence:
 #include <ccollections/cthreadpool.h>
 
 /* The map has no lock of its own, so every access goes through this
- * mutex. The lock covers the whole check-then-act sequence, not single
- * calls. */
+ * mutex. */
 static pthread_mutex_t counts_lock = PTHREAD_MUTEX_INITIALIZER;
 static chmap counts;
 
@@ -108,17 +103,18 @@ int main(void) {
 }
 ```
 
-If contention becomes a problem, give each worker its own map and merge the
-maps at the end, which needs no lock at all.
+If the contention starts to hurt, give each worker its own map and merge
+the maps at the end, which needs no lock at all.
 
-`common.h` also defines thin wrappers around pthreads (`ccol_mutex_t` and
-related items). They exist to make it easier to port the library to other
-systems and are not part of the API, so protect your own data with pthreads
-or `<threads.h>` directly, as the example does.
+`common.h` also has thin wrappers around pthreads (`_ccol_mutex_t` and
+friends). They are there to make the library easier to port to other
+systems and they aren't part of the API, so protect your own data with
+pthreads or `<threads.h>` directly like the example does.
 
 ## Thread-safe components
 
-You can call these components from many threads without a lock of your own:
+You can call these components from many threads without a lock of your
+own:
 
 | Component | How it synchronises |
 |---|---|
@@ -134,8 +130,8 @@ You can call these components from many threads without a lock of your own:
 
 ### Example: producers and a consumer
 
-A queue passes ownership of each message from the sender to the receiver, so
-the threads share no other data:
+A queue passes the ownership of each message from the sender to the
+receiver, so the threads don't share any other data:
 
 ```c
 #include <pthread.h>
@@ -188,52 +184,58 @@ int main(void) {
 
 ## Rules that you must also obey
 
-The thread-safe components have rules too, and the man page of each call
-states them. These are the ones that people break most often:
+The thread-safe components have rules as well, and the man page of each
+call states them. These are the ones people break most often.
 
-- **The destroy is the last call, and only one thread makes it.** The
-  destroy macro sets its variable to the `_INVALID` value, so a second
-  destroy through that same variable does nothing. However, destroying a
-  `ctpool` or `chttpclient` handle that has already been destroyed is a
-  fatal error, whether it happens through a copy of the handle or through
-  two destroys that race. `chttpclient_destroy` waits for the requests in
-  progress, so it is safe to call while other threads are inside a request.
-- **You can shut down a pool from anywhere.** `ctpool_shutdown_drain` and
-  `ctpool_shutdown_immediate` can be called more than once and from many
-  threads, and each call returns only after the workers have stopped. An
-  immediate shutdown that arrives during a drain discards the rest of the
-  queue.
-- **A task must not destroy its own pool.** Inside a task, or inside its
-  completion callback, `ctpool_destroy` on the same pool is fatal, while
-  `ctpool_wait` returns at once and the shutdown calls do nothing.
-- **The LRU eviction callback runs while the cache holds a lock**, so it
-  must not call back into the same cache. Because two segments can evict at
-  the same time, the callback can also run on two threads at once and must
-  protect its own state.
-- **A custom allocator that you give to a thread-safe object must itself be
-  thread-safe**, because the object calls the allocator from whichever
-  thread does the work. See [Memory management](memory.md).
+The destroy is the last call, and only one thread makes it. The destroy
+macro sets its variable to the `_INVALID` value, so a second destroy through
+the same variable does nothing, but destroying a `ctpool` or `chttpclient`
+handle that's already destroyed is a fatal error, whether it happens through
+a copy of the handle or through two destroys that race.
+`chttpclient_destroy` waits for the requests in progress, so you can call it
+while other threads are inside a request.
+
+You can shut a pool down from anywhere. `ctpool_shutdown_drain` and
+`ctpool_shutdown_immediate` can be called more than once and from many
+threads, and each call only returns once the workers have stopped. An
+immediate shutdown that comes in during a drain discards the rest of the
+queue.
+
+A task must not destroy its own pool. Inside a task or its completion
+callback, `ctpool_destroy` on the same pool is fatal, while `ctpool_wait`
+returns at once and the shutdown calls do nothing.
+
+The LRU eviction callback runs while the cache holds a lock, so it must not
+call back into the same cache, and it's best to keep it short, since other
+calls on that part of the cache wait for it. Two segments can evict at the
+same time, so the callback can also run on two threads at once and has to
+protect its own state.
+
+A custom allocator that you give to a thread-safe object has to be
+thread-safe itself, because the object calls it from whatever thread does
+the work. See [Memory management](memory.md).
 
 ## fork()
 
 ### The two supported patterns
 
-A program that forks while it uses `cthreadpool`, `cthreadcomm`, `clogger`,
-`chttpclient` or `chttpserver` must follow one of two patterns:
+A program that forks while it uses `cthreadpool`, `cthreadcomm`,
+`clogger`, `chttpclient` or `chttpserver` has to follow one of two
+patterns:
 
-1. **Fork first, then create.** Call `fork()` before you create any handle,
-   and let each process make its own handles. This is the prefork model of
+1. Fork first, then create. You call `fork()` before you create any handle
+   and each process makes its own handles. This is the prefork model of
    nginx and Apache.
-2. **Fork, then exec immediately.** A handle may exist when you call
-   `fork()`, but the child calls `exec()` straight away. `posix_spawn()` and
-   the `os/exec` package of Go work this way.
+2. Fork, then exec at once. A handle may exist when you call `fork()`, but
+   the child calls `exec()` right away, which is how `posix_spawn()` and
+   Go's `os/exec` package work.
 
-Every other use is **unsupported by design**, for example a child that keeps
+Anything else is unsupported by design, for example a child that keeps
 running without `exec()` while a handle created before the fork is live. A
-`fork()` copies only the calling thread, so the worker, poller and writer
-threads behind these handles do not exist in the child, and the child cannot
-use the handle again. The library also cannot know what other code in the
-process (OpenSSL, the C library or other libraries, for example) holds at
+`fork()` only copies the calling thread, so the worker, poller and writer
+threads behind these handles don't exist in the child and the child can't
+use the handle again. On top of that, the library can't know what other
+code in the process (OpenSSL, the C library or some other library) holds at
 the moment of such a fork.
 
 This program shows both patterns:
@@ -286,39 +288,48 @@ int main(void) {
 
 ### What the library does for you
 
-By default, those five modules register `pthread_atfork()` handlers which
-make sure that, after a `fork()`, the child never inherits one of the
-library's internal locks in a locked state, whichever thread was using the
-lock at the time of the fork. The HTTP client also makes a `fork()` wait
-while a teardown of its background engine is in progress.
+By default those five modules register `pthread_atfork()` handlers so
+that after a `fork()` the child never inherits one of the library's
+internal locks in a locked state, whatever thread was using the lock when
+the fork happened. The HTTP client also makes a `fork()` wait until a
+teardown of its background engine is finished and the thread that ran it
+has ended, so no thread of the client is running at the fork.
 
 This protection adds some work to every `fork()` in the process. If your
-program never forks, or forks only as in pattern 2, you can build the
+program never forks, or only forks as in pattern 2, you can build the
 library without it:
 
 ```bash
 make EXTRA_CFLAGS="-DCCOL_FORK_SAFETY_REQUIRED=0"
 ```
 
-This changes only the fork handling; the library keeps all its locks and all
-its other guarantees. Without the handlers, however, your program must not
-call `fork()` while another thread may be inside one of those modules.
+Only the fork handling changes, and the library keeps all its locks and
+all its other guarantees. Without the handlers though, your program must not
+call `fork()` while another thread may be inside one of those modules, and
+that includes the thread on which the HTTP client stops its engine after you
+destroy the last client, so call `chttpcli_engine_wait()` before such a
+`fork()`.
 
 ### Descriptors and exec()
 
-Every descriptor that the library creates is closed on exec, so a child that
-calls `exec()` keeps none of them.
+Every descriptor that the library creates is closed on exec, so a child
+that calls `exec()` keeps none of them. That includes the system CA bundle,
+which the HTTP client reads once per process through such a descriptor. The
+one exception is a system with no default CA file. There the client trusts
+OpenSSL's hashed certificate directory, and OpenSSL opens the files in it
+during a handshake with descriptors that an `exec()` keeps (see
+[chttpclient_set_tls(3)](../man/chttpclient/chttpclient_set_tls.3)).
 
-On macOS, a socket, an accepted socket and a pipe each take two calls to
+On macOS a socket, an accepted socket and a pipe each take two calls to
 become closed on exec, and a `fork()` from another thread waits until both
-calls are done. The wait lasts a few microseconds and does not depend on
+calls are done. The wait is a few microseconds and has nothing to do with
 `CCOL_FORK_SAFETY_REQUIRED`.
 
-`posix_spawn()` runs no fork handlers, so it does not wait. On macOS, a
+`posix_spawn()` runs no fork handlers, so it doesn't wait. On macOS a
 program that calls `posix_spawn()` while another thread may be creating a
 socket through the library must pass `POSIX_SPAWN_CLOEXEC_DEFAULT` to
-`posix_spawnattr_setflags()`, and then name each descriptor that the child
-must keep with `posix_spawn_file_actions_addinherit_np()`:
+`posix_spawnattr_setflags()` and then name each descriptor the child has to
+keep with `posix_spawn_file_actions_addinherit_np()`:
 
 ```c
 #include <spawn.h>

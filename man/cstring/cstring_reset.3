@@ -11,9 +11,9 @@ void cstring_reset(cstr s);
 .fi
 .SH DESCRIPTION
 .nf
-Sets the length to zero and then tries to shrink the buffer back to the
-minimum capacity of 16 bytes. When that reallocation fails, the capacity
-stays the same; the length always becomes zero in both cases.
+This function sets the length to zero and then tries to shrink the buffer
+back to the minimum capacity of 16 bytes. If that reallocation fails the
+capacity stays as it was, but the length becomes zero either way.
 .fi
 .SH PARAMETERS
 .nf

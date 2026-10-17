@@ -15,273 +15,291 @@ ccol_retval_t chttpclient_do(chttpcli cli,
 .nf
 This function takes a pool slot, blocking while every slot is in use.
 It then runs the HTTP request synchronously, buffers the whole response
-body, and puts a chttpcli_response on the heap into *resp_out.
+body and stores a heap-allocated chttpcli_response in *resp_out.
 
-The function sets *resp_out to NULL at once, before it starts any
-other work, and *resp_out stays NULL on every return that is not a
-success. So you can always call chttpclient_resp_free(resp) after this
-call, whatever ccol_retval_t it gives back, and you do not need to set
-your own local pointer before the call. After a success the caller
-owns *resp_out and must call chttpclient_resp_free on it at the end.
+*resp_out is set to NULL first, before any other work, and it stays
+NULL on every return that is not a success. So you can always call
+chttpclient_resp_free(resp) after this call, whatever ccol_retval_t it
+returns, and you don't have to initialize your own pointer before the
+call. After a success the caller owns *resp_out and must free it with
+chttpclient_resp_free when done.
 
-The client follows a redirect automatically. The redirect codes are
+The client follows redirects automatically. The redirect codes are
 301, 302, 303, 307 and 308, and the client follows up to 50 hops. For
-301, 302 and 303 it rewrites the method to a GET with no body, but
-leaves HEAD as HEAD; for 307 and 308 it keeps the original method and
-the original body. The Location header can be an absolute URL, a
-protocol-relative reference ("//host/path"), an absolute-path
-reference ("/foo"), or a general relative reference, such as "foo",
-"../foo", "./foo" or "?query", and the client resolves all of them as
-RFC 3986 asks. A Location value with a scheme of its own is always
-absolute, as RFC 3986 SS5.2.2 says: for example "mailto:x@y",
-"ftp://host/path" or any scheme other than http, https and http+unix.
-Such a value resolves to itself without a change, and because this
-client connects only over http, https and http+unix, the next hop
-reports ccol_http_invalid_url, the same code that an unsupported scheme
-in the original request URL gets. The client does not merge the
-reference onto the path of the current origin as if the reference were
-relative. A response with a redirect code and no Location header, or
-an empty one, is not a redirect: the client delivers it as the final
-response, as the Go net/http client does.
+301, 302 and 303 it turns the method into a GET with no body, but
+keeps HEAD as HEAD; for 307 and 308 it keeps the original method and
+body. The Location header can be an absolute URL, a protocol-relative
+reference ("//host/path"), an absolute-path reference ("/foo"), or a
+general relative reference such as "foo", "../foo", "./foo" or
+"?query", and the client resolves all of them as RFC 3986 describes. A
+Location value with a scheme of its own is always absolute, as RFC 3986
+SS5.2.2 says, for example "mailto:x@y", "ftp://host/path" or any
+scheme other than http, https and http+unix. Such a value resolves to
+itself unchanged, and since this client only connects over http, https
+and http+unix, the next hop reports ccol_http_invalid_url, the same
+code that an unsupported scheme in the original request URL gets. The
+client never merges such a reference onto the current origin's path as
+if it were relative. A response with a redirect code and no Location
+header, or an empty one, is not a redirect, and the client delivers it
+as the final response, as the Go net/http client does.
 
-A redirect from https to http is followed by default. That matches
-curl, whose CURLOPT_REDIR_PROTOCOLS permits both schemes, and the Go
-net/http client.
+A redirect from https to http is followed by default. That is what
+curl does, whose CURLOPT_REDIR_PROTOCOLS permits both schemes, and what
+the Go net/http client does.
 
 Set chttp_request_t.prevent_tls_downgrade_on_redirect to refuse such a
-redirect instead; the client then reports ccol_http_invalid_url and
+redirect instead. The client then reports ccol_http_invalid_url and
 opens no plaintext connection. Weigh that against the default: the
-peer that sent the Location chooses the downgrade, and once a chain
-leaves TLS, that hop and every later hop travel in clear.
+peer that sent the Location picks the downgrade, and once a chain
+leaves TLS, that hop and every later hop travel in clear text.
 
-A Location that merely inherits the scheme, such as "//host/path" or
-"/path", resolves back to https and follows whatever that field holds,
+A Location that only inherits the scheme, such as "//host/path" or
+"/path", resolves back to https and follows whatever that field says,
 and so does an upgrade from http to https, which can only add
 protection.
 
-The rule below, for AF_UNIX, is not optional and no field relaxes it.
+The AF_UNIX rule below is not optional, and no field relaxes it.
 
-A hop can name a Unix domain
-socket ("http+unix://...") only when the hop that carried the Location
-was bound to that same socket path. The client refuses every other
-resolved http+unix:// target with ccol_http_invalid_url, and tries no
-connection. The rule holds for every hop, judged against the hop that
-the Location came from, so a chain that leaves a socket cannot come
-back to it, and a chain that never used a socket cannot reach one,
-whatever the length of the chain. The match of the scheme ignores case,
-and the client compares the socket path after it decodes the percent
-escapes, so a different spelling or a second encoding cannot get past
-the rule. A relative Location on a Unix hop still resolves back onto
-the socket of that hop, and the client follows it in the normal way.
-Without this rule, any http or https server could redirect a caller
-onto any local socket, while also controlling the target of the
-request.
+A hop can name a Unix domain socket ("http+unix://...") only when the
+hop that carried the Location was bound to that same socket path.
+Every other resolved http+unix:// target is refused with
+ccol_http_invalid_url and no connection is tried. The rule holds on
+every hop, judged against the hop that the Location came from, so a
+chain that leaves a socket cannot come back to it and a chain that
+never used a socket cannot reach one, however long the chain is. The
+scheme is compared without regard to case, and the socket path is
+compared after its percent escapes are decoded, so a different
+spelling or a double encoding can't get around the rule. A relative
+Location on a Unix hop resolves back onto that hop's socket, and the
+client follows it normally. Without this rule any http or https server
+could redirect a caller onto any local socket and control the target
+of the request as well.
 
-If the client reaches the cap of 50 hops and the response of the last
-hop is itself a redirect, the client neither follows it nor delivers
-it, and gives ccol_http_too_many_redirects instead. The normalization
-of the dot segments ".." and "." only rewrites the path part; the
-client never treats "/", ".." or "." inside a query string as path
-navigation. When the request URL carries credentials (see below), the
-client makes an Authorization header from them and sends that header
-again on every hop that stays on the same origin. An origin is a
-scheme, a host and a port: the host compares without regard to case,
-and the scheme and the port compare exactly. The client drops the
-header for good the first time a hop changes the origin.
+If the client reaches the cap of 50 hops and the last hop's response
+is itself a redirect, the client neither follows it nor delivers it,
+and returns ccol_http_too_many_redirects instead. The normalization of
+the dot segments ".." and "." rewrites only the path; the client never
+treats "/", ".." or "." inside a query string as path navigation. When
+the request URL carries credentials (see below), the client builds an
+Authorization header from them and sends it again on every hop that
+stays on the same origin. An origin is a scheme, a host and a port:
+hosts are compared without regard to case, schemes and ports exactly.
+The client drops that header for good the first time a hop changes
+the origin.
 
 The headers that you set with chttp_request_set_header follow a
-redirect with two exceptions, which are the rules of curl. The client
-judges every hop against the ORIGINAL request, never against the hop
-before it. A hop whose scheme, host or port differs from the original
-request carries none of your Authorization, Cookie, Cookie2 and
-WWW-Authenticate headers. A hop whose host differs also carries none of
-your Host header, and the client writes its own Host line for the new
-target instead. Hosts and header names match without regard to case. A
-hop that comes back to the original origin therefore carries those
-headers again, and a second hop on the same foreign origin still
-carries none of them. Every other header of yours follows every hop.
+redirect with two exceptions, which are curl's rules. Every hop is
+judged against the ORIGINAL request, never against the hop before it.
+A hop whose scheme, host or port differs from the original request
+carries none of your Authorization, Cookie, Cookie2 and
+WWW-Authenticate headers. A hop whose host differs also carries no
+Host header of yours, and the client writes its own Host line for the
+new target instead. Hosts and header names are compared without regard
+to case. So a hop that comes back to the original origin carries those
+headers again, while a second hop on the same foreign origin carries
+none of them. Every other header of yours follows every hop.
 
-A 301, 302 or 303 hop rewrites the method to a GET with no body, and
+A 301, 302 or 303 hop turns the method into a GET with no body, and
 removes every Content-Length, Content-Type and Expect header that the
-caller set, from that hop and from every hop after it; a later 307 or
+caller set, from that hop and from every hop after it. A later 307 or
 308 hop can bring a real body back, and the client then sends those
 headers again. Those three headers only describe a body, and a value
-that described the body of the original request is never correct on a
-request with no body at all. The client sends every other header of the
-caller again on every hop, without a change.
+that described the original request's body is never right on a request
+that has no body at all. Every other header of the caller goes out
+again on every hop, unchanged.
 
-The request URL accepts http://, https:// and http+unix://, and the
-support for a Unix domain socket is the same in all three tiers. The
-form with the encoded socket path is
-"http+unix://%2Fpath%2Fto%2Fsock/path", which matches the convention of
-requests-unixsocket in Python. For the two network forms the client
-accepts a plain hostname, an IPv4 literal, and an IPv6 literal inside
-brackets ("https://[::1]:8443/path"). A URL can
-also carry credentials
-("http://user:pass@host/path"), which the client turns into an
-"Authorization: Basic ..." header for you, unless the request already
-sets its own Authorization header. This does not apply to
-http+unix://, which has no convention for userinfo. The client also
-finds a "#fragment" at the end of a URL and drops it: it never sends a
-fragment to a server.
+The request URL accepts http://, https:// and http+unix://, and Unix
+domain sockets are supported the same way in all three tiers. The form
+with the encoded socket path is "http+unix://%2Fpath%2Fto%2Fsock/path",
+the convention of Python's requests-unixsocket. For the two network
+forms the client accepts a plain hostname, an IPv4 literal, and an IPv6
+literal in brackets ("https://[::1]:8443/path"). A URL can also carry
+credentials ("http://user:pass@host/path"), which the client turns into
+an "Authorization: Basic ..." header for you, unless the request sets
+its own Authorization header. This doesn't apply to http+unix://,
+which has no convention for userinfo. The client also strips a
+"#fragment" from the end of a URL, because it never sends a fragment
+to a server.
 
-An empty port, as in "http://host:/", names the default port of the
-scheme (RFC 3986 section 3.2.3), as it does in curl, and port 0 is
-refused. A fully qualified hostname with one trailing dot, as in
+An empty port, as in "http://host:/", means the scheme's default port
+(RFC 3986 section 3.2.3), as in curl, and port 0 is refused. A fully
+qualified hostname with one trailing dot, as in
 "https://www.example.com./", is resolved and sent in the Host header
 exactly as written, while TLS uses the name without that dot for SNI
-and for the check of the certificate, as curl and Go do. The keep-alive
-cache matches hosts without regard to case, but a name with a trailing
-dot and the same name without it are two origins, because the name
-without the dot can resolve through a search domain to another host.
+and for the certificate check, as curl and Go do. The keep-alive cache
+compares hosts without regard to case, but a name with a trailing dot
+and the same name without it are two different origins, because the
+name without the dot can resolve through a search domain to another
+host.
 
 A server can send one response header name on several lines. See
 chttpclient_resp_header for the combined value, and
-chttpclient_resp_header_at for each line separately. A redirect with
+chttpclient_resp_header_at for each line on its own. A redirect with
 more than one Location line goes to the first one, as curl and the Go
 net/http client do.
 
-The client builds the request-target of the request line from the path
-and the query of the URL, and from those of every Location that it
+The client builds the request-target of the request line from the
+path and query of the URL, and from those of every Location it
 follows. It percent-encodes as "%XX" every byte that RFC 3986 does not
 allow there literally: the space, the control bytes, DEL, every byte
 of 0x80 and above, and the characters '"', '<', '>', '\\', '^', '`',
 \&'{', '|', '}', '[' and ']'. An existing "%XX" escape is kept as it is
-and never encoded a second time. A '%' that is not followed by two hex
-digits makes the URL invalid, in your URL and in a Location alike; Go's
+and never encoded twice. A '%' that is not followed by two hex digits
+makes the URL invalid, in your URL and in a Location alike, and Go's
 net/url rejects the same input. For example, a Location of "/my file"
 becomes the request-target "/my%20file".
 
-A host name can resolve to several addresses. The client connects
-with Happy Eyeballs (RFC 8305), as the default dialer of Go does: it
-takes the addresses in the order that the resolver gives, which is the
-order of RFC 6724, and alternates the address families, starting with
-the family of the first address. It starts the first address at once,
-and the next one when the attempts in flight have given no result for
+A host name can resolve to several addresses. The client connects with
+Happy Eyeballs (RFC 8305), as Go's default dialer does. It takes the
+addresses in the order the resolver returns them, which is the order
+of RFC 6724, and alternates the address families, starting with the
+family of the first address. The first address is tried at once, and
+the next one when the attempts in flight have given no result for
 250 ms, or at once when an attempt fails. The first attempt that
-connects wins, and the client closes every other one; it reports
-ccol_http_connection_failed only after every address failed. The
-connect timeout is one budget for the whole race; when it runs out,
-the connect ends with ccol_timed_out. So an address that drops its
-packets costs about 250 ms rather than the connect timeout, and the
-name "localhost", which a standard /etc/hosts lists as ::1 before
-127.0.0.1, reaches a server that listens on 127.0.0.1 alone.
-chttpclient_do starts the next address exactly at 250 ms;
-chttpclient_do_async and chttpclient_do_pooled start it between
-250 ms and 350 ms after the one before it.
+connects wins and every other one is closed; ccol_http_connection_failed
+is reported only after every address has failed. The connect timeout
+is one budget for the whole race, and when it runs out the connect
+ends with ccol_timed_out. So an address that drops its packets costs
+about 250 ms instead of the whole connect timeout, and the name
+"localhost", which a standard /etc/hosts lists as ::1 before
+127.0.0.1, reaches a server that listens on 127.0.0.1 only.
+Every tier starts the next address 250 ms after the one before it.
 
-A server can answer before it reads the full request, for example with
-a 401 from a check of credentials or a 413 from a size limit, and can
-then close the connection or stop reading. Each tier monitors the
-connection for such an answer while it sends the request, and gives
-that answer, as curl and the net/http client of Go do. The rules are:
-  - The client drops an interim (1xx) response and continues the send.
-  - A final response of 300 or above stops the send when its header
-    block has arrived; the client does not send the remaining part of
-    the request.
-  - A final response of 200 to 299 lets the send continue while the
+A server can answer before it has read the full request, for example
+with a 401 from a credentials check or a 413 from a size limit, and
+then close the connection or stop reading. Every tier watches the
+connection for such an answer while it sends the request, and returns
+that answer, as curl and Go's net/http client do. The rules are:
+  - An interim (1xx) response is dropped and the send goes on.
+  - A final response of 300 or above stops the send once its header
+    block has arrived, and the rest of the request is not sent.
+  - A final response of 200 to 299 lets the send go on while the
     response arrives, because a server can stream its answer while it
     reads the request. A complete response stops the send.
   - A write that fails because the peer went away stops the send, and
-    the client then gives the answer that the peer sent before it
+    the client then returns the answer that the peer sent before it
     went, if there is one.
-The client never reuses a connection whose response started before the
-client sent the full request.
+The client never reuses a connection whose response started before it
+had sent the full request.
 
-On Linux, a reset discards the data that the client did not read, so
-the client gives an answer only when it reads that answer before a
-reset arrives. chttpclient_do waits for readability during each wait of
-the send. chttpclient_do_async and chttpclient_do_pooled look for an
-answer at these times:
+On Linux a reset throws away data that the client has not read yet, so
+the client can return an answer only if it reads it before the reset
+arrives. chttpclient_do waits for readability during every wait of the
+send. chttpclient_do_async and chttpclient_do_pooled look for an answer
+at these points:
   - When a write would block.
-  - After a write, when 32 KiB or more went out since the last look.
+  - After a write, once 32 KiB or more went out since the last look.
 A response that arrives while a write of chttpclient_do_async or
-chttpclient_do_pooled waits for space in the socket is seen by these
-functions within 100 ms.
+chttpclient_do_pooled waits for room in the socket is seen within
+100 ms.
 
-Each socket of the client is close-on-exec, and so is each file that
-the TLS layer of the client reads, so a process that the application
-starts gets no connection of the client.
+Every socket of the client is close-on-exec, and so is every file that
+the client's TLS layer reads, the system CA bundle included, so a
+process that the application starts inherits no connection of the
+client. The one exception is a system with no default CA file, where
+OpenSSL itself opens the files of its hashed certificate directory
+during a handshake; see chttpclient_set_tls(3).
 
-The server can send interim informational responses with a 1xx
-status. The client drops each such response and continues to read on
-the same connection for the real response, so a caller never gets a
-1xx status as the final answer. "103 Early Hints" of RFC 8297 is the
-most frequent example, and it can come before an ordinary response,
-whatever the value of req->expect_continue.
+A server can send interim informational responses with a 1xx status.
+The client drops each of them and keeps reading on the same connection
+for the real response, so a caller never gets a 1xx status as the
+final answer. RFC 8297's "103 Early Hints" is the most frequent
+example, and it can come before an ordinary response whatever the
+value of req->expect_continue.
 
-The client does not accept an infinite sequence of interim responses:
-after it drops 64 interim responses in sequence on one hop,
-chttpclient_do stops and gives ccol_http_transfer_aborted. This limit
+The client does not accept an endless sequence of interim responses.
+Once it has dropped 64 interim responses in a row on one hop,
+chttpclient_do stops and returns ccol_http_transfer_aborted. The limit
 matters because the request timeout is 0 by default, and 0 means no
 timeout.
 
 The client does not drop "101 Switching Protocols". A 101 answers an
 Upgrade request, which this client never sends, and the bytes after a
-101 belong to a different protocol, so a 101 fails the request with
+101 belong to another protocol, so a 101 fails the request with
 ccol_http_transfer_aborted in every tier, as in curl.
 
-One header line of a response can be up to 64 KiB long, and the whole
-header block up to 64 KiB and 100 lines, while the status line stays
-within 8 KiB. A response past any of those limits gives
-ccol_http_transfer_aborted, and the same limits hold in every tier.
+One header line of a response can be up to 64 KiB long and the whole
+header block up to 64 KiB and 100 lines, while the status line must
+fit in 8 KiB. A response past any of those limits gives
+ccol_http_transfer_aborted, and the same limits apply in every tier.
+
+A response with no Content-Length and no chunked framing has a body
+that ends when the server closes the connection. Over https:// the
+body also ends there when the server closes without a TLS close_notify
+alert, which curl and the Go net/http client accept too, because many
+servers close that way; a close in the middle of a TLS record is
+ccol_http_transfer_aborted. Such a body can't be told apart from one
+that a failure cut off at a record boundary, so a server whose
+responses must arrive whole should send a Content-Length or chunked
+framing.
 
 If req->expect_continue is true and the request has a body, the client
-sends only the headers of the request first, and then waits up to one
-second for the first byte of a response from the server. The second
-bounds only that wait: a response that starts inside it is read to its
-end, bounded only by the request timeout, however long its rest takes.
-The wait ends in one of these ways:
+first sends only the request headers, then waits up to one second for
+the first byte of a response. That second bounds only this wait: a
+response that starts inside it is read to the end, bounded only by the
+request timeout, however long the rest of it takes. The wait ends in
+one of these ways:
 
   - The server sends a "100 Continue" interim response. The client
-    then sends the body and reads the real final response in the
-    normal way. A response that arrives together with the
-    "100 Continue" is read before the body goes out, under the
-    rules for an answer that arrives while the request is sent
-    (see above): a final response of 300 or above, or a complete
-    one, ends the request with no byte of the body sent.
-  - The server sends some OTHER interim 1xx status while the client
-    waits, such as "103 Early Hints" before "100 Continue". The
-    client drops it and waits on for the first byte of the next
-    response, inside the same budget of one second.
+    then sends the body and reads the final response normally. A
+    response that arrives together with the "100 Continue" is read
+    before the body goes out, under the rules for an answer that
+    arrives while the request is being sent (see above): a final
+    response of 300 or above, or a complete one, ends the request
+    without a byte of the body sent.
+  - The server sends some OTHER interim 1xx status during the wait,
+    such as "103 Early Hints" before "100 Continue". The client drops
+    it and keeps waiting for the first byte of the next response,
+    within the same one-second budget.
   - The server answers with a final status instead, for example to
-    reject the request and ask for no body. The client gives that
+    reject the request and ask for no body. The client hands that
     response to the caller as it is and never sends the body, and it
-    closes the connection afterwards and never reuses it. This holds
-    for a final response that is still arriving when the second ends.
-  - The wait of one second ends before any byte of a response. The
-    client then takes the server for one that does not support this
-    mechanism, sends the body and reads the final response in the
-    normal way.
+    closes the connection afterwards and never reuses it. This also
+    holds for a final response that is still arriving when the second
+    runs out.
+  - The second runs out before any byte of a response. The client then
+    assumes that the server doesn't support this mechanism, sends the
+    body and reads the final response normally.
 
-The cap of 64 dropped interim responses in a row applies separately to
-two phases: the wait for "100 Continue", and the read of the final
-response after it. A "100 Continue" is a real outcome, and so is the
-end of the wait with no response; neither is a dropped response, and
-each one sets the count back to zero. One hop can therefore drop up to
-64 interim responses during the wait for "100 Continue", and then up to
-64 more during the read of the final response; the total is not 64.
+The cap of 64 dropped interim responses in a row counts separately in
+two phases, the wait for "100 Continue" and the read of the final
+response after it. A "100 Continue" is a real outcome and so is the
+end of the wait without a response; neither counts as a dropped
+response, and each one resets the count to zero. So one hop can drop
+up to 64 interim responses while it waits for "100 Continue" and up to
+64 more while it reads the final response, and the total is not 64.
 
-expect_continue has no effect on a request with no body. Every tier
-honors it in the same way: chttpclient_do_async and everything on top
-of it use the same protocol with three outcomes that the text above
-describes, but make it part of their own dispatch, which does not
-block, instead of a wait that blocks.
+expect_continue has no effect on a request without a body. Every tier
+honors it the same way: chttpclient_do_async and everything built on it
+use the same three-outcome protocol described above, but as part of
+their own non-blocking dispatch instead of a blocking wait.
 
-Once the client has got a real "100 Continue" interim response and
-written the body on that connection, it reports a later failure on
-that connection directly, and never tries the request again on a
-different connection, even for a connection from the keep-alive idle
-pool. The server showed that it was alive and that it accepted the
-body, so a retry would send the body a second time, on a different
-connection, and a request that is not idempotent could then run two
-times. "Connection reuse" in chttpclient(7) gives the general rule
-that lets the client try a reused connection again one time; this case
-is the one exception to that rule.
+A connection from the keep-alive idle pool can turn out to be dead only
+after the client has written the request on it. When nothing came back,
+the client sends the request once more on a new connection, but only
+when the connection did not take the whole request, or when the
+request is idempotent: a GET, HEAD, OPTIONS, PUT or DELETE, or any
+request with an Idempotency-Key or X-Idempotency-Key header. A POST or
+PATCH without either header that went out in full may have run on the
+server already, so the call fails with ccol_http_transfer_aborted
+instead and the server receives the request once; the application
+decides whether to send it again. "Connection reuse" in chttpclient(7)
+has the full rule.
 
-The response body in the buffer has no size limit by default. Call
-chttpclient_set_max_response_body_size to cap it; the client then
-gives ccol_msg_too_large for a response above that cap instead of
+Once the client has received a real "100 Continue" interim response
+and written the body on that connection, it reports any later failure
+on that connection directly and never tries the request again on
+another connection, whatever the method. The server showed that it was
+alive and accepted the body, so a retry would send the body twice.
+
+A request whose Connection header lists the "close" option is the last
+one on its connection. The client closes the connection after the
+response, whatever the response says (RFC 9112 section 9.6), and the
+next request to that origin opens a new one.
+
+The buffered response body has no size limit by default. Call
+chttpclient_set_max_response_body_size to cap it, and the client then
+returns ccol_msg_too_large for a response over that cap instead of
 buffering the whole body.
 .fi
 .SH PARAMETERS
@@ -297,25 +315,31 @@ ccol_success
 
 ccol_invalid_args
        An argument is NULL; or cli is CHTTPCLI_INVALID, or a stale
-       handle of a client that is already destroyed; or a request
-       header holds a CR byte or an LF byte inside it, and the same
-       for body.content_type on a request with a body; or a request
-       header has the name "Transfer-Encoding"; or, on a request that
-       carries a body (POST, PUT or PATCH), a request header with the
-       name "Content-Length" holds a bad value. A good value is a
-       plain unsigned string of decimal digits, with no leading '+' or
-       '-' and no whitespace inside it, and it must also match the
-       real length of the body that the client sends. See
-       chttp_request_set_header(3).
+       handle of a client that has been destroyed; or req->method
+       names no HTTP method (CHTTP_ANY, or a value outside the enum,
+       set after construction); or a request header value holds a
+       control byte other than a horizontal tab (any byte below 0x20,
+       CR and LF among them, or 0x7F), and the same for
+       body.content_type on a request with a body; or a request
+       header name is not a token; or a request header has the name
+       "Transfer-Encoding"; or, on a request that carries a body
+       (POST, PUT or PATCH), a request header named "Content-Length"
+       holds a bad value. A valid value is a plain unsigned string of
+       decimal digits, with no leading '+' or '-' and no whitespace in
+       it, and it must also match the real length of the body that
+       the client sends. See chttp_request_set_header(3).
 
 ccol_not_enough_memory
-       An allocation of memory failed.
+       A memory allocation failed. When that happens while the client
+       checks a redirect target against the rules in DESCRIPTION, the
+       client follows no further hop and reports this code, so a
+       check that could not finish never lets a hop through.
 
 ccol_timed_out
        The request timeout or the connect timeout fired.
 
 ccol_not_permitted
-       The client is being destroyed, and accepts no new request.
+       The client is being destroyed and accepts no new request.
 
 ccol_http_invalid_url
        The URL is malformed; or it uses an unsupported scheme (the
@@ -323,56 +347,58 @@ ccol_http_invalid_url
        its host, port or userinfo part is missing or not valid.
 
        The host must match the uri-host rule of RFC 3986 section
-       3.2.2, that is, it must be one of these:
+       3.2.2, which means it must be one of these:
          - A name of letters, digits, '-', '.', '_', '~', the
            sub-delims !$&'()*+,;= and %XX escapes.
          - A bracketed IPv6 address or IPvFuture literal.
        A space, a tab, a control byte, a byte of 0x80 or above, a
        backslash, and a bracket that the authority does not close all
-       make the URL invalid. Give a host name outside ASCII in its
-       punycode (IDNA) form. The client does not support an IPv6 zone
-       identifier.
+       make the URL invalid. Write a host name outside ASCII in its
+       punycode (IDNA) form. IPv6 zone identifiers are not
+       supported.
 
        Credentials in the URL can hold only the characters of the
        userinfo rule, %XX escapes and an unescaped '@' in the
-       password. A user name that holds a ':' after the client decodes
-       its escapes, as in "http://a%3Ab:pw@host/", has no valid Basic
-       credential (see chttp_basic_auth(3)), so the URL is then also
-       invalid.
+       password. A user name that holds a ':' once its escapes are
+       decoded, as in "http://a%3Ab:pw@host/", has no valid Basic
+       credential (see chttp_basic_auth(3)), so such a URL is invalid
+       as well.
 
-       A CR byte or an LF byte in the path or in the query, and a '%'
-       in the path or the query that is not followed by two hex
-       digits, also make the URL invalid. Without these checks, the
-       client would copy such a byte into the Host header or the
-       request line, and the URL could then inject more header lines,
-       or smuggle a full second request. Each Location that the client
-       follows goes through the same rules.
+       A CR or LF byte in the path or the query, and a '%' in the path
+       or the query that is not followed by two hex digits, also make
+       the URL invalid. Without these checks the client would copy
+       such a byte into the Host header or the request line, and the
+       URL could then inject extra header lines or smuggle a whole
+       second request. Every Location that the client follows goes
+       through the same rules.
 
        Or, for http+unix://, the URL gives a socket path that is too
-       long for sockaddr_un.sun_path. The client also gives this code
-       when a redirect resolves to a http+unix:// target and the hop
-       that carried the Location was not bound to it (see
+       long for sockaddr_un.sun_path. The client also returns this
+       code when a redirect resolves to an http+unix:// target and the
+       hop that carried the Location was not bound to it (see
        DESCRIPTION).
 
 ccol_http_host_resolution_failed
        The DNS resolution of the target host failed. The client never
-       gives this code for http+unix://, which has no DNS step.
+       returns this code for http+unix://, which has no DNS step.
 
 ccol_http_connection_failed
-       The client could not make the connection: every address of the
-       host refused it or failed, or a http+unix:// socket path does
-       not exist. A socket error on a connection that the client
-       already made is ccol_http_transfer_aborted instead.
+       The client could not connect: every address of the host
+       refused or failed, or an http+unix:// socket path does not
+       exist. A socket error on a connection that is already
+       established is ccol_http_transfer_aborted instead.
 
 ccol_http_too_many_redirects
-       The chain of redirects went past 50 hops.
+       The redirect chain went past 50 hops.
 
 ccol_http_tls_handshake_failed
-       The TLS handshake failed for a reason other than the
-       verification of a certificate.
+       The TLS handshake failed for a reason other than certificate
+       verification. A peer that resets or closes the connection
+       after the TCP connect and before the handshake finishes gives
+       this code, in every tier.
 
 ccol_http_tls_cert_verification_failed
-       The client could not verify the certificate of the peer or its
+       The client could not verify the peer's certificate or its
        hostname.
 
 ccol_http_tls_cert_load_failed
@@ -382,32 +408,30 @@ ccol_http_tls_cert_load_failed
 
 ccol_http_transfer_aborted
        The connection failed during the transfer, or the server sent
-       a malformed HTTP/1.1 response. A response with ambiguous
-       framing is malformed, and these responses have ambiguous
-       framing:
-         - A response with a Content-Length and a Transfer-Encoding
-           (RFC 7230 section 3.3.3).
-         - A response that applies "chunked" more than one time
+       a malformed HTTP/1.1 response. A reused connection that took
+       the whole of a non-idempotent request and then died without a
+       byte of a response also gives this code (see DESCRIPTION). A
+       response with ambiguous framing is malformed, and these
+       responses have ambiguous framing:
+         - A response with both a Content-Length and a
+           Transfer-Encoding (RFC 7230 section 3.3.3).
+         - A response that applies "chunked" more than once
            (section 3.3.1). The client reads the codings of all
            Transfer-Encoding lines as one list.
-       A Transfer-Encoding without "chunked" and without a
-       Content-Length is not ambiguous: the client reads such a body
-       until the connection closes. A chunk-size line is also
-       malformed when its chunk extension does not obey the grammar
-       of RFC 9112 section 7.1.1, for example when it holds a control
-       byte.
+       The client decodes the "chunked" transfer coding and no other,
+       and never asks for another one, so a final response whose
+       Transfer-Encoding names any other coding (gzip, deflate,
+       identity, ...) fails with this code instead of returning a
+       body that is still encoded, as the Go net/http client does. A
+       chunk-size line is also malformed when its chunk extension
+       does not follow the grammar of RFC 9112 section 7.1.1, for
+       example when it holds a control byte.
 
-       Or a streaming chttpcli_write_fn gave back a value that is not
-       the number of bytes that it got.
+       Or a streaming chttpcli_write_fn returned a value other than
+       the number of bytes it was given.
 
-       Over https://, this code also covers a response whose body
-       ends at the close of the connection (no Content-Length and no
-       chunked framing) when the server closes without a TLS
-       close_notify alert. Without that alert, the client cannot tell
-       the end of the body from a connection that an attacker or a
-       failure stopped too early, so it reports the response as
-       truncated. A body with a length or with chunked framing does
-       not need the alert.
+       Over https://, this code also covers a connection that closes
+       in the middle of a TLS record.
 
        A connection that fails while the client sends the request
        gives this code only when the client found no answer from the
@@ -415,26 +439,27 @@ ccol_http_transfer_aborted
        also gives this code.
 
 ccol_msg_too_large
-       The response body went past the cap of
-       chttpclient_set_max_response_body_size. The client gives this
-       code only after you set that cap.
+       The response body went past the cap set by
+       chttpclient_set_max_response_body_size. The client returns
+       this code only once you have set that cap.
 
 ccol_unexpected_failure
        Any other internal failure that the codes above do not cover.
 .fi
 .SH NOTES
 .nf
-The library leaves the disposition of SIGPIPE to the application and
+The library leaves the SIGPIPE disposition to the application and
 never changes it, in any tier. No write of the client raises that
-signal: every write to a socket, a TLS record and the close_notify of
+signal, because every socket write, TLS records and the close_notify of
 a TLS teardown included, is a send(2) with MSG_NOSIGNAL. A server that
-closes or resets the connection while the client writes a request
-therefore fails that request, and never ends the process.
+closes or resets the connection while the client writes a request makes
+that request fail and never ends the process.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_do_streaming (3),
 .BR chttpclient_do_async (3),
 .BR chttpclient_set_max_response_body_size (3),
+.BR chttpclient_set_tls (3),
 .BR chttp_do (3),
 .BR chttpclient_resp_free (3),
 .BR chttpclient (7)

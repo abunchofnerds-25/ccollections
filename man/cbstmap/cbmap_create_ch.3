@@ -16,21 +16,20 @@ cbmap cbmap_create_ch(ccol_data_type key_type,
 .fi
 .SH DESCRIPTION
 .nf
-Creates a self-balancing BST map in which custom_comparison_proc sets the
-order of the keys. The function is a thin inline wrapper over
-cbmap_create_full(3) that gives NULL for the memory management
+Creates a self-balancing BST map whose keys are ordered by
+custom_comparison_proc. It is a thin inline wrapper over
+cbmap_create_full(3) that passes NULL for the memory management
 procedures, so the map uses the default allocator. The type-inferred
 equivalents are cbmap_construct_cc(3) and cbmap_init_cc(3).
 
-The procedure decides the order of the keys and nothing else: key_type
-sets the width that the map expects of every key_pair of a fixed-width
-key type, and key_type also sets the alignment of every stored key.
+The procedure only decides the order of the keys. key_type sets the width
+that the map expects of every key_pair of a fixed-width key type, and it
+also sets the alignment of every stored key.
 
-cbmap_construct_cc(3) gives the contract of the procedure:
-  - It returns a negative value, zero or a positive value.
-  - It defines key equality and key order.
-  - It must give a consistent, transitive order for the whole life of
-    the map.
+cbmap_construct_cc(3) gives the full contract of the procedure. In short,
+it returns a negative value, zero or a positive value, it defines key
+equality as well as key order, and the order it gives must be consistent
+and transitive for the whole life of the map.
 .fi
 .SH PARAMETERS
 .nf
@@ -42,20 +41,21 @@ err                     Optional pointer that receives an error string on
 .fi
 .SH RETURN VALUE
 .nf
-A new map on success.
-NULL on failure, in which case *err is set to an error string when err is
-not NULL.
+A new map on success. On failure it returns NULL and, when err is not
+NULL, sets *err to an error string.
 .fi
 .SH NOTES
 .nf
-The procedure gets two bare pointers to key bytes, and a key that comes
-in through the raw layer can be at any address. Read a key that is wider
-than one byte through memcpy, not through a pointer cast to the key type
-The procedure must stay callable for the whole life of the map
-The function reports a failure instead of stopping the program, while the
-cbmap_construct_cc(3) and cbmap_init_cc(3) macros call ccol_fatal_err()
-on a failure
-Destroy the map with cbmap_destroy(3)
+The procedure gets two bare pointers to key bytes, and a key that comes in
+through the raw layer can sit at any address. Read a key wider than one
+byte with memcpy, not through a pointer cast to the key type. The
+procedure must stay callable for the whole life of the map.
+
+This function reports a failure to the caller, while the
+cbmap_construct_cc(3) and cbmap_init_cc(3) macros call _ccol_fatal_err()
+on a failure.
+
+Destroy the map with cbmap_destroy(3).
 .fi
 .SH EXAMPLES
 .nf
@@ -85,4 +85,5 @@ cbmap_destroy(releases);
 .BR cbmap_create_full (3),
 .BR cbmap_construct_cc (3),
 .BR cbmap_init_cc (3),
-.BR cbmap_destroy (3)
+.BR cbmap_destroy (3),
+.BR ccol_determine_ccol_data_type (3)

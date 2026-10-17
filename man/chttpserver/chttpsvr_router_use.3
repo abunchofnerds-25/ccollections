@@ -12,29 +12,21 @@ ccol_retval_t chttpsvr_router_use(chttpsvr_router *router,
 .fi
 .SH DESCRIPTION
 .nf
-Appends a middleware to the chain of the given sub-router.  The
-middleware runs after the global middleware and before the route
-handler, and only for requests that the server routes through this
-sub-router.
+Appends a middleware to the chain of the given sub-router.  It runs
+after the global middleware and before the route handler, and only
+for requests that the server routes through this sub-router.
 
-It also runs for a request that is routed to this sub-router and then
-rejected with 413 before its handler could run, and for the 404 or 405
-of a path that this sub-router owns but none of its routes matches.
-See chttpsvr_subrouter(3) for which paths a sub-router owns, and
-chttpsvr_use(3) for the full rule and for the rejections that run no
-middleware at all.
+It also runs for a request that was routed to this sub-router and
+then rejected with 413 before its handler could run, and for the 404
+or 405 of a path that this sub-router owns but that none of its
+routes matches.  chttpsvr_subrouter(3) says which paths a sub-router
+owns, and chttpsvr_use(3) gives the full rule and the rejections that
+run no middleware at all.
 
-This function is thread-safe and can be called at any time, even while
-another thread runs chttpsvr_destroy on the owning server; a call that
-races such a destroy returns ccol_invalid_args and touches no freed
-memory.
-.fi
-.SH NOTES
-.nf
-The NOTES section of chttpsvr_use describes three further points: the
-cap that each router applies at registration time, the combined limit
-of 32 middleware steps per request at dispatch time, and the policy
-that the first of two duplicate routes wins.
+The function is thread-safe and may be called at any time, even while
+another thread runs chttpsvr_destroy on the owning server.  A call
+that races such a destroy returns ccol_invalid_args and touches no
+freed memory.
 .fi
 .SH RETURN VALUE
 .nf
@@ -45,6 +37,15 @@ ccol_not_enough_memory when an allocation fails.
 ccol_not_permitted when the middleware chain of this router is already
 at the cap of 32 entries.
 .fi
+.SH NOTES
+.nf
+The NOTES section of chttpsvr_use covers three more points: the cap
+that each router applies when you register a middleware, the limit
+of 32 middleware steps per request in total when a request is
+dispatched, and the rule that of two duplicate routes the first one
+wins.
+.fi
 .SH "SEE ALSO"
 .BR chttpsvr_use (3),
-.BR chttpsvr_subrouter (3)
+.BR chttpsvr_subrouter (3),
+.BR chttpsvr_req_set_context (3)

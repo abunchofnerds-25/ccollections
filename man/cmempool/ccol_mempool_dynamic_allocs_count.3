@@ -11,10 +11,10 @@ size_t ccol_mempool_dynamic_allocs_count(ccol_mempool *mp);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the number of outstanding allocations that came from the system
-allocator instead of the storage of the pool. These happen only in a
-pool created with fallback_to_dynamic_memory = true, and only after the
-elements of the pool run out.
+Returns the number of outstanding allocations that came from the
+system allocator instead of the pool's own storage. They happen only in
+a pool created with fallback_to_dynamic_memory = true, and only after
+the pool's elements run out.
 .fi
 .SH PARAMETERS
 .nf
@@ -27,23 +27,26 @@ a pool created without a fallback
 .fi
 .SH NOTES
 .nf
-A non-zero result means that the pool was too small for its workload at
-some point, and is the signal to raise elem_count: every fallback
-allocation is one round trip to the system allocator, which is the cost
-that the pool exists to avoid.
+A non-zero result means the pool was too small for its workload at
+some point, and that elem_count should go up: every fallback
+allocation is a round trip to the system allocator, which is exactly
+the cost the pool is there to avoid.
 
-An entry in the cache of a thread is pool-owned, so this call never
-counts such an entry.
+An entry in a thread's cache belongs to the pool, so this call never
+counts one.
 
 ccol_mempool_destroy() treats an outstanding fallback allocation as a
-leak and stops the process, so free every fallback entry of a pool with
-a fallback before you destroy that pool.
+leak and stops the process, so free every fallback entry of a pool
+before you destroy it.
+
+A NULL mp is a fatal error: the call prints a message and ends the
+process with abort(), in every build.
 .fi
 .SH "THREAD SAFETY"
 .nf
 Thread-safe when the pool was created with single_threaded = false.
-The call takes the lock of the pool, which makes it a cold-path call:
-do not use it inside a hot loop.
+The call takes the pool's lock, so it belongs on a cold path; don't
+use it inside a hot loop.
 .fi
 .SH "SEE ALSO"
 .BR ccol_mempool_total_capacity (3),

@@ -24,6 +24,7 @@ SOFTWARE.
 
 #include <csort.h>
 #include <internal/csortimpl.h>
+#include <internal/test_helpers/csortimpl.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -34,22 +35,22 @@ SOFTWARE.
 /* ========================================================================== */
 
 /* Compares two stored C-string pointers (const char **) with strcmp, in
- * lexicographic order. NULL comes before every string that is not NULL and
- * is equal only to another NULL. This is the default comparator when the
+ * lexicographic order. NULL sorts before every string that isn't NULL and is
+ * equal only to another NULL. This is the default comparator when the
  * element type is ccol_char_ptr.
  *
- * NULL is an ordinary member of the char * element type: a list in the
- * style of argv holds NULL elements, and so does a sparse table of optional
- * strings, and a caller asks cvec_find() for the first such element with a
- * NULL needle. Because a NULL that goes straight to strcmp() dereferences a
- * null pointer, this comparator gives NULL an explicit position of its own,
- * and that position must make the result a real total order: every NULL
- * goes into one equivalence class, which sits strictly below every string.
- * The take-left-or-take-right decision of csort_merge() needs such an order
- * from comparison_proc, since a comparator that answers inconsistently for
- * one single member of the element type also misorders the elements around
- * that member. The float comparators below impose an explicit rule on NaN
- * for the same reason. */
+ * NULL is an ordinary member of the char * element type. An argv-style list
+ * holds NULL elements, so does a sparse table of optional strings, and a
+ * caller asks cvec_find() for the first such element with a NULL needle.
+ * Passing a NULL straight to strcmp() dereferences a null pointer, so this
+ * comparator gives NULL its own explicit position, and that position must
+ * keep the result a real total order: all NULLs form one equivalence class
+ * that sits strictly below every string. csort_merge() decides between
+ * taking the left or the right element from comparison_proc, and that
+ * decision needs such an order; a comparator that answers inconsistently for
+ * even one member of the element type misorders the elements around that
+ * member as well. The float comparators below have an explicit NaN rule for
+ * the same reason. */
 int _csort_default_string_comparison_proc(const void *first,
                                           const void *second) {
   const char *_s1;
@@ -72,14 +73,14 @@ int _csort_default_string_comparison_proc(const void *first,
     return (_v1 > _v2) - (_v1 < _v2);                                 \
   }
 
-/* The macro above expands to a family of typed comparison functions, one
- * for each standard C integer type. Each function reads its two operands
- * with memcpy, because a caller can hand a default comparator an address
- * with neither the alignment nor the effective type of the element (a
- * custom getter over a packed buffer); the constant-size memcpy compiles to
- * the same single load as a typed read. It then gives -1, 0 or +1 with the
- * (a>b)-(a<b) idiom, which prevents the undefined behavior of an integer
- * subtraction at the edge values. */
+/* The macro above expands to a family of typed comparison functions, one per
+ * standard C integer type. Each one reads its two operands with memcpy,
+ * because a caller can hand a default comparator an address that has neither
+ * the alignment nor the effective type of the element (a custom getter over
+ * a packed buffer, for example). A constant-size memcpy compiles to the same
+ * single load as a typed read. The result is -1, 0 or +1 from the
+ * (a>b)-(a<b) idiom, which avoids the undefined behavior that an integer
+ * subtraction has at the edge values. */
 ___csort__define_default_integral_comparison_proc(char, char);
 ___csort__define_default_integral_comparison_proc(signed char, signed_char);
 ___csort__define_default_integral_comparison_proc(short, short);
@@ -95,29 +96,42 @@ ___csort__define_default_integral_comparison_proc(unsigned long long,
                                                   unsigned_long_long);
 #undef ___csort__define_default_integral_comparison_proc
 
-/* A three-way comparison for a floating-point type T, with an explicit rule
- * for NaN. The take-left-or-take-right decision of csort_merge() needs a
- * real strict weak ordering from comparison_proc over the whole collection,
- * and the native `<` and `>` of IEEE 754 cannot give one when a NaN is
- * present, because both are false for any comparison with a NaN operand.
- * The simple (a>b)-(a<b) idiom above, which serves every other numeric
- * type, silently reports a NaN as "equal" to every value, including two
- * completely unrelated values that are not NaN and only sit on the two
- * sides of the NaN in the collection. Without an explicit rule for NaN, the
- * position of the NaN is not the only unspecified thing: the relative order
- * of the elements around it is also corrupt. A merge step that compares a
- * real value against that NaN hears "equal" and picks a side from that
- * false premise, instead of from the real values that wait on the other
- * side. For example, csort_sort() on the doubles {9, NaN, 1, 4, NaN, 2, 7}
- * gives {1, 4, 9, NaN, NaN, 2, 7}, whose subsequence without the NaN values
- * (1, 4, 9, 2, 7) is not sorted. Every comparison that csort_merge() made
- * gave a value that fits *some* total order, because 0 means "equal", but
- * that order is not well defined. A NaN that is greater than every value
- * which is not NaN, and equal only to another NaN, restores a real total
- * order; cmp_float_val in cbstmap imposes the same rule for the BST map
- * keys of this library. Because isnan() is a type-generic macro from C99
- * <math.h>, this one macro serves float, double and long double with no
- * variant for each type. */
+/* bool has two values, and false comes before true. The operands are read
+ * with memcpy for the same reason as above. The function is written out
+ * instead of going through the macro because before C23 <stdbool.h> defines
+ * bool as a macro, and as a macro argument it would expand into the
+ * function name. */
+int _csort_default_bool_comparison_proc(const void *first, const void *second) {
+  _Bool _v1;
+  _Bool _v2;
+  memcpy(&_v1, first, sizeof(_v1));
+  memcpy(&_v2, second, sizeof(_v2));
+  return (_v1 > _v2) - (_v1 < _v2);
+}
+
+/* A three-way comparison for a floating-point type T with an explicit rule
+ * for NaN. csort_merge() decides between the left and the right element from
+ * comparison_proc, and that needs a real strict weak ordering over the whole
+ * collection. IEEE 754's native `<` and `>` can't give one once a NaN is
+ * present, since both are false for any comparison with a NaN operand. The
+ * plain (a>b)-(a<b) idiom above, which serves every other numeric type,
+ * silently reports a NaN as "equal" to every value, even to two completely
+ * unrelated non-NaN values that just happen to sit on either side of the NaN
+ * in the collection. So without a NaN rule it isn't only the NaN's position
+ * that is unspecified, the relative order of the elements around it gets
+ * corrupted too: a merge step comparing a real value with that NaN hears
+ * "equal" and picks a side from that, instead of from the real values
+ * waiting on the other side. For example, csort_sort() on the doubles
+ * {9, NaN, 1, 4, NaN, 2, 7} gives {1, 4, 9, NaN, NaN, 2, 7}, and the non-NaN
+ * subsequence (1, 4, 9, 2, 7) isn't sorted. Every single comparison
+ * csort_merge() made fits *some* total order, because 0 means "equal", but
+ * that order isn't well defined. Making a NaN greater than every non-NaN
+ * value and equal only to another NaN gives a real total order back;
+ * cmp_float_val in cbstmap uses the same rule for this library's BST map
+ * keys. It's tempting to fold these comparators into the integer macro
+ * above, but for a float type that brings exactly this corruption back.
+ * isnan() is a type-generic macro from C99 <math.h>, so this one macro
+ * covers float, double and long double without a variant per type. */
 #define ___csort__define_default_float_comparison_proc(type, name) \
   int ___csort__get_default_integral_comparison_proc_name(name)(   \
       const void *first, const void *second) {                     \
@@ -145,24 +159,24 @@ ___csort__define_default_float_comparison_proc(long double, long_double);
 /**
  * @brief Merge two sorted subarrays into one
  *
- * This function merges two contiguous sorted subarrays, [left...mid] and
- * [mid+1...right], into one sorted array, with a temporary buffer for the
- * intermediate results of the merge.
+ * Merges the two contiguous sorted subarrays [left...mid] and
+ * [mid+1...right] into one sorted array, using a temporary buffer for the
+ * intermediate results.
  *
- * @param col Pointer to the collection that the library sorts
+ * @param col Pointer to the collection being sorted
  * @param left First index of the left subarray
  * @param mid Last index of the left subarray; the right subarray starts at
  * mid+1.
  * @param right Last index of the right subarray
  * @param elem_size Size of each element in bytes
  * @param getter_proc Function that gets the element at an index. It must not
- * be NULL: csort_mergesort_iterative(), the only caller, gives that
- * guarantee, because ___csort_merge_sort(), the only way to reach that
- * caller, makes its own NULL check first.
+ * be NULL. csort_mergesort_iterative(), the only caller, guarantees that,
+ * because ___csort_merge_sort(), the only way to reach that caller, does its
+ * own NULL check first.
  * @param comparison_proc Function that compares two elements, with the same
  * guarantee as getter_proc.
- * @param temp_buffer Temporary buffer for the merge, which the caller
- * allocates in advance.
+ * @param temp_buffer Temporary buffer for the merge, allocated beforehand by
+ * the caller.
  */
 static void csort_merge(void *col, size_t left, size_t mid, size_t right,
                         size_t elem_size, csort_item_getter_proc_t getter_proc,
@@ -172,9 +186,9 @@ static void csort_merge(void *col, size_t left, size_t mid, size_t right,
   size_t n1 = mid - left + 1;  // Size of the left subarray
   size_t n2 = right - mid;     // Size of the right subarray
 
-  // Copy both subarrays into the temporary buffer:
-  // the left subarray goes to temp_buffer[0...n1-1],
-  // and the right subarray goes to temp_buffer[n1...n1+n2-1].
+  // Copy both subarrays into the temporary buffer. The left one goes to
+  // temp_buffer[0...n1-1] and the right one to
+  // temp_buffer[n1...n1+n2-1].
   for (i = 0; i < n1; i++) {
     void *src = getter_proc(col, left + i);
     void *dst = (unsigned char *)temp_buffer + i * elem_size;
@@ -189,8 +203,8 @@ static void csort_merge(void *col, size_t left, size_t mid, size_t right,
 
   // Merge the two subarrays back into col
   i = 0;     // Index for the left subarray
-  j = n1;    // Index for the right subarray, which starts after the left
-             // subarray in the buffer.
+  j = n1;    // Index for the right subarray, which starts right after the
+             // left one in the buffer.
   k = left;  // Index for the merged array
 
   while (i < n1 && j < n1 + n2) {
@@ -208,7 +222,7 @@ static void csort_merge(void *col, size_t left, size_t mid, size_t right,
     k++;
   }
 
-  // Copy the elements that stay in the left subarray
+  // Copy whatever is left in the left subarray
   while (i < n1) {
     void *src = (unsigned char *)temp_buffer + i * elem_size;
     void *dst = getter_proc(col, k);
@@ -217,7 +231,7 @@ static void csort_merge(void *col, size_t left, size_t mid, size_t right,
     k++;
   }
 
-  // Copy the elements that stay in the right subarray
+  // Copy whatever is left in the right subarray
   while (j < n1 + n2) {
     void *src = (unsigned char *)temp_buffer + j * elem_size;
     void *dst = getter_proc(col, k);
@@ -234,112 +248,108 @@ typedef enum {
 } csort_buffer_outcome;
 
 /* Checks the shape of a sort of length elements of elem_size bytes before
- * the caller allocates the temporary buffer that every merge pass reuses.
- * Both sort drivers below share it, so they apply one set of limits. It
- * gives csort_buffer_ready when the caller must allocate
- * length * elem_size bytes and sort, csort_buffer_not_needed for an input
- * with nothing to move, and csort_buffer_refused when the sort must report
- * failure. */
+ * the caller allocates the temporary buffer that all merge passes reuse.
+ * Both sort drivers below share it, so they apply the same limits. It gives
+ * csort_buffer_ready when the caller has to allocate length * elem_size
+ * bytes and sort, csort_buffer_not_needed when the input has nothing to
+ * move, and csort_buffer_refused when the sort reports failure. */
 static inline __attribute__((always_inline)) csort_buffer_outcome
 csort_check_sort_shape(size_t length, size_t elem_size,
                        ccol_memmgmt_procs_t *mprocs) {
-  // Reject a length that is more than ccol_max_elem_count before anything
-  // else; that limit is 2^63 on a 64-bit size_t. The bottom-up loop below
-  // doubles curr_size (1, 2, 4, and so on) up to the largest power of two
-  // below length, and stops when curr_size reaches length or goes past
-  // it. For a length above ccol_max_elem_count, that sequence reaches
-  // curr_size == ccol_max_elem_count while curr_size < length is true,
-  // so the loop body runs one more time and curr_size *= 2 then
-  // overflows all the way round to 0. From then on curr_size < length is
-  // true for ever, because 0 doubled is 0, and the loop can never stop.
+  // Reject a length above ccol_max_elem_count before anything else; on a
+  // 64-bit size_t that limit is 2^63. The bottom-up loop below doubles
+  // curr_size (1, 2, 4 and so on) up to the largest power of two below
+  // length, and stops once curr_size reaches or passes length. For a
+  // length above ccol_max_elem_count that sequence gets to
+  // curr_size == ccol_max_elem_count while curr_size < length is still
+  // true, so the body runs one more time and curr_size *= 2 overflows all
+  // the way round to 0. From there curr_size < length is true forever,
+  // because 0 doubled is 0, and the loop never stops.
   //
-  // The multiplication guard directly below this one,
-  // length > SIZE_MAX / elem_size, does NOT make this check
-  // unnecessary, and elem_size == 1 is the reason: for elem_size == 1,
-  // SIZE_MAX / elem_size is SIZE_MAX itself, so that guard rejects
-  // nothing on the basis of size, and every length up to SIZE_MAX passes.
-  // Without this check, such a length reaches the loop above with no bound
-  // at all. The multiplication guard alone covers every elem_size of 2 or
-  // more, because SIZE_MAX / elem_size is then below ccol_max_elem_count
-  // already, so the range that this check rejects for those elem_size
-  // values is empty. An elem_size of 0 is a completely different case: it
-  // never reaches this loop for any length, because it has its own
-  // dedicated short-circuit directly below, so it is not the reason for
-  // this check either. An elem_size of 1 is the one case that this check
-  // covers on its own, and a regression test must exercise that case (see
+  // The multiplication guard right below this one,
+  // length > SIZE_MAX / elem_size, does NOT make this check unnecessary,
+  // and elem_size == 1 is why. For elem_size == 1, SIZE_MAX / elem_size is
+  // SIZE_MAX itself, so that guard rejects nothing on size and every
+  // length up to SIZE_MAX gets through. Without this check such a length
+  // reaches the loop above with no bound at all. For every elem_size of 2
+  // or more the multiplication guard alone is enough, because
+  // SIZE_MAX / elem_size is already below ccol_max_elem_count, so the
+  // range this check rejects is empty for them. An elem_size of 0 is a
+  // different case altogether: it never reaches the loop for any length
+  // because it has its own short-circuit right below, so it isn't the
+  // reason for this check either. elem_size == 1 is the one case only this
+  // check covers, and a regression test needs to exercise it (see
   // csort_sort_rejects_length_exceeding_max_elem_count_for_nonzero_elem_size
   // in tests/csort/tests.c).
   //
   // Every other container in this library refuses to grow past
   // ccol_max_elem_count for the same reason (see cvector_push_back,
-  // cvector_reserve and cvector_append_array); this check is the equivalent
-  // cap of csort on its own length parameter. It never rejects
-  // ccol_max_elem_count itself: the last run of the loop body is at
-  // curr_size == ccol_max_elem_count / 2, and curr_size then doubles to
-  // exactly ccol_max_elem_count and stops there, with no overflow. Only a
-  // length strictly greater than that limit is rejected.
+  // cvector_reserve and cvector_append_array), and this is csort's
+  // equivalent cap on its own length parameter. ccol_max_elem_count itself
+  // is never rejected: the last run of the loop body is at
+  // curr_size == ccol_max_elem_count / 2, after which curr_size doubles to
+  // exactly ccol_max_elem_count and the loop stops without an overflow.
+  // Only a length strictly greater than the limit is rejected.
   if (length > ccol_max_elem_count) {
     return csort_buffer_refused;
   }
 
-  // An element of size zero carries no content that getter_proc or
-  // comparison_proc can tell apart, and no bytes for a merge
-  // pass to move, so the temp buffer would need 0 bytes for any length.
-  // Instead of making that allocation of zero bytes, this code treats the
-  // case like the trivial length of 0 or 1: it gives success
-  // immediately, and calls neither getter_proc nor comparison_proc nor
-  // the allocator. The C standard says that malloc(0) is
-  // implementation-defined, and the same holds for a custom malloc from the
-  // caller with a request of size 0: such a call can give NULL, and that
-  // NULL does not mean "out of memory". An allocation here therefore risks a
-  // false report of "out of memory" from csort_sort() for an input with
-  // nothing to sort. This early return also makes the SIZE_MAX / elem_size
-  // check below always safe, with no separate guard for zero,
-  // because elem_size is known to be nonzero when it runs.
+  // A zero-size element has no content that getter_proc or
+  // comparison_proc could tell apart, and no bytes for a merge pass to
+  // move, so the temp buffer would need 0 bytes whatever the length.
+  // Instead of making that zero-byte allocation we handle it like the
+  // trivial lengths 0 and 1: success at once, without calling
+  // getter_proc, comparison_proc or the allocator. malloc(0) is
+  // implementation-defined in the C standard, and a caller's custom malloc
+  // asked for 0 bytes behaves the same way; it can give NULL, and that NULL
+  // doesn't mean "out of memory". Allocating here would therefore risk a
+  // false "out of memory" from csort_sort() for an input with nothing to
+  // sort. The early return also keeps the SIZE_MAX / elem_size check below
+  // safe without a separate zero guard, since elem_size is known to be
+  // nonzero by the time it runs.
   if (elem_size == 0) {
     return csort_buffer_not_needed;
   }
 
-  // Guard the size computation of the temp buffer against an overflow of
-  // size_t, before the multiplication runs. A wrap-around of
-  // length * elem_size gives _ccol_mem_alloc a tiny, wrapped size, while
-  // every merge pass below reads and writes full elements of elem_size
-  // bytes at indices that come from the real length, which did not wrap; such
-  // a pass corrupts the heap memory past the buffer that is too small. Every
-  // other count * elem_size computation in this library guards the same
-  // multiplication in the same way (cvector_create_full,
-  // scale_the_cvector_size_up and cvector_reserve, for example), and this
-  // is the instance of that guard for the merge sort.
+  // Guard the temp buffer's size computation against a size_t overflow
+  // before the multiplication runs. If length * elem_size wrapped around,
+  // _ccol_mem_alloc would get a tiny wrapped size, while every merge pass
+  // below reads and writes full elem_size elements at indices that come
+  // from the real, unwrapped length, and such a pass would corrupt the heap
+  // past the undersized buffer. Every other count * elem_size computation
+  // in this library guards the same multiplication the same way
+  // (cvector_create_full, scale_the_cvector_size_up and cvector_reserve,
+  // for example), and this is the merge sort's copy of that guard.
   if (length > SIZE_MAX / elem_size) {
     return csort_buffer_refused;
   }
 
-  // An mprocs that is not NULL must hold all four function pointers: this is
-  // the all-or-nothing contract that ccol_memmgmt_procs_t itself documents.
-  // Each other entry point in this library that accepts an allocator applies
-  // that contract before it touches such a struct (for example
+  // A non-NULL mprocs must hold all four function pointers, which is the
+  // all-or-nothing contract that ccol_memmgmt_procs_t itself documents.
+  // Every other entry point in this library that takes an allocator applies
+  // that contract before touching the struct (for example
   // cvector_create_full, chmap_create_full, cbmap_create_full and
-  // ctpool_create_full); those functions check mprocs once, when they make a
-  // container, and then use it again. csort_sort() is different, because it
-  // takes a new mprocs on each call and a caller can make that struct by
-  // hand: csort_sort(3) documents a direct mprocs as a usual use case, so the
-  // mprocs does not always come from cvector_get_mprocs() of a container,
-  // which is checked. Without this check, a struct from a caller with .malloc
-  // set and .free left as NULL lets _ccol_mem_alloc() below succeed, and the
-  // program crashes later, through a call to a NULL function pointer, when
+  // ctpool_create_mp). Those functions check mprocs once when they create a
+  // container and reuse it afterwards. csort_sort() is different since it
+  // takes a fresh mprocs on every call, and a caller can build that struct
+  // by hand: csort_sort(3) documents passing mprocs directly as a usual use
+  // case, so it doesn't always come from cvector_get_mprocs() of an already
+  // checked container. Without this check, a caller's struct with .malloc
+  // set and .free left NULL lets _ccol_mem_alloc() below succeed, and the
+  // program crashes later through a NULL function pointer when
   // _ccol_mem_free() frees the temp buffer.
   //
-  // The check sits here, directly before the only allocation of this
-  // function, and not earlier, because no path that returns before the
-  // allocation touches mprocs. These paths are:
+  // The check sits right before the function's only allocation and not
+  // earlier, because none of the paths that return before the allocation
+  // touch mprocs. Those paths are:
   // - a col of NULL (in the callers)
   // - a length of 0 or 1 (in the callers)
   // - an elem_size of 0 (a trivial success)
   // - a length above ccol_max_elem_count and the overflow guard on
   //   length * elem_size (refusals).
-  // A malformed mprocs that this call does not use must not change the
-  // result of any of these paths.
-  if (!ccol_verify_memmgmt_procs(mprocs, (char **)NULL)) {
+  // A malformed mprocs that this call doesn't use must not change the
+  // result of any of them.
+  if (!_ccol_verify_memmgmt_procs(mprocs, (char **)NULL)) {
     return csort_buffer_refused;
   }
 
@@ -349,19 +359,17 @@ csort_check_sort_shape(size_t length, size_t elem_size,
 /**
  * @brief An iterative, bottom-up mergesort
  *
- * This function sorts iteratively, with no recursion. It starts with
- * subarrays of size 1 and merges pairs of subarrays step by step, so the
- * sorted subarrays grow to size 2, then 4, then 8, and so on, until the
- * whole array is sorted.
+ * Sorts with loops and no recursion. It starts from subarrays of size 1 and
+ * merges them in pairs, so the sorted subarrays grow to size 2, then 4, then
+ * 8 and so on until the whole array is sorted.
  *
  * @param col Pointer to the collection to sort
- * @param low First index, which the range includes
- * @param high Last index, which the range includes
+ * @param low First index, included in the range
+ * @param high Last index, included in the range
  * @param elem_size Size of each element in bytes
  * @param getter_proc Function that gets the element at an index
  * @param comparison_proc Function that compares two elements
- * @param mprocs Memory management procedures for the allocation of the
- * buffer
+ * @param mprocs Memory management procedures used to allocate the buffer
  */
 static bool csort_mergesort_iterative(void *col, size_t low, size_t high,
                                       size_t elem_size,
@@ -380,35 +388,31 @@ static bool csort_mergesort_iterative(void *col, size_t low, size_t high,
     return outcome == csort_buffer_not_needed;
   }
 
-  // Allocate the temporary buffer for the merge, which every merge
-  // operation reuses.
+  // Allocate the temporary merge buffer; every merge reuses it.
   void *temp_buffer = _ccol_mem_alloc(mprocs, length * elem_size);
   if (!temp_buffer) {
-    // The allocation of the temporary buffer failed, so no sort is
-    // possible. Because no merge has run yet, the collection is in its
-    // original order at this point, and the caller can see exactly what
-    // happened from the return value alone.
+    // We couldn't get the temporary buffer, so there's no way to sort. No
+    // merge has run yet, so the collection is still in its original order
+    // and the return value alone tells the caller exactly what happened.
     return false;
   }
 
-  // Bottom-up merge sort: start with subarrays of size 1, then merge pairs
-  // to get size 2, then 4, then 8, and so on.
+  // Bottom-up merge sort: start from subarrays of size 1, then merge pairs
+  // into size 2, then 4, then 8 and so on.
   for (size_t curr_size = 1; curr_size < length; curr_size *= 2) {
-    // Pick the start of the left subarray for the merge
+    // Pick where the left subarray of this merge starts
     for (size_t left_start = low; left_start <= high;
          left_start += 2 * curr_size) {
-      // Calculate the end of the left subarray
+      // Work out where the left subarray ends
       size_t mid = left_start + curr_size - 1;
 
-      // There is no right subarray when mid >= high, so there is nothing to
-      // merge
+      // When mid >= high there is no right subarray, so nothing to merge
       if (mid >= high) {
         break;
       }
 
-      // Calculate the end of the right subarray:
-      // (left_start + 2*curr_size - 1) or high, whichever value is
-      // smaller.
+      // Work out where the right subarray ends, which is
+      // (left_start + 2*curr_size - 1) or high, whichever is smaller.
       size_t right_end = left_start + 2 * curr_size - 1;
       if (right_end > high) {
         right_end = high;
@@ -437,18 +441,17 @@ unsigned long long _csort_contiguous_sorts_for_tests(void) {
 #endif
 
 /* Merges the sorted run [left, mid] with the sorted run [mid + 1, right] of
- * an array whose element i sits at base + i * elem_size. Only the left run
- * is copied out, and the merge then writes back from the start of the left
- * run. The write position never passes the read position of the right run
- * while a left element is waiting, because it trails that read position by
- * exactly the number of left elements not merged yet, so the elements of
- * the right run that remain once the left run is exhausted are already in
- * their final place. A tie takes the left element, which keeps the sort
- * stable.
+ * an array whose element i sits at base + i * elem_size. We copy out only
+ * the left run and then write back from the start of the left run. While a
+ * left element is waiting, the write position can't pass the read position
+ * of the right run, because it trails that read position by exactly the
+ * number of left elements not merged yet. So once the left run is used up,
+ * whatever is left of the right run is already in its final place. On a tie
+ * we take the left element, which is what keeps the sort stable.
  *
- * elem_size is a compile-time constant at every call site that
- * csort_contiguous_passes() specializes, so each memcpy below becomes one
- * load and one store there. */
+ * At every call site that csort_contiguous_passes() specializes, elem_size
+ * is a compile-time constant, so each memcpy below turns into one load and
+ * one store there. */
 static inline __attribute__((always_inline)) void csort_merge_contiguous(
     unsigned char *base, size_t left, size_t mid, size_t right,
     size_t elem_size, ccol_comparison_proc_t comparison_proc,
@@ -475,9 +478,9 @@ static inline __attribute__((always_inline)) void csort_merge_contiguous(
   }
 }
 
-/* Runs every bottom-up merge pass over [0, length). The pass structure is
- * the same as csort_mergesort_iterative(), so both drivers make the same
- * comparisons in the same order and give the same stable result. */
+/* Runs all the bottom-up merge passes over [0, length). The passes have the
+ * same structure as in csort_mergesort_iterative(), so both drivers make the
+ * same comparisons in the same order and give the same stable result. */
 static inline __attribute__((always_inline)) void csort_contiguous_passes(
     unsigned char *base, size_t length, size_t elem_size,
     ccol_comparison_proc_t comparison_proc, unsigned char *temp_buffer) {
@@ -499,11 +502,11 @@ static inline __attribute__((always_inline)) void csort_contiguous_passes(
   }
 }
 
-/* The sort of cvec_sort() and cvector_sort_with_comparison_proc(), which
- * addresses each element directly from the base pointer instead of making a
- * getter call for each access. Its limits and results are those of
- * ___csort_merge_sort(), because csort_check_sort_shape() applies the same
- * checks and the pass structure is identical. */
+/* The sort behind cvec_sort() and cvector_sort_with_comparison_proc(). It
+ * addresses each element straight from the base pointer instead of making a
+ * getter call per access. Its limits and results match those of
+ * ___csort_merge_sort(), since csort_check_sort_shape() applies the same
+ * checks and the passes are structured the same way. */
 bool _csort_merge_sort_contiguous(void *base, size_t length, size_t elem_size,
                                   ccol_comparison_proc_t comparison_proc,
                                   ccol_memmgmt_procs_t *mprocs) {
@@ -511,7 +514,7 @@ bool _csort_merge_sort_contiguous(void *base, size_t length, size_t elem_size,
     return true;
   }
   if (!comparison_proc) {
-    ccol_assert(false);
+    _ccol_assert(false);
     return false;
   }
 
@@ -529,9 +532,9 @@ bool _csort_merge_sort_contiguous(void *base, size_t length, size_t elem_size,
   g_csort_contiguous_sorts_for_tests++;
 #endif
 
-  /* The common element widths get a copy of the passes with a constant
-   * elem_size, so that every element move is a single load and store and
-   * not a call to memcpy with a length known only at run time. */
+  /* The common element widths get their own copy of the passes with a
+   * constant elem_size, so every element move is a single load and store
+   * instead of a memcpy call whose length is only known at run time. */
   unsigned char *b = base;
   switch (elem_size) {
     case 1:
@@ -563,9 +566,8 @@ bool _csort_merge_sort_contiguous(void *base, size_t length, size_t elem_size,
 /*                         PUBLIC SORT INTERFACE                              */
 /* ========================================================================== */
 
-/* The public entry point of csort. It checks the inputs and then calls the
- * iterative bottom-up mergesort, which is a stable sort and not a
- * quicksort. */
+/* csort's public entry point. It checks the inputs and then runs the
+ * iterative bottom-up mergesort, which is stable (it's not a quicksort). */
 bool ___csort_merge_sort(void *col, size_t length, size_t elem_size,
                          csort_item_getter_proc_t getter_proc,
                          ccol_comparison_proc_t comparison_proc,
@@ -579,7 +581,7 @@ bool ___csort_merge_sort(void *col, size_t length, size_t elem_size,
   }
 
   if (!getter_proc || !comparison_proc) {
-    ccol_assert(false);
+    _ccol_assert(false);
     return false;
   }
 

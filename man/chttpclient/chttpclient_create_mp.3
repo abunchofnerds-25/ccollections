@@ -1,0 +1,39 @@
+.TH CHTTPCLIENT_CREATE_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpclient_create_mp \- create an HTTP client with a custom allocator
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpclient.h>
+
+chttpcli chttpclient_create_mp(ccol_memmgmt_procs_t *mprocs,
+                               char **err_str);
+.fi
+.SH DESCRIPTION
+.nf
+This function allocates and initializes a new HTTP client. It does NOT
+create the connection pool; that happens on the first request.
+
+A new client starts with this configuration:
+  pool size              = the CPU count (resolved on the first
+                           request)
+  connect timeout        = 0 (no timeout)
+  request timeout        = 0 (no timeout)
+  max response body size = 0 (no limit)
+  TLS                    = peer and host verification on,
+                           system CA
+.fi
+.SH PARAMETERS
+.nf
+mprocs    A custom allocator, or NULL for malloc/free.
+err_str   Optional. It gets a static error string if the call fails.
+.fi
+.SH RETURN VALUE
+.nf
+A new client handle, or CHTTPCLI_INVALID if the call fails.
+.fi
+.SH "SEE ALSO"
+.BR chttpclient_create (3),
+.BR chttpclient_destroy (3),
+.BR chttpclient_set_pool_size (3)

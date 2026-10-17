@@ -11,14 +11,14 @@ void *p = cvec_data_ptr(v);
 .fi
 .SH DESCRIPTION
 .nf
-This macro is a wrapper for cvector_data_ptr() that gives a pointer to the
-start of the contiguous backing store of the vector, so you can give the
-elements to any C interface that expects a plain array. The elements are
-the storage of the vector itself rather than a copy, and a write through
-this pointer changes the content of the vector.
+A wrapper for cvector_data_ptr() that gives a pointer to the start of the
+vector's contiguous backing store, so you can hand the elements to any C
+interface that expects a plain array. The pointer leads to the vector's
+own storage, not a copy, and writing through it changes the content of
+the vector.
 
-The result is a void *; assign it to a pointer of the element type of the
-vector at the call site.
+The result is a void *; assign it to a pointer of the vector's element
+type at the call site.
 .fi
 .SH PARAMETERS
 .nf
@@ -26,28 +26,30 @@ v    Vector to get the data pointer from
 .fi
 .SH RETURN VALUE
 .nf
-Gives a pointer to the first element of the backing store.
+A pointer to the first element of the backing store.
 .fi
 .SH NOTES
 .nf
 The buffer covers the whole capacity of the vector, but only the first
 cvec_size(3) elements hold values.
-Do not free this pointer: the vector owns it and frees it at the
-destruction.
+
+Don't free this pointer; the vector owns it and frees it when it is
+destroyed.
+
 The macro asserts when v is NULL.
 .fi
 .SH WARNINGS
 .nf
-An operation that can grow or shrink the backing store invalidates the
-pointer, because such an operation reallocates the store. Those
-operations are cvec_push(3), cvec_append_array(3),
-cvec_append_cvec(3), cvec_reserve(3), cvec_reset(3), cvec_pop(3) and the
-destruction; cvec_pop(3) shrinks the store when the vector falls below a
-quarter full. Read the pointer again after any of these operations
-instead of keeping the old value.
+Any operation that can grow or shrink the backing store reallocates it
+and so invalidates the pointer. Those are cvec_push(3),
+cvec_append_array(3), cvec_append_cvec(3), cvec_reserve(3),
+cvec_reset(3), cvec_pop(3) and the destruction; cvec_pop(3) shrinks the
+store when the vector drops below a quarter full. Fetch the pointer again
+after any of them instead of keeping the old value.
+
 Passing this pointer straight back into cvec_append_array(3) or
 cvector_append_array(3) is safe, because those functions read their
-source through the reallocation that they can start.
+source through any reallocation that they start.
 .fi
 .SH EXAMPLES
 .nf

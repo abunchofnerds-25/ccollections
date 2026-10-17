@@ -17351,7 +17351,14 @@ TEST(async_deadline, a_connect_that_starts_as_the_sweep_judges_it_ends) {
   chttpcli_async_result_t *raw = f ? chttpclient_async_result_get(f) : NULL;
   ccol_retval_t rv = raw ? raw->rv : ccol_unexpected_failure;
   size_t abandoned = _chttp_async_hops_abandoned_for_tests();
+  char trace[512];
+  _chttp_sweep_fd_wait_trace_for_tests(trace, sizeof(trace));
   bool held = _chttp_sweep_fd_wait_held_for_tests();
+  if (!held)
+    fprintf(stderr,
+            "[SWEEP_HOLD_DIAG] %s; sweep ticks %lu; request rv %d; abandoned "
+            "%zu\n",
+            trace, _chttp_sweep_ticks_for_tests(), (int)rv, abandoned);
   if (raw) {
     chttpclient_resp_free(raw->resp);
     chttpclient_async_result_free(raw);

@@ -43,8 +43,10 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <tau/tau.h>
 #include <test_connect.h>
+#include <test_sanitizer.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -528,20 +530,11 @@ TEST(ctls_ctx, trust_system_no_crash) {
   ctls_ctx_release(ctx);
 }
 
-/* Points SSL_CERT_FILE at path, or unsets it for a NULL path, and drops the
- * parsed default CA file so that the next context reads the file again. The
- * previous value comes back in prev (empty when the variable wasn't set). */
-static void _system_ca_env_set(const char *path, char *prev, size_t prev_len,
-                               bool *had_prev) {
-  if (prev) {
-    const char *old = getenv("SSL_CERT_FILE");
-    *had_prev = old != NULL;
-    snprintf(prev, prev_len, "%s", old ? old : "");
-  }
-  if (path)
-    setenv("SSL_CERT_FILE", path, 1);
-  else
-    unsetenv("SSL_CERT_FILE");
+/* Points SSL_CERT_FILE at path and drops the parsed default CA file, so that
+ * the next context reads the file again. Only a child of _ctls_run_in_child
+ * calls it, so the parent's environment never changes. */
+static void _system_ca_env_set(const char *path) {
+  setenv("SSL_CERT_FILE", path, 1);
   _ctls_system_ca_forget_for_tests();
 }
 
@@ -575,63 +568,129 @@ static bool _client_verifies_test_server(ctls_ctx_t *client_ctx) {
   return ok;
 }
 
+/* Runs body in a forked child and copies the out_size bytes of results it
+ * fills back into out, so the parent can assert on them. The two tests below
+ * change SSL_CERT_FILE, and doing that in a child keeps the parent's
+ * environment as it was: no later test sees the change, and musl, which
+ * keeps every setenv() block for the life of the process, has nothing left
+ * for the memtest to report. Returns false when the child gave no full
+ * result within 30 s, in which case it's killed. */
+static bool _ctls_run_in_child(void (*body)(void *out), void *out,
+                               size_t out_size) {
+  int p[2];
+  if (pipe(p) != 0) return false;
+  fflush(NULL);
+  pid_t pid = fork();
+  if (pid < 0) {
+    close(p[0]);
+    close(p[1]);
+    return false;
+  }
+  if (pid == 0) {
+    close(p[0]);
+    body(out);
+    ssize_t w = write(p[1], out, out_size);
+    _exit(w == (ssize_t)out_size ? 0 : 1);
+  }
+  close(p[1]);
+  size_t got = 0;
+  while (got < out_size) {
+    struct pollfd pf = {.fd = p[0], .events = POLLIN};
+    if (poll(&pf, 1, 30000) <= 0) break;
+    ssize_t r = read(p[0], (char *)out + got, out_size - got);
+    if (r > 0) {
+      got += (size_t)r;
+    } else if (r == 0 || errno != EINTR) {
+      break;
+    }
+  }
+  close(p[0]);
+  if (got < out_size) kill(pid, SIGKILL);
+  int status = 0;
+  while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+  }
+  return got == out_size;
+}
+
+typedef struct {
+  ccol_retval_t rv_trusting;
+  bool verified;
+  ccol_retval_t rv_other;
+  bool other_verified;
+} _system_ca_names_result_t;
+
+static void _system_ca_names_body(void *out) {
+  _system_ca_names_result_t *r = (_system_ca_names_result_t *)out;
+  _system_ca_env_set(g_server_cert);
+  ctls_ctx_t *trusting = ctls_ctx_new(NULL);
+  r->rv_trusting =
+      trusting ? ctls_ctx_trust_system(trusting) : ccol_unexpected_failure;
+  r->verified =
+      r->rv_trusting == ccol_success && _client_verifies_test_server(trusting);
+  _system_ca_env_set(g_client_cert);
+  ctls_ctx_t *other = ctls_ctx_new(NULL);
+  r->rv_other = other ? ctls_ctx_trust_system(other) : ccol_unexpected_failure;
+  r->other_verified =
+      r->rv_other == ccol_success && _client_verifies_test_server(other);
+  ctls_ctx_release(trusting);
+  ctls_ctx_release(other);
+}
+
 /* The system store is the file that SSL_CERT_FILE names. A client that trusts
  * the system store verifies a server whose self-signed certificate is that
  * file, and stops verifying it once the variable names some other certificate.
- */
+ * The test runs in a child; see _ctls_run_in_child. */
 TEST(ctls_system_ca, ssl_cert_file_names_the_trusted_bundle) {
   if (!g_certs_ready) return;
-  char prev[1024];
-  bool had_prev = false;
-  _system_ca_env_set(g_server_cert, prev, sizeof(prev), &had_prev);
-  ctls_ctx_t *trusting = ctls_ctx_new(NULL);
-  ccol_retval_t rv_trusting =
-      trusting ? ctls_ctx_trust_system(trusting) : ccol_unexpected_failure;
-  bool verified =
-      rv_trusting == ccol_success && _client_verifies_test_server(trusting);
-
-  _system_ca_env_set(g_client_cert, NULL, 0, NULL);
-  ctls_ctx_t *other = ctls_ctx_new(NULL);
-  ccol_retval_t rv_other =
-      other ? ctls_ctx_trust_system(other) : ccol_unexpected_failure;
-  bool other_verified =
-      rv_other == ccol_success && _client_verifies_test_server(other);
-
-  _system_ca_env_set(had_prev ? prev : NULL, NULL, 0, NULL);
-  ctls_ctx_release(trusting);
-  ctls_ctx_release(other);
-  REQUIRE_EQ(rv_trusting, ccol_success);
-  REQUIRE_TRUE(verified);
-  REQUIRE_EQ(rv_other, ccol_success);
-  REQUIRE_FALSE(other_verified);
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  _system_ca_names_result_t r = {ccol_unexpected_failure, false,
+                                 ccol_unexpected_failure, true};
+  bool ran = _ctls_run_in_child(_system_ca_names_body, &r, sizeof(r));
+  REQUIRE_TRUE(ran);
+  REQUIRE_EQ(r.rv_trusting, ccol_success);
+  REQUIRE_TRUE(r.verified);
+  REQUIRE_EQ(r.rv_other, ccol_success);
+  REQUIRE_FALSE(r.other_verified);
 }
 
-/* Every context that trusts the system store shares a single parse of the
- * default CA file, across rebuilds too. A store that doesn't keep the parsed
- * list parses the file again for each context and each rebuild of one, and
- * the count goes past one. */
-TEST(ctls_system_ca, the_default_file_is_parsed_once_per_process) {
-  if (!g_certs_ready) return;
-  char prev[1024];
-  bool had_prev = false;
-  _system_ca_env_set(g_server_cert, prev, sizeof(prev), &had_prev);
+typedef struct {
+  bool all_ok;
+  long parses;
+  bool verified;
+} _system_ca_once_result_t;
+
+static void _system_ca_once_body(void *out) {
+  _system_ca_once_result_t *r = (_system_ca_once_result_t *)out;
+  _system_ca_env_set(g_server_cert);
   long before = _ctls_system_ca_parses_for_tests();
   ctls_ctx_t *ctxs[4] = {NULL, NULL, NULL, NULL};
-  bool all_ok = true;
+  r->all_ok = true;
   for (int i = 0; i < 4; ++i) {
     ctxs[i] = ctls_ctx_new(NULL);
     if (!ctxs[i] || ctls_ctx_trust_system(ctxs[i]) != ccol_success ||
         ctls_ctx_alpn_add(ctxs[i], "h2", NULL, NULL, NULL, NULL) !=
             ccol_success)
-      all_ok = false;
+      r->all_ok = false;
   }
-  long parses = _ctls_system_ca_parses_for_tests() - before;
-  bool verified = all_ok && _client_verifies_test_server(ctxs[3]);
+  r->parses = _ctls_system_ca_parses_for_tests() - before;
+  r->verified = r->all_ok && _client_verifies_test_server(ctxs[3]);
   for (int i = 0; i < 4; ++i) ctls_ctx_release(ctxs[i]);
-  _system_ca_env_set(had_prev ? prev : NULL, NULL, 0, NULL);
-  REQUIRE_TRUE(all_ok);
-  REQUIRE_EQ(parses, 1L);
-  REQUIRE_TRUE(verified);
+}
+
+/* Every context that trusts the system store shares a single parse of the
+ * default CA file, across rebuilds too. A store that doesn't keep the parsed
+ * list parses the file again for each context and each rebuild of one, and
+ * the count goes past one. The test runs in a child; see
+ * _ctls_run_in_child. */
+TEST(ctls_system_ca, the_default_file_is_parsed_once_per_process) {
+  if (!g_certs_ready) return;
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  _system_ca_once_result_t r = {false, -1, false};
+  bool ran = _ctls_run_in_child(_system_ca_once_body, &r, sizeof(r));
+  REQUIRE_TRUE(ran);
+  REQUIRE_TRUE(r.all_ok);
+  REQUIRE_EQ(r.parses, 1L);
+  REQUIRE_TRUE(r.verified);
 }
 
 static void _alpn_cleanup_marker(void *udata) { *(bool *)udata = true; }

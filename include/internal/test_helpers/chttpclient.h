@@ -335,6 +335,11 @@ unsigned _chttp_continue_deadline_stores_for_tests(void);
 void _chttp_sweep_fd_wait_arm_for_tests(void);
 bool _chttp_sweep_fd_wait_held_for_tests(void);
 
+/* Writes what the armed hold saw into buf (which ctxs it turned away and
+ * why, and how the lookup's wait ended), so a test can print it when the
+ * hold didn't happen. */
+void _chttp_sweep_fd_wait_trace_for_tests(char *buf, size_t size);
+
 /* How many hops have a future that the sweep already fulfilled while the hop
  * and its ctx still exist. */
 size_t _chttp_async_hops_abandoned_for_tests(void);

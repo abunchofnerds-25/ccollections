@@ -44,7 +44,8 @@ test_tsan: build_tsan
 
 memtest: build
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
-		--error-exitcode=1 --suppressions=openssl_internal.supp ./tests
+		--error-exitcode=1 --child-silent-after-fork=yes \
+		--suppressions=openssl_internal.supp ./tests
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
 		--error-exitcode=1 --suppressions=openssl_internal.supp ./tests_sigpipe
 

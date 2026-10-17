@@ -3107,6 +3107,20 @@ void _chttp_set_name_lookup_delay_ms_for_tests(unsigned ms) {
  * runner a sleep can end too late for that. */
 static _Atomic bool g_sweep_fd_wait_pending_for_tests = false;
 
+/* What the armed hold saw, for a test that has to explain a failure on a
+ * system it can't be debugged on: how many ctxs the sweep showed it, why
+ * each one was turned away, the fd and state of the last one turned away,
+ * and how the lookup's wait for it ended. Arming resets them. */
+static atomic_ulong g_sweep_fd_wait_seen_for_tests;
+static atomic_ulong g_sweep_fd_wait_not_armed_for_tests;
+static atomic_ulong g_sweep_fd_wait_had_fd_for_tests;
+static atomic_ulong g_sweep_fd_wait_wrong_state_for_tests;
+static atomic_ulong g_sweep_fd_wait_had_race_for_tests;
+static atomic_int g_sweep_fd_wait_last_fd_for_tests = -2;
+static atomic_int g_sweep_fd_wait_last_state_for_tests = -1;
+static atomic_int g_sweep_fd_wait_lookup_end_for_tests;
+static atomic_int g_sweep_fd_wait_hold_end_for_tests;
+
 /* Defined with the deadline sweep further down. The wait above uses them to
  * ask for a walk at once instead of waiting for the sweep's next planned
  * instant, which a slow runner (ThreadSanitizer on macOS arm64 among them)
@@ -3140,11 +3154,18 @@ static ccol_retval_t _addr_list_resolve_for_target(ccol_memmgmt_procs_t *mp,
     while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
     }
     struct timespec tick = {0, 1000000};
-    for (int i = 0; i < 5000 && atomic_load(&g_sweep_fd_wait_pending_for_tests);
-         i++) {
+    bool waited = atomic_load(&g_sweep_fd_wait_pending_for_tests);
+    int i = 0;
+    for (; i < 5000 && atomic_load(&g_sweep_fd_wait_pending_for_tests); i++) {
       _client_deadline_note_ns(_monotonic_now_ns());
       nanosleep(&tick, NULL);
     }
+    /* 1: the hold caught the hop, 2: the wait ran out, 3: nothing to wait
+     * for. */
+    if (waited)
+      atomic_store(&g_sweep_fd_wait_lookup_end_for_tests, i < 5000 ? 1 : 2);
+    else if (atomic_load(&g_sweep_fd_wait_lookup_end_for_tests) == 0)
+      atomic_store(&g_sweep_fd_wait_lookup_end_for_tests, 3);
   }
   const chttp_addr_list_t *ov = atomic_load(&g_addr_list_override_for_tests);
   if (ov) {
@@ -8197,15 +8218,33 @@ static _Atomic bool g_sweep_fd_wait_armed_for_tests = false;
 static _Atomic bool g_sweep_fd_wait_held_for_tests = false;
 
 static void _sweep_fd_wait_for_tests(chttp_async_ctx_t *node) {
-  if (!atomic_load(&g_sweep_fd_wait_armed_for_tests) || node->fd >= 0 ||
-      node->state != CHTTP_ASYNC_CONNECTING || atomic_load(&node->race) ||
-      !atomic_exchange(&g_sweep_fd_wait_armed_for_tests, false))
+  atomic_fetch_add(&g_sweep_fd_wait_seen_for_tests, 1);
+  if (!atomic_load(&g_sweep_fd_wait_armed_for_tests)) {
+    atomic_fetch_add(&g_sweep_fd_wait_not_armed_for_tests, 1);
     return;
+  }
+  int fd = node->fd;
+  chttp_async_state_t state = node->state;
+  bool raced = atomic_load(&node->race) != NULL;
+  if (fd >= 0 || state != CHTTP_ASYNC_CONNECTING || raced) {
+    if (fd >= 0) atomic_fetch_add(&g_sweep_fd_wait_had_fd_for_tests, 1);
+    if (state != CHTTP_ASYNC_CONNECTING)
+      atomic_fetch_add(&g_sweep_fd_wait_wrong_state_for_tests, 1);
+    if (raced) atomic_fetch_add(&g_sweep_fd_wait_had_race_for_tests, 1);
+    atomic_store(&g_sweep_fd_wait_last_fd_for_tests, fd);
+    atomic_store(&g_sweep_fd_wait_last_state_for_tests, (int)state);
+    return;
+  }
+  if (!atomic_exchange(&g_sweep_fd_wait_armed_for_tests, false)) return;
   atomic_store(&g_sweep_fd_wait_pending_for_tests, false);
   struct timespec ts = {0, 1000000};
   int i = 0;
   for (; i < 2000 && !atomic_load(&node->reg); i++) nanosleep(&ts, NULL);
-  if (i == 2000) return;
+  if (i == 2000) {
+    /* 1: the connect never registered its fd within the 2 s. */
+    atomic_store(&g_sweep_fd_wait_hold_end_for_tests, 1);
+    return;
+  }
   for (i = 0; i < 2000; i++) {
     int ms;
     _ccol_mutex_lock(node->deadline_lock);
@@ -8214,10 +8253,21 @@ static void _sweep_fd_wait_for_tests(chttp_async_ctx_t *node) {
     if (passed) break;
     nanosleep(&ts, NULL);
   }
+  /* 2: the hold waited for the registration and the deadline. */
+  atomic_store(&g_sweep_fd_wait_hold_end_for_tests, 2);
   atomic_store(&g_sweep_fd_wait_held_for_tests, true);
 }
 
 void _chttp_sweep_fd_wait_arm_for_tests(void) {
+  atomic_store(&g_sweep_fd_wait_seen_for_tests, 0);
+  atomic_store(&g_sweep_fd_wait_not_armed_for_tests, 0);
+  atomic_store(&g_sweep_fd_wait_had_fd_for_tests, 0);
+  atomic_store(&g_sweep_fd_wait_wrong_state_for_tests, 0);
+  atomic_store(&g_sweep_fd_wait_had_race_for_tests, 0);
+  atomic_store(&g_sweep_fd_wait_last_fd_for_tests, -2);
+  atomic_store(&g_sweep_fd_wait_last_state_for_tests, -1);
+  atomic_store(&g_sweep_fd_wait_lookup_end_for_tests, 0);
+  atomic_store(&g_sweep_fd_wait_hold_end_for_tests, 0);
   atomic_store(&g_sweep_fd_wait_held_for_tests, false);
   atomic_store(&g_sweep_fd_wait_pending_for_tests, true);
   atomic_store(&g_sweep_fd_wait_armed_for_tests, true);
@@ -8228,6 +8278,24 @@ bool _chttp_sweep_fd_wait_held_for_tests(void) {
   atomic_store(&g_sweep_fd_wait_armed_for_tests, false);
   atomic_store(&g_sweep_fd_wait_pending_for_tests, false);
   return atomic_load(&g_sweep_fd_wait_held_for_tests);
+}
+
+void _chttp_sweep_fd_wait_trace_for_tests(char *buf, size_t size) {
+  if (!buf || size == 0) return;
+  snprintf(buf, size,
+           "ctxs seen %lu, not armed %lu, had an fd %lu, wrong state %lu, "
+           "had a race %lu, last turned away fd %d state %d, lookup wait "
+           "end %d (1 caught, 2 ran out, 3 not waited), hold end %d (0 never "
+           "entered, 1 no fd registered within 2 s, 2 held)",
+           atomic_load(&g_sweep_fd_wait_seen_for_tests),
+           atomic_load(&g_sweep_fd_wait_not_armed_for_tests),
+           atomic_load(&g_sweep_fd_wait_had_fd_for_tests),
+           atomic_load(&g_sweep_fd_wait_wrong_state_for_tests),
+           atomic_load(&g_sweep_fd_wait_had_race_for_tests),
+           atomic_load(&g_sweep_fd_wait_last_fd_for_tests),
+           atomic_load(&g_sweep_fd_wait_last_state_for_tests),
+           atomic_load(&g_sweep_fd_wait_lookup_end_for_tests),
+           atomic_load(&g_sweep_fd_wait_hold_end_for_tests));
 }
 
 /* How many hops have a future the sweep already fulfilled while the hop is

@@ -197,7 +197,7 @@ This library started as a hobby project on Danis Ozdemir's PC and grew into its 
 - [**Danis Ozdemir**](https://www.linkedin.com/in/danis-o-4a0a8841/)
 - [**Fikri Kahraman**](https://www.linkedin.com/in/fikrikahraman/)
 
-In addition to the names listed above, the authors used [**Claude**](https://claude.ai) for generating the documentation for this library. Like most software engineers, they don't particularly enjoy writing docs. They also started experimenting with it as a potential contributor, especially for the maintenance work after the library's first release.
+In addition to the names listed above, the authors used [**Claude**](https://claude.ai) to generate the documentation for this library. Like most software engineers, they don't particularly enjoy writing docs. They also started experimenting with it as a potential contributor, especially for the maintenance work after the library's first release.
 
 ---
 

@@ -56,6 +56,12 @@ SOFTWARE.
  */
 void _clog_test_set_pending_compress_delay_us(unsigned int delay_us);
 
+/* While miss is true, every deletion pass leaves the names of the running
+ * compression (its source and its ".gz") out of its directory listing, as
+ * readdir() may when the compressor thread publishes and unlinks them during
+ * the scan. */
+void _clog_test_set_prune_misses_running(bool miss);
+
 /**
  * @brief Report whether the compression step created its ".gz" destination file
  *        on disk, for a test.

@@ -8210,10 +8210,12 @@ unsigned _chttp_continue_deadline_stores_for_tests(void) {
 
 /* White-box hook. While it is armed, the first sweep that meets a ctx in
  * CHTTP_ASYNC_CONNECTING with no fd and no race yet waits, before judging
- * it, first until the connect task has registered its fd and then until the
- * connect deadline has passed (2 s at most for each). That puts the deadline
- * after the connect task's check and before the sweep's judgement, which can
- * happen for real when a connect starts just before its deadline. */
+ * it, first until the connect task has registered its fd (5 s at most) and
+ * then until the connect deadline has passed (10 s at most). Both bounds go
+ * by the clock, because a 1 ms nap can take far longer on a busy runner. That
+ * puts the deadline after the connect task's check and before the sweep's
+ * judgement, which can happen for real when a connect starts just before its
+ * deadline. */
 static _Atomic bool g_sweep_fd_wait_armed_for_tests = false;
 static _Atomic bool g_sweep_fd_wait_held_for_tests = false;
 
@@ -8238,14 +8240,16 @@ static void _sweep_fd_wait_for_tests(chttp_async_ctx_t *node) {
   if (!atomic_exchange(&g_sweep_fd_wait_armed_for_tests, false)) return;
   atomic_store(&g_sweep_fd_wait_pending_for_tests, false);
   struct timespec ts = {0, 1000000};
-  int i = 0;
-  for (; i < 2000 && !atomic_load(&node->reg); i++) nanosleep(&ts, NULL);
-  if (i == 2000) {
-    /* 1: the connect never registered its fd within the 2 s. */
+  uint64_t give_up = _monotonic_now_ns() + 5000000000ull;
+  while (!atomic_load(&node->reg) && _monotonic_now_ns() < give_up)
+    nanosleep(&ts, NULL);
+  if (!atomic_load(&node->reg)) {
+    /* 1: the connect never registered its fd within the 5 s. */
     atomic_store(&g_sweep_fd_wait_hold_end_for_tests, 1);
     return;
   }
-  for (i = 0; i < 2000; i++) {
+  give_up = _monotonic_now_ns() + 10000000000ull;
+  while (_monotonic_now_ns() < give_up) {
     int ms;
     _ccol_mutex_lock(node->deadline_lock);
     bool passed = !_deadline_remaining_ms(&node->connect_deadline, &ms);
@@ -8285,8 +8289,9 @@ void _chttp_sweep_fd_wait_trace_for_tests(char *buf, size_t size) {
   snprintf(buf, size,
            "ctxs seen %lu, not armed %lu, had an fd %lu, wrong state %lu, "
            "had a race %lu, last turned away fd %d state %d, lookup wait "
-           "end %d (1 caught, 2 ran out, 3 not waited), hold end %d (0 never "
-           "entered, 1 no fd registered within 2 s, 2 held)",
+           "end %d (1 caught, 2 ran out, 3 not waited), hold end %d (0 not "
+           "entered or still waiting, 1 no fd registered within 5 s, 2 "
+           "held)",
            atomic_load(&g_sweep_fd_wait_seen_for_tests),
            atomic_load(&g_sweep_fd_wait_not_armed_for_tests),
            atomic_load(&g_sweep_fd_wait_had_fd_for_tests),

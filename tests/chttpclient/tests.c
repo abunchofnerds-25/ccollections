@@ -17342,11 +17342,15 @@ TEST(async_deadline, a_connect_that_starts_as_the_sweep_judges_it_ends) {
                                    sizeof(hole));
   /* While the hold is armed, the lookup waits after its delay until a sweep
    * tick has caught the hop before its connect, so the test doesn't depend on
-   * a tick landing inside the delay; a slow runner can sleep past it. */
-  _chttp_set_name_lookup_delay_ms_for_tests(300);
+   * a tick landing inside the delay. The connect has to start before its
+   * deadline, or it ends at once with ccol_timed_out and never registers an
+   * fd for the hold to wait for. A 2 s connect timeout leaves room for a
+   * slow runner, whose 20 ms sleep can end well over 100 ms late, and the
+   * hold then waits out the rest of it. */
+  _chttp_set_name_lookup_delay_ms_for_tests(20);
   _chttp_sweep_fd_wait_arm_for_tests();
   chttpcli_construct(cli);
-  ccol_retval_t set_rv = chttpclient_set_connect_timeout(cli, 400000);
+  ccol_retval_t set_rv = chttpclient_set_connect_timeout(cli, 2000000);
   ctpool_future *f = async_get(cli, "http://late-connect.invalid/get");
   chttpcli_async_result_t *raw = f ? chttpclient_async_result_get(f) : NULL;
   ccol_retval_t rv = raw ? raw->rv : ccol_unexpected_failure;

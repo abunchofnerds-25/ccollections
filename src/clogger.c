@@ -4613,6 +4613,17 @@ int _clog_test_get_max_generations_beyond_old_compressions(void) {
  * may_note is true; the pass the compressor thread runs passes false,
  * because a record of the target can be half written while it runs.
  */
+#ifdef RUNNING_UNIT_TESTS
+/* While set, a deletion pass leaves the running compression's two names out
+ * of its listing, as readdir() may when the compressor publishes and unlinks
+ * them during the scan. */
+static _Atomic bool _clog_test_prune_misses_running = false;
+
+void _clog_test_set_prune_misses_running(bool miss) {
+  atomic_store(&_clog_test_prune_misses_running, miss);
+}
+#endif
+
 static void _prune_rotated(clog_shared_t *sh, const char *just_rotated,
                            bool may_note) {
   int max_keep = sh->rotation.max_rotated_files;
@@ -4632,6 +4643,14 @@ static void _prune_rotated(clog_shared_t *sh, const char *just_rotated,
   int fc = 0, cap = 0;
   bool complete = true;
   size_t just_rotated_len = just_rotated ? strlen(just_rotated) : 0;
+  /* The compressor thread publishes the running job's dst and unlinks its
+   * src without the mutex, so while this listing runs, both names can move
+   * through slots readdir() has already passed or not reached yet, and the
+   * listing can hold neither. Such a pass would count one generation too
+   * few, keep one generation too many, and not set compress_prune_deferred,
+   * so the extra one would stay on disk. The running generation is
+   * therefore added below from the job itself when the listing missed it. */
+  bool running_listed = false;
   struct dirent *e;
 
   while ((e = readdir(d)) != NULL) {
@@ -4639,6 +4658,11 @@ static void _prune_rotated(clog_shared_t *sh, const char *just_rotated,
     const char *name_stamp;
     unsigned long seq;
     if (!_rotated_entry_match(n, base, base_len, &name_stamp, &seq)) continue;
+#ifdef RUNNING_UNIT_TESTS
+    if (running && atomic_load(&_clog_test_prune_misses_running) &&
+        (strcmp(running->src, n) == 0 || strcmp(running->dst, n) == 0))
+      continue;
+#endif
     if (_clog_entry_check(sh, n, name_stamp, &f, may_note) !=
         CLOG_ENTRY_GENERATION)
       continue;
@@ -4653,6 +4677,7 @@ static void _prune_rotated(clog_shared_t *sh, const char *just_rotated,
 
     bool is_protected = running && (strcmp(running->src, name) == 0 ||
                                     strcmp(running->dst, name) == 0);
+    if (is_protected) running_listed = true;
     if (just_rotated && (strcmp(name, just_rotated) == 0 ||
                          (strncmp(name, just_rotated, just_rotated_len) == 0 &&
                           strcmp(name + just_rotated_len, ".gz") == 0)))
@@ -4678,6 +4703,33 @@ static void _prune_rotated(clog_shared_t *sh, const char *just_rotated,
     fc++;
   }
   closedir(d);
+
+  const char *running_stamp;
+  unsigned long running_seq;
+  if (complete && running && !running_listed &&
+      _rotated_entry_match(running->src, base, base_len, &running_stamp,
+                           &running_seq)) {
+    size_t r_len = strlen(running->src);
+    char *name = _ccol_mem_alloc(m_procs, r_len + 1);
+    clog_rotated_file_t *nf =
+        name && fc >= cap
+            ? _ccol_mem_realloc(m_procs, files,
+                                (size_t)(cap ? cap * 2 : 16) * sizeof(*files))
+            : files;
+    if (!name || !nf) {
+      _ccol_mem_free(m_procs, name);
+      complete = false;
+    } else {
+      if (fc >= cap) cap = cap ? cap * 2 : 16;
+      files = nf;
+      memcpy(name, running->src, r_len + 1); /* + NUL */
+      files[fc].path = name;
+      files[fc].stamp = name + (size_t)(running_stamp - running->src);
+      files[fc].seq = running_seq;
+      files[fc].is_protected = true;
+      fc++;
+    }
+  }
 
   if (complete) {
     if (fc > 1)

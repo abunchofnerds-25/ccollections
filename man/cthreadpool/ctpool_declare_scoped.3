@@ -11,12 +11,12 @@ ctpool_declare_scoped(name);
 .fi
 .SH DESCRIPTION
 .nf
-Works like ctpool_declare(), but also attaches a cleanup attribute, so
-the pool destroys itself when the variable leaves scope, exactly as
-ctpool_destroy() destroys it.
+The same as ctpool_declare(), plus a cleanup attribute, so the pool is
+destroyed when the variable leaves scope, exactly as ctpool_destroy()
+would destroy it.
 
-You must still assign the variable before you use it. If the variable is
-still CTPOOL_INVALID at the end of scope, the cleanup does nothing.
+You must still assign the variable before you use it. If it is still
+CTPOOL_INVALID at the end of scope, the cleanup does nothing.
 .fi
 .SH PARAMETERS
 .nf
@@ -25,15 +25,16 @@ name  Variable name to declare.
 .SH NOTES
 .nf
 It needs GCC or Clang, because it uses __attribute__((cleanup)).
-Run a shutdown yourself before the end of scope when the drain behavior
-matters: the shutdown that the destroy runs by itself drains the queue,
-and that drain has no bound on its duration when the tasks are long.
+When the drain behavior matters, run a shutdown yourself before the
+end of scope: the shutdown that the destroy runs on its own drains the
+queue, and that drain can take any amount of time when the tasks are
+long.
 .fi
 .SH EXAMPLES
 .nf
 {
     ctpool_declare_scoped(pool);
-    pool = ccol_create_cthread_pool(4, 0, NULL);
+    pool = ctpool_create(4, 0, NULL);
     ctpool_submit(pool, my_fn, my_arg, NULL);
     ctpool_shutdown_drain(pool);
 }  /* pool is destroyed automatically here */

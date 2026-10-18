@@ -22,35 +22,34 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* This suite checks the accept and reject behavior of cyaml_parse_n against
- * the vendored YAML Test Suite snapshot (see yaml-test-suite/README.md).
- * For each case it reads in.yaml and meta.txt, plain files that PyYAML
- * pre-processed offline and that cyaml itself never touched, so this suite
- * has no circular dependency on the parser that it tests. The suite then
- * checks whether the success or failure of cyaml_parse_n matches the fail=0
- * or fail=1 expectation of the case. A full comparison at the event-stream
- * level against the expected tree of the suite is out of scope here;
- * agreement on accept and reject is the part that this suite implements.
+/* This suite checks what cyaml_parse_n accepts and rejects against the
+ * vendored YAML Test Suite snapshot (see yaml-test-suite/README.md). For
+ * each case it reads in.yaml and meta.txt, which are plain files that PyYAML
+ * pre-processed offline and that cyaml never touched, so the suite doesn't
+ * depend in a circle on the parser it tests. It then checks whether
+ * cyaml_parse_n succeeding or failing matches the case's fail=0 or fail=1
+ * expectation. Comparing the event stream against the suite's expected tree
+ * is out of scope here; agreeing on accept and reject is what this suite
+ * implements.
  *
- * A small number of cases are known deviations, each with its own
- * investigation. KNOWN_DEVIATIONS below lists every one of them explicitly
- * instead of the suite skipping them silently. Every entry is a
- * "reference-parser disagreement": two independent, widely-used reference
- * implementations disagree with the fail=0 or fail=1 expectation of the
- * case. Those two are PyYAML from Python and Psych from Ruby (the
- * libyaml-based parser in the standard library of Ruby). Both read the exact
- * vendored bytes of the case, not an approximation that somebody retyped by
- * hand, and both disagree with the expectation of the suite independently.
- * QB6E and DK95-1 are multi-line double-quoted scalars that both accept and
- * the suite marks fail=1, while ZYU8-2 is the reverse: both reject a
- * directive line that the suite marks as accepted. Two unrelated, mature
- * implementations therefore agree with each other and against the suite, so
- * for these specific cases this suite judges the behavior of cyaml against
- * those two implementations instead of against the suite.
+ * A few cases are known deviations, each investigated on its own, and
+ * KNOWN_DEVIATIONS below lists every one of them instead of skipping them
+ * silently. Every entry is a "reference-parser disagreement", meaning that
+ * two independent and widely used implementations disagree with the case's
+ * fail=0 or fail=1 expectation. Those two are PyYAML from Python and Psych
+ * from Ruby (the libyaml-based parser in Ruby's standard library). Both read
+ * the exact vendored bytes of the case, not something somebody retyped by
+ * hand, and each disagrees with the suite on its own. QB6E and DK95-1 are
+ * multi-line double-quoted scalars that both accept although the suite marks
+ * them fail=1, and ZYU8-2 is the other way around: both reject a directive
+ * line that the suite marks as accepted. Since two unrelated, mature
+ * implementations agree with each other and against the suite, for these
+ * particular cases we judge cyaml's behavior against them and not against
+ * the suite.
  *
  * Tabs are not on the list. cyaml accepts a tab wherever YAML 1.2 allows
- * separation whitespace, as the suite expects, although PyYAML and Psych
- * refuse several of those cases.
+ * separation whitespace, which is what the suite expects, even though
+ * PyYAML and Psych refuse several of those cases.
  */
 
 #include <cyaml.h>
@@ -66,11 +65,10 @@ TAU_MAIN()
 #define CASES_DIR "yaml-test-suite/cases"
 
 /* The vendored snapshot is pinned to one upstream tag (see the header
- * comment of this file), so its case count is a fixed, known quantity and
- * not a moving target. An exact match catches a regression in the load of
- * the corpus that drops some, but not most, of the cases (a bad path, a
- * partial extraction, or a subset of cases that somebody deleted by
- * accident), which a loose ">" bound would let through silently. */
+ * comment of this file), so its case count is a fixed number. Matching it
+ * exactly catches a broken corpus load that drops some but not most of the
+ * cases (a bad path, a partial extraction, a few cases deleted by accident),
+ * which a loose ">" bound would let through without a word. */
 #define EXPECTED_CASE_COUNT 354
 
 typedef struct {
@@ -97,11 +95,11 @@ static const known_deviation_t KNOWN_DEVIATIONS[] = {
 #define KNOWN_DEVIATIONS_COUNT \
   (sizeof(KNOWN_DEVIATIONS) / sizeof(KNOWN_DEVIATIONS[0]) - 1)
 
-/* Mark KNOWN_DEVIATIONS[i] as consulted in this run, so that the caller can
- * detect a STALE entry on its own: one that does not mismatch the
- * expectation of the suite at all, for example because a later fix resolves
- * it. Such an entry must be removed, because otherwise it silently describes
- * a deviation that does not exist. */
+/* Mark KNOWN_DEVIATIONS[i] as consulted in this run, so the caller can spot
+ * a STALE entry, that is one that doesn't mismatch the suite's
+ * expectation at all, for example once a change in the parser resolves it.
+ * Such an entry must be removed, otherwise it describes a deviation that
+ * doesn't exist. */
 static bool is_known_deviation(const char *case_id, bool *deviation_seen) {
   for (size_t i = 0; KNOWN_DEVIATIONS[i].case_id != NULL; ++i) {
     if (strcmp(KNOWN_DEVIATIONS[i].case_id, case_id) == 0) {
@@ -134,11 +132,11 @@ static char *read_whole_file(const char *path, size_t *out_len) {
   return buf;
 }
 
-/* Return whether the case expects a parse failure. This function sets
- * *ok_out to false when it cannot read meta_path, instead of silently
- * defaulting to "expects success": a case whose in.yaml did load while its
- * expectation file is missing or corrupt is a hard defect in the corpus or
- * in the harness of the tests, and it must not pass unnoticed. */
+/* Return whether the case expects a parse failure. When meta_path can't be
+ * read this function sets *ok_out to false rather than quietly assuming
+ * "expects success". A case whose in.yaml loaded while its expectation file
+ * is missing or corrupt is a hard defect in the corpus or in the test
+ * harness, and it must not pass unnoticed. */
 static bool parse_meta_expects_fail(const char *meta_path, bool *ok_out) {
   size_t len;
   char *meta = read_whole_file(meta_path, &len);
@@ -183,7 +181,7 @@ TEST(spec_suite, accept_reject_matches_expectation) {
       free(in_data);
       closedir(d);
       /* REQUIRE_TRUE returns only inside a running suite, so this return
-       * keeps in_data from being read after the free on any path. */
+       * makes sure in_data is never read after the free, on any path. */
       REQUIRE_TRUE(meta_ok);
       return;
     }
@@ -226,10 +224,9 @@ TEST(spec_suite, accept_reject_matches_expectation) {
           "unexpected mismatches, %zu stale known-deviation entries\n",
           total, known_deviation_count, unexpected_failures, stale_deviations);
 
-  /* This is an exact match, not a loose lower bound, so it catches a
-   * regression in the load of the corpus that silently drops some, but not
-   * most, of the cases of the pinned snapshot. See the comment on
-   * EXPECTED_CASE_COUNT. */
+  /* An exact match rather than a loose lower bound, so that a corpus load
+   * which drops some but not most of the cases of the pinned snapshot gets
+   * caught. See the comment on EXPECTED_CASE_COUNT. */
   REQUIRE_EQ(total, (size_t)EXPECTED_CASE_COUNT);
   REQUIRE_EQ(unexpected_failures, (size_t)0);
   REQUIRE_EQ(stale_deviations, (size_t)0);

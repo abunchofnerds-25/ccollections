@@ -3,9 +3,9 @@
 cjson \- overview of the JSON parser, serializer and DOM
 .SH DESCRIPTION
 .nf
-cjson parses JSON text (RFC 8259) into a tree of nodes, which a
-program can read and change, and then writes the tree back as JSON.
-Each node is identified by an opaque cjson handle.
+cjson parses JSON text (RFC 8259) into a tree of nodes that a
+program can read and change, and writes the tree back out as JSON.
+Each node is reached through an opaque cjson handle.
 .fi
 .SH "NODE TYPES"
 .nf
@@ -21,20 +21,20 @@ cjson_type(3) gives the type of a node, as a cjson_node_type_t:
   CJSON_LIST         an array of child nodes
   CJSON_DICTIONARY   an object: string keys, each with a child node
 
-A value accessor stops the program through ccol_fatal_err() when the
-node has a different type, and also for a NULL node.  So call
+A value accessor stops the program through _ccol_fatal_err() when the
+node has a different type, and for a NULL node as well, so call
 cjson_type(3) before you read a node whose type comes from the input.
 cjson_parse(3) gives the rules for large integers, strings and UTF-8.
 .fi
 .SH "PATHS"
 .nf
 cjson_get(3), cjson_set(3) and cjson_delete(3) find a node through a
-string of dot-separated components, for example "users.#0.name".  On
-an array, a component "#N" is the element at index N; every other
-component is an object key.  Write "\e." for a dot in a key and "\e\e"
-for a backslash.  cjson_set(3) creates a missing object key at the
-leaf, but it never creates a missing parent, and never an array
-element after the end.
+string of components separated by dots, such as "users.#0.name".  On
+an array, the component "#N" is the element at index N, where N is
+one or more decimal digits with no sign, and every other component
+is an object key.  Write "\e." for a dot in a key and "\e\e" for a
+backslash.  cjson_set(3) creates a missing object key at the leaf,
+but never a missing parent and never an array element past the end.
 .fi
 .SH "ORDER"
 .nf
@@ -42,9 +42,9 @@ An object keeps its members in insertion order:
   - For a parsed document, the order of the text.
   - For a tree that a program makes, the order of the calls that added
     the keys.
-A replacement keeps the position of its key.  The serializers,
+A replaced value keeps the position of its key.  The serializers,
 cjson_clone(3) and the cursor of cjson_dictionary_first(3) all use
-this order, so the output for one tree is the same in each run.
+this order, so one tree gives the same output in every run.
 .fi
 .SH "OWNERSHIP"
 .nf
@@ -52,30 +52,30 @@ cjson_parse(3), cjson_clone(3) and the cjson_create_*(3) functions give
 a tree that the caller owns and must free with cjson_destroy(3).
 
 cjson_get(3), cjson_list_get(3), cjson_dictionary_get(3) and the
-dictionary cursor give borrowed references, which the tree continues
-to own.  To attach such a node at a different location, clone it
-first.
+dictionary cursor give borrowed references that the tree keeps
+owning.  Clone such a node first if you want to attach it somewhere
+else.
 
-cjson_list_push(3) and cjson_dictionary_set(3) take the child; only
-ccol_invalid_args leaves the child with the caller.
+cjson_list_push(3) and cjson_dictionary_set(3) take the child, and
+only ccol_invalid_args leaves it with the caller.
 
 Each node records its allocator, so destroying a tree needs no
 allocator from the caller.  A string from cjson_serialize(3) is freed
-by the allocator of the root.
+with the root's allocator.
 .fi
 .SH "LIMITS"
 .nf
-A parse refuses nesting deeper than 500 containers, and the
-serializers and cjson_clone(3) refuse it too for a tree that a program
-makes.  The size of a parsed tree is linear in the length of the
-input; cjson_parse(3) gives the limit.  A string never holds a null
-byte, because each string is a null-terminated C string.
+A parse refuses nesting deeper than 500 containers, and so do the
+serializers and cjson_clone(3) for a tree that a program builds.
+The size of a parsed tree is linear in the length of the input, and
+cjson_parse(3) gives the bound.  A string never holds a null byte,
+because each one is a null-terminated C string.
 .fi
 .SH "THREAD SAFETY"
 .nf
 A tree is not thread safe, but many threads can read one tree at the
-same time while no thread changes it.  Separate trees are independent,
-and separate threads can parse and serialize at the same time.
+same time as long as no thread changes it.  Separate trees are
+independent, and separate threads can parse and serialize at once.
 .fi
 .SH "SEE ALSO"
 .BR cjson_parse (3),

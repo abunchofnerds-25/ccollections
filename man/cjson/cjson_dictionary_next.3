@@ -11,11 +11,11 @@ bool cjson_dictionary_next(cjson_dictionary_iter *it);
 .fi
 .SH DESCRIPTION
 .nf
-Steps the cursor it, which cjson_dictionary_first(3) filled, onto the
-member that follows the current one in insertion order.  After a call
-that returns true, it->key and it->value describe that member.  The
-order, the lifetime of it->key and the changes that the cursor
-survives are described in cjson_dictionary_first(3).
+Moves the cursor it, which cjson_dictionary_first(3) filled, to the
+member that comes after the current one in insertion order.  After a
+call that returns true, it->key and it->value describe that member.
+cjson_dictionary_first(3) describes the order, how long it->key
+lives and which changes the cursor survives.
 .fi
 .SH PARAMETERS
 .nf
@@ -23,17 +23,17 @@ it  A cursor that cjson_dictionary_first(3) filled.
 .fi
 .SH RETURN VALUE
 .nf
-true when it now stands on the next member.
+true when it stands on the next member.
 
 false when the previous call gave the last member, and on every call
-after that; the function then sets it->key and it->value to NULL.
-false also when it is NULL.
+after that, and the function then sets it->key and it->value to
+NULL.  Also false when it is NULL.
 .fi
 .SH NOTES
 .nf
-The cursor survives the replacement of any value, an insert, and the
-removal of any member other than the one that this call is about to
-read; cjson_dictionary_first(3) states the exact rule.
+The cursor survives an insert, the replacement of any value and the
+removal of any member except the one this call is about to read.
+cjson_dictionary_first(3) gives the exact rule.
 .fi
 .SH "SEE ALSO"
 .BR cjson_dictionary_first (3),

@@ -11,31 +11,30 @@ ccol_iter_declare(container, it);
 .fi
 .SH DESCRIPTION
 .nf
-This macro declares a cmap_iterator pointer named it, which carries the
-type information of container. The declaration adds
-__attribute__((cleanup)), so the iterator is destroyed automatically at the
-end of its scope and the caller needs no explicit ccol_iter_destroy() call.
+ccol_iter_declare declares a cmap_iterator pointer named it that carries
+the type information of container. The declaration has
+__attribute__((cleanup)), so the iterator is destroyed at the end of its
+scope and you don't need an explicit ccol_iter_destroy() call.
 
-The macro also declares two hidden companion type variables, which let
-ccol_iter_key_ptr() and ccol_iter_val_ptr() give pointers with the
-correct type for container.
+It also declares two hidden companion type variables. Those are what let
+ccol_iter_key_ptr() and ccol_iter_val_ptr() return pointers of the right
+type for container.
 .fi
 .SH PARAMETERS
 .nf
-container  Container variable, which the caller must declare first with
-           a *_declare or *_construct macro. It must be a cvec, a chmap
-           or a cbmap.
+container  Container variable, declared beforehand with a *_declare or
+           *_construct macro. It must be a cvec, a chmap or a cbmap.
 it         Name for the iterator variable.
 .fi
 .SH NOTES
 .nf
-container must be in scope, and its companion type variables must also be
-visible, in the same scope or in a parent scope.
-This macro needs GCC or Clang, because it uses __attribute__((cleanup)).
-A loop that leaves early leaves the iterator live until the end of the
-scope. The container can be destroyed before that point, because the
-cleanup frees the iterator without reading the container; but do not
-advance or dereference such an iterator once its container is gone.
+container must be in scope, and its companion type variables must be
+visible too, in the same scope or in a parent one.
+The macro uses __attribute__((cleanup)), so it needs GCC or Clang.
+When a loop leaves early, the iterator stays live until the end of the
+scope. You can destroy the container before that point, since the
+cleanup frees the iterator without reading the container, but do not
+advance or dereference the iterator once its container is gone.
 .fi
 .SH EXAMPLES
 .nf

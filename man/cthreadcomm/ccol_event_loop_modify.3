@@ -12,44 +12,39 @@ ccol_retval_t ccol_event_loop_modify(ccol_event_loop loop, ccol_event_reg reg,
 .fi
 .SH DESCRIPTION
 .nf
-This function changes the direction of reg in place, with no window
-where the fd below it is unregistered. The function works on an fd
-only: a call on a registration that comes from a queue selectable or a
-ccol_channel selectable returns ccol_invalid_args, because the
-direction of a queue selectable is a part of its identity. Remove such
-a registration and add it again instead of modifying it.
+Changes the direction of reg in place, with no moment where its fd is
+unregistered. Only fd registrations can be modified. A registration
+made from a queue or a ccol_channel selectable gives ccol_invalid_args,
+because the direction of a queue selectable is part of its identity;
+remove such a registration and add it again instead.
 
-On success three things happen:
-  - The library updates reg->sel.dir, so a callback that the loop
-    dispatches after this call returns sees the new direction in the
-    sel parameter that it gets. The dispatch path copies reg->sel
-    under its own internal lock at the moment that it collects each
-    dispatch, and keeps no live pointer into reg->sel, so a callback
-    that is already in flight when you call this function keeps the
-    direction that was current at the moment of the collect and never
-    races this update.
-  - reg moves to the other slot on the shared epoll entry of the fd
-    below it.
-  - The library recomputes the combined epoll interest mask of the fd,
-    fresh from the live state of both directions; ordinarily this is a
-    single EPOLL_CTL_MOD call. reg itself may be paused at the time of
-    the call (see ccol_event_loop_pause(3)). If it is, and the fd has
-    no other direction that is not paused, the mask carries no real
-    interest: the pause has put the fd outside the epoll interest set
-    of the kernel, the fd stays that way, and no epoll_ctl call is
-    needed at all. A reg that the loop stopped watching because an
-    event reached it that none of its handlers can take (see
+On success:
+  - reg->sel.dir is updated, so a callback dispatched after this call
+    returns sees the new direction in its sel parameter. The dispatch
+    path copies reg->sel under its own internal lock at the moment it
+    collects each dispatch and keeps no live pointer into reg->sel, so
+    a callback that is already in flight keeps the direction that was
+    current when it was collected and never races with this update.
+  - reg moves to the other slot on the shared epoll entry of its fd.
+  - The fd's combined epoll interest mask is recomputed from the live
+    state of both directions, normally with a single EPOLL_CTL_MOD
+    call. reg may be paused at the time of the call (see
+    ccol_event_loop_pause(3)); if it is and the fd has no other
+    direction that is not paused, the mask carries no real interest.
+    The pause has already put the fd outside the kernel's epoll
+    interest set, the fd stays there, and no epoll_ctl call is needed
+    at all. A reg that the loop stopped watching because an event
+    reached it that none of its handlers can take (see
     ccol_event_loop_add(3)) is watched again in its new direction.
 
-A call whose new_dir is the current direction of reg changes nothing
-else and returns ccol_success, but it makes a reg that the loop
-stopped watching, as described above, watched again.
+When new_dir is already reg's direction nothing else changes and the
+call returns ccol_success, but a reg that the loop stopped watching as
+described above is watched again.
 
-This call is valid only when a different registration on the same fd
-does not already hold the slot of the target direction. Use it, for
-example, for a non-blocking connect, which starts with an interest in
-write and moves to an interest in read after the connect finishes; it
-then needs no second ccol_event_loop_add() call.
+The call only works when no other registration on the same fd holds the
+slot of the target direction. A typical use is a non-blocking connect,
+which starts with interest in writing and switches to reading once the
+connect finishes, without a second ccol_event_loop_add() call.
 .fi
 .SH PARAMETERS
 .nf
@@ -59,28 +54,26 @@ new_dir  ccol_select_read or ccol_select_write.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success        The function changed the direction.
-ccol_invalid_args   loop is CCOL_EVENT_LOOP_INVALID, or a handle that
-                    is stale or that something already destroyed; or
-                    reg is CCOL_EVENT_REG_INVALID, or it fails to
-                    resolve for another reason; or reg is a
-                    registration for a queue or for a ccol_channel; or
-                    new_dir is neither ccol_select_read nor
-                    ccol_select_write. A reg that fails to resolve
-                    covers a handle that is plainly invalid, and also
-                    one that something removed between the moment that
-                    the caller got it and this call, either from
-                    another thread or from the callback of reg that
-                    removes itself. The library finds either case
-                    through the registration table of reg and rejects
-                    it cleanly; it never causes a use-after-free.
+ccol_success        The direction is changed.
+ccol_invalid_args   loop is CCOL_EVENT_LOOP_INVALID, a stale handle,
+                    or a handle that has already been destroyed; or
+                    reg is CCOL_EVENT_REG_INVALID or fails to resolve
+                    for another reason; or reg is a registration for a
+                    queue or a ccol_channel; or new_dir is neither
+                    ccol_select_read nor ccol_select_write. A reg that
+                    fails to resolve can be plainly invalid, or it can
+                    have been removed after the caller got it, by
+                    another thread or by reg's own callback removing
+                    itself. Both cases are caught through reg's
+                    registration table and refused cleanly, never with
+                    a use-after-free.
 ccol_not_permitted  A different registration on the same fd already
                     holds the target direction.
 .fi
 .SH THREAD SAFETY
 .nf
-Safe to call at the same time as ccol_event_loop_remove(), and from
-inside a callback that runs on one of the reactor threads.
+Safe to call at the same time as ccol_event_loop_remove(), and from a
+callback running on one of the reactor threads.
 .fi
 .SH EXAMPLES
 .nf

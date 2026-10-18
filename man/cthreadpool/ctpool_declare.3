@@ -12,10 +12,10 @@ ctpool_declare(name);
 .SH DESCRIPTION
 .nf
 Expands to `ctpool name` and leaves the variable uninitialized, so you
-must assign it with ccol_create_cthread_pool() or
-ccol_create_cthread_pool_mp() before you use it.
+must assign it with ctpool_create() or ctpool_create_mp() before you
+use it.
 
-This macro exists so that the naming matches the other c_collections
+The macro is there so that the naming matches the other c_collections
 modules.
 .fi
 .SH PARAMETERS
@@ -26,7 +26,7 @@ name  Variable name to declare.
 .nf
 ctpool_declare(pool);
 char *err = NULL;
-pool = ccol_create_cthread_pool(4, 128, &err);
+pool = ctpool_create(4, 128, &err);
 if (!pool) { fprintf(stderr, "%s\en", err); exit(1); }
 /* ... submit tasks ... */
 ctpool_shutdown_drain(pool);
@@ -35,4 +35,4 @@ ctpool_destroy(pool);
 .SH "SEE ALSO"
 .BR ctpool_declare_scoped (3),
 .BR ctpool_construct (3),
-.BR ccol_create_cthread_pool (3)
+.BR ctpool_create (3)

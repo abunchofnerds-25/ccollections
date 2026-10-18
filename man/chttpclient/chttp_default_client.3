@@ -11,14 +11,13 @@ chttpcli chttp_default_client(void);
 .fi
 .SH DESCRIPTION
 .nf
-This function gives the default client of the process, which the
-library initializes only when it first needs it. The function is
-thread-safe, and the library makes only one such client for each
-process.
+This function returns the process's default client, which the library
+creates the first time it is needed. The function is thread-safe, and
+a process never gets more than one default client.
 
-The default client uses the default settings: pool_size is the CPU
-count, there are no timeouts, and TLS verification is on. You can
-configure it with the same chttpclient_set_* functions as any other
+The default client has the default settings: pool_size is the CPU
+count, there are no timeouts and TLS verification is on. You can
+change them with the same chttpclient_set_* functions as for any other
 client.
 .fi
 .SH RETURN VALUE
@@ -28,22 +27,21 @@ initialization fails.
 .fi
 .SH WARNINGS
 .nf
-Do not give this handle to chttpclient_destroy. This module owns the
-default client and destroys it automatically at the exit of the
-process, from a handler that it registers with atexit(3) the first
-time that it builds the default client; a call of chttp_default_client
-from an exit handler that runs after that one gives CHTTPCLI_INVALID.
-If you do destroy it, that chttpclient_destroy call does not crash,
-because the module knows the handle and clears its own reference to it;
-but the library never builds the default client again. Every later call
-to chttp_default_client, chttp_do, chttp_get and the other wrappers in
-the process then fails cleanly and runs no request, for the rest of the
-life of that process. If you need a client whose life you control, make
-your own client with ccol_create_chttpclient or with
-ccol_create_chttpclient_mp.
+Do not pass this handle to chttpclient_destroy. The module owns the
+default client and destroys it at process exit, from a handler that it
+registers with atexit(3) when it first builds the client. A call to
+chttp_default_client from an exit handler that runs after that one
+returns CHTTPCLI_INVALID.
+If you destroy it anyway, the chttpclient_destroy call does not crash,
+because the module recognizes the handle and clears its own reference
+to it. The library never builds the default client again, though, so
+every later call to chttp_default_client, chttp_do, chttp_get and the
+other wrappers fails cleanly and runs no request, for the rest of the
+process's life. If you need a client whose lifetime you control,
+create your own with chttpclient_create or chttpclient_create_mp.
 .fi
 .SH "SEE ALSO"
-.BR ccol_create_chttpclient (3),
+.BR chttpclient_create (3),
 .BR chttpclient_destroy (3),
 .BR chttp_do (3),
 .BR chttp_get (3)

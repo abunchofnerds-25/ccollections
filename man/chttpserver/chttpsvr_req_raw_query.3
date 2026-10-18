@@ -11,8 +11,9 @@ const char *chttpsvr_req_raw_query(const chttpsvr_req *req);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the NUL-terminated raw query string exactly as it arrived,
-without the leading '?', or NULL when the request has no query string.
+Returns the raw query string as it arrived on the wire, without the
+leading '?' and terminated with a NUL.  A request without a query
+string gives NULL.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_req_query (3),

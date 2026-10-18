@@ -23,6 +23,7 @@
  */
 
 #include <internal/cpintable.h>
+#include <internal/test_helpers/cpintable.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdatomic.h>
@@ -34,31 +35,29 @@
 
 TAU_MAIN()
 
-/* A handle is (index << 32) | generation, the same form that every module
- * that uses this type makes. */
-extern void _ccol_pintable_force_next_stripe_alloc_failure_for_tests(void);
+/* A handle is (index << 32) | generation, which is the form every module
+ * that uses this type builds. */
 
 static uint64_t mk(uint32_t idx, uint32_t gen) {
   return ((uint64_t)idx << 32) | (uint64_t)gen;
 }
 
-/* The REQUIRE_* macros of Tau return from the test function as soon as one
- * of them fails, so a table that only a last statement frees keeps its
- * chunks and its stripe blocks on exactly the runs that matter, and memtest
- * then reports a leak on top of the assertion that caused it. A table that
- * carries a cleanup attribute is freed on every path out. Each test also
- * disposes of the table explicitly at its end; because ccol_pintable_dispose
- * unpublishes a chunk before it frees the chunk, that second call finds
- * nothing to do. */
+/* Tau's REQUIRE_* macros return from the test function as soon as one fails,
+ * so a table that only the last statement frees keeps its chunks and stripe
+ * blocks on exactly the runs that matter, and memtest then reports a leak on
+ * top of the assertion that caused it. A table with a cleanup attribute is
+ * freed on every way out. Each test also disposes of the table explicitly at
+ * its end, and since ccol_pintable_dispose unpublishes a chunk before it
+ * frees it, the second call finds nothing left to do. */
 static void dispose_pintable(ccol_pintable *t) { ccol_pintable_dispose(t); }
 
-/* The number of chunks that the table currently holds. A refusal that happens
- * before any allocation must leave this at zero. The return value alone cannot
- * separate "refused" from "allocated a chunk, stored a pointer, and then
- * reported a failure", so this count checks the half of the claims of those
- * tests that nothing else checks. This is not true of every refusal: a stripe
- * allocation that fails after its chunk is published keeps that chunk on
- * purpose, and
+/* The number of chunks the table holds right now. A refusal that comes
+ * before any allocation must leave this at zero. The return value alone
+ * can't tell "refused" apart from "allocated a chunk, stored a pointer and
+ * then reported a failure", so this count checks the half of those tests'
+ * claims that nothing else checks. It doesn't hold for every refusal though:
+ * a stripe allocation that fails after its chunk is published keeps that
+ * chunk on purpose, and
  * a_failed_stripe_allocation_keeps_the_chunk_and_leaves_the_slot_reusable pins
  * that. */
 static size_t chunks_held(const ccol_pintable *t) {
@@ -91,17 +90,17 @@ TEST(pintable, a_zero_handle_never_resolves) {
   ccol_pintable_dispose(&t);
 }
 
-/* Slot 0 is an ordinary slot, and it usually holds an object, so a zero
- * handle that reaches unpin must not name it. An owner that has not yet
- * written its own self-handle field holds zero, because such structs start
- * as all zero bytes. A decrement of slot 0 for that owner drives the count
- * of a real object below the truth, and a later drain then finishes while a
+/* Slot 0 is an ordinary slot and it usually holds an object, so a zero
+ * handle that reaches unpin must not name it. An owner that hasn't written
+ * its own self-handle field yet holds zero there, because such structs start
+ * as all zero bytes. Decrementing slot 0 for that owner pushes a real
+ * object's count below the truth, and a later drain then finishes while a
  * caller still holds the object.
  *
- * These two tests are not vacuous: remove either guard from
- * ccol_pintable_unpin or from ccol_pintable_pins_for, and the tests fail
- * here. Without them, the code corrupts the count of an unrelated owner in a
- * build that looks healthy. */
+ * Remove either guard from ccol_pintable_unpin or from
+ * ccol_pintable_pins_for and both tests fail here.
+ * Without the guards the code corrupts the count of an unrelated owner in a
+ * build that looks perfectly healthy. */
 TEST(pintable,
      a_zero_handle_is_ignored_by_unpin_rather_than_charged_to_slot_zero) {
   SCOPED_PINTABLE(t);
@@ -112,11 +111,11 @@ TEST(pintable,
   REQUIRE_EQ(ccol_pintable_pin(&t, mk(0, 1)), (void *)&obj);
   REQUIRE_EQ(ccol_pintable_pins(&t, 0), (size_t)1);
 
-  /* The pin above belongs to slot 0, and this call must not touch it. */
+  /* The pin above belongs to slot 0 and this call must not touch it. */
   ccol_pintable_unpin(&t, 0);
   REQUIRE_EQ(ccol_pintable_pins(&t, 0), (size_t)1);
 
-  /* A zero handle also names no slot to report on. */
+  /* A zero handle doesn't name a slot to report on either. */
   REQUIRE_EQ(ccol_pintable_pins_for(&t, 0), (size_t)0);
 
   ccol_pintable_unpin(&t, mk(0, 1));
@@ -126,14 +125,13 @@ TEST(pintable,
 
 TEST(pintable,
      a_zero_handle_is_ignored_by_reset_rather_than_clearing_slot_zero) {
-  /* A fork() child handler drops the pins of an owner by handle, and an owner
-   * that has not yet written its handle field carries zero. A clear of slot
-   * 0 for that owner drops the pin of a caller that is truly in flight, on an
-   * unrelated object, which is the one thing that the count exists to
-   * prevent.
+  /* A fork() child handler drops an owner's pins by handle, and an owner
+   * that hasn't written its handle field yet carries zero. Clearing slot 0
+   * for that owner drops the pin of a caller that really is in flight on an
+   * unrelated object, which is exactly what the count is there to prevent.
    *
-   * This test is not vacuous: code that derives the index from the handle
-   * without the guard fails here. */
+   * Code that derives the index from the handle without the guard fails
+   * here. */
   SCOPED_PINTABLE(t);
   memset(&t, 0, sizeof(t));
   int obj = 7;
@@ -145,15 +143,15 @@ TEST(pintable,
   ccol_pintable_reset_for(&t, 0);
   REQUIRE_EQ(ccol_pintable_pins(&t, 0), (size_t)1);
 
-  /* With the correct name, the clear happens. */
+  /* With the right name the clear does happen. */
   ccol_pintable_reset_for(&t, mk(0, 1));
   REQUIRE_EQ(ccol_pintable_pins(&t, 0), (size_t)0);
   ccol_pintable_dispose(&t);
 }
 
 TEST(pintable, a_handle_against_an_empty_table_resolves_to_nothing) {
-  /* A module resolves a handle before it publishes one, because a caller can
-   * pass a stale or invented handle, so a table of all zero bytes must
+  /* A module resolves a handle before it ever publishes one, since a caller
+   * can pass a stale or made-up handle, so a table of all zero bytes needs to
    * answer instead of faulting. */
   SCOPED_PINTABLE(t);
   memset(&t, 0, sizeof(t));
@@ -179,9 +177,8 @@ TEST(pintable, generation_zero_is_rejected_because_it_is_the_invalid_sentinel) {
   memset(&t, 0, sizeof(t));
   int obj = 1;
   REQUIRE_FALSE(ccol_pintable_publish(&t, 0, 0, &obj));
-  /* The refusal happens before the code builds anything, so the slot that
-     the call names stays empty, and a later publish into it starts from
-     nothing. */
+  /* The refusal comes before the code builds anything, so the slot the call
+     names stays empty and a later publish into it starts from nothing. */
   REQUIRE_EQ(chunks_held(&t), (size_t)0);
   REQUIRE_EQ(ccol_pintable_pin(&t, mk(0, 0)), NULL);
   ccol_pintable_dispose(&t);
@@ -194,7 +191,7 @@ TEST(pintable, a_stale_generation_does_not_resolve) {
 
   REQUIRE_TRUE(ccol_pintable_publish(&t, 3, 1, &first));
   ccol_pintable_retire(&t, 3);
-  /* A different object reuses the slot, as the free-index list of a module
+  /* A different object reuses the slot, the way a module's free-index list
    * does. */
   REQUIRE_TRUE(ccol_pintable_publish(&t, 3, 2, &second));
 
@@ -219,10 +216,10 @@ TEST(pintable, a_retired_handle_does_not_resolve) {
 }
 
 TEST(pintable, an_outstanding_pin_is_visible_to_the_drain_after_a_retire) {
-  /* This is the property that a destroy depends on: a retire stops every new
-   * pin, while a pin that the table has already granted keeps the count
-   * above zero until its release. That is what keeps the object alive for a
-   * caller that is already inside a call. */
+  /* A destroy depends on this: a retire stops every new pin, but a pin the
+   * table already granted keeps the count above zero until it's released.
+   * That's what keeps the object alive for a caller who is already inside a
+   * call. */
   SCOPED_PINTABLE(t);
   memset(&t, 0, sizeof(t));
   int obj = 1;
@@ -232,7 +229,7 @@ TEST(pintable, an_outstanding_pin_is_visible_to_the_drain_after_a_retire) {
   ccol_pintable_retire(&t, 2);
   REQUIRE_EQ(ccol_pintable_pins(&t, 2), (size_t)1);
   REQUIRE_EQ(ccol_pintable_pin(&t, mk(2, 1)), NULL); /* no new pin granted */
-  REQUIRE_EQ(ccol_pintable_pins(&t, 2), (size_t)1);  /* the refusal left
+  REQUIRE_EQ(ccol_pintable_pins(&t, 2), (size_t)1);  /* and the refusal left
                                                         no trace */
 
   ccol_pintable_unpin(&t, mk(2, 1));
@@ -257,10 +254,9 @@ TEST(pintable, nested_pins_on_one_handle_are_counted_individually) {
 }
 
 TEST(pintable, reset_drops_every_outstanding_pin) {
-  /* This is what a fork() child handler depends on. The threads that would
-   * release these pins do not exist in the child, so the count must be
-   * cleared; without that clear, the first destroy in the child waits
-   * forever. */
+  /* A fork() child handler depends on this. The threads that would release
+   * these pins don't exist in the child, so the count has to be cleared, and
+   * without the clear the child's first destroy waits forever. */
   SCOPED_PINTABLE(t);
   memset(&t, 0, sizeof(t));
   int obj = 1;
@@ -287,8 +283,8 @@ TEST(pintable, pins_for_a_handle_matches_pins_for_its_index) {
 }
 
 TEST(pintable, an_index_in_a_later_chunk_resolves) {
-  /* This crosses the chunk boundary, so the test exercises the index
-   * arithmetic of the directory and not only the first chunk. */
+  /* This crosses the chunk boundary, so the test exercises the directory's
+   * index arithmetic, beyond the first chunk. */
   SCOPED_PINTABLE(t);
   memset(&t, 0, sizeof(t));
   int obj = 1;
@@ -296,7 +292,7 @@ TEST(pintable, an_index_in_a_later_chunk_resolves) {
   REQUIRE_TRUE(ccol_pintable_publish(&t, idx, 1, &obj));
   REQUIRE_EQ(ccol_pintable_pin(&t, mk(idx, 1)), (void *)&obj);
   ccol_pintable_unpin(&t, mk(idx, 1));
-  /* That did not touch the first chunk. */
+  /* And the first chunk wasn't touched. */
   REQUIRE_EQ(ccol_pintable_pin(&t, mk(5, 1)), NULL);
   ccol_pintable_dispose(&t);
 }
@@ -325,15 +321,15 @@ static void *pin_worker(void *p) {
 }
 
 TEST(pintable, concurrent_pins_balance_to_zero) {
-  /* Every thread releases every pin that it takes, so the count returns to
-   * exactly zero. An error in the accounting of a stripe appears here as a
-   * non-zero residue, which no functional assertion anywhere else shows.
+  /* Every thread releases every pin it takes, so the count goes back to
+   * exactly zero. A mistake in a stripe's accounting shows up here as a
+   * non-zero residue, which no functional assertion anywhere else would show.
    *
    * These numbers give enough concurrency to interleave the stripes while
    * keeping the suite cheap under valgrind, which instruments every atomic
-   * operation and runs one thread at a time. An error in the accounting of a
-   * stripe is systematic rather than rare, so it appears at this size as
-   * well as at a larger one. */
+   * operation and runs one thread at a time. A stripe accounting error is
+   * systematic rather than rare, so it shows up at this size just as it
+   * would at a larger one. */
   enum { THREADS = 8, ITERS = 2000 };
   SCOPED_PINTABLE(t);
   memset(&t, 0, sizeof(t));
@@ -360,12 +356,12 @@ TEST(pintable, concurrent_pins_balance_to_zero) {
   ccol_pintable_dispose(&t);
 }
 
-/* The object that a worker reaches through its pin. A pin is a promise that
- * this memory stays valid, so a worker reads the object while it holds a
- * pin. A pin that the table grants after the owner freed the object turns
- * that read into a use-after-free, and the magic value then does not match.
- * AddressSanitizer and valgrind also report such a read directly, which is
- * where this test gets most of its strength. */
+/* The object a worker reaches through its pin. A pin promises that this
+ * memory stays valid, so the worker reads the object while it holds one. If
+ * the table granted a pin after the owner freed the object, that read would
+ * be a use-after-free and the magic value wouldn't match. AddressSanitizer
+ * and valgrind also report such a read directly, and that's where most of
+ * this test's strength comes from. */
 #define PIN_OBJ_MAGIC 0x5eaf00du
 
 typedef struct {
@@ -374,12 +370,11 @@ typedef struct {
 
 /* No worker takes a pin until every thread of the round exists. Valgrind
  * runs one thread at a time, so a thread that the test creates while the
- * existing threads hammer this slot starves. Measured without this gate, the
- * creation loop of one round takes 99 seconds, and the whole duration of the
- * test moves between two seconds and several minutes with the decisions of
- * the scheduler. The gate costs the race nothing, because the race is
- * between a pin and the retire after it, and both happen after the gate
- * opens. */
+ * existing ones hammer this slot starves. Measured without this gate, the
+ * creation loop of a single round took 99 seconds and the test's duration
+ * swung between two seconds and several minutes depending on the scheduler.
+ * The gate costs the race nothing, because the race is between a pin and
+ * the retire that follows it, and both happen after the gate opens. */
 typedef struct {
   _Atomic int ready;
   _Atomic bool go;
@@ -410,19 +405,19 @@ static void *race_worker(void *p) {
         atomic_fetch_add_explicit(a->violations, 1, memory_order_relaxed);
       ccol_pintable_unpin(a->t, a->handle);
     } else {
-      /* After the retire of the slot, every attempt fails. Without this
-       * sleep the worker spins at full speed until the test tells it to
-       * stop, and because valgrind runs one thread at a time, that spin
-       * starves the thread that does the retire.
+      /* Once the slot is retired every attempt fails. Without this sleep
+       * the worker would spin at full speed until the test tells it to
+       * stop, and since valgrind runs one thread at a time that spin starves
+       * the thread doing the retire.
        *
-       * This is a real sleep rather than sched_yield, because a yield does
-       * not reliably hand over the scheduler when only one thread runs at a
-       * time. A yield here makes the duration of this test bimodal under
-       * valgrind (either a few seconds or several minutes), depending on
-       * whether the six workers starve the drain. The drain loop below
-       * already sleeps for the same reason. This does not change the race:
-       * the code reaches this branch only after a pin has failed, which is
-       * after the retire that the race is against. */
+       * It's a real sleep and not sched_yield, because a yield doesn't
+       * reliably hand over the scheduler when only one thread runs at a
+       * time. With a yield here the duration of this test under valgrind is
+       * bimodal (a few seconds or several minutes), depending on whether the
+       * six workers starve the drain. The drain loop below sleeps for the
+       * same reason. The race isn't affected: the code only gets to this
+       * branch after a pin has failed, which is after the retire the race is
+       * against. */
       struct timespec ts = {.tv_sec = 0, .tv_nsec = 1000};
       nanosleep(&ts, NULL);
     }
@@ -431,22 +426,21 @@ static void *race_worker(void *p) {
 }
 
 TEST(pintable, a_pin_is_never_granted_against_a_drained_slot) {
-  /* This is the race that the order between the pin side and the retire side
-   * closes. An owner retires the slot and waits for the pin count to reach
-   * zero, and from that moment it treats the object as its own to free. A
-   * pin that the table grants after that point gives a caller memory that is
-   * already gone.
+  /* This is the race that the ordering between the pin side and the retire
+   * side closes. An owner retires the slot and waits for the pin count to
+   * reach zero, and from that moment on it treats the object as its own to
+   * free. A pin the table grants after that point hands a caller memory that
+   * is already gone.
    *
-   * The free is real, so a violation is a true use-after-free rather than a
-   * mismatch in the bookkeeping. On x86-64 a weaker memory order passes this
-   * test most of the time, so the test earns most of its value on the
-   * aarch64 and arm32 jobs and under the sanitizers, while staying cheap
-   * enough to run everywhere.
+   * The free is real, so a violation is a true use-after-free and not just a
+   * bookkeeping mismatch. On x86-64 a weaker memory order passes this test
+   * most of the time, so most of its value comes from the aarch64 and arm32
+   * jobs and the sanitizers, but it's cheap enough to run everywhere.
    *
-   * These numbers stay small so that the whole suite stays practical under
-   * valgrind, where each round pays for six threads that spin. The property
-   * is a race: the number of rounds times the number of runs across CI is
-   * what finds it, not one run alone. */
+   * The numbers are kept small so the whole suite stays practical under
+   * valgrind, where every round pays for six spinning threads. The property
+   * is a race, so what finds it is the number of rounds times the number of
+   * runs across CI, not a single run. */
   enum { THREADS = 6, ROUNDS = 60 };
   SCOPED_PINTABLE(t);
   memset(&t, 0, sizeof(t));
@@ -459,9 +453,9 @@ TEST(pintable, a_pin_is_never_granted_against_a_drained_slot) {
     pin_obj_t *obj = malloc(sizeof(*obj));
     if (!obj) break;
     obj->magic = PIN_OBJ_MAGIC;
-    /* The free happens before the assertion, not after it, because a REQUIRE_
-     * that fails returns from the test function at once. The object belongs
-     * to this loop until the table takes it. */
+    /* The free comes before the assertion, because a failing REQUIRE_
+     * returns from the test function at once. The object belongs to this
+     * loop until the table takes it. */
     bool published = ccol_pintable_publish(&t, 0, gen, obj);
     if (!published) free(obj);
     REQUIRE_TRUE(published);
@@ -481,32 +475,33 @@ TEST(pintable, a_pin_is_never_granted_against_a_drained_slot) {
       started++;
     }
 
-    /* The gate opens once every thread that truly started has arrived, and it
-       opens on every path, so a partial start still lets each started
-       thread finish and be joined, and nothing parks here forever. */
+    /* The gate opens once every thread that really started has arrived, and
+       it opens on every path, so after a partial start each started thread
+       can still finish and be joined and nothing parks here forever. */
     while (atomic_load_explicit(&gate.ready, memory_order_acquire) < started)
       pin_gate_park();
     atomic_store_explicit(&gate.go, true, memory_order_release);
 
-    /* Exactly what the destroy of an owning module does. */
+    /* This is exactly what an owning module's destroy does. */
     ccol_pintable_retire(&t, 0);
-    /* This loop sleeps instead of spinning or yielding. Under valgrind only
-     * one thread runs at a time, and sched_yield() does not reliably hand
-     * over the scheduler, so a spin with a yield waits out whole quanta while
-     * the workers that it depends on cannot run; a real sleep releases it at
-     * once. The drain loops of the library have the same shape.
+    /* This loop sleeps rather than spinning or yielding. Under valgrind
+     * only one thread runs at a time and sched_yield() doesn't reliably hand
+     * over the scheduler, so a spin with a yield waits out whole quanta
+     * while the workers it depends on can't run, and a real sleep lets them
+     * go at once. The library's drain loops have the same shape.
      *
-     * The wait has a bound, which is a safety net against a hang and not the
-     * property under test. A stripe count that does not balance is exactly
-     * what this test hunts for, and an unbounded wait for that count to
-     * reach zero hangs the whole binary under valgrind or on a loaded
-     * runner, so the drain_saw_nonzero check below never fails.
+     * The wait is bounded, but the bound is only a safety net against a
+     * hang, it's not the property under test. A stripe count that doesn't
+     * balance is exactly what this test is hunting for, and an unbounded
+     * wait for that count to reach zero would hang the whole binary under
+     * valgrind or on a loaded runner, so the drain_saw_nonzero check below
+     * could never fail.
      *
-     * The bound comes from the clock rather than from a count of loop
-     * iterations. A sleep this short costs the granularity of the scheduler,
-     * which is tens of microseconds rather than the one microsecond that the
-     * code asks for, so counting iterations as microseconds overstates the
-     * bound by more than a factor of ten, and the net catches nothing. */
+     * The bound comes from the clock and not from counting iterations. A
+     * sleep this short costs the scheduler's granularity, tens of
+     * microseconds rather than the one microsecond the code asks for, so
+     * counting iterations as microseconds would overstate the bound by more
+     * than ten times and the net would catch nothing. */
     struct timespec drain_start, drain_now;
     bool timed_out = false;
     clock_gettime(CLOCK_MONOTONIC, &drain_start);
@@ -520,16 +515,16 @@ TEST(pintable, a_pin_is_never_granted_against_a_drained_slot) {
       }
     }
 
-    /* Freeing the object while the workers still race is the point of this
-       test, not an oversight. The slot is retired and drained, so a pin
-       after that point is a true use-after-free, which AddressSanitizer and
+    /* Freeing the object while the workers are still racing is the whole
+       point of this test. The slot is retired and drained, so a pin after
+       that point is a true use-after-free, which AddressSanitizer and
        valgrind report while a check of the bookkeeping alone sees nothing.
-       That reasoning holds only once the count truly reaches zero, and the
-       bounded wait above can also end with a pin still outstanding, which
-       is exactly the accounting failure that this test hunts. A free at
-       that moment destroys the object with a worker provably inside it and
-       kills the binary before the check below can report anything, so that
-       path stops the workers, joins them first, and records the failure. */
+       That only holds once the count really reaches zero though, and the
+       bounded wait above can also end with a pin still outstanding, which is
+       exactly the accounting failure we are hunting. Freeing at that moment
+       would destroy the object with a worker provably inside it and kill
+       the binary before the check below could report anything, so on that
+       path we stop the workers, join them first and record the failure. */
     bool drained = !timed_out;
     bool joined = false;
     if (!drained) {
@@ -540,7 +535,7 @@ TEST(pintable, a_pin_is_never_granted_against_a_drained_slot) {
     }
 
     obj->magic = 0xdeadbeefu; /* poisoned before the free, so a late read
-                                 that escapes the allocator is still
+                                 that gets past the allocator is still
                                  visible */
     free(obj);
 
@@ -551,9 +546,9 @@ TEST(pintable, a_pin_is_never_granted_against_a_drained_slot) {
     }
   }
 
-  /* These assertions run after every thread is joined, never inside the
-   * loop: a REQUIRE_ that fails returns from the test function at once and
-   * would leave the workers running on a fixture that is already freed. */
+  /* These assertions run after every thread is joined and never inside the
+   * loop, because a failing REQUIRE_ returns from the test function at once
+   * and would leave the workers running on a fixture that is already freed. */
   REQUIRE_EQ(atomic_load(&violations), (size_t)0);
   REQUIRE_EQ(drain_saw_nonzero, (size_t)0);
   ccol_pintable_dispose(&t);
@@ -571,22 +566,21 @@ static void *unpin_on_another_thread(void *p) {
 }
 
 TEST(pintable, a_split_pin_still_sums_to_zero_once_both_sides_are_visible) {
-  /* The contract of ccol_pintable_unpin is that the thread that takes a pin
-   * is the thread that releases it, and this test does not permit anything
-   * else. A release on another thread splits one pin across two stripes, and
-   * because ccol_pintable_pins reads the stripes one at a time rather than
-   * as one snapshot, a split pin can sum to zero while a caller still holds
-   * it; that is what would let a drain free an object with a caller inside
-   * it.
+  /* ccol_pintable_unpin's contract is that the thread which takes a pin is
+   * the one that releases it, and this test doesn't allow anything else. A
+   * release on another thread splits one pin across two stripes, and since
+   * ccol_pintable_pins reads the stripes one at a time instead of as one
+   * snapshot, a split pin can sum to zero while a caller still holds it,
+   * which is what would let a drain free an object with a caller inside it.
    *
-   * This test pins the narrower property that the convergence of the drain
-   * rests on: the counters are signed, so a split sums to exactly zero once
-   * both sides are visible, and it leaves no permanent residue that would
-   * stall every later drain on this slot. The test joins the release before
-   * it reads the sum, so both sides are visible by construction; the unsafe
-   * window in the middle is not what this test measures. Whether these two
-   * threads land on different stripes depends on how many ids the process
-   * has given out, so the assertion is on the sum and never on the split. */
+   * What this test pins is the narrower property the drain's convergence
+   * rests on: the counters are signed, so once both sides are visible a split
+   * sums to exactly zero and leaves no permanent residue that would stall
+   * every later drain on this slot. The release is joined before we read the
+   * sum, so both sides are visible by construction, and the unsafe window in
+   * between isn't what we measure here. Whether the two threads land on
+   * different stripes depends on how many ids the process has handed out,
+   * so we assert on the sum and never on the split. */
   SCOPED_PINTABLE(t);
   memset(&t, 0, sizeof(t));
   int obj = 1;
@@ -607,19 +601,18 @@ TEST(pintable, a_split_pin_still_sums_to_zero_once_both_sides_are_visible) {
 }
 
 /* This is the one refusal that happens after the table has published a
- * chunk. The chunk deliberately stays: it is type-stable storage, and a
- * concurrent reader can already hold a pointer into it. Nothing frees it
- * before dispose, and the next publish into any of its slots reuses it. The
- * one thing that must not happen is the slot becoming live, because the
- * caller was told that the publish failed.
+ * chunk. The chunk stays on purpose. It is type-stable storage and a
+ * concurrent reader may already hold a pointer into it, so nothing frees it
+ * before dispose and the next publish into any of its slots reuses it. What
+ * must not happen is the slot becoming live, because the caller was told the
+ * publish failed.
  *
- * This test is not vacuous about the chunk: a failure path that unpublished
+ * The chunk part catches a real mistake: a failure path that unpublished
  * the chunk makes the reuse assertions fail. The assertion that the pin
- * returns NULL is not what separates those two cases; it is here for a
- * different reason. ccol_pintable_pin refuses every slot whose stripe block
- * is NULL, and that guard is what makes a half-published slot impossible to
- * resolve whatever its state word says, which is worth a check of its
- * own. */
+ * returns NULL isn't what tells those two cases apart, it's here for another
+ * reason. ccol_pintable_pin refuses every slot whose stripe block is NULL,
+ * and that guard is what makes a half-published slot impossible to resolve
+ * whatever its state word says, which deserves a check of its own. */
 TEST(pintable,
      a_failed_stripe_allocation_keeps_the_chunk_and_leaves_the_slot_reusable) {
   SCOPED_PINTABLE(t);
@@ -633,10 +626,10 @@ TEST(pintable,
   REQUIRE_EQ(ccol_pintable_pin(&t, mk(0, 1)), NULL);
   REQUIRE_EQ(ccol_pintable_pins(&t, 0), (size_t)0);
 
-  /* The table kept the chunk, and did not unpublish it. */
+  /* The table kept the chunk and didn't unpublish it. */
   REQUIRE_EQ(chunks_held(&t), (size_t)1);
 
-  /* The slot is also still fully usable. */
+  /* And the slot is fully usable. */
   REQUIRE_TRUE(ccol_pintable_publish(&t, 0, 2, &obj));
   REQUIRE_EQ(ccol_pintable_pin(&t, mk(0, 2)), (void *)&obj);
   REQUIRE_EQ(ccol_pintable_pins(&t, 0), (size_t)1);

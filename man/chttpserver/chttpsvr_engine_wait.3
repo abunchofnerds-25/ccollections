@@ -11,52 +11,52 @@ void chttpsvr_engine_wait(void);
 .fi
 .SH DESCRIPTION
 .nf
-Blocks the calling thread until the shared reactor of chttpserver has
-stopped completely, whether the stop was started before this call, at
-the same time as this call, or some time after it.  If nothing ever
-stops the reactor, this function blocks forever; for example, an
-external SIGTERM handler may call chttpsvr_engine_stop() at a later,
-unknown time.
+Blocks the calling thread until the shared reactor of chttpserver
+has stopped completely, whether the stop started before this call,
+at the same time or some time later.  If nothing ever stops the
+reactor, the call blocks forever.  The stop may come, for example,
+from an external SIGTERM handler that calls chttpsvr_engine_stop()
+at some unknown later time.
 
-Dropping the last reference to this reactor, which happens when you
-destroy the last chttpsvr with chttpsvr_destroy, starts an
-asynchronous teardown that does not block the caller that started it.
-This function is the explicit escape hatch for a program that must
-synchronize with that shutdown, or with a chttpsvr_engine_stop() call
-that comes from an external signal.  This reactor is separate from the
-engine of chttpclient, so this function has no connection to the
-async work of chttpclient in the same process.
+When the last reference to the reactor goes, which happens when you
+destroy the last chttpsvr with chttpsvr_destroy, an asynchronous
+teardown starts, and it doesn't block the caller that started it.
+This function is what a program calls when it has to synchronize
+with that shutdown, or with a chttpsvr_engine_stop() that came from
+an external signal.  The reactor is separate from the engine of
+chttpclient, so this function has nothing to do with the async work
+of chttpclient in the same process.
 
-It can be called concurrently from more than one thread, and each
-caller blocks until the library confirms that the reactor has stopped
-completely, regardless of which caller started the stop, whether by a
-release or by a chttpsvr_engine_stop() call.
+More than one thread may call it at the same time.  Each caller
+blocks until the library confirms that the reactor has stopped
+completely, whichever caller started the stop and whether it started
+through a release or through chttpsvr_engine_stop().
 
-Do not call this function from a request handler or a middleware that
-runs on the worker pool of ANY chttpsvr instance.  Such a call is a
-FATAL error: it calls ccol_fatal_err(), which means abort() and
-SIGABRT, so the library reports it at once instead of hanging.  The
-drain of the worker pool of that server can never finish while this
-in-flight request itself blocks here waiting for the engine to exit,
-which would deadlock the shutdown of the whole shared engine, not just
-of one server.  An admin or shutdown endpoint that wants a full drain
-before it answers calls chttpsvr_engine_stop() and then returns; call
-this function from a separate thread.
+Do not call it from a request handler or a middleware that runs on
+the worker pool of ANY chttpsvr instance.  That is a FATAL error: the
+library calls _ccol_fatal_err(), which means abort() and SIGABRT, and
+reports it at once instead of hanging.  The worker pool of that
+server can never finish draining while the request in flight is
+blocked here waiting for the engine to exit, and that would deadlock
+the shutdown of the whole shared engine, not just of one server.  An
+admin or shutdown endpoint that wants a full drain before it answers
+calls chttpsvr_engine_stop() and returns, and a separate thread calls
+this function.
 
-After this function returns, the fallback engine logger is closed.  A
+Once this function returns, the fallback engine logger is closed.  A
 logger installed with chttpsvr_set_engine_logger stays in place, and
 the engine that a later chttpsvr_start brings up logs through it
 again.
 
-It is safe to call this function before the reactor has ever started;
-it then does nothing.
+Calling it before the reactor has ever started is safe and does
+nothing.
 
-On OpenBSD, do not call this function from an exit handler that a
-constructor registered with atexit(3).  OpenBSD runs such a handler
-after the dynamic loader has taken a lock that it keeps until the
-process ends, and the teardown of the reactor joins threads, which
-needs that lock, so the call never returns.  An exit handler that
-main() registers is not affected.
+On OpenBSD, do not call it from an exit handler that a constructor
+registered with atexit(3).  OpenBSD runs such a handler after the
+dynamic loader has taken a lock that it holds until the process ends,
+and the teardown of the reactor joins threads, which needs that lock,
+so the call never returns.  An exit handler registered by main() is
+not affected.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_engine_stop (3),

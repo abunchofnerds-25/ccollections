@@ -22,22 +22,23 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* Every public destroy, free and release macro evaluates its handle argument
- * exactly once, calls the destroy function once with the value that the
- * argument held, and clears the argument. This binary checks the macros
- * alone: it defines the destroy functions that the macros call as recording
- * stubs, so it links none of the library and runs no module code.
+/* Every public destroy, free and release macro has to evaluate its handle
+ * argument exactly once, call the destroy function once with the value the
+ * argument held, and then clear the argument. This binary checks only the
+ * macros. The destroy functions they call are defined here as stubs that
+ * record their calls, so none of the library is linked and no module code
+ * runs.
  *
- * Each case walks an array backwards with `while (k) F(a[--k])`. A macro that
- * evaluates its argument twice decrements k twice per call, so it destroys
- * the wrong elements and skips others. Because the array sits at the end of
- * a larger one, an index that such a macro takes below 0 still names storage
- * of the test, and the failure is an assertion instead of undefined
- * behaviour.
+ * Each case walks an array backwards with `while (k) F(a[--k])`. A macro
+ * that evaluates its argument twice decrements k twice per call, so it
+ * destroys the wrong elements and skips others. The array sits at the end of
+ * a larger one, which means an index such a macro drives below 0 still
+ * points at the test's own storage, and we get an assertion failure instead
+ * of undefined behaviour.
  *
- * The binary is built with -Wshadow, and each case also nests one call inside
- * the argument of another, so a temporary of a destroy macro that hides
- * another one fails the build. */
+ * The binary is built with -Wshadow and every case also nests one call in
+ * the argument of another, so if a destroy macro's temporary hides another
+ * one the build fails. */
 
 #include <cbstmap.h>
 #include <chashmap.h>
@@ -73,7 +74,7 @@ static void dm_reset(void) {
   dm_calls = 0;
 }
 
-/* Recording stubs with the signatures of the library functions. */
+/* Stubs that record their calls, with the library functions' signatures. */
 void __chmap_destroy(chmap h) { dm_record((uintptr_t)h); }
 void __cbmap_destroy(cbmap h) { dm_record((uintptr_t)h); }
 void __chttpclient_destroy(chttpcli h) { dm_record((uintptr_t)h); }
@@ -95,7 +96,7 @@ void __ctpool_destroy(ctpool h) { dm_record((uintptr_t)h); }
 void __cvector_destroy(cvec h) { dm_record((uintptr_t)h); }
 void __cstring_destroy(cstr h) { dm_record((uintptr_t)h); }
 
-/* The pool argument of a free_entry macro is recorded as well, so a case can
+/* We record the pool argument of a free_entry macro too, so a case can
  * check that the pool reached the call unchanged. */
 static uintptr_t dm_pool_seen;
 void _ccol_mempool_free_entry(ccol_mempool *mp, void *entry) {
@@ -107,15 +108,16 @@ void _ccol_r_mempool_free_entry(ccol_r_mempool *rmp, void *entry) {
   dm_record((uintptr_t)entry);
 }
 
-/* A fake handle value for element i: never 0, so a macro that skips a NULL
- * or invalid handle still calls the stub. The stubs never dereference it. */
+/* A fake handle value for element i. It's never 0, so a macro that skips a
+ * NULL or invalid handle calls the stub anyway, and the stubs never
+ * dereference it. */
 #define DM_VAL(i) ((uintptr_t)0x1000u + (uintptr_t)(i) * 0x10u)
 
-/* Runs F over an array of three handles of type T, backwards, then checks
- * that exactly three calls happened, in order, with the value of each
- * element, that every element is cleared to CLEARED, and that k reached 0
- * after exactly three calls. A nested call inside the argument checks that
- * two expansions of F do not collide. */
+/* Runs F backwards over an array of three handles of type T, then checks
+ * that exactly three calls happened in order with each element's value, that
+ * every element was cleared to CLEARED and that k got to 0 after exactly
+ * three calls. A call nested in the argument checks that two expansions of F
+ * don't collide. */
 #define DM_CASE(F, T, CLEARED)                                            \
   do {                                                                    \
     T dm_all[2 * DM_N];                                                   \
@@ -191,8 +193,8 @@ TEST(destroy_macros, ccol_channel_destroy) {
   DM_CASE(ccol_channel_destroy, ccol_channel *, NULL);
 }
 
-/* The pool of a free_entry call is an ordinary argument: it reaches the
- * call once, unchanged. */
+/* The pool of a free_entry call is an ordinary argument, so it reaches the
+ * call once and unchanged. */
 static ccol_mempool *const dm_mp = (ccol_mempool *)DM_VAL(9);
 static ccol_r_mempool *const dm_rmp = (ccol_r_mempool *)DM_VAL(10);
 #define DM_FREE_ENTRY(e) ccol_mempool_free_entry(dm_mp, e)
@@ -214,7 +216,7 @@ TEST(destroy_macros, ccol_iter_destroy) {
   cmap_iterator dm_its[DM_N + 2];
   memset(dm_its, 0, sizeof(dm_its));
   for (int i = 0; i < DM_N + 2; i++) dm_its[i]._free_fn = dm_iter_free;
-  /* The guard iterators below dm_a are live too, as in DM_CASE. */
+  /* As in DM_CASE, the guard iterators below dm_a are live too. */
   cmap_iterator dm_guard_its[DM_N];
   memset(dm_guard_its, 0, sizeof(dm_guard_its));
   cmap_iterator *dm_all[2 * DM_N];

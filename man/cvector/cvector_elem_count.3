@@ -11,7 +11,7 @@ size_t cvector_elem_count(cvec v);
 .fi
 .SH DESCRIPTION
 .nf
-Returns the current number of elements stored in the vector.
+Returns how many elements the vector holds right now.
 .fi
 .SH PARAMETERS
 .nf
@@ -19,12 +19,11 @@ v    Vector to query
 .fi
 .SH RETURN VALUE
 .nf
-Returns number of elements in the vector
+The number of elements in the vector.
 .fi
 .SH NOTES
 .nf
-O(1) complexity
-Asserts if v is NULL
+O(1). Asserts if v is NULL.
 .fi
 .SH "SEE ALSO"
 .BR cvec_size (3),

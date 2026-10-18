@@ -11,12 +11,12 @@ cbmap_construct(hm_name, key_type, val_type);
 .fi
 .SH DESCRIPTION
 .nf
-Type-inferred macro that creates a BST map with the default settings.
-The macro finds the key type by itself: a signed integer, an unsigned
-integer, a floating-point type, a string or another type. It also
-creates type marker variables, which give the declared key type and the
-declared value type to the other type-dispatching macros at each place
-that calls them.
+Creates a BST map with the default settings. You don't name the kind of
+key: the macro works out whether key_type is a signed integer,
+an unsigned integer, a floating-point type, a string or some other type.
+It also creates the type marker variables, which carry the declared key
+type and value type to the other type-dispatching macros wherever you
+call them.
 .fi
 .SH PARAMETERS
 .nf
@@ -26,13 +26,19 @@ val_type  Type of the values
 .fi
 .SH NOTES
 .nf
-The macro stops the program if an allocation fails
-The macro uses the default memory management and the default
-comparison
-For a struct key_type, the macro uses a raw memcmp order. See
-cbmap_create_full(3) for the rules of the default comparison and for
-how to give a custom_comparison_proc instead. The cbmap_construct_cc
-macro is the type-inferred equivalent for a struct key_type
+The macro stops the program when an allocation fails.
+
+The map gets the default memory management and the default comparison.
+A struct key_type is ordered by a raw memcmp of its bytes; see
+cbmap_create_full(3) for the rules of the default comparison and for how
+to pass a custom_comparison_proc instead. For a struct key_type the
+type-inferred macro to use is cbmap_construct_cc.
+
+An array key type or value type, such as int[2] or char[16], does not
+compile, and the error message tells you to wrap the array in a struct.
+The macros copy keys and values by assignment, which C doesn't allow for
+an array, so the map would end up storing the address of the caller's
+array instead of its elements. A struct that holds the array works.
 .fi
 .SH EXAMPLES
 .nf

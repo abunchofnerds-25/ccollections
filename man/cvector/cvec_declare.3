@@ -11,57 +11,58 @@ cvec_declare(v, type);
 .fi
 .SH DESCRIPTION
 .nf
-This macro declares a vector variable named v that holds elements of the
-given type, together with the two hidden companion type variables that the
-type-dispatching macros read at each call site. The macro creates no
-vector: v stays uninitialized, and cvec_init(3) or cvec_init_mp(3) must
+Declares a vector variable named v that holds elements of the given type,
+together with the two hidden companion type variables that the
+type-dispatching macros read wherever they are called. No vector is
+created: v stays uninitialized, and cvec_init(3) or cvec_init_mp(3) must
 give it a vector before any other macro or function touches it.
 
-Use this macro when the creation and the declaration must be separate, for
-example when the choice of allocator comes further down the function, or
-for a variable at the top of a block that the later paths create in
-different ways. When the two steps do not need to be separate,
-cvec_construct(3) and cvec_construct_mp(3) do both together, and
-cvec_construct_scoped(3) and cvec_construct_mp_scoped(3) also add automatic
-destruction at the end of the scope.
+Use it when the declaration and the creation have to be separate, for
+example when the allocator is chosen further down the function, or for a
+variable at the top of a block that later paths create in different ways.
+When they don't need to be separate, cvec_construct(3) and
+cvec_construct_mp(3) do both at once, and cvec_construct_scoped(3) and
+cvec_construct_mp_scoped(3) also destroy the vector automatically at the
+end of the scope.
 
-The names of the companion variables come from v. The variables carry only
-type information: nothing reads them at run time and they are marked
-unused, so a vector that goes only to the raw functions costs nothing. The
-value companion carries the element type; cvec_init(3) takes the element
-size from it, and cvec_at(3), cvec_push(3) and the other type-dispatching
-macros use it to type their result. The key companion carries size_t,
-which is the type of the index that a vector iterator reports through
+The companion variables are named after v. They carry type information
+only; nothing reads them at run time and they are marked unused, so a
+vector that only goes to the raw functions costs nothing extra. The value
+companion carries the element type: cvec_init(3) takes the element size
+from it, and cvec_at(3), cvec_push(3) and the other type-dispatching
+macros type their results with it. The key companion carries size_t, the
+type of the index that a vector iterator reports through
 ccol_iter_key_ptr(3).
 .fi
 .SH PARAMETERS
 .nf
 v     Name of the vector variable to declare
 type  Element type, for example int, double or struct foo
-      Any type name is accepted, including a function
-      pointer type such as void (*)(int) and an array
-      type such as int[4]. For an array element type,
-      give cvec_push(3) an array or a string literal.
-      The macro copies its bytes into the element
+      Any type name works, a function pointer type such
+      as void (*)(int) and an array type such as int[4]
+      included. For an array element type, give
+      cvec_push(3) an array or a string literal, whose
+      bytes the macro copies into the element
 .fi
 .SH NOTES
 .nf
 The macro expands to a sequence of declarations and needs a semicolon at
-the end of the call site, so it belongs where declarations are legal and
-cannot be the body of an if or a loop without braces.
-The companion variables must stay in scope everywhere that you use a
+the end of the call, so it goes where declarations are legal and can't be
+the body of an if or a loop without braces.
+
+The companion variables have to be in scope wherever you use a
 type-dispatching macro on v. For a handle that comes from another scope,
 cvec_redeclare(3) makes them again.
-After the initialization, destroy a vector from this macro with
+
+Once it is initialized, destroy a vector declared with this macro using
 cvec_destroy(3).
 .fi
 .SH WARNINGS
 .nf
 v holds an indeterminate value until cvec_init(3) or cvec_init_mp(3)
-gives it one, and a read of v before that point is undefined behavior,
-including a call to cvec_destroy(3) on a path that skipped the
-initialization. cvec_declare_scoped(3) is the variant that starts at
-NULL.
+assigns one, and reading v before that is undefined behavior, a call to
+cvec_destroy(3) on a path that skipped the initialization included.
+cvec_declare_scoped(3) is the variant that starts at NULL.
 .fi
 .SH EXAMPLES
 .nf

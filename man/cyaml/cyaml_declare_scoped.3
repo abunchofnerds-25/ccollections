@@ -11,16 +11,16 @@ cyaml_declare_scoped(var_name);
 .fi
 .SH DESCRIPTION
 .nf
-Declare a cyaml handle variable named var_name, set it to NULL and
-attach a cleanup attribute to it.  When var_name goes out of scope, the
-cleanup frees the tree that the variable holds recursively, exactly as
+Declares a cyaml handle named var_name, sets it to NULL and attaches
+a cleanup attribute to it.  When var_name goes out of scope, the
+cleanup frees the whole tree that the variable holds, exactly as
 cyaml_destroy() does, and leaves the variable NULL.
 
-The cleanup runs at the end of the enclosing block, in the reverse of
-the declaration order, whether the block exits normally or through
-break, continue, return or goto.
+Cleanups run at the end of the enclosing block in reverse declaration
+order, whether the block exits normally or through break, continue,
+return or goto.
 
-This is a GCC and Clang extension, which MSVC does not have.
+The macro relies on a GCC and Clang extension that MSVC doesn't have.
 .fi
 .SH PARAMETERS
 .nf

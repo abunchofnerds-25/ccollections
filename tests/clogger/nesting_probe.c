@@ -22,17 +22,17 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* Compile-time probe for the logging macros, in two builds that the Makefile
- * runs with -fsyntax-only; nothing here runs.
+/* Compile-time probe for the logging macros. The Makefile builds it twice
+ * with -fsyntax-only and nothing here ever runs.
  *
- * Under -Wshadow -Werror, a logging macro nests inside the argument of
- * another logging macro and inside the argument of a value macro of another
- * module, so no expansion declares a local that hides one of an enclosing
+ * Under -Wshadow -Werror a logging macro nests inside the argument of another
+ * logging macro and inside the argument of a value macro of another module,
+ * so no expansion may declare a local that hides one of an enclosing
  * expansion.
  *
- * Under -std=c11 -pedantic-errors, a call with a format string and no
- * argument after it compiles. The format is the first argument of the
- * variadic part of each macro, so no call needs the GNU comma swallow. */
+ * Under -std=c11 -pedantic-errors a call with a format string and nothing
+ * after it compiles. The format is the first argument of each macro's
+ * variadic part, so no call needs the GNU comma swallow. */
 
 #include <clogger.h>
 #ifndef CLOGGER_PROBE_STRICT

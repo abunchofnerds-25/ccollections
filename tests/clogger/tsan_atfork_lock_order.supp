@@ -1,82 +1,84 @@
-# Suppresses a lock-order-inversion report that ThreadSanitizer raises against
-# the fork-prepare handlers of this module and cthreadcomm.
+# Suppresses a lock-order-inversion report that ThreadSanitizer raises
+# against the fork-prepare handlers of this module and of cthreadcomm.
 #
-# What the report says. Every module here that registers a pthread_atfork()
-# prepare handler takes its own locks in that handler and holds them until after
-# the fork, so the handlers' locks nest in whichever order the handlers run in.
-# The reported cycle pairs clog_slot_table.rwlock, taken in
-# _clog_atfork_prepare, against the queue registry mutex taken in
-# _cthreadcomm_atfork_prepare, each appearing to be acquired while the other is
-# held.
+# Every module here that registers a pthread_atfork() prepare handler takes
+# its own locks in that handler and holds them until after the fork, so the
+# handlers' locks nest in whatever order the handlers run in. The reported
+# cycle pairs clog_slot_table.rwlock, taken in _clog_atfork_prepare, with the
+# queue registry mutex taken in _cthreadcomm_atfork_prepare, each one
+# appearing to be acquired while the other is held.
 #
-# Why it cannot deadlock. The C library runs prepare handlers one sequence at a
-# time under its own atfork lock, so two handler sequences never interleave and
-# neither can wait on a lock the other holds. Within a process the relative
-# order of any two handlers is also fixed, since it is reverse registration
-# order and the modules force their dependencies to register ahead of them; the
-# two directions of the cycle therefore come from separate processes rather than
-# from one lock-order graph that a single process could deadlock on.
-# ThreadSanitizer's own graph does not distinguish them, because a forked child
-# inherits the parent's graph and keeps adding to it.
+# It can't deadlock. The C library runs prepare handlers one sequence at a
+# time under its own atfork lock, so two handler sequences never interleave
+# and neither can wait on a lock that the other holds. Inside one process
+# the relative order of any two handlers is fixed as well, since it's the
+# reverse of the registration order and the modules force their
+# dependencies to register ahead of them. So the two directions of the
+# cycle come from separate processes, and not from one lock-order graph that
+# a single process could deadlock on. ThreadSanitizer's graph can't tell
+# them apart, because a forked child inherits the parent's graph and keeps
+# adding to it.
 #
-# The second half of that argument is checked rather than asserted. Each prepare
-# handler reports itself to _ccol_atfork_order_record (see ccol_atfork_module_t
-# in common.h), which records the pairwise order and aborts if two handlers ever
-# run in opposite relative orders, which is the condition that would make this
-# cycle real. tests/common's atfork_order tests pin both directions of that
-# check. So a genuine inversion stops the run even while this file keeps the
-# detector quiet, which is what a suppression over our own code has to earn.
+# We check the second half of that argument instead of just claiming it.
+# Each prepare handler reports itself to _ccol_atfork_order_record (see
+# _ccol_atfork_module_t in common.h), which records the pairwise order and
+# aborts if two handlers ever run in opposite relative orders, and that is
+# exactly the condition that would make this cycle real. The atfork_order
+# tests of tests/common pin both directions of that check, so a real
+# inversion stops the run even while this file keeps the detector quiet,
+# which is what a suppression over our own code has to earn.
 #
-# What this file is worth. It silences output and nothing else: the deadlock
-# detector's reports do not set the exit status, so the ThreadSanitizer target
-# passes with or without it. Keeping it costs the reports; removing it costs a
-# handful of lines of noise on every run of this suite.
+# The file silences output and does nothing else. The deadlock detector's
+# reports don't set the exit status, so the ThreadSanitizer target passes
+# with or without it; keeping it costs us those reports, and removing it
+# costs a handful of lines of noise on every run of this suite.
 #
-# Anchored on this module's own frame, always symbol-resolved, rather than on
-# any pthread-internal frame name, mirroring tests/chttpclient/tsan_openssl.supp's
-# own "anchor on our own code" choice. It names _clog_atfork_prepare, which is
-# where the write lock is taken: an anchor naming a function that does not take
-# the lock suppresses nothing, silently, and nothing fails until the reports
-# surface somewhere else.
+# The entry is anchored on this module's own frame, which is always
+# symbol-resolved, and not on a pthread-internal frame name, the same
+# "anchor on our own code" choice that tests/chttpclient/tsan_openssl.supp
+# makes. It names _clog_atfork_prepare because that's where the write lock
+# is taken. An anchor naming a function that doesn't take the lock
+# suppresses nothing, silently, and nothing fails until the reports show up
+# somewhere else.
 #
-# Know what this hides. The anchor matches every lock-order-inversion report
-# carrying that frame, including one between this module's prepare handler and
-# another module's that did not arise from an inherited graph. That is the class
-# _ccol_atfork_order_record exists to catch independently; anyone changing which
-# locks a fork-prepare handler takes, or the order the handlers register in,
-# should re-derive the reasoning above rather than trusting a clean
-# ThreadSanitizer run here.
+# Keep in mind what it hides. The anchor matches every lock-order-inversion
+# report that carries that frame, including one between this module's
+# prepare handler and another module's that didn't come from an inherited
+# graph. _ccol_atfork_order_record exists to catch that class on its own,
+# but whoever changes which locks a fork-prepare handler takes, or the order
+# the handlers register in, should derive the reasoning above again and not
+# trust a clean ThreadSanitizer run here.
 deadlock:_clog_atfork_prepare
 
-# A second, separate case: ThreadSanitizer does not model the re-initialization
-# of a write-locked rwlock in a fork child.
+# A second, separate case: ThreadSanitizer doesn't model the
+# re-initialization of a write-locked rwlock in a fork child.
 #
-# What happens. The fork-prepare handlers of this module and of cthreadcomm
-# write-lock their process-wide slot-table rwlocks (clog_slot_table.rwlock and
+# The fork-prepare handlers of this module and of cthreadcomm write-lock
+# their process-wide slot-table rwlocks (clog_slot_table.rwlock and
 # ccol_event_loop_slot_table.rwlock) on the thread that calls fork(). In the
-# child, that thread has a new thread ID, and the unlock of a glibc rwlock
+# child that thread has a new thread ID, and the unlock of a glibc rwlock
 # compares the recorded writer ID with the caller's, so a plain unlock would
-# return 0 and release nothing. The child handlers therefore re-initialize
-# both rwlocks. ThreadSanitizer keeps treating them as write-held by
-# the child's main thread after the re-initialization. A later write lock of
-# either one in the child, by the exit drain or by a module destructor, is then
+# return 0 and release nothing. That's why the child handlers re-initialize
+# both rwlocks. ThreadSanitizer keeps treating them as write-held by the
+# child's main thread after the re-initialization, so a later write lock of
+# either one in the child, by the exit drain or by a module destructor, is
 # reported as "double lock of a mutex", and every lock the main thread takes
-# afterwards is recorded as nested inside them, which yields the
+# after that is recorded as nested inside them, which gives the
 # "lock-order-inversion" reports. Destroying the rwlock before the
 # re-initialization only changes the report to "destroy of a locked mutex".
 #
-# Where it appears. Only in forked children of the two exit-drain tests that
-# call exit() on the writer or compressor thread, or with the slot table held
-# for ever, because only those children take the slot-table locks again after
-# the fork. The behaviour these reports flag is checked directly instead: the
+# It appears only in forked children of the two exit-drain tests that call
+# exit() on the writer or compressor thread, or with the slot table held for
+# ever, because only those children take the slot-table locks again after
+# the fork. We check the behaviour these reports flag directly instead: the
 # fork_safety tests of every module lock the same rwlocks in a child after a
-# fork and fail with a hang if the child cannot.
+# fork and fail with a hang if the child can't.
 #
 # Each anchor names the frame of our own code that takes the lock in the
 # report, never a pthread or ThreadSanitizer frame, and the deadlock anchor
-# names the test helper whose child produces the inversion, so that an
-# inversion anywhere else is reported.
+# names the test helper whose child produces the inversion, so an inversion
+# anywhere else is reported as usual.
 mutex:_clog_exit_drain
 mutex:_cleanup_event_loop_slot_table
-mutex:clog_test_lock_table_forever
+mutex:_clog_test_lock_table_forever
 deadlock:exit_from_worker_child

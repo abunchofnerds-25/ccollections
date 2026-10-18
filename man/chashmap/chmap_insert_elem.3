@@ -13,9 +13,9 @@ ccol_retval_t chmap_insert_elem(chmap chm,
 .fi
 .SH DESCRIPTION
 .nf
-Inserts a key-value pair into the hash map. If the key already exists,
-the new value replaces the old one. The map resizes automatically when
-its load factor crosses a threshold.
+Inserts a key-value pair into the hash map. If the key is already there,
+the new value replaces the old one. When the load factor crosses a
+threshold, the map resizes.
 .fi
 .SH PARAMETERS
 .nf
@@ -25,8 +25,9 @@ val_pair   Value to associate with key (copied into map)
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success               - New key inserted successfully
-ccol_key_already_present   - Key already existed; value updated successfully
+ccol_success               - A new key was inserted
+ccol_key_already_present   - The key was already there and its value was
+                             updated
 ccol_invalid_args          - chm, key_pair, or val_pair is NULL or size is 0;
                              also returned when key_pair->size does not
                              exactly match the byte size of the key type,
@@ -48,30 +49,38 @@ ccol_not_enough_memory     - Memory allocation failed
 .fi
 .SH NOTES
 .nf
-The ptr of a key_pair needs no specified alignment, because the map
-hashes and compares the key bytes through memcpy instead of through a
-pointer cast to the key type. key_pair->ptr can therefore point directly
-at key bytes at any offset in a larger buffer, such as a field in a
-packed network frame or a memory-mapped record, and you do not have to
-copy the key bytes into an aligned local variable first
+key_pair->ptr needs no particular alignment, because the map hashes and
+compares the key bytes through memcpy, never through a pointer cast to the
+key type. So it can point straight at key bytes at any offset in a larger
+buffer, such as a field of a packed network frame or a memory-mapped
+record, and you don't have to copy them into an aligned local variable
+first
 Average O(1) complexity
 The map copies the key data and the value data into itself
-The map frees and replaces the old value when the key is already there
+When the key is already there, the map frees the old value and replaces
+it
+key_pair and val_pair may point into the map itself. Each can be the
+pair that chmap_get_elem_ref(3) filled for any key of the same map, or
+any other pair that points at the bytes of a stored key or value. The
+map reads both pairs before it changes anything, so this also holds for
+an insert that resizes the map and frees the storage they point at.
+Once the insert returns, the rule of chmap_get_elem_ref(3) applies to
+such a pair, and the insert has ended the validity of its ptr
 The map resizes itself when the load factor goes above its threshold.
 With open addressing, an insert of a new key doubles the table once the
-live entries fill more than 0.70 of it; a delete leaves no marker for
-a deleted slot, so only live entries count
-A value of the wrong width is rejected at the INSERT rather than at a
-later read. Without that check the insert would report success, and the
+live entries fill more than 0.70 of it; a delete leaves no marker for a
+deleted slot, so only live entries count
+A value of the wrong width is rejected at the INSERT and not at a later
+read. Without that check the insert would report success, and the
 value-size guard of chmap_get(3) would stop the process on the first
 read of that key, at a call site that did nothing wrong
-The type-inferred chmap_insert(3) macro cannot reach that rejection,
-because it first converts the value through the declared value type of
-the map, so every pair that it builds is exactly the right width
-For a float or double key, see chmap_construct(3) for the map's
-key equality contract (bitwise, except -0.0 canonicalized to 0.0)
-For a long double key, see chmap_construct(3) for the map's key
-equality contract (value-based, unlike every other key type)
+The type-inferred chmap_insert(3) macro never hits that rejection,
+because it first converts the value through the map's declared value
+type, so every pair it builds has exactly the right width
+For a float or double key, chmap_construct(3) gives the key equality
+contract (bitwise, except that -0.0 becomes 0.0)
+For a long double key, chmap_construct(3) gives the key equality contract
+(by value, unlike every other key type)
 A map created with a custom key equality procedure compares keys with
 it; see chmap_create_full(3)
 .fi

@@ -1,0 +1,475 @@
+.TH CLOG_CREATE_FROM_FILE_MP 3 "2026-10-01" "c_collections" "C Collections Library - Functions"
+.SH NAME
+clog_create_from_file_mp, clog_create_from_file \- create a file-backed logger with optional log rotation
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/clogger.h>
+
+clog clog_create_from_file_mp(const char *path, clog_level_t min_level,
+                    const clog_rotation_cfg_t *cfg,
+                    const clog_async_cfg_t *async_cfg,
+                    ccol_memmgmt_procs_t *mprocs);
+/* convenience wrapper; default allocator */
+static inline clog clog_create_from_file(const char *path,
+                    clog_level_t min_level,
+                    const clog_rotation_cfg_t *cfg,
+                    const clog_async_cfg_t *async_cfg);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a new logger that writes to the file at path.  A file that does
+not exist is created with mode 0644, narrowed by the umask of the
+process, and a file that exists is opened for append.  For an existing
+file the function finds the current size, asking fstat(2) first and
+falling back to an lseek(2) to the end of the file, so the thresholds
+of size rotation are right for an append to a log that already exists.
+If neither method gives the size and cfg->size_rotation_enabled is
+true, the call fails and returns CLOG_INVALID instead of silently
+starting the byte counter from zero, which would let the file grow well
+past cfg->max_file_size before its first rotation.
+
+Log rotation is on only when cfg is not NULL, and size rotation and
+time rotation can be turned on separately.
+
+With rotation on, the logger opens the directory of path and keeps it
+open for its whole life.  It opens the file, and does every rename,
+listing, compression and deletion of a rotation, relative to that
+directory, so a relative path keeps naming the same file after the
+process changes its working directory with chdir(2).
+
+Size rotation triggers after the write that takes the total bytes
+written to cfg->max_file_size or past it, and it is checked after each
+write.
+
+Time rotation triggers on the first write once
+cfg->rotation_interval_us microseconds have passed.  The check works on
+whole seconds, so an interval that is not a whole number of seconds
+rotates at the first whole second at or after its end.  The time counts
+from the last rotation.  Before the first rotation of the logger, when
+the file already holds data, it counts from the moment that file began:
+the stamp of the newest rotated generation on disk, since the rotation
+that made that generation also created the current file.  Without such
+a generation it is the birth time of the file where the system reports
+one (statx(2) on Linux, stat(2) on FreeBSD and macOS), and otherwise
+(on OpenBSD, for example) the last modification time.  On FreeBSD,
+changing the modification time to an earlier moment also moves the
+birth time to that moment.  When the file is empty or new, the
+interval counts from the creation of the logger, so a process that
+runs for less than the interval, or restarts often, still rotates.  A
+starting moment in the future counts as the creation of the logger.
+The interval is checked before each write.
+If the wall clock steps back to a moment before the start of the
+interval, the interval starts again at that moment, so the next time
+rotation comes one interval after the step and not when the clock
+reaches its earlier reading again.
+
+A rotation that fails is tried again on a later write, at least one
+second after the failure, and a wall clock that steps back does not
+make that wait longer than one second.
+
+When a rotation fires, the library first creates the next live file
+under a private name, <path>.tmp followed by 11 random hex digits, with
+O_CREAT, O_EXCL and O_NOFOLLOW, so the file is always a new regular
+file that the library made.  It then renames the current file to
+<path>.<YYYYMMDDHHMMSS> with a rename that never replaces an entry of
+that name, and renames the new file onto <path>.  Both renames are
+atomic, and the rotation never opens <path> or a rotated name.  A link,
+a FIFO or a file that another user puts at <path> while a rotation runs
+is replaced by the new live file, so it never receives a record and
+never blocks the rotation.  A process that stops between creating the
+private file and renaming it leaves that file behind empty; the next
+rotating open of path removes such an empty regular file, and nothing
+else at a name of that shape.  A second rotation inside the same second
+takes a collision suffix, _0001, _0002 and so on, zero-padded to four
+digits, and a number above 9999 takes the digits it needs, such as
+_10000.  Every rotation takes a name above every rotated name before
+it: a later rotation inside the same second takes the next number,
+never a name that a deletion freed.  A logger that starts in a
+directory which already holds rotated generations (see below) numbers
+its rotations above the newest of them, so a process that restarts
+inside the same second continues the sequence.  If the clock reads an
+earlier second than the newest rotated name, the rotation keeps the
+stamp of that name and takes the next number.  As with logrotate(8),
+the new live file gets the permission bits of the file it replaces,
+whatever the umask, and the owner and the group of that file where the
+process is allowed to give them.  If the process cannot give it the
+group, the group bits are cleared so that no other group gains access.
+A log that its operator restricted, to 0600 or 0640 for example, stays
+restricted in every generation that way, and each \&.gz file takes the
+bits of its source.  Once the new live file holds <path>, the oldest
+rotated files past cfg->max_rotated_files are deleted.  A rotation that
+fails never deletes a rotated file on its own account.
+
+A directory entry is a rotated generation of the log only when its name
+matches <path>.<YYYYMMDDHHMMSS>[_N][.gz] exactly, where N is four
+zero-padded digits or a number from 10000 to 999999999, and the entry,
+looked at without following a link, is a regular file whose owner is
+the effective user of the process or the owner of the live file, and
+whose timestamp is no more than 30 days above both the clock and the
+newest name the logger made.  Naming rotations, deleting, compressing
+and recovering compressions act on generations only.  Any other entry
+is never opened, compressed, renamed or deleted, and takes no place
+among the cfg->max_rotated_files kept.  That covers an unrelated file
+whose name starts with a timestamp of a similar shape, a link, a FIFO,
+a file owned by another user and a name stamped far in the future, so
+another user who can write to the directory cannot make the logger
+write, read, archive or delete a file through a link, block on a FIFO,
+or stop its rotations.  An entry that matches the name but is not a
+generation gets a "log rotation: ignored an entry that is not a
+rotated file of this log: <name>" record at CLOG_WARN in the live file,
+with every character outside printable ASCII, every quote and every
+backslash written as '?'.  At most 8 of these records go out for a log
+in any minute.
+
+The 30-day limit has a cost when the system clock steps back by more
+than 30 days.  A logger that stays open across the step keeps every
+generation, because the limit counts from the newest name it made.  A
+logger that opens the file after the step, the one of a restarted
+process for example, sees the generations written before the step as
+more than 30 days above both the clock and every name it made, so to
+that logger they are not generations.  It never renames, compresses or
+deletes them, they do not count toward cfg->max_rotated_files, and its
+rotations name them in the CLOG_WARN record above.  That lasts until
+the clock comes back within 30 days of their timestamps, and until then
+the operator removes or renames them.
+
+When path itself is a symbolic link, the logger writes through the link
+until the first rotation, which moves the link to a rotated name.  From
+then on the live file is a regular file that the logger made, and the
+link, which is not a generation, stays where the rotation put it.
+
+The timestamp and the collision number of each rotated name decide
+which rotated files are the oldest: the names are ordered by the
+timestamp and then by the number, compared as a number.  Every rotation
+takes a name above all the names before it, so that order is the order
+of the rotations, and the deletion always keeps the newest generations.
+The modification time of a rotated file is not used, because the
+compression step writes a compressed rotated file, and its modification
+time tells when that compression finished, not how old the log content
+inside it is.
+
+The prune pass counts generations, one generation per rotation, so the
+uncompressed file and the \&.gz file of one generation count once.  The
+prune pass of a rotation never deletes the generation that the same
+rotation has just created, but it still counts it against
+cfg->max_rotated_files.  A prune pass also never deletes the generation
+whose compression is running, and still counts it.  A pass keeps the
+newest cfg->max_rotated_files generations and deletes every older one,
+except an older one whose compression is running, which is deleted as
+soon as that compression ends.  A generation that is still waiting for
+its compression is deleted like any other once it is older than the
+newest cfg->max_rotated_files.  So at most cfg->max_rotated_files
+generations plus the one under compression stay on the disk.
+
+When cfg->compress_rotated is true, each rotated file is
+gzip-compressed with zlib after the rotation.  The compressed file goes
+to <rotated-name>.gz, and after a success the original uncompressed
+file is removed.  A compression thread of the logger does that work.
+The first rotation that needs it starts the thread, and it compresses
+one file at a time, the oldest first.
+
+The rotation only puts the file in a queue, so the thread that logs,
+the async writer thread and a producer behind a bounded async queue
+never wait for gzip.  The last clog_close(3) of the file waits until
+all queued compressions are complete, and a clog_fatal(3) record waits
+for them within the budget of the exit drain below.
+
+If the directory cannot hold the name <rotated-name>.gz.tmp (NAME_MAX,
+255 bytes on common filesystems), no compression of that file can
+succeed.  The file then stays uncompressed, and a "log rotation: a
+rotated file stays uncompressed: ..." record at CLOG_WARN goes into the
+new live file.
+
+The standard gunzip(1) and zcat(1) tools read the \&.gz files that the
+library makes.  A program that links the static library must also link
+with -lz, which pkg-config --static --libs ccollections adds, while the
+shared library has zlib as its own dependency.
+
+A compression opens its source with O_NOFOLLOW and O_NONBLOCK and reads
+it only when the descriptor is a regular file owned by the effective
+user or by the owner of the live file, so it never reads through a link
+and never waits on a FIFO or a device.
+A compression writes its output to <rotated-name>.gz.tmp, flushes it to
+the disk, and only then renames it to <rotated-name>.gz and removes the
+uncompressed file, so a \&.gz file always holds a complete gzip stream,
+even when the process stops in the middle of a compression.  The prune
+pass and the naming of rotations never look at the \&.tmp file.  A
+filesystem whose fsync(2) answers EINVAL or ENOSYS has no flush to
+disk, and the compression goes ahead without it.  A compression never
+replaces a file that already has the \&.gz name.  The \&.gz file gets
+the permission bits of the file it compresses, as gzip(1) gives them,
+and its owner and group under the same rule as the new live file of a
+rotation.  A compression that fails removes its temporary output.  If
+that removal fails too, as in a directory that lost its write
+permission, the compression thread tries the removal again before its
+next compression and when the logger closes, and the recovery at the
+next open (below) removes whatever is still left.
+
+When cfg->compress_rotated is true, the open finishes what an earlier
+process left unfinished in the directory, for generations only.  It
+removes every <rotated-name>.gz.tmp file of path that passes the same
+test of type, owner and timestamp.  A \&.gz file beside its own
+uncompressed file is not known to be complete, while the uncompressed
+file holds everything, so the open removes that \&.gz file.  Then it
+queues every uncompressed generation of path for compression, the
+oldest first.  A generation whose \&.gz name holds an entry that is not
+a generation stays uncompressed.
+
+A process that ends with exit(3), or a return from main(), while the
+logger is still open drains it within a budget of 5 seconds for the
+whole process.  An exit handler that the library registers when it
+loads delivers what an async logger still holds, as a clog_fatal(3)
+record does, and waits for the queued compressions.  The budget also
+bounds every lock that the drain takes, so a logger whose lock another
+thread holds past the budget is skipped, and the records it still holds
+can be lost.  Every write of the drain is bounded too, on a pipe, a
+socket and a terminal as well; see clog_create_from_fd_mp(3).  A
+compression that the budget cuts off stops, removes its \&.tmp output
+and keeps the uncompressed file, and the next open of path compresses
+it.  _exit(2), a signal and abort(3) run no exit handler.
+
+A file has one backing store in a process whenever a logger of it
+rotates.  If a rotating logger of this process already writes the file,
+or if this call rotates and a logger of this process already writes the
+file, the call joins that logger exactly the way clog_derive(3) does:
+the new handle has its own min_level and its own fields, and it shares
+the output target, the format, the rotation and the async writer
+thread.  The file counts as the same when the directory and the last
+component of path are the same, however each call spells the directory
+part.  Two different last components are two files, even when one of
+them is a symbolic link to the other, so open a rotating log under one
+name only.  The call returns CLOG_INVALID instead when its rotation
+configuration, its async configuration (NULL or not, and every resolved
+value) or its allocator differs from that logger's, and also when one
+of the two rotates and the other does not.  Two independent backing
+stores on one rotating file would each rename, delete and compress
+files that the other one still writes, and records would be lost.  Two
+opens of one file that both have rotation off stay two independent
+loggers, each appending whole records to the file.
+
+The join covers the loggers of one process only.  Rotation renames,
+deletes and compresses the files of the log, so two processes that
+rotate one file each do that under the other one and lose records.
+Give each process its own file (in a prefork server, for example, a
+name that holds the worker number) or let one process write the log.
+Two processes may append to one file with rotation off.
+A call for a file whose last clog_close(3) is still running waits until
+that close has finished.
+.fi
+.SH PARAMETERS
+.nf
+path       Path of the log file, copied by the call.
+min_level  Messages below this level are silently dropped.
+cfg        The rotation configuration, or NULL to turn rotation off.
+           A max_file_size or max_rotated_files <= 0, and a
+           rotation_interval_us of 0, fall back to their default,
+           which clogger.h also names as a constant:
+             size_rotation_enabled  - turns size rotation on
+             max_file_size          - int64_t bytes threshold
+                                      (<= 0 = CLOG_DEFAULT_MAX_FILE_SIZE,
+                                      10 MiB)
+             time_rotation_enabled  - turns time rotation on
+             rotation_interval_us   - uint64_t microseconds
+                                      (0 = CLOG_DEFAULT_ROTATION_INTERVAL_US,
+                                      86400000000 = 1 day)
+             max_rotated_files      - files kept
+                                      (<= 0 = CLOG_DEFAULT_MAX_ROTATED_FILES,
+                                      7)
+             compress_rotated       - gzip-compress each rotated file
+           max_file_size is a fixed-width int64_t and
+           rotation_interval_us is a uint64_t, so the struct has one
+           layout per target whatever _FILE_OFFSET_BITS and
+           _TIME_BITS are in the including translation unit, and you
+           need no particular compilation flag for it to mean the
+           same thing on both sides of the library boundary.
+async_cfg  The configuration for async logging, or NULL for
+           synchronous logging.  When it is not NULL, a clog_<level>()
+           call formats only its own message and hands the rest to a
+           dedicated writer thread.  clog_create_from_fd_mp(3) lists
+           all the fields.  Unlike cfg above, a struct of all zeros
+           still turns async mode on, with a default for every zero
+           field; only a literal NULL keeps the logging synchronous.
+mprocs     A custom allocator with function pointers for malloc, free,
+           calloc and realloc, or NULL for the default system
+           allocator.  When mprocs is not NULL all four pointers must
+           be set; a struct that is only partly filled makes the call
+           return CLOG_INVALID and no logger is created.  The library
+           copies the struct, so you can free yours after the call.
+           Every logger that clog_derive() makes from this one gets
+           the same allocator.  The two allocations that belong to
+           the library, the symbol text of a backtrace and the
+           identity cache of each thread, use malloc(3); see
+           clogger(7).
+.fi
+.SH RETURN VALUE
+.nf
+A new logger handle on success.
+CLOG_INVALID after a failure.  That is a bad path, a permission error,
+a min_level that is not one of the values of clog_level_t, an mprocs
+that is not valid or a failed allocation; size rotation turned on when
+the current size of an existing file cannot be found; a file that a
+rotating logger of this process already writes with another
+configuration; a rotating open of a file that a logger of this process
+writes without rotation; or an open while the process is ending, after
+the library has released its table of loggers, which is what an open
+from a destructor that runs after the destructor of the library gets.
+.fi
+.SH NOTES
+.nf
+The logger owns the file descriptor and closes it on clog_close().
+O_CLOEXEC is set on the file descriptor.
+The rename and the open of the new fd happen inside the locked section,
+so no log line is lost and no log line ends up between others across
+the rotation boundary.
+When compress_rotated is true, gzip runs on the compression thread of
+the logger, after the new fd is already in use and outside the mutex,
+so the I/O of the compression never stalls a log writer.
+The directory descriptor of a rotating logger carries O_CLOEXEC, like
+the file descriptor.
+There are two supported ways to use fork(2) with clogger:
+  - call fork(2) before you open a logger;
+  - open a logger, call fork(2), and then call exec(3) immediately.
+A process that goes on without exec(3) while a handle from before the
+fork is live is not using a supported pattern.
+
+As a defence in depth, a handle that is open at the time of such a fork
+can still be used in the child, and log, derive and close work
+correctly on both sides.  The async writer thread of a logger does not
+exist in a forked child, so an inherited handle with async mode on
+switches to synchronous logging in the child, without the caller
+noticing.
+
+This fallback is part of the fork protection of the library, which a
+build with -DCCOL_FORK_SAFETY_REQUIRED=0 leaves out, and such a process
+must not fork while it holds a live async logger.
+
+The compression thread does not exist in the child either.  The
+compressions that the parent queued stay with the parent, and a later
+rotation in the child starts a compression thread of its own.
+
+When async_cfg is not NULL, a batch that the writer thread builds can
+cover several records that the application logged moments apart, and
+such a batch can cross a rotation boundary.  It is written to whichever
+file is current at the time of the flush, instead of being split at
+the exact moment each record was logged.
+
+The kernel can accept only part of a write, for example when a
+filesystem has just run out of space or an RLIMIT_FSIZE ceiling is
+reached.  The bytes it did take then sit on the disk without the
+terminating newline of that record.  A synchronous logger writes that
+newline itself, so the next record starts on a line of its own and is
+never joined onto the fragment, and then it writes a "log record
+truncated: <n> of <m> bytes written" record that names the loss.  An
+async logger keeps the bytes that the write did not take in its
+batching buffer and offers them again on the next flush.  They are the
+exact continuation of what did reach the disk, so once the condition
+clears the logger completes the record and delivers every record behind
+it.  Size rotation and time rotation both stand down while those bytes
+are outstanding, so the two halves of a record always reach the same
+file, and the flush that delivers the bytes also takes the rotation.  A
+file with no room cannot take them, though, and the rotation is what
+frees room, because it deletes the oldest generations.  So when the
+write stopped with ENOSPC, EDQUOT or EFBIG and a rotation is due, the
+flush gives up on the continuation, names it with a "log record
+truncated: <n> undelivered bytes dropped" record, rotates, and offers
+the records it kept to the new file at once.  A rotation never comes
+between the two halves of a record that the logger still delivers.
+
+A batch that a full disk held back can grow far past
+cfg->max_file_size.  When the batch holds more than flush_buffer_size
+bytes and would take the file past cfg->max_file_size, the flush writes
+it in pieces that end on record boundaries and checks the size rotation
+between the pieces, so each file grows past cfg->max_file_size by one
+record at most.  An ordinary flush is a single write, so it can take
+the file past cfg->max_file_size by up to flush_buffer_size bytes
+before the size rotation that follows it.
+
+The newline and the marker of a loss go to the output that has just
+failed, and on a full disk they usually fail too.  The logger then
+keeps both and writes them in front of the next write that the output
+accepts.  An async logger also tries them at each flush of its writer
+thread, so they don't wait for a new record, and every logger tries
+them at exit(3) when nothing is written again: the newline first, then
+one marker.  While a single loss waits, the marker carries its own
+text; for more than one it reads "log record truncated: <k> earlier
+losses (records=<n> bytes=<m>): write error <errno>", with the number
+of losses, the records and the bytes they lost, and the errno of the
+last write that failed.  A record that arrives while that newline is
+still waiting is not written, because it would continue the fragment on
+the same line, and it counts as one more loss.  So every line of the
+log holds at most one record, and every loss is named once the output
+has room again.  An error that no retry gets past, such as EPIPE from a
+pipe whose reader is gone, ends the wait: the output is gone, so the
+logger gives up the newline and the marker.  The last clog_close(3) of
+the logger makes one more attempt within 100 milliseconds, and a loss
+that it cannot name then stays unnamed.
+
+A rotation never leaves such a fragment at the end of a generation.  If
+the newline is still owed when the logger rotates, the logger writes it
+to the generation it retires, after the rotation has deleted the oldest
+generations.  If that file still refuses it, for example because the
+fragment reaches an RLIMIT_FSIZE ceiling, the logger cuts the file back
+to the end of its last whole line, and the bytes that the cut removes
+count toward the bytes that the marker names.  So every rotated
+generation ends with a newline, and the marker that names the loss
+starts the new file on a line of its own.
+
+A flush keeps the undelivered bytes only after an error that a later
+attempt can get past: ENOSPC, EDQUOT, EFBIG, ENOBUFS, ENOMEM, or EAGAIN
+or EINTR that ends a wait.  Any other write error, such as EPIPE,
+ECONNRESET or EBADF, fails the same way on every retry, so the flush
+drops the undelivered bytes and writes a "log record truncated:
+undelivered batch dropped (records=<n> bytes=<m>): write error <errno>"
+record in their place, and the records after it go out as usual.  The
+last flush of clog_close(3) has no later retry, so what it cannot
+deliver is named the same way, with "the logger closed" as the reason.
+A record that does not fit into the batching buffer behind the bytes
+that a flush keeps is a loss as well, and a "log record truncated: a
+record did not fit behind the undelivered batch (<n> byte message)"
+record names it; the library never calls such a record too large,
+because the record itself is small.
+
+Some records have to reach the file before those bytes do, and the
+library never writes such a record between the two halves of the
+record that the bytes belong to.  There are two such cases, a
+CLOG_FMT_SYSLOG record, which is never batched, and a record that takes
+the synchronous write path.  Each of them first gives the outstanding
+bytes one more delivery attempt of its own.  If the file still won't
+take them, it gives up on them and on every remaining line of the split
+record, backtrace lines included, and writes the missing newline of the
+split record (when a line is open) and a "log record truncated: <n>
+undelivered bytes dropped" record in their place.  A logfmt record
+whose backtrace lines are still outstanding counts as split even when
+the bytes already on the disk end with the newline of its first line.
+The records that the batch holds behind the split one are kept, and a
+later flush delivers them, so they follow the record that had to be
+written past them.  Once the continuation is given up nothing is
+outstanding, so the next check takes the rotation that stood down for
+it, exactly as it would after a delivery.
+
+A write to a regular file cannot raise SIGPIPE, but a write at the
+RLIMIT_FSIZE limit of the process raises SIGXFSZ, and its default
+disposition ends the process with a core dump before the repair above
+can run.  Under the default policy, CLOG_SIGNALS_AUTO, the open (and
+each rotation that opens the next file) therefore sets the disposition
+of SIGXFSZ to SIG_IGN for the whole process, once, and only while it is
+still SIG_DFL, so a handler or an ignore that the application installed
+stays in place.  A write at the limit then fails with EFBIG and the
+logger survives it.  The async writer thread and the compression thread
+also keep SIGXFSZ blocked in their own signal masks.  Under
+CLOG_SIGNALS_UNTOUCHED the library leaves SIGXFSZ alone, and an
+application that sets a file size limit must ignore SIGXFSZ, or block
+it in every thread that can write a log file; otherwise the kernel ends
+the process once the log reaches the limit.  When path names a FIFO,
+the logger treats it as a pipe.  clog_set_signal_policy(3) covers both
+signals.
+.fi
+.SH "SEE ALSO"
+.BR clog_create_from_fd_mp (3),
+.BR clog_close (3),
+.BR clog_flush (3),
+.BR clog_set_signal_policy (3),
+.BR clog_fatal (3),
+.BR clogger (7)

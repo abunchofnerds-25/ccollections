@@ -29,17 +29,16 @@ SOFTWARE.
 #include <stddef.h>
 
 /*
- * This holds how an application translation unit, compiled with its own
- * ordinary flags, lays out clog_rotation_cfg_t.
+ * How an application translation unit, compiled with its own ordinary
+ * flags, lays out clog_rotation_cfg_t.
  *
- * The build makes consumer_view.c WITHOUT the -D_FILE_OFFSET_BITS=64 that
- * the library and the rest of this suite use, which is exactly the situation
- * of a program that includes <clogger.h> and compiles with default flags.
- * The two views must describe the same object: otherwise the library reads a
- * public struct whose layout follows a feature-test macro member by member
- * from the wrong offsets, and the logger silently rotates on a schedule that
- * the caller never asked for and turns on options that the caller never
- * set.
+ * consumer_view.c is built WITHOUT the -D_FILE_OFFSET_BITS=64 that the
+ * library and the rest of this suite use, which is exactly what a program
+ * that includes <clogger.h> with default flags looks like. Both views must
+ * describe the same object. If they don't, the library reads a public struct
+ * whose layout follows a feature-test macro member by member from the wrong
+ * offsets, and the logger silently rotates on a schedule the caller never
+ * asked for and turns on options the caller never set.
  */
 typedef struct {
   size_t struct_size;
@@ -54,16 +53,15 @@ typedef struct {
   size_t sizeof_rotation_interval_us;
 } clogger_consumer_view_t;
 
-/* This fills *out with the view of the struct that this translation unit
+/* Fills *out with the view of the struct that this translation unit
  * has. */
 void clogger_consumer_fill_view(clogger_consumer_view_t *out);
 
 /*
- * This opens a rotating file logger whose clog_rotation_cfg_t comes
- * entirely from this translation unit. That config sets size rotation at
- * max_file_size bytes, no time rotation, max_rotated_files files kept, and no
- * compression. The function returns CLOG_INVALID after a failure, exactly as
- * clog_open_file_mp() does.
+ * Opens a rotating file logger whose clog_rotation_cfg_t comes entirely from
+ * this translation unit: size rotation at max_file_size bytes, no time
+ * rotation, max_rotated_files files kept and no compression. It returns
+ * CLOG_INVALID after a failure, exactly as clog_create_from_file_mp() does.
  */
 clog clogger_consumer_open_rotating(const char *path, int64_t max_file_size,
                                     int max_rotated_files);

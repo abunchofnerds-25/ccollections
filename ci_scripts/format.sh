@@ -1,7 +1,7 @@
 #!/bin/sh
-# This script formats the C sources using clang-format with the Google style
-# and with sorted #include blocks. The repository has no .clang-format file,
-# so this script names the style.
+# Formats the C sources with clang-format in the Google style, with the
+# #include blocks sorted. There's no .clang-format file in the repository, so
+# the style is named here.
 #
 # Usage, from the root of the repository:
 #   ci_scripts/format.sh                 format each C file in place
@@ -11,13 +11,13 @@
 #   ci_scripts/format.sh FILE...         format only the named files
 #   ci_scripts/format.sh --check FILE... check only the named files
 #
-# CLANG_FORMAT selects the binary (default: clang-format). Two major versions
-# of clang-format can format the same code differently, so use the version
-# that the editor uses.
+# CLANG_FORMAT picks the binary (default: clang-format). Two major versions of
+# clang-format can format the same code differently, so use the one your editor
+# uses.
 #
-# The files are the .c and .h files that git tracks, plus the untracked files
-# that git does not ignore. Vendored code (tests/tau, picohttpparser) keeps
-# the layout of its upstream, and the script does not change it.
+# The files are the .c and .h files that git tracks plus the untracked ones git
+# doesn't ignore. Vendored code (tests/tau, picohttpparser) keeps its upstream
+# layout and the script leaves it alone.
 set -eu
 
 CLANG_FORMAT=${CLANG_FORMAT:-clang-format}

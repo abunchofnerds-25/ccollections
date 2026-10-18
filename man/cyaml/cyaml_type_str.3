@@ -11,13 +11,14 @@ const char *cyaml_type_str(cyaml node);
 .fi
 .SH DESCRIPTION
 .nf
-Return a static string literal that names the type of node, such as
-"CYAML_INTEGER", or "CYAML_UNKNOWN" for a type value that the function
-does not expect.  It is useful in diagnostics and in test output.
+Returns a static string literal that names the type of node, such as
+"CYAML_INTEGER", or "CYAML_UNKNOWN" for a type value that the
+function doesn't expect.  It comes in handy in diagnostics and in
+test output.
 .fi
 .SH RETURN VALUE
 .nf
-A static null-terminated string, which the caller must not free.
+A static null-terminated string that the caller must not free.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_type (3)

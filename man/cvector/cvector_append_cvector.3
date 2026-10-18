@@ -11,8 +11,8 @@ bool cvector_append_cvector(cvec v_to, cvec v_from);
 .fi
 .SH DESCRIPTION
 .nf
-This function appends all the elements of one vector to another vector;
-both vectors must have the same element size.
+Appends every element of one vector to another. Both vectors must have the
+same element size.
 .fi
 .SH PARAMETERS
 .nf
@@ -21,19 +21,17 @@ v_from  Source vector
 .fi
 .SH RETURN VALUE
 .nf
-Gives true on success
-Gives false when the combined element count overflows or is more than
-ccol_max_elem_count
-Gives false when the memory allocation fails
+true on success.
+false when the combined element count overflows or is more than
+ccol_max_elem_count, or when the memory allocation fails.
 .fi
 .SH NOTES
 .nf
-The two element sizes must be the same; the function asserts when they
-are different.
-The function appends all the elements or none of them.
-The function reserves more capacity automatically when this is
-necessary.
-The function asserts when v_to or v_from is NULL.
+The two element sizes must match; the function asserts when they don't,
+and also when v_to or v_from is NULL.
+
+Either all the elements are appended or none are, and more capacity is
+reserved automatically when needed.
 .fi
 .SH "SEE ALSO"
 .BR cvec_append_cvec (3),

@@ -15,21 +15,20 @@ Returns the HTTP method of req as a chttp_method_t enum value.  The
 value is always one of the seven real methods (CHTTP_GET, CHTTP_POST,
 CHTTP_PUT, CHTTP_DELETE, CHTTP_PATCH, CHTTP_HEAD and CHTTP_OPTIONS);
 the function never returns CHTTP_ANY, even when the route that matched
-was registered with CHTTP_ANY.
+the request was registered with CHTTP_ANY.
 
 A request whose method the server does not recognize at all (a WebDAV
 verb such as PROPFIND, a verb such as TRACE or CONNECT, or a custom
-verb) never reaches any handler, including one registered with
-CHTTP_ANY: the server rejects it with 501 Not Implemented before
-routing runs (see the notes on CHTTP_ANY in
-chttpsvr_register_handler(3)).  This is what makes "always one of the
-seven real methods" a complete guarantee rather than just the common
-case.
+verb) never reaches a handler, one registered with CHTTP_ANY
+included, because the server rejects it with 501 Not Implemented
+before routing runs (see the notes on CHTTP_ANY in
+chttpsvr_register_handler(3)).  That is what makes "always one of the
+seven real methods" a complete guarantee and not only the common case.
 
 The function returns CHTTP_GET when req is NULL.  Most other request
 accessors return NULL for a NULL req, but chttp_method_t is an integer
-enum with no sentinel value, so this one cannot.  If req can be NULL,
-check for NULL before calling this function.
+enum with no sentinel value, so this one can't.  If req can be NULL,
+check it before you call this function.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_req_path (3),

@@ -23,11 +23,10 @@ SOFTWARE.
 */
 
 /*
- * The libFuzzer target for chttp1_parser.c in request mode, which is the
- * grammar that chttpserver.c drives: it starts with a request line instead
- * of a status line. fuzz_common.h holds the shared driver that feeds the
- * input in fragments, and fuzz_chttp1_response.c is the sibling target for
- * response mode.
+ * The libFuzzer target for chttp1_parser.c in request mode, the grammar that
+ * chttpserver.c drives, which starts with a request line instead of a status
+ * line. The driver that feeds the input in fragments is in fuzz_common.h, and
+ * fuzz_chttp1_response.c is the sibling target for response mode.
  */
 
 #include <string.h>
@@ -55,11 +54,11 @@ static int on_header(chttp1_parser_t *p, const char *name, size_t name_len,
   return 0;
 }
 
-/* On every call this switches between the two outcomes of request mode:
- * CHTTP1_HEADERS_DIVERT_BODY, which exercises the divert and resume path
- * that the driver in fuzz_common.h obeys, and the ordinary
- * CHTTP1_HEADERS_HAS_BODY, so one fuzzing run covers both. Without this, a
- * run only ever exercises one of the two behaviors of request mode. */
+/* Each call alternates between the two outcomes of request mode:
+ * CHTTP1_HEADERS_DIVERT_BODY, which runs the divert and resume path that the
+ * driver in fuzz_common.h follows, and the ordinary CHTTP1_HEADERS_HAS_BODY.
+ * Without the switch one fuzzing run would only ever see one of the two
+ * behaviors of request mode. */
 static bool g_divert_next = false;
 
 static int on_headers_complete(chttp1_parser_t *p) {

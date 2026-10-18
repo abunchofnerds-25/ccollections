@@ -11,30 +11,36 @@ ccol_retval_t cjson_delete(cjson root, const char *path);
 .fi
 .SH DESCRIPTION
 .nf
-Navigates to the parent of the node that path addresses, removes the
-child and frees its whole subtree.  The path uses the same
-dot-separated syntax as cjson_get and cjson_set.
+Walks to the parent of the node that path addresses, removes that
+child from it and frees the child's whole subtree.  The path has the
+same dot-separated syntax as in cjson_get and cjson_set.
 
-For a dictionary parent, the macro uses the leaf component as the key
-to remove.  For a list parent, the leaf component must be a '#N'
-token; for example, "#2" removes index 2.
+When the parent is a dictionary, the leaf component is the key to
+remove.  When it is a list, the leaf component must be a '#N' token,
+so "#2" removes index 2.
 
-The macro splits the path at the LAST dot that is not escaped, which
-is why "a.b.c" targets the key "c" inside the node at "a.b".  When
-path holds no dot, root is the parent.
+The path is split at its LAST unescaped dot, so "a.b.c" targets the
+key "c" inside the node at "a.b".  A path with no dot has root as
+its parent.
 
-As in cjson_get and cjson_set, the escape sequences '\e.' and '\e\e'
-give a literal dot or a literal backslash in a key name.
+The escapes '\e.' and '\e\e' give a literal dot and a literal
+backslash in a key name, as they do in cjson_get and cjson_set.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_retval_t.  Returns ccol_success on success.
+ccol_retval_t, which is ccol_success on success.
 ccol_invalid_args when root or path is NULL; for an empty path or an
-empty path component, which a leading dot, a trailing dot or two dots
-together give; when the leaf component is not valid for the type of
-the parent; and for a malformed "#N" index.
-ccol_key_not_found when the parent path is absent, or when the leaf
-key or index has a correct form but is absent.
+empty path component (a leading dot, a trailing dot or two dots in a
+row); for a path whose shape cannot apply to the tree, at any
+position (a component that has to descend into or below a string, a
+number, a bool or null, or a component on a list that is not '#N');
+for a malformed "#N" index on a list, at any position; and for a
+component above the leaf that is not valid UTF-8.  A syntax error
+wins over an absent component earlier in the path.
+ccol_key_not_found only when a well-formed name or index is absent,
+above the leaf or at it.  An index with any number of digits is well
+formed, so an index too large for any integer type also gives
+ccol_key_not_found.
 ccol_not_enough_memory when an internal allocation fails.
 .fi
 .SH EXAMPLES

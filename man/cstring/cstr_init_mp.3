@@ -11,10 +11,10 @@ cstr_init_mp(s, initial, mprocs);
 .fi
 .SH DESCRIPTION
 .nf
-This macro calls cstring_create_full() to initialise the cstr variable s
-with the initial content and the memory management procedures that you
-give. You must declare s first. It calls ccol_fatal_err() if the
-creation fails.
+This macro initialises the cstr variable s through cstring_create_full(),
+with the content and the memory management procedures you give. You must
+declare s first. If the creation fails, the macro calls
+_ccol_fatal_err().
 .fi
 .SH PARAMETERS
 .nf
@@ -25,7 +25,7 @@ mprocs   Custom memory management procedures (ccol_memmgmt_procs_t *)
 .fi
 .SH NOTES
 .nf
-This macro calls ccol_fatal_err() when an allocation fails
+A failed allocation ends in _ccol_fatal_err()
 .fi
 .SH "SEE ALSO"
 .BR cstr_init (3),

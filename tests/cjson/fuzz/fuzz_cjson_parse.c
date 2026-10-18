@@ -24,17 +24,17 @@ SOFTWARE.
 
 /*
  * A libFuzzer target for the JSON parser of cjson.c, cjson_parse_n_mp(),
- * which also covers the two serializers of the DOM and cjson_clone(). It
- * drives all of them directly from whatever DOM shape the parser builds out
- * of the fuzz input, so one run does more than drive the parser: it also
- * sends a document that is malformed but that the parser accepted back
- * through cjson_serialize() and cjson_serialize_pretty(), and it confirms
- * that cjson_clone() never crashes on such a document either.
+ * that also covers the DOM's two serializers and cjson_clone(). It drives
+ * all of them directly from whatever DOM shape the parser builds out of the
+ * fuzz input, so a run does more than exercise the parser. A document that
+ * is malformed but that the parser accepted goes back out through
+ * cjson_serialize() and cjson_serialize_pretty(), and we also check that
+ * cjson_clone() doesn't crash on such a document.
  *
  * fuzz_cjson_path.c is the sibling target. It covers the OTHER hand-written
  * parser of cjson, the dot-separated path navigation grammar that
- * cjson_get(), cjson_set() and cjson_delete() read, which this target never
- * reaches.
+ * cjson_get(), cjson_set() and cjson_delete() read, and this target never
+ * gets there.
  */
 
 #include <cjson.h>
@@ -45,12 +45,12 @@ SOFTWARE.
 
 /* Re-parses text that this library just emitted. A failure here is a defect
  * in the library and never in the fuzz input, because the input was already
- * accepted and this text is the library's own rendering of that accepted
- * document. Calling the serializer alone only catches a serializer that
- * CRASHES; it cannot catch one that emits well-formed-looking text which the
- * matching parser then refuses. That disagreement is silent in production:
- * a caller stores the serialized form, reads it back, and gets a parse error
- * for a document this library wrote. */
+ * accepted and this text is our own rendering of that document. Calling the
+ * serializer alone would only catch a serializer that CRASHES, and not one
+ * that emits text which looks well formed but which the matching parser
+ * then refuses. In production that disagreement is silent: a caller stores
+ * the serialized form, reads it back and gets a parse error for a document
+ * this library wrote. */
 static void assert_reparses(const char *style, const char *text,
                             const char *compact) {
   if (!text) return; /* an allocation failed; that is not a round-trip fault */
@@ -63,12 +63,12 @@ static void assert_reparses(const char *style, const char *text,
             style, err ? err : "(no error string)", text);
     abort();
   }
-  /* The text must also mean the same document. The compact rendering of
-   * the re-parsed tree is compared with the compact rendering of the first
-   * tree: every member, every key byte, every value and the order of the
-   * members must survive. A parser that repairs or merges what it reads,
-   * or a serializer that changes a value, fails here while the re-parse
-   * above still succeeds. */
+  /* The text must also mean the same document, so we compare the compact
+   * rendering of the re-parsed tree with the compact rendering of the first
+   * one. Every member, every key byte, every value and the order of the
+   * members needs to survive. A parser that repairs or merges what it reads,
+   * or a serializer that changes a value, fails here even though the
+   * re-parse above succeeds. */
   char *again_compact = cjson_serialize(again);
   if (again_compact && compact && strcmp(again_compact, compact) != 0) {
     fprintf(stderr,

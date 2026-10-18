@@ -11,30 +11,31 @@ cvec cvector_create(size_t elem_size, char **err);
 .fi
 .SH DESCRIPTION
 .nf
-Creates a new vector container that stores elements of the specified size.
-The vector starts with a minimum capacity of 4 elements and automatically
-resizes as needed. Uses standard malloc/free for memory management.
+Creates a new vector for elements of the given size. It starts with the
+minimum capacity of 4 elements and resizes itself as needed, using the
+standard malloc and free for its memory.
 
-This is a static inline wrapper around cvector_create_full() with NULL
-memory management procedures.
+It is a static inline wrapper around cvector_create_full() that passes
+NULL for the memory management procedures.
 .fi
 .SH PARAMETERS
 .nf
 elem_size  Size of each element in bytes (must be > 0, and must not
            exceed SIZE_MAX / 4)
-err        Optional pointer to receive error string on failure
-           (pass NULL to ignore)
+err        Optional pointer that receives an error string on failure
+           (pass NULL to ignore it)
 .fi
 .SH RETURN VALUE
 .nf
-Returns pointer to newly created vector on success
-Returns NULL on failure (error string set in *err if provided)
+A pointer to the new vector on success.
+NULL on failure, with the error string set in *err if err was given.
 .fi
 .SH NOTES
 .nf
-Initial capacity is 4 elements
-Capacity doubles when full, halves when < 1/4 filled
-Must be destroyed with cvector_destroy() when done
+The initial capacity is 4 elements. The capacity doubles when the vector
+is full and halves when it is less than 1/4 full.
+
+Destroy the vector with cvector_destroy() when you are done with it.
 .fi
 .SH "SEE ALSO"
 .BR cvector_create_full (3),

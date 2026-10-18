@@ -11,8 +11,8 @@ chmap_destroy(hm);
 .fi
 .SH DESCRIPTION
 .nf
-Frees all resources associated with the hash map, including all
-key-value pairs, and then sets the hash map pointer to NULL.
+Frees everything the hash map holds, all key-value pairs included, and
+then sets the hash map pointer to NULL.
 .fi
 .SH PARAMETERS
 .nf
@@ -25,8 +25,8 @@ Frees all keys and values
 Frees every bucket collision chain and the bucket/slot array itself
 
 The macro evaluates hm exactly once. It must be a modifiable lvalue,
-such as a variable or an element of an array, so an expression with a
-side effect, such as handles[i++], destroys and clears one element.
+such as a variable or an array element, and an expression with a side
+effect such as handles[i++] destroys and clears exactly one element.
 .fi
 .SH "SEE ALSO"
 .BR chmap_create (3),

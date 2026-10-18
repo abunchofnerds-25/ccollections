@@ -1,0 +1,69 @@
+.TH CHTTPSVR_BOUND_ADDRESS 3 "2026-10-13" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_bound_address \- write the address that a server listens on
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpserver.h>
+
+#define CHTTPSVR_BOUND_ADDRESS_MAX 128
+
+ccol_retval_t chttpsvr_bound_address(chttpsvr srv, char *buf,
+                                     size_t buflen);
+.fi
+.SH DESCRIPTION
+.nf
+Writes into buf the address that the listener of srv is bound to, as
+a string that ends with a NUL byte.
+
+For a TCP listener this is the numeric form of the local address that
+the system bound, with no brackets and no port.  It is "127.0.0.1"
+for a listener on the IPv4 loopback, "0.0.0.0" or "::" for a listener
+on every interface (the default host of CHTTPSVR_CONFIG_DEFAULT gives
+"::" on a host with IPv6), and for a host name the address that the
+name was bound to.  The port comes from chttpsvr_bound_port.
+
+For a Unix domain socket it is the "unix://" form of the path in the
+configuration, so the text can be used as the host of another
+configuration.
+
+On every supported system, a buffer of CHTTPSVR_BOUND_ADDRESS_MAX
+(128) bytes is large enough for any address that this function
+writes.
+.fi
+.SH PARAMETERS
+.nf
+srv      The server handle.
+buf      The buffer that receives the text.
+buflen   The size of buf in bytes.  On every failure with a buflen
+         other than 0, buf receives the empty string.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        buf holds the address.
+ccol_invalid_args   srv is CHTTPSVR_INVALID or a stale handle, buf is
+                    NULL, or buflen is 0.
+ccol_not_permitted  The server does not listen (see
+                    chttpsvr_is_running(3)).
+ccol_msg_too_large  The address and its NUL byte do not fit in buflen
+                    bytes.
+.fi
+.SH THREAD SAFETY
+.nf
+Safe to call from any thread while a start or a stop of srv runs.
+The answer then describes the listener from one side of that change.
+.fi
+.SH EXAMPLES
+.nf
+char addr[CHTTPSVR_BOUND_ADDRESS_MAX];
+uint16_t port = 0;
+if (chttpsvr_bound_address(srv, addr, sizeof(addr)) == ccol_success &&
+    chttpsvr_bound_port(srv, &port) == ccol_success)
+  printf("listening on %s port %u\en", addr, (unsigned)port);
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_start (3),
+.BR chttpsvr_bound_port (3),
+.BR chttpsvr_is_running (3),
+.BR CHTTPSVR_CONFIG_DEFAULT (3)

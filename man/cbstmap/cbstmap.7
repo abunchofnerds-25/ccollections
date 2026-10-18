@@ -9,59 +9,63 @@ C Collections (libccollections, \-lccollections)
 .fi
 .SH DESCRIPTION
 .nf
-A cbmap maps keys to values and keeps the keys in sorted order. It is a
+A cbmap maps keys to values and keeps its keys sorted. Underneath it is a
 self-balancing AVL tree, so an insert, a lookup and a delete each take
-O(log n) time in the worst case, whatever the order of the inserts. An
-iteration visits the entries in ascending key order; that order is part
-of the contract (see cbmap_begin_iter(3)).
+O(log n) time in the worst case, whatever order the keys arrive in. An
+iteration visits the entries in ascending key order, and that order is
+part of the contract (see cbmap_begin_iter(3)).
 
-The key type selects the default order:
+The key type picks the default order:
   - char: the native order of char.
   - The signed integer types: a signed order.
   - The unsigned integer types and pointers: an unsigned order.
   - The floating types: a numeric order, in which a NaN sorts above all
     other values.
   - A string: the strcmp order.
-  - All other key types, for example a struct: a raw memcmp of the key
+  - Every other key type, a struct for example: a raw memcmp of the key
     bytes. A custom comparison procedure replaces this order.
 cbmap_create_full(3) gives the complete rules, and cbmap_construct_cc(3)
-gives the contract of a comparison procedure.
+the contract of a comparison procedure.
 
-The API has two layers:
-  - The type-inferred macros, for example cbmap_construct(3),
-    cbmap_insert(3), cbmap_get(3), cbmap_get_ptr(3) and cbmap_remove(3).
-    They keep the key type and the value type with the handle, and on a
-    hard error they stop the program through ccol_fatal_err().
-  - The raw functions: cbmap_create_full(3), cbmap_insert_elem(3),
-    cbmap_get_elem_ref(3), cbmap_get_elem_copy(3) and
-    cbmap_delete_elem(3). They take each key and each value as a
-    cmap_pair and return a ccol_retval_t.
+There are two layers in the API. The type-inferred macros, such as
+cbmap_construct(3), cbmap_insert(3), cbmap_get(3), cbmap_get_ptr(3) and
+cbmap_remove(3), keep the key type and the value type with the handle and
+stop the program through _ccol_fatal_err() on a hard error. The raw
+functions, cbmap_create_full(3), cbmap_insert_elem(3),
+cbmap_get_elem_ref(3), cbmap_get_elem_copy(3) and cbmap_delete_elem(3),
+take each key and value as a cmap_pair and return a ccol_retval_t.
 .fi
 .SH "OWNERSHIP OF KEYS AND VALUES"
 .nf
-The map keeps its own copy of each key and each value: an insert copies
-the bytes of the key and of the value into storage that the map owns,
-and an update frees the old value.
+The map keeps its own copy of every key and value. An insert copies the
+bytes of the key and the value into storage that the map owns, and an
+update frees the old value.
 
 A char * key or value is a NUL-terminated string. The map copies the
-contents of the string, with the terminator, and the caller keeps its
-own string, which it can change or free as soon as the insert returns.
+contents of the string together with its terminator, and the caller's
+string stays the caller's, free to change or be freed as soon as the
+insert returns.
 
-Some calls give back a string pointer: cbmap_get(3), cbmap_get_ptr(3),
-cbmap_get_elem_ref(3) and an iterator. That pointer points into the
-storage of the map, so do not free it. It is valid until the next
-insert, the next delete, a reset or the destroy of the map. To replace
-a stored string, insert the key again.
+cbmap_get(3), cbmap_get_ptr(3), cbmap_get_elem_ref(3) and an iterator
+give back string pointers into the map's own storage, so don't free them.
+Such a pointer is valid until the next insert, the next delete, a reset or
+the destroy of the map. To replace a stored string, insert the key again.
 
-A value of any other pointer type is kept as the pointer itself: the
-map does not copy, follow or free the object at that address. The
-caller must free such objects, for example by walking over the map and
-freeing them immediately before cbmap_destroy(3).
+A value of any other pointer type is stored as the pointer itself. The
+map doesn't copy, follow or free the object at that address; the caller
+must free those objects, for example by walking over the map and freeing
+them right before cbmap_destroy(3).
+
+An array type, such as int[2] or char[16], can't be the key type or the
+value type of the type-inferred macros. It is a compile error whose
+message says to wrap the array in a struct, because C cannot assign an
+array and the map would otherwise store the address of the caller's array
+instead of its elements. A struct that holds the array works.
 .fi
 .SH "THREAD SAFETY"
 .nf
-A map has no internal lock. A caller can share one map between threads,
-but it must then serialize each call that changes the map against all
+A map has no internal lock. One map can be shared between threads, but
+then the caller must serialize every call that changes the map against all
 other calls on that map.
 .fi
 .SH "SEE ALSO"

@@ -1,0 +1,157 @@
+.TH CLOG_SET_SIGNAL_POLICY 3 "2026-10-14" "c_collections" "C Collections Library - Functions"
+.SH NAME
+clog_set_signal_policy, clog_signal_policy_t \- choose what the logger may do about SIGPIPE and SIGXFSZ
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/clogger.h>
+
+typedef enum {
+    CLOG_SIGNALS_AUTO      = 0,   /* the default */
+    CLOG_SIGNALS_UNTOUCHED = 1,
+} clog_signal_policy_t;
+
+ccol_retval_t clog_set_signal_policy(clog_signal_policy_t policy);
+.fi
+.SH DESCRIPTION
+.nf
+Sets, for the whole process, what the library may do about the two
+signals that a logger's write can raise: SIGPIPE, when a logger writes
+to a descriptor whose reader is gone, and SIGXFSZ, when it writes to a
+regular file that has reached the file size limit of the process.  With
+the default disposition, either signal ends the process.
+
+A write(2) to a pipe or a socket whose reading end is closed fails
+with EPIPE and also raises SIGPIPE.  A write(2) to a regular file that
+would pass the RLIMIT_FSIZE limit of the process (which ulimit -f, or
+the LimitFSIZE= setting of a systemd unit, sets) writes only what fits
+and raises SIGXFSZ, and every later write to the file, including the
+newline and the marker with which the logger repairs it, fails with
+EFBIG and raises SIGXFSZ again.  A logger finds out the kind of its
+descriptor once, with fstat(2), when it opens (a rotation keeps a
+regular file), and what happens depends on that kind:
+
+Socket
+    Under either policy the library writes with send(2) and
+    MSG_NOSIGNAL, so the write fails with EPIPE and raises nothing.
+    No signal state changes.
+
+Pipe or FIFO, under CLOG_SIGNALS_AUTO
+    The async writer thread of a logger keeps SIGPIPE blocked in its
+    own signal mask and takes back the SIGPIPE that its own failed
+    write left pending on it, so nothing about the process changes.
+
+    macOS raises the SIGPIPE of a pipe write on the whole process
+    rather than on the writing thread, so there the async writer thread
+    also sets F_SETNOSIGPIPE on the descriptor for the length of each
+    write, and the write fails with EPIPE and raises nothing.  After
+    the write the descriptor gets back the F_SETNOSIGPIPE value it had
+    before.
+
+    Any other thread that writes to a pipe sets the disposition of
+    SIGPIPE to SIG_IGN for the whole process the first time it does
+    so.  That write comes from a synchronous logger, from a CLOG_FATAL
+    record, or from a record that an async logger writes on the
+    calling thread because its queue refused it.  Opening a logger on a
+    pipe changes nothing; only the first such write does.
+
+Regular file, under CLOG_SIGNALS_AUTO
+    Opening the logger, and each rotation that opens the next file,
+    sets the disposition of SIGXFSZ to SIG_IGN for the whole process.
+    It happens at the open and not at the first write that meets the
+    limit, because after a record that ends exactly at the limit the
+    next write raises SIGXFSZ with no short write before it.
+    A write at the limit then fails with EFBIG, and the logger repairs
+    the file once it has room, as clog_create_from_file_mp(3)
+    describes.  The async writer thread of the logger and the thread
+    that compresses its rotated files also keep SIGXFSZ blocked in
+    their own signal masks, and take back the SIGXFSZ that their own
+    failed write left pending on them.
+
+Pipe, FIFO or regular file, under CLOG_SIGNALS_UNTOUCHED
+    The library changes no disposition and no signal mask.  The write
+    raises SIGPIPE or SIGXFSZ, and what happens is up to the
+    disposition and the signal mask of the application.  An application
+    that writes logs under a file size limit must then ignore SIGXFSZ,
+    or block it in every thread that can write a log file; otherwise
+    the kernel ends the process once a log file reaches the limit.
+
+Terminal, or any other descriptor
+    The write can raise neither signal, so the library does nothing
+    about it under either policy.
+
+The library changes the disposition of each signal at most once, and
+only when the disposition is SIG_DFL at that moment, so a handler or
+an ignore that the application installed stays in place.
+
+Whatever the policy, a record whose write fails with EPIPE is dropped
+silently, the same as a record that meets any other write error the
+library cannot recover from.
+.fi
+.SH PARAMETERS
+.nf
+policy  CLOG_SIGNALS_AUTO or CLOG_SIGNALS_UNTOUCHED.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success       The policy is in force for every later write and
+                   open.
+ccol_invalid_args  policy is not one of the two values above.
+                   Nothing changes.
+.fi
+.SH NOTES
+.nf
+You may call this at any time, from any thread, before or after any
+logger exists.  The policy governs every write and every open that
+starts after the call, including those of the async writer threads
+that already run: under CLOG_SIGNALS_UNTOUCHED such a thread unblocks
+SIGPIPE and SIGXFSZ again before its next write, and under
+CLOG_SIGNALS_AUTO it blocks them again.  A thread that its creator
+started with one of the two signals already blocked keeps it blocked
+under both policies.
+
+A disposition of SIG_IGN that the library already set under
+CLOG_SIGNALS_AUTO stays in place when the policy changes to
+CLOG_SIGNALS_UNTOUCHED, because the library cannot tell whether that
+disposition is still its own, and the application may already rely on
+it.  To keep both dispositions untouched from the start, call this
+before the first logger opens.
+
+Linux raises the SIGXFSZ of a write on the thread that wrote, but
+FreeBSD raises it on the whole process, where any thread that does not
+block it can take it.  Under CLOG_SIGNALS_UNTOUCHED, blocking SIGXFSZ
+only in the threads that log is therefore enough on Linux and not on
+FreeBSD, while ignoring it protects the process on both.
+
+A disposition of SIG_IGN holds for the whole process, and, as for any
+ignored signal, a child that fork(2) and exec(3) start inherits it.
+An application whose children expect the default disposition of
+SIGPIPE or SIGXFSZ either restores it in the child before exec(3), or
+picks CLOG_SIGNALS_UNTOUCHED and handles both signals itself.
+.fi
+.SH THREAD SAFETY
+.nf
+Thread-safe.  A write or an open that runs at the same time as the
+call follows either the old policy or the new one.
+.fi
+.SH EXAMPLES
+.nf
+/* The application handles SIGPIPE and SIGXFSZ itself: it wants no
+ * change to their dispositions, so it ignores SIGXFSZ and blocks
+ * SIGPIPE in the threads that log. */
+if (clog_set_signal_policy(CLOG_SIGNALS_UNTOUCHED) != ccol_success)
+    abort();
+signal(SIGXFSZ, SIG_IGN);
+clog lg = clog_create_from_fd(STDOUT_FILENO, CLOG_INFO, NULL);
+if (lg == CLOG_INVALID)
+    abort();
+clog_info(lg, "stdout may be a pipe");
+clog_close(lg);
+.fi
+.SH "SEE ALSO"
+.BR clog_create_from_fd_mp (3),
+.BR clog_create_from_file_mp (3),
+.BR clog_fatal (3),
+.BR getrlimit (2),
+.BR signal (7)

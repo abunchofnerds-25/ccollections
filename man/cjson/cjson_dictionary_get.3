@@ -11,11 +11,13 @@ cjson cjson_dictionary_get(cjson obj, const char *key);
 .fi
 .SH DESCRIPTION
 .nf
-Returns a non-owning reference to the value associated with key.
+Returns the value stored under key in obj.  The object keeps owning
+the value, so the reference is borrowed.
 .fi
 .SH RETURN VALUE
 .nf
-Child node, or NULL if the key is absent or obj is not CJSON_DICTIONARY.
+The child node, or NULL when obj has no such key or is not a
+CJSON_DICTIONARY.
 .fi
 .SH "SEE ALSO"
 .BR cjson_dictionary_first (3),

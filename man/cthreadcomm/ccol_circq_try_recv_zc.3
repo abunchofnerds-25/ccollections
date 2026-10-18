@@ -12,9 +12,9 @@ ccol_retval_t ccol_circq_try_recv_zc(ccol_circular_queue *cq,
 .fi
 .SH DESCRIPTION
 .nf
-This function tries to receive a message immediately. If the queue is
-empty, it returns ccol_container_empty immediately; on success it
-transfers the ownership.
+Takes a message from the queue if one is there, and returns
+ccol_container_empty at once when the queue is empty. The data is
+handed over without a copy.
 .fi
 .SH PARAMETERS
 .nf
@@ -23,16 +23,15 @@ target_buf  Buffer that gets the message
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success         - The function received a message. The caller must
-                       free target_buf->data.
+ccol_success         - A message was received. The caller must free
+                       target_buf->data.
 ccol_invalid_args    - cq or target_buf is NULL
 ccol_container_empty - The queue is empty
 .fi
 .SH NOTES
 .nf
-The function never blocks.
-On success, the caller gets the ownership and must free
-  target_buf->data.
+This call never blocks. After a successful call the data belongs to
+the caller, who must free target_buf->data.
 .fi
 .SH "SEE ALSO"
 .BR ccol_circq_recv_zc (3),

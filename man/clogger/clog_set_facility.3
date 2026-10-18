@@ -7,46 +7,57 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <ccollections/clogger.h>
 
-void clog_set_facility(clog logger, clog_syslog_facility_t facility);
+ccol_retval_t clog_set_facility(clog logger,
+                                clog_syslog_facility_t facility);
 .fi
 .SH DESCRIPTION
 .nf
-Updates the syslog facility stored on the shared backing store.  The
+Sets the syslog facility that the shared backing store holds.  The
 facility goes into the PRI field of every RFC 5424 message, as
-(facility * 8) + severity.  Because the value lives on the shared
-store, the change is visible to every logger handle that writes to the
-same file descriptor: the root logger and every derived logger.
+(facility * 8) + severity.  The value lives on the shared store, so the
+change is visible to every logger handle that writes to the same file
+descriptor, the root logger and every derived logger.
 
-This function has an effect only when the output format is
-CLOG_FMT_SYSLOG.  A call with any other format is harmless: the store
-takes the new value, and that value reaches the output only once
-somebody selects CLOG_FMT_SYSLOG.
+The facility matters only when the output format is CLOG_FMT_SYSLOG.
+Calling this with any other format does no harm: the store keeps the new
+value, and it reaches the output once somebody selects CLOG_FMT_SYSLOG.
 
 Available facility codes (RFC 5424 / RFC 3164):
-  CLOG_SYSLOG_KERN     (0); Kernel messages
-  CLOG_SYSLOG_USER     (1); User-level messages (default)
-  CLOG_SYSLOG_MAIL     (2); Mail system
-  CLOG_SYSLOG_DAEMON   (3); System daemons
-  CLOG_SYSLOG_AUTH     (4); Security / authorization messages
-  CLOG_SYSLOG_SYSLOG   (5); Internal syslogd messages
-  CLOG_SYSLOG_LPR      (6); Line printer subsystem
-  CLOG_SYSLOG_NEWS     (7); Network news subsystem
-  CLOG_SYSLOG_UUCP     (8); UUCP subsystem
-  CLOG_SYSLOG_CRON     (9); Clock daemon
-  CLOG_SYSLOG_AUTHPRIV (10); Security / authorization (private)
-  CLOG_SYSLOG_FTP      (11); FTP daemon
-  CLOG_SYSLOG_LOCAL0   (16); Local use 0
+  CLOG_SYSLOG_KERN     (0): kernel messages
+  CLOG_SYSLOG_USER     (1): user-level messages (default)
+  CLOG_SYSLOG_MAIL     (2): mail system
+  CLOG_SYSLOG_DAEMON   (3): system daemons
+  CLOG_SYSLOG_AUTH     (4): security / authorization messages
+  CLOG_SYSLOG_SYSLOG   (5): internal syslogd messages
+  CLOG_SYSLOG_LPR      (6): line printer subsystem
+  CLOG_SYSLOG_NEWS     (7): network news subsystem
+  CLOG_SYSLOG_UUCP     (8): UUCP subsystem
+  CLOG_SYSLOG_CRON     (9): clock daemon
+  CLOG_SYSLOG_AUTHPRIV (10): security / authorization (private)
+  CLOG_SYSLOG_FTP      (11): FTP daemon
+  CLOG_SYSLOG_LOCAL0   (16): local use 0
   ...
-  CLOG_SYSLOG_LOCAL7   (23); Local use 7
+  CLOG_SYSLOG_LOCAL7   (23): local use 7
 .fi
 .SH PARAMETERS
 .nf
 logger    Logger handle.
-facility  Desired facility code (clog_syslog_facility_t).
+facility  The facility code to use (clog_syslog_facility_t).  A value
+          that the enum does not name (12 to 15, or anything outside
+          0 to 23, such as 99 or -1) is refused and the facility stays
+          as it is, which keeps the PRI of every record in the range
+          0 to 191 that RFC 5424 allows.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success       The facility is set.
+ccol_invalid_args  clog_syslog_facility_t does not name facility.  The
+                   facility stays as it is.
 .fi
 .SH NOTES
 .nf
-Thread-safe: the mutex of the shared backing store protects it.
+Thread-safe, because the mutex of the shared backing store protects the
+call.
 The default facility is CLOG_SYSLOG_USER.
 Asserts when logger is CLOG_INVALID, stale or already closed.
 .fi

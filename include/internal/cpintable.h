@@ -26,35 +26,35 @@
  * @file cpintable.h
  * @brief INTERNAL ONLY. Lock-free handle-to-pointer index with per-slot pins.
  *
- * Some modules give out an opaque uint64_t handle, backed by a
- * generation-tagged slot table. Each public call resolves the handle and
- * must keep the object alive until the call ends. This type is the hot half
- * of that work: it turns a handle into a pointer and holds the object
- * against a concurrent destroy, all with no shared write.
+ * Some modules give out an opaque uint64_t handle backed by a
+ * generation-tagged slot table. Every public call resolves the handle and
+ * has to keep the object alive until the call ends. This type is the hot
+ * half of that work: it turns a handle into a pointer and holds the object
+ * against a concurrent destroy, without any shared write.
  *
- * A wrong design here is costly, and one thread does not show the cost.
- * Consider a resolve that takes the read side of a process-global lock and
- * increments a counter that every caller shares: it does several
- * read-modify-write atomic operations on two cache lines that every core
- * wants, so each line moves between the cores and the call becomes slower
- * with each new thread, even when it does no other work.
+ * Getting this wrong is expensive, and you won't see the cost with one
+ * thread. Take a resolve that takes the read side of a process-global lock
+ * and increments a counter that every caller shares. That's several
+ * read-modify-write atomics on two cache lines that every core wants, so the
+ * lines bounce between cores and the call gets slower with every new thread,
+ * even when it does nothing else.
  *
- * In this type a resolve does plain acquire loads, and a pin touches only
- * the stripe of the calling thread, which is why the throughput rises with
- * the thread count instead of collapsing.
+ * Here a resolve does plain acquire loads and a pin only touches the calling
+ * thread's stripe, so throughput goes up with the thread count instead of
+ * collapsing.
  *
- * This header is internal: it carries no visibility block, make install does
- * not install it, and its symbols are absent from the dynamic symbol table
- * of the shared library.
+ * The header is internal: it carries no visibility block, make install
+ * leaves it out, and its symbols aren't in the dynamic symbol table of the
+ * shared library.
  *
- * Scope: the owning module keeps its own slot table for everything that is
- * cold (iteration, fork handlers, bookkeeping for that module). This type
- * holds a copy of only what a resolve needs, and the paths that write it
- * already hold the writer lock of that module.
+ * Scope: the owning module keeps its own slot table for all the cold work
+ * (iteration, fork handlers, its own bookkeeping). This type holds a copy of
+ * only what a resolve needs, and the paths that write it already hold the
+ * module's writer lock.
  *
- * The handle encoding is the one that every module uses:
- * (index << 32) | generation. The generation is never 0, so a handle of all
- * zero bits is always invalid.
+ * The handle encoding is the one every module uses:
+ * (index << 32) | generation. The generation is never 0, so a handle whose
+ * bits are all zero is always invalid.
  */
 
 #ifndef CCOL_CPINTABLE_H
@@ -63,64 +63,61 @@
 #include <common.h>
 #include <stdatomic.h>
 #if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L
-#include <stdbool.h> /* C23 has bool, true and false as keywords */
+#include <stdbool.h> /* bool, true and false are keywords in C23 */
 #endif
 #include <stddef.h>
 #include <stdint.h>
 
-/** The number of slots in each chunk. The library never moves or frees a
- *  chunk, which is what lets a reader index one chunk with no lock held. */
+/** Slots per chunk. A chunk is never moved or freed, and that's what lets a
+ *  reader index into it without holding a lock. */
 #define CCOL_PIN_CHUNK_SLOTS 64u
 
-/** The number of chunk pointers in the directory, which is also the ceiling
- *  on the live indices. */
+/** Number of chunk pointers in the directory, which is also the ceiling on
+ *  live indices. */
 #define CCOL_PIN_MAX_CHUNKS 1024u
 
-/** The number of indices that this table can hold. This is also the ceiling
- *  that each owning module must respect when it claims a slot of its own:
- *  the table cannot publish an index at or above this value, so such a
- *  handle could never be resolved. A module must refuse such an index rather
- *  than claim it and then roll back. An index that can never publish must
- *  never reach a free list that a later acquire pops from; otherwise every
- *  later acquire pops the same unusable index, and the module gives out no
- *  more handles for the rest of the process. */
+/** How many indices the table can hold. Each owning module has to respect
+ *  this ceiling when it claims a slot of its own, since the table can't
+ *  publish an index at or above it and such a handle could never resolve.
+ *  The module must refuse such an index instead of claiming it and rolling
+ *  back. An index that can never publish must never reach a free list that
+ *  a later acquire pops from; otherwise every later acquire pops the same
+ *  useless index and the module gives out no more handles for the rest of
+ *  the process. */
 #define CCOL_PIN_MAX_SLOTS ((size_t)CCOL_PIN_MAX_CHUNKS * CCOL_PIN_CHUNK_SLOTS)
 
-/** The number of independent pin counters for each slot. Each counter sits
- *  on its own cache line, and a thread pins on the stripe that its own id
- *  selects, so concurrent pins of one object write different lines and
- *  never contend. */
+/** Independent pin counters per slot. Each counter sits on its own cache
+ *  line and a thread pins on the stripe its own id selects, so concurrent
+ *  pins of one object write different lines and never contend. */
 #define CCOL_PIN_STRIPES 8u
 
-/** The assumed size of a cache line. A value that is too large costs a
- *  little memory for each live handle; a value that is too small puts two
- *  stripes on one line, which brings back exactly the sharing that this type
- *  exists to remove.
+/** The cache line size we assume. Too large costs a bit of memory per live
+ *  handle. Too small puts two stripes on one line, which brings back exactly
+ *  the sharing this type is there to remove.
  *
- *  What separates two stripes is the STRIDE that this padding makes, not the
- *  alignment of the block that holds them. This matters because plain calloc
- *  allocates the block, which usually does not start on a line boundary. The
- *  code writes only the count at the front of each stripe, and two
- *  consecutive counts are exactly this distance apart for any alignment of
- *  the block, so no two counts share a line; only padding that nobody reads
- *  crosses a line boundary.
+ *  What keeps two stripes apart is the STRIDE this padding gives, not the
+ *  alignment of the block holding them. That matters because the block comes
+ *  from plain calloc, which usually doesn't start it on a line boundary. We
+ *  only write the count at the front of each stripe, and two consecutive
+ *  counts are exactly this far apart whatever the block's alignment, so no
+ *  two counts share a line; only padding that nobody reads crosses a line
+ *  boundary.
  *
- *  A stronger alignment for the block is not worth an allocator that can
- *  give it: a measurement against a build that is identical in every other
- *  way, on one shared slot, at 1, 4, 8 and 12 threads, shows no change
- *  outside the variation between runs. */
+ *  A stronger block alignment isn't worth an allocator that can give it. We
+ *  measured it against a build identical in every other way, on one shared
+ *  slot at 1, 4, 8 and 12 threads, and saw no change beyond the run-to-run
+ *  variation. */
 #define CCOL_PIN_LINE 64u
 
-/* The counter is signed on purpose. A stripe reads negative when a release
- * lands on a stripe other than the one of the pin, and only the sum across
- * the stripes has a meaning. An unsigned counter would wrap to an enormous
- * value, and a destroy would then wait for a pin that does not exist. Atomic
- * arithmetic on a signed integer type is defined to wrap, so the
- * intermediate negative value is well defined and not merely correct by
- * chance.
+/* The counter is signed on purpose. A stripe goes negative when a release
+ * lands on a different stripe than its pin, and only the sum over all
+ * stripes means anything. With an unsigned counter it would wrap to a huge
+ * value and a destroy would wait for a pin that doesn't exist. Atomic
+ * arithmetic on a signed integer type is defined to wrap, so the negative
+ * intermediate value is well defined and not correct by luck.
  *
- * That tolerance makes the drain robust, not general: it keeps the sum of a
- * temporarily split count correct, but it is NOT permission to release a pin
+ * This tolerance makes the drain robust but not general. It keeps the sum
+ * of a temporarily split count right, but it does NOT allow releasing a pin
  * from another thread. See ccol_pintable_unpin(). */
 typedef struct {
   _Atomic ptrdiff_t count;
@@ -128,18 +125,17 @@ typedef struct {
 } ccol_pin_stripe;
 
 typedef struct {
-  /* (generation << 1) | live. The two values share one word, so a reader
-   * takes a consistent snapshot of both with one acquire load, and the
-   * validation after the pin below is a plain comparison. */
+  /* (generation << 1) | live. Both live in one word, so a reader gets a
+   * consistent snapshot of the two with one acquire load, and the check
+   * after the pin below is a plain comparison. */
   _Atomic uint64_t state;
-  /* The code publishes this before the slot becomes live and does not write
-   * it again while the slot is live, so an acquire load of a live state also
-   * sees this value. */
+  /* Published before the slot goes live and not written again while it is
+   * live, so an acquire load of a live state sees this value too. */
   void *_Atomic ptr;
-  /* The first publish into this slot allocates this block, which then stays
-   * for the life of the process: a reader can already hold this pointer, and
-   * nothing must free the block under that reader. A slot is also reused
-   * much more often than it is created. */
+  /* Allocated by the first publish into this slot and kept for the life of
+   * the process. A reader may already hold this pointer, so nothing may free
+   * the block under it, and a slot is reused far more often than it is
+   * created anyway. */
   ccol_pin_stripe *_Atomic stripes;
 } ccol_pin_slot;
 
@@ -154,13 +150,13 @@ typedef struct {
 /**
  * @brief Publish an object at an index so that a resolve can find it.
  *
- * Call this function with the writer lock of the owning module held, from
- * the same place that marks the slot of that module in use. The function
- * allocates the chunk and the stripe block at the first use of the index.
+ * Call it with the owning module's writer lock held, from the same place
+ * that marks the module's slot in use. The chunk and the stripe block are
+ * allocated the first time the index is used.
  *
  * @param gen The generation for this occupancy. It must not be 0.
- * @return false if the index is above the ceiling of the table or an
- *         allocation failed; the function then publishes nothing.
+ * @return false if the index is above the table's ceiling or an allocation
+ *         failed, and in that case nothing is published.
  */
 bool ccol_pintable_publish(ccol_pintable *t, uint32_t idx, uint32_t gen,
                            void *ptr);
@@ -168,135 +164,101 @@ bool ccol_pintable_publish(ccol_pintable *t, uint32_t idx, uint32_t gen,
 /**
  * @brief Stop a new resolve from finding the object at this index.
  *
- * Call this function with the writer lock of the owning module held, from
- * the same place that clears the in-use flag of that module. The function
- * does not change a pin that the table has already granted, so wait for
- * those pins with ccol_pintable_pins() before you free the object.
+ * Call it with the owning module's writer lock held, from the same place
+ * that clears the module's in-use flag. Pins the table has already granted
+ * aren't touched, so wait for them with ccol_pintable_pins() before you free
+ * the object.
  */
 void ccol_pintable_retire(ccol_pintable *t, uint32_t idx);
 
 /**
  * @brief Resolve a handle and pin the object against a concurrent destroy.
  *
- * This function is lock-free and writes to no memory that another thread
- * reads.
+ * Lock-free, and it writes no memory that another thread reads.
  *
  * @return The published pointer, or NULL if the handle is 0, is out of
  *         range, or names a slot that is retired or on a different
- *         generation. On a NULL result the function takes no pin, and you
- *         must not call unpin.
+ *         generation. A NULL result takes no pin, and you must not call
+ *         unpin after it.
  */
 void *ccol_pintable_pin(ccol_pintable *t, uint64_t handle);
 
 /**
  * @brief Release a pin taken by ccol_pintable_pin(). Lock-free.
  *
- * This function takes the same handle as the pin, and it must run on the
- * thread that took the pin. Each thread selects its own stripe, so a release
- * on another thread splits one pin across two stripes.
+ * Pass the same handle as the pin, and call it on the thread that took the
+ * pin. Every thread picks its own stripe, so a release on another thread
+ * splits one pin across two stripes. Handing a pin to another thread to
+ * release looks harmless, and it isn't, for the reason below.
  *
- * ccol_pintable_pins() reads the stripes one at a time rather than as one
- * snapshot. It can read the increment on the first stripe before the split
- * and the decrement on the second stripe after it, and the sum is then zero
- * while a caller still holds the pin. A destroy that waits on that count
- * frees the object while a caller is inside it.
+ * ccol_pintable_pins() reads the stripes one by one and not as a single
+ * snapshot. It can see the increment on the first stripe before the split
+ * and the decrement on the second stripe after it, and then the sum is zero
+ * while a caller still holds the pin. A destroy waiting on that count would
+ * free the object while a caller is inside it.
  *
- * The counters are signed, so a split sums correctly once both sides are
- * visible. That is what makes the drain converge; it does not make the
+ * Because the counters are signed, a split sums correctly once both sides
+ * are visible. That's what makes the drain converge, but it doesn't make the
  * intermediate reads safe.
  *
- * A zero handle is a no-op, matching ccol_pintable_pin(), which never grants
- * a pin for a zero handle.
+ * A zero handle does nothing, matching ccol_pintable_pin(), which never
+ * grants a pin for a zero handle.
  */
 void ccol_pintable_unpin(ccol_pintable *t, uint64_t handle);
 
 /**
- * @brief The number of pins that are outstanding against an index, summed
- *        across the stripes.
+ * @brief The number of pins outstanding against an index, summed over the
+ *        stripes.
  *
- * This is for a destroy that has retired the index and waits for the
- * callers in flight to finish. A result of zero means that every pin that a
- * caller took before this call is released, and together with the retire
- * this means that no new pin can appear. This holds because the thread that
- * takes a pin is the thread that releases it, so no single pin is ever
- * split across two of the stripes that this function sums one at a time.
- * See ccol_pintable_unpin().
+ * Meant for a destroy that has retired the index and waits for the callers
+ * in flight to finish. Zero means every pin a caller took before this call
+ * has been released, and together with the retire it means no new pin can
+ * appear. That holds because the thread that takes a pin is the one that
+ * releases it, so no single pin is ever split across two of the stripes we
+ * sum one by one. See ccol_pintable_unpin().
  */
 size_t ccol_pintable_pins(ccol_pintable *t, uint32_t idx);
 
-/** @brief ccol_pintable_pins() for the index that a handle names. The result
- *         is zero for a zero handle, because that handle names no slot. */
+/** @brief ccol_pintable_pins() for the index a handle names. It gives zero
+ *         for a zero handle, because that handle names no slot. */
 size_t ccol_pintable_pins_for(ccol_pintable *t, uint64_t handle);
 
 /**
  * @brief Free every chunk and every stripe block that this table owns.
  *
- * The library deliberately never frees the slot storage while the table is
- * in use, because a reader indexes that storage with no lock held. The
- * storage therefore stays reachable at process exit, and a leak checker that
- * treats still-reachable memory as an error reports it.
+ * We never free the slot storage while the table is in use, on purpose,
+ * since readers index it without a lock. So the storage is still reachable
+ * at process exit, and a leak checker that counts still-reachable memory as
+ * an error reports it.
  *
- * For this reason the owner of the table disposes of the storage once
- * nothing can resolve against it. A resolve that starts after that point
- * finds no chunk and answers NULL, which is how it answers for any handle
- * that it does not recognise.
+ * That's why the table's owner disposes of the storage once nothing can
+ * resolve against it any more. A resolve that starts after that finds no
+ * chunk and answers NULL, the same answer it gives for any handle it doesn't
+ * know.
  *
- * Call this function only when no call into the owning module can still be
- * in flight. The function unpublishes each chunk before it frees that chunk,
- * so a resolve that has not yet loaded the chunk pointer answers NULL
- * instead of reading freed memory. Nothing here protects a resolve that is
- * already past that load, however: this is an entry point for process
- * teardown, not a concurrent one.
+ * Only call this when no call into the owning module can be in flight. Each
+ * chunk is unpublished before it is freed, so a resolve that hasn't loaded
+ * the chunk pointer yet answers NULL instead of reading freed memory.
+ * Nothing protects a resolve that is already past that load though; this is
+ * an entry point for process teardown, not a concurrent one.
  */
 void ccol_pintable_dispose(ccol_pintable *t);
 
 /**
  * @brief Drop every outstanding pin against an index.
  *
- * This function is only for a fork() child handler. fork() copies only the
- * calling thread, and another thread can hold a pin at the instant of the
- * fork. Nothing in the child can release that pin, because the thread that
- * would release it does not exist there, so a destroy that waits for the
- * count to drain would wait forever. The child has one thread, so no caller
- * that is truly in flight can survive and be counted wrongly.
+ * Only for a fork() child handler. fork() copies just the calling thread,
+ * and another thread may hold a pin at the moment of the fork. Nothing in
+ * the child can release that pin since the thread that would do it doesn't
+ * exist there, so a destroy waiting for the count to drain would wait
+ * forever. The child has a single thread, so no caller that is really in
+ * flight can survive and be miscounted.
  */
 void ccol_pintable_reset(ccol_pintable *t, uint32_t idx);
 
-/** @brief ccol_pintable_reset() for the index that a handle names. A zero
- *         handle is a no-op, because it names no slot: slot 0 is an
- *         ordinary slot, and an unrelated object probably occupies it. */
+/** @brief ccol_pintable_reset() for the index a handle names. A zero handle
+ *         does nothing because it names no slot: slot 0 is an ordinary
+ *         slot, and some unrelated object probably sits in it. */
 void ccol_pintable_reset_for(ccol_pintable *t, uint64_t handle);
-
-#ifdef RUNNING_UNIT_TESTS
-/**
- * @brief Force the next ccol_pintable_publish() call to fail, once.
- *
- * A publish is the last step of every handle acquisition, and its failure
- * path is the rollback that the owning module runs to put a half-claimed
- * slot back on its free list. Nothing else reaches that path without a real
- * allocation failure inside this file, and no allocator that a caller gives
- * can cause that failure: plain calloc makes the chunk and the stripe blocks
- * by design, because a reader indexes them with no lock held.
- *
- * The forced failure happens before the function stores anything, so a
- * rollback sees exactly the state that a real allocation failure leaves. The
- * arm is one-shot: the next publish consumes the flag, whether that publish
- * succeeds or fails.
- *
- * The build compiles this only under RUNNING_UNIT_TESTS, so it is absent
- * from the shipped library and from the dynamic symbol table of that
- * library.
- */
-void _ccol_pintable_force_next_publish_failure_for_tests(void);
-
-/**
- * @brief Force the next stripe-block allocation to fail.
- *
- * This is the one refusal that can happen after the table has published a
- * chunk, and the only way to reach a table that holds a chunk whose slot
- * never became live. The build compiles this only under RUNNING_UNIT_TESTS.
- */
-void _ccol_pintable_force_next_stripe_alloc_failure_for_tests(void);
-#endif /* RUNNING_UNIT_TESTS */
 
 #endif /* CCOL_CPINTABLE_H */

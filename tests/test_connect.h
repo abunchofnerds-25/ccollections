@@ -24,22 +24,22 @@ SOFTWARE.
 
 /* connect(2) for the tests, with a bound on the wait.
  *
- * A blocking connect(2) of a TCP socket on OpenBSD 7.9 can miss its wakeup:
- * the connection is established, and even closed again by the peer, while
- * the caller sleeps in connect(2) for ever, because the connect timer stops
- * once the connection exists. A program of a few lines that makes blocking
- * loopback connects from four threads reproduces it within a few million
- * connects; the same program with a non-blocking connect(2) and poll(2) makes
- * twelve million without a hang. A test that sleeps there holds its CI job
- * until the job's time limit.
+ * On OpenBSD 7.9 a blocking connect(2) of a TCP socket can miss its wakeup.
+ * The connection gets established, and can even be closed again by the
+ * peer, while the caller sleeps in connect(2) for ever, because the connect
+ * timer stops once the connection exists. A few lines of blocking loopback
+ * connects from four threads hit it within a few million connects, while
+ * the same program with a non-blocking connect(2) and poll(2) does twelve
+ * million without a hang. A test that sleeps there holds its CI job until
+ * the job's time limit.
  *
- * test_connect() therefore connects a blocking TCP socket in non-blocking
- * mode, waits for the result with poll(2) for at most
- * TEST_CONNECT_TIMEOUT_MS, and gives the socket back in blocking mode. It
- * returns 0 on success, and -1 with errno set on failure, ETIMEDOUT when the
- * wait ran out, exactly as connect(2) reports a failure. Any other socket (a
- * Unix socket, a datagram socket, or one that is already non-blocking) goes
- * straight to connect(2), so a test keeps the behavior that it asks for. */
+ * So test_connect() connects a blocking TCP socket in non-blocking mode,
+ * waits for the result with poll(2) for at most TEST_CONNECT_TIMEOUT_MS and
+ * hands the socket back in blocking mode. It returns 0 on success and -1
+ * with errno set on failure (ETIMEDOUT when the wait ran out), the same way
+ * connect(2) reports a failure. Any other socket (a Unix socket, a datagram
+ * socket, or one that is non-blocking already) goes straight to connect(2),
+ * so the test gets the behavior it asked for. */
 
 #ifndef CCOL_TESTS_TEST_CONNECT_H
 #define CCOL_TESTS_TEST_CONNECT_H

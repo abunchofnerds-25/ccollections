@@ -11,8 +11,8 @@ void *ccol_mempool_calloc_entry(ccol_mempool *mp);
 .fi
 .SH DESCRIPTION
 .nf
-Works like ccol_mempool_alloc_entry(), but zeros the entry before it
-returns.
+The same as ccol_mempool_alloc_entry(), except that the entry is set
+to zero before it is returned.
 .fi
 .SH PARAMETERS
 .nf
@@ -26,9 +26,9 @@ Returns NULL when the pool is empty and the fallback is off
 .SH NOTES
 .nf
 O(1) complexity
-The function zeros the whole element
+The whole element is zeroed
 Thread-safe if the pool was created with single_threaded=false
-This function asserts if mp is NULL
+The function asserts if mp is NULL
 .fi
 .SH "SEE ALSO"
 .BR ccol_mempool_alloc_entry (3),

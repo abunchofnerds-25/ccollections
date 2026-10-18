@@ -26,63 +26,62 @@ static inline cjson cjson_create_dictionary(void);
 .fi
 .SH DESCRIPTION
 .nf
-Each _mp function allocates a new DOM node of the matching JSON type,
-with mp as the allocator.  A NULL mp means the default allocator,
-which is malloc/free/calloc/realloc.  Each node keeps its own
-allocator, and the library uses it for every later operation on the
-node, including the destruction of the node.
+Each _mp function allocates a new DOM node of the matching JSON type
+with mp as its allocator.  A NULL mp selects the default allocator
+(malloc/free/calloc/realloc).  The node keeps that allocator and the
+library uses it for every later operation on the node, destruction
+included.
 
-The functions without _mp are static inline wrappers; each one calls
-the _mp function with NULL as the allocator.
+The functions without _mp are static inline wrappers that call the
+_mp function with NULL as the allocator.
 
 cjson_create_string_mp() makes a private heap copy of val.  A NULL
-val gives a CJSON_NULL node, not a CJSON_STRING node that holds a
-null pointer, because a null C string pointer maps to JSON null.  A
-val that is not NULL must be valid UTF-8: JSON text is UTF-8 (RFC 8259
-section 8.1), so any other byte sequence has no JSON form, and
-cjson_create_string_mp() returns NULL for such a sequence instead of
-storing it.  This matches the behaviour of cjson_create_double_mp()
-for a double that is not finite.  To write a string field, use
-cjson_set(), which applies the same rule but returns
-ccol_invalid_args.
-cjson_create_list_mp() returns an empty array; add children to it
-with cjson_list_push().
-cjson_create_dictionary_mp() returns an empty object; add children to
-it with cjson_dictionary_set().  An empty array or object is one node,
-and its first child allocates the storage that holds its children, so
-the first push or set is the call that can fail for lack of memory.
+val gives a CJSON_NULL node, because a null C string pointer maps to
+JSON null; you never get a CJSON_STRING node that holds a null
+pointer.  A val that is not NULL must be valid UTF-8.  JSON text is
+UTF-8 (RFC 8259 section 8.1) and any other byte sequence has no JSON
+form, so cjson_create_string_mp() returns NULL for it instead of
+storing it, the same way cjson_create_double_mp() treats a double
+that is not finite.  cjson_set() applies the same rule when you
+write a string field, but it returns ccol_invalid_args.
+cjson_create_list_mp() returns an empty array, and you add children
+to it with cjson_list_push().
+cjson_create_dictionary_mp() returns an empty object, and you add
+children to it with cjson_dictionary_set().  An empty array or
+object is a single node.  The storage for its children is allocated
+by its first child, so the first push or set is the call that can
+fail for lack of memory.
 
-cjson_create_double_mp() rejects a value that is not finite (Inf,
--Inf and NaN) and returns NULL for it, because JSON has no form for a
-double that is not finite.  The parser also rejects a number that
-overflows to infinity.  To write a double field, use cjson_set(),
-which applies the same check and returns ccol_invalid_args on
-failure.
+cjson_create_double_mp() refuses Inf, -Inf and NaN and returns NULL
+for them, because JSON has no form for a double that is not finite.
+The parser likewise refuses a number that overflows to infinity.
+cjson_set() makes the same check when you write a double field and
+returns ccol_invalid_args when it fails.
 .fi
 .SH PARAMETERS
 .nf
-mp   Custom memory management procedures for this node and its owned
-     resources, or NULL for the default allocator.
+mp   Custom memory management procedures for this node and the
+     resources it owns, or NULL for the default allocator.
      The library keeps its own copy of the struct, so the caller may
-     release or reuse the struct once this call returns, but the
+     release or reuse the struct once this call returns.  The
      functions that it names must stay callable until the last node
      built with them is destroyed.  A process can use at most 64
-     distinct sets of four functions; a call that would need a 65th
-     fails and returns NULL.
+     distinct sets of four functions, and a call that would need a
+     65th fails and returns NULL.
 .fi
 .SH RETURN VALUE
 .nf
 A new cjson node on success.  NULL when the allocation fails, when
 val is not finite (cjson_create_double_mp), or when val is not valid
 UTF-8 (cjson_create_string_mp).
-cjson_create_string_mp(NULL, mp) returns a CJSON_NULL node; it never
-returns NULL itself, except when it is out of memory.
+cjson_create_string_mp(NULL, mp) returns a CJSON_NULL node, and it
+returns NULL only when it runs out of memory.
 .fi
 .SH NOTES
 .nf
-The caller owns the node that the function returns and must free it
-with cjson_destroy(), which uses the allocator that each node keeps
-and so needs no mp parameter.
+The caller owns the returned node and must free it with
+cjson_destroy().  That call needs no mp parameter, because it uses
+the allocator that each node keeps.
 .fi
 .SH "SEE ALSO"
 .BR cjson_destroy (3),

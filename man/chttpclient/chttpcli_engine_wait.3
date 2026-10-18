@@ -1,0 +1,80 @@
+.TH CHTTPCLI_ENGINE_WAIT 3 "2026-10-12" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpcli_engine_wait \- block until the async engine of chttpclient has stopped completely
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpclient.h>
+
+void chttpcli_engine_wait(void);
+.fi
+.SH DESCRIPTION
+.nf
+chttpclient's async engine serves Tier 2 and Tier 3
+(chttpclient_do_async, chttpclient_do_async_streaming,
+chttpclient_do_pooled and chttpclient_do_pooled_streaming) for every
+client of the process. It starts with the first request of those tiers
+and stops once no client holds it: the last such request has
+ended and the last idle connection of those tiers is closed, which
+chttpclient_destroy does for its own client. The engine's teardown then
+runs on a separate thread, after chttpclient_destroy has returned.
+
+This function blocks until that teardown is over and joins the thread
+that ran it. Once it returns, no engine thread runs, and the engine
+makes no further call to the allocator that
+chttpcli_set_engine_mem_mgmt_procs installed or through the logger
+that chttpcli_set_engine_logger installed, so the application may
+release both. If no engine runs, the function returns at once.
+
+The function waits as long as any client holds the engine: a client
+that is not destroyed and keeps idle Tier 2 or Tier 3 connections, a
+request of those tiers that is in flight, or the default client of
+chttp_default_client once it has used those tiers. The library's exit
+handler destroys the default client; destroy every other such client
+before you call this function.
+
+fork(2) waits for the same teardown on its own, so a process that
+destroys its last client and then forks does not need to call this
+function. The exception is a build with CCOL_FORK_SAFETY_REQUIRED=0,
+where fork(2) does not wait and the call must come before fork(2).
+
+A call from an engine thread, that is, from the write_fn of
+chttpclient_do_async_streaming or chttpclient_do_pooled_streaming,
+would wait for its own thread, so it calls _ccol_fatal_err() instead.
+.fi
+.SH THREAD SAFETY
+.nf
+Any number of threads may call this function at the same time, and
+each call returns once the engine has stopped.
+.fi
+.SH EXAMPLES
+.nf
+#include <ccollections/chttpclient.h>
+
+static ccol_memmgmt_procs_t engine_mp; /* filled by the application */
+
+int main(void) {
+  chttpcli_set_engine_mem_mgmt_procs(&engine_mp);
+  chttpcli cli = chttpclient_create(NULL);
+  chttp_request_t *req =
+      chttp_request_create(CHTTP_GET, "http://example.com/", NULL, NULL);
+  chttpcli_response *resp = NULL;
+  if (req && chttpclient_do_pooled(cli, req, &resp) == ccol_success)
+    chttpclient_resp_free(resp);
+  chttp_request_free(req);
+  chttpclient_destroy(cli);
+  /* The engine stops on a thread of its own; wait for it before the
+   * allocator of the engine goes away. */
+  chttpcli_engine_wait();
+  return 0;
+}
+.fi
+.SH "SEE ALSO"
+.BR chttpcli_set_engine_mem_mgmt_procs (3),
+.BR chttpcli_set_engine_logger (3),
+.BR chttpcli_set_engine_num_reactor_threads (3),
+.BR chttpclient_destroy (3),
+.BR chttpclient_do_async (3),
+.BR chttpclient_do_pooled (3),
+.BR chttpsvr_engine_wait (3)

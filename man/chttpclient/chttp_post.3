@@ -13,12 +13,15 @@ ccol_retval_t chttp_post(const char *url,
 .fi
 .SH DESCRIPTION
 .nf
-This is a short wrapper for an HTTP POST. body can be NULL for a POST
-with no body.
+This is a convenience wrapper that sends an HTTP POST. Pass a NULL body
+for a POST without one.
 .fi
 .SH RETURN VALUE
 .nf
-The same codes as chttpclient_do.
+The same codes as chttpclient_do, plus ccol_invalid_args for a body
+whose data is NULL while its len is not zero, which
+chttp_request_create refuses. ccol_not_enough_memory also covers a
+failed allocation of the internal request object.
 .fi
 .SH "SEE ALSO"
 .BR chttp_get (3),

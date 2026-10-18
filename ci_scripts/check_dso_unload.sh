@@ -1,51 +1,50 @@
 #!/bin/sh
-# This script checks that a process can still fork() after it loads the library
-# with dlopen(), uses a module that registers pthread_atfork() handlers, and
-# then unloads the library again. It also checks two properties of the
-# thread-specific keys of the library: a thread that used a thread-safe memory
-# pool and that outlives the dlclose() must exit cleanly, and the cycles of
-# dlopen() and dlclose() must give back every key that they took.
+# Checks that a process can still fork() after it loads the library with
+# dlopen(), uses a module that registers pthread_atfork() handlers and then
+# unloads the library again. It also checks two things about the library's
+# thread-specific keys: a thread that used a thread-safe memory pool and
+# outlives the dlclose() has to exit cleanly, and the dlopen()/dlclose()
+# cycles have to give back every key they took.
 #
-# pthread_atfork() keeps function pointers in the process-global state of the C
-# library, and POSIX gives no way to take them back, so a handler that an
-# unloaded shared object left registered would run at the next fork() in that
-# process, at an address where nothing is mapped. glibc closes this hole by
-# registering each handler against the __dso_handle of the object that calls
-# pthread_atfork(). The pthread_atfork() that a shared object links comes from
-# libc_nonshared.a for exactly this reason, so that handle belongs to the
-# caller, and glibc takes those handlers back when it unloads that object.
-# This library depends on that behavior, so this script proves it on the real
-# built artifact instead of assuming it.
+# pthread_atfork() keeps function pointers in the C library's process-global
+# state and POSIX gives no way to take them back, so a handler left registered
+# by an unloaded shared object would run at the next fork() of the process, at
+# an address where nothing is mapped. glibc closes that hole by registering
+# each handler against the __dso_handle of the object that calls
+# pthread_atfork(). That's the reason a shared object links its
+# pthread_atfork() from libc_nonshared.a: the handle belongs to the caller, and
+# glibc takes those handlers back when it unloads that object. The library
+# depends on this behaviour, so we prove it on the real built artifact rather
+# than assume it.
 #
-# pthread_key_create() is the same kind of process-global state. A key keeps
+# pthread_key_create() is process-global state of the same kind. A key keeps
 # the address of its destructor, which the C library calls for every thread
-# that exits with a value on that key, so a module that unloads with its key
-# still live leaves that address pointing at unmapped code, and the next exit
-# of such a thread crashes. Each module therefore deletes its keys when it
-# unloads. The probe runs a thread that armed the thread cache of a pool,
-# unloads the library, and only then lets that thread exit. It also counts the
-# keys that the process can still create, before the first load and after the
-# last unload, and a difference fails the check.
+# that exits with a value on the key, so a module that unloads with a live key
+# leaves that address pointing at unmapped code and the next such thread exit
+# crashes. That's why each module deletes its keys when it unloads. The probe
+# runs a thread that armed a pool's thread cache, unloads the library and only
+# then lets the thread exit. It also counts how many keys the process can
+# create before the first load and after the last unload, and any difference
+# fails the check.
 #
-# The assertion is only real when the loader truly unmaps the library before
-# the fork: an unload that did not happen leaves the handlers valid, and a
-# fork() that works then proves nothing. The probe reports which case it saw,
-# and a run that saw no unload is a failure, because the one thing that this
-# check exists to prove was never tested in it. Set
-# CCOL_DSO_UNLOAD_ALLOW_RESIDENT=1 for a target where the loader truly cannot
-# unload the object.
+# All of this only means something when the loader really unmaps the library
+# before the fork. If the unload didn't happen the handlers are valid anyway,
+# and a working fork() proves nothing. The probe reports which case it saw,
+# and a run that saw no unload is a failure, because the one thing this check
+# is there to prove was never tested. Set CCOL_DSO_UNLOAD_ALLOW_RESIDENT=1 for
+# a target whose loader really can't unload the object.
 #
-# On macOS dyld never unloads a dylib that has thread-local variables (see
-# dlclose(3) of macOS), and this library has some. A dlclose() there leaves the
-# library mapped, so neither hazard above can occur, and the destructors of the
-# modules do not run until the process exits. For a Mach-O library the script
-# therefore accepts a library that stays mapped, and the probe compares the
-# count of keys only after a real unload. The probe still loads the library,
-# uses it, closes it, forks and lets a thread exit, so a crash in any of those
-# steps still fails the check. musl's dlclose() never unloads either, and the
-# script accepts a resident library that needs libc.musl in the same way.
+# On macOS dyld never unloads a dylib that has thread-local variables (see the
+# macOS dlclose(3)), and this library has some. A dlclose() there leaves the
+# library mapped, so neither hazard above can happen and the module
+# destructors don't run until the process exits. For a Mach-O library we
+# accept a library that stays mapped, and the probe compares the key counts
+# only after a real unload. The probe loads the library, uses it, closes it,
+# forks and lets a thread exit all the same, so a crash in any of those steps
+# fails the check. musl's dlclose() never unloads either, and a resident
+# library that needs libc.musl is accepted in the same way.
 #
-# Run this from the root of the repository, after `make`;
+# Run this from the root of the repository after `make`;
 # `make check_dso_unload` and CI both use it.
 set -eu
 
@@ -53,17 +52,17 @@ SO="${1:-}"
 [ -n "$SO" ] || { echo "usage: $0 <shared-object>" >&2; exit 2; }
 [ -e "$SO" ] || { echo "check_dso_unload: $SO not built; run make first" >&2; exit 2; }
 
-# The thread-local block of the library has a budget. A library that uses
-# the initial-exec model anywhere carries the STATIC_TLS flag, and a dlopen()
-# must then fit its whole thread-local block into a reserve that the loader
-# shares among every library that a process loads late: about 1.6 KiB with
-# glibc, and on FreeBSD 128 bytes unless LD_STATIC_TLS_EXTRA raises it, which
-# a FreeBSD program that loads this library with dlopen() must do (the probe
-# below does; see include/internal/ctlsmodel.h). A budget of 512 bytes leaves
-# most of the glibc reserve to the other libraries of a process.
-# dyld gives the thread-local variables of a dylib to each thread when the
-# thread first uses them and keeps no static reserve, so a Mach-O library has
-# no such budget.
+# The library's thread-local block has a budget. A library that uses the
+# initial-exec model anywhere carries the STATIC_TLS flag, and a dlopen() then
+# has to fit its whole thread-local block into a reserve the loader shares
+# among all the libraries a process loads late: about 1.6 KiB with glibc, and
+# 128 bytes on FreeBSD unless LD_STATIC_TLS_EXTRA raises it, which a FreeBSD
+# program that loads this library with dlopen() has to do (the probe below
+# does; see include/internal/ctlsmodel.h). A budget of 512 bytes leaves most
+# of the glibc reserve to the other libraries of the process.
+# dyld hands a dylib's thread-local variables to each thread when the thread
+# first uses them and keeps no static reserve, so a Mach-O library has no such
+# budget.
 . ci_scripts/object_format.sh
 if ! FORMAT=$(ccol_object_format "$SO"); then
   echo "check_dso_unload: $SO is neither an ELF nor a Mach-O file" >&2
@@ -71,12 +70,12 @@ if ! FORMAT=$(ccol_object_format "$SO"); then
 fi
 LIBC=other
 if [ "$FORMAT" = elf ]; then
-  # This gate reads the program headers with readelf and needs no nm, which
-  # OpenBSD packages for its own target only as part of a cross toolchain.
+  # The gate reads the program headers with readelf and doesn't need nm,
+  # which OpenBSD packages for its own target only in a cross toolchain.
   NM=${NM:-unused}
   . ci_scripts/gnu_binutils.sh
   # musl's dlclose() never unloads an object (its dlclose(3) does nothing),
-  # which the library itself records by needing libc.musl.
+  # and the library itself records that by needing libc.musl.
   if "$READELF" -d "$SO" 2>/dev/null | grep -q 'libc\.musl'; then
     LIBC=musl
   fi
@@ -221,6 +220,11 @@ int main(int argc, char **argv) {
   const char *path = argc > 1 ? argv[1] : "./libccollections.so";
   const char *needle = "libccollections";
   int cycles = 3, i;
+  /* glibc before 2.34 creates one key for the per-thread state of dlerror(3)
+   * on the first call into libdl and keeps it for the life of the process, so
+   * a dlopen() of the program itself takes that key before the count. */
+  void *self = dlopen(NULL, RTLD_NOW);
+  if (self) dlclose(self);
   int keys_before = free_key_count();
 
   for (i = 0; i < cycles; i++) {
@@ -234,7 +238,7 @@ int main(int argc, char **argv) {
       fprintf(stderr, "dlopen(%s) failed: %s\n", path, dlerror());
       return 2;
     }
-    create = (create_fn)(unsigned long)dlsym(h, "ccol_create_cthread_pool_mp");
+    create = (create_fn)(unsigned long)dlsym(h, "ctpool_create_mp");
     destroy = (destroy_fn)(unsigned long)dlsym(h, "__ctpool_destroy");
     if (!create || !destroy) {
       fprintf(stderr, "dlsym failed: %s\n", dlerror());
@@ -368,26 +372,30 @@ int main(int argc, char **argv) {
 }
 PROBE
 
+# glibc before 2.34 keeps dlopen(3) and friends in libdl, and every Linux C
+# library accepts -ldl; macOS and the BSDs have them in libc.
+dl_libs=
+[ "$(uname -s)" = Linux ] && dl_libs=-ldl
 if ! $CC -Iinclude -std=gnu11 -g -O1 -pthread -o "$tmp/probe" "$tmp/probe.c" \
-     2>"$tmp/cc.err"; then
+     $dl_libs 2>"$tmp/cc.err"; then
   echo "check_dso_unload: could not compile the probe." >&2
   sed 's/^/  /' "$tmp/cc.err" >&2
   exit 2
 fi
 
-# The script finds the library through its own directory instead of through
-# the search path of the loader, so it tests the artifact that you just built
-# and not one that is already installed on the machine.
+# Find the library through its own directory, not through the loader's search
+# path, so we test the artifact you just built and not one that happens to be
+# installed on the machine.
 case "$SO" in
 /*) so_path="$SO" ;;
 *)  so_path="$PWD/$SO" ;;
 esac
 
-# The script saves the status of the probe before anything else reads it,
-# because a crash at fork() is the failure that this check exists to catch,
-# and it appears as a signal instead of as output.
-# LD_STATIC_TLS_EXTRA is the room that FreeBSD's loader keeps for the
-# initial-exec thread-local block of a late-loaded object; glibc ignores it.
+# Save the probe's status before anything else reads it, because a crash at
+# fork() is exactly the failure this check is there to catch and it shows up
+# as a signal, not as output.
+# LD_STATIC_TLS_EXTRA is the room FreeBSD's loader keeps for the initial-exec
+# thread-local block of a late-loaded object; glibc ignores it.
 set +e
 out=$(LD_STATIC_TLS_EXTRA=512 "$tmp/probe" "$so_path" 2>"$tmp/probe.err")
 rc=$?

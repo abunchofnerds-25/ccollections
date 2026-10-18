@@ -23,10 +23,11 @@ SOFTWARE.
 */
 
 /* The open file descriptors of the test process, on every supported system.
- * Linux lists them in /proc/self/fd, which is fast whatever the descriptor
- * limit is. The BSDs and macOS have no such listing by default, so there
- * every descriptor number up to the process limit (at most 65536) is probed
- * with fcntl(F_GETFD). Neither form counts a descriptor of its own. */
+ * Linux lists them in /proc/self/fd, which stays fast whatever the
+ * descriptor limit is. The BSDs and macOS have no such listing by default,
+ * so there we probe every descriptor number up to the process limit (at most
+ * 65536) with fcntl(F_GETFD). Neither form counts a descriptor that it opened
+ * for itself. */
 
 #ifndef CCOL_TESTS_TEST_FDS_H
 #define CCOL_TESTS_TEST_FDS_H

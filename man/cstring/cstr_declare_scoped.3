@@ -11,13 +11,12 @@ cstr_declare_scoped(s);
 .fi
 .SH DESCRIPTION
 .nf
-This macro is like cstr_declare(), but it also attaches a cleanup
+This macro works like cstr_declare() but also attaches a cleanup
 attribute, so the string is destroyed automatically when the variable
-leaves its scope. That destruction does exactly what cstring_destroy()
-does: it frees the internal buffer and the container, and it sets the
-variable to NULL. Because the macro initialises the variable to NULL, you
-can leave the variable unassigned for the whole scope; the cleanup then
-does nothing.
+leaves its scope. The cleanup does exactly what cstring_destroy() does:
+it frees the internal buffer and the container and sets the variable to
+NULL. The macro initialises the variable to NULL, so you can leave it
+unassigned for the whole scope and the cleanup then does nothing.
 .fi
 .SH PARAMETERS
 .nf

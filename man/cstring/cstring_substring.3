@@ -11,10 +11,10 @@ cstr cstring_substring(cstr s, size_t start, size_t length, char **err);
 .fi
 .SH DESCRIPTION
 .nf
-Allocates a new cstring containing characters in the range
-[start, start + length). If start + length extends beyond the end of the
-string the range is clamped to the actual end. If start is at or beyond
-the string length an empty cstring is returned.
+This function allocates a new cstring that holds the characters in the
+range [start, start + length). When start + length goes past the end of
+the string the range is clamped to the real end, and when start is at or
+past the length of the string you get an empty cstring.
 .fi
 .SH PARAMETERS
 .nf
@@ -25,12 +25,13 @@ err      Optional pointer to receive an error string on failure
 .fi
 .SH RETURN VALUE
 .nf
-New cstring on success
-NULL on allocation failure (details written to *err if err is non-NULL)
+A new cstring on success
+NULL when an allocation fails, with the details written to *err when err
+is not NULL
 .fi
 .SH NOTES
 .nf
-Caller must destroy the returned cstring when done
+You must destroy the returned cstring once you are done with it
 Asserts if s is NULL
 .fi
 .SH "SEE ALSO"

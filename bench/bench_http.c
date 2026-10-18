@@ -26,23 +26,22 @@
  * @file bench_http.c
  * @brief End-to-end benchmarks for chttpserver and chttpclient.
  *
- * These cases start a server on the loopback interface and drive it with the
- * client of this library, so one case measures the whole path: the
- * serialization of the request, the loopback round trip through the kernel,
- * the readiness dispatch of the reactor, the routing, the handler on a worker
- * thread, the serialization of the response, and the parse by the client.
- * That is the number that a user of this library sees, and it is the one worth
- * watching for a regression, although on its own it cannot say which of the
- * two sides a change belongs to.
+ * These cases start a server on the loopback interface and drive it with
+ * this library's own client, so one case measures the whole path: request
+ * serialization, the loopback round trip through the kernel, the reactor's
+ * readiness dispatch, routing, the handler on a worker thread, response
+ * serialization and the client's parse. That's the number a user of this
+ * library sees, and the one worth watching for a regression, although by
+ * itself it can't say which of the two sides a change belongs to.
  *
- * Loopback is not the internet, so do not read these figures as throughput
- * over a real network. What they measure well is the cost of this library for
- * each request, and a change to the routing, to the connection lifecycle, or
- * to the parser moves exactly that number.
+ * Loopback isn't the internet, so don't read these figures as throughput
+ * over a real network. What they measure well is this library's cost per
+ * request, and a change to the routing, the connection lifecycle or the
+ * parser moves exactly that number.
  *
- * These cases take a port by trying a range of numbers instead of one fixed
- * number, so a benchmark run does not fail only because something else on the
- * machine already listens on that port.
+ * These cases pick a port by trying a range of numbers instead of one fixed
+ * number, so a benchmark run doesn't fail just because something else on the
+ * machine is already listening on that port.
  */
 
 #include <chttpclient.h>
@@ -60,18 +59,18 @@
 #define BENCH_HTTP_PORT_TRIES 64
 #define BENCH_HTTP_CONCURRENCY 4
 
-/* This is the number of requests for each client thread in the forms that run
- * several clients together, so the form with 4 threads sends the same total as
- * the case that runs one request at a time. The wider forms raise the offered
- * load with the number of clients instead of dividing one fixed total into
- * smaller parts, which is what makes the figures for each request comparable
+/* The number of requests per client thread in the forms that run several
+ * clients together, so the 4-thread form sends the same total as the case
+ * that runs one request at a time. The wider forms raise the offered load
+ * with the number of clients instead of splitting one fixed total into
+ * smaller parts, which is what keeps the per-request figures comparable
  * across all of them. */
 #define BENCH_HTTP_MT_N 5000
 
 /* Request and response bodies for the cases that move a body. The small one
- * fits in the first read together with the headers, which is the shape of an
- * ordinary API call. The large one is larger than the socket buffers of the
- * loopback path, so the server reads it and writes it in several passes. */
+ * fits in the first read together with the headers, the shape of an ordinary
+ * API call. The large one is bigger than the loopback path's socket buffers,
+ * so the server reads and writes it in several passes. */
 #define BENCH_HTTP_SMALL_BODY 1024
 #define BENCH_HTTP_LARGE_BODY (1024 * 1024)
 #define BENCH_HTTP_SMALL_N 20000
@@ -88,8 +87,8 @@ typedef struct {
   unsigned char *large_body;
 } http_state_t;
 
-/* The response states the length that the server received, so the client can
- * check that the whole body arrived; otherwise a body that arrived in part
+/* The response states the length the server received, so the client can
+ * check that the whole body arrived, because otherwise a partly arrived body
  * would measure less work at the full price. */
 static void bench_echo_len_handler(chttpsvr_req *req, chttpsvr_resp *resp,
                                    void *ctx) {
@@ -141,15 +140,15 @@ static void *http_setup(size_t n) {
   st->cli = CHTTPCLI_INVALID;
 
   /* CLOG_INVALID means no logger. A logger here would put the cost of
-   * formatting and writing one line for each request inside a measurement
-   * that is about the request path. */
-  /* Nothing frees this, and nothing must: these two constructors report
-   * through CCOL_ERR_STR, a static string that the macro builds from __FILE__
-   * and __LINE__, so a free() on it is undefined behavior and not only a
-   * waste. The parse error strings of the serializers are library-owned in
-   * the same way: each thread has its own, and the next parse reuses it. */
+   * formatting and writing one line per request inside a measurement that is
+   * about the request path. */
+  /* Nothing frees this, and nothing may: these two constructors report
+   * through _CCOL_ERR_STR, a static string the macro builds from __FILE__ and
+   * __LINE__, so calling free() on it is undefined behavior and not just a
+   * waste. The serializers' parse error strings belong to the library in the
+   * same way: each thread has its own and the next parse reuses it. */
   char *err = NULL;
-  st->srv = ccol_create_chttpsvr(CLOG_INVALID, &err);
+  st->srv = chttpsvr_create(CLOG_INVALID, &err);
   if (st->srv == CHTTPSVR_INVALID) {
     if (err) fprintf(stderr, "bench: chttpsvr creation failed: %s\n", err);
     http_teardown(st);
@@ -196,7 +195,7 @@ static void *http_setup(size_t n) {
     return NULL;
   }
 
-  st->cli = ccol_create_chttpclient(&err);
+  st->cli = chttpclient_create(&err);
   if (st->cli == CHTTPCLI_INVALID) {
     if (err) fprintf(stderr, "bench: chttpclient creation failed: %s\n", err);
     http_teardown(st);
@@ -206,15 +205,15 @@ static void *http_setup(size_t n) {
   return st;
 }
 
-/* Every failure stops the run; the code does not count a failure and continue.
- * A request that fails costs much less than one that succeeds, so a server that
- * stopped answering would turn this into a loop that measures nothing and
- * reports a remarkable figure for it. The harness also divides the measured
- * time by the full count in both cases, so an early stop would report part of
- * the work at the full price. */
+/* Every failure stops the run, the code never counts a failure and carries
+ * on. A failing request costs much less than a successful one, so a server
+ * that stopped answering would turn this into a loop that measures nothing
+ * and reports a remarkable figure for it. The harness also divides the
+ * measured time by the full count either way, so an early stop would report
+ * part of the work at the full price. */
 static void http_do_requests(http_state_t *st, size_t count) {
   for (size_t i = 0; i < count; i++) {
-    chttp_request_t *req = chttp_request_new(CHTTP_GET, st->url, NULL, NULL);
+    chttp_request_t *req = chttp_request_create(CHTTP_GET, st->url, NULL, NULL);
     if (!req) bench_die("http request allocation failed");
     chttpcli_response *resp = NULL;
     if (chttpclient_do(st->cli, req, &resp) != ccol_success) {
@@ -228,8 +227,8 @@ static void http_do_requests(http_state_t *st, size_t count) {
   }
 }
 
-/* This sends one request at a time on a connection that stays open, so it
- * separates the cost of one request from every effect of concurrency. */
+/* Sends one request at a time on a connection that stays open, so it
+ * separates the cost of a single request from every effect of concurrency. */
 static void http_sequential_run(void *state, size_t n) {
   http_state_t *st = state;
   http_do_requests(st, n);
@@ -246,7 +245,7 @@ static void http_do_posts(http_state_t *st, const unsigned char *body,
     chttp_request_body_t b =
         CHTTP_BODY(body, body_len, "application/octet-stream");
     chttp_request_t *req =
-        chttp_request_new(CHTTP_POST, st->url_echo_len, &b, NULL);
+        chttp_request_create(CHTTP_POST, st->url_echo_len, &b, NULL);
     if (!req) bench_die("http request allocation failed");
     chttpcli_response *resp = NULL;
     if (chttpclient_do(st->cli, req, &resp) != ccol_success || !resp ||
@@ -269,7 +268,7 @@ static void http_post_small_run(void *state, size_t n) {
   bench_sink(&st->ok);
 }
 
-/* A body larger than the socket buffers: the server reads it in several
+/* A body bigger than the socket buffers, which the server reads in several
  * passes. */
 static void http_post_large_run(void *state, size_t n) {
   http_state_t *st = state;
@@ -277,13 +276,13 @@ static void http_post_large_run(void *state, size_t n) {
   bench_sink(&st->ok);
 }
 
-/* A response larger than the socket buffers: the server writes it in several
- * passes. */
+/* A response bigger than the socket buffers, which the server writes in
+ * several passes. */
 static void http_get_large_run(void *state, size_t n) {
   http_state_t *st = state;
   for (size_t i = 0; i < n; i++) {
     chttp_request_t *req =
-        chttp_request_new(CHTTP_GET, st->url_large, NULL, NULL);
+        chttp_request_create(CHTTP_GET, st->url_large, NULL, NULL);
     if (!req) bench_die("http request allocation failed");
     chttpcli_response *resp = NULL;
     if (chttpclient_do(st->cli, req, &resp) != ccol_success || !resp ||
@@ -299,15 +298,20 @@ static void http_get_large_run(void *state, size_t n) {
   bench_sink(&st->ok);
 }
 
-/* One server and one client handle shared by every thread, which is the shape
- * a real service has and where the reactor and its worker pool actually have to
- * overlap work. The connection pool is sized to the thread count so that the
- * clients are not queueing behind each other on the way out. */
+/* One server and one client handle shared by every thread, which is the
+ * shape a real service has and where the reactor and its worker pool really
+ * have to overlap work. The connection pool is sized to the thread count so
+ * the clients don't queue behind each other on the way out. */
 static void *http_setup_mt(size_t n, unsigned threads) {
   http_state_t *st = http_setup(n);
   if (st) chttpclient_set_pool_size(st->cli, threads);
   return st;
 }
+
+/* Every sample of these cases starts and stops a server, a client and their
+ * reactor threads, so each one rests this long after its teardown (see
+ * bench_case_t::rest_after_teardown_ms). */
+#define BENCH_HTTP_REST_MS 1000u
 
 void bench_register_http(void) {
   bench_add(&(bench_case_t){.group = "http",
@@ -315,12 +319,14 @@ void bench_register_http(void) {
                             .setup = http_setup,
                             .run = http_sequential_run,
                             .teardown = http_teardown,
+                            .rest_after_teardown_ms = BENCH_HTTP_REST_MS,
                             .n = BENCH_HTTP_N});
   bench_add_mt(&(bench_case_t){.group = "http",
                                .name = "get_concurrent_clients",
                                .setup_mt = http_setup_mt,
                                .run = http_sequential_run,
                                .teardown = http_teardown,
+                               .rest_after_teardown_ms = BENCH_HTTP_REST_MS,
                                .n = BENCH_HTTP_MT_N,
                                .shared_fixture = true});
   bench_add(&(bench_case_t){.group = "http",
@@ -328,17 +334,20 @@ void bench_register_http(void) {
                             .setup = http_setup,
                             .run = http_post_small_run,
                             .teardown = http_teardown,
+                            .rest_after_teardown_ms = BENCH_HTTP_REST_MS,
                             .n = BENCH_HTTP_SMALL_N});
   bench_add(&(bench_case_t){.group = "http",
                             .name = "post_1mb_sequential_keepalive",
                             .setup = http_setup,
                             .run = http_post_large_run,
                             .teardown = http_teardown,
+                            .rest_after_teardown_ms = BENCH_HTTP_REST_MS,
                             .n = BENCH_HTTP_LARGE_N});
   bench_add(&(bench_case_t){.group = "http",
                             .name = "get_1mb_sequential_keepalive",
                             .setup = http_setup,
                             .run = http_get_large_run,
                             .teardown = http_teardown,
+                            .rest_after_teardown_ms = BENCH_HTTP_REST_MS,
                             .n = BENCH_HTTP_LARGE_N});
 }

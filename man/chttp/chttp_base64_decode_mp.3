@@ -12,29 +12,28 @@ void *chttp_base64_decode_mp(ccol_memmgmt_procs_t *mp,
 .fi
 .SH DESCRIPTION
 .nf
-This function decodes a NUL-terminated standard RFC 4648 base64
-string, which uses the '+' and '/' alphabet with '=' padding.  The
-function takes the input length from strlen(b64_input), and that
-length must be a multiple of 4 bytes.  Any '=' padding must be the
-last character or the last two characters.  In a padded final group,
-the bits that no decoded byte holds must be zero (RFC 4648 section
-3.5), so that every byte string has exactly one encoding: "QQ=="
-decodes to "A", and "QR==" is malformed.  The function rejects every
-malformed input, that is, an input with an invalid character, padding
-in the wrong place, nonzero padding bits, or the wrong length.
+This function decodes a NUL-terminated string of standard RFC 4648
+base64, with the '+' and '/' alphabet and '=' padding.  It takes the
+input length from strlen(b64_input), and that length must be a
+multiple of 4 bytes.  Any '=' padding must be the last character or
+the last two characters.  In a padded final group, the bits that no
+decoded byte uses must be zero (RFC 4648 section 3.5), so every byte
+string has exactly one encoding: "QQ==" decodes to "A" while "QR=="
+is malformed.  Any malformed input is rejected, whether it has an
+invalid character, padding in the wrong place, nonzero padding bits
+or the wrong length.
 
-The buffer that the function gives back ends with a NUL, which helps
-when you decode text.  But the decoded data can also contain NUL bytes
-inside it, so always use out_len to get the real size, and never
-strlen().
+The returned buffer ends with a NUL, which is handy when you decode
+text.  The decoded data can hold NUL bytes of its own though, so
+always take the real size from out_len and never from strlen().
 .fi
 .SH PARAMETERS
 .nf
 mp         A custom allocator, or NULL for malloc/free.
 b64_input  The NUL-terminated base64 string to decode. It must not
            be NULL.
-out_len    Optional; it gets the decoded byte length. Give NULL to
-           ignore it.
+out_len    Optional. It receives the number of decoded bytes. Pass
+           NULL if you don't need it.
 .fi
 .SH RETURN VALUE
 .nf

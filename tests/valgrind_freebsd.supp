@@ -5,15 +5,15 @@
 # possibly lost blocks are never suppressed, so an object that the library or
 # a test loses is reported, together with any lock inside it.
 #
-# FreeBSD's libthr keeps each pthread object on the heap behind a pointer
-# (a pthread_rwlock_t is one pointer wide), where glibc
-# keeps the whole object inline. A lock that lives for the whole process, as
-# the slot-table and registry locks of this library do, is therefore one
-# reachable heap block at exit on FreeBSD and no block at all on glibc.
-# pthread_atfork(3) likewise keeps each registered handler triple in a block
-# that libthr never frees. A program of a few lines that uses none of this
-# library shows both. valgrind's own FreeBSD suppressions already cover the
-# mutex and condition-variable cases.
+# FreeBSD's libthr keeps each pthread object on the heap behind a pointer (a
+# pthread_rwlock_t is one pointer wide), while glibc keeps the whole object
+# inline. So a lock that lives for the whole process, like the slot-table and
+# registry locks of this library, is one reachable heap block at exit on
+# FreeBSD and no block at all on glibc. pthread_atfork(3) also keeps each
+# registered handler triple in a block that libthr never frees. A program of
+# a few lines that uses none of this library shows both. valgrind's own
+# FreeBSD suppressions already cover the mutex and condition-variable
+# cases.
 
 {
    freebsd_libthr_rwlock_object_still_reachable
@@ -32,7 +32,7 @@
 }
 
 # pthread_exit(3) unwinds the exiting thread through libgcc_s, which libthr
-# loads on first use; the unwinder keeps the state that it allocated then.
+# loads on first use, and the unwinder keeps the state it allocated then.
 {
    freebsd_libthr_exit_unwinder_still_reachable
    Memcheck:Leak
@@ -66,11 +66,12 @@
    fun:nsdispatch
 }
 
-# strerror_r(3) opens the message catalog of libc on its first call and keeps
-# the catalog, the names it copied and the thread-specific key that guards
-# it for the life of the process. The functions that do this are static in
-# libc, and the base system ships libc without symbols, so the entries name
-# the objects: an allocation two calls deep inside libc, called from libc.
+# strerror_r(3) opens the message catalog of libc on its first call and
+# keeps the catalog, the names it copied and the thread-specific key that
+# guards it for the life of the process. The functions doing this are static
+# in libc and the base system ships libc without symbols, so the entries name
+# the objects instead: an allocation two calls deep inside libc, called from
+# libc.
 {
    freebsd_libc_message_catalog_strdup_still_reachable
    Memcheck:Leak
@@ -101,8 +102,8 @@
    obj:/lib/libc.so.7
 }
 
-# pthread_setname_np(3) keeps a copy of the name with the thread, and frees
-# it when the thread exits; the main thread exits with the process.
+# pthread_setname_np(3) keeps a copy of the name with the thread and frees
+# it when the thread exits, but the main thread exits with the process.
 {
    freebsd_libthr_thread_name_still_reachable
    Memcheck:Leak
@@ -115,7 +116,7 @@
 # OpenSSL keeps its provider, algorithm-fetch and lock caches until
 # OPENSSL_cleanup(), which a library must not call on behalf of an
 # application. tests/ctls/openssl_internal.supp accepts the same category on
-# Linux by function name; FreeBSD's base libcrypto inlines its allocation
+# Linux by function name, but FreeBSD's base libcrypto inlines its allocation
 # wrappers, so this entry matches any reachable block whose allocator was
 # called from inside libcrypto.
 {
@@ -124,4 +125,21 @@
    match-leak-kinds: reachable
    fun:*alloc
    obj:/lib/libcrypto.so.*
+}
+
+# strtod(3) on FreeBSD (gdtoa) takes the big-number blocks of a long or
+# extreme decimal from a small static pool first, and from malloc once that
+# pool is used up, and it keeps every freed block on a free list of its size
+# class for the life of the process. A program of a few lines that parses
+# numbers of many lengths and exponents, with none of this library, ends with
+# such blocks still reachable from strtod_l, and a test suite gets to the
+# same state once enough number sizes have gone through cjson or cyaml.
+{
+   freebsd_libc_strtod_freelist_still_reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   obj:/lib/libc.so.7
+   ...
+   fun:strtod_l
 }

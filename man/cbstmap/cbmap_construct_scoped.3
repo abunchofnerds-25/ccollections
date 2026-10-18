@@ -11,55 +11,64 @@ cbmap_construct_scoped(hm_name, key_t, val_t);
 .fi
 .SH DESCRIPTION
 .nf
-Declares an ordered map handle named hm_name, together with the companion
-type variables that carry key_t and val_t to every later type-inferred
-macro, and then creates the map with the default allocator and the default
-order for key_t. The macro also attaches the cleanup attribute, which
-destroys the map on every exit from the enclosing scope, an early return
-included.
+Declares an ordered map handle named hm_name with the companion type
+variables that carry key_t and val_t to every later type-inferred macro,
+then creates the map with the default allocator and the default order for
+key_t. The handle also gets the cleanup attribute, which destroys the map
+on every exit from the enclosing scope, an early return included.
 
-The macro is cbmap_construct(3) plus that cleanup attribute; nothing else
-differs. Use this macro when the whole useful life of the map is one block,
-and use cbmap_construct(3) when your code returns the handle, stores it, or
-destroys it in a place that the compiler cannot see.
+That attribute is the only difference from cbmap_construct(3). This macro
+fits a map whose whole useful life is one block; use cbmap_construct(3)
+when your code returns the handle, stores it, or destroys it somewhere the
+compiler can't see.
 
-cbmap_declare_scoped(3) followed by cbmap_init(3) is the two-step form. Use
-it for a map whose configuration comes from inside the scope instead of
-from the declaration.
+The two-step form is cbmap_declare_scoped(3) followed by cbmap_init(3),
+for a map whose configuration comes from inside the scope rather than from
+the declaration.
 .fi
 .SH PARAMETERS
 .nf
 hm_name  Name for the map handle to declare
-key_t    Key type. It tells every later macro how to read a key, and tells
-         the container which order to give the tree
+key_t    Key type. Every later macro reads a key through it, and the
+         container takes the order of the tree from it
 val_t    Value type. Only the type-inferred macros read it; the library
-         never gives it to the container
+         never passes it to the container
 .fi
 .SH RETURN VALUE
 .nf
-None. This macro declares variables and does not expand to an expression.
+None. The macro declares variables and doesn't expand to an expression.
 .fi
 .SH NOTES
 .nf
-The macro stops the program through ccol_fatal_err() if the creation fails;
-use cbmap_declare_scoped(3) with cbmap_init(3) when the caller must handle a
-failure instead
-The macro needs GCC or Clang, because it uses the cleanup attribute
-The map keeps the elements in key order, and the walk visits them in
-ascending key order. cbmap_begin_iter(3) describes that contract, and
-cbmap_create_full(3) describes the order that each key type gets
-For a struct key_t, the default order is a raw comparison of the
-representation of the key, so use cbmap_construct_cc_scoped(3) for such a key
+The macro stops the program through _ccol_fatal_err() if the creation
+fails; when the caller has to handle a failure instead, use
+cbmap_declare_scoped(3) with cbmap_init(3). The cleanup attribute means it
+needs GCC or Clang.
+
+The map keeps its elements in key order and a walk visits them in
+ascending key order. cbmap_begin_iter(3) describes that contract and
+cbmap_create_full(3) the order that each key type gets. For a struct key_t
+the default order is a raw comparison of the key's representation, so use
+cbmap_construct_cc_scoped(3) for such a key.
+
 The exit of the scope destroys the map and clears the handle, so an
-explicit cbmap_destroy(3) earlier in the scope stays correct
+explicit cbmap_destroy(3) earlier in the scope is fine too.
+
 The companion type variables follow the scope of the handle, so a function
-that receives the handle needs cbmap_redeclare(3) there
+that receives the handle needs cbmap_redeclare(3) there.
+
+An array key type or value type, such as int[2] or char[16], is a compile
+error, and the message says to wrap the array in a struct. Keys and values
+are copied by assignment and C can't assign an array, so the map would
+otherwise keep the address of the caller's array instead of its elements.
+A struct that holds the array works.
 .fi
 .SH WARNINGS
 .nf
-The handle must not outlive its scope. Do not return it, and do not store
-it in a place that outlives the scope: either action gives out a handle
-whose map the cleanup attribute frees at the exit of the scope.
+The handle must not outlive its scope. Don't return it or store it
+anywhere that lives longer than the scope: the cleanup attribute frees the
+map when the scope exits, and the stored handle would then name a freed
+map.
 .fi
 .SH EXAMPLES
 .nf

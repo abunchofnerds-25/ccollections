@@ -14,41 +14,44 @@ chmap chmap_create(size_t initial_bucket_array_size,
 .fi
 .SH DESCRIPTION
 .nf
-Creates a hash map with default memory management and default hashing.
-The implementation strategy (open addressing or separate chaining) is
-selected automatically from the key and value types.
+Creates a hash map with the default memory management and the default
+hashing. Whether it uses open addressing or separate chaining is decided
+from the key and value types.
 
 Open addressing is used when both the key and the value are integral
-types of <=8 bytes (long double excluded); separate chaining is used for
-non-integral types and for types of >8 bytes.
+types of <=8 bytes (long double excluded), and separate chaining for
+non-integral types and types of >8 bytes.
 .fi
 .SH PARAMETERS
 .nf
-initial_bucket_array_size  Initial number of buckets (minimum 16)
+initial_bucket_array_size  Initial number of buckets. A value of 0 is
+                           refused and the call fails; a value from 1
+                           to 16 gives 16 buckets, and a larger value is
+                           rounded up to the next power of two
 key_type                   Type of keys (determines implementation)
 val_type                   Type of values (determines implementation)
 err                        Optional pointer that receives an error string
 .fi
 .SH RETURN VALUE
 .nf
-Returns a pointer to the newly created hash map on success.
-Returns NULL on failure.
+A pointer to the new hash map on success, or NULL on failure.
 .fi
 .SH NOTES
 .nf
 The minimum bucket count is 16 (always a power of 2)
-The key type and the hash mode select the default hashing; the backend
-does not. A map starts in the fast mode, with a Fibonacci multiply for
-an integral, float, double or pointer key and XXH64 with a secret seed
-for a string or any other buffer-like key, and switches to a keyed mode,
-with a seeded mixer and SipHash-1-3, when its keys collide more than a
-random function lets them. This is true for open addressing and for
-separate chaining; see chmap_create_full(3) for the modes and the
-thresholds
+The default hashing depends on the key type and the hash mode, not on
+the backend. A map starts in the fast mode, with a Fibonacci multiply
+for an integral, float, double or pointer key and XXH64 with a secret
+seed for a string or any other buffer-like key. It switches to a keyed
+mode, with a seeded mixer and SipHash-1-3, when its keys collide more
+than a random function would let them. Open addressing and separate
+chaining behave the same here; chmap_create_full(3) describes the modes
+and the thresholds
 Call chmap_destroy() to destroy the map after use
 .fi
 .SH "SEE ALSO"
 .BR chmap_create_full (3),
 .BR chmap_create_mp (3),
 .BR chmap_create_ch (3),
-.BR chmap_destroy (3)
+.BR chmap_destroy (3),
+.BR ccol_determine_ccol_data_type (3)

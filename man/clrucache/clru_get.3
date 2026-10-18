@@ -12,39 +12,38 @@ ccol_retval_t clru_get(name, key, val_ptr);
 .SH DESCRIPTION
 .nf
 A type-inferred GNU C statement expression that converts key to the
-declared KeyT of the cache, in the same way as a plain C assignment,
-gets the stored value, and delivers it through val_ptr. The behaviour
-on success depends on the value type that you declare at the
-construction of the cache:
+cache's declared KeyT, the same way a plain C assignment does, looks
+up the stored value and delivers it through val_ptr. What happens on
+success depends on the value type that you declared when the cache
+was constructed:
 
-A val type that is not char*: the macro converts the stored value to
-the type of *val_ptr in the same way as a plain C assignment. For
+A val type other than char*: the stored value is converted to the
+type of *val_ptr, as a plain C assignment would convert it. For
 example, a cache that stores int values and reads into a double *
 out-parameter converts the int to a double instead of copying the raw
-bytes of the int. There is no allocation on the heap. val_ptr is a
-pointer to the type of *val_ptr, NOT a cmap_pair *. A type of
-*val_ptr that the compiler cannot convert implicitly from the declared
-ValT of the cache is a compile error at this point, never a value that
-the macro reinterprets in silence.
+bytes of the int. Nothing is allocated on the heap. val_ptr is a
+pointer to the type of *val_ptr, NOT a cmap_pair *. If the compiler
+cannot implicitly convert the cache's declared ValT to the type of
+*val_ptr, that is a compile error at this point, never a value that
+the macro silently reinterprets.
 
-A char* val type: the macro gives the ownership of the string on the
-heap directly to the caller, through *(char **)val_ptr. The caller must
-free that pointer, with the custom free function of the cache if the
-caller configured a custom allocator at construction, and with free()
-if not.
+A char* val type: the macro hands the ownership of the heap string
+straight to the caller through *(char **)val_ptr. The caller must free
+that pointer with the cache's custom free function if a custom
+allocator was configured at construction, and with free() if not.
 
-Call clrucache_get_full() directly only when you need the raw cmap_pair
-output, which clru_get() hides completely.
+Call clrucache_get_full() directly only when you need the raw
+cmap_pair output, which clru_get() hides completely.
 
-A cache with a character-pointer key type accepts a const char * key
+A cache with a character-pointer key type takes a const char * key
 without a cast, because the macro keeps the pointer type of such a
 key.
 
 A key of a struct type is the same key as another one only when every
 byte of the two is equal, padding included; see KEYS WITH PADDING in
-clrucache_create_full(3). With GCC 11 or later this macro sets the
-padding of its own copy of the key to zero, so a key with equal members
-finds the entry that clru_set() stored.
+clrucache_create_full(3). With GCC 11 or later the macro sets the
+padding of its own copy of the key to zero, so a key with equal
+members finds the entry that clru_set() stored.
 .fi
 .SH PARAMETERS
 .nf
@@ -52,20 +51,21 @@ name     Cache variable. The companion type variables, which come from
          clru_construct, clru_declare or clru_redeclare, must be in
          scope. When a cache crosses a function boundary, call
          clru_redeclare() with a simple local alias first, because
-         the conversion of the key type and the value type needs the
+         converting the key type and the value type needs the
          companion variables name##__clru_key_type_var and
          name##__clru_val_type_var.
 key      Key expression: any expression that the compiler can convert
          implicitly to KeyT.
 val_ptr  A pointer to the value type, NOT a cmap_pair *.
-         For a val type that is not char*, it gets the stored value,
+         For a val type other than char*, it gets the stored value
          converted to the type of *val_ptr, for example a double *
-         for a double out-parameter. There is no allocation on the
-         heap. The macro leaves *val_ptr untouched when the call does
-         not return ccol_success.
-         For a char* val type, it is a pointer to a char* variable. On
-         success the macro sets it to the string on the heap, and the
-         caller must free that string with the matching allocator.
+         for a double out-parameter, and nothing is allocated on the
+         heap. *val_ptr is left untouched when the call does not
+         return ccol_success.
+         For a char* val type, it points to a char* variable. On
+         success the macro sets that variable to the heap string,
+         and the caller must free the string with the matching
+         allocator.
 .fi
 .SH RETURN VALUE
 .nf
@@ -80,33 +80,37 @@ ccol_not_enough_memory An internal allocation failed.
 ccol_unexpected_failure
                        A remote getter fetched a value whose size does
                        not match the size of ValT. This applies to a
-                       val type that is not char*, where sizeof(ValT)
-                       is the exact size that the macro needs, and the
+                       val type other than char*, where sizeof(ValT)
+                       is the exact size the macro needs, and the
                        result is the same whether this call ran the
                        fetch itself or coalesced onto the fetch of
-                       another concurrent caller for the same key. The
+                       another concurrent caller of the same key. The
                        macro leaves val_ptr untouched.
 .fi
 .SH NOTES
 .nf
-This macro uses a GNU C statement expression ({...}), so it needs GCC
+The macro uses a GNU C statement expression ({...}), so it needs GCC
 or Clang.
-The cache never gives out a pointer into its internal storage; it
-always copies the value out before it unlocks the lock of the segment.
+The cache never hands out a pointer into its internal storage; it
+always copies the value out before it unlocks the segment's lock.
+The value type may be const-qualified, such as const int or a const
+struct type: the macro copies the value through a temporary of the
+type without its qualifiers, so val_ptr can point to a plain variable
+of that type.
 .fi
 .SH WARNINGS
 .nf
 For a char* val type, the string that the macro puts in
 *(char **)val_ptr is a heap copy that the caller then owns and MUST
-free, with the custom free function of the cache if the caller
-configured a custom allocator, and with free() if not; otherwise the
-memory leaks. Each call to clru_get for a char* value makes its own
-allocation, so two calls for the same key give two independent
-pointers, and the caller must free each one.
+free, with the cache's custom free function if a custom allocator was
+configured and with free() if not, or the memory leaks. Each clru_get
+call for a char* value makes its own allocation, so two calls for the
+same key give two independent pointers, and the caller must free each
+of them.
 
-For a val type that is not char*, there is no allocation on the heap:
-the macro converts the value into *val_ptr, and the caller must NOT
-call free() on it.
+For a val type other than char*, nothing is allocated on the heap:
+the value is converted into *val_ptr, and the caller must NOT call
+free() on it.
 .fi
 .SH EXAMPLES
 .nf

@@ -12,15 +12,15 @@ ccol_retval_t cjson_list_remove(cjson arr, size_t index);
 .SH DESCRIPTION
 .nf
 Removes the element at position index from the array node arr and
-recursively frees it together with all of its descendants.  All
-elements after index shift left by one position, which costs O(n) in
-the number of elements after index.
+frees it together with everything below it.  The elements after
+index move one position to the left, so the call costs O(n) in the
+number of elements that follow index.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success        - element removed and freed.
-ccol_invalid_args   - arr is NULL, arr is not CJSON_LIST, or index is
-                      out of bounds.
+ccol_success        - the element was removed and freed.
+ccol_invalid_args   - arr is NULL, arr is not a CJSON_LIST, or index
+                      is out of bounds.
 .fi
 .SH "SEE ALSO"
 .BR cjson_list_push (3),

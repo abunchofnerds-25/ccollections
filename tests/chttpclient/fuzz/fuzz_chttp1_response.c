@@ -23,11 +23,11 @@ SOFTWARE.
 */
 
 /*
- * The libFuzzer target for chttp1_parser.c in response mode, the grammar
- * that chttpclient.c itself drives, which starts with a status line instead
- * of a request line. See fuzz_common.h for the shared driver that feeds the
- * input in fragments, and fuzz_chttp1_request.c for the sibling target in
- * request mode.
+ * The libFuzzer target for chttp1_parser.c in response mode, which is the
+ * grammar chttpclient.c itself drives and starts with a status line instead of
+ * a request line. The driver that feeds the input in fragments is in
+ * fuzz_common.h, and fuzz_chttp1_request.c is the sibling target for request
+ * mode.
  */
 
 #include <string.h>
@@ -75,11 +75,10 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 
   fuzz_feed_fragmented(&parser, data, size);
 
-  /* This also exercises the completion path for a body that the EOF
-   * frames: a response with no Content-Length and no chunked
-   * Transfer-Encoding, which is a real and common shape. This parser
-   * confirms it only through chttp1_parser_finish(), never through
-   * chttp1_parser_execute() alone. */
+  /* We also run the completion path of a body that EOF frames, a response with
+   * no Content-Length and no chunked Transfer-Encoding, which is a real and
+   * common shape. The parser only confirms it through chttp1_parser_finish(),
+   * never through chttp1_parser_execute() alone. */
   chttp1_parser_finish(&parser);
   return 0;
 }

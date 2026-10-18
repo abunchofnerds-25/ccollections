@@ -1,26 +1,25 @@
 # cthreadcomm: passing data between threads
 
-When two threads read and write the same variable without coordination, the
-result is a data race, which is undefined behaviour. `cthreadcomm` gives you
-safe ways to move data from one thread to another, and to wait for events:
+If two threads read and write the same variable without any coordination you
+get a data race, and that is undefined behaviour. `cthreadcomm` gives you
+safe ways to hand data from one thread to another and to wait for events.
+There are five pieces:
 
-- **`ccol_circular_queue`**: a bounded queue. A sender waits while the queue
-  is full, so a fast producer can only go as fast as its consumer.
-- **`ccol_dynamic_queue`**: an unbounded queue, where a sender never waits.
-- **`ccol_channel`**: two bounded queues behind one handle, which an "owner"
+- `ccol_circular_queue`, a bounded queue whose sender waits while it's full,
+  so a fast producer can only go as fast as its consumer.
+- `ccol_dynamic_queue`, an unbounded queue whose sender never waits.
+- `ccol_channel`, two bounded queues behind one handle, which an "owner"
   thread uses to talk to its "worker" threads.
-- **`ccol_select`**: waits until the first of several queues or file
-  descriptors is ready. It works like `poll(2)`, but it accepts queues as
-  well.
-- **`ccol_event_loop`**: a persistent reactor that runs your callbacks on its
-  own thread (or threads) each time a watched queue or file descriptor is
+- `ccol_select`, which waits until the first of several queues or file
+  descriptors is ready. It's like `poll(2)` but it takes queues too.
+- `ccol_event_loop`, a persistent reactor that runs your callbacks on its own
+  thread (or threads) every time a watched queue or file descriptor is
   ready.
 
-Use this module when you create your own threads and they need to
-communicate. If you only want to run functions on N threads, use
-[cthreadpool](cthreadpool.md) instead, which manages the threads for you; if
-you are writing an HTTP service, use [chttpserver](chttpserver.md), which
-runs its own event loop.
+This module is for programs that create their own threads and need them to
+communicate. If all you want is to run functions on N threads,
+[cthreadpool](cthreadpool.md) manages the threads for you, and for an HTTP
+service [chttpserver](chttpserver.md) already runs its own event loop.
 
 ```c
 #include <ccollections/cthreadcomm.h>
@@ -28,8 +27,8 @@ runs its own event loop.
 
 ## A first example
 
-One thread produces numbers and the main thread consumes them. A message with
-no payload marks the end of the stream:
+One thread produces numbers and the main thread consumes them. A message
+without a payload marks the end of the stream:
 
 ```c
 #include <ccollections/cthreadcomm.h>
@@ -82,7 +81,7 @@ Build it with `-lccollections -lpthread`.
 
 ## Messages and who owns them
 
-Each queue carries a `c_message_t`:
+Every queue carries a `c_message_t`:
 
 ```c
 typedef struct c_message_t {
@@ -92,19 +91,19 @@ typedef struct c_message_t {
 ```
 
 The queues never copy your payload. They move the pointer, and the
-**ownership** moves with it; that is what the `_zc` ("zero copy") in the
-function names means:
+**ownership** of the payload moves with it, which is what the `_zc` ("zero
+copy") in the function names stands for. A successful send sets `msg.data`
+to `NULL` because the queue has taken the payload over, so don't touch it
+again. A failed send leaves `msg` as it was, so the payload is yours
+and you have to free it or send it somewhere else. A receive hands the
+payload to you, and then freeing it is your job.
 
-- A successful send sets `msg.data` to `NULL`, because the queue takes over the
-  payload. Do not touch the payload again.
-- A failed send leaves `msg` unchanged, so the payload remains yours and you
-  must free it or send it somewhere else.
-- A receive hands the payload to you, and you must free it.
-
-Because exactly one thread holds a given payload at any moment, a whole class
-of concurrency bugs cannot happen. A message whose `data` is `NULL` and whose
-`size` is `0` is valid, and it makes a good "stop" sentinel, as the example
-above shows.
+Since only one thread holds a given payload at any moment, a whole class of
+concurrency bugs simply can't happen. A message with `data` set to `NULL`
+and `size` set to `0` is valid and makes a good "stop" sentinel, as the
+example above shows. A message whose two fields disagree (a `NULL` `data`
+with a `size` above `0`, or a non-`NULL` `data` with a `size` of `0`) is
+refused by every send with `ccol_invalid_args`, and it stays yours.
 
 ## Choosing a queue
 
@@ -116,7 +115,10 @@ above shows.
 | One thread that waits on several queues or sockets at the same time | `ccol_select` |
 | Callbacks that run each time a queue or socket is ready, for a long time | `ccol_event_loop` |
 
-Every queue can be used from many threads at the same time.
+You can use any of the queues from many threads at the same time. When you
+aren't sure which queue to pick, start with the circular queue: its sender
+waits instead of piling up messages, so a consumer that falls behind can't
+make the program run out of memory.
 
 ## Blocking, try and timed calls
 
@@ -132,40 +134,45 @@ ccol_circq_try_recv_zc(q, &msg);              /* ccol_container_empty immediatel
 ccol_circq_timed_recv_zc(q, &msg, 250000);
 ```
 
-Timeouts are `uint64_t` microseconds, measured on a monotonic clock, so a
-change of the system time does not make them longer or shorter. A timed call
-with a timeout of `0` behaves exactly like its `try_` form and returns the
-same result code (`ccol_container_full` or `ccol_container_empty`, not
-`ccol_timed_out`). [The design guide](design.md) describes the timeout
-conventions of the whole library.
+Timeouts are `uint64_t` microseconds on a monotonic clock, so changing the
+system time doesn't make them longer or shorter. A timed call with a timeout
+of `0` behaves exactly like its `try_` form and gives the same result code
+(`ccol_container_full` or `ccol_container_empty`, not `ccol_timed_out`). The
+timeout conventions of the whole library are in
+[the design guide](design.md).
 
-The dynamic queue has a single send, `ccol_dynmq_send_zc`, which never waits,
-plus a blocking, a try and a timed receive. A channel has all six calls,
-named `ccol_chan_`.
+The dynamic queue has a single send, `ccol_dynmq_send_zc`, which never
+waits, and the usual blocking, try and timed receive. A channel has all six
+calls, named `ccol_chan_`.
 
-To close a queue to new sends, call `ccol_circq_disable_sending` (or its
-`dynmq` or `chan` version). Senders that are waiting on a full queue then
-return `ccol_not_permitted` and keep their messages, while the messages
-already in the queue stay there for the consumer. A receive on an empty queue
-keeps waiting, so a consumer needs a sentinel (or a timed receive) to learn
-that the stream has ended.
+`ccol_circq_disable_sending` (and its `dynmq` and `chan` versions) closes a
+queue to new sends. Senders that are waiting on a full queue then return
+`ccol_not_permitted` and keep their messages, while whatever is already in
+the queue stays there for the consumer. A receive on an empty queue keeps
+waiting though, so the consumer needs a sentinel (or a timed receive) to find
+out that the stream is over. A producer that waits with `ccol_select` (or
+with an event loop write registration, see below) does find out: a queue
+whose sends are off counts as ready for writing, the same way a pipe whose
+reader went away counts as ready for `POLLOUT`, so the wait returns and the
+producer's send then reports `ccol_not_permitted`.
 
 ## Channels: an owner and its workers
 
 A `ccol_channel` is two circular queues behind one handle, one for each
-direction. The thread that creates the channel is its **owner**, and every
+direction. The thread that creates the channel is its **owner** and every
 other thread is a **worker**. `ccol_chan_send_zc` and `ccol_chan_recv_zc`
-pick the right queue from the identity of the calling thread, so the owner's
-sends go to the workers and the workers' sends go to the owner.
+pick the right queue from the identity of the calling thread, so what the
+owner sends goes to the workers and what the workers send goes to the owner.
 
-Because the channel identifies the owner by its thread ID, the owner thread
-must not exit while the channel is in use. A full example follows below.
+The channel recognises its owner by thread ID, so the owner thread must not
+exit while the channel is in use. In practice that means you create the
+channel on the thread that lives longest, which is usually the main thread.
+There's a full example further down.
 
 ## Waiting on several sources: `ccol_select`
 
-`ccol_select` waits until one of several **selectables** is ready and then
-tells you which one it was. You build selectables from queues and file
-descriptors:
+`ccol_select` waits until one of several **selectables** is ready and tells
+you which one. You build the selectables from queues and file descriptors:
 
 ```c
 size_t which;
@@ -175,31 +182,43 @@ ccol_retval_t rc = ccol_select_va(&which,
 ```
 
 `ccol_select_timed_va` adds a timeout in microseconds and returns
-`ccol_timed_out` when no selectable becomes ready in that time; a timeout of
-`0` checks the selectables once without waiting.
+`ccol_timed_out` when nothing becomes ready in that time. With a timeout of
+`0` it checks the selectables once and doesn't wait.
 
-The most important rule is that **`ccol_select` reports only readiness**: it
-does not receive or send anything for you. After it returns, make your own
-non-blocking call:
+The thing to remember is that **`ccol_select` only reports readiness**. It
+doesn't receive or send anything for you, so after it returns you make your
+own non-blocking call: `ccol_circq_try_recv_zc`, `ccol_dynmq_try_recv_zc`,
+`ccol_circq_try_send_zc` or `ccol_dynmq_send_zc` for a queue, and `read(2)`
+or `recv(2)` (`write(2)` or `send(2)`) for a file descriptor. Exactly as with
+POSIX `select(2)`, another thread can take the message before your call
+runs, which is why that call must not block and why you have to check what
+it returns.
 
-- for a queue: `ccol_circq_try_recv_zc`, `ccol_dynmq_try_recv_zc`,
-  `ccol_circq_try_send_zc` or `ccol_dynmq_send_zc`;
-- for a file descriptor: `read(2)` or `recv(2)` (`write(2)` or `send(2)`).
+When several selectables are ready at once, they share the calls of
+`ccol_select` fairly whatever their index. Each call scans the set in
+rotation order from a start that moves on with every call, and a ready file
+descriptor competes the same way as a ready queue. A worker that waits on a
+stop pipe and a job queue therefore sees the stop byte within a few calls,
+even if the queue never runs empty. Which of the ready selectables a single
+call reports is not specified, so if one of them must take priority, check
+it yourself before or after the call.
 
-Just as with POSIX `select(2)`, another thread can take the message before
-your call runs, which is why that call must not block and why you must check
-its result.
+Every file descriptor in the set has to be something the kernel can watch: a
+socket, a pipe, a FIFO, a terminal or an eventfd. A regular file or a
+directory is refused.
 
-Every file descriptor in the set must be one that the kernel can watch: a
-socket, a pipe, a FIFO, a terminal or an eventfd. The library refuses a
-regular file or a directory.
+When the set contains file descriptors, the call first asks `poll(2)`
+without waiting which of them are ready, so a call that finds something
+ready straight away costs one system call for all its descriptors. An epoll
+instance (a kqueue on the BSDs and macOS) is only built, for the rest of the
+call, when the call really has to wait.
 
 ## The persistent event loop
 
-`ccol_select` waits once. When you watch the same sources over and over for
-the life of a program, use a `ccol_event_loop` instead: create it once,
-register queues and file descriptors with callbacks, and its background
-thread calls you each time a source is ready:
+`ccol_select` waits once. If you watch the same sources again and again for
+the whole life of a program, a `ccol_event_loop` is the better tool. You
+create it once and register queues and file descriptors with callbacks, and
+its background thread calls you every time a source is ready:
 
 ```c
 /* The smallest useful ccol_event_loop: a callback runs on the reactor
@@ -268,67 +287,70 @@ int main(void) {
 2. the number of lock stripes (give `1`);
 3. the number of reactor threads (give `1`; see below).
 
-Keep these facts about callbacks in mind:
+A few things about the callbacks are worth keeping in mind.
 
-- **They report only readiness**, just as `ccol_select` does. Receive with
-  `ccol_circq_try_recv_zc(sel->cq, ...)` (or `sel->dq`), or call `read` or
-  `recv` on `sel->fd`, and be prepared for the call to find nothing.
-- **They run on the loop's thread**, not on the thread that called
-  `ccol_event_loop_add`. With the default single reactor thread, a slow
-  callback delays every other registration, so hand slow work to another
-  thread or to a [thread pool](cthreadpool.md).
-- **Readiness is level-triggered.** A socket that stays readable keeps
-  triggering calls until you read it, pause the registration or remove it,
-  and the same holds for an end of file: a handler that reads 0 bytes must
-  remove (or pause) its registration.
-- **A callback receives its own registration as `reg`**, so it can remove or
-  pause itself. Use that parameter rather than a copy that the adding thread
-  stores after `ccol_event_loop_add` returns, because the callback can run
-  before that happens.
-- **The loop never runs the callback of one registration twice at the same
-  time**, and it never runs the read callback and the write callback of one
-  file descriptor at the same time either, whatever the number of threads.
+They only report readiness, just like `ccol_select`. Receive with
+`ccol_circq_try_recv_zc(sel->cq, ...)` (or `sel->dq`), or call `read` or
+`recv` on `sel->fd`, and be ready for that call to find nothing.
+
+They run on the loop's thread and not on the thread that called
+`ccol_event_loop_add`. With the default single reactor thread a slow
+callback holds up every other registration, so hand slow work over to
+another thread or to a [thread pool](cthreadpool.md).
+
+Readiness is level-triggered. A socket that stays readable keeps triggering
+calls until you read it, pause the registration or remove it, and the same
+goes for end of file: a handler that reads 0 bytes has to remove (or pause)
+its registration.
+
+A callback gets its own registration as `reg`, so it can remove or pause
+itself. Use that parameter and not a copy that the adding thread stores
+after `ccol_event_loop_add` returns, because the callback can run before
+that store happens.
+
+The loop never runs the callback of one registration twice at the same time,
+and it never runs the read and the write callback of one file descriptor at
+the same time either, whatever the number of threads.
 
 `ccol_event_loop` and `ccol_event_reg` are opaque value handles (integers),
 not pointers. Compare them with `CCOL_EVENT_LOOP_INVALID` and
-`CCOL_EVENT_REG_INVALID`; both are `0`, so `if (!loop)` works.
+`CCOL_EVENT_REG_INVALID`. Both are `0`, so `if (!loop)` works.
 
 ### Removing registrations safely
 
-`ccol_event_loop_remove` is safe to call from any thread, including from the
+You can call `ccol_event_loop_remove` from any thread, including from the
 registration's own callback. Once it returns, no new callback of that
-registration starts, but it does not wait for a callback that is running on
-another thread at that moment. If the `arg` of your callback must stay valid
-until that callback has finished, set `on_removed` in
-`ccol_event_handlers_t`. It runs exactly once, when no callback of the
-registration can run, and that is the time to free `arg` and close
-the descriptor.
+registration starts, but it doesn't wait for a callback that happens to be
+running on another thread at that moment. If the `arg` of your callback has
+to stay valid until that callback is done, set `on_removed` in
+`ccol_event_handlers_t`. It runs exactly once, at a point where no callback
+of the registration can run, and that's where you free `arg` and
+close the descriptor.
 
-Two ownership rules apply as well:
-
-- The loop never closes a file descriptor or destroys a queue; that is your
-  job.
-- Remove every registration of a descriptor **before** you close it, and
-  remove the registrations of a queue (or destroy the loop) **before** you
-  destroy the queue. Destroying a queue that has a registration stops
-  the program with an assertion.
+The loop never closes a file descriptor or destroys a queue, that part is
+yours. Remove every registration of a descriptor **before** you close it,
+and remove the registrations of a queue (or destroy the loop) **before** you
+destroy the queue. Destroying a queue that has a registration stops
+the program with an assertion.
 
 This teardown order always works:
 
-1. Call `ccol_event_loop_shutdown`, which completes the work it has already
-   collected and joins the threads.
-2. Remove the registrations, empty your queues, and destroy them.
+1. Call `ccol_event_loop_shutdown`, which finishes the work it has already
+   collected and joins the threads. From that point the loop takes no wake
+   from a queue it watches, so other listeners of that queue keep getting
+   every message, and a new `ccol_event_loop_add` on it is refused.
+2. Remove the registrations, empty your queues and destroy them.
 3. Call `ccol_event_loop_destroy`, which also runs the `on_removed` of every
    registration that is live.
 
 ### Watching both directions, changing direction, pausing
 
 A registration watches one direction. To read and write one socket from
-separate callbacks, add the socket twice: once with `ccol_select_read` and
-once with `ccol_select_write`. To switch a registration from write to read,
-for example after a non-blocking `connect(2)` completes, use
-`ccol_event_loop_modify`. To stop the events for a while and get them back
-later, for example while a worker thread does blocking I/O on the socket,
+separate callbacks, add the socket twice, once with `ccol_select_read` and
+once with `ccol_select_write`. `ccol_event_loop_modify` switches a
+registration from write to read, for example after a non-blocking
+`connect(2)` has completed. If you want the events to stop for a while and
+come back later, say while a worker thread does blocking I/O on the socket,
 pause and resume:
 
 ```c
@@ -338,22 +360,22 @@ ccol_event_loop_pause(loop, reg);    /* no callbacks for reg from here on */
 ccol_event_loop_resume(loop, reg);   /* same registration, events again */
 ```
 
-Pause, resume and modify apply only to file descriptors; to change a queue
+Pause, resume and modify only work on file descriptors. To change a queue
 registration, remove it and add it again.
 
 ### More than one reactor thread
 
-With `num_reactor_threads == 1`, a single thread both waits and runs your
+With `num_reactor_threads == 1` a single thread both waits and runs your
 callbacks. A larger value keeps one waiting thread and adds a pool of
-`num_reactor_threads - 1` threads that run the callbacks, so one callback can
-take a long time without holding up the others. Start with 1 and increase it
-only when your callbacks really are slow. Whatever the value, exactly one
-thread waits on the kernel, so no "thundering herd" occurs.
+`num_reactor_threads - 1` threads for the callbacks, so one callback can take
+a long time without holding up the others. Start with 1 and only go higher
+when your callbacks really are slow. Whatever the value, exactly one thread
+waits on the kernel, so there is no "thundering herd".
 
 ## Example: a team of workers
 
-Jobs go out on a bounded queue, so the producer cannot get far ahead of the
-workers, and results come back on an unbounded queue, so a worker never waits
+Jobs go out on a bounded queue so the producer can't get far ahead of the
+workers, and results come back on an unbounded queue so a worker never waits
 when it reports. Each worker stops when it receives its own sentinel.
 
 ```c
@@ -474,10 +496,11 @@ int main(void) {
 
 ## Example: a helper thread with a channel
 
-The main thread creates the channel, which makes it the owner: it sends a
-request and receives the reply. The helper thread receives requests and sends
-replies with the same calls. The helper sends back the request's own buffer,
-which costs nothing because the ownership moves with the pointer.
+The main thread creates the channel and is therefore its owner. It sends a
+request and receives the reply, while the helper thread receives requests and
+sends replies with the very same calls. The helper sends back the request's
+own buffer, and that costs nothing since the ownership travels with the
+pointer.
 
 ```c
 /* A helper thread for requests and replies on one ccol_channel. The main
@@ -545,8 +568,8 @@ int main(void) {
 ## Example: commands, a stop signal and an idle timer
 
 One thread waits on a command queue and a pipe at the same time, and does
-maintenance work whenever no input arrives for 100 ms. A pipe is a handy way
-to wake a `ccol_select` from anywhere, including a signal handler.
+some maintenance work whenever 100 ms pass without input. A pipe is a handy
+way to wake a `ccol_select` from anywhere, a signal handler included.
 
 ```c
 /* One thread waits on a command queue and a "stop" pipe at once, and does
@@ -636,10 +659,10 @@ int main(void) {
 
 ## Example: a TCP echo server on an event loop
 
-The example registers a listening socket for reading, and its callback
-accepts and registers each pending connection. A client callback echoes back
-the data it reads and removes itself at end of file, and `on_removed` closes
-the socket and frees the context once no callback can use them. The program
+A listening socket is registered for reading, and its callback accepts every
+pending connection and registers it. The client callback echoes back what it
+reads and removes itself at end of file, and `on_removed` closes the socket
+and frees the context once no callback can use them. The program
 runs a few blocking clients against its own server, so it needs nothing from
 outside.
 
@@ -760,37 +783,44 @@ int main(void) {
 }
 ```
 
-The example uses `accept4(2)`, which Linux and the BSDs provide; glibc
-declares it only when `_GNU_SOURCE` is defined. For how the event loop maps
-onto epoll on Linux and kqueue on the BSDs, see [Platforms](platforms.md).
+`accept4(2)` exists on Linux and the BSDs, but glibc only declares it when
+`_GNU_SOURCE` is defined. How the event loop maps onto epoll on Linux and
+kqueue on the BSDs is described in [Platforms](platforms.md).
 
 ## Good to know
 
-- **After a failed send, you are the owner.** A send that returns an error
-  leaves `msg.data` unchanged, so free the data or send the message again;
-  otherwise the memory leaks.
-- **Destroy only queues that are empty and that nothing watches.**
-  `ccol_circular_queue_destroy`, `ccol_dynamic_queue_destroy` and
-  `ccol_channel_destroy` assert when messages are left in the queue, and
-  also when a `ccol_select` call or an event loop registration is watching
-  it. Empty the queue and remove its registrations first.
-- **In an event loop callback, use the queue calls, not the channel calls.**
-  A callback runs on a loop thread, which a channel takes for a worker. For a
-  selectable made with `ccol_selectable_from_chan`, receive with
-  `ccol_circq_try_recv_zc(sel->cq, ...)` and send with
-  `ccol_circq_try_send_zc(sel->cq, ...)`.
-- **Do not destroy or shut down a loop from its own callback.** A destroy
-  there is a fatal error, and a shutdown there returns `ccol_not_permitted`;
-  do both from another thread.
-- **Do not destroy a watched queue from one of its own callbacks**, and do
-  not hold a lock that one of its callbacks also takes while you destroy it,
-  because the destroy waits until those callbacks have finished.
-- **A write registration can send after `ccol_event_loop_remove` returns**
-  if its callback started before the remove, so wait for its `on_removed`
-  before you empty and destroy the queue.
-- **`fork(2)`**: either fork before you create these objects, or fork and
-  call `exec` immediately. For the policy of the whole library, see
-  [Concurrency](concurrency.md).
+After a failed send you are the owner. The send leaves `msg.data`
+alone, so free the data or send the message again, or the memory leaks.
+
+`ccol_circular_queue_destroy`, `ccol_dynamic_queue_destroy` and
+`ccol_channel_destroy` assert when messages are left in the queue, and also
+when a `ccol_select` call or an event loop registration is watching it, so
+empty the queue and remove its registrations first. We'd rather stop the
+program there than free a queue that still holds your payloads or that
+another thread is about to touch.
+
+In an event loop callback, use the queue calls and not the channel calls. A
+callback runs on a loop thread, which a channel takes for a worker, so for a
+selectable made with `ccol_selectable_from_chan` you receive with
+`ccol_circq_try_recv_zc(sel->cq, ...)` and send with
+`ccol_circq_try_send_zc(sel->cq, ...)`.
+
+A loop can't be destroyed or shut down from its own callback, since both
+would have to wait for the callback that is making the call. A destroy there
+is a fatal error and a shutdown there returns `ccol_not_permitted`, so do
+both from another thread.
+
+Don't destroy a watched queue from one of its own callbacks either, and
+don't hold a lock that one of its callbacks also takes while you destroy it,
+because the destroy waits for those callbacks to finish.
+
+A write registration can send after `ccol_event_loop_remove` returns
+if its callback had started before the remove. Wait for its `on_removed`
+before you empty and destroy the queue.
+
+For `fork(2)`, either fork before you create any of these objects, or fork
+and call `exec` immediately. The policy of the whole library is in
+[Concurrency](concurrency.md).
 
 ## Reference
 
@@ -798,7 +828,7 @@ Overview: [cthreadcomm(7)](../man/cthreadcomm/cthreadcomm.7)
 
 Circular queue:
 [ccol_circular_queue_create(3)](../man/cthreadcomm/ccol_circular_queue_create.3),
-[ccol_circular_queue_create_with_mprocs(3)](../man/cthreadcomm/ccol_circular_queue_create_with_mprocs.3),
+[ccol_circular_queue_create_mp(3)](../man/cthreadcomm/ccol_circular_queue_create_mp.3),
 [ccol_circular_queue_destroy(3)](../man/cthreadcomm/ccol_circular_queue_destroy.3),
 [ccol_circq_send_zc(3)](../man/cthreadcomm/ccol_circq_send_zc.3),
 [ccol_circq_try_send_zc(3)](../man/cthreadcomm/ccol_circq_try_send_zc.3),
@@ -812,7 +842,7 @@ Circular queue:
 
 Dynamic queue:
 [ccol_dynamic_queue_create(3)](../man/cthreadcomm/ccol_dynamic_queue_create.3),
-[ccol_dynamic_queue_create_with_mprocs(3)](../man/cthreadcomm/ccol_dynamic_queue_create_with_mprocs.3),
+[ccol_dynamic_queue_create_mp(3)](../man/cthreadcomm/ccol_dynamic_queue_create_mp.3),
 [ccol_dynamic_queue_destroy(3)](../man/cthreadcomm/ccol_dynamic_queue_destroy.3),
 [ccol_dynmq_send_zc(3)](../man/cthreadcomm/ccol_dynmq_send_zc.3),
 [ccol_dynmq_recv_zc(3)](../man/cthreadcomm/ccol_dynmq_recv_zc.3),
@@ -823,7 +853,7 @@ Dynamic queue:
 [ccol_dynmq_msg_count(3)](../man/cthreadcomm/ccol_dynmq_msg_count.3)
 
 Channel: [ccol_channel_create(3)](../man/cthreadcomm/ccol_channel_create.3),
-[ccol_channel_create_with_mprocs(3)](../man/cthreadcomm/ccol_channel_create_with_mprocs.3),
+[ccol_channel_create_mp(3)](../man/cthreadcomm/ccol_channel_create_mp.3),
 [ccol_channel_destroy(3)](../man/cthreadcomm/ccol_channel_destroy.3),
 [ccol_chan_send_zc(3)](../man/cthreadcomm/ccol_chan_send_zc.3),
 [ccol_chan_try_send_zc(3)](../man/cthreadcomm/ccol_chan_try_send_zc.3),
@@ -846,7 +876,7 @@ Select: [ccol_select(3)](../man/cthreadcomm/ccol_select.3),
 
 Event loop:
 [ccol_event_loop_create(3)](../man/cthreadcomm/ccol_event_loop_create.3),
-[ccol_event_loop_create_with_mprocs(3)](../man/cthreadcomm/ccol_event_loop_create_with_mprocs.3),
+[ccol_event_loop_create_mp(3)](../man/cthreadcomm/ccol_event_loop_create_mp.3),
 [ccol_event_loop_declare(3)](../man/cthreadcomm/ccol_event_loop_declare.3),
 [ccol_event_loop_declare_scoped(3)](../man/cthreadcomm/ccol_event_loop_declare_scoped.3),
 [ccol_event_loop_construct(3)](../man/cthreadcomm/ccol_event_loop_construct.3),

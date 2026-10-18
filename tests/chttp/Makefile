@@ -13,11 +13,14 @@ CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 $(CCOL_HARDENING_CFLAGS) -Wstrict
 	$(CCOL_LD_HARDENING) \
 	-Wformat=2 -Wformat-security -Wall -Wextra -gdwarf-4 -g3 -O3 -Werror $(EXTRA_CFLAGS)
 COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
-# The two wraps route every send(2) and read(2) call of the linked sources
-# through __wrap_send and __wrap_read in tests.c. Both pass straight through
-# unless a test arms them to report one EINTR, which no real socket produces
-# on demand.
-LFLAGS = -lpthread -lssl -lcrypto $(call ccol_ld_wrap,send read) $(CCOL_PLATFORM_LIBS)
+# The two wraps send every send(2) and read(2) call of the linked sources
+# through __wrap_send and __wrap_read in tests.c. Both just pass through unless
+# a test arms them to report one EINTR, which no real socket gives you on
+# demand.
+# The tests call dlsym(3), which glibc before 2.34 has in libdl. Every Linux C
+# library accepts -ldl (glibc 2.34 and later and musl ship it as an empty
+# library), while macOS, FreeBSD and OpenBSD have dlsym in libc.
+LFLAGS = -lpthread -lssl -lcrypto $(call ccol_ld_wrap,send read) $(CCOL_PLATFORM_LIBS) $(CCOL_DL_LIBS)
 
 build:
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)
@@ -28,13 +31,13 @@ test: build
 memtest: build
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 ./tests
 
-# The flag "--ignore-errors negative" is there because the coverage counters
-# of gcov are plain, non-atomic increments: in instrumented code that runs
-# concurrently, two threads can race on one counter, and gcov then reports a
-# false hit count below zero. This happens in more than one module and also
-# inside a glibc header; it is a limit of the gcov instrumentation, not a
-# defect in the logic of this library. The Makefile of tests/chttpclient
-# carries the same flag, and its comment gives the full reason.
+# --ignore-errors negative is there because gcov's coverage counters are
+# plain, non-atomic increments, so in instrumented code running concurrently two
+# threads can race on one counter and gcov then reports a hit count below zero
+# that isn't real. It happens in more than one module and inside a glibc header
+# as well; it's a limit of the gcov instrumentation, not a bug in the library's
+# logic. tests/chttpclient/Makefile has the same flag and its comment gives the
+# full reason.
 generate_coverage_report:
 	$(CC)  $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
@@ -46,14 +49,14 @@ generate_coverage_report:
 
 all: build test memtest generate_coverage_report
 
-# The steps of `all` rebuild and run the same object files and binaries: the
-# coverage step rebuilds them with instrumentation, and the test and memtest
-# steps run the binaries that the build step links. Under make -j those steps
-# would overlap and link or run a half-rebuilt mix. .NOTPARALLEL runs the
-# prerequisites of `all` one after another, in the order listed, while the
-# work inside each step still runs in parallel. A make older than 4.4 ignores
-# the prerequisite list and runs this whole Makefile serially, which is also
-# correct.
+# The steps of `all` rebuild and run the same object files and binaries. The
+# coverage step rebuilds them with instrumentation, and test and memtest run
+# the binaries that the build step links, so under make -j the steps would
+# overlap and link or run a half-rebuilt mix. .NOTPARALLEL runs the
+# prerequisites of `all` one after another in the order listed, while the work
+# inside each step still runs in parallel. A make older than 4.4 ignores the
+# prerequisite list and runs the whole Makefile serially, which is correct
+# too.
 .NOTPARALLEL: all
 
 clean:

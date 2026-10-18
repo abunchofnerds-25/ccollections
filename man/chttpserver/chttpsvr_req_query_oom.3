@@ -12,20 +12,20 @@ bool chttpsvr_req_query_oom(const chttpsvr_req *req);
 .SH DESCRIPTION
 .nf
 Returns true when an allocation for the query string of this request
-failed because the library ran out of memory.  Two allocations can
-fail this way: growing the result array inside chttpsvr_req_query,
-and the one-time, shared parse of the query string, which
-chttpsvr_req_query and chttpsvr_req_query_one each start lazily on
+failed for lack of memory.  Two allocations can fail like that: the
+growth of the result array inside chttpsvr_req_query, and the shared
+parse of the query string, which runs once and which
+chttpsvr_req_query and chttpsvr_req_query_one start lazily on their
 first use.
 
-chttpsvr_req_query returns NULL and a count of 0 both when the
-requested key is absent and when a lack of memory stopped it from
-building the result array; after any NULL return from
-chttpsvr_req_query, use this function to tell the two cases apart.
+chttpsvr_req_query returns NULL with a count of 0 both for an absent
+key and when it could not build the result array for lack of memory.
+After any NULL from chttpsvr_req_query, call this function to find
+out which of the two happened.
 
-The flag latches: once set, it stays true for the rest of the request,
-whatever query calls follow.  This function returns false when req is
-NULL.
+Once the flag is set it stays true for the rest of the request,
+whatever query calls follow.  For a NULL req the function returns
+false.
 .fi
 .SH RETURN VALUE
 .nf

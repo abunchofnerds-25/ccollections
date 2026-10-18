@@ -11,9 +11,9 @@ ccol_retval_t ccol_circq_send_zc(ccol_circular_queue *cq, c_message_t *msg);
 .fi
 .SH DESCRIPTION
 .nf
-This function blocks until the queue has free space and then transfers
-the ownership of the message data to the queue. On success it sets the
-msg->data pointer to NULL; this is the zero-copy behaviour.
+Waits until the queue has free space and then puts the message in it.
+The data is not copied: its ownership moves to the queue, and on
+success msg->data is set to NULL.
 .fi
 .SH PARAMETERS
 .nf
@@ -23,18 +23,23 @@ msg  Message to send. On success the ownership of the data moves to the
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success       - The function sent the message
-ccol_invalid_args  - cq or msg is NULL, or the check of msg fails
+ccol_success       - The message was sent
+ccol_invalid_args  - cq or msg is NULL, msg->data is NULL while
+                     msg->size is not 0, or msg->data is not NULL
+                     while msg->size is 0
 ccol_not_permitted - Sends on the queue are turned off
 .fi
 .SH NOTES
 .nf
-The function blocks with no time limit while it waits for free space,
-  or for sends on the queue to go off.
-After the function wakes up, it checks again whether sends are on.
-On failure, the caller keeps the ownership of msg->data.
-msg->data == NULL with msg->size == 0 is valid (a sentinel message).
-msg->data == NULL with msg->size > 0 is not valid.
+The wait for free space has no time limit, but it ends when sends on
+the queue are turned off, because a woken sender checks the send state
+again before it goes on. On failure the caller keeps the ownership of
+msg->data.
+
+msg->data == NULL with msg->size == 0 is valid and works as a sentinel
+message. msg->data == NULL with msg->size > 0 is refused, and so is
+msg->data != NULL with msg->size == 0, because a live pointer must
+carry a payload.
 .fi
 .SH "SEE ALSO"
 .BR ccol_circq_try_send_zc (3),

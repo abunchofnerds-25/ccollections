@@ -22,11 +22,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* Random bytes from the kernel, without blocking: getrandom(2) where the
- * system has it (Linux, FreeBSD), getentropy(2) on macOS and
- * OpenBSD, which serves at most 256 bytes a call and has no <sys/random.h>
- * on OpenBSD. It gives false when the bytes are not available,
- * and the caller then falls back to a mix of its own. */
+/* Random bytes from the kernel, without blocking. We use getrandom(2) where
+ * the system has it (Linux, FreeBSD) and getentropy(2) on macOS and OpenBSD;
+ * getentropy serves at most 256 bytes per call, and OpenBSD has no
+ * <sys/random.h> for it. The function gives false when the bytes aren't
+ * available, and the caller then falls back to a mix of its own. */
 
 #ifndef CCOL_INTERNAL_CRANDOM_H
 #define CCOL_INTERNAL_CRANDOM_H

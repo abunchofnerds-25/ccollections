@@ -11,29 +11,39 @@ ccol_retval_t chttpcli_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
 .fi
 .SH DESCRIPTION
 .nf
-Every chttpcli instance in this process shares one ccol_event_loop
-reactor for its Tier 2 and Tier 3 work. This function sends every
-allocation of that reactor (the registration table, the dispatch state
-of each connection, the worker pool for DNS and for connect, and more)
-to the malloc, free, calloc and realloc in mp, in the same way as the
-memory management procs of every other module in this library. An mp
-of NULL puts the default allocator back.
+All chttpcli instances of a process share one ccol_event_loop reactor
+for their Tier 2 and Tier 3 work. This function routes every
+allocation of that reactor (the registration table, the per-connection
+dispatch state, the worker pool for DNS and connect, and more) to the
+malloc, free, calloc and realloc in mp, the same way the memory
+management procs of every other module of this library work. An mp of
+NULL brings the default allocator back.
 
-Each chttpcli instance also has an allocator for its own requests and
-connections, which you set with ccol_create_chttpclient_mp, following
-the usual _mp convention. This function is independent of it, and
-affects only the construction of the one shared reactor.
+Each chttpcli instance also has its own allocator for its requests and
+connections, which you set with chttpclient_create_mp by the usual _mp
+convention. That allocator is separate from this one, which only
+affects how the single shared reactor is built.
 
-You can call this function only at two times: before the reactor ever
-starts in this process (that is, before the first call to
-chttpclient_do_async or to chttpclient_do_async_streaming anywhere),
-or after the engine stops completely, which happens after every async
-user of a chttpcli drops its reference and the automatic teardown
-finishes. The reactor of chttpsvr_set_engine_mem_mgmt_procs usually
-lives for the whole process, but this engine starts and stops on its
-own with the Tier 2 and Tier 3 traffic, so the window for this call
-comes back again and again instead of being one chance at the start of
-the process.
+You can call this function at only two points: before the reactor
+first starts in this process (before the first call to
+chttpclient_do_async or chttpclient_do_async_streaming anywhere), or
+after the engine has stopped completely. The engine stops once every
+async user of a chttpcli has dropped its reference and the automatic
+teardown has finished, and chttpcli_engine_wait blocks until that
+teardown is over. The reactor behind chttpsvr_set_engine_mem_mgmt_procs
+usually lives as long as the process, but this engine starts and stops
+along with the Tier 2 and Tier 3 traffic, so the window for this
+call opens again every time the engine stops and is not a one-time
+chance at process start.
+
+The engine allocates and frees through mp until its teardown ends, and
+the teardown runs on its own thread after the last client lets go of
+the engine. So mp and the functions it points to must stay valid until
+chttpcli_engine_wait returns after the last client is destroyed. The
+default client of chttp_default_client can keep the engine alive
+through its idle Tier 2 and Tier 3 connections until the library's
+exit handler destroys it, so a process that uses the default client
+for those tiers must keep mp valid until it exits.
 
 If mp is not NULL, all four function pointers in it (malloc, free,
 calloc and realloc) must be set.
@@ -47,6 +57,7 @@ ccol_not_permitted, while the engine runs. Wait for the engine to stop
     completely first.
 .fi
 .SH "SEE ALSO"
+.BR chttpcli_engine_wait (3),
 .BR chttpcli_set_engine_logger (3),
 .BR chttpcli_set_engine_num_reactor_threads (3),
 .BR chttpclient_do_async (3),

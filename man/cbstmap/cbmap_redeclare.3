@@ -12,22 +12,22 @@ cbmap_redeclare(hm_name, key_t, val_t);
 .SH DESCRIPTION
 .nf
 Declares the companion type variables that carry key_t and val_t for an
-ordered map handle that already exists. The macro declares no handle,
-creates no map and destroys none; it gives back only the type information
-that the type-inferred macros need.
+ordered map handle that already exists. It declares no handle, and it
+neither creates nor destroys a map; all it gives back is the type
+information that the type-inferred macros need.
 
-Every type-inferred macro gets the key type and the value type of a map from
-two ordinary local variables that carry the name of the handle, and that
-cbmap_construct(3) and cbmap_declare(3) create beside the handle. Because
-they are local declarations, they do not travel with the handle to another
-function: inside that function, cbmap_insert(hm_name, ...) and its siblings
-name variables that nothing declares there, and the translation unit does
-not compile. This macro declares those variables again, so every caller
-that passes a cbmap across a function boundary needs it.
+Each type-inferred macro learns the key type and the value type of a map
+from two ordinary local variables named after the handle, which
+cbmap_construct(3) and cbmap_declare(3) create next to it. Being local
+declarations, they don't travel with the handle into another function.
+Inside that function cbmap_insert(hm_name, ...) and its siblings would
+name variables that nothing declares there, and the translation unit
+would not compile. This macro declares those variables again, so every
+caller that passes a cbmap across a function boundary needs it.
 
-The types here must be the types that the caller created the map with,
-because the macros use them to read a key, to size a value, and to decide
-whether a value is a char * that the map stores by contents.
+The types must be the ones the caller created the map with, because the
+macros use them to read a key, to size a value and to decide whether a
+value is a char * that the map stores by contents.
 .fi
 .SH PARAMETERS
 .nf
@@ -37,30 +37,37 @@ val_t    Value type that the caller created the map with
 .fi
 .SH RETURN VALUE
 .nf
-None. This macro expands to declarations and does not expand to an
-expression.
+None. The macro expands to declarations, not to an expression.
 .fi
 .SH NOTES
 .nf
-The macro expands to a sequence of declarations, so put it where a
-declaration is legal and give it a semicolon of its own at the end
+Because the macro is a sequence of declarations, put it where a
+declaration is legal and end it with a semicolon of its own.
+
 The declared variables are pointers that nothing dereferences at run time.
-They exist so that typeof and the type-introspection macros can read the
-types from them, and they cost nothing in the generated code
-The macro declares variables only, which also makes it the way to reach a
-handle that a struct field or a global holds: name the macro in each
-function that works on that handle
+They are there so that typeof and the type-introspection macros can read
+the types from them, and they cost nothing in the generated code.
+
+Since it only declares variables, this macro is also how you reach a
+handle held in a struct field or a global: name it in each function that
+works on that handle.
+
+An array key type or value type, such as int[2] or char[16], is a compile
+error whose message says to wrap the array in a struct. The macros copy
+keys and values by assignment and C can't assign an array, so the map
+would otherwise store the address of the caller's array instead of its
+elements. A struct that holds the array works.
 .fi
 .SH WARNINGS
 .nf
-The declared value type can have a width that differs from the stored
-width. cbmap_get(3) and cbmap_get_ptr(3) report that at run time: they
-describe the size mismatch and stop the program through ccol_fatal_err().
-They find no mismatch, however, between two types of the same width, so
-the types here are a promise that the caller keeps, not one that the
-compiler checks. A key of the wrong width gets a report instead of an
-acceptance: the raw entry points return ccol_invalid_args for it. The order
-of the tree has a meaning only for keys of the width that the caller
+The declared value type can have a different width from the stored one.
+cbmap_get(3) and cbmap_get_ptr(3) catch that at run time: they describe
+the size mismatch and stop the program through _ccol_fatal_err(). They
+can't see a mismatch between two types of the same width, though, so the
+types given here are a promise that the caller keeps and the compiler
+doesn't check. A key of the wrong width is reported rather than accepted,
+since the raw entry points return ccol_invalid_args for it. The order of
+the tree only means something for keys of the width that the caller
 created the map for.
 .fi
 .SH EXAMPLES

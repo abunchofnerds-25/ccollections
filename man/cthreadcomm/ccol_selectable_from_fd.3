@@ -11,34 +11,33 @@ ccol_selectable_from_fd(fd, dir);
 .fi
 .SH DESCRIPTION
 .nf
-This macro builds a ccol_selectable value, a tagged union whose type
-here is ccol_selectable_fd, that wraps the file descriptor that you
-give, with the I/O direction that you give.
+Builds a ccol_selectable value (a tagged union, here of type
+ccol_selectable_fd) that wraps the given file descriptor with the
+given I/O direction.
 
   ccol_select_read; wake when the fd becomes readable (data available or
                      EOF / error condition)
   ccol_select_write; wake when the fd becomes writable (send buffer has room)
 
-This macro expands to a compound literal, so it costs nothing at run
+The macro expands to a compound literal, so it costs nothing at run
 time.
 
-ccol_select() never reads or writes the fd itself; it only reports
-readiness (see the documentation of ccol_select()). When the read
-direction wins, the caller then does its own read(2) or recv(2) on fd,
-and when the write direction wins, its own write(2) or send(2). Either
-call can find nothing, or get EWOULDBLOCK, when another reader or
-writer wins the race first; POSIX select(2) itself has the same
-time-of-check to time-of-use contract.
+ccol_select() never reads or writes the fd; it only reports readiness
+(see ccol_select(3)). When the read direction wins, the caller does its
+own read(2) or recv(2) on fd, and when the write direction wins, its
+own write(2) or send(2). Either call can find nothing, or get
+EWOULDBLOCK, if another reader or writer gets there first. POSIX
+select(2) has the same time-of-check to time-of-use contract.
 
-You can mix fd selectables and queue selectables in one ccol_select()
-call. The library moves to a wait path built on epoll(7) (kqueue(2) on
-FreeBSD) when any fd selectable is present, and uses the lighter
-condition variable path when you give it queue selectables only.
+fd selectables and queue selectables can be mixed in one ccol_select()
+call. As soon as there is an fd selectable, the wait goes through
+epoll(7) (kqueue(2) on FreeBSD); with queue selectables only, the
+lighter condition variable path is used.
 .fi
 .SH PARAMETERS
 .nf
-fd        An open file descriptor. It must be >= 0. A negative value
-          makes a selectable that ccol_select() rejects with
+fd        An open file descriptor, >= 0. A negative value gives a
+          selectable that ccol_select() refuses with
           ccol_invalid_args.
 dir       ccol_select_read or ccol_select_write.
 .fi

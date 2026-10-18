@@ -1,19 +1,18 @@
 # Suppressions for reachable memory that OpenSSL's own internal RSA/BN caches
-# hold: RSA blinding state, BN_MONT_CTX Montgomery contexts, and similar
-# lazily-computed values populated during RSA key generation and signing.
-# This suite exercises both heavily through its own self-signed certificate
+# hold: RSA blinding state, BN_MONT_CTX Montgomery contexts and similar
+# lazily-computed values that RSA key generation and signing fill in. This
+# suite exercises both heavily through its own self-signed certificate
 # generation, the self-signed path of ctls_ctx_cert_add().
 #
-# These blocks are allocated through OpenSSL's own CRYPTO_malloc/CRYPTO_zalloc
-# wrappers and kept alive for the lifetime of the process by libcrypto's own
-# internal static/thread-local state. Only an explicit OPENSSL_cleanup() call
-# releases them, and this codebase does not make that call, because calling
-# it unconditionally at process exit is not safe in a library meant to be
-# embedded in a larger application that may have other OpenSSL handles in
-# use. They are not leaks: they belong to the same accepted category of
-# "still reachable" library-internal state that
-# tests/chttpclient/ld_so_dlopen.supp documents for glibc's own NSS module
-# loading.
+# OpenSSL allocates these blocks through its own CRYPTO_malloc/CRYPTO_zalloc
+# wrappers, and libcrypto's internal static/thread-local state keeps them
+# alive for the lifetime of the process. Only an explicit OPENSSL_cleanup()
+# call releases them, and we don't make that call: calling it
+# unconditionally at process exit isn't safe in a library that is meant to
+# be embedded in a larger application, which may have other OpenSSL handles
+# in use. So they aren't leaks. They are the same accepted kind of "still
+# reachable" library-internal state that tests/chttpclient/ld_so_dlopen.supp
+# documents for glibc's own NSS module loading.
 
 {
    openssl_internal_rsa_bn_caches_still_reachable
@@ -24,9 +23,9 @@
    ...
 }
 
-# Same category, reached through OpenSSL 3's provider/encoder framework
+# Same kind of state, reached through OpenSSL 3's provider/encoder framework
 # (OSSL_ENCODER_CTX_new_for_pkey, via X509_set_pubkey -> X509_PUBKEY_set),
-# which grows an internal cache via realloc rather than a fresh malloc.
+# which grows an internal cache with realloc instead of a fresh malloc.
 {
    openssl_internal_encoder_cache_still_reachable
    Memcheck:Leak
@@ -37,43 +36,40 @@
    ...
 }
 
-# The two suppressions above match by function-name prefix (fun:CRYPTO_malloc,
-# fun:OSSL_ENCODER_CTX_new_for_pkey). That is precise, but it covers only the
-# exact call paths that those two functions reached when the rules were
-# written. A `make memtest` run of this suite under heavier concurrent system
-# load reproduced dozens of further "still reachable" reports through OTHER
-# libcrypto.so.3/libssl.so.3-internal call chains entirely: OPENSSL_LH_
-# insert via OSSL_LIB_CTX_get0_global_default, OPENSSL_sk_insert via
+# The two suppressions above match by function-name prefix
+# (fun:CRYPTO_malloc, fun:OSSL_ENCODER_CTX_new_for_pkey). That is precise,
+# but it covers only the exact call paths that reach those two functions. A
+# `make memtest` run of this suite under heavy concurrent system load gives
+# dozens more "still reachable" reports through entirely OTHER call chains
+# inside libcrypto.so.3/libssl.so.3: OPENSSL_LH_insert via
+# OSSL_LIB_CTX_get0_global_default, OPENSSL_sk_insert via
 # OSSL_DECODER_do_all_provided/OSSL_ENCODER_do_all_provided, EVP_MD_fetch,
-# CRYPTO_aligned_alloc, and several more. Under that load, the
-# ctls_sni/ctls_alpn race-stress tests of this suite repeatedly call
+# CRYPTO_aligned_alloc and several more. Under that load the
+# ctls_sni/ctls_alpn race-stress tests of this suite call
 # ctls_ctx_cert_add()/ctls_ctx_alpn_add() -> _ctls_ctx_rebuild_locked() ->
-# SSL_CTX_new_ex() in a tight loop, and each call can populate a DIFFERENT
-# lazily-initialized OpenSSL 3 provider/algorithm/OSSL_LIB_CTX cache the
-# first time that particular internal code path is reached. Direct backtrace
-# inspection confirms that each report originates entirely within the own
-# internals of libssl.so.3/libcrypto.so.3, with no application-code frame
-# anywhere above the allocator itself: it is genuinely reached from an
-# internal OpenSSL call, not from a ctls.c-level bug that routes through
-# OpenSSL by coincidence.
+# SSL_CTX_new_ex() over and over in a tight loop, and each call can fill a
+# DIFFERENT lazily-initialized OpenSSL 3 provider/algorithm/OSSL_LIB_CTX
+# cache the first time it reaches that particular internal code path. The
+# backtraces show that each report comes entirely from the internals of
+# libssl.so.3/libcrypto.so.3, with no application-code frame anywhere above
+# the allocator, so it really starts from an internal OpenSSL call and not
+# from a bug in ctls.c that happens to route through OpenSSL.
 #
-# The reports are real; they were reproduced directly against this exact
-# suite. `tests/ctls` reliably passes clean in isolation (single or 3-way
-# concurrent runs), so this is a load/scheduling-dependent, not
-# deterministic, gap in the narrow function-name-prefix coverage of the ABOVE
-# two rules; it is not a newly discovered leak. Every one of these
-# reports belongs to the identical category that the two rules above accept
-# (an internal OpenSSL cache that lives for the whole process and is
-# deliberately never freed) and is merely reached through a call path that
-# their narrow prefixes do not cover. Instead of an open-ended, ever-growing
-# list of further narrow function-name rules, the two rules below match on
-# the ORIGIN LIBRARY of the allocation: any "still reachable"
-# block whose backtrace includes at least one frame inside libcrypto.so.3 or
-# libssl.so.3 is, by construction, memory that the code of this codebase did
-# not allocate and cannot safely free, whichever of OpenSSL's many internal
-# call paths produced it. Freeing it would require OPENSSL_cleanup(), which
-# is unsafe to call unconditionally in an embeddable library (see the
-# rationale above).
+# The reports are real and come from this exact suite. `tests/ctls` passes
+# clean when it runs alone (a single run or 3 concurrent ones), so this is a
+# gap in the narrow function-name-prefix coverage of the two rules ABOVE that
+# depends on load and scheduling, and not a new leak. Every one of these
+# reports is in the same category that those two rules accept (an internal
+# OpenSSL cache that lives for the whole process and is never freed on
+# purpose), reached through a call path that their narrow prefixes don't
+# cover. Instead of an open-ended list of more narrow function-name rules
+# that keeps growing, the two rules below match on the ORIGIN LIBRARY of the
+# allocation. Any "still reachable" block whose backtrace has at least one
+# frame inside libcrypto.so.3 or libssl.so.3 is, by construction, memory
+# that our code didn't allocate and can't safely free, whichever of
+# OpenSSL's many internal call paths produced it. Freeing it would need
+# OPENSSL_cleanup(), which isn't safe to call unconditionally in an
+# embeddable library (see the reasoning at the top of this file).
 {
    openssl_internal_still_reachable_via_libcrypto
    Memcheck:Leak
@@ -92,23 +88,22 @@
 }
 
 # glibc's own per-thread TLS bookkeeping (the "dtv", dynamic thread vector),
-# which _dl_allocate_tls/allocate_dtv allocate the moment pthread_create
-# creates a new thread. Valgrind reports it as "possibly lost" instead of
-# "still reachable" specifically because its leak checker classifies an
-# INTERIOR pointer (as opposed to a pointer to the exact start address of a
-# block) that way; see the valgrind manual for the definition of "possibly
-# lost". glibc deliberately caches a thread's dtv block and recycles it for a
-# LATER pthread_create() call instead of freeing it immediately once that
-# thread exits/is joined. That makes this a well-known, benign
-# valgrind/glibc interaction, independent of whether the thread that
-# triggered the allocation was itself properly joined. This suite confirms
-# it: both of its own thread-creating tests,
+# which _dl_allocate_tls/allocate_dtv allocate as soon as pthread_create
+# creates a new thread. Valgrind reports it as "possibly lost" and not as
+# "still reachable" because its leak checker classifies an INTERIOR pointer
+# (as opposed to a pointer to the exact start address of a block) that way;
+# the valgrind manual defines "possibly lost". glibc caches a thread's dtv
+# block on purpose and recycles it for a LATER pthread_create() call instead
+# of freeing it once that thread exits or is joined. That makes it a
+# well-known, harmless valgrind/glibc interaction, whether or not the thread
+# that caused the allocation was joined properly, and this suite shows it:
+# both of its own thread-creating tests,
 # ctls_sni.cert_add_race_during_live_handshake_does_not_crash and
 # ctls_alpn.alpn_add_race_during_live_handshake_does_not_crash, join their
-# own rotation thread unconditionally. The rule is scoped narrowly to this
-# exact allocation shape (not a broad libc-wide suppression), since this is
-# a category distinct from the OpenSSL-internal one above, and independently
-# well documented.
+# rotation thread unconditionally. The rule is scoped narrowly to this exact
+# allocation shape (it is not a broad libc-wide suppression), because it is
+# a different category from the OpenSSL-internal one above, and one that is
+# well documented on its own.
 {
    glibc_thread_tls_dtv_possibly_lost
    Memcheck:Leak
@@ -122,23 +117,13 @@
    ...
 }
 
-# A single chashmap iterator (chashmap_begin_iter(), which _ctls_ctx_
-# rebuild_locked() in ctls.c uses to walk every named/SNI certificate while
-# it rebuilds their SSL_CTX objects) was reported once as "possibly lost"
-# under a heavily-loaded `make memtest` run, from the background rotation
-# thread of ctls_sni.cert_add_race_during_
-# live_handshake_does_not_crash. Unlike the OpenSSL/glibc entries above
-# (third-party library internals that this codebase cannot instrument or
-# fix), this is our own application code. So instead of a suppression on the
-# strength of a code-reading argument alone, a direct and permanent check
-# verifies the actual allocation/free balance at this exact call site: see
-# chashmap_iter_outstanding_count_for_tests() in chashmap.c and its own doc
-# comment, and _check_chmap_iter_balance_at_exit in tests/ctls/tests.c, a
-# process-exit destructor that aborts loudly the instant this goes out of
-# balance for real. That check has run clean across 35+ further executions
-# (native and under valgrind, including deliberate concurrent-stress batches)
-# without a single violation, and the "possibly lost" report has not
-# recurred either. No suppression is carried for this one: if it recurs, the
-# real valgrind report should be visible, so that it can be correlated
-# directly against the result of the exit-time check, instead of being hidden
-# behind a rule that has never matched anything since it was written.
+# There is deliberately no rule here for our own code.
+# _ctls_ctx_rebuild_locked() in ctls.c walks the named/SNI certificates with
+# ccol_chmap_walk_next(),
+# which allocates nothing, so the rebuild has no iterator that could leak.
+# _check_chmap_iter_balance_at_exit in tests/ctls/tests.c is a process-exit
+# destructor that aborts as soon as any chashmap iterator of the process is
+# left outstanding (chashmap_iter_outstanding_count_for_tests() in
+# chashmap.c), so if a "possibly lost" report from our code ever shows up in
+# `make memtest`, the real valgrind report stays visible and you can compare
+# it with that exit-time check instead of having it hidden behind a rule.

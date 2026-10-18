@@ -1,24 +1,18 @@
 # chashmap: a hash map
 
-`chashmap` maps keys to values: you give it a key and it gives you the value
-stored for that key, in constant time on average, however many entries the
-map holds. It is the same idea as `std::unordered_map` in C++, `HashMap` in
-Java or `dict` in Python.
+`chashmap` maps keys to values. You give it a key and it gives you the
+value stored for that key, in constant time on average however many entries
+the map holds. It's the same idea as `std::unordered_map` in C++, `HashMap`
+in Java or `dict` in Python.
 
-Use a hash map when you:
-
-- look items up by a name, an id or some other key;
-- count or group items, or remove duplicates;
-- choose an action from a string, such as a command name, a field name or a
-  route.
-
-Use a different module when:
-
-- you need the keys in sorted order: use [cbstmap](cbstmap.md);
-- a plain array with a small integer index is enough: use
-  [cvector](cvector.md);
-- more than one thread uses the map and you want the module to do the
-  locking: `clrucache` is a thread-safe cache built on this map.
+You'd reach for a hash map to look things up by a name, an id or some other
+key, to count or group items or drop duplicates, or to pick an action from
+a string such as a command name, a field name or a route. If you need the
+keys in sorted order, [cbstmap](cbstmap.md) is the better fit, and if a
+plain array with a small integer index is enough, use
+[cvector](cvector.md). When several threads share the map and you want the
+module to do the locking, look at `clrucache`, a thread-safe cache built on
+this map.
 
 ```c
 #include <ccollections/chashmap.h>
@@ -48,8 +42,8 @@ int main(void) {
 }
 ```
 
-Compile the program with `-std=gnu11`, because the macros use GNU C
-extensions, and link it with `-lccollections`:
+The macros use GNU C extensions, so compile with `-std=gnu11`, and link
+with `-lccollections`:
 
 ```sh
 gcc -std=gnu11 ages.c -lccollections -o ages
@@ -60,23 +54,21 @@ The program prints `alice is 32`, `2 people` and `carol is unknown`.
 ## Create a map
 
 `chmap_construct(name, KeyType, ValueType)` declares a variable called
-`name` and stores a new, empty map in it. It also declares hidden companion
-variables that record the two types, which is how `chmap_insert` and the
+`name` and puts a new, empty map in it. Along with it come hidden companion
+variables that record the two types, and that's how `chmap_insert` and the
 other macros know how to copy, hash and return your keys and values. The
-[design guide](design.md) explains this mechanism for the whole library.
+[design guide](design.md) explains this for the whole library.
 
 Any C type works as a key or a value: integers, `float`, `double`,
 `long double`, pointers, function pointers, structs and `char *` strings.
-You do not choose the internal layout; the map picks one when you create it:
+You don't pick the internal layout, the map picks it when you create it.
+When both types are integers of eight bytes or less it uses a compact
+open-addressing table with 17 bytes per slot (the key, the value and one
+status byte), and for every other type it uses separate chaining. The API
+is the same either way.
 
-- when both types are integers of eight bytes or less, it uses a compact
-  open-addressing table;
-- for all other types, it uses separate chaining.
-
-The API is the same for both layouts.
-
-`chmap_destroy(name)` frees the map and sets `name` to `NULL`. To free the
-map automatically at the end of a block, use the scoped form:
+`chmap_destroy(name)` frees the map and sets `name` to `NULL`. If you want
+the map freed automatically at the end of a block, use the scoped form:
 
 ```c
 void handle_request(void) {
@@ -95,12 +87,11 @@ void handle_request(void) {
 | delete a key | `chmap_remove(m, key)` |
 | count the entries | `chmap_elem_count(m)` |
 
-`chmap_insert` is an "upsert": it adds a key that is new and replaces the
-value of a key that is already in the map. `chmap_get` returns the value; if
-the key is not in the map, `chmap_get` stops the program, so use it only
-where a missing key is a bug. `chmap_get_ptr` returns `NULL` for a missing
-key and,
-for a key that is present, a pointer into the map that you can write
+`chmap_insert` is an "upsert": a new key is added and a key that is already
+there gets its value replaced. `chmap_get` returns the value, but it stops
+the program when the key isn't in the map, so only use it where a missing
+key is a bug. `chmap_get_ptr` returns `NULL` for a missing key, and for a
+key that is there it returns a pointer into the map that you can write
 through:
 
 ```c
@@ -112,55 +103,47 @@ else
 ```
 
 `chmap_remove` returns `ccol_success`, or `ccol_key_not_found` when the key
-is not in the map.
+isn't in the map.
 
-The macros convert keys and values to the declared types the same way a C
-assignment does, so you can pass literals and computed expressions. For
-example, a `float` key `1.5f` in a map of `int` becomes `1`, as in
-`int x = 1.5f;`. When you pass a struct literal as an argument, wrap it in
-an
-extra pair of parentheses, because otherwise its commas split the macro
-arguments: `chmap_insert(m, ((point){1, 2}), 7)`.
+Keys and values are converted to the declared types the way a C assignment
+converts them, so literals and computed expressions are fine. A `float` key
+`1.5f` in a map of `int` becomes `1`, as in `int x = 1.5f;`. A struct
+literal needs an extra pair of parentheses around it, since its commas
+would split the macro arguments otherwise:
+`chmap_insert(m, ((point){1, 2}), 7)`.
 
 ## Strings: the owner of each string
 
-When the key type or the value type is `char *`, the map stores a **copy of
-the string** instead of your pointer. This has three consequences:
+When the key type or the value type is `char *`, the map stores a copy of
+the string and not your pointer. So you can reuse or free your buffer as
+soon as `chmap_insert` returns, for example insert from a stack buffer that
+you overwrite in a loop. A string the map gives you, from `chmap_get`,
+`chmap_get_ptr` or an iterator, points into the map's own storage. Never
+free it; it stays valid until the next change to the map (an insert, a
+remove or a reset) or until the map is destroyed. To replace a stored
+string with another one you insert the key again. For a string value
+`chmap_get_ptr` gives you a `char *const *`, so you can change the
+characters in place but not the pointer.
 
-- You can reuse or free your buffer as soon as `chmap_insert` returns. For
-  example, you can insert from a stack buffer that you overwrite in a loop.
-- A string that the map gives you, whether from `chmap_get`, `chmap_get_ptr`
-  or an iterator, points into the map's own storage. Never free it. It stays
-  valid until the next change to the map (an insert, a remove or a reset),
-  or
-  until the map is destroyed.
-- To replace a stored string with a different one, insert the key again. For
-  a string value, `chmap_get_ptr` gives you a `char *const *`: you can
-  change
-  the characters in place, but not the pointer.
+`char *`, `unsigned char *` and `signed char *` all mean a NUL-terminated
+string in this library, and a `NULL` string pointer isn't a string at all.
+`chmap_get_ptr` returns `NULL` for it, `chmap_remove` returns
+`ccol_invalid_args`, and `chmap_insert` and `chmap_get` stop the program. If
+you take a key from `getenv()` or a similar function, check it for `NULL`
+first.
 
-In this library, `char *`, `unsigned char *` and `signed char *` all mean a
-NUL-terminated string, and a `NULL` string pointer is not a string:
-
-- `chmap_get_ptr` returns `NULL` for it;
-- `chmap_remove` returns `ccol_invalid_args`;
-- `chmap_insert` and `chmap_get` stop the program.
-
-So before you use a value from `getenv()` or a similar function as a key,
-make sure that it is not `NULL`.
-
-**Any other pointer type is stored as the pointer itself.** A map of `int`
-to `struct user *` keeps the addresses that you gave it and never frees the
-objects they point to. Free them yourself before you destroy the map, or use
-`chmap_destroy_with_dtor`, which calls a destructor on each value, as the
-inventory example below shows. [chashmap(7)](../man/chashmap/chashmap.7)
-gives the precise rules.
+Every other pointer type is stored as the pointer itself. A map of `int` to
+`struct user *` keeps the addresses you gave it and never frees the objects
+behind them. Free them yourself before you destroy the map, or use
+`chmap_destroy_with_dtor`, which calls a destructor on each value (the
+inventory example below does this). The precise rules are in
+[chashmap(7)](../man/chashmap/chashmap.7).
 
 ## Iterate over all entries
 
 `ccol_for_each` visits every entry. `ccol_iter_key_ptr(it)` points to the
-key, which is read-only, and `ccol_iter_val_ptr(it)` points to the value,
-which you can change in place:
+key, which is read-only, and `ccol_iter_val_ptr(it)` to the value, which you
+can change in place:
 
 ```c
 ccol_for_each(freq, it, {
@@ -168,21 +151,20 @@ ccol_for_each(freq, it, {
 });
 ```
 
-A `break` or a `return` in the body is safe, because the macro frees the
-iterator for you. Do not insert or remove entries while you iterate. The
-[iterators guide](citerators.md) describes the manual `ccol_begin` /
-`ccol_iter_next` form.
+A `break` or a `return` in the body is safe since the macro frees the
+iterator for you, but don't insert or remove entries while you iterate. The
+manual `ccol_begin` / `ccol_iter_next` form is described in the
+[iterators guide](citerators.md).
 
-**The iteration order is not defined.** It can differ between two maps with
-the same keys, and between two runs of the same program. When you need
-sorted output, use [cbstmap](cbstmap.md), or copy the keys into a vector and
-sort it.
+The iteration order isn't defined. It can differ between two maps with the
+same keys and between two runs of the same program, so for sorted output
+use [cbstmap](cbstmap.md) or copy the keys into a vector and sort it.
 
 ## Give a map to a different function
 
-A `chmap` is a handle, so you pass it by value. The hidden type variables do
-not travel with the handle, so the function that receives the map must state
-the types again with `chmap_redeclare`:
+A `chmap` is a handle and you pass it by value. The hidden type variables
+don't travel with it, so the function that gets the map has to state the
+types again with `chmap_redeclare`:
 
 ```c
 void bump(chmap scores, const char *who) {
@@ -193,14 +175,15 @@ void bump(chmap scores, const char *who) {
 }
 ```
 
-The types must be the ones that you used to create the map; the compiler
-cannot check this for you.
+They must be the types you created the map with, and the compiler can't
+check that for you.
 
 ## Example: count words
 
 This program reads text from standard input and prints how many times each
-word occurs. It inserts every word from the same buffer, which it overwrites
-for the next word; that is safe because the map copies each string.
+word occurs. Every word is inserted from the same buffer, which gets
+overwritten by the next word, and that's safe because the map copies each
+string.
 
 ```c
 #include <ctype.h>
@@ -246,16 +229,15 @@ int main(void) {
 $ echo "the cat sat on the mat. The end" | ./words
 ```
 
-This command prints each of `the` (3), `cat`, `sat`, `on`, `mat` and `end`
-(1) once, in no defined order.
+It prints `the` (3) and `cat`, `sat`, `on`, `mat` and `end` (1) once each,
+in no defined order.
 
 ## Example: a command dispatcher
 
 A map from a command name to a function pointer replaces a long chain of
-`strcmp` calls. Because `chmap_get_ptr` returns `NULL` for an unknown
-command, the program prints a message instead of crashing. It creates the
-map in `main` and uses it in two other functions, each of which declares the
-map again.
+`strcmp` calls. For an unknown command `chmap_get_ptr` returns `NULL`, and
+the program prints a message instead of crashing. The map is created in
+`main` and used in two other functions, and each of them declares it again.
 
 ```c
 #include <stdio.h>
@@ -311,9 +293,9 @@ int main(void) {
 
 ## Struct keys
 
-A struct can be a key. By default, the map hashes and compares **all the
-bytes** of the struct, padding included, which is correct for a struct
-without padding, such as a fixed-size digest:
+A struct can be a key. By default the map hashes and compares all the bytes
+of the struct, padding included, which is right for a struct with no
+padding, a fixed-size digest for example:
 
 ```c
 typedef struct { unsigned char b[32]; } digest_t;
@@ -322,28 +304,34 @@ chmap_construct(seen, digest_t, int);
 chmap_insert(seen, d, 1);            /* d is a digest_t */
 ```
 
-For a struct with padding, for example a `char` followed by a `long`, use
-`chmap_construct_full` and give it a hash function and an equality function
-that read only the members. The two functions must agree: keys that are
-equal must have equal hashes. The next example shows this.
+A struct with padding, say a `char` followed by a `long`, is a trap with
+that default, because its padding bytes take part in the hash and the
+comparison. Such a struct needs `chmap_construct_full` with a hash function
+and an equality function that read only the members. The two have to agree, which means keys that are
+equal must have equal hashes, and the next example shows how.
 
-Two more facts about keys:
+An array can't be a key type or a value type. Declaring a map with `int[2]`
+or `char[16]` is a compile error whose message tells you to wrap the array
+in a struct like the `digest_t` above; C can't assign an array, so without
+that error the map would store the address of your array instead of its
+elements.
 
-- **The map compares floating-point keys bit by bit**, with one exception:
-  `-0.0` and `0.0` are the same key. A NaN key is found by its exact bit
-  pattern, and `long double` keys are compared by value.
-  [chmap_construct(3)](../man/chashmap/chmap_construct.3) gives the details.
-- **You cannot pass binary keys whose length is known only at run time to
-  the macros**, such as a slice of a buffer or a byte string that contains
-  zeros, because the macros always treat a `char *` as a NUL-terminated
-  string. Use the raw layer described below.
+Floating-point keys are compared bit by bit, except that `-0.0` and `0.0`
+are the same key. A NaN key is found by its exact bit pattern, and
+`long double` keys are compared by value
+([chmap_construct(3)](../man/chashmap/chmap_construct.3) has the details).
+
+Binary keys whose length is only known at run time, a slice of a buffer or
+a byte string with zeros in it, can't go through the macros, because the
+macros always treat a `char *` as a NUL-terminated string. Use the raw
+layer described below for those.
 
 ## Example: an inventory with struct keys and owned values
 
-The stock is keyed by (warehouse, sku). The key struct has padding, so the
+The stock is keyed by (warehouse, sku). That key struct has padding, so the
 map gets hash and equality functions that read each member. Each value is a
 pointer to a heap record that owns a string, and `chmap_destroy_with_dtor`
-frees every record when the map is destroyed.
+frees all the records when the map goes away.
 
 ```c
 #include <stdbool.h>
@@ -426,29 +414,31 @@ int main(void) {
 }
 ```
 
-A custom hash does not need to be a good hash: the map mixes the result of
-your function before it uses it, so even an identity function or a small
-counter gives a good distribution. Your function receives the address of the
-key and its stored size, which is `strlen + 1` for a string and `sizeof` for
-a fixed-size type. When the built-in equality is correct for your keys, use
-`chmap_construct_ch`, which takes only a hash function.
+Your hash doesn't have to be a good one. The map mixes its result before
+using it, so even an identity function or a small counter spreads well. The
+function gets the address of the key and its stored size, which is
+`strlen + 1` for a string and `sizeof` for a fixed-size type. If the
+built-in equality is already right for your keys, `chmap_construct_ch`
+takes only a hash function.
 
 ## When an error must not stop the program
 
-The macros stop the program on a hard error, such as running out of memory.
-That is the right default for most code, but library code, a server or any
-other code that must recover has to use the raw layer instead. When
-`chmap_create` and its related functions fail, they return `NULL` and an
-error string, and each element function returns a `ccol_retval_t`. Every key
-and value goes to the raw layer as a `cmap_pair` (a pointer and a size), so
-the raw layer also accepts binary keys of any length.
+The macros stop the program on a hard error such as running out of memory.
+For most code that's the right default, but library code, a server or
+anything else that has to recover should use the raw layer instead. When
+`chmap_create` and its related functions fail they return `NULL` and an
+error string, and every element function returns a `ccol_retval_t`. Keys
+and values go to the raw layer as a `cmap_pair` (a pointer and a size), so
+it also takes binary keys of any length. `chmap_get_elem_ref` fills a
+`cmap_pair` that you own with the location and the size of the stored
+value, and you can change the value bytes through its `ptr` until the next
+insert, delete or resize of the map.
 
 ## Example: count fields without a copy
 
 This program counts the distinct fields of a comma-separated line. Each key
-is a slice of the line, passed as a pointer and a length, so the program
-copies nothing out of the line, and every failure comes back as a return
-code.
+is a slice of the line passed as a pointer and a length, so nothing is
+copied out of the line, and every failure comes back as a return code.
 
 ```c
 #include <stdio.h>
@@ -475,13 +465,13 @@ int main(void) {
         size_t len = end ? (size_t)(end - start) : strlen(start);
 
         cmap_pair key = {(void *)start, len};
-        const cmap_pair *val = NULL;
+        cmap_pair val;
         ccol_retval_t rc = chmap_get_elem_ref(seen, &key, &val);
         if (rc == ccol_success) {
             int count;
-            memcpy(&count, val->ptr, sizeof(count));
+            memcpy(&count, val.ptr, sizeof(count));
             count++;
-            memcpy(val->ptr, &count, sizeof(count));   /* update in place */
+            memcpy(val.ptr, &count, sizeof(count));    /* update in place */
         } else if (rc == ccol_key_not_found) {
             int one = 1;
             cmap_pair v = {&one, sizeof(one)};
@@ -511,39 +501,34 @@ int main(void) {
 }
 ```
 
-The program prints `3 distinct values` and `red appears 3 times`. A key
-pointer can have any alignment, so slices of a packed buffer work as keys.
+The output is `3 distinct values` and `red appears 3 times`. A key pointer
+can have any alignment, which is why slices of a packed buffer work as keys.
 
 ## Keys from untrusted input
 
-You can give a map keys that an attacker chooses, such as the field names of
-a JSON request. The map watches how often its keys collide, and when there
-are more collisions than random keys would cause, it switches to a keyed
-hash that uses a secret value for each process. A crafted set of keys
-therefore cannot make the map slow, and you do not have to do anything to
-get this protection.
+It's fine to give a map keys that an attacker picks, like the field names
+of a JSON request. The map keeps an eye on how often its keys collide, and
+once there are more collisions than random keys would cause, it switches to
+a keyed hash with a secret value per process. A crafted set of keys can't
+make the map slow that way, and you get this without doing anything.
 
-The one exception is a custom hash function: when your function returns the
-same value for two keys, those keys always collide. For keys that you do not
-trust, use the built-in hash, or a custom hash that an attacker cannot make
-collide. [chmap_create_full(3)](../man/chashmap/chmap_create_full.3)
-describes the mechanism.
+The exception is a custom hash function. If your function returns the same
+value for two keys, those keys collide no matter what the map does, so for
+keys you don't trust use the built-in hash or a custom one that an attacker
+can't make collide. The mechanism is described in
+[chmap_create_full(3)](../man/chashmap/chmap_create_full.3).
 
 ## Good to know
 
-- **Pointers into the map are short-lived.** A pointer from `chmap_get_ptr`,
-  a stored string or an iterator is valid only until the next insert, remove
-  or reset; a lookup never invalidates it.
-- **The map does not own pointers that are not strings.** It frees its own
-  copies of keys and values, but never the objects that your pointer values
-  point to.
-- **No locking.** A map has no internal lock. If more than one thread uses a
-  map and any of them changes it, protect every call with your own lock. See
-  [Concurrency](concurrency.md).
-- **The iteration order is not defined.** When you need a stable result, for
-  example to print or to compare, sort the keys first.
-- **`chmap_get` stops the program when the key is missing.** When a missing
-  key is a normal outcome, use `chmap_get_ptr`.
+A pointer from `chmap_get_ptr`, a stored string or an iterator is valid only
+until the next insert, remove or reset. A lookup never invalidates it.
+
+The map frees its own copies of keys and values, but it never frees the
+objects your non-string pointer values point to.
+
+A map has no lock inside it. If more than one thread uses a map and any of
+them changes it, protect every call with your own lock (see
+[Concurrency](concurrency.md)).
 
 ## Reference
 

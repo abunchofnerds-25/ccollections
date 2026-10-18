@@ -12,20 +12,23 @@ cstr cstring_create_full(const char *initial, ccol_memmgmt_procs_t *m_procs,
 .fi
 .SH DESCRIPTION
 .nf
-Allocates and initialises a new cstring. If initial is non-NULL its content
-is copied in; passing NULL creates an empty string. The internal buffer
-capacity is rounded up to the nearest power of two (minimum 16 bytes).
+This function allocates and initialises a new cstring. When initial is
+not NULL its content is copied in, and a NULL gives an empty string. The
+capacity of the internal buffer is rounded up to the nearest power of two,
+and it is at least 16 bytes.
 .fi
 .SH PARAMETERS
 .nf
 initial   Initial C string content, or NULL for an empty string
-m_procs   Custom memory management procedures, or NULL for default malloc/free
+m_procs   Custom memory management procedures, or NULL for the default
+          malloc/free. The string keeps its own copy of the structure,
+          so yours does not have to outlive the call
 err       Optional pointer to receive an error string on failure
 .fi
 .SH RETURN VALUE
 .nf
-Returns pointer to newly created cstring on success
-Returns NULL on failure (details written to *err if err is non-NULL)
+A pointer to the new cstring on success
+NULL on failure, with the details written to *err when err is not NULL
 .fi
 .SH "SEE ALSO"
 .BR cstring_create (3),

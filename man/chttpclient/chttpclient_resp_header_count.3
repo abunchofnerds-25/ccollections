@@ -12,31 +12,30 @@ size_t chttpclient_resp_header_count(const chttpcli_response *resp,
 .fi
 .SH DESCRIPTION
 .nf
-This function gives the number of lines of the response header block
-that carry the name that you give; the lookup ignores the case of the
-name. Every such line counts once, whatever its value, and an empty
-value counts too.
+This function returns how many lines of the response header block carry
+the given name, compared without regard to case. Each such line counts
+once whatever its value, an empty value included.
 
-Use it with chttpclient_resp_header_at to read each occurrence of a
-header that a server can send more than once, such as Set-Cookie.
+Use it together with chttpclient_resp_header_at to read every
+occurrence of a header that a server can send more than once, such as
+Set-Cookie.
 .fi
 .SH PARAMETERS
 .nf
-resp  The response to query. It can be NULL, and the function then
-      gives 0.
-name  The header name. It can be NULL, and the function then gives 0.
+resp  The response to query. It can be NULL, in which case the
+      function returns 0.
+name  The header name. It can be NULL, in which case the function
+      returns 0.
 .fi
 .SH RETURN VALUE
 .nf
-The number of lines with that name, or 0 if the response has none. The
-function also gives 0 for a response from a streaming request, which
-keeps no headers.
+The number of lines with that name, or 0 if there are none. A response
+from a streaming request keeps no headers, so it always gives 0.
 .fi
 .SH NOTES
 .nf
-Only the header block of the response counts. A trailer field of a
-chunked response body is not a response header, and it never counts
-here.
+Only the response's header block counts. A trailer field of a chunked
+body is not a response header and is never counted here.
 .fi
 .SH EXAMPLES
 .nf

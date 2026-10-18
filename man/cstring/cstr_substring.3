@@ -1,6 +1,6 @@
 .TH CSTR_SUBSTRING 3 "2026-09-28" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cstr_substring \- create a new string from a sub-range, and call ccol_fatal_err() on failure
+cstr_substring \- create a new string from a sub-range, and call _ccol_fatal_err() on failure
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -12,9 +12,9 @@ cstr result = cstr_substring(s, start, len);
 .SH DESCRIPTION
 .nf
 This macro is a GNU C statement expression that calls cstring_substring()
-and then calls ccol_fatal_err() if the result is NULL, which means that an
-allocation failed. Because the macro gives the new cstring as a value, you
-can use it directly inside an expression.
+and calls _ccol_fatal_err() when the result is NULL, which happens only
+when an allocation failed. The new cstring is the value of the macro, so
+you can use it directly inside an expression.
 .fi
 .SH PARAMETERS
 .nf
@@ -28,15 +28,15 @@ A new cstr that holds the sub-range that you asked for
 .fi
 .SH NOTES
 .nf
-This macro uses a GNU C statement expression ({...}), so it needs GCC or
-Clang
-The macro clamps the range at the end of the string instead of rejecting
-the range
-The caller must destroy the cstring that this macro returns
+The macro uses a GNU C statement expression ({...}), so it needs GCC or
+Clang.
+A range that runs past the end of the string is clamped at the end
+instead of being rejected.
+You must destroy the cstring that this macro returns.
 The macro evaluates each of s, start and len exactly once, so the failure
-message reports the start and the length that the call used
-Call cstring_substring() directly when you want to handle an error
-yourself
+message reports the start and the length that the call really used.
+If you want to handle an error yourself, call cstring_substring()
+directly.
 .fi
 .SH EXAMPLES
 .nf

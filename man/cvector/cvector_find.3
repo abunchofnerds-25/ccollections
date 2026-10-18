@@ -12,9 +12,9 @@ size_t cvector_find(cvec v, const void *elem,
 .fi
 .SH DESCRIPTION
 .nf
-Does a linear scan and returns the zero-based index of the first element
-that is equal to *elem. When cmp is NULL, the function compares with
-memcmp over the element size, which is equality byte by byte.
+Scans the vector linearly and returns the zero-based index of the first
+element equal to *elem. With a NULL cmp the elements are compared with
+memcmp over the element size, that is byte by byte.
 .fi
 .SH PARAMETERS
 .nf
@@ -30,9 +30,9 @@ ccol_invalid_size when there is no match, and when elem is NULL.
 .fi
 .SH NOTES
 .nf
-O(n) complexity
-Asserts if v is NULL
-Structs with padding bytes may not compare correctly when cmp is NULL
+O(n). Asserts if v is NULL.
+
+With a NULL cmp, structs with padding bytes may not compare correctly.
 .fi
 .SH "SEE ALSO"
 .BR cvec_find (3)

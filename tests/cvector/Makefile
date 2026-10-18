@@ -10,29 +10,28 @@ CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 $(CCOL_HARDENING_CFLAGS) -Wstrict
 	$(CCOL_LD_HARDENING) \
 	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O3 -Werror $(EXTRA_CFLAGS)
 COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage 
-# The wrap of cvector_elem_count lets a test count the calls that the inline
-# expansion of a macro makes to cvector_elem_count, while the wrapper in
-# tests.c forwards every call to the real function.
+# Wrapping cvector_elem_count lets a test count the calls that a macro's inline
+# expansion makes to it, while the wrapper in tests.c forwards every call to
+# the real function.
 LFLAGS = -lpthread $(call ccol_ld_wrap,cvector_elem_count) $(CCOL_PLATFORM_LIBS)
 
 build:
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)
 
-# cvec_sort refuses an element type that has no default comparison procedure
-# with a _Static_assert, so the check happens at build time. Under every
-# compiler that is available, compile_probes.sh asserts that each such type
-# fails to compile with a useful message while every supported type compiles.
-# The script also pins the array element forms of the value macros and the
-# -Wcast-qual cleanliness of the iterator accessors. ./tests cannot reach a
-# message that the compiler issues, because ./tests must compile before it
-# can run anything.
+# cvec_sort refuses an element type without a default comparison procedure
+# through a _Static_assert, so the check happens at build time. With every
+# compiler that's available, compile_probes.sh asserts that each such type fails
+# to compile with a useful message while every supported type compiles. The
+# script also pins the array element forms of the value macros and that the
+# iterator accessors are clean under -Wcast-qual. ./tests can't reach a message
+# the compiler gives, because ./tests has to compile before it can run anything.
 compile_probes:
 	sh ./compile_probes.sh
 
-# nesting_probe.c nests the public macros of this module inside their own
-# arguments and inside those of other modules. -Wshadow makes any local that
-# a nested expansion hides a hard error, which only the compiler can report,
-# so the probe is compiled and never run.
+# nesting_probe.c nests this module's public macros inside their own arguments
+# and inside those of other modules. -Wshadow turns any local that a nested
+# expansion hides into a hard error, and only the compiler can report that, so
+# the probe is compiled but never run.
 nesting_probe:
 	$(CC) $(INCLUDES) $(DEFINITIONS) -std=gnu11 -Wall -Wextra -Wshadow -Werror \
 		-fsyntax-only nesting_probe.c
@@ -43,12 +42,12 @@ test: build compile_probes nesting_probe
 memtest: build
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 --child-silent-after-fork=yes ./tests
 
-# --ignore-errors negative: the coverage counters of gcov are plain, non-atomic
-# increments, so instrumented code that runs on more than one thread at a time
-# can race on them and produce a false negative hit count. This affects more
-# than one module and also happens inside a glibc header; it is a limit of the
-# gcov instrumentation, not a defect in the logic of this library. The same
-# flag in tests/chttpclient/Makefile gives the full reason.
+# --ignore-errors negative is there because gcov's coverage counters are
+# plain, non-atomic increments, so instrumented code running on more than one
+# thread at a time can race on them and end up with a negative hit count that
+# isn't real. It happens in more than one module and inside a glibc header as
+# well; it's a limit of the gcov instrumentation, not a bug in the library's
+# logic. tests/chttpclient/Makefile has the same flag with the full reason.
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
@@ -60,14 +59,14 @@ generate_coverage_report:
 
 all: build test memtest generate_coverage_report
 
-# The steps of `all` rebuild and run the same object files and binaries: the
-# coverage step rebuilds them with instrumentation, and the test and memtest
-# steps run the binaries that the build step links. Under make -j those steps
-# would overlap and link or run a half-rebuilt mix. .NOTPARALLEL runs the
-# prerequisites of `all` one after another, in the order listed, while the
-# work inside each step still runs in parallel. A make older than 4.4 ignores
-# the prerequisite list and runs this whole Makefile serially, which is also
-# correct.
+# The steps of `all` rebuild and run the same object files and binaries. The
+# coverage step rebuilds them with instrumentation, and test and memtest run
+# the binaries that the build step links, so under make -j the steps would
+# overlap and link or run a half-rebuilt mix. .NOTPARALLEL runs the
+# prerequisites of `all` one after another in the order listed, while the work
+# inside each step still runs in parallel. A make older than 4.4 ignores the
+# prerequisite list and runs the whole Makefile serially, which is correct
+# too.
 .NOTPARALLEL: all
 
 clean:

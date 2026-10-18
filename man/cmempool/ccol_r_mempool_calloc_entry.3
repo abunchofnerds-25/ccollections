@@ -11,8 +11,8 @@ void *ccol_r_mempool_calloc_entry(ccol_r_mempool *rmp, size_t size);
 .fi
 .SH DESCRIPTION
 .nf
-Works like ccol_r_mempool_alloc_entry(), but zeros the requested number
-of bytes before it returns.
+The same as ccol_r_mempool_alloc_entry(), except that the requested
+number of bytes is set to zero before the entry is returned.
 .fi
 .SH PARAMETERS
 .nf
@@ -26,9 +26,9 @@ Returns NULL on failure
 .fi
 .SH NOTES
 .nf
-The function zeros exactly 'size' bytes, and not the full pool element
+Exactly 'size' bytes are zeroed, not the full pool element
 Thread-safe if the pool was created with single_threaded=false
-This function asserts if rmp is NULL
+The function asserts if rmp is NULL
 .fi
 .SH "SEE ALSO"
 .BR ccol_r_mempool_alloc_entry (3),

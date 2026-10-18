@@ -11,13 +11,14 @@ CHTTP_NO_BODY
 .fi
 .SH DESCRIPTION
 .nf
-This macro expands to an initializer for a chttp_request_body_t in
-which every field is zero.  Use it for GET, HEAD, DELETE and the other
-methods that carry no body.
+This macro expands to an initializer for a chttp_request_body_t whose
+fields are all zero.  Use it for GET, HEAD, DELETE and any other
+request that carries no body.
 .fi
 .SH EXAMPLES
 .nf
-chttp_request_t *req = chttp_request_new(CHTTP_GET, url, &CHTTP_NO_BODY, NULL);
+chttp_request_t *req =
+    chttp_request_create(CHTTP_GET, url, &CHTTP_NO_BODY, NULL);
 .fi
 .SH "SEE ALSO"
 .BR CHTTP_BODY (3),

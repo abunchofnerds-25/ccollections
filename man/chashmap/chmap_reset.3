@@ -11,9 +11,9 @@ ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size);
 .fi
 .SH DESCRIPTION
 .nf
-Removes all key-value pairs from the hash map, destroys all internal
-data, and optionally resizes the bucket/slot array. The map remains
-usable after the reset, whether or not the resize succeeds.
+Removes every key-value pair from the hash map, destroys all internal
+data and, if asked, resizes the bucket/slot array. The map is usable
+after the reset whether the resize succeeded or not.
 .fi
 .SH PARAMETERS
 .nf
@@ -24,13 +24,15 @@ new_bucket_array_size    New bucket count (0 = keep current size;
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success           - All elements cleared (and resize succeeded if requested)
-ccol_not_enough_memory - Resize failed; elements are still cleared
+ccol_success           - Every element was cleared (and the resize, if
+                         asked for, succeeded)
+ccol_not_enough_memory - The resize failed, but the elements are cleared
+                         anyway
 .fi
 .SH NOTES
 .nf
 O(n) complexity, where n is the number of elements
-All elements are destroyed regardless of the return value
+Every element is destroyed whatever the return value is
 Asserts if chm is NULL
 .fi
 .SH "SEE ALSO"

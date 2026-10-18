@@ -11,9 +11,9 @@ cstr_rfind(s, needle);
 .fi
 .SH DESCRIPTION
 .nf
-This macro is a pass-through wrapper for cstring_rfind(). The search
-runs from the end of the string, and its time is linear in the length of
-the string plus the length of needle. See cstring_rfind(3).
+This macro just forwards its arguments to cstring_rfind(). The search
+starts from the end of the string and takes time linear in the length of
+the string plus the length of needle; cstring_rfind(3) has the details.
 .fi
 .SH PARAMETERS
 .nf

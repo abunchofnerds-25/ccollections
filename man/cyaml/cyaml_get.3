@@ -11,34 +11,32 @@ cyaml cyaml_get(cyaml root, const char *path);
 .fi
 .SH DESCRIPTION
 .nf
-Navigate from root through a dot-separated path and return the node at
-the destination.
+Walks from root through a dot-separated path and returns the node it
+ends at.
 
 Path syntax:
   - A dot ('.') separates the components.
-  - A component that starts with '#' followed by one or more decimal
-    digits indexes into a CYAML_LIST by position; for example, "#0"
-    is the first element.
-  - The macro reads every other component as a literal
-    CYAML_DICTIONARY key.
-  - A bare '#' with no digits after it has no valid meaning as an
-    index.  When the current node is a CYAML_DICTIONARY, the macro
-    uses it as a literal key, exactly as it uses any other component
-    that is not "#N", so such a path addresses a key with the literal
-    name "#".  When the current node is a CYAML_LIST, there is no
-    literal-key fallback for a list at all, so the navigation fails
-    and the macro returns NULL.  cjson rejects a bare '#' in that case
-    in the same way.
-  - Escape sequences: '\e.' gives a literal '.' in the key instead of
-    a separator, and '\e\e' gives a literal '\e' in the key.  A '\e'
-    before any other character stays unchanged.
+  - A component made of '#' and one or more decimal digits indexes a
+    CYAML_LIST by position, so "#0" is the first element.  An index
+    with any number of digits is well formed, so an index that the
+    list doesn't reach is absent however large it is, and the macro
+    returns NULL for it.
+  - Every other component is a literal CYAML_DICTIONARY key.
+  - A bare '#' with no digits is not a valid index.  When the current
+    node is a CYAML_DICTIONARY, the macro uses it as a literal key,
+    like any other component that is not "#N", so the path addresses
+    a key named "#".  A CYAML_LIST has no literal-key fallback at
+    all, so on a list the navigation fails and the macro returns
+    NULL.  cjson refuses a bare '#' in that case the same way.
+  - Escapes: '\e.' gives a literal '.' in the key instead of a
+    separator, and '\e\e' gives a literal '\e'.  A '\e' before any
+    other character is kept as it is.
   - An empty component (nothing between two dots, a leading dot, or a
-    trailing dot) has no valid meaning, either as a literal
-    empty-string key or as a "#N" index.  This holds at every position
-    in the path, and the navigation fails.
-  - A NULL or empty path identifies root itself, and the macro then
-    gives root.
-  - A NULL root identifies no node, and the macro then gives NULL.
+    trailing dot) means nothing, neither an empty-string key nor a
+    "#N" index.  That holds at every position in the path, and the
+    navigation fails.
+  - A NULL or empty path names root itself, and the macro gives root.
+  - A NULL root names no node, and the macro gives NULL.
 
 The returned reference is NON-OWNING and becomes invalid when the
 caller changes or destroys the node that holds it.
@@ -50,9 +48,13 @@ path  Dot-separated path, given as a string literal or a char *.
 .fi
 .SH RETURN VALUE
 .nf
-A non-owning cyaml handle at the target, or NULL when root is NULL, when
-a component along the path is missing, when the node type does not
-fit, or when the path holds an empty component.
+A non-owning cyaml handle to the target, or NULL when root is NULL,
+when a component along the path is missing, when the node type
+doesn't fit, or when the path holds a malformed component (an empty
+one, or one that is not well-formed UTF-8, which no key of a tree can
+be).  A path of 256 bytes or more is first copied with root's
+allocator, and the macro also returns NULL when that copy fails.  A
+shorter path needs no allocation.
 .fi
 .SH EXAMPLES
 .nf

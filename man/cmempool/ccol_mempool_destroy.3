@@ -11,8 +11,8 @@ ccol_mempool_destroy(mp);
 .fi
 .SH DESCRIPTION
 .nf
-Frees every resource of the memory pool. For a pool that was created from
-a preallocated buffer, this macro frees only the pool struct and not the
+Frees every resource of the memory pool. For a pool created from a
+preallocated buffer the macro frees only the pool struct, not the
 buffer itself.
 .fi
 .SH PARAMETERS
@@ -21,47 +21,47 @@ mp   Memory pool to destroy. The macro sets it to NULL afterward
 .fi
 .SH NOTES
 .nf
-It is safe to call this macro with a NULL pointer
-For a preallocated pool, the caller owns the lifetime of the buffer
+Calling the macro with a NULL pointer is safe
+For a preallocated pool, the buffer's lifetime is the caller's business
 
 The macro evaluates mp exactly once. It must be a modifiable lvalue,
-such as a variable or an element of an array, so an expression with a
-side effect, such as handles[i++], destroys and clears one element.
+such as a variable or an element of an array, so with an expression
+that has a side effect, such as handles[i++], it destroys and clears
+one element.
 .fi
 .PP
 The library can call the free function of a custom allocator after this macro
-returns, and after main() returns. A pool that threads share keeps a small
-cache of entries for each thread, and a destroy of the pool marks those caches
-dead without freeing them, because a cache belongs to the thread that holds it
-and another thread must not free it under that thread. The library frees each
-cache later, at one of three points: when the owning thread next has to get a
-cache for a pool that it does not already hold one for; when that thread
-exits; or at process exit, or when dlclose(3) unloads the library, if that
-thread is the one that runs the unload handler of the library. Each free calls
-the free function that the pool was created with. None of these three points is
-guaranteed to happen: a thread that keeps using the same few pools answers
-every request from the caches that it already holds, never gets another one,
-and so can hold a dead cache for ever. A program that needs its allocator to
-see every free should join such threads.
+returns, and even after main() returns. A pool that threads share keeps a small
+cache of entries for each thread. A destroy of the pool marks those caches dead
+but doesn't free them, because a cache belongs to the thread that holds it and
+another thread must not free it under that thread. Each cache is freed later,
+at one of three points: when the owning thread next has to get a cache for a
+pool that it doesn't already hold one for, when that thread exits, or at
+process exit or when dlclose(3) unloads the library, if that thread is the one
+that runs the library's unload handler. Each free calls the free function that
+the pool was created with. None of these points is guaranteed to come: a thread
+that keeps using the same few pools answers every request from the caches it
+already holds and never gets another one, so it can hold a dead cache for ever.
+A program that needs its allocator to see every free should join such threads.
 .PP
-Once dlclose(3) unloads the library, the code that frees a cache is gone, so
-the cache of every other thread that is still running stays allocated for the
-rest of the process, while that thread exits cleanly. When their caches must go
+Once dlclose(3) unloads the library the code that frees a cache is gone, so the
+cache of every other thread that is still running stays allocated for the rest
+of the process, while that thread itself exits cleanly. If their caches must go
 back to the allocator, join the threads that used a thread-safe pool before you
 unload the library.
 .PP
-An allocator that is itself torn down at a known point must therefore outlive
-that point. The library can call an allocator that draws from an arena after
-the end of main() has freed that arena, and the same is true for an allocator
-that draws from storage which the exit handler of the application frees. An
-allocator built on malloc and free is not affected, and neither is one built on
-storage that lives for the whole process. A pool created with single_threaded
-keeps no such cache and has no such tail.
+So an allocator that is torn down at a known point must outlive that point. The
+library can call an allocator that draws from an arena after the end of main()
+has freed that arena, and the same goes for an allocator that draws from
+storage which the application's exit handler frees. An allocator built on
+malloc and free isn't affected, and neither is one built on storage that lives
+for the whole process. A pool created with single_threaded keeps no such cache
+and has no such tail.
 .SH WARNINGS
 .nf
-A pointer from the dynamic fallback that nobody freed causes an
-assertion failure, so free every allocated entry before you destroy the
-pool.
+A pointer from the dynamic fallback that was never freed makes the
+destroy fail an assertion, so free every allocated entry before you
+destroy the pool.
 .fi
 .SH "SEE ALSO"
 .BR ccol_mempool_create (3),

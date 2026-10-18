@@ -1,0 +1,122 @@
+.TH CLRUCACHE 7 "2026-10-14" "c_collections" "C Collections Library - Overview"
+.SH NAME
+clrucache \- overview of the thread-safe LRU cache
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/clrucache.h>
+.fi
+.SH DESCRIPTION
+.nf
+A clru_cache holds up to a fixed number of key-value entries and
+evicts the least recently used entry to make room for a new one. A
+hash map gives it O(1) lookup and a linked list O(1) eviction. A cache
+can sit in front of a remote store: a remote getter fills a miss, and
+a remote setter writes each set through to the store before the cache
+changes.
+
+The API has two layers:
+  - The type-inferred macros clru_construct(3), clru_init(3),
+    clru_get(3), clru_set(3) and clru_destroy(3) keep the key type and
+    the value type with the handle and convert each argument to them.
+  - The raw functions clrucache_create_full(3), clrucache_get_full(3)
+    and clrucache_set_full(3) take each key and each value as a
+    cmap_pair and return a ccol_retval_t.
+.fi
+.SS "Handles"
+.nf
+clru_cache is an opaque value handle, not a pointer, and
+CLRU_CACHE_INVALID (0) means no cache. Every handle is checked before
+the cache is touched, so a get or a set through a handle that is
+invalid or already destroyed reports ccol_invalid_args, and a destroy
+of a stale handle stops the process. clru_destroy(3) evicts every
+entry, calling the eviction callback for each one, and sets the handle
+to CLRU_CACHE_INVALID.
+.fi
+.SS "Segments and eviction"
+.nf
+Below a capacity of 128 a cache is one segment with one exact
+least-recently-used order. From 128 entries up the cache is divided
+into segments, each with its own lock. A hash of the key picks the
+segment, and each segment evicts its own least recently used entry
+when its share of the capacity is full, so a full segmented cache
+holds a few percent less than its capacity.
+clrucache_create_full(3) has the details.
+.fi
+.SS "Ownership"
+.nf
+The cache keeps its own copy of every key and value. A get never hands
+out a pointer into the cache: clru_get(3) copies the value into the
+caller's variable, and clrucache_get_full(3) gives a heap copy that
+the caller frees with the cache's allocator (free(3) when the cache
+has none). A char * value that clru_get(3) delivers is such a heap
+copy too.
+
+A remote getter allocates the value it fetches with the cache's
+allocator, and the cache takes ownership of it. The cache keeps its
+own copy of the ccol_memmgmt_procs_t struct, so the caller can release
+the struct once the create returns, but the functions it names must
+stay callable until the cache is destroyed.
+
+A key of a type that the cache doesn't know, such as a struct, is the
+same key as another one only when every byte of the two is equal,
+padding included. With the raw functions, zero such a key with
+memset(3) before you set its members. With GCC 11 or later the macros
+clear the padding of their own copy of the key.
+.fi
+.SS "Concurrent operations on one key"
+.nf
+Getters that miss on the same key share one remote fetch: one getter
+runs the remote getter, and the others wait and get its result.
+Setters of the same key run one at a time, and a getter of a key waits
+while a set of that key is in progress.
+
+A set takes effect when its remote setter returns. Every step that can
+fail for lack of memory runs before the remote setter, and nothing
+after a remote setter that succeeds can fail, so the cache never
+serves a value older than the one the remote store holds. A set whose
+remote setter fails returns ccol_unexpected_failure, and the key keeps
+its old value and its place in the eviction order. While the remote
+setter runs the key stays an ordinary entry, so an insert of another
+key can evict it.
+.fi
+.SS "Callbacks"
+.nf
+The remote getter and the remote setter run with no lock of the cache
+held, so they can use the cache for any other key. They must not get
+or set the key they serve, and they must not destroy the cache,
+because each of those calls waits for the operation that runs the
+callback.
+
+The eviction callback runs while the lock of the evicting segment is
+held, so it must not call into the cache at all. Two segments can
+evict at the same time on two threads, so a callback that keeps state
+of its own must protect that state.
+.fi
+.SH "THREAD SAFETY"
+.nf
+Every function and macro of clrucache can be called from many threads
+at the same time on one cache. Operations on keys in different
+segments don't wait for each other. A destroy waits until every call
+running on the cache has returned before it frees anything, and a get
+or a set that starts after the destroy reports ccol_invalid_args. Two
+destroys of one handle are a programming error.
+.fi
+.SH "SEE ALSO"
+.BR clru_declare (3),
+.BR clru_declare_scoped (3),
+.BR clru_init (3),
+.BR clru_construct (3),
+.BR clru_construct_scoped (3),
+.BR clru_redeclare (3),
+.BR clru_get (3),
+.BR clru_set (3),
+.BR clru_destroy (3),
+.BR clrucache_create_full (3),
+.BR clrucache_get_full (3),
+.BR clrucache_set_full (3),
+.BR clrucache_size (3),
+.BR clrucache_capacity (3),
+.BR chashmap (7),
+.BR ccollections (7)

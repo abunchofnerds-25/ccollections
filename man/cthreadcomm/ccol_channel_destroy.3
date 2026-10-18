@@ -11,21 +11,21 @@ ccol_channel_destroy(ch);
 .fi
 .SH DESCRIPTION
 .nf
-This macro frees all the resources of the ccol_channel, including both
-of the queues inside it, and then sets the ccol_channel pointer to
-NULL.
+Frees everything the ccol_channel holds, both of its queues included,
+and then sets the ccol_channel pointer to NULL.
 
-ccol_event_loop_remove() does not wait for a callback that it already
-gave to a reactor thread, so such a callback can be inside one of the
-queues of the channel when the removal returns. This call blocks until
-every one of those callbacks finishes with that queue, and only then
-frees the queue. This is what makes the documented teardown sequence
-(drain, remove, destroy) safe as written.
+ccol_event_loop_remove() doesn't wait for a callback that it has
+already handed to a reactor thread, so such a callback can still be
+working inside one of the channel's queues when the removal returns.
+This call blocks until every one of those callbacks is done with the
+queue and only then frees it, which is what makes the documented
+teardown order (drain, remove, destroy) safe as written.
 
-A callback that the loop runs for a different registration can run this
+A callback that the loop runs for a different registration can run that
 whole sequence for this channel, with any num_reactor_threads. A
-dispatch that the loop collected for it but did not start yet does not
-hold the destroy up, and it never runs its callback after the removal.
+dispatch that the loop collected for the removed registration but did
+not start yet doesn't hold the destroy up, and it never runs its
+callback after the removal.
 .fi
 .SH PARAMETERS
 .nf
@@ -35,29 +35,31 @@ ch   Channel to destroy. The macro sets it to NULL.
 .nf
 You can call this with a NULL pointer.
 
-The macro evaluates ch exactly once. It must be a modifiable lvalue,
-such as a variable or an element of an array, so an expression with a
-side effect, such as handles[i++], destroys and clears one element.
+ch is evaluated exactly once and must be a modifiable lvalue, such as
+a variable or an array element. An expression with a side effect, such
+as handles[i++], therefore destroys and clears a single element.
 .fi
 .SH WARNINGS
 .nf
-Messages that stay in one of the directions cause an assertion failure,
-so drain both queues before you destroy the channel.
-A watcher on one of the directions also causes an assertion failure. A
-watcher is a ccol_select() call, a ccol_select_timed() call, or an
-ccol_event_loop registration (ccol_selectable_from_chan). Without that
-assertion, the waiter would stay linked and point to the mutex of the
-queue below the channel, which the destroy is about to free.
-Call ccol_event_loop_remove() before you destroy the channel, or let
-every ccol_select() call and every ccol_select_timed() call that
-watches the channel return first.
-Do not call this from inside an ccol_event_loop callback that dispatches
-one of the directions of this ccol_channel: the destroy would wait for
-that same callback. This is a caller error, and the program stops
-through ccol_fatal_err().
-Do not hold an application lock across this call if one of these
-callbacks takes that lock, because the destroy waits for the callback
-while the callback waits for the lock.
+A message left in either direction causes an assertion failure, so
+drain both queues before you destroy the channel.
+
+A watcher on either direction causes an assertion failure too. A
+watcher is a ccol_select() call, a ccol_select_timed() call or a
+ccol_event_loop registration (ccol_selectable_from_chan). Without the
+assertion the waiter would stay linked and keep pointing at the mutex
+of a queue that the destroy is about to free. Call
+ccol_event_loop_remove() first, or let every ccol_select() and
+ccol_select_timed() call that watches the channel return.
+
+Do not call this from inside a ccol_event_loop callback that dispatches
+one of the directions of this ccol_channel, because the destroy would
+wait for that very callback. It is a caller error, and the program
+stops through _ccol_fatal_err().
+
+Do not hold an application lock across this call when one of those
+callbacks takes the same lock: the destroy waits for the callback while
+the callback waits for the lock.
 .fi
 .SH "SEE ALSO"
 .BR ccol_channel_create (3)

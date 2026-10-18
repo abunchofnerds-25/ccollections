@@ -1,30 +1,31 @@
 #!/usr/bin/env python3
-"""Differential testing harness: cyaml vs. PyYAML.
+"""Differential test of cyaml against PyYAML.
 
-Runs cyaml_to_json (a standalone helper built from `make build_differential`
-in this directory's parent) and PyYAML side by side against the same input,
-compares the resulting values, and reports any disagreement.
+It feeds the same input to cyaml_to_json (a small helper that
+`make build_differential` builds in the parent directory) and to PyYAML,
+compares the two values and reports every disagreement.
 
-This is not part of `make test`/`make memtest`; it is a manual/scheduled
-tool, not a blocking pass/fail gate. Its inputs are the vendored YAML Test
-Suite snapshot (../yaml-test-suite/cases/*/in.yaml) and the fuzz seed corpus
-(../fuzz/corpus/*), both already checked into this tree for other purposes.
+This isn't part of `make test` or `make memtest`. It's a tool you run by hand
+or on a schedule, and a mismatch needs a person to judge it, so it never
+fails a build. Its inputs are the vendored YAML Test Suite snapshot
+(../yaml-test-suite/cases/*/in.yaml) and the fuzz seed corpus
+(../fuzz/corpus/*), which the tree already carries for other reasons.
 
-PyYAML implements YAML 1.1, not YAML 1.2 (this library's target), so a plain
-yaml.safe_load() comparison would be dominated by well-known 1.1-vs-1.2
-core-schema noise (yes/no/on/off as booleans, sexagesimal numbers, octal
-without a 0o prefix, timestamp auto-resolution, ...) rather than genuine
-cyaml bugs. Cyaml12CoreLoader below narrows PyYAML's *implicit* (untagged)
-scalar resolution down to exactly the core schema cyaml.h itself documents,
-so a reported mismatch is far more likely to be a real, actionable finding.
-Explicit tags (!!str, !!binary, ...) are untouched here: cyaml resolves and
-applies tags itself now (see cyaml.h), so a value-position tag is expected
-to match PyYAML directly rather than diverge. The one documented exception
-is a tag decorating a dictionary KEY, which cyaml parses for validity but
-always discards (this DOM's keys are plain strings, not nodes, so a key has
-nowhere to store a tag); PyYAML instead resolves a tagged key's own value
-(e.g. a bare "!!null" key becomes the stringified key "null"), which is
-reported as a known, deliberate deviation rather than a bug.
+PyYAML implements YAML 1.1, while this library targets YAML 1.2, so a plain
+yaml.safe_load() comparison would drown in the well-known differences
+between the two core schemas (yes/no/on/off as booleans, sexagesimal
+numbers, octal without 0o, automatic timestamps, ...) instead of showing
+cyaml bugs. Cyaml12CoreLoader below narrows PyYAML's implicit (untagged)
+scalar resolution to exactly the core schema that cyaml.h documents, so a
+mismatch it reports is usually worth a look.
+
+Explicit tags (!!str, !!binary, ...) are left alone: cyaml resolves and
+applies tags itself (see cyaml.h), so a tag on a value should agree with
+PyYAML. The one documented exception is a tag on a dictionary KEY. cyaml
+checks that it is valid and then drops it, because a key in this DOM is a
+plain string and has nowhere to keep a tag, while PyYAML resolves the
+tagged key (a bare "!!null" key becomes the key "null"). That case is
+reported as a known deviation, not as a bug.
 """
 
 import glob
@@ -42,9 +43,20 @@ CYAML_TO_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 
 class Cyaml12CoreLoader(yaml.SafeLoader):
-    """SafeLoader with implicit scalar resolution narrowed to match this
-    library's own documented YAML 1.2 core schema (see cyaml.h's "Implicit
-    typing" section)."""
+    """A SafeLoader whose implicit scalar resolution is narrowed to the YAML
+    1.2 core schema that cyaml.h documents (its "Implicit typing" section),
+    plus the YAML 1.2 rule for the non-specific tag."""
+
+    def compose_scalar_node(self, anchor):
+        # PyYAML reads a bare "!" as no tag at all, so "! 12" turns into
+        # the integer 12 and a lone "!" into None. YAML 1.2 section 6.9.1
+        # (Example 6.28) makes a scalar under the non-specific tag a string,
+        # and that's what cyaml does. Without this, every input with a bare
+        # "!" on a scalar would report a mismatch that is PyYAML's fault.
+        event = self.peek_event()
+        if event.tag == "!":
+            event.tag = "tag:yaml.org,2002:str"
+        return super().compose_scalar_node(anchor)
 
 
 Cyaml12CoreLoader.yaml_implicit_resolvers = {}
@@ -74,8 +86,30 @@ Cyaml12CoreLoader.add_implicit_resolver(
     )$""", re.X),
     list("-+.0123456789"))
 
-# Merge keys (<<:) are a documented cyaml feature (see cyaml.h); keep
-# PyYAML's own recognition of the key so both sides expand it the same way.
+_LLONG_MAX = 2**63 - 1
+
+
+def _construct_core_int(loader, node):
+    """cyaml keeps an integer in a signed 64-bit long long. A decimal literal
+    outside that range becomes a float of the same magnitude, and an
+    unsigned 0x or 0o literal above LLONG_MAX stays a string, since the core
+    schema gives hex and octal no float reading (cyaml.h, "Integer range").
+    PyYAML builds an int of any size, so this maps both cases onto what
+    cyaml documents."""
+    text = loader.construct_scalar(node)
+    if text[:2] in ("0x", "0o"):
+        value = int(text[2:], 16 if text[1] == "x" else 8)
+        return text if value > _LLONG_MAX else value
+    value = int(text, 10)
+    if value > _LLONG_MAX or value < -_LLONG_MAX - 1:
+        return float(text)
+    return value
+
+
+Cyaml12CoreLoader.add_constructor("tag:yaml.org,2002:int", _construct_core_int)
+
+# cyaml supports merge keys (<<:), see cyaml.h, so we keep PyYAML's
+# recognition of that key and both sides expand it the same way.
 Cyaml12CoreLoader.add_implicit_resolver(
     "tag:yaml.org,2002:merge",
     re.compile(r"^(?:<<)$"),
@@ -83,9 +117,8 @@ Cyaml12CoreLoader.add_implicit_resolver(
 
 
 def to_jsonable(obj):
-    """Mirrors cyaml_to_json.c's own JSON encoding exactly, including its
-    NaN/Infinity sentinel strings, so both sides can be compared with a
-    plain ==."""
+    """Encodes a value exactly as cyaml_to_json.c does, NaN and Infinity
+    sentinel strings included, so the two sides compare with a plain ==."""
     if obj is None or isinstance(obj, (bool, str)):
         return obj
     if isinstance(obj, int):
@@ -104,15 +137,14 @@ def to_jsonable(obj):
 
 
 def to_key_string(key):
-    """cyaml's own dictionary storage is always char*-keyed: every scalar
-    key is stored as its raw text, including a YAML-null key, stored as
-    the literal text "null" (cyaml's own canonical text for a null value,
-    matching what cyaml_serialize would emit for one), not Python's str(None).
-    A non-string PyYAML key (e.g. an integer or bool scalar used as a
-    mapping key) is stringified to match; a non-scalar key never reaches
-    here, since PyYAML/Python cannot construct one as a dict key at all
-    (see run_pyyaml's own handling of that case as an expected
-    accept/reject divergence)."""
+    """cyaml always keys a dictionary by a char *: every scalar key is
+    stored as its text, and a YAML null key as the text "null" (cyaml's
+    canonical text for null, which is also what cyaml_serialize writes),
+    not as Python's str(None). A PyYAML key that isn't a string, such as an
+    integer or a bool, is turned into its text to match. A key that isn't a
+    scalar never gets here, because Python can't use one as a dict key at
+    all; run_pyyaml reports that case as an expected accept/reject
+    difference."""
     if key is None:
         return "null"
     if isinstance(key, str):
@@ -128,12 +160,10 @@ def run_cyaml(data: bytes):
                            capture_output=True)
     if proc.returncode != 0:
         return False, proc.stderr.decode("utf-8", "replace").strip()
-    # cyaml refuses input that is not well-formed UTF-8 (see cyaml.h), so
-    # cyaml_to_json is not expected to emit non-UTF-8 bytes in output that
-    # is meant to be UTF-8-encoded JSON. The output is decoded explicitly
-    # all the same, and that case is reported on its own, instead of letting
-    # UnicodeDecodeError propagate uncaught and abort the whole comparison
-    # run.
+    # cyaml refuses input that isn't well-formed UTF-8 (see cyaml.h), so
+    # cyaml_to_json shouldn't ever print bytes that aren't UTF-8. We decode
+    # the output explicitly anyway and report that case on its own, because
+    # an uncaught UnicodeDecodeError would end the whole comparison run.
     try:
         stdout_text = proc.stdout.decode("utf-8")
     except UnicodeDecodeError as e:
@@ -145,34 +175,30 @@ def run_cyaml(data: bytes):
 
 
 def run_pyyaml(data: bytes):
-    """Returns (ok, value_or_error_message). Mirrors cyaml_parse's own
-    documented multi-document convention: a single document is returned
-    directly, more than one is wrapped in a list. A stream with no
-    documents at all (empty input, or comment-only input) is the same
-    "one empty document" case as an explicit empty document; PyYAML's
-    own load_all() quirk of yielding zero items there is a generator
-    artifact, not a real zero-documents result (yaml.load() on the same
-    input returns None, not an error), so it is normalized to None rather
-    than an empty list."""
+    """Returns (ok, value_or_error_message), following cyaml_parse's
+    documented rule for several documents: one document comes back as it
+    is, more than one comes back wrapped in a list. A stream with no
+    documents at all (empty or only comments) counts as one empty document,
+    just like an explicit empty one. PyYAML's load_all() yields nothing
+    there, but that's a side effect of it being a generator (yaml.load() on
+    the same input returns None), so we turn it into None and not into an
+    empty list."""
     try:
         docs = list(yaml.load_all(data, Loader=Cyaml12CoreLoader))
     except yaml.YAMLError as e:
         return False, str(e)
     except Exception as e:
-        # A malformed input can hit a genuine PyYAML-internal bug instead
-        # of a normal, cleanly-reported yaml.YAMLError. For example, a \U
-        # escape naming a codepoint >= 0x110000 makes PyYAML's own scanner
-        # call chr() on an out-of-range value (ValueError), and its
-        # regex-based scalar resolver can match a value as boolean-looking
-        # while its own construct_yaml_bool value-lookup table then rejects
-        # it (KeyError); a larger fuzz corpus keeps finding further internal
-        # PyYAML failure modes of this shape. Every one is reported the
-        # same way as an ordinary pyyaml-side rejection, with the actual
-        # exception type named for diagnostic purposes, instead of letting
-        # it abort the whole comparison run. Catching Exception, instead of
-        # a specific, growing list of exception types, lets
-        # KeyboardInterrupt/SystemExit/GeneratorExit (none of which
-        # subclass Exception) propagate normally.
+        # Malformed input can hit a real bug inside PyYAML instead of a
+        # clean yaml.YAMLError. A \U escape that names a code point of
+        # 0x110000 or more makes its scanner call chr() out of range
+        # (ValueError), and its regex resolver can take a value for a bool
+        # that the construct_yaml_bool table then doesn't know (KeyError).
+        # A larger fuzz corpus finds more of these. We report each one like
+        # any other PyYAML rejection, with the exception type in the message,
+        # rather than let it end the run. Catching Exception and not a list
+        # of types that would keep growing still lets KeyboardInterrupt,
+        # SystemExit and GeneratorExit through, since none of them
+        # subclasses Exception.
         return False, f"pyyaml raised {type(e).__name__}: {e}"
     if not docs:
         value = None
@@ -186,14 +212,12 @@ def run_pyyaml(data: bytes):
         return False, str(e)
 
 
-# Value-level mismatches that were investigated one by one (checked against
-# a second reference parser, Ruby's Psych, before being accepted) and judged
-# NOT to be cyaml bugs; see this project's own internal history notes for
-# the full reasoning behind each one. The dict is keyed by case_id() below.
-# tests_spec_suite.c's own KNOWN_DEVIATIONS covers only
-# accept/reject-level disagreement against the vendored suite itself, while
-# this dict is specifically about VALUE-level disagreement against PyYAML,
-# so the two lists are not expected to overlap.
+# Value mismatches that are not cyaml bugs. Each one is checked against a
+# second reference parser, Ruby's Psych, and its entry says why cyaml's
+# reading is the right one. The keys come from case_id() below.
+# KNOWN_DEVIATIONS in tests_spec_suite.c is about accept/reject differences
+# against the vendored suite, while this dict is about VALUE differences
+# against PyYAML, so the two lists don't overlap.
 KNOWN_VALUE_DEVIATIONS = {
     "652Z": "reference-parser leniency: cyaml correctly treats a bare '?' "
             "glued to non-whitespace content as a plain scalar, not an "
@@ -202,12 +226,6 @@ KNOWN_VALUE_DEVIATIONS = {
             "verified against a reference parser). PyYAML/Psych are both "
             "more lenient than the strict grammar here.",
     "HM87-1": "same glued-'?' leniency as 652Z, sequence-element form.",
-    "FH7J": "tag-on-key-discarded policy: cyaml parses a tag decorating a "
-            "dictionary key for validity but always discards it (keys are "
-            "plain strings, not nodes, so there is nowhere to store one), "
-            "while PyYAML resolves a tagged key's own value (e.g. a bare "
-            "'!!null' key becomes the stringified key 'null' rather than "
-            "cyaml's raw, tag-stripped empty-string key).",
     "Y2GN": "anchor name containing ':' (\"&an:chor\"): PyYAML and Psych "
             "disagree with EACH OTHER here, not just with cyaml, so there "
             "is no reference-parser consensus to judge cyaml against; "
@@ -223,9 +241,9 @@ KNOWN_VALUE_DEVIATIONS = {
 }
 
 def case_id(path):
-    """The suite's own case directory name for a yaml-test-suite input, or
-    the filename (no extension) for a fuzz-corpus input; matches the keys
-    in KNOWN_VALUE_DEVIATIONS above."""
+    """The case directory name for a yaml-test-suite input, or the file
+    name without its extension for a fuzz corpus input, which is how
+    KNOWN_VALUE_DEVIATIONS above is keyed."""
     base = os.path.basename(os.path.dirname(path))
     if base and base != "corpus":
         return base

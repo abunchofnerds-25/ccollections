@@ -11,8 +11,8 @@ void *cvector_at(cvec v, size_t index);
 .fi
 .SH DESCRIPTION
 .nf
-This function gives a pointer to the element at the given index, which
-the caller can use to read the element or to change it in place.
+Gives a pointer to the element at the given index, through which the
+caller can read the element or change it in place.
 .fi
 .SH PARAMETERS
 .nf
@@ -21,14 +21,13 @@ index  Zero-based index of the element to access
 .fi
 .SH RETURN VALUE
 .nf
-Gives a pointer to the element at the index on success
-Gives NULL when index >= elem_count, and when the vector is empty
+A pointer to the element at the index on success.
+NULL when index >= elem_count, and when the vector is empty.
 .fi
 .SH NOTES
 .nf
-O(1) complexity
-The pointer stays valid only until the size of the vector changes
-The function asserts when v is NULL
+O(1). The pointer is valid only until the size of the vector changes. The
+function asserts when v is NULL.
 .fi
 .SH "SEE ALSO"
 .BR cvec_at (3),

@@ -11,11 +11,11 @@ cyaml_declare(var_name);
 .fi
 .SH DESCRIPTION
 .nf
-Declare a cyaml handle variable named var_name, without initializing
-it.  The macro exists so that the naming convention matches the other
-c_collections modules, each of which has its own _declare macro.
+Declares a cyaml handle named var_name and leaves it uninitialized.
+The macro is there so that cyaml follows the naming convention of the
+other c_collections modules, which all have a _declare macro.
 
-This macro expands to "cyaml var_name".
+It expands to "cyaml var_name".
 .fi
 .SH PARAMETERS
 .nf

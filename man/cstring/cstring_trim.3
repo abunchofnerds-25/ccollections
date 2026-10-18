@@ -11,8 +11,13 @@ void cstring_trim(cstr s);
 .fi
 .SH DESCRIPTION
 .nf
-Removes all leading and trailing whitespace characters, as classified by
-isspace(), from the string in-place. Internal whitespace is preserved.
+This function removes all leading and trailing white space from the
+string, in place. White space means the six ASCII bytes space, '\et',
+'\en', '\ev', '\ef' and '\er', in every locale, because the function
+doesn't ask the locale the way isspace() does. No other byte counts as
+white space, so a byte above 0x7F, such as a no-break space or a piece of
+a UTF-8 sequence, is never removed and a UTF-8 string stays valid. White
+space inside the string is kept.
 .fi
 .SH PARAMETERS
 .nf
@@ -20,7 +25,7 @@ s   String to change
 .fi
 .SH NOTES
 .nf
-If the string consists entirely of whitespace it becomes empty
+A string that holds nothing but white space becomes empty
 Asserts if s is NULL
 .fi
 .SH "SEE ALSO"

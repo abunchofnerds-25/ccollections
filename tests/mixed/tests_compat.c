@@ -1,7 +1,7 @@
 /* The corpus for behavioural compatibility.
  *
  * The "Behavioral compatibility" section of doc/compatibility.md promises
- * that six things do not change inside the 1.x series:
+ * that six things stay the same within the 1.x series:
  * - the retval that a given input gives, and which conditions are fatal
  * - which operations invalidate an iterator or a borrowed pointer
  * - the ownership rules for a key, a value and a node
@@ -10,46 +10,46 @@
  *   gives
  * - the thread-safety class of each type.
  *
- * `make check_abi` covers the shape of the interface. Nothing else covers
- * the list above. A rewrite can keep each signature and each struct layout
- * and also make these changes:
+ * `make check_abi` covers the shape of the interface but nothing covers the
+ * list above. A rewrite could keep every signature and every struct layout
+ * and still do things like these:
  * - It frees a node that the caller owns.
  * - It runs a callback on a different thread.
  * - It allocates from the default allocator, and not from the allocator
  *   that it got.
- * The ABI gate and the suite of each module stay green. This binary makes
- * sure that such a change is not silent.
+ * The ABI gate and every module's suite would stay green, and this binary
+ * is here so that such a change doesn't go unnoticed.
  *
- * Two rules control what this corpus holds. These rules prevent the corpus
- * from becoming a burden that somebody deletes when it is not convenient.
+ * Two rules decide what goes into this corpus, and they are what keeps it
+ * from turning into a burden that somebody deletes when it gets in the way.
  *
- * This corpus pins only DOCUMENTED promises. Each assertion below matches a
- * sentence in a doc/ guide, in a man page, or in the doc comment of a public
- * header. The comment on each test names the promise that it pins. It pins
- * no incidental behaviour. The policy explicitly allows a faster
- * replacement of an algorithm or a data structure inside 1.x. An assertion
- * on an exact allocation count, a bucket order or a capacity progression
- * forbids what the policy allows.
+ * The corpus pins only DOCUMENTED promises. Every assertion below matches a
+ * sentence in a doc/ guide, in a man page or in the doc comment of a public
+ * header, and the comment on each test names the promise it pins. Incidental
+ * behaviour isn't pinned. The policy explicitly allows a faster algorithm or
+ * data structure to replace the current one inside 1.x, and an assertion on
+ * an exact allocation count, a bucket order or a capacity progression would
+ * forbid what the policy allows.
  *
- * Each expectation uses terms that the library does not control. A test
- * that compares against a constant of the library passes for each value of
- * that constant. Such a test checks nothing. Therefore, each test compares a
- * retval against a numeric literal. A test of a promise about the source of
- * memory uses an allocator that this file owns.
+ * Every expectation is written in terms the library doesn't control. A test
+ * that compares against one of the library's own constants passes whatever
+ * value that constant has, so it checks nothing. That's why each test
+ * compares a retval against a numeric literal, and a test of where memory
+ * comes from uses an allocator that this file owns.
  *
- * For invalidation, this corpus pins only positive guarantees. A test can
- * assert "a reference stays valid across X". A test cannot assert "Y
- * invalidates a reference". A read of a pointer that the library
- * invalidated is undefined behaviour. Therefore, such a test checks the
- * sanitizer, and not the contract. Do not "complete" the iterator section
- * with such a test.
+ * For invalidation the corpus pins only the positive guarantees. A test can
+ * assert "a reference stays valid across X", but it can't assert "Y
+ * invalidates a reference", because reading a pointer the library has
+ * invalidated is undefined behaviour and such a test would be checking the
+ * sanitizer and not the contract. Please don't "complete" the iterator
+ * section with a test like that.
  *
- * These tests are not vacuous. A file of assertions with no output of its
- * own looks the same when it checks something and when it checks nothing.
- * Therefore, each category below is known to fail against a library that breaks
- * it. Each of these five changes to a scratch copy of src/ makes the named
- * tests fail. When somebody adds a category, do these changes again. A
- * promise that has no failing change behind it is not proved checkable.
+ * Each of these tests can fail. A file of assertions with no output of its
+ * own looks the same whether it checks something or nothing, so every
+ * category below is known to fail against a library that breaks it. Each
+ * of these five changes to a scratch copy of src/ makes the named tests
+ * fail. When you add a category, run these changes again, because a promise
+ * with no failing change behind it hasn't been shown to be checkable.
  *
  *   1. Call on_complete before task->fn in the worker loop of
  *      cthreadpool.c.
@@ -59,21 +59,21 @@
  *      -> compat_ownership.a_json_attach_that_runs_out_of_memory_...
  *   3. Allocate the first backing store of a vector with malloc(), and not
  *      with _ccol_mem_alloc(mmgt_procs, ...).
- *      -> this stops the process in the allocator of this file, which
- *         refuses to free a block that it never gave out
+ *      -> this stops the process in this file's allocator, which refuses
+ *         to free a block it never handed out
  *   4. Skip __chmap_iterator_destroy() when an open-addressing iteration
  *      ends.
  *      -> compat_iterators.running_an_iterator_to_the_end_returns_its_memory
  *         and compat_allocator.an_iterator_is_allocated_from_the_container...
- *   5. Make chmap_get_elem_ref() return a pointer to one shared static copy,
- *      and not a pointer into the map.
+ *   5. Make chmap_get_elem_ref() set val_pair->ptr to the address of one
+ *      shared static copy of the value, and not to the value in the map.
  *      -> all three compat_pointer_stability tests
  *
- * In a script for those changes, make sure that the anchor matches exactly
- * one time before you build. Check the status of the build and the
- * timestamp of the binary separately from the run. A mutation that does not
- * compile leaves the previous binary in place. A run of that binary passes,
- * and it looks exactly like a test that found nothing.
+ * If you script those changes, make sure each anchor matches exactly once
+ * before you build, and check the build status and the binary's timestamp
+ * separately from the run. A mutation that doesn't compile leaves the
+ * previous binary in place, and running that binary passes in a way that
+ * looks exactly like a test that found nothing.
  */
 
 #include <cbstmap.h>
@@ -89,11 +89,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #include <tau/tau.h>
-#pragma GCC diagnostic pop
+#include <time.h>
 
 TAU_MAIN()
 
@@ -101,21 +98,21 @@ TAU_MAIN()
 /*                    A COUNTING, IDENTIFYING ALLOCATOR                       */
 /* ========================================================================== */
 
-/* This allocator answers the two questions that the allocator promise
- * raises: did the library use this allocator, and did everything that it
- * gave out come back?
+/* This allocator answers the two questions the allocator promise raises:
+ * did the library use this allocator at all, and did everything it handed
+ * out come back?
  *
- * It also identifies its own blocks: it checks every free against the live
- * set and stops the process on a pointer that it never made. That is what
- * turns "the container frees with the allocator that it allocated from" from
- * a claim into a check; without it, a container that allocated from malloc
- * and freed through these procs looks exactly like a correct one.
+ * It also knows its own blocks. Every free is checked against the live set
+ * and a pointer it never made stops the process. That's what turns "the
+ * container frees with the allocator it allocated from" from a claim into
+ * a check, because without it a container that allocated from malloc and
+ * freed through these procs would look exactly like a correct one.
  *
- * This allocator is single-threaded by construction, because the registry
- * below is a plain array with no synchronisation. Give it only to objects
- * that this file drives from one thread, and never to a thread pool or to a
- * cache under concurrent use: a test-only counter that races is a sanitizer
- * finding of its own.
+ * The allocator is single-threaded by construction, since the registry
+ * below is a plain array with no synchronisation. Only give it to objects
+ * that this file drives from one thread, never to a thread pool or to a
+ * cache under concurrent use, because a test-only counter that races is a
+ * sanitizer finding of its own.
  */
 #define CA_MAX_LIVE 8192
 
@@ -124,8 +121,8 @@ typedef struct {
   size_t live_count;
   size_t alloc_calls; /* malloc, calloc and realloc that gave memory */
   size_t free_calls;
-  /* Once alloc_calls reaches this value, the allocator refuses every further
-   * request. SIZE_MAX keeps the allocator honest. */
+  /* Once alloc_calls reaches this value the allocator refuses every request
+   * after it. SIZE_MAX keeps the allocator honest. */
   size_t fail_from;
 } counting_allocator_t;
 
@@ -152,8 +149,8 @@ static void ca_forget(void *p) {
       return;
     }
   }
-  /* This is a block that this allocator never gave out, so the container
-   * mixes two allocators, which is the defect that this registry exists to
+  /* A block this allocator never handed out, which means the container is
+   * mixing two allocators, the very defect this registry is here to
    * catch. */
   fprintf(stderr, "counting allocator: free of a foreign pointer %p\n", p);
   abort();
@@ -181,11 +178,11 @@ static void *ca_calloc(size_t a, size_t b) {
 
 static void *ca_realloc(void *old, size_t n) {
   if (ca_refusing()) return NULL;
-  /* The registry is updated before the call, not after it. Once realloc()
-   * returns, the value of the old pointer is indeterminate, so this file
-   * must not inspect it, not even to compare it against the registry. The
-   * code retires the block while the block is still valid, and puts it back
-   * only if realloc refuses. */
+  /* The registry is updated before the call and not after it. Once
+   * realloc() returns, the old pointer's value is indeterminate and this
+   * file must not look at it, not even to compare it with the registry. So
+   * we retire the block while it's still valid and put it back only if
+   * realloc refuses. */
   if (old) ca_forget(old);
   void *p = realloc(old, n);
   if (!p) {
@@ -215,11 +212,11 @@ static ccol_memmgmt_procs_t *ca_procs(void) { return &g_ca_procs; }
 /*         PROMISE: no enumerator's numeric value changes within 1.x          */
 /* ========================================================================== */
 
-/* doc/compatibility.md and ccollections(7) state this promise. Both give
- * zero as the value of ccol_success, because call sites compare against
- * that value directly. The literals here are intentional: a comparison of
- * an enumerator against itself is true under any renumbering, and the
- * promise forbids a renumbering. */
+/* doc/compatibility.md and ccollections(7) state this promise, and both give
+ * zero as the value of ccol_success because call sites compare against it
+ * directly. The literals here are on purpose: comparing an enumerator with
+ * itself is true under any renumbering, and a renumbering is exactly what
+ * the promise forbids. */
 TEST(compat_enum_values, ccol_retval_t_enumerators_keep_their_numeric_values) {
   REQUIRE_EQ((int)ccol_success, 0);
   REQUIRE_EQ((int)ccol_not_enough_memory, -1);
@@ -248,12 +245,12 @@ TEST(compat_enum_values, ccol_data_type_enumerators_keep_their_numeric_values) {
 /*   PROMISE: the circumstances under which a caller-supplied allocator runs  */
 /* ========================================================================== */
 
-/* ccollections(7): each module that allocates accepts a
- * ccol_memmgmt_procs_t * when it creates an object, so the storage of the
- * container comes from those procs and goes back to them, and these tests
- * pin that. They assert only that the count is not zero and that it
- * balances, not the count itself, because the policy allows a change of
- * algorithm, and such a change changes the counts. */
+/* ccollections(7): every module that allocates accepts a
+ * ccol_memmgmt_procs_t * when it creates an object, so the container's
+ * storage comes from those procs and goes back to them, which is what these
+ * tests pin. They only assert that the count isn't zero and that it
+ * balances, never the count itself, because the policy allows a change of
+ * algorithm and such a change moves the counts. */
 TEST(compat_allocator, a_hash_map_allocates_and_frees_through_the_given_procs) {
   ca_reset();
   {
@@ -300,9 +297,9 @@ TEST(compat_allocator, a_vector_allocates_and_frees_through_the_given_procs) {
 
 TEST(compat_allocator, passing_null_procs_selects_the_standard_family) {
   /* ccollections(7): a NULL pointer selects the standard malloc(3),
-   * calloc(3), realloc(3) and free(3). This test makes sure that nothing
-   * touches the allocator of the caller, which is the only half of the
-   * promise that a test can see. */
+   * calloc(3), realloc(3) and free(3). The test makes sure nothing touches
+   * the caller's allocator, which is the only half of the promise a test can
+   * see. */
   ca_reset();
   {
     chmap_construct_mp(m, int, int, NULL);
@@ -317,9 +314,9 @@ TEST(compat_allocator, passing_null_procs_selects_the_standard_family) {
 }
 
 TEST(compat_allocator, an_iterator_is_allocated_from_the_container_own_procs) {
-  /* An iterator is memory that the caller never names, so only two
-   * statements about it are possible: which allocator it comes from, and
-   * that it goes back. Both are part of the same promise. */
+  /* The caller never names an iterator's memory, so there are only two
+   * things to say about it: which allocator it comes from and that it goes
+   * back. Both belong to the same promise. */
   ca_reset();
   {
     chmap_construct_mp(m, int, int, ca_procs());
@@ -342,10 +339,10 @@ TEST(compat_allocator, an_iterator_is_allocated_from_the_container_own_procs) {
 }
 
 TEST(compat_allocator, a_refused_allocation_is_reported_rather_than_fatal) {
-  /* This is the companion of the promise about a retval: on the raw function
-   * layer, a lack of memory is a returned value, never a call to
-   * ccol_fatal_err(). A process that stopped here would fail this whole
-   * binary instead of one test. */
+  /* The companion of the retval promise: on the raw function layer running
+   * out of memory is a returned value and never a call to _ccol_fatal_err().
+   * A process that stopped here would fail this whole binary instead of one
+   * test. */
   ca_reset();
   chmap_construct_mp(m, int, int, ca_procs());
 
@@ -372,10 +369,10 @@ TEST(compat_allocator, a_refused_allocation_is_reported_rather_than_fatal) {
 TEST(compat_ownership,
      a_map_copies_a_string_key_and_value_into_its_own_storage) {
   /* doc/chashmap.md and chmap_insert_elem(3): the map stores copies, so the
-   * buffer of the caller stays the property of the caller, to use again or
-   * to free. After the insert, the test writes over the source buffers to
-   * show the difference between a copy and a kept pointer: a map that
-   * aliased the caller would give back the text that the test wrote. */
+   * caller's buffer stays the caller's, to reuse or to free. After the insert
+   * the test writes over the source buffers to tell a copy apart from a kept
+   * pointer, because a map that aliased the caller would hand back the text
+   * the test wrote. */
   char key[32];
   char val[32];
   snprintf(key, sizeof(key), "alice");
@@ -389,9 +386,9 @@ TEST(compat_ownership,
   key[sizeof(key) - 1] = '\0';
   val[sizeof(val) - 1] = '\0';
 
-  /* This uses get_ptr rather than get, because chmap_get() stops the process
-   * when the key is absent, which is exactly what a regression here
-   * produces, and such a stop takes every other test in this binary down
+  /* We use get_ptr and not get here, because chmap_get() stops the process
+   * when the key is absent, which is exactly what a regression here would
+   * produce, and such a stop takes every other test in this binary down
    * with it. */
   char *const *found = chmap_get_ptr(m, "alice");
   bool copied = found && *found && strcmp(*found, "engineer") == 0;
@@ -401,10 +398,10 @@ TEST(compat_ownership,
 
 TEST(compat_ownership, attaching_a_json_child_transfers_it_to_the_parent) {
   /* cjson.h: "cjson_list_push() and cjson_dictionary_set() transfer
-   * ownership of the child to the parent; do not free it afterwards." A
-   * destroy of the parent alone must return every block, which shows that
-   * the parent took the child over. This test deliberately never destroys
-   * the child. */
+   * ownership of the child to the parent; do not free it afterwards." So
+   * destroying the parent alone gives back every block, which shows
+   * that the parent took the child over. The test never destroys the child,
+   * on purpose. */
   ca_reset();
   cjson root = cjson_create_dictionary_mp(ca_procs());
   cjson child = cjson_create_string_mp("value", ca_procs());
@@ -422,8 +419,8 @@ TEST(compat_ownership, attaching_a_json_child_transfers_it_to_the_parent) {
 TEST(compat_ownership,
      a_json_get_hands_back_a_reference_the_parent_still_owns) {
   /* cjson.h: "cjson_get() returns a NON-OWNING reference valid until the
-   * tree is mutated or destroyed." The caller must not free it, so a destroy
-   * of the parent alone must account for everything. */
+   * tree is mutated or destroyed." The caller must not free it, so
+   * destroying the parent alone must account for everything. */
   ca_reset();
   cjson root = cjson_create_dictionary_mp(ca_procs());
   cjson child = cjson_create_string_mp("value", ca_procs());
@@ -443,10 +440,10 @@ TEST(compat_ownership,
      an_already_attached_json_child_is_refused_and_left_alone) {
   /* The doc comment of cjson_list_push(): a child that already has a parent
    * is "rejected with ccol_invalid_args and @p child is left completely
-   * untouched, still owned by whatever it was already attached to". This
-   * failure therefore does NOT transfer the ownership, and the first parent
-   * frees the child. What a failed attach does depends on which failure it
-   * was, and that fine point is worth a test. */
+   * untouched, still owned by whatever it was already attached to". So this
+   * failure does NOT transfer the ownership, and the first parent frees the
+   * child. What a failed attach does depends on which failure it was, and
+   * that fine point deserves a test. */
   ca_reset();
   cjson first = cjson_create_list_mp(ca_procs());
   cjson second = cjson_create_list_mp(ca_procs());
@@ -455,8 +452,8 @@ TEST(compat_ownership,
       first && second && child && cjson_list_push(first, child) == ccol_success;
 
   ccol_retval_t r = built ? cjson_list_push(second, child) : ccol_success;
-  /* `first` still owns child, so a destroy of both parents, and of nothing
-   * else, must account for every block exactly once. */
+  /* `first` keeps owning child, so destroying both parents and nothing else
+   * should account for every block exactly once. */
   cjson_destroy(second);
   cjson_destroy(first);
 
@@ -467,10 +464,10 @@ TEST(compat_ownership,
 
 TEST(compat_ownership,
      a_json_attach_that_runs_out_of_memory_destroys_the_child) {
-  /* This is the other half of the rule above: the ownership also transfers
-   * on the path where memory runs out. The child is gone once the call
-   * returns, so freeing it here would be a double free, and a destroy of the
-   * parent alone must balance. */
+  /* The other half of the rule above: when memory runs out the ownership
+   * transfers as well. The child is gone once the call returns, so freeing
+   * it here would be a double free, and destroying the parent alone has to
+   * balance. */
   ca_reset();
   cjson root = cjson_create_dictionary_mp(ca_procs());
   cjson child = cjson_create_string_mp("value", ca_procs());
@@ -487,20 +484,20 @@ TEST(compat_ownership,
   REQUIRE_EQ(g_ca.live_count, (size_t)0);
 }
 
-/* cjson and cyaml share one ownership rule: ccol_invalid_args means that the
- * function rejected the arguments, that nothing touched the child, and that
- * the caller still owns it, while every other failure transfers the
- * ownership and deep-frees the child. The tests above and below pin that for
- * each module separately, because each header states it separately.
+/* cjson and cyaml share one ownership rule. ccol_invalid_args means the
+ * function rejected the arguments, nothing touched the child and the caller
+ * keeps owning it, and every other failure transfers the ownership and
+ * deep-frees the child. The tests around here pin that for each module on
+ * its own, because each header states it on its own.
  *
- * Both modules also refuse text that is not well-formed UTF-8, in their
+ * Both modules also refuse text that isn't well-formed UTF-8, in their
  * parsers and in their direct API, and neither replaces anything with
- * U+FFFD. Each module's own suite pins that rule and its messages; this
- * corpus pins only the ownership rule. */
+ * U+FFFD. Each module's own suite pins that rule and its messages, this
+ * corpus only pins the ownership rule. */
 
 TEST(compat_ownership, attaching_a_yaml_child_transfers_it_to_the_parent) {
-  /* cyaml has the same ownership rules as cjson. Its own header states them
-   * separately, so these tests pin them separately. */
+  /* cyaml has the same ownership rules as cjson. Its header states them on
+   * its own, so these tests pin them on their own. */
   ca_reset();
   cyaml root = cyaml_create_dictionary_mp(ca_procs());
   cyaml child = cyaml_create_string_mp("value", ca_procs());
@@ -517,13 +514,13 @@ TEST(compat_ownership, attaching_a_yaml_child_transfers_it_to_the_parent) {
 
 TEST(compat_ownership,
      an_already_attached_yaml_child_is_refused_and_left_alone) {
-  /* cyaml splits its failures in the same way as cjson, and these tests pin
-   * the split for each module separately instead of assuming that it carries
-   * across. A child that already has a parent is rejected with
-   * ccol_invalid_args and left alone: freeing it would tear a node out of
-   * the tree that still owns it, and accepting it is a double free. A
-   * borrowed reference from cyaml_dictionary_get() or cyaml_list_get() is
-   * the way that the API itself names a node that already has a parent. */
+  /* cyaml splits its failures the same way cjson does, and we pin the split
+   * for each module instead of assuming it carries over. A child that
+   * already has a parent is rejected with ccol_invalid_args and left alone,
+   * because freeing it would tear a node out of the tree that owns it and
+   * accepting it would be a double free. A borrowed reference from
+   * cyaml_dictionary_get() or cyaml_list_get() is how the API itself names a
+   * node that already has a parent. */
   ca_reset();
   cyaml first = cyaml_create_list_mp(ca_procs());
   cyaml second = cyaml_create_list_mp(ca_procs());
@@ -532,8 +529,8 @@ TEST(compat_ownership,
       first && second && child && cyaml_list_push(first, child) == ccol_success;
 
   ccol_retval_t r = built ? cyaml_list_push(second, child) : ccol_success;
-  /* `first` still owns child, so a destroy of both parents, and of nothing
-   * else, must account for every block exactly once. */
+  /* `first` keeps owning child, so destroying both parents and nothing else
+   * has to account for every block exactly once. */
   cyaml_destroy(second);
   cyaml_destroy(first);
 
@@ -544,9 +541,9 @@ TEST(compat_ownership,
 
 TEST(compat_ownership,
      a_yaml_attach_that_runs_out_of_memory_destroys_the_child) {
-  /* This is the other half of the split, and it matches that of cjson: a
-   * failure that is not a rejection does transfer the ownership. The child
-   * is gone once the call returns, so freeing it here would be a double
+  /* The other half of the split, matching cjson's: a failure that isn't a
+   * rejection does transfer the ownership. The child is gone once the call
+   * returns, so freeing it here would be a double
    * free. */
   enum { KIDS = 64 };
   ca_reset();
@@ -558,9 +555,9 @@ TEST(compat_ownership,
     if (!kids[i]) built = false;
   }
 
-  /* A new list already has room, so refusing the next allocation does not
-   * always reach a push; enough children to force the backing store to grow
-   * do reach one. */
+  /* A new list has room already, so refusing the next allocation doesn't
+   * always hit a push, but enough children to make the backing store grow
+   * do hit one. */
   g_ca.fail_from = g_ca.alloc_calls;
   bool some_push_failed = false;
   if (built) {
@@ -571,9 +568,9 @@ TEST(compat_ownership,
   }
   g_ca.fail_from = SIZE_MAX;
 
-  /* Nothing here frees a child: root owns a child that the code pushed, and
-   * the push itself deep-freed a child that it refused. If either half of
-   * that is wrong, the count of live blocks shows it. */
+  /* Nothing here frees a child. root owns the children the code pushed, and
+   * the push itself deep-freed the one it refused. If either half of that
+   * is wrong, the count of live blocks shows it. */
   cyaml_destroy(root);
   REQUIRE_TRUE(built);
   REQUIRE_TRUE(some_push_failed);
@@ -586,11 +583,11 @@ TEST(compat_ownership,
 
 /* Only the positive half can be asserted here. The header comment of this
  * file explains why a test of the invalidation direction would be undefined
- * behaviour rather than a test. */
+ * behaviour and not a test. */
 
 TEST(compat_pointer_stability, a_reference_survives_lookups_of_other_keys) {
   /* chashmap.h: an insert, a delete or a resize invalidates a returned
-   * pointer, but the pointer is invalidated "never by an unrelated
+   * pointer, but it is invalidated "never by an unrelated
    * chmap_get_elem_ref/chmap_get/chmap_get_ptr call for a different
    * key". */
   chmap_construct(m, int, int);
@@ -601,19 +598,19 @@ TEST(compat_pointer_stability, a_reference_survives_lookups_of_other_keys) {
 
   int key = 5;
   cmap_pair kp = {.ptr = &key, .size = sizeof(key)};
-  const cmap_pair *held = NULL;
+  cmap_pair held = {NULL, 0};
   ccol_retval_t r = chmap_get_elem_ref(m, &kp, &held);
 
   for (int i = 0; i < 32; i++) {
     if (i == 5) continue;
     int other = i;
     cmap_pair okp = {.ptr = &other, .size = sizeof(other)};
-    const cmap_pair *tmp = NULL;
+    cmap_pair tmp;
     (void)chmap_get_elem_ref(m, &okp, &tmp);
   }
 
-  bool still_correct = (r == ccol_success) && held && held->ptr &&
-                       (*(const int *)held->ptr == 35);
+  bool still_correct =
+      (r == ccol_success) && held.ptr && (*(const int *)held.ptr == 35);
   chmap_destroy(m);
   REQUIRE_TRUE(still_correct);
 }
@@ -632,13 +629,13 @@ TEST(compat_pointer_stability, several_references_may_be_held_at_once) {
   for (int i = 0; i < 16; i++) {
     int k = i;
     cmap_pair kp = {.ptr = &k, .size = sizeof(k)};
-    const cmap_pair *out = NULL;
-    if (chmap_get_elem_ref(m, &kp, &out) != ccol_success || !out || !out->ptr) {
+    cmap_pair out;
+    if (chmap_get_elem_ref(m, &kp, &out) != ccol_success || !out.ptr) {
       all_resolved = false;
       refs[i] = NULL;
       continue;
     }
-    refs[i] = (const int *)out->ptr;
+    refs[i] = (const int *)out.ptr;
   }
 
   bool all_still_correct = all_resolved;
@@ -651,10 +648,10 @@ TEST(compat_pointer_stability, several_references_may_be_held_at_once) {
 }
 
 TEST(compat_pointer_stability, updating_a_key_in_place_keeps_other_references) {
-  /* A write through a reference is explicitly permitted ("Can modify value
-   * in-place") and is not one of the operations that invalidate a pointer,
-   * so a reference that a caller holds for another key goes on reading its
-   * own value. */
+  /* Writing through a reference is explicitly allowed ("Can modify value
+   * in-place") and isn't one of the operations that invalidate a pointer, so
+   * a reference the caller holds for another key goes on reading its own
+   * value. */
   chmap_construct(m, int, int);
   for (int i = 0; i < 16; i++) {
     int k = i, v = i;
@@ -664,25 +661,25 @@ TEST(compat_pointer_stability, updating_a_key_in_place_keeps_other_references) {
   int a = 3, b = 9;
   cmap_pair akp = {.ptr = &a, .size = sizeof(a)};
   cmap_pair bkp = {.ptr = &b, .size = sizeof(b)};
-  const cmap_pair *aref = NULL, *bref = NULL;
+  cmap_pair aref = {NULL, 0}, bref = {NULL, 0};
   bool got = chmap_get_elem_ref(m, &akp, &aref) == ccol_success &&
              chmap_get_elem_ref(m, &bkp, &bref) == ccol_success;
 
-  if (got) *(int *)aref->ptr = 1234;
+  if (got) *(int *)aref.ptr = 1234;
 
-  bool a_updated = got && *(const int *)aref->ptr == 1234;
-  bool b_untouched = got && *(const int *)bref->ptr == 9;
+  bool a_updated = got && *(const int *)aref.ptr == 1234;
+  bool b_untouched = got && *(const int *)bref.ptr == 9;
   chmap_destroy(m);
   REQUIRE_TRUE(a_updated);
   REQUIRE_TRUE(b_untouched);
 }
 
 TEST(compat_iterators, a_null_handle_iterates_as_empty_for_every_container) {
-  /* This is a deliberate contract across the modules: a NULL handle iterates
-   * as empty instead of stopping the process, in the same way for all three
-   * iterable containers. ccol_begin() calls ccol_fatal_err() when it gets an
-   * error, so a regression here kills this binary instead of failing one
-   * test. */
+  /* A contract shared by the modules: a NULL handle iterates as empty
+   * instead of stopping the process, and all three iterable containers do
+   * it the same way. ccol_begin() calls _ccol_fatal_err() when it gets an
+   * error, so a regression here would kill this binary instead of failing
+   * one test. */
   int rounds = 0;
   {
     chmap_declare(hm, int, int) = NULL;
@@ -703,7 +700,7 @@ TEST(compat_iterators, a_null_handle_iterates_as_empty_for_every_container) {
 }
 
 TEST(compat_iterators, running_an_iterator_to_the_end_returns_its_memory) {
-  /* The iterator destroys itself after _next_fn reports the end, so a loop
+  /* The iterator destroys itself once _next_fn reports the end, so a loop
    * that runs to the end leaks nothing and needs no explicit destroy. */
   ca_reset();
   {
@@ -724,9 +721,9 @@ TEST(compat_iterators, running_an_iterator_to_the_end_returns_its_memory) {
 }
 
 TEST(compat_iterators, abandoning_an_iterator_early_returns_its_memory) {
-  /* A break out of the loop before the end means that _next_fn never reports
-   * the end, so the iterator is still live, and the scope-exit cleanup that
-   * the declaration carries is what frees it. */
+  /* When the loop breaks out before the end, _next_fn never reports the end
+   * and the iterator is still live, so it's the scope-exit cleanup on the
+   * declaration that frees it. */
   ca_reset();
   {
     chmap_construct_mp(m, int, int, ca_procs());
@@ -789,10 +786,10 @@ static ccol_retval_t lru_set_int(clru_cache c, int k, int v) {
 }
 
 static ccol_retval_t lru_get_int(clru_cache c, int k, int *out) {
-  /* clrucache_get_full() gives back a heap COPY of the stored value, which
-   * the caller becomes responsible for freeing, instead of filling a buffer
-   * that the caller gives. These caches use the default allocator, so the
-   * matching call is a plain free(). */
+  /* clrucache_get_full() hands back a heap COPY of the stored value, which
+   * the caller then frees, instead of filling a buffer the caller
+   * passes in. These caches use the default allocator, so the matching call
+   * is a plain free(). */
   cmap_pair kp = {.ptr = &k, .size = sizeof(k)};
   cmap_pair vp = {0};
   ccol_retval_t r = clrucache_get_full(c, &kp, &vp);
@@ -806,10 +803,10 @@ static ccol_retval_t lru_get_int(clru_cache c, int k, int *out) {
 TEST(compat_callbacks, a_small_cache_evicts_in_exact_global_lru_order) {
   /* clrucache_create_full(3): "Splitting begins at a capacity of 128 ...
    * Below that a cache is a single segment and evicts in one exact global
-   * least-recently-used order." This test puts four keys into a cache of
+   * least-recently-used order." The test puts four keys into a cache of
    * three, with a lookup in between that moves one key back to the
-   * most-recently-used end, so exactly one answer is correct for which key
-   * leaves. */
+   * most-recently-used end, so there's exactly one right answer for which
+   * key leaves. */
   ev_reset();
   char *err = NULL;
   clru_cache c = clrucache_create_full(3, ccol_int, ccol_int, NULL, NULL, ev_cb,
@@ -820,11 +817,11 @@ TEST(compat_callbacks, a_small_cache_evicts_in_exact_global_lru_order) {
             lru_set_int(c, 2, 20) == ccol_success &&
             lru_set_int(c, 3, 30) == ccol_success;
 
-  /* Touch 1, so that 2 becomes the least recently used entry. */
+  /* Touch 1 so that 2 becomes the least recently used entry. */
   int got = 0;
   ok = ok && lru_get_int(c, 1, &got) == ccol_success && got == 10;
 
-  /* Inserting a fourth key must evict 2, not 1. */
+  /* A fourth key evicts 2, not 1. */
   ok = ok && lru_set_int(c, 4, 40) == ccol_success;
 
   size_t evictions = g_ev_count;
@@ -839,9 +836,9 @@ TEST(compat_callbacks, a_small_cache_evicts_in_exact_global_lru_order) {
 TEST(compat_callbacks, the_eviction_callback_runs_synchronously_on_the_caller) {
   /* clrucache.h: "Invoked synchronously (while the owning segment's lock is
    * held) when an entry is evicted". Synchronously means inside the call that
-   * caused the eviction and on the thread of that caller. Moving the callback
-   * to a deferred or background reclaimer breaks both halves, and that move
-   * is exactly what this test exists to stop. */
+   * caused the eviction and on that caller's thread. Moving the callback to
+   * a deferred or background reclaimer would break both halves, and that
+   * move is exactly what this test is here to stop. */
   ev_reset();
   char *err = NULL;
   clru_cache c = clrucache_create_full(2, ccol_int, ccol_int, NULL, NULL, ev_cb,
@@ -872,12 +869,11 @@ static bool remote_setter(const cmap_pair *key, const cmap_pair *val) {
   (void)val;
   g_setter_calls++;
   /* "the remote setter (if provided) is always called before the cache is
-   * updated". A read of the key here must therefore still miss or find the
-   * previous value, and never the value that the code is writing. A read
-   * through the public API would deadlock against the segment lock, so the
-   * check is the weaker one that the contract permits: the setter ran at
-   * all, and its refusal left the cache alone, which the caller below
-   * asserts. */
+   * updated". So a read of the key here must miss or find the old value,
+   * never the value being written. A read through the public API would
+   * deadlock against the segment lock, so we make the weaker check the
+   * contract allows: the setter ran at all, and its refusal left the cache
+   * alone, which the caller below asserts. */
   (void)key;
   return g_setter_should_succeed;
 }
@@ -885,9 +881,9 @@ static bool remote_setter(const cmap_pair *key, const cmap_pair *val) {
 TEST(compat_callbacks, a_refused_remote_setter_leaves_the_cache_unchanged) {
   /* clrucache.h: "the remote setter (if provided) is always called before
    * the cache is updated. If the remote call fails the cache is not updated
-   * and clrucache_set_full() returns ccol_unexpected_failure." A test can
-   * observe both halves from outside: the count of the calls and the absence
-   * of the key. */
+   * and clrucache_set_full() returns ccol_unexpected_failure." Both halves
+   * can be seen from outside, as the number of calls and as the missing
+   * key. */
   ev_reset();
   g_setter_calls = 0;
   g_setter_should_succeed = false;
@@ -931,9 +927,9 @@ TEST(compat_callbacks, an_accepted_remote_setter_runs_before_the_cache_update) {
 
 /* cthreadpool task and completion */
 
-/* The worker threads share these, so every one of them is atomic. A plain
- * counter here would be a true data race, and a sanitizer finding in a file
- * whose whole job is to be trustworthy. */
+/* The worker threads share these, so all of them are atomic. A plain counter
+ * here would be a real data race, and a sanitizer finding in a file whose
+ * whole job is to be trustworthy. */
 static atomic_int g_seq;
 static atomic_int g_task_order;
 static atomic_int g_complete_order;
@@ -954,19 +950,19 @@ static void pool_complete(void *arg, bool ran) {
   atomic_store(&g_complete_ran, ran ? 1 : 0);
   atomic_store(&g_complete_saw_task_done, atomic_load(&g_task_done));
   atomic_store(&g_complete_order, atomic_fetch_add(&g_seq, 1));
-  /* This compares with pthread_equal against a value that the code captured
-   * before the submit, instead of publishing a pthread_t across threads,
-   * because a pthread_t has no portable atomic form. */
+  /* We compare with pthread_equal against a value captured before the
+   * submit instead of publishing a pthread_t across threads, because a
+   * pthread_t has no portable atomic form. */
   atomic_store(&g_complete_on_submitter,
                pthread_equal(pthread_self(), g_submitter_thread) ? 1 : 0);
 }
 
 TEST(compat_callbacks, on_complete_runs_after_its_task_and_on_a_worker) {
   /* cthreadpool.h, ctpool_submit(): "A worker calls on_complete(arg, true)
-   * right after fn returns, on that worker thread". That one sentence is a
-   * promise about an order, about a thread and about the ran flag, and this
-   * test pins all three. ctpool_wait() gives the synchronisation, so nothing
-   * here depends on a sleep or on a margin. */
+   * right after fn returns, on that worker thread". That one sentence
+   * promises an order, a thread and the value of the ran flag, and this test
+   * pins all three. ctpool_wait() gives the synchronisation, so nothing here
+   * depends on a sleep or a margin. */
   atomic_store(&g_seq, 0);
   atomic_store(&g_task_order, -1);
   atomic_store(&g_complete_order, -1);
@@ -977,7 +973,7 @@ TEST(compat_callbacks, on_complete_runs_after_its_task_and_on_a_worker) {
   g_submitter_thread = pthread_self();
 
   char *err = NULL;
-  ctpool pool = ccol_create_cthread_pool_mp(2, 0, NULL, &err);
+  ctpool pool = ctpool_create_mp(2, 0, NULL, &err);
   REQUIRE_TRUE(pool != CTPOOL_INVALID);
 
   ccol_retval_t r = ctpool_submit(pool, pool_task, NULL, pool_complete);
@@ -995,7 +991,7 @@ TEST(compat_callbacks, on_complete_runs_after_its_task_and_on_a_worker) {
   REQUIRE_EQ(atomic_load(&g_complete_ran), 1);
 }
 
-/* Each discarded task of the test below owns one heap block, which its
+/* Each discarded task in the test below owns one heap block, which its
  * on_complete frees. */
 static atomic_int g_discard_calls;
 static atomic_int g_discard_ran_true;
@@ -1013,10 +1009,10 @@ static void discard_blocker_task(void *arg) {
 
 static void discard_task(void *arg) { (void)arg; }
 
-/* A discarded task gets its on_complete only after the shutdown has taken it
- * out of the queue, so from that point the blocked worker can find no task of
- * this test to run. The first such call therefore opens the gate of the
- * worker, which lets the shutdown join it. */
+/* A discarded task only gets its on_complete after the shutdown has taken
+ * it out of the queue, and from then on the blocked worker can't find any
+ * task of this test to run. So the first such call opens the worker's gate,
+ * and the shutdown can join it. */
 static void discard_complete(void *arg, bool ran) {
   if (ran) atomic_fetch_add(&g_discard_ran_true, 1);
   if (!pthread_equal(pthread_self(), g_submitter_thread))
@@ -1026,9 +1022,9 @@ static void discard_complete(void *arg, bool ran) {
   free(arg);
 }
 
-/* A bound for the case where no discarded on_complete runs: the gate opens
- * after 10 s, so that the test fails and does not hang. It returns as soon as
- * the gate is open. */
+/* A bound for the case where no discarded on_complete runs at all: the gate
+ * opens after 10 s so the test fails instead of hanging. It returns as soon
+ * as the gate is open. */
 static void *discard_release_gate(void *arg) {
   (void)arg;
   struct timespec ts = {.tv_sec = 0, .tv_nsec = 1000000};
@@ -1041,8 +1037,8 @@ static void *discard_release_gate(void *arg) {
 TEST(compat_callbacks, a_discarded_task_gets_on_complete_with_ran_false) {
   /* cthreadpool.h, ctpool_submit(): "on_complete runs exactly once for every
    * task that a submit accepts" and "The on_complete(arg, false) calls run on
-   * the thread that makes that call, before the call returns". A caller that
-   * hands ownership of arg to the task relies on both: each queued task below
+   * the thread that makes that call, before the call returns". A caller who
+   * hands ownership of arg to the task relies on both. Each queued task below
    * owns a heap block that only its on_complete frees, so a missed call is a
    * leak and a second call is a double free. */
   enum { DISCARDED = 8 };
@@ -1054,7 +1050,7 @@ TEST(compat_callbacks, a_discarded_task_gets_on_complete_with_ran_false) {
   g_submitter_thread = pthread_self();
 
   char *err = NULL;
-  ctpool pool = ccol_create_cthread_pool_mp(1, 0, NULL, &err);
+  ctpool pool = ctpool_create_mp(1, 0, NULL, &err);
   REQUIRE_TRUE(pool != CTPOOL_INVALID);
 
   bool blocker_ok =
@@ -1091,8 +1087,8 @@ TEST(compat_callbacks, a_discarded_task_gets_on_complete_with_ran_false) {
   REQUIRE_EQ(atomic_load(&g_discard_on_submitter), 1);
 }
 
-/* Each task records its own argument in the next free slot, so the order of
- * the slots is the order of execution. */
+/* Each task writes its own argument into the next free slot, so the slot
+ * order is the execution order. */
 #define ORDER_N 16
 static atomic_int g_order_observed[ORDER_N];
 static atomic_int g_order_slot;
@@ -1106,16 +1102,16 @@ static void order_task(void *arg) {
 
 TEST(compat_callbacks,
      a_single_worker_pool_runs_its_tasks_in_submission_order) {
-  /* The queue is FIFO and one worker takes tasks from it, so the tasks run in
-   * the order in which the test submitted them. This is the weakest form of
-   * the promise that still says something: with more than one worker, the
-   * pool is explicitly free to interleave the tasks, so this test asserts
+  /* The queue is FIFO and a single worker takes tasks from it, so the tasks
+   * run in the order the test submitted them. That's the weakest form of the
+   * promise that still says something, since with more than one worker the
+   * pool is explicitly free to interleave the tasks, and this test asserts
    * nothing about that case. */
   atomic_store(&g_order_slot, 0);
   for (int i = 0; i < ORDER_N; i++) atomic_store(&g_order_observed[i], -1);
 
   char *err = NULL;
-  ctpool pool = ccol_create_cthread_pool_mp(1, 0, NULL, &err);
+  ctpool pool = ctpool_create_mp(1, 0, NULL, &err);
   REQUIRE_TRUE(pool != CTPOOL_INVALID);
 
   bool submitted_all = true;

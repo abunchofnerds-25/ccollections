@@ -11,8 +11,8 @@ size_t ccol_r_mempool_used_count(ccol_r_mempool *rmp, size_t size);
 .fi
 .SH DESCRIPTION
 .nf
-Returns how many entries are allocated from the pool that would serve the
-given size, not counting any dynamic allocation.
+Returns how many entries are allocated from the pool that would serve
+the given size, without any dynamic allocation.
 .fi
 .SH PARAMETERS
 .nf
@@ -21,23 +21,24 @@ size  Size in bytes to query (maps to a specific sub-pool)
 .fi
 .SH RETURN VALUE
 .nf
-Returns number of entries in use for this size
-Returns 0 on error
+Returns the number of entries in use for this size
+Returns 0 when size is invalid
 .fi
 .SH NOTES
 .nf
 It returns 0 if size is invalid, which means 0 or above largest_size
+It asserts if rmp is NULL
 It rounds size up to the next power-of-two pool
 Thread-safe if the pool was created with single_threaded=false
-The pool tracks a dynamic allocation separately
+Dynamic allocations are tracked separately
 
-The count is exact whenever the sub-pool is quiet. An entry parked in the
-cache of a thread counts as free, because nothing holds it. Under
-concurrent allocation on a tier that keeps a cache for each thread, the
-result can sit a few entries above ccol_r_mempool_total_capacity() for
-that size for a short time, but it never goes above the physical slot
-count that ccol_r_mempool_allocated_bytes(3) accounts for. See
-ccol_mempool_total_capacity(3) for the reason.
+The count is exact whenever the sub-pool is quiet. An entry parked in a
+thread's cache counts as free, since nobody holds it. Under concurrent
+allocation on a tier that keeps a cache for each thread, the result can
+be a few entries above ccol_r_mempool_total_capacity() for that size
+for a short time, but never above the physical slot count that
+ccol_r_mempool_allocated_bytes(3) accounts for.
+ccol_mempool_total_capacity(3) explains why.
 .fi
 .SH "SEE ALSO"
 .BR ccol_r_mempool_total_capacity (3),

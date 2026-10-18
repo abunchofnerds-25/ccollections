@@ -22,38 +22,34 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* This binary runs with the default disposition of SIGPIPE, which ends the
- * process. It must stay a binary of its own: tests.c ignores SIGPIPE for the
- * whole process, and an ignored SIGPIPE is discarded when it is raised, so a
- * write that raises it is invisible there.
+/* This binary runs with SIGPIPE at its default disposition, which ends the
+ * process, and it must stay a binary of its own because tests.c ignores
+ * SIGPIPE for the whole process. An ignored SIGPIPE is thrown away the moment
+ * it is raised, so a write that raises it can't be seen there.
  *
  * Each test blocks SIGPIPE on its own thread around the operation under test
  * and then asks whether one is pending. A write(2) to a socket whose peer is
- * gone raises SIGPIPE for the writing thread; while the signal is blocked, it
- * stays pending instead of ending the process, so a failure is reported as one
- * failed test with the pending signal consumed, and the binary goes on. */
+ * gone raises SIGPIPE for the writing thread, and while the signal is blocked
+ * it stays pending instead of ending the process. A failure therefore shows up
+ * as one failed test with the pending signal consumed, and the binary carries
+ * on. */
 
 #include <common.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <internal/ctls.h>
+#include <internal/test_helpers/ctls.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <tau/tau.h>
+#include <test_signals.h>
 #include <time.h>
 #include <unistd.h>
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
-#include <tau/tau.h>
-#include <test_signals.h>
-#pragma GCC diagnostic pop
-
 TAU_MAIN()
-
-extern size_t _ctls_live_sock_bio_count_for_tests(void);
 
 __attribute__((constructor)) static void _setup(void) {
   signal(SIGPIPE, SIG_DFL);
@@ -72,8 +68,8 @@ static void _block_sigpipe(sigset_t *old) {
   pthread_sigmask(SIG_BLOCK, &set, old);
 }
 
-/* Reports whether a SIGPIPE is pending, consumes it if so, and restores the
- * signal mask. */
+/* Tells whether a SIGPIPE is pending, consumes it if there is one, and puts the
+ * signal mask back. */
 static bool _take_pending_sigpipe_and_unblock(const sigset_t *old) {
   sigset_t pending;
   sigemptyset(&pending);
@@ -114,8 +110,8 @@ static bool _drive_both(ctls_conn_t *a, ctls_conn_t *b, int max_iters) {
   return ok && a_done && b_done;
 }
 
-/* One connected pair of TLS connections over an AF_UNIX socketpair, with
- * the handshake complete. fds[0] carries the server and fds[1] the client. */
+/* A connected pair of TLS connections over an AF_UNIX socketpair, with the
+ * handshake already done. fds[0] is the server side and fds[1] the client. */
 typedef struct {
   ctls_ctx_t *server_ctx;
   ctls_ctx_t *client_ctx;
@@ -141,8 +137,8 @@ static bool _tls_pair_open(tls_pair *p) {
   return _drive_both(p->client, p->server, 200);
 }
 
-/* Destroys whatever _tls_pair_open built. A connection or a descriptor that a
- * test already released is NULL or -1 here. */
+/* Destroys whatever _tls_pair_open built. A connection or descriptor that the
+ * test has already released is NULL or -1 by the time we get here. */
 static void _tls_pair_close(tls_pair *p) {
   ctls_conn_destroy(p->client);
   ctls_conn_destroy(p->server);
@@ -152,9 +148,9 @@ static void _tls_pair_close(tls_pair *p) {
   ctls_ctx_release(p->server_ctx);
 }
 
-/* A peer that is gone when the connection is destroyed: the close_notify that
- * ctls_conn_destroy() writes must fail with EPIPE and must not raise SIGPIPE.
- * This is the teardown of a keep-alive connection that the peer reset. */
+/* The peer is gone by the time the connection is destroyed, so the close_notify
+ * that ctls_conn_destroy() writes fails with EPIPE, and it must not raise
+ * SIGPIPE. It's the teardown of a keep-alive connection that the peer reset. */
 static bool _destroy_after_peer_close_raises_sigpipe(bool destroy_client) {
   tls_pair p;
   bool opened = _tls_pair_open(&p);
@@ -179,7 +175,7 @@ static bool _destroy_after_peer_close_raises_sigpipe(bool destroy_client) {
 }
 
 TEST(ctls_sigpipe, the_binary_runs_with_the_default_disposition) {
-  /* Every other test here is vacuous under an ignored SIGPIPE. */
+  /* Every other test in this file proves nothing if SIGPIPE is ignored. */
   REQUIRE_TRUE(_sigpipe_has_default_disposition());
 }
 

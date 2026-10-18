@@ -22,19 +22,15 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* The thread cache of a thread-safe pool after the module unloads. Because
- * the unload deletes the thread-specific key of the cache, which cannot be
- * undone in one process, these tests run in a binary of their own, so that no
- * other test of the suite runs with the cache gone. */
+/* What the thread cache of a thread-safe pool does after the module unloads.
+ * The unload deletes the cache's thread-specific key and a process can't
+ * undo that, so these tests live in a binary of their own and no other test
+ * of the suite runs with the cache gone. */
 
 #include <cmempool.h>
+#include <internal/test_helpers/cmempool.h>
 #include <pthread.h>
 #include <tau/tau.h>
-
-extern size_t _ccol_mempool_live_magazines_for_tests(ccol_mempool *mp);
-extern size_t _ccol_mempool_thread_magazines_for_tests(void);
-extern size_t _ccol_mempool_reserve_for_tests(ccol_mempool *mp);
-extern void _ccol_mempool_unload_cache_for_tests(void);
 
 TAU_MAIN()
 
@@ -44,8 +40,8 @@ typedef struct {
   size_t thread_magazines;
 } user_args_t;
 
-/* Takes and gives back entries from the pool, and records how many magazines
- * this thread holds before it exits. */
+/* Takes entries from the pool and gives them back, then records how many
+ * magazines this thread holds before it exits. */
 static void *pool_user(void *arg) {
   user_args_t *a = (user_args_t *)arg;
   for (int i = 0; i < 100; i++) {
@@ -60,19 +56,18 @@ static void *pool_user(void *arg) {
   return NULL;
 }
 
-/* After the unload, no thread builds a magazine. A magazine that a thread
- * built with no value on the deleted key would never be drained at the exit of
- * that thread: the pool would count it as live for ever, and the memtest of
- * this binary would report the magazine as lost. This test is non-vacuous:
- * without the refusal to build a magazine for a thread that cannot arm the
- * key, the thread below holds one magazine, and the pool still counts it after
- * the join. */
+/* After the unload no thread builds a magazine. If a thread built one with
+ * no value on the deleted key, nothing would drain it when that thread
+ * exits, so the pool would count it as live for ever and the memtest of this
+ * binary would report it as lost. And if we didn't refuse
+ * a magazine to a thread that can't arm the key, the thread below would hold
+ * one, and the pool would go on counting it after the join. */
 TEST(mempool_unload, no_thread_cache_is_built_after_the_module_unloads) {
   char *err = NULL;
   ccol_mempool *mp = ccol_mempool_create(64, 32, false, false, NULL, &err);
   REQUIRE_NE((void *)mp, (void *)NULL);
 
-  /* Before the unload, this thread gets a magazine. */
+  /* Before the unload this thread gets a magazine. */
   void *e = ccol_mempool_alloc_entry(mp);
   bool got_first = e != NULL;
   if (e) ccol_mempool_free_entry(mp, e);
@@ -89,7 +84,7 @@ TEST(mempool_unload, no_thread_cache_is_built_after_the_module_unloads) {
   if (created == 0) pthread_join(t, NULL);
   size_t mags_after_join = _ccol_mempool_live_magazines_for_tests(mp);
 
-  /* This thread keeps working through the locked path, with no magazine. */
+  /* With no magazine this thread keeps working through the locked path. */
   int own_failed = 0;
   for (int i = 0; i < 100; i++) {
     void *x = ccol_mempool_alloc_entry(mp);
@@ -102,7 +97,7 @@ TEST(mempool_unload, no_thread_cache_is_built_after_the_module_unloads) {
   size_t own_after_use = _ccol_mempool_thread_magazines_for_tests();
   size_t used_at_end = ccol_mempool_used_count(mp);
 
-  /* A pool created after the unload has no cache, and so no reserve. */
+  /* A pool created after the unload has no cache, so no reserve either. */
   ccol_mempool *late = ccol_mempool_create(64, 32, false, false, NULL, &err);
   size_t late_reserve = late ? _ccol_mempool_reserve_for_tests(late) : 1;
   if (late) ccol_mempool_destroy(late);

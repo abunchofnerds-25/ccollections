@@ -11,8 +11,8 @@ size_t ccol_chan_msg_count(ccol_channel *ch, ccol_channel_direction d);
 .fi
 .SH DESCRIPTION
 .nf
-This function gives the number of messages that the queue of the given
-direction holds at the time of the call.
+Returns how many messages the queue of the given direction holds at
+the moment of the call.
 .fi
 .SH PARAMETERS
 .nf
@@ -22,13 +22,13 @@ d    Direction to ask about (ccol_owner_to_workers or
 .fi
 .SH RETURN VALUE
 .nf
-The function gives the number of messages in the given direction, or
-(size_t)-1 on an error: the ccol_channel is NULL, or the direction is
-not valid.
+The number of messages in that direction, or (size_t)-1 when the
+ccol_channel is NULL or the direction is not valid.
 .fi
 .SH NOTES
 .nf
-The count is a thread-safe snapshot.
+Reading the count is thread-safe, but it is only a snapshot: other
+threads can change it as soon as the call returns.
 .fi
 .SH "SEE ALSO"
 .BR ccol_chan_send_zc (3),

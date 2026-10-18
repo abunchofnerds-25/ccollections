@@ -1,0 +1,142 @@
+.TH CTHREADPOOL 7 "2026-10-14" "c_collections" "C Collections Library - Overview"
+.SH NAME
+cthreadpool \- overview of the ctpool thread pool and its futures
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/cthreadpool.h>
+.fi
+.SH DESCRIPTION
+.nf
+A ctpool runs tasks on a fixed number of worker threads, which it
+starts when it is created and stops at its shutdown. A task is a
+function plus an argument. Tasks wait in a queue that is either
+unbounded or bounded, chosen by the queue_capacity of
+ctpool_create_mp(3): 0 gives an unbounded queue, and any other value a
+bounded queue of that capacity.
+
+A task can come with an on_complete callback, or it can return a
+void * result through a future (ctpool_submit_future(3)). A detached
+future (ctpool_future_create_detached(3)) has no pool behind it, and a
+producer of your own completes it with ctpool_future_fulfill(3).
+.fi
+.SS "Handles"
+.nf
+ctpool is an opaque value handle, not a pointer, and CTPOOL_INVALID
+(0) means no pool. Every handle is checked before the pool is touched,
+so a call through an invalid or destroyed handle reports
+ccol_invalid_args, or does nothing for the calls that return no code.
+ctpool_destroy(3) of a stale handle, or a second destroy that races
+the first one, stops the process.
+.fi
+.SS "Submitting a task"
+.nf
+There are four submit calls for each kind of task:
+  - ctpool_submit(3) and ctpool_submit_future(3) wait for room in a
+    full bounded queue;
+  - ctpool_try_submit(3) and ctpool_try_submit_future(3) never wait,
+    and give ccol_container_full instead;
+  - ctpool_timed_submit(3) and ctpool_timed_submit_future(3) wait at
+    most timeout_us microseconds, measured on CLOCK_MONOTONIC, and
+    with a timeout of 0 they do exactly what the try_ call does.
+A submit never waits on an unbounded queue. A submit after a shutdown
+has started gives ccol_not_permitted. A blocking or timed submit into
+a full bounded queue from a task of the same pool, or from its
+on_complete, gives ccol_container_full at once, because only the
+pool's workers can make room and they would be waiting for themselves.
+
+Every future submit tells you why it failed: ctpool_submit_future(3)
+stores the code in its rv_out argument, and the try and timed forms
+return it.
+.fi
+.SS "Completion callbacks"
+.nf
+on_complete runs exactly once for every task that a submit accepts.
+A worker calls on_complete(arg, true) right after the task function
+returns. A task that the pool discards before any worker takes it gets
+on_complete(arg, false) instead, on the thread that discards it,
+before that call returns and with no lock of the pool held, so
+on_complete can always release what the task owns. A submit that fails
+accepts nothing and never calls on_complete.
+.fi
+.SS "Futures and their results"
+.nf
+ctpool_future_get(3) blocks until the task has a result and returns
+it, or returns NULL for a task that a shutdown cancelled. Any number of
+threads can wait on one future. The pool never allocates, copies or
+frees a result: the thread that gets it owns it, and frees it the same
+way the task allocated it. Call ctpool_future_free(3) exactly once for
+each future that a submit returned, whether you call
+ctpool_future_get(3) or not; without a get the future is
+fire-and-forget. Futures use malloc(3) and free(3), never the pool's
+allocator.
+.fi
+.SS "Shutdown and destroy"
+.nf
+ctpool_shutdown_drain(3) finishes every queued task and then stops the
+workers. ctpool_shutdown_immediate(3) discards the queued tasks,
+cancels their futures and calls their on_complete with ran == false,
+lets each worker finish the task it is running, and then stops the
+workers. An immediate shutdown that comes during a drain discards what
+is left in the queue. Both calls block until every worker has exited,
+and a second call of either one starts nothing new but waits for the
+same end.
+
+ctpool_wait(3) blocks until the queue is empty and every running task
+is done, without stopping the pool, and no other thread may submit
+during that wait. ctpool_destroy(3) runs a drain first if no shutdown
+ran, waits for every call on the handle that is still running, frees
+the pool and sets the handle to CTPOOL_INVALID.
+.fi
+.SS "Calls from inside the pool"
+.nf
+A task, or an on_complete callback, can call into its own pool. A
+ctpool_wait(3), ctpool_shutdown_drain(3) or ctpool_shutdown_immediate(3)
+from there returns at once and does nothing, because a worker cannot
+wait for itself, and a ctpool_destroy(3) of its own pool stops the
+process. The same goes for a call inside an on_complete(arg, false)
+that a shutdown runs.
+.fi
+.SS "fork(2)"
+.nf
+Create a pool after fork(), or call exec() right after fork(). A child
+that keeps running without exec() while a pool from before the fork is
+live is not supported, because fork() does not copy the worker
+threads. See ccollections(7).
+.fi
+.SH "THREAD SAFETY"
+.nf
+Every function can be called from any thread at the same time as any
+other one on the same live handle, shutdowns and a destroy included.
+The one exception is a second ctpool_destroy(3) of the same handle.
+Tasks run on the worker threads, so data that two tasks share needs its
+own protection.
+.fi
+.SH "SEE ALSO"
+.BR ctpool_create (3),
+.BR ctpool_create_mp (3),
+.BR ctpool_declare (3),
+.BR ctpool_declare_scoped (3),
+.BR ctpool_construct (3),
+.BR ctpool_construct_scoped (3),
+.BR ctpool_destroy (3),
+.BR ctpool_submit (3),
+.BR ctpool_try_submit (3),
+.BR ctpool_timed_submit (3),
+.BR ctpool_submit_future (3),
+.BR ctpool_try_submit_future (3),
+.BR ctpool_timed_submit_future (3),
+.BR ctpool_future_get (3),
+.BR ctpool_future_done (3),
+.BR ctpool_future_cancelled (3),
+.BR ctpool_future_free (3),
+.BR ctpool_future_create_detached (3),
+.BR ctpool_future_fulfill (3),
+.BR ctpool_wait (3),
+.BR ctpool_shutdown_drain (3),
+.BR ctpool_shutdown_immediate (3),
+.BR ctpool_pending_count (3),
+.BR ctpool_active_count (3),
+.BR cthreadcomm (7),
+.BR ccollections (7)

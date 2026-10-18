@@ -1,0 +1,59 @@
+.TH CHTTPSVR_BOUND_PORT 3 "2026-10-13" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_bound_port \- report the TCP port that a server listens on
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpserver.h>
+
+ccol_retval_t chttpsvr_bound_port(chttpsvr srv, uint16_t *port_out);
+.fi
+.SH DESCRIPTION
+.nf
+Stores in *port_out the TCP port that the listener of srv is bound
+to, in host byte order.  It is the port that the system really bound,
+so either the port of the configuration or, for a configuration with
+port 0, the ephemeral port that the system picked.  The library reads
+it from the socket with getsockname(2) when chttpsvr_start binds it,
+the same way the Addr method of a Go net.Listener and the
+MHD_DAEMON_INFO_BIND_PORT query of libmicrohttpd report it.
+
+A server started with port 0 binds a new ephemeral port on every
+start, so read the port again after a restart.
+.fi
+.SH PARAMETERS
+.nf
+srv        The server handle.
+port_out   Receives the port.  It receives 0 on every failure.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        *port_out holds the port.
+ccol_invalid_args   srv is CHTTPSVR_INVALID or a stale handle, or
+                    port_out is NULL.
+ccol_not_permitted  The server does not listen (see
+                    chttpsvr_is_running(3)), or it listens on a
+                    "unix://" path, which has no port.
+.fi
+.SH THREAD SAFETY
+.nf
+Safe to call from any thread while a start or a stop of srv runs.
+The answer then describes the listener from one side of that change.
+.fi
+.SH EXAMPLES
+.nf
+chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+cfg.host = "127.0.0.1";
+cfg.port = 0; /* let the system choose a free port */
+if (chttpsvr_start(srv, &cfg) == ccol_success) {
+  uint16_t port = 0;
+  if (chttpsvr_bound_port(srv, &port) == ccol_success)
+    printf("listening on http://127.0.0.1:%u/\en", (unsigned)port);
+}
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_start (3),
+.BR chttpsvr_bound_address (3),
+.BR chttpsvr_is_running (3),
+.BR CHTTPSVR_CONFIG_DEFAULT (3)

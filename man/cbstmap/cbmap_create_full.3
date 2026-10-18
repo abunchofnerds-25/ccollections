@@ -14,8 +14,8 @@ cbmap cbmap_create_full(ccol_data_type key_type,
 .fi
 .SH DESCRIPTION
 .nf
-Creates a self-balancing BST map, with full control by the caller over the
-key type, the memory management and the comparison function.
+Creates a self-balancing BST map and gives the caller full control over
+the key type, the memory management and the comparison function.
 .fi
 .SH PARAMETERS
 .nf
@@ -26,45 +26,44 @@ err                      Optional pointer that receives an error string
 .fi
 .SH RETURN VALUE
 .nf
-Returns a pointer to the new BST map on success
-Returns NULL on failure
+A pointer to the new BST map on success, NULL on failure.
 .fi
 .SH NOTES
 .nf
-Default comparison for ccol_char: the native char comparison of this
-platform, which is signed or unsigned to match the behavior of char on
-this platform
-Default comparison for ccol_signed_char and for short/int/long/long_long:
-a signed comparison, which does not depend on the char signedness of this
-platform. Note that ccol_signed_char is a scalar signed char or its typedef
-int8_t; a signed char * string key is ccol_string instead
-Default comparison for the unsigned integer types and ccol_pointer: an
-unsigned comparison
-Default comparison for ccol_float/double/long_double: a numeric
-floating-point comparison, in which a NaN key sorts as greater than every
-non-NaN key and equal to every other NaN key
-Default comparison for ccol_string: a strcmp-equivalent lexicographic order
-For ccol_other_types (for example a struct key type) the default comparison
-is a raw memcmp of the representation, which compares indeterminate padding
-bytes and compares each pointer member by address, not by the object that
-the pointer points at. Give custom_comparison_proc for a struct key
-Every default comparison above applies to two keys of the same stored size.
-Only a key type of variable width, that is ccol_string or ccol_other_types,
-can have two keys of different sizes. For two such keys, the map compares
-the common prefix first; if the common prefix is equal, the map compares
-the sizes, and the shorter key comes first. Every key of a fixed-width key
-type is exactly ccol_fixed_width_data_type_size(3) bytes wide, and every
-entry point that takes a key_pair needs that exact width. This is also true
-when the caller gives a custom_comparison_proc, because that function gets
-two bare key pointers and no sizes, so it reads a width that the key type
-fixes.
+The default comparison for each key type is:
+  ccol_char: the platform's native char comparison, signed or unsigned
+  to match how char behaves on this platform.
+  ccol_signed_char and short/int/long/long_long: a signed comparison,
+  which doesn't depend on whether char is signed on this platform.
+  ccol_signed_char is a scalar signed char or its typedef int8_t; a
+  signed char * string key is ccol_string instead.
+  The unsigned integer types and ccol_pointer: an unsigned comparison.
+  ccol_float/double/long_double: a numeric floating-point comparison, in
+  which a NaN key sorts above every non-NaN key and equal to every other
+  NaN key.
+  ccol_string: a lexicographic order equivalent to strcmp.
+  ccol_other_types (a struct key type, for example): a raw memcmp of the
+  representation. That compares indeterminate padding bytes and compares
+  each pointer member by its address, not by the object it points at, so
+  pass a custom_comparison_proc for a struct key.
+
+All of these compare two keys of the same stored size. Only a key type of
+variable width, ccol_string or ccol_other_types, can have two keys of
+different sizes, and for those the map compares the common prefix first;
+when the prefix is equal it compares the sizes and the shorter key comes
+first. Every key of a fixed-width key type is exactly
+ccol_fixed_width_data_type_size(3) bytes wide, and every entry point that
+takes a key_pair needs that exact width. The same holds with a
+custom_comparison_proc, since that function gets two bare key pointers
+and no sizes and so reads a width that the key type fixes.
+
 A custom comparison gets void* pointers to the key data, and a key that
-comes in through the raw layer can be at any address. Read a key that is
-wider than one byte through memcpy, not through a pointer cast to the key
-type
+comes in through the raw layer can be at any address. Read a key wider
+than one byte with memcpy, not through a pointer cast to the key type.
 .fi
 .SH "SEE ALSO"
 .BR cbmap_create (3),
 .BR cbmap_create_mp (3),
 .BR cbmap_create_ch (3),
-.BR cbmap_destroy (3)
+.BR cbmap_destroy (3),
+.BR ccol_determine_ccol_data_type (3)

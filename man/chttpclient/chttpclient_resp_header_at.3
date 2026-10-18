@@ -12,26 +12,26 @@ const char *chttpclient_resp_header_at(const chttpcli_response *resp,
 .fi
 .SH DESCRIPTION
 .nf
-This function gives the value of one line of the response header
-block with the name that you give; the lookup ignores the case of the
-name. index counts the lines with that name, from 0, in the order in
-which the server sent them. Each value is the value of one line exactly
-as the server sent it, never a combined value.
+This function returns the value of one line of the response header
+block that carries the given name, compared without regard to case.
+index counts the lines with that name from 0, in the order the server
+sent them. The value is always the value of that one line exactly as
+the server sent it, never a combined value.
 
-chttpclient_resp_header_count gives the number of lines with a name,
-and chttpclient_resp_header gives the combined value of a repeated
+chttpclient_resp_header_count tells you how many lines carry a name,
+and chttpclient_resp_header returns the combined value of a repeated
 name, or the first value of a repeated Set-Cookie.
 
-The pointer that the function gives back stays valid until a call to
-chttpclient_resp_free.
+The returned pointer stays valid until chttpclient_resp_free is
+called.
 .fi
 .SH PARAMETERS
 .nf
-resp   The response to query. It can be NULL, and the function then
-       gives NULL.
-name   The header name. It can be NULL, and the function then gives
-       NULL.
-index  Which occurrence to give, from 0 to
+resp   The response to query. It can be NULL, in which case the
+       function returns NULL.
+name   The header name. It can be NULL, in which case the function
+       returns NULL.
+index  The occurrence to return, from 0 to
        chttpclient_resp_header_count(resp, name) - 1.
 .fi
 .SH RETURN VALUE
@@ -41,9 +41,8 @@ is not below the number of lines with that name.
 .fi
 .SH NOTES
 .nf
-Only the header block of the response counts. A trailer field of a
-chunked response body is not a response header, and this function
-never gives one.
+Only the response's header block counts. A trailer field of a chunked
+body is not a response header, and this function never returns one.
 .fi
 .SH EXAMPLES
 .nf

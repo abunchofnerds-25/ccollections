@@ -11,44 +11,45 @@ cjson cjson_get(cjson root, const char *path);
 .fi
 .SH DESCRIPTION
 .nf
-Navigates from root through the components of path and returns the
-node that the last component addresses.
+Walks from root through the components of path and returns the node
+that the last component addresses.
 
-path is a dot-separated sequence of component strings.  When the
-current node is CJSON_LIST, a component that starts with '#' followed
-by one or more decimal digits addresses an array element by a
-zero-based index.  In every other case the macro uses the whole
-component as a literal object key, and the '#' is part of that key.
-A bare '#' with no digits after it on a CJSON_LIST node is an error,
-and the macro returns NULL.
+path is a sequence of components separated by dots.  When the
+current node is a CJSON_LIST, a component made of '#' and one or
+more decimal digits addresses an array element by its zero-based
+index.  In every other case the whole component is a literal object
+key, with the '#' as part of the key.  A bare '#' with no digits on
+a CJSON_LIST node is an error and the macro returns NULL.
 
-A NULL root gives NULL, while a NULL path or an empty path gives root
-unchanged.  An empty component in a path addresses nothing, so the
-macro then gives NULL; a leading dot, a trailing dot and two dots
-together (as in "a..b") make an empty component.
+A NULL root gives NULL, and a NULL or empty path gives root itself.
+An empty component addresses nothing, so the macro gives NULL for
+it; a leading dot, a trailing dot and two dots in a row (as in
+"a..b") all make an empty component.
 
 Escape sequences in path components:
   \e.   -> a literal '.' in the key (not treated as a path separator)
   \e\e   -> a literal '\e' in the key
-The macro leaves a '\e' before any other character unchanged.
+A '\e' before any other character is kept as it is.
 .fi
 .SH PARAMETERS
 .nf
-root   Root cjson node (typically CJSON_DICTIONARY or CJSON_LIST).
+root   Root cjson node, usually a CJSON_DICTIONARY or a CJSON_LIST.
 path   Dot-separated path string, for example
        "users.#0.address.city".
 .fi
 .SH RETURN VALUE
 .nf
 A cjson handle to the target node, which the caller does not own.
-The macro returns NULL when a component along the path is missing, or
-when the type of the current node does not support the asked-for
-step.
+NULL when a component along the path is missing, or when the current
+node's type doesn't allow the requested step.  A path of 256 bytes or
+more is first copied with root's allocator, and the macro also
+returns NULL when that copy fails.  A shorter path needs no
+allocation.
 .fi
 .SH NOTES
 .nf
-The handle that the macro returns becomes invalid when the caller
-changes the tree or destroys it.  Do not free that handle.
+The returned handle becomes invalid once the caller changes or
+destroys the tree.  Do not free it.
 .fi
 .SH EXAMPLES
 .nf

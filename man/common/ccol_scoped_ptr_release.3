@@ -12,36 +12,33 @@ released = ccol_scoped_ptr_release(name);
 .SH DESCRIPTION
 .nf
 Returns the current value of name and sets name to NULL, so the cleanup
-that ccol_scoped_ptr() or ccol_scoped_ptr_mp() registered for name
-becomes a no-op at the end of the scope. Use this macro to give the
-ownership of the pointer to code outside the enclosing scope, for
-example as the return value of a function; the pointer is then not
-freed in that scope.
+that ccol_scoped_ptr() or ccol_scoped_ptr_mp() registered for it does
+nothing at the end of the scope. You use it to hand the pointer to code
+outside the enclosing scope, for example as a function's return value,
+and the pointer is then not freed in that scope.
 
-The caller that receives the released value becomes responsible for
-freeing it, and must free it with the allocator that allocated it.
+Whoever receives the released value has to free it, and must free it
+with the allocator that allocated it.
 .fi
 .SH PARAMETERS
 .nf
-name  A pointer previously declared with ccol_scoped_ptr() or
+name  A pointer declared earlier with ccol_scoped_ptr() or
       ccol_scoped_ptr_mp()
 .fi
 .SH RETURN VALUE
 .nf
-Returns the value of name from immediately before the release (NULL if
-name never received a value).
+The value name had just before the release, or NULL if name was never
+given a value.
 .fi
 .SH NOTES
 .nf
-Needs GCC or Clang (ccol_scoped_ptr() and ccol_scoped_ptr_mp() already
-have the same requirement)
+Needs GCC or Clang, as ccol_scoped_ptr() and ccol_scoped_ptr_mp() do.
 
-A call on a scoped pointer that never received a value is safe: the
-macro returns NULL and leaves name at NULL.
+Calling it on a scoped pointer that was never given a value is safe. It
+returns NULL and leaves name at NULL.
 
-More than one call on the same name is safe. A call after the first one
-has no use because name is already NULL, and each later call returns
-NULL again.
+Calling it more than once on the same name is also safe. After the first
+call name is NULL, so every later call just returns NULL again.
 .fi
 .SH EXAMPLES
 .nf

@@ -11,19 +11,21 @@ ccol_retval_t ccol_circq_enable_sending(ccol_circular_queue *cq);
 .fi
 .SH DESCRIPTION
 .nf
-This function clears the flag that ccol_circq_disable_sending() set, so
-the queue accepts a send again. It also wakes every thread that blocks
-and waits to send; a woken sender continues as soon as the queue has
-room for its message.
+Clears the flag that ccol_circq_disable_sending() set, so the queue
+accepts sends again, and wakes every thread that is blocked waiting to
+send. A woken sender goes on as soon as the queue has room for its
+message.
 
-A new queue has sends turned on from the start, so you need this call
-only to open a queue again after a call turned sends off. A call on a
-queue that already has sends on is harmless.
+A new queue starts with sends on, so you only need this call to reopen
+a queue whose sends were turned off. Calling it on a queue whose sends
+are already on is harmless.
 
-The function also wakes every write-direction waiter on this queue,
-which is a ccol_select() call, a ccol_select_timed() call, or an
-ccol_event_loop registration. Each of them scans again and sees the
-new state.
+It also wakes every write-direction waiter on the queue (a ccol_select()
+call, a ccol_select_timed() call or a ccol_event_loop registration), and
+each of them scans again and sees the new state. While sends are off
+the queue is ready for the write direction whatever its message count
+(see ccol_circq_disable_sending(3)), but from this call on a full queue
+is not ready for writing until a receive frees a slot.
 .fi
 .SH PARAMETERS
 .nf
@@ -31,15 +33,14 @@ cq   Circular queue that gets sends turned on
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success       - The function turned sends on
+ccol_success       - Sends are on again
 ccol_invalid_args  - cq is NULL
 .fi
 .SH NOTES
 .nf
-The function wakes every blocked sender with a broadcast, so a thread
-can try to send immediately if the queue has free space.
-The function does not change a receive.
-The function is thread-safe.
+Blocked senders are woken with a broadcast, so a sender can try again
+at once if the queue has free space. Receives are not affected, and the
+function is thread-safe.
 .fi
 .SH "SEE ALSO"
 .BR ccol_circq_disable_sending (3),

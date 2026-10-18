@@ -11,25 +11,24 @@ ctpool_future *ctpool_future_create_detached(char **err_str);
 .fi
 .SH DESCRIPTION
 .nf
-Allocates a future object that no cthread_pool task queue backs. An
-outside producer, such as an engine driven by events that is not itself
-a ctpool worker, must call ctpool_future_fulfill exactly one time to
-deliver the result.
+Allocates a future that no cthread_pool task queue is behind. A
+producer outside the pool, such as an event-driven engine that is not
+itself a ctpool worker, must call ctpool_future_fulfill exactly once
+to deliver the result.
 
-On success the future has a reference count of 2, which mirrors the
-convention of ctpool_submit_future: the caller holds one reference,
-which ctpool_future_free releases, and the producer holds the other,
+On success the future has a reference count of 2, the same convention
+as with ctpool_submit_future: the caller holds one reference, which
+ctpool_future_free releases, and the producer holds the other one,
 which ctpool_future_fulfill releases. Each ctpool_future_get call that
-runs on the future adds one more.
+runs on the future adds one more for its duration.
 
-The library frees the struct once every reference has gone, in whatever
-order they go. A call to ctpool_future_free can come before a call to
-ctpool_future_fulfill, and either call can come while other threads
-still wait in ctpool_future_get. This is exactly how a future that a
-pool backs behaves.
+The struct is freed once every reference is gone, in whatever order
+they go. ctpool_future_free can come before ctpool_future_fulfill, and
+either call can come while other threads still wait in
+ctpool_future_get, exactly as with a future that a pool is behind.
 
-This function always uses the standard malloc and free, not any custom
-allocator, in the same way as the futures of ctpool_submit_future.
+The function always uses the standard malloc and free and never a
+custom allocator, the same as the futures of ctpool_submit_future.
 .fi
 .SH PARAMETERS
 .nf

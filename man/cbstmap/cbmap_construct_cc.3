@@ -11,70 +11,80 @@ cbmap_construct_cc(hm_name, key_t, val_t, custom_comparison_proc);
 .fi
 .SH DESCRIPTION
 .nf
-Declares an ordered map handle named hm_name, together with the companion
-type variables that carry key_t and val_t to every later type-inferred
-macro, and then creates a map whose keys custom_comparison_proc orders
+Declares an ordered map handle named hm_name with the companion type
+variables that carry key_t and val_t to every later type-inferred macro,
+then creates a map whose keys are ordered by custom_comparison_proc
 instead of the default order for key_t.
 
-The macro is cbmap_construct(3) plus a comparison procedure, and it uses
-the default allocator. cbmap_construct_mp(3) replaces the allocator instead,
-and cbmap_construct_full(3) takes both. cbmap_construct_cc_scoped(3) is the
-same macro with a cleanup attribute, which destroys the map at the exit of
-the scope.
+Think of it as cbmap_construct(3) with a comparison procedure added; the
+allocator is the default one. cbmap_construct_mp(3) replaces the
+allocator instead, and cbmap_construct_full(3) takes both.
+cbmap_construct_cc_scoped(3) is the same macro with a cleanup attribute
+that destroys the map when the scope exits.
 
-A struct key_t needs this variant. Without a procedure, the map orders a key
-type that it does not recognize by a raw comparison of the representation,
-which reads padding bytes and orders a pointer member by its address.
+A struct key_t needs this variant. Without a procedure the map orders a
+key type that it doesn't recognize by a raw comparison of the key's
+representation, which reads the padding bytes and orders a pointer member
+by its address.
 
-cbmap_declare(3) followed by cbmap_init_cc(3) is the two-step form. Use it
-when the caller must handle a creation failure and the failure must not be
-fatal.
+The two-step form is cbmap_declare(3) followed by cbmap_init_cc(3). Use it
+when the caller has to handle a creation failure and that failure must
+not be fatal.
 .fi
 .SH PARAMETERS
 .nf
 hm_name                 Name for the map handle to declare
-key_t                   Key type. It tells every later macro how to read
-                        a key, and tells the container which width to
-                        expect and which alignment to give a stored key
+key_t                   Key type. Every later macro reads a key through
+                        it, and the container takes from it the width to
+                        expect and the alignment of a stored key
 val_t                   Value type. Only the type-inferred macros read
-                        it; the library never gives it to the container
+                        it; the library never passes it to the container
 custom_comparison_proc  A ccol_comparison_proc_t, or NULL for the
                         default order for key_t
 .fi
 .SH RETURN VALUE
 .nf
-None. This macro declares variables and does not expand to an expression.
+None. The macro declares variables and doesn't expand to an expression.
 .fi
 .SH "CUSTOM COMPARISON"
 .nf
-The procedure gets pointers to two keys. It returns a negative value when
-the first key orders before the second key, a positive value when the
-first key orders after the second key, and zero when the map must treat
-the two keys as the same key. A zero makes a call an update instead of an
-insert, so the procedure defines both key equality and key order.
+The procedure receives pointers to two keys. It returns a negative value
+when the first key orders before the second, a positive value when it
+orders after the second, and zero when the map must treat the two as the
+same key. Since a zero turns an insert into an update, the procedure
+defines key equality as well as key order.
 
-The procedure must give a strict weak order over key_t, and that order must
-not change while the map holds elements: the same pair of keys must always
-compare in the same way, a comparison in the opposite direction must give
-the opposite sign, and the order must be transitive. An inconsistent
-procedure breaks the placement invariant of the tree, after which the map
-cannot find a key that it holds.
+The procedure must give a strict weak order over key_t, and that order
+must not change while the map holds elements: the same pair of keys
+always compares the same way, swapping the two gives the opposite sign,
+and the order is transitive. An inconsistent procedure breaks the
+placement invariant of the tree, and after that the map can't find keys
+that it holds.
 
-Because the procedure gets two bare pointers and no lengths, it can only
-read a width that key_t fixes. The map therefore validates the width of an
+The procedure gets two bare pointers and no lengths, so it can only read
+a width that key_t fixes. That is why the map checks the width of an
 incoming key against key_t and aligns its stored keys for key_t; the
 procedure decides the order of the keys and nothing else.
 .fi
 .SH NOTES
 .nf
-The macro stops the program through ccol_fatal_err() if the creation fails
-The macro uses the default allocator
-The procedure must stay callable for the whole life of the map
-The walk visits the elements in ascending key order, by the order of this
-procedure. cbmap_begin_iter(3) describes that contract
-Destroy the map with cbmap_destroy(3). The companion type variables follow
-the scope of the handle, so a function that receives the handle needs
-cbmap_redeclare(3) there
+The macro stops the program through _ccol_fatal_err() if the creation
+fails, and it uses the default allocator.
+
+The procedure must stay callable for the whole life of the map.
+
+A walk visits the elements in ascending key order, by the order of this
+procedure; cbmap_begin_iter(3) describes that contract.
+
+Destroy the map with cbmap_destroy(3). The companion type variables
+follow the scope of the handle, so a function that receives the handle
+has to call cbmap_redeclare(3) first.
+
+An array key type or value type, such as int[2] or char[16], is a compile
+error whose message says to wrap the array in a struct. The macros copy
+keys and values by assignment and C can't assign an array, so the map
+would otherwise store the address of the caller's array instead of its
+elements. A struct that holds the array works.
 .fi
 .SH EXAMPLES
 .nf

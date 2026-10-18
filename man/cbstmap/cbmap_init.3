@@ -11,52 +11,50 @@ cbmap_init(hm_name);
 .fi
 .SH DESCRIPTION
 .nf
-Creates an ordered map with the default allocator and the default order for
-the declared key type, and assigns that map to hm_name. The caller must
-declare the handle first, with cbmap_declare(3) or cbmap_declare_scoped(3).
-The key type and the value type do not come to this macro as arguments: the
-macro reads them from the companion type variables that the declare macro
-created.
+Creates an ordered map with the default allocator and the default order
+for the declared key type, and assigns it to hm_name. The caller must
+declare the handle first, with cbmap_declare(3) or
+cbmap_declare_scoped(3). The key type and the value type are not arguments
+here; the macro reads them from the companion type variables that the
+declare macro created.
 
-This is the narrowest of the init macros. cbmap_init_mp(3) adds an
+It is the narrowest of the init macros. cbmap_init_mp(3) adds an
 allocator, cbmap_init_cc(3) adds a comparison procedure, and
-cbmap_init_full(3) takes both.
-
-The one-step equivalents are cbmap_construct(3) and
-cbmap_construct_scoped(3).
+cbmap_init_full(3) takes both. The one-step equivalents are
+cbmap_construct(3) and cbmap_construct_scoped(3).
 .fi
 .SH PARAMETERS
 .nf
-hm_name  The map handle that the caller declared before, into which
-         the macro creates the map
+hm_name  The map handle that the caller declared earlier, which receives
+         the new map
 .fi
 .SH RETURN VALUE
 .nf
-None. This macro expands to a statement and does not expand to an
-expression.
+None. The macro expands to a statement, not to an expression.
 .fi
 .SH "ORDERING"
 .nf
-The container is an AVL tree, so it keeps its elements in key order and
-the walk visits them in ascending key order, as cbmap_begin_iter(3)
-describes. The order comes from the declared key type: the signed integer
-types get a signed integer comparison, the unsigned types and pointers get
-an unsigned comparison, the floating-point types get a numeric comparison,
-and a string key gets a lexicographic byte comparison.
-cbmap_create_full(3) gives all of these in full, and also says where a NaN
-key sorts.
+The container is an AVL tree, so it keeps its elements in key order and a
+walk visits them in ascending key order, as cbmap_begin_iter(3)
+describes. The declared key type picks the order: a signed integer
+comparison for the signed integer types, an unsigned comparison for the
+unsigned types and pointers, a numeric comparison for the floating-point
+types and a lexicographic byte comparison for a string key.
+cbmap_create_full(3) spells all of these out, including where a NaN key
+sorts.
 
-A key type that the map does not recognize, such as a struct, gets a raw
-comparison of the representation of the key, which reads padding bytes and
+A key type that the map doesn't recognize, such as a struct, is compared
+by the raw representation of the key, which reads the padding bytes and
 orders a pointer member by its address. Use cbmap_init_cc(3) for such a
 key type.
 .fi
 .SH NOTES
 .nf
-The macro stops the program through ccol_fatal_err() if the creation fails
-The macro uses the default allocator
-Only the key type reaches the container; only the type-inferred macros read
-the declared value type
+The macro stops the program through _ccol_fatal_err() if the creation
+fails, and it uses the default allocator.
+
+Only the key type reaches the container; the declared value type is read
+by the type-inferred macros alone.
 .fi
 .SH EXAMPLES
 .nf

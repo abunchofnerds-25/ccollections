@@ -38,46 +38,57 @@ SOFTWARE.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <unistd.h>
 
-/* There is one shared, process-wide buffer instead of one buffer for each
- * consumer module, so the lines of every caller mix in true chronological
- * order after a flush. That order is important when you compare a rotation
- * event in clogger.c against a fork() in cthreadcomm.c at about the same
- * time. The buffer is large because a full run of about 200 tests
- * accumulates several MB of lines; a buffer that becomes full between two
- * flush points starts to drop lines quietly (see the doc comment of
- * cdebuglog_write()). */
+#include "common.h"
+
+/* We keep one buffer for the whole process rather than one per consumer
+ * module, so after a flush the lines of all callers appear in their real
+ * chronological order. That matters when you compare a rotation event in
+ * clogger.c with a fork() in cthreadcomm.c at about the same time. The
+ * buffer is large because a full run of about 200 tests collects several MB
+ * of lines, and once it gets full between two flush points it starts
+ * dropping lines silently (see the doc comment of cdebuglog_write()). */
 #define CDEBUGLOG_BUF_CAP (8U * 1024U * 1024U)
-/* A flush only at fork() or at exit() lets the lines of a whole crash-free
- * run collect before any of them reach stderr, so the output arrives as one
- * very large burst at the point where the first fork() happens, instead of
- * near the tests that made each line.
+/* If we flushed only at fork() or exit(), the lines of a whole run without a
+ * crash would pile up before any of them reached stderr, and the output
+ * would come as one huge burst at the first fork() instead of near the tests
+ * that wrote each line.
  *
- * With this threshold, cdebuglog_write() also starts a flush when the buffer
- * passes it, so the output of a long run breaks into several bursts, each
- * with a clear position in time. This costs many fewer write() calls than
- * one call for each line. The threshold sets the size of each batch; it does
- * not decide whether the module batches lines at all. */
+ * With this threshold cdebuglog_write() also starts a flush once the buffer
+ * passes it, so a long run comes out in several bursts, each with a clear
+ * place in time, and still with far fewer write() calls than one per line.
+ * The threshold only sets the size of each batch; batching itself happens
+ * either way. */
 #define CDEBUGLOG_FLUSH_THRESHOLD (CDEBUGLOG_BUF_CAP / 8U)
 static char _cdebuglog_buf[CDEBUGLOG_BUF_CAP];
-static _Atomic size_t _cdebuglog_pos = 0;
+static size_t _cdebuglog_pos = 0;
 static _Atomic bool _cdebuglog_atexit_registered = false;
+/* One lock makes copying a line into the buffer and flushing the buffer
+ * exclusive. A flush then never writes a line that another thread is still
+ * copying, and a line never lands in a range that a flush has already given
+ * back. */
+static _ccol_mutex_t _cdebuglog_lock;
+static _ccol_once_flag_t _cdebuglog_lock_once = _CCOL_ONCE_INIT;
+
+static void _cdebuglog_lock_init(void) {
+  (void)_ccol_mutex_init(_cdebuglog_lock);
+}
+
+/* Writes the buffer to stderr and empties it. The caller holds the lock. */
+static void _cdebuglog_flush_locked(void) {
+  if (_cdebuglog_pos > 0) {
+    ssize_t wn = write(STDERR_FILENO, _cdebuglog_buf, _cdebuglog_pos);
+    (void)wn; /* best-effort diagnostic flush, nothing to do on a failure */
+  }
+  _cdebuglog_pos = 0;
+}
 
 void cdebuglog_flush(void) {
-  size_t n = atomic_exchange(&_cdebuglog_pos, 0);
-  /* A burst of reservations past the capacity continues to advance the
-   * counter, and no reservation rolls it back: each one checks and drops its
-   * own write in cdebuglog_write() below. This is why n can be larger than
-   * the real backing buffer, and why n must be clamped before the read;
-   * without the clamp, this write() reads past the end of a fixed-size static
-   * array. */
-  if (n > CDEBUGLOG_BUF_CAP) n = CDEBUGLOG_BUF_CAP;
-  if (n > 0) {
-    ssize_t wn = write(STDERR_FILENO, _cdebuglog_buf, n);
-    (void)wn; /* a best-effort diagnostic flush; no action on a failure */
-  }
+  _ccol_call_once(_cdebuglog_lock_once, _cdebuglog_lock_init);
+  _ccol_mutex_lock(_cdebuglog_lock);
+  _cdebuglog_flush_locked();
+  _ccol_mutex_unlock(_cdebuglog_lock);
 }
 
 static void _cdebuglog_atexit(void) { cdebuglog_flush(); }
@@ -85,19 +96,26 @@ static void _cdebuglog_atexit(void) { cdebuglog_flush(); }
 void cdebuglog_write(const char *fmt, ...) {
   if (!atomic_exchange(&_cdebuglog_atexit_registered, true)) {
     atexit(_cdebuglog_atexit);
-    /* The context of the process start (the umask and the current working
-     * directory), captured one time, at the first use of this module in a
-     * process. The code reads the umask with the standard "set it twice"
-     * method, because umask(2) has no query-only mode. When a directory
-     * permission mismatch appears later in the same process, this context
-     * shows whether an inherited process-wide umask, or a strange working
-     * directory, explains it. */
-    mode_t um = umask(0);
-    umask(um);
+    /* The context at process start (the umask and the current working
+     * directory), captured once, the first time a process uses this module.
+     * If a directory permission mismatch shows up later in the same process,
+     * it tells you whether an inherited process-wide umask or an odd working
+     * directory explains it. We read the umask from the "Umask:" line of
+     * /proc/self/status, because umask(2) can only be read by setting it,
+     * and that would change the mode of every file another thread creates in
+     * the meantime. Without /proc it isn't shown. */
+    char um[16] = "unknown";
+    FILE *st = fopen("/proc/self/status", "r");
+    if (st) {
+      char l[256];
+      while (fgets(l, sizeof(l), st))
+        if (sscanf(l, "Umask: %15s", um) == 1) break;
+      fclose(st);
+    }
     char cwd[PATH_MAX];
     if (!getcwd(cwd, sizeof(cwd))) strcpy(cwd, "(unknown)");
-    cdebuglog_write("[DEBUG_PROCSTART] pid=%d umask=%03o cwd=%s\n",
-                    (int)getpid(), (unsigned int)um, cwd);
+    cdebuglog_write("[DEBUG_PROCSTART] pid=%d umask=%s cwd=%s\n", (int)getpid(),
+                    um, cwd);
   }
 
   char line[512];
@@ -108,16 +126,16 @@ void cdebuglog_write(const char *fmt, ...) {
   if (len <= 0) return;
   size_t ulen = (size_t)len < sizeof(line) ? (size_t)len : sizeof(line) - 1;
 
-  size_t start = atomic_fetch_add(&_cdebuglog_pos, ulen);
-  if (start + ulen > CDEBUGLOG_BUF_CAP) return; /* dropped, see doc comment */
-  memcpy(_cdebuglog_buf + start, line, ulen);
-
-  /* Only the one write whose own reservation crosses the threshold starts a
-   * flush, so a burst of concurrent writers does not call flush many times at
-   * once. See the doc comment of CDEBUGLOG_FLUSH_THRESHOLD. */
-  if (start < CDEBUGLOG_FLUSH_THRESHOLD &&
-      start + ulen >= CDEBUGLOG_FLUSH_THRESHOLD)
-    cdebuglog_flush();
+  _ccol_call_once(_cdebuglog_lock_once, _cdebuglog_lock_init);
+  _ccol_mutex_lock(_cdebuglog_lock);
+  if (_cdebuglog_pos + ulen <= CDEBUGLOG_BUF_CAP) {
+    memcpy(_cdebuglog_buf + _cdebuglog_pos, line, ulen);
+    _cdebuglog_pos += ulen;
+  } /* else dropped, see the doc comment of cdebuglog_write() */
+  /* Once the buffer is past the threshold it goes out in one burst; see the
+   * doc comment of CDEBUGLOG_FLUSH_THRESHOLD. */
+  if (_cdebuglog_pos >= CDEBUGLOG_FLUSH_THRESHOLD) _cdebuglog_flush_locked();
+  _ccol_mutex_unlock(_cdebuglog_lock);
 }
 
 #endif /* RUNNING_UNIT_TESTS && CDEBUGLOG_ENABLED */

@@ -12,22 +12,30 @@ clru_construct_scoped(name, KeyT, ValT, capacity, getter, setter,
 .fi
 .SH DESCRIPTION
 .nf
-Does what clru_construct() does, and also destroys the cache
-automatically when the variable leaves its scope.
+The same as clru_construct(), and the cache is also destroyed by
+itself when the variable leaves its scope.
 .fi
 .SH PARAMETERS
 .nf
 name      Variable name for the cache handle
 KeyT      Key type
 ValT      Value type
-capacity  The maximum number of live entries before eviction
+capacity  The total number of live entries; see
+          clrucache_create_full(3). It must be greater than 0
 getter    Remote getter callback, or NULL
 setter    Remote setter callback, or NULL
 evict_cb  Eviction callback, or NULL
 .fi
 .SH NOTES
 .nf
-This macro needs GCC or Clang, because it uses __attribute__((cleanup)).
+The macro needs GCC or Clang, because it uses __attribute__((cleanup)).
+
+An array key type or value type, such as int[2] or char[16], is a
+compile error, and the message says to wrap the array in a struct. The
+macros copy a key or a value by assignment, C cannot assign an array,
+and without the error the cache would store the address of the
+caller's array instead of its elements. A struct that holds the
+array works.
 .fi
 .SH EXAMPLES
 .nf

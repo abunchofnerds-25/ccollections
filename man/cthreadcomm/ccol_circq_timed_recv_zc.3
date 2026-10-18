@@ -13,9 +13,8 @@ ccol_retval_t ccol_circq_timed_recv_zc(ccol_circular_queue *cq,
 .fi
 .SH DESCRIPTION
 .nf
-This function blocks and waits for a message for at most the given
-timeout. If a message arrives, the function receives it and transfers
-the ownership.
+Works like ccol_circq_recv_zc(), but waits for a message for at most
+timeout_us microseconds.
 .fi
 .SH PARAMETERS
 .nf
@@ -26,7 +25,7 @@ timeout_us  Longest time to wait, in microseconds, from the call. 0
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success              - The function received a message
+ccol_success              - A message was received
 ccol_invalid_args         - cq or target_buf is NULL
 ccol_container_empty      - The timeout is 0 and the queue is empty
 ccol_timed_out            - The timeout ended
@@ -35,20 +34,21 @@ ccol_unexpected_failure   - The wait failed with an error other than a
 .fi
 .SH NOTES
 .nf
-The function blocks for the duration of the timeout at most.
-On success, the caller gets the ownership and must free
-  target_buf->data.
-A timeout of 0 does not wait: the call then does exactly what
-ccol_circq_try_recv_zc does and returns its result, so it gives
-ccol_container_empty, not ccol_timed_out, when it cannot proceed at
-once.
+The call never blocks for longer than the timeout. After a successful
+call the data belongs to the caller, who must free target_buf->data.
+
+With a timeout of 0 the call doesn't wait at all. It does exactly what
+ccol_circq_try_recv_zc does and returns that result, so an empty queue
+gives ccol_container_empty and not ccol_timed_out.
+
 A timeout too large to form a deadline, such as UINT64_MAX, saturates
-to the latest deadline that the clock can hold and in practice waits
-with no end; it never wraps into the past.
-The library measures the timeout against CLOCK_MONOTONIC, so a change
-to the wall clock of the system (by an administrator, by NTP, or by the
-resume of a virtual machine) does not make the timeout longer or
-shorter: the call waits for the duration that the caller gave.
+to the latest deadline the clock can hold, which in practice means
+waiting with no end. It never wraps around into the past.
+
+The timeout is measured on CLOCK_MONOTONIC. Changes to the system's
+wall clock (made by an administrator, by NTP, or by resuming a virtual
+machine) don't make it longer or shorter, and the call waits for the
+duration that the caller gave.
 .fi
 .SH "SEE ALSO"
 .BR ccol_circq_recv_zc (3),

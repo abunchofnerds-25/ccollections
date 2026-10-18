@@ -22,12 +22,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/* Compile-time probe: every public macro of this header nests inside the
- * argument of another public macro, and inside its own argument, under
+/* Compile-time probe that every public macro of this header nests inside
+ * the argument of another public macro, and inside its own argument, under
  * -Wshadow -Werror. The value macros give their temporaries a unique name in
- * each expansion, so a nested expansion never declares a local that hides one
- * of the enclosing expansion; without that, each nesting below is a -Wshadow
- * error in the build of a caller. The Makefile compiles this file with
+ * each expansion, so a nested expansion never declares a local that hides
+ * one of the outer expansion. If they didn't, each nesting below would be a
+ * -Wshadow error in a caller's build. The Makefile compiles this file with
  * -fsyntax-only, so nothing here runs. */
 
 #include <chashmap.h>

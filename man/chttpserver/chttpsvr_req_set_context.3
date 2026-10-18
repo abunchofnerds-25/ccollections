@@ -1,0 +1,103 @@
+.TH CHTTPSVR_REQ_SET_CONTEXT 3 "2026-10-13" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_req_set_context \- attach a value to a request for later middleware and the handler
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpserver.h>
+
+ccol_retval_t chttpsvr_req_set_context(chttpsvr_req *req,
+                                       const void *key, void *value);
+.fi
+.SH DESCRIPTION
+.nf
+Attaches value to req under key.  Every later step of the request's
+chain (the middleware after this one, and the handler) reads it back
+with chttpsvr_req_context.  This is where a middleware that
+authenticates a request, or gives it a trace identifier, stores what
+it found.
+
+Each request starts with an empty set of values of its own, so
+nothing that one request stores reaches another request, even on the
+same connection.
+
+Keys are compared by address and nothing else, as Go compares the
+keys of context.WithValue by identity.  The usual key is the address
+of a static object in the module that stores the value, so that two
+independent middleware never share a key by accident.  A second call
+with a key the request already holds replaces the value.  A NULL
+value is stored like any other.
+
+The values stay attached until the chain of the request returns.  For
+a matched route that is when the handler and every middleware around
+it have returned, so a middleware can still read them after its call
+to next returns.  For a rejected request that runs its middleware (a
+404, 405 or 413; see chttpsvr_use(3)) it is when the outermost
+middleware returns.  After that the library forgets them.  It never
+frees, dereferences or copies a value.
+
+The first value costs no allocation.  Further values use the
+allocator of the server, and their storage is released when the
+chain returns.
+.fi
+.SH PARAMETERS
+.nf
+req     The request.
+key     The key, compared by address.  It must not be NULL.
+value   The value to attach, which may be NULL.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success            The value is attached.
+ccol_invalid_args       req or key is NULL.
+ccol_not_enough_memory  The storage for the value could not be
+                        allocated.  The request keeps the values that
+                        it had.
+.fi
+.SH NOTES
+.nf
+The library never frees a value, so a value that points to memory a
+middleware allocated has to be freed by that middleware, for example
+after its call to next returns.
+.fi
+.SH THREAD SAFETY
+.nf
+A request belongs to one thread at a time, the one that runs its
+chain: a worker thread for a buffered route, and a streaming thread
+for a streaming route.  Call this function only on that thread and
+only while the chain runs.  It takes no lock.
+.fi
+.SH EXAMPLES
+.nf
+static const char user_key; /* its address is the key */
+
+static void auth_mw(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx,
+                    chttpsvr_next_fn next) {
+  user_t *user = lookup_user(ctx, chttpsvr_req_header(req, "authorization"));
+  if (!user) {
+    chttpsvr_resp_set_status(resp, 401);
+    return;
+  }
+  if (chttpsvr_req_set_context(req, &user_key, user) != ccol_success) {
+    release_user(user);
+    chttpsvr_resp_set_status(resp, 500);
+    return;
+  }
+  next(req, resp);
+  release_user(user);
+}
+
+static void profile_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+                            void *ctx) {
+  (void)ctx;
+  user_t *user = chttpsvr_req_context(req, &user_key);
+  chttpsvr_resp_printf(resp, "hello %s", user->name);
+}
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_req_context (3),
+.BR chttpsvr_use (3),
+.BR chttpsvr_router_use (3),
+.BR chttpsvr_register_handler (3),
+.BR chttpsvr_register_streaming_handler (3)

@@ -1,26 +1,22 @@
 # clogger: structured logging
 
 `clogger` writes log records that a program can search, filter and collect.
-Instead of free-form text, each record is a sequence of `key=value` pairs
-that give the time, the level, the process and the thread, the source
-location, the fields that you attached, and the message.
+A record isn't free-form text but a sequence of `key=value` pairs: the time,
+the level, the process and the thread, the source location, the fields you
+attached, and finally the message.
 
 ```
 ts=2026-05-29T21:52:39.096473Z level=INFO proc=myapp(1234):main(1234) src=main.c:9 func=main env=prod msg="starting up"
 ```
 
-Use `clogger` when:
+It's a good fit when you want logs that `grep`, `jq` or a log collector can
+read without guessing, when several threads log at the same time and their
+lines must not get mixed up, when you want rotation of log files or logs
+that go to the system's syslog daemon without writing that code yourself, or
+when you want error records to carry a backtrace.
 
-- you want logs that tools such as `grep`, `jq` or a log collector can read
-  without guessing,
-- several threads write log records at the same time and their lines must
-  not mix,
-- you want log file rotation, or logs that go to the system's syslog
-  daemon, without writing that code yourself,
-- you want error records to carry a backtrace.
-
-For a short single-threaded tool that prints only a few messages,
-`fprintf(stderr, ...)` is simpler and a perfectly good choice.
+For a short single-threaded tool that prints a handful of messages,
+`fprintf(stderr, ...)` is simpler and perfectly fine.
 
 ```c
 #include <ccollections/clogger.h>
@@ -33,7 +29,7 @@ For a short single-threaded tool that prints only a few messages,
 
 int main(void) {
     /* A logger that writes to stderr (fd 2), synchronously. */
-    clog lg = clog_open_fd(2, CLOG_INFO, NULL);
+    clog lg = clog_create_from_fd(2, CLOG_INFO, NULL);
     if (lg == CLOG_INVALID)
         return 1;
 
@@ -68,17 +64,17 @@ ts=2026-10-06T16:24:43.551276Z level=ERROR proc=first(2741242):first(2741242) sr
 	...
 ```
 
-A few points to note:
+`clog` is a handle, a plain number and not a pointer, and `CLOG_INVALID`
+(zero) means "no logger". Never cast a `clog` to `void *` or back: it's a
+64-bit number, and on a 32-bit system a pointer can't even hold it.
 
-- `clog` is a handle: a plain number, not a pointer. `CLOG_INVALID`
-  (zero) means "no logger". Never cast a `clog` to `void *` or back from `void *`.
-- The `clog_*` macros take a `printf` format and record the file, the
-  line and the function for you.
-- `clog_error` adds a backtrace as lines that start with a tab. Because
-  these lines do not start with `ts=`, a log collector can attach them to
-  the record above them.
-- `clog_close` frees the logger but does not close fd 2; a logger never
-  closes a descriptor that you gave it.
+The `clog_*` macros take a `printf` format and record the file, the line and
+the function for you. `clog_error` also adds a backtrace as lines that start
+with a tab. Those lines don't start with `ts=`, so a log collector can
+attach them to the record above them.
+
+`clog_close` frees the logger but doesn't close fd 2. A logger never closes a
+descriptor that you gave it.
 
 ## Reading a record
 
@@ -92,10 +88,12 @@ Each record starts with the same keys:
 | `src` | `file:line` of the log call |
 | `func` | the function that wrote the record |
 
-Your fields come next, and then `msg`. A value that contains a space, `=`,
-`"`, a backslash or a control character is written in double quotes with
-backslash escapes, so even a message that contains a newline produces
-exactly one line:
+Your fields come after them, then `msg`. A value that contains a space, `=`,
+`"`, a backslash, a control character or a byte that isn't valid UTF-8 is
+written in double quotes with backslash escapes, so even a message with a
+newline in it produces exactly one line. A C1 control (U+0080 to U+009F,
+which a terminal may take as a control sequence) is written as `\u0080` to
+`\u009f`, and every invalid byte becomes U+FFFD:
 
 ```
 msg="two\nlines \"quoted\" back\\slash"
@@ -115,30 +113,30 @@ From the most detailed to the most severe:
 | `CLOG_ALERT` | an operator must act immediately; adds a backtrace |
 | `CLOG_FATAL` | the program cannot continue; adds a backtrace, then exits |
 
-Each level has a macro: `clog_trace`, `clog_debug`, `clog_info`,
+Each level has its macro: `clog_trace`, `clog_debug`, `clog_info`,
 `clog_warn`, `clog_error`, `clog_alert` and `clog_fatal`.
 
-You choose the minimum level when you open the logger and can change it at
-any time with `clog_set_level`. A record below the minimum is discarded and
-costs almost nothing. With `CLOG_OFF` as the minimum, the logger writes
-nothing except `CLOG_FATAL` records.
+You pick the minimum level when you open the logger, and `clog_set_level`
+changes it whenever you like. A record below the minimum is dropped and costs
+almost nothing. With `CLOG_OFF` as the minimum the logger writes nothing but
+`CLOG_FATAL` records.
 
-`clog_fatal` is special: it always writes, whatever the minimum, and
-then stops the process with `exit(EXIT_FAILURE)`, so it never returns.
-Before it exits, it makes sure that the records the program wrote earlier
-also reach the log, so the last records of a dying program are not lost.
+`clog_fatal` is the odd one. It always writes whatever the minimum is, and
+then ends the process with `exit(EXIT_FAILURE)`, so it never returns. Before
+exiting it makes sure the records the program wrote earlier reach the log as
+well, so you don't lose the last words of a dying program.
 
 ## Fields
 
 A field is a `key=value` pair that the logger adds to every record once you
-set it. Use fields for context that stays the same across many records,
-such as a service name, a request ID or a user.
+set it. They're meant for context that is the same across many records, like
+a service name, a request ID or a user.
 
 ```c
 #include <ccollections/clogger.h>
 
 int main(void) {
-    clog lg = clog_open_fd(1, CLOG_INFO, NULL);
+    clog lg = clog_create_from_fd(1, CLOG_INFO, NULL);
     if (lg == CLOG_INVALID)
         return 1;
 
@@ -160,7 +158,7 @@ int main(void) {
 }
 ```
 
-Without the `ts` and `proc` keys, the output is:
+Leaving out the `ts` and `proc` keys, the output is:
 
 ```
 level=INFO src=fields.c:9 func=main request_id=abc-123 msg=processing
@@ -169,19 +167,27 @@ level=INFO src=fields.c:16 func=main path="/tmp/my file" msg="between requests"
 level=INFO src=fields.c:19 func=main msg="no fields at all"
 ```
 
-The logger copies both the key and the value, so you can free or reuse
-your strings immediately.
+The logger copies the key and the value, so you can free or reuse your
+strings as soon as the call returns.
 
-Keys must be plain printable ASCII without spaces, `=`, `]`, `"` or `\`,
-and must not be one of the fixed names (`ts`, `level`, `proc`, `src`,
-`func`, `msg`, `bt`, `bt_error`). Because `clog_set_field` silently ignores
-a bad key, stick to simple keys such as `request_id` or `user`.
+A key must be plain printable ASCII without spaces, `=`, `]`, `"` or `\`,
+and it can't be one of the fixed names (`ts`, `level`, `proc`, `src`,
+`func`, `msg`, `bt`, `bt_error`). `clog_set_field` returns
+`ccol_invalid_args` for a bad key or a NULL value and
+`ccol_not_enough_memory` when it can't copy the strings, and in both cases
+the fields are left as they were. Whoever reads the log later depends on
+the fields, so check the result where a missing one would hurt:
+
+```c
+if (clog_set_field(req_log, "request_id", id) != ccol_success)
+    clog_warn(req_log, "request_id field not set");   /* fragment */
+```
 
 ## Derived loggers: one logger per task
 
-You often want extra fields for one item of work, such as one HTTP request
-or one order, without changing the fields that the rest of the program
-uses. `clog_derive` gives you a second handle on the same output:
+Often you want some extra fields for one item of work, one HTTP request or
+one order, without touching the fields that the rest of the program uses.
+`clog_derive` gives you a second handle on the same output:
 
 ```c
 clog req_log = clog_derive(app_log);      /* fragment */
@@ -193,22 +199,24 @@ clog_close(req_log);                      /* app_log stays open */
 ```
 
 A derived logger starts with a copy of its parent's fields and level, and
-from then on the two are independent: a field that you set on one does not
-show on the other. They do share everything about the output, though: the
-file or descriptor, the format, the rotation, and the lock that keeps lines
-from mixing. The output stays open until you have closed the root and every
-derived handle. The order example below shows this in practice.
+after that the two are independent, so a field you set on one doesn't show
+up on the other. Everything about the output is shared though: the file or
+descriptor, the format, the rotation, and the lock that keeps lines from
+mixing. A write through any of the handles rotates the file when a limit is
+reached, and rotation goes on as long as any handle is open, even after the
+root is closed. The output itself stays open until the root and every
+derived handle are closed. The order example below shows this in practice.
 
 ## Output formats
 
-`clog_set_format` changes the format of a logger at any time, and the change
-also applies to every handle that shares its output.
+`clog_set_format` changes the format of a logger at any time, and the
+change applies to every handle that shares the same output.
 
-**logfmt** (`CLOG_FMT_LOGFMT`, the default) is the format of the examples
-above: easy for a person to read and for a program to parse.
+**logfmt** (`CLOG_FMT_LOGFMT`, the default) is what the examples above use.
+A person can read it easily and a program can parse it easily.
 
 **JSON** (`CLOG_FMT_JSON`) writes one JSON object per line (NDJSON). Your
-fields become top-level keys, and a backtrace becomes a `"bt"` array in the
+fields become top-level keys and a backtrace becomes a `"bt"` array in the
 same object:
 
 ```
@@ -216,14 +224,16 @@ same object:
 {"ts":"2026-10-06T16:24:58.272599Z","level":"ERROR","proc":"app(2741544):app(2741544)","src":"app.c:11","func":"main","env":"prod","msg":"db failed: timeout","bt":["#0 ./app(main+0xf5) [0x56479704526e]","#1 ..."]}
 ```
 
-Every string in a JSON record is valid UTF-8, even when you log binary
-data, because the logger replaces each invalid byte with U+FFFD. You can
-therefore pass the output safely to `jq` or to a JSON collector.
+Every string in a JSON record is valid UTF-8, even if you log binary data,
+because each invalid byte is replaced with U+FFFD and every control
+character is escaped, C1 controls included. So it's safe to pipe the output
+into `jq` or a JSON collector. The logfmt and syslog formats do the same
+replacement, which means every format writes valid UTF-8.
 
 **Syslog** (`CLOG_FMT_SYSLOG`) writes RFC 5424 messages for the system log
-daemon. It works only on a logger that you opened with `clog_open_fd`; on a
-file logger the call does nothing. On Linux, connect a datagram socket to
-`/dev/log`:
+daemon. It only works on a logger you created with `clog_create_from_fd`; on
+a file logger the call returns `ccol_invalid_args` and changes nothing. On
+Linux you connect a datagram socket to `/dev/log`:
 
 ```c
 #include <ccollections/clogger.h>
@@ -243,13 +253,17 @@ int main(void) {
     if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0)
         perror("connect /dev/log");
     else
-        lg = clog_open_fd(fd, CLOG_INFO, NULL);
+        lg = clog_create_from_fd(fd, CLOG_INFO, NULL);
     if (lg == CLOG_INVALID) {
         close(fd);
         return 1;
     }
-    clog_set_format(lg, CLOG_FMT_SYSLOG);
-    clog_set_facility(lg, CLOG_SYSLOG_DAEMON);
+    if (clog_set_format(lg, CLOG_FMT_SYSLOG) != ccol_success ||
+        clog_set_facility(lg, CLOG_SYSLOG_DAEMON) != ccol_success) {
+        clog_close(lg);
+        close(fd);
+        return 1;
+    }
 
     clog_info(lg, "service started");
 
@@ -265,13 +279,13 @@ The daemon receives:
 <30>1 2026-10-06T16:24:58.377293Z myhost myservice 2741559 INFO [ccol proc="myservice(2741559):myservice(2741559)" src="svc.c:26" func="main"] service started
 ```
 
-Keep syslog messages below about 2 KiB, which a typical syslog daemon
-accepts in one datagram.
+Keep syslog messages under about 2 KiB, which is what a typical syslog
+daemon accepts in one datagram.
 
 ## Logging to a file, with rotation
 
-`clog_open_file` opens (or creates) a file and appends to it. Pass a
-`clog_rotation_cfg_t` to rotate the file, or `NULL` for a plain file that
+`clog_create_from_file` opens (or creates) a file and appends to it. Give it
+a `clog_rotation_cfg_t` to rotate the file, or `NULL` for a plain file that
 only grows:
 
 ```c
@@ -283,47 +297,76 @@ clog_rotation_cfg_t cfg = {                          /* fragment */
     .max_rotated_files     = 7,                     /* keep one week */
     .compress_rotated      = true,                  /* gzip old files */
 };
-clog lg = clog_open_file("/var/log/myapp/app.log", CLOG_INFO, &cfg, NULL);
+clog lg = clog_create_from_file("/var/log/myapp/app.log", CLOG_INFO, &cfg,
+                                NULL);
 ```
 
-What happens on disk:
+On disk, a rotation renames `app.log` to `app.log.<YYYYMMDDHHMMSS>` and
+starts a new `app.log`. A second rotation within the same second gets
+`_0001`, a third one `_0002`, and so on.
 
-- A rotation renames `app.log` to `app.log.<YYYYMMDDHHMMSS>` and starts a
-  new `app.log`. A second rotation in the same second gets `_0001`, a third
-  gets `_0002`, and so on.
-- The logger keeps the newest `max_rotated_files` old files and deletes the
-  rest. A value set to zero takes its default (10 MiB, one day, 7 files).
-  The deletion cannot be disabled, so old logs never fill the disk.
-- With `compress_rotated`, each old file becomes a `.gz` file that `zcat`
-  can read. The compression runs on a background thread of the logger, so a
-  log call never waits for gzip. If you link the static library, also link
-  zlib (`-lz`).
-- A new `app.log` gets the permissions and the owner of the file it
-  replaces, so a log that you restricted to `0600` stays restricted.
-- The logger works in the directory where it opened the file, so a relative
-  path keeps working after your program calls `chdir`.
-- The logger renames, compresses and deletes only the files that it
-  identifies as its own rotated files, and leaves every other file in the
-  directory alone.
+Time rotation counts the interval from the last rotation. If the system
+clock steps back to a moment before that rotation, the interval starts over
+from the new time, so the next rotation comes one interval later.
+
+The logger keeps the newest `max_rotated_files` old files and deletes the
+rest. A value left at zero takes its default (10 MiB, one day, 7 files),
+and `clogger.h` names these defaults `CLOG_DEFAULT_MAX_FILE_SIZE`,
+`CLOG_DEFAULT_ROTATION_INTERVAL_US` and `CLOG_DEFAULT_MAX_ROTATED_FILES`.
+You can't turn the deletion off, and that's on purpose, so old logs never
+fill up the disk.
+
+With `compress_rotated` every old file becomes a `.gz` file that `zcat` can
+read. Compression runs on a background thread of the logger, so a log call
+never waits for gzip. If you link the static library, link zlib (`-lz`) as
+well.
+
+A new `app.log` gets the permissions and the owner of the file it replaces,
+so a log that you restricted to `0600` stays that way. The logger also works
+relative to the directory where it opened the file, so a relative path keeps
+working after your program calls `chdir`.
+
+The logger only renames, compresses and deletes files that it recognises as
+its own rotated files, and leaves everything else in the directory alone. A
+rotated name whose timestamp is more than 30 days ahead of both the clock
+and the newest name the logger made isn't one of its files: the logger
+leaves it alone and logs a `WARN` record that names it. The consequence is
+that if the system clock steps back by more than 30 days, a logger that
+opens the file after the step (a restarted process, for example) won't
+manage the old files written before the step until the clock catches up,
+and you have to remove or rename them yourself.
+
+An async logger (see the next section) checks the size after each batch it
+writes, so its file can go past `max_file_size` by up to
+`flush_buffer_size` bytes before it rotates. If the size of each file
+matters to you, keep `flush_buffer_size` small compared to
+`max_file_size`.
 
 The rotation example below shows all of this on a real directory.
 
-**One file, one logger.** When two parts of your program call
-`clog_open_file` on the same rotating file, the second call joins the first
-logger, as `clog_derive` does, so the two parts never both rename the file.
-The second call fails with `CLOG_INVALID` if its rotation, async or
-allocator settings differ from the first. For the details, see
-[clog_open_file_mp(3)](../man/clogger/clog_open_file_mp.3).
+**One file, one logger.** If two parts of your program call
+`clog_create_from_file` on the same rotating file, the second call joins the
+first logger the way `clog_derive` does, so the two never both rename the
+file. The second call fails with `CLOG_INVALID` if its rotation, async or
+allocator settings differ from the first one. Open a rotating file under one
+name only (a symbolic link to it counts as a second file), and never let two
+processes rotate the same file, because each would rename and delete files
+that the other one is writing. In a prefork server, give every worker its
+own file. The details are in
+[clog_create_from_file_mp(3)](../man/clogger/clog_create_from_file_mp.3).
 
 ## Async logging
 
-By default, each log call formats and writes its record before it returns.
-This is simple and safe, but a slow disk or a busy pipe then slows down the
-thread that logs.
+By default a log call formats and writes its record before it returns. That
+is simple and safe, but a slow disk or a busy pipe then slows down the
+thread that logs. Synchronous mode is the right place to start for most
+programs, since a record that a call has written can't be lost if the
+program crashes later; async mode is worth it once the writes really hold
+your threads back.
 
-Pass a `clog_async_cfg_t` to put a logger into async mode. The logging
-thread then only formats the message and hands the record to the logger's
-writer thread, which collects records and writes them in batches:
+Passing a `clog_async_cfg_t` puts a logger into async mode. The logging
+thread then only formats the message and hands the record over to the
+logger's writer thread, which collects records and writes them in batches:
 
 ```c
 clog_async_cfg_t acfg = {                     /* fragment */
@@ -331,35 +374,51 @@ clog_async_cfg_t acfg = {                     /* fragment */
     .flush_buffer_size = 64 * 1024,           /* write at 64 KiB buffered */
     .flush_interval_us = 200000,              /* ... or every 200 ms */
 };
-clog lg = clog_open_file("app.log", CLOG_INFO, NULL, &acfg);
+clog lg = clog_create_from_file("app.log", CLOG_INFO, NULL, &acfg);
 ```
 
-- `queue_size` sets the backpressure. Zero means an unbounded queue that never blocks a caller; with a positive size, a full queue makes the caller wait. In neither case does the logger discard a record.
-- Any pointer that is not NULL puts the logger into async mode, including a
-  pointer to a struct of zeros, which selects the defaults (64 KiB and
-  200 ms). Only `NULL` means synchronous.
-- Every logger that you derive from an async logger is also async.
-- `clog_flush` waits until the logger has handed every record logged before
-  the call to the operating system. Call it before a step that might crash.
+`queue_size` sets the backpressure. Zero means an unbounded queue that never
+blocks a caller, while a positive size makes the caller wait when the queue
+is full. The logger doesn't drop a record in either case.
 
-At exit:
+The writer thread writes a batch once it reaches `flush_buffer_size`, and at
+least once every `flush_interval_us`, also while records keep arriving
+without a pause. When there's nothing to write it sleeps until the next
+record or request, so an idle logger causes no wakeups.
 
-- `clog_close`, a normal `exit()` and a return from `main` write the records
-  that are still queued, with the exit path waiting at most 5 seconds.
-- `clog_fatal` first writes the records that earlier calls queued, then
-  its own record, and then exits.
-- `_exit()`, `abort()` and a crash on a signal run no exit handlers, so the
-  queued records are lost. Where that matters, call `clog_flush` first.
+Any pointer that isn't NULL puts the logger into async mode, a pointer to a
+struct of zeros included, which selects the defaults (64 KiB and 200 ms).
+Only `NULL` means synchronous. Every logger derived from an async logger is
+async too.
+
+`clog_flush` waits until every record logged before the call has been handed
+to the operating system.
+
+What happens at exit depends on how the process ends. `clog_close`, a normal
+`exit()` and a return from `main` write the records that are left in the
+queue, and the exit path waits at most 5 seconds for that. `clog_fatal`
+first writes the records that earlier calls queued, then its own record, and
+then exits. `_exit()`, `abort()` and a crash on a signal run no exit
+handlers, so the queued records are lost, and where that matters you should
+call `clog_flush` first.
+
+`exit()` writes the queued records but doesn't stop the writer thread or the
+compressor thread, which simply end with the process. That's why a leak
+checker such as valgrind reports their stacks as "possibly lost" when the
+program exits without `clog_close`. If you need a clean leak report, in a
+test suite for example, call `clog_close` on every async or compressing
+logger before you exit.
 
 ## Thread names
 
-The `proc` key gives the name of the thread that wrote the record. By
-default this is the name that the operating system gives the thread, which
-for a new thread is usually the program name, so give your threads
+The `proc` key carries the name of the thread that wrote the record. By
+default that's the name the operating system gives the thread, which for a
+new thread is usually the program name, so it pays to give your threads
 meaningful names:
 
 ```c
 static void *worker(void *arg) {                     /* fragment */
+    (void)arg;
     ccol_set_thread_name("ingest-worker");
     clog_info(lg, "started");   /* proc=myapp(1234):ingest-worker(1240) */
     return NULL;
@@ -367,47 +426,70 @@ static void *worker(void *arg) {                     /* fragment */
 ```
 
 `ccol_set_thread_name` keeps the first 15 bytes of the name (the Linux
-limit). It needs no logger and renames only the calling thread. To rename a
-thread that writes log records, use this function rather than
-`pthread_setname_np`: the logger reads a thread's name once, at that
-thread's first record, and does not see a rename made by any other
-function after that.
+limit). It needs no logger and renames only the calling thread. For a thread
+that writes log records, use it instead of `pthread_setname_np`, because the
+logger reads a thread's name once, at that thread's first record, and
+doesn't see a rename that any other function makes afterwards.
 
 ## Backtraces
 
-`clog_error`, `clog_alert` and `clog_fatal` add a backtrace;
-link with `-rdynamic` to see function names in it. The capture works on
-glibc, FreeBSD, OpenBSD and macOS; musl has no `backtrace()`. When the logger cannot get a backtrace, the record
-says so (`#error backtrace unavailable`, or a `"bt_error"` key in JSON)
-instead of silently leaving it out.
+`clog_error`, `clog_alert` and `clog_fatal` add a backtrace, and you need to
+link with `-rdynamic` to see function names in it. Capturing works on glibc,
+FreeBSD, OpenBSD and macOS, but musl has no `backtrace()`. When the logger
+can't get a backtrace, the record says so (`#error backtrace unavailable`,
+or a `"bt_error"` key in JSON) instead of quietly leaving it out.
 
-## Pipes, sockets and SIGPIPE
+## Signals: SIGPIPE and SIGXFSZ
 
-A logger can write to any kind of descriptor: a pipe into another program,
-a socket to a log collector, or a terminal. Normally a write to a pipe with
-no reader raises `SIGPIPE`, which stops the process. `clogger` prevents
-this by default and simply discards a write to a broken pipe or socket. If
-your application must manage `SIGPIPE` itself, call
-`clog_set_sigpipe_policy(CLOG_SIGPIPE_UNTOUCHED)` before the first log
-write. [clog_set_sigpipe_policy(3)](../man/clogger/clog_set_sigpipe_policy.3)
-describes the two policies.
+A logger can write to any kind of descriptor: a pipe into another program, a
+socket to a log collector, a terminal or a file. Two kinds of write can
+raise a signal whose default action kills the process. Writing to a pipe
+with no reader raises `SIGPIPE`. Writing to a file that has reached the file
+size limit of the process (`ulimit -f`, or `LimitFSIZE=` in a systemd unit)
+raises `SIGXFSZ`, and every later write to that file raises it again, the
+newline and the loss marker that the logger writes to repair the file
+included.
+
+`clogger` prevents both by default. A write to a broken pipe or socket is
+just dropped. When a logger opens a regular file, and when a rotation opens
+the next one, the library sets the disposition of `SIGXFSZ` to `SIG_IGN` for
+the process, but only while the disposition is the default one, so a handler
+or an ignore that your application installed is kept. A write at the limit
+then fails with `EFBIG`, and the logger repairs the file as soon as there is
+room again, after a rotation for example, or once the limit is raised. The
+background threads of a logger also block both signals in their own signal
+masks.
+
+If your application has to manage these signals itself, call
+`clog_set_signal_policy(CLOG_SIGNALS_UNTOUCHED)` before the first logger
+opens. The library then changes no disposition and no signal mask, and a
+program that runs under a file size limit has to ignore `SIGXFSZ`, or block
+it in every thread that can write a log file, or the kernel ends the process
+when a log file reaches the limit. Ignoring it is the safer choice, because
+FreeBSD raises `SIGXFSZ` on the whole process, where any thread that doesn't
+block it can take it.
+[clog_set_signal_policy(3)](../man/clogger/clog_set_signal_policy.3)
+describes both policies.
 
 ## Custom allocators and fork
 
-`clog_open_fd_mp` and `clog_open_file_mp` take a `ccol_memmgmt_procs_t` as
-their last argument, and the logger then allocates through your functions.
-Set all four function pointers; derived loggers use the same allocator. See
-[Memory management](memory.md).
+`clog_create_from_fd_mp` and `clog_create_from_file_mp` take a
+`ccol_memmgmt_procs_t` as their last argument, and the logger then allocates
+through your functions. Set all four function pointers. Derived loggers use
+the same allocator. Two allocations belong to the library and go through
+`malloc`: the symbol text of a backtrace, which `backtrace_symbols` makes,
+and the small identity cache that every thread fills on its first record and
+that all loggers share. See [Memory management](memory.md).
 
 If your program calls `fork()`, fork before you open a logger, or open the
-logger and call `exec` in the child immediately after the fork. For the
-policy behind that rule, see [Concurrency](concurrency.md).
+logger and call `exec` in the child right after the fork. The policy behind
+this is explained in [Concurrency](concurrency.md).
 
 ## Example: per-order logging in a rotating file
 
 A small shop processes customer orders. Every record about an order carries
 the order ID and the customer, and no other record of the program does. The
-log lives in a temporary directory that the program removes at the end.
+log goes into a temporary directory that the program removes at the end.
 
 ```c
 /* orders.c: one derived logger for each customer order, in a rotating file. */
@@ -474,7 +556,7 @@ int main(void) {
         .rotation_interval_us  = 86400000000ULL,     /* one day */
         .max_rotated_files     = 14,
     };
-    g_log = clog_open_file(path, CLOG_INFO, &rot, NULL);
+    g_log = clog_create_from_file(path, CLOG_INFO, &rot, NULL);
     if (g_log == CLOG_INVALID) {
         remove_dir(dir);
         return 1;
@@ -510,8 +592,8 @@ level=WARN src=orders.c:27 func=process_order customer=Bob order_id=ORD-1002 app
 level=INFO src=orders.c:74 func=main app=order-processor msg="batch done"
 ```
 
-The order fields appear only on the lines of their own order, while the
-`app` field of the root logger appears on every line, because each derived
+The order fields only show up on the lines of their own order, while the
+`app` field of the root logger is on every line, because every derived
 logger started with a copy of it.
 
 ## Example: worker threads with async JSON logging
@@ -565,7 +647,7 @@ int main(void) {
         .flush_buffer_size = 64 * 1024,
         .flush_interval_us = 100000,      /* 100 ms */
     };
-    g_log = clog_open_fd(1, CLOG_INFO, &acfg);
+    g_log = clog_create_from_fd(1, CLOG_INFO, &acfg);
     if (g_log == CLOG_INVALID)
         return 1;
     clog_set_format(g_log, CLOG_FMT_JSON);
@@ -598,14 +680,14 @@ Build it with `-pthread`. Part of the output:
 {"ts":"2026-10-06T16:25:27.079039Z","level":"INFO","proc":"workers(2742360):workers(2742360)","src":"workers.c:61","func":"main","msg":"all 4 workers done"}
 ```
 
-Each worker closes only its own derived handle while other threads keep
-writing through theirs, which is safe. What is not safe is closing a handle
-that another thread is using.
+Each worker closes its own derived handle while the other threads keep
+writing through theirs, and that's safe. Closing a handle that another
+thread is using is what you must not do.
 
 ## Example: watching rotation and compression
 
-This program sets a very small size limit so that rotation happens at once.
-It writes 200 records and then lists the directory.
+This program sets a tiny size limit so that rotation kicks in at once. It
+writes 200 records and then lists the directory.
 
 ```c
 /* rotate.c: show size rotation, compression and retention. */
@@ -657,7 +739,7 @@ int main(void) {
         .max_rotated_files     = 3,      /* keep three old generations */
         .compress_rotated      = true,   /* gzip each rotated file */
     };
-    clog lg = clog_open_file(path, CLOG_INFO, &cfg, NULL);
+    clog lg = clog_create_from_file(path, CLOG_INFO, &cfg, NULL);
     if (lg == CLOG_INVALID) {
         rmdir(dir);
         return 1;
@@ -677,7 +759,7 @@ int main(void) {
 }
 ```
 
-One run produced output like this:
+One run gave output like this:
 
 ```
 /tmp/rotate-demo-uxpj7Y:
@@ -688,18 +770,19 @@ One run produced output like this:
 ```
 
 All the rotations happened within one second, so their names carry the
-suffixes `_0001`, `_0002`, and so on. The logger deleted the oldest
-generations, the three newest are compressed, and `app.log` holds the
-latest records.
+suffixes `_0001`, `_0002` and so on. The oldest generations were deleted and
+the three newest are compressed. `app.log` holds what was written since the
+last rotation. A size rotation runs right after the write that reaches the
+limit, so if the last record of a run happens to be that write, `app.log` is
+empty (0 bytes). The sizes, and how many records end up in each file, depend
+on the length of each record, which includes the program name and the time
+stamp.
 
 ## Example: a command-line tool with -v and -q
 
-This tool prints the size of each file that you give it, and sends its own
-diagnostics to standard error through a logger:
-
-- `-v` lowers the minimum level to `DEBUG`;
-- `-q` raises the minimum level to `ERROR`;
-- a usage error is fatal.
+This tool prints the size of every file you give it and sends its own
+diagnostics to standard error through a logger. `-v` lowers the minimum
+level to `DEBUG`, `-q` raises it to `ERROR`, and a usage error is fatal.
 
 ```c
 /* lsize.c: print the size of each file; -v adds detail, -q shows less. */
@@ -710,7 +793,7 @@ diagnostics to standard error through a logger:
 #include <sys/stat.h>
 
 int main(int argc, char **argv) {
-    clog lg = clog_open_fd(2, CLOG_INFO, NULL);
+    clog lg = clog_create_from_fd(2, CLOG_INFO, NULL);
     if (lg == CLOG_INVALID)
         return 1;
 
@@ -751,24 +834,45 @@ missing file and the `INFO` summary. `./lsize` with no file writes one
 
 ## Good to know
 
-- **A handle is a number.** Compare it with `CLOG_INVALID`. Passing
-  `CLOG_INVALID` or a closed handle to a function stops the program with a
-  message, so a use after close shows up immediately instead of corrupting
-  memory.
-- **Do not close a handle that another thread is using.** Every other call
-  is thread-safe. If threads start and stop independently, give each one
-  its own derived logger, as in the worker example.
-- **`clog_fatal` does not return.** Code after it never runs.
-- **Async records can be lost on `_exit`, `abort` or a crash.** Call
-  `clog_flush` before a step that might fail badly.
-- **The syslog format needs a descriptor logger.** `clog_set_format` with
-  `CLOG_FMT_SYSLOG` on a file logger does nothing.
-- **Bad field keys are ignored without a report.** If a field does not
-  appear, check its key for spaces or reserved names.
-- **The logger never writes a malformed record.** A record larger than
-  16 MiB, or one that it cannot build because memory ran out, is replaced
-  by a short record that says so. When a write cannot deliver records, a
-  `log record truncated` record reports them.
+A handle is a number, so compare it with `CLOG_INVALID`. Passing
+`CLOG_INVALID` or a closed handle to a function stops the program with a
+message, which means a use after close shows up immediately instead of
+corrupting memory.
+
+Don't close a handle that another thread is using. Every other call is
+thread-safe, and if your threads start and stop independently you can give
+each one its own derived logger, like the worker example does.
+
+`clog_fatal` doesn't return, so code after it never runs.
+
+Async records can get lost on `_exit`, `abort` or a crash. Call `clog_flush`
+before a step that might go badly wrong.
+
+Values outside an enum are refused. `clog_set_level`, `clog_set_format` and
+`clog_set_facility` return `ccol_invalid_args` for a value that their enum
+doesn't name (a level of `-3`, a format of `9`, a facility of `99`) and keep
+the current setting, and `clog_create_from_file` and `clog_create_from_fd`
+return `CLOG_INVALID` for such a minimum level.
+
+A bad field key never shows up in the log, and nothing in the log says so;
+`clog_set_field` tells you through its return value (`ccol_invalid_args`).
+If a field doesn't show up, check that return value, and the key for spaces
+or reserved names.
+
+The logger never writes a malformed record. A record larger than 16 MiB, or
+one it can't build because memory ran out, is replaced by a short record
+that says so. When a write can't deliver records, a `log record truncated`
+record reports them. On a full disk that record waits until there is room
+again and goes out in front of the next record (or at the next flush of an
+async logger, or at exit), so the log names the loss either way and no
+record gets glued to the fragment of a cut one.
+
+A full disk doesn't stop rotation. If the disk fills up in the middle of a
+record while a rotation is due, the logger gives up the rest of that record
+and rotates, which deletes the oldest generations and frees some room.
+Every rotated generation ends with a newline: the logger closes a cut record
+in the file it retires, or cuts that file back to its last whole line when
+the file refuses even the newline.
 
 ## Reference
 
@@ -776,10 +880,10 @@ Overview:
 [clogger(7)](../man/clogger/clogger.7)
 
 Opening and closing:
-[clog_open_fd_mp(3)](../man/clogger/clog_open_fd_mp.3)
-(also `clog_open_fd`),
-[clog_open_file_mp(3)](../man/clogger/clog_open_file_mp.3)
-(also `clog_open_file`; rotation, compression, one file one logger),
+[clog_create_from_fd_mp(3)](../man/clogger/clog_create_from_fd_mp.3)
+(also `clog_create_from_fd`),
+[clog_create_from_file_mp(3)](../man/clogger/clog_create_from_file_mp.3)
+(also `clog_create_from_file`; rotation, compression, one file one logger),
 [clog_derive(3)](../man/clogger/clog_derive.3),
 [clog_flush(3)](../man/clogger/clog_flush.3),
 [clog_close(3)](../man/clogger/clog_close.3)
@@ -806,7 +910,7 @@ Levels, formats and fields:
 
 Threads and signals:
 [ccol_set_thread_name(3)](../man/clogger/ccol_set_thread_name.3),
-[clog_set_sigpipe_policy(3)](../man/clogger/clog_set_sigpipe_policy.3)
+[clog_set_signal_policy(3)](../man/clogger/clog_set_signal_policy.3)
 
 Related guides:
 [Concurrency](concurrency.md),

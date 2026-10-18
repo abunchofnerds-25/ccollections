@@ -11,9 +11,9 @@ void ctpool_shutdown_immediate(ctpool pool);
 .fi
 .SH DESCRIPTION
 .nf
-Cancels every task that is in the queue, then tells each worker thread
-to exit once its current task, if it has one, finishes. The call blocks
-until every worker thread has exited.
+Cancels every task in the queue, and then tells each worker thread to
+exit once it finishes the task it is running, if it has one. The call
+blocks until every worker thread has exited.
 
 A cancelled task that ctpool_submit(3), ctpool_try_submit(3) or
 ctpool_timed_submit(3) queued with an on_complete gets
@@ -23,15 +23,15 @@ the pool held. From such an on_complete, ctpool_wait(3) and both
 shutdown functions on the same pool are no-ops, and ctpool_destroy(3)
 on the same pool is a fatal error; see ctpool_submit(3).
 
-The library marks the future of a cancelled task as done and as
-cancelled, and wakes every thread that blocks in ctpool_future_get for
-a cancelled future; each of them receives NULL.
+The future of a cancelled task is marked as done and as cancelled, and
+every thread blocked in ctpool_future_get on a cancelled future is
+woken up and gets NULL.
 
-A second call, whether it follows the first one or runs at the same time
-on another thread, does no more shutdown work of its own, but it still
-blocks until the shutdown that is already under way stops. Every caller
-therefore gets the same guarantee: after the call returns, every worker
-thread has exited.
+A second call, whether it comes after the first one or at the same
+time on another thread, does no shutdown work of its own, but it still
+blocks until the shutdown that is under way ends. So every caller gets
+the same guarantee: once the call returns, every worker thread has
+exited.
 .fi
 .SH PARAMETERS
 .nf
@@ -42,22 +42,22 @@ pool   Thread pool handle (CTPOOL_INVALID or a stale/already-destroyed
 .nf
 A task that is already running when you make this call finishes as
 usual.
-Every submit function returns ccol_not_permitted after this call, with
-one exception: ctpool_submit_future, which reports a failure only as a
-NULL return.
+Every submit function returns ccol_not_permitted after this call;
+ctpool_submit_future returns NULL and stores ccol_not_permitted in its
+rv_out.
 
-A call to this function while a ctpool_shutdown_drain already runs
-escalates that drain instead of joining it unchanged: it discards
-whatever is still in the queue at that moment, cancels the futures of
-those tasks, and calls on_complete(arg, false) for each of them that
-has one, exactly as if this call had started the shutdown. A task
-that the drain already started still finishes as usual.
+If a ctpool_shutdown_drain is already running, this call escalates the
+drain instead of simply joining it: it discards whatever is left in the
+queue at that moment, cancels the futures of those tasks and calls
+on_complete(arg, false) for each of them that has one, exactly as if
+this call had started the shutdown. A task that the drain has already
+started still finishes as usual.
 
-A call to ctpool_shutdown_immediate on pool from inside a task that runs
-on one of the worker threads of pool, or from the on_complete callback
-of that task, does nothing at all, for the reason that
-ctpool_shutdown_drain documents for the same case: a worker thread
-cannot join itself. This call neither discards the queue nor blocks.
+A call to ctpool_shutdown_immediate on pool from inside a task running
+on one of pool's worker threads, or from the on_complete callback of
+that task, does nothing at all, for the reason ctpool_shutdown_drain
+gives for the same case: a worker thread cannot join itself. The call
+neither discards the queue nor blocks.
 .fi
 .SH "SEE ALSO"
 .BR ctpool_shutdown_drain (3),

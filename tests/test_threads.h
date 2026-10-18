@@ -23,11 +23,11 @@ SOFTWARE.
 */
 
 /* The number of threads of the test process, on every supported system.
- * Linux lists them in /proc/self/task, FreeBSD reports one kern.proc
- * record for each thread, OpenBSD one record for the process and one for
- * each thread, and macOS lists them with task_threads(). Under
- * qemu-user the Linux count also holds the threads of the emulator itself, so a
- * test compares counts with a baseline that it took, and never with a constant.
+ * Linux lists them in /proc/self/task, FreeBSD gives one kern.proc record
+ * per thread, OpenBSD gives one record for the process plus one per thread,
+ * and macOS lists them with task_threads(). Under qemu-user the Linux count
+ * includes the emulator's own threads too, so a test compares the count with
+ * a baseline it took itself and never with a constant.
  */
 
 #ifndef CCOL_TESTS_TEST_THREADS_H
@@ -50,9 +50,9 @@ SOFTWARE.
 #endif
 
 #ifdef __OpenBSD__
-/* The kern.proc records of this process: one for the process itself, whose
- * p_tid is -1, and one for each thread. The caller frees *out. Gives the
- * number of records, or -1. */
+/* The kern.proc records of this process, one for the process itself (its
+ * p_tid is -1) and one per thread. Returns the number of records, or -1, and
+ * the caller frees *out. */
 static inline int test_openbsd_proc_records(struct kinfo_proc **out) {
   int mib[6] = {CTL_KERN,
                 KERN_PROC,

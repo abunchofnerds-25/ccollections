@@ -11,9 +11,9 @@ chttpsvr_declare(name);
 .fi
 .SH DESCRIPTION
 .nf
-Declares a chttpsvr variable called name without initializing it;
-use ccol_create_chttpsvr to initialize it later.
+Declares a chttpsvr variable called name and leaves it
+uninitialized, so that you can assign it later with chttpsvr_create.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_construct (3),
-.BR ccol_create_chttpsvr (3)
+.BR chttpsvr_create (3)

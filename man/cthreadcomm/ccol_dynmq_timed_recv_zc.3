@@ -13,14 +13,13 @@ ccol_retval_t ccol_dynmq_timed_recv_zc(ccol_dynamic_queue *dq,
 .fi
 .SH DESCRIPTION
 .nf
-This function waits for a message in the dynamic queue for at most the
-given timeout. If a message arrives in time, the function removes the
-message at the head and transfers the ownership of its data pointer to
-the caller in target_buf. The caller must free target_buf->data after
-it finishes with the data.
+Works like ccol_dynmq_recv_zc(), but waits for a message for at most
+timeout_us microseconds. If one arrives in time, the message at the
+head is removed and handed over in target_buf, and the caller must free
+target_buf->data when done with it.
 
-The timeout is a count of microseconds from the call, from which the
-library makes an absolute deadline on CLOCK_MONOTONIC.
+The timeout counts microseconds from the call, and the library turns it
+into an absolute deadline on CLOCK_MONOTONIC.
 .fi
 .SH PARAMETERS
 .nf
@@ -32,8 +31,8 @@ timeout_us  Longest time to wait, in microseconds, from the call. 0
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success              - The function received a message. The caller
-                            must free target_buf->data.
+ccol_success              - A message was received. The caller must
+                            free target_buf->data.
 ccol_invalid_args         - dq or target_buf is NULL
 ccol_container_empty      - The timeout is 0 and the queue is empty
 ccol_timed_out            - The timeout ended before a message arrived
@@ -42,19 +41,22 @@ ccol_unexpected_failure   - The wait failed with an error other than a
 .fi
 .SH NOTES
 .nf
-The function blocks for the duration of the timeout at most.
-On success, the caller gets the ownership of target_buf->data.
-A timeout of 0 does not wait: the call then does exactly what
-ccol_dynmq_try_recv_zc does and returns its result, so it gives
-ccol_container_empty, not ccol_timed_out, when it cannot proceed at
-once.
+The call never blocks for longer than the timeout. After a successful
+call target_buf->data belongs to the caller.
+
+With a timeout of 0 the call doesn't wait at all. It does exactly what
+ccol_dynmq_try_recv_zc does and returns that result, so an empty queue
+gives ccol_container_empty and not ccol_timed_out.
+
 A timeout too large to form a deadline, such as UINT64_MAX, saturates
-to the latest deadline that the clock can hold and in practice waits
-with no end; it never wraps into the past.
-The library measures the timeout against CLOCK_MONOTONIC, so a change
-to the wall clock of the system (by an administrator, by NTP, or by the
-resume of a virtual machine) does not make the timeout longer or
-shorter: the call waits for the duration that the caller gave.
+to the latest deadline the clock can hold, which in practice means
+waiting with no end. It never wraps around into the past.
+
+The timeout is measured on CLOCK_MONOTONIC. Changes to the system's
+wall clock (made by an administrator, by NTP, or by resuming a virtual
+machine) don't make it longer or shorter, and the call waits for the
+duration that the caller gave.
+
 The function is thread-safe.
 .fi
 .SH "SEE ALSO"

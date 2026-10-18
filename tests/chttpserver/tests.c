@@ -51,6 +51,7 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/ioctl.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -17666,6 +17667,35 @@ TEST(lingering_close, a_large_refused_upload_is_taken_whole_before_the_close) {
   REQUIRE_EQ(end, 0);
 }
 
+/* Waits, for at most timeout_ms, until the server's end of the client's
+   connection holds unread bytes. The server's end is the socket of this
+   process, other than client_fd, whose local port is port and which has a
+   peer. On OpenBSD a loopback packet reaches the receiving socket through a
+   separate network task, so bytes can still be on their way when send()
+   returns; on Linux they are always there by then. */
+static bool _lc_server_end_holds_bytes(int port, int client_fd,
+                                       int timeout_ms) {
+  int server_fd = -1;
+  for (int fd = 3; fd < 4096 && server_fd < 0; fd++) {
+    struct sockaddr_storage ss, peer;
+    socklen_t sl = sizeof(ss), pl = sizeof(peer);
+    if (fd == client_fd || getsockname(fd, (struct sockaddr *)&ss, &sl) != 0)
+      continue;
+    if (ss.ss_family != AF_INET ||
+        ntohs(((struct sockaddr_in *)&ss)->sin_port) != port)
+      continue;
+    if (getpeername(fd, (struct sockaddr *)&peer, &pl) == 0) server_fd = fd;
+  }
+  if (server_fd < 0) return false;
+  long long deadline = _sc_now_ms() + timeout_ms;
+  for (;;) {
+    int queued = 0;
+    if (ioctl(server_fd, FIONREAD, &queued) == 0 && queued > 0) return true;
+    if (_sc_now_ms() >= deadline) return false;
+    _sc_nap_ms(1);
+  }
+}
+
 TEST(lingering_close, a_close_after_the_response_lingers_on_unread_bytes) {
   /* The request asks for Connection: close, and the client sends more bytes
      while the handler runs, which the server never reads. The client only reads
@@ -17692,6 +17722,9 @@ TEST(lingering_close, a_close_after_the_response_lingers_on_unread_bytes) {
   bool extra = entered && _sc_send_str(fd,
                                        "GET /hello HTTP/1.1\r\nHost: h\r\n"
                                        "X-Pad: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  /* The server decides from what its socket holds, so the handler may finish
+     only once those bytes are there. */
+  bool arrived = extra && _lc_server_end_holds_bytes(_LC_PORT + 41, fd, 5000);
   _sc_gate_open(true);
   _sc_nap_ms(300);
   char buf[2048] = {0};
@@ -17704,6 +17737,7 @@ TEST(lingering_close, a_close_after_the_response_lingers_on_unread_bytes) {
   REQUIRE_TRUE(sent);
   REQUIRE_TRUE(entered);
   REQUIRE_TRUE(extra);
+  REQUIRE_TRUE(arrived);
   REQUIRE_EQ(status, 200);
   REQUIRE_TRUE(strstr(buf, "gated") != NULL);
   REQUIRE_EQ(end, 0);
@@ -18397,6 +18431,10 @@ TEST(request_state, a_lingering_connection_keeps_nothing_of_its_response) {
     if (!entered) _sc_nap_ms(1);
   }
   bool extra = entered && _sc_send_str(fd, "GET /hello HTTP/1.1\r\nX-Pad: a");
+  /* The close lingers only on bytes that are already in the server's socket,
+     so the handler finishes once they are there (see
+     _lc_server_end_holds_bytes). */
+  bool arrived = extra && _lc_server_end_holds_bytes(_FX_PORT + 15, fd, 5000);
   _sc_gate_open(true);
   char buf[2048] = {0};
   int status = extra ? _sc_read_response(fd, buf, sizeof(buf), NULL, 5000) : -1;
@@ -18406,6 +18444,7 @@ TEST(request_state, a_lingering_connection_keeps_nothing_of_its_response) {
   _sc_gate_open(false);
   if (fd >= 0) close(fd);
   REQUIRE_TRUE(extra);
+  REQUIRE_TRUE(arrived);
   REQUIRE_EQ(status, 200);
   REQUIRE_TRUE(lingering);
   REQUIRE_EQ(kept, (size_t)0);

@@ -14209,26 +14209,35 @@ static void tidr_run(size_t threads, tidr_ctx *c) {
 #endif
 }
 
+/* On macOS a pthread_t is the address of the thread's own stack mapping,
+ * which the join unmaps, so a later thread gets the ID only when a new
+ * mapping lands at that address. Once some other mapping takes it, no
+ * thread of this loop can match any more, so we try again with a new loop,
+ * whose poller frees an address of its own. */
 static void tidr_run_body(size_t threads, tidr_ctx *c) {
-  c->loop = ccol_event_loop_create(8, 1, threads, NULL);
-  c->created = c->loop != CCOL_EVENT_LOOP_INVALID;
-  if (!c->created) return;
-  c->poller = _ccol_event_loop_poller_thread_for_tests(c->loop);
-  if (ccol_event_loop_shutdown(c->loop) == ccol_success) {
-    enum { TIDR_BATCH = 16 };
-    for (int round = 0; round < 64 && !atomic_load(&c->matched); round++) {
-      pthread_t tids[TIDR_BATCH];
-      int started = 0;
-      for (; started < TIDR_BATCH; started++) {
-        if (pthread_create(&tids[started], NULL, tidr_thread, c) != 0) break;
+  enum { TIDR_LOOPS = 8, TIDR_ROUNDS = 64, TIDR_BATCH = 16 };
+  for (int attempt = 0; attempt < TIDR_LOOPS && !atomic_load(&c->matched);
+       attempt++) {
+    c->loop = ccol_event_loop_create(8, 1, threads, NULL);
+    c->created = c->loop != CCOL_EVENT_LOOP_INVALID;
+    if (!c->created) return;
+    c->poller = _ccol_event_loop_poller_thread_for_tests(c->loop);
+    if (ccol_event_loop_shutdown(c->loop) == ccol_success) {
+      for (int round = 0; round < TIDR_ROUNDS && !atomic_load(&c->matched);
+           round++) {
+        pthread_t tids[TIDR_BATCH];
+        int started = 0;
+        for (; started < TIDR_BATCH; started++) {
+          if (pthread_create(&tids[started], NULL, tidr_thread, c) != 0) break;
+        }
+        for (int i = 0; i < started; i++) pthread_join(tids[i], NULL);
+        if (started == 0) break;
       }
-      for (int i = 0; i < started; i++) pthread_join(tids[i], NULL);
-      if (started == 0) break;
     }
-  }
-  if (!atomic_load(&c->destroyed)) {
-    ccol_event_loop l = c->loop;
-    ccol_event_loop_destroy(l);
+    if (!atomic_load(&c->destroyed)) {
+      ccol_event_loop l = c->loop;
+      ccol_event_loop_destroy(l);
+    }
   }
 }
 

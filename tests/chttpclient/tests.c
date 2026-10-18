@@ -17354,7 +17354,16 @@ TEST(async_deadline, a_connect_that_starts_as_the_sweep_judges_it_ends) {
   ctpool_future *f = async_get(cli, "http://late-connect.invalid/get");
   chttpcli_async_result_t *raw = f ? chttpclient_async_result_get(f) : NULL;
   ccol_retval_t rv = raw ? raw->rv : ccol_unexpected_failure;
+  /* A hop that the sweep shut down is also counted as abandoned when its
+   * dispatch hasn't ended it by the next tick (a slow runner), and its
+   * teardown takes the count back; a hop sent down the lookup path with a
+   * live connect never ends, and keeps it. So the count must come back to
+   * 0, within 10 s, before the silent peers below are closed. */
   size_t abandoned = _chttp_async_hops_abandoned_for_tests();
+  for (int i = 0; i < 1000 && abandoned != 0; i++) {
+    usleep(10000);
+    abandoned = _chttp_async_hops_abandoned_for_tests();
+  }
   char trace[512];
   _chttp_sweep_fd_wait_trace_for_tests(trace, sizeof(trace));
   bool held = _chttp_sweep_fd_wait_held_for_tests();

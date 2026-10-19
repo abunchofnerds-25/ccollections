@@ -159,7 +159,7 @@ tests use an allocator that refuses to free a block it didn't hand out.
 
 ## Reference
 
-[ccollections(7)](../man/common/ccollections.7) (the return codes and their values)
+[ccollections(7)](https://abunchofnerds-25.github.io/ccollections/man/common/ccollections.7.html) (the return codes and their values)
 
 Related guides:
 [Building and linking](building.md),

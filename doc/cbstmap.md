@@ -176,7 +176,7 @@ reuse or free your buffer as soon as `cbmap_insert` returns. A string the
 map gives back points into that storage; never free it, and don't keep it
 past the next insert, remove or reset. A pointer value of any other type is
 stored as the pointer itself and the map never frees what it points to. All
-of these rules are listed in [cbstmap(7)](../man/cbstmap/cbstmap.7).
+of these rules are listed in [cbstmap(7)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbstmap.7.html).
 
 ## Example: a leaderboard
 
@@ -388,52 +388,52 @@ changes it, protect every call with your own lock (see
 
 ## Reference
 
-Overview: [cbstmap(7)](../man/cbstmap/cbstmap.7)
+Overview: [cbstmap(7)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbstmap.7.html)
 
 Create and destroy (macros):
-[cbmap_construct(3)](../man/cbstmap/cbmap_construct.3),
-[cbmap_construct_scoped(3)](../man/cbstmap/cbmap_construct_scoped.3),
-[cbmap_construct_cc(3)](../man/cbstmap/cbmap_construct_cc.3),
-[cbmap_construct_cc_scoped(3)](../man/cbstmap/cbmap_construct_cc_scoped.3),
-[cbmap_construct_mp(3)](../man/cbstmap/cbmap_construct_mp.3),
-[cbmap_construct_mp_scoped(3)](../man/cbstmap/cbmap_construct_mp_scoped.3),
-[cbmap_construct_full(3)](../man/cbstmap/cbmap_construct_full.3),
-[cbmap_construct_full_scoped(3)](../man/cbstmap/cbmap_construct_full_scoped.3),
-[cbmap_declare(3)](../man/cbstmap/cbmap_declare.3),
-[cbmap_declare_scoped(3)](../man/cbstmap/cbmap_declare_scoped.3),
-[cbmap_init(3)](../man/cbstmap/cbmap_init.3),
-[cbmap_init_cc(3)](../man/cbstmap/cbmap_init_cc.3),
-[cbmap_init_mp(3)](../man/cbstmap/cbmap_init_mp.3),
-[cbmap_init_full(3)](../man/cbstmap/cbmap_init_full.3),
-[cbmap_redeclare(3)](../man/cbstmap/cbmap_redeclare.3),
-[cbmap_destroy(3)](../man/cbstmap/cbmap_destroy.3)
+[cbmap_construct(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_construct.3.html),
+[cbmap_construct_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_construct_scoped.3.html),
+[cbmap_construct_cc(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_construct_cc.3.html),
+[cbmap_construct_cc_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_construct_cc_scoped.3.html),
+[cbmap_construct_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_construct_mp.3.html),
+[cbmap_construct_mp_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_construct_mp_scoped.3.html),
+[cbmap_construct_full(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_construct_full.3.html),
+[cbmap_construct_full_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_construct_full_scoped.3.html),
+[cbmap_declare(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_declare.3.html),
+[cbmap_declare_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_declare_scoped.3.html),
+[cbmap_init(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_init.3.html),
+[cbmap_init_cc(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_init_cc.3.html),
+[cbmap_init_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_init_mp.3.html),
+[cbmap_init_full(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_init_full.3.html),
+[cbmap_redeclare(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_redeclare.3.html),
+[cbmap_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_destroy.3.html)
 
 Element access (macros):
-[cbmap_insert(3)](../man/cbstmap/cbmap_insert.3),
-[cbmap_get(3)](../man/cbstmap/cbmap_get.3),
-[cbmap_get_ptr(3)](../man/cbstmap/cbmap_get_ptr.3),
-[cbmap_remove(3)](../man/cbstmap/cbmap_remove.3)
+[cbmap_insert(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_insert.3.html),
+[cbmap_get(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_get.3.html),
+[cbmap_get_ptr(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_get_ptr.3.html),
+[cbmap_remove(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_remove.3.html)
 
 Raw functions:
-[cbmap_create(3)](../man/cbstmap/cbmap_create.3),
-[cbmap_create_mp(3)](../man/cbstmap/cbmap_create_mp.3),
-[cbmap_create_ch(3)](../man/cbstmap/cbmap_create_ch.3),
-[cbmap_create_full(3)](../man/cbstmap/cbmap_create_full.3),
-[cbmap_insert_elem(3)](../man/cbstmap/cbmap_insert_elem.3),
-[cbmap_get_elem_ref(3)](../man/cbstmap/cbmap_get_elem_ref.3),
-[cbmap_get_elem_copy(3)](../man/cbstmap/cbmap_get_elem_copy.3),
-[cbmap_delete_elem(3)](../man/cbstmap/cbmap_delete_elem.3),
-[cbmap_elem_count(3)](../man/cbstmap/cbmap_elem_count.3),
-[cbmap_reset(3)](../man/cbstmap/cbmap_reset.3),
-[cbmap_begin_iter(3)](../man/cbstmap/cbmap_begin_iter.3)
+[cbmap_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_create.3.html),
+[cbmap_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_create_mp.3.html),
+[cbmap_create_ch(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_create_ch.3.html),
+[cbmap_create_full(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_create_full.3.html),
+[cbmap_insert_elem(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_insert_elem.3.html),
+[cbmap_get_elem_ref(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_get_elem_ref.3.html),
+[cbmap_get_elem_copy(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_get_elem_copy.3.html),
+[cbmap_delete_elem(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_delete_elem.3.html),
+[cbmap_elem_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_elem_count.3.html),
+[cbmap_reset(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_reset.3.html),
+[cbmap_begin_iter(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_begin_iter.3.html)
 
 Iteration:
-[ccol_for_each(3)](../man/citerators/ccol_for_each.3),
-[ccol_begin(3)](../man/citerators/ccol_begin.3),
-[ccol_iter_next(3)](../man/citerators/ccol_iter_next.3),
-[ccol_iter_key_ptr(3)](../man/citerators/ccol_iter_key_ptr.3),
-[ccol_iter_val_ptr(3)](../man/citerators/ccol_iter_val_ptr.3),
-[ccol_iter_destroy(3)](../man/citerators/ccol_iter_destroy.3)
+[ccol_for_each(3)](https://abunchofnerds-25.github.io/ccollections/man/citerators/ccol_for_each.3.html),
+[ccol_begin(3)](https://abunchofnerds-25.github.io/ccollections/man/citerators/ccol_begin.3.html),
+[ccol_iter_next(3)](https://abunchofnerds-25.github.io/ccollections/man/citerators/ccol_iter_next.3.html),
+[ccol_iter_key_ptr(3)](https://abunchofnerds-25.github.io/ccollections/man/citerators/ccol_iter_key_ptr.3.html),
+[ccol_iter_val_ptr(3)](https://abunchofnerds-25.github.io/ccollections/man/citerators/ccol_iter_val_ptr.3.html),
+[ccol_iter_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/citerators/ccol_iter_destroy.3.html)
 
 Related guides:
 [chashmap](chashmap.md) (unordered map),

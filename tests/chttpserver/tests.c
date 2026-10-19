@@ -9262,6 +9262,28 @@ static void _large_body_handler(chttpsvr_req *req, chttpsvr_resp *resp,
     chttpsvr_resp_write(resp, chunk, sizeof(chunk));
 }
 
+/* Whether the server's end of the TCP connection that client_fd has is still
+   open in this process: a socket, other than client_fd, whose local port is
+   the client's peer port and whose peer port is the client's local port. */
+static bool _server_end_of_conn_open(int client_fd) {
+  struct sockaddr_in me, them;
+  socklen_t ml = sizeof(me), tl = sizeof(them);
+  if (getsockname(client_fd, (struct sockaddr *)&me, &ml) != 0 ||
+      getpeername(client_fd, (struct sockaddr *)&them, &tl) != 0)
+    return false;
+  for (int fd = 3; fd < 4096; fd++) {
+    struct sockaddr_in a, b;
+    socklen_t al = sizeof(a), bl = sizeof(b);
+    if (fd == client_fd || getsockname(fd, (struct sockaddr *)&a, &al) != 0 ||
+        a.sin_family != AF_INET || a.sin_port != them.sin_port)
+      continue;
+    if (getpeername(fd, (struct sockaddr *)&b, &bl) == 0 &&
+        b.sin_port == me.sin_port)
+      return true;
+  }
+  return false;
+}
+
 TEST(chttpserver, response_write_timeout_closes_slow_reader_connection) {
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
@@ -9302,7 +9324,13 @@ TEST(chttpserver, response_write_timeout_closes_slow_reader_connection) {
      that no reader drains and closes the connection. The 20 ticks move the
      clock by at most 20 s, in which neither the rate floor nor
      max_response_write_duration_us can fire, so only response_write_timeout_us
-     can close the connection here. */
+     can close the connection here.
+
+     The connection counts as closed once the server's end of it is gone. The
+     parked and in-flight counts are not enough: a connection that the reactor
+     has just taken off the parked list to resume its write is in neither for
+     a moment, and a test that stopped there would read the whole response
+     and then wait for an EOF that a keep-alive connection never sends. */
   bool parked = false;
   for (int i = 0; i < 10000 && !parked; i++) { /* at most 10 s */
     parked = _chttpsvr_parked_count_for_tests(srv, 2) >= 1;
@@ -9313,7 +9341,7 @@ TEST(chttpserver, response_write_timeout_closes_slow_reader_connection) {
     _chttpsvr_advance_slow_clock_for_tests(1000);
     _chttpsvr_sweep_now_for_tests(srv);
     closed = _chttpsvr_parked_count_for_tests(srv, 2) == 0 &&
-             _chttpsvr_in_flight_requests_for_tests(srv) == 0;
+             !_server_end_of_conn_open(fd);
     if (!closed) usleep(10000);
   }
 
@@ -9325,7 +9353,27 @@ TEST(chttpserver, response_write_timeout_closes_slow_reader_connection) {
   char buf[65536];
   size_t total = 0;
   ssize_t r;
-  while ((r = read(fd, buf, sizeof(buf))) > 0) total += (size_t)r;
+  int read_errno = 0;
+  long long last_read_ms = 0;
+  for (;;) {
+    struct timespec a, b;
+    clock_gettime(CLOCK_MONOTONIC, &a);
+    r = read(fd, buf, sizeof(buf));
+    read_errno = r < 0 ? errno : 0;
+    clock_gettime(CLOCK_MONOTONIC, &b);
+    last_read_ms = (long long)(b.tv_sec - a.tv_sec) * 1000 +
+                   (b.tv_nsec - a.tv_nsec) / 1000000;
+    if (r <= 0) break;
+    total += (size_t)r;
+  }
+  /* A reset (ECONNRESET at once) and a stall (EAGAIN after the 5 s receive
+     timeout) end the loop the same way, so the end is printed when it isn't
+     an EOF. */
+  if (r != 0)
+    fprintf(stderr,
+            "[WRITE_TIMEOUT_DIAG] last read %zd errno %d (%s) after %lld ms, "
+            "%zu bytes read\n",
+            r, read_errno, strerror(read_errno), last_read_ms, total);
 
   REQUIRE_TRUE(parked);
   REQUIRE_TRUE(closed);

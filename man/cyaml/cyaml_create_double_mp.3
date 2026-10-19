@@ -15,7 +15,7 @@ cyaml cyaml_create_double(double val);
 Allocates a DOM node of type CYAML_FLOAT.  YAML, unlike JSON, has a
 form for values that are not finite, so the node accepts and stores
 all three of them: +Inf serializes as .inf, -Inf as -.inf and NaN as
-.nan.  cyaml_create_double() passes NULL for mp.
+\&.nan.  cyaml_create_double() passes NULL for mp.
 .fi
 .SH PARAMETERS
 .nf

@@ -824,72 +824,72 @@ and call `exec` immediately. The policy of the whole library is in
 
 ## Reference
 
-Overview: [cthreadcomm(7)](../man/cthreadcomm/cthreadcomm.7)
+Overview: [cthreadcomm(7)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/cthreadcomm.7.html)
 
 Circular queue:
-[ccol_circular_queue_create(3)](../man/cthreadcomm/ccol_circular_queue_create.3),
-[ccol_circular_queue_create_mp(3)](../man/cthreadcomm/ccol_circular_queue_create_mp.3),
-[ccol_circular_queue_destroy(3)](../man/cthreadcomm/ccol_circular_queue_destroy.3),
-[ccol_circq_send_zc(3)](../man/cthreadcomm/ccol_circq_send_zc.3),
-[ccol_circq_try_send_zc(3)](../man/cthreadcomm/ccol_circq_try_send_zc.3),
-[ccol_circq_timed_send_zc(3)](../man/cthreadcomm/ccol_circq_timed_send_zc.3),
-[ccol_circq_recv_zc(3)](../man/cthreadcomm/ccol_circq_recv_zc.3),
-[ccol_circq_try_recv_zc(3)](../man/cthreadcomm/ccol_circq_try_recv_zc.3),
-[ccol_circq_timed_recv_zc(3)](../man/cthreadcomm/ccol_circq_timed_recv_zc.3),
-[ccol_circq_disable_sending(3)](../man/cthreadcomm/ccol_circq_disable_sending.3),
-[ccol_circq_enable_sending(3)](../man/cthreadcomm/ccol_circq_enable_sending.3),
-[ccol_circq_msg_count(3)](../man/cthreadcomm/ccol_circq_msg_count.3)
+[ccol_circular_queue_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circular_queue_create.3.html),
+[ccol_circular_queue_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circular_queue_create_mp.3.html),
+[ccol_circular_queue_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circular_queue_destroy.3.html),
+[ccol_circq_send_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_send_zc.3.html),
+[ccol_circq_try_send_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_try_send_zc.3.html),
+[ccol_circq_timed_send_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_timed_send_zc.3.html),
+[ccol_circq_recv_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_recv_zc.3.html),
+[ccol_circq_try_recv_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_try_recv_zc.3.html),
+[ccol_circq_timed_recv_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_timed_recv_zc.3.html),
+[ccol_circq_disable_sending(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_disable_sending.3.html),
+[ccol_circq_enable_sending(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_enable_sending.3.html),
+[ccol_circq_msg_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_msg_count.3.html)
 
 Dynamic queue:
-[ccol_dynamic_queue_create(3)](../man/cthreadcomm/ccol_dynamic_queue_create.3),
-[ccol_dynamic_queue_create_mp(3)](../man/cthreadcomm/ccol_dynamic_queue_create_mp.3),
-[ccol_dynamic_queue_destroy(3)](../man/cthreadcomm/ccol_dynamic_queue_destroy.3),
-[ccol_dynmq_send_zc(3)](../man/cthreadcomm/ccol_dynmq_send_zc.3),
-[ccol_dynmq_recv_zc(3)](../man/cthreadcomm/ccol_dynmq_recv_zc.3),
-[ccol_dynmq_try_recv_zc(3)](../man/cthreadcomm/ccol_dynmq_try_recv_zc.3),
-[ccol_dynmq_timed_recv_zc(3)](../man/cthreadcomm/ccol_dynmq_timed_recv_zc.3),
-[ccol_dynmq_disable_sending(3)](../man/cthreadcomm/ccol_dynmq_disable_sending.3),
-[ccol_dynmq_enable_sending(3)](../man/cthreadcomm/ccol_dynmq_enable_sending.3),
-[ccol_dynmq_msg_count(3)](../man/cthreadcomm/ccol_dynmq_msg_count.3)
+[ccol_dynamic_queue_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_dynamic_queue_create.3.html),
+[ccol_dynamic_queue_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_dynamic_queue_create_mp.3.html),
+[ccol_dynamic_queue_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_dynamic_queue_destroy.3.html),
+[ccol_dynmq_send_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_dynmq_send_zc.3.html),
+[ccol_dynmq_recv_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_dynmq_recv_zc.3.html),
+[ccol_dynmq_try_recv_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_dynmq_try_recv_zc.3.html),
+[ccol_dynmq_timed_recv_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_dynmq_timed_recv_zc.3.html),
+[ccol_dynmq_disable_sending(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_dynmq_disable_sending.3.html),
+[ccol_dynmq_enable_sending(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_dynmq_enable_sending.3.html),
+[ccol_dynmq_msg_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_dynmq_msg_count.3.html)
 
-Channel: [ccol_channel_create(3)](../man/cthreadcomm/ccol_channel_create.3),
-[ccol_channel_create_mp(3)](../man/cthreadcomm/ccol_channel_create_mp.3),
-[ccol_channel_destroy(3)](../man/cthreadcomm/ccol_channel_destroy.3),
-[ccol_chan_send_zc(3)](../man/cthreadcomm/ccol_chan_send_zc.3),
-[ccol_chan_try_send_zc(3)](../man/cthreadcomm/ccol_chan_try_send_zc.3),
-[ccol_chan_timed_send_zc(3)](../man/cthreadcomm/ccol_chan_timed_send_zc.3),
-[ccol_chan_recv_zc(3)](../man/cthreadcomm/ccol_chan_recv_zc.3),
-[ccol_chan_try_recv_zc(3)](../man/cthreadcomm/ccol_chan_try_recv_zc.3),
-[ccol_chan_timed_recv_zc(3)](../man/cthreadcomm/ccol_chan_timed_recv_zc.3),
-[ccol_chan_disable_sending(3)](../man/cthreadcomm/ccol_chan_disable_sending.3),
-[ccol_chan_enable_sending(3)](../man/cthreadcomm/ccol_chan_enable_sending.3),
-[ccol_chan_msg_count(3)](../man/cthreadcomm/ccol_chan_msg_count.3)
+Channel: [ccol_channel_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_channel_create.3.html),
+[ccol_channel_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_channel_create_mp.3.html),
+[ccol_channel_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_channel_destroy.3.html),
+[ccol_chan_send_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_chan_send_zc.3.html),
+[ccol_chan_try_send_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_chan_try_send_zc.3.html),
+[ccol_chan_timed_send_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_chan_timed_send_zc.3.html),
+[ccol_chan_recv_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_chan_recv_zc.3.html),
+[ccol_chan_try_recv_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_chan_try_recv_zc.3.html),
+[ccol_chan_timed_recv_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_chan_timed_recv_zc.3.html),
+[ccol_chan_disable_sending(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_chan_disable_sending.3.html),
+[ccol_chan_enable_sending(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_chan_enable_sending.3.html),
+[ccol_chan_msg_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_chan_msg_count.3.html)
 
-Select: [ccol_select(3)](../man/cthreadcomm/ccol_select.3),
-[ccol_select_timed(3)](../man/cthreadcomm/ccol_select_timed.3),
-[ccol_select_va(3)](../man/cthreadcomm/ccol_select_va.3),
-[ccol_select_timed_va(3)](../man/cthreadcomm/ccol_select_timed_va.3),
-[ccol_selectable_from_circq(3)](../man/cthreadcomm/ccol_selectable_from_circq.3),
-[ccol_selectable_from_dynq(3)](../man/cthreadcomm/ccol_selectable_from_dynq.3),
-[ccol_selectable_from_chan(3)](../man/cthreadcomm/ccol_selectable_from_chan.3),
-[ccol_selectable_from_fd(3)](../man/cthreadcomm/ccol_selectable_from_fd.3)
+Select: [ccol_select(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_select.3.html),
+[ccol_select_timed(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_select_timed.3.html),
+[ccol_select_va(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_select_va.3.html),
+[ccol_select_timed_va(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_select_timed_va.3.html),
+[ccol_selectable_from_circq(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_selectable_from_circq.3.html),
+[ccol_selectable_from_dynq(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_selectable_from_dynq.3.html),
+[ccol_selectable_from_chan(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_selectable_from_chan.3.html),
+[ccol_selectable_from_fd(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_selectable_from_fd.3.html)
 
 Event loop:
-[ccol_event_loop_create(3)](../man/cthreadcomm/ccol_event_loop_create.3),
-[ccol_event_loop_create_mp(3)](../man/cthreadcomm/ccol_event_loop_create_mp.3),
-[ccol_event_loop_declare(3)](../man/cthreadcomm/ccol_event_loop_declare.3),
-[ccol_event_loop_declare_scoped(3)](../man/cthreadcomm/ccol_event_loop_declare_scoped.3),
-[ccol_event_loop_construct(3)](../man/cthreadcomm/ccol_event_loop_construct.3),
-[ccol_event_loop_construct_scoped(3)](../man/cthreadcomm/ccol_event_loop_construct_scoped.3),
-[ccol_event_loop_add(3)](../man/cthreadcomm/ccol_event_loop_add.3),
-[ccol_event_loop_remove(3)](../man/cthreadcomm/ccol_event_loop_remove.3),
-[ccol_event_loop_modify(3)](../man/cthreadcomm/ccol_event_loop_modify.3),
-[ccol_event_loop_pause(3)](../man/cthreadcomm/ccol_event_loop_pause.3),
-[ccol_event_loop_resume(3)](../man/cthreadcomm/ccol_event_loop_resume.3),
-[ccol_event_loop_reg_count(3)](../man/cthreadcomm/ccol_event_loop_reg_count.3),
-[ccol_event_loop_reg_generation(3)](../man/cthreadcomm/ccol_event_loop_reg_generation.3),
-[ccol_event_loop_shutdown(3)](../man/cthreadcomm/ccol_event_loop_shutdown.3),
-[ccol_event_loop_destroy(3)](../man/cthreadcomm/ccol_event_loop_destroy.3)
+[ccol_event_loop_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_create.3.html),
+[ccol_event_loop_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_create_mp.3.html),
+[ccol_event_loop_declare(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_declare.3.html),
+[ccol_event_loop_declare_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_declare_scoped.3.html),
+[ccol_event_loop_construct(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_construct.3.html),
+[ccol_event_loop_construct_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_construct_scoped.3.html),
+[ccol_event_loop_add(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_add.3.html),
+[ccol_event_loop_remove(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_remove.3.html),
+[ccol_event_loop_modify(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_modify.3.html),
+[ccol_event_loop_pause(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_pause.3.html),
+[ccol_event_loop_resume(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_resume.3.html),
+[ccol_event_loop_reg_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_reg_count.3.html),
+[ccol_event_loop_reg_generation(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_reg_generation.3.html),
+[ccol_event_loop_shutdown(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_shutdown.3.html),
+[ccol_event_loop_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_event_loop_destroy.3.html)
 
 Related guides:
 [Thread pool](cthreadpool.md),

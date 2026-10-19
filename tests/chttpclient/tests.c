@@ -813,6 +813,31 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
     return true;
   }
 
+  if (strcmp(method, "GET") == 0 &&
+      (strcmp(path, "/drip") == 0 || strcmp(path, "/drip-stop") == 0)) {
+    /* /drip sends a 10-byte body one byte at a time, 150 ms apart, so the
+     * response takes about 1.5 s but its connection is never silent for long.
+     * /drip-stop sends the head and the first 5 bytes, then nothing until the
+     * test calls held_release() (at most about 15 s), then closes. */
+    bool stop = strcmp(path, "/drip-stop") == 0;
+    unsigned epoch = atomic_load(&g_held_epoch);
+    static const char head[] =
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n"
+        "Content-Length: 10\r\nConnection: close\r\n\r\n";
+    if (send(conn_fd, head, sizeof(head) - 1, MSG_NOSIGNAL) < 0) return true;
+    for (int i = 0; i < 10; i++) {
+      if (stop && i == 5) {
+        for (int j = 0; j < 1500 && atomic_load(&g_held_epoch) == epoch; j++)
+          usleep(10000); /* 10 ms */
+        return true;
+      }
+      char b = (char)('0' + i);
+      if (send(conn_fd, &b, 1, MSG_NOSIGNAL) != 1) return true;
+      if (i < 9) usleep(150000); /* 150 ms */
+    }
+    return true;
+  }
+
   if (strcmp(method, "GET") == 0 && strcmp(path, "/held") == 0) {
     /* A gated sibling of /slow. It signals its start like /slow and only
      * answers once the test calls held_release(), so a test can keep a request
@@ -1632,12 +1657,37 @@ static void *srv_conn_thread(void *arg) {
   return NULL;
 }
 
+/* Decides what an accept loop of the test server does after accept(2) failed:
+ * false once the server stops, true otherwise. A failed accept is passing (a
+ * client that reset before we took its connection, a signal, a full descriptor
+ * table), and a loop that ended on one would leave the listener open with
+ * nobody accepting, so every later request would connect, send and wait for a
+ * response for ever. The error is printed, and an error that can repeat at once
+ * waits 1 ms before the next try. */
+static atomic_int g_accept_failures = 0;
+
+static bool srv_accept_failed_keep_going(const char *which) {
+  int e = errno;
+  atomic_fetch_add(&g_accept_failures, 1);
+  if (!atomic_load(&g_srv.running)) return false;
+  fprintf(stderr, "[ACCEPT_DIAG] %s accept failed: errno %d (%s), retrying\n",
+          which, e, strerror(e));
+  if (e != EINTR && e != ECONNABORTED) {
+    struct timespec nap = {0, 1000000};
+    nanosleep(&nap, NULL);
+  }
+  return true;
+}
+
 /* The server's accept loop, running in a background thread. */
 static void *srv_accept_loop(void *arg) {
   (void)arg;
   while (atomic_load(&g_srv.running)) {
     int conn_fd = accept(g_srv.server_fd, NULL, NULL);
-    if (conn_fd < 0) break;
+    if (conn_fd < 0) {
+      if (srv_accept_failed_keep_going("tcp4")) continue;
+      break;
+    }
     if (!atomic_load(&g_srv.running)) {
       close(conn_fd);
       break;
@@ -1662,7 +1712,10 @@ static void *srv_accept_loop6(void *arg) {
   (void)arg;
   while (atomic_load(&g_srv.running)) {
     int conn_fd = accept(g_srv.server_fd6, NULL, NULL);
-    if (conn_fd < 0) break;
+    if (conn_fd < 0) {
+      if (srv_accept_failed_keep_going("tcp6")) continue;
+      break;
+    }
     if (!atomic_load(&g_srv.running)) {
       close(conn_fd);
       break;
@@ -1687,7 +1740,10 @@ static void *srv_accept_loop_unix(void *arg) {
   (void)arg;
   while (atomic_load(&g_srv.running)) {
     int conn_fd = accept(g_srv.server_fd_unix, NULL, NULL);
-    if (conn_fd < 0) break;
+    if (conn_fd < 0) {
+      if (srv_accept_failed_keep_going("unix")) continue;
+      break;
+    }
     if (!atomic_load(&g_srv.running)) {
       close(conn_fd);
       break;
@@ -6816,6 +6872,242 @@ TEST(http, delete_with_body_content_type_not_sent) {
 
   chttp_request_free(req);
   chttpclient_resp_free(resp);
+}
+
+static void _accept_intr_handler(int sig) { (void)sig; }
+
+TEST(test_server, an_accept_that_fails_does_not_stop_the_server) {
+  /* The accept loop of this file's server keeps going after accept(2) fails,
+     because the listener stays open and a loop that ended would leave every
+     later request connected and waiting for an answer for ever. A signal whose
+     handler has no SA_RESTART makes the accept(2) that the loop waits in fail
+     with EINTR, and a request after that still gets its response. The request
+     has a timeout, so a loop that ended fails the test instead of hanging it.
+   */
+  /* The server starts on first use, and its accept thread must exist before we
+     signal it. */
+  char url[128];
+  make_url(url, sizeof(url), "/echo-content-type");
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = _accept_intr_handler;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  bool installed = sigaction(SIGUSR2, &sa, NULL) == 0;
+  int before = atomic_load(&g_accept_failures);
+  bool failed = false;
+  for (int i = 0; installed && i < 50 && !failed; i++) {
+    /* The loop may be between two accept(2) calls, so we signal again until
+       one of them fails. */
+    pthread_kill(g_srv.accept_tid, SIGUSR2);
+    for (int j = 0; j < 100 && !failed; j++) {
+      failed = atomic_load(&g_accept_failures) > before;
+      if (!failed) usleep(1000);
+    }
+  }
+  /* A signal of the loop above can still be pending. Its default action would
+     end the process, and setting SIG_IGN discards it. */
+  if (installed) signal(SIGUSR2, SIG_IGN);
+
+  chttpcli_construct(cli);
+  ccol_retval_t set_rv = chttpclient_set_request_timeout(cli, 5000000);
+  chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv =
+      req ? chttpclient_do(cli, req, &resp) : ccol_not_enough_memory;
+  int status = resp ? resp->status_code : -1;
+  chttpclient_resp_free(resp);
+  chttp_request_free(req);
+  chttpclient_destroy(cli);
+
+  REQUIRE_TRUE(installed);
+  REQUIRE_TRUE(failed);
+  REQUIRE_EQ(set_rv, ccol_success);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_EQ(status, 200);
+}
+
+/* ========================================================================== */
+/*                     INACTIVITY TIMEOUT                                     */
+/* ========================================================================== */
+
+typedef struct {
+  char body[64];
+  size_t len;
+  int sleep_ms; /* how long each call of the write_fn takes */
+} inact_sink_t;
+
+static size_t inact_write_fn(const void *data, size_t len, void *ctx) {
+  inact_sink_t *k = (inact_sink_t *)ctx;
+  if (k->sleep_ms > 0) usleep((useconds_t)k->sleep_ms * 1000);
+  size_t room = sizeof(k->body) - 1 - k->len;
+  size_t n = len < room ? len : room;
+  memcpy(k->body + k->len, data, n);
+  k->len += n;
+  k->body[k->len] = '\0';
+  return len;
+}
+
+typedef struct {
+  ccol_retval_t rv;
+  int status;
+  char body[64];
+  long elapsed_ms;
+} inact_outcome_t;
+
+/* Runs GET path in one tier (1 sync, 2 async, 3 pooled) on a client with
+ * the given inactivity and request timeouts. With sleep_ms >= 0 it streams
+ * through inact_write_fn, whose every call takes sleep_ms. */
+static inact_outcome_t inact_run(int tier, const char *path, uint64_t inact_us,
+                                 uint64_t request_us, int sleep_ms) {
+  inact_outcome_t o = {ccol_unexpected_failure, -1, {0}, -1};
+  char url[128];
+  make_url(url, sizeof(url), path);
+  chttpcli_construct(cli);
+  if (cli == CHTTPCLI_INVALID ||
+      chttpclient_set_inactivity_timeout(cli, inact_us) != ccol_success ||
+      chttpclient_set_request_timeout(cli, request_us) != ccol_success) {
+    if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+    return o;
+  }
+  chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
+  inact_sink_t sink = {{0}, 0, sleep_ms};
+  bool streaming = sleep_ms >= 0;
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  chttpcli_response *resp = NULL;
+  if (!req) {
+    o.rv = ccol_not_enough_memory;
+  } else if (tier == 1) {
+    o.rv = streaming ? chttpclient_do_streaming(cli, req, inact_write_fn, &sink,
+                                                &o.status)
+                     : chttpclient_do(cli, req, &resp);
+  } else if (tier == 3) {
+    o.rv = streaming ? chttpclient_do_pooled_streaming(cli, req, inact_write_fn,
+                                                       &sink, &o.status)
+                     : chttpclient_do_pooled(cli, req, &resp);
+  } else {
+    ctpool_future *f = streaming ? chttpclient_do_async_streaming(
+                                       cli, req, inact_write_fn, &sink)
+                                 : chttpclient_do_async(cli, req);
+    chttpcli_async_result_t *r = f ? chttpclient_async_result_get(f) : NULL;
+    if (r) {
+      o.rv = r->rv;
+      resp = r->resp;
+      r->resp = NULL;
+      if (streaming && resp) o.status = resp->status_code;
+      chttpclient_async_result_free(r);
+    }
+    if (f) ctpool_future_free(f);
+  }
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  o.elapsed_ms = (long)((t1.tv_sec - t0.tv_sec) * 1000 +
+                        (t1.tv_nsec - t0.tv_nsec) / 1000000);
+  if (resp) {
+    o.status = resp->status_code;
+    if (resp->body)
+      snprintf(o.body, sizeof(o.body), "%.*s", (int)resp->body_len, resp->body);
+  }
+  if (streaming) memcpy(o.body, sink.body, sizeof(o.body));
+  chttpclient_resp_free(resp);
+  chttp_request_free(req);
+  chttpclient_destroy(cli);
+  /* Lets a held route of the test server end its connection. */
+  held_release();
+  return o;
+}
+
+TEST(inactivity, a_new_client_and_the_default_client_have_the_defaults) {
+  /* A client starts with a 30 s connect timeout, a 60 s inactivity timeout
+     and no request timeout, and so does the process's default client. */
+  chttpcli_construct(cli);
+  uint64_t c = 0, r = 1, i = 0;
+  bool got = _chttpclient_timeouts_for_tests(cli, &c, &r, &i);
+  chttpclient_destroy(cli);
+  uint64_t dc = 0, dr = 1, di = 0;
+  bool dgot =
+      _chttpclient_timeouts_for_tests(chttp_default_client(), &dc, &dr, &di);
+  REQUIRE_TRUE(got);
+  REQUIRE_EQ(c, (uint64_t)30000000);
+  REQUIRE_EQ(c, CHTTPCLI_DEFAULT_CONNECT_TIMEOUT_US);
+  REQUIRE_EQ(i, (uint64_t)60000000);
+  REQUIRE_EQ(i, CHTTPCLI_DEFAULT_INACTIVITY_TIMEOUT_US);
+  REQUIRE_EQ(r, (uint64_t)0);
+  REQUIRE_TRUE(dgot);
+  REQUIRE_EQ(dc, (uint64_t)30000000);
+  REQUIRE_EQ(di, (uint64_t)60000000);
+  REQUIRE_EQ(dr, (uint64_t)0);
+}
+
+TEST(inactivity, the_setter_refuses_an_invalid_client) {
+  REQUIRE_EQ(chttpclient_set_inactivity_timeout(CHTTPCLI_INVALID, 1000),
+             ccol_invalid_args);
+}
+
+TEST(inactivity, a_server_that_never_answers_ends_the_request_in_every_tier) {
+  /* /held reads the request and sends nothing. With no request timeout, the
+     300 ms inactivity timeout is all that ends the wait, in every tier. */
+  inact_outcome_t o[3];
+  for (int t = 1; t <= 3; t++) o[t - 1] = inact_run(t, "/held", 300000, 0, -1);
+  for (int t = 0; t < 3; t++) {
+    REQUIRE_EQ(o[t].rv, ccol_timed_out);
+    REQUIRE_GE(o[t].elapsed_ms, 250L);
+    REQUIRE_LT(o[t].elapsed_ms, 10000L);
+  }
+}
+
+TEST(inactivity, a_body_that_stops_midway_ends_the_request_in_every_tier) {
+  /* /drip-stop sends its head and half its body, then nothing. */
+  inact_outcome_t o[3];
+  for (int t = 1; t <= 3; t++)
+    o[t - 1] = inact_run(t, "/drip-stop", 300000, 0, -1);
+  for (int t = 0; t < 3; t++) {
+    REQUIRE_EQ(o[t].rv, ccol_timed_out);
+    REQUIRE_GE(o[t].elapsed_ms, 250L);
+    REQUIRE_LT(o[t].elapsed_ms, 10000L);
+  }
+}
+
+TEST(inactivity, a_slow_body_that_keeps_moving_completes_in_every_tier) {
+  /* /drip takes about 1.5 s for its 10 bytes, three times the 500 ms
+     inactivity timeout, but never goes 500 ms without a byte, so every tier
+     reads the whole body. A timeout counted from the start of the request
+     would end it. */
+  inact_outcome_t o[3];
+  for (int t = 1; t <= 3; t++) o[t - 1] = inact_run(t, "/drip", 500000, 0, -1);
+  for (int t = 0; t < 3; t++) {
+    REQUIRE_EQ(o[t].rv, ccol_success);
+    REQUIRE_EQ(o[t].status, 200);
+    REQUIRE_STREQ(o[t].body, "0123456789");
+    REQUIRE_GE(o[t].elapsed_ms, 1200L);
+  }
+}
+
+TEST(inactivity, time_in_the_write_fn_does_not_count_in_every_tier) {
+  /* Each write_fn call of this streaming request takes 400 ms, longer than
+     the 300 ms inactivity timeout, while the server's gaps are 150 ms. Only
+     time spent waiting on the connection counts, so every tier completes; a
+     count that went on during write_fn would end the request. */
+  inact_outcome_t o[3];
+  for (int t = 1; t <= 3; t++) o[t - 1] = inact_run(t, "/drip", 300000, 0, 400);
+  for (int t = 0; t < 3; t++) {
+    REQUIRE_EQ(o[t].rv, ccol_success);
+    REQUIRE_EQ(o[t].status, 200);
+    REQUIRE_STREQ(o[t].body, "0123456789");
+  }
+}
+
+TEST(inactivity, zero_turns_it_off_in_every_tier) {
+  /* With the inactivity timeout at 0 only the 800 ms request timeout ends a
+     request to a server that never answers, so no tier ends it before
+     then. */
+  inact_outcome_t o[3];
+  for (int t = 1; t <= 3; t++) o[t - 1] = inact_run(t, "/held", 0, 800000, -1);
+  for (int t = 0; t < 3; t++) {
+    REQUIRE_EQ(o[t].rv, ccol_timed_out);
+    REQUIRE_GE(o[t].elapsed_ms, 750L);
+    REQUIRE_LT(o[t].elapsed_ms, 10000L);
+  }
 }
 
 /* ========================================================================== */

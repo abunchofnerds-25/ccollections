@@ -209,7 +209,7 @@ sources an earlier source wins over a later one. The `<<` entry itself
 doesn't appear in the parsed tree, and the merged members take the position
 of the first `<<` key that brings them in. A quoted `"<<"` key is an
 ordinary member and sits beside the merged members. The full rules are in
-[cyaml(7)](../man/cyaml/cyaml.7).
+[cyaml(7)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml.7.html).
 
 The usual case is a set of environments that share default values:
 
@@ -518,7 +518,7 @@ message is always printable ASCII, so it's safe to log.
 A parse also limits the number of nodes and bytes it creates, and a
 separate fixed limit caps the data that aliases and merge keys can copy, so
 a small hostile document (a "billion laughs") can't use up all the memory.
-All the rules and numbers are in [cyaml_parse(3)](../man/cyaml/cyaml_parse.3).
+All the rules and numbers are in [cyaml_parse(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_parse.3.html).
 
 ## Example: change JSON into YAML
 
@@ -647,63 +647,63 @@ Many threads can read a tree as long as no thread changes it (see
 
 ## Reference
 
-Overview: [cyaml(7)](../man/cyaml/cyaml.7) (YAML features, types, anchors,
+Overview: [cyaml(7)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml.7.html) (YAML features, types, anchors,
 merge keys)
 
 Parse and write:
-[cyaml_parse(3)](../man/cyaml/cyaml_parse.3),
-[cyaml_parse_mp(3)](../man/cyaml/cyaml_parse_mp.3),
-[cyaml_parse_n(3)](../man/cyaml/cyaml_parse_n.3),
-[cyaml_parse_n_mp(3)](../man/cyaml/cyaml_parse_n_mp.3),
-[cyaml_serialize(3)](../man/cyaml/cyaml_serialize.3),
-[cyaml_serialize_flow(3)](../man/cyaml/cyaml_serialize_flow.3),
-[cyaml_serialize_stream(3)](../man/cyaml/cyaml_serialize_stream.3),
-[cyaml_serialize_free(3)](../man/cyaml/cyaml_serialize_free.3),
-[cyaml_serialize_free_mp(3)](../man/cyaml/cyaml_serialize_free_mp.3)
+[cyaml_parse(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_parse.3.html),
+[cyaml_parse_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_parse_mp.3.html),
+[cyaml_parse_n(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_parse_n.3.html),
+[cyaml_parse_n_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_parse_n_mp.3.html),
+[cyaml_serialize(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_serialize.3.html),
+[cyaml_serialize_flow(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_serialize_flow.3.html),
+[cyaml_serialize_stream(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_serialize_stream.3.html),
+[cyaml_serialize_free(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_serialize_free.3.html),
+[cyaml_serialize_free_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_serialize_free_mp.3.html)
 
 Paths:
-[cyaml_get(3)](../man/cyaml/cyaml_get.3),
-[cyaml_set(3)](../man/cyaml/cyaml_set.3),
-[cyaml_delete(3)](../man/cyaml/cyaml_delete.3)
+[cyaml_get(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_get.3.html),
+[cyaml_set(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_set.3.html),
+[cyaml_delete(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_delete.3.html)
 
 Read nodes:
-[cyaml_type(3)](../man/cyaml/cyaml_type.3),
-[cyaml_type_str(3)](../man/cyaml/cyaml_type_str.3),
-[cyaml_bool_val(3)](../man/cyaml/cyaml_bool_val.3),
-[cyaml_int_val(3)](../man/cyaml/cyaml_int_val.3),
-[cyaml_double_val(3)](../man/cyaml/cyaml_double_val.3),
-[cyaml_str_val(3)](../man/cyaml/cyaml_str_val.3),
-[cyaml_node_tag(3)](../man/cyaml/cyaml_node_tag.3),
-[cyaml_node_set_tag(3)](../man/cyaml/cyaml_node_set_tag.3)
+[cyaml_type(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_type.3.html),
+[cyaml_type_str(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_type_str.3.html),
+[cyaml_bool_val(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_bool_val.3.html),
+[cyaml_int_val(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_int_val.3.html),
+[cyaml_double_val(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_double_val.3.html),
+[cyaml_str_val(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_str_val.3.html),
+[cyaml_node_tag(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_node_tag.3.html),
+[cyaml_node_set_tag(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_node_set_tag.3.html)
 
 Lists:
-[cyaml_list_len(3)](../man/cyaml/cyaml_list_len.3),
-[cyaml_list_get(3)](../man/cyaml/cyaml_list_get.3),
-[cyaml_list_push(3)](../man/cyaml/cyaml_list_push.3),
-[cyaml_list_remove(3)](../man/cyaml/cyaml_list_remove.3)
+[cyaml_list_len(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_list_len.3.html),
+[cyaml_list_get(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_list_get.3.html),
+[cyaml_list_push(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_list_push.3.html),
+[cyaml_list_remove(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_list_remove.3.html)
 
 Dictionaries:
-[cyaml_dictionary_size(3)](../man/cyaml/cyaml_dictionary_size.3),
-[cyaml_dictionary_get(3)](../man/cyaml/cyaml_dictionary_get.3),
-[cyaml_dictionary_set(3)](../man/cyaml/cyaml_dictionary_set.3),
-[cyaml_dictionary_remove(3)](../man/cyaml/cyaml_dictionary_remove.3),
-[cyaml_dictionary_first(3)](../man/cyaml/cyaml_dictionary_first.3),
-[cyaml_dictionary_next(3)](../man/cyaml/cyaml_dictionary_next.3)
+[cyaml_dictionary_size(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_dictionary_size.3.html),
+[cyaml_dictionary_get(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_dictionary_get.3.html),
+[cyaml_dictionary_set(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_dictionary_set.3.html),
+[cyaml_dictionary_remove(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_dictionary_remove.3.html),
+[cyaml_dictionary_first(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_dictionary_first.3.html),
+[cyaml_dictionary_next(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_dictionary_next.3.html)
 
 Make, copy and free nodes:
-[cyaml_create_null(3)](../man/cyaml/cyaml_create_null.3),
-[cyaml_create_bool(3)](../man/cyaml/cyaml_create_bool.3),
-[cyaml_create_int(3)](../man/cyaml/cyaml_create_int.3),
-[cyaml_create_double(3)](../man/cyaml/cyaml_create_double.3),
-[cyaml_create_string(3)](../man/cyaml/cyaml_create_string.3),
-[cyaml_create_list(3)](../man/cyaml/cyaml_create_list.3),
-[cyaml_create_dictionary(3)](../man/cyaml/cyaml_create_dictionary.3),
-[cyaml_create_string_mp(3)](../man/cyaml/cyaml_create_string_mp.3) (and the
+[cyaml_create_null(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_create_null.3.html),
+[cyaml_create_bool(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_create_bool.3.html),
+[cyaml_create_int(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_create_int.3.html),
+[cyaml_create_double(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_create_double.3.html),
+[cyaml_create_string(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_create_string.3.html),
+[cyaml_create_list(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_create_list.3.html),
+[cyaml_create_dictionary(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_create_dictionary.3.html),
+[cyaml_create_string_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_create_string_mp.3.html) (and the
 other `_mp` variants),
-[cyaml_clone(3)](../man/cyaml/cyaml_clone.3),
-[cyaml_destroy(3)](../man/cyaml/cyaml_destroy.3),
-[cyaml_declare(3)](../man/cyaml/cyaml_declare.3),
-[cyaml_declare_scoped(3)](../man/cyaml/cyaml_declare_scoped.3)
+[cyaml_clone(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_clone.3.html),
+[cyaml_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_destroy.3.html),
+[cyaml_declare(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_declare.3.html),
+[cyaml_declare_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cyaml/cyaml_declare_scoped.3.html)
 
 Related guides:
 [cjson](cjson.md),

@@ -34,7 +34,7 @@ jobs:
         # the job built, and the check takes that architecture from the ELF
         # header of the library. Without this package check_abi reports that it
         # didn't check signatures and layouts, so it never passes in silence.
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev zlib1g-dev valgrind abigail-tools
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev zlib1g-dev valgrind abigail-tools mandoc python3
       - name: make test
         run: make test
       - name: make memtest (valgrind)
@@ -68,6 +68,16 @@ jobs:
       # half that keeps such a name out of the tree.
       - name: every installable filename is a literal path
         run: make check_filenames
+      # The guides link to the HTML man pages of the Pages site, and GitHub
+      # can't check an absolute link, so this does: every one must name a page
+      # under man/, and none may point at a troff source. Rendering the pages
+      # here too means a page that mandoc reports an error in, such as a text
+      # line that `man` silently drops, fails the pull request and not the
+      # deployment after the merge.
+      - name: every documentation link reaches a rendered man page
+        run: make check_doc_links
+      - name: every man page renders without a mandoc error
+        run: make man_html
       # pthread_atfork() handlers live in the process-global state of the C
       # library and POSIX has no way to take them back, so a module that
       # registers them from a shared object that you later dlclose() would make
@@ -209,11 +219,30 @@ jobs:
           # the previous compiler.
           run: |
             set -eu
-            gmake test
+            # Runs one target in every module with a time bound of 30 minutes
+            # each (the slowest module takes a few minutes here), carries on
+            # after a failing module and names the failures at the end. A plain
+            # `gmake test` stops at the first failure, and a hang there used
+            # the whole job timeout and printed nothing about where it was.
+            run_suites() {
+              target=$1; shift
+              failed=""
+              for d in tests/*/; do
+                [ -f "$d/Makefile" ] || continue
+                if ! timeout -k 30 1800 gmake -C "$d" "$target" "$@"; then
+                  failed="$failed $(basename "$d")"
+                fi
+              done
+              if [ -n "$failed" ]; then
+                echo "Failed modules ($target${*:+ $*}):$failed"
+                return 1
+              fi
+            }
+            run_suites test
             gmake clean >/dev/null
-            gmake test CC=gcc14
+            run_suites test CC=gcc14
             gmake clean >/dev/null
-            gmake memtest
+            run_suites memtest
             gmake
             gmake check_abi
             gmake check_layout
@@ -261,9 +290,28 @@ jobs:
           run: |
             set -eu
             ulimit -n 1024
-            gmake test
+            # Runs one target in every module with a time bound of 30 minutes
+            # each (the slowest module takes a few minutes here), carries on
+            # after a failing module and names the failures at the end. A plain
+            # `gmake test` stops at the first failure, and a hang there used
+            # the whole job timeout and printed nothing about where it was.
+            run_suites() {
+              target=$1; shift
+              failed=""
+              for d in tests/*/; do
+                [ -f "$d/Makefile" ] || continue
+                if ! timeout -k 30 1800 gmake -C "$d" "$target" "$@"; then
+                  failed="$failed $(basename "$d")"
+                fi
+              done
+              if [ -n "$failed" ]; then
+                echo "Failed modules ($target${*:+ $*}):$failed"
+                return 1
+              fi
+            }
+            run_suites test
             gmake clean >/dev/null
-            gmake test CC=egcc
+            run_suites test CC=egcc
             gmake clean >/dev/null
             gmake
             gmake check_layout

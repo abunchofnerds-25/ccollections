@@ -318,7 +318,7 @@ which the HTTP client reads once per process through such a descriptor. The
 one exception is a system with no default CA file. There the client trusts
 OpenSSL's hashed certificate directory, and OpenSSL opens the files in it
 during a handshake with descriptors that an `exec()` keeps (see
-[chttpclient_set_tls(3)](../man/chttpclient/chttpclient_set_tls.3)).
+[chttpclient_set_tls(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_set_tls.3.html)).
 
 On macOS a socket, an accepted socket and a pipe each take two calls to
 become closed on exec, and a `fork()` from another thread waits until both
@@ -354,20 +354,20 @@ static int spawn_clean(pid_t *pid, char *const argv[]) {
 
 ## Reference
 
-[ccollections(7)](../man/common/ccollections.7) (thread-safety classes, fork
+[ccollections(7)](https://abunchofnerds-25.github.io/ccollections/man/common/ccollections.7.html) (thread-safety classes, fork
 policy,
 CCOL_FORK_SAFETY_REQUIRED),
-[ctpool_destroy(3)](../man/cthreadpool/ctpool_destroy.3),
-[ctpool_wait(3)](../man/cthreadpool/ctpool_wait.3),
-[ctpool_shutdown_drain(3)](../man/cthreadpool/ctpool_shutdown_drain.3),
-[ctpool_shutdown_immediate(3)](../man/cthreadpool/ctpool_shutdown_immediate.3),
-[chttpclient_destroy(3)](../man/chttpclient/chttpclient_destroy.3),
-[clrucache_create_full(3)](../man/clrucache/clrucache_create_full.3),
-[clog_derive(3)](../man/clogger/clog_derive.3),
-[clog_set_level(3)](../man/clogger/clog_set_level.3),
-[ccol_circq_send_zc(3)](../man/cthreadcomm/ccol_circq_send_zc.3),
-[ccol_circq_recv_zc(3)](../man/cthreadcomm/ccol_circq_recv_zc.3),
-[cjson_parse_mp(3)](../man/cjson/cjson_parse_mp.3)
+[ctpool_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_destroy.3.html),
+[ctpool_wait(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_wait.3.html),
+[ctpool_shutdown_drain(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_shutdown_drain.3.html),
+[ctpool_shutdown_immediate(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_shutdown_immediate.3.html),
+[chttpclient_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_destroy.3.html),
+[clrucache_create_full(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clrucache_create_full.3.html),
+[clog_derive(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_derive.3.html),
+[clog_set_level(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_set_level.3.html),
+[ccol_circq_send_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_send_zc.3.html),
+[ccol_circq_recv_zc(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circq_recv_zc.3.html),
+[cjson_parse_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_parse_mp.3.html)
 
 Related guides:
 [How the library works](design.md),

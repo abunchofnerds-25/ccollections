@@ -236,8 +236,9 @@ framing.
 If req->expect_continue is true and the request has a body, the client
 first sends only the request headers, then waits up to one second for
 the first byte of a response. That second bounds only this wait: a
-response that starts inside it is read to the end, bounded only by the
-request timeout, however long the rest of it takes. The wait ends in
+response that starts inside it is read to the end, bounded by the
+request timeout and the inactivity timeout, however long the rest of
+it takes. The wait ends in
 one of these ways:
 
   - The server sends a "100 Continue" interim response. The client
@@ -336,7 +337,8 @@ ccol_not_enough_memory
        check that could not finish never lets a hop through.
 
 ccol_timed_out
-       The request timeout or the connect timeout fired.
+       The request timeout, the connect timeout or the inactivity
+       timeout fired.
 
 ccol_not_permitted
        The client is being destroyed and accepts no new request.

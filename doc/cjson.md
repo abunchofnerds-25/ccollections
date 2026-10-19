@@ -705,59 +705,59 @@ of its block (GCC and Clang).
 
 ## Reference
 
-Overview: [cjson(7)](../man/cjson/cjson.7)
+Overview: [cjson(7)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson.7.html)
 
 Parse and write:
-[cjson_parse(3)](../man/cjson/cjson_parse.3),
-[cjson_parse_mp(3)](../man/cjson/cjson_parse_mp.3),
-[cjson_parse_n(3)](../man/cjson/cjson_parse_n.3),
-[cjson_parse_n_mp(3)](../man/cjson/cjson_parse_n_mp.3),
-[cjson_serialize(3)](../man/cjson/cjson_serialize.3),
-[cjson_serialize_pretty(3)](../man/cjson/cjson_serialize_pretty.3),
-[cjson_serialize_free(3)](../man/cjson/cjson_serialize_free.3),
-[cjson_serialize_free_mp(3)](../man/cjson/cjson_serialize_free_mp.3)
+[cjson_parse(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_parse.3.html),
+[cjson_parse_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_parse_mp.3.html),
+[cjson_parse_n(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_parse_n.3.html),
+[cjson_parse_n_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_parse_n_mp.3.html),
+[cjson_serialize(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_serialize.3.html),
+[cjson_serialize_pretty(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_serialize_pretty.3.html),
+[cjson_serialize_free(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_serialize_free.3.html),
+[cjson_serialize_free_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_serialize_free_mp.3.html)
 
 Paths:
-[cjson_get(3)](../man/cjson/cjson_get.3),
-[cjson_set(3)](../man/cjson/cjson_set.3),
-[cjson_delete(3)](../man/cjson/cjson_delete.3)
+[cjson_get(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_get.3.html),
+[cjson_set(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_set.3.html),
+[cjson_delete(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_delete.3.html)
 
 Read nodes:
-[cjson_type(3)](../man/cjson/cjson_type.3),
-[cjson_type_str(3)](../man/cjson/cjson_type_str.3),
-[cjson_bool_val(3)](../man/cjson/cjson_bool_val.3),
-[cjson_int_val(3)](../man/cjson/cjson_int_val.3),
-[cjson_double_val(3)](../man/cjson/cjson_double_val.3),
-[cjson_str_val(3)](../man/cjson/cjson_str_val.3)
+[cjson_type(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_type.3.html),
+[cjson_type_str(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_type_str.3.html),
+[cjson_bool_val(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_bool_val.3.html),
+[cjson_int_val(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_int_val.3.html),
+[cjson_double_val(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_double_val.3.html),
+[cjson_str_val(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_str_val.3.html)
 
 Arrays:
-[cjson_list_len(3)](../man/cjson/cjson_list_len.3),
-[cjson_list_get(3)](../man/cjson/cjson_list_get.3),
-[cjson_list_push(3)](../man/cjson/cjson_list_push.3),
-[cjson_list_remove(3)](../man/cjson/cjson_list_remove.3)
+[cjson_list_len(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_list_len.3.html),
+[cjson_list_get(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_list_get.3.html),
+[cjson_list_push(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_list_push.3.html),
+[cjson_list_remove(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_list_remove.3.html)
 
 Objects:
-[cjson_dictionary_size(3)](../man/cjson/cjson_dictionary_size.3),
-[cjson_dictionary_get(3)](../man/cjson/cjson_dictionary_get.3),
-[cjson_dictionary_set(3)](../man/cjson/cjson_dictionary_set.3),
-[cjson_dictionary_remove(3)](../man/cjson/cjson_dictionary_remove.3),
-[cjson_dictionary_first(3)](../man/cjson/cjson_dictionary_first.3),
-[cjson_dictionary_next(3)](../man/cjson/cjson_dictionary_next.3)
+[cjson_dictionary_size(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_dictionary_size.3.html),
+[cjson_dictionary_get(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_dictionary_get.3.html),
+[cjson_dictionary_set(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_dictionary_set.3.html),
+[cjson_dictionary_remove(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_dictionary_remove.3.html),
+[cjson_dictionary_first(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_dictionary_first.3.html),
+[cjson_dictionary_next(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_dictionary_next.3.html)
 
 Make, copy and free nodes:
-[cjson_create_null(3)](../man/cjson/cjson_create_null.3),
-[cjson_create_bool(3)](../man/cjson/cjson_create_bool.3),
-[cjson_create_int(3)](../man/cjson/cjson_create_int.3),
-[cjson_create_double(3)](../man/cjson/cjson_create_double.3),
-[cjson_create_string(3)](../man/cjson/cjson_create_string.3),
-[cjson_create_list(3)](../man/cjson/cjson_create_list.3),
-[cjson_create_dictionary(3)](../man/cjson/cjson_create_dictionary.3),
-[cjson_create_null_mp(3)](../man/cjson/cjson_create_null_mp.3) (and the
+[cjson_create_null(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_create_null.3.html),
+[cjson_create_bool(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_create_bool.3.html),
+[cjson_create_int(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_create_int.3.html),
+[cjson_create_double(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_create_double.3.html),
+[cjson_create_string(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_create_string.3.html),
+[cjson_create_list(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_create_list.3.html),
+[cjson_create_dictionary(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_create_dictionary.3.html),
+[cjson_create_null_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_create_null_mp.3.html) (and the
 other `_mp` variants),
-[cjson_clone(3)](../man/cjson/cjson_clone.3),
-[cjson_destroy(3)](../man/cjson/cjson_destroy.3),
-[cjson_declare(3)](../man/cjson/cjson_declare.3),
-[cjson_declare_scoped(3)](../man/cjson/cjson_declare_scoped.3)
+[cjson_clone(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_clone.3.html),
+[cjson_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_destroy.3.html),
+[cjson_declare(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_declare.3.html),
+[cjson_declare_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_declare_scoped.3.html)
 
 Related guides:
 [cyaml](cyaml.md),

@@ -154,6 +154,14 @@ typedef uint64_t chttpcli;
  *  for a chttpcli. */
 #define CHTTPCLI_INVALID ((chttpcli)0)
 
+/** The connect timeout of a new client: 30 s, in microseconds (see
+ *  chttpclient_set_connect_timeout). */
+#define CHTTPCLI_DEFAULT_CONNECT_TIMEOUT_US ((uint64_t)30000000)
+
+/** The inactivity timeout of a new client: 60 s, in microseconds (see
+ *  chttpclient_set_inactivity_timeout). */
+#define CHTTPCLI_DEFAULT_INACTIVITY_TIMEOUT_US ((uint64_t)60000000)
+
 /* ========================================================================== */
 /*                         STREAMING CALLBACK                                 */
 /* ========================================================================== */
@@ -437,7 +445,8 @@ void chttp_request_free(chttp_request_t *req);
  *
  * Until any chttpclient_set_* call, the configuration is:
  *   pool_size              = the CPU count (resolved on the first request)
- *   connect_timeout_us     = 0 (no timeout)
+ *   connect_timeout_us     = CHTTPCLI_DEFAULT_CONNECT_TIMEOUT_US (30 s)
+ *   inactivity_timeout_us  = CHTTPCLI_DEFAULT_INACTIVITY_TIMEOUT_US (60 s)
  *   request_timeout_us     = 0 (no timeout)
  *   max_response_body_size = 0 (no limit)
  *   TLS                    = peer and host verification on, system CA bundle
@@ -496,6 +505,8 @@ ccol_retval_t chttpclient_set_pool_size(chttpcli cli, size_t n);
 
 /**
  * @brief Set the TCP connect timeout in microseconds. 0 means no timeout.
+ *
+ * The default is CHTTPCLI_DEFAULT_CONNECT_TIMEOUT_US (30 s).
  *
  * For an HTTPS request the TLS handshake shares one budget with the TCP
  * connect phase, so this timeout bounds the handshake as well.
@@ -575,6 +586,42 @@ ccol_retval_t chttpclient_set_connect_timeout(chttpcli cli, uint64_t us);
  *         or a stale handle of a client that has been destroyed.
  */
 ccol_retval_t chttpclient_set_request_timeout(chttpcli cli, uint64_t us);
+
+/**
+ * @brief Set the inactivity timeout in microseconds. 0 means no timeout.
+ *
+ * The default is CHTTPCLI_DEFAULT_INACTIVITY_TIMEOUT_US (60 s).
+ *
+ * A request ends with ccol_timed_out once it has waited this long on its
+ * connection with no byte sent or received. Every byte that moves either
+ * way starts the count again, so a transfer that keeps moving, however
+ * slowly and however long it takes in total, never reaches this timeout.
+ * Only time spent waiting on the connection counts: time spent in the
+ * chttpcli_write_fn of a streaming request is not counted.
+ *
+ * The count starts once the connection is up (the connect timeout bounds
+ * the connect and the TLS handshake) and covers the sending of the request,
+ * the wait for the first byte of the response and the reading of the
+ * response. A server that takes longer than this timeout to start its
+ * response, such as one that holds a long poll open, needs a larger value
+ * or 0.
+ *
+ * chttpclient_do, chttpclient_do_async and chttpclient_do_pooled, and their
+ * streaming forms, apply it on every hop of the request. For
+ * chttpclient_do_async and chttpclient_do_pooled an engine thread watches
+ * it, and a request ends at most about 100 ms after its connection has
+ * been silent for the timeout.
+ *
+ * Any value other than 0 is honoured as a limit, however far away it is. A
+ * value too large for the clock to reach saturates to the latest deadline
+ * the clock can hold.
+ *
+ * @param cli  The client handle.
+ * @param us   The timeout in microseconds. 0 means no timeout.
+ * @return ccol_success, or ccol_invalid_args when cli is CHTTPCLI_INVALID
+ *         or a stale handle of a client that has been destroyed.
+ */
+ccol_retval_t chttpclient_set_inactivity_timeout(chttpcli cli, uint64_t us);
 
 /**
  * @brief Cap the size of a buffered response body. 0 means no limit, and 0
@@ -1519,7 +1566,8 @@ ccol_retval_t chttpclient_do_pooled_streaming(chttpcli cli,
  *        the first time it's needed.
  *
  * This function is thread-safe. The default client has the default
- * settings (pool_size is the CPU count, no timeouts, TLS verification on),
+ * settings (pool_size is the CPU count, a 30 s connect timeout, a 60 s
+ * inactivity timeout, no request timeout, TLS verification on),
  * and you can configure it by passing the handle from this function to a
  * chttpclient_set_* function.
  *

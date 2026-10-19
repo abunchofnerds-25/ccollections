@@ -1,0 +1,150 @@
+/* The stylesheet of the man pages on the GitHub Pages site, which
+ * ci_scripts/build_man_html.py renders with mandoc. It styles the classes
+ * that mandoc writes, plus the navigation line and the index that the
+ * script adds. Colors follow the light or dark setting of the reader's
+ * system. */
+:root {
+  --bg: #ffffff;
+  --fg: #1f2328;
+  --muted: #59636e;
+  --rule: #d1d9e0;
+  --link: #0969da;
+  --code-bg: #f6f8fa;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --fg: #e6edf3;
+    --muted: #9198a1;
+    --rule: #3d444d;
+    --link: #4493f8;
+    --code-bg: #151b23;
+  }
+}
+html {
+  background: var(--bg);
+  color: var(--fg);
+}
+body {
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: 1rem 16px 3rem;
+  font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica,
+    Arial, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+a {
+  color: var(--link);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+nav.site {
+  font-size: 0.875rem;
+  color: var(--muted);
+  margin-bottom: 1rem;
+}
+pre, code, .Li {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.875rem;
+}
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  line-height: 1.45;
+}
+
+/* mandoc output */
+table.head, table.foot {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+td.head-vol {
+  text-align: center;
+}
+td.head-rtitle, td.foot-os {
+  text-align: right;
+}
+table.foot {
+  margin-top: 2.5rem;
+  border-top: 1px solid var(--rule);
+}
+table.foot td {
+  padding-top: 0.5rem;
+}
+h1.Sh {
+  font-size: 1.125rem;
+  margin: 2rem 0 0.5rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--rule);
+}
+h2.Ss {
+  font-size: 1rem;
+  margin: 1.5rem 0 0.5rem;
+}
+h1.Sh a.permalink, h2.Ss a.permalink {
+  color: inherit;
+}
+.manual-text {
+  margin-top: 0.5rem;
+}
+.Bd-indent, .Bl-tag > dd {
+  margin-left: 2rem;
+}
+dl.Bl-tag > dt {
+  font-weight: 600;
+}
+
+/* index.html */
+h1.index {
+  font-size: 1.5rem;
+  margin: 0.5rem 0;
+}
+p.index {
+  color: var(--muted);
+}
+ul.modules {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  padding: 0;
+  list-style: none;
+}
+h2.index {
+  font-size: 1.125rem;
+  margin: 2rem 0 0.5rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--rule);
+}
+dl.index {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+  gap: 0.25rem 1rem;
+  margin: 0;
+}
+dl.index dt {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+dl.index dd {
+  margin: 0;
+}
+@media (max-width: 40rem) {
+  dl.index {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  dl.index dd {
+    margin: 0 0 0.5rem 1rem;
+    color: var(--muted);
+  }
+}

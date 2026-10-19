@@ -8,12 +8,15 @@ C Collections (libccollections, \-lccollections)
 #include <ccollections/chttpclient.h>
 
 ccol_retval_t chttpclient_set_connect_timeout(chttpcli cli, uint64_t us);
+
+#define CHTTPCLI_DEFAULT_CONNECT_TIMEOUT_US ((uint64_t)30000000)
 .fi
 .SH DESCRIPTION
 .nf
 This function sets the maximum time that the TCP connect phase may
 take, and for HTTPS that phase includes the TLS handshake. 0 turns the
-timeout off, which is the default. Any other value is honoured as a
+timeout off. The default is CHTTPCLI_DEFAULT_CONNECT_TIMEOUT_US, 30 s.
+Any other value is honoured as a
 limit however far away it is: a value too large for the clock to
 reach, such as UINT64_MAX, saturates to the latest deadline the clock
 can hold and never wraps into the past.
@@ -51,4 +54,5 @@ ccol_invalid_args cli is CHTTPCLI_INVALID, or a stale handle of a
                   client that has been destroyed.
 .fi
 .SH "SEE ALSO"
-.BR chttpclient_set_request_timeout (3)
+.BR chttpclient_set_request_timeout (3),
+.BR chttpclient_set_inactivity_timeout (3)

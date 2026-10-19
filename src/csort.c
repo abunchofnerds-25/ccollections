@@ -63,14 +63,13 @@ int _csort_default_string_comparison_proc(const void *first,
   return strcmp(_s1, _s2);
 }
 
-#define ___csort__define_default_integral_comparison_proc(type, name) \
-  int ___csort__get_default_integral_comparison_proc_name(name)(      \
-      const void *first, const void *second) {                        \
-    type _v1;                                                         \
-    type _v2;                                                         \
-    memcpy(&_v1, first, sizeof(_v1));                                 \
-    memcpy(&_v2, second, sizeof(_v2));                                \
-    return (_v1 > _v2) - (_v1 < _v2);                                 \
+#define ___csort__define_default_integral_comparison_proc(type, name)   \
+  int _csort_default_cmp(name)(const void *first, const void *second) { \
+    type _v1;                                                           \
+    type _v2;                                                           \
+    memcpy(&_v1, first, sizeof(_v1));                                   \
+    memcpy(&_v2, second, sizeof(_v2));                                  \
+    return (_v1 > _v2) - (_v1 < _v2);                                   \
   }
 
 /* The macro above expands to a family of typed comparison functions, one per
@@ -132,19 +131,18 @@ int _csort_default_bool_comparison_proc(const void *first, const void *second) {
  * above, but for a float type that brings exactly this corruption back.
  * isnan() is a type-generic macro from C99 <math.h>, so this one macro
  * covers float, double and long double without a variant per type. */
-#define ___csort__define_default_float_comparison_proc(type, name) \
-  int ___csort__get_default_integral_comparison_proc_name(name)(   \
-      const void *first, const void *second) {                     \
-    type _v1;                                                      \
-    type _v2;                                                      \
-    memcpy(&_v1, first, sizeof(_v1));                              \
-    memcpy(&_v2, second, sizeof(_v2));                             \
-    bool _nan1 = isnan(_v1);                                       \
-    bool _nan2 = isnan(_v2);                                       \
-    if (_nan1 || _nan2) {                                          \
-      return _nan1 == _nan2 ? 0 : (_nan1 ? 1 : -1);                \
-    }                                                              \
-    return (_v1 > _v2) - (_v1 < _v2);                              \
+#define ___csort__define_default_float_comparison_proc(type, name)      \
+  int _csort_default_cmp(name)(const void *first, const void *second) { \
+    type _v1;                                                           \
+    type _v2;                                                           \
+    memcpy(&_v1, first, sizeof(_v1));                                   \
+    memcpy(&_v2, second, sizeof(_v2));                                  \
+    bool _nan1 = isnan(_v1);                                            \
+    bool _nan2 = isnan(_v2);                                            \
+    if (_nan1 || _nan2) {                                               \
+      return _nan1 == _nan2 ? 0 : (_nan1 ? 1 : -1);                     \
+    }                                                                   \
+    return (_v1 > _v2) - (_v1 < _v2);                                   \
   }
 
 ___csort__define_default_float_comparison_proc(float, float);

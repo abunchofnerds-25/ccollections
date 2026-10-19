@@ -16,7 +16,8 @@ creates the first time it is needed. The function is thread-safe, and
 a process never gets more than one default client.
 
 The default client has the default settings: pool_size is the CPU
-count, there are no timeouts and TLS verification is on. You can
+count, the connect timeout is 30 s, the inactivity timeout is 60 s,
+there is no request timeout and TLS verification is on. You can
 change them with the same chttpclient_set_* functions as for any other
 client.
 .fi

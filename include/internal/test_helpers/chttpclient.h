@@ -501,4 +501,10 @@ void _chttpclient_force_reactivate_fail_once_for_tests(void);
 /* Makes the next read dispatch of a ctx that has already read successfully
  * act as a hard read error (ECONNRESET), without touching the socket. */
 void _chttpclient_force_async_hard_read_error_once_for_tests(void);
+
+/* Reads back the connect, request and inactivity timeouts of cli, in
+ * microseconds. Returns false for a handle that doesn't resolve. */
+bool _chttpclient_timeouts_for_tests(chttpcli cli, uint64_t *connect_us,
+                                     uint64_t *request_us,
+                                     uint64_t *inactivity_us);
 #endif /* RUNNING_UNIT_TESTS */

@@ -117,7 +117,7 @@ response of a request that is already running carries `Connection: close`.
 So the shutdown is over once the running handlers return, and after 30
 seconds the server closes the connections of handlers that are busy,
 so that a handler blocked on its client returns too. See
-[chttpsvr_destroy(3)](../man/chttpserver/chttpsvr_destroy.3).
+[chttpsvr_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_destroy.3.html).
 
 Every server has its own pool of worker threads. When the headers of a
 request arrive, the reactor finds the route and hands the request to a
@@ -148,7 +148,7 @@ cfg.max_body_size = 1024 * 1024;   /* a larger body gets 413 */
 
 The defaults are safe for a server on the public internet, since every
 timeout and every resource limit is finite.
-[CHTTPSVR_CONFIG_DEFAULT(3)](../man/chttpserver/CHTTPSVR_CONFIG_DEFAULT.3)
+[CHTTPSVR_CONFIG_DEFAULT(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/CHTTPSVR_CONFIG_DEFAULT.3.html)
 lists every field with its default. All the timeout fields end in `_us` and
 are in microseconds.
 
@@ -227,7 +227,7 @@ one, so `/users/42/` doesn't match `/users/{id}`.
 
 You can add routes and middleware at any time, also while the server is
 running. The complete matching rules are in
-[chttpsvr_register_handler(3)](../man/chttpserver/chttpsvr_register_handler.3).
+[chttpsvr_register_handler(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_register_handler.3.html).
 
 ## Read the request
 
@@ -738,10 +738,10 @@ it keeps reading and throwing away the body for at most 2 seconds before
 closing the connection, so the client gets to read the answer instead of a
 connection reset.
 
-[chttpsvr_start(3)](../man/chttpserver/chttpsvr_start.3) describes every
+[chttpsvr_start(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_start.3.html) describes every
 limit, every answer the server makes on its own and the request validation
 rules, and
-[CHTTPSVR_CONFIG_DEFAULT(3)](../man/chttpserver/CHTTPSVR_CONFIG_DEFAULT.3)
+[CHTTPSVR_CONFIG_DEFAULT(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/CHTTPSVR_CONFIG_DEFAULT.3.html)
 explains how to turn each limit off. For most fields 0 turns the limit off,
 but for the defenses from `min_transfer_rate_bps` to
 `streaming_queue_timeout_us` 0 means the default value, so a configuration
@@ -876,7 +876,7 @@ curl --cacert ca.crt --cert alice.crt --key alice.key \
 The bundle may also contain certificate revocation lists, and the server
 then applies them. The fields of `chttp_tls_config_t` are explained in the
 [HTTP client guide](chttpclient.md) and in
-[CHTTP_TLS_DEFAULT(3)](../man/chttp/CHTTP_TLS_DEFAULT.3).
+[CHTTP_TLS_DEFAULT(3)](https://abunchofnerds-25.github.io/ccollections/man/chttp/CHTTP_TLS_DEFAULT.3.html).
 
 ## Start, stop and shut down
 
@@ -970,76 +970,76 @@ instead of corrupting memory.
 
 ## Reference
 
-Overview: [chttpserver(7)](../man/chttpserver/chttpserver.7)
+Overview: [chttpserver(7)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpserver.7.html)
 
 Create and destroy a server:
-[chttpsvr_create(3)](../man/chttpserver/chttpsvr_create.3),
-[chttpsvr_create_mp(3)](../man/chttpserver/chttpsvr_create_mp.3),
-[chttpsvr_destroy(3)](../man/chttpserver/chttpsvr_destroy.3),
-[chttpsvr_declare(3)](../man/chttpserver/chttpsvr_declare.3),
-[chttpsvr_declare_scoped(3)](../man/chttpserver/chttpsvr_declare_scoped.3),
-[chttpsvr_construct(3)](../man/chttpserver/chttpsvr_construct.3),
-[chttpsvr_construct_scoped(3)](../man/chttpserver/chttpsvr_construct_scoped.3)
+[chttpsvr_create(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_create.3.html),
+[chttpsvr_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_create_mp.3.html),
+[chttpsvr_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_destroy.3.html),
+[chttpsvr_declare(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_declare.3.html),
+[chttpsvr_declare_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_declare_scoped.3.html),
+[chttpsvr_construct(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_construct.3.html),
+[chttpsvr_construct_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_construct_scoped.3.html)
 
 Start and stop:
-[CHTTPSVR_CONFIG_DEFAULT(3)](../man/chttpserver/CHTTPSVR_CONFIG_DEFAULT.3),
-[chttpsvr_start(3)](../man/chttpserver/chttpsvr_start.3),
-[chttpsvr_stop(3)](../man/chttpserver/chttpsvr_stop.3),
-[chttpsvr_is_running(3)](../man/chttpserver/chttpsvr_is_running.3),
-[chttpsvr_bound_port(3)](../man/chttpserver/chttpsvr_bound_port.3),
-[chttpsvr_bound_address(3)](../man/chttpserver/chttpsvr_bound_address.3)
+[CHTTPSVR_CONFIG_DEFAULT(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/CHTTPSVR_CONFIG_DEFAULT.3.html),
+[chttpsvr_start(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_start.3.html),
+[chttpsvr_stop(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_stop.3.html),
+[chttpsvr_is_running(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_is_running.3.html),
+[chttpsvr_bound_port(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_bound_port.3.html),
+[chttpsvr_bound_address(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_bound_address.3.html)
 
 The shared engine:
-[chttpsvr_engine_stop(3)](../man/chttpserver/chttpsvr_engine_stop.3),
-[chttpsvr_engine_wait(3)](../man/chttpserver/chttpsvr_engine_wait.3),
-[chttpsvr_set_engine_logger(3)](../man/chttpserver/chttpsvr_set_engine_logger.3),
-[chttpsvr_set_engine_num_reactor_threads(3)](../man/chttpserver/chttpsvr_set_engine_num_reactor_threads.3),
-[chttpsvr_set_engine_mem_mgmt_procs(3)](../man/chttpserver/chttpsvr_set_engine_mem_mgmt_procs.3)
+[chttpsvr_engine_stop(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_engine_stop.3.html),
+[chttpsvr_engine_wait(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_engine_wait.3.html),
+[chttpsvr_set_engine_logger(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_set_engine_logger.3.html),
+[chttpsvr_set_engine_num_reactor_threads(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_set_engine_num_reactor_threads.3.html),
+[chttpsvr_set_engine_mem_mgmt_procs(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_set_engine_mem_mgmt_procs.3.html)
 
 Routes, middleware and sub-routers:
-[chttpsvr_register_handler(3)](../man/chttpserver/chttpsvr_register_handler.3),
-[chttpsvr_register_streaming_handler(3)](../man/chttpserver/chttpsvr_register_streaming_handler.3),
-[chttpsvr_use(3)](../man/chttpserver/chttpsvr_use.3),
-[chttpsvr_subrouter(3)](../man/chttpserver/chttpsvr_subrouter.3),
-[chttpsvr_router_on(3)](../man/chttpserver/chttpsvr_router_on.3),
-[chttpsvr_router_on_stream(3)](../man/chttpserver/chttpsvr_router_on_stream.3),
-[chttpsvr_router_use(3)](../man/chttpserver/chttpsvr_router_use.3)
+[chttpsvr_register_handler(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_register_handler.3.html),
+[chttpsvr_register_streaming_handler(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_register_streaming_handler.3.html),
+[chttpsvr_use(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_use.3.html),
+[chttpsvr_subrouter(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_subrouter.3.html),
+[chttpsvr_router_on(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_router_on.3.html),
+[chttpsvr_router_on_stream(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_router_on_stream.3.html),
+[chttpsvr_router_use(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_router_use.3.html)
 
 The request:
-[chttpsvr_req_method(3)](../man/chttpserver/chttpsvr_req_method.3),
-[chttpsvr_req_path(3)](../man/chttpserver/chttpsvr_req_path.3),
-[chttpsvr_req_param(3)](../man/chttpserver/chttpsvr_req_param.3),
-[chttpsvr_req_header(3)](../man/chttpserver/chttpsvr_req_header.3),
-[chttpsvr_req_raw_query(3)](../man/chttpserver/chttpsvr_req_raw_query.3),
-[chttpsvr_req_query(3)](../man/chttpserver/chttpsvr_req_query.3),
-[chttpsvr_req_query_one(3)](../man/chttpserver/chttpsvr_req_query_one.3),
-[chttpsvr_req_query_oom(3)](../man/chttpserver/chttpsvr_req_query_oom.3),
-[chttpsvr_req_body(3)](../man/chttpserver/chttpsvr_req_body.3),
-[chttpsvr_req_read(3)](../man/chttpserver/chttpsvr_req_read.3),
-[chttpsvr_req_stream_error(3)](../man/chttpserver/chttpsvr_req_stream_error.3),
-[chttpsvr_req_set_context(3)](../man/chttpserver/chttpsvr_req_set_context.3),
-[chttpsvr_req_context(3)](../man/chttpserver/chttpsvr_req_context.3)
+[chttpsvr_req_method(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_req_method.3.html),
+[chttpsvr_req_path(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_req_path.3.html),
+[chttpsvr_req_param(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_req_param.3.html),
+[chttpsvr_req_header(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_req_header.3.html),
+[chttpsvr_req_raw_query(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_req_raw_query.3.html),
+[chttpsvr_req_query(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_req_query.3.html),
+[chttpsvr_req_query_one(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_req_query_one.3.html),
+[chttpsvr_req_query_oom(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_req_query_oom.3.html),
+[chttpsvr_req_body(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_req_body.3.html),
+[chttpsvr_req_read(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_req_read.3.html),
+[chttpsvr_req_stream_error(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_req_stream_error.3.html),
+[chttpsvr_req_set_context(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_req_set_context.3.html),
+[chttpsvr_req_context(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_req_context.3.html)
 
 Client certificates:
-[chttpsvr_req_peer_cert_verified(3)](../man/chttpserver/chttpsvr_req_peer_cert_verified.3),
-[chttpsvr_req_peer_cert_subject(3)](../man/chttpserver/chttpsvr_req_peer_cert_subject.3),
-[chttpsvr_req_peer_cert_sha256(3)](../man/chttpserver/chttpsvr_req_peer_cert_sha256.3),
-[chttpsvr_req_peer_cert_der(3)](../man/chttpserver/chttpsvr_req_peer_cert_der.3)
+[chttpsvr_req_peer_cert_verified(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_req_peer_cert_verified.3.html),
+[chttpsvr_req_peer_cert_subject(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_req_peer_cert_subject.3.html),
+[chttpsvr_req_peer_cert_sha256(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_req_peer_cert_sha256.3.html),
+[chttpsvr_req_peer_cert_der(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_req_peer_cert_der.3.html)
 
 The response:
-[chttpsvr_resp_set_status(3)](../man/chttpserver/chttpsvr_resp_set_status.3),
-[chttpsvr_resp_set_header(3)](../man/chttpserver/chttpsvr_resp_set_header.3),
-[chttpsvr_resp_add_header(3)](../man/chttpserver/chttpsvr_resp_add_header.3),
-[chttpsvr_resp_write(3)](../man/chttpserver/chttpsvr_resp_write.3),
-[chttpsvr_resp_write_str(3)](../man/chttpserver/chttpsvr_resp_write_str.3),
-[chttpsvr_resp_printf(3)](../man/chttpserver/chttpsvr_resp_printf.3),
-[chttpsvr_resp_write_json(3)](../man/chttpserver/chttpsvr_resp_write_json.3)
+[chttpsvr_resp_set_status(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_resp_set_status.3.html),
+[chttpsvr_resp_set_header(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_resp_set_header.3.html),
+[chttpsvr_resp_add_header(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_resp_add_header.3.html),
+[chttpsvr_resp_write(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_resp_write.3.html),
+[chttpsvr_resp_write_str(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_resp_write_str.3.html),
+[chttpsvr_resp_printf(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_resp_printf.3.html),
+[chttpsvr_resp_write_json(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpserver/chttpsvr_resp_write_json.3.html)
 
 Shared HTTP types:
-[chttp(7)](../man/chttp/chttp.7),
-[CHTTP_STATUS(3)](../man/chttp/CHTTP_STATUS.3),
-[chttp_method_str(3)](../man/chttp/chttp_method_str.3),
-[CHTTP_TLS_DEFAULT(3)](../man/chttp/CHTTP_TLS_DEFAULT.3)
+[chttp(7)](https://abunchofnerds-25.github.io/ccollections/man/chttp/chttp.7.html),
+[CHTTP_STATUS(3)](https://abunchofnerds-25.github.io/ccollections/man/chttp/CHTTP_STATUS.3.html),
+[chttp_method_str(3)](https://abunchofnerds-25.github.io/ccollections/man/chttp/chttp_method_str.3.html),
+[CHTTP_TLS_DEFAULT(3)](https://abunchofnerds-25.github.io/ccollections/man/chttp/CHTTP_TLS_DEFAULT.3.html)
 
 Related guides:
 [HTTP client](chttpclient.md),

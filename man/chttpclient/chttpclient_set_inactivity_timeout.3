@@ -1,0 +1,64 @@
+.TH CHTTPCLIENT_SET_INACTIVITY_TIMEOUT 3 "2026-10-18" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpclient_set_inactivity_timeout \- set how long a request may wait on a silent connection
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <ccollections/chttpclient.h>
+
+ccol_retval_t chttpclient_set_inactivity_timeout(chttpcli cli,
+                                                 uint64_t us);
+
+#define CHTTPCLI_DEFAULT_INACTIVITY_TIMEOUT_US ((uint64_t)60000000)
+.fi
+.SH DESCRIPTION
+.nf
+This function sets how long a request may wait on its connection with
+no byte sent or received. When it has waited that long, the request
+ends with ccol_timed_out. 0 turns the timeout off. The default is
+CHTTPCLI_DEFAULT_INACTIVITY_TIMEOUT_US, 60 s.
+
+Every byte that moves in either direction starts the count again. A
+transfer that keeps moving therefore never reaches this timeout,
+however slowly it moves and however long it takes in total; the
+request timeout of chttpclient_set_request_timeout(3) is the limit for
+the whole request.
+
+Only time spent waiting on the connection counts. The time that the
+write_fn of a streaming request takes, between two reads, is not
+counted.
+
+The count starts once the connection is up, since the connect timeout
+of chttpclient_set_connect_timeout(3) bounds the connect and the TLS
+handshake. It covers the sending of the request, the wait for the
+first byte of the response and the reading of the response. A server
+that takes longer than this timeout to start its response, such as one
+that holds a long poll open, needs a larger value or 0.
+
+chttpclient_do, chttpclient_do_async, chttpclient_do_pooled and their
+streaming forms apply it on every hop of a request. For
+chttpclient_do_async and chttpclient_do_pooled an engine thread
+watches it, and a request ends at most about 100 ms after its
+connection has been silent for the timeout.
+
+Any value other than 0 is honoured as a limit however far away it is:
+a value too large for the clock to reach saturates to the latest
+deadline the clock can hold.
+.fi
+.SH PARAMETERS
+.nf
+cli   The client handle. It must not be CHTTPCLI_INVALID.
+us    The timeout in microseconds. 0 means no timeout.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success      The client has the new timeout.
+ccol_invalid_args cli is CHTTPCLI_INVALID, or a stale handle of a
+                  client that has been destroyed.
+.fi
+.SH "SEE ALSO"
+.BR chttpclient_set_connect_timeout (3),
+.BR chttpclient_set_request_timeout (3),
+.BR chttpclient_do (3),
+.BR chttpclient (7)

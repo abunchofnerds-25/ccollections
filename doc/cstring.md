@@ -357,66 +357,66 @@ string, protect it with your own lock (see [Concurrency](concurrency.md)).
 
 ## Reference
 
-Overview: [cstring(7)](../man/cstring/cstring.7)
+Overview: [cstring(7)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstring.7.html)
 
 Lifecycle:
-[cstr_construct(3)](../man/cstring/cstr_construct.3),
-[cstr_construct_scoped(3)](../man/cstring/cstr_construct_scoped.3),
-[cstr_construct_mp(3)](../man/cstring/cstr_construct_mp.3),
-[cstr_construct_mp_scoped(3)](../man/cstring/cstr_construct_mp_scoped.3),
-[cstr_declare(3)](../man/cstring/cstr_declare.3),
-[cstr_declare_scoped(3)](../man/cstring/cstr_declare_scoped.3),
-[cstr_init(3)](../man/cstring/cstr_init.3),
-[cstr_init_mp(3)](../man/cstring/cstr_init_mp.3),
-[cstr_reserve(3)](../man/cstring/cstr_reserve.3),
-[cstr_reset(3)](../man/cstring/cstr_reset.3),
-[cstr_destroy(3)](../man/cstring/cstr_destroy.3)
+[cstr_construct(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_construct.3.html),
+[cstr_construct_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_construct_scoped.3.html),
+[cstr_construct_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_construct_mp.3.html),
+[cstr_construct_mp_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_construct_mp_scoped.3.html),
+[cstr_declare(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_declare.3.html),
+[cstr_declare_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_declare_scoped.3.html),
+[cstr_init(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_init.3.html),
+[cstr_init_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_init_mp.3.html),
+[cstr_reserve(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_reserve.3.html),
+[cstr_reset(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_reset.3.html),
+[cstr_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_destroy.3.html)
 
 Reading:
-[cstr_c_str(3)](../man/cstring/cstr_c_str.3),
-[cstr_length(3)](../man/cstring/cstr_length.3),
-[cstr_at(3)](../man/cstring/cstr_at.3),
-[cstr_is_empty(3)](../man/cstring/cstr_is_empty.3)
+[cstr_c_str(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_c_str.3.html),
+[cstr_length(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_length.3.html),
+[cstr_at(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_at.3.html),
+[cstr_is_empty(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_is_empty.3.html)
 
 Changing:
-[cstr_append(3)](../man/cstring/cstr_append.3),
-[cstr_prepend(3)](../man/cstring/cstr_prepend.3),
-[cstr_insert(3)](../man/cstring/cstr_insert.3),
-[cstr_set(3)](../man/cstring/cstr_set.3),
-[cstr_replace(3)](../man/cstring/cstr_replace.3),
-[cstr_trim(3)](../man/cstring/cstr_trim.3),
-[cstr_to_upper(3)](../man/cstring/cstr_to_upper.3),
-[cstr_to_lower(3)](../man/cstring/cstr_to_lower.3)
+[cstr_append(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_append.3.html),
+[cstr_prepend(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_prepend.3.html),
+[cstr_insert(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_insert.3.html),
+[cstr_set(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_set.3.html),
+[cstr_replace(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_replace.3.html),
+[cstr_trim(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_trim.3.html),
+[cstr_to_upper(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_to_upper.3.html),
+[cstr_to_lower(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_to_lower.3.html)
 
 Searching and comparing:
-[cstr_equals(3)](../man/cstring/cstr_equals.3),
-[cstr_compare(3)](../man/cstring/cstr_compare.3),
-[cstr_starts_with(3)](../man/cstring/cstr_starts_with.3),
-[cstr_ends_with(3)](../man/cstring/cstr_ends_with.3),
-[cstr_find(3)](../man/cstring/cstr_find.3),
-[cstr_rfind(3)](../man/cstring/cstr_rfind.3)
+[cstr_equals(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_equals.3.html),
+[cstr_compare(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_compare.3.html),
+[cstr_starts_with(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_starts_with.3.html),
+[cstr_ends_with(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_ends_with.3.html),
+[cstr_find(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_find.3.html),
+[cstr_rfind(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_rfind.3.html)
 
 New strings:
-[cstr_substring(3)](../man/cstring/cstr_substring.3),
-[cstr_copy(3)](../man/cstring/cstr_copy.3),
-[cstr_split(3)](../man/cstring/cstr_split.3)
+[cstr_substring(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_substring.3.html),
+[cstr_copy(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_copy.3.html),
+[cstr_split(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_split.3.html)
 
 Raw functions (they give a status and do not stop the program):
-[cstring_new(3)](../man/cstring/cstring_new.3),
-[cstring_create(3)](../man/cstring/cstring_create.3),
-[cstring_create_full(3)](../man/cstring/cstring_create_full.3),
-[cstring_destroy(3)](../man/cstring/cstring_destroy.3),
-[cstring_append(3)](../man/cstring/cstring_append.3),
-[cstring_prepend(3)](../man/cstring/cstring_prepend.3),
-[cstring_insert(3)](../man/cstring/cstring_insert.3),
-[cstring_set(3)](../man/cstring/cstring_set.3),
-[cstring_replace(3)](../man/cstring/cstring_replace.3),
-[cstring_reserve(3)](../man/cstring/cstring_reserve.3),
-[cstring_reset(3)](../man/cstring/cstring_reset.3),
-[cstring_substring(3)](../man/cstring/cstring_substring.3),
-[cstring_copy(3)](../man/cstring/cstring_copy.3),
-[cstring_split(3)](../man/cstring/cstring_split.3),
-[cstring_get_mprocs(3)](../man/cstring/cstring_get_mprocs.3)
+[cstring_new(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstring_new.3.html),
+[cstring_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstring_create.3.html),
+[cstring_create_full(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstring_create_full.3.html),
+[cstring_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstring_destroy.3.html),
+[cstring_append(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstring_append.3.html),
+[cstring_prepend(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstring_prepend.3.html),
+[cstring_insert(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstring_insert.3.html),
+[cstring_set(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstring_set.3.html),
+[cstring_replace(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstring_replace.3.html),
+[cstring_reserve(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstring_reserve.3.html),
+[cstring_reset(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstring_reset.3.html),
+[cstring_substring(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstring_substring.3.html),
+[cstring_copy(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstring_copy.3.html),
+[cstring_split(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstring_split.3.html),
+[cstring_get_mprocs(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstring_get_mprocs.3.html)
 
 Related guides:
 [Vectors](cvector.md),

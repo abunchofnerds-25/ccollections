@@ -221,6 +221,12 @@ typedef struct {
    * generation (see _idle_pool_take). It means nothing for a plaintext
    * connection and we never read it there. */
   uint64_t tls_generation;
+  /* The inactivity timeout of the request this connection serves now (0 for
+   * none), and how long that request has waited on it since a byte last
+   * moved. Each request sets both when it takes the connection; see
+   * _conn_inactivity_left_ms. */
+  uint64_t inactivity_us;
+  uint64_t inactivity_waited_ns;
 } chttp_conn_t;
 
 typedef struct {
@@ -501,6 +507,11 @@ struct chttpclient {
 
   uint64_t connect_timeout_us;
   uint64_t request_timeout_us;
+  /* How long a request may wait on its connection with no byte moving
+   * either way, 0 meaning no limit (see the doc comment of
+   * chttpclient_set_inactivity_timeout). Copied into each request like the
+   * two timeouts above. */
+  uint64_t inactivity_timeout_us;
   /* Cap on a buffered response body in all three tiers, with the default 0
    * meaning no limit (see the doc comment of
    * chttpclient_set_max_response_body_size). Like connect_timeout_us and
@@ -2714,6 +2725,55 @@ static ccol_retval_t _conn_wait(int fd, short events, int timeout_ms,
   }
 }
 
+/* Narrows *wait_ms to what is left of c's inactivity budget, rounded up to
+ * a whole millisecond. Returns false once the budget is used up, which ends
+ * the request with ccol_timed_out like a deadline that passed. Only time
+ * spent in the waits of _conn_wait_io and _chttp_send_all_watch counts
+ * against the budget, so time that a streaming write_fn takes between two
+ * reads does not, and every byte that moves resets it (_conn_read,
+ * _conn_write). */
+static bool _conn_inactivity_left_ms(const chttp_conn_t *c, int *wait_ms) {
+  if (c->inactivity_us == 0) return true;
+  uint64_t budget_ns = c->inactivity_us > UINT64_MAX / 1000
+                           ? UINT64_MAX
+                           : c->inactivity_us * 1000;
+  if (c->inactivity_waited_ns >= budget_ns) return false;
+  uint64_t left_ns = budget_ns - c->inactivity_waited_ns;
+  uint64_t left_ms = left_ns / 1000000 + (left_ns % 1000000 != 0);
+  *wait_ms = _combine_ms(*wait_ms, left_ms > INT_MAX ? INT_MAX : (int)left_ms);
+  return true;
+}
+
+/* Adds the time since *start to what c's request has waited without a byte
+ * moving. */
+static void _conn_inactivity_charge(chttp_conn_t *c,
+                                    const struct timespec *start) {
+  if (c->inactivity_us == 0) return;
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  int64_t ns = (int64_t)(now.tv_sec - start->tv_sec) * 1000000000 +
+               (now.tv_nsec - start->tv_nsec);
+  if (ns > 0) c->inactivity_waited_ns += (uint64_t)ns;
+}
+
+/* _conn_wait on c's socket, with the time it takes charged to c's
+ * inactivity budget. */
+static ccol_retval_t _conn_wait_io(chttp_conn_t *c, short events,
+                                   int timeout_ms, ccol_retval_t error_rv) {
+  struct timespec start;
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  ccol_retval_t rv = _conn_wait(c->fd, events, timeout_ms, error_rv);
+  _conn_inactivity_charge(c, &start);
+  return rv;
+}
+
+/* Starts the inactivity count of a request that has just taken c, fresh or
+ * from the idle pool. */
+static void _conn_inactivity_start(chttp_conn_t *c, uint64_t timeout_us) {
+  c->inactivity_us = timeout_us;
+  c->inactivity_waited_ns = 0;
+}
+
 static ssize_t _conn_read(chttp_conn_t *c, void *buf, size_t len) {
   if (c->tls) {
 #ifdef RUNNING_UNIT_TESTS
@@ -2724,6 +2784,7 @@ static ssize_t _conn_read(chttp_conn_t *c, void *buf, size_t len) {
 #endif
     ssize_t n = ctls_conn_read(c->tls, buf, len);
     if (n < 0 && (errno == EAGAIN)) errno = EWOULDBLOCK;
+    if (n > 0) c->inactivity_waited_ns = 0;
     return n;
   }
   ssize_t n;
@@ -2731,6 +2792,7 @@ static ssize_t _conn_read(chttp_conn_t *c, void *buf, size_t len) {
     n = recv(c->fd, buf, len, 0);
   } while (n < 0 && errno == EINTR);
   if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) errno = EWOULDBLOCK;
+  if (n > 0) c->inactivity_waited_ns = 0;
   return n;
 }
 
@@ -2744,6 +2806,7 @@ static ssize_t _conn_write(chttp_conn_t *c, const void *buf, size_t len) {
 #endif
     ssize_t n = ctls_conn_write(c->tls, buf, len);
     if (n < 0 && (errno == EAGAIN)) errno = EWOULDBLOCK;
+    if (n > 0) c->inactivity_waited_ns = 0;
     return n;
   }
   ssize_t n;
@@ -2751,6 +2814,7 @@ static ssize_t _conn_write(chttp_conn_t *c, const void *buf, size_t len) {
     n = send(c->fd, buf, len, CCOL_MSG_NOSIGNAL);
   } while (n < 0 && errno == EINTR);
   if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) errno = EWOULDBLOCK;
+  if (n > 0) c->inactivity_waited_ns = 0;
   return n;
 }
 
@@ -2771,9 +2835,11 @@ static ccol_retval_t _chttp_send_all(chttp_conn_t *conn, const char *data,
   short want_events = POLLOUT;
   while (sent < len) {
     int wait_ms;
-    if (!_deadline_remaining_ms(overall, &wait_ms)) return ccol_timed_out;
+    if (!_deadline_remaining_ms(overall, &wait_ms) ||
+        !_conn_inactivity_left_ms(conn, &wait_ms))
+      return ccol_timed_out;
     ccol_retval_t prv =
-        _conn_wait(conn->fd, want_events, wait_ms, ccol_http_transfer_aborted);
+        _conn_wait_io(conn, want_events, wait_ms, ccol_http_transfer_aborted);
     if (prv == ccol_timed_out) continue; /* The loop checks the deadline. */
     if (prv != ccol_success) return prv;
     ssize_t n = _conn_write(conn, data + sent, len - sent);
@@ -3090,6 +3156,9 @@ void _chttp_addr_list_interleave_for_tests(const int *families, size_t n,
 }
 #endif
 
+/* Defined with the deadline sweep further down. */
+static uint64_t _monotonic_now_ns(void);
+
 #ifdef RUNNING_UNIT_TESTS
 /* White-box hook. When non-zero, every name lookup (address literals are
  * never affected) sleeps this many milliseconds first, playing a resolver
@@ -3121,11 +3190,10 @@ static atomic_int g_sweep_fd_wait_last_state_for_tests = -1;
 static atomic_int g_sweep_fd_wait_lookup_end_for_tests;
 static atomic_int g_sweep_fd_wait_hold_end_for_tests;
 
-/* Defined with the deadline sweep further down. The wait above uses them to
+/* Defined with the deadline sweep further down. The wait above uses it to
  * ask for a walk at once instead of waiting for the sweep's next planned
  * instant, which a slow runner (ThreadSanitizer on macOS arm64 among them)
  * can push past any fixed bound. */
-static uint64_t _monotonic_now_ns(void);
 static void _client_deadline_note_ns(uint64_t at_ns);
 
 /* White-box count of the name lookups started by all tiers (address
@@ -5310,7 +5378,8 @@ static ccol_retval_t _chttp_read_message_with(
     chttp_deadline_t *dl = (started || !first_byte) ? overall : first_byte;
     /* _read_deadline_passed explains the rule behind this check. */
     if (_read_deadline_passed(dl, conn->fd) ||
-        !_deadline_remaining_ms(dl, &wait_ms))
+        !_deadline_remaining_ms(dl, &wait_ms) ||
+        !_conn_inactivity_left_ms(conn, &wait_ms))
       return ccol_timed_out;
     /* When a TLS read uses a buffer smaller than the record, the rest of
      * the record stays inside the TLS layer where poll(2) can't see it, and
@@ -5325,8 +5394,8 @@ static ccol_retval_t _chttp_read_message_with(
 #ifdef RUNNING_UNIT_TESTS
       __atomic_fetch_add(&_chttp_tier1_read_waits, 1, __ATOMIC_RELAXED);
 #endif
-      ccol_retval_t prv = _conn_wait(conn->fd, want_events, wait_ms,
-                                     ccol_http_transfer_aborted);
+      ccol_retval_t prv =
+          _conn_wait_io(conn, want_events, wait_ms, ccol_http_transfer_aborted);
       if (prv == ccol_timed_out) continue; /* Deadline checked at the top. */
       if (prv != ccol_success) return prv;
     }
@@ -6906,6 +6975,14 @@ typedef struct {
   int refcount; /* How many live per-hop ctx point at this chain. It drops
                  * to zero exactly once, when the last hop is torn down and
                  * no other hop is queued to take over. */
+  /* Snapshot of cli->inactivity_timeout_us, set by _chttp_do_async_internal
+   * right after the chain is created and copied into each hop. */
+  uint64_t inactivity_timeout_us;
+  /* When a write_fn of this chain last returned (monotonic ns, 0 before the
+   * first call). The deadline sweep counts a hop's inactivity from the later
+   * of this and the hop's last_io_ns, so time spent in write_fn never counts
+   * as a silent connection. */
+  _Atomic uint64_t sink_returned_ns;
 } chttp_async_chain_t;
 
 /* Sink of a Tier 2 or Tier 3 streaming request. It passes the bytes to the
@@ -6932,6 +7009,7 @@ static size_t _sink_async_user(const void *data, size_t len, void *ctx) {
   _chttpcli_call_push(&frame, chain->cli, true);
   size_t n = chain->write_fn(data, len, chain->write_ctx);
   _chttpcli_call_pop(&frame);
+  atomic_store(&chain->sink_returned_ns, _monotonic_now_ns());
   atomic_store(&chain->in_sink, false);
   return n;
 }
@@ -7645,6 +7723,13 @@ typedef struct chttp_async_ctx_s {
                           * abandoned in between, its teardown frees the
                           * copy. */
   size_t continue_carry_len;
+  /* The chain's inactivity timeout, copied at the start of the hop, and the
+   * last moment the hop's connection showed activity (monotonic ns): any
+   * dispatch of the hop, or the room watch of a paused duplex send. 0 means
+   * the count hasn't started, and the deadline sweep starts it the first
+   * time it sees the hop sending or reading. */
+  uint64_t inactivity_us;
+  _Atomic uint64_t last_io_ns;
 } chttp_async_ctx_t;
 
 /* ========================================================================== */
@@ -8418,6 +8503,36 @@ static void _client_deadline_sweep_once(void) {
 #endif
           }
           next_ns = _sweep_earlier(next_ns, &node->overall_deadline, left);
+        }
+        /* The inactivity deadline is the hop's last activity plus its
+         * timeout, while it sends, waits for 100 Continue or reads, and
+         * never while a write_fn of its chain runs. */
+        if (!expired && has_chain && node->inactivity_us != 0 &&
+            (state == CHTTP_ASYNC_WRITING ||
+             state == CHTTP_ASYNC_AWAITING_CONTINUE ||
+             state == CHTTP_ASYNC_READING) &&
+            !atomic_load(&chain_snap->in_sink)) {
+          uint64_t now_ns = _monotonic_now_ns();
+          uint64_t last = atomic_load(&node->last_io_ns);
+          uint64_t sink = atomic_load(&chain_snap->sink_returned_ns);
+          if (sink > last) last = sink;
+          if (last == 0) {
+            atomic_store(&node->last_io_ns, now_ns);
+            last = now_ns;
+          }
+          uint64_t budget_ns = node->inactivity_us > UINT64_MAX / 1000
+                                   ? UINT64_MAX
+                                   : node->inactivity_us * 1000;
+          uint64_t due =
+              last > UINT64_MAX - budget_ns ? UINT64_MAX : last + budget_ns;
+          if (now_ns >= due) {
+            expired = true;
+#ifdef RUNNING_UNIT_TESTS
+            _sweep_note_due_for_tests(0, due);
+#endif
+          } else if (due < next_ns) {
+            next_ns = due;
+          }
         }
         if (!expired && state == CHTTP_ASYNC_AWAITING_CONTINUE &&
             !atomic_load(&node->continue_decided) &&
@@ -9651,6 +9766,8 @@ static bool _async_idle_pool_take(struct chttpclient *cli,
    * lets the sweep read this field concurrently. */
   _ccol_mutex_lock(ctx->deadline_lock);
   ctx->overall_deadline = chain->overall_deadline;
+  ctx->inactivity_us = chain->inactivity_timeout_us;
+  atomic_store(&ctx->last_io_ns, 0);
   /* A reused connection starts its hop without any verdict of the sweep.
    * The offer cleared the flag under this lock and nothing sets it while
    * the ctx is idle, but clearing it here keeps the start of every hop
@@ -10307,6 +10424,7 @@ static void _async_on_room(ccol_event_loop loop, ccol_event_reg reg,
   (void)loop;
   (void)sel;
   chttp_async_ctx_t *ctx = (chttp_async_ctx_t *)arg;
+  atomic_store(&ctx->last_io_ns, _monotonic_now_ns());
   ccol_event_reg expected = reg;
   if (!atomic_compare_exchange_strong(&ctx->room_reg, &expected,
                                       CCOL_EVENT_REG_INVALID))
@@ -10968,6 +11086,7 @@ static void _async_on_writable_impl(ccol_event_loop loop, ccol_event_reg reg,
                                     chttp_async_ctx_t *ctx) {
   (void)loop;
   (void)sel;
+  atomic_store(&ctx->last_io_ns, _monotonic_now_ns());
   /* See the field comment of ctx->hop_completed. A stray dispatch can show
    * up after this ctx has reached a terminal outcome, and it must not run
    * any of the state transition logic below a second time.
@@ -11584,6 +11703,7 @@ static void _async_on_readable_impl(ccol_event_loop loop, ccol_event_reg reg,
                                     chttp_async_ctx_t *ctx) {
   (void)loop;
   (void)sel;
+  atomic_store(&ctx->last_io_ns, _monotonic_now_ns());
 
   /* An earlier dispatch of this ctx has already brought the hop to a
    * terminal outcome: a fulfilled future (a TLS handshake failure found
@@ -12049,6 +12169,7 @@ static void _async_on_error_impl(ccol_event_loop loop, ccol_event_reg reg,
                                  ccol_selectable *sel, chttp_async_ctx_t *ctx) {
   (void)loop;
   (void)sel;
+  atomic_store(&ctx->last_io_ns, _monotonic_now_ns());
   if (ctx->hop_completed) {
     /* See the comment of _async_ctx_handle_if_abandoned. Like the one in
      * _async_on_readable_impl, this is a MAIN path that reaps a deferred
@@ -12664,6 +12785,8 @@ static void _async_retry_hop(chttp_async_ctx_t *old_ctx) {
    * same (see that lock's field comment). */
   _ccol_mutex_lock(ctx->deadline_lock);
   ctx->overall_deadline = chain->overall_deadline;
+  ctx->inactivity_us = chain->inactivity_timeout_us;
+  atomic_store(&ctx->last_io_ns, 0);
   _ccol_mutex_unlock(ctx->deadline_lock);
   ctx->chain = chain;
   ctx->cli = old_ctx->cli;
@@ -13006,6 +13129,8 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
    * it from an earlier fresh connect. */
   _ccol_mutex_lock(ctx->deadline_lock);
   ctx->overall_deadline = chain->overall_deadline;
+  ctx->inactivity_us = chain->inactivity_timeout_us;
+  atomic_store(&ctx->last_io_ns, 0);
   _ccol_mutex_unlock(ctx->deadline_lock);
   ctx->chain = chain;
   ctx->hop = hop;
@@ -13548,6 +13673,7 @@ static ctpool_future *_chttp_do_async_internal(struct chttpclient *cli,
   uint64_t tls_generation;
   uint64_t connect_timeout_us;
   uint64_t request_timeout_us;
+  uint64_t inactivity_timeout_us;
   size_t max_response_body_size;
   _ccol_mutex_lock(cli->lock);
   tls_ctx = cli->tls_ctx;
@@ -13560,6 +13686,7 @@ static ctpool_future *_chttp_do_async_internal(struct chttpclient *cli,
   tls_generation = cli->tls_generation;
   connect_timeout_us = cli->connect_timeout_us;
   request_timeout_us = cli->request_timeout_us;
+  inactivity_timeout_us = cli->inactivity_timeout_us;
   max_response_body_size = cli->max_response_body_size;
   if (tls_ctx) ctls_ctx_retain(tls_ctx);
   _ccol_mutex_unlock(cli->lock);
@@ -13604,6 +13731,7 @@ static ctpool_future *_chttp_do_async_internal(struct chttpclient *cli,
       verify_host, tls_generation, connect_timeout_us, request_timeout_us,
       max_response_body_size, write_fn, write_ctx, req->expect_continue,
       req->prevent_tls_downgrade_on_redirect);
+  if (chain) chain->inactivity_timeout_us = inactivity_timeout_us;
   /* _async_chain_create deep-copies initial_origin_key, like req_headers,
    * body_data and body_content_type, so our local copy never outlives this
    * call, whether the chain was created or not. */
@@ -14318,6 +14446,8 @@ chttpcli chttpclient_create_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
 
   cli->m_procs = mp;
   cli->tls = CHTTP_TLS_DEFAULT;
+  cli->connect_timeout_us = CHTTPCLI_DEFAULT_CONNECT_TIMEOUT_US;
+  cli->inactivity_timeout_us = CHTTPCLI_DEFAULT_INACTIVITY_TIMEOUT_US;
   if (_ccol_mutex_init(cli->lock) != 0) {
     if (err_str) *err_str = _CCOL_ERR_STR("failed to initialize mutex");
     _ccol_mem_free(mp, cli);
@@ -14468,6 +14598,32 @@ ccol_retval_t chttpclient_set_request_timeout(chttpcli h, uint64_t us) {
   _chttpcli_resolve_unpin(cli);
   return ccol_success;
 }
+
+ccol_retval_t chttpclient_set_inactivity_timeout(chttpcli h, uint64_t us) {
+  struct chttpclient *cli = _chttpcli_resolve(h);
+  if (!cli) return ccol_invalid_args;
+  _ccol_mutex_lock(cli->lock);
+  cli->inactivity_timeout_us = us;
+  _ccol_mutex_unlock(cli->lock);
+  _chttpcli_resolve_unpin(cli);
+  return ccol_success;
+}
+
+#ifdef RUNNING_UNIT_TESTS
+bool _chttpclient_timeouts_for_tests(chttpcli h, uint64_t *connect_us,
+                                     uint64_t *request_us,
+                                     uint64_t *inactivity_us) {
+  struct chttpclient *cli = _chttpcli_resolve(h);
+  if (!cli) return false;
+  _ccol_mutex_lock(cli->lock);
+  *connect_us = cli->connect_timeout_us;
+  *request_us = cli->request_timeout_us;
+  *inactivity_us = cli->inactivity_timeout_us;
+  _ccol_mutex_unlock(cli->lock);
+  _chttpcli_resolve_unpin(cli);
+  return true;
+}
+#endif
 
 ccol_retval_t chttpclient_set_max_response_body_size(chttpcli h,
                                                      size_t max_bytes) {
@@ -15003,7 +15159,9 @@ static ccol_retval_t _chttp_send_all_watch(
   bool read_blocked = false;
   while (sent < len && !e->stop_send) {
     int wait_ms;
-    if (!_deadline_remaining_ms(overall, &wait_ms)) return ccol_timed_out;
+    if (!_deadline_remaining_ms(overall, &wait_ms) ||
+        !_conn_inactivity_left_ms(conn, &wait_ms))
+      return ccol_timed_out;
     /* poll(2) can't see plaintext that the TLS layer already holds, so we
      * read first while ctls_conn_has_pending_input reports input. But that
      * report is also true for the start of a record that isn't complete
@@ -15027,7 +15185,10 @@ static ccol_retval_t _chttp_send_all_watch(
         struct pollfd pfd = {.fd = conn->fd,
                              .events = (short)(want_events | POLLIN),
                              .revents = 0};
+        struct timespec wait_start;
+        clock_gettime(CLOCK_MONOTONIC, &wait_start);
         int rc = poll(&pfd, 1, wait_ms);
+        _conn_inactivity_charge(conn, &wait_start);
         if (rc < 0) {
           if (errno == EINTR) continue;
           return ccol_http_transfer_aborted;
@@ -15391,6 +15552,7 @@ static ccol_retval_t chttp_do_internal(
   ccol_memmgmt_procs_t *mp = cli->m_procs;
 
   uint64_t connect_timeout_us;
+  uint64_t inactivity_timeout_us;
   bool verify_host;
   ctls_ctx_t *tls_ctx;
   bool tls_ctx_usable;
@@ -15402,6 +15564,7 @@ static ccol_retval_t chttp_do_internal(
   uint64_t tls_generation;
   _ccol_mutex_lock(cli->lock);
   connect_timeout_us = cli->connect_timeout_us;
+  inactivity_timeout_us = cli->inactivity_timeout_us;
   tls_ctx = cli->tls_ctx;
   tls_ctx_usable = cli->tls_ctx_usable;
   tls_generation = cli->tls_generation;
@@ -15549,6 +15712,7 @@ static ccol_retval_t chttp_do_internal(
         break;
       }
     }
+    _conn_inactivity_start(&conn, inactivity_timeout_us);
 
     chttp_parse_ctx_t pctx;
     memset(&pctx, 0, sizeof(pctx));
@@ -15639,6 +15803,7 @@ static ccol_retval_t chttp_do_internal(
                        tls_generation, &retry_connect_dl, &overall_dl, &conn);
       if (prv == ccol_success) {
         reused = false;
+        _conn_inactivity_start(&conn, inactivity_timeout_us);
         prv = _chttp_send_and_read(
             &conn, wire, wire_len, cur_body.len, use_100_continue, replayable,
             &overall_dl, &pctx, &keep_alive, &any_bytes_read, &retry_unsafe);

@@ -247,8 +247,8 @@ cache goes back to the pool when the thread exits.
 Single-threaded pools and pools on your own buffer have no caches, so none
 of this applies to them. The details, including how accurate the counts are
 while many threads use the pool, are in
-[ccol_mempool_create(3)](../man/cmempool/ccol_mempool_create.3) and
-[ccol_mempool_total_capacity(3)](../man/cmempool/ccol_mempool_total_capacity.3).
+[ccol_mempool_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_mempool_create.3.html) and
+[ccol_mempool_total_capacity(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_mempool_total_capacity.3.html).
 
 ### Example: worker threads allocating job records
 
@@ -438,7 +438,7 @@ Each tier is a separate pool, so the sizing rules of a thread-safe pool
 apply to every tier on its own. The largest tiers have the fewest entries
 and are the first to drop below 8, so raise the count exponent or narrow
 the range to keep them at 8 or more (see
-[ccol_r_mempool_create(3)](../man/cmempool/ccol_r_mempool_create.3)).
+[ccol_r_mempool_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_r_mempool_create.3.html)).
 
 ## Pools without a heap: preallocated buffers
 
@@ -543,36 +543,36 @@ differ the link fails. See [Building](building.md).
 
 ## Reference
 
-Overview: [cmempool(7)](../man/cmempool/cmempool.7)
+Overview: [cmempool(7)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/cmempool.7.html)
 
 Fixed-size pool:
 
-- [ccol_mempool_create(3)](../man/cmempool/ccol_mempool_create.3)
-- [ccol_mempool_create_from_preallocated_buffer(3)](../man/cmempool/ccol_mempool_create_from_preallocated_buffer.3)
-- [CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER(3)](../man/cmempool/CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER.3)
-- [ccol_mempool_alloc_entry(3)](../man/cmempool/ccol_mempool_alloc_entry.3),
-  [ccol_mempool_calloc_entry(3)](../man/cmempool/ccol_mempool_calloc_entry.3),
-  [ccol_mempool_free_entry(3)](../man/cmempool/ccol_mempool_free_entry.3)
-- [ccol_mempool_destroy(3)](../man/cmempool/ccol_mempool_destroy.3)
-- [ccol_mempool_total_capacity(3)](../man/cmempool/ccol_mempool_total_capacity.3),
-  [ccol_mempool_used_count(3)](../man/cmempool/ccol_mempool_used_count.3),
-  [ccol_mempool_dynamic_allocs_count(3)](../man/cmempool/ccol_mempool_dynamic_allocs_count.3),
-  [ccol_mempool_allocated_bytes(3)](../man/cmempool/ccol_mempool_allocated_bytes.3)
+- [ccol_mempool_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_mempool_create.3.html)
+- [ccol_mempool_create_from_preallocated_buffer(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_mempool_create_from_preallocated_buffer.3.html)
+- [CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER.3.html)
+- [ccol_mempool_alloc_entry(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_mempool_alloc_entry.3.html),
+  [ccol_mempool_calloc_entry(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_mempool_calloc_entry.3.html),
+  [ccol_mempool_free_entry(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_mempool_free_entry.3.html)
+- [ccol_mempool_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_mempool_destroy.3.html)
+- [ccol_mempool_total_capacity(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_mempool_total_capacity.3.html),
+  [ccol_mempool_used_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_mempool_used_count.3.html),
+  [ccol_mempool_dynamic_allocs_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_mempool_dynamic_allocs_count.3.html),
+  [ccol_mempool_allocated_bytes(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_mempool_allocated_bytes.3.html)
 
 Ranged pool:
 
-- [ccol_r_mempool_create(3)](../man/cmempool/ccol_r_mempool_create.3)
-- [ccol_r_mempool_create_from_preallocated_buffer(3)](../man/cmempool/ccol_r_mempool_create_from_preallocated_buffer.3)
-- [CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(3)](../man/cmempool/CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER.3)
-- [ccol_r_mempool_alloc_entry(3)](../man/cmempool/ccol_r_mempool_alloc_entry.3),
-  [ccol_r_mempool_calloc_entry(3)](../man/cmempool/ccol_r_mempool_calloc_entry.3),
-  [ccol_r_mempool_realloc_entry(3)](../man/cmempool/ccol_r_mempool_realloc_entry.3),
-  [ccol_r_mempool_free_entry(3)](../man/cmempool/ccol_r_mempool_free_entry.3)
-- [ccol_r_mempool_destroy(3)](../man/cmempool/ccol_r_mempool_destroy.3)
-- [ccol_r_mempool_total_capacity(3)](../man/cmempool/ccol_r_mempool_total_capacity.3),
-  [ccol_r_mempool_used_count(3)](../man/cmempool/ccol_r_mempool_used_count.3),
-  [ccol_r_mempool_dynamic_allocs_count(3)](../man/cmempool/ccol_r_mempool_dynamic_allocs_count.3),
-  [ccol_r_mempool_allocated_bytes(3)](../man/cmempool/ccol_r_mempool_allocated_bytes.3)
+- [ccol_r_mempool_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_r_mempool_create.3.html)
+- [ccol_r_mempool_create_from_preallocated_buffer(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_r_mempool_create_from_preallocated_buffer.3.html)
+- [CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER.3.html)
+- [ccol_r_mempool_alloc_entry(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_r_mempool_alloc_entry.3.html),
+  [ccol_r_mempool_calloc_entry(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_r_mempool_calloc_entry.3.html),
+  [ccol_r_mempool_realloc_entry(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_r_mempool_realloc_entry.3.html),
+  [ccol_r_mempool_free_entry(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_r_mempool_free_entry.3.html)
+- [ccol_r_mempool_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_r_mempool_destroy.3.html)
+- [ccol_r_mempool_total_capacity(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_r_mempool_total_capacity.3.html),
+  [ccol_r_mempool_used_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_r_mempool_used_count.3.html),
+  [ccol_r_mempool_dynamic_allocs_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_r_mempool_dynamic_allocs_count.3.html),
+  [ccol_r_mempool_allocated_bytes(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_r_mempool_allocated_bytes.3.html)
 
 Related guides:
 

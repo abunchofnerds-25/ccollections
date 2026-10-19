@@ -273,8 +273,7 @@ bool ___csort_merge_sort(void *col, size_t length, size_t elem_size,
  *
  * @return The function name: _csort_default_<name>_comparison_proc
  */
-#define ___csort__get_default_integral_comparison_proc_name(name) \
-  _csort_default_##name##_comparison_proc
+#define _csort_default_cmp(name) _csort_default_##name##_comparison_proc
 
 /**
  * @brief Internal macro that declares a default comparison procedure
@@ -287,8 +286,7 @@ bool ___csort_merge_sort(void *col, size_t length, size_t elem_size,
  * char
  */
 #define ___csort__declare_default_integral_comparison_proc(type, name) \
-  int ___csort__get_default_integral_comparison_proc_name(name)(       \
-      const void *first, const void *second)
+  int _csort_default_cmp(name)(const void *first, const void *second)
 
 /* Default comparison procedures for all the standard types */
 
@@ -468,137 +466,95 @@ ___csort__declare_default_integral_comparison_proc(long double, long_double);
  * csort_sort() with an explicit comparator of its own; the char[N] field
  * examples in doc/csort.md are written that way. */
 #if defined(_CCOL_CLANG_GENERIC_ASSOC_WARNING)
-#define csort_get_default_comparison_proc(x)                                             \
-  ({                                                                                     \
-    ccol_comparison_proc_t __csort_gdcp_result = NULL;                                   \
-    if (_ccol_is_integral_type((x))) {                                                   \
-      _Pragma("GCC diagnostic push");                                                    \
-      _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\"");            \
-      __csort_gdcp_result = _Generic((x),                                                \
-          char: ___csort__get_default_integral_comparison_proc_name(char),               \
-          signed char: ___csort__get_default_integral_comparison_proc_name(              \
-                                         signed_char),                                   \
-          short: ___csort__get_default_integral_comparison_proc_name(short),             \
-          int: ___csort__get_default_integral_comparison_proc_name(int),                 \
-          long: ___csort__get_default_integral_comparison_proc_name(long),               \
-          long long: ___csort__get_default_integral_comparison_proc_name(                \
-                                         long_long),                                     \
-          unsigned char: ___csort__get_default_integral_comparison_proc_name(            \
-                                         unsigned_char),                                 \
-          unsigned short: ___csort__get_default_integral_comparison_proc_name(           \
-                                         unsigned_short),                                \
-          unsigned int: ___csort__get_default_integral_comparison_proc_name(             \
-                                         unsigned_int),                                  \
-          unsigned long: ___csort__get_default_integral_comparison_proc_name(            \
-                                         unsigned_long),                                 \
-          unsigned long long: ___csort__get_default_integral_comparison_proc_name(       \
-                                         unsigned_long_long),                            \
-          float: ___csort__get_default_integral_comparison_proc_name(float),             \
-          double: ___csort__get_default_integral_comparison_proc_name(double),           \
-          long double: ___csort__get_default_integral_comparison_proc_name(              \
-                                         long_double),                                   \
-          const char: ___csort__get_default_integral_comparison_proc_name(               \
-                                         char),                                          \
-          const signed char: ___csort__get_default_integral_comparison_proc_name(        \
-                                         signed_char),                                   \
-          const short: ___csort__get_default_integral_comparison_proc_name(              \
-                                         short),                                         \
-          const int: ___csort__get_default_integral_comparison_proc_name(int),           \
-          const long: ___csort__get_default_integral_comparison_proc_name(               \
-                                         long),                                          \
-          const long long: ___csort__get_default_integral_comparison_proc_name(          \
-                                         long_long),                                     \
-          const unsigned char: ___csort__get_default_integral_comparison_proc_name(      \
-                                         unsigned_char),                                 \
-          const unsigned short: ___csort__get_default_integral_comparison_proc_name(     \
-                                         unsigned_short),                                \
-          const unsigned int: ___csort__get_default_integral_comparison_proc_name(       \
-                                         unsigned_int),                                  \
-          const unsigned long: ___csort__get_default_integral_comparison_proc_name(      \
-                                         unsigned_long),                                 \
-          const unsigned long long: ___csort__get_default_integral_comparison_proc_name( \
-                                         unsigned_long_long),                            \
-          const float: ___csort__get_default_integral_comparison_proc_name(              \
-                                         float),                                         \
-          const double: ___csort__get_default_integral_comparison_proc_name(             \
-                                         double),                                        \
-          const long double: ___csort__get_default_integral_comparison_proc_name(        \
-                                         long_double),                                   \
-          default: NULL);                                                                \
-      _Pragma("GCC diagnostic pop");                                                     \
-    } else if (_ccol_is_char_ptr((x)) && !_ccol_is_char_array((x))) {                    \
-      __csort_gdcp_result = _csort_default_string_comparison_proc;                       \
-    } else {                                                                             \
-      _Pragma("GCC diagnostic push");                                                    \
-      _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\"");            \
-      if (_Generic((x), _Bool: 1, const _Bool: 1, default: 0))                           \
-        __csort_gdcp_result = _csort_default_bool_comparison_proc;                       \
-      _Pragma("GCC diagnostic pop");                                                     \
-    }                                                                                    \
-    __csort_gdcp_result;                                                                 \
+#define csort_get_default_comparison_proc(x)                                  \
+  ({                                                                          \
+    ccol_comparison_proc_t __csort_gdcp_result = NULL;                        \
+    if (_ccol_is_integral_type((x))) {                                        \
+      _Pragma("GCC diagnostic push");                                         \
+      _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\""); \
+      __csort_gdcp_result = _Generic((x),                                     \
+          char: _csort_default_cmp(char),                                     \
+          signed char: _csort_default_cmp(signed_char),                       \
+          short: _csort_default_cmp(short),                                   \
+          int: _csort_default_cmp(int),                                       \
+          long: _csort_default_cmp(long),                                     \
+          long long: _csort_default_cmp(long_long),                           \
+          unsigned char: _csort_default_cmp(unsigned_char),                   \
+          unsigned short: _csort_default_cmp(unsigned_short),                 \
+          unsigned int: _csort_default_cmp(unsigned_int),                     \
+          unsigned long: _csort_default_cmp(unsigned_long),                   \
+          unsigned long long: _csort_default_cmp(unsigned_long_long),         \
+          float: _csort_default_cmp(float),                                   \
+          double: _csort_default_cmp(double),                                 \
+          long double: _csort_default_cmp(long_double),                       \
+          const char: _csort_default_cmp(char),                               \
+          const signed char: _csort_default_cmp(signed_char),                 \
+          const short: _csort_default_cmp(short),                             \
+          const int: _csort_default_cmp(int),                                 \
+          const long: _csort_default_cmp(long),                               \
+          const long long: _csort_default_cmp(long_long),                     \
+          const unsigned char: _csort_default_cmp(unsigned_char),             \
+          const unsigned short: _csort_default_cmp(unsigned_short),           \
+          const unsigned int: _csort_default_cmp(unsigned_int),               \
+          const unsigned long: _csort_default_cmp(unsigned_long),             \
+          const unsigned long long: _csort_default_cmp(unsigned_long_long),   \
+          const float: _csort_default_cmp(float),                             \
+          const double: _csort_default_cmp(double),                           \
+          const long double: _csort_default_cmp(long_double),                 \
+          default: NULL);                                                     \
+      _Pragma("GCC diagnostic pop");                                          \
+    } else if (_ccol_is_char_ptr((x)) && !_ccol_is_char_array((x))) {         \
+      __csort_gdcp_result = _csort_default_string_comparison_proc;            \
+    } else {                                                                  \
+      _Pragma("GCC diagnostic push");                                         \
+      _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\""); \
+      if (_Generic((x), _Bool: 1, const _Bool: 1, default: 0))                \
+        __csort_gdcp_result = _csort_default_bool_comparison_proc;            \
+      _Pragma("GCC diagnostic pop");                                          \
+    }                                                                         \
+    __csort_gdcp_result;                                                      \
   })
 #else
-#define csort_get_default_comparison_proc(x)                                             \
-  ({                                                                                     \
-    ccol_comparison_proc_t __csort_gdcp_result = NULL;                                   \
-    if (_ccol_is_integral_type((x))) {                                                   \
-      __csort_gdcp_result = _Generic((x),                                                \
-          char: ___csort__get_default_integral_comparison_proc_name(char),               \
-          signed char: ___csort__get_default_integral_comparison_proc_name(              \
-                                         signed_char),                                   \
-          short: ___csort__get_default_integral_comparison_proc_name(short),             \
-          int: ___csort__get_default_integral_comparison_proc_name(int),                 \
-          long: ___csort__get_default_integral_comparison_proc_name(long),               \
-          long long: ___csort__get_default_integral_comparison_proc_name(                \
-                                         long_long),                                     \
-          unsigned char: ___csort__get_default_integral_comparison_proc_name(            \
-                                         unsigned_char),                                 \
-          unsigned short: ___csort__get_default_integral_comparison_proc_name(           \
-                                         unsigned_short),                                \
-          unsigned int: ___csort__get_default_integral_comparison_proc_name(             \
-                                         unsigned_int),                                  \
-          unsigned long: ___csort__get_default_integral_comparison_proc_name(            \
-                                         unsigned_long),                                 \
-          unsigned long long: ___csort__get_default_integral_comparison_proc_name(       \
-                                         unsigned_long_long),                            \
-          float: ___csort__get_default_integral_comparison_proc_name(float),             \
-          double: ___csort__get_default_integral_comparison_proc_name(double),           \
-          long double: ___csort__get_default_integral_comparison_proc_name(              \
-                                         long_double),                                   \
-          const char: ___csort__get_default_integral_comparison_proc_name(               \
-                                         char),                                          \
-          const signed char: ___csort__get_default_integral_comparison_proc_name(        \
-                                         signed_char),                                   \
-          const short: ___csort__get_default_integral_comparison_proc_name(              \
-                                         short),                                         \
-          const int: ___csort__get_default_integral_comparison_proc_name(int),           \
-          const long: ___csort__get_default_integral_comparison_proc_name(               \
-                                         long),                                          \
-          const long long: ___csort__get_default_integral_comparison_proc_name(          \
-                                         long_long),                                     \
-          const unsigned char: ___csort__get_default_integral_comparison_proc_name(      \
-                                         unsigned_char),                                 \
-          const unsigned short: ___csort__get_default_integral_comparison_proc_name(     \
-                                         unsigned_short),                                \
-          const unsigned int: ___csort__get_default_integral_comparison_proc_name(       \
-                                         unsigned_int),                                  \
-          const unsigned long: ___csort__get_default_integral_comparison_proc_name(      \
-                                         unsigned_long),                                 \
-          const unsigned long long: ___csort__get_default_integral_comparison_proc_name( \
-                                         unsigned_long_long),                            \
-          const float: ___csort__get_default_integral_comparison_proc_name(              \
-                                         float),                                         \
-          const double: ___csort__get_default_integral_comparison_proc_name(             \
-                                         double),                                        \
-          const long double: ___csort__get_default_integral_comparison_proc_name(        \
-                                         long_double),                                   \
-          default: NULL);                                                                \
-    } else if (_ccol_is_char_ptr((x)) && !_ccol_is_char_array((x))) {                    \
-      __csort_gdcp_result = _csort_default_string_comparison_proc;                       \
-    } else if (_Generic((x), _Bool: 1, const _Bool: 1, default: 0)) {                    \
-      __csort_gdcp_result = _csort_default_bool_comparison_proc;                         \
-    }                                                                                    \
-    __csort_gdcp_result;                                                                 \
+#define csort_get_default_comparison_proc(x)                                \
+  ({                                                                        \
+    ccol_comparison_proc_t __csort_gdcp_result = NULL;                      \
+    if (_ccol_is_integral_type((x))) {                                      \
+      __csort_gdcp_result = _Generic((x),                                   \
+          char: _csort_default_cmp(char),                                   \
+          signed char: _csort_default_cmp(signed_char),                     \
+          short: _csort_default_cmp(short),                                 \
+          int: _csort_default_cmp(int),                                     \
+          long: _csort_default_cmp(long),                                   \
+          long long: _csort_default_cmp(long_long),                         \
+          unsigned char: _csort_default_cmp(unsigned_char),                 \
+          unsigned short: _csort_default_cmp(unsigned_short),               \
+          unsigned int: _csort_default_cmp(unsigned_int),                   \
+          unsigned long: _csort_default_cmp(unsigned_long),                 \
+          unsigned long long: _csort_default_cmp(unsigned_long_long),       \
+          float: _csort_default_cmp(float),                                 \
+          double: _csort_default_cmp(double),                               \
+          long double: _csort_default_cmp(long_double),                     \
+          const char: _csort_default_cmp(char),                             \
+          const signed char: _csort_default_cmp(signed_char),               \
+          const short: _csort_default_cmp(short),                           \
+          const int: _csort_default_cmp(int),                               \
+          const long: _csort_default_cmp(long),                             \
+          const long long: _csort_default_cmp(long_long),                   \
+          const unsigned char: _csort_default_cmp(unsigned_char),           \
+          const unsigned short: _csort_default_cmp(unsigned_short),         \
+          const unsigned int: _csort_default_cmp(unsigned_int),             \
+          const unsigned long: _csort_default_cmp(unsigned_long),           \
+          const unsigned long long: _csort_default_cmp(unsigned_long_long), \
+          const float: _csort_default_cmp(float),                           \
+          const double: _csort_default_cmp(double),                         \
+          const long double: _csort_default_cmp(long_double),               \
+          default: NULL);                                                   \
+    } else if (_ccol_is_char_ptr((x)) && !_ccol_is_char_array((x))) {       \
+      __csort_gdcp_result = _csort_default_string_comparison_proc;          \
+    } else if (_Generic((x), _Bool: 1, const _Bool: 1, default: 0)) {       \
+      __csort_gdcp_result = _csort_default_bool_comparison_proc;            \
+    }                                                                       \
+    __csort_gdcp_result;                                                    \
   })
 #endif
 

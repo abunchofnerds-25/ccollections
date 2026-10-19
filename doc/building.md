@@ -472,10 +472,10 @@ install of a reduced build, and such an install should go to a `PREFIX` or
 
 ## Reference
 
-[ccollections(7)](../man/common/ccollections.7) (compile-time switches, allocators,
+[ccollections(7)](https://abunchofnerds-25.github.io/ccollections/man/common/ccollections.7.html) (compile-time switches, allocators,
 return codes),
-[CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER(3)](../man/cmempool/CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER.3),
-[ccol_mempool_create(3)](../man/cmempool/ccol_mempool_create.3)
+[CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER.3.html),
+[ccol_mempool_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_mempool_create.3.html)
 
 Related guides:
 [How the library works](design.md),

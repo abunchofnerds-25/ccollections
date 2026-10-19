@@ -485,38 +485,38 @@ immediately. [Concurrency](concurrency.md) has the details.
 
 ## Reference
 
-Overview: [cthreadpool(7)](../man/cthreadpool/cthreadpool.7)
+Overview: [cthreadpool(7)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/cthreadpool.7.html)
 
 Creating and destroying:
-[ctpool_create(3)](../man/cthreadpool/ctpool_create.3),
-[ctpool_create_mp(3)](../man/cthreadpool/ctpool_create_mp.3),
-[ctpool_declare(3)](../man/cthreadpool/ctpool_declare.3),
-[ctpool_declare_scoped(3)](../man/cthreadpool/ctpool_declare_scoped.3),
-[ctpool_construct(3)](../man/cthreadpool/ctpool_construct.3),
-[ctpool_construct_scoped(3)](../man/cthreadpool/ctpool_construct_scoped.3),
-[ctpool_destroy(3)](../man/cthreadpool/ctpool_destroy.3)
+[ctpool_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_create.3.html),
+[ctpool_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_create_mp.3.html),
+[ctpool_declare(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_declare.3.html),
+[ctpool_declare_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_declare_scoped.3.html),
+[ctpool_construct(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_construct.3.html),
+[ctpool_construct_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_construct_scoped.3.html),
+[ctpool_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_destroy.3.html)
 
 Submitting tasks:
-[ctpool_submit(3)](../man/cthreadpool/ctpool_submit.3),
-[ctpool_try_submit(3)](../man/cthreadpool/ctpool_try_submit.3),
-[ctpool_timed_submit(3)](../man/cthreadpool/ctpool_timed_submit.3)
+[ctpool_submit(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_submit.3.html),
+[ctpool_try_submit(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_try_submit.3.html),
+[ctpool_timed_submit(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_timed_submit.3.html)
 
-Futures: [ctpool_submit_future(3)](../man/cthreadpool/ctpool_submit_future.3),
-[ctpool_try_submit_future(3)](../man/cthreadpool/ctpool_try_submit_future.3),
-[ctpool_timed_submit_future(3)](../man/cthreadpool/ctpool_timed_submit_future.3),
-[ctpool_future_get(3)](../man/cthreadpool/ctpool_future_get.3),
-[ctpool_future_done(3)](../man/cthreadpool/ctpool_future_done.3),
-[ctpool_future_cancelled(3)](../man/cthreadpool/ctpool_future_cancelled.3),
-[ctpool_future_free(3)](../man/cthreadpool/ctpool_future_free.3),
-[ctpool_future_create_detached(3)](../man/cthreadpool/ctpool_future_create_detached.3),
-[ctpool_future_fulfill(3)](../man/cthreadpool/ctpool_future_fulfill.3)
+Futures: [ctpool_submit_future(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_submit_future.3.html),
+[ctpool_try_submit_future(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_try_submit_future.3.html),
+[ctpool_timed_submit_future(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_timed_submit_future.3.html),
+[ctpool_future_get(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_future_get.3.html),
+[ctpool_future_done(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_future_done.3.html),
+[ctpool_future_cancelled(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_future_cancelled.3.html),
+[ctpool_future_free(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_future_free.3.html),
+[ctpool_future_create_detached(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_future_create_detached.3.html),
+[ctpool_future_fulfill(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_future_fulfill.3.html)
 
 Waiting, shutting down and inspecting:
-[ctpool_wait(3)](../man/cthreadpool/ctpool_wait.3),
-[ctpool_shutdown_drain(3)](../man/cthreadpool/ctpool_shutdown_drain.3),
-[ctpool_shutdown_immediate(3)](../man/cthreadpool/ctpool_shutdown_immediate.3),
-[ctpool_pending_count(3)](../man/cthreadpool/ctpool_pending_count.3),
-[ctpool_active_count(3)](../man/cthreadpool/ctpool_active_count.3)
+[ctpool_wait(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_wait.3.html),
+[ctpool_shutdown_drain(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_shutdown_drain.3.html),
+[ctpool_shutdown_immediate(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_shutdown_immediate.3.html),
+[ctpool_pending_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_pending_count.3.html),
+[ctpool_active_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_active_count.3.html)
 
 Related guides:
 [Thread communication](cthreadcomm.md),

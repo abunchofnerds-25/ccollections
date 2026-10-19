@@ -102,7 +102,7 @@ copy costs a little, but it means an eviction on another thread can't remove
 a value while you're using it.
 
 The return value is `ccol_success`, `ccol_key_not_found`, or another error
-code listed in [clru_get(3)](../man/clrucache/clru_get.3).
+code listed in [clru_get(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clru_get.3.html).
 `ccol_key_not_found` means the key isn't in the cache and either there is
 no getter or the getter failed.
 
@@ -121,7 +121,7 @@ A struct key is compared byte by byte, padding included. With GCC 11 or
 later `clru_get` and `clru_set` clear the padding for you. With another
 compiler, or with the raw functions, zero every byte of the key with
 `memset` before you set its fields. "KEYS WITH PADDING" on
-[clrucache_create_full(3)](../man/clrucache/clrucache_create_full.3) has the
+[clrucache_create_full(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clrucache_create_full.3.html) has the
 details.
 
 ## Read-through: filling the cache on a miss
@@ -300,7 +300,7 @@ protection.
 Another thread can remove a key while that key's setter is running. Long
 story short, the result is always the same as if the two operations had run
 one after the other, and
-[clrucache_set_full(3)](../man/clrucache/clrucache_set_full.3) goes through
+[clrucache_set_full(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clrucache_set_full.3.html) goes through
 this case in full.
 
 ## Passing a cache to other functions
@@ -484,30 +484,30 @@ handle afterwards stops the program.
 
 ## Reference
 
-Overview: [clrucache(7)](../man/clrucache/clrucache.7)
+Overview: [clrucache(7)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clrucache.7.html)
 
 Creating and destroying:
 
-- [clru_construct(3)](../man/clrucache/clru_construct.3),
-  [clru_construct_scoped(3)](../man/clrucache/clru_construct_scoped.3)
-- [clru_declare(3)](../man/clrucache/clru_declare.3),
-  [clru_declare_scoped(3)](../man/clrucache/clru_declare_scoped.3),
-  [clru_init(3)](../man/clrucache/clru_init.3)
-- [clru_redeclare(3)](../man/clrucache/clru_redeclare.3)
-- [clru_destroy(3)](../man/clrucache/clru_destroy.3)
-- [clrucache_create_full(3)](../man/clrucache/clrucache_create_full.3)
+- [clru_construct(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clru_construct.3.html),
+  [clru_construct_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clru_construct_scoped.3.html)
+- [clru_declare(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clru_declare.3.html),
+  [clru_declare_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clru_declare_scoped.3.html),
+  [clru_init(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clru_init.3.html)
+- [clru_redeclare(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clru_redeclare.3.html)
+- [clru_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clru_destroy.3.html)
+- [clrucache_create_full(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clrucache_create_full.3.html)
 
 Reading and writing:
 
-- [clru_get(3)](../man/clrucache/clru_get.3),
-  [clru_set(3)](../man/clrucache/clru_set.3)
-- [clrucache_get_full(3)](../man/clrucache/clrucache_get_full.3),
-  [clrucache_set_full(3)](../man/clrucache/clrucache_set_full.3)
+- [clru_get(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clru_get.3.html),
+  [clru_set(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clru_set.3.html)
+- [clrucache_get_full(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clrucache_get_full.3.html),
+  [clrucache_set_full(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clrucache_set_full.3.html)
 
 Inspecting:
 
-- [clrucache_size(3)](../man/clrucache/clrucache_size.3),
-  [clrucache_capacity(3)](../man/clrucache/clrucache_capacity.3)
+- [clrucache_size(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clrucache_size.3.html),
+  [clrucache_capacity(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clrucache_capacity.3.html)
 
 Related guides:
 

@@ -353,7 +353,7 @@ name only (a symbolic link to it counts as a second file), and never let two
 processes rotate the same file, because each would rename and delete files
 that the other one is writing. In a prefork server, give every worker its
 own file. The details are in
-[clog_create_from_file_mp(3)](../man/clogger/clog_create_from_file_mp.3).
+[clog_create_from_file_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_create_from_file_mp.3.html).
 
 ## Async logging
 
@@ -468,7 +468,7 @@ it in every thread that can write a log file, or the kernel ends the process
 when a log file reaches the limit. Ignoring it is the safer choice, because
 FreeBSD raises `SIGXFSZ` on the whole process, where any thread that doesn't
 block it can take it.
-[clog_set_signal_policy(3)](../man/clogger/clog_set_signal_policy.3)
+[clog_set_signal_policy(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_set_signal_policy.3.html)
 describes both policies.
 
 ## Custom allocators and fork
@@ -877,40 +877,40 @@ the file refuses even the newline.
 ## Reference
 
 Overview:
-[clogger(7)](../man/clogger/clogger.7)
+[clogger(7)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clogger.7.html)
 
 Opening and closing:
-[clog_create_from_fd_mp(3)](../man/clogger/clog_create_from_fd_mp.3)
+[clog_create_from_fd_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_create_from_fd_mp.3.html)
 (also `clog_create_from_fd`),
-[clog_create_from_file_mp(3)](../man/clogger/clog_create_from_file_mp.3)
+[clog_create_from_file_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_create_from_file_mp.3.html)
 (also `clog_create_from_file`; rotation, compression, one file one logger),
-[clog_derive(3)](../man/clogger/clog_derive.3),
-[clog_flush(3)](../man/clogger/clog_flush.3),
-[clog_close(3)](../man/clogger/clog_close.3)
+[clog_derive(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_derive.3.html),
+[clog_flush(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_flush.3.html),
+[clog_close(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_close.3.html)
 
 Logging:
-[clog_trace(3)](../man/clogger/clog_trace.3),
-[clog_debug(3)](../man/clogger/clog_debug.3),
-[clog_info(3)](../man/clogger/clog_info.3),
-[clog_warn(3)](../man/clogger/clog_warn.3),
-[clog_error(3)](../man/clogger/clog_error.3),
-[clog_alert(3)](../man/clogger/clog_alert.3),
-[clog_fatal(3)](../man/clogger/clog_fatal.3)
+[clog_trace(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_trace.3.html),
+[clog_debug(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_debug.3.html),
+[clog_info(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_info.3.html),
+[clog_warn(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_warn.3.html),
+[clog_error(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_error.3.html),
+[clog_alert(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_alert.3.html),
+[clog_fatal(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_fatal.3.html)
 
 Levels, formats and fields:
-[clog_set_level(3)](../man/clogger/clog_set_level.3),
-[clog_get_level(3)](../man/clogger/clog_get_level.3),
-[clog_set_format(3)](../man/clogger/clog_set_format.3),
-[clog_get_format(3)](../man/clogger/clog_get_format.3),
-[clog_set_facility(3)](../man/clogger/clog_set_facility.3),
-[clog_get_facility(3)](../man/clogger/clog_get_facility.3),
-[clog_set_field(3)](../man/clogger/clog_set_field.3),
-[clog_remove_field(3)](../man/clogger/clog_remove_field.3),
-[clog_clear_fields(3)](../man/clogger/clog_clear_fields.3)
+[clog_set_level(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_set_level.3.html),
+[clog_get_level(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_get_level.3.html),
+[clog_set_format(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_set_format.3.html),
+[clog_get_format(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_get_format.3.html),
+[clog_set_facility(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_set_facility.3.html),
+[clog_get_facility(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_get_facility.3.html),
+[clog_set_field(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_set_field.3.html),
+[clog_remove_field(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_remove_field.3.html),
+[clog_clear_fields(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_clear_fields.3.html)
 
 Threads and signals:
-[ccol_set_thread_name(3)](../man/clogger/ccol_set_thread_name.3),
-[clog_set_signal_policy(3)](../man/clogger/clog_set_signal_policy.3)
+[ccol_set_thread_name(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/ccol_set_thread_name.3.html),
+[clog_set_signal_policy(3)](https://abunchofnerds-25.github.io/ccollections/man/clogger/clog_set_signal_policy.3.html)
 
 Related guides:
 [Concurrency](concurrency.md),

@@ -206,9 +206,16 @@ its connection, and the client closes the connection after the response
 instead of keeping it for the next request.
 
 Timeouts and sizes are plain numbers, the timeouts in microseconds and the
-body limit in bytes. 0 means "no limit", which is also the default for all
-three settings. The request has to stay valid while `chttpclient_do()`
-runs, and you free it after the call.
+body limit in bytes, and 0 turns any of them off. Every client starts with
+a 30 s connect timeout and a 60 s inactivity timeout, and with no request
+timeout and no body limit. The inactivity timeout ends a request whose
+connection has gone silent: no byte in either direction for that long. A
+download that keeps moving is never cut off by it, however long it takes,
+so it's a safe default where a total limit wouldn't be. If a server of
+yours takes longer than a minute to start answering, a long poll for
+example, raise it with `chttpclient_set_inactivity_timeout()` or set it
+to 0. The request has to stay valid while `chttpclient_do()` runs, and you
+free it after the call.
 
 `chttpclient_destroy()` waits for requests that are running on other
 threads, then frees the client and sets `cli` to `CHTTPCLI_INVALID`. Never
@@ -245,7 +252,7 @@ The codes you'll see most and what usually causes them:
 | `ccol_http_invalid_url` | A typo, a space in the host, or a scheme that the client does not support. |
 | `ccol_http_host_resolution_failed` | DNS cannot find the host. |
 | `ccol_http_connection_failed` | No server listens at that address, or every address refused the connection. |
-| `ccol_timed_out` | Your connect timeout or request timeout expired. |
+| `ccol_timed_out` | The connect timeout, the inactivity timeout or your request timeout expired. |
 | `ccol_http_tls_cert_verification_failed` | The client does not trust the server certificate, or the certificate names a different host. |
 | `ccol_http_tls_cert_load_failed` | The client cannot read a CA bundle, certificate or key file that you configured. |
 | `ccol_http_transfer_aborted` | The connection broke during the transfer, or the server sent malformed HTTP. |
@@ -253,14 +260,16 @@ The codes you'll see most and what usually causes them:
 | `ccol_http_too_many_redirects` | More than 50 redirects. |
 
 The full list, with every cause of each code, is in
-[chttpclient_do(3)](../man/chttpclient/chttpclient_do.3).
+[chttpclient_do(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_do.3.html).
 
 ## Large downloads: stream the body
 
 A buffered response keeps the whole body in memory. For a big file you can
 ask the client to hand you the body in pieces instead. Your callback gets
 each piece as it arrives and returns the number of bytes it consumed, and
-any other return value stops the transfer.
+any other return value stops the transfer. The time your callback takes
+doesn't count against the inactivity timeout, which only counts time spent
+waiting on the connection.
 
 ```c
 /* download.c: write the body of a URL into a file without keeping the
@@ -357,7 +366,7 @@ the file or `SSL_CERT_FILE` later has no effect. Only if that file is
 missing or holds no certificate does the client fall back to OpenSSL's
 hashed certificate directory (`SSL_CERT_DIR`, or the built-in directory),
 whose files OpenSSL itself opens during each handshake. See
-[chttpclient_set_tls(3)](../man/chttpclient/chttpclient_set_tls.3).
+[chttpclient_set_tls(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_set_tls.3.html).
 
 In this struct **zero is the safe value**. Any field you leave unset keeps
 verification on, and every field that weakens security says so in its name
@@ -396,7 +405,7 @@ The client reads the files the first time a request needs them, so a wrong
 path shows up as `ccol_http_tls_cert_load_failed` from the request and not
 from `chttpclient_set_tls()`. A CA bundle may also contain certificate
 revocation lists. See
-[chttpclient_set_tls(3)](../man/chttpclient/chttpclient_set_tls.3).
+[chttpclient_set_tls(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_set_tls.3.html).
 
 ## Many requests at the same time
 
@@ -800,7 +809,7 @@ and the same goes for any request with an `Idempotency-Key` or
 `X-Idempotency-Key` header. A POST or PATCH without either header may
 already have run on the server, so it fails with
 `ccol_http_transfer_aborted` and it's up to you whether to send it again.
-See [chttpclient(7)](../man/chttpclient/chttpclient.7).
+See [chttpclient(7)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient.7.html).
 
 `resp->body` is `NULL` for an empty body. And only POST, PUT and PATCH send
 a body, so a body you give to a GET isn't sent.
@@ -821,78 +830,79 @@ signal settings.
 
 ## Reference
 
-Overview: [chttpclient(7)](../man/chttpclient/chttpclient.7)
+Overview: [chttpclient(7)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient.7.html)
 
 Clients:
-[chttpclient_create(3)](../man/chttpclient/chttpclient_create.3),
-[chttpclient_create_mp(3)](../man/chttpclient/chttpclient_create_mp.3),
-[chttpcli_construct(3)](../man/chttpclient/chttpcli_construct.3),
-[chttpcli_construct_scoped(3)](../man/chttpclient/chttpcli_construct_scoped.3),
-[chttpcli_declare(3)](../man/chttpclient/chttpcli_declare.3),
-[chttpcli_declare_scoped(3)](../man/chttpclient/chttpcli_declare_scoped.3),
-[chttpclient_destroy(3)](../man/chttpclient/chttpclient_destroy.3),
-[chttp_default_client(3)](../man/chttpclient/chttp_default_client.3)
+[chttpclient_create(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_create.3.html),
+[chttpclient_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_create_mp.3.html),
+[chttpcli_construct(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_construct.3.html),
+[chttpcli_construct_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_construct_scoped.3.html),
+[chttpcli_declare(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_declare.3.html),
+[chttpcli_declare_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_declare_scoped.3.html),
+[chttpclient_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_destroy.3.html),
+[chttp_default_client(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_default_client.3.html)
 
 Settings:
-[chttpclient_set_pool_size(3)](../man/chttpclient/chttpclient_set_pool_size.3),
-[chttpclient_set_connect_timeout(3)](../man/chttpclient/chttpclient_set_connect_timeout.3),
-[chttpclient_set_request_timeout(3)](../man/chttpclient/chttpclient_set_request_timeout.3),
-[chttpclient_set_max_response_body_size(3)](../man/chttpclient/chttpclient_set_max_response_body_size.3),
-[chttpclient_set_tls(3)](../man/chttpclient/chttpclient_set_tls.3)
+[chttpclient_set_pool_size(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_set_pool_size.3.html),
+[chttpclient_set_connect_timeout(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_set_connect_timeout.3.html),
+[chttpclient_set_request_timeout(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_set_request_timeout.3.html),
+[chttpclient_set_inactivity_timeout(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_set_inactivity_timeout.3.html),
+[chttpclient_set_max_response_body_size(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_set_max_response_body_size.3.html),
+[chttpclient_set_tls(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_set_tls.3.html)
 
 Requests:
-[chttp_request_create(3)](../man/chttpclient/chttp_request_create.3),
-[chttp_request_create_mp(3)](../man/chttpclient/chttp_request_create_mp.3),
-[chttp_request_set_header(3)](../man/chttpclient/chttp_request_set_header.3),
-[chttp_request_get_header(3)](../man/chttpclient/chttp_request_get_header.3),
-[chttp_request_free(3)](../man/chttpclient/chttp_request_free.3)
+[chttp_request_create(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_request_create.3.html),
+[chttp_request_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_request_create_mp.3.html),
+[chttp_request_set_header(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_request_set_header.3.html),
+[chttp_request_get_header(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_request_get_header.3.html),
+[chttp_request_free(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_request_free.3.html)
 
-Run requests: [chttpclient_do(3)](../man/chttpclient/chttpclient_do.3),
-[chttpclient_do_streaming(3)](../man/chttpclient/chttpclient_do_streaming.3),
-[chttpclient_do_async(3)](../man/chttpclient/chttpclient_do_async.3),
-[chttpclient_do_async_streaming(3)](../man/chttpclient/chttpclient_do_async_streaming.3),
-[chttpclient_async_result_get(3)](../man/chttpclient/chttpclient_async_result_get.3),
-[chttpclient_async_result_free(3)](../man/chttpclient/chttpclient_async_result_free.3),
-[chttpclient_do_pooled(3)](../man/chttpclient/chttpclient_do_pooled.3),
-[chttpclient_do_pooled_streaming(3)](../man/chttpclient/chttpclient_do_pooled_streaming.3)
+Run requests: [chttpclient_do(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_do.3.html),
+[chttpclient_do_streaming(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_do_streaming.3.html),
+[chttpclient_do_async(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_do_async.3.html),
+[chttpclient_do_async_streaming(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_do_async_streaming.3.html),
+[chttpclient_async_result_get(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_async_result_get.3.html),
+[chttpclient_async_result_free(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_async_result_free.3.html),
+[chttpclient_do_pooled(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_do_pooled.3.html),
+[chttpclient_do_pooled_streaming(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_do_pooled_streaming.3.html)
 
 Convenience calls on the default client:
-[chttp_do(3)](../man/chttpclient/chttp_do.3),
-[chttp_get(3)](../man/chttpclient/chttp_get.3),
-[chttp_post(3)](../man/chttpclient/chttp_post.3),
-[chttp_put(3)](../man/chttpclient/chttp_put.3),
-[chttp_delete(3)](../man/chttpclient/chttp_delete.3),
-[chttp_patch(3)](../man/chttpclient/chttp_patch.3),
-[chttp_run_query(3)](../man/chttpclient/chttp_run_query.3)
+[chttp_do(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_do.3.html),
+[chttp_get(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_get.3.html),
+[chttp_post(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_post.3.html),
+[chttp_put(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_put.3.html),
+[chttp_delete(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_delete.3.html),
+[chttp_patch(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_patch.3.html),
+[chttp_run_query(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttp_run_query.3.html)
 
 Responses:
-[chttpclient_resp_header(3)](../man/chttpclient/chttpclient_resp_header.3),
-[chttpclient_resp_header_count(3)](../man/chttpclient/chttpclient_resp_header_count.3),
-[chttpclient_resp_header_at(3)](../man/chttpclient/chttpclient_resp_header_at.3),
-[chttpclient_resp_free(3)](../man/chttpclient/chttpclient_resp_free.3)
+[chttpclient_resp_header(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_resp_header.3.html),
+[chttpclient_resp_header_count(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_resp_header_count.3.html),
+[chttpclient_resp_header_at(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_resp_header_at.3.html),
+[chttpclient_resp_free(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpclient_resp_free.3.html)
 
 The shared engine of Tiers 2 and 3:
-[chttpcli_set_engine_logger(3)](../man/chttpclient/chttpcli_set_engine_logger.3),
-[chttpcli_set_engine_mem_mgmt_procs(3)](../man/chttpclient/chttpcli_set_engine_mem_mgmt_procs.3),
-[chttpcli_set_engine_num_reactor_threads(3)](../man/chttpclient/chttpcli_set_engine_num_reactor_threads.3),
-[chttpcli_engine_wait(3)](../man/chttpclient/chttpcli_engine_wait.3)
+[chttpcli_set_engine_logger(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_set_engine_logger.3.html),
+[chttpcli_set_engine_mem_mgmt_procs(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_set_engine_mem_mgmt_procs.3.html),
+[chttpcli_set_engine_num_reactor_threads(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_set_engine_num_reactor_threads.3.html),
+[chttpcli_engine_wait(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_engine_wait.3.html)
 
 Shared types and helpers (`chttp.h`):
-[chttp(7)](../man/chttp/chttp.7),
-[CHTTP_STATUS(3)](../man/chttp/CHTTP_STATUS.3),
-[CHTTP_TLS_DEFAULT(3)](../man/chttp/CHTTP_TLS_DEFAULT.3),
-[CHTTP_BODY(3)](../man/chttp/CHTTP_BODY.3),
-[CHTTP_JSON_BODY(3)](../man/chttp/CHTTP_JSON_BODY.3),
-[CHTTP_TEXT_BODY(3)](../man/chttp/CHTTP_TEXT_BODY.3),
-[CHTTP_FORM_BODY(3)](../man/chttp/CHTTP_FORM_BODY.3),
-[CHTTP_NO_BODY(3)](../man/chttp/CHTTP_NO_BODY.3),
-[chttp_method_str(3)](../man/chttp/chttp_method_str.3),
-[chttp_base64_encode(3)](../man/chttp/chttp_base64_encode.3),
-[chttp_base64_encode_mp(3)](../man/chttp/chttp_base64_encode_mp.3),
-[chttp_base64_decode(3)](../man/chttp/chttp_base64_decode.3),
-[chttp_base64_decode_mp(3)](../man/chttp/chttp_base64_decode_mp.3),
-[chttp_basic_auth(3)](../man/chttp/chttp_basic_auth.3),
-[chttp_basic_auth_mp(3)](../man/chttp/chttp_basic_auth_mp.3)
+[chttp(7)](https://abunchofnerds-25.github.io/ccollections/man/chttp/chttp.7.html),
+[CHTTP_STATUS(3)](https://abunchofnerds-25.github.io/ccollections/man/chttp/CHTTP_STATUS.3.html),
+[CHTTP_TLS_DEFAULT(3)](https://abunchofnerds-25.github.io/ccollections/man/chttp/CHTTP_TLS_DEFAULT.3.html),
+[CHTTP_BODY(3)](https://abunchofnerds-25.github.io/ccollections/man/chttp/CHTTP_BODY.3.html),
+[CHTTP_JSON_BODY(3)](https://abunchofnerds-25.github.io/ccollections/man/chttp/CHTTP_JSON_BODY.3.html),
+[CHTTP_TEXT_BODY(3)](https://abunchofnerds-25.github.io/ccollections/man/chttp/CHTTP_TEXT_BODY.3.html),
+[CHTTP_FORM_BODY(3)](https://abunchofnerds-25.github.io/ccollections/man/chttp/CHTTP_FORM_BODY.3.html),
+[CHTTP_NO_BODY(3)](https://abunchofnerds-25.github.io/ccollections/man/chttp/CHTTP_NO_BODY.3.html),
+[chttp_method_str(3)](https://abunchofnerds-25.github.io/ccollections/man/chttp/chttp_method_str.3.html),
+[chttp_base64_encode(3)](https://abunchofnerds-25.github.io/ccollections/man/chttp/chttp_base64_encode.3.html),
+[chttp_base64_encode_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/chttp/chttp_base64_encode_mp.3.html),
+[chttp_base64_decode(3)](https://abunchofnerds-25.github.io/ccollections/man/chttp/chttp_base64_decode.3.html),
+[chttp_base64_decode_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/chttp/chttp_base64_decode_mp.3.html),
+[chttp_basic_auth(3)](https://abunchofnerds-25.github.io/ccollections/man/chttp/chttp_basic_auth.3.html),
+[chttp_basic_auth_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/chttp/chttp_basic_auth_mp.3.html)
 
 Related guides: [HTTP server](chttpserver.md),
 [Concurrency and fork()](concurrency.md), [Memory management](memory.md),

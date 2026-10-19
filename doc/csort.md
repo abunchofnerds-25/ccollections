@@ -324,12 +324,12 @@ whole sort.
 
 ## Reference
 
-Overview: [csort(7)](../man/csort/csort.7)
+Overview: [csort(7)](https://abunchofnerds-25.github.io/ccollections/man/csort/csort.7.html)
 
-[csort_sort(3)](../man/csort/csort_sort.3),
-[csort_get_default_comparison_proc(3)](../man/csort/csort_get_default_comparison_proc.3),
-[cvec_sort(3)](../man/cvector/cvec_sort.3),
-[cvector_sort_with_comparison_proc(3)](../man/cvector/cvector_sort_with_comparison_proc.3)
+[csort_sort(3)](https://abunchofnerds-25.github.io/ccollections/man/csort/csort_sort.3.html),
+[csort_get_default_comparison_proc(3)](https://abunchofnerds-25.github.io/ccollections/man/csort/csort_get_default_comparison_proc.3.html),
+[cvec_sort(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_sort.3.html),
+[cvector_sort_with_comparison_proc(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_sort_with_comparison_proc.3.html)
 
 Related guides:
 [Vectors](cvector.md),

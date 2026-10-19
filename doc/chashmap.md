@@ -137,7 +137,7 @@ Every other pointer type is stored as the pointer itself. A map of `int` to
 behind them. Free them yourself before you destroy the map, or use
 `chmap_destroy_with_dtor`, which calls a destructor on each value (the
 inventory example below does this). The precise rules are in
-[chashmap(7)](../man/chashmap/chashmap.7).
+[chashmap(7)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap.7.html).
 
 ## Iterate over all entries
 
@@ -319,7 +319,7 @@ elements.
 Floating-point keys are compared bit by bit, except that `-0.0` and `0.0`
 are the same key. A NaN key is found by its exact bit pattern, and
 `long double` keys are compared by value
-([chmap_construct(3)](../man/chashmap/chmap_construct.3) has the details).
+([chmap_construct(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_construct.3.html) has the details).
 
 Binary keys whose length is only known at run time, a slice of a buffer or
 a byte string with zeros in it, can't go through the macros, because the
@@ -516,7 +516,7 @@ The exception is a custom hash function. If your function returns the same
 value for two keys, those keys collide no matter what the map does, so for
 keys you don't trust use the built-in hash or a custom one that an attacker
 can't make collide. The mechanism is described in
-[chmap_create_full(3)](../man/chashmap/chmap_create_full.3).
+[chmap_create_full(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_create_full.3.html).
 
 ## Good to know
 
@@ -532,53 +532,53 @@ them changes it, protect every call with your own lock (see
 
 ## Reference
 
-Overview: [chashmap(7)](../man/chashmap/chashmap.7)
+Overview: [chashmap(7)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap.7.html)
 
 Create and destroy (macros):
-[chmap_construct(3)](../man/chashmap/chmap_construct.3),
-[chmap_construct_scoped(3)](../man/chashmap/chmap_construct_scoped.3),
-[chmap_construct_mp(3)](../man/chashmap/chmap_construct_mp.3),
-[chmap_construct_mp_scoped(3)](../man/chashmap/chmap_construct_mp_scoped.3),
-[chmap_construct_ch(3)](../man/chashmap/chmap_construct_ch.3),
-[chmap_construct_ch_scoped(3)](../man/chashmap/chmap_construct_ch_scoped.3),
-[chmap_construct_full(3)](../man/chashmap/chmap_construct_full.3),
-[chmap_construct_full_scoped(3)](../man/chashmap/chmap_construct_full_scoped.3),
-[chmap_declare(3)](../man/chashmap/chmap_declare.3),
-[chmap_declare_scoped(3)](../man/chashmap/chmap_declare_scoped.3),
-[chmap_init(3)](../man/chashmap/chmap_init.3),
-[chmap_init_mp(3)](../man/chashmap/chmap_init_mp.3),
-[chmap_init_ch(3)](../man/chashmap/chmap_init_ch.3),
-[chmap_init_full(3)](../man/chashmap/chmap_init_full.3),
-[chmap_redeclare(3)](../man/chashmap/chmap_redeclare.3),
-[chmap_destroy(3)](../man/chashmap/chmap_destroy.3)
+[chmap_construct(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_construct.3.html),
+[chmap_construct_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_construct_scoped.3.html),
+[chmap_construct_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_construct_mp.3.html),
+[chmap_construct_mp_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_construct_mp_scoped.3.html),
+[chmap_construct_ch(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_construct_ch.3.html),
+[chmap_construct_ch_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_construct_ch_scoped.3.html),
+[chmap_construct_full(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_construct_full.3.html),
+[chmap_construct_full_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_construct_full_scoped.3.html),
+[chmap_declare(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_declare.3.html),
+[chmap_declare_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_declare_scoped.3.html),
+[chmap_init(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_init.3.html),
+[chmap_init_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_init_mp.3.html),
+[chmap_init_ch(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_init_ch.3.html),
+[chmap_init_full(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_init_full.3.html),
+[chmap_redeclare(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_redeclare.3.html),
+[chmap_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_destroy.3.html)
 
 Element access (macros):
-[chmap_insert(3)](../man/chashmap/chmap_insert.3),
-[chmap_get(3)](../man/chashmap/chmap_get.3),
-[chmap_get_ptr(3)](../man/chashmap/chmap_get_ptr.3),
-[chmap_remove(3)](../man/chashmap/chmap_remove.3)
+[chmap_insert(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_insert.3.html),
+[chmap_get(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_get.3.html),
+[chmap_get_ptr(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_get_ptr.3.html),
+[chmap_remove(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_remove.3.html)
 
 Raw functions:
-[chmap_create(3)](../man/chashmap/chmap_create.3),
-[chmap_create_mp(3)](../man/chashmap/chmap_create_mp.3),
-[chmap_create_ch(3)](../man/chashmap/chmap_create_ch.3),
-[chmap_create_full(3)](../man/chashmap/chmap_create_full.3),
-[chmap_insert_elem(3)](../man/chashmap/chmap_insert_elem.3),
-[chmap_get_elem_ref(3)](../man/chashmap/chmap_get_elem_ref.3),
-[chmap_get_elem_copy(3)](../man/chashmap/chmap_get_elem_copy.3),
-[chmap_delete_elem(3)](../man/chashmap/chmap_delete_elem.3),
-[chmap_elem_count(3)](../man/chashmap/chmap_elem_count.3),
-[chmap_reset(3)](../man/chashmap/chmap_reset.3),
-[chmap_destroy_with_dtor(3)](../man/chashmap/chmap_destroy_with_dtor.3),
-[chashmap_begin_iter(3)](../man/chashmap/chashmap_begin_iter.3)
+[chmap_create(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_create.3.html),
+[chmap_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_create_mp.3.html),
+[chmap_create_ch(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_create_ch.3.html),
+[chmap_create_full(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_create_full.3.html),
+[chmap_insert_elem(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_insert_elem.3.html),
+[chmap_get_elem_ref(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_get_elem_ref.3.html),
+[chmap_get_elem_copy(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_get_elem_copy.3.html),
+[chmap_delete_elem(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_delete_elem.3.html),
+[chmap_elem_count(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_elem_count.3.html),
+[chmap_reset(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_reset.3.html),
+[chmap_destroy_with_dtor(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_destroy_with_dtor.3.html),
+[chashmap_begin_iter(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_begin_iter.3.html)
 
 Iteration:
-[ccol_for_each(3)](../man/citerators/ccol_for_each.3),
-[ccol_begin(3)](../man/citerators/ccol_begin.3),
-[ccol_iter_next(3)](../man/citerators/ccol_iter_next.3),
-[ccol_iter_key_ptr(3)](../man/citerators/ccol_iter_key_ptr.3),
-[ccol_iter_val_ptr(3)](../man/citerators/ccol_iter_val_ptr.3),
-[ccol_iter_destroy(3)](../man/citerators/ccol_iter_destroy.3)
+[ccol_for_each(3)](https://abunchofnerds-25.github.io/ccollections/man/citerators/ccol_for_each.3.html),
+[ccol_begin(3)](https://abunchofnerds-25.github.io/ccollections/man/citerators/ccol_begin.3.html),
+[ccol_iter_next(3)](https://abunchofnerds-25.github.io/ccollections/man/citerators/ccol_iter_next.3.html),
+[ccol_iter_key_ptr(3)](https://abunchofnerds-25.github.io/ccollections/man/citerators/ccol_iter_key_ptr.3.html),
+[ccol_iter_val_ptr(3)](https://abunchofnerds-25.github.io/ccollections/man/citerators/ccol_iter_val_ptr.3.html),
+[ccol_iter_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/citerators/ccol_iter_destroy.3.html)
 
 Related guides:
 [cbstmap](cbstmap.md) (ordered map),

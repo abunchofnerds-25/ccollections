@@ -1,7 +1,10 @@
 name: Coverage
 
 # Runs on every push to main, which is what a merged pull request makes, and
-# publishes the merged coverage report to GitHub Pages. Pushes to other
+# publishes the GitHub Pages site: the rendered man pages under man/, which
+# the guides under doc/ link to, the merged coverage report under coverage/,
+# and a front page. A repository has one Pages site and a deployment replaces
+# all of it, so both parts are built here and go out together. Pushes to other
 # branches and pull requests don't start it on purpose: a full run builds and
 # runs every module suite again under gcov instrumentation, and only the state
 # of main is worth publishing.
@@ -28,7 +31,7 @@ concurrency:
 
 jobs:
   coverage:
-    name: Merged coverage report
+    name: Man pages and merged coverage report
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment:
@@ -38,7 +41,12 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y lcov libssl-dev zlib1g-dev
+        run: sudo apt-get update && sudo apt-get install -y lcov libssl-dev zlib1g-dev mandoc
+
+      # First, because it takes seconds and the coverage build takes most of
+      # an hour. It stops on a page that mandoc reports an error in.
+      - name: Render the man pages
+        run: make man_html
 
       - name: Build the merged coverage report
         run: make coverage_site
@@ -65,13 +73,21 @@ jobs:
           path: coverage_site/html
           retention-days: 30
 
+      - name: Put the site together
+        run: |
+          rm -rf pages_site
+          mkdir pages_site
+          cp -R man_html pages_site/man
+          cp -R coverage_site/html pages_site/coverage
+          cp ci_scripts/pages_index.html pages_site/index.html
+
       - name: Configure Pages
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
 
       - name: Upload the Pages artifact
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
-          path: coverage_site/html
+          path: pages_site
 
       - name: Deploy to Pages
         id: deployment

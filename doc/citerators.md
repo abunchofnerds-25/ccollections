@@ -301,21 +301,21 @@ Clang with `-std=gnu11`.
 
 ## Reference
 
-Overview: [citerators(7)](../man/citerators/citerators.7)
+Overview: [citerators(7)](https://abunchofnerds-25.github.io/ccollections/man/citerators/citerators.7.html)
 
-[ccol_for_each(3)](../man/citerators/ccol_for_each.3),
-[ccol_iter_declare(3)](../man/citerators/ccol_iter_declare.3),
-[ccol_begin(3)](../man/citerators/ccol_begin.3),
-[ccol_end(3)](../man/citerators/ccol_end.3),
-[ccol_iter_next(3)](../man/citerators/ccol_iter_next.3),
-[ccol_iter_key_ptr(3)](../man/citerators/ccol_iter_key_ptr.3),
-[ccol_iter_val_ptr(3)](../man/citerators/ccol_iter_val_ptr.3),
-[ccol_iter_destroy(3)](../man/citerators/ccol_iter_destroy.3)
+[ccol_for_each(3)](https://abunchofnerds-25.github.io/ccollections/man/citerators/ccol_for_each.3.html),
+[ccol_iter_declare(3)](https://abunchofnerds-25.github.io/ccollections/man/citerators/ccol_iter_declare.3.html),
+[ccol_begin(3)](https://abunchofnerds-25.github.io/ccollections/man/citerators/ccol_begin.3.html),
+[ccol_end(3)](https://abunchofnerds-25.github.io/ccollections/man/citerators/ccol_end.3.html),
+[ccol_iter_next(3)](https://abunchofnerds-25.github.io/ccollections/man/citerators/ccol_iter_next.3.html),
+[ccol_iter_key_ptr(3)](https://abunchofnerds-25.github.io/ccollections/man/citerators/ccol_iter_key_ptr.3.html),
+[ccol_iter_val_ptr(3)](https://abunchofnerds-25.github.io/ccollections/man/citerators/ccol_iter_val_ptr.3.html),
+[ccol_iter_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/citerators/ccol_iter_destroy.3.html)
 
 The per-container functions that `ccol_begin` calls:
-[cvector_begin_iter(3)](../man/cvector/cvector_begin_iter.3),
-[chashmap_begin_iter(3)](../man/chashmap/chashmap_begin_iter.3),
-[cbmap_begin_iter(3)](../man/cbstmap/cbmap_begin_iter.3)
+[cvector_begin_iter(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_begin_iter.3.html),
+[chashmap_begin_iter(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chashmap_begin_iter.3.html),
+[cbmap_begin_iter(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_begin_iter.3.html)
 
 Related guides:
 [Vectors](cvector.md),

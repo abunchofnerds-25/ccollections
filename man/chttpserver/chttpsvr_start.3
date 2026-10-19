@@ -341,7 +341,7 @@ served as HTTP/1.1 (RFC 9110 section 2.5).  A Host header outside the
 uri-host [ ":" port ] grammar of RFC 9112 section 3.2 gets 400.  The
 host must be a reg-name of unreserved, sub-delims and percent-encoded
 bytes, an IPv4 address or a bracketed IP literal, so a '/', '@', '?',
-'#' or whitespace, an empty host, or a port that is not all digits is
+\&'#' or whitespace, an empty host, or a port that is not all digits is
 refused.  A Transfer-Encoding that names a coding other than chunked,
 such as "gzip, chunked", gets 501 Not Implemented, because the server
 decodes no other coding, while one that does not end in chunked gets

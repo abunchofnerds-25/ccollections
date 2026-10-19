@@ -271,7 +271,7 @@ that may be empty, a server that may be down. The library reports them as a
 `ccol_retval_t`, which is `0` (`ccol_success`) on success and a negative
 code otherwise, such as `ccol_key_not_found`, `ccol_timed_out` or
 `ccol_http_connection_failed`. The values don't change during the whole
-`1.x` series, and [ccollections(7)](../man/common/ccollections.7) lists all
+`1.x` series, and [ccollections(7)](https://abunchofnerds-25.github.io/ccollections/man/common/ccollections.7.html) lists all
 of them. `ccol_retval_to_str` gives you the name of a value for a message:
 
 ```c
@@ -516,28 +516,28 @@ changes, so the program takes it after the push and never before.
 ## Reference
 
 Rules for the full library:
-[ccollections(7)](../man/common/ccollections.7),
-[ccol_retval_to_str(3)](../man/common/ccol_retval_to_str.3),
-[ccol_scoped_ptr(3)](../man/common/ccol_scoped_ptr.3),
-[ccol_scoped_ptr_mp(3)](../man/common/ccol_scoped_ptr_mp.3),
-[ccol_scoped_ptr_release(3)](../man/common/ccol_scoped_ptr_release.3)
+[ccollections(7)](https://abunchofnerds-25.github.io/ccollections/man/common/ccollections.7.html),
+[ccol_retval_to_str(3)](https://abunchofnerds-25.github.io/ccollections/man/common/ccol_retval_to_str.3.html),
+[ccol_scoped_ptr(3)](https://abunchofnerds-25.github.io/ccollections/man/common/ccol_scoped_ptr.3.html),
+[ccol_scoped_ptr_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/common/ccol_scoped_ptr_mp.3.html),
+[ccol_scoped_ptr_release(3)](https://abunchofnerds-25.github.io/ccollections/man/common/ccol_scoped_ptr_release.3.html)
 
 Lifecycle macros, with the vector as the example:
-[cvec_declare(3)](../man/cvector/cvec_declare.3),
-[cvec_init(3)](../man/cvector/cvec_init.3),
-[cvec_construct(3)](../man/cvector/cvec_construct.3),
-[cvec_construct_scoped(3)](../man/cvector/cvec_construct_scoped.3),
-[cvec_declare_scoped(3)](../man/cvector/cvec_declare_scoped.3),
-[cvec_redeclare(3)](../man/cvector/cvec_redeclare.3),
-[cvec_destroy(3)](../man/cvector/cvec_destroy.3)
+[cvec_declare(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_declare.3.html),
+[cvec_init(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_init.3.html),
+[cvec_construct(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_construct.3.html),
+[cvec_construct_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_construct_scoped.3.html),
+[cvec_declare_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_declare_scoped.3.html),
+[cvec_redeclare(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_redeclare.3.html),
+[cvec_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_destroy.3.html)
 
 Typed layer and raw layer of the map:
-[chmap_insert(3)](../man/chashmap/chmap_insert.3),
-[chmap_insert_elem(3)](../man/chashmap/chmap_insert_elem.3),
-[chmap_get(3)](../man/chashmap/chmap_get.3),
-[chmap_get_ptr(3)](../man/chashmap/chmap_get_ptr.3),
-[chmap_get_elem_ref(3)](../man/chashmap/chmap_get_elem_ref.3),
-[chmap_get_elem_copy(3)](../man/chashmap/chmap_get_elem_copy.3)
+[chmap_insert(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_insert.3.html),
+[chmap_insert_elem(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_insert_elem.3.html),
+[chmap_get(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_get.3.html),
+[chmap_get_ptr(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_get_ptr.3.html),
+[chmap_get_elem_ref(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_get_elem_ref.3.html),
+[chmap_get_elem_copy(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_get_elem_copy.3.html)
 
 Related guides:
 [Building and linking](building.md),

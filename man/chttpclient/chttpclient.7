@@ -54,6 +54,23 @@ which chttp_get, chttp_post, chttp_put, chttp_delete, chttp_patch,
 chttp_do and chttp_run_query use. The library owns that client, so do
 not destroy it.
 .fi
+.SS Timeouts
+.nf
+Every client, the default client included, has three timeouts, each
+set in microseconds and turned off by 0:
+  - The connect timeout bounds the TCP connect and, for HTTPS, the
+    TLS handshake. It is 30 s by default.
+  - The inactivity timeout bounds the time a request waits on its
+    connection with no byte moving either way. It is 60 s by default,
+    so a server that stops answering never holds a request for ever,
+    and a slow transfer that keeps moving is never cut off.
+  - The request timeout bounds the whole request. It is off by
+    default.
+A request that runs out of any of them ends with ccol_timed_out. See
+chttpclient_set_connect_timeout(3),
+chttpclient_set_inactivity_timeout(3) and
+chttpclient_set_request_timeout(3).
+.fi
 .SS Requests
 .nf
 A chttp_request_t holds a method, a URL, a body and a set of headers.
@@ -279,6 +296,7 @@ reads one while another thread changes it.
 .BR chttpclient_do_async (3),
 .BR chttpclient_do_pooled (3),
 .BR chttpclient_set_tls (3),
+.BR chttpclient_set_inactivity_timeout (3),
 .BR chttp_request_create (3),
 .BR chttp_default_client (3),
 .BR chttpclient_resp_header (3),

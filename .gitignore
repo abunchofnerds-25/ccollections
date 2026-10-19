@@ -21,6 +21,10 @@ tests/*/coverage/
 # The merged coverage report of `make coverage_site`, for reading in a
 # browser.
 coverage_site/
+# The HTML man pages of `make man_html`, and the GitHub Pages site that the
+# Coverage workflow puts together from them and the coverage report.
+/man_html/
+/pages_site/
 tests/*/fuzz_*
 tests/*/crash-*
 tests/*/oom-*

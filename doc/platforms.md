@@ -226,7 +226,7 @@ but you must still destroy every handle before the `dlclose()`.
 
 ## Reference
 
-[ccollections(7)](../man/common/ccollections.7) (compile-time switches)
+[ccollections(7)](https://abunchofnerds-25.github.io/ccollections/man/common/ccollections.7.html) (compile-time switches)
 
 Related guides:
 [Building and linking](building.md),

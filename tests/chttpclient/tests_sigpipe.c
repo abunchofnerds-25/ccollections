@@ -341,6 +341,11 @@ TEST(chttpcli_sigpipe, a_sync_write_to_a_refusing_server_raises_no_sigpipe) {
   refusing_server srv;
   bool server_up = _refusing_server_start(&srv, "sync", false);
   chttpcli cli = chttpclient_create(NULL);
+  /* The refusing server takes one connection and its listener stays open
+     until the end of the test, so a request it never accepted would wait for
+     ever; the timeout makes that a failure. */
+  if (cli != CHTTPCLI_INVALID)
+    (void)chttpclient_set_request_timeout(cli, 30000000);
   char *body = NULL;
   chttp_request_t *req = server_up ? _large_post(srv.url, &body) : NULL;
   if (req) req->expect_continue = true;
@@ -378,6 +383,11 @@ TEST(chttpcli_sigpipe,
   bool server_up = _refusing_server_start(&srv, "async", false);
   bool holder_up = _refusing_server_start(&holder, "hold", true);
   chttpcli cli = chttpclient_create(NULL);
+  /* The refusing server takes one connection and its listener stays open
+     until the end of the test, so a request it never accepted would wait for
+     ever; the timeout makes that a failure. */
+  if (cli != CHTTPCLI_INVALID)
+    (void)chttpclient_set_request_timeout(cli, 30000000);
   char *body = NULL;
   chttp_request_t *req =
       server_up && holder_up ? _large_post(srv.url, &body) : NULL;

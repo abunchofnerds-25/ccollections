@@ -529,6 +529,24 @@ check_layout:
 update_layout_baseline:
 	@CLANG="$(CLANG)" ./ci_scripts/check_public_layout.sh --update
 
+# Renders every man page to HTML under $(MAN_HTML_DIR), for the GitHub Pages
+# site that the guides under doc/ link to. The troff sources are only read;
+# `make install` copies them as they are. It first runs `mandoc -T lint` over
+# every page and stops on an error, because such an error (a text line that
+# starts with ' or .) also loses words under `man`. It needs mandoc and
+# python3.
+MAN_HTML_DIR = man_html
+PYTHON ?= python3
+.PHONY: man_html
+man_html:
+	@$(PYTHON) ./ci_scripts/build_man_html.py $(MAN_HTML_DIR)
+
+# Fails when README.md or a guide links a man page that doesn't exist, or
+# links the troff source under man/ instead of the rendered page.
+.PHONY: check_doc_links
+check_doc_links:
+	@$(PYTHON) ./ci_scripts/check_doc_links.py
+
 # Proves that a process can fork() after it loads this library with dlopen(),
 # uses a module that registers pthread_atfork() handlers and unloads the
 # library again. Like the two checks above it needs the built .so, since the
@@ -808,6 +826,7 @@ clean:
 		tests/*/*.o tests/*/.build-flags* \
 		bench/bench bench/*.o bench/.build-flags \
 		tests/*/coverage tests/*/third_party_obj $(COVERAGE_SITE_DIR) \
+		$(MAN_HTML_DIR) pages_site \
 		tests/*/differential/cyaml_to_json \
 		tests/*/*.gcno tests/*/*.gcda tests/*/*.gcov tests/*/*.c.info
 	@if [ -d tests ]; then \

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/abunchofnerds-25/ccollections/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/abunchofnerds-25/ccollections/actions/workflows/ci.yml?query=branch%3Amain)
 [![Fuzz](https://github.com/abunchofnerds-25/ccollections/actions/workflows/fuzz.yml/badge.svg?branch=main)](https://github.com/abunchofnerds-25/ccollections/actions/workflows/fuzz.yml?query=branch%3Amain)
-[![Coverage](https://github.com/abunchofnerds-25/ccollections/actions/workflows/coverage.yml/badge.svg?branch=main)](https://abunchofnerds-25.github.io/ccollections/)
+[![Coverage](https://github.com/abunchofnerds-25/ccollections/actions/workflows/coverage.yml/badge.svg?branch=main)](https://abunchofnerds-25.github.io/ccollections/coverage/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **C Collections** is a C library with the pieces that other languages put in their standard library and C doesn't have: vectors, hash maps, ordered maps, strings, memory pools, thread-safe queues, a thread pool, a structured logger, JSON and YAML, and an HTTP client and server.
@@ -174,7 +174,7 @@ cd man && man -l cvector/cvec_push.3   # directly from the source tree
 
 Each module also has an overview page in section 7 with the rules for the whole module, such as `man 7 chashmap` or `man 7 cyaml`, and `man 7 ccollections` covers what all the modules have in common.
 
-The pages are in [`man/`](man/), one directory per module, and [`man/README`](man/README) explains how that tree is laid out. Each guide ends with links to the pages of its module.
+You can also read every page [in the browser](https://abunchofnerds-25.github.io/ccollections/man/), with the references between pages as links. The sources are in [`man/`](man/), one directory per module, and [`man/README`](man/README) explains how that tree is laid out. Each guide ends with links to the pages of its module.
 
 ---
 

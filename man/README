@@ -111,6 +111,14 @@ relative to the current working directory and not to where the page is.
     cd man && man -l cvector/cvector_create.3
     cd man && man -l cjson/cjson_parse.3   # an alias page, .so and all
 
+The same pages, rendered to HTML, are on the project's GitHub Pages site at
+https://abunchofnerds-25.github.io/ccollections/man/, and every link from
+README.md and the guides under doc/ goes there, because GitHub shows these
+files as raw troff. `make man_html` renders them into man_html/ with mandoc;
+references to our own pages become links, and an alias page becomes a
+redirect to the page it names. The HTML is generated and never committed:
+these files stay the source.
+
 Maintenance
 -----------
 
@@ -119,3 +127,11 @@ file of that symbol directly and keep the section order of the pages around
 it: NAME, LIBRARY, SYNOPSIS, DESCRIPTION, PARAMETERS, RETURN VALUE, NOTES,
 WARNINGS, THREAD SAFETY, EXAMPLES, SEE ALSO. Write every new page in plain
 ASCII.
+
+A line of text must not start with ' or ., because troff takes such a line
+as a request and `man` drops it without a word. Put \& in front of it, as
+in "\&.nan", and run `make man_html`, which stops on every error that
+`mandoc -T lint` reports. A guide links a page by the URL of its rendered
+form, https://abunchofnerds-25.github.io/ccollections/man/<module>/<page>.<n>.html,
+and `make check_doc_links` refuses a link that names no page or points at
+the troff file.

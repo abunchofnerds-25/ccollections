@@ -358,24 +358,24 @@ a corrupted pool.
 
 ## Reference
 
-[ccollections(7)](../man/common/ccollections.7) (the allocator contract),
-[ccol_scoped_ptr_mp(3)](../man/common/ccol_scoped_ptr_mp.3),
-[cvec_construct_mp(3)](../man/cvector/cvec_construct_mp.3),
-[chmap_construct_mp(3)](../man/chashmap/chmap_construct_mp.3),
-[cbmap_construct_mp(3)](../man/cbstmap/cbmap_construct_mp.3),
-[cstr_construct_mp(3)](../man/cstring/cstr_construct_mp.3),
-[cjson_parse_mp(3)](../man/cjson/cjson_parse_mp.3),
-[cjson_serialize_free_mp(3)](../man/cjson/cjson_serialize_free_mp.3),
-[ccol_circular_queue_create_mp(3)](../man/cthreadcomm/ccol_circular_queue_create_mp.3),
-[clrucache_create_full(3)](../man/clrucache/clrucache_create_full.3),
-[ctpool_create_mp(3)](../man/cthreadpool/ctpool_create_mp.3),
-[chttpcli_set_engine_mem_mgmt_procs(3)](../man/chttpclient/chttpcli_set_engine_mem_mgmt_procs.3),
-[chttpcli_engine_wait(3)](../man/chttpclient/chttpcli_engine_wait.3),
-[ccol_mempool_create(3)](../man/cmempool/ccol_mempool_create.3),
-[ccol_mempool_destroy(3)](../man/cmempool/ccol_mempool_destroy.3),
-[ccol_r_mempool_create(3)](../man/cmempool/ccol_r_mempool_create.3),
-[ccol_r_mempool_alloc_entry(3)](../man/cmempool/ccol_r_mempool_alloc_entry.3),
-[ccol_r_mempool_free_entry(3)](../man/cmempool/ccol_r_mempool_free_entry.3)
+[ccollections(7)](https://abunchofnerds-25.github.io/ccollections/man/common/ccollections.7.html) (the allocator contract),
+[ccol_scoped_ptr_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/common/ccol_scoped_ptr_mp.3.html),
+[cvec_construct_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_construct_mp.3.html),
+[chmap_construct_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/chashmap/chmap_construct_mp.3.html),
+[cbmap_construct_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cbstmap/cbmap_construct_mp.3.html),
+[cstr_construct_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cstring/cstr_construct_mp.3.html),
+[cjson_parse_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_parse_mp.3.html),
+[cjson_serialize_free_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cjson/cjson_serialize_free_mp.3.html),
+[ccol_circular_queue_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadcomm/ccol_circular_queue_create_mp.3.html),
+[clrucache_create_full(3)](https://abunchofnerds-25.github.io/ccollections/man/clrucache/clrucache_create_full.3.html),
+[ctpool_create_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cthreadpool/ctpool_create_mp.3.html),
+[chttpcli_set_engine_mem_mgmt_procs(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_set_engine_mem_mgmt_procs.3.html),
+[chttpcli_engine_wait(3)](https://abunchofnerds-25.github.io/ccollections/man/chttpclient/chttpcli_engine_wait.3.html),
+[ccol_mempool_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_mempool_create.3.html),
+[ccol_mempool_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_mempool_destroy.3.html),
+[ccol_r_mempool_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_r_mempool_create.3.html),
+[ccol_r_mempool_alloc_entry(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_r_mempool_alloc_entry.3.html),
+[ccol_r_mempool_free_entry(3)](https://abunchofnerds-25.github.io/ccollections/man/cmempool/ccol_r_mempool_free_entry.3.html)
 
 Related guides:
 [How the library works](design.md),

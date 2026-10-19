@@ -18,7 +18,9 @@ create the connection pool; that happens on the first request.
 A new client starts with this configuration:
   pool size              = the CPU count (resolved on the first
                            request)
-  connect timeout        = 0 (no timeout)
+  connect timeout        = CHTTPCLI_DEFAULT_CONNECT_TIMEOUT_US (30 s)
+  inactivity timeout     = CHTTPCLI_DEFAULT_INACTIVITY_TIMEOUT_US
+                           (60 s)
   request timeout        = 0 (no timeout)
   max response body size = 0 (no limit)
   TLS                    = peer and host verification on,

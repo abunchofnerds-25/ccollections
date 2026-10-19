@@ -24,8 +24,9 @@ source level and at the binary level.
 - One unit of time for the whole public API. Every timeout, deadline,
   interval and duration is a `uint64_t` count of microseconds, and its name
   ends in `_us`. That covers the timed calls of `cthreadcomm` and
-  `cthreadpool`, `ccol_select_timed()`, `chttpclient_set_connect_timeout()`
-  and `chttpclient_set_request_timeout()`, every duration of
+  `cthreadpool`, `ccol_select_timed()`, `chttpclient_set_connect_timeout()`,
+  `chttpclient_set_request_timeout()` and
+  `chttpclient_set_inactivity_timeout()`, every duration of
   `chttpsvr_config_t`, and `flush_interval_us` and `rotation_interval_us` of
   `clogger`. No public signature takes a `struct timespec` or a `time_t`,
   so an application and the library never need to agree on the width of
@@ -344,6 +345,14 @@ source level and at the binary level.
   a transfer error. Every client socket is close-on-exec. A timeout of 0
   means no limit, and every other value, up to `UINT64_MAX` microseconds, is
   honoured.
+- A `chttpclient` request never waits for ever on a peer that stops
+  answering. A new client connects with a 30 s timeout
+  (`CHTTPCLI_DEFAULT_CONNECT_TIMEOUT_US`) and gives up on a connection that
+  moves no byte for 60 s (`CHTTPCLI_DEFAULT_INACTIVITY_TIMEOUT_US`, set with
+  `chttpclient_set_inactivity_timeout()`). Every byte resets the inactivity
+  count, so a slow download that keeps moving runs to the end, and the time a
+  streaming `write_fn` takes doesn't count. The request timeout stays off
+  unless you set one.
 - `chttpsvr_start()` on a running server swaps in its new pools at once. The
   pools of the previous run finish the requests they hold on a thread of their
   own, and a request that arrives during the swap is always served.

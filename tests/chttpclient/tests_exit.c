@@ -151,8 +151,17 @@ static void _server_main(int lfd) {
   for (;;) {
     int fd = accept(lfd, NULL, NULL);
     if (fd < 0) {
-      if (errno == EINTR) continue;
-      _exit(0);
+      /* A failed accept is passing (a signal, a client that reset in the
+         queue, a full descriptor table), and a server that left on one would
+         leave its listener open, so every later test of this binary would
+         connect and wait for an answer. _teardown ends this process with
+         SIGKILL, so only a listener that can't be used ends the loop. */
+      if (errno == EBADF || errno == EINVAL || errno == ENOTSOCK) _exit(0);
+      if (errno != EINTR && errno != ECONNABORTED) {
+        struct timespec nap = {0, 1000000};
+        nanosleep(&nap, NULL);
+      }
+      continue;
     }
     pid_t p = fork();
     if (p == 0) {

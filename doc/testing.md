@@ -137,6 +137,27 @@ cover `src/` and `include/`. `coverage_check` reads the merged data, so run
 `coverage_site` first. The threshold and the short list of files that have
 no tests of their own are in `ci_scripts/check_test_coverages.sh`.
 
+## Man pages
+
+```bash
+make man_html          # render every man page to HTML in man_html/
+make check_doc_links   # every man page link of the guides is valid
+```
+
+The guides and `README.md` link to the HTML pages on the project's GitHub
+Pages site, because GitHub shows a troff file as raw source. `man_html`
+renders them with mandoc and needs `mandoc` and `python3`. It runs
+`mandoc -T lint` first and stops on any error, and an error there is a real
+fault of the installed page: a text line that starts with `'` or `.` is a
+request to troff, so `man` drops it, words and all. Put `\&` in front of
+such a line. Open `man_html/index.html` to read the result.
+
+`check_doc_links` needs only `python3`. GitHub doesn't check an absolute
+link, so this target does: a link to the site must name a page that exists
+under `man/`, and a link to a troff file is refused with the URL to use
+instead. Both run in CI on every push, and the Coverage workflow publishes
+the pages from `main`.
+
 ## Checks on the built library
 
 The suites link the library sources directly, so they never see which

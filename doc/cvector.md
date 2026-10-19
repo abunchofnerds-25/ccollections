@@ -125,7 +125,7 @@ you don't trust.
 
 `cvec_find` returns `ccol_invalid_size` when no element equals the value.
 Numbers are compared by value, `char *` elements as strings and structs
-byte by byte (the [cvec_find(3)](../man/cvector/cvec_find.3) page has the
+byte by byte (the [cvec_find(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_find.3.html) page has the
 details), and `cvector_find(v, &value, cmp)` lets you pass your own
 comparator.
 
@@ -380,52 +380,52 @@ the same vector, protect it with a lock of your own (see
 
 ## Reference
 
-Overview: [cvector(7)](../man/cvector/cvector.7)
+Overview: [cvector(7)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector.7.html)
 
 Lifecycle:
-[cvec_construct(3)](../man/cvector/cvec_construct.3),
-[cvec_construct_scoped(3)](../man/cvector/cvec_construct_scoped.3),
-[cvec_construct_mp(3)](../man/cvector/cvec_construct_mp.3),
-[cvec_construct_mp_scoped(3)](../man/cvector/cvec_construct_mp_scoped.3),
-[cvec_declare(3)](../man/cvector/cvec_declare.3),
-[cvec_declare_scoped(3)](../man/cvector/cvec_declare_scoped.3),
-[cvec_init(3)](../man/cvector/cvec_init.3),
-[cvec_init_mp(3)](../man/cvector/cvec_init_mp.3),
-[cvec_redeclare(3)](../man/cvector/cvec_redeclare.3),
-[cvec_reset(3)](../man/cvector/cvec_reset.3),
-[cvec_destroy(3)](../man/cvector/cvec_destroy.3)
+[cvec_construct(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_construct.3.html),
+[cvec_construct_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_construct_scoped.3.html),
+[cvec_construct_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_construct_mp.3.html),
+[cvec_construct_mp_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_construct_mp_scoped.3.html),
+[cvec_declare(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_declare.3.html),
+[cvec_declare_scoped(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_declare_scoped.3.html),
+[cvec_init(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_init.3.html),
+[cvec_init_mp(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_init_mp.3.html),
+[cvec_redeclare(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_redeclare.3.html),
+[cvec_reset(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_reset.3.html),
+[cvec_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_destroy.3.html)
 
 Elements:
-[cvec_push(3)](../man/cvector/cvec_push.3),
-[cvec_pop(3)](../man/cvector/cvec_pop.3),
-[cvec_at(3)](../man/cvector/cvec_at.3),
-[cvec_at_ptr(3)](../man/cvector/cvec_at_ptr.3),
-[cvec_size(3)](../man/cvector/cvec_size.3),
-[cvec_find(3)](../man/cvector/cvec_find.3),
-[cvec_reserve(3)](../man/cvector/cvec_reserve.3),
-[cvec_data_ptr(3)](../man/cvector/cvec_data_ptr.3),
-[cvec_append_array(3)](../man/cvector/cvec_append_array.3),
-[cvec_append_cvec(3)](../man/cvector/cvec_append_cvec.3)
+[cvec_push(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_push.3.html),
+[cvec_pop(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_pop.3.html),
+[cvec_at(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_at.3.html),
+[cvec_at_ptr(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_at_ptr.3.html),
+[cvec_size(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_size.3.html),
+[cvec_find(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_find.3.html),
+[cvec_reserve(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_reserve.3.html),
+[cvec_data_ptr(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_data_ptr.3.html),
+[cvec_append_array(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_append_array.3.html),
+[cvec_append_cvec(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_append_cvec.3.html)
 
-Sorting: [cvec_sort(3)](../man/cvector/cvec_sort.3),
-[cvector_sort_with_comparison_proc(3)](../man/cvector/cvector_sort_with_comparison_proc.3)
+Sorting: [cvec_sort(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvec_sort.3.html),
+[cvector_sort_with_comparison_proc(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_sort_with_comparison_proc.3.html)
 
 Raw functions (they give a status and do not stop the program):
-[cvector_create(3)](../man/cvector/cvector_create.3),
-[cvector_create_full(3)](../man/cvector/cvector_create_full.3),
-[cvector_destroy(3)](../man/cvector/cvector_destroy.3),
-[cvector_push_back(3)](../man/cvector/cvector_push_back.3),
-[cvector_pop_back(3)](../man/cvector/cvector_pop_back.3),
-[cvector_at(3)](../man/cvector/cvector_at.3),
-[cvector_elem_count(3)](../man/cvector/cvector_elem_count.3),
-[cvector_find(3)](../man/cvector/cvector_find.3),
-[cvector_reserve(3)](../man/cvector/cvector_reserve.3),
-[cvector_reset(3)](../man/cvector/cvector_reset.3),
-[cvector_append_array(3)](../man/cvector/cvector_append_array.3),
-[cvector_append_cvector(3)](../man/cvector/cvector_append_cvector.3),
-[cvector_data_ptr(3)](../man/cvector/cvector_data_ptr.3),
-[cvector_begin_iter(3)](../man/cvector/cvector_begin_iter.3),
-[cvector_get_mprocs(3)](../man/cvector/cvector_get_mprocs.3)
+[cvector_create(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_create.3.html),
+[cvector_create_full(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_create_full.3.html),
+[cvector_destroy(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_destroy.3.html),
+[cvector_push_back(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_push_back.3.html),
+[cvector_pop_back(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_pop_back.3.html),
+[cvector_at(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_at.3.html),
+[cvector_elem_count(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_elem_count.3.html),
+[cvector_find(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_find.3.html),
+[cvector_reserve(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_reserve.3.html),
+[cvector_reset(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_reset.3.html),
+[cvector_append_array(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_append_array.3.html),
+[cvector_append_cvector(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_append_cvector.3.html),
+[cvector_data_ptr(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_data_ptr.3.html),
+[cvector_begin_iter(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_begin_iter.3.html),
+[cvector_get_mprocs(3)](https://abunchofnerds-25.github.io/ccollections/man/cvector/cvector_get_mprocs.3.html)
 
 Related guides:
 [Iterators](citerators.md),

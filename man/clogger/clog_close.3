@@ -60,7 +60,7 @@ derived loggers); that close is safe, because the sibling is a
 different handle and it is open.
 For a logger on an fd, from clog_create_from_fd_mp, this call does NOT
 close the file descriptor; you have to do that yourself.
-Asserts when logger is CLOG_INVALID, stale or already closed.  The
+Asserts when logger is CLOG_NULL, stale or already closed.  The
 destructor of the library releases the table of loggers at the end of
 the process, so a close from a destructor that runs after it finds
 every handle stale and reports the same error.

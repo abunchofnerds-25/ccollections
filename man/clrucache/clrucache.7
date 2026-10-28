@@ -27,12 +27,12 @@ The API has two layers:
 .SS "Handles"
 .nf
 clru_cache is an opaque value handle, not a pointer, and
-CLRU_CACHE_INVALID (0) means no cache. Every handle is checked before
+CLRU_CACHE_NULL (0) means no cache. Every handle is checked before
 the cache is touched, so a get or a set through a handle that is
 invalid or already destroyed reports ccol_invalid_args, and a destroy
 of a stale handle stops the process. clru_destroy(3) evicts every
 entry, calling the eviction callback for each one, and sets the handle
-to CLRU_CACHE_INVALID.
+to CLRU_CACHE_NULL.
 .fi
 .SS "Segments and eviction"
 .nf

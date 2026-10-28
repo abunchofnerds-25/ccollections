@@ -8,7 +8,7 @@ include ../hardening.mk
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 $(CCOL_HARDENING_CFLAGS) -Wstrict-overflow \
 	$(CCOL_LD_HARDENING) \
 	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O3 -Werror $(EXTRA_CFLAGS)
-COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
+COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage -DCCOL_TEST_COVERAGE
 LFLAGS = -lpthread $(CCOL_PLATFORM_LIBS)
 
 build:
@@ -47,13 +47,21 @@ memtest: build build_destroy_macros
 # isn't real. It happens in more than one module and inside a glibc header as
 # well; it's a limit of the gcov instrumentation, not a bug in the library's
 # logic. tests/chttpclient/Makefile has the same flag with the full reason.
+# genhtml gets --ignore-errors inconsistent because at -O3 the compiler
+# inlines a function into a caller in the same file, so gcov counts its lines
+# as run while the out-of-line copy, which this suite never calls, has no
+# calls (ccol_procs_is_interned here).
+# Every binary that `test` runs is built and run here too, with the same
+# instrumentation, so the tracefile counts what each of them reaches.
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
+	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) -Wshadow tests_destroy_macros.c -o tests_destroy_macros $(LFLAGS) && \
+	./tests_destroy_macros && \
 	gcov tests-common && \
 	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file common.c.info && \
-	genhtml common.c.info --output-directory coverage && \
+	genhtml --ignore-errors inconsistent common.c.info --output-directory coverage && \
 	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info
 
 all: build test memtest generate_coverage_report

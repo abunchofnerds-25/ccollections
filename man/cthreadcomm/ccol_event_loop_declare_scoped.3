@@ -11,7 +11,7 @@ ccol_event_loop_declare_scoped(name);
 .fi
 .SH DESCRIPTION
 .nf
-Declares a ccol_event_loop variable set to CCOL_EVENT_LOOP_INVALID and
+Declares a ccol_event_loop variable set to CCOL_EVENT_LOOP_NULL and
 tags it with a cleanup attribute, so the loop is destroyed
 automatically, exactly as ccol_event_loop_destroy() would do it, when
 the variable leaves its scope. You must assign the variable with
@@ -29,7 +29,7 @@ name  Variable name to declare.
 .SH NOTES
 .nf
 The macro uses __attribute__((cleanup)), so it needs GCC or Clang.
-Leaving the variable at CCOL_EVENT_LOOP_INVALID for the whole scope is
+Leaving the variable at CCOL_EVENT_LOOP_NULL for the whole scope is
 safe, because the cleanup does nothing for that value.
 .fi
 .SH EXAMPLES

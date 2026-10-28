@@ -57,14 +57,14 @@ that is already in flight.
 .fi
 .SH PARAMETERS
 .nf
-cli       The client handle. It must not be CHTTPCLI_INVALID.
+cli       The client handle. It must not be CHTTPCLI_NULL.
 max_bytes The maximum size in bytes of a buffered response body.
           0 means no limit.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success      The client has the new cap.
-ccol_invalid_args cli is CHTTPCLI_INVALID, or a stale handle of a
+ccol_invalid_args cli is CHTTPCLI_NULL, or a stale handle of a
                   client that has been destroyed.
 .fi
 .SH "SEE ALSO"

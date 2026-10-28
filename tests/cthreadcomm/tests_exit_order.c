@@ -36,7 +36,7 @@ SOFTWARE.
  *      read (make memtest).
  *   2. Once the last object is gone and the bookkeeping is released, a new
  *      queue and a new loop fail cleanly with NULL and
- *      CCOL_EVENT_LOOP_INVALID. Without that handling a queue create pushes
+ *      CCOL_EVENT_LOOP_NULL. Without that handling a queue create pushes
  *      into a freed vector and succeeds, and a loop create asserts inside
  *      cvector_elem_count.
  *   3. A stale loop handle resolves to nothing and the call reports
@@ -52,17 +52,21 @@ SOFTWARE.
  * ends the process with _exit(1). */
 
 #include <cthreadcomm.h>
+#include <errno.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <test_coverage.h>
+#include <test_signals.h>
 #include <unistd.h>
 
 static ccol_circular_queue *g_cq;
 static ccol_dynamic_queue *g_dq;
-static ccol_event_loop g_loop = CCOL_EVENT_LOOP_INVALID;
-static ccol_event_reg g_reg = CCOL_EVENT_REG_INVALID;
+static ccol_event_loop g_loop = CCOL_EVENT_LOOP_NULL;
+static ccol_event_reg g_reg = CCOL_EVENT_REG_NULL;
 static bool g_main_ran;
 
 static int g_failures;
@@ -83,7 +87,7 @@ static void on_readable_noop(ccol_event_loop loop, ccol_event_reg reg,
 }
 
 __attribute__((destructor(101))) static void late_application_destructor(void) {
-  if (!g_main_ran) _exit(1);
+  if (!g_main_ran) test_child_exit(1);
 
   /* 1. Tear down what was live when the library destructors ran. */
   check(ccol_event_loop_remove(g_loop, g_reg) == ccol_success,
@@ -102,10 +106,10 @@ __attribute__((destructor(101))) static void late_application_destructor(void) {
   /* 2. New objects fail cleanly once the bookkeeping is released. */
   char *err = NULL;
   ccol_event_loop late_loop = ccol_event_loop_create(8, 1, 1, &err);
-  check(late_loop == CCOL_EVENT_LOOP_INVALID,
+  check(late_loop == CCOL_EVENT_LOOP_NULL,
         "a loop created after the release fails");
   check(err != NULL, "a loop created after the release sets err_str");
-  if (late_loop != CCOL_EVENT_LOOP_INVALID) ccol_event_loop_destroy(late_loop);
+  if (late_loop != CCOL_EVENT_LOOP_NULL) ccol_event_loop_destroy(late_loop);
 
 #if CCOL_FORK_SAFETY_REQUIRED
   ccol_circular_queue *late_cq = ccol_circular_queue_create(4, NULL);
@@ -118,26 +122,31 @@ __attribute__((destructor(101))) static void late_application_destructor(void) {
 
   /* 4. The fork handlers walk the released tables. */
   pid_t pid = fork();
-  if (pid == 0) _exit(0);
+  if (pid == 0) test_child_exit(0);
   check(pid > 0, "fork after the release");
   if (pid > 0) {
     int status = 0;
     pid_t w;
     do {
       w = waitpid(pid, &status, 0);
-    } while (w < 0);
-    check(WIFEXITED(status), "the child of a fork after the release exits");
+    } while (w < 0 && errno == EINTR);
+    check(w == pid, "waitpid of the child of a fork after the release");
+    check(w == pid && WIFEXITED(status),
+          "the child of a fork after the release exits");
   }
 
-  if (g_failures) _exit(1);
+  if (g_failures) test_child_exit(1);
   fprintf(stderr, "tests_exit_order: OK\n");
 }
 
 int main(void) {
+  /* The destructor waits for a child, and test_reset_inherited_signals()
+   * explains what an inherited signal state does to that. */
+  test_reset_inherited_signals();
   g_cq = ccol_circular_queue_create(4, NULL);
   g_dq = ccol_dynamic_queue_create(NULL);
   g_loop = ccol_event_loop_create(8, 1, 1, NULL);
-  if (!g_cq || !g_dq || g_loop == CCOL_EVENT_LOOP_INVALID) {
+  if (!g_cq || !g_dq || g_loop == CCOL_EVENT_LOOP_NULL) {
     fprintf(stderr, "tests_exit_order: FAILED: setup\n");
     return 1;
   }
@@ -145,7 +154,7 @@ int main(void) {
   g_reg = ccol_event_loop_add(
       g_loop, ccol_selectable_from_circq(g_cq, ccol_select_read), handlers,
       NULL, NULL);
-  if (g_reg == CCOL_EVENT_REG_INVALID) {
+  if (g_reg == CCOL_EVENT_REG_NULL) {
     fprintf(stderr, "tests_exit_order: FAILED: setup of the registration\n");
     return 1;
   }

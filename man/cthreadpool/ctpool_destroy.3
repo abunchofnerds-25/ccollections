@@ -14,7 +14,7 @@ ctpool_destroy(pool);
 Drains or cancels every task that is still pending, joins every worker
 thread, waits until every resolved use of the handle that is still in
 flight has stopped, and frees every resource of the pool. Then it sets
-the pool handle to CTPOOL_INVALID.
+the pool handle to CTPOOL_NULL.
 
 If the caller called neither ctpool_shutdown_drain() nor
 ctpool_shutdown_immediate() before, the macro runs a drain shutdown
@@ -22,12 +22,12 @@ itself, so every task in the queue finishes before the pool is freed.
 .fi
 .SH PARAMETERS
 .nf
-pool  Thread pool variable to destroy (set to CTPOOL_INVALID after
+pool  Thread pool variable to destroy (set to CTPOOL_NULL after
       destruction).
 .fi
 .SH NOTES
 .nf
-Calling it when pool is CTPOOL_INVALID is safe, and the macro then does
+Calling it when pool is CTPOOL_NULL is safe, and the macro then does
 nothing.
 
 A call on a stale handle (one that an earlier call already destroyed,

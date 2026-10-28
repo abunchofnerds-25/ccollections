@@ -62,7 +62,7 @@ LFLAGS = -lpthread -lssl -lcrypto -lz -lm $(CCOL_PLATFORM_LIBS) $(CCOL_DL_LIBS)
 # Empty for an ordinary build. generate_coverage_report passes COVERAGE_ON
 # here, so the same pattern rule instruments the library objects.
 COVERAGE_FLAGS =
-COVERAGE_ON = -fprofile-arcs -ftest-coverage
+COVERAGE_ON = -fprofile-arcs -ftest-coverage -DCCOL_TEST_COVERAGE
 
 # An object file keeps no record of how it was built. Without this stamp a
 # change of compiler or flags (a native build followed by
@@ -320,16 +320,25 @@ memtest: build build_parser build_default_client build_differential build_sigpip
 # next. It's a limit of the gcov instrumentation for concurrent code and has
 # nothing to do with the library's logic. The mismatch and inconsistent flags
 # are there for the same kind of reason, a known quirk of the tool.
-generate_coverage_report:
+# Every binary that `test` runs is built and run here too, with the same
+# instrumentation, so the tracefile counts what each of them reaches.
+generate_coverage_report: tests_locale
 	$(MAKE) clean_objs
 	$(MAKE) COVERAGE_FLAGS="$(COVERAGE_ON)" $(SRC_OBJS)
 	$(CC) $(COVERAGE_ON) $(CFLAGS) tests.c $(SRC_OBJS) -o tests $(LFLAGS) && \
 	./tests && \
+	$(CC) $(COVERAGE_ON) $(CFLAGS) tests_default_client.c $(SRC_OBJS) -o tests_default_client $(LFLAGS) && \
+	./tests_default_client && \
+	$(CC) $(COVERAGE_ON) $(CFLAGS) tests_sigpipe.c $(SRC_OBJS) -o tests_sigpipe $(LFLAGS) && \
+	./tests_sigpipe && \
+	$(CC) $(COVERAGE_ON) $(CFLAGS) tests_exit.c $(SRC_OBJS) -o tests_exit $(LFLAGS) && \
+	./tests_exit && \
 	gcov -d -w chttpclient && \
 	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file chttpclient.c.info && \
 	genhtml --ignore-errors inconsistent -s chttpclient.c.info --output-directory coverage/tests && \
-	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info *.o tests
+	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info *.o tests \
+		tests_default_client tests_sigpipe tests_exit
 	$(MAKE) clean_objs
 	$(MAKE) COVERAGE_FLAGS="$(COVERAGE_ON)" $(PARSER_OBJS)
 	$(CC) $(COVERAGE_ON) $(CFLAGS) tests_parser.c $(PARSER_OBJS) \

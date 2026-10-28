@@ -49,7 +49,7 @@ while part of what it flushed is still pending.  After any other write
 error, such as EPIPE, the flush drops those bytes and writes a record
 that names the loss.  clog_create_from_fd_mp(3) describes both rules and
 what they promise about the framing of a record.
-Asserts when logger is CLOG_INVALID, stale or already closed.
+Asserts when logger is CLOG_NULL, stale or already closed.
 .fi
 .SH "SEE ALSO"
 .BR clog_create_from_fd_mp (3),

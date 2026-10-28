@@ -144,7 +144,7 @@ if (clog_set_signal_policy(CLOG_SIGNALS_UNTOUCHED) != ccol_success)
     abort();
 signal(SIGXFSZ, SIG_IGN);
 clog lg = clog_create_from_fd(STDOUT_FILENO, CLOG_INFO, NULL);
-if (lg == CLOG_INVALID)
+if (lg == CLOG_NULL)
     abort();
 clog_info(lg, "stdout may be a pipe");
 clog_close(lg);

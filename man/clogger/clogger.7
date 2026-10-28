@@ -27,12 +27,12 @@ writer thread of its own (async mode, through a clog_async_cfg_t).
 .SS Handles
 .nf
 A clog is an opaque value handle, a uint64_t, and not a pointer, so
-never cast it to or from void *.  CLOG_INVALID, which is 0, means "no
+never cast it to or from void *.  CLOG_NULL, which is 0, means "no
 logger", and the open functions and clog_derive(3) give it on failure.
-You can test for it with if (!lg) or with lg == CLOG_INVALID.
+You can test for it with if (!lg) or with lg == CLOG_NULL.
 
 Every function that takes a handle needs a live one.  Given
-CLOG_INVALID, a handle whose logger is closed or a stale handle, it
+CLOG_NULL, a handle whose logger is closed or a stale handle, it
 stops the process with a diagnostic, and such a handle is never ignored
 silently.
 

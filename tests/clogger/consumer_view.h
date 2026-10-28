@@ -61,7 +61,7 @@ void clogger_consumer_fill_view(clogger_consumer_view_t *out);
  * Opens a rotating file logger whose clog_rotation_cfg_t comes entirely from
  * this translation unit: size rotation at max_file_size bytes, no time
  * rotation, max_rotated_files files kept and no compression. It returns
- * CLOG_INVALID after a failure, exactly as clog_create_from_file_mp() does.
+ * CLOG_NULL after a failure, exactly as clog_create_from_file_mp() does.
  */
 clog clogger_consumer_open_rotating(const char *path, int64_t max_file_size,
                                     int max_rotated_files);

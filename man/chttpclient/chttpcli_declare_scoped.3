@@ -16,8 +16,8 @@ cleanup attribute, so the handle is destroyed automatically when name
 goes out of scope, whichever path leaves the scope. The cleanup
 destroys it the same way chttpclient_destroy does.
 
-The variable starts as CHTTPCLI_INVALID. To skip the cleanup call, set
-it back to CHTTPCLI_INVALID before the scope ends.
+The variable starts as CHTTPCLI_NULL. To skip the cleanup call, set
+it back to CHTTPCLI_NULL before the scope ends.
 .fi
 .SH "SEE ALSO"
 .BR chttpcli_construct_scoped (3),

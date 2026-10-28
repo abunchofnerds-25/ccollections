@@ -83,4 +83,10 @@ extern bool cyaml_test_force_line_cache_disabled;
 /* The largest buffer, in bytes, that the canonical key builder allocated on
  * this thread. A test resets it to 0 before the parse it checks. */
 extern __thread size_t _cyaml_canonical_key_peak_bytes_for_tests;
+
+/* How many nodes the serializers of this thread have refused for nesting too
+ * deep, or met after an earlier refusal or a failed allocation had already
+ * spoiled the output. A walk that stops at its first refusal adds exactly 1
+ * per refused tree. */
+extern __thread size_t _cyaml_serialize_oom_visits_for_tests;
 #endif /* RUNNING_UNIT_TESTS */

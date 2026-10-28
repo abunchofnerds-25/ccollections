@@ -27,13 +27,13 @@ queue_capacity selects the mode of the task queue:
 
 All num_threads worker threads are started before the function
 returns. If a pthread_create call fails, the threads that already
-started are joined cleanly and the function returns CTPOOL_INVALID.
+started are joined cleanly and the function returns CTPOOL_NULL.
 
 Each worker thread records its pool on one thread-specific key, which
 the library creates for the whole process the first time a pool is
 created; that key is what lets a task that destroys its own pool fail
 loudly. When the process has no key left to give (PTHREAD_KEYS_MAX),
-the function returns CTPOOL_INVALID, and so does every later call in
+the function returns CTPOOL_NULL, and so does every later call in
 that process. The library deletes the key when it is unloaded with no
 pool left, so a dlopen(3) and dlclose(3) cycle gives the key back.
 .fi
@@ -48,7 +48,7 @@ err_str        Optional. It gets a static error string on failure
 .SH RETURN VALUE
 .nf
 Returns a new ctpool handle on success.
-Returns CTPOOL_INVALID on failure, and sets *err_str if err_str is
+Returns CTPOOL_NULL on failure, and sets *err_str if err_str is
 not NULL. The call fails, and allocates nothing, when num_threads is
 0 or when queue_capacity is ccol_invalid_size. ccol_invalid_size is
 the error value of a size and not a capacity; pass 0 for an unbounded
@@ -58,7 +58,7 @@ queue.
 .nf
 The handle that this function gives is an opaque VALUE, not a pointer.
 Do not cast it to void* or from void*, and do not use it as an address.
-Compare it with CTPOOL_INVALID; since CTPOOL_INVALID is 0, a test such
+Compare it with CTPOOL_NULL; since CTPOOL_NULL is 0, a test such
 as if (!pool) is also correct.
 A future always uses the standard malloc and free, whatever mprocs is.
 Behind each submission there is a small internal task node, which the

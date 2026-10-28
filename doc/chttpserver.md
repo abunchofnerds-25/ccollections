@@ -52,8 +52,8 @@ int main(int argc, char **argv) {
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
 
-    chttpsvr srv = chttpsvr_create(CLOG_INVALID, NULL);
-    if (srv == CHTTPSVR_INVALID) return 1;
+    chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
+    if (srv == CHTTPSVR_NULL) return 1;
 
     chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
     cfg.host = "127.0.0.1";
@@ -86,7 +86,7 @@ kill -INT %1
 
 The whole program comes down to four calls.
 
-1. `chttpsvr_create` creates a server. With `CLOG_INVALID` the server uses
+1. `chttpsvr_create` creates a server. With `CLOG_NULL` the server uses
    its own quiet logger, which only prints fatal messages; pass a
    [clogger](clogger.md) handle instead if you want the server to log
    through it. A logger handle that is already closed makes the call fail
@@ -528,8 +528,8 @@ int main(int argc, char **argv) {
     if (!st.notes) return 1;
     pthread_mutex_init(&st.lock, NULL);
 
-    chttpsvr srv = chttpsvr_create(CLOG_INVALID, NULL);
-    if (srv == CHTTPSVR_INVALID) {
+    chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
+    if (srv == CHTTPSVR_NULL) {
         cjson_destroy(st.notes);
         pthread_mutex_destroy(&st.lock);
         return 1;
@@ -662,8 +662,8 @@ static void upload(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
 }
 
 int main(int argc, char **argv) {
-    chttpsvr srv = chttpsvr_create(CLOG_INVALID, NULL);
-    if (srv == CHTTPSVR_INVALID) return 1;
+    chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
+    if (srv == CHTTPSVR_NULL) return 1;
 
     chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
     cfg.host = "127.0.0.1";
@@ -842,8 +842,8 @@ int main(int argc, char **argv) {
         .client_cert_optional = true,  /* ...but also serves anonymous clients */
     };
 
-    chttpsvr srv = chttpsvr_create(CLOG_INVALID, NULL);
-    if (srv == CHTTPSVR_INVALID) return 1;
+    chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
+    if (srv == CHTTPSVR_NULL) return 1;
 
     chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
     cfg.host = "127.0.0.1";
@@ -888,7 +888,7 @@ complete in the background.
 
 `chttpsvr_destroy(srv)` closes the listener and every connection, waits for
 the handlers that are running, then frees the server and sets the handle to
-`CHTTPSVR_INVALID`.
+`CHTTPSVR_NULL`.
 
 `chttpsvr_engine_stop()` stops every server in the process. It doesn't
 block and it's async-signal-safe, so it belongs in a `SIGTERM` handler, and
@@ -913,7 +913,7 @@ doesn't print them at all. The engine keeps a logger derived from `log`,
 which uses the allocator of `log` and, for a logger from
 `clog_create_from_fd`, writes to your descriptor, so keep that descriptor
 open while the logger is installed.
-`chttpsvr_set_engine_logger(CLOG_INVALID)` releases it at once. Call it
+`chttpsvr_set_engine_logger(CLOG_NULL)` releases it at once. Call it
 after `chttpsvr_engine_wait()` returns and before you destroy the allocator
 of `log` or close its descriptor. If you never release it, the engine closes
 the derived logger when the process exits. Passing a `log` that is already
@@ -963,8 +963,8 @@ the fork. A child that keeps running with a server inherited from its parent
 is not supported, see [Concurrency](concurrency.md).
 
 `chttpsvr` is an integer handle and not a pointer, so compare it with
-`CHTTPSVR_INVALID`. `chttpsvr_destroy` sets your variable to
-`CHTTPSVR_INVALID` and a second destroy of that variable does nothing, but a
+`CHTTPSVR_NULL`. `chttpsvr_destroy` sets your variable to
+`CHTTPSVR_NULL` and a second destroy of that variable does nothing, but a
 destroy through a different copy of the same handle stops the program
 instead of corrupting memory.
 

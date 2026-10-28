@@ -54,7 +54,7 @@ rv_out  Receives the result code on every return (may be NULL)
 Returns a new ctpool_future handle on success, and stores
 ccol_success in *rv_out.
 Returns NULL on failure, and stores one of these codes in *rv_out:
-  ccol_invalid_args       pool is CTPOOL_INVALID, or a stale and
+  ccol_invalid_args       pool is CTPOOL_NULL, or a stale and
                           already destroyed handle, or fn is NULL
   ccol_not_permitted      the pool is in shutdown
   ccol_container_full     a bounded queue is at capacity and the

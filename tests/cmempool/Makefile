@@ -9,7 +9,7 @@ include ../hardening.mk
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 $(CCOL_HARDENING_CFLAGS) -Wstrict-overflow \
 	$(CCOL_LD_HARDENING) \
 	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O3 -Werror $(EXTRA_CFLAGS)
-COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage 
+COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage -DCCOL_TEST_COVERAGE
 # -O1 here instead of the ordinary -O3, because what this build exercises is
 # the ThreadSanitizer instrumentation. A higher level buys nothing and makes a
 # report harder to map back to the source.
@@ -53,13 +53,21 @@ memtest: build
 # isn't real. It happens in more than one module and inside a glibc header as
 # well; it's a limit of the gcov instrumentation, not a bug in the library's
 # logic. tests/chttpclient/Makefile has the same flag with the full reason.
+# genhtml gets --ignore-errors inconsistent because at -O3 the compiler
+# inlines a function into a caller in the same file, so gcov counts its lines
+# as run while the out-of-line copy, which this suite never calls, has no
+# calls (ccol_procs_is_interned here).
+# Every binary that `test` runs is built and run here too, with the same
+# instrumentation, so the tracefile counts what each of them reaches.
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
+	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) tests_unload.c $(SRC_FILES) -o tests_unload $(CCOL_PLATFORM_LIBS) && \
+	./tests_unload && \
 	gcov tests-$(SRC_FILE_PREFIX) && \
 	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file $(SRC_FILE_PREFIX).c.info && \
-	genhtml $(SRC_FILE_PREFIX).c.info --output-directory coverage && \
+	genhtml --ignore-errors inconsistent $(SRC_FILE_PREFIX).c.info --output-directory coverage && \
 	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info
 
 all: build test test_tsan memtest generate_coverage_report

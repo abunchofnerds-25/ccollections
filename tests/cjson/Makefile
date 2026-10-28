@@ -10,7 +10,7 @@ include ../hardening.mk
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 $(CCOL_HARDENING_CFLAGS) -Wstrict-overflow \
 	$(CCOL_LD_HARDENING) \
 	-Wformat=2 -Wformat-security -Wall -Wextra -gdwarf-4 -g3 -O3 -Werror $(EXTRA_CFLAGS)
-COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
+COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage -DCCOL_TEST_COVERAGE
 LFLAGS = $(CCOL_PLATFORM_LIBS)
 build:
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)
@@ -84,9 +84,15 @@ fuzz_path:
 # isn't real. It happens in more than one module and inside a glibc header as
 # well; it's a limit of the gcov instrumentation, not a bug in the library's
 # logic. tests/chttpclient/Makefile has the same flag with the full reason.
+# Every binary that `test` runs is built and run here too, with the same
+# instrumentation, so the tracefile counts what each of them reaches.
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
+	$(CC) $(COVERAGE_FLAGS) $(C23_CFLAGS) tests_c23.c $(SRC_FILES) -o tests_c23 $(LFLAGS) && \
+	./tests_c23 && \
+	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) tests_keys.c $(SRC_FILES) -o tests_keys $(LFLAGS) && \
+	./tests_keys && \
 	gcov -d -w tests-$(SRC_FILE_PREFIX) && echo 'GCOV SUCCEEDED, CALLING LCOV' && \
 	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file $(SRC_FILE_PREFIX).c.info && \

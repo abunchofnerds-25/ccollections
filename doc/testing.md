@@ -41,6 +41,21 @@ example). Both targets run every binary in every directory and stop at the
 first failure. `tests/mixed/` has the tests that span several modules, the
 compatibility corpus of [Compatibility](compatibility.md) among them.
 
+`SUITE_TIMEOUT` puts a bound, in seconds, on each module of `make test`,
+`make memtest` and `make coverage_site`, so a suite that hangs fails and
+is named instead of running into the job's own timeout. CI sets it to 1800.
+It needs `timeout(1)` on the `PATH`; on macOS Homebrew's coreutils
+installs it as `gtimeout`, and its `libexec/gnubin` directory holds it
+under the plain name. While it's set, Ctrl-C does nothing until the suite
+ends or its bound runs out: GNU `timeout` runs the suite in a process
+group of its own, so the signal never reaches it, and make waits for it
+before it stops. To stop at once, kill that process group (the `timeout`
+process leads it).
+
+```bash
+make test SUITE_TIMEOUT=1800
+```
+
 When you work on one module, just run its suite:
 
 ```bash
@@ -127,15 +142,28 @@ make WITH_CJSON=0 WITH_CYAML=0 WITH_CLOGGER=0 \
 
 ```bash
 make coverage_site    # build all suites again with coverage, merge one report
-make coverage_check   # fail if a file has less than 80 percent of its lines
+make coverage_check   # fail if a file has less than 90 percent of its lines
 ```
 
 `coverage_site` writes a report you can browse to `coverage_site/html` and
-a summary to `coverage_site/summary.txt`. It merges the runs of all suites,
-since many of them exercise a file like `src/common.c`, and the figures only
-cover `src/` and `include/`. `coverage_check` reads the merged data, so run
-`coverage_site` first. The threshold and the short list of files that have
-no tests of their own are in `ci_scripts/check_test_coverages.sh`.
+a summary to `coverage_site/summary.txt`. It merges the runs of the
+suites, since many of them exercise a file like `src/common.c`, and the
+figures only cover `src/` and `include/`. `tests/mixed` isn't part of the
+report. Build the report with GCC, because the targets read the counts
+with GCC's `gcov`, which can't read what Clang writes. `coverage_check`
+reads the merged data, so run `coverage_site` first. The threshold and the
+short list of files that have no tests of their own are in
+`ci_scripts/check_test_coverages.sh`.
+
+The coverage target of each suite builds and runs every binary that its
+`test` target runs, so a new `tests_<suffix>.c` binary goes into both. gcov
+writes its counts at exit, so a forked child that ends with `_exit()` or
+dies by an abort would lose everything it ran. A child therefore leaves
+through `test_child_exit()` of `tests/test_coverage.h`, and a child that is
+meant to abort starts with `test_child_no_core()` of `tests/test_signals.h`,
+which in a coverage build writes the counts before the child dies. Outside
+a coverage build both behave as `_exit()` and as a plain limit on core
+files. Don't call `test_child_exit()` from a signal handler.
 
 ## Man pages
 

@@ -35,10 +35,19 @@ SOFTWARE.
 #include <string.h>
 #include <sys/wait.h>
 #include <tau/tau.h>
+#include <test_coverage.h>
+#include <test_signals.h>
 #include <time.h>
 #include <unistd.h>
 
 TAU_MAIN()
+
+/* The forked children of this binary report through their wait status, and
+ * test_reset_inherited_signals() explains what an inherited signal state does
+ * to that. */
+__attribute__((constructor)) static void _reset_inherited_signals(void) {
+  test_reset_inherited_signals();
+}
 
 /* ========================================================================== */
 /*                         CONSTRUCTION                                       */
@@ -3403,16 +3412,52 @@ TEST(ownership,
    * comment on node_reaches() in cjson.c explains why testing
    * needle->attached first keeps each call O(1) however large the already
    * built child is. build_nested_list_via_api() does exactly this once per
-   * level, and without the short circuit n=20000 takes well over a second
-   * here while with it it's a few milliseconds. We assert an explicit
-   * wall-clock bound, as the other DoS-guard tests of the codebase do; see
-   * parse.deeply_nested_array_rejected_not_crashed above. */
-  clock_t t0 = clock();
-  cjson deep = build_nested_list_via_api(20000);
-  double elapsed_ms = (double)(clock() - t0) * 1000.0 / CLOCKS_PER_SEC;
+   * level, so we count the nodes the search visits instead of timing it:
+   * with the short circuit no call of the n=20000 build walks a single node,
+   * and without it the build visits about n^2/2 of them (2e8).
+   *
+   * The first part shows that the counter really counts a walk: a push into
+   * an attached container must search the child's subtree, here the list
+   * and its three members. */
+  cjson root = cjson_create_list();
+  cjson target = cjson_create_list();
+  cjson child = cjson_create_list();
+  bool created = root && target && child;
+  ccol_retval_t r_target = ccol_unexpected_failure;
+  ccol_retval_t r_child = ccol_unexpected_failure;
+  bool members_ok = true;
+  unsigned long before = 0, walked = 0;
+  if (created) {
+    /* A failed push destroys the child it was given, so neither target nor
+     * child is destroyed here once it has been handed over. */
+    r_target = cjson_list_push(root, target);
+    for (int i = 0; i < 3; i++)
+      if (cjson_list_push(child, cjson_create_int(i)) != ccol_success)
+        members_ok = false;
+    before = atomic_load(&_cjson_cycle_search_nodes_for_tests);
+    if (r_target == ccol_success)
+      r_child = cjson_list_push(target, child);
+    else
+      cjson_destroy(child);
+    walked = atomic_load(&_cjson_cycle_search_nodes_for_tests) - before;
+  } else {
+    cjson_destroy(target);
+    cjson_destroy(child);
+  }
+  cjson_destroy(root);
+  REQUIRE_TRUE(created);
+  REQUIRE_EQ(r_target, ccol_success);
+  REQUIRE_TRUE(members_ok);
+  REQUIRE_EQ(r_child, ccol_success);
+  REQUIRE_EQ(walked, 4UL);
+
+  const size_t n = 20000;
+  before = atomic_load(&_cjson_cycle_search_nodes_for_tests);
+  cjson deep = build_nested_list_via_api(n);
+  walked = atomic_load(&_cjson_cycle_search_nodes_for_tests) - before;
   REQUIRE_NE((void *)deep, NULL);
-  REQUIRE_LT(elapsed_ms, 500.0);
   cjson_destroy(deep);
+  REQUIRE_EQ(walked, 0UL);
 }
 
 /* ========================================================================== */
@@ -4231,7 +4276,7 @@ TEST(parse, a_maximally_nested_document_runs_on_a_small_thread_stack) {
     ssize_t written = write(fds[1], &verdict, 1);
     (void)written;
     close(fds[1]);
-    _exit(0);
+    test_child_exit(0);
   }
 
   close(fds[1]);

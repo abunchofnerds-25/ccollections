@@ -63,8 +63,10 @@ SOFTWARE.
 #include <sys/wait.h>
 #include <tau/tau.h>
 #include <test_connect.h>
+#include <test_coverage.h>
 #include <test_fds.h>
 #include <test_sanitizer.h>
+#include <test_signals.h>
 #include <unistd.h>
 
 TAU_MAIN()
@@ -123,9 +125,14 @@ static int g_dtor_probe_fd = -1;
  * doesn't write one. One process-wide SIGPIPE ignore, installed before the mock
  * server or any test runs, closes the window whatever the test order and
  * whatever tier a test uses. tests_sigpipe.c covers the client with the default
- * disposition. */
+ * disposition.
+ *
+ * The forked children of this binary report through their wait status, and
+ * test_reset_inherited_signals() explains what an inherited signal state does
+ * to that. */
 __attribute__((constructor)) static void _ignore_sigpipe_for_mock_server(void) {
   signal(SIGPIPE, SIG_IGN);
+  test_reset_inherited_signals();
 }
 
 /* ========================================================================== */
@@ -1581,7 +1588,22 @@ static bool srv_handle_expect_continue_slow_final_route(int conn_fd,
 
 #define MAX_KEEPALIVE_REQUESTS_PER_CONN 100
 
+/* The number of connections that the plain HTTP mock server and the TLS mock
+ * server have accepted and not closed yet. A connection counts from its
+ * accept() until its thread has closed it, so a test that counts the open
+ * descriptors of the process can first wait for the server ends of earlier
+ * tests' connections to go (settled_fd_baseline). */
+static atomic_int g_mock_conns_open = 0;
+
+static void *srv_conn_thread_body(void *arg);
+
 static void *srv_conn_thread(void *arg) {
+  void *r = srv_conn_thread_body(arg);
+  atomic_fetch_sub(&g_mock_conns_open, 1);
+  return r;
+}
+
+static void *srv_conn_thread_body(void *arg) {
   int conn_fd = (int)(intptr_t)arg;
   char *buf = (char *)malloc(TEST_SERVER_BUF);
   if (!buf) {
@@ -1693,11 +1715,13 @@ static void *srv_accept_loop(void *arg) {
       break;
     }
     atomic_fetch_add(&g_accept_count, 1);
+    atomic_fetch_add(&g_mock_conns_open, 1);
 
     pthread_t tid;
     if (pthread_create(&tid, NULL, srv_conn_thread,
                        (void *)(intptr_t)conn_fd) != 0) {
       close(conn_fd);
+      atomic_fetch_sub(&g_mock_conns_open, 1);
     } else {
       register_conn_thread(tid);
     }
@@ -1721,11 +1745,13 @@ static void *srv_accept_loop6(void *arg) {
       break;
     }
     atomic_fetch_add(&g_accept_count, 1);
+    atomic_fetch_add(&g_mock_conns_open, 1);
 
     pthread_t tid;
     if (pthread_create(&tid, NULL, srv_conn_thread,
                        (void *)(intptr_t)conn_fd) != 0) {
       close(conn_fd);
+      atomic_fetch_sub(&g_mock_conns_open, 1);
     } else {
       register_conn_thread(tid);
     }
@@ -1749,11 +1775,13 @@ static void *srv_accept_loop_unix(void *arg) {
       break;
     }
     atomic_fetch_add(&g_accept_count, 1);
+    atomic_fetch_add(&g_mock_conns_open, 1);
 
     pthread_t tid;
     if (pthread_create(&tid, NULL, srv_conn_thread,
                        (void *)(intptr_t)conn_fd) != 0) {
       close(conn_fd);
+      atomic_fetch_sub(&g_mock_conns_open, 1);
     } else {
       register_conn_thread(tid);
     }
@@ -2240,21 +2268,243 @@ TEST(request, free_null_safe) { chttp_request_free(NULL); }
 TEST(client_construction, create_and_destroy) {
   char *err = NULL;
   chttpcli cli = chttpclient_create(&err);
-  REQUIRE_NE(cli, CHTTPCLI_INVALID);
+  REQUIRE_NE(cli, CHTTPCLI_NULL);
   chttpclient_destroy(cli);
-  REQUIRE_EQ(cli, CHTTPCLI_INVALID);
+  REQUIRE_EQ(cli, CHTTPCLI_NULL);
+}
+
+/* An allocator for the construction sweeps below. It fails the call whose
+ * index is g_cf_fail_at (-1: none), counts every call, and keeps the number
+ * of blocks it handed out and nobody gave back yet, so a sweep can tell a
+ * create that failed cleanly from one that left something allocated. */
+static atomic_int g_cf_calls;
+static atomic_int g_cf_fail_at = -1;
+static atomic_bool g_cf_failed;
+static atomic_long g_cf_live;
+
+static bool cf_should_fail(void) {
+  int idx = atomic_fetch_add(&g_cf_calls, 1);
+  if (idx != atomic_load(&g_cf_fail_at)) return false;
+  atomic_store(&g_cf_failed, true);
+  return true;
+}
+static void *cf_malloc(size_t sz) {
+  if (cf_should_fail()) return NULL;
+  void *p = malloc(sz);
+  if (p) atomic_fetch_add(&g_cf_live, 1);
+  return p;
+}
+static void *cf_calloc(size_t n, size_t sz) {
+  if (cf_should_fail()) return NULL;
+  void *p = calloc(n, sz);
+  if (p) atomic_fetch_add(&g_cf_live, 1);
+  return p;
+}
+static void *cf_realloc(void *old, size_t sz) {
+  if (cf_should_fail()) return NULL;
+  void *p = realloc(old, sz);
+  if (p && !old) atomic_fetch_add(&g_cf_live, 1);
+  return p;
+}
+static void cf_free(void *p) {
+  if (p) atomic_fetch_sub(&g_cf_live, 1);
+  free(p);
+}
+static ccol_memmgmt_procs_t g_cf_mp = {.malloc = cf_malloc,
+                                       .free = cf_free,
+                                       .calloc = cf_calloc,
+                                       .realloc = cf_realloc};
+
+static void cf_arm(int fail_at) {
+  atomic_store(&g_cf_calls, 0);
+  atomic_store(&g_cf_failed, false);
+  atomic_store(&g_cf_fail_at, fail_at);
+}
+
+/* Fails every allocation of chttpclient_create_mp in turn, from the copy of
+ * the procs to the TLS context and the idle pool maps. Each create that
+ * meets a failed allocation must return CHTTPCLI_NULL with an err_str and
+ * give back every block it took; a missing free on any unwind path shows as
+ * a block still out, and a create that hides the failure shows as a client
+ * that was made anyway. The sweep stops at the first index that no
+ * allocation of the create reaches, and the client made then must still
+ * serve a request. */
+TEST(client_construction, a_create_whose_allocation_fails_frees_everything) {
+  enum { SWEEP_MAX = 400 };
+  int refused = 0, survived = 0, no_err = 0, leaked = 0;
+  bool reached_the_end = false;
+  for (int idx = 0; idx < SWEEP_MAX && !reached_the_end; idx++) {
+    atomic_store(&g_cf_live, 0);
+    cf_arm(idx);
+    char *err = NULL;
+    chttpcli cli = chttpclient_create_mp(&g_cf_mp, &err);
+    bool failed = atomic_load(&g_cf_failed);
+    cf_arm(-1);
+    if (cli == CHTTPCLI_NULL) {
+      refused++;
+      if (!err) no_err++;
+    } else {
+      if (failed)
+        survived++;
+      else
+        reached_the_end = true;
+      chttpclient_destroy(cli);
+    }
+    if (atomic_load(&g_cf_live) != 0) leaked++;
+  }
+
+  char url[160];
+  make_url(url, sizeof(url), "/get");
+  atomic_store(&g_cf_live, 0);
+  char *err = NULL;
+  chttpcli cli = chttpclient_create_mp(&g_cf_mp, &err);
+  int status = -1;
+  ccol_retval_t rv = ccol_unexpected_failure;
+  if (cli != CHTTPCLI_NULL) {
+    chttp_request_t *req =
+        chttp_request_create_mp(CHTTP_GET, url, NULL, &g_cf_mp, NULL);
+    chttpcli_response *resp = NULL;
+    if (req) rv = chttpclient_do(cli, req, &resp);
+    if (rv == ccol_success) {
+      status = resp->status_code;
+      chttpclient_resp_free(resp);
+    }
+    chttp_request_free(req);
+    chttpclient_destroy(cli);
+  }
+  long live_after_use = atomic_load(&g_cf_live);
+
+  REQUIRE_TRUE(reached_the_end);
+  REQUIRE_GT(refused, 3);
+  REQUIRE_EQ(no_err, 0);
+  REQUIRE_EQ(leaked, 0);
+  REQUIRE_EQ(survived, 0);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_EQ(status, 200);
+  REQUIRE_EQ(live_after_use, 0L);
+}
+
+/* Makes each mutex and condition variable init of chttpclient_create_mp fail
+ * in turn. The create must return CHTTPCLI_NULL with the matching
+ * err_str, destroy what it initialized before (valgrind and the sanitizers
+ * see a primitive that is never destroyed on some systems) and give back
+ * every block, and the next create must work. */
+TEST(client_construction,
+     a_create_whose_primitive_init_fails_frees_everything) {
+  static const struct {
+    _chttpcli_fault_t step;
+    const char *err;
+  } cases[] = {
+      {_CHTTPCLI_FAULT_LOCK, "failed to initialize mutex"},
+      {_CHTTPCLI_FAULT_AVAILABLE_CV, "failed to initialize condition variable"},
+      {_CHTTPCLI_FAULT_IDLE_ASYNC_DRAINED_CV,
+       "failed to initialize condition variable"},
+      {_CHTTPCLI_FAULT_ASYNC_COUNT_LOCK, "failed to initialize mutex"},
+      {_CHTTPCLI_FAULT_ASYNC_COUNT_DRAINED_CV,
+       "failed to initialize condition variable"},
+  };
+  enum { N = sizeof(cases) / sizeof(cases[0]) };
+  bool refused[N], err_ok[N];
+  long live[N];
+  for (size_t i = 0; i < N; i++) {
+    atomic_store(&g_cf_live, 0);
+    char *err = NULL;
+    _chttpclient_arm_create_fault_for_tests(cases[i].step);
+    chttpcli cli = chttpclient_create_mp(&g_cf_mp, &err);
+    _chttpclient_arm_create_fault_for_tests(_CHTTPCLI_FAULT_NONE);
+    refused[i] = cli == CHTTPCLI_NULL;
+    if (!refused[i]) chttpclient_destroy(cli);
+    err_ok[i] = err && strstr(err, cases[i].err) != NULL;
+    live[i] = atomic_load(&g_cf_live);
+  }
+  chttpcli cli = chttpclient_create_mp(&g_cf_mp, NULL);
+  bool works =
+      cli != CHTTPCLI_NULL && chttpclient_set_pool_size(cli, 2) == ccol_success;
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
+
+  for (size_t i = 0; i < N; i++) {
+    REQUIRE_TRUE(refused[i]);
+    REQUIRE_TRUE(err_ok[i]);
+    REQUIRE_EQ(live[i], 0L);
+  }
+  REQUIRE_TRUE(works);
+}
+
+/* A procs table with a missing function can't be used for anything, so the
+ * create refuses it before it allocates and says why. */
+TEST(client_construction, a_create_with_an_incomplete_procs_table_is_refused) {
+  ccol_memmgmt_procs_t no_free = g_cf_mp;
+  no_free.free = NULL;
+  cf_arm(-1);
+  char *err = NULL;
+  chttpcli cli = chttpclient_create_mp(&no_free, &err);
+  int calls = atomic_load(&g_cf_calls);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
+  REQUIRE_EQ(cli, CHTTPCLI_NULL);
+  REQUIRE_NE((void *)err, NULL);
+  REQUIRE_EQ(calls, 0);
+}
+
+/* Fails every allocation of chttp_request_create_mp in turn for a request
+ * with a body and a content type, so every copy is reached. Each failure
+ * must return NULL with an err_str and give back every block; the first
+ * index past the last allocation gives a request that holds its own copies
+ * of the url, the body and the content type. */
+TEST(client_construction, a_request_whose_allocation_fails_frees_everything) {
+  static const char url[] = "http://127.0.0.1:1/x";
+  static const char payload[] = "{\"a\":1}";
+  chttp_request_body_t body = CHTTP_JSON_BODY(payload, sizeof(payload) - 1);
+  enum { SWEEP_MAX = 32 };
+  int refused = 0, no_err = 0, leaked = 0;
+  chttp_request_t *req = NULL;
+  for (int idx = 0; idx < SWEEP_MAX && !req; idx++) {
+    atomic_store(&g_cf_live, 0);
+    cf_arm(idx);
+    char *err = NULL;
+    chttp_request_t *r =
+        chttp_request_create_mp(CHTTP_POST, url, &body, &g_cf_mp, &err);
+    bool failed = atomic_load(&g_cf_failed);
+    cf_arm(-1);
+    if (!r) {
+      refused++;
+      if (!err) no_err++;
+      if (atomic_load(&g_cf_live) != 0) leaked++;
+    } else if (failed) {
+      /* A request that came back although an allocation failed is wrong;
+       * count it with the leaks and keep sweeping. */
+      leaked++;
+      chttp_request_free(r);
+    } else {
+      req = r;
+    }
+  }
+  bool copies_ok =
+      req && req->url != url && strcmp(req->url, url) == 0 &&
+      req->body.data != payload && req->body.len == sizeof(payload) - 1 &&
+      memcmp(req->body.data, payload, req->body.len) == 0 &&
+      req->body.content_type && req->body.content_type != body.content_type &&
+      strcmp(req->body.content_type, body.content_type) == 0;
+  chttp_request_free(req);
+  long live_after_free = atomic_load(&g_cf_live);
+
+  /* The procs copy, the request, the url, the body, the content type. */
+  REQUIRE_EQ(refused, 5);
+  REQUIRE_EQ(no_err, 0);
+  REQUIRE_EQ(leaked, 0);
+  REQUIRE_TRUE(copies_ok);
+  REQUIRE_EQ(live_after_free, 0L);
 }
 
 TEST(client_construction, construct_macro) {
   chttpcli_construct(cli);
-  REQUIRE_NE(cli, CHTTPCLI_INVALID);
+  REQUIRE_NE(cli, CHTTPCLI_NULL);
   chttpclient_destroy(cli);
 }
 
 TEST(client_construction, construct_scoped_macro) {
   {
     chttpcli_construct_scoped(cli);
-    REQUIRE_NE(cli, CHTTPCLI_INVALID);
+    REQUIRE_NE(cli, CHTTPCLI_NULL);
   }
   /* cli is destroyed at scope exit. Nothing to assert here, valgrind
    * checks the result. */
@@ -2264,7 +2514,7 @@ TEST(client_construction, declare_and_init) {
   chttpcli_declare(cli);
   char *err = NULL;
   cli = chttpclient_create(&err);
-  REQUIRE_NE(cli, CHTTPCLI_INVALID);
+  REQUIRE_NE(cli, CHTTPCLI_NULL);
   chttpclient_destroy(cli);
 }
 
@@ -2280,12 +2530,12 @@ TEST(client_construction, set_configuration) {
 }
 
 TEST(client_construction, null_args) {
-  REQUIRE_EQ(chttpclient_set_pool_size(CHTTPCLI_INVALID, 4), ccol_invalid_args);
-  REQUIRE_EQ(chttpclient_set_connect_timeout(CHTTPCLI_INVALID, 0),
+  REQUIRE_EQ(chttpclient_set_pool_size(CHTTPCLI_NULL, 4), ccol_invalid_args);
+  REQUIRE_EQ(chttpclient_set_connect_timeout(CHTTPCLI_NULL, 0),
              ccol_invalid_args);
-  REQUIRE_EQ(chttpclient_set_request_timeout(CHTTPCLI_INVALID, 0),
+  REQUIRE_EQ(chttpclient_set_request_timeout(CHTTPCLI_NULL, 0),
              ccol_invalid_args);
-  REQUIRE_EQ(chttpclient_set_tls(CHTTPCLI_INVALID, NULL), ccol_invalid_args);
+  REQUIRE_EQ(chttpclient_set_tls(CHTTPCLI_NULL, NULL), ccol_invalid_args);
 }
 
 TEST(client_construction, half_configured_client_cert_pair_rejected) {
@@ -2590,7 +2840,7 @@ TEST(http, default_client_convenience) {
   make_url(url, sizeof(url), "/get");
 
   chttpcli def = chttp_default_client();
-  REQUIRE_NE(def, CHTTPCLI_INVALID);
+  REQUIRE_NE(def, CHTTPCLI_NULL);
 
   chttpcli_response *resp = NULL;
   ccol_retval_t rv = chttpclient_do(def, NULL, &resp);
@@ -2708,7 +2958,7 @@ TEST(http, streaming_null_args) {
   memset(&sink, 0, sizeof(sink));
   int status = 0;
 
-  REQUIRE_EQ(chttpclient_do_streaming(CHTTPCLI_INVALID, req, stream_sink_write,
+  REQUIRE_EQ(chttpclient_do_streaming(CHTTPCLI_NULL, req, stream_sink_write,
                                       &sink, &status),
              ccol_invalid_args);
   REQUIRE_EQ(chttpclient_do_streaming(chttp_default_client(), NULL,
@@ -3204,6 +3454,17 @@ TEST(pool, idle_handles_freed_on_shrink) {
   chttpclient_destroy(cli);
 }
 
+/* Milliseconds since t0 on CLOCK_MONOTONIC, rounded down, taken from the
+ * whole difference in nanoseconds so a pair across a second boundary is not
+ * rounded up. */
+static long elapsed_ms_since(const struct timespec *t0) {
+  struct timespec t1;
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  long long ns = (long long)(t1.tv_sec - t0->tv_sec) * 1000000000LL +
+                 (long long)(t1.tv_nsec - t0->tv_nsec);
+  return (long)(ns / 1000000LL);
+}
+
 TEST(pool, shrink_while_in_flight_exiles_slots) {
   /* Starts POOL_LARGE requests at once and shrinks the pool to POOL_SMALL while
    * all of them are in flight, so cli->in_flight_count is briefly bigger than
@@ -3245,8 +3506,15 @@ TEST(pool, shrink_while_in_flight_exiles_slots) {
    *
    * The bound is `started` and never POOL_LARGE. A count no live thread can
    * reach turns a pthread_create failure into a binary that hangs here with no
-   * diagnostic, while with `started` it fails the assertion below instead. */
-  while (atomic_load(&g_slow_started) < started) {
+   * diagnostic, while with `started` it fails the assertion below instead. The
+   * wait is also capped at about 10 s: a request that fails before it reaches
+   * the server (the server couldn't start a thread for the connection, say)
+   * never counts, and the results below then fail the test instead of the
+   * binary hanging here. */
+  struct timespec slow_wait_start;
+  clock_gettime(CLOCK_MONOTONIC, &slow_wait_start);
+  while (atomic_load(&g_slow_started) < started &&
+         elapsed_ms_since(&slow_wait_start) < 10000) {
     struct timespec ts = {.tv_sec = 0, .tv_nsec = 1000000}; /* 1 ms */
     nanosleep(&ts, NULL);
   }
@@ -3297,7 +3565,7 @@ TEST(invalid_args, chttpclient_do_null_checks) {
   REQUIRE_NE((void *)req, NULL);
 
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttpclient_do(CHTTPCLI_INVALID, req, &resp), ccol_invalid_args);
+  REQUIRE_EQ(chttpclient_do(CHTTPCLI_NULL, req, &resp), ccol_invalid_args);
   REQUIRE_EQ(chttpclient_do(cli, NULL, &resp), ccol_invalid_args);
   REQUIRE_EQ(chttpclient_do(cli, req, NULL), ccol_invalid_args);
 
@@ -3392,7 +3660,7 @@ TEST(custom_allocator, allocations_go_through_custom_procs) {
 
   err = NULL;
   chttpcli cli = chttpclient_create_mp(&mp, &err);
-  REQUIRE_NE(cli, CHTTPCLI_INVALID);
+  REQUIRE_NE(cli, CHTTPCLI_NULL);
   chttpclient_destroy(cli);
 
   REQUIRE_GT(atomic_load(&g_alloc_count), 0);
@@ -3436,7 +3704,7 @@ TEST(body_buffer_oom, realloc_failure_reports_not_enough_memory) {
    * call this allocator fails. */
   char *cerr = NULL;
   chttpcli cli = chttpclient_create_mp(&g_bodybuf_oom_mp, &cerr);
-  REQUIRE_NE(cli, CHTTPCLI_INVALID);
+  REQUIRE_NE(cli, CHTTPCLI_NULL);
 
   char url[160];
   make_url(url, sizeof(url), "/large");
@@ -4104,7 +4372,7 @@ TEST(error_codes, a_method_that_names_no_http_method_is_refused) {
   chttpcli cli = chttpclient_create(NULL);
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   ccol_retval_t rv1 = ccol_success, rv2 = ccol_success;
-  if (cli != CHTTPCLI_INVALID && req) {
+  if (cli != CHTTPCLI_NULL && req) {
     req->method = CHTTP_ANY;
     chttpcli_response *resp = NULL;
     rv1 = chttpclient_do(cli, req, &resp);
@@ -4116,7 +4384,7 @@ TEST(error_codes, a_method_that_names_no_http_method_is_refused) {
     if (f) ctpool_future_free(f);
   }
   if (req) chttp_request_free(req);
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   wait_for_async_engine_idle();
   REQUIRE_TRUE(any_refused);
   REQUIRE_TRUE(out_of_range_refused);
@@ -4286,7 +4554,7 @@ TEST(error_codes, resp_out_actively_reset_to_null_for_a_stale_handle) {
    * order, resolving the handle before chttpclient_do resets *resp_out, and
    * the sentinel stays in place. */
   chttpcli dead = chttpclient_create(NULL);
-  REQUIRE_NE(dead, CHTTPCLI_INVALID);
+  REQUIRE_NE(dead, CHTTPCLI_NULL);
   chttpcli dead_handle = dead;
   __chttpclient_destroy(dead);
 
@@ -4295,7 +4563,7 @@ TEST(error_codes, resp_out_actively_reset_to_null_for_a_stale_handle) {
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   REQUIRE_NE((void *)req, NULL);
 
-  chttpcli handles[] = {dead_handle, CHTTPCLI_INVALID,
+  chttpcli handles[] = {dead_handle, CHTTPCLI_NULL,
                         (chttpcli)0x0000000700000009ULL};
   bool all_null = true;
   bool all_invalid = true;
@@ -6188,7 +6456,7 @@ TEST(custom_allocator, response_freed_before_client_with_custom_alloc) {
                              .realloc = tracked_realloc};
   char *err = NULL;
   chttpcli cli = chttpclient_create_mp(&mp, &err);
-  REQUIRE_NE(cli, CHTTPCLI_INVALID);
+  REQUIRE_NE(cli, CHTTPCLI_NULL);
 
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   REQUIRE_NE((void *)req, NULL);
@@ -6964,10 +7232,10 @@ static inact_outcome_t inact_run(int tier, const char *path, uint64_t inact_us,
   char url[128];
   make_url(url, sizeof(url), path);
   chttpcli_construct(cli);
-  if (cli == CHTTPCLI_INVALID ||
+  if (cli == CHTTPCLI_NULL ||
       chttpclient_set_inactivity_timeout(cli, inact_us) != ccol_success ||
       chttpclient_set_request_timeout(cli, request_us) != ccol_success) {
-    if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+    if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
     return o;
   }
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
@@ -7040,7 +7308,7 @@ TEST(inactivity, a_new_client_and_the_default_client_have_the_defaults) {
 }
 
 TEST(inactivity, the_setter_refuses_an_invalid_client) {
-  REQUIRE_EQ(chttpclient_set_inactivity_timeout(CHTTPCLI_INVALID, 1000),
+  REQUIRE_EQ(chttpclient_set_inactivity_timeout(CHTTPCLI_NULL, 1000),
              ccol_invalid_args);
 }
 
@@ -7394,9 +7662,15 @@ TEST(expect_continue, wait_times_out_body_sent_anyway) {
   REQUIRE_NE((void *)req, NULL);
   req->expect_continue = true;
 
+  /* explicit_expect_header_suppresses_the_wait relies on this count, so this
+   * test checks that a hop which does wait moves it. A pooled connection of
+   * the default client that the server closed as the hop took it makes the
+   * hop again on a fresh one, which waits a second time. */
+  unsigned long waits_before = _chttp_tier1_continue_waits_for_tests();
   chttpcli_response *resp = NULL;
   ccol_retval_t rv = chttp_do(req, &resp);
   REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_GE(_chttp_tier1_continue_waits_for_tests(), waits_before + 1);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_EQ(resp->body_len, strlen(payload));
@@ -7452,7 +7726,7 @@ static slow_final_outcome_t run_slow_final_case(int tier, bool streaming,
   chttp_request_body_t body = CHTTP_TEXT_BODY(payload, strlen(payload));
   chttp_request_t *req = chttp_request_create(CHTTP_POST, url, &body, NULL);
   chttpcli cli = chttpclient_create(NULL);
-  if (req && cli != CHTTPCLI_INVALID) {
+  if (req && cli != CHTTPCLI_NULL) {
     req->expect_continue = true;
     if (request_timeout_ms > 0)
       (void)chttpclient_set_request_timeout(
@@ -7489,7 +7763,7 @@ static slow_final_outcome_t run_slow_final_case(int tier, bool streaming,
     }
     if (streaming) snprintf(out.body, sizeof(out.body), "%s", sink.data);
   }
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   if (req) chttp_request_free(req);
   /* The route publishes its count once the client has closed the connection.
    * The bound is a safety net against a hang, not a timing assumption. */
@@ -7551,9 +7825,10 @@ TEST(expect_continue, explicit_expect_header_suppresses_the_wait) {
    * waits the whole CHTTP_100_CONTINUE_WAIT_US of 1000ms for an interim
    * response that can never come, since the client sent no "expect:" line.
    * /post is an ordinary route that knows nothing about Expect: 100-continue,
-   * it reads the body and answers at once, so a correct request finishes
-   * almost immediately while a broken client takes about 1 second here, which
-   * is what the elapsed time assertion below is about. */
+   * it reads the body and answers at once. The test counts the continue
+   * windows that Tier 1 opens instead of timing the call: a slow runner can
+   * take most of a second for the whole request, and the wait it must not
+   * make is only about 1 s. */
   char url[160];
   make_url(url, sizeof(url), "/post");
 
@@ -7564,23 +7839,17 @@ TEST(expect_continue, explicit_expect_header_suppresses_the_wait) {
   req->expect_continue = true;
   chttp_request_set_header(req, "Expect", "204-content");
 
-  struct timespec t0, t1;
-  clock_gettime(CLOCK_MONOTONIC, &t0);
+  unsigned long waits_before = _chttp_tier1_continue_waits_for_tests();
   chttpcli_response *resp = NULL;
   ccol_retval_t rv = chttp_do(req, &resp);
-  clock_gettime(CLOCK_MONOTONIC, &t1);
-  long elapsed_ms =
-      (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
+  unsigned long waits_after = _chttp_tier1_continue_waits_for_tests();
+  chttp_request_free(req);
 
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
-  /* This bound is far below CHTTP_100_CONTINUE_WAIT_US (1000ms), so a request
-   * that wrongly waits for an interim response fails here even with the
-   * scheduling jitter of a busy CI machine. */
-  REQUIRE_LT(elapsed_ms, 500);
+  REQUIRE_EQ(waits_after, waits_before);
 
-  chttp_request_free(req);
   chttpclient_resp_free(resp);
 }
 
@@ -7881,9 +8150,16 @@ TEST(early_hints, tier1_discards_exactly_64_before_giving_up) {
  * The tests take the engine through full start and stop cycles on purpose, not
  * just one acquire and release, to prove the lazy restart path works; nothing
  * else in this suite runs it.
+ *
+ * Each test that counts references, or that needs the engine stopped when it
+ * starts, first waits for the engine to go idle. The test before it may have
+ * dropped its last reference with the reaper still tearing the reactor down,
+ * and tau runs the tests in another order under some compilers.
  */
+static void wait_for_async_engine_idle(void);
 
 TEST(async_engine, starts_on_first_acquire_and_stops_at_zero_refcount) {
+  wait_for_async_engine_idle();
   REQUIRE_FALSE(_chttpclient_engine_running_for_tests());
   REQUIRE_EQ(_chttpclient_engine_ref_count_for_tests(), 0);
 
@@ -7902,6 +8178,7 @@ TEST(async_engine, starts_on_first_acquire_and_stops_at_zero_refcount) {
 }
 
 TEST(async_engine, refcount_tracks_multiple_acquirers) {
+  wait_for_async_engine_idle();
   REQUIRE_EQ(_chttpclient_engine_acquire_for_tests(), ccol_success);
   REQUIRE_EQ(_chttpclient_engine_acquire_for_tests(), ccol_success);
   REQUIRE_EQ(_chttpclient_engine_acquire_for_tests(), ccol_success);
@@ -7923,6 +8200,7 @@ TEST(async_engine, refcount_tracks_multiple_acquirers) {
 }
 
 TEST(async_engine, restart_after_full_stop_works) {
+  wait_for_async_engine_idle();
   /* Proves that a caller can stop the engine and start it again more than once,
    * and that it isn't a start-once-per-process thing. */
   for (int i = 0; i < 3; i++) {
@@ -7951,6 +8229,7 @@ static void *engine_acquire_release_thread(void *arg) {
 }
 
 TEST(async_engine, concurrent_acquire_release_no_corruption) {
+  wait_for_async_engine_idle();
   enum { N = 16 };
   pthread_t threads[N];
   atomic_int acquired_ok = 0;
@@ -7980,6 +8259,7 @@ TEST(async_engine, concurrent_acquire_release_no_corruption) {
 }
 
 TEST(async_engine, num_reactor_threads_defaults_to_cpu_count) {
+  wait_for_async_engine_idle();
   /* When nothing configures the thread count here, or 0 is passed (the sentinel
    * that puts the default back), the reactor sizes itself from
    * sysconf(_SC_NPROCESSORS_ONLN), falling back to 1 if that query fails. The
@@ -7997,6 +8277,7 @@ TEST(async_engine, num_reactor_threads_defaults_to_cpu_count) {
 }
 
 TEST(async_engine, num_reactor_threads_explicit_value_is_wired_in) {
+  wait_for_async_engine_idle();
   /* A value above zero should reach ccol_event_loop_create_mp exactly, and not
    * be accepted and then ignored. */
   REQUIRE_EQ(chttpcli_set_engine_num_reactor_threads(3), ccol_success);
@@ -8717,7 +8998,7 @@ TEST(async_step_a, null_args_returns_null) {
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   REQUIRE_NE((void *)req, NULL);
 
-  REQUIRE_EQ((void *)chttpclient_do_async(CHTTPCLI_INVALID, req), NULL);
+  REQUIRE_EQ((void *)chttpclient_do_async(CHTTPCLI_NULL, req), NULL);
   REQUIRE_EQ((void *)chttpclient_do_async(cli, NULL), NULL);
 
   chttp_request_free(req);
@@ -9114,6 +9395,10 @@ TEST(async_expect_continue, wait_times_out_body_sent_anyway) {
   REQUIRE_NE((void *)req, NULL);
   req->expect_continue = true;
 
+  /* explicit_expect_header_suppresses_the_wait and
+   * bodyless_request_not_affected rely on this count, so this test checks that
+   * a hop which does wait moves it. */
+  unsigned stores_before = _chttp_continue_deadline_stores_for_tests();
   ctpool_future *f = chttpclient_do_async(cli, req);
   REQUIRE_NE((void *)f, NULL);
   chttp_request_free(req);
@@ -9121,6 +9406,7 @@ TEST(async_expect_continue, wait_times_out_body_sent_anyway) {
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
   REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
+  REQUIRE_EQ(_chttp_continue_deadline_stores_for_tests(), stores_before + 1);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -9148,32 +9434,32 @@ TEST(async_expect_continue, explicit_expect_header_suppresses_the_wait) {
   req->expect_continue = true;
   chttp_request_set_header(req, "Expect", "204-content");
 
-  struct timespec t0, t1;
-  clock_gettime(CLOCK_MONOTONIC, &t0);
+  /* The request timeout is only there so that a hang fails the test, so the
+   * test stops before the request when it can't be set. */
+  ccol_retval_t timeout_rv = chttpclient_set_request_timeout(cli, 30000000);
+  if (timeout_rv != ccol_success) {
+    chttp_request_free(req);
+    chttpclient_destroy(cli);
+  }
+  REQUIRE_EQ(timeout_rv, ccol_success);
+  unsigned stores_before = _chttp_continue_deadline_stores_for_tests();
   ctpool_future *f = chttpclient_do_async(cli, req);
   REQUIRE_NE((void *)f, NULL);
   chttp_request_free(req);
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
   REQUIRE_NE((void *)raw, NULL);
-  clock_gettime(CLOCK_MONOTONIC, &t1);
-  long elapsed_ms =
-      (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
+  unsigned stores_after = _chttp_continue_deadline_stores_for_tests();
 
   REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   REQUIRE_NE((void *)raw->resp, NULL);
   REQUIRE_EQ(raw->resp->status_code, 200);
-  /* A wide bound, not the tighter 500ms of Tier 1 (see that sibling test's
-   * comment). The async engine adds thread hops of its own, from the submitter
-   * to the DNS pool and the connect pool, then to the reactor, then to a
-   * dispatch worker, and under valgrind every hop pays its own share of the
-   * per-instruction instrumentation cost. That can push this well past 500ms,
-   * to 838ms to 887ms, and steady load from other test suites running at the
-   * same time (a full `make memtest` sweep from the repository root, for
-   * example) pushes it further still. 3000ms covers both and is still an
-   * explicit ceiling on a path that must never sit out a real
-   * CHTTP_100_CONTINUE_WAIT_US wait of about 1000ms. */
-  REQUIRE_LT(elapsed_ms, 3000L);
+  /* A hop that waits for "100 Continue" stores its continue deadline as it
+   * enters that state, so the count of those stores says whether the wait
+   * happened at all, however slow the machine is. A wall-time bound can't:
+   * the request takes most of a second under valgrind or qemu-user, and the
+   * wait it must not make is only about 1 s. */
+  REQUIRE_EQ(stores_after, stores_before);
 
   chttpclient_resp_free(raw->resp);
   chttpclient_async_result_free(raw);
@@ -9458,7 +9744,7 @@ TEST(async_expect_continue, carry_replay_survives_a_racing_destroy) {
   atomic_store(&g_carry_mp_live_blocks, 0);
   char *err = NULL;
   chttpcli cli = chttpclient_create_mp(&g_carry_mp, &err);
-  REQUIRE_NE(cli, CHTTPCLI_INVALID);
+  REQUIRE_NE(cli, CHTTPCLI_NULL);
 
   char url[160];
   make_url(url, sizeof(url), "/expect-continue-bundled-final");
@@ -9525,32 +9811,32 @@ TEST(async_expect_continue, bodyless_request_not_affected) {
   REQUIRE_NE((void *)req, NULL);
   req->expect_continue = true;
 
-  struct timespec t0, t1;
-  clock_gettime(CLOCK_MONOTONIC, &t0);
+  /* The request timeout is only there so that a hang fails the test, so the
+   * test stops before the request when it can't be set. */
+  ccol_retval_t timeout_rv = chttpclient_set_request_timeout(cli, 30000000);
+  if (timeout_rv != ccol_success) {
+    chttp_request_free(req);
+    chttpclient_destroy(cli);
+  }
+  REQUIRE_EQ(timeout_rv, ccol_success);
+  unsigned stores_before = _chttp_continue_deadline_stores_for_tests();
   ctpool_future *f = chttpclient_do_async(cli, req);
   REQUIRE_NE((void *)f, NULL);
   chttp_request_free(req);
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
   REQUIRE_NE((void *)raw, NULL);
-  clock_gettime(CLOCK_MONOTONIC, &t1);
-  long elapsed_ms =
-      (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
+  unsigned stores_after = _chttp_continue_deadline_stores_for_tests();
 
   REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   REQUIRE_NE((void *)raw->resp, NULL);
   REQUIRE_EQ(raw->resp->status_code, 200);
-  /* A wide bound, not the tighter 500ms of Tier 1 (see that sibling test's
-   * comment). The async engine adds thread hops of its own, from the submitter
-   * to the DNS pool and the connect pool, then to the reactor, then to a
-   * dispatch worker, and under valgrind every hop pays its own share of the
-   * per-instruction instrumentation cost. That can push this well past 500ms,
-   * to 838ms to 887ms, and steady load from other test suites running at the
-   * same time (a full `make memtest` sweep from the repository root, for
-   * example) pushes it further still. 3000ms covers both and is still an
-   * explicit ceiling on a path that must never sit out a real
-   * CHTTP_100_CONTINUE_WAIT_US wait of about 1000ms. */
-  REQUIRE_LT(elapsed_ms, 3000L);
+  /* A hop that waits for "100 Continue" stores its continue deadline as it
+   * enters that state, so the count of those stores says whether the wait
+   * happened at all, however slow the machine is. A wall-time bound can't:
+   * the request takes most of a second under valgrind or qemu-user, and the
+   * wait it must not make is only about 1 s. */
+  REQUIRE_EQ(stores_after, stores_before);
 
   chttpclient_resp_free(raw->resp);
   chttpclient_async_result_free(raw);
@@ -10648,7 +10934,7 @@ TEST(async_idle_pool, reused_hop_setup_failure_releases_engine_reference) {
 
   char *cerr = NULL;
   chttpcli cli = chttpclient_create_mp(&g_hop_fail_mp, &cerr);
-  REQUIRE_NE(cli, CHTTPCLI_INVALID);
+  REQUIRE_NE(cli, CHTTPCLI_NULL);
 
   enum { SWEEP_UPPER = 40 };
   for (int idx = 0; idx < SWEEP_UPPER; idx++) {
@@ -10749,7 +11035,7 @@ TEST(async_idle_pool,
   {
     char *cerr = NULL;
     chttpcli cli = chttpclient_create_mp(&g_size_fail_mp, &cerr);
-    REQUIRE_NE(cli, CHTTPCLI_INVALID);
+    REQUIRE_NE(cli, CHTTPCLI_NULL);
     g_size_fail_target_size = chain_size;
 
     chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
@@ -10775,7 +11061,7 @@ TEST(async_idle_pool,
   {
     char *cerr = NULL;
     chttpcli cli = chttpclient_create_mp(&g_size_fail_mp, &cerr);
-    REQUIRE_NE(cli, CHTTPCLI_INVALID);
+    REQUIRE_NE(cli, CHTTPCLI_NULL);
     g_size_fail_target_size = chain_size;
 
     chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
@@ -10819,7 +11105,7 @@ TEST(client_construction, tier1_hop_allocation_failure_sweep_no_leak) {
   for (int idx = -1; idx < SWEEP_UPPER; idx++) {
     char *cerr = NULL;
     chttpcli cli = chttpclient_create_mp(&g_hop_fail_mp, &cerr);
-    REQUIRE_NE(cli, CHTTPCLI_INVALID);
+    REQUIRE_NE(cli, CHTTPCLI_NULL);
 
     char *rerr = NULL;
     chttp_request_t *req =
@@ -10992,9 +11278,12 @@ static void die_if_wedged(bool ok, const char *what) {
 }
 
 /* Both waits below are only bounded as a safety net against a hang; the restore
- * lands one or two dispatches after the arming. */
+ * lands one or two dispatches after the arming. A wedged registration never
+ * gets there however long we wait, so the bound of about 30 s only has to be
+ * far above what a whole request can take on a slow runner (valgrind, qemu-user
+ * or a loaded VM): running out aborts the whole binary. */
 static bool wait_for_stray_write_arm_restore(unsigned long before) {
-  for (int i = 0; i < 500; i++) {
+  for (int i = 0; i < 3000; i++) {
     if (stray_write_arm_restores() > before) return true;
     usleep(10000);
   }
@@ -11002,7 +11291,7 @@ static bool wait_for_stray_write_arm_restore(unsigned long before) {
 }
 
 static bool wait_for_future_done(ctpool_future *f) {
-  for (int i = 0; i < 500; i++) {
+  for (int i = 0; i < 3000; i++) {
     if (ctpool_future_done(f)) return true;
     usleep(10000);
   }
@@ -11374,13 +11663,6 @@ TEST(async_deadline, generous_connect_timeout_does_not_interfere) {
   wait_for_async_engine_idle();
 }
 
-static long elapsed_ms_since(const struct timespec *t0) {
-  struct timespec t1;
-  clock_gettime(CLOCK_MONOTONIC, &t1);
-  return (long)(t1.tv_sec - t0->tv_sec) * 1000L +
-         (t1.tv_nsec - t0->tv_nsec) / 1000000L;
-}
-
 /*
  * A name lookup that doesn't answer ends the request at its own request timeout
  * with ccol_timed_out, although the lookup itself can't be interrupted and
@@ -11422,7 +11704,10 @@ TEST(async_deadline, a_stalled_name_lookup_ends_at_the_request_timeout) {
  *
  * If the connect task looks the name up whatever the deadline
  * says, the two queued requests make two more lookups once the stalled ones
- * return.
+ * return, four in all. The pool has two threads, so at most two lookups start
+ * before the 200 ms deadline. On a slow runner a pool thread can pick up even
+ * its first task after that deadline, and that task then makes no lookup
+ * either, so the count can be below two but never above it.
  */
 TEST(async_deadline, a_request_that_timed_out_in_the_queue_makes_no_lookup) {
   wait_for_async_engine_idle();
@@ -11456,7 +11741,7 @@ TEST(async_deadline, a_request_that_timed_out_in_the_queue_makes_no_lookup) {
   REQUIRE_EQ(reset_rv, ccol_success);
   REQUIRE_EQ(set_rv, ccol_success);
   REQUIRE_EQ(timed_out, 4);
-  REQUIRE_EQ(lookups, 2ul);
+  REQUIRE_LE(lookups, 2ul);
 }
 
 /*
@@ -11801,7 +12086,7 @@ TEST(pooled, null_checks) {
   REQUIRE_NE((void *)req, NULL);
 
   chttpcli_response *resp = NULL;
-  REQUIRE_EQ(chttpclient_do_pooled(CHTTPCLI_INVALID, req, &resp),
+  REQUIRE_EQ(chttpclient_do_pooled(CHTTPCLI_NULL, req, &resp),
              ccol_invalid_args);
   REQUIRE_EQ(chttpclient_do_pooled(cli, NULL, &resp), ccol_invalid_args);
   REQUIRE_EQ(chttpclient_do_pooled(cli, req, NULL), ccol_invalid_args);
@@ -11874,7 +12159,7 @@ TEST(pooled, allocation_failure_reports_not_enough_memory) {
 
   char *cerr = NULL;
   chttpcli cli = chttpclient_create_mp(&g_hop_fail_mp, &cerr);
-  REQUIRE_NE(cli, CHTTPCLI_INVALID);
+  REQUIRE_NE(cli, CHTTPCLI_NULL);
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   REQUIRE_NE((void *)req, NULL);
 
@@ -12379,13 +12664,13 @@ TEST(chttpcli_handle_lifecycle, handle_publish_failure_rolls_the_slot_back) {
   for (int i = 0; i < CYCLES; i++) {
     _ccol_pintable_force_next_publish_failure_for_tests();
     chttpcli bad = chttpclient_create(NULL);
-    if (bad != CHTTPCLI_INVALID) {
+    if (bad != CHTTPCLI_NULL) {
       all_failed = false;
       __chttpclient_destroy(bad);
       break;
     }
     chttpcli good = chttpclient_create(NULL);
-    if (good == CHTTPCLI_INVALID) {
+    if (good == CHTTPCLI_NULL) {
       all_created = false;
       break;
     }
@@ -12398,7 +12683,7 @@ TEST(chttpcli_handle_lifecycle, handle_publish_failure_rolls_the_slot_back) {
   /* Capture the result instead of asserting here, because the forced failure
      may not have applied: `failed` is then a live client, and returning now
      would leak it and everything below it. */
-  bool forced_failure_applied = (failed == CHTTPCLI_INVALID);
+  bool forced_failure_applied = (failed == CHTTPCLI_NULL);
   if (!forced_failure_applied) __chttpclient_destroy(failed);
 
   /* The slot went back on the free list, so the next client takes it again and
@@ -12410,7 +12695,7 @@ TEST(chttpcli_handle_lifecycle, handle_publish_failure_rolls_the_slot_back) {
   char url[128];
   make_url(url, sizeof(url), "/get");
   chttpcli_construct(cli);
-  REQUIRE_NE(cli, CHTTPCLI_INVALID);
+  REQUIRE_NE(cli, CHTTPCLI_NULL);
 
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   bool req_built = (req != NULL);
@@ -12455,6 +12740,7 @@ TEST(chttpcli_handle_lifecycle, handle_publish_failure_rolls_the_slot_back) {
 TEST(chttpcli_handle_lifecycle, sequential_double_destroy_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -12462,18 +12748,18 @@ TEST(chttpcli_handle_lifecycle, sequential_double_destroy_is_fatal) {
       close(dn);
     }
     chttpcli cli = chttpclient_create(NULL);
-    if (cli == CHTTPCLI_INVALID) _exit(2);
+    if (cli == CHTTPCLI_NULL) test_child_exit(2);
     chttpcli stale = cli;         /* a separate copy of the handle value. The
-                macro below sets the local to CHTTPCLI_INVALID, and this copy
+                macro below sets the local to CHTTPCLI_NULL, and this copy
                 isn't that local. A real program that keeps a second copy
                 somewhere else has exactly this. */
     chttpclient_destroy(cli);     /* completes normally. The local `cli` is
-            now CHTTPCLI_INVALID, and `stale` still holds the original
+            now CHTTPCLI_NULL, and `stale` still holds the original
             value. */
     __chttpclient_destroy(stale); /* the misuse under test, a second destroy
         of a handle that is already fully torn down, coming after the first
         one. */
-    _exit(0); /* nothing gets here when _ccol_fatal_err() aborts. */
+    test_child_exit(0); /* nothing gets here when _ccol_fatal_err() aborts. */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -12499,6 +12785,7 @@ static void *concurrent_destroy_thread(void *arg) {
 TEST(chttpcli_handle_lifecycle, concurrent_double_destroy_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -12506,7 +12793,7 @@ TEST(chttpcli_handle_lifecycle, concurrent_double_destroy_is_fatal) {
       close(dn);
     }
     chttpcli cli = chttpclient_create(NULL);
-    if (cli == CHTTPCLI_INVALID) _exit(2);
+    if (cli == CHTTPCLI_NULL) test_child_exit(2);
     concurrent_destroy_arg_t a1 = {.h = cli};
     concurrent_destroy_arg_t a2 = {.h = cli};
     pthread_t t1, t2;
@@ -12517,18 +12804,18 @@ TEST(chttpcli_handle_lifecycle, concurrent_double_destroy_is_fatal) {
      * to the pthread_join below is undefined behavior that can hang this child,
      * and with it the parent's waitpid below. _exit(3) gives a clean failure
      * instead, with an exit code that is easy to tell from a SIGABRT; this
-     * child already uses one like it for the cli == CHTTPCLI_INVALID
+     * child already uses one like it for the cli == CHTTPCLI_NULL
      * precondition above. The parent's WIFSIGNALED and WTERMSIG checks below
      * report it as a clean test failure and not as a hang. */
     int t1_rv = pthread_create(&t1, NULL, concurrent_destroy_thread, &a1);
     int t2_rv = (t1_rv == 0)
                     ? pthread_create(&t2, NULL, concurrent_destroy_thread, &a2)
                     : -1;
-    if (t1_rv != 0 || t2_rv != 0) _exit(3);
+    if (t1_rv != 0 || t2_rv != 0) test_child_exit(3);
     pthread_join(t1, NULL);
     pthread_join(t2, NULL);
-    _exit(0); /* nothing reaches this. One of the two destroy calls loses
-                  the race, and it must reach _ccol_fatal_err(). */
+    test_child_exit(0); /* nothing reaches this. One of the two destroy calls
+                  loses the race, and it must reach _ccol_fatal_err(). */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -12727,7 +13014,7 @@ TEST(chttpcli_handle_lifecycle, resolve_unpin_race_stress) {
   enum { ITERATIONS = 25 };
   for (int i = 0; i < ITERATIONS; i++) {
     chttpcli cli = chttpclient_create(NULL);
-    REQUIRE_NE(cli, CHTTPCLI_INVALID);
+    REQUIRE_NE(cli, CHTTPCLI_NULL);
 
     pool_size_setter_arg_t setter_arg = {.h = cli};
     concurrent_destroy_arg_t destroy_arg = {.h = cli};
@@ -12761,12 +13048,12 @@ TEST(chttpcli_handle_lifecycle, resolve_unpin_race_stress) {
 TEST(chttpcli_handle_lifecycle,
      legitimate_slot_reuse_not_confused_with_stale_handle) {
   chttpcli a = chttpclient_create(NULL);
-  REQUIRE_NE(a, CHTTPCLI_INVALID);
+  REQUIRE_NE(a, CHTTPCLI_NULL);
   chttpcli stale_a = a;
   chttpclient_destroy(a);
 
   chttpcli b = chttpclient_create(NULL);
-  REQUIRE_NE(b, CHTTPCLI_INVALID);
+  REQUIRE_NE(b, CHTTPCLI_NULL);
 
   /* B's operations should succeed normally, whether or not the allocator gave
    * B the exact address of A. */
@@ -12792,13 +13079,13 @@ TEST(chttpcli_handle_lifecycle, bounded_slot_reuse_under_churn) {
   enum { ITERATIONS = 25 };
 
   chttpcli cli0 = chttpclient_create(NULL);
-  REQUIRE_NE(cli0, CHTTPCLI_INVALID);
+  REQUIRE_NE(cli0, CHTTPCLI_NULL);
   chttpclient_destroy(cli0);
   size_t capacity_after_first = _chttpcli_slot_table_capacity_for_tests();
 
   for (int i = 1; i < ITERATIONS; i++) {
     chttpcli cli = chttpclient_create(NULL);
-    REQUIRE_NE(cli, CHTTPCLI_INVALID);
+    REQUIRE_NE(cli, CHTTPCLI_NULL);
     chttpclient_destroy(cli);
   }
 
@@ -12816,7 +13103,7 @@ TEST(chttpcli_handle_lifecycle, a_failed_free_list_push_loses_no_slot) {
   bool all_ok = true;
   for (size_t i = 0; i < cycles && all_ok; i++) {
     chttpcli cli = chttpclient_create(NULL);
-    if (cli == CHTTPCLI_INVALID) {
+    if (cli == CHTTPCLI_NULL) {
       all_ok = false;
       break;
     }
@@ -12825,9 +13112,9 @@ TEST(chttpcli_handle_lifecycle, a_failed_free_list_push_loses_no_slot) {
   }
   /* A client from a reclaimed slot is fully usable. */
   chttpcli cli = chttpclient_create(NULL);
-  bool usable = cli != CHTTPCLI_INVALID &&
+  bool usable = cli != CHTTPCLI_NULL &&
                 chttpclient_set_request_timeout(cli, 1000000) == ccol_success;
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   size_t after = _chttpcli_slot_table_capacity_for_tests();
   REQUIRE_TRUE(all_ok);
   REQUIRE_TRUE(usable);
@@ -12848,7 +13135,7 @@ TEST(tls, set_tls_all_exit_paths_release_pin) {
   /* Exit 1 of 4, the !tls branch, which restores the defaults. */
   {
     chttpcli cli = chttpclient_create(NULL);
-    REQUIRE_NE(cli, CHTTPCLI_INVALID);
+    REQUIRE_NE(cli, CHTTPCLI_NULL);
     REQUIRE_EQ(chttpclient_set_tls(cli, NULL), ccol_success);
     REQUIRE_TRUE(destroy_completes_promptly(cli));
   }
@@ -12857,7 +13144,7 @@ TEST(tls, set_tls_all_exit_paths_release_pin) {
    * configuration. */
   {
     chttpcli cli = chttpclient_create(NULL);
-    REQUIRE_NE(cli, CHTTPCLI_INVALID);
+    REQUIRE_NE(cli, CHTTPCLI_NULL);
     chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
     tls.ca_bundle_path = "/nonexistent/ca-bundle.pem"; /* set_tls itself
         never reads this. The client checks it at request time. */
@@ -12870,7 +13157,7 @@ TEST(tls, set_tls_all_exit_paths_release_pin) {
   {
     char *cerr = NULL;
     chttpcli cli = chttpclient_create_mp(&g_hop_fail_mp, &cerr);
-    REQUIRE_NE(cli, CHTTPCLI_INVALID);
+    REQUIRE_NE(cli, CHTTPCLI_NULL);
     atomic_store(&g_hop_fail_call_index, 0);
     g_hop_fail_at_call = 0;
     chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
@@ -13180,7 +13467,15 @@ static void ers_discard(int fd, char *buf, size_t buf_size) {
   }
 }
 
+static void *_tls_conn_thread_body(void *arg);
+
 static void *_tls_conn_thread(void *arg) {
+  void *r = _tls_conn_thread_body(arg);
+  atomic_fetch_sub(&g_mock_conns_open, 1);
+  return r;
+}
+
+static void *_tls_conn_thread_body(void *arg) {
   int fd = (int)(intptr_t)arg;
   atomic_fetch_add(&g_tls_accept_count, 1);
   SSL *ssl = SSL_new(g_tls_ssl_ctx);
@@ -13356,10 +13651,12 @@ static void *_tls_accept_loop(void *arg) {
       close(fd);
       break;
     }
+    atomic_fetch_add(&g_mock_conns_open, 1);
     pthread_t tid;
     if (pthread_create(&tid, NULL, _tls_conn_thread, (void *)(intptr_t)fd) !=
         0) {
       close(fd);
+      atomic_fetch_sub(&g_mock_conns_open, 1);
       continue;
     }
     register_tls_conn_thread(tid);
@@ -13497,6 +13794,188 @@ TEST(sync_tls, handshake_succeeds_when_ca_is_trusted) {
 
   chttpclient_resp_free(resp);
   chttpclient_destroy(cli);
+}
+
+/* Fails each allocation of chttpclient_set_tls with a CA bundle in turn,
+ * through the client's allocator. Each call either reports
+ * ccol_not_enough_memory and leaves the defaults in place, which don't trust
+ * the test certificate, so a request fails verification; or it succeeds and
+ * a request is served. A call that hides a failed allocation and reports
+ * success leaves a client whose HTTPS requests all fail. */
+TEST(sync_tls, a_set_tls_that_runs_out_of_memory_reports_it) {
+  if (!g_tls_cert_ready) {
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this environment\n");
+    return;
+  }
+  char url[160];
+  make_tls_url(url, sizeof(url), "/hello");
+  chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
+  tls.ca_bundle_path = g_tls_cert_path;
+
+  enum { SWEEP_MAX = 300 };
+  int oom = 0, served = 0, wrong = 0;
+  bool reached_the_end = false;
+  for (int idx = 0; idx < SWEEP_MAX && !reached_the_end; idx++) {
+    cf_arm(-1);
+    chttpcli cli = chttpclient_create_mp(&g_cf_mp, NULL);
+    if (cli == CHTTPCLI_NULL) {
+      wrong++;
+      break;
+    }
+    cf_arm(idx);
+    ccol_retval_t rv = chttpclient_set_tls(cli, &tls);
+    bool failed = atomic_load(&g_cf_failed);
+    cf_arm(-1);
+    if (!failed) reached_the_end = true;
+
+    chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
+    chttpcli_response *resp = NULL;
+    ccol_retval_t req_rv =
+        req ? chttpclient_do(cli, req, &resp) : ccol_not_enough_memory;
+    int status = req_rv == ccol_success ? resp->status_code : -1;
+    if (req_rv == ccol_success) chttpclient_resp_free(resp);
+    chttp_request_free(req);
+    chttpclient_destroy(cli);
+
+    if (rv == ccol_not_enough_memory &&
+        req_rv == ccol_http_tls_cert_verification_failed)
+      oom++;
+    else if (rv == ccol_success && status == 200)
+      served++;
+    else
+      wrong++;
+  }
+
+  REQUIRE_TRUE(reached_the_end);
+  REQUIRE_EQ(wrong, 0);
+  REQUIRE_GT(oom, 0);
+  REQUIRE_GT(served, 0);
+}
+
+/* Fails each allocation of chttpclient_set_tls(cli, NULL) in turn. Once
+ * memory is back, a request to the test server must fail the way the
+ * defaults make it fail, verification against the system store, which
+ * doesn't trust the test certificate. A client left with no context after
+ * the failed rebuild must build it again for the request, and must never
+ * report a certificate file problem it doesn't have. */
+TEST(sync_tls, a_reset_that_runs_out_of_memory_recovers_at_the_next_request) {
+  if (!g_tls_cert_ready) {
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this environment\n");
+    return;
+  }
+  char url[160];
+  make_tls_url(url, sizeof(url), "/hello");
+
+  enum { SWEEP_MAX = 300 };
+  int oom = 0, ok = 0, wrong = 0;
+  bool reached_the_end = false;
+  for (int idx = 0; idx < SWEEP_MAX && !reached_the_end; idx++) {
+    cf_arm(-1);
+    chttpcli cli = chttpclient_create_mp(&g_cf_mp, NULL);
+    if (cli == CHTTPCLI_NULL) {
+      wrong++;
+      break;
+    }
+    cf_arm(idx);
+    ccol_retval_t rv = chttpclient_set_tls(cli, NULL);
+    bool failed = atomic_load(&g_cf_failed);
+    cf_arm(-1);
+    if (!failed) reached_the_end = true;
+
+    chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
+    chttpcli_response *resp = NULL;
+    ccol_retval_t req_rv =
+        req ? chttpclient_do(cli, req, &resp) : ccol_not_enough_memory;
+    if (req_rv == ccol_success) chttpclient_resp_free(resp);
+    chttp_request_free(req);
+    chttpclient_destroy(cli);
+
+    if (req_rv != ccol_http_tls_cert_verification_failed)
+      wrong++;
+    else if (rv == ccol_not_enough_memory)
+      oom++;
+    else if (rv == ccol_success)
+      ok++;
+    else
+      wrong++;
+  }
+
+  REQUIRE_TRUE(reached_the_end);
+  REQUIRE_EQ(wrong, 0);
+  REQUIRE_GT(oom, 0);
+  REQUIRE_GT(ok, 0);
+}
+
+/* The Tier 2 and Tier 3 twin of
+ * sync_tls.a_reset_that_runs_out_of_memory_recovers_at_the_next_request:
+ * an async request and a pooled one, each made after a chttpclient_set_tls(
+ * cli, NULL) that lost an allocation, rebuild the context and fail the way
+ * the defaults make them fail, never with a certificate file problem. */
+TEST(sync_tls, an_async_request_after_a_reset_without_memory_recovers) {
+  if (!g_tls_cert_ready) {
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this environment\n");
+    return;
+  }
+  char url[160];
+  make_tls_url(url, sizeof(url), "/hello");
+
+  enum { SWEEP_MAX = 300 };
+  int oom = 0, wrong = 0, rearm_missed = 0;
+  bool reached_the_end = false;
+  for (int idx = 0; idx < SWEEP_MAX && !reached_the_end; idx++) {
+    cf_arm(-1);
+    chttpcli cli = chttpclient_create_mp(&g_cf_mp, NULL);
+    if (cli == CHTTPCLI_NULL) {
+      wrong++;
+      break;
+    }
+    cf_arm(idx);
+    ccol_retval_t rv = chttpclient_set_tls(cli, NULL);
+    bool failed = atomic_load(&g_cf_failed);
+    cf_arm(-1);
+    if (!failed) reached_the_end = true;
+    if (rv == ccol_not_enough_memory) oom++;
+
+    ccol_retval_t async_rv = ccol_unexpected_failure;
+    ctpool_future *f = async_get(cli, url);
+    if (f) {
+      chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+      if (raw) {
+        async_rv = raw->rv;
+        if (raw->rv == ccol_success) chttpclient_resp_free(raw->resp);
+      }
+      chttpclient_async_result_free(raw);
+      ctpool_future_free(f);
+    }
+    if (rv == ccol_not_enough_memory) {
+      /* Make the next rebuild fail again, so the pooled call below meets a
+       * client with no context too. */
+      cf_arm(idx);
+      if (chttpclient_set_tls(cli, NULL) != ccol_not_enough_memory)
+        rearm_missed++;
+      cf_arm(-1);
+    }
+    chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
+    chttpcli_response *resp = NULL;
+    ccol_retval_t pooled_rv =
+        req ? chttpclient_do_pooled(cli, req, &resp) : ccol_not_enough_memory;
+    if (pooled_rv == ccol_success) chttpclient_resp_free(resp);
+    chttp_request_free(req);
+    chttpclient_destroy(cli);
+
+    if (async_rv != ccol_http_tls_cert_verification_failed ||
+        pooled_rv != ccol_http_tls_cert_verification_failed)
+      wrong++;
+  }
+  wait_for_async_engine_idle();
+
+  REQUIRE_TRUE(reached_the_end);
+  REQUIRE_EQ(wrong, 0);
+  REQUIRE_EQ(rearm_missed, 0);
+  REQUIRE_GT(oom, 0);
 }
 
 TEST(sync_tls, large_body_response_over_tls) {
@@ -14218,7 +14697,7 @@ TEST(async_idle_pool, abandoned_reused_ctx_is_shut_down_under_its_idle_lock) {
 
   char *cerr = NULL;
   chttpcli cli = chttpclient_create_mp(&g_hop_fail_mp, &cerr);
-  REQUIRE_NE(cli, CHTTPCLI_INVALID);
+  REQUIRE_NE(cli, CHTTPCLI_NULL);
 
   _chttpclient_reset_abandon_shutdown_probe_for_tests();
 
@@ -14357,6 +14836,7 @@ TEST(async_engine, reaper_spawn_failure_is_retried_by_the_sweep) {
    *
    * Without the sweep's retry nothing releases an engine with no
    * reference, and it stays up until the next acquire and release. */
+  wait_for_async_engine_idle();
   unsigned abandoned_before =
       _chttpclient_engine_reaper_abandoned_count_for_tests();
   /* Nothing is armed and nothing holds a reference yet, so returning early here
@@ -14448,7 +14928,7 @@ TEST(async_engine, reaper_spawn_failure_on_a_reactor_thread_does_not_abort) {
      * one-core machine as on any other. */
     (void)chttpcli_set_engine_num_reactor_threads(4);
     chttpcli cli = chttpclient_create(NULL);
-    if (cli != CHTTPCLI_INVALID) {
+    if (cli != CHTTPCLI_NULL) {
       char child_url[160];
       make_url(child_url, sizeof(child_url), "/keepalive");
       ctpool_future *f = async_get(cli, child_url);
@@ -14470,6 +14950,14 @@ TEST(async_engine, reaper_spawn_failure_on_a_reactor_thread_does_not_abort) {
        * back into the harness's test loop, while this process exists to run one
        * branch and then exit. */
       if (poll_engine_ref_count(1) == 1) {
+        /* The count is process-wide and this child inherits the parent's
+         * count, which an earlier test of the parent may have raised, so the
+         * give-up path shows up as a rise above it. Polling for a count above
+         * zero would end at once after such a test, before the reactor
+         * thread's release has run, and the child would report 'K' whatever
+         * that release does. */
+        unsigned before =
+            _chttpclient_engine_reaper_abandoned_count_for_tests();
         _chttpclient_force_reaper_spawn_fail_for_tests(true);
         /* A pooled connection holds that one reference and no
          * chttpclient_destroy on this thread drains it, so the reactor's IDLE
@@ -14484,18 +14972,18 @@ TEST(async_engine, reaper_spawn_failure_on_a_reactor_thread_does_not_abort) {
          * safety net against a hang: a child that never gets to the branch
          * reports 'F', and the parent then fails on that and not on a
          * timeout. */
-        unsigned abandoned = 0;
-        for (int i = 0; i < 10000 && abandoned == 0; i++) {
-          abandoned = _chttpclient_engine_reaper_abandoned_count_for_tests();
-          if (abandoned == 0) usleep(1000);
+        bool abandoned = false;
+        for (int i = 0; i < 10000 && !abandoned; i++) {
+          abandoned =
+              _chttpclient_engine_reaper_abandoned_count_for_tests() > before;
+          if (!abandoned) usleep(1000);
         }
-        if (abandoned > 0 && _chttpclient_engine_running_for_tests())
-          marker = 'K';
+        if (abandoned && _chttpclient_engine_running_for_tests()) marker = 'K';
       }
     }
     ssize_t written = write(pfd[1], &marker, 1);
     (void)written;
-    _exit(0);
+    test_child_exit(0);
   }
 
   close(pfd[1]);
@@ -14538,10 +15026,11 @@ TEST(async_engine, reaper_spawn_failure_on_a_reactor_thread_does_not_abort) {
 /* The grandchild side of engine_logger_of_an_inherited_engine_is_closed. It
  * reports on report_fd and never returns. */
 static void _inherited_logger_grandchild(clog inherited, int report_fd) {
+  test_child_no_core();
   char marker = 'A'; /* The acquire failed. */
   if (_chttpclient_engine_acquire_for_tests() == ccol_success) {
     clog now = _chttpclient_engine_logger_for_tests();
-    marker = (now == CLOG_INVALID) ? 'Z' : (now == inherited ? 'S' : 'N');
+    marker = (now == CLOG_NULL) ? 'Z' : (now == inherited ? 'S' : 'N');
   }
   ssize_t w = write(report_fd, &marker, 1);
   (void)w;
@@ -14551,7 +15040,7 @@ static void _inherited_logger_grandchild(clog inherited, int report_fd) {
   marker = 'L';
   w = write(report_fd, &marker, 1);
   (void)w;
-  _exit(0);
+  test_child_exit(0);
 }
 
 /* A fork() child inherits a parent engine with no reference left, along with
@@ -14587,9 +15076,9 @@ TEST(async_engine, engine_logger_of_an_inherited_engine_is_closed) {
     _chttpclient_clear_engine_user_logger_for_tests();
     (void)chttpcli_set_engine_num_reactor_threads(4);
     chttpcli cli = chttpclient_create(NULL);
-    clog inherited = CLOG_INVALID;
+    clog inherited = CLOG_NULL;
     bool abandoned = false;
-    if (cli != CHTTPCLI_INVALID) {
+    if (cli != CHTTPCLI_NULL) {
       char child_url[160];
       make_url(child_url, sizeof(child_url), "/keepalive");
       ctpool_future *f = async_get(cli, child_url);
@@ -14619,7 +15108,7 @@ TEST(async_engine, engine_logger_of_an_inherited_engine_is_closed) {
     }
     /* Each failed precondition leaves its own marker. */
     verdict[0] = !abandoned                                 ? 'a'
-                 : inherited == CLOG_INVALID                ? 'b'
+                 : inherited == CLOG_NULL                   ? 'b'
                  : !_chttpclient_engine_running_for_tests() ? 'c'
                                                             : 'F';
     if (verdict[0] == 'F') {
@@ -14654,7 +15143,7 @@ TEST(async_engine, engine_logger_of_an_inherited_engine_is_closed) {
     }
     ssize_t w = write(pfd[1], verdict, 2);
     (void)w;
-    _exit(0);
+    test_child_exit(0);
   }
 
   close(pfd[1]);
@@ -14756,7 +15245,7 @@ TEST(tls_config_defaults, the_default_macro_matches_a_zeroed_struct) {
 TEST(tls_config_defaults, skip_verify_together_with_a_ca_bundle_is_refused) {
   chttpcli cli _ccol_destructor(___chttpclient_destroy) =
       chttpclient_create(NULL);
-  REQUIRE_TRUE(cli != CHTTPCLI_INVALID);
+  REQUIRE_TRUE(cli != CHTTPCLI_NULL);
 
   chttp_tls_config_t contradictory = {
       .ca_bundle_path = "/etc/ssl/ca.pem",
@@ -16050,7 +16539,7 @@ TEST(lifetime, a_response_freed_after_its_client_uses_no_freed_allocator) {
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   chttpcli_response *resp = NULL;
   ccol_retval_t rv = ccol_unexpected_failure;
-  if (cli != CHTTPCLI_INVALID && req) rv = chttpclient_do(cli, req, &resp);
+  if (cli != CHTTPCLI_NULL && req) rv = chttpclient_do(cli, req, &resp);
   chttp_request_free(req);
   int status = resp ? resp->status_code : -1;
   chttpclient_destroy(cli);
@@ -16070,7 +16559,7 @@ TEST(lifetime, an_async_result_freed_after_its_client_uses_no_freed_allocator) {
   chttpcli cli = chttpclient_create_mp(&g_quarantine_mp, NULL);
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   ctpool_future *f = NULL;
-  if (cli != CHTTPCLI_INVALID && req) f = chttpclient_do_async(cli, req);
+  if (cli != CHTTPCLI_NULL && req) f = chttpclient_do_async(cli, req);
   chttp_request_free(req);
   chttpcli_async_result_t *res = f ? chttpclient_async_result_get(f) : NULL;
   ccol_retval_t rv = res ? res->rv : ccol_unexpected_failure;
@@ -16253,7 +16742,7 @@ static ccol_retval_t repeated_fields_get(int tier, const char *url,
   *resp_out = NULL;
   char *err = NULL;
   chttpcli cli = chttpclient_create(&err);
-  if (cli == CHTTPCLI_INVALID) return ccol_unexpected_failure;
+  if (cli == CHTTPCLI_NULL) return ccol_unexpected_failure;
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   if (!req) {
     chttpclient_destroy(cli);
@@ -16374,7 +16863,7 @@ static ccol_retval_t long_header_stream(int tier, const char *url,
   *status_out = 0;
   *len_out = 0;
   chttpcli cli = chttpclient_create(NULL);
-  if (cli == CHTTPCLI_INVALID) return ccol_unexpected_failure;
+  if (cli == CHTTPCLI_NULL) return ccol_unexpected_failure;
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   if (!req) {
     chttpclient_destroy(cli);
@@ -16528,7 +17017,7 @@ TEST(repeated_fields, a_redirect_with_two_locations_follows_the_first) {
   }
   /* Tier 1's streaming path reads Location from the same parse. */
   chttpcli cli = chttpclient_create(NULL);
-  REQUIRE_NE(cli, CHTTPCLI_INVALID);
+  REQUIRE_NE(cli, CHTTPCLI_NULL);
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   int streamed_status = 0;
   stream_sink_t sink;
@@ -16562,10 +17051,18 @@ static int count_lines_containing(const char *path, const char *needle) {
   return n;
 }
 
+/* The name of a log file in the working directory, the filesystem a log
+ * normally goes to. The pid keeps two runs of this binary in one directory
+ * (a test and a memtest side by side) from writing into each other's file. */
+static const char *engine_log_path(char *buf, size_t size, const char *tag) {
+  snprintf(buf, size, "chttpclient_engine_logger_%s.%ld.log", tag,
+           (long)getpid());
+  return buf;
+}
+
 TEST(engine_logger, the_installed_logger_survives_every_engine_restart) {
-  /* The file is in the working directory, on the filesystem a log normally goes
-   * to. */
-  const char *path = "chttpclient_engine_logger_restart.log";
+  char path_buf[96];
+  const char *path = engine_log_path(path_buf, sizeof(path_buf), "restart");
   int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
   REQUIRE_GE(fd, 0);
   wait_for_async_engine_idle();
@@ -16629,7 +17126,8 @@ TEST(engine_logger, the_installed_logger_survives_every_engine_restart) {
  * A setter that derives from the handle without checking it ends
  * the process with a fatal error on the closed handle. */
 TEST(engine_logger, a_closed_logger_is_refused) {
-  const char *path = "chttpclient_engine_logger_closed.log";
+  char path_buf[96];
+  const char *path = engine_log_path(path_buf, sizeof(path_buf), "closed");
   int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
   REQUIRE_GE(fd, 0);
   wait_for_async_engine_idle();
@@ -16718,7 +17216,7 @@ TEST(deadline_sweep, a_verdict_on_a_finished_hop_never_marks_its_pooled_ctx) {
   char url[128];
   make_url(url, sizeof(url), "/sweep-race");
   chttpcli cli = chttpclient_create(NULL);
-  REQUIRE_NE(cli, CHTTPCLI_INVALID);
+  REQUIRE_NE(cli, CHTTPCLI_NULL);
   REQUIRE_EQ(chttpclient_set_request_timeout(cli, 30000000), ccol_success);
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   REQUIRE_NE((void *)req, NULL);
@@ -17290,13 +17788,13 @@ TEST(early_response, reject_then_close_is_returned_in_every_tier) {
   ers_srv_t s;
   REQUIRE_TRUE(ers_start(&s, ERS_REJECT_CLOSE));
   chttpcli cli = chttpclient_create(NULL);
-  if (cli != CHTTPCLI_INVALID) chttpclient_set_request_timeout(cli, 20000000);
+  if (cli != CHTTPCLI_NULL) chttpclient_set_request_timeout(cli, 20000000);
   chttp_request_t *req = ers_post(s.port, ERS_BIG_BODY, NULL);
   ccol_retval_t rv[4] = {0};
   int status[4] = {0};
   char body[4][16];
   memset(body, 0, sizeof(body));
-  for (int tier = 1; tier <= 3 && req && cli != CHTTPCLI_INVALID; tier++) {
+  for (int tier = 1; tier <= 3 && req && cli != CHTTPCLI_NULL; tier++) {
     chttpcli_response *resp = NULL;
     rv[tier] = run_in_tier(tier, cli, req, &resp);
     if (resp) {
@@ -17306,9 +17804,9 @@ TEST(early_response, reject_then_close_is_returned_in_every_tier) {
     }
     chttpclient_resp_free(resp);
   }
-  bool have = req && cli != CHTTPCLI_INVALID;
+  bool have = req && cli != CHTTPCLI_NULL;
   chttp_request_free(req);
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   wait_for_async_engine_idle();
   ers_stop(&s);
 
@@ -17329,7 +17827,7 @@ TEST(early_response, reject_while_not_reading_is_returned_in_every_tier) {
   ers_srv_t s;
   REQUIRE_TRUE(ers_start(&s, ERS_REJECT_HOLD));
   chttpcli cli = chttpclient_create(NULL);
-  if (cli != CHTTPCLI_INVALID) chttpclient_set_request_timeout(cli, 15000000);
+  if (cli != CHTTPCLI_NULL) chttpclient_set_request_timeout(cli, 15000000);
   chttp_request_t *req = ers_post(s.port, ERS_BIG_BODY, NULL);
   char get_url[128];
   snprintf(get_url, sizeof(get_url), "http://127.0.0.1:%d/after", s.port);
@@ -17338,8 +17836,7 @@ TEST(early_response, reject_while_not_reading_is_returned_in_every_tier) {
   int status[4] = {0}, gstatus[4] = {0};
   long elapsed[4] = {0};
   int accepts[4] = {0};
-  for (int tier = 1; tier <= 3 && req && get && cli != CHTTPCLI_INVALID;
-       tier++) {
+  for (int tier = 1; tier <= 3 && req && get && cli != CHTTPCLI_NULL; tier++) {
     int before = atomic_load(&s.accepts);
     chttpcli_response *resp = NULL;
     long t0 = ers_now_ms();
@@ -17353,10 +17850,10 @@ TEST(early_response, reject_while_not_reading_is_returned_in_every_tier) {
     chttpclient_resp_free(resp);
     accepts[tier] = atomic_load(&s.accepts) - before;
   }
-  bool have = req && get && cli != CHTTPCLI_INVALID;
+  bool have = req && get && cli != CHTTPCLI_NULL;
   chttp_request_free(req);
   chttp_request_free(get);
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   wait_for_async_engine_idle();
   ers_stop(&s);
 
@@ -17377,14 +17874,14 @@ TEST(early_response, interim_response_lets_the_upload_finish_in_every_tier) {
   ers_srv_t s;
   REQUIRE_TRUE(ers_start(&s, ERS_HINTS_READ));
   chttpcli cli = chttpclient_create(NULL);
-  if (cli != CHTTPCLI_INVALID) chttpclient_set_request_timeout(cli, 20000000);
+  if (cli != CHTTPCLI_NULL) chttpclient_set_request_timeout(cli, 20000000);
   size_t len = 2u * 1024u * 1024u;
   chttp_request_t *req = ers_post(s.port, len, NULL);
   ccol_retval_t rv[4] = {0};
   int status[4] = {0};
   char body[4][32];
   memset(body, 0, sizeof(body));
-  for (int tier = 1; tier <= 3 && req && cli != CHTTPCLI_INVALID; tier++) {
+  for (int tier = 1; tier <= 3 && req && cli != CHTTPCLI_NULL; tier++) {
     chttpcli_response *resp = NULL;
     rv[tier] = run_in_tier(tier, cli, req, &resp);
     if (resp) {
@@ -17394,9 +17891,9 @@ TEST(early_response, interim_response_lets_the_upload_finish_in_every_tier) {
     }
     chttpclient_resp_free(resp);
   }
-  bool have = req && cli != CHTTPCLI_INVALID;
+  bool have = req && cli != CHTTPCLI_NULL;
   chttp_request_free(req);
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   wait_for_async_engine_idle();
   ers_stop(&s);
 
@@ -17418,7 +17915,7 @@ TEST(early_response, streamed_2xx_answer_keeps_the_upload_going_in_every_tier) {
   ers_srv_t s;
   REQUIRE_TRUE(ers_start(&s, ERS_STREAM_ECHO));
   chttpcli cli = chttpclient_create(NULL);
-  if (cli != CHTTPCLI_INVALID)
+  if (cli != CHTTPCLI_NULL)
     chttpclient_set_request_timeout(cli, ERS_ECHO_TIMEOUT_US);
   size_t len = ERS_BIG_BODY;
   char *sent = NULL;
@@ -17426,7 +17923,7 @@ TEST(early_response, streamed_2xx_answer_keeps_the_upload_going_in_every_tier) {
   ccol_retval_t rv[4] = {0};
   int status[4] = {0};
   bool same[4] = {false};
-  for (int tier = 1; tier <= 3 && req && cli != CHTTPCLI_INVALID; tier++) {
+  for (int tier = 1; tier <= 3 && req && cli != CHTTPCLI_NULL; tier++) {
     chttpcli_response *resp = NULL;
     rv[tier] = run_in_tier(tier, cli, req, &resp);
     if (resp) {
@@ -17436,10 +17933,10 @@ TEST(early_response, streamed_2xx_answer_keeps_the_upload_going_in_every_tier) {
     }
     chttpclient_resp_free(resp);
   }
-  bool have = req && cli != CHTTPCLI_INVALID;
+  bool have = req && cli != CHTTPCLI_NULL;
   chttp_request_free(req);
   free(sent);
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   wait_for_async_engine_idle();
   ers_stop(&s);
 
@@ -17460,14 +17957,14 @@ TEST(early_response, early_2xx_head_lets_the_upload_finish_in_every_tier) {
   ers_srv_t s;
   REQUIRE_TRUE(ers_start(&s, ERS_EARLY_200));
   chttpcli cli = chttpclient_create(NULL);
-  if (cli != CHTTPCLI_INVALID) chttpclient_set_request_timeout(cli, 20000000);
+  if (cli != CHTTPCLI_NULL) chttpclient_set_request_timeout(cli, 20000000);
   size_t len = ERS_BIG_BODY;
   chttp_request_t *req = ers_post(s.port, len, NULL);
   ccol_retval_t rv[4] = {0};
   int status[4] = {0};
   char body[4][32];
   memset(body, 0, sizeof(body));
-  for (int tier = 1; tier <= 3 && req && cli != CHTTPCLI_INVALID; tier++) {
+  for (int tier = 1; tier <= 3 && req && cli != CHTTPCLI_NULL; tier++) {
     chttpcli_response *resp = NULL;
     rv[tier] = run_in_tier(tier, cli, req, &resp);
     if (resp) {
@@ -17477,9 +17974,9 @@ TEST(early_response, early_2xx_head_lets_the_upload_finish_in_every_tier) {
     }
     chttpclient_resp_free(resp);
   }
-  bool have = req && cli != CHTTPCLI_INVALID;
+  bool have = req && cli != CHTTPCLI_NULL;
   chttp_request_free(req);
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   wait_for_async_engine_idle();
   ers_stop(&s);
 
@@ -17502,12 +17999,12 @@ TEST(early_response, reject_after_the_send_blocked_is_returned_in_every_tier) {
   ers_srv_t s;
   REQUIRE_TRUE(ers_start(&s, ERS_LATE_REJECT));
   chttpcli cli = chttpclient_create(NULL);
-  if (cli != CHTTPCLI_INVALID) chttpclient_set_request_timeout(cli, 15000000);
+  if (cli != CHTTPCLI_NULL) chttpclient_set_request_timeout(cli, 15000000);
   chttp_request_t *req = ers_post(s.port, ERS_BIG_BODY, NULL);
   ccol_retval_t rv[4] = {0};
   int status[4] = {0};
   long elapsed[4] = {0};
-  for (int tier = 1; tier <= 3 && req && cli != CHTTPCLI_INVALID; tier++) {
+  for (int tier = 1; tier <= 3 && req && cli != CHTTPCLI_NULL; tier++) {
     chttpcli_response *resp = NULL;
     long t0 = ers_now_ms();
     rv[tier] = run_in_tier(tier, cli, req, &resp);
@@ -17515,9 +18012,9 @@ TEST(early_response, reject_after_the_send_blocked_is_returned_in_every_tier) {
     status[tier] = resp ? resp->status_code : 0;
     chttpclient_resp_free(resp);
   }
-  bool have = req && cli != CHTTPCLI_INVALID;
+  bool have = req && cli != CHTTPCLI_NULL;
   chttp_request_free(req);
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   wait_for_async_engine_idle();
   ers_stop(&s);
 
@@ -17609,6 +18106,22 @@ static int blackhole_listener(struct sockaddr_in *out, int *filler_out) {
 
 static int count_open_fds(void) { return test_count_open_fds(); }
 
+/* Waits until the mock servers have closed their end of every connection and
+ * the async engine is down, then counts the open descriptors. A count taken
+ * earlier can include the server end of the last connection of the test before,
+ * which closes a moment later, and the count at the end of the test is then
+ * one short of it. The wait is about 10 s by the clock at most: a server
+ * thread that never closes its end only makes the count wrong, and the test's
+ * own comparison then says so. */
+static int settled_fd_baseline(void) {
+  wait_for_async_engine_idle();
+  struct timespec t0;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  while (atomic_load(&g_mock_conns_open) > 0 && elapsed_ms_since(&t0) < 10000L)
+    usleep(1000);
+  return count_open_fds();
+}
+
 /*
  * A connect that starts while the deadline sweep is looking at its hop, and
  * whose connect deadline passes before the sweep judges it, gets shut down by
@@ -17683,10 +18196,12 @@ TEST(async_deadline, a_connect_that_starts_as_the_sweep_judges_it_ends) {
 
 /* The open descriptor count settles back to `baseline` once every socket of the
  * client is closed. A server thread of this file may still hold its end of a
- * connection for a moment, so we poll. */
+ * connection for a moment, so we poll, for about 10 s by the clock at most. */
 static int settle_open_fds(int baseline) {
+  struct timespec t0;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
   int n = count_open_fds();
-  for (int i = 0; i < 300 && n != baseline; i++) {
+  while (n != baseline && elapsed_ms_since(&t0) < 10000L) {
     usleep(10000);
     n = count_open_fds();
   }
@@ -17712,16 +18227,16 @@ TEST(happy_eyeballs, a_silent_first_address_costs_one_attempt_delay) {
                                      (const struct sockaddr *)&good};
   socklen_t lens[2] = {sizeof(hole), sizeof(good)};
 
-  int fds_before = count_open_fds();
+  int fds_before = settled_fd_baseline();
   _chttp_set_addr_override_for_tests(addrs, lens, 2);
   chttpcli cli = chttpclient_create(NULL);
-  if (cli != CHTTPCLI_INVALID) chttpclient_set_connect_timeout(cli, 10000000);
+  if (cli != CHTTPCLI_NULL) chttpclient_set_connect_timeout(cli, 10000000);
   chttp_request_t *req = chttp_request_create(
       CHTTP_GET, "http://eyeballs.invalid/get", NULL, NULL);
   ccol_retval_t rv[4] = {0};
   int status[4] = {0};
   long elapsed[4] = {0};
-  for (int tier = 1; tier <= 3 && req && cli != CHTTPCLI_INVALID; tier++) {
+  for (int tier = 1; tier <= 3 && req && cli != CHTTPCLI_NULL; tier++) {
     chttpcli_response *resp = NULL;
     long t0 = ers_now_ms();
     rv[tier] = run_in_tier(tier, cli, req, &resp);
@@ -17729,9 +18244,9 @@ TEST(happy_eyeballs, a_silent_first_address_costs_one_attempt_delay) {
     status[tier] = resp ? resp->status_code : 0;
     chttpclient_resp_free(resp);
   }
-  bool have = req && cli != CHTTPCLI_INVALID;
+  bool have = req && cli != CHTTPCLI_NULL;
   chttp_request_free(req);
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   wait_for_async_engine_idle();
   _chttp_set_addr_override_for_tests(NULL, NULL, 0);
   int fds_after = settle_open_fds(fds_before);
@@ -17779,7 +18294,7 @@ TEST(happy_eyeballs, the_async_tiers_start_the_next_address_on_time) {
   _chttp_set_addr_override_for_tests(addrs, lens, 2);
   _chttp_sweep_due_reset_for_tests();
   chttpcli cli = chttpclient_create(NULL);
-  if (cli != CHTTPCLI_INVALID) chttpclient_set_connect_timeout(cli, 10000000);
+  if (cli != CHTTPCLI_NULL) chttpclient_set_connect_timeout(cli, 10000000);
   chttp_request_t *req = chttp_request_create(
       CHTTP_GET, "http://eyeballs.invalid/get", NULL, NULL);
   ccol_retval_t rv[6];
@@ -17788,7 +18303,7 @@ TEST(happy_eyeballs, the_async_tiers_start_the_next_address_on_time) {
     rv[i] = ccol_unexpected_failure;
     elapsed[i] = 0;
   }
-  for (int i = 0; i < 6 && req && cli != CHTTPCLI_INVALID; i++) {
+  for (int i = 0; i < 6 && req && cli != CHTTPCLI_NULL; i++) {
     chttpcli_response *resp = NULL;
     long t0 = ers_now_ms();
     /* Tier 2 and Tier 3 alternate. Connection: close keeps the idle pool empty,
@@ -17798,11 +18313,11 @@ TEST(happy_eyeballs, the_async_tiers_start_the_next_address_on_time) {
     elapsed[i] = ers_now_ms() - t0;
     chttpclient_resp_free(resp);
   }
-  bool have = req && cli != CHTTPCLI_INVALID;
+  bool have = req && cli != CHTTPCLI_NULL;
   int64_t max_late_ns = 0;
   unsigned long starts = _chttp_sweep_due_for_tests(1, &max_late_ns);
   chttp_request_free(req);
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   wait_for_async_engine_idle();
   _chttp_set_addr_override_for_tests(NULL, NULL, 0);
   close(filler);
@@ -17832,15 +18347,15 @@ TEST(happy_eyeballs, the_connect_timeout_bounds_the_whole_race) {
   socklen_t lens[2] = {sizeof(h1), sizeof(h2)};
   bool ready = l1 >= 0 && l2 >= 0;
 
-  int fds_before = count_open_fds();
+  int fds_before = settled_fd_baseline();
   if (ready) _chttp_set_addr_override_for_tests(addrs, lens, 2);
   chttpcli cli = chttpclient_create(NULL);
-  if (cli != CHTTPCLI_INVALID) chttpclient_set_connect_timeout(cli, 700000);
+  if (cli != CHTTPCLI_NULL) chttpclient_set_connect_timeout(cli, 700000);
   chttp_request_t *req = chttp_request_create(
       CHTTP_GET, "http://eyeballs.invalid/get", NULL, NULL);
   ccol_retval_t rv[4] = {0};
   long elapsed[4] = {0};
-  for (int tier = 1; tier <= 3 && ready && req && cli != CHTTPCLI_INVALID;
+  for (int tier = 1; tier <= 3 && ready && req && cli != CHTTPCLI_NULL;
        tier++) {
     chttpcli_response *resp = NULL;
     long t0 = ers_now_ms();
@@ -17848,9 +18363,9 @@ TEST(happy_eyeballs, the_connect_timeout_bounds_the_whole_race) {
     elapsed[tier] = ers_now_ms() - t0;
     chttpclient_resp_free(resp);
   }
-  bool have = req && cli != CHTTPCLI_INVALID;
+  bool have = req && cli != CHTTPCLI_NULL;
   chttp_request_free(req);
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   wait_for_async_engine_idle();
   _chttp_set_addr_override_for_tests(NULL, NULL, 0);
   int fds_after = settle_open_fds(fds_before);
@@ -17889,21 +18404,21 @@ TEST(happy_eyeballs, a_refused_address_hands_over_at_once) {
   _chttp_set_addr_override_for_tests(addrs, lens, 2);
   _chttp_set_connect_attempt_delay_ms_for_tests(60000);
   chttpcli cli = chttpclient_create(NULL);
-  if (cli != CHTTPCLI_INVALID) chttpclient_set_connect_timeout(cli, 90000000);
+  if (cli != CHTTPCLI_NULL) chttpclient_set_connect_timeout(cli, 90000000);
   chttp_request_t *req = chttp_request_create(
       CHTTP_GET, "http://eyeballs.invalid/get", NULL, NULL);
   ccol_retval_t rv[4] = {0};
   long elapsed[4] = {0};
-  for (int tier = 1; tier <= 3 && req && cli != CHTTPCLI_INVALID; tier++) {
+  for (int tier = 1; tier <= 3 && req && cli != CHTTPCLI_NULL; tier++) {
     chttpcli_response *resp = NULL;
     long t0 = ers_now_ms();
     rv[tier] = run_in_tier(tier, cli, req, &resp);
     elapsed[tier] = ers_now_ms() - t0;
     chttpclient_resp_free(resp);
   }
-  bool have = req && cli != CHTTPCLI_INVALID;
+  bool have = req && cli != CHTTPCLI_NULL;
   chttp_request_free(req);
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   wait_for_async_engine_idle();
   _chttp_set_connect_attempt_delay_ms_for_tests(0);
   _chttp_set_addr_override_for_tests(NULL, NULL, 0);
@@ -17961,13 +18476,13 @@ TEST(happy_eyeballs, tier1_an_asynchronous_failure_hands_over_at_once) {
     chttpcli cli = chttpclient_create(NULL);
     /* The request timeout bounds a run where the wrong address wins, since its
      * listener never answers. */
-    if (cli != CHTTPCLI_INVALID) {
+    if (cli != CHTTPCLI_NULL) {
       chttpclient_set_connect_timeout(cli, 30000000);
       chttpclient_set_request_timeout(cli, 60000000);
     }
     chttp_request_t *req = chttp_request_create(
         CHTTP_GET, "http://eyeballs.invalid/get", NULL, NULL);
-    have = req && cli != CHTTPCLI_INVALID;
+    have = req && cli != CHTTPCLI_NULL;
     if (have) {
       chttpcli_response *resp = NULL;
       long t0 = ers_now_ms();
@@ -17977,7 +18492,7 @@ TEST(happy_eyeballs, tier1_an_asynchronous_failure_hands_over_at_once) {
       chttpclient_resp_free(resp);
     }
     chttp_request_free(req);
-    if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+    if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
     _chttp_set_connect_async_failures_for_tests(0);
     _chttp_set_connect_short_delays_for_tests(0);
     _chttp_set_connect_attempt_delay_ms_for_tests(0);
@@ -18057,8 +18572,7 @@ TEST(cloexec, pooled_client_sockets_are_close_on_exec) {
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   chttp_request_t *ureq = chttp_request_create(CHTTP_GET, uurl, NULL, NULL);
   ccol_retval_t rv[4] = {0}, urv[4] = {0};
-  for (int tier = 1; tier <= 2 && req && ureq && cli != CHTTPCLI_INVALID;
-       tier++) {
+  for (int tier = 1; tier <= 2 && req && ureq && cli != CHTTPCLI_NULL; tier++) {
     chttpcli_response *resp = NULL;
     rv[tier] = run_in_tier(tier, cli, req, &resp);
     chttpclient_resp_free(resp);
@@ -18069,10 +18583,10 @@ TEST(cloexec, pooled_client_sockets_are_close_on_exec) {
   int found = 0, inheritable = 0, ufound = 0, uinheritable = 0;
   count_client_sockets(get_test_port(), NULL, &found, &inheritable);
   count_client_sockets(0, get_test_unix_socket_path(), &ufound, &uinheritable);
-  bool have = req && ureq && cli != CHTTPCLI_INVALID;
+  bool have = req && ureq && cli != CHTTPCLI_NULL;
   chttp_request_free(req);
   chttp_request_free(ureq);
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   wait_for_async_engine_idle();
 
   REQUIRE_TRUE(have);
@@ -18223,8 +18737,8 @@ TEST(cloexec, tls_files_are_opened_close_on_exec) {
   chttpcli cli = chttpclient_create(NULL);
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.ca_bundle_path = g_tls_cert_path;
-  ccol_retval_t trv = cli != CHTTPCLI_INVALID ? chttpclient_set_tls(cli, &tls)
-                                              : ccol_invalid_args;
+  ccol_retval_t trv =
+      cli != CHTTPCLI_NULL ? chttpclient_set_tls(cli, &tls) : ccol_invalid_args;
   char url[160];
   make_tls_url(url, sizeof(url), "/hello");
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
@@ -18235,7 +18749,7 @@ TEST(cloexec, tls_files_are_opened_close_on_exec) {
     chttpclient_resp_free(resp);
   }
   chttp_request_free(req);
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
 
   pthread_mutex_lock(&g_open_mu);
   int seen = g_open_watch_seen;
@@ -18264,9 +18778,9 @@ TEST(early_response, tls_answers_during_the_upload_are_returned_in_every_tier) {
   chttpcli cli = chttpclient_create(NULL);
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.ca_bundle_path = g_tls_cert_path;
-  ccol_retval_t trv = cli != CHTTPCLI_INVALID ? chttpclient_set_tls(cli, &tls)
-                                              : ccol_invalid_args;
-  if (cli != CHTTPCLI_INVALID) chttpclient_set_request_timeout(cli, 15000000);
+  ccol_retval_t trv =
+      cli != CHTTPCLI_NULL ? chttpclient_set_tls(cli, &tls) : ccol_invalid_args;
+  if (cli != CHTTPCLI_NULL) chttpclient_set_request_timeout(cli, 15000000);
   size_t len = ERS_BIG_BODY;
   char *body = (char *)malloc(len);
   if (body) memset(body, 'b', len);
@@ -18292,7 +18806,7 @@ TEST(early_response, tls_answers_during_the_upload_are_returned_in_every_tier) {
   }
   atomic_store(&g_tls_early_release, 1);
   free(body);
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   wait_for_async_engine_idle();
 
   REQUIRE_EQ(trv, ccol_success);
@@ -18312,7 +18826,7 @@ TEST(early_response, a_response_that_started_during_the_send_is_never_pooled) {
   ers_srv_t s;
   REQUIRE_TRUE(ers_start(&s, ERS_STREAM_ECHO_KA));
   chttpcli cli = chttpclient_create(NULL);
-  if (cli != CHTTPCLI_INVALID)
+  if (cli != CHTTPCLI_NULL)
     chttpclient_set_request_timeout(cli, ERS_ECHO_TIMEOUT_US);
   chttp_request_t *req = ers_post(s.port, ERS_BIG_BODY, NULL);
   char get_url[128];
@@ -18321,8 +18835,7 @@ TEST(early_response, a_response_that_started_during_the_send_is_never_pooled) {
   ccol_retval_t rv[4] = {0}, grv[4] = {0};
   int status[4] = {0};
   int accepts[4] = {0};
-  for (int tier = 1; tier <= 3 && req && get && cli != CHTTPCLI_INVALID;
-       tier++) {
+  for (int tier = 1; tier <= 3 && req && get && cli != CHTTPCLI_NULL; tier++) {
     int before = atomic_load(&s.accepts);
     chttpcli_response *resp = NULL;
     rv[tier] = run_in_tier(tier, cli, req, &resp);
@@ -18333,10 +18846,10 @@ TEST(early_response, a_response_that_started_during_the_send_is_never_pooled) {
     chttpclient_resp_free(resp);
     accepts[tier] = atomic_load(&s.accepts) - before;
   }
-  bool have = req && get && cli != CHTTPCLI_INVALID;
+  bool have = req && get && cli != CHTTPCLI_NULL;
   chttp_request_free(req);
   chttp_request_free(get);
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   wait_for_async_engine_idle();
   ers_stop(&s);
 
@@ -18357,21 +18870,21 @@ TEST(expect_continue, pooled_continue_windows_over_sweep_ticks) {
   ers_srv_t s;
   REQUIRE_TRUE(ers_start(&s, ERS_SLOW_CONTINUE));
   chttpcli cli = chttpclient_create(NULL);
-  if (cli != CHTTPCLI_INVALID) chttpclient_set_request_timeout(cli, 10000000);
+  if (cli != CHTTPCLI_NULL) chttpclient_set_request_timeout(cli, 10000000);
   chttp_request_t *req = ers_post(s.port, 64, NULL);
   if (req) req->expect_continue = true;
   ccol_retval_t rv[4] = {0};
   int status[4] = {0};
-  for (int i = 1; i <= 3 && req && cli != CHTTPCLI_INVALID; i++) {
+  for (int i = 1; i <= 3 && req && cli != CHTTPCLI_NULL; i++) {
     chttpcli_response *resp = NULL;
     rv[i] = run_in_tier(2, cli, req, &resp);
     status[i] = resp ? resp->status_code : 0;
     chttpclient_resp_free(resp);
   }
-  bool have = req && cli != CHTTPCLI_INVALID;
+  bool have = req && cli != CHTTPCLI_NULL;
   int accepts = atomic_load(&s.accepts);
   chttp_request_free(req);
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   wait_for_async_engine_idle();
   ers_stop(&s);
 
@@ -18489,11 +19002,11 @@ TEST(expect_continue, a_stale_sweep_snapshot_never_ends_a_later_window) {
   bool srv_started =
       listening && pthread_create(&s.tid, NULL, cwin_srv_thread, &s) == 0;
 
-  chttpcli cli = srv_started ? chttpclient_create(NULL) : CHTTPCLI_INVALID;
-  if (cli != CHTTPCLI_INVALID) chttpclient_set_request_timeout(cli, 10000000);
+  chttpcli cli = srv_started ? chttpclient_create(NULL) : CHTTPCLI_NULL;
+  if (cli != CHTTPCLI_NULL) chttpclient_set_request_timeout(cli, 10000000);
   chttp_request_t *req = srv_started ? ers_post(s.port, 64, NULL) : NULL;
   if (req) req->expect_continue = true;
-  bool have = req && cli != CHTTPCLI_INVALID;
+  bool have = req && cli != CHTTPCLI_NULL;
 
   bool parked = false, stored = false;
   ccol_retval_t rv1 = ccol_unexpected_failure, rv2 = ccol_unexpected_failure;
@@ -18543,7 +19056,7 @@ TEST(expect_continue, a_stale_sweep_snapshot_never_ends_a_later_window) {
   }
   _chttp_continue_sweep_release_for_tests();
   chttp_request_free(req);
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   wait_for_async_engine_idle();
   if (srv_started) {
     test_wake_listener(s.lfd);
@@ -18594,7 +19107,7 @@ static ccol_retval_t huge_timeout_get(const char *path, uint64_t connect_us,
   *status = -1;
   *elapsed_ms = -1;
   chttpcli cli = chttpclient_create(NULL);
-  if (cli == CHTTPCLI_INVALID) return ccol_unexpected_failure;
+  if (cli == CHTTPCLI_NULL) return ccol_unexpected_failure;
   ccol_retval_t rv = chttpclient_set_connect_timeout(cli, connect_us);
   if (rv == ccol_success) rv = chttpclient_set_request_timeout(cli, request_us);
   if (rv == ccol_success) {
@@ -19430,7 +19943,7 @@ TEST(request_headers, an_async_request_keeps_its_headers_or_fails) {
   for (int fail_at = 1; fail_at <= 8; fail_at++) {
     char *err = NULL;
     chttpcli cli = chttpclient_create(&err);
-    if (cli == CHTTPCLI_INVALID) continue;
+    if (cli == CHTTPCLI_NULL) continue;
     chttp_request_t *req =
         chttp_request_create_mp(CHTTP_GET, url, NULL, &mp, &err);
     if (req) (void)chttp_request_set_header(req, "x-echo", "kept");
@@ -19476,17 +19989,15 @@ TEST(request_headers, destroy_closes_pooled_connections_without_memory) {
     chttpcli warm = chttpclient_create(NULL);
     chttp_request_t *wreq = chttp_request_create(CHTTP_GET, url, NULL, NULL);
     chttpcli_response *wresp = NULL;
-    if (warm != CHTTPCLI_INVALID && wreq)
-      (void)chttpclient_do(warm, wreq, &wresp);
+    if (warm != CHTTPCLI_NULL && wreq) (void)chttpclient_do(warm, wreq, &wresp);
     chttpclient_resp_free(wresp);
     chttp_request_free(wreq);
-    if (warm != CHTTPCLI_INVALID) chttpclient_destroy(warm);
+    if (warm != CHTTPCLI_NULL) chttpclient_destroy(warm);
   }
-  usleep(100000);
-  int fds_before = count_open_fds();
+  int fds_before = settled_fd_baseline();
   char *err = NULL;
   chttpcli cli = chttpclient_create_mp(&mp, &err);
-  REQUIRE_NE(cli, CHTTPCLI_INVALID);
+  REQUIRE_NE(cli, CHTTPCLI_NULL);
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   chttpcli_response *resp = NULL;
   ccol_retval_t rv =
@@ -19884,7 +20395,7 @@ TEST(redirect_resolution, a_failed_allocation_reports_not_enough_memory) {
   make_url(url, sizeof(url), "/redirect-relative");
   char *cerr = NULL;
   chttpcli cli = chttpclient_create_mp(&g_resolve_fail_mp, &cerr);
-  REQUIRE_NE(cli, CHTTPCLI_INVALID);
+  REQUIRE_NE(cli, CHTTPCLI_NULL);
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   REQUIRE_NE((void *)req, NULL);
 
@@ -20026,7 +20537,7 @@ static bool growth_from_cap_fails_cleanly(int which) {
     unsigned char ok =
         (oom && atomic_load(&g_ob_overflow_alloc_calls) == 1) ? 1 : 0;
     ssize_t w = write(fds[1], &ok, 1);
-    _exit(w == 1 ? 0 : 1);
+    test_child_exit(w == 1 ? 0 : 1);
   }
   close(fds[1]);
   if (pid < 0) {
@@ -20071,16 +20582,17 @@ static bool self_destroy_aborts(int tier, char *msg, size_t msg_size) {
   if (pipe(fds) != 0) return false;
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     close(fds[0]);
     dup2(fds[1], STDERR_FILENO);
     close(fds[1]);
     char url[160];
     make_url(url, sizeof(url), "/get");
     chttpcli cli = chttpclient_create(NULL);
-    if (cli == CHTTPCLI_INVALID) _exit(2);
+    if (cli == CHTTPCLI_NULL) test_child_exit(2);
     self_destroy_ctx_t c = {.cli = cli};
     chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
-    if (!req) _exit(3);
+    if (!req) test_child_exit(3);
     int status_code = 0;
     if (tier == 0) {
       (void)chttpclient_do_streaming(cli, req, self_destroy_write_fn, &c,
@@ -20093,7 +20605,7 @@ static bool self_destroy_aborts(int tier, char *msg, size_t msg_size) {
       (void)chttpclient_do_pooled_streaming(cli, req, self_destroy_write_fn, &c,
                                             &status_code);
     }
-    _exit(0); /* Nothing gets here when the destroy is fatal. */
+    test_child_exit(0); /* Nothing gets here when the destroy is fatal. */
   }
   close(fds[1]);
   if (pid < 0) {
@@ -20976,18 +21488,21 @@ TEST(engine_wait, the_engine_allocator_is_unused_after_engine_wait) {
   wait_for_async_engine_idle();
   /* The engine's fallback logger, served by the allocator, is only in use while
    * no engine logger is installed. */
-  ccol_retval_t release_rv = chttpcli_set_engine_logger(CLOG_INVALID);
+  ccol_retval_t release_rv = chttpcli_set_engine_logger(CLOG_NULL);
   atomic_store(&g_ew_dead, false);
   atomic_store(&g_ew_calls_after_death, 0);
   atomic_store(&g_ew_calls, 0);
   ccol_retval_t set_rv = chttpcli_set_engine_mem_mgmt_procs(&g_ew_mp);
+  /* The pooled connection of /keepalive holds the engine until the destroy, so
+   * the hold below is armed before the reaper can start. */
   char url[128];
-  make_url(url, sizeof(url), "/get");
+  make_url(url, sizeof(url), "/keepalive");
   chttpcli cli = chttpclient_create(NULL);
   ccol_retval_t rv = one_async_get(cli, url);
   _chttpclient_hold_next_reaper_final_section_for_tests(300);
   chttpclient_destroy(cli);
   chttpcli_engine_wait();
+  bool held = _chttpclient_reaper_final_section_was_entered_for_tests();
   atomic_store(&g_ew_dead, true);
   /* A reaper that was still running would finish within this time. */
   usleep(600000);
@@ -20998,6 +21513,7 @@ TEST(engine_wait, the_engine_allocator_is_unused_after_engine_wait) {
   REQUIRE_EQ(release_rv, ccol_success);
   REQUIRE_EQ(set_rv, ccol_success);
   REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_TRUE(held);
   REQUIRE_GT(used, 0);
   REQUIRE_EQ(late, 0);
   REQUIRE_EQ(reset_rv, ccol_success);
@@ -21100,7 +21616,7 @@ __attribute__((constructor(101))) static void _dtor_probe_enter(void) {
   const char *fd_text = getenv("CHTTPCLI_DTOR_PROBE_FD");
   if (!fd_text) return;
   g_dtor_probe_fd = atoi(fd_text);
-  if (atexit(_dtor_probe_reached_exit) != 0) _exit(2);
+  if (atexit(_dtor_probe_reached_exit) != 0) test_child_exit(2);
 }
 
 __attribute__((destructor(101))) static void _dtor_probe_report(void) {
@@ -21143,7 +21659,7 @@ TEST(engine_wait, the_module_destructor_initializes_nothing_unused) {
      * let the parent skip instead of reporting a missing 'x'. */
     ssize_t w = write(p[1], "E", 1);
     (void)w;
-    _exit(127);
+    test_child_exit(127);
   }
   close(p[1]);
   char got[4] = {0};
@@ -21193,7 +21709,8 @@ TEST(engine_wait, returns_at_once_when_no_engine_runs) {
  * Take the release away and the derived logger stays installed and the
  * next engine run writes its start and stop messages to the file. */
 TEST(engine_logger, a_release_closes_the_installed_logger) {
-  const char *path = "chttpclient_engine_logger_release.log";
+  char path_buf[96];
+  const char *path = engine_log_path(path_buf, sizeof(path_buf), "release");
   int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0644);
   REQUIRE_GE(fd, 0);
   wait_for_async_engine_idle();
@@ -21203,16 +21720,19 @@ TEST(engine_logger, a_release_closes_the_installed_logger) {
   ccol_retval_t set_rv =
       lg ? chttpcli_set_engine_logger(lg) : ccol_not_enough_memory;
   if (lg) clog_close(lg);
+  /* /keepalive leaves the connection open, so the client holds the engine
+   * through its idle connection until the destroy below. After a response
+   * with Connection: close the engine only stays up until the teardown of
+   * that connection runs, and the refusal below would race it. */
   char url[128];
-  make_url(url, sizeof(url), "/get");
+  make_url(url, sizeof(url), "/keepalive");
   chttpcli cli = chttpclient_create(NULL);
   ccol_retval_t rv1 = one_async_get(cli, url);
-  /* The client holds the engine through its idle connection. */
-  ccol_retval_t busy_rv = chttpcli_set_engine_logger(CLOG_INVALID);
+  ccol_retval_t busy_rv = chttpcli_set_engine_logger(CLOG_NULL);
   chttpclient_destroy(cli);
   chttpcli_engine_wait();
   int lines_before = count_lines_containing(path, "http client reactor engine");
-  ccol_retval_t release_rv = chttpcli_set_engine_logger(CLOG_INVALID);
+  ccol_retval_t release_rv = chttpcli_set_engine_logger(CLOG_NULL);
   atomic_store(&g_ew_dead, true);
   cli = chttpclient_create(NULL);
   ccol_retval_t rv2 = one_async_get(cli, url);
@@ -21253,7 +21773,7 @@ static size_t other_destroy_write_fn(const void *data, size_t len, void *ctx) {
   other_destroy_ctx_t *c = (other_destroy_ctx_t *)ctx;
   if (c->other) {
     chttpcli victim = c->other;
-    c->other = CHTTPCLI_INVALID;
+    c->other = CHTTPCLI_NULL;
     __chttpclient_destroy(victim);
   }
   return len;
@@ -21272,19 +21792,21 @@ static int other_destroy_status(int tier, char *msg, size_t msg_size) {
   if (pipe(fds) != 0) return -1;
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     close(fds[0]);
     dup2(fds[1], STDERR_FILENO);
     close(fds[1]);
-    if (chttpcli_set_engine_num_reactor_threads(1) != ccol_success) _exit(4);
+    if (chttpcli_set_engine_num_reactor_threads(1) != ccol_success)
+      test_child_exit(4);
     char url[160];
     make_url(url, sizeof(url), "/get");
     chttpcli a = chttpclient_create(NULL);
     chttpcli b = chttpclient_create(NULL);
-    if (a == CHTTPCLI_INVALID || b == CHTTPCLI_INVALID) _exit(2);
-    if (one_async_get(b, url) != ccol_success) _exit(5);
+    if (a == CHTTPCLI_NULL || b == CHTTPCLI_NULL) test_child_exit(2);
+    if (one_async_get(b, url) != ccol_success) test_child_exit(5);
     other_destroy_ctx_t c = {.other = b};
     chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
-    if (!req) _exit(3);
+    if (!req) test_child_exit(3);
     int status_code = 0;
     if (tier == 0) {
       (void)chttpclient_do_streaming(a, req, other_destroy_write_fn, &c,
@@ -21299,12 +21821,12 @@ static int other_destroy_status(int tier, char *msg, size_t msg_size) {
     }
     /* valgrind replaces a forked child's exit status, so the outcome travels as
      * a marker on the pipe. */
-    if (c.other == CHTTPCLI_INVALID) {
+    if (c.other == CHTTPCLI_NULL) {
       static const char done[] = "other client destroyed\n";
       ssize_t w = write(STDERR_FILENO, done, sizeof(done) - 1);
       (void)w;
     }
-    _exit(0);
+    test_child_exit(0);
   }
   close(fds[1]);
   if (pid < 0) {
@@ -21388,7 +21910,7 @@ static void *_ca_fd_watch_thread(void *arg) {
         if (flags >= 0 && !(flags & FD_CLOEXEC)) verdict = 'Y';
       }
       ssize_t wr = write(p[1], &verdict, 1);
-      _exit(wr == 1 ? 0 : 2);
+      test_child_exit(wr == 1 ? 0 : 2);
     }
     close(p[1]);
     if (pid < 0) {
@@ -21448,7 +21970,7 @@ TEST(chttpcli_tls, client_creation_leaves_no_inheritable_ca_file_descriptor) {
       break;
     if (atomic_load(&w.inherited)) break;
     chttpcli cli = chttpclient_create(NULL);
-    if (cli == CHTTPCLI_INVALID) {
+    if (cli == CHTTPCLI_NULL) {
       create_failed = true;
       break;
     }

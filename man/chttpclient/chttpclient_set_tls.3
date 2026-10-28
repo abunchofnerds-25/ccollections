@@ -34,7 +34,10 @@ OpenSSL was built with (the variable is ignored in a set-user-ID or
 set-group-ID process). The library reads it through a close-on-exec
 descriptor and parses it once per process, the first time a client
 needs it, and every later client shares the parsed certificates, so
-changing the file or SSL_CERT_FILE after that point has no effect.
+changing the file or SSL_CERT_FILE after that point has no effect. A
+file with a certificate whose key OpenSSL can't decode is read again
+for each client instead, and a file with a block OpenSSL can't read is
+read again too and counts as holding no certificate.
 Only when that file is absent or holds no certificate does the client
 fall back to OpenSSL's hashed directory (SSL_CERT_DIR, or the
 directory OpenSSL was built with). OpenSSL then opens the files of
@@ -100,14 +103,14 @@ client retires only the connections that are idle.
 .fi
 .SH PARAMETERS
 .nf
-cli   The client handle. It must not be CHTTPCLI_INVALID.
+cli   The client handle. It must not be CHTTPCLI_NULL.
 tls   The TLS configuration to copy, or NULL to put the defaults
       back.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success          The client has the new configuration.
-ccol_invalid_args     cli is CHTTPCLI_INVALID, or a stale handle of
+ccol_invalid_args     cli is CHTTPCLI_NULL, or a stale handle of
                       a client that has been destroyed, or you set
                       only one of tls->cert_path and tls->key_path,
                       or you set tls->insecure_skip_verify together
@@ -121,7 +124,11 @@ ccol_not_enough_memory
                       and hostname verification, the system CA
                       bundle and no client certificate); the
                       client never applies part of your
-                      configuration.
+                      configuration. When memory is short even
+                      for the defaults, the next request builds
+                      them again, and a request that needs TLS
+                      fails with ccol_not_enough_memory if that
+                      fails too.
 .fi
 .SH "SEE ALSO"
 .BR CHTTP_TLS_DEFAULT (3),

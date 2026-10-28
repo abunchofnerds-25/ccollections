@@ -163,19 +163,19 @@ TEST(destroy_macros, cvector_destroy) { DM_CASE(cvector_destroy, cvec, NULL); }
 TEST(destroy_macros, cstr_destroy) { DM_CASE(cstr_destroy, cstr, NULL); }
 TEST(destroy_macros, cstring_destroy) { DM_CASE(cstring_destroy, cstr, NULL); }
 TEST(destroy_macros, chttpclient_destroy) {
-  DM_CASE(chttpclient_destroy, chttpcli, CHTTPCLI_INVALID);
+  DM_CASE(chttpclient_destroy, chttpcli, CHTTPCLI_NULL);
 }
 TEST(destroy_macros, chttpsvr_destroy) {
-  DM_CASE(chttpsvr_destroy, chttpsvr, CHTTPSVR_INVALID);
+  DM_CASE(chttpsvr_destroy, chttpsvr, CHTTPSVR_NULL);
 }
 TEST(destroy_macros, clru_destroy) {
-  DM_CASE(clru_destroy, clru_cache, CLRU_CACHE_INVALID);
+  DM_CASE(clru_destroy, clru_cache, CLRU_CACHE_NULL);
 }
 TEST(destroy_macros, ctpool_destroy) {
-  DM_CASE(ctpool_destroy, ctpool, CTPOOL_INVALID);
+  DM_CASE(ctpool_destroy, ctpool, CTPOOL_NULL);
 }
 TEST(destroy_macros, ccol_event_loop_destroy) {
-  DM_CASE(ccol_event_loop_destroy, ccol_event_loop, CCOL_EVENT_LOOP_INVALID);
+  DM_CASE(ccol_event_loop_destroy, ccol_event_loop, CCOL_EVENT_LOOP_NULL);
 }
 TEST(destroy_macros, ccol_mempool_destroy) {
   DM_CASE(ccol_mempool_destroy, ccol_mempool *, NULL);

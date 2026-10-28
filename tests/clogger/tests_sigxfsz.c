@@ -47,6 +47,8 @@ SOFTWARE.
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <tau/tau.h>
+#include <test_coverage.h>
+#include <test_signals.h>
 #include <unistd.h>
 
 TAU_MAIN()
@@ -61,7 +63,10 @@ static void _sigxfsz_default(void) {
   pthread_sigmask(SIG_UNBLOCK, &set, NULL);
 }
 
-__attribute__((constructor)) static void _setup(void) { _sigxfsz_default(); }
+__attribute__((constructor)) static void _setup(void) {
+  _sigxfsz_default();
+  test_reset_inherited_signals();
+}
 
 /* ========================================================================== */
 /*                         HELPERS                                            */
@@ -128,13 +133,13 @@ static void _child_send(int v) {
   do {                       \
     if (!(cond)) {           \
       _child_send(__LINE__); \
-      _exit(1);              \
+      test_child_exit(1);    \
     }                        \
   } while (0)
 
 static void _child_pass(void) {
   _child_send(0);
-  _exit(0);
+  test_child_exit(0);
 }
 
 static void _child_mark(int phase) { _child_send(-phase); }
@@ -184,13 +189,14 @@ static void _run_child(void (*fn)(void), child_outcome_t *out) {
     return;
   }
   if (pid == 0) {
+    test_child_no_core();
     close(p[0]);
     _result_fd = p[1];
     _sigxfsz_default();
     alarm(120);
     fn();
     _child_send(-1000); /* a scenario must end in _child_pass() */
-    _exit(1);
+    test_child_exit(1);
   }
   out->forked = true;
   close(p[1]);
@@ -243,7 +249,7 @@ static void _sync_auto_body(off_t extra) {
   _log_path(path, sizeof(path), "sync");
   CHILD_CHECK(_sigxfsz_is(SIG_DFL));
   clog lg = clog_create_from_file(path, CLOG_INFO, NULL, NULL);
-  CHILD_CHECK(lg != CLOG_INVALID);
+  CHILD_CHECK(lg != CLOG_NULL);
   CHILD_CHECK(_sigxfsz_is(SIG_IGN)); /* at the open, before any limit */
   clog_info(lg, "first record");
   off_t size = _file_size(path);
@@ -284,7 +290,7 @@ static void _scenario_async_auto(void) {
   _log_path(path, sizeof(path), "async");
   CHILD_CHECK(_sigxfsz_is(SIG_DFL));
   clog lg = clog_create_from_file(path, CLOG_INFO, NULL, &_async_cfg);
-  CHILD_CHECK(lg != CLOG_INVALID);
+  CHILD_CHECK(lg != CLOG_NULL);
   CHILD_CHECK(_sigxfsz_is(SIG_IGN));
   clog_info(lg, "first record");
   clog_flush(lg);
@@ -327,7 +333,7 @@ static void _scenario_writer_consumes_and_follows_policy(void) {
   _log_path(path, sizeof(path), "consume");
   CHILD_CHECK(clog_set_signal_policy(CLOG_SIGNALS_UNTOUCHED) == ccol_success);
   clog lg = clog_create_from_file(path, CLOG_INFO, NULL, &_async_cfg);
-  CHILD_CHECK(lg != CLOG_INVALID);
+  CHILD_CHECK(lg != CLOG_NULL);
   CHILD_CHECK(_sigxfsz_is(SIG_DFL));
   sigset_t set;
   sigemptyset(&set);
@@ -385,7 +391,7 @@ static void _scenario_untouched(void) {
   _log_path(path, sizeof(path), "untouched");
   CHILD_CHECK(clog_set_signal_policy(CLOG_SIGNALS_UNTOUCHED) == ccol_success);
   clog lg = clog_create_from_file(path, CLOG_INFO, NULL, NULL);
-  CHILD_CHECK(lg != CLOG_INVALID);
+  CHILD_CHECK(lg != CLOG_NULL);
   CHILD_CHECK(_sigxfsz_is(SIG_DFL));
   clog_info(lg, "first record");
   off_t size = _file_size(path);
@@ -429,7 +435,7 @@ static void _scenario_application_handler_stays(void) {
   sigemptyset(&sa.sa_mask);
   CHILD_CHECK(sigaction(SIGXFSZ, &sa, NULL) == 0);
   clog lg = clog_create_from_file(path, CLOG_INFO, NULL, NULL);
-  CHILD_CHECK(lg != CLOG_INVALID);
+  CHILD_CHECK(lg != CLOG_NULL);
   CHILD_CHECK(_sigxfsz_is(_count_sigxfsz));
   clog_info(lg, "first record");
   off_t size = _file_size(path);
@@ -460,7 +466,7 @@ static void _scenario_ignores_stay(void) {
   char path[128];
   _log_path(path, sizeof(path), "ignores");
   clog lg = clog_create_from_file(path, CLOG_INFO, NULL, NULL);
-  CHILD_CHECK(lg != CLOG_INVALID);
+  CHILD_CHECK(lg != CLOG_NULL);
   CHILD_CHECK(_sigxfsz_is(SIG_IGN));
   CHILD_CHECK(clog_set_signal_policy(CLOG_SIGNALS_UNTOUCHED) == ccol_success);
   clog_info(lg, "first record");

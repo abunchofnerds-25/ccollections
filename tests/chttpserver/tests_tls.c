@@ -40,6 +40,7 @@ SOFTWARE.
 #include <sys/time.h>
 #include <tau/tau.h>
 #include <test_connect.h>
+#include <test_signals.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -48,9 +49,13 @@ TAU_MAIN()
 /* The test clients of this binary write to the server with plain write(2), and
  * the server can close a connection while one of them is writing. The library
  * leaves the SIGPIPE disposition to the application, so this binary ignores it
- * itself; tests_sigpipe.c covers the library under the default disposition. */
+ * itself; tests_sigpipe.c covers the library under the default disposition.
+ *
+ * test_reset_inherited_signals() puts back the rest of the signal state that
+ * the parent process can leave behind, before any thread starts. */
 __attribute__((constructor)) static void _ignore_sigpipe_for_test_writes(void) {
   signal(SIGPIPE, SIG_IGN);
+  test_reset_inherited_signals();
 }
 
 /* ========================================================================== */
@@ -77,8 +82,8 @@ __attribute__((constructor)) static void _ignore_sigpipe_for_test_writes(void) {
  * entries for "localhost" resolve to this same loopback server. */
 #define BASE_URL_MISMATCHED_HOST "https://localhost:18790"
 
-static clog g_test_logger = CLOG_INVALID;
-static chttpsvr g_tls_srv = CHTTPSVR_INVALID;
+static clog g_test_logger = CLOG_NULL;
+static chttpsvr g_tls_srv = CHTTPSVR_NULL;
 static char g_cert_dir[256];
 static char g_cert_path[320];
 static char g_key_path[320];
@@ -199,7 +204,7 @@ static void _teardown(void) {
   if (g_tls_srv) chttpsvr_stop(g_tls_srv);
   if (g_tls_srv) {
     __chttpsvr_destroy(g_tls_srv);
-    g_tls_srv = CHTTPSVR_INVALID;
+    g_tls_srv = CHTTPSVR_NULL;
   }
   /* __chttpsvr_destroy releases this server's shared-engine reference, but it
    * doesn't wait synchronously for chttpserver's shared ccol_event_loop reactor
@@ -216,7 +221,7 @@ static void _teardown(void) {
   chttpsvr_engine_wait();
   if (g_test_logger) {
     clog_close(g_test_logger);
-    g_test_logger = CLOG_INVALID;
+    g_test_logger = CLOG_NULL;
   }
 #endif
   _remove_generated_cert();
@@ -294,7 +299,7 @@ TEST(chttpserver_tls, handshake_succeeds_when_ca_is_trusted) {
 
   chttpcli cli _ccol_destructor(___chttpclient_destroy) =
       chttpclient_create(NULL);
-  REQUIRE_TRUE(cli != CHTTPCLI_INVALID);
+  REQUIRE_TRUE(cli != CHTTPCLI_NULL);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.ca_bundle_path = g_cert_path;
@@ -373,7 +378,7 @@ TEST(chttpserver_tls, hostname_mismatch_rejected_by_default) {
 
   chttpcli cli _ccol_destructor(___chttpclient_destroy) =
       chttpclient_create(NULL);
-  REQUIRE_TRUE(cli != CHTTPCLI_INVALID);
+  REQUIRE_TRUE(cli != CHTTPCLI_NULL);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.ca_bundle_path = g_cert_path;
@@ -412,7 +417,7 @@ TEST(chttpserver_tls, hostname_mismatch_allowed_when_hostname_check_skipped) {
 
   chttpcli cli _ccol_destructor(___chttpclient_destroy) =
       chttpclient_create(NULL);
-  REQUIRE_TRUE(cli != CHTTPCLI_INVALID);
+  REQUIRE_TRUE(cli != CHTTPCLI_NULL);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.ca_bundle_path = g_cert_path;
@@ -461,7 +466,7 @@ TEST(chttpserver_tls, client_presents_certificate_mtls_smoke) {
 
   chttpcli cli _ccol_destructor(___chttpclient_destroy) =
       chttpclient_create(NULL);
-  REQUIRE_TRUE(cli != CHTTPCLI_INVALID);
+  REQUIRE_TRUE(cli != CHTTPCLI_NULL);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.ca_bundle_path = g_cert_path;
@@ -511,11 +516,11 @@ static void _peer_cert_handler(chttpsvr_req *req, chttpsvr_resp *resp,
                        chttpsvr_req_peer_cert_verified(req) ? 1 : 0);
 }
 
-/* Starts a mutual TLS server on port, and returns CHTTPSVR_INVALID on any
+/* Starts a mutual TLS server on port, and returns CHTTPSVR_NULL on any
    failure. */
 static chttpsvr _mtls_server(uint16_t port, bool client_cert_optional) {
   chttpsvr srv = chttpsvr_create(g_test_logger, NULL);
-  if (srv == CHTTPSVR_INVALID) return CHTTPSVR_INVALID;
+  if (srv == CHTTPSVR_NULL) return CHTTPSVR_NULL;
   chttpsvr_register_handler(srv, CHTTP_GET, "/peer", _peer_cert_handler, NULL);
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.cert_path = g_cert_path;
@@ -528,7 +533,7 @@ static chttpsvr _mtls_server(uint16_t port, bool client_cert_optional) {
   cfg.tls = &tls;
   if (chttpsvr_start(srv, &cfg) != ccol_success) {
     chttpsvr_destroy(srv);
-    return CHTTPSVR_INVALID;
+    return CHTTPSVR_NULL;
   }
   return srv;
 }
@@ -544,7 +549,7 @@ static ccol_retval_t _mtls_get(uint16_t port, const char *cert_path,
   body_out[0] = '\0';
   chttpcli cli _ccol_destructor(___chttpclient_destroy) =
       chttpclient_create(NULL);
-  if (cli == CHTTPCLI_INVALID) return ccol_not_enough_memory;
+  if (cli == CHTTPCLI_NULL) return ccol_not_enough_memory;
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.ca_bundle_path = g_cert_path;
   tls.cert_path = cert_path;
@@ -576,7 +581,7 @@ TEST(chttpserver_tls, mtls_refuses_a_client_without_a_certificate) {
   }
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _mtls_server(TLS_TEST_PORT + 20, false);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int status = -1;
   char body[64];
   ccol_retval_t rv =
@@ -595,7 +600,7 @@ TEST(chttpserver_tls, mtls_accepts_and_reports_a_verified_client) {
   for (int optional = 0; optional < 2; optional++) {
     chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
         _mtls_server(TLS_TEST_PORT + 21, optional != 0);
-    REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+    REQUIRE_TRUE(srv != CHTTPSVR_NULL);
     int status = -1;
     char body[64];
     ccol_retval_t rv =
@@ -619,7 +624,7 @@ TEST(chttpserver_tls, mtls_refuses_a_certificate_from_another_ca) {
   for (int optional = 0; optional < 2; optional++) {
     chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
         _mtls_server(TLS_TEST_PORT + 22, optional != 0);
-    REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+    REQUIRE_TRUE(srv != CHTTPSVR_NULL);
     int status = -1;
     char body[64];
     ccol_retval_t rv = _mtls_get(TLS_TEST_PORT + 22, g_other_cert_path,
@@ -641,7 +646,7 @@ TEST(chttpserver_tls, mtls_optional_accepts_an_anonymous_client_unverified) {
   }
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       _mtls_server(TLS_TEST_PORT + 23, true);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   int status = -1;
   char body[64];
   ccol_retval_t rv =
@@ -660,7 +665,7 @@ TEST(chttpserver_tls, peer_cert_verified_is_false_without_mutual_tls) {
   }
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   REQUIRE_EQ(chttpsvr_register_handler(srv, CHTTP_GET, "/peer",
                                        _peer_cert_handler, NULL),
              ccol_success);
@@ -703,7 +708,7 @@ TEST(chttpserver_tls, start_rejects_cert_path_without_key_path) {
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, &err);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.cert_path = "/nonexistent/cert.pem";
@@ -723,7 +728,7 @@ TEST(chttpserver_tls, start_rejects_key_path_without_cert_path) {
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, &err);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.cert_path = NULL;
@@ -752,7 +757,7 @@ TEST(chttpserver_tls, start_rejects_ca_bundle_path_without_cert_key_pair) {
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, &err);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.cert_path = NULL;
@@ -789,7 +794,7 @@ TEST(chttpserver_tls, start_rejects_tls_config_with_no_cert_or_key) {
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, &err);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
@@ -840,9 +845,9 @@ TEST(chttpserver_tls, start_rejects_a_ca_bundle_holding_no_certificate) {
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, &err);
-  if (srv == CHTTPSVR_INVALID) {
+  if (srv == CHTTPSVR_NULL) {
     unlink(bundle);
-    REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+    REQUIRE_TRUE(srv != CHTTPSVR_NULL);
     return;
   }
 
@@ -884,7 +889,7 @@ TEST(chttpserver_tls, start_reports_a_certificate_that_cannot_be_loaded) {
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, &err);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.cert_path = "/nonexistent/server.pem";
   tls.key_path = g_key_path;
@@ -920,7 +925,7 @@ TEST(chttpserver_tls, start_rejects_unloadable_ca_bundle_path) {
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, &err);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.cert_path = g_cert_path;
@@ -1714,7 +1719,7 @@ TEST(tls_crl, a_server_refuses_a_revoked_client_through_chttpsvr) {
   }
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   REQUIRE_EQ(chttpsvr_register_handler(srv, CHTTP_GET, "/peer",
                                        _peer_cert_handler, NULL),
              ccol_success);
@@ -2180,7 +2185,7 @@ TEST(tls_identity, a_handler_sees_the_identity_of_its_client) {
 
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   REQUIRE_EQ(chttpsvr_register_handler(srv, CHTTP_GET, "/peer",
                                        _identity_handler, NULL),
              ccol_success);
@@ -2224,4 +2229,109 @@ TEST(tls_identity, null_arguments_report_nothing) {
   REQUIRE_TRUE(zeroed);
   REQUIRE_EQ(chttpsvr_req_peer_cert_sha256(NULL, NULL), ccol_invalid_args);
   REQUIRE_TRUE(chttpsvr_req_peer_cert_subject(NULL) == NULL);
+}
+
+/* An allocator that counts the blocks it has handed out and not yet taken
+   back. */
+static _Atomic long g_tls_live = 0;
+static void *_tls_count_malloc(size_t n) {
+  void *p = malloc(n);
+  if (p) atomic_fetch_add(&g_tls_live, 1);
+  return p;
+}
+static void *_tls_count_calloc(size_t n, size_t s) {
+  void *p = calloc(n, s);
+  if (p) atomic_fetch_add(&g_tls_live, 1);
+  return p;
+}
+static void *_tls_count_realloc(void *p, size_t s) {
+  void *np = realloc(p, s);
+  if (np && !p) atomic_fetch_add(&g_tls_live, 1);
+  return np;
+}
+static void _tls_count_free(void *p) {
+  if (p) atomic_fetch_sub(&g_tls_live, 1);
+  free(p);
+}
+
+/* The last frees of a server that was ever started run on the reactor
+   thread after chttpsvr_destroy() has returned, once its registrations are
+   reclaimed. Waits up to 10 s for g_tls_live to reach 0 and returns what it
+   reads last. */
+static long _tls_wait_for_no_live_blocks(void) {
+  struct timespec start, now;
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  long live = atomic_load(&g_tls_live);
+  while (live != 0) {
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (now.tv_sec - start.tv_sec >= 10) break;
+    struct timespec nap = {0, 1000000L};
+    nanosleep(&nap, NULL);
+    live = atomic_load(&g_tls_live);
+  }
+  return live;
+}
+
+/* A TLS server that stops and starts again builds its TLS context afresh,
+   gives the old one back and keeps verifying client certificates, and a
+   second TLS server on the port that the first one holds fails its start
+   with ccol_unexpected_failure, gives back what that start built, and
+   leaves the first one serving. */
+TEST(chttpserver_tls,
+     a_restarted_tls_server_serves_and_a_busy_port_is_refused) {
+  if (!g_cert_ready) {
+    fprintf(stderr, "SKIP: no self-signed cert available\n");
+    return;
+  }
+  ccol_memmgmt_procs_t mp = {_tls_count_malloc, _tls_count_free,
+                             _tls_count_calloc, _tls_count_realloc};
+  atomic_store(&g_tls_live, 0);
+  chttpsvr srv = chttpsvr_create_mp(&mp, g_test_logger, NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
+  chttpsvr_register_handler(srv, CHTTP_GET, "/peer", _peer_cert_handler, NULL);
+  chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
+  tls.cert_path = g_cert_path;
+  tls.key_path = g_key_path;
+  tls.ca_bundle_path = g_client_cert_path;
+  tls.client_cert_optional = true;
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = 0;
+  cfg.tls = &tls;
+  uint16_t port = 0;
+  int status_first = -1, status_restart = -1, status_after_busy = -1;
+  char body_first[64] = "", body_restart[64] = "", body_after_busy[64] = "";
+  ccol_retval_t first_rv = chttpsvr_start(srv, &cfg);
+  ccol_retval_t restart_rv = ccol_unexpected_failure;
+  ccol_retval_t busy_rv = ccol_success;
+  if (first_rv == ccol_success &&
+      chttpsvr_bound_port(srv, &port) == ccol_success) {
+    _mtls_get(port, g_client_cert_path, g_client_key_path, &status_first,
+              body_first, sizeof(body_first));
+    chttpsvr_stop(srv);
+    cfg.port = port;
+    restart_rv = chttpsvr_start(srv, &cfg);
+    if (restart_rv == ccol_success)
+      _mtls_get(port, g_client_cert_path, g_client_key_path, &status_restart,
+                body_restart, sizeof(body_restart));
+    chttpsvr other = chttpsvr_create_mp(&mp, g_test_logger, NULL);
+    if (other != CHTTPSVR_NULL) {
+      busy_rv = chttpsvr_start(other, &cfg);
+      chttpsvr_destroy(other);
+    }
+    _mtls_get(port, g_client_cert_path, g_client_key_path, &status_after_busy,
+              body_after_busy, sizeof(body_after_busy));
+  }
+  chttpsvr_destroy(srv);
+  long live = _tls_wait_for_no_live_blocks();
+  REQUIRE_EQ((int)first_rv, (int)ccol_success);
+  REQUIRE_EQ(status_first, 200);
+  REQUIRE_STREQ(body_first, "verified=1");
+  REQUIRE_EQ((int)restart_rv, (int)ccol_success);
+  REQUIRE_EQ(status_restart, 200);
+  REQUIRE_STREQ(body_restart, "verified=1");
+  REQUIRE_EQ((int)busy_rv, (int)ccol_unexpected_failure);
+  REQUIRE_EQ(status_after_busy, 200);
+  REQUIRE_STREQ(body_after_busy, "verified=1");
+  REQUIRE_EQ(live, 0L);
 }

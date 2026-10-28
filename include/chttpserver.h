@@ -54,7 +54,7 @@ SOFTWARE.
  * }
  *
  * int main(void) {
- *     chttpsvr_construct(srv, CLOG_INVALID);
+ *     chttpsvr_construct(srv, CLOG_NULL);
  *     chttpsvr_register_handler(srv, CHTTP_GET, "/hello", hello, NULL);
  *     chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
  *     if (chttpsvr_start(srv, &cfg) != ccol_success) {
@@ -154,7 +154,7 @@ SOFTWARE.
  * Call chttpsvr_set_engine_logger() to install your own logger for
  * engine-level events (TLS handshake failures, listen-socket bind failures
  * and idle-timeout closures).  It takes effect at once and also serves
- * every later start of the engine, until a call with CLOG_INVALID releases
+ * every later start of the engine, until a call with CLOG_NULL releases
  * it.
  *
  * Call chttpsvr_engine_wait() to block the calling thread until the engine
@@ -175,7 +175,7 @@ SOFTWARE.
  *
  * Typical single-server pattern:
  * @code
- *   chttpsvr_construct(srv, CLOG_INVALID);
+ *   chttpsvr_construct(srv, CLOG_NULL);
  *   chttpsvr_register_handler(srv, CHTTP_GET, "/hello", hello, NULL);
  *   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
  *   if (chttpsvr_start(srv, &cfg) != ccol_success) {
@@ -292,8 +292,8 @@ typedef struct chttpserver chttpserver;
  * chttpsvr is an opaque VALUE handle, not a pointer: it packs a slot index
  * and a generation into one value. Never cast it to or from void*, never
  * compare it through a pointer cast, and never treat it as an address;
- * compare it directly with CHTTPSVR_INVALID. A truth check works too, since
- * CHTTPSVR_INVALID is 0, so `if (!srv)` is fine. The library resolves every
+ * compare it directly with CHTTPSVR_NULL. A truth check works too, since
+ * CHTTPSVR_NULL is 0, so `if (!srv)` is fine. The library resolves every
  * use of a chttpsvr through a slot table it owns before touching the server
  * struct, so it always detects a handle whose slot was freed, or reused for
  * a different, later server, and never dereferences freed memory or the
@@ -304,7 +304,7 @@ typedef uint64_t chttpsvr;
 
 /** @brief Sentinel value for "no server": the chttpsvr equivalent of
  *         NULL. */
-#define CHTTPSVR_INVALID ((chttpsvr)0)
+#define CHTTPSVR_NULL ((chttpsvr)0)
 
 /** @brief Opaque route group (sub-router) handle. */
 typedef struct chttpsvr_router chttpsvr_router;
@@ -878,7 +878,7 @@ typedef struct chttpsvr_config {
  * field component=http-server-engine.  It closes the logger an earlier call
  * derived, and a running engine's fallback logger, if there is one.  The
  * library owns the derived logger and closes it when another call replaces
- * it, when a call with CLOG_INVALID releases it, or at process exit or
+ * it, when a call with CLOG_NULL releases it, or at process exit or
  * library unload; an engine still running then closes it as it stops. You
  * keep ownership of cl and may close cl whenever you like: the derived
  * logger is a handle of its own and keeps cl's destination open as long as
@@ -887,7 +887,7 @@ typedef struct chttpsvr_config {
  * The derived logger allocates and frees through cl's allocator. An
  * application that destroys that allocator before the process exits must
  * first release the engine logger by calling chttpsvr_set_engine_logger()
- * with CLOG_INVALID, which closes the derived logger at once. A release is
+ * with CLOG_NULL, which closes the derived logger at once. A release is
  * refused with ccol_not_permitted while an engine runs, because the engine
  * logs through the logger: call it after chttpsvr_engine_wait() has
  * returned. The next engine to start then uses the fallback logger.
@@ -898,13 +898,13 @@ typedef struct chttpsvr_config {
  * descriptor open while the engine logger is installed, and release the
  * engine logger before you close the descriptor.
  *
- * A cl that isn't CLOG_INVALID but names no open logger, because it is
+ * A cl that isn't CLOG_NULL but names no open logger, because it is
  * closed or stale, gives ccol_invalid_args and changes nothing; the engine
  * keeps the logger it had.
  *
- * @param cl  Parent logger to derive from, or CLOG_INVALID to release the
+ * @param cl  Parent logger to derive from, or CLOG_NULL to release the
  *            engine logger that an earlier call installed.
- * @return ccol_success; ccol_not_permitted for CLOG_INVALID while an engine
+ * @return ccol_success; ccol_not_permitted for CLOG_NULL while an engine
  *         runs; ccol_invalid_args when cl is closed or stale; or
  *         ccol_not_enough_memory when the derived logger cannot be
  *         allocated.
@@ -1100,9 +1100,9 @@ void chttpsvr_engine_stop(void);
  *
  * The server always manages its own logger, separate from any handle you
  * pass in:
- *   - cl == CLOG_INVALID: the server creates an internal logger that writes
+ *   - cl == CLOG_NULL: the server creates an internal logger that writes
  *                  only FATAL messages to stderr.
- *   - cl != CLOG_INVALID: the server derives a new logger from cl with
+ *   - cl != CLOG_NULL: the server derives a new logger from cl with
  *                  clog_derive() and sets the field component=http-server
  *                  on it.  Your cl doesn't change, and you keep ownership
  *                  of it.
@@ -1110,12 +1110,12 @@ void chttpsvr_engine_stop(void);
  *
  * @param mprocs   Custom allocator, or NULL for malloc and free.
  * @param cl       Parent logger to derive this server's logger from, or
- *                 CLOG_INVALID to use an internal logger that writes only FATAL
+ *                 CLOG_NULL to use an internal logger that writes only FATAL
  *                 messages to stderr. A handle that is closed or was never
  *                 valid makes the call fail with an error string; it doesn't
  *                 end the process.
  * @param err_str  Optional. On failure it receives a static error string.
- * @return The new server handle, or CHTTPSVR_INVALID on failure. A call
+ * @return The new server handle, or CHTTPSVR_NULL on failure. A call
  *         made after the library's exit-time destructor has released its
  *         handle table (from a later destructor or atexit handler of the
  *         application) fails this way too, with an error string; every
@@ -1127,7 +1127,7 @@ chttpsvr chttpsvr_create_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
 /**
  * @brief Create an HTTP server with the default allocator.
  *
- * @return The new server handle, or CHTTPSVR_INVALID on a failure.
+ * @return The new server handle, or CHTTPSVR_NULL on a failure.
  */
 static inline __attribute__((always_inline)) chttpsvr
 chttpsvr_create(clog cl, char **err_str) {
@@ -1195,7 +1195,7 @@ chttpsvr_create(clog cl, char **err_str) {
  * calls _ccol_fatal_err(), i.e. abort() and SIGABRT, rather than causing a
  * use-after-free or a double free; that covers both a purely sequential
  * double destroy and a concurrent one that overlaps in time.
- * CHTTPSVR_INVALID (0) is the one exception and stays a silent no-op,
+ * CHTTPSVR_NULL (0) is the one exception and stays a silent no-op,
  * matching the chttpsvr_destroy idiom, where the destroy sets the handle to
  * the invalid value.
  *
@@ -1224,8 +1224,8 @@ void __chttpsvr_destroy(chttpsvr srv);
 /**
  * @brief RAII cleanup helper. Use it with _ccol_destructor.
  *
- * Safe on a *pp that is already CHTTPSVR_INVALID, where it does nothing.
- * Calling it on a stale handle that isn't CHTTPSVR_INVALID and that
+ * Safe on a *pp that is already CHTTPSVR_NULL, where it does nothing.
+ * Calling it on a stale handle that isn't CHTTPSVR_NULL and that
  * something else has already destroyed is the same fatal misuse that
  * __chttpsvr_destroy documents.
  */
@@ -1233,12 +1233,12 @@ static inline __attribute__((always_inline)) void ___chttpsvr_destroy(
     chttpsvr *pp) {
   if (pp && *pp) {
     __chttpsvr_destroy(*pp);
-    *pp = CHTTPSVR_INVALID;
+    *pp = CHTTPSVR_NULL;
   }
 }
 
 /**
- * @brief Destroy an HTTP server and set the handle to CHTTPSVR_INVALID.
+ * @brief Destroy an HTTP server and set the handle to CHTTPSVR_NULL.
  *
  * Stops the server if it is running, drains every in-flight request, and
  * frees this server's reference to the shared engine, which starts the
@@ -1264,7 +1264,7 @@ static inline __attribute__((always_inline)) void ___chttpsvr_destroy(
   do {                                          \
     __typeof__(name) *slot = &(name);           \
     __chttpsvr_destroy(*slot);                  \
-    *slot = CHTTPSVR_INVALID;                   \
+    *slot = CHTTPSVR_NULL;                      \
   } while (0)
 
 /* ========================================================================== */
@@ -1278,7 +1278,7 @@ static inline __attribute__((always_inline)) void ___chttpsvr_destroy(
  *         end of its scope.
  */
 #define chttpsvr_declare_scoped(name) \
-  chttpsvr name _ccol_destructor(___chttpsvr_destroy) = CHTTPSVR_INVALID
+  chttpsvr name _ccol_destructor(___chttpsvr_destroy) = CHTTPSVR_NULL
 
 /**
  * @brief Declare and initialize a server, calling _ccol_fatal_err on a
@@ -1286,13 +1286,13 @@ static inline __attribute__((always_inline)) void ___chttpsvr_destroy(
  *
  * @param name  The variable name for the server handle.
  * @param cl    Parent logger to derive the logger of this server from, or
- *              CLOG_INVALID to use an internal logger that writes only FATAL
+ *              CLOG_NULL to use an internal logger that writes only FATAL
  *              messages to stderr.  See chttpsvr_create_mp() for the
  *              details.
  *
  * Example:
  * @code
- * chttpsvr_construct(srv, CLOG_INVALID);
+ * chttpsvr_construct(srv, CLOG_NULL);
  * chttpsvr_register_handler(srv, CHTTP_GET, "/hello", my_handler, NULL);
  * chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
  * cfg.port = 9000;
@@ -1306,7 +1306,7 @@ static inline __attribute__((always_inline)) void ___chttpsvr_destroy(
  * @endcode
  */
 #define chttpsvr_construct(name, cl)                          \
-  chttpsvr name = CHTTPSVR_INVALID;                           \
+  chttpsvr name = CHTTPSVR_NULL;                              \
   do {                                                        \
     char *_chs_err = NULL;                                    \
     (name) = chttpsvr_create((cl), &_chs_err);                \
@@ -1322,19 +1322,19 @@ static inline __attribute__((always_inline)) void ___chttpsvr_destroy(
  *
  * @param name  The variable name for the server handle.
  * @param cl    Parent logger to derive the logger of this server from, or
- *              CLOG_INVALID to use an internal logger that writes only FATAL
+ *              CLOG_NULL to use an internal logger that writes only FATAL
  *              messages to stderr.  See chttpsvr_create_mp() for the
  *              details.
  */
-#define chttpsvr_construct_scoped(name, cl)                               \
-  chttpsvr name _ccol_destructor(___chttpsvr_destroy) = CHTTPSVR_INVALID; \
-  do {                                                                    \
-    char *_chs_err = NULL;                                                \
-    (name) = chttpsvr_create((cl), &_chs_err);                            \
-    if (!(name)) {                                                        \
-      _ccol_fatal_err("chttpsvr_construct_scoped('%s'): %s", #name,       \
-                      _chs_err ? _chs_err : "unknown error");             \
-    }                                                                     \
+#define chttpsvr_construct_scoped(name, cl)                            \
+  chttpsvr name _ccol_destructor(___chttpsvr_destroy) = CHTTPSVR_NULL; \
+  do {                                                                 \
+    char *_chs_err = NULL;                                             \
+    (name) = chttpsvr_create((cl), &_chs_err);                         \
+    if (!(name)) {                                                     \
+      _ccol_fatal_err("chttpsvr_construct_scoped('%s'): %s", #name,    \
+                      _chs_err ? _chs_err : "unknown error");          \
+    }                                                                  \
   } while (0)
 
 /* ========================================================================== */
@@ -1421,7 +1421,7 @@ static inline __attribute__((always_inline)) void ___chttpsvr_destroy(
  * @param cfg  Startup configuration.  The server uses
  *             CHTTPSVR_CONFIG_DEFAULT when this is NULL.
  * @return ccol_success            The listener is bound and registered.
- *         ccol_invalid_args       srv is CHTTPSVR_INVALID, or a stale handle
+ *         ccol_invalid_args       srv is CHTTPSVR_NULL, or a stale handle
  *                                 that something already destroyed; or
  *                                 cfg->tls is set but
  *                                 cert_path and key_path are not both set.
@@ -1481,7 +1481,7 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg);
  * connection and wait for every in-flight request on this server to drain
  * before the resources are freed.
  *
- * Does nothing, silently, when srv is CHTTPSVR_INVALID or a stale handle
+ * Does nothing, silently, when srv is CHTTPSVR_NULL or a stale handle
  * that something has already destroyed.
  *
  * You may call it at the same time as a chttpsvr_start() restarting the
@@ -1517,7 +1517,7 @@ void chttpsvr_stop(chttpsvr srv);
  * @param running_out  Receives true when the server listens and false
  *                     otherwise. It receives false on every failure.
  * @return ccol_success       *running_out holds the answer.
- *         ccol_invalid_args  srv is CHTTPSVR_INVALID or a stale handle, or
+ *         ccol_invalid_args  srv is CHTTPSVR_NULL or a stale handle, or
  *                            running_out is NULL.
  */
 ccol_retval_t chttpsvr_is_running(chttpsvr srv, bool *running_out);
@@ -1535,7 +1535,7 @@ ccol_retval_t chttpsvr_is_running(chttpsvr srv, bool *running_out);
  * @param port_out  Receives the port in host byte order. It receives 0 on
  *                  every failure.
  * @return ccol_success        *port_out holds the port.
- *         ccol_invalid_args   srv is CHTTPSVR_INVALID or a stale handle, or
+ *         ccol_invalid_args   srv is CHTTPSVR_NULL or a stale handle, or
  *                             port_out is NULL.
  *         ccol_not_permitted  The server does not listen (see
  *                             chttpsvr_is_running()), or it listens on a
@@ -1560,7 +1560,7 @@ ccol_retval_t chttpsvr_bound_port(chttpsvr srv, uint16_t *port_out);
  * @param buflen  The size of buf in bytes. On every failure where buflen is
  *                not 0, buf receives the empty string.
  * @return ccol_success        buf holds the address.
- *         ccol_invalid_args   srv is CHTTPSVR_INVALID or a stale handle, or
+ *         ccol_invalid_args   srv is CHTTPSVR_NULL or a stale handle, or
  *                             buf is NULL, or buflen is 0.
  *         ccol_not_permitted  The server does not listen (see
  *                             chttpsvr_is_running()).
@@ -1596,7 +1596,7 @@ ccol_retval_t chttpsvr_bound_address(chttpsvr srv, char *buf, size_t buflen);
  * @param fn       The handler function.
  * @param ctx      Opaque user data that the server gives to fn.
  * @return ccol_success, ccol_invalid_args, or ccol_not_enough_memory. The
- *         library gives ccol_invalid_args when srv is CHTTPSVR_INVALID or a
+ *         library gives ccol_invalid_args when srv is CHTTPSVR_NULL or a
  *         stale handle that something already destroyed, and also when
  *         method is not one of the seven methods or CHTTP_ANY, when
  *         pattern or fn is NULL, when pattern does not start with '/',
@@ -1643,7 +1643,7 @@ ccol_retval_t chttpsvr_register_handler(chttpsvr srv, chttp_method_t method,
  *                streaming pool.
  * @param ctx     Opaque user data that the server gives to fn.
  * @return ccol_success, ccol_invalid_args, or ccol_not_enough_memory. The
- *         library gives ccol_invalid_args when srv is CHTTPSVR_INVALID or a
+ *         library gives ccol_invalid_args when srv is CHTTPSVR_NULL or a
  *         stale handle that something already destroyed, and also when
  *         method is not one of the seven methods or CHTTP_ANY, when
  *         pattern or fn is NULL, when pattern does not start with '/',
@@ -1704,7 +1704,7 @@ ccol_retval_t chttpsvr_register_streaming_handler(chttpsvr srv,
  * @param ctx  Opaque user data that the server gives to fn.
  * @return ccol_success, ccol_invalid_args, ccol_not_enough_memory, or
  *         ccol_not_permitted. The library gives ccol_invalid_args when srv
- *         is CHTTPSVR_INVALID, when srv is a stale handle that something
+ *         is CHTTPSVR_NULL, when srv is a stale handle that something
  *         already destroyed, or when fn is NULL, and ccol_not_permitted when
  *         the middleware chain of the root router is already at the cap of
  *         32 entries (see "Middleware chain limit" above).
@@ -1761,7 +1761,7 @@ ccol_retval_t chttpsvr_use(chttpsvr srv, chttpsvr_middleware_fn fn, void *ctx);
  *   chttpsvr_register_streaming_handler when you want a catch-all that gets
  *   every request. Don't use a sub-router with the prefix "/" for either.
  *
- * @param srv     Server handle. It must not be CHTTPSVR_INVALID.
+ * @param srv     Server handle. It must not be CHTTPSVR_NULL.
  * @param prefix  The path prefix, for example "/api/v1", which must not be
  *                NULL and must start with '/'.  The library rejects two
  *                slashes together, for example "//api" or "/a//b", and
@@ -1770,7 +1770,7 @@ ccol_retval_t chttpsvr_use(chttpsvr srv, chttpsvr_middleware_fn fn, void *ctx);
  *                sub-router that matches only the exact root path "/" (see
  *                the note above).
  * @return A sub-router pointer that srv owns, or NULL. It gives NULL when
- *         srv is CHTTPSVR_INVALID, when srv is a stale handle that something
+ *         srv is CHTTPSVR_NULL, when srv is a stale handle that something
  *         already destroyed, when prefix is NULL, when prefix does not start
  *         with '/', when prefix has two slashes together, or when the
  *         library runs out of memory.

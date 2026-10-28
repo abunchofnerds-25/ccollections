@@ -811,7 +811,7 @@ TEST(compat_callbacks, a_small_cache_evicts_in_exact_global_lru_order) {
   char *err = NULL;
   clru_cache c = clrucache_create_full(3, ccol_int, ccol_int, NULL, NULL, ev_cb,
                                        NULL, &err);
-  REQUIRE_TRUE(c != CLRU_CACHE_INVALID);
+  REQUIRE_TRUE(c != CLRU_CACHE_NULL);
 
   bool ok = lru_set_int(c, 1, 10) == ccol_success &&
             lru_set_int(c, 2, 20) == ccol_success &&
@@ -843,7 +843,7 @@ TEST(compat_callbacks, the_eviction_callback_runs_synchronously_on_the_caller) {
   char *err = NULL;
   clru_cache c = clrucache_create_full(2, ccol_int, ccol_int, NULL, NULL, ev_cb,
                                        NULL, &err);
-  REQUIRE_TRUE(c != CLRU_CACHE_INVALID);
+  REQUIRE_TRUE(c != CLRU_CACHE_NULL);
 
   bool ok = true;
   for (int i = 1; i <= 6 && ok; i++) ok = lru_set_int(c, i, i) == ccol_success;
@@ -890,7 +890,7 @@ TEST(compat_callbacks, a_refused_remote_setter_leaves_the_cache_unchanged) {
   char *err = NULL;
   g_setter_cache = clrucache_create_full(8, ccol_int, ccol_int, NULL,
                                          remote_setter, NULL, NULL, &err);
-  REQUIRE_TRUE(g_setter_cache != CLRU_CACHE_INVALID);
+  REQUIRE_TRUE(g_setter_cache != CLRU_CACHE_NULL);
 
   ccol_retval_t r = lru_set_int(g_setter_cache, 7, 70);
 
@@ -911,7 +911,7 @@ TEST(compat_callbacks, an_accepted_remote_setter_runs_before_the_cache_update) {
   char *err = NULL;
   g_setter_cache = clrucache_create_full(8, ccol_int, ccol_int, NULL,
                                          remote_setter, NULL, NULL, &err);
-  REQUIRE_TRUE(g_setter_cache != CLRU_CACHE_INVALID);
+  REQUIRE_TRUE(g_setter_cache != CLRU_CACHE_NULL);
 
   ccol_retval_t r = lru_set_int(g_setter_cache, 7, 70);
   int got = 0;
@@ -974,7 +974,7 @@ TEST(compat_callbacks, on_complete_runs_after_its_task_and_on_a_worker) {
 
   char *err = NULL;
   ctpool pool = ctpool_create_mp(2, 0, NULL, &err);
-  REQUIRE_TRUE(pool != CTPOOL_INVALID);
+  REQUIRE_TRUE(pool != CTPOOL_NULL);
 
   ccol_retval_t r = ctpool_submit(pool, pool_task, NULL, pool_complete);
   ctpool_wait(pool);
@@ -1002,8 +1002,11 @@ static atomic_int g_discard_blocker_running;
 static void discard_blocker_task(void *arg) {
   (void)arg;
   atomic_store(&g_discard_blocker_running, 1);
+  /* The bound is a hang guard only, longer than the releaser's below, so
+   * the worker never takes a queued task before the shutdown has had every
+   * chance to discard it. */
   struct timespec ts = {.tv_sec = 0, .tv_nsec = 1000000};
-  for (int i = 0; i < 10000 && !atomic_load(&g_discard_gate); i++)
+  for (int i = 0; i < 120000 && !atomic_load(&g_discard_gate); i++)
     nanosleep(&ts, NULL);
 }
 
@@ -1023,12 +1026,14 @@ static void discard_complete(void *arg, bool ran) {
 }
 
 /* A bound for the case where no discarded on_complete runs at all: the gate
- * opens after 10 s so the test fails instead of hanging. It returns as soon
- * as the gate is open. */
+ * opens after 60 s so the test fails instead of hanging. It returns as soon
+ * as the gate is open. The bound is long because a gate that opens before
+ * the shutdown starts lets the worker run the queued tasks, which fails the
+ * test on a machine that only stalled. */
 static void *discard_release_gate(void *arg) {
   (void)arg;
   struct timespec ts = {.tv_sec = 0, .tv_nsec = 1000000};
-  for (int i = 0; i < 10000 && !atomic_load(&g_discard_gate); i++)
+  for (int i = 0; i < 60000 && !atomic_load(&g_discard_gate); i++)
     nanosleep(&ts, NULL);
   atomic_store(&g_discard_gate, 1);
   return NULL;
@@ -1051,13 +1056,13 @@ TEST(compat_callbacks, a_discarded_task_gets_on_complete_with_ran_false) {
 
   char *err = NULL;
   ctpool pool = ctpool_create_mp(1, 0, NULL, &err);
-  REQUIRE_TRUE(pool != CTPOOL_INVALID);
+  REQUIRE_TRUE(pool != CTPOOL_NULL);
 
   bool blocker_ok =
       ctpool_submit(pool, discard_blocker_task, NULL, NULL) == ccol_success;
   struct timespec ts = {.tv_sec = 0, .tv_nsec = 1000000};
   for (int i = 0;
-       blocker_ok && i < 10000 && !atomic_load(&g_discard_blocker_running); i++)
+       blocker_ok && i < 60000 && !atomic_load(&g_discard_blocker_running); i++)
     nanosleep(&ts, NULL);
   int accepted = 0;
   for (int i = 0; i < DISCARDED; i++) {
@@ -1112,7 +1117,7 @@ TEST(compat_callbacks,
 
   char *err = NULL;
   ctpool pool = ctpool_create_mp(1, 0, NULL, &err);
-  REQUIRE_TRUE(pool != CTPOOL_INVALID);
+  REQUIRE_TRUE(pool != CTPOOL_NULL);
 
   bool submitted_all = true;
   for (int i = 0; i < ORDER_N; i++) {

@@ -61,23 +61,23 @@ TAU_MAIN()
 
 TEST(default_client, destroying_it_directly_does_not_crash_or_double_free) {
   chttpcli cli = chttp_default_client();
-  REQUIRE_NE(cli, CHTTPCLI_INVALID);
+  REQUIRE_NE(cli, CHTTPCLI_NULL);
 
   /* The misuse this test makes safe: the caller destroys the handle that
      chttp_default_client() owns, although that function is the one in
      charge of tearing it down at process exit. */
   chttpclient_destroy(cli);
-  REQUIRE_EQ(cli, CHTTPCLI_INVALID); /* the macro clears the local, as it
+  REQUIRE_EQ(cli, CHTTPCLI_NULL); /* the macro clears the local, as it
                                         always does */
 
   /* The destroy has to clear the singleton. If it doesn't, this call gives back
    * the same stale handle, _ccol_call_once never fires again and every use of
    * it below is a use after the destroy. Once the singleton is cleared this
-   * call gives back CHTTPCLI_INVALID for good, because nothing can rebuild the
+   * call gives back CHTTPCLI_NULL for good, because nothing can rebuild the
    * default client after such a destroy (see the doc comment of
    * chttp_default_client). */
   chttpcli cli2 = chttp_default_client();
-  REQUIRE_EQ(cli2, CHTTPCLI_INVALID);
+  REQUIRE_EQ(cli2, CHTTPCLI_NULL);
 
   /* Every convenience function on top of the default client must fail cleanly,
    * with no crash and no dereference of a dangling pointer. No real request is

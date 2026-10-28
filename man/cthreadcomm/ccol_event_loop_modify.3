@@ -55,9 +55,9 @@ new_dir  ccol_select_read or ccol_select_write.
 .SH RETURN VALUE
 .nf
 ccol_success        The direction is changed.
-ccol_invalid_args   loop is CCOL_EVENT_LOOP_INVALID, a stale handle,
+ccol_invalid_args   loop is CCOL_EVENT_LOOP_NULL, a stale handle,
                     or a handle that has already been destroyed; or
-                    reg is CCOL_EVENT_REG_INVALID or fails to resolve
+                    reg is CCOL_EVENT_REG_NULL or fails to resolve
                     for another reason; or reg is a registration for a
                     queue or a ccol_channel; or new_dir is neither
                     ccol_select_read nor ccol_select_write. A reg that

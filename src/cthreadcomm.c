@@ -2977,6 +2977,10 @@ void _ccol_select_test_short_next_capped_waits(uint32_t count) {
   atomic_store(&g_sel_short_capped_waits, count);
 }
 
+uint32_t _ccol_select_test_short_capped_waits_left(void) {
+  return atomic_load(&g_sel_short_capped_waits);
+}
+
 static int _sel_poll_wait_for_tests(int epfd, ccol_poll_event *evs, int cap,
                                     int timeout_ms) {
   if (timeout_ms == INT_MAX) {
@@ -4973,7 +4977,7 @@ static _Atomic bool g_force_next_reg_slot_acquire_failure = false;
  * ccol_event_loop_add's ORDERING directly and deterministically: acquire the
  * slot first, only then wire the reg into the registry. Without it a test
  * only sees the end state, which is the same for both orders (both make
- * ccol_event_loop_add return CCOL_EVENT_REG_INVALID with reg_count back at
+ * ccol_event_loop_add return CCOL_EVENT_REG_NULL with reg_count back at
  * 0, since rolling back a post-wiring failure restores reg_count too).
  * reg_count can already include THIS call's registration only if the wiring
  * ran before the slot acquire was even tried, so a snapshot of 0 proves the
@@ -5946,7 +5950,7 @@ ccol_event_reg ccol_event_loop_add(ccol_event_loop loop, ccol_selectable sel,
   if (!raw) {
     if (err_str)
       *err_str = _CCOL_ERR_STR("Invalid or stale ccol_event_loop handle");
-    return CCOL_EVENT_REG_INVALID;
+    return CCOL_EVENT_REG_NULL;
   }
 
   ccol_retval_t validate = _ccol_event_loop_validate_add_args(raw, &sel);
@@ -5954,7 +5958,7 @@ ccol_event_reg ccol_event_loop_add(ccol_event_loop loop, ccol_selectable sel,
     if (err_str)
       *err_str = _CCOL_ERR_STR("Invalid arguments to ccol_event_loop_add");
     _ccol_event_loop_resolve_unpin(raw);
-    return CCOL_EVENT_REG_INVALID;
+    return CCOL_EVENT_REG_NULL;
   }
 
   ccol_retval_t create_rv = ccol_success;
@@ -5970,7 +5974,7 @@ ccol_event_reg ccol_event_loop_add(ccol_event_loop loop, ccol_selectable sel,
                     "ccol_event_loop_add: a system call failed (the "
                     "initialisation of a mutex or a condition variable)");
     _ccol_event_loop_resolve_unpin(raw);
-    return CCOL_EVENT_REG_INVALID;
+    return CCOL_EVENT_REG_NULL;
   }
 
   /* The slot acquire happens BEFORE reg is wired into the fd or queue
@@ -6015,7 +6019,7 @@ ccol_event_reg ccol_event_loop_add(ccol_event_loop loop, ccol_selectable sel,
           "slot");
     _ccol_event_reg_free(raw, reg);
     _ccol_event_loop_resolve_unpin(raw);
-    return CCOL_EVENT_REG_INVALID;
+    return CCOL_EVENT_REG_NULL;
   }
 
   /* The stripe index is computed before any lock is taken, from data we
@@ -6120,7 +6124,7 @@ ccol_event_reg ccol_event_loop_add(ccol_event_loop loop, ccol_selectable sel,
     _ccol_event_reg_slot_release(raw, reg);
     _ccol_event_reg_free(raw, reg);
     _ccol_event_loop_resolve_unpin(raw);
-    return CCOL_EVENT_REG_INVALID;
+    return CCOL_EVENT_REG_NULL;
   }
 
 #ifdef RUNNING_UNIT_TESTS
@@ -7942,7 +7946,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
   if (max_events_per_wait == 0) {
     if (err_str)
       *err_str = _CCOL_ERR_STR("max_events_per_wait must be positive");
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
   /* max_events_per_wait gets narrowed to a plain `int` for epoll_wait's
    * maxevents parameter in _ccol_event_loop_thread_fn, and it also sizes the
@@ -7964,26 +7968,26 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
   if (max_events_per_wait > (size_t)INT_MAX) {
     if (err_str)
       *err_str = _CCOL_ERR_STR("max_events_per_wait must not exceed INT_MAX");
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
   if (max_events_per_wait > SIZE_MAX / sizeof(ccol_poll_event)) {
     if (err_str)
       *err_str = _CCOL_ERR_STR(
           "max_events_per_wait is too large: max_events_per_wait * "
           "sizeof(ccol_poll_event) would overflow size_t");
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
   if (num_lock_stripes == 0) {
     if (err_str) *err_str = _CCOL_ERR_STR("num_lock_stripes must be positive");
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
   if (num_reactor_threads == 0) {
     if (err_str)
       *err_str = _CCOL_ERR_STR("num_reactor_threads must be positive");
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
   if (!_ccol_verify_memmgmt_procs(mmgmt_procs, err_str)) {
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
 
   /* A loop's dispatch sets two of this module's thread-local keys. A key
@@ -7996,7 +8000,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
     if (err_str)
       *err_str = _CCOL_ERR_STR(
           "failed to create a thread-local key of ccol_event_loop");
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
 
   struct _ccol_event_loop_s *loop =
@@ -8005,12 +8009,12 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
   if (!loop) {
     if (err_str)
       *err_str = _CCOL_ERR_STR("Failed to allocate memory for ccol_event_loop");
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
 
   if (!_ccol_populate_mem_mgmt_procs(loop, mmgmt_procs, err_str)) {
     _ccol_mem_free(mmgmt_procs, loop);
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
 
   loop->epfd = ccol_poll_create();
@@ -8018,7 +8022,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
     if (err_str) *err_str = _CCOL_ERR_STR("epoll_create1 failed");
     _ccol_mem_free(mmgmt_procs, loop->m_procs);
     _ccol_mem_free(mmgmt_procs, loop);
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
 
   loop->shutdown_efd = ccol_wakefd_create();
@@ -8027,7 +8031,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
     close(loop->epfd);
     _ccol_mem_free(mmgmt_procs, loop->m_procs);
     _ccol_mem_free(mmgmt_procs, loop);
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
 
   ccol_poll_event ev;
@@ -8041,7 +8045,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
     close(loop->epfd);
     _ccol_mem_free(mmgmt_procs, loop->m_procs);
     _ccol_mem_free(mmgmt_procs, loop);
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
 
   loop->reclaim_wake_efd = ccol_wakefd_create();
@@ -8051,7 +8055,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
     close(loop->epfd);
     _ccol_mem_free(mmgmt_procs, loop->m_procs);
     _ccol_mem_free(mmgmt_procs, loop);
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
 
   ev.data.ptr = &loop->reclaim_wake_efd;
@@ -8066,7 +8070,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
     close(loop->epfd);
     _ccol_mem_free(mmgmt_procs, loop->m_procs);
     _ccol_mem_free(mmgmt_procs, loop);
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
 
   if (_ccol_mutex_init(loop->shutdown_lock) != 0) {
@@ -8076,7 +8080,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
     close(loop->epfd);
     _ccol_mem_free(mmgmt_procs, loop->m_procs);
     _ccol_mem_free(mmgmt_procs, loop);
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
   if (_ccol_cond_var_init(loop->joined_cv) != 0) {
     if (err_str) *err_str = _CCOL_ERR_STR("Failed to initialize joined_cv");
@@ -8086,7 +8090,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
     close(loop->epfd);
     _ccol_mem_free(mmgmt_procs, loop->m_procs);
     _ccol_mem_free(mmgmt_procs, loop);
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
   if (_ccol_rw_lock_init(loop->reg_slot_rwlock) != 0) {
     if (err_str)
@@ -8098,7 +8102,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
     close(loop->epfd);
     _ccol_mem_free(mmgmt_procs, loop->m_procs);
     _ccol_mem_free(mmgmt_procs, loop);
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
   loop->reg_slots =
       cvector_create_full(sizeof(ccol_event_reg_slot_t), mmgmt_procs, NULL);
@@ -8112,7 +8116,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
     close(loop->epfd);
     _ccol_mem_free(mmgmt_procs, loop->m_procs);
     _ccol_mem_free(mmgmt_procs, loop);
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
   loop->reg_lost_indices = 0;
   loop->reg_free_indices =
@@ -8129,7 +8133,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
     close(loop->epfd);
     _ccol_mem_free(mmgmt_procs, loop->m_procs);
     _ccol_mem_free(mmgmt_procs, loop);
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
   loop->shutdown_started = false;
   loop->joined = false;
@@ -8154,7 +8158,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
 #endif
   loop->num_stripes = num_lock_stripes;
   loop->num_reactor_threads = num_reactor_threads;
-  loop->dispatch_pool = CTPOOL_INVALID;
+  loop->dispatch_pool = CTPOOL_NULL;
 
   loop->stripes = _ccol_mem_calloc(mmgmt_procs, num_lock_stripes,
                                    sizeof(ccol_event_loop_stripe_t));
@@ -8171,7 +8175,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
     close(loop->epfd);
     _ccol_mem_free(mmgmt_procs, loop->m_procs);
     _ccol_mem_free(mmgmt_procs, loop);
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
 
   size_t stripes_created = 0;
@@ -8195,7 +8199,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
       close(loop->epfd);
       _ccol_mem_free(mmgmt_procs, loop->m_procs);
       _ccol_mem_free(mmgmt_procs, loop);
-      return CCOL_EVENT_LOOP_INVALID;
+      return CCOL_EVENT_LOOP_NULL;
     }
     if (_ccol_mutex_init(loop->stripes[stripes_created].lock) != 0) {
       if (err_str) *err_str = _CCOL_ERR_STR("Failed to initialize stripe lock");
@@ -8217,7 +8221,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
       close(loop->epfd);
       _ccol_mem_free(mmgmt_procs, loop->m_procs);
       _ccol_mem_free(mmgmt_procs, loop);
-      return CCOL_EVENT_LOOP_INVALID;
+      return CCOL_EVENT_LOOP_NULL;
     }
     loop->stripes[stripes_created].queue_regs_head = NULL;
   }
@@ -8243,7 +8247,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
     close(loop->epfd);
     _ccol_mem_free(mmgmt_procs, loop->m_procs);
     _ccol_mem_free(mmgmt_procs, loop);
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
 
   /* dispatch_pool only exists for num_reactor_threads > 1 (see the field
@@ -8276,7 +8280,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
       close(loop->epfd);
       _ccol_mem_free(mmgmt_procs, loop->m_procs);
       _ccol_mem_free(mmgmt_procs, loop);
-      return CCOL_EVENT_LOOP_INVALID;
+      return CCOL_EVENT_LOOP_NULL;
     }
   }
 
@@ -8296,7 +8300,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
     close(loop->epfd);
     _ccol_mem_free(mmgmt_procs, loop->m_procs);
     _ccol_mem_free(mmgmt_procs, loop);
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
 
   atomic_init(&loop->pending_resolve_count, (size_t)0);
@@ -8325,7 +8329,7 @@ ccol_event_loop ccol_event_loop_create_mp(size_t max_events_per_wait,
       *err_str =
           _CCOL_ERR_STR("Failed to allocate ccol_event_loop handle slot");
     _ccol_event_loop_teardown_raw(loop);
-    return CCOL_EVENT_LOOP_INVALID;
+    return CCOL_EVENT_LOOP_NULL;
   }
   loop->self_handle = h;
 

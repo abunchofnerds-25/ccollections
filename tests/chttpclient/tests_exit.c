@@ -63,11 +63,20 @@ SOFTWARE.
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <tau/tau.h>
+#include <test_coverage.h>
+#include <test_signals.h>
 #include <test_threads.h>
 #include <time.h>
 #include <unistd.h>
 
 TAU_MAIN()
+
+/* The forked children of this binary report through their wait status, and
+ * test_reset_inherited_signals() explains what an inherited signal state does
+ * to that. */
+__attribute__((constructor)) static void _reset_inherited_signals(void) {
+  test_reset_inherited_signals();
+}
 
 /* A child's exit codes. */
 enum {
@@ -147,7 +156,7 @@ static void _server_main(int lfd) {
   if (!ctx ||
       SSL_CTX_use_certificate_file(ctx, g_cert, SSL_FILETYPE_PEM) != 1 ||
       SSL_CTX_use_PrivateKey_file(ctx, g_key, SSL_FILETYPE_PEM) != 1)
-    _exit(1);
+    test_child_exit(1);
   for (;;) {
     int fd = accept(lfd, NULL, NULL);
     if (fd < 0) {
@@ -156,7 +165,8 @@ static void _server_main(int lfd) {
          leave its listener open, so every later test of this binary would
          connect and wait for an answer. _teardown ends this process with
          SIGKILL, so only a listener that can't be used ends the loop. */
-      if (errno == EBADF || errno == EINVAL || errno == ENOTSOCK) _exit(0);
+      if (errno == EBADF || errno == EINVAL || errno == ENOTSOCK)
+        test_child_exit(0);
       if (errno != EINTR && errno != ECONNABORTED) {
         struct timespec nap = {0, 1000000};
         nanosleep(&nap, NULL);
@@ -168,7 +178,7 @@ static void _server_main(int lfd) {
       close(lfd);
       _serve_connection(ctx, fd);
       close(fd);
-      _exit(0);
+      test_child_exit(0);
     }
     close(fd);
   }
@@ -257,10 +267,22 @@ static int g_scenario_code = CHILD_OK;
  * removes the thread from /proc/self/task a moment later, so a thread joined
  * just before this check may still be listed. Such a thread disappears within
  * microseconds while one that nobody joined stays, so we read the count until
- * it reaches the baseline, for 2 s at most. */
+ * it reaches the baseline, for about 10 s by the clock. A count of naps would
+ * stretch on a loaded runner, and the extra time costs nothing: a thread that
+ * nobody joined is still there when it runs out. */
 static int _settled_thread_count(void) {
+  struct timespec start, now;
+  clock_gettime(CLOCK_MONOTONIC, &start);
   int threads = _thread_count();
-  for (int i = 0; i < 2000 && threads != g_thread_baseline; i++) {
+  while (threads != g_thread_baseline) {
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    /* From the full nanosecond difference, so a pair across a second
+     * boundary isn't rounded up. */
+    long long waited_ms =
+        ((long long)(now.tv_sec - start.tv_sec) * 1000000000LL +
+         (now.tv_nsec - start.tv_nsec)) /
+        1000000LL;
+    if (waited_ms >= 10000) break;
     struct timespec ts = {0, 1000L * 1000L};
     nanosleep(&ts, NULL);
     threads = _thread_count();
@@ -279,7 +301,7 @@ static void _check_at_exit(void) {
   if (code == CHILD_OK && _chttpclient_reaper_created_count_for_tests() !=
                               _chttpclient_reaper_joined_count_for_tests())
     code = CHILD_REAPER_NOT_JOINED;
-  if (write(g_report_fd, &code, 1) != 1) _exit(CHILD_SCENARIO_FAILED);
+  if (write(g_report_fd, &code, 1) != 1) test_child_exit(CHILD_SCENARIO_FAILED);
 }
 
 static bool _set_tls(chttpcli cli) {
@@ -324,7 +346,7 @@ static void _child_full(void) {
   snprintf(url, sizeof(url), "https://127.0.0.1:%d/x", g_port);
   bool ok = true;
   chttpcli cli = chttpclient_create(NULL);
-  if (cli == CHTTPCLI_INVALID || !_set_tls(cli)) {
+  if (cli == CHTTPCLI_NULL || !_set_tls(cli)) {
     g_scenario_code = CHILD_SCENARIO_FAILED;
     exit(1);
   }
@@ -333,7 +355,7 @@ static void _child_full(void) {
   ok = _tier2_get(cli, url) && ok;
   chttpclient_destroy(cli);
   chttpcli dc = chttp_default_client();
-  if (dc == CHTTPCLI_INVALID || !_set_tls(dc))
+  if (dc == CHTTPCLI_NULL || !_set_tls(dc))
     ok = false;
   else
     ok = _tier2_get(dc, url) && ok;
@@ -353,7 +375,7 @@ static void _child_exit_in_callback(void) {
   char url[96];
   snprintf(url, sizeof(url), "https://127.0.0.1:%d/x", g_port);
   chttpcli cli = chttpclient_create(NULL);
-  if (cli == CHTTPCLI_INVALID || !_set_tls(cli)) exit(CHILD_SCENARIO_FAILED);
+  if (cli == CHTTPCLI_NULL || !_set_tls(cli)) exit(CHILD_SCENARIO_FAILED);
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   if (!req) exit(CHILD_SCENARIO_FAILED);
   ctpool_future *f =
@@ -369,7 +391,7 @@ static void _child_exit_in_flight(void) {
   char url[96];
   snprintf(url, sizeof(url), "https://127.0.0.1:%d/hang", g_port);
   chttpcli cli = chttpclient_create(NULL);
-  if (cli == CHTTPCLI_INVALID || !_set_tls(cli)) exit(CHILD_SCENARIO_FAILED);
+  if (cli == CHTTPCLI_NULL || !_set_tls(cli)) exit(CHILD_SCENARIO_FAILED);
   chttp_request_t *req = chttp_request_create(CHTTP_GET, url, NULL, NULL);
   if (!req) exit(CHILD_SCENARIO_FAILED);
   ctpool_future *f = chttpclient_do_async(cli, req);
@@ -409,8 +431,8 @@ static void _forked_child_main(pthread_t stale_reaper, int report_fd) {
   int bfd[2];
   if (pipe(bfd) != 0) {
     code = CHILD_SCENARIO_FAILED;
-    if (write(report_fd, &code, 1) != 1) _exit(CHILD_SCENARIO_FAILED);
-    _exit(0);
+    if (write(report_fd, &code, 1) != 1) test_child_exit(CHILD_SCENARIO_FAILED);
+    test_child_exit(0);
   }
   g_blocker_fd = bfd[0];
   pthread_t tids[PREFORK_MAX_THREADS];
@@ -432,18 +454,18 @@ static void _forked_child_main(pthread_t stale_reaper, int report_fd) {
     char url[96];
     snprintf(url, sizeof(url), "https://127.0.0.1:%d/x", g_port);
     chttpcli cli = chttpclient_create(NULL);
-    bool ok = cli != CHTTPCLI_INVALID && _set_tls(cli);
+    bool ok = cli != CHTTPCLI_NULL && _set_tls(cli);
     ok = ok && _tier2_get(cli, url);
     ok = ok && _tier3_get(cli, url);
-    if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+    if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
     if (!ok) code = CHILD_SCENARIO_FAILED;
   }
   /* All the blockers are released and joined before the verdict. */
   close(bfd[1]);
   for (int i = 0; i < started; i++) pthread_join(tids[i], NULL);
   close(bfd[0]);
-  if (write(report_fd, &code, 1) != 1) _exit(CHILD_SCENARIO_FAILED);
-  _exit(0);
+  if (write(report_fd, &code, 1) != 1) test_child_exit(CHILD_SCENARIO_FAILED);
+  test_child_exit(0);
 }
 
 static bool _under_valgrind(void);
@@ -453,9 +475,9 @@ static void _child_prefork_after_engine_stop(void) {
   char url[96];
   snprintf(url, sizeof(url), "https://127.0.0.1:%d/x", g_port);
   chttpcli cli = chttpclient_create(NULL);
-  bool ok = cli != CHTTPCLI_INVALID && _set_tls(cli);
+  bool ok = cli != CHTTPCLI_NULL && _set_tls(cli);
   ok = ok && _tier3_get(cli, url);
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   pthread_t stale;
   if (!ok) {
     code = CHILD_SCENARIO_FAILED;
@@ -496,8 +518,8 @@ static void _child_prefork_after_engine_stop(void) {
       close(rfd[0]);
     }
   }
-  if (write(g_report_fd, &code, 1) != 1) _exit(CHILD_SCENARIO_FAILED);
-  _exit(0);
+  if (write(g_report_fd, &code, 1) != 1) test_child_exit(CHILD_SCENARIO_FAILED);
+  test_child_exit(0);
 }
 
 #if CCOL_FORK_SAFETY_REQUIRED
@@ -511,13 +533,13 @@ static void _forked_child_requests(int report_fd) {
   char url[96];
   snprintf(url, sizeof(url), "https://127.0.0.1:%d/x", g_port);
   chttpcli cli = chttpclient_create(NULL);
-  bool ok = cli != CHTTPCLI_INVALID && _set_tls(cli);
+  bool ok = cli != CHTTPCLI_NULL && _set_tls(cli);
   ok = ok && _tier2_get(cli, url);
   ok = ok && _tier3_get(cli, url);
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   if (!ok) code = CHILD_SCENARIO_FAILED;
-  if (write(report_fd, &code, 1) != 1) _exit(CHILD_SCENARIO_FAILED);
-  _exit(0);
+  if (write(report_fd, &code, 1) != 1) test_child_exit(CHILD_SCENARIO_FAILED);
+  test_child_exit(0);
 }
 
 #define FORK_DURING_REAP_ROUNDS 3
@@ -530,11 +552,11 @@ static void _child_fork_during_reap(void) {
   for (int round = 0; round < FORK_DURING_REAP_ROUNDS && code == CHILD_OK;
        round++) {
     chttpcli cli = chttpclient_create(NULL);
-    bool ok = cli != CHTTPCLI_INVALID && _set_tls(cli);
+    bool ok = cli != CHTTPCLI_NULL && _set_tls(cli);
     ok = ok && _tier3_get(cli, url);
     _chttpclient_hold_next_reaper_final_section_for_tests(hold_ms);
     /* The destroy drops the last reference and a reaper starts. */
-    if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+    if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
     if (!ok) {
       code = CHILD_SCENARIO_FAILED;
       break;
@@ -584,8 +606,8 @@ static void _child_fork_during_reap(void) {
     close(rfd[0]);
     _chttpclient_engine_wait_for_quiescence_for_tests();
   }
-  if (write(g_report_fd, &code, 1) != 1) _exit(CHILD_SCENARIO_FAILED);
-  _exit(0);
+  if (write(g_report_fd, &code, 1) != 1) test_child_exit(CHILD_SCENARIO_FAILED);
+  test_child_exit(0);
 }
 
 /* A fork while the engine's reaper is still running after its teardown: it
@@ -606,14 +628,14 @@ static void _forked_child_after_reaper_tail(int report_fd) {
     char url[96];
     snprintf(url, sizeof(url), "https://127.0.0.1:%d/x", g_port);
     chttpcli cli = chttpclient_create(NULL);
-    bool ok = cli != CHTTPCLI_INVALID && _set_tls(cli);
+    bool ok = cli != CHTTPCLI_NULL && _set_tls(cli);
     ok = ok && _tier2_get(cli, url);
     ok = ok && _tier3_get(cli, url);
-    if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+    if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
     if (!ok) code = CHILD_SCENARIO_FAILED;
   }
-  if (write(report_fd, &code, 1) != 1) _exit(CHILD_SCENARIO_FAILED);
-  _exit(0);
+  if (write(report_fd, &code, 1) != 1) test_child_exit(CHILD_SCENARIO_FAILED);
+  test_child_exit(0);
 }
 
 static void _child_fork_during_reaper_tail(void) {
@@ -621,11 +643,11 @@ static void _child_fork_during_reaper_tail(void) {
   char url[96];
   snprintf(url, sizeof(url), "https://127.0.0.1:%d/x", g_port);
   chttpcli cli = chttpclient_create(NULL);
-  bool ok = cli != CHTTPCLI_INVALID && _set_tls(cli);
+  bool ok = cli != CHTTPCLI_NULL && _set_tls(cli);
   ok = ok && _tier3_get(cli, url);
   _chttpclient_hold_next_reaper_tail_for_tests(_under_valgrind() ? 3000 : 800);
   /* The destroy drops the last reference and a reaper starts. */
-  if (cli != CHTTPCLI_INVALID) chttpclient_destroy(cli);
+  if (cli != CHTTPCLI_NULL) chttpclient_destroy(cli);
   if (!ok) code = CHILD_SCENARIO_FAILED;
   /* Once the hold has started the entered flag stays set, so this poll also
    * sees a hold that is already over. */
@@ -667,8 +689,8 @@ static void _child_fork_during_reaper_tail(void) {
     }
     close(rfd[0]);
   }
-  if (write(g_report_fd, &code, 1) != 1) _exit(CHILD_SCENARIO_FAILED);
-  _exit(0);
+  if (write(g_report_fd, &code, 1) != 1) test_child_exit(CHILD_SCENARIO_FAILED);
+  test_child_exit(0);
 }
 #endif /* CCOL_FORK_SAFETY_REQUIRED */
 
@@ -709,7 +731,7 @@ static int _run_child(void (*fn)(void), int timeout_s, int *report) {
     g_report_fd = pfd[1];
     g_thread_baseline = _thread_count();
     fn();
-    _exit(CHILD_SCENARIO_FAILED);
+    test_child_exit(CHILD_SCENARIO_FAILED);
   }
   close(pfd[1]);
   int status = 0;
@@ -850,7 +872,7 @@ TEST(exit, exit_does_not_wait_for_an_abandoned_lookup) {
   if (pid == 0) {
     _chttp_set_name_lookup_delay_ms_for_tests(30000);
     chttpcli cli = chttpclient_create(NULL);
-    if (cli == CHTTPCLI_INVALID) _exit(3);
+    if (cli == CHTTPCLI_NULL) test_child_exit(3);
     (void)chttpclient_set_request_timeout(cli, 100000);
     chttp_request_t *req = chttp_request_create(
         CHTTP_GET, "http://stalled-lookup.invalid:9/", NULL, NULL);

@@ -23,7 +23,7 @@ client.
 .fi
 .SH RETURN VALUE
 .nf
-The handle of the default client, or CHTTPCLI_INVALID if the
+The handle of the default client, or CHTTPCLI_NULL if the
 initialization fails.
 .fi
 .SH WARNINGS
@@ -32,7 +32,7 @@ Do not pass this handle to chttpclient_destroy. The module owns the
 default client and destroys it at process exit, from a handler that it
 registers with atexit(3) when it first builds the client. A call to
 chttp_default_client from an exit handler that runs after that one
-returns CHTTPCLI_INVALID.
+returns CHTTPCLI_NULL.
 If you destroy it anyway, the chttpclient_destroy call does not crash,
 because the module recognizes the handle and clears its own reference
 to it. The library never builds the default client again, though, so

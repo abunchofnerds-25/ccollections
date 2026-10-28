@@ -67,7 +67,7 @@ pattern checks and of how a path segment is decoded.
 .SH RETURN VALUE
 .nf
 ccol_success on success.
-ccol_invalid_args when srv is CHTTPSVR_INVALID or a stale handle that
+ccol_invalid_args when srv is CHTTPSVR_NULL or a stale handle that
                   was destroyed; when method is neither one of the
                   seven methods nor CHTTP_ANY; when pattern or fn is
                   NULL; when pattern does not start with '/', has two

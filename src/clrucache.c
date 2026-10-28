@@ -854,17 +854,17 @@ clru_cache clrucache_create_full(size_t capacity, ccol_data_type key_type,
 
   if (capacity == 0) {
     if (err) *err = _CCOL_ERR_STR("capacity must be > 0");
-    return CLRU_CACHE_INVALID;
+    return CLRU_CACHE_NULL;
   }
 
-  if (!_ccol_verify_memmgmt_procs(mprocs, err)) return CLRU_CACHE_INVALID;
+  if (!_ccol_verify_memmgmt_procs(mprocs, err)) return CLRU_CACHE_NULL;
 
   struct clrucache *router =
       (struct clrucache *)(mprocs ? mprocs->calloc(1, sizeof(*router))
                                   : calloc(1, sizeof(*router)));
   if (!router) {
     if (err) *err = _CCOL_ERR_STR("failed to allocate cache struct");
-    return CLRU_CACHE_INVALID;
+    return CLRU_CACHE_NULL;
   }
 
   if (mprocs) {
@@ -881,7 +881,7 @@ clru_cache clrucache_create_full(size_t capacity, ccol_data_type key_type,
   if (!router->shards) {
     if (err) *err = _CCOL_ERR_STR("failed to allocate cache segments");
     router_free_self(router);
-    return CLRU_CACHE_INVALID;
+    return CLRU_CACHE_NULL;
   }
 
   /* The segment capacities add up to exactly the total the caller asked
@@ -896,7 +896,7 @@ clru_cache clrucache_create_full(size_t capacity, ccol_data_type key_type,
     if (!router->shards[i]) {
       router_destroy_shards(router);
       router_free_self(router);
-      return CLRU_CACHE_INVALID;
+      return CLRU_CACHE_NULL;
     }
   }
 
@@ -917,7 +917,7 @@ clru_cache clrucache_create_full(size_t capacity, ccol_data_type key_type,
                  : _CCOL_ERR_STR("failed to allocate clru_cache handle slot");
     router_destroy_shards(router);
     router_free_self(router);
-    return CLRU_CACHE_INVALID;
+    return CLRU_CACHE_NULL;
   }
 
   return h;

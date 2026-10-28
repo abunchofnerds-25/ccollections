@@ -109,7 +109,7 @@ client rejects it.
 .fi
 .SH PARAMETERS
 .nf
-cli The client handle. It must not be CHTTPCLI_INVALID.
+cli The client handle. It must not be CHTTPCLI_NULL.
 req The request to run. It must not be NULL. Unlike with
     chttpclient_do, req does not have to stay valid after this call
     returns, because the library copies everything it needs before
@@ -118,7 +118,7 @@ req The request to run. It must not be NULL. Unlike with
 .SH RETURN VALUE
 .nf
 A future, or NULL if the request could not even be queued. That is
-the case for a NULL req, for a cli that is CHTTPCLI_INVALID and for a
+the case for a NULL req, for a cli that is CHTTPCLI_NULL and for a
 stale cli of a client that has been destroyed, and also for a
 malformed URL, for TLS that cannot be used, when memory runs out and
 when the engine fails to start. After a success the caller owns the

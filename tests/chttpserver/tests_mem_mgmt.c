@@ -52,8 +52,8 @@ TAU_MAIN()
 #define TEST_PORT 18795
 #define BASE_URL "http://127.0.0.1:18795"
 
-static clog g_test_logger = CLOG_INVALID;
-static chttpsvr g_srv = CHTTPSVR_INVALID;
+static clog g_test_logger = CLOG_NULL;
+static chttpsvr g_srv = CHTTPSVR_NULL;
 
 static size_t g_mm_malloc_count = 0;
 static size_t g_mm_free_count = 0;
@@ -91,7 +91,7 @@ static void _teardown(void) {
   if (g_srv) chttpsvr_stop(g_srv);
   if (g_srv) {
     __chttpsvr_destroy(g_srv);
-    g_srv = CHTTPSVR_INVALID;
+    g_srv = CHTTPSVR_NULL;
   }
   /* __chttpsvr_destroy releases this server's shared-engine reference, but it
    * hands the teardown of the shared ccol_event_loop reactor to a joinable
@@ -109,7 +109,7 @@ static void _teardown(void) {
   chttpsvr_engine_wait();
   if (g_test_logger) {
     clog_close(g_test_logger);
-    g_test_logger = CLOG_INVALID;
+    g_test_logger = CLOG_NULL;
   }
 #endif
 }
@@ -306,7 +306,7 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
    * cleans up normally when the process exits. */
   chttpsvr_stop(g_srv);
   __chttpsvr_destroy(g_srv);
-  g_srv = CHTTPSVR_INVALID;
+  g_srv = CHTTPSVR_NULL;
   chttpsvr_engine_wait();
 
   /* The engine start below has to really use the procs this test installs
@@ -341,12 +341,12 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
      function at once on a failure, and without this destructor that return
      would leak this server's shared-engine reference, which then hangs the
      chttpsvr_engine_wait() call in this file's _teardown() when the process
-     exits. The variable is set to CHTTPSVR_INVALID right after ownership goes
+     exits. The variable is set to CHTTPSVR_NULL right after ownership goes
      to g_srv, so the destructor never destroys the handle that g_srv owns from
      then on a second time. */
   chttpsvr new_srv _ccol_destructor(___chttpsvr_destroy) =
       chttpsvr_create(g_test_logger, &err);
-  REQUIRE_TRUE(new_srv != CHTTPSVR_INVALID);
+  REQUIRE_TRUE(new_srv != CHTTPSVR_NULL);
   ccol_retval_t rv = chttpsvr_register_handler(new_srv, CHTTP_GET, "/hello",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -356,7 +356,7 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
   cfg.port = TEST_PORT;
   REQUIRE_EQ((int)chttpsvr_start(new_srv, &cfg), (int)ccol_success);
   g_srv = new_srv;
-  new_srv = CHTTPSVR_INVALID; /* ownership went to g_srv, see above */
+  new_srv = CHTTPSVR_NULL; /* ownership went to g_srv, see above */
 
   /* The shared ccol_event_loop reactor is a plain static variable.
    * ccol_event_loop_destroy destroys it completely when the code above releases
@@ -371,7 +371,7 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
 
   chttpcli cli _ccol_destructor(___chttpclient_destroy) =
       chttpclient_create(NULL);
-  REQUIRE_TRUE(cli != CHTTPCLI_INVALID);
+  REQUIRE_TRUE(cli != CHTTPCLI_NULL);
   chttp_request_t *req =
       chttp_request_create(CHTTP_GET, BASE_URL "/hello", NULL, NULL);
   REQUIRE_TRUE(req != NULL);

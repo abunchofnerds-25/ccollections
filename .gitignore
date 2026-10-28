@@ -1,4 +1,5 @@
 .vscode/
+.zed/
 .project
 obj/
 # Build products. Every pattern here starts with a slash, which ties it to the
@@ -74,11 +75,5 @@ tests/*/.build-flags
 
 # The build identity stamp of clogger's consumer view translation unit
 tests/*/.build-flags-consumer
-
-# The hardening-flag probe of the root Makefile and tests/hardening.mk writes
-# these while it asks the compiler what it supports, and removes them again,
-# but an interrupted build can leave one behind.
-.ccol_probe.c
-.ccol_probe.o
 
 # A line with no side effects. It starts a new CI run - 1

@@ -23,7 +23,7 @@ producer of your own completes it with ctpool_future_fulfill(3).
 .fi
 .SS "Handles"
 .nf
-ctpool is an opaque value handle, not a pointer, and CTPOOL_INVALID
+ctpool is an opaque value handle, not a pointer, and CTPOOL_NULL
 (0) means no pool. Every handle is checked before the pool is touched,
 so a call through an invalid or destroyed handle reports
 ccol_invalid_args, or does nothing for the calls that return no code.
@@ -87,7 +87,7 @@ ctpool_wait(3) blocks until the queue is empty and every running task
 is done, without stopping the pool, and no other thread may submit
 during that wait. ctpool_destroy(3) runs a drain first if no shutdown
 ran, waits for every call on the handle that is still running, frees
-the pool and sets the handle to CTPOOL_INVALID.
+the pool and sets the handle to CTPOOL_NULL.
 .fi
 .SS "Calls from inside the pool"
 .nf

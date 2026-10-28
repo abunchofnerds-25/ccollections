@@ -176,6 +176,10 @@ static inline void sb_init_hint(sbuf_t *sb, ccol_memmgmt_procs_t *mp,
 #ifdef RUNNING_UNIT_TESTS
 /* How many strings utf8_cstr_is_valid() has checked, over all threads. */
 atomic_ulong _cjson_utf8_cstr_checks_for_tests;
+
+/* How many nodes the cycle search of node_reaches() has taken off its stack,
+ * over all threads. */
+atomic_ulong _cjson_cycle_search_nodes_for_tests;
 #endif /* RUNNING_UNIT_TESTS */
 
 /* True when the whole NUL-terminated string is well-formed UTF-8. A NULL s is
@@ -503,6 +507,10 @@ static bool node_reaches(cjson_node_t *haystack, const cjson_node_t *needle,
 
   while (len > 0 && !found) {
     cjson_node_t *n = stack[--len];
+#ifdef RUNNING_UNIT_TESTS
+    atomic_fetch_add_explicit(&_cjson_cycle_search_nodes_for_tests, 1,
+                              memory_order_relaxed);
+#endif /* RUNNING_UNIT_TESTS */
     if ((const cjson_node_t *)n == needle) {
       found = true;
       break;

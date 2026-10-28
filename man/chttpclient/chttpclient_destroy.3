@@ -12,7 +12,7 @@ chttpclient_destroy(cli)
 .SH DESCRIPTION
 .nf
 This macro waits until every request in flight has finished, then frees
-every resource and sets cli to CHTTPCLI_INVALID.
+every resource and sets cli to CHTTPCLI_NULL.
 
 "Every request in flight" covers all three tiers: a synchronous
 chttpclient_do or chttpclient_do_streaming call running on another
@@ -24,7 +24,7 @@ count. The macro is safe even if nobody has waited yet on a
 ctpool_future from chttpclient_do_async or
 chttpclient_do_async_streaming.
 
-cli must be a live handle, or CHTTPCLI_INVALID, which is a silent
+cli must be a live handle, or CHTTPCLI_NULL, which is a silent
 no-op. Three other kinds of value are a FATAL ERROR: a stale handle that an
 earlier call destroyed, a stale handle that another thread is
 destroying at the same moment, and a forged or garbage value. In each

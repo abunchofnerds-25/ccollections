@@ -247,7 +247,7 @@ int main(int argc, char **argv) {
     /* The module registers its atfork handlers when it creates a pool. An
      * unload with no handler registered would prove nothing. */
     p = create(2, 0, NULL, &err);
-    if (p == CTPOOL_INVALID) {
+    if (p == CTPOOL_NULL) {
       fprintf(stderr, "pool creation failed: %s\n", err ? err : "(no detail)");
       return 2;
     }

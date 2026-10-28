@@ -52,7 +52,7 @@ int main(void) {
     for (int i = 0; i < 8; i++)
         printf("%d^2 = %ld\n", items[i].input, items[i].output);
 
-    ctpool_destroy(pool);              /* empties, joins, sets pool to CTPOOL_INVALID */
+    ctpool_destroy(pool);              /* empties, joins, sets pool to CTPOOL_NULL */
     return 0;
 }
 ```
@@ -79,7 +79,7 @@ nothing slows the producer down, and the backlog grows until memory runs
 out.
 
 `ctpool` is an opaque value handle (an integer) and not a pointer. You
-compare it with `CTPOOL_INVALID`, which is `0`, so `if (!pool)` works. Every
+compare it with `CTPOOL_NULL`, which is `0`, so `if (!pool)` works. Every
 use of the handle is checked, so a handle whose pool you already destroyed is
 detected instead of being dereferenced.
 
@@ -197,7 +197,7 @@ finish, and then the workers stop.
 Both functions wait, for every caller, until all workers have stopped. After
 a shutdown a submit returns `ccol_not_permitted`, and `ctpool_submit_future`
 returns `NULL` with `ccol_not_permitted` in its `rv_out`. `ctpool_destroy`
-frees the pool and sets the handle to `CTPOOL_INVALID`. If you never called a
+frees the pool and sets the handle to `CTPOOL_NULL`. If you never called a
 shutdown function, it finishes the queued tasks first.
 
 ## Detached futures
@@ -468,7 +468,7 @@ space (`ctpool_submit_future` returns `NULL` and stores that code in its
 `ctpool_timed_submit` or an unbounded queue there, so that a full queue is a
 case your code handles and not a surprise.
 
-`ctpool_destroy` sets your variable to `CTPOOL_INVALID`, so a second destroy
+`ctpool_destroy` sets your variable to `CTPOOL_NULL`, so a second destroy
 of the same variable does nothing. A destroy through a different, older copy
 of the handle stops the program though (it doesn't corrupt memory), so don't
 keep stale copies around.

@@ -190,6 +190,8 @@ static ccol_memmgmt_procs_t _ccol_procs_slots[CCOL_PROCS_INTERN_CAPACITY];
 static atomic_uchar _ccol_procs_slot_state[CCOL_PROCS_INTERN_CAPACITY];
 #ifdef RUNNING_UNIT_TESTS
 _Atomic unsigned _ccol_procs_intern_claim_delay_us_for_tests;
+_Atomic unsigned _ccol_procs_intern_claim_wait_sightings_for_tests;
+_Atomic unsigned _ccol_procs_intern_writing_sightings_for_tests;
 #endif
 
 static inline bool _ccol_procs_same(const ccol_memmgmt_procs_t *a,
@@ -253,7 +255,21 @@ ccol_retval_t ccol_procs_intern(ccol_memmgmt_procs_t *mp,
 #ifdef RUNNING_UNIT_TESTS
         unsigned delay_us = atomic_load_explicit(
             &_ccol_procs_intern_claim_delay_us_for_tests, memory_order_relaxed);
-        if (delay_us) {
+        unsigned sightings = atomic_load_explicit(
+            &_ccol_procs_intern_claim_wait_sightings_for_tests,
+            memory_order_relaxed);
+        if (delay_us && sightings) {
+          /* The delay is then only the bound of a wait for that many
+           * sightings of a slot being written. */
+          for (unsigned waited = 0;
+               waited < delay_us &&
+               atomic_load(&_ccol_procs_intern_writing_sightings_for_tests) <
+                   sightings;
+               waited += 100) {
+            struct timespec ts = {0, 100000L};
+            nanosleep(&ts, NULL);
+          }
+        } else if (delay_us) {
           struct timespec ts = {(time_t)(delay_us / 1000000u),
                                 (long)(delay_us % 1000000u) * 1000L};
           nanosleep(&ts, NULL);
@@ -272,6 +288,10 @@ ccol_retval_t ccol_procs_intern(ccol_memmgmt_procs_t *mp,
      * thread claims is READY at the moment it claims it, so a slot that
      * another thread is still writing is read before the lookup moves
      * on. */
+#ifdef RUNNING_UNIT_TESTS
+    if (st == _CCOL_PROCS_SLOT_WRITING)
+      atomic_fetch_add(&_ccol_procs_intern_writing_sightings_for_tests, 1);
+#endif
     if (st == _CCOL_PROCS_SLOT_WRITING) _ccol_procs_wait_ready(i);
     if (_ccol_procs_same(&_ccol_procs_slots[i], &want)) {
       *out = &_ccol_procs_slots[i];
@@ -401,6 +421,10 @@ atomic_ulong _ccol_cloexec_gate_leaves_for_tests;
  * in the same fork. Only prepare handlers run in that window, so the flag
  * doesn't need a lock. */
 bool _ccol_cloexec_gate_prepared_for_tests;
+/* How many times the gate's prepare handler started, counted before it waits
+ * for the write side, so a test can tell that a fork() of another thread has
+ * reached the gate and waits there. */
+atomic_ulong _ccol_cloexec_gate_prepares_for_tests;
 #endif
 
 static void _ccol_cloexec_gate_init(void) {
@@ -425,6 +449,9 @@ void _ccol_cloexec_gate_leave(void) {
 }
 
 static void _ccol_cloexec_gate_prepare(void) {
+#ifdef RUNNING_UNIT_TESTS
+  atomic_fetch_add(&_ccol_cloexec_gate_prepares_for_tests, 1);
+#endif
   _ccol_call_once(_ccol_cloexec_gate_once, _ccol_cloexec_gate_init);
   if (_ccol_cloexec_gate_ok) _ccol_rw_lock_wrlock(_ccol_cloexec_gate);
 #ifdef RUNNING_UNIT_TESTS

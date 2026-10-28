@@ -1158,7 +1158,68 @@ static ctpool_task *dequeue(cthread_pool *pool) {
  * that path. The counter holds how many futures exist right now. */
 atomic_bool _ctpool_fail_next_future_alloc_for_tests;
 atomic_long _ctpool_live_futures_for_tests;
+
+/* The step that _ctpool_arm_fault_for_tests armed, or _CTPOOL_FAULT_NONE, and
+ * one more than the index of the worker whose thread creation fails, or 0. */
+static atomic_int _ctpool_armed_fault;
+static atomic_size_t _ctpool_worker_create_fault;
+
+void _ctpool_arm_fault_for_tests(_ctpool_fault_t step) {
+  atomic_store(&_ctpool_armed_fault, (int)step);
+}
+
+void _ctpool_fail_worker_create_at_for_tests(size_t index) {
+  atomic_store(&_ctpool_worker_create_fault, index + 1);
+}
+
+/* True once for the armed step, on the first thread that reaches it. */
+static bool _ctpool_fault_fires(_ctpool_fault_t step) {
+  int expected = (int)step;
+  return atomic_compare_exchange_strong(&_ctpool_armed_fault, &expected,
+                                        (int)_CTPOOL_FAULT_NONE);
+}
+
+static bool _ctpool_worker_create_fault_fires(size_t index) {
+  size_t expected = index + 1;
+  return atomic_compare_exchange_strong(&_ctpool_worker_create_fault, &expected,
+                                        0);
+}
+
+#define _CTPOOL_FAULT(step) _ctpool_fault_fires(step)
+#define _CTPOOL_WORKER_CREATE_FAULT(index) \
+  _ctpool_worker_create_fault_fires(index)
+#else
+/* A build without the test hooks never takes a failure that no call made. */
+#define _CTPOOL_FAULT(step) false
+#define _CTPOOL_WORKER_CREATE_FAULT(index) false
 #endif
+
+#ifdef RUNNING_UNIT_TESTS
+/* How many future blocks are allocated right now, counted from the calloc
+ * to the free, partly built ones included. */
+atomic_long _ctpool_future_blocks_for_tests;
+#endif
+
+/* Every future block comes from here and goes back through
+ * future_block_free, so that a test build can count the blocks. */
+static inline ctpool_future *future_block_alloc(void) {
+  if (_CTPOOL_FAULT(_CTPOOL_FAULT_FUTURE_ALLOC)) return NULL;
+  ctpool_future *f = (ctpool_future *)calloc(1, sizeof(ctpool_future));
+#ifdef RUNNING_UNIT_TESTS
+  if (f)
+    atomic_fetch_add_explicit(&_ctpool_future_blocks_for_tests, 1,
+                              memory_order_relaxed);
+#endif
+  return f;
+}
+
+static inline void future_block_free(ctpool_future *f) {
+#ifdef RUNNING_UNIT_TESTS
+  atomic_fetch_sub_explicit(&_ctpool_future_blocks_for_tests, 1,
+                            memory_order_relaxed);
+#endif
+  free(f);
+}
 
 /*
  * Destroys and frees f once the caller has seen f's refcount reach 0. The
@@ -1179,7 +1240,7 @@ static void future_destroy_if_unreferenced(ctpool_future *f, int remaining) {
 #endif
     _ccol_mutex_destroy(f->mu);
     _ccol_cond_var_destroy(f->cv);
-    free(f);
+    future_block_free(f);
   }
 }
 
@@ -1286,6 +1347,12 @@ static bool make_abs_deadline(uint64_t timeout_us, struct timespec *abs_out) {
  * pthread_setspecific had failed. A test sets it only around the creation of
  * the pool it looks at. */
 atomic_bool _ctpool_skip_worker_mark_for_tests;
+
+/* How many worker threads of any pool are running right now, counted from
+ * the successful thread create to the worker's last statement, and a pause,
+ * in microseconds, that a worker makes before its last statement. */
+atomic_long _ctpool_running_workers_for_tests;
+atomic_uint _ctpool_worker_exit_delay_us_for_tests;
 #endif /* RUNNING_UNIT_TESTS */
 
 static void *worker_thread_fn(void *arg) {
@@ -1384,6 +1451,15 @@ static void *worker_thread_fn(void *arg) {
       break;
     }
   }
+#ifdef RUNNING_UNIT_TESTS
+  unsigned delay_us = atomic_load(&_ctpool_worker_exit_delay_us_for_tests);
+  if (delay_us) {
+    struct timespec ts = {(time_t)(delay_us / 1000000u),
+                          (long)(delay_us % 1000000u) * 1000L};
+    nanosleep(&ts, NULL);
+  }
+  atomic_fetch_sub(&_ctpool_running_workers_for_tests, 1);
+#endif /* RUNNING_UNIT_TESTS */
   return NULL;
 }
 
@@ -1409,7 +1485,7 @@ ctpool ctpool_create_mp(size_t num_threads, size_t queue_capacity,
                         ccol_memmgmt_procs_t *mprocs, char **err_str) {
   if (num_threads == 0) {
     if (err_str) *err_str = _CCOL_ERR_STR("num_threads must be >= 1");
-    return CTPOOL_INVALID;
+    return CTPOOL_NULL;
   }
   /* ccol_invalid_size is the error value of a size and never a capacity. A
    * caller who wants an unbounded queue passes 0. */
@@ -1417,17 +1493,17 @@ ctpool ctpool_create_mp(size_t num_threads, size_t queue_capacity,
     if (err_str)
       *err_str = _CCOL_ERR_STR(
           "queue_capacity is ccol_invalid_size; pass 0 for an unbounded queue");
-    return CTPOOL_INVALID;
+    return CTPOOL_NULL;
   }
 
-  if (!_ccol_verify_memmgmt_procs(mprocs, err_str)) return CTPOOL_INVALID;
+  if (!_ccol_verify_memmgmt_procs(mprocs, err_str)) return CTPOOL_NULL;
 
   if (!_ctpool_worker_key_available()) {
     if (err_str)
       *err_str = _CCOL_ERR_STR(
           "the thread-local worker key is not available: it could not be "
           "created, or the library already released it at unload");
-    return CTPOOL_INVALID;
+    return CTPOOL_NULL;
   }
 
   cthread_pool *pool =
@@ -1435,7 +1511,7 @@ ctpool ctpool_create_mp(size_t num_threads, size_t queue_capacity,
                               : calloc(1, sizeof(*pool)));
   if (!pool) {
     if (err_str) *err_str = _CCOL_ERR_STR("failed to allocate pool struct");
-    return CTPOOL_INVALID;
+    return CTPOOL_NULL;
   }
 
   if (mprocs) {
@@ -1443,47 +1519,52 @@ ctpool ctpool_create_mp(size_t num_threads, size_t queue_capacity,
     if (!pool->m_procs) {
       mprocs->free(pool);
       if (err_str) *err_str = _CCOL_ERR_STR("failed to allocate m_procs copy");
-      return CTPOOL_INVALID;
+      return CTPOOL_NULL;
     }
     memcpy(pool->m_procs, mprocs, sizeof(*mprocs));
   }
 
   pool->queue_cap = queue_capacity;
 
-  if (_ccol_mutex_init(pool->mu) != 0) {
+  if (_CTPOOL_FAULT(_CTPOOL_FAULT_POOL_MUTEX) ||
+      _ccol_mutex_init(pool->mu) != 0) {
     if (err_str) *err_str = _CCOL_ERR_STR("mutex init failed");
     pool_free_self(pool);
-    return CTPOOL_INVALID;
+    return CTPOOL_NULL;
   }
-  if (_ccol_cond_var_init(pool->not_empty) != 0) {
+  if (_CTPOOL_FAULT(_CTPOOL_FAULT_POOL_NOT_EMPTY) ||
+      _ccol_cond_var_init(pool->not_empty) != 0) {
     if (err_str) *err_str = _CCOL_ERR_STR("cond_var init failed");
     _ccol_mutex_destroy(pool->mu);
     pool_free_self(pool);
-    return CTPOOL_INVALID;
+    return CTPOOL_NULL;
   }
-  if (_ctpool_init_monotonic_cond_var(&pool->not_full) != 0) {
+  if (_CTPOOL_FAULT(_CTPOOL_FAULT_POOL_NOT_FULL) ||
+      _ctpool_init_monotonic_cond_var(&pool->not_full) != 0) {
     if (err_str) *err_str = _CCOL_ERR_STR("cond_var init failed");
     _ccol_mutex_destroy(pool->mu);
     _ccol_cond_var_destroy(pool->not_empty);
     pool_free_self(pool);
-    return CTPOOL_INVALID;
+    return CTPOOL_NULL;
   }
-  if (_ccol_cond_var_init(pool->idle_cv) != 0) {
+  if (_CTPOOL_FAULT(_CTPOOL_FAULT_POOL_IDLE_CV) ||
+      _ccol_cond_var_init(pool->idle_cv) != 0) {
     if (err_str) *err_str = _CCOL_ERR_STR("cond_var init failed");
     _ccol_mutex_destroy(pool->mu);
     _ccol_cond_var_destroy(pool->not_empty);
     _ccol_cond_var_destroy(pool->not_full);
     pool_free_self(pool);
-    return CTPOOL_INVALID;
+    return CTPOOL_NULL;
   }
-  if (_ccol_cond_var_init(pool->shutdown_cv) != 0) {
+  if (_CTPOOL_FAULT(_CTPOOL_FAULT_POOL_SHUTDOWN_CV) ||
+      _ccol_cond_var_init(pool->shutdown_cv) != 0) {
     if (err_str) *err_str = _CCOL_ERR_STR("cond_var init failed");
     _ccol_mutex_destroy(pool->mu);
     _ccol_cond_var_destroy(pool->not_empty);
     _ccol_cond_var_destroy(pool->not_full);
     _ccol_cond_var_destroy(pool->idle_cv);
     pool_free_self(pool);
-    return CTPOOL_INVALID;
+    return CTPOOL_NULL;
   }
 
 #if CCOL_FORK_SAFETY_REQUIRED
@@ -1500,7 +1581,7 @@ ctpool ctpool_create_mp(size_t num_threads, size_t queue_capacity,
     _ccol_cond_var_destroy(pool->idle_cv);
     _ccol_cond_var_destroy(pool->shutdown_cv);
     pool_free_self(pool);
-    return CTPOOL_INVALID;
+    return CTPOOL_NULL;
   }
 
   pool->num_threads = num_threads;
@@ -1511,7 +1592,8 @@ ctpool ctpool_create_mp(size_t num_threads, size_t queue_capacity,
                                  : CTPOOL_TASK_FREE_LIST_CEILING;
 
   for (size_t i = 0; i < num_threads; i++) {
-    if (_ccol_thread_create(pool->threads[i].id, worker_thread_fn, pool) != 0) {
+    if (_CTPOOL_WORKER_CREATE_FAULT(i) ||
+        _ccol_thread_create(pool->threads[i].id, worker_thread_fn, pool) != 0) {
       /* Shut down the threads that did start, then clean up. */
       _ctpool_lock_mu(pool);
       __atomic_store_n(&pool->shutdown_drain, true, __ATOMIC_RELAXED);
@@ -1529,8 +1611,13 @@ ctpool ctpool_create_mp(size_t num_threads, size_t queue_capacity,
       _ccol_cond_var_destroy(pool->idle_cv);
       _ccol_cond_var_destroy(pool->shutdown_cv);
       pool_free_self(pool);
-      return CTPOOL_INVALID;
+      return CTPOOL_NULL;
     }
+#ifdef RUNNING_UNIT_TESTS
+    /* Counted by the creator, so a worker that hasn't run yet is counted
+     * too; it can't reach its last statement before the pool shuts down. */
+    atomic_fetch_add(&_ctpool_running_workers_for_tests, 1);
+#endif /* RUNNING_UNIT_TESTS */
   }
 
   /* The slot acquire is the LAST step, once every worker thread is running
@@ -1547,7 +1634,7 @@ ctpool ctpool_create_mp(size_t num_threads, size_t queue_capacity,
     if (err_str)
       *err_str = _CCOL_ERR_STR("failed to allocate ctpool handle slot");
     _ctpool_teardown_raw(pool, CTPOOL_TEARDOWN_NO_SLOT);
-    return CTPOOL_INVALID;
+    return CTPOOL_NULL;
   }
 
   return h;
@@ -1576,6 +1663,10 @@ ctpool ctpool_create_mp(size_t num_threads, size_t queue_capacity,
  * tells the test that the waiter is inside the wait. */
 atomic_bool _ctpool_timeout_after_wake_for_tests;
 atomic_bool _ctpool_timeout_after_wake_waiting_for_tests;
+
+/* What the last timed wait for room of this thread did. See
+ * _ctpool_timed_wait_record_for_tests. */
+static __thread _ctpool_timed_wait_record_t _ctpool_timed_wait_record;
 #endif
 
 /* Always inlined, since each submit instantiates it with a constant block
@@ -1625,6 +1716,12 @@ submit_wait_for_room_locked(cthread_pool *pool, int block,
         /* timed_submit */
         int rc;
 #ifdef RUNNING_UNIT_TESTS
+        if (!_ctpool_timed_wait_record.waited) {
+          _ctpool_timed_wait_record.waited = true;
+          _ctpool_timed_wait_record.deadline = *abs_deadline;
+          clock_gettime(CLOCK_MONOTONIC,
+                        &_ctpool_timed_wait_record.wait_started);
+        }
         if (atomic_exchange(&_ctpool_timeout_after_wake_for_tests, false)) {
           atomic_store(&_ctpool_timeout_after_wake_waiting_for_tests, true);
           _ccol_cond_var_wait(pool->not_full, pool->mu);
@@ -1641,6 +1738,10 @@ submit_wait_for_room_locked(cthread_pool *pool, int block,
          * dequeue to signal it. */
         if (rc != 0 && pool->queue_size >= pool->queue_cap &&
             !pool->shutdown_drain && !pool->shutdown_immediate) {
+#ifdef RUNNING_UNIT_TESTS
+          _ctpool_timed_wait_record.timed_out = rc == ETIMEDOUT;
+          clock_gettime(CLOCK_MONOTONIC, &_ctpool_timed_wait_record.wait_ended);
+#endif
           _ccol_mutex_unlock(pool->mu);
           return rc == ETIMEDOUT ? ccol_timed_out : ccol_unexpected_failure;
         }
@@ -1842,15 +1943,17 @@ static ctpool_future *submit_future_alloc(void) {
   if (atomic_exchange(&_ctpool_fail_next_future_alloc_for_tests, false))
     return NULL;
 #endif
-  ctpool_future *f = (ctpool_future *)calloc(1, sizeof(ctpool_future));
+  ctpool_future *f = future_block_alloc();
   if (!f) return NULL;
-  if (_ccol_mutex_init(f->mu) != 0) {
-    free(f);
+  if (_CTPOOL_FAULT(_CTPOOL_FAULT_FUTURE_MUTEX) ||
+      _ccol_mutex_init(f->mu) != 0) {
+    future_block_free(f);
     return NULL;
   }
-  if (_ccol_cond_var_init(f->cv) != 0) {
+  if (_CTPOOL_FAULT(_CTPOOL_FAULT_FUTURE_CV) ||
+      _ccol_cond_var_init(f->cv) != 0) {
     _ccol_mutex_destroy(f->mu);
-    free(f);
+    future_block_free(f);
     return NULL;
   }
   f->refcount = 2;
@@ -1869,7 +1972,7 @@ static void submit_future_discard(ctpool_future *f) {
 #endif
   _ccol_mutex_destroy(f->mu);
   _ccol_cond_var_destroy(f->cv);
-  free(f);
+  future_block_free(f);
 }
 
 /*
@@ -2038,19 +2141,21 @@ void ctpool_future_free(ctpool_future *f) {
 }
 
 ctpool_future *ctpool_future_create_detached(char **err_str) {
-  ctpool_future *f = (ctpool_future *)calloc(1, sizeof(ctpool_future));
+  ctpool_future *f = future_block_alloc();
   if (!f) {
     if (err_str) *err_str = _CCOL_ERR_STR("failed to allocate future");
     return NULL;
   }
-  if (_ccol_mutex_init(f->mu) != 0) {
-    free(f);
+  if (_CTPOOL_FAULT(_CTPOOL_FAULT_FUTURE_MUTEX) ||
+      _ccol_mutex_init(f->mu) != 0) {
+    future_block_free(f);
     if (err_str) *err_str = _CCOL_ERR_STR("future mutex init failed");
     return NULL;
   }
-  if (_ccol_cond_var_init(f->cv) != 0) {
+  if (_CTPOOL_FAULT(_CTPOOL_FAULT_FUTURE_CV) ||
+      _ccol_cond_var_init(f->cv) != 0) {
     _ccol_mutex_destroy(f->mu);
-    free(f);
+    future_block_free(f);
     if (err_str) *err_str = _CCOL_ERR_STR("future cond_var init failed");
     return NULL;
   }
@@ -2720,6 +2825,12 @@ int _ctpool_timedwait_not_full_for_tests(cthread_pool *pool,
  * calling thread, which no worker or other thread can disturb. */
 unsigned long _ctpool_mu_locks_for_tests(void) {
   return _ctpool_mu_locks_taken;
+}
+
+_ctpool_timed_wait_record_t _ctpool_timed_wait_record_for_tests(void) {
+  _ctpool_timed_wait_record_t r = _ctpool_timed_wait_record;
+  memset(&_ctpool_timed_wait_record, 0, sizeof(_ctpool_timed_wait_record));
+  return r;
 }
 
 /* Reads a future's current reference count, under that future's mutex, so a

@@ -64,8 +64,9 @@ for prog in vector_only nothing; do
   "$CC" -std=gnu11 -I"$dir/inc" "$dir/$prog.c" -L"$libdir" \
     -Wl,--no-as-needed -lccollections -o "$dir/$prog"
   # The check only means something when the program really loads the library,
-  # so we verify that first.
-  if ! LD_LIBRARY_PATH="$libdir" ldd "$dir/$prog" | grep -q libccollections; then
+  # so we verify that first. grep reads all of ldd's output (no -q), because
+  # FreeBSD's ldd reports the SIGPIPE it gets when grep leaves early.
+  if ! LD_LIBRARY_PATH="$libdir" ldd "$dir/$prog" | grep libccollections >/dev/null; then
     echo "check_exit_reachable: $prog does not load the library" >&2
     exit 2
   fi

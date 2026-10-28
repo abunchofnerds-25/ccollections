@@ -9,7 +9,7 @@ include ../hardening.mk
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -std=gnu11 $(CCOL_HARDENING_CFLAGS) -Wstrict-overflow \
 	$(CCOL_LD_HARDENING) \
 	-Wformat=2 -Wformat-security -Wall -Wextra -gdwarf-4 -g3 -O3 -Werror $(EXTRA_CFLAGS)
-COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
+COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage -DCCOL_TEST_COVERAGE
 LFLAGS = -lssl -lcrypto -lpthread $(CCOL_PLATFORM_LIBS)
 
 # A separate ThreadSanitizer build, kept out of the default -Werror build;
@@ -42,8 +42,11 @@ build_tsan:
 test_tsan: build_tsan
 	./tests_tsan
 
+# CTLS_SAMPLED_SWEEP makes the system CA allocation sweep visit evenly spaced
+# points instead of every index, because valgrind takes too long for the full
+# sweep with OpenSSL 3.0. Every other target runs the full sweep.
 memtest: build
-	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
+	CTLS_SAMPLED_SWEEP=1 valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
 		--error-exitcode=1 --child-silent-after-fork=yes \
 		--suppressions=openssl_internal.supp ./tests
 	valgrind $(CCOL_VALGRIND_SUPP) --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
@@ -55,9 +58,13 @@ memtest: build
 # isn't real. It happens in more than one module and inside a glibc header as
 # well; it's a limit of the gcov instrumentation, not a bug in the library's
 # logic. tests/chttpclient/Makefile has the same flag with the full reason.
+# Every binary that `test` runs is built and run here too, with the same
+# instrumentation, so the tracefile counts what each of them reaches.
 generate_coverage_report:
 	$(CC)  $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
+	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) tests_sigpipe.c $(SRC_FILES) -o tests_sigpipe $(LFLAGS) && \
+	./tests_sigpipe && \
 	gcov -d -w tests-$(SRC_FILE_PREFIX) && echo 'GCOV SUCCEEDED, CALLING LCOV' && \
 	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file $(SRC_FILE_PREFIX).c.info && \

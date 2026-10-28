@@ -10,10 +10,19 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <tau/tau.h>
+#include <test_coverage.h>
+#include <test_signals.h>
 #include <time.h>
 #include <unistd.h>
 
 TAU_MAIN()
+
+/* The forked children of this binary report through their wait status, and
+ * test_reset_inherited_signals() explains what an inherited signal state does
+ * to that. */
+__attribute__((constructor)) static void _reset_inherited_signals(void) {
+  test_reset_inherited_signals();
+}
 
 /* ========================================================================== */
 /*                         BASIC OPERATIONS                                   */
@@ -110,7 +119,7 @@ TEST(basic, invalid_args_get) {
   _populate_cmap_pair(&kp, k);
   cmap_pair val_out = {};
 
-  REQUIRE_EQ(clrucache_get_full(CLRU_CACHE_INVALID, &kp, &val_out),
+  REQUIRE_EQ(clrucache_get_full(CLRU_CACHE_NULL, &kp, &val_out),
              ccol_invalid_args);
   REQUIRE_EQ(clrucache_get_full(cache, NULL, &val_out), ccol_invalid_args);
   REQUIRE_EQ(clrucache_get_full(cache, &kp, NULL), ccol_invalid_args);
@@ -134,8 +143,7 @@ TEST(basic, invalid_args_set) {
   _populate_cmap_pair(&kp, k);
   _populate_cmap_pair(&vp, v);
 
-  REQUIRE_EQ(clrucache_set_full(CLRU_CACHE_INVALID, &kp, &vp),
-             ccol_invalid_args);
+  REQUIRE_EQ(clrucache_set_full(CLRU_CACHE_NULL, &kp, &vp), ccol_invalid_args);
   REQUIRE_EQ(clrucache_set_full(cache, NULL, &vp), ccol_invalid_args);
   REQUIRE_EQ(clrucache_set_full(cache, &kp, NULL), ccol_invalid_args);
 
@@ -158,34 +166,34 @@ TEST(basic, capacity_zero_returns_null) {
   char *err = NULL;
   clru_cache cache = clrucache_create_full(0, ccol_int, ccol_int, NULL, NULL,
                                            NULL, NULL, &err);
-  REQUIRE_EQ(cache, CLRU_CACHE_INVALID);
+  REQUIRE_EQ(cache, CLRU_CACHE_NULL);
   REQUIRE_NOT_NULL(err);
 }
 
 TEST(basic, null_cache_size_and_capacity_return_zero) {
-  REQUIRE_EQ(clrucache_size(CLRU_CACHE_INVALID), (size_t)0);
-  REQUIRE_EQ(clrucache_capacity(CLRU_CACHE_INVALID), (size_t)0);
+  REQUIRE_EQ(clrucache_size(CLRU_CACHE_NULL), (size_t)0);
+  REQUIRE_EQ(clrucache_capacity(CLRU_CACHE_NULL), (size_t)0);
 }
 
 TEST(basic, destroy_null_cache_is_noop) {
-  clru_cache cache = CLRU_CACHE_INVALID;
+  clru_cache cache = CLRU_CACHE_NULL;
   clru_destroy(cache); /* must not crash */
-  REQUIRE_EQ(cache, CLRU_CACHE_INVALID);
+  REQUIRE_EQ(cache, CLRU_CACHE_NULL);
 }
 
 TEST(basic, destroy_sets_handle_null) {
   clru_construct_scoped(cache, int, int, 4, NULL, NULL, NULL);
   clru_set(cache, 1, 10);
-  REQUIRE_NE(cache, CLRU_CACHE_INVALID);
+  REQUIRE_NE(cache, CLRU_CACHE_NULL);
   clru_destroy(cache);
-  REQUIRE_EQ(cache, CLRU_CACHE_INVALID);
+  REQUIRE_EQ(cache, CLRU_CACHE_NULL);
 }
 
 TEST(basic, create_full_null_err_on_failure) {
   /* Passing NULL for err must not crash when the creation fails. */
   clru_cache cache = clrucache_create_full(0, ccol_int, ccol_int, NULL, NULL,
                                            NULL, NULL, NULL);
-  REQUIRE_EQ(cache, CLRU_CACHE_INVALID);
+  REQUIRE_EQ(cache, CLRU_CACHE_NULL);
 }
 
 TEST(basic, size_unchanged_on_overwrite) {
@@ -1421,6 +1429,23 @@ typedef struct {
   _Atomic bool done;
 } waiter_arg_t;
 
+/* Waits, with a bound, until the n getters of w have all joined the remote
+   call in flight for key (the entry then holds 1 + n references, see
+   failset_await_waiters), or until one of them has returned, which a getter
+   that doesn't block does. A check of done after this sees a getter that is
+   really blocked, however long the getter threads took to start, and not
+   one that simply hasn't called clru_get yet. */
+static void clru_await_blocked_getters(clru_cache cache, int key,
+                                       waiter_arg_t *w, int n) {
+  cmap_pair kp = {.ptr = &key, .size = sizeof(key)};
+  for (int waited_ms = 0; waited_ms < CLRU_GATE_WAIT_MS; waited_ms++) {
+    if (_clrucache_key_waiters_for_tests(cache, &kp) == 1 + n) return;
+    for (int i = 0; i < n; i++)
+      if (atomic_load(&w[i].done)) return;
+    usleep(1000);
+  }
+}
+
 static void *waiter_thread(void *arg) {
   waiter_arg_t *wa = (waiter_arg_t *)arg;
   clru_cache cache = wa->cache;
@@ -1478,7 +1503,7 @@ TEST(concurrency, getters_wait_for_sync_setter) {
      frame. */
   int done_while_blocked = -1;
   if (waiter_started) {
-    usleep(50000);
+    clru_await_blocked_getters(cache, 10, &warg, 1);
     done_while_blocked = (int)atomic_load(&warg.done);
   }
 
@@ -1549,7 +1574,7 @@ TEST(concurrency, getter_blocked_by_setter_for_existing_key_succeeds) {
      frame. */
   int done_while_blocked = -1;
   if (waiter_started) {
-    usleep(50000);
+    clru_await_blocked_getters(cache, 55, &warg, 1);
     done_while_blocked = (int)atomic_load(&warg.done);
   }
 
@@ -1609,7 +1634,7 @@ TEST(concurrency, getter_sees_key_not_found_when_new_key_setter_fails) {
      frame. */
   int done_while_blocked = -1;
   if (waiter_started) {
-    usleep(50000);
+    clru_await_blocked_getters(cache, 77, &warg, 1);
     done_while_blocked = (int)atomic_load(&warg.done);
   }
 
@@ -1681,7 +1706,7 @@ TEST(concurrency, getter_gets_old_value_when_setter_fails_for_existing_key) {
      frame. */
   int done_while_blocked = -1;
   if (waiter_started) {
-    usleep(50000);
+    clru_await_blocked_getters(cache, 33, &warg, 1);
     done_while_blocked = (int)atomic_load(&warg.done);
   }
 
@@ -1759,7 +1784,7 @@ TEST(concurrency, multiple_getters_see_old_value_when_setter_fails) {
      count that really started, never by N_OLD_VAL_WAITERS. */
   int still_blocked = 0;
   if (wtids_created > 0) {
-    usleep(50000); /* give all getters time to enter the wait loop */
+    clru_await_blocked_getters(cache, 42, wargs, wtids_created);
     for (int i = 0; i < wtids_created; i++) {
       if (atomic_load(&wargs[i].done) == 0) still_blocked++;
     }
@@ -1990,7 +2015,7 @@ TEST(concurrency, getter_sees_new_value_after_set_with_concurrent_insertion) {
  */
   int done_while_blocked = -1;
   if (waiter_started) {
-    usleep(50000); /* give Thread B time to enter the wait loop */
+    clru_await_blocked_getters(cache, 1, &warg, 1);
     done_while_blocked = (int)atomic_load(&warg.done);
   }
 
@@ -3450,7 +3475,7 @@ TEST(get_val_types, char_ptr_value_from_remote_getter_full_api) {
 TEST(get_val_types, get_into_rejects_live_value_too_large_for_buffer) {
   clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
                                            NULL, NULL, NULL);
-  REQUIRE_NE(cache, CLRU_CACHE_INVALID);
+  REQUIRE_NE(cache, CLRU_CACHE_NULL);
 
   int k = 1;
   long long v = 12345LL;
@@ -3491,7 +3516,7 @@ TEST(get_val_types, get_into_rejects_live_value_too_large_for_buffer) {
 TEST(get_val_types, get_into_rejects_live_value_too_small_for_buffer) {
   clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
                                            NULL, NULL, NULL);
-  REQUIRE_NE(cache, CLRU_CACHE_INVALID);
+  REQUIRE_NE(cache, CLRU_CACHE_NULL);
 
   int k = 1;
   char v = 0x5A;
@@ -3542,7 +3567,7 @@ TEST(get_val_types, get_into_rejects_live_value_too_small_for_buffer) {
 TEST(get_val_types, get_into_size_mismatch_failure_does_not_promote_lru) {
   clru_cache cache = clrucache_create_full(2, ccol_int, ccol_int, NULL, NULL,
                                            NULL, NULL, NULL);
-  REQUIRE_NE(cache, CLRU_CACHE_INVALID);
+  REQUIRE_NE(cache, CLRU_CACHE_NULL);
 
   /* k1 is the LRU (oldest) entry and k2 the MRU (newest) one. Both hold 8-byte
    * values stored through the raw API, so after these two sets the LRU order is
@@ -3769,7 +3794,7 @@ TEST(custom_alloc, get_full_copy_uses_custom_allocator) {
   char *err = NULL;
   clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
                                            NULL, &mprocs, &err);
-  REQUIRE_NE(cache, CLRU_CACHE_INVALID);
+  REQUIRE_NE(cache, CLRU_CACHE_NULL);
 
   int k = 1, v = 42;
   cmap_pair kp = {}, vp = {};
@@ -3806,7 +3831,7 @@ TEST(custom_alloc, char_ptr_get_full_uses_custom_allocator) {
   char *err = NULL;
   clru_cache cache = clrucache_create_full(8, ccol_string, ccol_string, NULL,
                                            NULL, NULL, &mprocs, &err);
-  REQUIRE_NE(cache, CLRU_CACHE_INVALID);
+  REQUIRE_NE(cache, CLRU_CACHE_NULL);
 
   char *k = "hello", *v = "world";
   cmap_pair kp = {}, vp = {};
@@ -3840,7 +3865,7 @@ TEST(custom_alloc, invalid_mprocs_returns_null) {
   char *err = NULL;
   clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
                                            NULL, &bad, &err);
-  REQUIRE_EQ(cache, CLRU_CACHE_INVALID);
+  REQUIRE_EQ(cache, CLRU_CACHE_NULL);
 }
 
 /*
@@ -3858,7 +3883,7 @@ TEST(custom_alloc, get_full_copy_oom_failure_does_not_promote_lru) {
 
   clru_cache cache = clrucache_create_full(2, ccol_int, ccol_int, NULL, NULL,
                                            NULL, &mprocs, NULL);
-  REQUIRE_NE(cache, CLRU_CACHE_INVALID);
+  REQUIRE_NE(cache, CLRU_CACHE_NULL);
 
   /* k1 is the LRU (oldest) entry and k2 the MRU (newest) one. */
   int k1 = 1, v1 = 111;
@@ -3951,9 +3976,9 @@ TEST(clrucache_handle_lifecycle, handle_publish_failure_rolls_the_slot_back) {
     char *err = NULL;
     clru_cache failed = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
                                               NULL, NULL, &err);
-    if (failed != CLRU_CACHE_INVALID || err == NULL) {
+    if (failed != CLRU_CACHE_NULL || err == NULL) {
       all_failed = false;
-      if (failed != CLRU_CACHE_INVALID) __clrucache_destroy(failed);
+      if (failed != CLRU_CACHE_NULL) __clrucache_destroy(failed);
       break;
     }
 
@@ -3963,7 +3988,7 @@ TEST(clrucache_handle_lifecycle, handle_publish_failure_rolls_the_slot_back) {
      * can't build on shows up here as a failing get, not as a lost slot. */
     clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
                                              NULL, NULL, NULL);
-    if (cache == CLRU_CACHE_INVALID) {
+    if (cache == CLRU_CACHE_NULL) {
       all_created = false;
       break;
     }
@@ -4009,7 +4034,7 @@ TEST(clrucache_handle_lifecycle, handle_publish_failure_rolls_the_slot_back) {
  * remainder is what keeps the total exactly at what the caller asked for. */
 static void clru_check_segmented_capacity(size_t capacity) {
   clru_construct(cache, int, int, capacity, NULL, NULL, NULL);
-  REQUIRE_NE(cache, CLRU_CACHE_INVALID);
+  REQUIRE_NE(cache, CLRU_CACHE_NULL);
 
   /* The reported capacity is the caller's number, whether the library split it
    * or not and whether it split evenly or not. */
@@ -4073,7 +4098,7 @@ static void clru_check_segmented_capacity(size_t capacity) {
  * which is right for a cache that was split and too loose here. */
 static void clru_check_unsplit_capacity_is_exact(size_t capacity) {
   clru_construct(cache, int, int, capacity, NULL, NULL, NULL);
-  REQUIRE_NE(cache, CLRU_CACHE_INVALID);
+  REQUIRE_NE(cache, CLRU_CACHE_NULL);
   for (size_t i = 0; i < capacity; i++) clru_set(cache, (int)i, (int)i);
   size_t filled = clrucache_size(cache);
   clru_destroy(cache);
@@ -4142,7 +4167,7 @@ TEST(segmented, a_key_always_lands_in_the_same_segment) {
    * overflow, so any miss here is the defect this test is looking for. */
   enum { CAP = 512, KEYS = CAP / 2, ROUNDS = 4 };
   clru_construct(cache, int, int, CAP, NULL, NULL, NULL);
-  REQUIRE_NE(cache, CLRU_CACHE_INVALID);
+  REQUIRE_NE(cache, CLRU_CACHE_NULL);
 
   size_t misses = 0, wrong = 0;
   for (int round = 0; round < ROUNDS; round++) {
@@ -4201,7 +4226,7 @@ TEST(segmented, keys_sharing_their_low_bits_still_use_every_segment) {
 
   for (size_t s = 0; s < sizeof(scales) / sizeof(scales[0]); s++) {
     clru_construct(cache, long long, int, CAP, NULL, NULL, NULL);
-    REQUIRE_NE(cache, CLRU_CACHE_INVALID);
+    REQUIRE_NE(cache, CLRU_CACHE_NULL);
 
     for (int i = 0; i < CAP; i++) {
       clru_set(cache, (long long)i * scales[s], i);
@@ -4231,7 +4256,7 @@ TEST(segmented, an_unevenly_spread_key_set_keeps_nearly_all_of_its_capacity) {
    * is still tight enough to catch a real regression. */
   enum { CAP = 4096 };
   clru_construct(cache, int, int, CAP, NULL, NULL, NULL);
-  REQUIRE_NE(cache, CLRU_CACHE_INVALID);
+  REQUIRE_NE(cache, CLRU_CACHE_NULL);
 
   uint32_t state = 0x1234567u;
   for (int i = 0; i < CAP; i++) {
@@ -4272,7 +4297,7 @@ TEST(segmented, a_long_double_key_is_one_key_however_many_segments) {
     clru_cache cache =
         clrucache_create_full(capacities[c], ccol_long_double, ccol_int, NULL,
                               NULL, NULL, NULL, NULL);
-    REQUIRE_NE(cache, CLRU_CACHE_INVALID);
+    REQUIRE_NE(cache, CLRU_CACHE_NULL);
 
     unsigned char image_a[sizeof(long double)];
     unsigned char image_b[sizeof(long double)];
@@ -4325,7 +4350,7 @@ TEST(segmented, a_key_size_that_disagrees_with_the_key_type_is_rejected) {
   for (size_t c = 0; c < sizeof(capacities) / sizeof(capacities[0]); c++) {
     clru_cache cache = clrucache_create_full(capacities[c], ccol_int, ccol_int,
                                              NULL, NULL, NULL, NULL, NULL);
-    REQUIRE_NE(cache, CLRU_CACHE_INVALID);
+    REQUIRE_NE(cache, CLRU_CACHE_NULL);
 
     int *key_bytes = (int *)malloc(sizeof(int));
     /* Not asserted here, since the cache is already built and returning now
@@ -4363,7 +4388,7 @@ TEST(segmented, string_keys_spread_across_segments_and_round_trip) {
    * gives. */
   enum { CAP = 512, KEYS = CAP / 2 };
   clru_construct(cache, char *, int, CAP, NULL, NULL, NULL);
-  REQUIRE_NE(cache, CLRU_CACHE_INVALID);
+  REQUIRE_NE(cache, CLRU_CACHE_NULL);
 
   size_t misses = 0, wrong = 0;
   for (int i = 0; i < KEYS; i++) {
@@ -4407,7 +4432,7 @@ TEST(segmented, a_flood_switches_every_segment_map_and_loses_no_key) {
   enum { CAP = 8192, KEYS = 6000 };
   const uint64_t inv = clru_mul_inverse(0x9E3779B97F4A7C15ULL);
   clru_construct(cache, long long, int, CAP, NULL, NULL, NULL);
-  REQUIRE_NE(cache, CLRU_CACHE_INVALID);
+  REQUIRE_NE(cache, CLRU_CACHE_NULL);
   size_t misses = 0, wrong = 0;
   for (uint64_t i = 0; i < KEYS; i++) {
     long long k = (long long)(i * inv);
@@ -4429,7 +4454,7 @@ TEST(segmented, a_flood_switches_every_segment_map_and_loses_no_key) {
 
   /* The same flood as doubles, then -0.0 and 0.0. */
   clru_construct(dcache, double, int, CAP, NULL, NULL, NULL);
-  REQUIRE_NE(dcache, CLRU_CACHE_INVALID);
+  REQUIRE_NE(dcache, CLRU_CACHE_NULL);
   for (uint64_t i = 1; i <= KEYS; i++) {
     uint64_t bits = i * inv;
     double k;
@@ -4475,6 +4500,7 @@ TEST(segmented, a_flood_switches_every_segment_map_and_loses_no_key) {
 TEST(clrucache_handle_lifecycle, sequential_double_destroy_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -4483,14 +4509,15 @@ TEST(clrucache_handle_lifecycle, sequential_double_destroy_is_fatal) {
     }
     clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
                                              NULL, NULL, NULL);
-    if (cache == CLRU_CACHE_INVALID) _exit(2);
+    if (cache == CLRU_CACHE_NULL) test_child_exit(2);
     clru_cache stale = cache;   /* an independently-held copy of the handle
           value, distinct from the local the macro below invalidates */
     clru_destroy(cache);        /* completes normally; the local `cache` is now
-               CLRU_CACHE_INVALID, but `stale` still holds the original value */
+               CLRU_CACHE_NULL, but `stale` still holds the original value */
     __clrucache_destroy(stale); /* the actual misuse under test: a second,
         purely sequential destroy of a handle already fully torn down */
-    _exit(0); /* unreachable if _ccol_fatal_err() aborted as expected */
+    /* unreachable if _ccol_fatal_err() aborted as expected */
+    test_child_exit(0);
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -4514,17 +4541,17 @@ __attribute__((destructor(101))) static void clru_create_after_the_release(
   clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
                                            NULL, NULL, &err);
   char verdict = 'O';
-  if (cache == CLRU_CACHE_INVALID)
+  if (cache == CLRU_CACHE_NULL)
     verdict = (err != NULL && strstr(err, "released") != NULL) ? 'R' : 'E';
   else
     clru_destroy(cache);
-  if (write(g_late_create_report_fd, &verdict, 1) != 1) _exit(4);
-  _exit(0);
+  if (write(g_late_create_report_fd, &verdict, 1) != 1) test_child_exit(4);
+  test_child_exit(0);
 }
 
 /* A create from a destructor that runs after the library's module destructor,
  * which has released the handle table by then, is refused with
- * CLRU_CACHE_INVALID and an error saying so. OpenBSD runs no destructor of a
+ * CLRU_CACHE_NULL and an error saying so. OpenBSD runs no destructor of a
  * program that links libpthread, so the test skips there.
  *
  * A create that indexed the released table would stop the child at an
@@ -4547,7 +4574,7 @@ TEST(clrucache_handle_lifecycle, a_create_after_the_table_is_released_fails) {
      * module destructor releases the table instead of deferring the release. */
     clru_cache first = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
                                              NULL, NULL, NULL);
-    if (first == CLRU_CACHE_INVALID) _exit(5);
+    if (first == CLRU_CACHE_NULL) test_child_exit(5);
     clru_destroy(first);
     g_late_create_report_fd = p[1];
     exit(0);
@@ -4585,6 +4612,7 @@ static void *clru_concurrent_destroy_thread(void *arg) {
 TEST(clrucache_handle_lifecycle, concurrent_double_destroy_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
@@ -4593,7 +4621,7 @@ TEST(clrucache_handle_lifecycle, concurrent_double_destroy_is_fatal) {
     }
     clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
                                              NULL, NULL, NULL);
-    if (cache == CLRU_CACHE_INVALID) _exit(2);
+    if (cache == CLRU_CACHE_NULL) test_child_exit(2);
     clru_concurrent_destroy_arg_t a1 = {.h = cache};
     clru_concurrent_destroy_arg_t a2 = {.h = cache};
     pthread_t t1, t2;
@@ -4604,13 +4632,13 @@ TEST(clrucache_handle_lifecycle, concurrent_double_destroy_is_fatal) {
      * SIGABRT check below turns it into a clean test failure. The child never
      * joins a garbage pthread_t, because nothing created it. */
     if (pthread_create(&t1, NULL, clru_concurrent_destroy_thread, &a1) != 0)
-      _exit(2);
+      test_child_exit(2);
     if (pthread_create(&t2, NULL, clru_concurrent_destroy_thread, &a2) != 0)
-      _exit(2);
+      test_child_exit(2);
     pthread_join(t1, NULL);
     pthread_join(t2, NULL);
-    _exit(0); /* Nothing reaches this. Whichever of the two destroy calls
-                  loses the race must reach _ccol_fatal_err(). */
+    test_child_exit(0); /* Nothing reaches this. Whichever of the two destroy
+                  calls loses the race must reach _ccol_fatal_err(). */
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
@@ -4806,7 +4834,7 @@ TEST(clrucache_handle_lifecycle, resolve_unpin_race_stress) {
   for (int i = 0; i < ITERATIONS; i++) {
     clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
                                              NULL, NULL, NULL);
-    REQUIRE_NE(cache, CLRU_CACHE_INVALID);
+    REQUIRE_NE(cache, CLRU_CACHE_NULL);
 
     clru_capacity_arg_t capacity_arg = {.h = cache};
     clru_concurrent_destroy_arg_t destroy_arg = {.h = cache};
@@ -4837,13 +4865,13 @@ TEST(clrucache_handle_lifecycle,
    * can't return with a cache still alive. */
   clru_cache a = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL, NULL,
                                        NULL, NULL);
-  bool a_created = a != CLRU_CACHE_INVALID;
+  bool a_created = a != CLRU_CACHE_NULL;
   clru_cache stale_a = a;
   clru_destroy(a);
 
   clru_cache b = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL, NULL,
                                        NULL, NULL);
-  bool b_created = b != CLRU_CACHE_INVALID;
+  bool b_created = b != CLRU_CACHE_NULL;
 
   /* B's operations should succeed normally whether or not the allocator
    * happened to give B exactly A's address. */
@@ -4876,14 +4904,14 @@ TEST(clrucache_handle_lifecycle, bounded_slot_reuse_under_churn) {
 
   clru_cache cache0 = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
                                             NULL, NULL, NULL);
-  REQUIRE_NE(cache0, CLRU_CACHE_INVALID);
+  REQUIRE_NE(cache0, CLRU_CACHE_NULL);
   clru_destroy(cache0);
   size_t capacity_after_first = _clrucache_slot_table_capacity_for_tests();
 
   for (int i = 1; i < ITERATIONS; i++) {
     clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
                                              NULL, NULL, NULL);
-    REQUIRE_NE(cache, CLRU_CACHE_INVALID);
+    REQUIRE_NE(cache, CLRU_CACHE_NULL);
     clru_destroy(cache);
   }
 
@@ -4897,7 +4925,7 @@ TEST(clrucache_handle_lifecycle, bounded_slot_reuse_under_churn) {
 /* the backing map, the records of the eviction list and the condition        */
 /* variable of each entry. Every failure point unwinds a different amount of  */
 /* that work, and nothing else in this suite runs those branches. Without     */
-/* this sweep the documented CLRU_CACHE_INVALID return, and the frees that    */
+/* this sweep the documented CLRU_CACHE_NULL return, and the frees that    */
 /* come with it, are never checked.                                           */
 /*                                                                            */
 /* One counter covers all four procs. The cache struct and the map both come  */
@@ -4942,7 +4970,7 @@ TEST(clrucache_oom, integral_cache_construction_unwinds_at_every_allocation) {
     clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
                                              NULL, &g_lru_sweep_procs, &err);
     _lru_disarm();
-    if (cache != CLRU_CACHE_INVALID) {
+    if (cache != CLRU_CACHE_NULL) {
       __clrucache_destroy(cache);
     } else if (!err) {
       all_handled = false;
@@ -4963,7 +4991,7 @@ TEST(clrucache_oom,
         clrucache_create_full(8, ccol_string, ccol_string, NULL, NULL, NULL,
                               &g_lru_sweep_procs, &err);
     _lru_disarm();
-    if (cache != CLRU_CACHE_INVALID)
+    if (cache != CLRU_CACHE_NULL)
       __clrucache_destroy(cache);
     else if (!err)
       all_handled = false;
@@ -4981,7 +5009,7 @@ TEST(clrucache_oom, a_large_capacity_cache_unwinds_at_every_allocation) {
         clrucache_create_full(256, ccol_long_long, ccol_string, NULL, NULL,
                               NULL, &g_lru_sweep_procs, NULL);
     _lru_disarm();
-    if (cache != CLRU_CACHE_INVALID) __clrucache_destroy(cache);
+    if (cache != CLRU_CACHE_NULL) __clrucache_destroy(cache);
   }
   REQUIRE_TRUE(all_handled);
 }
@@ -4995,7 +5023,7 @@ TEST(clrucache_oom, a_cache_built_under_a_late_failure_still_stores_and_reads) {
     clru_cache cache = clrucache_create_full(4, ccol_int, ccol_int, NULL, NULL,
                                              NULL, &g_lru_sweep_procs, NULL);
     _lru_disarm();
-    if (cache != CLRU_CACHE_INVALID) {
+    if (cache != CLRU_CACHE_NULL) {
       built = true;
       int key = 7, val = 42;
       cmap_pair kp = {}, vp = {};
@@ -5083,7 +5111,7 @@ TEST(clrucache_oom, a_failed_set_never_leaves_the_cache_older_than_the_remote) {
   clru_cache cache = clrucache_create_full(
       8, ccol_int, ccol_int, _lru_remote_store_getter, _lru_remote_store_setter,
       NULL, &g_lru_sweep_procs, NULL);
-  REQUIRE_NE(cache, CLRU_CACHE_INVALID);
+  REQUIRE_NE(cache, CLRU_CACHE_NULL);
 
   int key1 = 1, first = 100;
   cmap_pair kp1 = {.ptr = &key1, .size = sizeof(key1)};
@@ -5564,6 +5592,7 @@ static int clru_null_run_probe(int (*probe)(void)) {
   if (pipe(fds) != 0) return -1;
   pid_t pid = fork();
   if (pid == 0) {
+    test_child_no_core();
     close(fds[0]);
     int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
@@ -5573,7 +5602,7 @@ static int clru_null_run_probe(int (*probe)(void)) {
     unsigned char byte = (unsigned char)probe();
     ssize_t w = write(fds[1], &byte, 1);
     (void)w;
-    _exit(0);
+    test_child_exit(0);
   }
   close(fds[1]);
   if (pid < 0) {
@@ -5631,14 +5660,13 @@ TEST(clru_macros, destroy_evaluates_its_argument_once) {
                                                 NULL, NULL, NULL, NULL),
                           clrucache_create_full(8, ccol_int, ccol_int, NULL,
                                                 NULL, NULL, NULL, NULL)};
-  bool created =
-      caches[0] != CLRU_CACHE_INVALID && caches[1] != CLRU_CACHE_INVALID;
+  bool created = caches[0] != CLRU_CACHE_NULL && caches[1] != CLRU_CACHE_NULL;
   int k = 2;
   while (k > 0) clru_destroy(caches[--k]);
   REQUIRE_TRUE(created);
   REQUIRE_EQ(k, 0);
-  REQUIRE_EQ(caches[0], CLRU_CACHE_INVALID);
-  REQUIRE_EQ(caches[1], CLRU_CACHE_INVALID);
+  REQUIRE_EQ(caches[0], CLRU_CACHE_NULL);
+  REQUIRE_EQ(caches[1], CLRU_CACHE_NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -5717,7 +5745,7 @@ TEST(custom_alloc, cache_does_not_read_the_procs_struct_of_the_caller_later) {
   *mp = poison;
   long calls_at_overwrite = _lru_pl_calls;
 
-  bool created = cache != CLRU_CACHE_INVALID;
+  bool created = cache != CLRU_CACHE_NULL;
   size_t stored = 0, found = 0;
   if (created) {
     for (long long k = 0; k < 600; k++) {

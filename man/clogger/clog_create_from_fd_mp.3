@@ -101,7 +101,7 @@ mprocs     A custom allocator with function pointers for malloc, free,
            calloc and realloc, or NULL for the default system
            allocator.  When mprocs is not NULL all four pointers must
            be set; a struct that is only partly filled makes the call
-           return CLOG_INVALID and no logger is created.  The library
+           return CLOG_NULL and no logger is created.  The library
            copies the struct, so you can free yours after the call.
            Every logger that clog_derive() makes from this logger uses
            the same allocator.  The two allocations that belong to the
@@ -111,10 +111,10 @@ mprocs     A custom allocator with function pointers for malloc, free,
 .SH RETURN VALUE
 .nf
 A new logger handle on success.
-CLOG_INVALID when fd is negative, closed, read-only or not valid in
+CLOG_NULL when fd is negative, closed, read-only or not valid in
 some other way, when min_level is not one of the values of
 clog_level_t, when mprocs is not valid, or when a memory allocation
-fails.  CLOG_INVALID also comes back when the process is ending and the
+fails.  CLOG_NULL also comes back when the process is ending and the
 library has already released its table of loggers, which is what an
 open from a destructor that runs after the destructor of the library
 gets.

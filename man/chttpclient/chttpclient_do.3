@@ -305,7 +305,7 @@ buffering the whole body.
 .fi
 .SH PARAMETERS
 .nf
-cli       The client handle. It must not be CHTTPCLI_INVALID.
+cli       The client handle. It must not be CHTTPCLI_NULL.
 req       The request to run. It must not be NULL.
 resp_out  The output parameter. It must not be NULL.
 .fi
@@ -315,7 +315,7 @@ ccol_success
        The request finished, and *resp_out is valid.
 
 ccol_invalid_args
-       An argument is NULL; or cli is CHTTPCLI_INVALID, or a stale
+       An argument is NULL; or cli is CHTTPCLI_NULL, or a stale
        handle of a client that has been destroyed; or req->method
        names no HTTP method (CHTTP_ANY, or a value outside the enum,
        set after construction); or a request header value holds a

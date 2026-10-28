@@ -45,7 +45,7 @@ err_str               Optional pointer that gets an error string on a
 .fi
 .SH RETURN VALUE
 .nf
-A new ccol_event_loop handle on success, or CCOL_EVENT_LOOP_INVALID
+A new ccol_event_loop handle on success, or CCOL_EVENT_LOOP_NULL
 when an argument is invalid, an allocation failed, epoll_create1,
 eventfd or pthread_create failed, the process had no thread-specific
 key left for the dispatch of a loop, the library's process-exit

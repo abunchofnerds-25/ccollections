@@ -59,16 +59,22 @@ SOFTWARE.
 
 #include <tau/tau.h>
 #include <test_connect.h>
+#include <test_coverage.h>
 #include <test_sanitizer.h>
+#include <test_signals.h>
 
 TAU_MAIN()
 
 /* The test clients of this binary write to the server with plain write(2), and
  * the server can close a connection while one of them is writing. The library
  * leaves the SIGPIPE disposition to the application, so this binary ignores it
- * itself; tests_sigpipe.c covers the library under the default disposition. */
+ * itself; tests_sigpipe.c covers the library under the default disposition.
+ *
+ * test_reset_inherited_signals() puts back the rest of the signal state that
+ * the parent process can leave behind, before any thread starts. */
 __attribute__((constructor)) static void _ignore_sigpipe_for_test_writes(void) {
   signal(SIGPIPE, SIG_IGN);
+  test_reset_inherited_signals();
 }
 
 /* ========================================================================== */
@@ -237,7 +243,7 @@ static ccol_retval_t _get(const char *url, int *status_out) {
 static chttpsvr _start_server(const char *port_str, uint16_t port) {
   (void)port_str;
   char *err = NULL;
-  chttpsvr srv = chttpsvr_create(CLOG_INVALID, &err);
+  chttpsvr srv = chttpsvr_create(CLOG_NULL, &err);
   if (!srv) {
     fprintf(stderr, "FATAL: chttpsvr_create failed: %s\n", err ? err : "?");
     exit(1);
@@ -395,10 +401,9 @@ TEST_F(engine_stop_fixture,
      the background client thread below only sends an HTTP request to srv and
      never destroys srv itself. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      chttpsvr_create(CLOG_INVALID, &err);
-  if (srv == CHTTPSVR_INVALID)
-    _chttpsvr_set_wait_in_flight_bounds_for_tests(0, 0);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+      chttpsvr_create(CLOG_NULL, &err);
+  if (srv == CHTTPSVR_NULL) _chttpsvr_set_wait_in_flight_bounds_for_tests(0, 0);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   chttpsvr_register_handler(srv, CHTTP_GET, "/slow", _slow_handler, NULL);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
@@ -563,10 +568,9 @@ TEST_F(engine_stop_fixture, concurrent_destroy_and_engine_stop_is_safe) {
      later, so this destructor can never fire during the destroy race between
      the reaper and this thread that the test drives on purpose. */
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      chttpsvr_create(CLOG_INVALID, &err);
-  if (srv == CHTTPSVR_INVALID)
-    _chttpsvr_set_wait_in_flight_bounds_for_tests(0, 0);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+      chttpsvr_create(CLOG_NULL, &err);
+  if (srv == CHTTPSVR_NULL) _chttpsvr_set_wait_in_flight_bounds_for_tests(0, 0);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   chttpsvr_register_handler(srv, CHTTP_GET, "/slow-race", _slow_handler, NULL);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
@@ -722,7 +726,7 @@ TEST_F(engine_stop_fixture, concurrent_destroy_and_engine_stop_is_safe) {
 /* luck.                                                                      */
 /* ========================================================================== */
 
-static chttpsvr g_race_srv = CHTTPSVR_INVALID;
+static chttpsvr g_race_srv = CHTTPSVR_NULL;
 static ccol_retval_t g_race_start_rv = ccol_success;
 /* The thread function below sets this flag as the very last thing it does,
    strictly after it has written both g_race_srv and g_race_start_rv in full,
@@ -737,7 +741,7 @@ static _Atomic bool g_race_start_returned = false;
 static void *_start_racing_server_thread(void *arg) {
   (void)arg;
   char *err = NULL;
-  g_race_srv = chttpsvr_create(CLOG_INVALID, &err);
+  g_race_srv = chttpsvr_create(CLOG_NULL, &err);
   if (!g_race_srv) {
     fprintf(stderr, "FATAL: chttpsvr_create failed: %s\n", err ? err : "?");
     exit(1);
@@ -753,7 +757,7 @@ static void *_start_racing_server_thread(void *arg) {
 }
 
 TEST_F(engine_stop_fixture, force_stop_racing_a_concurrent_start_is_safe) {
-  g_race_srv = CHTTPSVR_INVALID;
+  g_race_srv = CHTTPSVR_NULL;
   g_race_start_rv = ccol_success;
   atomic_store(&g_race_start_returned, false);
 
@@ -828,7 +832,7 @@ TEST_F(engine_stop_fixture, force_stop_racing_a_concurrent_start_is_safe) {
      same treatment. */
   ccol_retval_t race_rv = g_race_start_rv;
   if (race_rv != ccol_success) {
-    if (g_race_srv != CHTTPSVR_INVALID) chttpsvr_destroy(g_race_srv);
+    if (g_race_srv != CHTTPSVR_NULL) chttpsvr_destroy(g_race_srv);
     chttpsvr_engine_wait();
     REQUIRE_EQ((int)race_rv, (int)ccol_success);
   }
@@ -908,7 +912,7 @@ typedef struct {
 static void *_start_stopping_race_server_thread(void *arg) {
   _stopping_race_ctx_t *ctx = (_stopping_race_ctx_t *)arg;
   char *err = NULL;
-  ctx->srv = chttpsvr_create(CLOG_INVALID, &err);
+  ctx->srv = chttpsvr_create(CLOG_NULL, &err);
   if (!ctx->srv) {
     fprintf(stderr, "FATAL: chttpsvr_create failed: %s\n", err ? err : "?");
     exit(1);
@@ -947,7 +951,7 @@ static int _idle_connection_closed(uint16_t port) {
 static void *_start_idle_limited_server_thread(void *arg) {
   _stopping_race_ctx_t *ctx = (_stopping_race_ctx_t *)arg;
   char *err = NULL;
-  ctx->srv = chttpsvr_create(CLOG_INVALID, &err);
+  ctx->srv = chttpsvr_create(CLOG_NULL, &err);
   if (!ctx->srv) {
     fprintf(stderr, "FATAL: chttpsvr_create failed: %s\n", err ? err : "?");
     exit(1);
@@ -1112,7 +1116,7 @@ TEST_F(engine_stop_fixture,
   ccol_retval_t start_rv = ctx->start_rv;
   free(ctx);
   if (start_rv != ccol_success) {
-    if (srv2 != CHTTPSVR_INVALID) chttpsvr_destroy(srv2);
+    if (srv2 != CHTTPSVR_NULL) chttpsvr_destroy(srv2);
     chttpsvr_engine_wait();
     REQUIRE_EQ((int)start_rv, (int)ccol_success);
   }
@@ -1215,7 +1219,7 @@ TEST_F(engine_stop_fixture,
   ccol_retval_t start_rv = ctx->start_rv;
   free(ctx);
   if (start_rv != ccol_success) {
-    if (srv2 != CHTTPSVR_INVALID) chttpsvr_destroy(srv2);
+    if (srv2 != CHTTPSVR_NULL) chttpsvr_destroy(srv2);
     chttpsvr_engine_wait();
     REQUIRE_EQ((int)start_rv, (int)ccol_success);
   }
@@ -1483,8 +1487,8 @@ TEST_F(engine_stop_fixture,
      srv yet is proven safe and destroys srv explicitly, while the `!returned`
      bail-out deliberately doesn't. */
   char *err = NULL;
-  chttpsvr srv = chttpsvr_create(CLOG_INVALID, &err);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  chttpsvr srv = chttpsvr_create(CLOG_NULL, &err);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   chttpsvr_register_handler(srv, CHTTP_GET, "/hello", _hello_handler, NULL);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
@@ -1660,7 +1664,7 @@ TEST_F(engine_stop_fixture,
 /* reliably with a heap-use-after-free on raw->mutex.                         */
 /* ========================================================================== */
 
-static chttpsvr g_start_uaf_race_srv = CHTTPSVR_INVALID;
+static chttpsvr g_start_uaf_race_srv = CHTTPSVR_NULL;
 static _Atomic bool g_start_uaf_race_destroy_returned = false;
 
 static void *_start_uaf_race_destroy_thread(void *arg) {
@@ -1680,8 +1684,8 @@ TEST_F(engine_stop_fixture,
      would wedge every later test of this binary that touches the same
      machinery. */
   char *err = NULL;
-  chttpsvr srv = chttpsvr_create(CLOG_INVALID, &err);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  chttpsvr srv = chttpsvr_create(CLOG_NULL, &err);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   chttpsvr_register_handler(srv, CHTTP_GET, "/hello", _hello_handler, NULL);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
@@ -1720,7 +1724,7 @@ TEST_F(engine_stop_fixture,
        bail-out further below, where a background thread may already be racing
        srv. See the opening comment of this test. */
     chttpsvr_destroy(srv);
-    g_start_uaf_race_srv = CHTTPSVR_INVALID;
+    g_start_uaf_race_srv = CHTTPSVR_NULL;
     REQUIRE_TRUE(false);
   }
   restart_arg->srv = &srv;
@@ -1926,7 +1930,7 @@ TEST_F(engine_stop_fixture,
 /* race window a few instructions wide by luck.                               */
 /* ========================================================================== */
 
-static chttpsvr g_stop_race_srv = CHTTPSVR_INVALID;
+static chttpsvr g_stop_race_srv = CHTTPSVR_NULL;
 static ccol_retval_t g_stop_race_start_rv = ccol_success;
 static _Atomic bool g_stop_race_start_returned = false;
 /* _stop_racing_server_thread sets this flag as its last statement, once
@@ -2161,7 +2165,7 @@ TEST_F(engine_stop_fixture,
 /* dispatches show the general pattern such a measurement would need here,    */
 /* for example post_accept_alloc_failure_backs_off_instead_of_busy_looping.   */
 /* ========================================================================== */
-static chttpsvr g_qstop_race_srv = CHTTPSVR_INVALID;
+static chttpsvr g_qstop_race_srv = CHTTPSVR_NULL;
 static ccol_retval_t g_qstop_race_start_rv = ccol_success;
 /* _start_racing_quiesce_stop_thread sets this flag as its last statement, once
    chttpsvr_start() itself has really returned, and this test polls it, with a
@@ -2325,7 +2329,7 @@ TEST_F(
 /* thread while that thread is still paused.                                  */
 /* ========================================================================== */
 
-static chttpsvr g_reaper_race_srv = CHTTPSVR_INVALID;
+static chttpsvr g_reaper_race_srv = CHTTPSVR_NULL;
 static _Atomic bool g_reaper_race_destroy_returned = false;
 
 static void *_destroy_racing_reaper_thread(void *arg) {
@@ -2397,12 +2401,12 @@ TEST_F(engine_stop_fixture,
      isn't enough that nothing crashed above. */
   int status = 0;
   ccol_retval_t get_rv = ccol_unexpected_failure;
-  chttpsvr srv2 = CHTTPSVR_INVALID;
+  chttpsvr srv2 = CHTTPSVR_NULL;
   if (destroy_th_created) {
     srv2 = _start_server("18809", 18809);
     get_rv = _get("http://127.0.0.1:18809/hello", &status);
   }
-  if (srv2 != CHTTPSVR_INVALID) chttpsvr_destroy(srv2);
+  if (srv2 != CHTTPSVR_NULL) chttpsvr_destroy(srv2);
   chttpsvr_engine_wait();
 
   REQUIRE_TRUE(destroy_th_created);
@@ -2599,7 +2603,7 @@ TEST_F(engine_stop_fixture, fork_mid_quiesce_teardown_does_not_hang_child) {
        this result reliably. wait_from_within_own_task_does_not_hang in
        tests/cthreadpool and the fork_safety group in tests/clogger deal with
        the same valgrind behaviour. */
-    alarm(3);
+    alarm(30);
     char ok = 0;
     /* Half 1: srv is gone from servers_bundler.servers[] already, which
        shows that the atfork fixup ran the unregister step and not only the flip
@@ -2618,7 +2622,7 @@ TEST_F(engine_stop_fixture, fork_mid_quiesce_teardown_does_not_hang_child) {
     ssize_t written = write(pipefd[1], &ok, 1);
     (void)written;
     close(pipefd[1]);
-    _exit(0);
+    test_child_exit(0);
   }
   close(pipefd[1]);
 
@@ -2729,13 +2733,13 @@ TEST_F(engine_stop_fixture,
     }
     /* The same comment in the previous test explains why this child reports
        through the pipe and not through the exit code of the process. */
-    alarm(3);
+    alarm(30);
     /* On purpose a brand new handle and not srv itself; the doc comment of this
        test above explains why restarting srv wouldn't drive _engine_acquire()
        at all. */
-    chttpsvr fresh = chttpsvr_create(CLOG_INVALID, NULL);
+    chttpsvr fresh = chttpsvr_create(CLOG_NULL, NULL);
     char ok = 0;
-    if (fresh != CHTTPSVR_INVALID) {
+    if (fresh != CHTTPSVR_NULL) {
       chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
       cfg.host = "127.0.0.1";
       cfg.port = 18813;
@@ -2750,7 +2754,7 @@ TEST_F(engine_stop_fixture,
     ssize_t written = write(pipefd[1], &ok, 1);
     (void)written;
     close(pipefd[1]);
-    _exit(0);
+    test_child_exit(0);
   }
   close(pipefd[1]);
 
@@ -2805,7 +2809,7 @@ static bool _child_get_hello(uint16_t port, int timeout_ms) {
    first server has to run on a reactor of its own and answer a request.
    A child that kept the inherited reactor would start its server on it, the
    listener would never be polled, and the request would get no answer within
-   its 3 s bound. */
+   its 20 s bound. */
 TEST_F(engine_stop_fixture, a_child_forked_during_a_teardown_serves_requests) {
   (void)tau;
   TEST_SKIP_FORK_IF_UNSUPPORTED();
@@ -2838,10 +2842,10 @@ TEST_F(engine_stop_fixture, a_child_forked_during_a_teardown_serves_requests) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    alarm(10);
+    alarm(60);
     char ok = 0;
-    chttpsvr fresh = chttpsvr_create(CLOG_INVALID, NULL);
-    if (fresh != CHTTPSVR_INVALID) {
+    chttpsvr fresh = chttpsvr_create(CLOG_NULL, NULL);
+    if (fresh != CHTTPSVR_NULL) {
       chttpsvr_register_handler(fresh, CHTTP_GET, "/hello", _hello_handler,
                                 NULL);
       chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
@@ -2849,14 +2853,14 @@ TEST_F(engine_stop_fixture, a_child_forked_during_a_teardown_serves_requests) {
       cfg.port = 18851;
       if (chttpsvr_start(fresh, &cfg) == ccol_success &&
           _chttpsvr_engine_reactor_pid_for_tests() == getpid() &&
-          _child_get_hello(18851, 3000))
+          _child_get_hello(18851, 20000))
         ok = 1;
       chttpsvr_destroy(fresh);
     }
     ssize_t written = write(pipefd[1], &ok, 1);
     (void)written;
     close(pipefd[1]);
-    _exit(0);
+    test_child_exit(0);
   }
   close(pipefd[1]);
   char ok = 0;
@@ -2900,10 +2904,10 @@ TEST_F(engine_stop_fixture, a_start_fails_when_the_stop_watcher_cannot_start) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    alarm(10);
+    alarm(60);
     char out[2] = {0, 0};
-    chttpsvr srv = chttpsvr_create(CLOG_INVALID, NULL);
-    if (srv != CHTTPSVR_INVALID) {
+    chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
+    if (srv != CHTTPSVR_NULL) {
       chttpsvr_register_handler(srv, CHTTP_GET, "/hello", _hello_handler, NULL);
       chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
       cfg.host = "127.0.0.1";
@@ -2923,7 +2927,7 @@ TEST_F(engine_stop_fixture, a_start_fails_when_the_stop_watcher_cannot_start) {
     ssize_t written = write(pipefd[1], out, sizeof(out));
     (void)written;
     close(pipefd[1]);
-    _exit(0);
+    test_child_exit(0);
   }
   close(pipefd[1]);
   char out[2] = {0, 0};
@@ -2936,6 +2940,78 @@ TEST_F(engine_stop_fixture, a_start_fails_when_the_stop_watcher_cannot_start) {
   REQUIRE_EQ(n, (ssize_t)2);
   REQUIRE_EQ(out[0], 1);
   REQUIRE_EQ(out[1], 1);
+}
+
+/* A server relies on the shared idle sweep thread for its idle timeout and
+   for getting max_connections capacity back. When that thread can't be
+   created, chttpsvr_start() fails with ccol_unexpected_failure and leaves
+   the server stopped, and a later start that has a thread to give brings
+   the sweep up and serves requests. A fork child has no sweep thread yet,
+   which is what lets the test reach its creation. A start that carried on
+   without the sweep would make the first start succeed. */
+TEST_F(engine_stop_fixture, a_start_fails_when_the_idle_sweep_cannot_start) {
+  (void)tau;
+  TEST_SKIP_FORK_IF_UNSUPPORTED();
+  int pipefd[2];
+  REQUIRE_EQ(pipe(pipefd), 0);
+  pid_t pid = fork();
+  if (pid == -1) {
+    close(pipefd[0]);
+    close(pipefd[1]);
+    REQUIRE_TRUE(false);
+  }
+  if (pid == 0) {
+    close(pipefd[0]);
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    alarm(60);
+    char out[3] = {0, 0, 0};
+    chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
+    if (srv != CHTTPSVR_NULL) {
+      chttpsvr_register_handler(srv, CHTTP_GET, "/hello", _hello_handler, NULL);
+      chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+      cfg.host = "127.0.0.1";
+      cfg.port = 0;
+      _chttpsvr_force_idle_sweep_thread_create_fail_for_tests(true);
+      ccol_retval_t first = chttpsvr_start(srv, &cfg);
+      _chttpsvr_force_idle_sweep_thread_create_fail_for_tests(false);
+      bool running = true;
+      chttpsvr_is_running(srv, &running);
+      out[0] = first == ccol_unexpected_failure && !running;
+      if (first == ccol_success) chttpsvr_stop(srv);
+      uint16_t port = 0;
+      if (chttpsvr_start(srv, &cfg) == ccol_success &&
+          chttpsvr_bound_port(srv, &port) == ccol_success) {
+        out[1] = 1;
+        char url[64];
+        snprintf(url, sizeof(url), "http://127.0.0.1:%u/hello", (unsigned)port);
+        int status = 0;
+        out[2] = _get(url, &status) == ccol_success && status == 200;
+      }
+      chttpsvr_destroy(srv);
+      chttpsvr_engine_wait();
+    }
+    ssize_t written = write(pipefd[1], out, sizeof(out));
+    (void)written;
+    close(pipefd[1]);
+    test_child_exit(0);
+  }
+  close(pipefd[1]);
+  char out[3] = {0, 0, 0};
+  ssize_t n = read(pipefd[0], out, sizeof(out));
+  close(pipefd[0]);
+  int status = 0;
+  pid_t waited = waitpid(pid, &status, 0);
+  REQUIRE_EQ(waited, pid);
+  REQUIRE_TRUE(WIFEXITED(status));
+  REQUIRE_EQ(n, (ssize_t)3);
+  REQUIRE_EQ(out[0], 1);
+  REQUIRE_EQ(out[1], 1);
+  REQUIRE_EQ(out[2], 1);
 }
 
 /* When the engine's reaper thread can't be created, the destroy of the last
@@ -2965,7 +3041,7 @@ TEST_F(engine_stop_fixture, a_destroy_whose_reaper_runs_inline_returns) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
-    alarm(20);
+    alarm(60);
     char out[2] = {0, 0};
     chttpsvr srv = _start_server("18870", 18870);
     int status = 0;
@@ -2979,7 +3055,7 @@ TEST_F(engine_stop_fixture, a_destroy_whose_reaper_runs_inline_returns) {
     ssize_t written = write(pipefd[1], out, sizeof(out));
     (void)written;
     close(pipefd[1]);
-    _exit(0);
+    test_child_exit(0);
   }
   close(pipefd[1]);
   char out[2] = {0, 0};
@@ -3188,8 +3264,8 @@ TEST_F(engine_stop_fixture, force_stop_ends_parked_waiting_and_queued) {
    * ThreadSanitizer run this same test. */
   _chttpsvr_set_wait_in_flight_bounds_for_tests(300, 2000);
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      chttpsvr_create(CLOG_INVALID, NULL);
-  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+      chttpsvr_create(CLOG_NULL, NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_NULL);
   chttpsvr_register_handler(srv, CHTTP_POST, "/len", _es_len_handler, NULL);
   chttpsvr_register_streaming_handler(srv, CHTTP_POST, "/drain",
                                       _es_drain_stream_handler, NULL);
@@ -3269,6 +3345,29 @@ static int _es_count_in_file(const char *path, const char *needle) {
   return count;
 }
 
+/* Waits, for at most bound_ms on CLOCK_MONOTONIC, until no engine runs and
+ * no reaper is left to join, then joins it through chttpsvr_engine_wait(),
+ * which returns at once by then. Returns false when an engine is still up
+ * at the bound: a server that an earlier test left running would otherwise
+ * make the unbounded wait hang this test. */
+static bool _engine_settle_bounded(int bound_ms) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  int64_t end = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000 + bound_ms;
+  for (;;) {
+    bool idle = _chttpsvr_engine_reactor_pid_for_tests() == 0 &&
+                !_chttpsvr_engine_reaper_unjoined_for_tests();
+    if (idle) {
+      chttpsvr_engine_wait();
+      return true;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    if ((int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000 >= end) return false;
+    struct timespec nap = {0, 1000000L};
+    nanosleep(&nap, NULL);
+  }
+}
+
 /* A logger installed with chttpsvr_set_engine_logger() serves every engine of
  * the process, not only the one that runs, or first starts, after the call.
  * Each of two full engine cycles logs its creation and its teardown through it.
@@ -3279,9 +3378,15 @@ static int _es_count_in_file(const char *path, const char *needle) {
  *
  * The logger stays installed until a later test replaces or releases it, and it
  * writes to a file that is unlinked here and whose descriptor stays open for
- * that reason. */
+ * that reason.
+ *
+ * An earlier test may destroy its last server without waiting for the reap.
+ * A running engine switches to a newly installed logger at once, so that
+ * engine's teardown would add a third "destroyed" line here. The wait at the
+ * top makes the test count only its own two cycles, in any order. */
 TEST_F(engine_stop_fixture, engine_logger_serves_every_later_engine) {
   (void)tau; /* this test creates no background thread of its own */
+  REQUIRE_TRUE(_engine_settle_bounded(10000));
   char path[] = "chttpsvr_engine_logger_XXXXXX";
   int fd = mkstemp(path);
   REQUIRE_TRUE(fd >= 0);
@@ -3340,7 +3445,7 @@ TEST_F(engine_stop_fixture, a_closed_engine_logger_is_refused) {
     chttpsvr_destroy(srv);
     chttpsvr_engine_wait();
   }
-  ccol_retval_t release_rv = chttpsvr_set_engine_logger(CLOG_INVALID);
+  ccol_retval_t release_rv = chttpsvr_set_engine_logger(CLOG_NULL);
   int created = _es_count_in_file(
       path, "New http server reactor engine has been created");
   unlink(path);
@@ -3366,9 +3471,15 @@ static int64_t _engine_test_mono_ms(void) {
 /* The engine's idle sweep thread ticks once a second, and the engine teardown
    joins it. The join must wake the thread instead of waiting out the rest of
    its tick, so the destroy of the last server and the chttpsvr_engine_wait()
-   after it return well under a second. The server starts and stops at once, so
-   the sweep thread has just started its first wait. If the sweep thread slept
-   out its tick, the teardown would take about a second. */
+   after it don't wait for a tick. The server starts and stops at once, so the
+   sweep thread has just started its first wait. The test counts how each
+   sweep thread stopped instead of timing the teardown, because a loaded
+   runner under valgrind can take most of a second to tear an engine down
+   anyway. A stop whose signal didn't end the wait leaves the thread to sleep
+   out its tick, and that counts as stopped after a timeout, three times. The
+   counters are process-wide, so the test first waits for any engine an
+   earlier test left behind. Each round must still end within 10 s, a bound
+   that only a hang crosses. */
 TEST(engine_teardown, the_last_destroy_and_engine_wait_return_quickly) {
   char sock_path[64];
   snprintf(sock_path, sizeof(sock_path), "/tmp/chttpsvr_teardown_%d.sock",
@@ -3377,11 +3488,15 @@ TEST(engine_teardown, the_last_destroy_and_engine_wait_return_quickly) {
   char host_buf[96];
   snprintf(host_buf, sizeof(host_buf), "unix://%s", sock_path);
 
-  int64_t worst_ms = 0;
+  REQUIRE_TRUE(_engine_settle_bounded(10000));
+  size_t woken0 = 0, timed_out0 = 0;
+  _chttpsvr_idle_sweep_exits_for_tests(&woken0, &timed_out0);
   bool all_started = true;
+  int64_t slowest_round_ms = 0;
   for (int round = 0; round < 3; round++) {
-    chttpsvr srv = chttpsvr_create(CLOG_INVALID, NULL);
-    if (srv == CHTTPSVR_INVALID) {
+    int64_t round_start = _engine_test_mono_ms();
+    chttpsvr srv = chttpsvr_create(CLOG_NULL, NULL);
+    if (srv == CHTTPSVR_NULL) {
       all_started = false;
       break;
     }
@@ -3392,16 +3507,19 @@ TEST(engine_teardown, the_last_destroy_and_engine_wait_return_quickly) {
       all_started = false;
       break;
     }
-    int64_t t0 = _engine_test_mono_ms();
     chttpsvr_destroy(srv);
     chttpsvr_engine_wait();
-    int64_t elapsed = _engine_test_mono_ms() - t0;
-    if (elapsed > worst_ms) worst_ms = elapsed;
+    int64_t took = _engine_test_mono_ms() - round_start;
+    if (took > slowest_round_ms) slowest_round_ms = took;
   }
   unlink(sock_path);
+  size_t woken1 = 0, timed_out1 = 0;
+  _chttpsvr_idle_sweep_exits_for_tests(&woken1, &timed_out1);
 
   REQUIRE_TRUE(all_started);
-  REQUIRE_LT(worst_ms, (int64_t)600);
+  REQUIRE_EQ(timed_out1 - timed_out0, (size_t)0);
+  REQUIRE_EQ(woken1 - woken0, (size_t)3);
+  REQUIRE_LT(slowest_round_ms, (int64_t)10000);
 }
 
 /* ========================================================================== */
@@ -3489,8 +3607,8 @@ TEST_F(engine_stop_fixture,
        an_engine_stop_closes_every_idle_connection_at_once) {
   _chttpsvr_set_wait_in_flight_bounds_for_tests(8000, 2000);
   char *err = NULL;
-  chttpsvr a = chttpsvr_create(CLOG_INVALID, &err);
-  bool created = a != CHTTPSVR_INVALID;
+  chttpsvr a = chttpsvr_create(CLOG_NULL, &err);
+  bool created = a != CHTTPSVR_NULL;
   if (!created) _chttpsvr_set_wait_in_flight_bounds_for_tests(0, 0);
   REQUIRE_TRUE(created);
   chttpsvr_register_handler(a, CHTTP_GET, "/slow", _slow_handler, NULL);
@@ -3572,8 +3690,8 @@ TEST_F(engine_stop_fixture,
 TEST_F(engine_stop_fixture, a_stop_racing_a_destroy_waits_for_its_drain) {
   _chttpsvr_set_wait_in_flight_bounds_for_tests(5000, 2000);
   char *err = NULL;
-  chttpsvr srv = chttpsvr_create(CLOG_INVALID, &err);
-  bool created = srv != CHTTPSVR_INVALID;
+  chttpsvr srv = chttpsvr_create(CLOG_NULL, &err);
+  bool created = srv != CHTTPSVR_NULL;
   if (!created) _chttpsvr_set_wait_in_flight_bounds_for_tests(0, 0);
   REQUIRE_TRUE(created);
   chttpsvr_register_handler(srv, CHTTP_GET, "/slow300", _slow_300ms_handler,
@@ -3752,7 +3870,7 @@ static void *_dead_realloc(void *p, size_t s) {
   return realloc(p, s);
 }
 
-/* chttpsvr_set_engine_logger(CLOG_INVALID) closes the engine logger at once,
+/* chttpsvr_set_engine_logger(CLOG_NULL) closes the engine logger at once,
    so an application can close its own logger and destroy the allocator behind
    it before main returns. It's refused while an engine runs. The allocator
    aborts the process on any call after it has been marked destroyed, which
@@ -3766,19 +3884,18 @@ TEST_F(engine_stop_fixture, releasing_the_engine_logger_frees_it_at_once) {
                                        .calloc = _dead_calloc,
                                        .realloc = _dead_realloc};
   clog lg = clog_create_from_fd_mp(2, CLOG_FATAL, NULL, &procs);
-  REQUIRE_TRUE(lg != CLOG_INVALID);
+  REQUIRE_TRUE(lg != CLOG_NULL);
   ccol_retval_t set_rv = chttpsvr_set_engine_logger(lg);
 
   chttpsvr srv = _start_server("18864", 18864);
-  ccol_retval_t release_while_running =
-      chttpsvr_set_engine_logger(CLOG_INVALID);
+  ccol_retval_t release_while_running = chttpsvr_set_engine_logger(CLOG_NULL);
   int status = 0;
   ccol_retval_t get_rv = _get("http://127.0.0.1:18864/hello", &status);
   chttpsvr_destroy(srv);
   chttpsvr_engine_wait();
 
-  ccol_retval_t release_rv = chttpsvr_set_engine_logger(CLOG_INVALID);
-  ccol_retval_t release_again_rv = chttpsvr_set_engine_logger(CLOG_INVALID);
+  ccol_retval_t release_rv = chttpsvr_set_engine_logger(CLOG_NULL);
+  ccol_retval_t release_again_rv = chttpsvr_set_engine_logger(CLOG_NULL);
   clog_close(lg);
   atomic_store(&g_dead_alloc_dead, true);
 

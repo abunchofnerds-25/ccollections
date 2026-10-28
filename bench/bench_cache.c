@@ -68,7 +68,7 @@ typedef struct {
 
 static void lru_teardown(void *state) {
   lru_state_t *st = state;
-  if (st->cache != CLRU_CACHE_INVALID) {
+  if (st->cache != CLRU_CACHE_NULL) {
     clru_cache c = st->cache;
     clru_destroy(c);
   }
@@ -94,7 +94,7 @@ static lru_state_t *lru_make(size_t n, size_t key_span, bool prefill) {
   }
 
   clru_construct(c, int, int, BENCH_LRU_CAPACITY, NULL, NULL, NULL);
-  if (c == CLRU_CACHE_INVALID) {
+  if (c == CLRU_CACHE_NULL) {
     lru_teardown(st);
     return NULL;
   }

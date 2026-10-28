@@ -1,6 +1,6 @@
 .TH CHTTPSVR_DESTROY 3 "2026-07-14" "c_collections" "C Collections Library - Macros"
 .SH NAME
-chttpsvr_destroy \- destroy a chttpsvr handle and set it to CHTTPSVR_INVALID
+chttpsvr_destroy \- destroy a chttpsvr handle and set it to CHTTPSVR_NULL
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -12,7 +12,7 @@ chttpsvr_destroy(name);
 .SH DESCRIPTION
 .nf
 Destroys the server that name holds and then sets name to
-CHTTPSVR_INVALID.
+CHTTPSVR_NULL.
 
 It drains every in-flight request and closes every idle connection
 that is left.  Connections that wait without a thread are ended too:

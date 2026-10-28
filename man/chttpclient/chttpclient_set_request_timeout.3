@@ -54,13 +54,13 @@ into the past.
 .fi
 .SH PARAMETERS
 .nf
-cli   The client handle. It must not be CHTTPCLI_INVALID.
+cli   The client handle. It must not be CHTTPCLI_NULL.
 us    The timeout in microseconds. 0 means no timeout.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success      The client has the new timeout.
-ccol_invalid_args cli is CHTTPCLI_INVALID, or a stale handle of a
+ccol_invalid_args cli is CHTTPCLI_NULL, or a stale handle of a
                   client that has been destroyed.
 .fi
 .SH "SEE ALSO"

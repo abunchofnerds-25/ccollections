@@ -89,7 +89,7 @@ LFLAGS = -lpthread -lssl -lcrypto -lm -lz -rdynamic $(CCOL_PLATFORM_LIBS)
 # Empty for an ordinary build. generate_coverage_report passes COVERAGE_ON
 # in, so the same pattern rule instruments the library objects.
 COVERAGE_FLAGS =
-COVERAGE_ON = -fprofile-arcs -ftest-coverage
+COVERAGE_ON = -fprofile-arcs -ftest-coverage -DCCOL_TEST_COVERAGE
 
 # An object file keeps no record of how it was built, so without this stamp
 # a change of compiler or flags relinks stale objects of the wrong
@@ -216,7 +216,9 @@ memtest: build build_tls build_mem_mgmt build_engine_stop build_worker_key build
 # isn't real. It happens in more than one module and inside a glibc header as
 # well; it's a limit of the gcov instrumentation, not a bug in the library's
 # logic. tests/chttpclient/Makefile has the same flag with the full reason.
-generate_coverage_report:
+# Every binary that `test` runs is built and run here too, with the same
+# instrumentation, so the tracefile counts what each of them reaches.
+generate_coverage_report: tests_locale
 	$(MAKE) clean_objs
 	$(MAKE) COVERAGE_FLAGS="$(COVERAGE_ON)" $(SRC_OBJS)
 	$(CC) $(COVERAGE_ON) $(CFLAGS) tests.c $(SRC_OBJS) \
@@ -272,6 +274,17 @@ generate_coverage_report:
 	genhtml --ignore-errors inconsistent -s chttpserver_worker_key.c.info \
 		--output-directory coverage/tests_worker_key && \
 	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info *.o tests_worker_key
+	$(MAKE) clean_objs
+	$(MAKE) COVERAGE_FLAGS="$(COVERAGE_ON)" $(SRC_OBJS)
+	$(CC) $(COVERAGE_ON) $(CFLAGS) tests_sigpipe.c $(SRC_OBJS) \
+		-o tests_sigpipe $(LFLAGS) && \
+	./tests_sigpipe && \
+	gcov -d -w chttpserver && \
+	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative \
+		--capture --directory . --output-file chttpserver_sigpipe.c.info && \
+	genhtml --ignore-errors inconsistent -s chttpserver_sigpipe.c.info \
+		--output-directory coverage/tests_sigpipe && \
+	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info *.o tests_sigpipe
 
 all: build build_tls build_mem_mgmt build_engine_stop build_worker_key build_sigpipe build_tsan test test_tsan build_engine_stop_tsan test_engine_stop_tsan memtest generate_coverage_report
 

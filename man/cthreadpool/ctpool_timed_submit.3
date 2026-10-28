@@ -48,7 +48,7 @@ timeout_us   Longest time to wait, in microseconds (0 = do not wait)
 .SH RETURN VALUE
 .nf
 ccol_success           - task enqueued.
-ccol_invalid_args      - pool is CTPOOL_INVALID or a stale/already-
+ccol_invalid_args      - pool is CTPOOL_NULL or a stale/already-
                          destroyed handle, or fn is NULL.
 ccol_not_enough_memory - task struct allocation failed.
 ccol_not_permitted     - pool is shutting down.

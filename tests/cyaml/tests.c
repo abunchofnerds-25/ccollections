@@ -39,10 +39,18 @@ SOFTWARE.
 #include <string.h>
 #include <sys/wait.h>
 #include <tau/tau.h>
+#include <test_signals.h>
 #include <time.h>
 #include <unistd.h>
 
 TAU_MAIN()
+
+/* The forked children of this binary report through their wait status, and
+ * test_reset_inherited_signals() explains what an inherited signal state does
+ * to that. */
+__attribute__((constructor)) static void _reset_inherited_signals(void) {
+  test_reset_inherited_signals();
+}
 
 /* Counting allocator: it lets exactly g_alloc_remaining calls to malloc,
  * calloc and realloc succeed and then returns NULL. -1 means no limit,
@@ -5714,11 +5722,11 @@ TEST(errors, deeply_nested_explicit_keys_rejected_not_hung) {
    * nesting limit.
    *
    * The parse should reject the input and return quickly, without hanging or
-   * crashing. The test asserts that directly with clock(), as
-   * serialize.oom_short_circuits_remaining_siblings_after_depth_exceeded in
-   * this file does, because Tau has no per-test timeout and without the
-   * assertion a regression here would hang the whole binary instead of
-   * failing visibly. */
+   * crashing. The clock() bound, checked once the parse has returned, fails
+   * a regression that is slow but finishes; one that really hangs is left
+   * to the per-module SUITE_TIMEOUT of the run, since Tau has no per-test
+   * timeout. The correct parse takes well under a millisecond, so 2 seconds
+   * leaves room for any slow runner. */
   char input[203];
   int off = 0;
   for (int i = 0; i < 100; i++) {
@@ -5848,11 +5856,13 @@ TEST(errors, exponential_alias_expansion_rejected_not_exhausted) {
    * That other test is rejected within microseconds, because the canonical
    * key length guard catches it at a shallow depth, while this guard only
    * trips after the parser really builds and frees CYAML_MAX_PARSE_NODES
-   * clones, so the bound here is far more generous. We measured about 0.5
-   * seconds for a plain run and about 13 seconds under valgrind's
-   * per-allocation instrumentation on a typical development machine. A
-   * bound of 60 seconds leaves plenty of room for a slower or busier
-   * environment and is still nowhere near a hang with no end. */
+   * clones, so the bound here is far more generous. A plain run takes about
+   * 0.5 seconds of CPU time and a run under valgrind's per-allocation
+   * instrumentation 8 to 13 seconds on a fast machine. The bound only fails
+   * a parse that is slow but finishes; what proves the limit is the refused
+   * parse, and a parse with no limit at all builds 2^30 nodes, which the
+   * per-module SUITE_TIMEOUT of the run ends. 300 seconds of CPU time leaves
+   * room for valgrind on a slow CI virtual machine. */
   const int levels = 30; /* 2^30 nodes if ever fully materialized */
   size_t cap = 64 + (size_t)levels * 40;
   char *input = malloc(cap);
@@ -5869,7 +5879,7 @@ TEST(errors, exponential_alias_expansion_rejected_not_exhausted) {
   double elapsed_s = (double)(clock() - start) / CLOCKS_PER_SEC;
   REQUIRE_EQ((void *)doc, NULL);
   REQUIRE_NE((void *)err, NULL);
-  REQUIRE_LT(elapsed_s, 60.0);
+  REQUIRE_LT(elapsed_s, 300.0);
   free(input);
 }
 
@@ -6005,7 +6015,9 @@ TEST(parse_budget, alias_expansion_of_a_padded_input_is_still_refused) {
   free(input);
   REQUIRE_EQ((void *)doc, NULL);
   REQUIRE_TRUE(named);
-  REQUIRE_LT(elapsed_s, 60.0);
+  /* Fails a parse that is slow but finishes, for the reason
+   * errors.exponential_alias_expansion_rejected_not_exhausted gives. */
+  REQUIRE_LT(elapsed_s, 300.0);
 }
 
 /* Builds a nested-alias document (each level holds eight aliases of the one
@@ -6633,17 +6645,14 @@ TEST(serialize, oom_short_circuits_remaining_siblings_after_depth_exceeded) {
    * b->oom is already true.
    *
    * The test builds branch_count independent deep chains of one-key
-   * dictionaries, each one safely past CYAML_MAX_NESTING_DEPTH. Done right,
-   * only the FIRST branch is walked in full and then it stops, so the
-   * elapsed time stays about the same for any branch_count; without the
-   * guard the time grows linearly with branch_count.
-   *
-   * These figures come from a build with the guard removed. The correct
-   * behaviour finishes this call in under 1 millisecond, while the build
-   * without the guard takes about 1.25 seconds for branch_count walks of a
-   * chain of about 520 levels. The 0.5 second bound below sits between the
-   * two and leaves a wide margin on the fast side for a slower run or one
-   * under instrumentation such as valgrind. */
+   * dictionaries, each one safely past CYAML_MAX_NESTING_DEPTH, and counts
+   * through _cyaml_serialize_oom_visits_for_tests every node a serializer
+   * refuses for its depth or meets with b->oom already set. Done right, the
+   * walk refuses the first branch once and stops, so the count is exactly 1
+   * for any branch_count. A walk that keeps going after the flag is set adds
+   * at least one per remaining branch, and one that also drops the guard at
+   * the top of the head descends into every branch and refuses each of
+   * them. */
   size_t branch_count = 3000;
   size_t chain_depth = 520; /* > CYAML_MAX_NESTING_DEPTH (500) */
 
@@ -6661,13 +6670,20 @@ TEST(serialize, oom_short_circuits_remaining_siblings_after_depth_exceeded) {
     REQUIRE_EQ(cyaml_list_push(top, chain), ccol_success);
   }
 
-  clock_t start = clock();
+  _cyaml_serialize_oom_visits_for_tests = 0;
   char *block = cyaml_serialize(top);
-  double elapsed_s = (double)(clock() - start) / CLOCKS_PER_SEC;
-  REQUIRE_EQ((void *)block, NULL);
-  REQUIRE_LT(elapsed_s, 0.5);
-
+  size_t block_visits = _cyaml_serialize_oom_visits_for_tests;
+  _cyaml_serialize_oom_visits_for_tests = 0;
+  char *flow = cyaml_serialize_flow(top);
+  size_t flow_visits = _cyaml_serialize_oom_visits_for_tests;
+  cyaml_serialize_free(block);
+  cyaml_serialize_free(flow);
   cyaml_destroy(top);
+
+  REQUIRE_EQ((void *)block, NULL);
+  REQUIRE_EQ((void *)flow, NULL);
+  REQUIRE_EQ(block_visits, (size_t)1);
+  REQUIRE_EQ(flow_visits, (size_t)1);
 }
 
 TEST(block_mapping, document_start_marker_no_separator) {

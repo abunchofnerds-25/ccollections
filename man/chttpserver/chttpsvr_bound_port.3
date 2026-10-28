@@ -30,7 +30,7 @@ port_out   Receives the port.  It receives 0 on every failure.
 .SH RETURN VALUE
 .nf
 ccol_success        *port_out holds the port.
-ccol_invalid_args   srv is CHTTPSVR_INVALID or a stale handle, or
+ccol_invalid_args   srv is CHTTPSVR_NULL or a stale handle, or
                     port_out is NULL.
 ccol_not_permitted  The server does not listen (see
                     chttpsvr_is_running(3)), or it listens on a

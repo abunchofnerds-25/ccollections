@@ -25,8 +25,8 @@ err_str        Optional. It gets a static error string on failure
 .fi
 .SH RETURN VALUE
 .nf
-Returns a new ctpool handle on success, or CTPOOL_INVALID on failure.
-A process with no thread-specific key left to give gets CTPOOL_INVALID
+Returns a new ctpool handle on success, or CTPOOL_NULL on failure.
+A process with no thread-specific key left to give gets CTPOOL_NULL
 from this call and from every later one; see ctpool_create_mp(3).
 .fi
 .SH "SEE ALSO"
